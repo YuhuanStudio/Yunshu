@@ -31,12 +31,10 @@ class ParsedOutput:
 
 class OutputParser(ABC):
     @abstractmethod
-    def parse(self, text: str) -> ParsedOutput:
-        ...
+    def parse(self, text: str) -> ParsedOutput: ...
 
     @abstractmethod
-    def family_name(self) -> str:
-        ...
+    def family_name(self) -> str: ...
 
 
 class DeepSeekOutputParser(OutputParser):
@@ -90,10 +88,10 @@ class QwenOutputParser(OutputParser):
             _o = self._OPEN_RE.search(text)
             _c = self._CLOSE_RE.search(text)
             if _c and (_o is None or _c.start() < _o.start()):
-                r = text[:_c.start()].strip()
+                r = text[: _c.start()].strip()
                 if r:
                     reasoning = r
-                text = text[_c.end():].strip()
+                text = text[_c.end() :].strip()
 
         tool_text = None
         tool_matches = self._TOOL_RE.findall(text) + self._FUNC_RE.findall(text)
@@ -129,7 +127,9 @@ class GemmaOutputParser(OutputParser):
 class HarmonyOutputParser(OutputParser):
     """Harmony/gpt_oss: Extract [REASONING]...[/REASONING] markers."""
 
-    _REASON_RE = re.compile(r"\[REASONING\](.*?)\[/REASONING\]", re.DOTALL | re.IGNORECASE)
+    _REASON_RE = re.compile(
+        r"\[REASONING\](.*?)\[/REASONING\]", re.DOTALL | re.IGNORECASE
+    )
 
     def parse(self, text: str) -> ParsedOutput:
         reasoning = None

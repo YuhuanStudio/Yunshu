@@ -2,6 +2,7 @@
 ANY single prompt overflows the context window, not whether their SUM does (each list
 element is an independent prompt sent in its own request). The old `sum > limit`
 falsely flagged a batch of individually-fitting prompts."""
+
 from __future__ import annotations
 
 import asyncio
@@ -14,13 +15,18 @@ from yunshu_gateway.routers import (
 
 class _FakeTok:
     """encode returns `len(text)` tokens — 1 token per character — for determinism."""
+
     def encode(self, text, add_special_tokens=True):
         return [0] * len(text)
 
 
 def _call(prompt, ctx_limit, monkeypatch):
-    monkeypatch.setattr("yunshu_gateway.routers.models._check_permission", lambda *a, **k: None)
-    monkeypatch.setattr("yunshu_gateway.routers.models._check_model_access", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "yunshu_gateway.routers.models._check_permission", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        "yunshu_gateway.routers.models._check_model_access", lambda *a, **k: None
+    )
     monkeypatch.setattr(T, "_resolve_tokenizer", lambda m: _FakeTok())
     monkeypatch.setattr(T, "_resolve_context_limit", lambda m: ctx_limit)
     req = T.TokenCountRequest(model="m", prompt=prompt)
@@ -53,6 +59,7 @@ def test_no_limit_never_flags(monkeypatch):
 
 # ── A1: /v1/audio/transcriptions rejects an unknown response_format ──
 
+
 def test_transcription_invalid_response_format_rejected(monkeypatch):
     import asyncio as _aio
     import types as _types
@@ -63,13 +70,19 @@ def test_transcription_invalid_response_format_rejected(monkeypatch):
         audio as A,  # noqa: N812  # intentional short module alias
     )
 
-    monkeypatch.setattr("yunshu_gateway.routers.models._check_permission", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "yunshu_gateway.routers.models._check_permission", lambda *a, **k: None
+    )
     fake_req = _types.SimpleNamespace(state=_types.SimpleNamespace())
     try:
-        _aio.run(A.create_transcription(
-            request=fake_req, file=None, model="m",
-            response_format="jsonl",  # typo / unsupported → must 400
-        ))
+        _aio.run(
+            A.create_transcription(
+                request=fake_req,
+                file=None,
+                model="m",
+                response_format="jsonl",  # typo / unsupported → must 400
+            )
+        )
         raise AssertionError("expected HTTPException for invalid response_format")
     except HTTPException as e:
         assert e.status_code == 400

@@ -1,4 +1,5 @@
 """Tests for GPU-accelerated N-gram speculative decoding."""
+
 import mlx.core as mx
 import pytest
 
@@ -28,10 +29,12 @@ class TestGPUNgramTable:
 
     def test_build_from_multiple_sequences(self):
         table = GPUNgramTable(GPUNgramConfig(min_n=1, max_n=3, k=3))
-        table.build_from_sequences([
-            [1, 2, 3, 4, 5],
-            [10, 20, 30, 10, 20, 30],
-        ])
+        table.build_from_sequences(
+            [
+                [1, 2, 3, 4, 5],
+                [10, 20, 30, 10, 20, 30],
+            ]
+        )
         assert table.total_entries > 0
 
     def test_lookup_gpu_basic_match(self):
@@ -247,9 +250,14 @@ class TestGPUNgramStrategy:
         strategy.end("req-1")
 
     def test_empty_proposal(self):
-        strategy = GPUNgramStrategy(GPUNgramConfig(
-            min_n=2, max_n=3, k=3, gpu_fallback=False,
-        ))
+        strategy = GPUNgramStrategy(
+            GPUNgramConfig(
+                min_n=2,
+                max_n=3,
+                k=3,
+                gpu_fallback=False,
+            )
+        )
         strategy.begin("req-2")
         proposal = strategy.draft([1, 2], n=5)
         assert proposal.tokens == []
@@ -283,33 +291,40 @@ class TestGPUNgramStrategy:
 
 class TestGPUNgramFactory:
     def test_create_gpu_ngram(self):
-        strategy = SpecStrategyFactory.create({
-            "type": "gpu_ngram",
-            "min_n": 1,
-            "max_n": 3,
-            "k": 5,
-        })
+        strategy = SpecStrategyFactory.create(
+            {
+                "type": "gpu_ngram",
+                "min_n": 1,
+                "max_n": 3,
+                "k": 5,
+            }
+        )
         assert isinstance(strategy, GPUNgramStrategy)
         assert strategy.name == "gpu_ngram"
 
     def test_create_suffix(self):
         from yunshu_engine.spec_interface import SuffixStrategy
-        strategy = SpecStrategyFactory.create({
-            "type": "suffix",
-            "min_suffix_length": 3,
-            "max_window": 256,
-        })
+
+        strategy = SpecStrategyFactory.create(
+            {
+                "type": "suffix",
+                "min_suffix_length": 3,
+                "max_window": 256,
+            }
+        )
         assert isinstance(strategy, SuffixStrategy)
         assert strategy.name == "suffix"
 
     def test_composite_with_gpu_ngram(self):
-        strategy = SpecStrategyFactory.create({
-            "type": "composite",
-            "strategies": [
-                {"type": "gpu_ngram", "min_n": 1, "max_n": 3, "k": 3},
-                {"type": "ngram", "mode": "lps"},
-            ],
-        })
+        strategy = SpecStrategyFactory.create(
+            {
+                "type": "composite",
+                "strategies": [
+                    {"type": "gpu_ngram", "min_n": 1, "max_n": 3, "k": 3},
+                    {"type": "ngram", "mode": "lps"},
+                ],
+            }
+        )
         assert isinstance(strategy, CompositeStrategy)
         assert "gpu_ngram" in strategy.name
 

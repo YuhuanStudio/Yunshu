@@ -5,6 +5,7 @@ so with two ASR (or two TTS) models loaded, a request for `whisper` could be ser
 model is loaded; it does NOT bind engine selection. _select_audio_engine now matches by
 model_id (mirroring the non-streaming create_speech). Also: the OpenAI SDK's
 `timestamp_granularities[]` form key now binds via an alias."""
+
 from __future__ import annotations
 
 import inspect
@@ -64,11 +65,13 @@ def test_empty_model_falls_back_to_first_of_type():
 def test_skips_unloaded_and_wrong_type():
     asr = _ASREngine()
     tts = _TTSEngine()
-    mgr = _mgr([
-        _entry("asr-1", asr),                 # wrong type
-        _entry("kokoro", tts, loaded=False),  # right type but unloaded
-        _entry("kokoro", tts),                # the live one
-    ])
+    mgr = _mgr(
+        [
+            _entry("asr-1", asr),  # wrong type
+            _entry("kokoro", tts, loaded=False),  # right type but unloaded
+            _entry("kokoro", tts),  # the live one
+        ]
+    )
     assert _select_audio_engine(mgr, "kokoro", _TTSEngine) is tts
     assert _select_audio_engine(mgr, "asr-1", _ASREngine) is asr
 

@@ -20,6 +20,7 @@ class TestLogitsProcessorSampler:
     def test_no_processors_passthrough(self):
         """Without processors, the base sampler is called directly."""
         calls = []
+
         def base_sampler(logits):
             calls.append(logits)
             return mx.array([42])
@@ -33,6 +34,7 @@ class TestLogitsProcessorSampler:
     def test_processor_receives_tokens(self):
         """Logits processors receive accumulated token list."""
         tokens_seen = []
+
         def fake_processor(tokens, logits):
             tokens_seen.append(list(tokens))
             return logits
@@ -57,6 +59,7 @@ class TestLogitsProcessorSampler:
 
     def test_reset_clears_tokens(self):
         """reset() clears accumulated tokens."""
+
         def base_sampler(logits):
             return mx.array([1])
 
@@ -127,6 +130,7 @@ class TestMakeSamplerRepetitionPenalty:
     def test_repetition_penalty_modifies_logits(self, scheduler):
         """Verify the repetition penalty actually modifies logits for repeated tokens."""
         import mlx.core as mx
+
         mx.clear_cache()
         # the scheduler now routes temp>0 through a per-request numpy RNG
         # (off mlx-lm's PRNG-trapped make_sampler), so reproducibility comes from the
@@ -179,23 +183,28 @@ class TestSchedulerStats:
 class TestRequestTimeout:
     def test_timeout_status_exists(self):
         from yunshu_engine.request import RequestStatus
+
         assert hasattr(RequestStatus, "FINISHED_TIMEOUT")
 
     def test_timeout_finish_reason(self):
         from yunshu_engine.request import RequestStatus
+
         assert RequestStatus.finish_reason(RequestStatus.FINISHED_TIMEOUT) == "timeout"
 
     def test_timeout_is_finished(self):
         from yunshu_engine.request import RequestStatus
+
         assert RequestStatus.is_finished(RequestStatus.FINISHED_TIMEOUT) is True
 
     def test_config_has_timeout(self):
         from yunshu_engine.scheduler import SchedulerConfig
+
         config = SchedulerConfig()
         assert config.request_timeout_seconds == 300
 
     def test_config_custom_timeout(self):
         from yunshu_engine.scheduler import SchedulerConfig
+
         config = SchedulerConfig(request_timeout_seconds=60)
         assert config.request_timeout_seconds == 60
 
@@ -203,11 +212,13 @@ class TestRequestTimeout:
 class TestSeedParameter:
     def test_seed_in_sampling_params(self):
         from yunshu_engine.request import SamplingParams
+
         sp = SamplingParams(seed=42)
         assert sp.seed == 42
 
     def test_seed_default_none(self):
         from yunshu_engine.request import SamplingParams
+
         sp = SamplingParams()
         assert sp.seed is None
 
@@ -221,11 +232,18 @@ class TestQueueDepthLimit:
         scheduler = Scheduler.__new__(Scheduler)
         scheduler.config = config
         scheduler.requests = {}
-        scheduler.waiting = type('FakeQueue', (), {'push': lambda s, x, **kw: None, '__len__': lambda s: 2})()
+        scheduler.waiting = type(
+            "FakeQueue", (), {"push": lambda s, x, **kw: None, "__len__": lambda s: 2}
+        )()
         scheduler.running = {}
         scheduler._pending_abort_ids = set()
 
-        req = Request(request_id="overflow-1", prompt="test", prompt_token_ids=[1,2,3], sampling_params=SamplingParams())
+        req = Request(
+            request_id="overflow-1",
+            prompt="test",
+            prompt_token_ids=[1, 2, 3],
+            sampling_params=SamplingParams(),
+        )
         scheduler.add_request(req)
         assert req.status == RequestStatus.FINISHED_ERROR
         assert req.finish_reason == "queue_full"
@@ -259,7 +277,7 @@ class TestSarathiChunkedPrefill:
         tokenizer = MagicMock()
         config = SchedulerConfig()
         sched = Scheduler(model, tokenizer, config)
-        assert hasattr(sched, '_pending_prefill')
+        assert hasattr(sched, "_pending_prefill")
         assert isinstance(sched._pending_prefill, dict)
         assert len(sched._pending_prefill) == 0
 
@@ -309,25 +327,30 @@ class TestRequestPreemption:
 
     def test_preempted_status_exists(self):
         from yunshu_engine.request import RequestStatus
+
         assert hasattr(RequestStatus, "PREEMPTED")
 
     def test_preempted_is_not_finished(self):
         from yunshu_engine.request import RequestStatus
+
         assert not RequestStatus.is_finished(RequestStatus.PREEMPTED)
 
     def test_preempted_between_running_and_finished(self):
         from yunshu_engine.request import RequestStatus
+
         assert RequestStatus.PREEMPTED > RequestStatus.RUNNING
         assert RequestStatus.PREEMPTED < RequestStatus.FINISHED_STOPPED
 
     def test_request_has_preemptions_field(self):
         from yunshu_engine.request import Request
+
         req = Request(request_id="test", prompt="hello")
         assert req.num_preemptions == 0
 
     def test_preempt_request_moves_to_waiting(self):
         """_preempt_request should set status to PREEMPTED and queue for re-scheduling."""
         from yunshu_engine.request import Request, RequestStatus
+
         model = MagicMock()
         tokenizer = MagicMock()
         config = SchedulerConfig(policy=SchedulingPolicy.PRIORITY)
@@ -360,6 +383,7 @@ class TestRequestPreemption:
         BUG-3 (response truncated below max_tokens).
         """
         from yunshu_engine.request import Request, RequestStatus
+
         model = MagicMock()
         tokenizer = MagicMock()
         config = SchedulerConfig(policy=SchedulingPolicy.PRIORITY)
@@ -639,7 +663,9 @@ class TestCacheLocalityReordering:
 
         # req-a and req-c should be consecutive (same prefix hash)
         ids = [r.request_id for r in result]
-        assert ids.index("req-a") < ids.index("req-b") or ids.index("req-c") < ids.index("req-b")
+        assert ids.index("req-a") < ids.index("req-b") or ids.index(
+            "req-c"
+        ) < ids.index("req-b")
         # Both should be in the output
         assert set(ids) == {"req-a", "req-b", "req-c"}
 
@@ -791,6 +817,7 @@ class TestFAIRPolicy:
     def _build_requests(self, priorities: list[int], names: list[str] | None = None):
         """Build a list of Request stubs with given priorities."""
         from yunshu_engine.request import Request, SamplingParams
+
         requests = []
         names = names or [f"req-{i}" for i in range(len(priorities))]
         for name, p in zip(names, priorities, strict=False):
@@ -808,6 +835,7 @@ class TestFAIRPolicy:
     def test_fair_groups_by_priority(self):
         """The FAIR round-robin should group requests by priority level."""
         from yunshu_engine.scheduler import SchedulingPolicy
+
         assert SchedulingPolicy.FAIR is not None
         # Verify the enum is accessible
         reqs = self._build_requests([0, 5, 10, 0, 5, 10])
@@ -852,19 +880,31 @@ class TestFAIRPolicy:
     def test_request_priority_comparison(self):
         """Request.__lt__ uses top-level priority field (not sampling_params)."""
         from yunshu_engine.request import Request, SamplingParams
+
         # Set Request.priority explicitly — it's a separate top-level field
-        high = Request(request_id="h", prompt="x",
-                       sampling_params=SamplingParams(priority=10),
-                       prompt_token_ids=[1], num_prompt_tokens=1, priority=10)
-        low = Request(request_id="l", prompt="x",
-                      sampling_params=SamplingParams(priority=0),
-                      prompt_token_ids=[1], num_prompt_tokens=1, priority=0)
+        high = Request(
+            request_id="h",
+            prompt="x",
+            sampling_params=SamplingParams(priority=10),
+            prompt_token_ids=[1],
+            num_prompt_tokens=1,
+            priority=10,
+        )
+        low = Request(
+            request_id="l",
+            prompt="x",
+            sampling_params=SamplingParams(priority=0),
+            prompt_token_ids=[1],
+            num_prompt_tokens=1,
+            priority=0,
+        )
         # __lt__: self.priority(0) < other.priority(10) is True → low < high
-        assert (low < high), "low.priority=0 should compare < high.priority=10"
+        assert low < high, "low.priority=0 should compare < high.priority=10"
         assert not (high < low)
 
     def test_request_with_zero_priority_default(self):
         """Default SamplingParams() has priority=0 (lowest)."""
         from yunshu_engine.request import SamplingParams
+
         sp = SamplingParams()
         assert sp.priority == 0

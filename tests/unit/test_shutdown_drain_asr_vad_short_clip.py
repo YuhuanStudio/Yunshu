@@ -8,6 +8,7 @@ the ASR VAD pre-gate required ~3 consecutive loud frames (streaming turn-detecti
   latch), so a short utterance (<~90ms) never latched → the file returned an empty transcript
   on real speech. For a one-shot file gate, any single clearly-loud frame proceeds.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -15,6 +16,7 @@ import inspect
 
 def test_shutdown_polls_live_counter():
     from yunshu_gateway import main
+
     src = inspect.getsource(main)
     # the one-shot event wait (the actual await call) is gone; a live-counter poll loop is used
     assert "await asyncio.wait_for(_drain_event.wait()" not in src
@@ -23,6 +25,7 @@ def test_shutdown_polls_live_counter():
 
 def test_vad_energy_fallback_in_source():
     from yunshu_engine import audio_engine
+
     src = inspect.getsource(audio_engine.ASREngine.transcribe)
     assert "vad_result.energy > self._vad.threshold" in src
 
@@ -33,6 +36,7 @@ def test_short_loud_frame_has_energy_above_threshold():
     import numpy as np
 
     from yunshu_engine.vad import EnergyVAD
+
     vad = EnergyVAD()
     sr = vad.sample_rate
     n = int(sr * vad.frame_duration_ms / 1000)

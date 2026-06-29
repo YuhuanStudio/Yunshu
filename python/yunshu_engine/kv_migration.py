@@ -51,6 +51,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class BlockTemperature:
     """Temperature metadata for a KV block in the migration system."""
+
     block_id: int
     tier: KVTier = KVTier.HOT
     access_frequency: int = 0
@@ -63,6 +64,7 @@ class BlockTemperature:
 @dataclass
 class MigrationRecord:
     """Record of a single migration operation."""
+
     block_id: int
     source_tier: KVTier
     dest_tier: KVTier
@@ -75,6 +77,7 @@ class MigrationRecord:
 @dataclass
 class MigrationStats:
     """Aggregate statistics for the migration manager."""
+
     gpu_to_cpu_count: int = 0
     cpu_to_ssd_count: int = 0
     ssd_to_cpu_count: int = 0
@@ -106,6 +109,7 @@ class MigrationStats:
 @dataclass
 class TierStats:
     """Per-tier utilization statistics."""
+
     tier: KVTier
     entry_count: int = 0
     byte_size: int = 0
@@ -130,6 +134,7 @@ class TierStats:
 @dataclass
 class WarmingPrediction:
     """A prediction about a prefix that will be needed soon."""
+
     prefix_hash: str
     confidence: float  # 0.0-1.0
     predicted_access_time: float  # monotonic timestamp
@@ -140,6 +145,7 @@ class WarmingPrediction:
 @dataclass
 class WarmingStats:
     """Statistics for the cache warming scheduler."""
+
     predictions_made: int = 0
     predictions_correct: int = 0
     predictions_incorrect: int = 0
@@ -250,7 +256,9 @@ class KVMigrationManager:
 
         # Statistics
         self._stats = MigrationStats()
-        self._migration_history: collections.deque[MigrationRecord] = collections.deque(maxlen=1000)
+        self._migration_history: collections.deque[MigrationRecord] = collections.deque(
+            maxlen=1000
+        )
         self._max_history = 1000
 
     # ── Lifecycle ──────────────────────────────────────────────────
@@ -384,24 +392,28 @@ class KVMigrationManager:
             with self._lock:
                 temp = self._temperatures.get(block_id)
                 if temp is None:
-                    results.append(MigrationRecord(
-                        block_id=block_id,
-                        source_tier=KVTier.COLD,
-                        dest_tier=KVTier.HOT,
-                        success=False,
-                    ))
+                    results.append(
+                        MigrationRecord(
+                            block_id=block_id,
+                            source_tier=KVTier.COLD,
+                            dest_tier=KVTier.HOT,
+                            success=False,
+                        )
+                    )
                     self._stats.failed_migrations += 1
                     continue
 
                 source = temp.tier
                 if source == KVTier.HOT:
                     # Already on GPU
-                    results.append(MigrationRecord(
-                        block_id=block_id,
-                        source_tier=source,
-                        dest_tier=KVTier.HOT,
-                        success=True,
-                    ))
+                    results.append(
+                        MigrationRecord(
+                            block_id=block_id,
+                            source_tier=source,
+                            dest_tier=KVTier.HOT,
+                            success=True,
+                        )
+                    )
                     continue
 
                 record = self._do_migrate(block_id, source, KVTier.HOT)
@@ -532,24 +544,28 @@ class KVMigrationManager:
             with self._lock:
                 temp = self._temperatures.get(block_id)
                 if temp is None:
-                    results.append(MigrationRecord(
-                        block_id=block_id,
-                        source_tier=source_tier,
-                        dest_tier=dest_tier,
-                        success=False,
-                    ))
+                    results.append(
+                        MigrationRecord(
+                            block_id=block_id,
+                            source_tier=source_tier,
+                            dest_tier=dest_tier,
+                            success=False,
+                        )
+                    )
                     self._stats.failed_migrations += 1
                     continue
 
                 actual_source = temp.tier
                 if actual_source != source_tier:
                     # Block not in expected source tier
-                    results.append(MigrationRecord(
-                        block_id=block_id,
-                        source_tier=actual_source,
-                        dest_tier=dest_tier,
-                        success=False,
-                    ))
+                    results.append(
+                        MigrationRecord(
+                            block_id=block_id,
+                            source_tier=actual_source,
+                            dest_tier=dest_tier,
+                            success=False,
+                        )
+                    )
                     self._stats.failed_migrations += 1
                     continue
 
@@ -893,7 +909,10 @@ class MultiTierCacheCoordinator:
         now = time.monotonic()
         with self._lock:
             # Promote high-access blocks from slower tiers to GPU
-            for tier, store in [(KVTier.WARM, self._cpu_cache), (KVTier.SSD, self._ssd_cache)]:
+            for tier, store in [
+                (KVTier.WARM, self._cpu_cache),
+                (KVTier.SSD, self._ssd_cache),
+            ]:
                 to_promote = []
                 for key, (_data, _last_access, access_count) in list(store.items()):
                     if access_count >= 10:
@@ -904,7 +923,9 @@ class MultiTierCacheCoordinator:
 
             # Demote low-access blocks from GPU to CPU
             to_demote = []
-            for key, (_data, _last_access, access_count) in list(self._gpu_cache.items()):
+            for key, (_data, _last_access, access_count) in list(
+                self._gpu_cache.items()
+            ):
                 if access_count < 2:
                     to_demote.append(key)
             for key in to_demote:
@@ -913,7 +934,9 @@ class MultiTierCacheCoordinator:
 
             # Demote low-access blocks from CPU to SSD
             to_demote = []
-            for key, (_data, _last_access, access_count) in list(self._cpu_cache.items()):
+            for key, (_data, _last_access, access_count) in list(
+                self._cpu_cache.items()
+            ):
                 if access_count < 2:
                     to_demote.append(key)
             for key in to_demote:
@@ -1181,16 +1204,19 @@ class CacheWarmingScheduler:
                     except Exception:
                         logger.debug(
                             "Coordinator tier lookup failed for key %s",
-                            key[:12], exc_info=True,
+                            key[:12],
+                            exc_info=True,
                         )
 
-                predictions.append(WarmingPrediction(
-                    prefix_hash=key,
-                    confidence=confidence,
-                    predicted_access_time=predicted_time,
-                    source_tier=source_tier,
-                    access_count_in_window=count,
-                ))
+                predictions.append(
+                    WarmingPrediction(
+                        prefix_hash=key,
+                        confidence=confidence,
+                        predicted_access_time=predicted_time,
+                        source_tier=source_tier,
+                        access_count_in_window=count,
+                    )
+                )
 
         # Sort by confidence (highest first)
         predictions.sort(key=lambda p: p.confidence, reverse=True)
@@ -1224,7 +1250,9 @@ class CacheWarmingScheduler:
         # otherwise hash it. This supports both pre-hashed keys from
         # predictions and raw prefix strings from direct calls.
         key = prefix_hash
-        if len(prefix_hash) != 32 or not all(c in "0123456789abcdef" for c in prefix_hash):
+        if len(prefix_hash) != 32 or not all(
+            c in "0123456789abcdef" for c in prefix_hash
+        ):
             key = _prefix_hash(prefix_hash)
 
         # Use coordinator's promote_by_key (key is now properly hashed)
@@ -1237,9 +1265,7 @@ class CacheWarmingScheduler:
 
         return result
 
-    def schedule_warming(
-        self, predictions: list[WarmingPrediction]
-    ) -> int:
+    def schedule_warming(self, predictions: list[WarmingPrediction]) -> int:
         """Schedule warming operations for predicted hot prefixes.
 
         Takes a list of predictions and warms the top N (limited by

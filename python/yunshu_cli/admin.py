@@ -2,6 +2,7 @@
 
 Model management, API key management, and mesh status.
 """
+
 from __future__ import annotations
 
 import json
@@ -58,6 +59,7 @@ def models_list(
 ):
     """List available models."""
     import httpx
+
     try:
         resp = httpx.get(f"{url}/v1/models", timeout=5)
         models = resp.json().get("data", [])
@@ -84,6 +86,7 @@ def models_discover(
 ):
     """Discover models on disk."""
     import httpx
+
     try:
         resp = httpx.get(f"{url}/api/v1/admin/models/discover", timeout=5)
         data = resp.json()
@@ -102,7 +105,9 @@ def models_discover(
         table.add_column("Engine")
         for mid, info in models.items():
             if isinstance(info, dict):
-                table.add_row(mid, info.get("model_type", ""), info.get("engine_type", ""))
+                table.add_row(
+                    mid, info.get("model_type", ""), info.get("engine_type", "")
+                )
             else:
                 table.add_row(mid, str(info), "")
         console.print(table)
@@ -115,8 +120,11 @@ def models_load(
 ):
     """Load a model into memory."""
     import httpx
+
     try:
-        resp = httpx.post(f"{url}/api/v1/admin/models/load", json={"model_id": model_id}, timeout=120)
+        resp = httpx.post(
+            f"{url}/api/v1/admin/models/load", json={"model_id": model_id}, timeout=120
+        )
         console.print(f"[green]{resp.json().get('message', resp.text)}[/]")
     except Exception as e:
         console.print(f"[red]Error: {e}[/]")
@@ -130,8 +138,11 @@ def models_unload(
 ):
     """Unload a model from memory."""
     import httpx
+
     try:
-        resp = httpx.post(f"{url}/api/v1/admin/models/unload", json={"model_id": model_id}, timeout=30)
+        resp = httpx.post(
+            f"{url}/api/v1/admin/models/unload", json={"model_id": model_id}, timeout=30
+        )
         console.print(f"[green]{resp.json().get('message', resp.text)}[/]")
     except Exception as e:
         console.print(f"[red]Error: {e}[/]")
@@ -150,6 +161,7 @@ def keys_list(
 ):
     """List API keys."""
     import httpx
+
     try:
         resp = httpx.get(f"{url}/api/v1/admin/keys", timeout=5)
         keys = resp.json()
@@ -174,13 +186,18 @@ def keys_list(
 @keys_app.command("create")
 def keys_create(
     name: str = typer.Argument(help="Key name"),
-    role: str = typer.Option("user", "--role", "-r", help="Role: admin, developer, user"),
+    role: str = typer.Option(
+        "user", "--role", "-r", help="Role: admin, developer, user"
+    ),
     url: str = typer.Option(_default_url(), "--url", "-u", envvar="YUNSHU_GATEWAY_URL"),
 ):
     """Create a new API key."""
     import httpx
+
     try:
-        resp = httpx.post(f"{url}/api/v1/admin/keys", json={"name": name, "role": role}, timeout=5)
+        resp = httpx.post(
+            f"{url}/api/v1/admin/keys", json={"name": name, "role": role}, timeout=5
+        )
         data = resp.json()
         key = data.get("key") or data.get("token") or ""
         if key:
@@ -199,6 +216,7 @@ def keys_revoke(
 ):
     """Revoke an API key."""
     import httpx
+
     try:
         resp = httpx.delete(f"{url}/api/v1/admin/keys/{key_id}", timeout=5)
         console.print(f"[green]{resp.json().get('message', 'Key revoked')}[/]")
@@ -219,6 +237,7 @@ def mesh_status(
 ):
     """Show mesh cluster status."""
     import httpx
+
     try:
         resp = httpx.get(f"{url}/api/v1/mesh/status", timeout=5)
         data = resp.json()
@@ -230,12 +249,14 @@ def mesh_status(
     topology = data.get("topology", "single")
     nodes = data.get("nodes", [])
 
-    console.print(Panel(
-        f"Distributed: {'[green]Yes[/]' if distributed else '[dim]No[/]'}\n"
-        f"Topology: {topology}\n"
-        f"Nodes: {len(nodes)}",
-        title="Mesh Status",
-    ))
+    console.print(
+        Panel(
+            f"Distributed: {'[green]Yes[/]' if distributed else '[dim]No[/]'}\n"
+            f"Topology: {topology}\n"
+            f"Nodes: {len(nodes)}",
+            title="Mesh Status",
+        )
+    )
 
     if nodes:
         table = Table(title="Nodes")
@@ -260,6 +281,7 @@ def mesh_status(
 
 # ── Config ──
 
+
 @admin_app.command("config")
 def admin_config(
     url: str = typer.Option(_default_url(), "--url", "-u", envvar="YUNSHU_GATEWAY_URL"),
@@ -282,7 +304,9 @@ def admin_config(
                     num_v = float(v)
                 except ValueError:
                     num_v = v
-            resp = httpx.patch(f"{url}/api/v1/admin/config/engine", json={k: num_v}, timeout=5)
+            resp = httpx.patch(
+                f"{url}/api/v1/admin/config/engine", json={k: num_v}, timeout=5
+            )
             console.print(f"[green]{resp.json().get('message', 'Updated')}[/]")
         except Exception as e:
             console.print(f"[red]Error: {e}[/]")
@@ -316,20 +340,28 @@ def _admin_headers() -> dict[str, str]:
 @tenants_app.command("create")
 def tenants_create(
     name: str = typer.Argument(help="Tenant name"),
-    tier: str = typer.Option("FREE", "--tier", "-t", help="Tier: FREE / PRO / ENTERPRISE"),
+    tier: str = typer.Option(
+        "FREE", "--tier", "-t", help="Tier: FREE / PRO / ENTERPRISE"
+    ),
     rpm: int | None = typer.Option(None, "--rpm", help="Requests per minute override"),
     tpm: int | None = typer.Option(None, "--tpm", help="Tokens per minute override"),
     url: str = typer.Option(_default_url(), "--url", "-u", envvar="YUNSHU_GATEWAY_URL"),
 ):
     """Create a new tenant. Prints the api_key (returned ONCE — save it)."""
     import httpx
+
     body: dict = {"name": name, "tier": tier.upper()}
     if rpm is not None:
         body["requests_per_minute"] = rpm
     if tpm is not None:
         body["tokens_per_minute"] = tpm
     try:
-        resp = httpx.post(f"{url}/api/v1/admin/tenants", json=body, headers=_admin_headers(), timeout=10)
+        resp = httpx.post(
+            f"{url}/api/v1/admin/tenants",
+            json=body,
+            headers=_admin_headers(),
+            timeout=10,
+        )
         if resp.status_code != 200:
             console.print(f"[red]Error {resp.status_code}: {resp.text}[/]")
             raise typer.Exit(1)
@@ -338,16 +370,18 @@ def tenants_create(
         console.print(f"[red]Network error: {e}[/]")
         raise typer.Exit(1) from e
 
-    console.print(Panel.fit(
-        f"[green]Tenant created:[/]\n"
-        f"  tenant_id: [cyan]{data['tenant_id']}[/]\n"
-        f"  name: {data['name']}\n"
-        f"  tier: {data['tier']}\n"
-        f"  api_key: [yellow]{data['api_key']}[/]  ← save this; cannot recover\n"
-        f"  quota.rpm: {data['quota']['requests_per_minute']}\n"
-        f"  quota.tpm: {data['quota']['tokens_per_minute']}\n"
-        f"  quota.max_concurrent: {data['quota']['max_concurrent']}"
-    ))
+    console.print(
+        Panel.fit(
+            f"[green]Tenant created:[/]\n"
+            f"  tenant_id: [cyan]{data['tenant_id']}[/]\n"
+            f"  name: {data['name']}\n"
+            f"  tier: {data['tier']}\n"
+            f"  api_key: [yellow]{data['api_key']}[/]  ← save this; cannot recover\n"
+            f"  quota.rpm: {data['quota']['requests_per_minute']}\n"
+            f"  quota.tpm: {data['quota']['tokens_per_minute']}\n"
+            f"  quota.max_concurrent: {data['quota']['max_concurrent']}"
+        )
+    )
 
 
 @tenants_app.command("list")
@@ -356,10 +390,15 @@ def tenants_list(
 ):
     """List all tenants (api_keys never shown)."""
     import httpx
+
     try:
-        resp = httpx.get(f"{url}/api/v1/admin/tenants", headers=_admin_headers(), timeout=5)
+        resp = httpx.get(
+            f"{url}/api/v1/admin/tenants", headers=_admin_headers(), timeout=5
+        )
         if resp.status_code == 503:
-            console.print(f"[yellow]{resp.json().get('detail', 'Tenant management not enabled')}[/]")
+            console.print(
+                f"[yellow]{resp.json().get('detail', 'Tenant management not enabled')}[/]"
+            )
             return
         data = resp.json()
     except httpx.HTTPError as e:
@@ -395,8 +434,13 @@ def tenants_delete(
 ):
     """Delete a tenant."""
     import httpx
+
     try:
-        resp = httpx.delete(f"{url}/api/v1/admin/tenants/{tenant_id}", headers=_admin_headers(), timeout=5)
+        resp = httpx.delete(
+            f"{url}/api/v1/admin/tenants/{tenant_id}",
+            headers=_admin_headers(),
+            timeout=5,
+        )
         if resp.status_code == 404:
             console.print(f"[red]Tenant '{tenant_id}' not found.[/]")
             raise typer.Exit(1)
@@ -416,9 +460,13 @@ def tenants_deactivate(
 ):
     """Soft-disable a tenant (api_key still on disk but auth returns None)."""
     import httpx
+
     try:
-        resp = httpx.post(f"{url}/api/v1/admin/tenants/{tenant_id}/deactivate",
-                          headers=_admin_headers(), timeout=5)
+        resp = httpx.post(
+            f"{url}/api/v1/admin/tenants/{tenant_id}/deactivate",
+            headers=_admin_headers(),
+            timeout=5,
+        )
         if resp.status_code == 404:
             console.print(f"[red]Tenant '{tenant_id}' not found.[/]")
             raise typer.Exit(1)
@@ -436,18 +484,25 @@ def tenants_deactivate(
 
 @admin_app.command("audit-log")
 def admin_audit_log(
-    limit: int = typer.Option(50, "--limit", "-n", help="Max events to display (1-1000)"),
+    limit: int = typer.Option(
+        50, "--limit", "-n", help="Max events to display (1-1000)"
+    ),
     op: str | None = typer.Option(None, "--op", help="Filter by operation name"),
     url: str = typer.Option(_default_url(), "--url", "-u", envvar="YUNSHU_GATEWAY_URL"),
 ):
     """Show recent audit events from the gateway's ring buffer."""
     import httpx
+
     params: dict = {"limit": limit}
     if op:
         params["op"] = op
     try:
-        resp = httpx.get(f"{url}/api/v1/admin/audit-log", params=params,
-                         headers=_admin_headers(), timeout=5)
+        resp = httpx.get(
+            f"{url}/api/v1/admin/audit-log",
+            params=params,
+            headers=_admin_headers(),
+            timeout=5,
+        )
         data = resp.json()
     except httpx.HTTPError as e:
         console.print(f"[red]Network error: {e}[/]")
@@ -457,7 +512,9 @@ def admin_audit_log(
     if not events:
         console.print("[dim]No audit events.[/]")
         return
-    table = Table(title=f"Audit Events (showing {len(events)} of {data.get('total_in_buffer', 0)})")
+    table = Table(
+        title=f"Audit Events (showing {len(events)} of {data.get('total_in_buffer', 0)})"
+    )
     table.add_column("Timestamp", style="dim")
     table.add_column("Op", style="cyan")
     table.add_column("Actor")

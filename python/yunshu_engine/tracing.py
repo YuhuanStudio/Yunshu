@@ -220,16 +220,17 @@ class InferenceTracer:
                     {
                         "resource": {
                             "attributes": [
-                                {"key": "service.name", "value": {"stringValue": "yunshu-engine"}},
+                                {
+                                    "key": "service.name",
+                                    "value": {"stringValue": "yunshu-engine"},
+                                },
                             ]
                         },
                         "scopeSpans": [
                             {
                                 "scope": {"name": "yunshu.inference"},
                                 "spans": [
-                                    s.to_dict()
-                                    for t in all_traces
-                                    for s in t.spans
+                                    s.to_dict() for t in all_traces for s in t.spans
                                 ],
                             }
                         ],
@@ -332,7 +333,11 @@ class StructuredLogger:
         level = LogLevel[level_str] if isinstance(level_str, str) else level_str
 
         with self._lock:
-            self._log_counts[level_str.upper() if isinstance(level_str, str) else LogLevel(level).name] += 1
+            self._log_counts[
+                level_str.upper()
+                if isinstance(level_str, str)
+                else LogLevel(level).name
+            ] += 1
             self._event_counts[event] += 1
             self._total_entries += 1
 
@@ -342,7 +347,9 @@ class StructuredLogger:
         entry: dict[str, Any] = {
             "timestamp": time.time(),
             "logger": self._name,
-            "level": level_str.upper() if isinstance(level_str, str) else LogLevel(level).name,
+            "level": level_str.upper()
+            if isinstance(level_str, str)
+            else LogLevel(level).name,
             "event": event,
         }
 
@@ -415,8 +422,20 @@ class MetricType(StrEnum):
 
 # Pre-allocated bucket boundaries for latency histograms
 DEFAULT_LATENCY_BUCKETS = (
-    0.001, 0.005, 0.01, 0.025, 0.05, 0.1,
-    0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0,
+    0.001,
+    0.005,
+    0.01,
+    0.025,
+    0.05,
+    0.1,
+    0.25,
+    0.5,
+    1.0,
+    2.5,
+    5.0,
+    10.0,
+    30.0,
+    60.0,
 )
 
 
@@ -494,9 +513,7 @@ class MetricsAggregatorV2:
         def _esc(v: str) -> str:
             return v.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
-        pairs = ",".join(
-            f'{k}="{_esc(v)}"' for k, v in sorted(key)
-        )
+        pairs = ",".join(f'{k}="{_esc(v)}"' for k, v in sorted(key))
         return f"{{{pairs}}}"
 
     def get_prometheus_output(self) -> str:
@@ -532,9 +549,7 @@ class MetricsAggregatorV2:
             # Histograms
             for name in sorted(self._histograms):
                 help_text = self._help.get(name, "")
-                buckets = self._histogram_buckets.get(
-                    name, DEFAULT_LATENCY_BUCKETS
-                )
+                buckets = self._histogram_buckets.get(name, DEFAULT_LATENCY_BUCKETS)
                 if help_text:
                     lines.append(f"# HELP {name} {help_text}")
                 lines.append(f"# TYPE {name} histogram")
@@ -554,13 +569,9 @@ class MetricsAggregatorV2:
                                 f'{name}_bucket{{le="{upper}",{extra}}} {in_bucket}'
                             )
                         else:
-                            lines.append(
-                                f'{name}_bucket{{le="{upper}"}} {in_bucket}'
-                            )
+                            lines.append(f'{name}_bucket{{le="{upper}"}} {in_bucket}')
                     if extra:
-                        lines.append(
-                            f'{name}_bucket{{le="+Inf",{extra}}} {count}'
-                        )
+                        lines.append(f'{name}_bucket{{le="+Inf",{extra}}} {count}')
                     else:
                         lines.append(f'{name}_bucket{{le="+Inf"}} {count}')
                     lines.append(f"{name}_sum{label_str} {total}")
@@ -575,7 +586,9 @@ class MetricsAggregatorV2:
     def get_stats(self) -> dict[str, Any]:
         """Return aggregator statistics."""
         with self._lock:
-            total_metrics = len(self._counters) + len(self._gauges) + len(self._histograms)
+            total_metrics = (
+                len(self._counters) + len(self._gauges) + len(self._histograms)
+            )
             total_series = (
                 sum(len(v) for v in self._counters.values())
                 + sum(len(v) for v in self._gauges.values())
@@ -720,6 +733,7 @@ class HealthDashboard:
         data: dict[str, Any] = {}
         try:
             import psutil
+
             data["cpu_percent"] = psutil.cpu_percent(interval=0)
             mem = psutil.virtual_memory()
             data["memory_percent"] = mem.percent
@@ -731,12 +745,16 @@ class HealthDashboard:
 
         try:
             import mlx.core as mx
+
             active = mx.get_active_memory()
             data["gpu_active_bytes"] = active
             import subprocess
+
             r = subprocess.run(
                 ["sysctl", "-n", "hw.memsize"],
-                capture_output=True, text=True, timeout=2,
+                capture_output=True,
+                text=True,
+                timeout=2,
             )
             total = int(r.stdout.strip()) if r.returncode == 0 else 0
             data["gpu_utilization_pct"] = round(active / total * 100, 1) if total else 0
@@ -751,25 +769,30 @@ class HealthDashboard:
         data: dict[str, Any] = {"total": 0, "loaded": 0, "details": []}
         try:
             from yunshu_gateway.engine import get_engine, get_model_manager
+
             manager = get_model_manager()
             if manager is not None:
                 for entry in manager.list_entries():
                     data["total"] += 1
                     if entry.is_loaded:
                         data["loaded"] += 1
-                    data["details"].append({
-                        "model_id": entry.model_id,
-                        "loaded": entry.is_loaded,
-                    })
+                    data["details"].append(
+                        {
+                            "model_id": entry.model_id,
+                            "loaded": entry.is_loaded,
+                        }
+                    )
             else:
                 engine = get_engine()
                 if engine and getattr(engine, "is_loaded", False):
                     data["total"] = 1
                     data["loaded"] = 1
-                    data["details"].append({
-                        "model_id": getattr(engine, "model_name", "default"),
-                        "loaded": True,
-                    })
+                    data["details"].append(
+                        {
+                            "model_id": getattr(engine, "model_name", "default"),
+                            "loaded": True,
+                        }
+                    )
         except Exception:
             logger.debug("operation failed", exc_info=True)
         return data
@@ -784,6 +807,7 @@ class HealthDashboard:
             from yunshu_gateway.middleware.metrics_aggregator import (
                 get_metrics_aggregator,
             )
+
             agg = get_metrics_aggregator()
             summary = agg.get_summary(window_seconds=60)
             data["active"] = summary.get("total_requests", 0)
@@ -797,6 +821,7 @@ class HealthDashboard:
         data: dict[str, Any] = {"active": False}
         try:
             from yunshu_gateway.engine import get_engine, get_model_manager
+
             manager = get_model_manager()
             engines = []
             if manager is not None:

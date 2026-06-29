@@ -7,7 +7,6 @@ Covers:
 - Vectorized MLX operations correctness
 """
 
-
 import mlx.core as mx
 import pytest
 
@@ -27,7 +26,10 @@ from yunshu_engine.request import SamplingParams
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_logits(batch_size: int = 4, vocab_size: int = 100, seed: int = 42) -> mx.array:
+
+def _make_logits(
+    batch_size: int = 4, vocab_size: int = 100, seed: int = 42
+) -> mx.array:
     """Create deterministic logits for testing."""
     mx.random.seed(seed)
     return mx.random.normal((batch_size, vocab_size))
@@ -43,6 +45,7 @@ def _default_params(batch_size: int = 4, **overrides) -> list[dict]:
 # ===================================================================
 # BatchSampler
 # ===================================================================
+
 
 class TestBatchSamplerPrepare:
     """Tests for BatchSampler.prepare_batch()."""
@@ -192,7 +195,7 @@ class TestBatchSamplerSample:
         sampler = BatchSampler()
         logits = mx.zeros((1, 100))
         logits[0, 0] = 10.0  # Very dominant token
-        logits[0, 1] = 1.0   # Secondary token
+        logits[0, 1] = 1.0  # Secondary token
 
         params = _default_params(batch_size=1, temperature=1.0, top_p=0.5)
         # With top_p=0.5, token 0 should dominate
@@ -204,7 +207,7 @@ class TestBatchSamplerSample:
         """Min-p filtering removes low-probability tokens."""
         sampler = BatchSampler()
         logits = mx.zeros((1, 100))
-        logits[0, 0] = 10.0   # Dominant
+        logits[0, 0] = 10.0  # Dominant
         logits[0, 1] = 0.001  # Very unlikely
 
         params = _default_params(batch_size=1, temperature=1.0, min_p=0.1)
@@ -317,6 +320,7 @@ class TestBatchSamplerTopK:
 # LogitsProcessorBatch
 # ===================================================================
 
+
 class TestLogitsProcessorBatch:
     """Tests for LogitsProcessorBatch pipeline."""
 
@@ -333,8 +337,10 @@ class TestLogitsProcessorBatch:
     def test_add_processor(self):
         """add_processor registers a new processor."""
         processor = LogitsProcessorBatch()
+
         def custom_fn(logits, cfg):
             return logits
+
         processor.add_processor("custom", custom_fn)
         names = [n for n, _ in processor._processors]
         assert "custom" in names
@@ -354,10 +360,13 @@ class TestLogitsProcessorBatch:
     def test_add_processor_replaces_existing(self):
         """Adding a processor with the same name replaces it."""
         processor = LogitsProcessorBatch()
+
         def fn1(logits, cfg):
             return logits
+
         def fn2(logits, cfg):
             return logits
+
         processor.add_processor("custom", fn1)
         processor.add_processor("custom", fn2)
 
@@ -567,6 +576,7 @@ class TestLogitsProcessorBatch:
 # BatchStopChecker
 # ===================================================================
 
+
 class TestBatchStopChecker:
     """Tests for BatchStopChecker."""
 
@@ -654,10 +664,10 @@ class TestBatchStopChecker:
 
         mask = checker.check_batch_token_ids_vectorized(token_ids, stop_sets)
         mask_list = mask.tolist()
-        assert mask_list[0] is True   # token 10 in {10, 50}
+        assert mask_list[0] is True  # token 10 in {10, 50}
         assert mask_list[1] is False  # token 20 not in {30}
         assert mask_list[2] is False  # empty set
-        assert mask_list[3] is True   # token 40 in {40, 99}
+        assert mask_list[3] is True  # token 40 in {40, 99}
 
     def test_max_tokens_vectorized(self):
         """Vectorized max_tokens check returns correct mask."""
@@ -668,9 +678,9 @@ class TestBatchStopChecker:
         mask = checker.check_max_tokens_vectorized(counts, limits)
         mask_list = mask.tolist()
         assert mask_list[0] is False  # 100 < 200
-        assert mask_list[1] is True   # 256 >= 256
+        assert mask_list[1] is True  # 256 >= 256
         assert mask_list[2] is False  # 255 < 256
-        assert mask_list[3] is True   # 500 >= 500
+        assert mask_list[3] is True  # 500 >= 500
 
     def test_stats_tracking(self):
         """Stats are updated after checks."""
@@ -690,10 +700,12 @@ class TestBatchStopChecker:
         token_ids = mx.array([2, 50, 100, 42])
         counts = [5, 10, 256, 3]
         configs = [
-            StopConfig(request_id="r0", max_tokens=256, eos_token_ids=[2]),     # EOS stop
-            StopConfig(request_id="r1", max_tokens=256),                         # continue
-            StopConfig(request_id="r2", max_tokens=256),                         # max_tokens stop
-            StopConfig(request_id="r3", max_tokens=256, stop_token_ids=[100]),   # not this token
+            StopConfig(request_id="r0", max_tokens=256, eos_token_ids=[2]),  # EOS stop
+            StopConfig(request_id="r1", max_tokens=256),  # continue
+            StopConfig(request_id="r2", max_tokens=256),  # max_tokens stop
+            StopConfig(
+                request_id="r3", max_tokens=256, stop_token_ids=[100]
+            ),  # not this token
         ]
 
         results = checker.check_batch(token_ids, counts, configs)
@@ -706,6 +718,7 @@ class TestBatchStopChecker:
 # ===================================================================
 # Aho-Corasick Trie
 # ===================================================================
+
 
 class TestAhoCorasickTrie:
     """Tests for _AhoCorasickTrie (multi-pattern stop string matching)."""
@@ -795,6 +808,7 @@ class TestAhoCorasickTrie:
 # Integration-style tests
 # ===================================================================
 
+
 class TestBatchSamplerIntegration:
     """Integration tests combining multiple components."""
 
@@ -857,7 +871,13 @@ class TestBatchSamplerIntegration:
             {"temperature": 0.0, "top_k": 0, "top_p": 1.0, "min_p": 0.0, "seed": None},
             {"temperature": 0.5, "top_k": 10, "top_p": 0.9, "min_p": 0.0, "seed": None},
             {"temperature": 1.0, "top_k": 0, "top_p": 1.0, "min_p": 0.1, "seed": None},
-            {"temperature": 0.8, "top_k": 5, "top_p": 0.95, "min_p": 0.05, "seed": None},
+            {
+                "temperature": 0.8,
+                "top_k": 5,
+                "top_p": 0.95,
+                "min_p": 0.05,
+                "seed": None,
+            },
         ]
 
         result = sampler.sample_batch(logits, params)
@@ -914,27 +934,35 @@ class TestBatchSamplerTempPosition:
 
     def test_top_p_nucleus_is_temperature_invariant(self):
         import mlx.core as mx
+
         # Clear gap: tokens 0,1 dominate; top_p=0.8 should keep only {0,1}
         # regardless of temperature (nucleus is defined on the un-tempered probs).
         logits = mx.array([[5.0, 4.0, 0.0, -2.0, -5.0]])
         sampler = BatchSampler()
         seen = set()
         for _ in range(2000):
-            r = sampler.sample_batch(logits, [{"temperature": 2.0, "top_p": 0.8, "seed": None}])
+            r = sampler.sample_batch(
+                logits, [{"temperature": 2.0, "top_p": 0.8, "seed": None}]
+            )
             seen.add(int(r.token_ids[0]))
         # Only the un-tempered nucleus tokens may be sampled.
         assert seen <= {0, 1}, f"sampled outside nucleus: {seen}"
 
     def test_temperature_still_reshapes_within_nucleus(self):
         import mlx.core as mx
+
         logits = mx.array([[2.0, 1.0, 0.0, -8.0, -9.0]])
         sampler = BatchSampler()
+
         def _top_frac(temp):
             c = 0
             for _ in range(3000):
-                r = sampler.sample_batch(logits, [{"temperature": temp, "top_p": 1.0, "seed": None}])
+                r = sampler.sample_batch(
+                    logits, [{"temperature": temp, "top_p": 1.0, "seed": None}]
+                )
                 if int(r.token_ids[0]) == 0:
                     c += 1
             return c / 3000
+
         # Colder concentrates on the top token; hotter spreads.
         assert _top_frac(0.3) > _top_frac(4.0)

@@ -6,6 +6,7 @@ The opus path transcodes with `-f ogg -c:a libopus`, producing an Ogg-ENCAPSULAT
 "audio/opus" denotes raw/CMAF Opus packets. Strict clients keying on Content-Type mis-handled
 the Ogg bytes. Fixed the single _AUDIO_MIME["opus"] mapping to audio/ogg.
 """
+
 from __future__ import annotations
 
 from yunshu_gateway.routers.audio import _AUDIO_MIME, _FFMPEG_FMT

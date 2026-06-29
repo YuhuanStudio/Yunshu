@@ -16,6 +16,7 @@ from yunshu_engine.gpu_rejection import (
 
 # ── Helpers ──
 
+
 def _make_logits(model_picks: list[int], vocab_size: int = 100) -> mx.array:
     """Create logits where argmax at each position equals model_picks[i].
 
@@ -31,10 +32,13 @@ def _make_logits(model_picks: list[int], vocab_size: int = 100) -> mx.array:
 
 def _make_logits_3d(model_picks: list[int], vocab_size: int = 100) -> mx.array:
     """Create 3D logits [1, K, vocab_size] for testing shape normalization."""
-    return _make_logits(model_picks, vocab_size).reshape(1, len(model_picks), vocab_size)
+    return _make_logits(model_picks, vocab_size).reshape(
+        1, len(model_picks), vocab_size
+    )
 
 
 # ── BatchRejectionResult Dataclass Tests ──
+
 
 class TestBatchRejectionResult:
     """Tests for the BatchRejectionResult dataclass."""
@@ -66,6 +70,7 @@ class TestBatchRejectionResult:
 
 
 # ── GPU Greedy Verification Tests ──
+
 
 class TestGPUGreedyVerification:
     """Tests for GPURejectionSampler.verify_greedy()."""
@@ -181,6 +186,7 @@ class TestGPUGreedyVerification:
 
 # ── GPU Stochastic Verification Tests ──
 
+
 class TestGPUStochasticVerification:
     """Tests for GPURejectionSampler.verify_stochastic()."""
 
@@ -257,9 +263,7 @@ class TestGPUStochasticVerification:
         logits[0, A] = 30.0  # softmax → ~all mass on A
         # draft is very confident on B (high draft prob) but target prob of B ~0
         # → acceptance ratio ~0 → forced rejection at position 0.
-        result = self.sampler.verify_stochastic(
-            logits, [B], [-0.001], temperature=1.0
-        )
+        result = self.sampler.verify_stochastic(logits, [B], [-0.001], temperature=1.0)
         assert result.rejection_position == 0
         assert result.accepted_count == 0
         # The correction must come from the (peaked) target, i.e. token A — never B.
@@ -270,6 +274,7 @@ class TestGPUStochasticVerification:
         import inspect
 
         from yunshu_engine import gpu_rejection
+
         src = inspect.getsource(gpu_rejection.GPURejectionSampler.verify_stochastic)
         code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
         # the old per-vocab scalar subtraction is removed
@@ -280,9 +285,7 @@ class TestGPUStochasticVerification:
     def test_empty_draft_stochastic(self):
         """Empty draft returns 0 accepted."""
         logits = mx.zeros((0, 50))
-        result = self.sampler.verify_stochastic(
-            logits, [], [], temperature=1.0
-        )
+        result = self.sampler.verify_stochastic(logits, [], [], temperature=1.0)
 
         assert result.accepted_count == 0
         assert result.rejection_position is None
@@ -298,6 +301,7 @@ class TestGPUStochasticVerification:
 
 
 # ── Batch Verification Tests ──
+
 
 class TestBatchVerification:
     """Tests for GPURejectionSampler.verify_greedy_batch()."""
@@ -378,6 +382,7 @@ class TestBatchVerification:
 
 # ── CPU Sequential Fallback Tests ──
 
+
 class TestCPUSequentialFallback:
     """Tests for GPURejectionSampler.verify_cpu_sequential()."""
 
@@ -417,6 +422,7 @@ class TestCPUSequentialFallback:
 
 
 # ── Auto-Detection Tests ──
+
 
 class TestAutoDetection:
     """Tests for should_enable_gpu_rejection() and verify_auto()."""
@@ -488,7 +494,8 @@ class TestAutoDetection:
             sampler = GPURejectionSampler(rng_seed=42)
             logits = _make_logits([5, 10, 15])
             result = sampler.verify_auto(
-                logits, [5, 10, 15],
+                logits,
+                [5, 10, 15],
                 draft_logprobs=[-0.5, -0.5, -0.5],
                 temperature=1.0,
             )
@@ -499,6 +506,7 @@ class TestAutoDetection:
 
 
 # ── Bonus Token Tests ──
+
 
 class TestBonusToken:
     """Tests for GPURejectionSampler.compute_bonus_token()."""
@@ -526,6 +534,7 @@ class TestBonusToken:
 
 
 # ── GPU vs CPU Equivalence Tests ──
+
 
 class TestGPUvsCPUEquivalence:
     """Verify GPU batch and CPU sequential produce identical results."""

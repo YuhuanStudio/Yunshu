@@ -16,6 +16,7 @@ KVPrefixCache serves the warmed prefix (cached_tokens reflects the reuse). If th
 KV was LRU-evicted before a read, it transparently re-prefills once — the handle
 governs *validity/TTL*, the KV tier governs *residency*.
 """
+
 from __future__ import annotations
 
 import threading
@@ -26,16 +27,16 @@ from dataclasses import dataclass, field
 
 @dataclass
 class CachedContent:
-    name: str                      # "cachedContents/<id>"
+    name: str  # "cachedContents/<id>"
     model: str
-    messages: list[dict]           # content to prepend on read (system/context)
+    messages: list[dict]  # content to prepend on read (system/context)
     token_count: int
     created_at: float
     expire_at: float
     display_name: str = ""
     last_used_at: float = field(default=0.0)
     read_count: int = 0
-    owner: str = "anonymous"       # caller identity (resolve_actor) for tenant isolation
+    owner: str = "anonymous"  # caller identity (resolve_actor) for tenant isolation
 
     def to_api(self, now: float | None = None) -> dict:
         now = now if now is not None else time.time()
@@ -54,6 +55,7 @@ class CachedContent:
 
 def _rfc3339(ts: float) -> str:
     import datetime
+
     return datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
@@ -81,18 +83,34 @@ class ExplicitContextCache:
         for names in by_owner.values():
             if len(names) > self._max_entries:
                 for n in sorted(names, key=lambda k: self._entries[k].expire_at)[
-                        :len(names) - self._max_entries]:
+                    : len(names) - self._max_entries
+                ]:
                     self._entries.pop(n, None)
 
-    def create(self, model: str, messages: list[dict], token_count: int,
-               ttl_seconds: float | None = None, display_name: str = "",
-               owner: str = "anonymous") -> CachedContent:
+    def create(
+        self,
+        model: str,
+        messages: list[dict],
+        token_count: int,
+        ttl_seconds: float | None = None,
+        display_name: str = "",
+        owner: str = "anonymous",
+    ) -> CachedContent:
         now = time.time()
-        ttl = float(ttl_seconds) if ttl_seconds and ttl_seconds > 0 else self._default_ttl
+        ttl = (
+            float(ttl_seconds) if ttl_seconds and ttl_seconds > 0 else self._default_ttl
+        )
         name = f"cachedContents/{uuid.uuid4().hex[:24]}"
         entry = CachedContent(
-            name=name, model=model, messages=list(messages), token_count=int(token_count),
-            created_at=now, expire_at=now + ttl, display_name=display_name, owner=owner)
+            name=name,
+            model=model,
+            messages=list(messages),
+            token_count=int(token_count),
+            created_at=now,
+            expire_at=now + ttl,
+            display_name=display_name,
+            owner=owner,
+        )
         with self._lock:
             self._evict_expired(now)
             self._entries[name] = entry

@@ -6,6 +6,7 @@ class TestRadixTreeMatch:
 
     def test_match_empty_tree(self):
         from yunshu_kv.radix_attention import RadixTree
+
         tree = RadixTree()
         node, remaining = tree.match([1, 2, 3])
         assert node is tree.root
@@ -13,6 +14,7 @@ class TestRadixTreeMatch:
 
     def test_match_exact(self):
         from yunshu_kv.radix_attention import RadixTree
+
         tree = RadixTree()
         tree.insert([1, 2, 3], [], [])
         node, remaining = tree.match([1, 2, 3])
@@ -28,6 +30,7 @@ class TestRadixTreeMatch:
         - Returns [1,2,3] with remaining=[]
         """
         from yunshu_kv.radix_attention import RadixTree
+
         tree = RadixTree()
         tree.insert([1, 2, 3, 4, 5], [], [])
         assert tree.total_nodes == 1
@@ -40,6 +43,7 @@ class TestRadixTreeMatch:
 
     def test_match_no_match(self):
         from yunshu_kv.radix_attention import RadixTree
+
         tree = RadixTree()
         tree.insert([1, 2, 3], [], [])
         node, remaining = tree.match([4, 5, 6])
@@ -58,6 +62,7 @@ class TestRadixTreeSplit:
         - Match returns node [1,2] with remaining [4]
         """
         from yunshu_kv.radix_attention import RadixTree
+
         tree = RadixTree()
         tree.insert([1, 2, 3], [], [])
         node, remaining = tree.match([1, 2, 4])
@@ -69,6 +74,7 @@ class TestRadixTreeSplit:
     def test_split_preserves_children(self):
         """After split, the original child's children are moved to new node."""
         from yunshu_kv.radix_attention import RadixTree
+
         tree = RadixTree()
         # Insert [1,2,3] and [1,2,4] — creates two children off [1,2]
         tree.insert([1, 2, 3], [], [])
@@ -83,6 +89,7 @@ class TestRadixTreeSplit:
     def test_insert_after_split(self):
         """After a split creates a shared prefix node, insert the new suffix."""
         from yunshu_kv.radix_attention import RadixTree
+
         tree = RadixTree()
         tree.insert([1, 2, 3], [], [])
 
@@ -134,6 +141,7 @@ class TestRadixTreeCompaction:
     def test_merge_after_eviction(self):
         """After evicting a leaf, parent with single child merges."""
         from yunshu_kv.radix_attention import RadixTree
+
         tree = RadixTree()
 
         # Insert two paths: [1,2,3] and [1,2,4]
@@ -150,6 +158,7 @@ class TestRadixTreeCompaction:
     def test_no_merge_with_multiple_children(self):
         """Parent with 2+ children should NOT merge after single eviction."""
         from yunshu_kv.radix_attention import RadixTree
+
         tree = RadixTree()
 
         tree.insert([1, 2, 3], [], [])
@@ -168,6 +177,7 @@ class TestRadixTreeRefcounting:
 
     def test_inc_ref_propagates_to_root(self):
         from yunshu_kv.radix_attention import RadixTree
+
         tree = RadixTree()
         child = tree.insert([1, 2, 3], [], [])
         intermediate = list(tree.root.children.values())[0]
@@ -179,6 +189,7 @@ class TestRadixTreeRefcounting:
 
     def test_dec_ref_propagates_to_root(self):
         from yunshu_kv.radix_attention import RadixTree
+
         tree = RadixTree()
         child = tree.insert([1, 2, 3], [], [])
         intermediate = list(tree.root.children.values())[0]
@@ -191,6 +202,7 @@ class TestRadixTreeRefcounting:
     def test_eviction_skips_active_refs(self):
         """Nodes with ref_count > 0 should not be evicted."""
         from yunshu_kv.radix_attention import RadixTree
+
         tree = RadixTree()
         node = tree.insert([1, 2, 3], [], [])
         node.last_access_time = 0  # Oldest
@@ -209,6 +221,7 @@ class TestRadixTreeStats:
 
     def test_stats_empty(self):
         from yunshu_kv.radix_attention import RadixTree
+
         tree = RadixTree()
         stats = tree.get_stats()
         assert stats["total_nodes"] == 0
@@ -216,6 +229,7 @@ class TestRadixTreeStats:
 
     def test_stats_after_insert(self):
         from yunshu_kv.radix_attention import RadixTree
+
         tree = RadixTree()
         tree.insert([1, 2, 3], [], [])
         stats = tree.get_stats()
@@ -224,6 +238,7 @@ class TestRadixTreeStats:
 
     def test_eviction_stats(self):
         from yunshu_kv.radix_attention import RadixTree
+
         tree = RadixTree()
         tree.insert([1, 2, 3], [], [])
         tree.evict(1)

@@ -7,6 +7,7 @@ NOT in _normalize_image_part on the path that actually feeds the engine. Now the
 normalizes the bare string to the canonical object, and the engine extraction guards against
 a non-dict image_url defensively.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -31,15 +32,25 @@ def test_object_form_image_url_unchanged():
 
 def test_image_and_image_data_types_still_normalized():
     # the pre-existing behavior must be preserved
-    assert _normalize_image_part(
-        {"type": "image", "url": "https://e/x.png"})["image_url"]["url"] == "https://e/x.png"
-    assert "abc" in _normalize_image_part(
-        {"type": "image_data", "data": "abc"})["image_url"]["url"]
+    assert (
+        _normalize_image_part({"type": "image", "url": "https://e/x.png"})["image_url"][
+            "url"
+        ]
+        == "https://e/x.png"
+    )
+    assert (
+        "abc"
+        in _normalize_image_part({"type": "image_data", "data": "abc"})["image_url"][
+            "url"
+        ]
+    )
 
 
 def test_engine_extraction_guards_non_dict_image_url():
     # the engine extraction must not do .get("url") on a bare string (AttributeError → 500)
     src = inspect.getsource(vlm_engine.VLMEngine._extract_images)
     code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
-    assert 'part.get("image_url", {}).get("url", "")' not in code  # the crashing form is gone
+    assert (
+        'part.get("image_url", {}).get("url", "")' not in code
+    )  # the crashing form is gone
     assert "isinstance(_iu, dict)" in code and "isinstance(_iu, str)" in code

@@ -1,4 +1,5 @@
 """Tests for PrefillProgressTracker and its integration with fast paths."""
+
 import time
 
 from yunshu_engine.prefill_progress import PrefillProgressTracker, get_prefill_tracker
@@ -79,6 +80,7 @@ class TestPrefillProgressEdgeCases:
 
     def test_concurrent_updates(self):
         import threading
+
         tracker = PrefillProgressTracker()
         errors = []
 

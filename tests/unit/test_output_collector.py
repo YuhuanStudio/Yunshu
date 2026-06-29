@@ -27,8 +27,12 @@ class TestRequestOutputCollector:
 
     def test_aggregation_merges_outputs(self):
         collector = RequestOutputCollector(aggregate=True)
-        collector.put(RequestOutput(request_id="test", new_text="hel", new_token_ids=[1, 2]))
-        collector.put(RequestOutput(request_id="test", new_text="lo", new_token_ids=[3]))
+        collector.put(
+            RequestOutput(request_id="test", new_text="hel", new_token_ids=[1, 2])
+        )
+        collector.put(
+            RequestOutput(request_id="test", new_text="lo", new_token_ids=[3])
+        )
         result = collector.get_nowait()
         assert result is not None
         assert result.new_text == "hello"
@@ -56,8 +60,17 @@ class TestRequestOutputCollector:
 
     def test_merge_preserves_cumulative(self):
         collector = RequestOutputCollector()
-        out1 = RequestOutput(request_id="test", new_text="a", output_token_ids=[1], completion_tokens=1)
-        out2 = RequestOutput(request_id="test", new_text="b", output_token_ids=[1, 2], completion_tokens=2, finished=True, finish_reason="stop")
+        out1 = RequestOutput(
+            request_id="test", new_text="a", output_token_ids=[1], completion_tokens=1
+        )
+        out2 = RequestOutput(
+            request_id="test",
+            new_text="b",
+            output_token_ids=[1, 2],
+            completion_tokens=2,
+            finished=True,
+            finish_reason="stop",
+        )
         collector.put(out1)
         collector.put(out2)
         result = collector.get_nowait()

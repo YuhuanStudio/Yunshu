@@ -36,7 +36,9 @@ def _make_request(
         context_length=context_length,
         output_length=output_length,
         is_prefilling=is_prefilling,
-        effective_priority=effective_priority if effective_priority is not None else priority,
+        effective_priority=effective_priority
+        if effective_priority is not None
+        else priority,
     )
 
 
@@ -95,7 +97,9 @@ class TestTokenLevelSchedulerBasic:
         ]
         result = sched.compute_token_budget(reqs, total_budget=1024)
         total = sum(a.prefill_tokens + a.decode_tokens for a in result)
-        assert total <= 1024 + len(reqs) * sched.min_prefill_tokens  # tolerance for min floor
+        assert (
+            total <= 1024 + len(reqs) * sched.min_prefill_tokens
+        )  # tolerance for min floor
 
     def test_stats_updated(self):
         """Stats are updated after budget computation."""
@@ -117,10 +121,14 @@ class TestTokenLevelSchedulerWFQ:
 
     def test_higher_priority_gets_more_tokens(self):
         """Higher priority request should get more decode tokens than lower."""
-        sched = TokenLevelScheduler(priority_weight=1.0, wait_time_weight=0.0, context_weight=0.0)
+        sched = TokenLevelScheduler(
+            priority_weight=1.0, wait_time_weight=0.0, context_weight=0.0
+        )
         reqs = [
             _make_request("low", priority=1, is_prefilling=False, effective_priority=1),
-            _make_request("high", priority=10, is_prefilling=False, effective_priority=10),
+            _make_request(
+                "high", priority=10, is_prefilling=False, effective_priority=10
+            ),
         ]
         result = sched.compute_token_budget(reqs, total_budget=100)
         low_alloc = next(a for a in result if a.request_id == "low")
@@ -129,7 +137,9 @@ class TestTokenLevelSchedulerWFQ:
 
     def test_longer_wait_gets_boost(self):
         """Longer-waiting requests should get more tokens."""
-        sched = TokenLevelScheduler(priority_weight=0.0, wait_time_weight=1.0, context_weight=0.0)
+        sched = TokenLevelScheduler(
+            priority_weight=0.0, wait_time_weight=1.0, context_weight=0.0
+        )
         reqs = [
             _make_request("short-wait", wait_time=0.1, is_prefilling=False),
             _make_request("long-wait", wait_time=5.0, is_prefilling=False),
@@ -153,10 +163,16 @@ class TestTokenLevelSchedulerWFQ:
 
     def test_effective_priority_overrides_raw_priority(self):
         """Effective priority (from inversion guard) should be used for weighting."""
-        sched = TokenLevelScheduler(priority_weight=1.0, wait_time_weight=0.0, context_weight=0.0)
+        sched = TokenLevelScheduler(
+            priority_weight=1.0, wait_time_weight=0.0, context_weight=0.0
+        )
         reqs = [
-            _make_request("raw-low", priority=1, is_prefilling=False, effective_priority=1),
-            _make_request("boosted", priority=1, is_prefilling=False, effective_priority=50),
+            _make_request(
+                "raw-low", priority=1, is_prefilling=False, effective_priority=1
+            ),
+            _make_request(
+                "boosted", priority=1, is_prefilling=False, effective_priority=50
+            ),
         ]
         result = sched.compute_token_budget(reqs, total_budget=100)
         raw_alloc = next(a for a in result if a.request_id == "raw-low")
@@ -197,7 +213,9 @@ class TestTokenLevelPrefillStrategies:
         )
         reqs = [
             _make_request("low", priority=1, is_prefilling=True, effective_priority=1),
-            _make_request("high", priority=50, is_prefilling=True, effective_priority=50),
+            _make_request(
+                "high", priority=50, is_prefilling=True, effective_priority=50
+            ),
         ]
         result = sched.compute_token_budget(reqs, total_budget=2048)
         low_alloc = next(a for a in result if a.request_id == "low")
@@ -238,7 +256,9 @@ class TestTokenLevelDecodeStrategies:
         sched = TokenLevelScheduler(decode_strategy=DecodeStrategy.PRIORITY_ONLY)
         reqs = [
             _make_request("low", priority=1, is_prefilling=False, effective_priority=1),
-            _make_request("high", priority=50, is_prefilling=False, effective_priority=50),
+            _make_request(
+                "high", priority=50, is_prefilling=False, effective_priority=50
+            ),
         ]
         result = sched.compute_token_budget(reqs, total_budget=100)
         high_alloc = next(a for a in result if a.request_id == "high")
@@ -855,8 +875,20 @@ class TestIntegration:
             context_weight=0.0,
         )
 
-        running = [_make_request("low", priority=1, wait_time=5.0, is_prefilling=False, effective_priority=1)]
-        waiting = [_make_request("high", priority=50, is_prefilling=False, effective_priority=50)]
+        running = [
+            _make_request(
+                "low",
+                priority=1,
+                wait_time=5.0,
+                is_prefilling=False,
+                effective_priority=1,
+            )
+        ]
+        waiting = [
+            _make_request(
+                "high", priority=50, is_prefilling=False, effective_priority=50
+            )
+        ]
 
         # Resolve inversion
         guard.resolve(running, waiting)
@@ -907,8 +939,20 @@ class TestIntegration:
             tracker.record_allocation(a.request_id, a.prefill_tokens + a.decode_tokens)
 
         # Phase 2: inversion — low-priority running, high-priority waiting
-        running = [_make_request("req-low", priority=1, wait_time=5.0, is_prefilling=False, effective_priority=1)]
-        waiting = [_make_request("req-high", priority=50, is_prefilling=False, effective_priority=50)]
+        running = [
+            _make_request(
+                "req-low",
+                priority=1,
+                wait_time=5.0,
+                is_prefilling=False,
+                effective_priority=1,
+            )
+        ]
+        waiting = [
+            _make_request(
+                "req-high", priority=50, is_prefilling=False, effective_priority=50
+            )
+        ]
 
         events = guard.resolve(running, waiting)
         assert len(events) == 1

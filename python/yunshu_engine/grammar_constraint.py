@@ -80,7 +80,9 @@ class _RegexDFA:
         # Build DFA
         self._nfa_start: int = 0
         self._nfa_accept: set[int] = set()
-        self._nfa_transitions: dict[int, list[tuple[set[int] | _ExceptChars | None, int]]] = {}
+        self._nfa_transitions: dict[
+            int, list[tuple[set[int] | _ExceptChars | None, int]]
+        ] = {}
         self._nfa_epsilon: dict[int, list[int]] = {}
         self._dfa_transitions: dict[frozenset[int], dict[int, frozenset[int]]] = {}
         self._dfa_accept_states: set[frozenset[int]] = set()
@@ -99,7 +101,8 @@ class _RegexDFA:
         if self._nfa_counter >= self._MAX_NFA_STATES:
             raise ValueError(
                 f"regex too complex: NFA exceeds {self._MAX_NFA_STATES} states "
-                "(repeat counts too large)")
+                "(repeat counts too large)"
+            )
         s = self._nfa_counter
         self._nfa_counter += 1
         return s
@@ -143,7 +146,9 @@ class _RegexDFA:
             if op == _sre_parse.LITERAL:
                 # Single character match
                 next_state = accept if i == len(items) - 1 else self._new_nfa_state()
-                self._nfa_transitions.setdefault(current, []).append((set([av]), next_state))
+                self._nfa_transitions.setdefault(current, []).append(
+                    (set([av]), next_state)
+                )
                 current = next_state
 
             elif op == _sre_parse.NOT_LITERAL:
@@ -160,7 +165,7 @@ class _RegexDFA:
                 # Match any character (except newline by default)
                 next_state = accept if i == len(items) - 1 else self._new_nfa_state()
                 self._nfa_transitions.setdefault(current, []).append(
-                    (_ExceptChars({ord('\n')}), next_state)
+                    (_ExceptChars({ord("\n")}), next_state)
                 )
                 current = next_state
 
@@ -191,7 +196,9 @@ class _RegexDFA:
                 # av is (min, max, parsed_subpattern)
                 min_count, max_count, parsed_sub = av
                 next_state = accept if i == len(items) - 1 else self._new_nfa_state()
-                self._build_repeat_nfa(parsed_sub, min_count, max_count, current, next_state)
+                self._build_repeat_nfa(
+                    parsed_sub, min_count, max_count, current, next_state
+                )
                 current = next_state
 
             elif op == _sre_parse.AT:
@@ -324,25 +331,27 @@ class _RegexDFA:
         ~65k element sets.
         """
         if category == _sre_parse.CATEGORY_DIGIT:
-            return set(range(ord('0'), ord('9') + 1))
+            return set(range(ord("0"), ord("9") + 1))
         elif category == _sre_parse.CATEGORY_NOT_DIGIT:
-            return _ExceptChars(set(range(ord('0'), ord('9') + 1)))
+            return _ExceptChars(set(range(ord("0"), ord("9") + 1)))
         elif category == _sre_parse.CATEGORY_SPACE:
-            return {ord(c) for c in ' \t\n\r\f\v'}
+            return {ord(c) for c in " \t\n\r\f\v"}
         elif category == _sre_parse.CATEGORY_NOT_SPACE:
-            return _ExceptChars({ord(c) for c in ' \t\n\r\f\v'})
+            return _ExceptChars({ord(c) for c in " \t\n\r\f\v"})
         elif category == _sre_parse.CATEGORY_WORD:
             chars: set[int] = set()
-            chars.update(range(ord('a'), ord('z') + 1))
-            chars.update(range(ord('A'), ord('Z') + 1))
-            chars.update(range(ord('0'), ord('9') + 1))
-            chars.add(ord('_'))
+            chars.update(range(ord("a"), ord("z") + 1))
+            chars.update(range(ord("A"), ord("Z") + 1))
+            chars.update(range(ord("0"), ord("9") + 1))
+            chars.add(ord("_"))
             return chars
         elif category == _sre_parse.CATEGORY_NOT_WORD:
-            word = (set(range(ord('a'), ord('z') + 1))
-                    | set(range(ord('A'), ord('Z') + 1))
-                    | set(range(ord('0'), ord('9') + 1))
-                    | {ord('_')})
+            word = (
+                set(range(ord("a"), ord("z") + 1))
+                | set(range(ord("A"), ord("Z") + 1))
+                | set(range(ord("0"), ord("9") + 1))
+                | {ord("_")}
+            )
             return _ExceptChars(word)
         return set()
 
@@ -387,9 +396,9 @@ class _RegexDFA:
         _QUERY_RANGE.update(range(0x0900, 0x0970))  # Devanagari
         _QUERY_RANGE.update(range(0x00C0, 0x0250))  # Latin Extended
         _QUERY_RANGE.update(range(0x1F600, 0x1F6C8))  # Emoji
-        _QUERY_RANGE.add(ord('\n'))
-        _QUERY_RANGE.add(ord('\t'))
-        _QUERY_RANGE.add(ord('\r'))
+        _QUERY_RANGE.add(ord("\n"))
+        _QUERY_RANGE.add(ord("\t"))
+        _QUERY_RANGE.add(ord("\r"))
 
         worklist = [start_closure]
         visited: set[frozenset[int]] = set()
@@ -534,7 +543,7 @@ class _RegexDFA:
         # Try wrapping: check if the text could be a prefix by trying
         # the original pattern with a wildcard suffix
         try:
-            extended = re.compile(self._pattern + r'.*')
+            extended = re.compile(self._pattern + r".*")
             return bool(extended.fullmatch(text))
         except re.error:
             return False
@@ -554,7 +563,7 @@ class _RegexDFA:
                 continue
             # Try extended pattern
             try:
-                extended = re.compile(self._pattern + r'.*')
+                extended = re.compile(self._pattern + r".*")
                 if extended.fullmatch(candidate):
                     valid.add(cp)
             except re.error:
@@ -651,23 +660,23 @@ class RegexConstraint:
         wider CJK) when called before any tokenizer is known.
         """
         base = list(range(32, 127))  # printable ASCII
-        base.extend([ord('\n'), ord('\t'), ord('\r')])
+        base.extend([ord("\n"), ord("\t"), ord("\r")])
         if self._query_codepoints:
             base.extend(self._query_codepoints)
             return base
         base.extend(range(0x4E00, 0x4E00 + 1000))  # CJK Unified (broader sample)
-        base.extend(range(0xAC00, 0xAC00 + 100))    # Hangul
-        base.extend(range(0x3040, 0x30FF))          # Hiragana + Katakana
-        base.extend(range(0x0400, 0x0500))          # Cyrillic
-        base.extend(range(0x0370, 0x0400))          # Greek + Coptic
-        base.extend(range(0x0590, 0x0600))          # Hebrew
-        base.extend(range(0x0531, 0x0590))          # Armenian
-        base.extend(range(0x10A0, 0x1100))          # Georgian
-        base.extend(range(0x0600, 0x0660))          # Arabic
-        base.extend(range(0x0E00, 0x0E50))          # Thai
-        base.extend(range(0x0900, 0x0970))          # Devanagari
-        base.extend(range(0x1F600, 0x1F6C8))        # Common Emoji
-        base.extend(range(0x00C0, 0x0250))          # Latin Extended
+        base.extend(range(0xAC00, 0xAC00 + 100))  # Hangul
+        base.extend(range(0x3040, 0x30FF))  # Hiragana + Katakana
+        base.extend(range(0x0400, 0x0500))  # Cyrillic
+        base.extend(range(0x0370, 0x0400))  # Greek + Coptic
+        base.extend(range(0x0590, 0x0600))  # Hebrew
+        base.extend(range(0x0531, 0x0590))  # Armenian
+        base.extend(range(0x10A0, 0x1100))  # Georgian
+        base.extend(range(0x0600, 0x0660))  # Arabic
+        base.extend(range(0x0E00, 0x0E50))  # Thai
+        base.extend(range(0x0900, 0x0970))  # Devanagari
+        base.extend(range(0x1F600, 0x1F6C8))  # Common Emoji
+        base.extend(range(0x00C0, 0x0250))  # Latin Extended
         return base
 
     def _valid_next_chars(self) -> set[str] | None:
@@ -708,12 +717,14 @@ class RegexConstraint:
         self._valid_chars_cache[cache_key] = result
         return result
 
-    def get_allowed_tokens(self, tokenizer: Any, generated_token_ids: list[int]) -> list[int]:
+    def get_allowed_tokens(
+        self, tokenizer: Any, generated_token_ids: list[int]
+    ) -> list[int]:
         if self._done:
             eos_ids = []
-            if hasattr(tokenizer, 'eos_token_ids'):
+            if hasattr(tokenizer, "eos_token_ids"):
                 eos_ids = list(tokenizer.eos_token_ids)
-            elif hasattr(tokenizer, 'eos_token_id'):
+            elif hasattr(tokenizer, "eos_token_id"):
                 eos_ids = [tokenizer.eos_token_id]
             return eos_ids
 
@@ -721,10 +732,12 @@ class RegexConstraint:
         # universe so non-Latin scripts aren't silently un-probed (→ empty allow-set →
         # premature EOS). Done once per (cached) tokenizer char-map.
         if self._query_codepoints is None:
-            if not hasattr(self.__class__, '_token_char_cache'):
+            if not hasattr(self.__class__, "_token_char_cache"):
                 self.__class__._token_char_cache = weakref.WeakKeyDictionary()
             if tokenizer not in self.__class__._token_char_cache:
-                self.__class__._token_char_cache[tokenizer] = _build_token_char_map(tokenizer)
+                self.__class__._token_char_cache[tokenizer] = _build_token_char_map(
+                    tokenizer
+                )
             _cmap = self.__class__._token_char_cache[tokenizer]
             self._query_codepoints = {ord(c) for c in _cmap if c}
             self._valid_chars_cache.clear()  # any pre-tokenizer cached probe is incomplete
@@ -753,9 +766,9 @@ class RegexConstraint:
         # vocab incl. EOS, so it is unaffected.)
         if self._dfa.is_full_match(self._text_buffer):
             eos_ids = []
-            if hasattr(tokenizer, 'eos_token_ids'):
+            if hasattr(tokenizer, "eos_token_ids"):
                 eos_ids = list(tokenizer.eos_token_ids)
-            elif hasattr(tokenizer, 'eos_token_id'):
+            elif hasattr(tokenizer, "eos_token_id"):
                 eos_ids = [tokenizer.eos_token_id]
             if eos_ids:
                 # _filter_tokens_by_dfa returns a cached list; build a new list so
@@ -764,18 +777,20 @@ class RegexConstraint:
         return allowed
 
     def _get_all_token_ids(self, tokenizer: Any) -> list[int]:
-        if hasattr(tokenizer, 'get_vocab'):
+        if hasattr(tokenizer, "get_vocab"):
             return list(tokenizer.get_vocab().values())
-        if hasattr(tokenizer, 'vocab') and isinstance(tokenizer.vocab, dict):
+        if hasattr(tokenizer, "vocab") and isinstance(tokenizer.vocab, dict):
             return list(tokenizer.vocab.values())
-        vocab_size = getattr(tokenizer, 'vocab_size', 32000)
+        vocab_size = getattr(tokenizer, "vocab_size", 32000)
         return list(range(vocab_size))
 
     def _find_tokens_for_chars(self, tokenizer: Any, chars: set[str]) -> list[int]:
-        if not hasattr(self.__class__, '_token_char_cache'):
+        if not hasattr(self.__class__, "_token_char_cache"):
             self.__class__._token_char_cache = weakref.WeakKeyDictionary()
         if tokenizer not in self.__class__._token_char_cache:
-            self.__class__._token_char_cache[tokenizer] = _build_token_char_map(tokenizer)
+            self.__class__._token_char_cache[tokenizer] = _build_token_char_map(
+                tokenizer
+            )
 
         char_map = self.__class__._token_char_cache[tokenizer]
         allowed = set()
@@ -807,10 +822,12 @@ class RegexConstraint:
             self._valid_tokens_cache.clear()
 
         # Build/lookup id->decoded-text map for this tokenizer.
-        if not hasattr(self.__class__, '_token_text_cache'):
+        if not hasattr(self.__class__, "_token_text_cache"):
             self.__class__._token_text_cache = weakref.WeakKeyDictionary()
         if tokenizer not in self.__class__._token_text_cache:
-            self.__class__._token_text_cache[tokenizer] = _build_token_text_map(tokenizer)
+            self.__class__._token_text_cache[tokenizer] = _build_token_text_map(
+                tokenizer
+            )
         text_map = self.__class__._token_text_cache[tokenizer]
 
         filtered: list[int] = []
@@ -861,7 +878,9 @@ class ChoiceConstraint:
         self._text_buffer = ""
         self._done = False
         self._matched_choice: str | None = None
-        self._has_partial_match = False  # True when matched text is also a prefix of a longer choice
+        self._has_partial_match = (
+            False  # True when matched text is also a prefix of a longer choice
+        )
         self._failed = False  # True when an invalid path was encountered
         # Build prefix trie using appropriate case form
         self._trie: dict[str, Any] = {}
@@ -906,12 +925,14 @@ class ChoiceConstraint:
                 # No longer choices possible — generation is complete
                 self._done = True
 
-    def get_allowed_tokens(self, tokenizer: Any, generated_token_ids: list[int]) -> list[int]:
+    def get_allowed_tokens(
+        self, tokenizer: Any, generated_token_ids: list[int]
+    ) -> list[int]:
         if self._done:
             eos_ids = []
-            if hasattr(tokenizer, 'eos_token_ids'):
+            if hasattr(tokenizer, "eos_token_ids"):
                 eos_ids = list(tokenizer.eos_token_ids)
-            elif hasattr(tokenizer, 'eos_token_id'):
+            elif hasattr(tokenizer, "eos_token_id"):
                 eos_ids = [tokenizer.eos_token_id]
             return eos_ids
 
@@ -942,9 +963,9 @@ class ChoiceConstraint:
         # If only __eos__ is valid, return EOS tokens
         if valid_chars == {"__eos__"}:
             eos_ids = []
-            if hasattr(tokenizer, 'eos_token_ids'):
+            if hasattr(tokenizer, "eos_token_ids"):
                 eos_ids = list(tokenizer.eos_token_ids)
-            elif hasattr(tokenizer, 'eos_token_id'):
+            elif hasattr(tokenizer, "eos_token_id"):
                 eos_ids = [tokenizer.eos_token_id]
             return eos_ids
 
@@ -959,20 +980,28 @@ class ChoiceConstraint:
         # alone admits tokens like "boom" (starts with 'b', like "blue") which
         # immediately diverge from every choice, so the model can emit
         # off-grammar output that advance() only detects after the fact.
-        if not hasattr(self.__class__, '_token_char_cache'):
+        if not hasattr(self.__class__, "_token_char_cache"):
             self.__class__._token_char_cache = weakref.WeakKeyDictionary()
         if tokenizer not in self.__class__._token_char_cache:
-            self.__class__._token_char_cache[tokenizer] = _build_token_char_map(tokenizer)
-        if not hasattr(self.__class__, '_token_text_cache'):
+            self.__class__._token_char_cache[tokenizer] = _build_token_char_map(
+                tokenizer
+            )
+        if not hasattr(self.__class__, "_token_text_cache"):
             self.__class__._token_text_cache = weakref.WeakKeyDictionary()
         if tokenizer not in self.__class__._token_text_cache:
-            self.__class__._token_text_cache[tokenizer] = _build_token_text_map(tokenizer)
+            self.__class__._token_text_cache[tokenizer] = _build_token_text_map(
+                tokenizer
+            )
         char_map = self.__class__._token_char_cache[tokenizer]
         text_map = self.__class__._token_text_cache[tokenizer]
 
         # Remaining continuations from the current buffer toward each choice.
-        choices_cmp = self._choices if self._case_sensitive else [c.lower() for c in self._choices]
-        continuations = [c[len(buf):] for c in choices_cmp if c.startswith(buf)]
+        choices_cmp = (
+            self._choices
+            if self._case_sensitive
+            else [c.lower() for c in self._choices]
+        )
+        continuations = [c[len(buf) :] for c in choices_cmp if c.startswith(buf)]
 
         candidates: set[int] = set()
         for ch in valid_chars:
@@ -997,9 +1026,9 @@ class ChoiceConstraint:
         # choice end (__end__ marker present in the trie node).
         if has_eos:
             eos_ids = []
-            if hasattr(tokenizer, 'eos_token_ids'):
+            if hasattr(tokenizer, "eos_token_ids"):
                 eos_ids = list(tokenizer.eos_token_ids)
-            elif hasattr(tokenizer, 'eos_token_id'):
+            elif hasattr(tokenizer, "eos_token_id"):
                 eos_ids = [tokenizer.eos_token_id]
             allowed.update(eos_ids)
         return list(allowed)
@@ -1055,6 +1084,7 @@ class LarkGrammarConstraint:
 
         try:
             from lark import Lark, Token
+
             self._lark_token = Token
             self._parser = Lark(
                 grammar,
@@ -1097,13 +1127,15 @@ class LarkGrammarConstraint:
         except Exception:
             logger.debug("CFG parse incomplete, continuing generation", exc_info=True)
 
-    def get_allowed_tokens(self, tokenizer: Any, generated_token_ids: list[int]) -> list[int]:
+    def get_allowed_tokens(
+        self, tokenizer: Any, generated_token_ids: list[int]
+    ) -> list[int]:
         if self._done or self._parser is None:
             if self._done:
                 eos_ids = []
-                if hasattr(tokenizer, 'eos_token_ids'):
+                if hasattr(tokenizer, "eos_token_ids"):
                     eos_ids = list(tokenizer.eos_token_ids)
-                elif hasattr(tokenizer, 'eos_token_id'):
+                elif hasattr(tokenizer, "eos_token_id"):
                     eos_ids = [tokenizer.eos_token_id]
                 return eos_ids
             return []
@@ -1116,10 +1148,12 @@ class LarkGrammarConstraint:
         if not valid_chars:
             return []
 
-        if not hasattr(self.__class__, '_token_char_cache'):
+        if not hasattr(self.__class__, "_token_char_cache"):
             self.__class__._token_char_cache = weakref.WeakKeyDictionary()
         if tokenizer not in self.__class__._token_char_cache:
-            self.__class__._token_char_cache[tokenizer] = _build_token_char_map(tokenizer)
+            self.__class__._token_char_cache[tokenizer] = _build_token_char_map(
+                tokenizer
+            )
 
         char_map = self.__class__._token_char_cache[tokenizer]
         candidates = set()
@@ -1166,9 +1200,10 @@ class LarkGrammarConstraint:
         if self._parser is None:
             return None
 
-        has_interactive = hasattr(self._parser, 'parse_interactive')
+        has_interactive = hasattr(self._parser, "parse_interactive")
         if not has_interactive:
             import logging
+
             logging.getLogger(__name__).warning(
                 "LarkGrammarConstraint: parse_interactive unavailable (Lark < 1.2). "
                 "CFG constraint will be permissive — all characters allowed. "
@@ -1178,7 +1213,7 @@ class LarkGrammarConstraint:
 
         valid = set()
         test_chars = [chr(i) for i in range(32, 127)]
-        test_chars.extend(['\n', '\t'])
+        test_chars.extend(["\n", "\t"])
         # CJK Unified Ideographs sample and Latin Extended sample
         test_chars.extend(chr(i) for i in range(0x4E00, 0x4E00 + 100))
         test_chars.extend(chr(i) for i in range(0x00C0, 0x00C0 + 50))
@@ -1235,12 +1270,12 @@ def _build_token_text_map(tokenizer: Any) -> dict[int, str]:
     against the remaining choice continuations (not just the first char).
     """
     text_map: dict[int, str] = {}
-    if hasattr(tokenizer, 'get_vocab'):
+    if hasattr(tokenizer, "get_vocab"):
         vocab = tokenizer.get_vocab()
-    elif hasattr(tokenizer, 'vocab') and isinstance(tokenizer.vocab, dict):
+    elif hasattr(tokenizer, "vocab") and isinstance(tokenizer.vocab, dict):
         vocab = tokenizer.vocab
     else:
-        vocab_size = getattr(tokenizer, 'vocab_size', 32000)
+        vocab_size = getattr(tokenizer, "vocab_size", 32000)
         vocab = {str(i): i for i in range(vocab_size)}
     for _token_text, token_id in vocab.items():
         try:
@@ -1261,18 +1296,18 @@ def _build_token_char_map(tokenizer: Any) -> dict[str, list[int]]:
     """
     char_map: dict[str, list[int]] = {}
 
-    if hasattr(tokenizer, 'get_vocab'):
+    if hasattr(tokenizer, "get_vocab"):
         vocab = tokenizer.get_vocab()
-    elif hasattr(tokenizer, 'vocab') and isinstance(tokenizer.vocab, dict):
+    elif hasattr(tokenizer, "vocab") and isinstance(tokenizer.vocab, dict):
         vocab = tokenizer.vocab
     else:
-        vocab_size = getattr(tokenizer, 'vocab_size', 32000)
+        vocab_size = getattr(tokenizer, "vocab_size", 32000)
         vocab = {str(i): i for i in range(vocab_size)}
 
     for token_text, token_id in vocab.items():
         if not token_text:
             continue
-        first_char = token_text[0] if token_text else ''
+        first_char = token_text[0] if token_text else ""
         try:
             decoded = tokenizer.decode([token_id])
             if decoded:
@@ -1280,7 +1315,11 @@ def _build_token_char_map(tokenizer: Any) -> dict[str, list[int]]:
             else:
                 char_map.setdefault(first_char, []).append(token_id)
         except Exception:
-            logger.debug("tokenizer decode failed for token %d in char map build", token_id, exc_info=True)
+            logger.debug(
+                "tokenizer decode failed for token %d in char map build",
+                token_id,
+                exc_info=True,
+            )
             char_map.setdefault(first_char, []).append(token_id)
 
     return char_map
@@ -1290,18 +1329,18 @@ def _build_token_text_map(tokenizer: Any) -> dict[int, str]:
     """Build a mapping from token ID to decoded text for fast lookup
     during DFA-based full-token prefix validation."""
     text_map: dict[int, str] = {}
-    if hasattr(tokenizer, 'get_vocab'):
+    if hasattr(tokenizer, "get_vocab"):
         vocab = tokenizer.get_vocab()
-    elif hasattr(tokenizer, 'vocab') and isinstance(tokenizer.vocab, dict):
+    elif hasattr(tokenizer, "vocab") and isinstance(tokenizer.vocab, dict):
         vocab = tokenizer.vocab
     else:
         return text_map
 
     eos_ids: set[int] = set()
-    if hasattr(tokenizer, 'eos_token_ids'):
+    if hasattr(tokenizer, "eos_token_ids"):
         with contextlib.suppress(Exception):
             eos_ids = set(tokenizer.eos_token_ids)
-    elif hasattr(tokenizer, 'eos_token_id'):
+    elif hasattr(tokenizer, "eos_token_id"):
         with contextlib.suppress(Exception):
             eos_ids = {tokenizer.eos_token_id}
 
@@ -1320,11 +1359,11 @@ def _build_token_text_map(tokenizer: Any) -> dict[int, str]:
 
 
 def _get_all_token_ids(tokenizer: Any) -> list[int]:
-    if hasattr(tokenizer, 'get_vocab'):
+    if hasattr(tokenizer, "get_vocab"):
         return list(tokenizer.get_vocab().values())
-    if hasattr(tokenizer, 'vocab') and isinstance(tokenizer.vocab, dict):
+    if hasattr(tokenizer, "vocab") and isinstance(tokenizer.vocab, dict):
         return list(tokenizer.vocab.values())
-    return list(range(getattr(tokenizer, 'vocab_size', 32000)))
+    return list(range(getattr(tokenizer, "vocab_size", 32000)))
 
 
 # ── Constraint Factory ──────────────────────────────────────────────────────
@@ -1359,6 +1398,7 @@ class ConstraintFactory:
         """
         if grammar_type in ("json_schema", "json_object"):
             from .json_schema import JsonSchemaConstraint
+
             schema = grammar if grammar_type == "json_schema" else None
             return JsonSchemaConstraint(schema)
 

@@ -8,6 +8,7 @@ were silently MEAN-pooled (wrong embedding space, degraded retrieval) — the ex
 the function to fix, defeated for anything but an explicit local dir. Fix: resolve the repo id to
 its local snapshot (hf_repo_to_path) before the join, mirroring the engine's own load path.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -34,12 +35,25 @@ def _pooling_dir(flag: str) -> str:
 
 
 def test_cls_and_last_detected_from_local_dir():
-    assert _engine_with_model(_pooling_dir("pooling_mode_cls_token"))._resolve_embedding_pooling() == "CLS"
-    assert _engine_with_model(_pooling_dir("pooling_mode_lasttoken"))._resolve_embedding_pooling() == "LAST"
+    assert (
+        _engine_with_model(
+            _pooling_dir("pooling_mode_cls_token")
+        )._resolve_embedding_pooling()
+        == "CLS"
+    )
+    assert (
+        _engine_with_model(
+            _pooling_dir("pooling_mode_lasttoken")
+        )._resolve_embedding_pooling()
+        == "LAST"
+    )
 
 
 def test_unknown_repo_id_falls_back_to_mean_no_crash():
-    assert _engine_with_model("NonExistent/repo-xyz-999")._resolve_embedding_pooling() == "MEAN"
+    assert (
+        _engine_with_model("NonExistent/repo-xyz-999")._resolve_embedding_pooling()
+        == "MEAN"
+    )
 
 
 def test_plain_model_dir_without_pooling_config_is_mean():

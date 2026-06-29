@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 class NoiseScheduleType(StrEnum):
     """Supported noise schedule types."""
+
     LINEAR = "linear"
     SCALED_LINEAR = "scaled_linear"
     COSINE = "cosine"
@@ -47,6 +48,7 @@ class NoiseScheduleType(StrEnum):
 
 class SchedulerType(StrEnum):
     """Supported diffusion scheduler algorithms."""
+
     DDIM = "ddim"
     DPM_PLUS_PLUS = "dpm_plus_plus"
     EULER = "euler"
@@ -60,6 +62,7 @@ class SchedulerType(StrEnum):
 @dataclass
 class DiffusionStep:
     """A single diffusion step."""
+
     step_index: int
     timestep: int
     sigma: float
@@ -105,7 +108,9 @@ class DiffusionScheduler:
 
         # Validate
         if num_inference_steps < 1:
-            raise ValueError(f"num_inference_steps must be >= 1, got {num_inference_steps}")
+            raise ValueError(
+                f"num_inference_steps must be >= 1, got {num_inference_steps}"
+            )
         if num_inference_steps > num_train_timesteps:
             raise ValueError(
                 f"num_inference_steps ({num_inference_steps}) cannot exceed "
@@ -143,36 +148,46 @@ class DiffusionScheduler:
     def _compute_betas(self) -> list[float]:
         """Compute beta schedule based on noise_schedule type."""
         if self.noise_schedule == NoiseScheduleType.LINEAR:
-            return [self.beta_start + i * (self.beta_end - self.beta_start) /
-                    (self.num_train_timesteps - 1)
-                    for i in range(self.num_train_timesteps)]
+            return [
+                self.beta_start
+                + i * (self.beta_end - self.beta_start) / (self.num_train_timesteps - 1)
+                for i in range(self.num_train_timesteps)
+            ]
         elif self.noise_schedule == NoiseScheduleType.SCALED_LINEAR:
             start_sqrt = math.sqrt(self.beta_start)
             end_sqrt = math.sqrt(self.beta_end)
-            return [(start_sqrt + i * (end_sqrt - start_sqrt) /
-                     (self.num_train_timesteps - 1)) ** 2
-                    for i in range(self.num_train_timesteps)]
+            return [
+                (
+                    start_sqrt
+                    + i * (end_sqrt - start_sqrt) / (self.num_train_timesteps - 1)
+                )
+                ** 2
+                for i in range(self.num_train_timesteps)
+            ]
         elif self.noise_schedule == NoiseScheduleType.COSINE:
             return self._cosine_betas()
         elif self.noise_schedule == NoiseScheduleType.SQRT_LINEAR:
-            return [self.beta_start + math.sqrt(
-                i / (self.num_train_timesteps - 1)) *
-                    (self.beta_end - self.beta_start)
-                    for i in range(self.num_train_timesteps)]
+            return [
+                self.beta_start
+                + math.sqrt(i / (self.num_train_timesteps - 1))
+                * (self.beta_end - self.beta_start)
+                for i in range(self.num_train_timesteps)
+            ]
         return [self.beta_start] * self.num_train_timesteps
 
     def _cosine_betas(self, s: float = 0.008) -> list[float]:
         """Cosine schedule (Improved DDPM)."""
         steps = self.num_train_timesteps + 1
         t = [i / steps for i in range(steps)]
-        alphas_cumprod = [math.cos((t_val + s) / (1 + s) * math.pi / 2) ** 2
-                          for t_val in t]
+        alphas_cumprod = [
+            math.cos((t_val + s) / (1 + s) * math.pi / 2) ** 2 for t_val in t
+        ]
         alphas_cumprod = [a / alphas_cumprod[0] for a in alphas_cumprod]
         betas = []
         for i in range(1, len(alphas_cumprod)):
             beta = min(1 - alphas_cumprod[i] / alphas_cumprod[i - 1], 0.999)
             betas.append(beta)
-        return betas[:self.num_train_timesteps]
+        return betas[: self.num_train_timesteps]
 
     @staticmethod
     def _cumprod(values: list[float]) -> list[float]:
@@ -195,7 +210,11 @@ class DiffusionScheduler:
             return [self.num_train_timesteps // 2]
 
         timesteps = [
-            int(round(i * (self.num_train_timesteps - 1) / (self.num_inference_steps - 1)))
+            int(
+                round(
+                    i * (self.num_train_timesteps - 1) / (self.num_inference_steps - 1)
+                )
+            )
             for i in range(self.num_inference_steps)
         ]
         # Deduplicate (can happen with very few inference steps) and sort
@@ -209,7 +228,9 @@ class DiffusionScheduler:
             attempts += 1
             prev_len = len(timesteps)
             # Insert midpoints between consecutive timesteps
-            gaps = [(timesteps[i + 1] - timesteps[i], i) for i in range(len(timesteps) - 1)]
+            gaps = [
+                (timesteps[i + 1] - timesteps[i], i) for i in range(len(timesteps) - 1)
+            ]
             if not gaps:
                 break
             gaps.sort(reverse=True)
@@ -230,8 +251,9 @@ class DiffusionScheduler:
         sigmas = []
         for ts in self._timesteps:
             if ts < len(self._alphas_cumprod) and self._alphas_cumprod[ts] > 0:
-                sigmas.append(math.sqrt((1 - self._alphas_cumprod[ts]) /
-                                        self._alphas_cumprod[ts]))
+                sigmas.append(
+                    math.sqrt((1 - self._alphas_cumprod[ts]) / self._alphas_cumprod[ts])
+                )
             else:
                 sigmas.append(1.0)
         return sigmas
@@ -240,7 +262,8 @@ class DiffusionScheduler:
         """Get the diffusion step descriptor for a given index."""
         if step_index < 0 or step_index >= len(self._timesteps):
             raise IndexError(
-                f"step_index {step_index} out of range [0, {len(self._timesteps)})")
+                f"step_index {step_index} out of range [0, {len(self._timesteps)})"
+            )
         return DiffusionStep(
             step_index=step_index,
             timestep=self._timesteps[step_index],
@@ -298,7 +321,7 @@ class DiffusionScheduler:
             SchedulerType.EULER_ANCESTRAL,
         ):
             # Euler / Euler-ancestral: scale by c_in = 1 / (sigma^2 + 1)^0.5
-            c_in = 1.0 / math.sqrt(sigma ** 2 + 1)
+            c_in = 1.0 / math.sqrt(sigma**2 + 1)
             if sample is None:
                 return c_in
             return sample * c_in
@@ -312,6 +335,7 @@ class DiffusionScheduler:
 @dataclass
 class LoRAAdapter:
     """Metadata for a LoRA adapter."""
+
     lora_id: str
     priority: int = 0  # Higher = more important
     memory_bytes: int = 0
@@ -322,6 +346,7 @@ class LoRAAdapter:
 @dataclass
 class MemoryBudget:
     """GPU memory budget tracking for LoRA offloading."""
+
     total_bytes: int = 0
     used_bytes: int = 0
     peak_bytes: int = 0
@@ -382,9 +407,13 @@ class DiffusionLoRAOffloader:
     def unload_count(self) -> int:
         return self._unload_count
 
-    def register_adapter(self, lora_id: str, memory_bytes: int = 0,
-                         priority: int = 0,
-                         assigned_steps: range | None = None) -> None:
+    def register_adapter(
+        self,
+        lora_id: str,
+        memory_bytes: int = 0,
+        priority: int = 0,
+        assigned_steps: range | None = None,
+    ) -> None:
         """Register a LoRA adapter with the offloader."""
         self._adapters[lora_id] = LoRAAdapter(
             lora_id=lora_id,
@@ -426,18 +455,26 @@ class DiffusionLoRAOffloader:
             # Check if we need to evict to make room
             if self._memory.total_bytes > 0:
                 if not self._evict_for(adapter.memory_bytes, lora_id, step, protected):
-                    logger.warning(f"Cannot load {lora_id}: insufficient memory after eviction")
+                    logger.warning(
+                        f"Cannot load {lora_id}: insufficient memory after eviction"
+                    )
                     continue
 
             self._load(lora_id)
 
         # Return IDs that are actually loaded right now, sorted by priority
         # (highest first) to match the _adapters_for_step ordering contract.
-        loaded = [aid for aid in target_ids
-                  if aid in self._adapters and self._adapters[aid].loaded]
+        loaded = [
+            aid
+            for aid in target_ids
+            if aid in self._adapters and self._adapters[aid].loaded
+        ]
         # Also include any other loaded adapters not in target_ids
-        extras = [aid for aid, a in self._adapters.items()
-                  if a.loaded and aid not in set(loaded)]
+        extras = [
+            aid
+            for aid, a in self._adapters.items()
+            if a.loaded and aid not in set(loaded)
+        ]
         return loaded + extras
 
     def unload_after_step(self, step: int) -> list[str]:
@@ -494,8 +531,13 @@ class DiffusionLoRAOffloader:
         self._memory.free(adapter.memory_bytes)
         self._unload_count += 1
 
-    def _evict_for(self, needed_bytes: int, exclude_id: str, step: int = 0,
-                    protected: set[str] | None = None) -> bool:
+    def _evict_for(
+        self,
+        needed_bytes: int,
+        exclude_id: str,
+        step: int = 0,
+        protected: set[str] | None = None,
+    ) -> bool:
         """Evict loaded adapters to free memory, excluding protected adapters.
 
         Args:
@@ -511,8 +553,11 @@ class DiffusionLoRAOffloader:
 
         # Sort loaded adapters by priority (lowest first) for eviction.
         # Never evict the adapter being loaded or any adapter in the protected set.
-        candidates = [(a.priority, lid, a) for lid, a in self._adapters.items()
-                      if a.loaded and lid != exclude_id and lid not in _protected]
+        candidates = [
+            (a.priority, lid, a)
+            for lid, a in self._adapters.items()
+            if a.loaded and lid != exclude_id and lid not in _protected
+        ]
         candidates.sort()  # Lowest priority first
 
         freed = 0
@@ -536,6 +581,7 @@ class NodeAssignment:
     steps can be a range (for contiguous assignment) or a list[int]
     (for round-robin or non-contiguous assignment).
     """
+
     node_id: int
     steps: range | list[int]
     is_primary: bool = False
@@ -556,6 +602,7 @@ class NodeAssignment:
 @dataclass
 class SyncCheckpoint:
     """Checkpoint for fault-tolerant latent exchange."""
+
     step: int
     node_id: int
     timestamp: float
@@ -564,6 +611,7 @@ class SyncCheckpoint:
 
 class StepAssignmentStrategy(StrEnum):
     """Strategy for distributing steps across nodes."""
+
     CONTIGUOUS = "contiguous"  # Each node gets a contiguous block
     ROUND_ROBIN = "round_robin"  # Steps alternate between nodes
     DYNAMIC = "dynamic"  # Nodes pull steps from a queue
@@ -675,7 +723,9 @@ class DistributedDiffusionCoordinator:
                 return node_id
         return 0
 
-    def assign_steps(self, num_nodes: int, total_steps: int) -> dict[int, NodeAssignment]:
+    def assign_steps(
+        self, num_nodes: int, total_steps: int
+    ) -> dict[int, NodeAssignment]:
         """Re-assign steps with new parameters."""
         self.num_nodes = min(num_nodes, total_steps)
         self.total_steps = total_steps
@@ -684,8 +734,9 @@ class DistributedDiffusionCoordinator:
         self._assign_steps()
         return self.assignments
 
-    def sync_latents(self, source_node: int, target_node: int,
-                     step: int, latent_data: Any = None) -> SyncCheckpoint:
+    def sync_latents(
+        self, source_node: int, target_node: int, step: int, latent_data: Any = None
+    ) -> SyncCheckpoint:
         """Record a latent synchronization between nodes.
 
         In production, this would transfer actual latent data via mesh.
@@ -752,6 +803,9 @@ class DistributedDiffusionCoordinator:
             "strategy": self.strategy.value,
             "sync_points_count": len(self._sync_points),
             "checkpoints_count": completed_checkpoints,
-            "progress_pct": (completed_checkpoints / self.total_steps * 100
-                             if self.total_steps > 0 else 0.0),
+            "progress_pct": (
+                completed_checkpoints / self.total_steps * 100
+                if self.total_steps > 0
+                else 0.0
+            ),
         }

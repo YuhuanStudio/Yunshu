@@ -3,6 +3,7 @@ max_tokens > thinking.budget_tokens (the thinking budget must leave room for the
 answer) and returns 400 otherwise. Yunshu accepted budget_tokens >= max_tokens leniently;
 now it validates per the contract.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -21,9 +22,9 @@ def _req(max_tokens, budget):
 
 def test_budget_ge_max_tokens_rejected():
     with pytest.raises(ValueError):
-        _req(max_tokens=100, budget=100)   # equal
+        _req(max_tokens=100, budget=100)  # equal
     with pytest.raises(ValueError):
-        _req(max_tokens=100, budget=200)   # greater
+        _req(max_tokens=100, budget=200)  # greater
 
 
 def test_budget_lt_max_tokens_accepted():
@@ -33,6 +34,9 @@ def test_budget_lt_max_tokens_accepted():
 
 def test_thinking_disabled_unaffected():
     r = AnthropicMessagesRequest(
-        model="claude-x", messages=[{"role": "user", "content": "hi"}],
-        max_tokens=50, thinking={"type": "disabled"})
+        model="claude-x",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=50,
+        thinking={"type": "disabled"},
+    )
     assert r.max_tokens == 50

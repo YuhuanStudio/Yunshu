@@ -63,7 +63,8 @@ class OverlapConfig:
             async_eval=os.environ.get("YUNSHU_ASYNC_EVAL", "1") == "1",
             overlap_detokenize=os.environ.get("YUNSHU_OVERLAP_DETOKENIZE", "1") == "1",
             overlap_grammar=os.environ.get("YUNSHU_OVERLAP_GRAMMAR", "1") == "1",
-            overlap_response_dist=os.environ.get("YUNSHU_OVERLAP_RESPONSE_DIST", "0") == "1",
+            overlap_response_dist=os.environ.get("YUNSHU_OVERLAP_RESPONSE_DIST", "0")
+            == "1",
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -142,9 +143,7 @@ class OverlapMetrics:
             "steps_with_overlap": self.steps_with_overlap,
             "overlap_rate": round(self.overlap_rate, 3),
             "overlap_efficiency": round(self.overlap_efficiency, 3),
-            "avg_gpu_time_ms": round(
-                self.gpu_time_ms / max(self.total_steps, 1), 3
-            ),
+            "avg_gpu_time_ms": round(self.gpu_time_ms / max(self.total_steps, 1), 3),
             "avg_cpu_overlap_ms": round(
                 self.cpu_overlap_time_ms / max(self.total_steps, 1), 3
             ),
@@ -348,21 +347,25 @@ class OverlapScheduler:
             detokenizer = getattr(out, "_detokenizer", None)
             token_id = getattr(out, "_last_token_id", None)
             if detokenizer and token_id is not None and self._config.overlap_detokenize:
-                work.append({
-                    "kind": "detokenize",
-                    "detokenizer": detokenizer,
-                    "token_id": token_id,
-                })
+                work.append(
+                    {
+                        "kind": "detokenize",
+                        "detokenizer": detokenizer,
+                        "token_id": token_id,
+                    }
+                )
 
             # Queue grammar check work if checker is attached
             checker = getattr(out, "_grammar_checker", None)
             text = getattr(out, "text", "")
             if checker and text and self._config.overlap_grammar:
-                work.append({
-                    "kind": "grammar",
-                    "checker": checker,
-                    "text": text,
-                })
+                work.append(
+                    {
+                        "kind": "grammar",
+                        "checker": checker,
+                        "text": text,
+                    }
+                )
 
         return work
 
@@ -385,6 +388,7 @@ class OverlapScheduler:
             return []
         try:
             import mlx.core as mx
+
             if isinstance(obj, mx.array):
                 return [obj]
         except ImportError:
@@ -407,6 +411,7 @@ class OverlapScheduler:
         """Synchronize all pending GPU operations."""
         try:
             import mlx.core as mx
+
             mx.synchronize()
         except ImportError:
             pass

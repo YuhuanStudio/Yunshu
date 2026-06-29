@@ -6,6 +6,7 @@ non-finite component raised an uncaught ValueError at the return (a 500). The ot
 scoring endpoints sanitized their scalar scores but /v1/pooling shipped vectors
 un-checked. Now coerce non-finite components to 0.0 (mirrors /v1/embeddings).
 """
+
 from __future__ import annotations
 
 import inspect
@@ -14,6 +15,7 @@ import json
 
 def test_pooling_has_finite_guard_like_siblings():
     from yunshu_gateway.routers import scoring
+
     src = inspect.getsource(scoring.create_pooling)
     code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
     # the pooling loop now sanitizes vector components before encoding

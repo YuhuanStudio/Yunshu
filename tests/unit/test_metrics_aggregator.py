@@ -23,6 +23,7 @@ def _fresh_instance():
 # Recording
 # ---------------------------------------------------------------------------
 
+
 class TestRecording:
     def test_record_single_request(self):
         agg = MetricsAggregator()
@@ -55,6 +56,7 @@ class TestRecording:
 # ---------------------------------------------------------------------------
 # Summaries
 # ---------------------------------------------------------------------------
+
 
 class TestSummary:
     def test_empty_summary(self):
@@ -162,10 +164,18 @@ class TestSummary:
         # Record with a fake old timestamp.
         old_time = time.time() - 120  # 2 minutes ago
         from yunshu_gateway.middleware.metrics_aggregator import _DataPoint
-        agg._points.append(_DataPoint(
-            timestamp=old_time, method="GET", path="/",
-            status=200, duration_ms=50.0, tokens_in=0, tokens_out=0,
-        ))
+
+        agg._points.append(
+            _DataPoint(
+                timestamp=old_time,
+                method="GET",
+                path="/",
+                status=200,
+                duration_ms=50.0,
+                tokens_in=0,
+                tokens_out=0,
+            )
+        )
         # Record a recent one.
         agg.record_request("GET", "/health", 200, 10.0)
         summary = agg.get_summary(window_seconds=60)
@@ -176,6 +186,7 @@ class TestSummary:
 # ---------------------------------------------------------------------------
 # Percentiles
 # ---------------------------------------------------------------------------
+
 
 class TestPercentiles:
     def test_empty_percentiles(self):
@@ -226,6 +237,7 @@ class TestPercentiles:
 # Endpoint breakdown
 # ---------------------------------------------------------------------------
 
+
 class TestEndpointBreakdown:
     def test_breakdown_empty(self):
         agg = MetricsAggregator()
@@ -250,6 +262,7 @@ class TestEndpointBreakdown:
 # Window pruning
 # ---------------------------------------------------------------------------
 
+
 class TestPruning:
     def test_prune_removes_old_entries(self):
         agg = MetricsAggregator(max_window_seconds=2)
@@ -257,10 +270,17 @@ class TestPruning:
 
         # Insert an old data point directly.
         old_time = time.time() - 10
-        agg._points.append(_DataPoint(
-            timestamp=old_time, method="GET", path="/old",
-            status=200, duration_ms=10.0, tokens_in=0, tokens_out=0,
-        ))
+        agg._points.append(
+            _DataPoint(
+                timestamp=old_time,
+                method="GET",
+                path="/old",
+                status=200,
+                duration_ms=10.0,
+                tokens_in=0,
+                tokens_out=0,
+            )
+        )
         # Recording a new request triggers pruning.
         agg.record_request("GET", "/new", 200, 5.0)
 
@@ -272,6 +292,7 @@ class TestPruning:
 # ---------------------------------------------------------------------------
 # Singleton
 # ---------------------------------------------------------------------------
+
 
 class TestSingleton:
     def test_get_metrics_aggregator_returns_same(self):

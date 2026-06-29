@@ -187,6 +187,7 @@ class TestVideoEndpoint:
         from fastapi.testclient import TestClient
 
         from yunshu_gateway.main import create_app
+
         app = create_app()
         return TestClient(app)
 
@@ -195,22 +196,28 @@ class TestVideoEndpoint:
         fallback (placeholder) path; the endpoint must signal this clearly with
         503 rather than returning a misleading 200 + placeholder frames.
         """
-        resp = client.post("/v1/video/generations", json={
-            "prompt": "a beautiful sunset",
-            "width": 64,
-            "height": 64,
-            "num_frames": 9,
-            "response_format": "frames",
-        })
+        resp = client.post(
+            "/v1/video/generations",
+            json={
+                "prompt": "a beautiful sunset",
+                "width": 64,
+                "height": 64,
+                "num_frames": 9,
+                "response_format": "frames",
+            },
+        )
         assert resp.status_code == 503
         detail = str(resp.json()).lower()
         assert "fallback" in detail or "unavailable" in detail
 
     def test_video_invalid_image(self, client):
-        resp = client.post("/v1/video/generations", json={
-            "prompt": "test",
-            "image": "not-valid-base64!!!",
-        })
+        resp = client.post(
+            "/v1/video/generations",
+            json={
+                "prompt": "test",
+                "image": "not-valid-base64!!!",
+            },
+        )
         assert resp.status_code == 400
 
     def test_video_request_model(self):
@@ -341,6 +348,7 @@ class TestVideoEngineStats:
         engine = VideoEngine()
         engine.start()
         import asyncio
+
         asyncio.run(
             engine.generate(
                 prompt="test stats",
@@ -441,10 +449,13 @@ class TestVideoLoRA:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = os.path.join(tmpdir, "adapter_config.json")
             with open(config_path, "w") as f:
-                json.dump({
-                    "lora_parameters": {"rank": 4, "scale": 10.0},
-                    "num_layers": 8,
-                }, f)
+                json.dump(
+                    {
+                        "lora_parameters": {"rank": 4, "scale": 10.0},
+                        "num_layers": 8,
+                    },
+                    f,
+                )
 
             result = engine.load_lora_adapter(tmpdir)
             assert result is True
@@ -464,10 +475,13 @@ class TestVideoLoRA:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = os.path.join(tmpdir, "adapter_config.json")
             with open(config_path, "w") as f:
-                json.dump({
-                    "lora_parameters": {"rank": 16, "scale": 30.0},
-                    "num_layers": 4,
-                }, f)
+                json.dump(
+                    {
+                        "lora_parameters": {"rank": 16, "scale": 30.0},
+                        "num_layers": 4,
+                    },
+                    f,
+                )
 
             # Load (will queue since no model)
             assert engine.load_lora_adapter(tmpdir) is True
@@ -562,6 +576,7 @@ class TestVideoEnvVars:
         os.environ["YUNSHU_VIDEO_LORA"] = "/nonexistent/path/lora"
         try:
             from yunshu_engine.video_engine import VideoEngine
+
             engine = VideoEngine()
             assert engine._lora_adapter_path == ""
         finally:

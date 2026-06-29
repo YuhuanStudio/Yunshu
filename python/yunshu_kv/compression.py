@@ -17,13 +17,14 @@ import numpy as np
 
 try:
     import mlx.core as mx
+
     HAS_MLX = True
 except ImportError:
     HAS_MLX = False
 
 
 class KVTier(Enum):
-    HOT = auto()   # FP16 in UMA
+    HOT = auto()  # FP16 in UMA
     WARM = auto()  # INT4 quantized
     COLD = auto()  # SSD
 
@@ -63,13 +64,15 @@ def quantize_kv_4bit(
     *batch_dims, num_tokens, head_dim = arr.shape
 
     if arr.ndim < 2 or head_dim == 0:
-        raise ValueError(f"kv_array must be at least 2D with head_dim > 0, got shape {arr.shape}")
+        raise ValueError(
+            f"kv_array must be at least 2D with head_dim > 0, got shape {arr.shape}"
+        )
 
     # Pad head_dim to be divisible by group_size * 2 (for packing)
     effective_dim = head_dim
     pad_needed = (group_size - head_dim % group_size) % group_size
     if pad_needed:
-        arr = np.pad(arr, ((0,0),) * len(batch_dims) + ((0,0), (0, pad_needed)))
+        arr = np.pad(arr, ((0, 0),) * len(batch_dims) + ((0, 0), (0, pad_needed)))
         effective_dim = head_dim + pad_needed
 
     # Reshape into groups: [..., tokens, num_groups, group_size]
@@ -77,14 +80,23 @@ def quantize_kv_4bit(
     grouped = arr.reshape(batch_dims + [num_tokens, num_groups, group_size])
 
     # Per-group absolute max
-    group_max = np.max(np.abs(grouped), axis=-1, keepdims=True)  # [..., tokens, groups, 1]
+    group_max = np.max(
+        np.abs(grouped), axis=-1, keepdims=True
+    )  # [..., tokens, groups, 1]
     group_max = np.where(np.isfinite(group_max), group_max, 0.0)
     scales = (group_max / 7.0).squeeze(-1)  # [..., tokens, groups]
     scales = np.where(scales == 0, 1.0, scales)
 
     # Quantize: [..., tokens, groups, group_size]
     scales_expanded = scales[..., None]
-    quantized = np.clip(np.round(arr.reshape(batch_dims + [num_tokens, num_groups, group_size]) / scales_expanded), -7, 7).astype(np.int8)
+    quantized = np.clip(
+        np.round(
+            arr.reshape(batch_dims + [num_tokens, num_groups, group_size])
+            / scales_expanded
+        ),
+        -7,
+        7,
+    ).astype(np.int8)
     quantized_uint = (quantized + 8).astype(np.uint8)
 
     # Reshape back: [..., tokens, effective_dim]

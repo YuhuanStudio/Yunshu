@@ -8,6 +8,7 @@ Fix: snapshot the original system list (req._anthropic_orig_system) before the o
 use it at all three usage call sites, and compute the real prefix count on the streaming
 path instead of bool().
 """
+
 from __future__ import annotations
 
 import inspect
@@ -25,7 +26,11 @@ class _Tok:
 
 def test_helper_counts_list_prefix_but_zero_for_string():
     system = [
-        {"type": "text", "text": "alpha beta gamma", "cache_control": {"type": "ephemeral"}},
+        {
+            "type": "text",
+            "text": "alpha beta gamma",
+            "cache_control": {"type": "ephemeral"},
+        },
         {"type": "text", "text": "delta epsilon"},
     ]
     # breakpoint char offset = end of the first block's text ("alpha beta gamma" = 16 chars).
@@ -33,7 +38,10 @@ def test_helper_counts_list_prefix_but_zero_for_string():
     n = _cacheable_prefix_token_count(system, [16], _Tok())
     assert n == 3
     # the bug: a STRING system (what req.system becomes after the overwrite) → always 0
-    assert _cacheable_prefix_token_count("alpha beta gamma\ndelta epsilon", [16], _Tok()) == 0
+    assert (
+        _cacheable_prefix_token_count("alpha beta gamma\ndelta epsilon", [16], _Tok())
+        == 0
+    )
 
 
 def test_create_message_snapshots_original_system():

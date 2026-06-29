@@ -1,4 +1,5 @@
 """Tests for mRoPE (Multi-dimensional Rotary Position Embedding) support."""
+
 from unittest.mock import MagicMock
 
 import mlx.core as mx

@@ -92,12 +92,14 @@ class CacheBlockType(enum.Enum):
 
 
 # Fill default block sizes after enum is defined.
-_DEFAULT_BLOCK_SIZES.update({
-    CacheBlockType.ATTENTION: 64,
-    CacheBlockType.MAMBA_SSM: 1,      # SSM state is per-slot, not per-token
-    CacheBlockType.SLIDING_WINDOW: 64,
-    CacheBlockType.MLA: 64,
-})
+_DEFAULT_BLOCK_SIZES.update(
+    {
+        CacheBlockType.ATTENTION: 64,
+        CacheBlockType.MAMBA_SSM: 1,  # SSM state is per-slot, not per-token
+        CacheBlockType.SLIDING_WINDOW: 64,
+        CacheBlockType.MLA: 64,
+    }
+)
 
 
 # ── MambaSSMState ──────────────────────────────────────────────────────
@@ -332,7 +334,9 @@ class MambaSSMState:
         # Override comp_code from wrapper byte (the stored value inside the
         # header may differ for non-zlib modes; trust the wrapper).
         if comp_code == _COMPRESS_NONE and stored_comp_code in (
-            _COMPRESS_QUANT_8BIT, _COMPRESS_QUANT_4BIT, _COMPRESS_NONE,
+            _COMPRESS_QUANT_8BIT,
+            _COMPRESS_QUANT_4BIT,
+            _COMPRESS_NONE,
         ):
             comp_code = stored_comp_code
 
@@ -386,7 +390,9 @@ class MambaSSMState:
         buf.write(np_arr.tobytes())
 
     @staticmethod
-    def _read_tensor_raw(data: bytes, offset: int, dtype: mx.Dtype) -> tuple[mx.array, int]:
+    def _read_tensor_raw(
+        data: bytes, offset: int, dtype: mx.Dtype
+    ) -> tuple[mx.array, int]:
         """Read a tensor from bytes at offset."""
         import numpy as np
 
@@ -402,9 +408,13 @@ class MambaSSMState:
         for d in shape:
             num_elements *= d
 
-        np_dtype = {mx.float16: np.float16, mx.float32: np.float32}.get(dtype, np.float16)
+        np_dtype = {mx.float16: np.float16, mx.float32: np.float32}.get(
+            dtype, np.float16
+        )
         nbytes = num_elements * np_dtype().itemsize
-        np_arr = np.frombuffer(data[offset : offset + nbytes], dtype=np_dtype).reshape(shape)
+        np_arr = np.frombuffer(data[offset : offset + nbytes], dtype=np_dtype).reshape(
+            shape
+        )
         offset += nbytes
 
         return mx.array(np_arr), offset
@@ -428,7 +438,9 @@ class MambaSSMState:
         buf.write(quantized.tobytes())
 
     @staticmethod
-    def _read_tensor_8bit(data: bytes, offset: int, dtype: mx.Dtype) -> tuple[mx.array, int]:
+    def _read_tensor_8bit(
+        data: bytes, offset: int, dtype: mx.Dtype
+    ) -> tuple[mx.array, int]:
         """Read 8-bit quantized tensor."""
         import numpy as np
 
@@ -448,11 +460,15 @@ class MambaSSMState:
             num_elements *= d
 
         nbytes = num_elements  # int8 = 1 byte each
-        quantized = np.frombuffer(data[offset : offset + nbytes], dtype=np.int8).reshape(shape)
+        quantized = np.frombuffer(
+            data[offset : offset + nbytes], dtype=np.int8
+        ).reshape(shape)
         offset += nbytes
 
-        dequantized = (quantized.astype(np.float32) * scale / 127.0)
-        target_dtype = {mx.float16: np.float16, mx.float32: np.float32}.get(dtype, np.float16)
+        dequantized = quantized.astype(np.float32) * scale / 127.0
+        target_dtype = {mx.float16: np.float16, mx.float32: np.float32}.get(
+            dtype, np.float16
+        )
         return mx.array(dequantized.astype(target_dtype)), offset
 
     @staticmethod
@@ -484,7 +500,9 @@ class MambaSSMState:
         buf.write(bytes(packed))
 
     @staticmethod
-    def _read_tensor_4bit(data: bytes, offset: int, dtype: mx.Dtype) -> tuple[mx.array, int]:
+    def _read_tensor_4bit(
+        data: bytes, offset: int, dtype: mx.Dtype
+    ) -> tuple[mx.array, int]:
         """Read 4-bit quantized tensor."""
         import numpy as np
 
@@ -515,8 +533,10 @@ class MambaSSMState:
             flat.extend([hi, lo])
         flat = flat[:num_elements]
 
-        dequantized = (np.array(flat, dtype=np.float32) * scale / 7.0)
-        target_dtype = {mx.float16: np.float16, mx.float32: np.float32}.get(dtype, np.float16)
+        dequantized = np.array(flat, dtype=np.float32) * scale / 7.0
+        target_dtype = {mx.float16: np.float16, mx.float32: np.float32}.get(
+            dtype, np.float16
+        )
         return mx.array(dequantized.reshape(shape).astype(target_dtype)), offset
 
 
@@ -783,8 +803,10 @@ class HybridKVCache:
                 logger.warning(
                     "HybridKVCache: shape mismatch for layer %d (%s pool): "
                     "existing=%s, new=%s. Using existing shape.",
-                    layer_idx, block_type.value,
-                    existing.cache_shape, cache_shape,
+                    layer_idx,
+                    block_type.value,
+                    existing.cache_shape,
+                    cache_shape,
                 )
 
         self._pools[block_type].register_layer(layer_idx)

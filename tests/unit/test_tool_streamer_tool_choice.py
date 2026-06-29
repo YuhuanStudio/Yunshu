@@ -9,13 +9,18 @@ allow_parallel ctor args), so every streaming consumer — single-choice and per
 n>1 — honours it. A suppressed call has its start, every args delta, and its final
 tool_call dropped. Unconstrained → pure pass-through (no behaviour change).
 """
+
 from __future__ import annotations
 
 from yunshu_engine.tool_call_streamer import ToolCallStreamer
 
 _TWO = [
-    "<tool_call>", '{"name":"alpha","arguments":{"x":1}}', "</tool_call>",
-    "<tool_call>", '{"name":"beta","arguments":{"y":2}}', "</tool_call>",
+    "<tool_call>",
+    '{"name":"alpha","arguments":{"x":1}}',
+    "</tool_call>",
+    "<tool_call>",
+    '{"name":"beta","arguments":{"y":2}}',
+    "</tool_call>",
 ]
 
 

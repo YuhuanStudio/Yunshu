@@ -23,8 +23,7 @@ class MessageAdapter(ABC):
         ...
 
     @abstractmethod
-    def family_name(self) -> str:
-        ...
+    def family_name(self) -> str: ...
 
 
 class HarmonyMessageAdapter(MessageAdapter):
@@ -43,10 +42,12 @@ class HarmonyMessageAdapter(MessageAdapter):
             content = msg.get("content", "")
 
             if role == "system":
-                adapted.append({
-                    "role": "developer",
-                    "content": content,
-                })
+                adapted.append(
+                    {
+                        "role": "developer",
+                        "content": content,
+                    }
+                )
             elif role == "tool":
                 tool_msg = {
                     "role": "tool",
@@ -110,7 +111,9 @@ class Gemma4MessageAdapter(MessageAdapter):
                 # cached_content context doc prepended ahead of the request's own system
                 # message) all but the LAST were silently dropped. Gemma-4 is the flagship
                 # model + the cached_content→Gemma path is exactly explicit_cache's purpose.
-                system_prefix = f"{system_prefix}\n\n{content}" if system_prefix else content
+                system_prefix = (
+                    f"{system_prefix}\n\n{content}" if system_prefix else content
+                )
                 # A system message is a TURN BOUNDARY — reset prev_role so a
                 # following user/assistant isn't merged into the one BEFORE the system msg.
                 # The old code left prev_role unchanged, so [user, system, user] collapsed
@@ -257,8 +260,11 @@ class QwenMessageAdapter(MessageAdapter):
         # messages to the front (mirrors the Llama/GLM/DeepSeek/Phi adapters, which already
         # do this — a mid-system Qwen request otherwise raised → caught at
         # _apply_chat_template → collapsed to the plaintext fallback).
-        if (adapted and adapted[0]["role"] != "system"
-                and any(m["role"] == "system" for m in adapted)):
+        if (
+            adapted
+            and adapted[0]["role"] != "system"
+            and any(m["role"] == "system" for m in adapted)
+        ):
             sys_msgs = [m for m in adapted if m["role"] == "system"]
             other = [m for m in adapted if m["role"] != "system"]
             adapted = sys_msgs + other
@@ -286,7 +292,11 @@ class MistralMessageAdapter(MessageAdapter):
             content = msg.get("content", "")
 
             if role == "system":
-                system_prefix = (system_prefix + "\n\n" + content).strip() if system_prefix else content
+                system_prefix = (
+                    (system_prefix + "\n\n" + content).strip()
+                    if system_prefix
+                    else content
+                )
                 continue
 
             new_msg = {"role": role, "content": content}
@@ -311,7 +321,11 @@ class MistralMessageAdapter(MessageAdapter):
             if adapted:
                 first = adapted[0]
                 if first["role"] == "user":
-                    first["content"] = f"{system_prefix}\n\n{first['content']}" if first["content"] else system_prefix
+                    first["content"] = (
+                        f"{system_prefix}\n\n{first['content']}"
+                        if first["content"]
+                        else system_prefix
+                    )
                 else:
                     adapted.insert(0, {"role": "user", "content": system_prefix})
             else:
@@ -328,7 +342,11 @@ class MistralMessageAdapter(MessageAdapter):
             if role == "tool":
                 alternated.append(msg)
                 continue
-            if alternated and alternated[-1]["role"] == role and role in ("user", "assistant"):
+            if (
+                alternated
+                and alternated[-1]["role"] == role
+                and role in ("user", "assistant")
+            ):
                 # Insert empty opposite turn
                 opposite = "assistant" if role == "user" else "user"
                 alternated.append({"role": opposite, "content": ""})

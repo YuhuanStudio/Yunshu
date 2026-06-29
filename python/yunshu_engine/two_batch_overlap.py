@@ -48,6 +48,7 @@ logger = logging.getLogger(__name__)
 
 class BatchSlot(Enum):
     """Identifies which batch slot is currently active."""
+
     A = auto()
     B = auto()
 
@@ -109,9 +110,7 @@ class TBOConfig:
         return cls(
             enabled=os.environ.get("YUNSHU_TBO", "0") == "1",
             min_batch_size=int(os.environ.get("YUNSHU_TBO_MIN_BATCH", "2")),
-            low_util_threshold=float(
-                os.environ.get("YUNSHU_TBO_LOW_UTIL", "0.1")
-            ),
+            low_util_threshold=float(os.environ.get("YUNSHU_TBO_LOW_UTIL", "0.1")),
             fallback_window=int(os.environ.get("YUNSHU_TBO_FALLBACK_WINDOW", "50")),
             metrics_window=int(os.environ.get("YUNSHU_TBO_METRICS_WINDOW", "100")),
         )
@@ -195,7 +194,9 @@ class TBOMetrics:
         if not self._recent_gpu_ms:
             return 0.0
         avg_gpu = sum(self._recent_gpu_ms) / len(self._recent_gpu_ms)
-        avg_overlap = sum(self._recent_cpu_overlap_ms) / len(self._recent_cpu_overlap_ms)
+        avg_overlap = sum(self._recent_cpu_overlap_ms) / len(
+            self._recent_cpu_overlap_ms
+        )
         if avg_gpu <= 0:
             return 0.0
         return min(avg_overlap / avg_gpu, 1.0)
@@ -504,7 +505,7 @@ class TwoBatchOverlapScheduler:
         if not self._batch_size_history:
             return False
 
-        recent = self._batch_size_history[-self._history_max:]
+        recent = self._batch_size_history[-self._history_max :]
         avg_batch = sum(recent) / len(recent)
 
         # Need average batch size above threshold
@@ -527,9 +528,7 @@ class TwoBatchOverlapScheduler:
         """
         avg_batch = 0.0
         if self._batch_size_history:
-            avg_batch = sum(self._batch_size_history) / len(
-                self._batch_size_history
-            )
+            avg_batch = sum(self._batch_size_history) / len(self._batch_size_history)
 
         return {
             "config": self._config.to_dict(),

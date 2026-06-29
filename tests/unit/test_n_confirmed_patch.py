@@ -8,6 +8,7 @@ class TestClearRollback:
 
     def test_clears_ssm_rollback_state(self):
         from yunshu_engine.n_confirmed_patch import clear_rollback
+
         cache = [MagicMock()]
         cache[0].rollback_state = ("conv_snap", "ssm_snap")
         clear_rollback(cache)
@@ -15,6 +16,7 @@ class TestClearRollback:
 
     def test_clears_multiple_layers(self):
         from yunshu_engine.n_confirmed_patch import clear_rollback
+
         cache = [MagicMock(), MagicMock(), MagicMock()]
         cache[0].rollback_state = ("conv1", "ssm1")
         cache[1].rollback_state = ("conv2", "ssm2")
@@ -25,6 +27,7 @@ class TestClearRollback:
 
     def test_no_rollback_state_does_nothing(self):
         from yunshu_engine.n_confirmed_patch import clear_rollback
+
         cache = [MagicMock(spec=["advance"])]
         # No crash
         clear_rollback(cache)
@@ -35,6 +38,7 @@ class TestRestoreRollback:
 
     def test_restores_ssm_state(self):
         from yunshu_engine.n_confirmed_patch import restore_rollback
+
         cache = [MagicMock()]
         conv_snap = MagicMock()
         ssm_snap = MagicMock()
@@ -50,6 +54,7 @@ class TestRestoreRollback:
 
     def test_trims_kv_layers(self):
         from yunshu_engine.n_confirmed_patch import restore_rollback
+
         cache = [MagicMock()]
         cache[0].is_trimmable.return_value = True
         cache[0].rollback_state = None  # not an SSM layer
@@ -60,6 +65,7 @@ class TestRestoreRollback:
 
     def test_mixed_layers(self):
         from yunshu_engine.n_confirmed_patch import restore_rollback
+
         ssm_layer = MagicMock()
         ssm_layer.rollback_state = ("conv", "ssm")
         ssm_layer.lengths = 10
@@ -76,6 +82,7 @@ class TestRestoreRollback:
 
     def test_returns_false_for_unsupported_layer(self):
         from yunshu_engine.n_confirmed_patch import restore_rollback
+
         cache = [MagicMock()]
         cache[0].rollback_state = None
         cache[0].is_trimmable.return_value = False
@@ -89,6 +96,7 @@ class TestApplyNPConfirmedPatch:
 
     def test_patch_is_idempotent(self):
         from yunshu_engine.n_confirmed_patch import apply_n_confirmed_patch
+
         # First call may or may not succeed depending on mlx_lm availability
         result1 = apply_n_confirmed_patch()
         result2 = apply_n_confirmed_patch()

@@ -9,6 +9,7 @@ delta.content with reasoning_tokens=0, defeating the streaming fixes on the
 DEFAULT path. _resolve_think_token_ids encodes the BRACKETED form with
 add_special_tokens=False, and the fix is swept to all 8 think-token call sites.
 """
+
 from __future__ import annotations
 
 import inspect

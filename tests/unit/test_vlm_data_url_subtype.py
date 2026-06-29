@@ -4,6 +4,7 @@
 `data:image` dispatch but then hit header.split("/")[1] in _save_base64_image, raising
 IndexError → a generic 500. Default the extension to png when the subtype is absent.
 """
+
 from __future__ import annotations
 
 import asyncio

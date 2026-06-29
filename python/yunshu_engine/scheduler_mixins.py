@@ -61,7 +61,9 @@ class MetricsMixin(SchedulerMixin):
 
     def __init__(self, window_size: int = 100) -> None:
         self._window_size = window_size
-        self._step_times: collections.deque[float] = collections.deque(maxlen=window_size)
+        self._step_times: collections.deque[float] = collections.deque(
+            maxlen=window_size
+        )
         self._batch_sizes: deque[int] = deque(maxlen=self._window_size)
         self._throughput_window: list[tuple[float, int]] = []
         self._total_tokens = 0
@@ -74,17 +76,17 @@ class MetricsMixin(SchedulerMixin):
 
     def post_step(self, scheduler: Any, output: Any) -> None:
         now = time.monotonic()
-        step_latency = now - self._step_start if hasattr(self, '_step_start') else 0.0
+        step_latency = now - self._step_start if hasattr(self, "_step_start") else 0.0
         self._step_times.append(step_latency)
 
         batch_size = 0
         tokens = 0
         finished = 0
-        if hasattr(output, 'outputs') and output.outputs:
+        if hasattr(output, "outputs") and output.outputs:
             batch_size = len(output.outputs)
             for o in output.outputs:
-                tokens += getattr(o, 'completion_tokens', 1)
-                if getattr(o, 'finished', False):
+                tokens += getattr(o, "completion_tokens", 1)
+                if getattr(o, "finished", False):
                     finished += 1
 
         self._batch_sizes.append(batch_size)
@@ -107,9 +109,7 @@ class MetricsMixin(SchedulerMixin):
         now = time.monotonic()
         uptime = now - self._start_time
         avg_step = (
-            sum(self._step_times) / len(self._step_times)
-            if self._step_times
-            else 0.0
+            sum(self._step_times) / len(self._step_times) if self._step_times else 0.0
         )
         avg_batch = (
             sum(self._batch_sizes) / len(self._batch_sizes)
@@ -118,15 +118,17 @@ class MetricsMixin(SchedulerMixin):
         )
         if len(self._throughput_window) >= 2:
             throughput_60s = sum(n for _, n in self._throughput_window)
-            window_span = (
-                self._throughput_window[-1][0] - self._throughput_window[0][0]
-            )
+            window_span = self._throughput_window[-1][0] - self._throughput_window[0][0]
             throughput_tps = throughput_60s / max(window_span, 0.001)
         else:
             throughput_tps = 0.0
         _sorted_steps = sorted(self._step_times) if self._step_times else []
         p50_step = _sorted_steps[len(_sorted_steps) // 2] if _sorted_steps else 0.0
-        _p99_idx = min(len(_sorted_steps) - 1, int(len(_sorted_steps) * 0.99)) if _sorted_steps else 0
+        _p99_idx = (
+            min(len(_sorted_steps) - 1, int(len(_sorted_steps) * 0.99))
+            if _sorted_steps
+            else 0
+        )
         p99_step = _sorted_steps[_p99_idx] if _sorted_steps else 0.0
         return {
             "step_count": self._step_count,
@@ -180,39 +182,42 @@ class ProfilingMixin(SchedulerMixin):
         if not self._enabled:
             return
         import random
+
         if random.random() > self._sample_rate:
             return
 
         now = time.monotonic()
-        step_latency = (now - self._step_start) * 1000 if hasattr(self, '_step_start') else 0.0
-
-        batch_size = len(output.outputs) if hasattr(output, 'outputs') and output.outputs else 0
-        tokens = sum(
-            getattr(o, 'completion_tokens', 1)
-            for o in (output.outputs or [])
+        step_latency = (
+            (now - self._step_start) * 1000 if hasattr(self, "_step_start") else 0.0
         )
+
+        batch_size = (
+            len(output.outputs) if hasattr(output, "outputs") and output.outputs else 0
+        )
+        tokens = sum(getattr(o, "completion_tokens", 1) for o in (output.outputs or []))
 
         active_mem = 0
         peak_mem = 0
         try:
             import mlx.core as mx
+
             active_mem = mx.get_active_memory()
             peak_mem = mx.get_peak_memory()
         except Exception:
             logger.debug("operation failed", exc_info=True)
 
         phase = "decode"
-        if output is not None and hasattr(output, 'outputs'):
+        if output is not None and hasattr(output, "outputs"):
             for o in output.outputs or []:
-                eop = getattr(o, 'end_of_prompt', False)
-                prog = getattr(o, 'progress', None)
+                eop = getattr(o, "end_of_prompt", False)
+                prog = getattr(o, "progress", None)
                 if eop or (prog is not None and prog < 1.0):
                     phase = "prefill"
                     break
         # Fallback: if waiting queue is non-empty and output didn't
         # explicitly indicate decode, treat as prefill (the step likely
         # scheduled a prefill from the waiting queue).
-        if phase == "decode" and hasattr(scheduler, 'waiting') and scheduler.waiting:
+        if phase == "decode" and hasattr(scheduler, "waiting") and scheduler.waiting:
             phase = "prefill"
 
         sample = ProfilingSample(
@@ -248,10 +253,14 @@ class ProfilingMixin(SchedulerMixin):
             ),
             "memory_active_mb": round(
                 self._samples[-1].memory_active_bytes / 1024 / 1024, 1
-            ) if self._samples else 0,
+            )
+            if self._samples
+            else 0,
             "memory_peak_mb": round(
                 self._samples[-1].memory_peak_bytes / 1024 / 1024, 1
-            ) if self._samples else 0,
+            )
+            if self._samples
+            else 0,
         }
 
     def export_traces(self) -> list[dict]:
@@ -295,18 +304,18 @@ class DisaggregationMixin(SchedulerMixin):
         pass
 
     def post_step(self, scheduler: Any, output: Any) -> None:
-        if not output or not hasattr(output, 'outputs'):
+        if not output or not hasattr(output, "outputs"):
             return
         for o in output.outputs:
-            if getattr(o, 'finished', False):
-                prompt_tokens = getattr(o, 'prompt_tokens', 0)
+            if getattr(o, "finished", False):
+                prompt_tokens = getattr(o, "prompt_tokens", 0)
                 if prompt_tokens > self._prefill_threshold:
                     self._prefill_count += 1
                 else:
                     self._decode_count += 1
 
     def on_add_request(self, scheduler: Any, request: Any) -> None:
-        prompt_len = getattr(request, 'num_prompt_tokens', 0)
+        prompt_len = getattr(request, "num_prompt_tokens", 0)
         if prompt_len > self._prefill_threshold and self._prefill_nodes:
             logger.debug(f"Routing long prompt ({prompt_len} tokens) to prefill node")
 
@@ -338,11 +347,11 @@ class DataParallelMixin(SchedulerMixin):
         pass
 
     def post_step(self, scheduler: Any, output: Any) -> None:
-        if not output or not hasattr(output, 'outputs') or not output.outputs:
+        if not output or not hasattr(output, "outputs") or not output.outputs:
             return
         for o in output.outputs:
-            if getattr(o, 'finished', False):
-                if not hasattr(o, 'replica_id'):
+            if getattr(o, "finished", False):
+                if not hasattr(o, "replica_id"):
                     continue
                 replica_id = o.replica_id
                 self._replica_loads[replica_id] = max(
@@ -400,7 +409,7 @@ class PipelineParallelMixin(SchedulerMixin):
 
     def post_step(self, scheduler: Any, output: Any) -> None:
         batch_size = 0
-        if hasattr(output, 'outputs') and output.outputs is not None:
+        if hasattr(output, "outputs") and output.outputs is not None:
             batch_size = len(output.outputs)
         # Pipeline bubble: stage has nothing to process while waiting
         # for other stages to complete their micro-batches
@@ -450,10 +459,10 @@ class SpecDecodeMixin(SchedulerMixin):
         pass
 
     def post_step(self, scheduler: Any, output: Any) -> None:
-        if not hasattr(output, 'outputs') or not output.outputs:
+        if not hasattr(output, "outputs") or not output.outputs:
             return
         for o in output.outputs:
-            spec_accepted = getattr(o, 'spec_accepted', None)
+            spec_accepted = getattr(o, "spec_accepted", None)
             if spec_accepted is not None:
                 self._acceptances.append(spec_accepted)
                 if spec_accepted:
@@ -462,7 +471,7 @@ class SpecDecodeMixin(SchedulerMixin):
                     self._total_rejected += 1
                 self._total_drafts += 1
 
-                proposer = getattr(o, 'spec_proposer', 'unknown')
+                proposer = getattr(o, "spec_proposer", "unknown")
                 stats = self._proposer_stats[proposer]
                 stats["drafts"] += 1
                 if spec_accepted:
@@ -542,6 +551,7 @@ class MemoryPressureMixin(SchedulerMixin):
     def pre_step(self, scheduler: Any) -> None:
         try:
             import mlx.core as mx
+
             active = mx.get_active_memory()
             total = self._total_memory_bytes
             if total <= 0:
@@ -641,10 +651,10 @@ class CompositionScheduler:
         for m in self._mixins:
             m.post_step(self._scheduler, output)
         # Check for finished requests
-        if hasattr(output, 'outputs') and output.outputs:
+        if hasattr(output, "outputs") and output.outputs:
             for o in output.outputs:
-                if getattr(o, 'finished', False):
-                    rid = getattr(o, 'request_id', '')
+                if getattr(o, "finished", False):
+                    rid = getattr(o, "request_id", "")
                     for m in self._mixins:
                         m.on_finish(self._scheduler, rid, o)
         return output

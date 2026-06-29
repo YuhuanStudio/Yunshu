@@ -7,6 +7,7 @@ parser then did row.get(col, "").strip() → None.strip() → AttributeError, wh
 DictReader(restval="") so missing cells are empty strings (.strip() safe, cells default),
 and custom_id falls back to a generated id when missing/empty.
 """
+
 from __future__ import annotations
 
 import csv
@@ -21,7 +22,9 @@ def _parse_row_like_production(row, max_tokens=128):
     custom_id = row.get("custom_id") or "GENERATED"
     rmt_raw = row.get("max_tokens", "")
     try:
-        rmt = int(rmt_raw) if rmt_raw.strip() else max_tokens   # None.strip() would crash here
+        rmt = (
+            int(rmt_raw) if rmt_raw.strip() else max_tokens
+        )  # None.strip() would crash here
     except (ValueError, TypeError):
         rmt = max_tokens
     rt_raw = row.get("temperature", "")
@@ -46,7 +49,7 @@ def test_ragged_row_defaults_cleanly_with_restval():
     # missing cells are now empty strings — .strip() is safe
     assert rows[0]["max_tokens"] == "" and rows[0]["temperature"] == ""
     cid, rmt, rt = _parse_row_like_production(rows[0])
-    assert cid == "id1"            # present custom_id kept
+    assert cid == "id1"  # present custom_id kept
     assert rmt == 128 and rt == 0.7  # missing numeric cells default, no crash
 
 
@@ -54,7 +57,7 @@ def test_missing_custom_id_column_gets_generated_id():
     text = "prompt,max_tokens\nhello,64\n"
     rows = list(csv.DictReader(io.StringIO(text), restval=""))
     cid, rmt, rt = _parse_row_like_production(rows[0])
-    assert cid == "GENERATED"     # missing/empty custom_id → fallback, not None
+    assert cid == "GENERATED"  # missing/empty custom_id → fallback, not None
     assert rmt == 64
 
 

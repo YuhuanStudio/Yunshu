@@ -3,6 +3,7 @@
 Requires models in models/ directory. Skips gracefully if models not available.
 Run: .venv/bin/python3 -m pytest tests/integration/test_mtp.py -v
 """
+
 from __future__ import annotations
 
 import gc
@@ -83,7 +84,9 @@ class TestMTPLoad:
         assert hasattr(inner.mtp, "layers"), "Missing MTP decoder layers"
         assert hasattr(inner.mtp, "norm"), "Missing final norm"
         assert hasattr(inner.mtp, "pre_fc_norm_hidden"), "Missing pre_fc_norm_hidden"
-        assert hasattr(inner.mtp, "pre_fc_norm_embedding"), "Missing pre_fc_norm_embedding"
+        assert hasattr(inner.mtp, "pre_fc_norm_embedding"), (
+            "Missing pre_fc_norm_embedding"
+        )
 
     def test_mtp_fc_weight_shape(self, loaded_model):
         inner = getattr(loaded_model, "language_model", loaded_model)
@@ -98,6 +101,7 @@ class TestMTPLoad:
 
         assert len(cache) == len(inner.mtp.layers)
         from mlx_lm.models.cache import KVCache
+
         assert all(isinstance(c, KVCache) for c in cache)
 
     def test_idempotent_patch(self):
@@ -186,7 +190,9 @@ class TestMTPDecodeLoop:
         for _ in range(total):
             last_hidden = hidden[:, -1:, :]
             mtp_cache = inner.make_mtp_cache()
-            mtp_logits = loaded_model.mtp_forward(last_hidden, mx.array([[current_tok]]), mtp_cache)
+            mtp_logits = loaded_model.mtp_forward(
+                last_hidden, mx.array([[current_tok]]), mtp_cache
+            )
             mtp_tok = int(mx.argmax(mtp_logits[0, -1, :]).item())
 
             t_logits = loaded_model(mx.array([[current_tok]]), cache=cache)
@@ -198,7 +204,9 @@ class TestMTPDecodeLoop:
                 matches += 1
 
             # Get hidden for next iteration
-            _, hidden = loaded_model(mx.array([[current_tok]]), cache=cache, return_hidden=True)
+            _, hidden = loaded_model(
+                mx.array([[current_tok]]), cache=cache, return_hidden=True
+            )
             current_tok = backbone_tok
 
         acceptance = matches / total
@@ -211,12 +219,14 @@ class TestMTPSanitize:
 
     def test_sanitize_keeps_mtp_keys(self):
         from yunshu_engine.mtp_patch import apply_mtp_patch
+
         apply_mtp_patch()
 
         from mlx_lm.models import qwen3_5 as q35
 
         # Create a minimal TextModel with MTP
         from mlx_lm.models.qwen3_5 import TextModelArgs
+
         args = TextModelArgs(
             model_type="qwen3_5_text",
             hidden_size=256,
@@ -242,10 +252,12 @@ class TestMTPSanitize:
 
     def test_sanitize_strips_mtp_when_no_module(self):
         from yunshu_engine.mtp_patch import apply_mtp_patch
+
         apply_mtp_patch()
 
         from mlx_lm.models import qwen3_5 as q35
         from mlx_lm.models.qwen3_5 import TextModelArgs
+
         args = TextModelArgs(
             model_type="qwen3_5_text",
             hidden_size=256,
@@ -267,6 +279,7 @@ class TestMTPSanitize:
 
     def test_sanitize_shifts_norm_weights(self):
         from yunshu_engine.mtp_patch import apply_mtp_patch
+
         apply_mtp_patch()
 
         from mlx_lm.models import qwen3_5 as q35

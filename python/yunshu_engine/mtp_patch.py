@@ -132,14 +132,24 @@ def _patch_text_model(q35: Any) -> None:
         if n_mtp > 0:
             self.mtp = q35.MTPModule(args)
 
-    def __call__(self, inputs, cache=None, input_embeddings=None,
-                 return_hidden: bool = False, n_confirmed: int = 0):
+    def __call__(
+        self,
+        inputs,
+        cache=None,
+        input_embeddings=None,
+        return_hidden: bool = False,
+        n_confirmed: int = 0,
+    ):
         # Newer mlx-lm Qwen3_5TextModel.__call__ signature: (inputs, cache,
         # input_embeddings) — does NOT accept n_confirmed. Pass it via
         # kwargs only if the model accepts it (some forks/branches add it).
         try:
-            hidden = self.model(inputs, cache, input_embeddings=input_embeddings,
-                                n_confirmed=n_confirmed)
+            hidden = self.model(
+                inputs,
+                cache,
+                input_embeddings=input_embeddings,
+                n_confirmed=n_confirmed,
+            )
         except TypeError:
             hidden = self.model(inputs, cache, input_embeddings=input_embeddings)
         if self.args.tie_word_embeddings:
@@ -154,7 +164,10 @@ def _patch_text_model(q35: Any) -> None:
         if hidden_states.shape[1] > 1:
             hidden_states = hidden_states[:, -1:, :]
         mtp_out = self.mtp(
-            hidden_states, next_token_ids, self.model.embed_tokens, mtp_cache,
+            hidden_states,
+            next_token_ids,
+            self.model.embed_tokens,
+            mtp_cache,
         )
         if self.args.tie_word_embeddings:
             return self.model.embed_tokens.as_linear(mtp_out)
@@ -179,9 +192,13 @@ def _patch_text_model(q35: Any) -> None:
             weights.pop("lm_head.weight", None)
 
         norm_keys = (
-            ".input_layernorm.weight", ".post_attention_layernorm.weight",
-            "model.norm.weight", ".q_norm.weight", ".k_norm.weight",
-            ".pre_fc_norm_hidden.weight", ".pre_fc_norm_embedding.weight",
+            ".input_layernorm.weight",
+            ".post_attention_layernorm.weight",
+            "model.norm.weight",
+            ".q_norm.weight",
+            ".k_norm.weight",
+            ".pre_fc_norm_hidden.weight",
+            ".pre_fc_norm_embedding.weight",
             "mtp.norm.weight",
         )
         shifted_keys: set[str] = set()
@@ -208,12 +225,20 @@ def _patch_outer_model(q35: Any) -> None:
     if "_yunshu_mtp_patched" in cls.__dict__:
         return
 
-
-    def __call__(self, inputs, cache=None, input_embeddings=None,
-                 return_hidden: bool = False, n_confirmed: int = 0):
+    def __call__(
+        self,
+        inputs,
+        cache=None,
+        input_embeddings=None,
+        return_hidden: bool = False,
+        n_confirmed: int = 0,
+    ):
         return self.language_model(
-            inputs, cache=cache, input_embeddings=input_embeddings,
-            return_hidden=return_hidden, n_confirmed=n_confirmed,
+            inputs,
+            cache=cache,
+            input_embeddings=input_embeddings,
+            return_hidden=return_hidden,
+            n_confirmed=n_confirmed,
         )
 
     def mtp_forward(self, hidden_states, next_token_ids, mtp_cache):

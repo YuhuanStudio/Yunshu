@@ -8,6 +8,7 @@ first-token distribution. The fix already applied to _generate_gemma4_assistant_
 route messages-format prompts through `_apply_chat_template` + `_encode_prompt` (which
 strips a duplicate leading BOS) — must be propagated to every sibling.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -32,7 +33,9 @@ def test_spec_path_routes_messages_through_bos_guarded_encode(method_name):
     src = inspect.getsource(method)
     # the messages-format branch must encode via _encode_prompt (the double-BOS guard),
     # never raw tokenizer.encode right after a tokenize=False apply_chat_template
-    assert "_apply_chat_template(prompt" in src, f"{method_name} not routed via _apply_chat_template"
+    assert "_apply_chat_template(prompt" in src, (
+        f"{method_name} not routed via _apply_chat_template"
+    )
     assert "_encode_prompt(" in src, f"{method_name} not routed via _encode_prompt"
     # the raw tokenize=False template call (which produces the BOS-bearing string) is gone
     assert "apply_chat_template(prompt, **tpl_kwargs)" not in src, (

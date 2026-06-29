@@ -72,8 +72,12 @@ class TestChatMessageSchema:
             role="assistant",
             content=None,
             tool_calls=[
-                ToolCall(id="call_1", function=ToolCallFunction(name="f1", arguments="{}")),
-                ToolCall(id="call_2", function=ToolCallFunction(name="f2", arguments="{}")),
+                ToolCall(
+                    id="call_1", function=ToolCallFunction(name="f1", arguments="{}")
+                ),
+                ToolCall(
+                    id="call_2", function=ToolCallFunction(name="f2", arguments="{}")
+                ),
             ],
         )
         assert len(msg.tool_calls) == 2
@@ -83,7 +87,11 @@ class TestChatMessageSchema:
         msg = ChatMessage(
             role="assistant",
             content=None,
-            tool_calls=[ToolCall(id="call_1", function=ToolCallFunction(name="f", arguments="{}"))],
+            tool_calls=[
+                ToolCall(
+                    id="call_1", function=ToolCallFunction(name="f", arguments="{}")
+                )
+            ],
         )
         assert msg.content is None
         assert msg.tool_calls is not None
@@ -116,7 +124,9 @@ class TestExtractMessages:
                     ToolCall(
                         id="call_1",
                         type="function",
-                        function=ToolCallFunction(name="get_weather", arguments='{"city":"SF"}'),
+                        function=ToolCallFunction(
+                            name="get_weather", arguments='{"city":"SF"}'
+                        ),
                     )
                 ],
             )
@@ -159,7 +169,9 @@ class TestExtractMessages:
                     ToolCall(
                         id="call_w1",
                         type="function",
-                        function=ToolCallFunction(name="get_weather", arguments='{"city":"SF"}'),
+                        function=ToolCallFunction(
+                            name="get_weather", arguments='{"city":"SF"}'
+                        ),
                     )
                 ],
             ),
@@ -218,21 +230,49 @@ class TestContextWindowTruncation:
         messages = [
             {"role": "system", "content": "You are helpful."},
             {"role": "user", "content": "Call func A"},
-            {"role": "assistant", "content": None, "tool_calls": [
-                {"id": "call_1", "type": "function", "function": {"name": "func_a", "arguments": "{}"}},
-            ]},
-            {"role": "tool", "content": "result A", "tool_call_id": "call_1", "name": "func_a"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "func_a", "arguments": "{}"},
+                    },
+                ],
+            },
+            {
+                "role": "tool",
+                "content": "result A",
+                "tool_call_id": "call_1",
+                "name": "func_a",
+            },
             {"role": "assistant", "content": "Done with A."},
             {"role": "user", "content": "Call func B"},
-            {"role": "assistant", "content": None, "tool_calls": [
-                {"id": "call_2", "type": "function", "function": {"name": "func_b", "arguments": "{}"}},
-            ]},
-            {"role": "tool", "content": "result B", "tool_call_id": "call_2", "name": "func_b"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {"name": "func_b", "arguments": "{}"},
+                    },
+                ],
+            },
+            {
+                "role": "tool",
+                "content": "result B",
+                "tool_call_id": "call_2",
+                "name": "func_b",
+            },
             {"role": "assistant", "content": "Done with B."},
         ]
 
         # Truncate to a small budget that requires removing older messages
-        result = mgr.compute_truncation(messages, max_tokens=40, strategy="truncate_oldest")
+        result = mgr.compute_truncation(
+            messages, max_tokens=40, strategy="truncate_oldest"
+        )
 
         # The result must not have orphaned tool messages
         for i, msg in enumerate(result.messages):
@@ -254,16 +294,26 @@ class TestContextWindowTruncation:
         mgr = ContextWindowManager()
         messages = [
             {"role": "system", "content": "System"},
-            {"role": "assistant", "content": None, "tool_calls": [
-                {"id": "c1", "type": "function", "function": {"name": "f", "arguments": "{}"}},
-            ]},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "f", "arguments": "{}"},
+                    },
+                ],
+            },
             {"role": "tool", "content": "R1", "tool_call_id": "c1"},
             {"role": "user", "content": "Hello"},
             {"role": "assistant", "content": "World"},
         ]
 
         # Budget only fits system + user + assistant
-        result = mgr.compute_truncation(messages, max_tokens=30, strategy="truncate_oldest")
+        result = mgr.compute_truncation(
+            messages, max_tokens=30, strategy="truncate_oldest"
+        )
         roles = [m["role"] for m in result.messages]
 
         # Either the tool group is fully present or fully removed
@@ -285,14 +335,24 @@ class TestContextWindowTruncation:
         mgr = ContextWindowManager()
         messages = [
             {"role": "system", "content": "System"},
-            {"role": "assistant", "content": None, "tool_calls": [
-                {"id": "c1", "type": "function", "function": {"name": "f", "arguments": "{}"}},
-            ]},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "f", "arguments": "{}"},
+                    },
+                ],
+            },
             {"role": "tool", "content": "Result", "tool_call_id": "c1"},
             {"role": "assistant", "content": "Final answer"},
         ]
 
-        result = mgr.compute_truncation(messages, max_tokens=30, strategy="sliding_window")
+        result = mgr.compute_truncation(
+            messages, max_tokens=30, strategy="sliding_window"
+        )
 
         # Must not start with a tool message (it would be orphaned)
         non_system = [m for m in result.messages if m.get("role") != "system"]
@@ -309,16 +369,30 @@ class TestContextWindowTruncation:
         messages = [
             {"role": "system", "content": "System"},
             {"role": "user", "content": "Important question " * 20},
-            {"role": "assistant", "content": None, "tool_calls": [
-                {"id": "c1", "type": "function", "function": {"name": "search", "arguments": '{"q": "test"}'}},
-            ]},
-            {"role": "tool", "content": "Search results here " * 10, "tool_call_id": "c1"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "search", "arguments": '{"q": "test"}'},
+                    },
+                ],
+            },
+            {
+                "role": "tool",
+                "content": "Search results here " * 10,
+                "tool_call_id": "c1",
+            },
             {"role": "assistant", "content": "Based on search... " * 10},
             {"role": "user", "content": "Follow up question"},
             {"role": "assistant", "content": "Follow up answer"},
         ]
 
-        result = mgr.compute_truncation(messages, max_tokens=80, strategy="importance_aware")
+        result = mgr.compute_truncation(
+            messages, max_tokens=80, strategy="importance_aware"
+        )
 
         # Check tool group integrity
         for i, msg in enumerate(result.messages):
@@ -433,9 +507,13 @@ class TestEngineMessagesToText:
         engine._tokenizer = None
 
         msgs = [
-            {"role": "assistant", "content": None, "tool_calls": [
-                {"id": "c1", "function": {"name": "f", "arguments": "{}"}},
-            ]},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "c1", "function": {"name": "f", "arguments": "{}"}},
+                ],
+            },
             {"role": "tool", "content": "result", "tool_call_id": "c1", "name": "f"},
         ]
         # Should not crash - tool_calls, tool_call_id, name are preserved
@@ -464,8 +542,17 @@ class TestMessageAdapterMultiTurn:
         from yunshu_engine.message_adapter import DeepSeekMessageAdapter
 
         msgs = [
-            {"role": "assistant", "content": "Let me check", "tool_calls": [{"id": "c1"}]},
-            {"role": "tool", "content": "result", "tool_call_id": "c1", "name": "search"},
+            {
+                "role": "assistant",
+                "content": "Let me check",
+                "tool_calls": [{"id": "c1"}],
+            },
+            {
+                "role": "tool",
+                "content": "result",
+                "tool_call_id": "c1",
+                "name": "search",
+            },
         ]
         result = DeepSeekMessageAdapter().adapt(msgs)
         # Find the assistant message
@@ -521,13 +608,19 @@ class TestKVPrefixCacheMultiTurn:
 
         # Create a mock KV cache (just a list of dicts with offset)
         mock_kv1 = [
-            type("KVLayer", (), {"keys": mx.zeros((1, 1)), "values": mx.zeros((1, 1)), "offset": 15})()
+            type(
+                "KVLayer",
+                (),
+                {"keys": mx.zeros((1, 1)), "values": mx.zeros((1, 1)), "offset": 15},
+            )()
         ]
 
         cache.add(turn1_tokens, mock_kv1)
 
         # Simulate turn 2: same system + user + assistant + new user message
-        turn2_tokens = mx.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18])
+        turn2_tokens = mx.array(
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+        )
 
         result_kv, remaining, matched = cache.get(turn2_tokens)
 
@@ -593,13 +686,18 @@ class TestContextWindowCountTokens:
 
         mgr = ContextWindowManager()
         msgs_without = [{"role": "assistant", "content": "Hello"}]
-        msgs_with = [{
-            "role": "assistant",
-            "content": "Hello",
-            "tool_calls": [
-                {"id": "c1", "function": {"name": "search", "arguments": '{"q": "test"}'}},
-            ],
-        }]
+        msgs_with = [
+            {
+                "role": "assistant",
+                "content": "Hello",
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "function": {"name": "search", "arguments": '{"q": "test"}'},
+                    },
+                ],
+            }
+        ]
 
         tokens_without = mgr._count_messages_tokens(msgs_without)
         tokens_with = mgr._count_messages_tokens(msgs_with)
@@ -610,7 +708,14 @@ class TestContextWindowCountTokens:
 
         mgr = ContextWindowManager()
         msgs_without = [{"role": "tool", "content": "result"}]
-        msgs_with = [{"role": "tool", "content": "result", "tool_call_id": "call_abc123", "name": "search"}]
+        msgs_with = [
+            {
+                "role": "tool",
+                "content": "result",
+                "tool_call_id": "call_abc123",
+                "name": "search",
+            }
+        ]
 
         tokens_without = mgr._count_messages_tokens(msgs_without)
         tokens_with = mgr._count_messages_tokens(msgs_with)
@@ -638,9 +743,13 @@ class TestTruncateFirstMessageGroup:
         from yunshu_engine.context_window import _truncate_first_message_group
 
         msgs = [
-            {"role": "assistant", "content": None, "tool_calls": [
-                {"id": "c1", "function": {"name": "f", "arguments": "{}"}},
-            ]},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "c1", "function": {"name": "f", "arguments": "{}"}},
+                ],
+            },
             {"role": "tool", "content": "result", "tool_call_id": "c1"},
             {"role": "user", "content": "Next question"},
         ]
@@ -670,10 +779,14 @@ class TestTruncateFirstMessageGroup:
         from yunshu_engine.context_window import _truncate_first_message_group
 
         msgs = [
-            {"role": "assistant", "content": None, "tool_calls": [
-                {"id": "c1", "function": {"name": "f1", "arguments": "{}"}},
-                {"id": "c2", "function": {"name": "f2", "arguments": "{}"}},
-            ]},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "c1", "function": {"name": "f1", "arguments": "{}"}},
+                    {"id": "c2", "function": {"name": "f2", "arguments": "{}"}},
+                ],
+            },
             {"role": "tool", "content": "r1", "tool_call_id": "c1"},
             {"role": "tool", "content": "r2", "tool_call_id": "c2"},
             {"role": "user", "content": "Next"},

@@ -57,7 +57,9 @@ class BoundarySnapshotSSDStore:
     def start(self) -> None:
         self._shutdown = False
         self._writer_thread = threading.Thread(
-            target=self._writer_loop, daemon=True, name="boundary-writer",
+            target=self._writer_loop,
+            daemon=True,
+            name="boundary-writer",
         )
         self._writer_thread.start()
 
@@ -182,7 +184,9 @@ class BoundarySnapshotSSDStore:
                 type_name = ct.name if hasattr(ct, "name") else str(ct)
                 entries.append((key, "string", [], type_name.encode("utf-8")))
             elif isinstance(value, np.ndarray):
-                entries.append((key, str(value.dtype), list(value.shape), value.tobytes()))
+                entries.append(
+                    (key, str(value.dtype), list(value.shape), value.tobytes())
+                )
             elif hasattr(value, "shape"):
                 # MLX array
                 arr = np.array(value, copy=False)
@@ -232,7 +236,7 @@ class BoundarySnapshotSSDStore:
         """Deserialize binary format back to cache state dict."""
         offset = 0
 
-        magic = data[offset:offset + 8]
+        magic = data[offset : offset + 8]
         if magic != _MAGIC:
             raise ValueError(f"Invalid boundary snapshot magic: {magic}")
         offset += 8
@@ -244,22 +248,22 @@ class BoundarySnapshotSSDStore:
         for _ in range(num_entries):
             key_len = struct.unpack_from("<I", data, offset)[0]
             offset += 4
-            key = data[offset:offset + key_len].decode("utf-8")
+            key = data[offset : offset + key_len].decode("utf-8")
             offset += key_len
 
             dtype_len = struct.unpack_from("<I", data, offset)[0]
             offset += 4
-            dtype = data[offset:offset + dtype_len].decode("utf-8")
+            dtype = data[offset : offset + dtype_len].decode("utf-8")
             offset += dtype_len
 
             shape_len = struct.unpack_from("<I", data, offset)[0]
             offset += 4
-            shape = json.loads(data[offset:offset + shape_len].decode("utf-8"))
+            shape = json.loads(data[offset : offset + shape_len].decode("utf-8"))
             offset += shape_len
 
             data_len = struct.unpack_from("<I", data, offset)[0]
             offset += 4
-            raw = data[offset:offset + data_len]
+            raw = data[offset : offset + data_len]
             offset += data_len
 
             if dtype == "string":
@@ -309,7 +313,9 @@ class BoundarySnapshotSSDStore:
                         fname = Path(filepath_str).stem
                         flushed_keys.append(fname)
                     except Exception as e:
-                        logger.warning(f"Boundary snapshot write failed for {filepath_str}: {e}")
+                        logger.warning(
+                            f"Boundary snapshot write failed for {filepath_str}: {e}"
+                        )
                 # Remove flushed entries from pending writes to free memory
                 with self._pending_lock:
                     for k in flushed_keys:

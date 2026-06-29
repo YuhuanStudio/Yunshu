@@ -1,4 +1,5 @@
 """lock the /metrics auth-bypass + cachedContents/batch IDOR fixes."""
+
 from __future__ import annotations
 
 import os
@@ -11,7 +12,10 @@ import pytest
 def _auth_env():
     """Tests assume auth is configured — the global test env sets
     YUNSHU_AUTH_DISABLED=true, which would short-circuit _check_metrics_auth."""
-    saved = {k: os.environ.pop(k, None) for k in ("YUNSHU_AUTH_DISABLED", "YUNSHU_AUTH_TOKEN")}
+    saved = {
+        k: os.environ.pop(k, None)
+        for k in ("YUNSHU_AUTH_DISABLED", "YUNSHU_AUTH_TOKEN")
+    }
     yield
     for k, v in saved.items():
         if v is not None:
@@ -33,8 +37,10 @@ def _req(headers=None, state=None):
 
 # ── /metrics auth (single-token gate) ──
 
+
 def test_metrics_public_when_no_auth_configured():
     from yunshu_gateway.middleware.metrics import _check_metrics_auth
+
     os.environ.pop("YUNSHU_AUTH_TOKEN", None)
     os.environ.pop("YUNSHU_AUTH_DISABLED", None)
     # no static token → scraper-compatible allow
@@ -47,6 +53,7 @@ def test_metrics_rejects_unauth_when_static_token_set():
     from fastapi import HTTPException
 
     from yunshu_gateway.middleware.metrics import _check_metrics_auth
+
     os.environ["YUNSHU_AUTH_TOKEN"] = "owner-static-secret"
     try:
         # No Authorization header → 401 (not the scraper-compatible allow).
@@ -62,6 +69,7 @@ def test_metrics_rejects_wrong_static_token():
     from fastapi import HTTPException
 
     from yunshu_gateway.middleware.metrics import _check_metrics_auth
+
     os.environ["YUNSHU_AUTH_TOKEN"] = "owner-static-secret"
     try:
         with pytest.raises(HTTPException) as e:
@@ -74,9 +82,12 @@ def test_metrics_rejects_wrong_static_token():
 def test_metrics_accepts_valid_static_token():
     """A Bearer token matching YUNSHU_AUTH_TOKEN → allow."""
     from yunshu_gateway.middleware.metrics import _check_metrics_auth
+
     os.environ["YUNSHU_AUTH_TOKEN"] = "owner-static-secret"
     try:
-        _check_metrics_auth(_req({"Authorization": "Bearer owner-static-secret"}))  # no raise
+        _check_metrics_auth(
+            _req({"Authorization": "Bearer owner-static-secret"})
+        )  # no raise
     finally:
         os.environ.pop("YUNSHU_AUTH_TOKEN", None)
 
@@ -85,6 +96,7 @@ def test_metrics_accepts_owner_role_from_middleware():
     """When TenantAuthMiddleware has already authenticated the request and
     stamped state.role="owner", /metrics trusts that and allows."""
     from yunshu_gateway.middleware.metrics import _check_metrics_auth
+
     os.environ["YUNSHU_AUTH_TOKEN"] = "owner-static-secret"
     try:
         _check_metrics_auth(_req(state={"role": "owner"}))  # no raise
@@ -98,19 +110,26 @@ def test_metrics_accepts_owner_role_from_middleware():
 
 # ── cachedContents IDOR ──
 
+
 def test_cached_contents_owner_isolation():
     from yunshu_gateway.explicit_cache import ExplicitContextCache
+
     store = ExplicitContextCache()
-    e = store.create(model="m", messages=[{"role": "user", "content": "x"}],
-                     token_count=1, owner="alice")
+    e = store.create(
+        model="m",
+        messages=[{"role": "user", "content": "x"}],
+        token_count=1,
+        owner="alice",
+    )
     assert e.owner == "alice"
 
     # mimic the router _owns() check
     def owns(entry, actor):
         o = getattr(entry, "owner", None)
         return (not o or o == "anonymous") or actor == o
+
     assert owns(e, "alice") is True
-    assert owns(e, "bob") is False   # bob cannot see alice's handle
+    assert owns(e, "bob") is False  # bob cannot see alice's handle
 
 
 def test_batch_owner_isolation():
@@ -118,6 +137,7 @@ def test_batch_owner_isolation():
     def owns(info, actor):
         o = info.get("owner")
         return (not o or o == "anonymous") or actor == o
+
     assert owns({"owner": "alice"}, "alice") is True
     assert owns({"owner": "alice"}, "bob") is False
     assert owns({"owner": "anonymous"}, "bob") is True  # permissive when unstamped
@@ -131,40 +151,63 @@ class TestCachedContentReadPathIDOR:
 
     def _fake_request(self, actor_name):
         import types
+
         key = types.SimpleNamespace(name=actor_name, key_prefix=actor_name)
         state = types.SimpleNamespace(rbac_key=key)
         return types.SimpleNamespace(state=state)
 
     def _entry(self, owner):
         import types
-        return types.SimpleNamespace(messages=[{"role": "system", "content": "SECRET CONTEXT"}],
-                                     model="m", owner=owner)
+
+        return types.SimpleNamespace(
+            messages=[{"role": "system", "content": "SECRET CONTEXT"}],
+            model="m",
+            owner=owner,
+        )
 
     def test_other_tenant_handle_is_ignored(self, monkeypatch):
         from yunshu_gateway.routers import chat as chat_mod
+
         store = type("S", (), {"use": lambda self, n: self._e})()
         store._e = self._entry(owner="alice")
-        monkeypatch.setattr("yunshu_gateway.explicit_cache.get_store", lambda: store, raising=False)
+        monkeypatch.setattr(
+            "yunshu_gateway.explicit_cache.get_store", lambda: store, raising=False
+        )
         # tenant "bob" tries to use alice's handle → context must NOT be prepended
         msgs = [{"role": "user", "content": "hi"}]
-        out = chat_mod._prepend_cached_content(list(msgs), "cachedContents/x", "m",
-                                               self._fake_request("bob"))
+        out = chat_mod._prepend_cached_content(
+            list(msgs), "cachedContents/x", "m", self._fake_request("bob")
+        )
         assert out == msgs  # alice's SECRET CONTEXT not leaked into bob's prompt
 
     def test_owner_can_use_own_handle(self, monkeypatch):
         from yunshu_gateway.routers import chat as chat_mod
+
         store = type("S", (), {"use": lambda self, n: self._e})()
         store._e = self._entry(owner="alice")
-        monkeypatch.setattr("yunshu_gateway.explicit_cache.get_store", lambda: store, raising=False)
-        out = chat_mod._prepend_cached_content([{"role": "user", "content": "hi"}],
-                                               "cachedContents/x", "m", self._fake_request("alice"))
+        monkeypatch.setattr(
+            "yunshu_gateway.explicit_cache.get_store", lambda: store, raising=False
+        )
+        out = chat_mod._prepend_cached_content(
+            [{"role": "user", "content": "hi"}],
+            "cachedContents/x",
+            "m",
+            self._fake_request("alice"),
+        )
         assert any(m.get("content") == "SECRET CONTEXT" for m in out)  # owner gets it
 
     def test_anonymous_owner_allowed(self, monkeypatch):
         from yunshu_gateway.routers import chat as chat_mod
+
         store = type("S", (), {"use": lambda self, n: self._e})()
         store._e = self._entry(owner="anonymous")
-        monkeypatch.setattr("yunshu_gateway.explicit_cache.get_store", lambda: store, raising=False)
-        out = chat_mod._prepend_cached_content([{"role": "user", "content": "hi"}],
-                                               "cachedContents/x", "m", self._fake_request("bob"))
+        monkeypatch.setattr(
+            "yunshu_gateway.explicit_cache.get_store", lambda: store, raising=False
+        )
+        out = chat_mod._prepend_cached_content(
+            [{"role": "user", "content": "hi"}],
+            "cachedContents/x",
+            "m",
+            self._fake_request("bob"),
+        )
         assert any(m.get("content") == "SECRET CONTEXT" for m in out)

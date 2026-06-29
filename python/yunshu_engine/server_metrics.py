@@ -4,7 +4,6 @@ session + all-time scopes,
 per-model counters, periodic JSON persistence.
 """
 
-
 import json
 import logging
 import threading
@@ -85,11 +84,17 @@ class ServerMetrics:
             with open(self._stats_path) as f:
                 data = json.load(f)
             self._alltime_prompt_tokens = int(data.get("total_prompt_tokens", 0))
-            self._alltime_completion_tokens = int(data.get("total_completion_tokens", 0))
+            self._alltime_completion_tokens = int(
+                data.get("total_completion_tokens", 0)
+            )
             self._alltime_cached_tokens = int(data.get("total_cached_tokens", 0))
             self._alltime_requests = int(data.get("total_requests", 0))
-            self._alltime_prefill_duration = float(data.get("total_prefill_duration", 0.0))
-            self._alltime_generation_duration = float(data.get("total_generation_duration", 0.0))
+            self._alltime_prefill_duration = float(
+                data.get("total_prefill_duration", 0.0)
+            )
+            self._alltime_generation_duration = float(
+                data.get("total_generation_duration", 0.0)
+            )
             for model_id, counters in data.get("per_model", {}).items():
                 self._alltime_per_model[model_id] = {
                     k: float(v) if "duration" in k else int(v)

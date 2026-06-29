@@ -212,7 +212,9 @@ class GPURejectionSampler:
         logit_2d = self._normalize_logits(logits, K)
 
         # Step 1: Compute target log probabilities (vectorized)
-        target_logprobs_full = logit_2d - mx.logsumexp(logit_2d, axis=-1, keepdims=True)  # [K, V]
+        target_logprobs_full = logit_2d - mx.logsumexp(
+            logit_2d, axis=-1, keepdims=True
+        )  # [K, V]
 
         # Step 2: Gather target logprob at each draft token position
         draft_ids_arr = mx.array(draft_token_ids).reshape(K, 1)
@@ -332,9 +334,7 @@ class GPURejectionSampler:
         for i in range(n_requests):
             if normalized[i] is None or len(all_draft_ids[i]) == 0:
                 elapsed = (time.perf_counter() - t0) * 1e6
-                results.append(
-                    BatchRejectionResult(0, None, "gpu_batch", elapsed)
-                )
+                results.append(BatchRejectionResult(0, None, "gpu_batch", elapsed))
                 continue
 
             K_i = len(all_draft_ids[i])
@@ -438,9 +438,7 @@ class GPURejectionSampler:
             BatchRejectionResult via GPU batch or CPU sequential.
         """
         if not should_enable_gpu_rejection():
-            return GPURejectionSampler.verify_cpu_sequential(
-                logits, draft_token_ids
-            )
+            return GPURejectionSampler.verify_cpu_sequential(logits, draft_token_ids)
 
         try:
             if temperature > 0.0 and draft_logprobs is not None:
@@ -449,12 +447,8 @@ class GPURejectionSampler:
                 )
             return self.verify_greedy(logits, draft_token_ids)
         except Exception as e:
-            logger.warning(
-                f"GPU rejection sampling failed, falling back to CPU: {e}"
-            )
-            return GPURejectionSampler.verify_cpu_sequential(
-                logits, draft_token_ids
-            )
+            logger.warning(f"GPU rejection sampling failed, falling back to CPU: {e}")
+            return GPURejectionSampler.verify_cpu_sequential(logits, draft_token_ids)
 
     # ── Helpers ──
 
@@ -469,9 +463,7 @@ class GPURejectionSampler:
             return logits.reshape(logits.shape[-2], logits.shape[-1])
         if logits.ndim == 2:
             return logits
-        raise ValueError(
-            f"Expected 2D or 3D logits, got shape {logits.shape}"
-        )
+        raise ValueError(f"Expected 2D or 3D logits, got shape {logits.shape}")
 
     @staticmethod
     def compute_bonus_token(logits: mx.array, position: int) -> int:

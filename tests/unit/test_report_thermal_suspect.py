@@ -6,6 +6,7 @@ the cache section ran hot mid-run, so the per-KPI cool-gate alone let those whol
 thermal depressions masquerade as 🔴 regressions. _analyze must demote a uniform
 cross-model (≥3 models) cache depression in one snapshot into `thermal_suspect`.
 """
+
 import os
 import sys
 
@@ -33,10 +34,14 @@ def test_uniform_cross_model_cache_depression_is_demoted():
     regr_kpis = {f["kpi"] for f in a["flags"] if not f["improved"]}
     suspect_kpis = {f["kpi"] for f in a["thermal_suspect"]}
     # None of the uniformly-depressed cache decode KPIs should be a hard regression…
-    assert not any(k.startswith("cache/") and k.endswith("decode_tps") for k in regr_kpis)
+    assert not any(
+        k.startswith("cache/") and k.endswith("decode_tps") for k in regr_kpis
+    )
     # …they're all in the thermal-suspect bucket instead.
     assert suspect_kpis == {
-        "cache/m-a/decode_tps", "cache/m-b/decode_tps", "cache/m-c/decode_tps"
+        "cache/m-a/decode_tps",
+        "cache/m-b/decode_tps",
+        "cache/m-c/decode_tps",
     }
     assert "20260103T000000Z" in a["suspect_ts"]
 

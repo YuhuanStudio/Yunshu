@@ -1,4 +1,5 @@
 """Tests for yunshu_engine.deltanet_inversion — DeltaNet state inversion."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -12,7 +13,13 @@ from yunshu_engine.deltanet_inversion import (
 
 
 def _apply_forward_and_make_entry(
-    B=1, Hv=2, Hk=2, Dv=4, Dk=4, scalar_g=True, dtype=mx.float32,
+    B=1,
+    Hv=2,
+    Hk=2,
+    Dv=4,
+    Dk=4,
+    scalar_g=True,
+    dtype=mx.float32,
 ):
     """Create a valid DeltaNetInversionEntry by applying the forward recurrence.
 
@@ -41,7 +48,11 @@ def _apply_forward_and_make_entry(
     state_new = g_exp * state_old + correction
 
     return DeltaNetInversionEntry(
-        gate=g, beta=beta, key=k, value=v, state_after=state_new,
+        gate=g,
+        beta=beta,
+        key=k,
+        value=v,
+        state_after=state_new,
     ), state_old
 
 
@@ -110,9 +121,11 @@ class TestInvertState:
         inv = DeltaNetInverter()
         recovered = inv.invert_state(entry)
         assert recovered.shape == original.shape
-        error = float(mx.max(mx.abs(
-            original.astype(mx.float32) - recovered.astype(mx.float32)
-        )).item())
+        error = float(
+            mx.max(
+                mx.abs(original.astype(mx.float32) - recovered.astype(mx.float32))
+            ).item()
+        )
         assert error < 1e-4, f"Scalar g roundtrip error: {error}"
 
     def test_vector_g_shape_preserved(self):
@@ -197,7 +210,12 @@ class TestVerifyRoundtrip:
         k = mx.random.normal((1, 2, 4)).astype(mx.float32)
         v = mx.random.normal((1, 2, 4)).astype(mx.float32)
         error = DeltaNetInverter.verify_roundtrip(
-            state_before, state_after, g, beta, k, v,
+            state_before,
+            state_after,
+            g,
+            beta,
+            k,
+            v,
         )
         assert isinstance(error, float)
         assert error >= 0
@@ -211,14 +229,24 @@ class TestVerifyRoundtrip:
         k = mx.random.normal((1, 2, 4))
         v = mx.random.normal((1, 2, 4))
         error = DeltaNetInverter.verify_roundtrip(
-            state_before, state_after, g, beta, k, v,
+            state_before,
+            state_after,
+            g,
+            beta,
+            k,
+            v,
         )
-        assert error == float('inf')
+        assert error == float("inf")
 
     def test_with_known_forward(self):
         entry, original = _apply_forward_and_make_entry(dtype=mx.float32)
         error = DeltaNetInverter.verify_roundtrip(
-            original, entry.state_after, entry.gate, entry.beta, entry.key, entry.value,
+            original,
+            entry.state_after,
+            entry.gate,
+            entry.beta,
+            entry.key,
+            entry.value,
         )
         # verify_roundtrip inverts state_after, then compares recovered state
         # against the known original state_before. Error should be small.
@@ -234,6 +262,7 @@ class TestRegisterHooks:
         class FakeLayer:
             def __call__(self, *a, **kw):
                 return None
+
             state = mx.zeros((1, 2, 4, 4))
 
         class FakeModel:

@@ -7,6 +7,7 @@ Phase 4 tests:
 - conversation.item.delete
 - response.create with modalities filter
 """
+
 import asyncio
 import base64
 import struct
@@ -141,7 +142,9 @@ class TestChunkedAudio:
         mock_entry.engine.synthesize_stream = _mock_stream
         mock_manager.list_entries.return_value = [mock_entry]
 
-        with patch.object(yunshu_gateway.engine, "get_model_manager", return_value=mock_manager):
+        with patch.object(
+            yunshu_gateway.engine, "get_model_manager", return_value=mock_manager
+        ):
             await session._synthesize_audio_response("test text", "resp_1", "item_1")
 
         calls = ws.send_json.call_args_list
@@ -172,7 +175,9 @@ class TestChunkedAudio:
         mock_entry.engine.synthesize_stream = _mock_stream
         mock_manager.list_entries.return_value = [mock_entry]
 
-        with patch.object(yunshu_gateway.engine, "get_model_manager", return_value=mock_manager):
+        with patch.object(
+            yunshu_gateway.engine, "get_model_manager", return_value=mock_manager
+        ):
             await session._synthesize_audio_response("test text", "resp_1", "item_1")
 
         calls = ws.send_json.call_args_list
@@ -189,7 +194,9 @@ class TestChunkedAudio:
         ws.send_json = AsyncMock()
         session = RealtimeSession(ws)
 
-        with patch.object(yunshu_gateway.engine, "get_model_manager", return_value=None):
+        with patch.object(
+            yunshu_gateway.engine, "get_model_manager", return_value=None
+        ):
             await session._synthesize_audio_response("test text", "resp_1", "item_1")
 
         assert ws.send_json.call_count == 1
@@ -224,10 +231,12 @@ class TestSessionUpdateTurnDetection:
         ws.send_json = AsyncMock()
         session = RealtimeSession(ws)
 
-        await session._handle_session_update({
-            "type": "session.update",
-            "session": {"turn_detection": {"type": "server_vad", "threshold": 0.9}},
-        })
+        await session._handle_session_update(
+            {
+                "type": "session.update",
+                "session": {"turn_detection": {"type": "server_vad", "threshold": 0.9}},
+            }
+        )
 
         ws.send_json.assert_called_once()
         event = ws.send_json.call_args[0][0]
@@ -248,10 +257,12 @@ class TestConversationItemDelete:
         item = ConversationItem("item_1", "message", role="user")
         session.conversation.add_item(item)
 
-        await session._handle_conversation_item_delete({
-            "type": "conversation.item.delete",
-            "item_id": "item_1",
-        })
+        await session._handle_conversation_item_delete(
+            {
+                "type": "conversation.item.delete",
+                "item_id": "item_1",
+            }
+        )
 
         assert len(session.conversation.items) == 0
         event = ws.send_json.call_args[0][0]
@@ -264,10 +275,12 @@ class TestConversationItemDelete:
         ws.send_json = AsyncMock()
         session = RealtimeSession(ws)
 
-        await session._handle_conversation_item_delete({
-            "type": "conversation.item.delete",
-            "item_id": "nonexistent",
-        })
+        await session._handle_conversation_item_delete(
+            {
+                "type": "conversation.item.delete",
+                "item_id": "nonexistent",
+            }
+        )
 
         event = ws.send_json.call_args[0][0]
         assert event["type"] == RealtimeEvent.ERROR
@@ -278,9 +291,11 @@ class TestConversationItemDelete:
         ws.send_json = AsyncMock()
         session = RealtimeSession(ws)
 
-        await session._handle_conversation_item_delete({
-            "type": "conversation.item.delete",
-        })
+        await session._handle_conversation_item_delete(
+            {
+                "type": "conversation.item.delete",
+            }
+        )
 
         event = ws.send_json.call_args[0][0]
         assert event["type"] == RealtimeEvent.ERROR
@@ -297,10 +312,12 @@ class TestConversationItemDelete:
         session.conversation.add_item(item1)
         session.conversation.add_item(item2)
 
-        await session._handle_conversation_item_delete({
-            "type": "conversation.item.delete",
-            "item_id": "item_1",
-        })
+        await session._handle_conversation_item_delete(
+            {
+                "type": "conversation.item.delete",
+                "item_id": "item_1",
+            }
+        )
 
         assert len(session.conversation.items) == 1
         assert session.conversation.items[0].item_id == "item_2"
@@ -315,10 +332,12 @@ class TestResponseCreateModalities:
         ws.send_json = AsyncMock()
         session = RealtimeSession(ws)
 
-        await session._handle_response_create({
-            "type": "response.create",
-            "response": {"modalities": ["text"]},
-        })
+        await session._handle_response_create(
+            {
+                "type": "response.create",
+                "response": {"modalities": ["text"]},
+            }
+        )
 
         # Check the response.created event
         event = ws.send_json.call_args[0][0]
@@ -331,10 +350,12 @@ class TestResponseCreateModalities:
         ws.send_json = AsyncMock()
         session = RealtimeSession(ws)
 
-        await session._handle_response_create({
-            "type": "response.create",
-            "response": {"modalities": ["audio"]},
-        })
+        await session._handle_response_create(
+            {
+                "type": "response.create",
+                "response": {"modalities": ["audio"]},
+            }
+        )
 
         event = ws.send_json.call_args[0][0]
         assert event["response"]["modalities"] == ["audio"]
@@ -345,10 +366,12 @@ class TestResponseCreateModalities:
         ws.send_json = AsyncMock()
         session = RealtimeSession(ws)
 
-        await session._handle_response_create({
-            "type": "response.create",
-            "response": {"modalities": ["text", "audio"]},
-        })
+        await session._handle_response_create(
+            {
+                "type": "response.create",
+                "response": {"modalities": ["text", "audio"]},
+            }
+        )
 
         event = ws.send_json.call_args[0][0]
         assert event["response"]["modalities"] == ["text", "audio"]
@@ -359,10 +382,12 @@ class TestResponseCreateModalities:
         ws.send_json = AsyncMock()
         session = RealtimeSession(ws)
 
-        await session._handle_response_create({
-            "type": "response.create",
-            "response": {"modalities": ["video"]},  # Invalid
-        })
+        await session._handle_response_create(
+            {
+                "type": "response.create",
+                "response": {"modalities": ["video"]},  # Invalid
+            }
+        )
 
         event = ws.send_json.call_args[0][0]
         # Should fall back to ["text"]
@@ -374,10 +399,12 @@ class TestResponseCreateModalities:
         ws.send_json = AsyncMock()
         session = RealtimeSession(ws)
 
-        await session._handle_response_create({
-            "type": "response.create",
-            "response": {"modalities": []},
-        })
+        await session._handle_response_create(
+            {
+                "type": "response.create",
+                "response": {"modalities": []},
+            }
+        )
 
         event = ws.send_json.call_args[0][0]
         assert event["response"]["modalities"] == ["text"]
@@ -389,10 +416,12 @@ class TestResponseCreateModalities:
         session = RealtimeSession(ws)
         session.session.modalities = ["text", "audio"]
 
-        await session._handle_response_create({
-            "type": "response.create",
-            "response": {},
-        })
+        await session._handle_response_create(
+            {
+                "type": "response.create",
+                "response": {},
+            }
+        )
 
         event = ws.send_json.call_args[0][0]
         assert event["response"]["modalities"] == ["text", "audio"]
@@ -408,10 +437,12 @@ class TestInputAudioBufferWithVAD:
         session = RealtimeSession(ws)
 
         audio_chunk = base64.b64encode(b"\x00" * 100).decode()
-        await session._handle_input_audio_buffer_append({
-            "type": "input_audio_buffer.append",
-            "audio": audio_chunk,
-        })
+        await session._handle_input_audio_buffer_append(
+            {
+                "type": "input_audio_buffer.append",
+                "audio": audio_chunk,
+            }
+        )
 
         assert len(session._audio_buffer) == 100
 
@@ -421,10 +452,12 @@ class TestInputAudioBufferWithVAD:
         ws.send_json = AsyncMock()
         session = RealtimeSession(ws)
 
-        await session._handle_input_audio_buffer_append({
-            "type": "input_audio_buffer.append",
-            "audio": "",
-        })
+        await session._handle_input_audio_buffer_append(
+            {
+                "type": "input_audio_buffer.append",
+                "audio": "",
+            }
+        )
 
         assert len(session._audio_buffer) == 0
 
@@ -443,10 +476,12 @@ class TestInputAudioBufferWithVAD:
         speech_data = struct.pack("<480h", *([20000] * 480))
         audio_b64 = base64.b64encode(speech_data).decode()
 
-        await session._handle_input_audio_buffer_append({
-            "type": "input_audio_buffer.append",
-            "audio": audio_b64,
-        })
+        await session._handle_input_audio_buffer_append(
+            {
+                "type": "input_audio_buffer.append",
+                "audio": audio_b64,
+            }
+        )
 
         assert session._vad_speaking is True
         # Should have sent speech_started event
@@ -462,10 +497,12 @@ class TestInputAudioBufferWithVAD:
         speech_data = struct.pack("<480h", *([20000] * 480))
         audio_b64 = base64.b64encode(speech_data).decode()
 
-        await session._handle_input_audio_buffer_append({
-            "type": "input_audio_buffer.append",
-            "audio": audio_b64,
-        })
+        await session._handle_input_audio_buffer_append(
+            {
+                "type": "input_audio_buffer.append",
+                "audio": audio_b64,
+            }
+        )
 
         # Buffer should accumulate but no VAD events
         assert len(session._audio_buffer) > 0
@@ -536,7 +573,7 @@ class TestVADAutoTrigger:
         await session._auto_commit_and_respond()
 
         session._handle_input_audio_buffer_commit.assert_called_once()  # audio still committed
-        session._handle_response_create.assert_not_called()             # but no response
+        session._handle_response_create.assert_not_called()  # but no response
 
     @pytest.mark.asyncio
     async def test_auto_commit_skips_if_response_active(self):
@@ -580,6 +617,7 @@ class TestResponseCancelTruncation:
         # Create a cancellable task with audio modality
         async def _slow():
             await asyncio.sleep(100)
+
         task = asyncio.create_task(_slow())
         task._response_id = "resp_test123"
         task._item_id = "item_test456"
@@ -607,6 +645,7 @@ class TestResponseCancelTruncation:
         # Create a cancellable task with text-only modality
         async def _slow():
             await asyncio.sleep(100)
+
         task = asyncio.create_task(_slow())
         task._response_id = "resp_test789"
         task._item_id = "item_test012"
@@ -647,14 +686,16 @@ class TestResponseCancelTruncation:
         session = RealtimeSession(ws)
 
         # Simulate _handle_response_create setting up the task
-        await session._handle_response_create({
-            "type": "response.create",
-            "response": {"modalities": ["text"]},
-        })
+        await session._handle_response_create(
+            {
+                "type": "response.create",
+                "response": {"modalities": ["text"]},
+            }
+        )
 
         assert session._active_response is not None
-        assert hasattr(session._active_response, '_response_id')
-        assert hasattr(session._active_response, '_item_id')
+        assert hasattr(session._active_response, "_response_id")
+        assert hasattr(session._active_response, "_item_id")
         assert session._active_response._response_id.startswith("resp_")
         assert session._active_response._item_id.startswith("item_")
 
@@ -672,7 +713,9 @@ class TestInputAudioBufferClear:
         session = RealtimeSession(ws)
         session._audio_buffer = bytearray(b"\x00" * 100)
 
-        await session._handle_input_audio_buffer_clear({"type": "input_audio_buffer.clear"})
+        await session._handle_input_audio_buffer_clear(
+            {"type": "input_audio_buffer.clear"}
+        )
 
         assert len(session._audio_buffer) == 0
 
@@ -685,7 +728,9 @@ class TestInputAudioBufferClear:
         session._vad_silence_bytes = 4096
         session._audio_buffer = bytearray(b"\x00" * 100)
 
-        await session._handle_input_audio_buffer_clear({"type": "input_audio_buffer.clear"})
+        await session._handle_input_audio_buffer_clear(
+            {"type": "input_audio_buffer.clear"}
+        )
 
         assert session._vad_speaking is False
         assert session._vad_silence_bytes == 0
@@ -701,6 +746,7 @@ class TestG711Decode:
         session = RealtimeSession(ws)
         result = session._decode_g711_ulaw(bytes([0xFF, 0xFF]))
         import struct
+
         samples = struct.unpack("<2h", result)
         # μ-law silence byte decodes to near-zero
         assert abs(samples[0]) < 100
@@ -712,6 +758,7 @@ class TestG711Decode:
         session = RealtimeSession(ws)
         result = session._decode_g711_alaw(bytes([0xD5, 0xD5]))
         import struct
+
         samples = struct.unpack("<2h", result)
         assert abs(samples[0]) < 100
         assert abs(samples[1]) < 100
@@ -757,10 +804,12 @@ class TestAudioFormatNegotiation:
 
         # Send μ-law encoded audio
         audio_b64 = base64.b64encode(bytes([0xFF] * 10)).decode()
-        await session._handle_input_audio_buffer_append({
-            "type": "input_audio_buffer.append",
-            "audio": audio_b64,
-        })
+        await session._handle_input_audio_buffer_append(
+            {
+                "type": "input_audio_buffer.append",
+                "audio": audio_b64,
+            }
+        )
 
         # Buffer should have decoded PCM (20 bytes from 10 μ-law bytes)
         assert len(session._audio_buffer) == 20
@@ -775,10 +824,12 @@ class TestAudioFormatNegotiation:
         session._run_vad = AsyncMock()
 
         audio_b64 = base64.b64encode(bytes([0xD5] * 10)).decode()
-        await session._handle_input_audio_buffer_append({
-            "type": "input_audio_buffer.append",
-            "audio": audio_b64,
-        })
+        await session._handle_input_audio_buffer_append(
+            {
+                "type": "input_audio_buffer.append",
+                "audio": audio_b64,
+            }
+        )
 
         assert len(session._audio_buffer) == 20
 
@@ -792,9 +843,11 @@ class TestAudioFormatNegotiation:
         session._run_vad = AsyncMock()
 
         audio_b64 = base64.b64encode(b"\x00" * 100).decode()
-        await session._handle_input_audio_buffer_append({
-            "type": "input_audio_buffer.append",
-            "audio": audio_b64,
-        })
+        await session._handle_input_audio_buffer_append(
+            {
+                "type": "input_audio_buffer.append",
+                "audio": audio_b64,
+            }
+        )
 
         assert len(session._audio_buffer) == 100

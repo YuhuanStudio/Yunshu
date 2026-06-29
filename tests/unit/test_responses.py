@@ -56,7 +56,8 @@ class TestResponsesRequestValidation:
     def test_bad_response_format_type(self):
         with pytest.raises(ValidationError) as exc:
             ResponsesRequest(
-                model="qwen", input="hi",
+                model="qwen",
+                input="hi",
                 response_format={"type": "bogus"},
             )
         assert "response_format.type" in _err_text(exc)
@@ -71,29 +72,30 @@ class TestResponsesRequestValidation:
     def test_bad_grammar_type(self):
         with pytest.raises(ValidationError) as exc:
             ResponsesRequest(
-                model="qwen", input="hi",
+                model="qwen",
+                input="hi",
                 grammar={"type": "yaml"},
             )
         assert "grammar.type" in _err_text(exc)
 
     def test_valid_grammar_types(self):
         for t in ("json", "regex", "choice", "cfg"):
-            req = ResponsesRequest(
-                model="qwen", input="hi", grammar={"type": t}
-            )
+            req = ResponsesRequest(model="qwen", input="hi", grammar={"type": t})
             assert req.grammar["type"] == t
 
     def test_stop_overflow(self):
         with pytest.raises(ValidationError) as exc:
             ResponsesRequest(
-                model="qwen", input="hi",
+                model="qwen",
+                input="hi",
                 stop=[f"s{i}" for i in range(17)],
             )
         assert "stop" in _err_text(exc)
 
     def test_stop_exactly_16_ok(self):
         req = ResponsesRequest(
-            model="qwen", input="hi",
+            model="qwen",
+            input="hi",
             stop=[f"s{i}" for i in range(16)],
         )
         assert len(req.stop) == 16
@@ -104,9 +106,7 @@ class TestResponsesRequestValidation:
         assert "stop" in _err_text(exc)
 
     def test_max_completion_tokens_aliases_max_output(self):
-        req = ResponsesRequest(
-            model="qwen", input="hi", max_completion_tokens=999
-        )
+        req = ResponsesRequest(model="qwen", input="hi", max_completion_tokens=999)
         assert req.max_output_tokens == 999
 
     def test_input_list_of_dict_blocks(self):
@@ -124,18 +124,34 @@ class TestResponsesToolConversation:
 
     def test_function_call_output_item_accepted_and_mapped(self):
         from yunshu_gateway.routers.responses import _convert_to_messages
-        req = ResponsesRequest(model="m", input=[
-            {"type": "message", "role": "user", "content": "weather in SF?"},
-            {"type": "function_call", "call_id": "call_1", "name": "get_weather",
-             "arguments": '{"city":"SF"}'},
-            {"type": "function_call_output", "call_id": "call_1", "output": "72F sunny"},
-        ])
+
+        req = ResponsesRequest(
+            model="m",
+            input=[
+                {"type": "message", "role": "user", "content": "weather in SF?"},
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "get_weather",
+                    "arguments": '{"city":"SF"}',
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "72F sunny",
+                },
+            ],
+        )
         msgs = _convert_to_messages(req)
         assert msgs[0] == {"role": "user", "content": "weather in SF?"}
         assert msgs[1]["role"] == "assistant"
         assert msgs[1]["tool_calls"][0]["id"] == "call_1"
         assert msgs[1]["tool_calls"][0]["function"]["name"] == "get_weather"
-        assert msgs[2] == {"role": "tool", "tool_call_id": "call_1", "content": "72F sunny"}
+        assert msgs[2] == {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": "72F sunny",
+        }
 
     def test_message_item_still_requires_content(self):
         with pytest.raises(ValidationError):
@@ -143,6 +159,7 @@ class TestResponsesToolConversation:
 
     def test_plain_string_input_unchanged(self):
         from yunshu_gateway.routers.responses import _convert_to_messages
+
         req = ResponsesRequest(model="m", input="hi")
         assert _convert_to_messages(req) == [{"role": "user", "content": "hi"}]
 
@@ -153,21 +170,31 @@ class TestResponsesMultimodalOrder:
 
     def test_text_image_text_order_preserved(self):
         from yunshu_gateway.routers.responses import _extract_input_text
-        r = _extract_input_text([
-            {"type": "input_text", "text": "A"},
-            {"type": "input_image", "image_url": "data:image/png;base64,xxx"},
-            {"type": "input_text", "text": "B"},
-        ])
+
+        r = _extract_input_text(
+            [
+                {"type": "input_text", "text": "A"},
+                {"type": "input_image", "image_url": "data:image/png;base64,xxx"},
+                {"type": "input_text", "text": "B"},
+            ]
+        )
         assert [b["type"] for b in r] == ["text", "image_url", "text"]
         assert r[0]["text"] == "A" and r[2]["text"] == "B"
 
     def test_nested_image_url_dict_unwrapped(self):
         from yunshu_gateway.routers.responses import _extract_input_text
-        r = _extract_input_text([
-            {"type": "input_image", "image_url": {"url": "data:image/png;base64,yyy"}},
-        ])
+
+        r = _extract_input_text(
+            [
+                {
+                    "type": "input_image",
+                    "image_url": {"url": "data:image/png;base64,yyy"},
+                },
+            ]
+        )
         assert r[0]["image_url"]["url"] == "data:image/png;base64,yyy"
 
     def test_text_only_returns_string(self):
         from yunshu_gateway.routers.responses import _extract_input_text
+
         assert _extract_input_text([{"type": "input_text", "text": "hello"}]) == "hello"

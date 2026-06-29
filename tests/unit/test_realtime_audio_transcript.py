@@ -7,6 +7,7 @@ response the client received audio but NO transcript at all (text delta gated of
 audio_transcript never emitted anywhere). Stream the transcript whenever audio is in the
 negotiated modalities.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -22,5 +23,5 @@ def test_generate_response_emits_audio_transcript_for_audio_modality():
     assert "RESPONSE_AUDIO_TRANSCRIPT_DONE" in src
     # the emission is gated on audio being in the negotiated modalities
     i = src.index("RESPONSE_AUDIO_TRANSCRIPT_DELTA")
-    window = src[max(0, i - 200):i]
+    window = src[max(0, i - 200) : i]
     assert '"audio" in modalities' in window

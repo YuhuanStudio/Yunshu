@@ -135,15 +135,20 @@ def _repair_json_schema(
                 del schema["$ref"]
                 # Save sibling keys (e.g. description, default) that
                 # coexist with $ref before merging target.
-                sibling_keys = {k: v for k, v in schema.items()
-                                if k not in ("$ref", "definitions", "$defs")}
+                sibling_keys = {
+                    k: v
+                    for k, v in schema.items()
+                    if k not in ("$ref", "definitions", "$defs")
+                }
                 # Merge target into schema
                 for k, v in target.items():
                     schema[k] = v
                 # Restore local sibling keys — they take precedence
                 schema.update(sibling_keys)
                 # Recurse to repair the merged schema
-                return _repair_json_schema(schema, _depth + 1, _root_defs, set(_seen_refs))
+                return _repair_json_schema(
+                    schema, _depth + 1, _root_defs, set(_seen_refs)
+                )
 
     # 2. Add "type": "object" if properties is present but type is missing
     if "properties" in schema and "type" not in schema:
@@ -152,11 +157,10 @@ def _repair_json_schema(
     # 3. Convert anyOf with exactly one non-null + null to oneOf
     if "anyOf" in schema and isinstance(schema["anyOf"], list):
         options = schema["anyOf"]
-        has_null = any(
-            isinstance(o, dict) and o.get("type") == "null"
-            for o in options
-        )
-        non_null = [o for o in options if isinstance(o, dict) and o.get("type") != "null"]
+        has_null = any(isinstance(o, dict) and o.get("type") == "null" for o in options)
+        non_null = [
+            o for o in options if isinstance(o, dict) and o.get("type") != "null"
+        ]
         if has_null and len(non_null) == 1:
             # Pattern: anyOf: [SomeType, null] → oneOf: [SomeType, null]
             schema["oneOf"] = schema.pop("anyOf")
@@ -188,10 +192,14 @@ def _repair_json_schema(
     if "properties" in schema and isinstance(schema["properties"], dict):
         for key, value in schema["properties"].items():
             if isinstance(value, dict):
-                schema["properties"][key] = _repair_json_schema(value, _depth + 1, _root_defs, set(_seen_refs))
+                schema["properties"][key] = _repair_json_schema(
+                    value, _depth + 1, _root_defs, set(_seen_refs)
+                )
 
     if "items" in schema and isinstance(schema["items"], dict):
-        schema["items"] = _repair_json_schema(schema["items"], _depth + 1, _root_defs, set(_seen_refs))
+        schema["items"] = _repair_json_schema(
+            schema["items"], _depth + 1, _root_defs, set(_seen_refs)
+        )
 
     # JSON Schema 2020-12 tuple validation via `prefixItems` (what
     # Pydantic/OpenAI emit for fixed-length heterogeneous arrays). The FSM only
@@ -199,13 +207,22 @@ def _repair_json_schema(
     # the string default and rejected the leading non-string element. Approximate
     # by allowing any of the prefixItems element types at each position (a union)
     # — lenient (not strictly per-position) but stops rejecting valid tuples.
-    if "items" not in schema and isinstance(schema.get("prefixItems"), list) and schema["prefixItems"]:
-        _opts = [_repair_json_schema(s, _depth + 1, _root_defs, set(_seen_refs))
-                 for s in schema["prefixItems"] if isinstance(s, dict)]
+    if (
+        "items" not in schema
+        and isinstance(schema.get("prefixItems"), list)
+        and schema["prefixItems"]
+    ):
+        _opts = [
+            _repair_json_schema(s, _depth + 1, _root_defs, set(_seen_refs))
+            for s in schema["prefixItems"]
+            if isinstance(s, dict)
+        ]
         if _opts:
             schema["items"] = _opts[0] if len(_opts) == 1 else {"anyOf": _opts}
 
-    if "additionalProperties" in schema and isinstance(schema["additionalProperties"], dict):
+    if "additionalProperties" in schema and isinstance(
+        schema["additionalProperties"], dict
+    ):
         schema["additionalProperties"] = _repair_json_schema(
             schema["additionalProperties"], _depth + 1, _root_defs, set(_seen_refs)
         )
@@ -213,7 +230,9 @@ def _repair_json_schema(
     for key in ("anyOf", "oneOf", "allOf"):
         if key in schema and isinstance(schema[key], list):
             schema[key] = [
-                _repair_json_schema(o, _depth + 1, _root_defs, set(_seen_refs)) if isinstance(o, dict) else o
+                _repair_json_schema(o, _depth + 1, _root_defs, set(_seen_refs))
+                if isinstance(o, dict)
+                else o
                 for o in schema[key]
             ]
 
@@ -267,48 +286,54 @@ def _repair_json_schema(
 
 class JsonState(Enum):
     """States in the JSON generation state machine."""
+
     START = auto()
     # Object
-    OBJECT_OPEN = auto()        # just emitted `{`
-    OBJECT_KEY = auto()         # expecting a key string (or `}`)
+    OBJECT_OPEN = auto()  # just emitted `{`
+    OBJECT_KEY = auto()  # expecting a key string (or `}`)
     OBJECT_KEY_STRING = auto()  # inside a key string
     OBJECT_KEY_STRING_ESCAPE = auto()  # after \ in a key string
     OBJECT_KEY_STRING_UNICODE = auto()  # after \u in a key string
-    OBJECT_COLON = auto()       # expecting `:` after key
-    OBJECT_VALUE = auto()       # expecting a value (depends on schema)
-    OBJECT_COMMA = auto()       # expecting `,` or `}`
+    OBJECT_COLON = auto()  # expecting `:` after key
+    OBJECT_VALUE = auto()  # expecting a value (depends on schema)
+    OBJECT_COMMA = auto()  # expecting `,` or `}`
     # Array
-    ARRAY_OPEN = auto()         # just emitted `[`
-    ARRAY_VALUE = auto()        # expecting a value (depends on items schema)
-    ARRAY_COMMA = auto()        # expecting `,` or `]`
+    ARRAY_OPEN = auto()  # just emitted `[`
+    ARRAY_VALUE = auto()  # expecting a value (depends on items schema)
+    ARRAY_COMMA = auto()  # expecting `,` or `]`
     # Primitives
-    STRING = auto()             # inside a string value
-    STRING_ESCAPE = auto()      # after `\` inside a string
-    STRING_UNICODE = auto()     # after `\u` — consuming 4 hex digits
-    NUMBER = auto()             # inside a number (after [1-9] or 0)
-    NUMBER_ZERO = auto()        # after leading '0' — only '.', 'eE', or terminators allowed
-    NUMBER_FRACTION = auto()    # after `.` in a number
-    NUMBER_EXPONENT = auto()    # after `e`/`E` in a number
+    STRING = auto()  # inside a string value
+    STRING_ESCAPE = auto()  # after `\` inside a string
+    STRING_UNICODE = auto()  # after `\u` — consuming 4 hex digits
+    NUMBER = auto()  # inside a number (after [1-9] or 0)
+    NUMBER_ZERO = auto()  # after leading '0' — only '.', 'eE', or terminators allowed
+    NUMBER_FRACTION = auto()  # after `.` in a number
+    NUMBER_EXPONENT = auto()  # after `e`/`E` in a number
     NUMBER_EXPONENT_SIGN = auto()  # after `e`/`E`+`+/-` — digit required
-    BOOLEAN_TRUE = auto()       # expecting `true`
-    BOOLEAN_FALSE = auto()      # expecting `false`
-    NULL = auto()               # expecting `null`
+    BOOLEAN_TRUE = auto()  # expecting `true`
+    BOOLEAN_FALSE = auto()  # expecting `false`
+    NULL = auto()  # expecting `null`
     # Terminal
-    DONE = auto()               # generation complete
-    WHITESPACE = auto()         # consuming whitespace between tokens
+    DONE = auto()  # generation complete
+    WHITESPACE = auto()  # consuming whitespace between tokens
 
 
 # Characters allowed in various JSON contexts
-_WHITESPACE_CHARS = {' ', '\t', '\n', '\r'}
-_DIGIT_CHARS = set('0123456789')
-_HEX_CHARS = set('0123456789abcdefABCDEF')
+_WHITESPACE_CHARS = {" ", "\t", "\n", "\r"}
+_DIGIT_CHARS = set("0123456789")
+_HEX_CHARS = set("0123456789abcdefABCDEF")
 # States where we are INSIDE a string (any char continues it; `"` exits). Used to
 # validate string-exiting tokens so they can't slip structural chars past masking.
-_STRING_STATES = frozenset({
-    JsonState.STRING, JsonState.STRING_ESCAPE, JsonState.STRING_UNICODE,
-    JsonState.OBJECT_KEY_STRING, JsonState.OBJECT_KEY_STRING_ESCAPE,
-    JsonState.OBJECT_KEY_STRING_UNICODE,
-})
+_STRING_STATES = frozenset(
+    {
+        JsonState.STRING,
+        JsonState.STRING_ESCAPE,
+        JsonState.STRING_UNICODE,
+        JsonState.OBJECT_KEY_STRING,
+        JsonState.OBJECT_KEY_STRING_ESCAPE,
+        JsonState.OBJECT_KEY_STRING_UNICODE,
+    }
+)
 
 
 def json_encode_value(val: Any) -> str:
@@ -364,10 +389,14 @@ class JsonSchemaConstraint:
         self._string_start: int = 0  # position in text_buffer where string started
         self._number_start: int = 0
         self._number_seen_digit: bool = False  # True once at least one digit consumed
-        self._number_has_dot: bool = False     # True once '.' consumed
-        self._number_exponent_digit: bool = False  # True once at least one exponent digit consumed
+        self._number_has_dot: bool = False  # True once '.' consumed
+        self._number_exponent_digit: bool = (
+            False  # True once at least one exponent digit consumed
+        )
         self._is_first_value: bool = True  # track first value in object/array
-        self._is_integer: bool = False  # True when current number context requires integer (no .eE)
+        self._is_integer: bool = (
+            False  # True when current number context requires integer (no .eE)
+        )
         # Snapshot stack for rollback (speculative draft validation)
         self._snapshots: list[tuple] = []
         # Track length of value literals for robust detection
@@ -419,10 +448,9 @@ class JsonSchemaConstraint:
         if isinstance(_tlt, str):
             _root_is_scalar_number = _tlt in ("number", "integer")
         elif isinstance(_tlt, (list, tuple)):
-            _root_is_scalar_number = (
-                any(t in ("number", "integer") for t in _tlt)
-                and all(t in _SCALARS for t in _tlt)
-            )
+            _root_is_scalar_number = any(
+                t in ("number", "integer") for t in _tlt
+            ) and all(t in _SCALARS for t in _tlt)
         else:
             _root_is_scalar_number = False
         if not _root_is_scalar_number:
@@ -432,12 +460,14 @@ class JsonSchemaConstraint:
             return True  # bare '0' is a complete number
         if s == JsonState.NUMBER and self._number_seen_digit:
             return True
-        return s == JsonState.NUMBER_EXPONENT and bool(getattr(self, "_number_exponent_digit", False))
+        return s == JsonState.NUMBER_EXPONENT and bool(
+            getattr(self, "_number_exponent_digit", False)
+        )
 
     def _eos_ids(self, tokenizer: Any) -> list[int]:
-        if hasattr(tokenizer, 'eos_token_ids'):
+        if hasattr(tokenizer, "eos_token_ids"):
             return list(tokenizer.eos_token_ids)
-        if getattr(tokenizer, 'eos_token_id', None) is not None:
+        if getattr(tokenizer, "eos_token_id", None) is not None:
             return [tokenizer.eos_token_id]
         return []
 
@@ -470,6 +500,7 @@ class JsonSchemaConstraint:
             merged_props: dict = {}
             merged_required: list[str] = []
             merged_items: dict | None = None
+
             def _flatten_allOf(sub: dict) -> None:
                 """Recursively flatten nested allOf into merged fields."""
                 if "allOf" in sub and isinstance(sub["allOf"], list):
@@ -486,6 +517,7 @@ class JsonSchemaConstraint:
                         merged_items = sub["items"].copy()
                     else:
                         merged_items.update(sub["items"])
+
             for sub in schema["allOf"]:
                 if isinstance(sub, dict):
                     _flatten_allOf(sub)
@@ -521,10 +553,11 @@ class JsonSchemaConstraint:
         if "anyOf" in schema or "oneOf" in schema:
             # Collect ALL option types (not just first) for union semantics
             options = schema.get("anyOf") or schema.get("oneOf") or []
-            non_null = [o for o in options if isinstance(o, dict) and o.get("type") != "null"]
+            non_null = [
+                o for o in options if isinstance(o, dict) and o.get("type") != "null"
+            ]
             has_null = any(
-                isinstance(o, dict) and o.get("type") == "null"
-                for o in options
+                isinstance(o, dict) and o.get("type") == "null" for o in options
             )
             if not non_null and not has_null:
                 return "any"
@@ -554,24 +587,26 @@ class JsonSchemaConstraint:
         declared property has been emitted, the only valid character is `}`
         so the model cannot emit `,"newkey":` with an undeclared name.
         """
-        parent_schema = self._schema_stack[-1][1] if self._schema_stack else self._schema
+        parent_schema = (
+            self._schema_stack[-1][1] if self._schema_stack else self._schema
+        )
         if not isinstance(parent_schema, dict):
-            return {',', '}'}
+            return {",", "}"}
         required = parent_schema.get("required", [])
         seen = self._seen_object_keys[-1] if self._seen_object_keys else set()
         declared = set(parent_schema.get("properties", {}).keys())
         strict_no_extras = parent_schema.get("additionalProperties") is False
         all_declared_seen = bool(declared) and declared.issubset(seen)
         if strict_no_extras and all_declared_seen:
-            return {'}'}
-        chars: set[str] = {','}
+            return {"}"}
+        chars: set[str] = {","}
         if all(k in seen for k in required):
-            chars.add('}')
+            chars.add("}")
         return chars
 
     def _array_post_value_chars(self) -> set[str]:
         """Structural chars after an array element completes."""
-        return {',', ']'}
+        return {",", "]"}
 
     def _post_primitive_value_chars(self) -> set[str]:
         """Structural chars valid at the boundary where a primitive value
@@ -584,15 +619,23 @@ class JsonSchemaConstraint:
         if not self._schema_stack:
             return set()
         return_state, parent_schema = self._schema_stack[-1]
-        parent_type = self._get_type_from_schema(parent_schema) if isinstance(parent_schema, dict) else None
-        if parent_type == "array" or (isinstance(parent_type, list) and "array" in parent_type):
+        parent_type = (
+            self._get_type_from_schema(parent_schema)
+            if isinstance(parent_schema, dict)
+            else None
+        )
+        if parent_type == "array" or (
+            isinstance(parent_type, list) and "array" in parent_type
+        ):
             return self._array_post_value_chars()
-        if parent_type == "object" or (isinstance(parent_type, list) and "object" in parent_type):
+        if parent_type == "object" or (
+            isinstance(parent_type, list) and "object" in parent_type
+        ):
             return self._object_post_value_chars()
         # Top-level primitive: no follow-up structural char
         if return_state == JsonState.DONE:
             return set()
-        return {',', '}', ']'}
+        return {",", "}", "]"}
 
     def _get_expected_chars(self) -> set[str] | None:
         """Get the set of characters that are valid at the current state.
@@ -603,17 +646,17 @@ class JsonSchemaConstraint:
         state = self._state
 
         if state == JsonState.START:
-            ws = {' ', '\t', '\n', '\r'}
+            ws = {" ", "\t", "\n", "\r"}
             if self._top_level_type == "array":
-                return {'['} | ws
+                return {"["} | ws
             if self._top_level_type == "string":
                 return {'"'} | ws
             if self._top_level_type == "boolean":
-                return {'t', 'f'} | ws
+                return {"t", "f"} | ws
             if self._top_level_type == "null":
-                return {'n'} | ws
+                return {"n"} | ws
             if self._top_level_type in ("number", "integer"):
-                return {'-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'} | ws
+                return {"-", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"} | ws
             if isinstance(self._top_level_type, list):
                 # Multiple types possible
                 chars = set()
@@ -622,19 +665,40 @@ class JsonSchemaConstraint:
                 return chars | ws
             if self._top_level_type == "any":
                 # Schema {} or no type — allow any JSON value
-                return (
-                    {'{', '[', '"', 't', 'f', 'n', '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'}
-                    | ws
-                )
-            return {'{', ' ', '\t', '\n', '\r'}  # default: object
+                return {
+                    "{",
+                    "[",
+                    '"',
+                    "t",
+                    "f",
+                    "n",
+                    "-",
+                    "0",
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                    "6",
+                    "7",
+                    "8",
+                    "9",
+                } | ws
+            return {"{", " ", "\t", "\n", "\r"}  # default: object
 
         if state == JsonState.OBJECT_OPEN:
             # After `{`, expect `"` (key) or `}` (only if no required keys)
-            chars = {'"', ' ', '\t', '\n', '\r'}
-            parent_schema = self._schema_stack[-1][1] if self._schema_stack else self._schema
-            required = parent_schema.get("required", []) if isinstance(parent_schema, dict) else []
+            chars = {'"', " ", "\t", "\n", "\r"}
+            parent_schema = (
+                self._schema_stack[-1][1] if self._schema_stack else self._schema
+            )
+            required = (
+                parent_schema.get("required", [])
+                if isinstance(parent_schema, dict)
+                else []
+            )
             if not required:
-                chars.add('}')
+                chars.add("}")
             return chars
 
         if state == JsonState.OBJECT_KEY:
@@ -645,27 +709,36 @@ class JsonSchemaConstraint:
             # additionalProperties:false can't reach here: _object_post_value_chars
             # forbids the comma once all declared keys are seen, so a comma is only
             # emitted when another key is still allowed.)
-            return {' ', '\t', '\n', '\r', '"'}
+            return {" ", "\t", "\n", "\r", '"'}
 
-        if state in (JsonState.OBJECT_KEY_STRING, JsonState.OBJECT_KEY_STRING_ESCAPE,
-                     JsonState.OBJECT_KEY_STRING_UNICODE):
+        if state in (
+            JsonState.OBJECT_KEY_STRING,
+            JsonState.OBJECT_KEY_STRING_ESCAPE,
+            JsonState.OBJECT_KEY_STRING_UNICODE,
+        ):
             if state == JsonState.OBJECT_KEY_STRING:
                 # In strict mode (additionalProperties: false), the key string
                 # must match one of the declared property names that have not
                 # yet been emitted.  Restrict to characters that extend a
                 # valid prefix; allow `"` only when the partial key exactly
                 # matches a candidate.
-                parent_schema = self._schema_stack[-1][1] if self._schema_stack else self._schema
+                parent_schema = (
+                    self._schema_stack[-1][1] if self._schema_stack else self._schema
+                )
                 if (
                     isinstance(parent_schema, dict)
                     and parent_schema.get("additionalProperties") is False
                 ):
                     declared = list(parent_schema.get("properties", {}).keys())
                     if declared:
-                        seen = self._seen_object_keys[-1] if self._seen_object_keys else set()
+                        seen = (
+                            self._seen_object_keys[-1]
+                            if self._seen_object_keys
+                            else set()
+                        )
                         candidates = [k for k in declared if k not in seen]
                         if candidates:
-                            partial = self._text_buffer[self._string_start:]
+                            partial = self._text_buffer[self._string_start :]
                             chars: set[str] = set()
                             for cand in candidates:
                                 if cand.startswith(partial):
@@ -680,19 +753,19 @@ class JsonSchemaConstraint:
                             # validation will fail later.
                 return None  # any char inside key string
             if state == JsonState.OBJECT_KEY_STRING_ESCAPE:
-                return {'"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u'}
+                return {'"', "\\", "/", "b", "f", "n", "r", "t", "u"}
             if state == JsonState.OBJECT_KEY_STRING_UNICODE:
                 return _HEX_CHARS
 
         if state == JsonState.OBJECT_COLON:
-            return {':', ' ', '\t', '\n', '\r'}
+            return {":", " ", "\t", "\n", "\r"}
 
         if state == JsonState.OBJECT_VALUE:
             # Depends on schema type for this value
             return self._get_value_start_chars()
 
         if state == JsonState.OBJECT_COMMA:
-            chars = {' ', '\t', '\n', '\r'} | self._object_post_value_chars()
+            chars = {" ", "\t", "\n", "\r"} | self._object_post_value_chars()
             return chars
 
         if state == JsonState.ARRAY_OPEN:
@@ -706,10 +779,10 @@ class JsonSchemaConstraint:
             # valid here — allowing it produced trailing commas (`[1,]`, which is
             # invalid JSON). Keep `]` only for ARRAY_OPEN's empty-array case.
             # Mirrors the OBJECT_KEY fix.
-            return self._get_array_value_start_chars() - {']'}
+            return self._get_array_value_start_chars() - {"]"}
 
         if state == JsonState.ARRAY_COMMA:
-            return {',', ']', ' ', '\t', '\n', '\r'}
+            return {",", "]", " ", "\t", "\n", "\r"}
 
         if state == JsonState.STRING:
             # Enum/const string values: constrain char-by-char to the declared
@@ -723,11 +796,13 @@ class JsonSchemaConstraint:
                     opts = [vs["const"]]
                 str_opts = [o for o in (opts or []) if isinstance(o, str)]
                 if str_opts:
-                    partial = self._text_buffer[self._string_start:]
+                    partial = self._text_buffer[self._string_start :]
                     chars: set[str] = set()
                     for o in str_opts:
                         if o.startswith(partial):
-                            chars.add('"' if len(o) == len(partial) else o[len(partial)])
+                            chars.add(
+                                '"' if len(o) == len(partial) else o[len(partial)]
+                            )
                     if chars:
                         return chars
                     # partial matches no option — unreachable when masked from
@@ -735,7 +810,7 @@ class JsonSchemaConstraint:
             return None  # any char inside a free-form string
 
         if state == JsonState.STRING_ESCAPE:
-            return {'"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u'}
+            return {'"', "\\", "/", "b", "f", "n", "r", "t", "u"}
 
         if state == JsonState.STRING_UNICODE:
             # Must provide hex digits
@@ -745,12 +820,12 @@ class JsonSchemaConstraint:
             chars = set(_DIGIT_CHARS)
             if not self._is_integer:
                 if self._number_seen_digit and not self._number_has_dot:
-                    chars.add('.')
+                    chars.add(".")
                 if self._number_seen_digit:
-                    chars.update('eE')
+                    chars.update("eE")
             if self._number_seen_digit:
                 chars.update(self._post_primitive_value_chars())
-                chars.update({' ', '\t', '\n', '\r'})
+                chars.update({" ", "\t", "\n", "\r"})
             return chars
 
         if state == JsonState.NUMBER_ZERO:
@@ -758,10 +833,10 @@ class JsonSchemaConstraint:
             # For integer type, exclude '.' and 'eE'.
             chars: set[str] = set()
             if not self._is_integer:
-                chars.add('.')
-                chars.update('eE')
+                chars.add(".")
+                chars.update("eE")
             chars.update(self._post_primitive_value_chars())
-            chars.update({' ', '\t', '\n', '\r'})
+            chars.update({" ", "\t", "\n", "\r"})
             return chars
 
         if state == JsonState.NUMBER_FRACTION:
@@ -776,10 +851,10 @@ class JsonSchemaConstraint:
             # valid — a second sign would produce invalid JSON (e.g. "1e+5+3").
             chars = set(_DIGIT_CHARS)
             if not self._number_exponent_digit:
-                chars.update('+-')
+                chars.update("+-")
             if self._number_exponent_digit:
                 chars.update(self._post_primitive_value_chars())
-                chars.update({' ', '\t', '\n', '\r'})
+                chars.update({" ", "\t", "\n", "\r"})
             return chars
 
         if state == JsonState.NUMBER_EXPONENT_SIGN:
@@ -791,7 +866,7 @@ class JsonSchemaConstraint:
             # After entering BOOLEAN_TRUE, first char 't' was consumed.
             # _literal_remaining tracks how many chars of the suffix remain.
             # idx = position in literal we need next (1='r', 2='u', 3='e')
-            remaining = getattr(self, '_literal_remaining', 3)
+            remaining = getattr(self, "_literal_remaining", 3)
             idx = len(literal) - remaining
             if 0 <= idx < len(literal):
                 return {literal[idx]}
@@ -799,7 +874,7 @@ class JsonSchemaConstraint:
 
         if state == JsonState.BOOLEAN_FALSE:
             literal = "false"
-            remaining = getattr(self, '_literal_remaining', 4)
+            remaining = getattr(self, "_literal_remaining", 4)
             idx = len(literal) - remaining
             if 0 <= idx < len(literal):
                 return {literal[idx]}
@@ -807,7 +882,7 @@ class JsonSchemaConstraint:
 
         if state == JsonState.NULL:
             literal = "null"
-            remaining = getattr(self, '_literal_remaining', 3)
+            remaining = getattr(self, "_literal_remaining", 3)
             idx = len(literal) - remaining
             if 0 <= idx < len(literal):
                 return {literal[idx]}
@@ -825,7 +900,29 @@ class JsonSchemaConstraint:
 
         if value_schema is None:
             # Any value type allowed
-            return {'"', '{', '[', 't', 'f', 'n', '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ' ', '\t', '\n', '\r'}
+            return {
+                '"',
+                "{",
+                "[",
+                "t",
+                "f",
+                "n",
+                "-",
+                "0",
+                "1",
+                "2",
+                "3",
+                "4",
+                "5",
+                "6",
+                "7",
+                "8",
+                "9",
+                " ",
+                "\t",
+                "\n",
+                "\r",
+            }
 
         # Handle enum: restrict to first chars of each enum value
         if "enum" in value_schema and isinstance(value_schema["enum"], list):
@@ -835,7 +932,7 @@ class JsonSchemaConstraint:
                 if s:
                     chars.add(s[0])
             chars.update(_WHITESPACE_CHARS)
-            return chars if chars else {' ', '\t', '\n', '\r'}
+            return chars if chars else {" ", "\t", "\n", "\r"}
 
         # Handle const: restrict to first char of the constant value
         if "const" in value_schema:
@@ -870,20 +967,24 @@ class JsonSchemaConstraint:
             items_schema = {"type": "any"}
 
         # Handle enum in items schema
-        if isinstance(items_schema, dict) and "enum" in items_schema and isinstance(items_schema["enum"], list):
-            chars: set[str] = {']', ' ', '\t', '\n', '\r'}
+        if (
+            isinstance(items_schema, dict)
+            and "enum" in items_schema
+            and isinstance(items_schema["enum"], list)
+        ):
+            chars: set[str] = {"]", " ", "\t", "\n", "\r"}
             for val in items_schema["enum"]:
                 s = json_encode_value(val)
                 if s:
                     chars.add(s[0])
-            return chars if len(chars) > 5 else chars | {']', ' ', '\t', '\n', '\r'}
+            return chars if len(chars) > 5 else chars | {"]", " ", "\t", "\n", "\r"}
 
         # Handle const in items schema
         if isinstance(items_schema, dict) and "const" in items_schema:
             s = json_encode_value(items_schema["const"])
             if s:
-                return {s[0]} | {']', ' ', '\t', '\n', '\r'}
-            return {']', ' ', '\t', '\n', '\r'}
+                return {s[0]} | {"]", " ", "\t", "\n", "\r"}
+            return {"]", " ", "\t", "\n", "\r"}
 
         schema_type = self._get_type_from_schema(items_schema)
 
@@ -891,28 +992,69 @@ class JsonSchemaConstraint:
             chars = set()
             for t in schema_type:
                 chars.update(self._type_to_start_chars(t))
-            chars.update({']', ' ', '\t', '\n', '\r'})
+            chars.update({"]", " ", "\t", "\n", "\r"})
             return chars
 
         chars = self._type_to_start_chars(schema_type)
-        chars.update({']', ' ', '\t', '\n', '\r'})
+        chars.update({"]", " ", "\t", "\n", "\r"})
         return chars
 
     def _type_to_start_chars(self, schema_type: str) -> set[str]:
         """Map a JSON Schema type to the characters that can start it."""
         mapping = {
             "string": {'"'},
-            "object": {'{'},
-            "array": {'['},
-            "boolean": {'t', 'f'},
-            "null": {'n'},
-            "number": {'-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'},
-            "integer": {'-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'},
-            "any": {'"', '{', '[', 't', 'f', 'n', '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'},
+            "object": {"{"},
+            "array": {"["},
+            "boolean": {"t", "f"},
+            "null": {"n"},
+            "number": {"-", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"},
+            "integer": {"-", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"},
+            "any": {
+                '"',
+                "{",
+                "[",
+                "t",
+                "f",
+                "n",
+                "-",
+                "0",
+                "1",
+                "2",
+                "3",
+                "4",
+                "5",
+                "6",
+                "7",
+                "8",
+                "9",
+            },
         }
-        return mapping.get(schema_type, {'"', '{', '[', 't', 'f', 'n', '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'})
+        return mapping.get(
+            schema_type,
+            {
+                '"',
+                "{",
+                "[",
+                "t",
+                "f",
+                "n",
+                "-",
+                "0",
+                "1",
+                "2",
+                "3",
+                "4",
+                "5",
+                "6",
+                "7",
+                "8",
+                "9",
+            },
+        )
 
-    def _resolve_to_concrete_schema(self, schema: dict, target_type: str) -> dict | None:
+    def _resolve_to_concrete_schema(
+        self, schema: dict, target_type: str
+    ) -> dict | None:
         """Resolve a schema (possibly anyOf/oneOf) to find a concrete sub-schema
         matching *target_type* (e.g. "object" or "array").
 
@@ -1044,24 +1186,26 @@ class JsonSchemaConstraint:
 
     def checkpoint(self) -> None:
         """Save current state for later rollback (speculative draft validation)."""
-        self._snapshots.append((
-            self._state,
-            self._text_buffer,
-            [(s, copy.deepcopy(d)) for s, d in self._schema_stack],
-            [list(k) for k in self._object_keys_remaining],
-            [set(s) for s in self._seen_object_keys],
-            self._current_key,
-            self._in_string,
-            self._string_start,
-            self._number_start,
-            self._is_first_value,
-            self._literal_remaining,
-            self._unicode_remaining,
-            self._number_seen_digit,
-            self._number_has_dot,
-            self._number_exponent_digit,
-            self._is_integer,
-        ))
+        self._snapshots.append(
+            (
+                self._state,
+                self._text_buffer,
+                [(s, copy.deepcopy(d)) for s, d in self._schema_stack],
+                [list(k) for k in self._object_keys_remaining],
+                [set(s) for s in self._seen_object_keys],
+                self._current_key,
+                self._in_string,
+                self._string_start,
+                self._number_start,
+                self._is_first_value,
+                self._literal_remaining,
+                self._unicode_remaining,
+                self._number_seen_digit,
+                self._number_has_dot,
+                self._number_exponent_digit,
+                self._is_integer,
+            )
+        )
 
     def discard_checkpoint(self) -> None:
         """Discard the most recent checkpoint without restoring state.
@@ -1104,12 +1248,12 @@ class JsonSchemaConstraint:
             ch = text[i]
 
             if self._state == JsonState.START:
-                if ch == '{':
+                if ch == "{":
                     self._state = JsonState.OBJECT_OPEN
                     self._is_first_value = True
                     self._init_object_keys(self._schema)
                     self._schema_stack.append((JsonState.DONE, self._schema))
-                elif ch == '[':
+                elif ch == "[":
                     self._state = JsonState.ARRAY_OPEN
                     self._is_first_value = True
                     self._schema_stack.append((JsonState.DONE, self._schema))
@@ -1118,21 +1262,25 @@ class JsonSchemaConstraint:
                     self._state = JsonState.STRING
                     self._string_start = buf_offset + i + 1
                     self._schema_stack.append((JsonState.DONE, self._schema))
-                elif ch in 'tf':
+                elif ch in "tf":
                     # Top-level boolean
-                    self._state = JsonState.BOOLEAN_TRUE if ch == 't' else JsonState.BOOLEAN_FALSE
-                    self._literal_remaining = 3 if ch == 't' else 4
+                    self._state = (
+                        JsonState.BOOLEAN_TRUE if ch == "t" else JsonState.BOOLEAN_FALSE
+                    )
+                    self._literal_remaining = 3 if ch == "t" else 4
                     self._schema_stack.append((JsonState.DONE, self._schema))
-                elif ch == 'n':
+                elif ch == "n":
                     # Top-level null
                     self._state = JsonState.NULL
                     self._literal_remaining = 3
                     self._schema_stack.append((JsonState.DONE, self._schema))
-                elif ch == '-' or ch in _DIGIT_CHARS:
+                elif ch == "-" or ch in _DIGIT_CHARS:
                     # Top-level number
-                    self._state = JsonState.NUMBER_ZERO if ch == '0' else JsonState.NUMBER
+                    self._state = (
+                        JsonState.NUMBER_ZERO if ch == "0" else JsonState.NUMBER
+                    )
                     self._number_start = buf_offset + i
-                    self._number_seen_digit = ch != '-'
+                    self._number_seen_digit = ch != "-"
                     self._number_has_dot = False
                     self._number_exponent_digit = False
                     self._is_integer = self._is_integer_schema(self._schema)
@@ -1150,7 +1298,7 @@ class JsonSchemaConstraint:
                     self._in_string = True
                     i += 1
                     continue
-                if ch == '}':
+                if ch == "}":
                     self._pop_schema()
                     i += 1
                     continue
@@ -1167,7 +1315,7 @@ class JsonSchemaConstraint:
                     self._in_string = True
                     i += 1
                     continue
-                if ch == '}':
+                if ch == "}":
                     self._pop_schema()
                     i += 1
                     continue
@@ -1175,7 +1323,7 @@ class JsonSchemaConstraint:
                 continue
 
             if self._state == JsonState.OBJECT_KEY_STRING:
-                if ch == '\\':
+                if ch == "\\":
                     # Transition to escape handling state to properly track
                     # escapes that span token boundaries.
                     self._state = JsonState.OBJECT_KEY_STRING_ESCAPE
@@ -1197,7 +1345,7 @@ class JsonSchemaConstraint:
 
             if self._state == JsonState.OBJECT_KEY_STRING_ESCAPE:
                 # Consuming the escaped character after \ in an object key
-                if ch == 'u':
+                if ch == "u":
                     self._state = JsonState.OBJECT_KEY_STRING_UNICODE
                     self._unicode_remaining = 4
                 else:
@@ -1217,7 +1365,7 @@ class JsonSchemaConstraint:
                 if ch in _WHITESPACE_CHARS:
                     i += 1
                     continue
-                if ch == ':':
+                if ch == ":":
                     self._state = JsonState.OBJECT_VALUE
                     i += 1
                     continue
@@ -1237,12 +1385,12 @@ class JsonSchemaConstraint:
                 if ch in _WHITESPACE_CHARS:
                     i += 1
                     continue
-                if ch == ',':
+                if ch == ",":
                     self._state = JsonState.OBJECT_KEY
                     self._is_first_value = False
                     i += 1
                     continue
-                if ch == '}':
+                if ch == "}":
                     self._pop_schema()
                     i += 1
                     continue
@@ -1253,7 +1401,7 @@ class JsonSchemaConstraint:
                 if ch in _WHITESPACE_CHARS:
                     i += 1
                     continue
-                if ch == ']':
+                if ch == "]":
                     self._pop_schema()
                     i += 1
                     continue
@@ -1268,7 +1416,7 @@ class JsonSchemaConstraint:
                 if ch in _WHITESPACE_CHARS:
                     i += 1
                     continue
-                if ch == ']':
+                if ch == "]":
                     self._pop_schema()
                     i += 1
                     continue
@@ -1280,12 +1428,12 @@ class JsonSchemaConstraint:
                 if ch in _WHITESPACE_CHARS:
                     i += 1
                     continue
-                if ch == ',':
+                if ch == ",":
                     self._state = JsonState.ARRAY_VALUE
                     self._is_first_value = False
                     i += 1
                     continue
-                if ch == ']':
+                if ch == "]":
                     self._pop_schema()
                     i += 1
                     continue
@@ -1293,7 +1441,7 @@ class JsonSchemaConstraint:
                 continue
 
             if self._state == JsonState.STRING:
-                if ch == '\\':
+                if ch == "\\":
                     self._state = JsonState.STRING_ESCAPE
                     i += 1
                     continue
@@ -1307,7 +1455,7 @@ class JsonSchemaConstraint:
 
             if self._state == JsonState.STRING_ESCAPE:
                 # After \, next char is the escape type
-                if ch == 'u':
+                if ch == "u":
                     # Unicode escape: need 4 hex digits
                     self._state = JsonState.STRING_UNICODE
                     self._unicode_remaining = 4
@@ -1324,9 +1472,13 @@ class JsonSchemaConstraint:
                 i += 1
                 continue
 
-            if self._state in (JsonState.NUMBER, JsonState.NUMBER_ZERO,
-                               JsonState.NUMBER_FRACTION,
-                               JsonState.NUMBER_EXPONENT, JsonState.NUMBER_EXPONENT_SIGN):
+            if self._state in (
+                JsonState.NUMBER,
+                JsonState.NUMBER_ZERO,
+                JsonState.NUMBER_FRACTION,
+                JsonState.NUMBER_EXPONENT,
+                JsonState.NUMBER_EXPONENT_SIGN,
+            ):
                 # JSON number: -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?
                 # We use five sub-states to track what's valid next:
                 # NUMBER: after [1-9], more digits / '.' / 'eE' / terminators
@@ -1357,22 +1509,40 @@ class JsonSchemaConstraint:
                         self._number_exponent_digit = True
                     elif self._state == JsonState.NUMBER_EXPONENT:
                         self._number_exponent_digit = True
-                    elif self._state == JsonState.NUMBER and ch == '0' and not prior_seen_digit:
+                    elif (
+                        self._state == JsonState.NUMBER
+                        and ch == "0"
+                        and not prior_seen_digit
+                    ):
                         # e.g. after '-' then '0': treat as leading zero
                         self._state = JsonState.NUMBER_ZERO
                     i += 1
                     continue
-                if ch == '.' and self._state in (JsonState.NUMBER, JsonState.NUMBER_ZERO) and not self._number_has_dot and not self._is_integer:
+                if (
+                    ch == "."
+                    and self._state in (JsonState.NUMBER, JsonState.NUMBER_ZERO)
+                    and not self._number_has_dot
+                    and not self._is_integer
+                ):
                     self._state = JsonState.NUMBER_FRACTION
                     self._number_has_dot = True
                     i += 1
                     continue
-                if ch in 'eE' and self._state in (JsonState.NUMBER, JsonState.NUMBER_ZERO) and self._number_seen_digit and not self._is_integer:
+                if (
+                    ch in "eE"
+                    and self._state in (JsonState.NUMBER, JsonState.NUMBER_ZERO)
+                    and self._number_seen_digit
+                    and not self._is_integer
+                ):
                     self._state = JsonState.NUMBER_EXPONENT
                     self._number_exponent_digit = False
                     i += 1
                     continue
-                if ch in '+-' and self._state == JsonState.NUMBER_EXPONENT and not self._number_exponent_digit:
+                if (
+                    ch in "+-"
+                    and self._state == JsonState.NUMBER_EXPONENT
+                    and not self._number_exponent_digit
+                ):
                     self._state = JsonState.NUMBER_EXPONENT_SIGN
                     i += 1
                     continue
@@ -1392,7 +1562,10 @@ class JsonSchemaConstraint:
                     continue
                 # NUMBER_EXPONENT / NUMBER_EXPONENT_SIGN without digits also
                 # means incomplete — same strategy.
-                if self._state in (JsonState.NUMBER_EXPONENT, JsonState.NUMBER_EXPONENT_SIGN):
+                if self._state in (
+                    JsonState.NUMBER_EXPONENT,
+                    JsonState.NUMBER_EXPONENT_SIGN,
+                ):
                     self._value_completed()
                     continue
                 self._value_completed()
@@ -1429,32 +1602,32 @@ class JsonSchemaConstraint:
         if ch == '"':
             self._state = JsonState.STRING
             self._string_start = buf_pos + 1  # position after the opening quote
-        elif ch == '{':
+        elif ch == "{":
             value_schema = self._get_current_value_schema()
             obj_schema = self._resolve_object_schema(value_schema)
             self._init_object_keys(obj_schema)
             self._schema_stack.append((JsonState.OBJECT_COMMA, obj_schema))
             self._state = JsonState.OBJECT_OPEN
             self._is_first_value = True
-        elif ch == '[':
+        elif ch == "[":
             value_schema = self._get_current_value_schema()
             arr_schema = self._resolve_array_schema(value_schema)
             self._schema_stack.append((JsonState.ARRAY_COMMA, arr_schema))
             self._state = JsonState.ARRAY_OPEN
             self._is_first_value = True
-        elif ch == 't':
+        elif ch == "t":
             self._state = JsonState.BOOLEAN_TRUE
             self._literal_remaining = 3  # "rue" remaining after 't'
-        elif ch == 'f':
+        elif ch == "f":
             self._state = JsonState.BOOLEAN_FALSE
             self._literal_remaining = 4  # "alse" remaining after 'f'
-        elif ch == 'n':
+        elif ch == "n":
             self._state = JsonState.NULL
             self._literal_remaining = 3  # "ull" remaining after 'n'
-        elif ch == '-' or ch in _DIGIT_CHARS:
-            self._state = JsonState.NUMBER_ZERO if ch == '0' else JsonState.NUMBER
+        elif ch == "-" or ch in _DIGIT_CHARS:
+            self._state = JsonState.NUMBER_ZERO if ch == "0" else JsonState.NUMBER
             self._number_start = buf_pos
-            self._number_seen_digit = ch != '-'
+            self._number_seen_digit = ch != "-"
             self._number_has_dot = False
             self._number_exponent_digit = False
             # Determine if schema expects integer (no .eE allowed)
@@ -1512,7 +1685,7 @@ class JsonSchemaConstraint:
         if ch == '"':
             self._state = JsonState.STRING
             self._string_start = buf_pos + 1  # position after the opening quote
-        elif ch == '{':
+        elif ch == "{":
             # Get items schema and resolve anyOf/oneOf to find object option
             items_schema = {"type": "object"}
             if self._schema_stack:
@@ -1524,7 +1697,7 @@ class JsonSchemaConstraint:
             self._schema_stack.append((JsonState.ARRAY_COMMA, items_schema))
             self._state = JsonState.OBJECT_OPEN
             self._is_first_value = True
-        elif ch == '[':
+        elif ch == "[":
             items_schema = {"type": "array"}
             if self._schema_stack:
                 _, parent_schema = self._schema_stack[-1]
@@ -1534,19 +1707,19 @@ class JsonSchemaConstraint:
             self._schema_stack.append((JsonState.ARRAY_COMMA, items_schema))
             self._state = JsonState.ARRAY_OPEN
             self._is_first_value = True
-        elif ch == 't':
+        elif ch == "t":
             self._state = JsonState.BOOLEAN_TRUE
             self._literal_remaining = 3  # "rue"
-        elif ch == 'f':
+        elif ch == "f":
             self._state = JsonState.BOOLEAN_FALSE
             self._literal_remaining = 4  # "alse"
-        elif ch == 'n':
+        elif ch == "n":
             self._state = JsonState.NULL
             self._literal_remaining = 3  # "ull"
-        elif ch == '-' or ch in _DIGIT_CHARS:
-            self._state = JsonState.NUMBER_ZERO if ch == '0' else JsonState.NUMBER
+        elif ch == "-" or ch in _DIGIT_CHARS:
+            self._state = JsonState.NUMBER_ZERO if ch == "0" else JsonState.NUMBER
             self._number_start = buf_pos
-            self._number_seen_digit = ch != '-'
+            self._number_seen_digit = ch != "-"
             self._number_has_dot = False
             self._number_exponent_digit = False
             # Determine if items schema expects integer
@@ -1567,14 +1740,16 @@ class JsonSchemaConstraint:
             if len(self._schema_stack) == 1 and return_state == JsonState.DONE:
                 # Top-level primitive — check if schema allows only primitives
                 is_container = parent_type in ("object", "array") or (
-                    isinstance(parent_type, list) and
-                    any(t in ("object", "array") for t in parent_type)
+                    isinstance(parent_type, list)
+                    and any(t in ("object", "array") for t in parent_type)
                 )
                 if not is_container:
                     self._schema_stack.pop()
                     self._state = JsonState.DONE
                     return
-            if parent_type == "array" or (isinstance(parent_type, list) and "array" in parent_type):
+            if parent_type == "array" or (
+                isinstance(parent_type, list) and "array" in parent_type
+            ):
                 self._state = JsonState.ARRAY_COMMA
             else:
                 self._state = JsonState.OBJECT_COMMA
@@ -1593,8 +1768,9 @@ class JsonSchemaConstraint:
             # object (has type:"object" or is a list including "object").
             # A schema with "properties" but type:"string" should NOT pop
             # _seen_object_keys since _init_object_keys skips non-objects.
-            if (popped_type == "object"
-                or (isinstance(popped_type, list) and "object" in popped_type)):
+            if popped_type == "object" or (
+                isinstance(popped_type, list) and "object" in popped_type
+            ):
                 if self._object_keys_remaining:
                     self._object_keys_remaining.pop()
                 if self._seen_object_keys:
@@ -1619,7 +1795,9 @@ class JsonSchemaConstraint:
             self._object_keys_remaining.append([])  # any keys allowed
         self._seen_object_keys.append(set())
 
-    def get_allowed_tokens(self, tokenizer: Any, generated_token_ids: list[int]) -> list[int]:
+    def get_allowed_tokens(
+        self, tokenizer: Any, generated_token_ids: list[int]
+    ) -> list[int]:
         """Return the list of allowed token IDs for the next token.
 
         Args:
@@ -1713,14 +1891,22 @@ class JsonSchemaConstraint:
     def _token_accepted(self, token_text: str) -> bool:
         """True iff advancing through every char of token_text stays valid."""
         saved = (
-            self._state, self._text_buffer,
+            self._state,
+            self._text_buffer,
             list(self._schema_stack),
             [list(k) for k in self._object_keys_remaining],
             [set(s) for s in self._seen_object_keys],
-            self._current_key, self._in_string, self._string_start,
-            self._number_start, self._is_first_value, self._literal_remaining,
-            self._unicode_remaining, self._number_seen_digit,
-            self._number_has_dot, self._number_exponent_digit, self._is_integer,
+            self._current_key,
+            self._in_string,
+            self._string_start,
+            self._number_start,
+            self._is_first_value,
+            self._literal_remaining,
+            self._unicode_remaining,
+            self._number_seen_digit,
+            self._number_has_dot,
+            self._number_exponent_digit,
+            self._is_integer,
         )
         try:
             for ch in token_text:
@@ -1732,29 +1918,43 @@ class JsonSchemaConstraint:
             return True
         finally:
             (
-                self._state, self._text_buffer, self._schema_stack,
-                self._object_keys_remaining, self._seen_object_keys,
-                self._current_key, self._in_string, self._string_start,
-                self._number_start, self._is_first_value, self._literal_remaining,
-                self._unicode_remaining, self._number_seen_digit,
-                self._number_has_dot, self._number_exponent_digit, self._is_integer,
+                self._state,
+                self._text_buffer,
+                self._schema_stack,
+                self._object_keys_remaining,
+                self._seen_object_keys,
+                self._current_key,
+                self._in_string,
+                self._string_start,
+                self._number_start,
+                self._is_first_value,
+                self._literal_remaining,
+                self._unicode_remaining,
+                self._number_seen_digit,
+                self._number_has_dot,
+                self._number_exponent_digit,
+                self._is_integer,
             ) = saved
 
     def _token_text_map(self, tokenizer: Any) -> dict[int, str]:
         """Lazily cache token_id → decoded text (parallel to the char map)."""
-        if not hasattr(self.__class__, '_token_text_cache'):
+        if not hasattr(self.__class__, "_token_text_cache"):
             import weakref
+
             self.__class__._token_text_cache = weakref.WeakKeyDictionary()
         cache = self.__class__._token_text_cache
         if tokenizer not in cache:
             m: dict[int, str] = {}
-            if hasattr(tokenizer, 'get_vocab'):
+            if hasattr(tokenizer, "get_vocab"):
                 vocab = tokenizer.get_vocab()
-            elif hasattr(tokenizer, 'vocab') and isinstance(tokenizer.vocab, dict):
+            elif hasattr(tokenizer, "vocab") and isinstance(tokenizer.vocab, dict):
                 vocab = tokenizer.vocab
             else:
-                vocab = {str(i): i for i in range(getattr(tokenizer, 'vocab_size', 32000))}
+                vocab = {
+                    str(i): i for i in range(getattr(tokenizer, "vocab_size", 32000))
+                }
             import contextlib
+
             for _txt, tid in vocab.items():
                 with contextlib.suppress(Exception):
                     m[tid] = tokenizer.decode([tid])
@@ -1763,28 +1963,32 @@ class JsonSchemaConstraint:
 
     def _get_all_token_ids(self, tokenizer: Any) -> list[int]:
         """Get all token IDs from the tokenizer vocabulary."""
-        if hasattr(tokenizer, 'get_vocab'):
+        if hasattr(tokenizer, "get_vocab"):
             vocab = tokenizer.get_vocab()
             return list(vocab.values())
-        if hasattr(tokenizer, 'vocab'):
+        if hasattr(tokenizer, "vocab"):
             vocab = tokenizer.vocab
             if isinstance(vocab, dict):
                 return list(vocab.values())
             return list(range(len(vocab)))
         # Fallback: try to determine vocab size from tokenizer config
-        vocab_size = getattr(tokenizer, 'vocab_size', None)
+        vocab_size = getattr(tokenizer, "vocab_size", None)
         if not vocab_size:
             # Try reading from the model config attached to tokenizer
-            config = getattr(tokenizer, 'config', None)
+            config = getattr(tokenizer, "config", None)
             if config:
-                vocab_size = config.get('vocab_size') or config.get('model_type') and 32000
+                vocab_size = (
+                    config.get("vocab_size") or config.get("model_type") and 32000
+                )
         if vocab_size:
             return list(range(vocab_size))
         # Last resort: use actual tokenizer length
         try:
             return list(range(len(tokenizer.get_vocab())))
         except Exception:
-            logger.debug("tokenizer vocab size detection failed, using fallback", exc_info=True)
+            logger.debug(
+                "tokenizer vocab size detection failed, using fallback", exc_info=True
+            )
             return list(range(32000))
 
     def _find_tokens_for_chars(self, tokenizer: Any, chars: set[str]) -> list[int]:
@@ -1793,11 +1997,14 @@ class JsonSchemaConstraint:
         Uses precomputed token cache for efficiency on repeated calls.
         """
         # Build token-to-first-char mapping if not cached
-        if not hasattr(self.__class__, '_token_char_cache'):
+        if not hasattr(self.__class__, "_token_char_cache"):
             import weakref
+
             self.__class__._token_char_cache = weakref.WeakKeyDictionary()
         if tokenizer not in self.__class__._token_char_cache:
-            self.__class__._token_char_cache[tokenizer] = self._build_token_char_map(tokenizer)
+            self.__class__._token_char_cache[tokenizer] = self._build_token_char_map(
+                tokenizer
+            )
 
         char_map = self.__class__._token_char_cache[tokenizer]
         allowed = set()
@@ -1814,21 +2021,21 @@ class JsonSchemaConstraint:
         """
         char_map: dict[str, list[int]] = {}
 
-        if hasattr(tokenizer, 'get_vocab'):
+        if hasattr(tokenizer, "get_vocab"):
             vocab = tokenizer.get_vocab()
-        elif hasattr(tokenizer, 'vocab') and isinstance(tokenizer.vocab, dict):
+        elif hasattr(tokenizer, "vocab") and isinstance(tokenizer.vocab, dict):
             vocab = tokenizer.vocab
         else:
-            vocab_size = getattr(tokenizer, 'vocab_size', 32000)
+            vocab_size = getattr(tokenizer, "vocab_size", 32000)
             vocab = {str(i): i for i in range(vocab_size)}
 
         for token_text, token_id in vocab.items():
             if not token_text:
                 continue
             # Get the decoded character(s) that this token starts with
-            first_char = token_text[0] if token_text else ''
+            first_char = token_text[0] if token_text else ""
             # For special tokens (starting with <), skip
-            if first_char == '<' and len(token_text) > 1 and token_text.endswith('>'):
+            if first_char == "<" and len(token_text) > 1 and token_text.endswith(">"):
                 continue
             # For byte-level tokens (starting with Ġ or similar), decode properly
             try:
@@ -1851,7 +2058,11 @@ class JsonSchemaConstraint:
                         continue
                     char_map.setdefault(first_decoded, []).append(token_id)
             except Exception:
-                logger.debug("tokenizer decode failed for token %d, using raw char", token_id, exc_info=True)
+                logger.debug(
+                    "tokenizer decode failed for token %d, using raw char",
+                    token_id,
+                    exc_info=True,
+                )
                 # Fallback: use raw first char
                 char_map.setdefault(first_char, []).append(token_id)
 
@@ -1910,7 +2121,7 @@ def apply_json_constraint(
     """
     import mlx.core as mx
 
-    neg_inf = mx.array(float('-inf'), dtype=logits.dtype)
+    neg_inf = mx.array(float("-inf"), dtype=logits.dtype)
 
     if not allowed_token_ids:
         # No valid tokens in current state — fall back to argmax of original
@@ -1925,7 +2136,9 @@ def apply_json_constraint(
         vocab_size = logits.shape[-1]
         flat_2d = logits.reshape(-1, vocab_size)
         # Sanitize NaN logits before argmax — NaN produces arbitrary indices
-        flat_2d = mx.where(mx.isnan(flat_2d), mx.array(-1e10, dtype=flat_2d.dtype), flat_2d)
+        flat_2d = mx.where(
+            mx.isnan(flat_2d), mx.array(-1e10, dtype=flat_2d.dtype), flat_2d
+        )
         best_per_pos = mx.argmax(flat_2d, axis=-1)
         mask = mx.ones(logits.shape, dtype=mx.bool_)
         mask = mask.reshape(-1, vocab_size)
@@ -1936,7 +2149,9 @@ def apply_json_constraint(
         # one finite value per position so sampling doesn't produce NaN.
         if not mx.any(mx.isfinite(result.reshape(-1))).item():
             result = result.reshape(-1, vocab_size)
-            result[mx.arange(result.shape[0]), best_per_pos] = mx.array(0.0, dtype=logits.dtype)
+            result[mx.arange(result.shape[0]), best_per_pos] = mx.array(
+                0.0, dtype=logits.dtype
+            )
             result = result.reshape(logits.shape)
         return result
 
@@ -1966,7 +2181,9 @@ def apply_json_constraint(
         )
         vocab_size = logits.shape[-1]
         flat_2d = logits.reshape(-1, vocab_size)
-        flat_2d = mx.where(mx.isnan(flat_2d), mx.array(-1e10, dtype=flat_2d.dtype), flat_2d)
+        flat_2d = mx.where(
+            mx.isnan(flat_2d), mx.array(-1e10, dtype=flat_2d.dtype), flat_2d
+        )
         best_per_pos = mx.argmax(flat_2d, axis=-1)
         fallback_mask = mx.ones(logits.shape, dtype=mx.bool_)
         fallback_mask = fallback_mask.reshape(-1, vocab_size)
@@ -1976,7 +2193,9 @@ def apply_json_constraint(
         # If even the argmax was -inf, force one finite value per position
         if not mx.any(mx.isfinite(result.reshape(-1))).item():
             result = result.reshape(-1, vocab_size)
-            result[mx.arange(result.shape[0]), best_per_pos] = mx.array(0.0, dtype=logits.dtype)
+            result[mx.arange(result.shape[0]), best_per_pos] = mx.array(
+                0.0, dtype=logits.dtype
+            )
             result = result.reshape(logits.shape)
         return result
 
@@ -2018,7 +2237,9 @@ class ConstrainedSampler:
             mx.array with sampled token ID
         """
         # Get allowed tokens for current state
-        allowed = self._constraint.get_allowed_tokens(self._tokenizer, self._generated_ids)
+        allowed = self._constraint.get_allowed_tokens(
+            self._tokenizer, self._generated_ids
+        )
 
         if allowed:
             # Mask disallowed tokens
@@ -2028,9 +2249,9 @@ class ConstrainedSampler:
             # producing invalid output.  Setting all logits to -inf
             # causes softmax NaN, so we allowlist only EOS tokens.
             eos_ids = []
-            if hasattr(self._tokenizer, 'eos_token_ids'):
+            if hasattr(self._tokenizer, "eos_token_ids"):
                 eos_ids = list(self._tokenizer.eos_token_ids)
-            elif hasattr(self._tokenizer, 'eos_token_id'):
+            elif hasattr(self._tokenizer, "eos_token_id"):
                 eos_ids = [self._tokenizer.eos_token_id]
             if eos_ids:
                 masked_logits = apply_json_constraint(logits, eos_ids)
@@ -2049,16 +2270,20 @@ class ConstrainedSampler:
         # would corrupt the constraint's text buffer and break
         # checkpoint/rollback correctness.
         eos_ids = set()
-        if hasattr(self._tokenizer, 'eos_token_ids'):
+        if hasattr(self._tokenizer, "eos_token_ids"):
             eos_ids = set(self._tokenizer.eos_token_ids)
-        elif hasattr(self._tokenizer, 'eos_token_id'):
+        elif hasattr(self._tokenizer, "eos_token_id"):
             eos_ids = {self._tokenizer.eos_token_id}
 
         if token_id not in eos_ids:
             try:
                 token_text = self._tokenizer.decode([token_id])
             except Exception:
-                logger.debug("tokenizer decode failed for constrained sampler token %d", token_id, exc_info=True)
+                logger.debug(
+                    "tokenizer decode failed for constrained sampler token %d",
+                    token_id,
+                    exc_info=True,
+                )
                 token_text = ""
             self._constraint.advance(token_text)
 
@@ -2070,22 +2295,22 @@ class ConstrainedSampler:
 
     def checkpoint(self) -> None:
         """Forward checkpoint to underlying constraint (for spec decode)."""
-        if hasattr(self._constraint, 'checkpoint'):
+        if hasattr(self._constraint, "checkpoint"):
             self._constraint.checkpoint()
         self._checkpoint_ids_len = len(self._generated_ids)
 
     def rollback(self) -> None:
         """Forward rollback to underlying constraint (for spec decode)."""
-        if hasattr(self._constraint, 'rollback'):
+        if hasattr(self._constraint, "rollback"):
             self._constraint.rollback()
-        if hasattr(self, '_checkpoint_ids_len'):
-            del self._generated_ids[self._checkpoint_ids_len:]
+        if hasattr(self, "_checkpoint_ids_len"):
+            del self._generated_ids[self._checkpoint_ids_len :]
 
     def discard_checkpoint(self) -> None:
         """Discard the most recent checkpoint without restoring state."""
-        if hasattr(self._constraint, 'discard_checkpoint'):
+        if hasattr(self._constraint, "discard_checkpoint"):
             self._constraint.discard_checkpoint()
-        if hasattr(self, '_checkpoint_ids_len'):
+        if hasattr(self, "_checkpoint_ids_len"):
             del self._checkpoint_ids_len
 
 

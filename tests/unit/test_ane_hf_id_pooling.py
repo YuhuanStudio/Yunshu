@@ -7,6 +7,7 @@ model (bge) was compiled+served with MEAN pooling: the wrong embedding space cla
 close, on the HF-id sibling the local-tmp-only test never covered. Now non-local ids
 resolve the pooling spec from the hub; only an explicit non-mean spec refuses.
 """
+
 from __future__ import annotations
 
 import json
@@ -24,11 +25,17 @@ def _local_pool_dir(tmp_path, mode_key):
 
 
 def test_local_cls_still_refused(tmp_path):
-    assert _model_is_mean_pooled(_local_pool_dir(tmp_path, "pooling_mode_cls_token")) is False
+    assert (
+        _model_is_mean_pooled(_local_pool_dir(tmp_path, "pooling_mode_cls_token"))
+        is False
+    )
 
 
 def test_local_mean_still_mean(tmp_path):
-    assert _model_is_mean_pooled(_local_pool_dir(tmp_path, "pooling_mode_mean_tokens")) is True
+    assert (
+        _model_is_mean_pooled(_local_pool_dir(tmp_path, "pooling_mode_mean_tokens"))
+        is True
+    )
 
 
 def _patch_hub(monkeypatch, tmp_path, pool_dict_or_exc):

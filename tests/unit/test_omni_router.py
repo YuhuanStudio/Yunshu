@@ -3,6 +3,7 @@
 The model-backed streaming path is an integration test (needs a resident
 Qwen3-Omni ~22GB). These cover the routing/config surface so CI stays fast.
 """
+
 from __future__ import annotations
 
 import pytest

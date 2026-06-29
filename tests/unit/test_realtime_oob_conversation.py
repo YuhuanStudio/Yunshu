@@ -11,6 +11,7 @@ Fix: snapshot _oob = config.get("conversation") == "none" and gate the conversat
 calls (and the conversation.item.created signal) on `not _oob`. The response output events
 (output_item.added/done, response.done) still fire so the client receives the response.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -28,12 +29,18 @@ def test_both_add_item_calls_are_gated_on_not_oob():
     # strip comments so the assertions match real code lines only
     code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
     # both history writes (function_call item + assistant message) must be present...
-    assert code.count("self.conversation.add_item(") == 2, "expected exactly the 2 history writes"
+    assert code.count("self.conversation.add_item(") == 2, (
+        "expected exactly the 2 history writes"
+    )
     # ...and each must be guarded by a `not _oob` check (source-guard, count >= 2)
-    assert code.count("if not _oob:") >= 2, "both add_item calls must be gated on `not _oob`"
+    assert code.count("if not _oob:") >= 2, (
+        "both add_item calls must be gated on `not _oob`"
+    )
     # the conversation.item.created signal must sit inside the not-_oob block (no separate emit)
-    gate = src.index("if not _oob:\n                self.conversation.add_item(assistant_item)")
-    assert "conversation.item.created" in src[gate:gate + 400]
+    gate = src.index(
+        "if not _oob:\n                self.conversation.add_item(assistant_item)"
+    )
+    assert "conversation.item.created" in src[gate : gate + 400]
 
 
 def test_out_of_band_still_emits_response_output_events():

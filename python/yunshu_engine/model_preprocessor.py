@@ -34,6 +34,7 @@ class PreprocessorType(Enum):
 @dataclass
 class PreprocessedInput:
     """Result of preprocessing a raw input for a specific model."""
+
     input_type: PreprocessorType
     model_family: str
     # Token representations
@@ -96,7 +97,9 @@ class QwenOmniAudioPreprocessor(ModelPreprocessor):
     def configure_from_model_config(self, model_config: dict) -> None:
         thinker = model_config.get("thinker_config", {})
         if isinstance(thinker, dict):
-            self._audio_start_id = thinker.get("audio_start_token_id", self._audio_start_id)
+            self._audio_start_id = thinker.get(
+                "audio_start_token_id", self._audio_start_id
+            )
             self._audio_end_id = thinker.get("audio_end_token_id", self._audio_end_id)
             self._audio_token_id = thinker.get("audio_token_id", self._audio_token_id)
 
@@ -116,7 +119,9 @@ class QwenOmniAudioPreprocessor(ModelPreprocessor):
         else:
             # Raw audio bytes — real codec not yet implemented
             # Return empty token_ids to prevent fake tokens replacing real prompt
-            warnings.append("Qwen3-Omni audio codec not yet integrated — pass pre-tokenized input")
+            warnings.append(
+                "Qwen3-Omni audio codec not yet integrated — pass pre-tokenized input"
+            )
             estimated_tokens = 0
             if isinstance(raw_input, (bytes, bytearray)):
                 estimated_tokens = len(raw_input) // 320
@@ -142,10 +147,7 @@ class QwenOmniAudioPreprocessor(ModelPreprocessor):
 
     def detect_model(self, model_config: dict) -> bool:
         model_type = model_config.get("model_type", "").lower()
-        return any(
-            x in model_type
-            for x in ("qwen3_omni", "qwen2_5_omni")
-        )
+        return any(x in model_type for x in ("qwen3_omni", "qwen2_5_omni"))
 
 
 class CosyVoicePhonemePreprocessor(ModelPreprocessor):
@@ -213,30 +215,42 @@ class Qwen3TTSPreprocessor(ModelPreprocessor):
             token_ids = [self._tts_bos_id] + raw_input + [self._tts_eos_id]
         elif isinstance(raw_input, dict):
             if "token_ids" in raw_input:
-                token_ids = [self._tts_bos_id] + raw_input["token_ids"] + [self._tts_eos_id]
+                token_ids = (
+                    [self._tts_bos_id] + raw_input["token_ids"] + [self._tts_eos_id]
+                )
             else:
                 text = raw_input.get("text", "")
                 estimated_tokens = len(text) * 3
-                warnings.append("Qwen3-TTS codec not yet integrated — pass pre-tokenized input")
+                warnings.append(
+                    "Qwen3-TTS codec not yet integrated — pass pre-tokenized input"
+                )
                 return PreprocessedInput(
                     input_type=PreprocessorType.SPEECH,
                     model_family=self.model_family,
                     token_ids=[],
                     original_tokens=len(text.split()),
                     processed_tokens=estimated_tokens,
-                    features={"codec": "qwen3_tts_12hz", "estimated_tokens": estimated_tokens},
+                    features={
+                        "codec": "qwen3_tts_12hz",
+                        "estimated_tokens": estimated_tokens,
+                    },
                     warnings=warnings,
                 )
         elif isinstance(raw_input, str):
             estimated_tokens = len(raw_input) * 3
-            warnings.append("Qwen3-TTS codec not yet integrated — pass pre-tokenized input")
+            warnings.append(
+                "Qwen3-TTS codec not yet integrated — pass pre-tokenized input"
+            )
             return PreprocessedInput(
                 input_type=PreprocessorType.SPEECH,
                 model_family=self.model_family,
                 token_ids=[],
                 original_tokens=len(raw_input.split()),
                 processed_tokens=estimated_tokens,
-                features={"codec": "qwen3_tts_12hz", "estimated_tokens": estimated_tokens},
+                features={
+                    "codec": "qwen3_tts_12hz",
+                    "estimated_tokens": estimated_tokens,
+                },
                 warnings=warnings,
             )
 
@@ -281,7 +295,9 @@ class Qwen3ASRPreprocessor(ModelPreprocessor):
     def configure_from_model_config(self, model_config: dict) -> None:
         thinker = model_config.get("thinker_config", {})
         if isinstance(thinker, dict):
-            self._audio_start_id = thinker.get("audio_start_token_id", self._audio_start_id)
+            self._audio_start_id = thinker.get(
+                "audio_start_token_id", self._audio_start_id
+            )
             self._audio_end_id = thinker.get("audio_end_token_id", self._audio_end_id)
             self._audio_token_id = thinker.get("audio_token_id", self._audio_token_id)
 
@@ -293,22 +309,33 @@ class Qwen3ASRPreprocessor(ModelPreprocessor):
             token_ids = [self._audio_start_id] + raw_input + [self._audio_end_id]
         elif isinstance(raw_input, dict):
             if "token_ids" in raw_input:
-                token_ids = [self._audio_start_id] + raw_input["token_ids"] + [self._audio_end_id]
+                token_ids = (
+                    [self._audio_start_id]
+                    + raw_input["token_ids"]
+                    + [self._audio_end_id]
+                )
             else:
                 estimated_tokens = raw_input.get("audio_length", 0) // 320
-                warnings.append("Qwen3-ASR audio codec not yet integrated — pass pre-tokenized input")
+                warnings.append(
+                    "Qwen3-ASR audio codec not yet integrated — pass pre-tokenized input"
+                )
                 return PreprocessedInput(
                     input_type=PreprocessorType.AUDIO,
                     model_family=self.model_family,
                     token_ids=[],
                     original_tokens=estimated_tokens,
                     processed_tokens=0,
-                    features={"codec": "qwen3_asr", "estimated_tokens": estimated_tokens},
+                    features={
+                        "codec": "qwen3_asr",
+                        "estimated_tokens": estimated_tokens,
+                    },
                     warnings=warnings,
                 )
         elif isinstance(raw_input, (bytes, bytearray)):
             estimated_tokens = len(raw_input) // 320
-            warnings.append("Qwen3-ASR audio codec not yet integrated — pass pre-tokenized input")
+            warnings.append(
+                "Qwen3-ASR audio codec not yet integrated — pass pre-tokenized input"
+            )
             return PreprocessedInput(
                 input_type=PreprocessorType.AUDIO,
                 model_family=self.model_family,
@@ -368,7 +395,9 @@ class LLaVAImagePreprocessor(ModelPreprocessor):
                 "patch_size": self._patch_size,
                 "num_patches": num_patches,
             },
-            warnings=["LLaVA vision encoder not yet integrated — VLM engine uses mlx_vlm directly"],
+            warnings=[
+                "LLaVA vision encoder not yet integrated — VLM engine uses mlx_vlm directly"
+            ],
         )
 
     def detect_model(self, model_config: dict) -> bool:
@@ -386,7 +415,9 @@ class QwenVLImagePreprocessor(ModelPreprocessor):
     model_family = "qwen_vl"
     input_type = PreprocessorType.IMAGE
 
-    def __init__(self, min_pixels: int = 56*56, max_pixels: int = 28*28*4*1280) -> None:
+    def __init__(
+        self, min_pixels: int = 56 * 56, max_pixels: int = 28 * 28 * 4 * 1280
+    ) -> None:
         self._min_pixels = min_pixels
         self._max_pixels = max_pixels
 
@@ -407,15 +438,14 @@ class QwenVLImagePreprocessor(ModelPreprocessor):
                 "min_pixels": self._min_pixels,
                 "max_pixels": self._max_pixels,
             },
-            warnings=["Qwen-VL ViT encoder not yet integrated — VLM engine uses mlx_vlm directly"],
+            warnings=[
+                "Qwen-VL ViT encoder not yet integrated — VLM engine uses mlx_vlm directly"
+            ],
         )
 
     def detect_model(self, model_config: dict) -> bool:
         model_type = model_config.get("model_type", "").lower()
-        return any(
-            x in model_type
-            for x in ("qwen2_vl", "qwen2_5_vl", "qwen3_vl")
-        )
+        return any(x in model_type for x in ("qwen2_vl", "qwen2_5_vl", "qwen3_vl"))
 
 
 class WanVideoPreprocessor(ModelPreprocessor):
@@ -486,7 +516,10 @@ class GLMOCRPreprocessor(ModelPreprocessor):
         )
 
     def detect_model(self, model_config: dict) -> bool:
-        return "glm" in model_config.get("model_type", "").lower() and "ocr" in model_config.get("model_type", "").lower()
+        return (
+            "glm" in model_config.get("model_type", "").lower()
+            and "ocr" in model_config.get("model_type", "").lower()
+        )
 
 
 class DeepSeekOCRPreprocessor(ModelPreprocessor):
@@ -508,7 +541,10 @@ class DeepSeekOCRPreprocessor(ModelPreprocessor):
         )
 
     def detect_model(self, model_config: dict) -> bool:
-        return "deepseek" in model_config.get("model_type", "").lower() and "ocr" in model_config.get("model_type", "").lower()
+        return (
+            "deepseek" in model_config.get("model_type", "").lower()
+            and "ocr" in model_config.get("model_type", "").lower()
+        )
 
 
 class WhisperSpeechPreprocessor(ModelPreprocessor):
@@ -608,7 +644,9 @@ class InternVLImagePreprocessor(ModelPreprocessor):
     model_family = "internvl"
     input_type = PreprocessorType.IMAGE
 
-    def __init__(self, image_size: int = 448, patch_size: int = 14, downsample_ratio: float = 0.5) -> None:
+    def __init__(
+        self, image_size: int = 448, patch_size: int = 14, downsample_ratio: float = 0.5
+    ) -> None:
         self._image_size = image_size
         self._patch_size = patch_size
         self._downsample_ratio = downsample_ratio
@@ -724,7 +762,9 @@ class InternVLVideoPreprocessor(ModelPreprocessor):
     model_family = "internvl_video"
     input_type = PreprocessorType.VIDEO
 
-    def __init__(self, num_frames: int = 8, image_size: int = 448, patch_size: int = 14) -> None:
+    def __init__(
+        self, num_frames: int = 8, image_size: int = 448, patch_size: int = 14
+    ) -> None:
         self._num_frames = num_frames
         self._image_size = image_size
         self._patch_size = patch_size
@@ -807,7 +847,13 @@ class PreprocessorRegistry:
                 return preprocessor
         return None
 
-    def preprocess(self, raw_input: Any, model_family: str = "", model_config: dict | None = None, **kwargs) -> PreprocessedInput:
+    def preprocess(
+        self,
+        raw_input: Any,
+        model_family: str = "",
+        model_config: dict | None = None,
+        **kwargs,
+    ) -> PreprocessedInput:
         """Preprocess input for a specific model."""
         preprocessor = None
         if model_family:
@@ -837,7 +883,5 @@ class PreprocessorRegistry:
     def get_stats(self) -> dict:
         return {
             "registered": len(self._preprocessors),
-            "by_type": {
-                t.name: len(ps) for t, ps in self._type_index.items()
-            },
+            "by_type": {t.name: len(ps) for t, ps in self._type_index.items()},
         }

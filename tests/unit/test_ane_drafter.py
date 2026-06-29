@@ -5,6 +5,7 @@ Phase 4 tests:
 - draft_token function (ANE path and GPU fallback)
 - Edge cases: no CoreML, no MLX, empty inputs
 """
+
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -44,7 +45,9 @@ class TestCompileDrafterModel:
 
     def test_model_name_in_compiled_path(self):
         """Compiled path should include the model name."""
-        result = compile_drafter_model("/models/qwen-draft", output_path="/tmp/test_ane")
+        result = compile_drafter_model(
+            "/models/qwen-draft", output_path="/tmp/test_ane"
+        )
         assert "qwen-draft" in result["compiled_path"]
 
     @patch("yunshu_engine.ane_embedding._HAS_COREMLTOOLS", True)
@@ -75,7 +78,9 @@ class TestCompileDrafterModel:
         (mlmodelc / "model.mlmodel").write_bytes(b"\x00" * 100)
 
         with patch("yunshu_engine.ane_embedding._HAS_COREMLTOOLS", True):
-            with patch("yunshu_engine.ane_embedding.is_ane_available", return_value=True):
+            with patch(
+                "yunshu_engine.ane_embedding.is_ane_available", return_value=True
+            ):
                 result = compile_drafter_model(
                     str(model_path), output_path=str(cache_dir)
                 )
@@ -102,21 +107,29 @@ class TestDraftToken:
     def test_gpu_fallback_returns_tokens(self):
         """GPU fallback should return requested number of tokens."""
         mock_tokens = [100, 200, 300]
-        with patch("yunshu_engine.ane_embedding._draft_token_gpu", return_value=mock_tokens):
+        with patch(
+            "yunshu_engine.ane_embedding._draft_token_gpu", return_value=mock_tokens
+        ):
             result = draft_token("/some/model", [1, 2, 3, 4, 5], num_draft=3)
         assert len(result) == 3
         assert all(isinstance(t, int) for t in result)
 
     def test_gpu_fallback_deterministic(self):
         """GPU fallback with same context should produce same results."""
-        with patch("yunshu_engine.ane_embedding._draft_token_gpu", return_value=[42, 43, 44, 45, 46]):
+        with patch(
+            "yunshu_engine.ane_embedding._draft_token_gpu",
+            return_value=[42, 43, 44, 45, 46],
+        ):
             result1 = draft_token("/some/model", [100, 200, 300], num_draft=5)
             result2 = draft_token("/some/model", [100, 200, 300], num_draft=5)
         assert result1 == result2
 
     def test_gpu_fallback_different_context_different_results(self):
         """Different context should produce different draft tokens."""
-        with patch("yunshu_engine.ane_embedding._draft_token_gpu", side_effect=[[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]]):
+        with patch(
+            "yunshu_engine.ane_embedding._draft_token_gpu",
+            side_effect=[[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]],
+        ):
             result1 = draft_token("/some/model", [1, 2, 3], num_draft=5)
             result2 = draft_token("/some/model", [4, 5, 6], num_draft=5)
         assert result1 != result2
@@ -125,7 +138,9 @@ class TestDraftToken:
         """Should return exactly num_draft tokens."""
         for k in [1, 3, 5, 10]:
             mock_result = list(range(k))
-            with patch("yunshu_engine.ane_embedding._draft_token_gpu", return_value=mock_result):
+            with patch(
+                "yunshu_engine.ane_embedding._draft_token_gpu", return_value=mock_result
+            ):
                 result = draft_token("/some/model", [1, 2, 3], num_draft=k)
             assert len(result) == k
 
@@ -137,15 +152,19 @@ class TestDraftTokenGPU:
         """With a mocked model, should return tokens."""
         mock_model = MagicMock()
         mock_tokenizer = MagicMock()
-        with patch("yunshu_engine.ane_embedding.Path") as mock_path_cls, \
-             patch("mlx_lm.utils.load_model", return_value=(mock_model, MagicMock())), \
-             patch("mlx_lm.utils.load_tokenizer", return_value=mock_tokenizer):
+        with (
+            patch("yunshu_engine.ane_embedding.Path") as mock_path_cls,
+            patch("mlx_lm.utils.load_model", return_value=(mock_model, MagicMock())),
+            patch("mlx_lm.utils.load_tokenizer", return_value=mock_tokenizer),
+        ):
             mock_path_inst = MagicMock()
             mock_path_inst.exists.return_value = True
             mock_path_cls.return_value = mock_path_inst
 
             with patch("mlx_lm.generate.generate_step") as mock_step:
-                mock_step.return_value = iter([(10, None), (20, None), (30, None), (40, None), (50, None)])
+                mock_step.return_value = iter(
+                    [(10, None), (20, None), (30, None), (40, None), (50, None)]
+                )
                 result = _draft_token_gpu("/some/model", [1, 2, 3], 5)
         assert len(result) == 5
         assert all(isinstance(t, int) for t in result)
@@ -154,9 +173,11 @@ class TestDraftTokenGPU:
         """Tokens should be in reasonable vocab range."""
         mock_model = MagicMock()
         mock_tokenizer = MagicMock()
-        with patch("yunshu_engine.ane_embedding.Path") as mock_path_cls, \
-             patch("mlx_lm.utils.load_model", return_value=(mock_model, MagicMock())), \
-             patch("mlx_lm.utils.load_tokenizer", return_value=mock_tokenizer):
+        with (
+            patch("yunshu_engine.ane_embedding.Path") as mock_path_cls,
+            patch("mlx_lm.utils.load_model", return_value=(mock_model, MagicMock())),
+            patch("mlx_lm.utils.load_tokenizer", return_value=mock_tokenizer),
+        ):
             mock_path_inst = MagicMock()
             mock_path_inst.exists.return_value = True
             mock_path_cls.return_value = mock_path_inst
@@ -179,7 +200,9 @@ class TestDraftTokenCoreMLPath:
     @patch("yunshu_engine.ane_embedding._HAS_COREMLTOOLS", False)
     def test_nonexistent_mlmodelc_falls_to_gpu(self):
         """Non-existent .mlmodelc path should fall back to GPU."""
-        with patch("yunshu_engine.ane_embedding._draft_token_gpu", return_value=[10, 20, 30]):
+        with patch(
+            "yunshu_engine.ane_embedding._draft_token_gpu", return_value=[10, 20, 30]
+        ):
             result = draft_token("/fake/model.mlmodelc", [1, 2, 3], num_draft=3)
         assert len(result) == 3
 
@@ -190,11 +213,15 @@ class TestDraftTokenCoreMLPath:
         mock_ct.models.MLModel.side_effect = Exception("Load failed")
 
         import tempfile
+
         with tempfile.TemporaryDirectory() as tmpdir:
             mlmodelc_path = Path(tmpdir) / "test.mlmodelc"
             mlmodelc_path.mkdir()
 
-            with patch("yunshu_engine.ane_embedding._draft_token_gpu", return_value=[10, 20, 30]):
+            with patch(
+                "yunshu_engine.ane_embedding._draft_token_gpu",
+                return_value=[10, 20, 30],
+            ):
                 result = draft_token(str(mlmodelc_path), [1, 2, 3], num_draft=3)
             assert len(result) == 3
 
@@ -203,18 +230,28 @@ class TestDrafterEdgeCases:
     """Edge cases for drafter functions."""
 
     def test_single_context_token(self):
-        with patch("yunshu_engine.ane_embedding._draft_token_gpu", return_value=[10, 20, 30, 40, 50]):
+        with patch(
+            "yunshu_engine.ane_embedding._draft_token_gpu",
+            return_value=[10, 20, 30, 40, 50],
+        ):
             result = draft_token("/model", [42], num_draft=5)
         assert len(result) == 5
 
     def test_large_context(self):
         """Large context should still work."""
         context = list(range(1000))
-        with patch("yunshu_engine.ane_embedding._draft_token_gpu", return_value=[10, 20, 30, 40, 50]):
+        with patch(
+            "yunshu_engine.ane_embedding._draft_token_gpu",
+            return_value=[10, 20, 30, 40, 50],
+        ):
             result = draft_token("/model", context, num_draft=5)
         assert len(result) == 5
 
     def test_model_path_with_special_chars(self):
-        with patch("yunshu_engine.ane_embedding._draft_token_gpu", return_value=[10, 20, 30]):
-            result = draft_token("/model/path with spaces/draft", [1, 2, 3], num_draft=3)
+        with patch(
+            "yunshu_engine.ane_embedding._draft_token_gpu", return_value=[10, 20, 30]
+        ):
+            result = draft_token(
+                "/model/path with spaces/draft", [1, 2, 3], num_draft=3
+            )
         assert len(result) == 3

@@ -138,7 +138,9 @@ def resolve_actor(request: object) -> str:
 
     tenant = getattr(state, "tenant", None)
     if tenant is not None:
-        tenant_name = getattr(tenant, "name", None) or getattr(tenant, "tenant_id", None)
+        tenant_name = getattr(tenant, "name", None) or getattr(
+            tenant, "tenant_id", None
+        )
         if tenant_name:
             return f"tenant:{tenant_name}"
 

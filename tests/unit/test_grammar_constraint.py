@@ -166,7 +166,7 @@ class TestChoiceConstraint:
         c = ChoiceConstraint(["hello", "hi"])
         allowed = c.get_allowed_tokens(tok, [])
         # Should allow 'h' (first char of both choices)
-        assert ord('h') in allowed
+        assert ord("h") in allowed
 
     def test_get_allowed_tokens_after_prefix(self):
         tok = FakeTokenizer()
@@ -174,8 +174,8 @@ class TestChoiceConstraint:
         c.advance("h")
         allowed = c.get_allowed_tokens(tok, [])
         # Should allow 'e' and 'i' (next chars)
-        assert ord('e') in allowed
-        assert ord('i') in allowed
+        assert ord("e") in allowed
+        assert ord("i") in allowed
 
     def test_case_insensitive(self):
         c = ChoiceConstraint(["Hello", "World"], case_sensitive=False)
@@ -210,16 +210,16 @@ class TestLarkGrammarConstraint:
         assert c.state in ("active", "unavailable")
 
     def test_is_done_initially_false(self):
-        c = LarkGrammarConstraint("start: \"hello\"")
+        c = LarkGrammarConstraint('start: "hello"')
         assert not c.is_done
 
     def test_reset(self):
-        c = LarkGrammarConstraint("start: \"hello\"")
+        c = LarkGrammarConstraint('start: "hello"')
         c.reset()
         assert not c.is_done
 
     def test_get_stats(self):
-        c = LarkGrammarConstraint("start: \"test\"")
+        c = LarkGrammarConstraint('start: "test"')
         stats = c.get_stats()
         assert stats["type"] == "cfg"
         assert "buffer_len" in stats
@@ -236,11 +236,13 @@ class TestConstraintFactory:
 
     def test_create_json_schema(self):
         from python.yunshu_engine.json_schema import JsonSchemaConstraint
+
         c = ConstraintFactory.create("json_schema", {"type": "object"})
         assert isinstance(c, JsonSchemaConstraint)
 
     def test_create_json_object(self):
         from python.yunshu_engine.json_schema import JsonSchemaConstraint
+
         c = ConstraintFactory.create("json_object")
         assert isinstance(c, JsonSchemaConstraint)
 

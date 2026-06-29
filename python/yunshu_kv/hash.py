@@ -4,15 +4,16 @@ Uses xxhash for speed (vs oMLX's SHA256). Chain hashing: each block's hash
 depends on the parent hash + token IDs, enabling O(1) prefix lookup.
 """
 
-
 import struct
 
 try:
     import xxhash
+
     def _hash_bytes(data: bytes) -> int:
         return xxhash.xxh64(data).intdigest()
 except ImportError:
     import hashlib
+
     def _hash_bytes(data: bytes) -> int:
         return int.from_bytes(hashlib.blake2b(data, digest_size=8).digest(), "little")
 

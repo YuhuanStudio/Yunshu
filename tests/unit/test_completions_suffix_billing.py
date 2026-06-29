@@ -11,6 +11,7 @@ suffix-truncation lines so the correction operates on the true completion.
 Source-level guard test (the bug lived in a deep per-request closure that's hard
 to exercise without a live engine).
 """
+
 from __future__ import annotations
 
 import inspect

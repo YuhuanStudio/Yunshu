@@ -22,12 +22,14 @@ serve_app = typer.Typer(help="Start inference server.", no_args_is_help=True)
 def serve(
     model: str | None = typer.Option(
         None,
-        "--model", "-m",
+        "--model",
+        "-m",
         help="Model path or HuggingFace ID (single-model mode).",
     ),
     models_dir: str | None = typer.Option(
         None,
-        "--models-dir", "-d",
+        "--models-dir",
+        "-d",
         help="Directory to scan for models (multi-model mode).",
     ),
     host: str = typer.Option("0.0.0.0", "--host", "-h", help="Bind host."),
@@ -96,7 +98,9 @@ def serve(
         "--base-path",
         help="Base directory for Yunshu data (default: ~/.yunshu).",
     ),
-    log_level: str = typer.Option("info", "--log-level", help="Log level (trace|debug|info|warning|error)."),
+    log_level: str = typer.Option(
+        "info", "--log-level", help="Log level (trace|debug|info|warning|error)."
+    ),
     startup_timeout: float = typer.Option(
         300.0,
         "--startup-timeout",
@@ -205,7 +209,9 @@ def serve(
 
     # Warn if reload=True with workers>1 (uvicorn ignores workers in reload mode)
     if reload and workers > 1:
-        console.print("[yellow]Warning:[/] --reload with --workers > 1 is not supported by uvicorn. Using workers=1.")
+        console.print(
+            "[yellow]Warning:[/] --reload with --workers > 1 is not supported by uvicorn. Using workers=1."
+        )
         workers = 1
 
     uvicorn.run(
@@ -263,5 +269,7 @@ def _print_startup_banner(
 
     table.add_row("Endpoints", "/v1/chat/completions, /v1/models, /health")
 
-    console.print(Panel(table, title="[bold]Yunshu Server[/]", border_style="bright_blue"))
+    console.print(
+        Panel(table, title="[bold]Yunshu Server[/]", border_style="bright_blue")
+    )
     console.print()

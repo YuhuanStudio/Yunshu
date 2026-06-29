@@ -1,6 +1,5 @@
 """Tests for SpecPrefillEngine — speculative prefill during decode idle time."""
 
-
 import pytest
 
 from yunshu_engine.spec_prefill_engine import (

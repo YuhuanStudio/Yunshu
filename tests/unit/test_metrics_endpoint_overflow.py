@@ -6,6 +6,7 @@ cap. So an endpoint flood (reachable on auth-disabled deployments) churned the e
 rate(yunshu_request_total). record_request now RETURNS the bucketed endpoint and the
 middleware feeds it to the exporter + aggregator. Plus a LOW: _esc_prom now escapes \\r.
 """
+
 from __future__ import annotations
 
 from yunshu_gateway.middleware import (
@@ -18,14 +19,21 @@ def test_record_request_returns_bucketed_endpoint():
     # fill past the distinct-endpoint cap with unique short paths
     cap = M._MAX_DISTINCT_ENDPOINTS
     for i in range(cap + 5):
-        ret = m.record_request(endpoint=f"/p{i}", method="GET", status=200, latency=0.01)
+        ret = m.record_request(
+            endpoint=f"/p{i}", method="GET", status=200, latency=0.01
+        )
         # the return value is what the exporter should use
         assert ret is not None
     # a brand-new endpoint past the cap must come back bucketed as /{other}
-    ret = m.record_request(endpoint="/brand-new-path", method="GET", status=200, latency=0.01)
+    ret = m.record_request(
+        endpoint="/brand-new-path", method="GET", status=200, latency=0.01
+    )
     assert ret == "/{other}", f"expected /{{other}} past cap, got {ret!r}"
     # an already-seen endpoint is returned as itself
-    assert m.record_request(endpoint="/p0", method="GET", status=200, latency=0.01) == "/p0"
+    assert (
+        m.record_request(endpoint="/p0", method="GET", status=200, latency=0.01)
+        == "/p0"
+    )
 
 
 def test_esc_prom_escapes_carriage_return():

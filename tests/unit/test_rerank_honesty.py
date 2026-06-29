@@ -6,6 +6,7 @@ BI-ENCODER (embeds query and each document separately, ranks by cosine) — ther
 (query, document) cross-encoder forward pass. Corrected the label so the code doesn't
 misrepresent the method (the project's documented anti-overclaim discipline).
 """
+
 from __future__ import annotations
 
 import inspect

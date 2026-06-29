@@ -78,12 +78,16 @@ class InferenceState:
         Raises ValueError if required fields are missing or have wrong types.
         """
         if not isinstance(data, dict):
-            raise ValueError(f"Checkpoint data must be a dict, got {type(data).__name__}")
+            raise ValueError(
+                f"Checkpoint data must be a dict, got {type(data).__name__}"
+            )
         # Validate required field
         if "request_id" not in data:
             raise ValueError("Checkpoint data missing required field: request_id")
         if not isinstance(data["request_id"], str):
-            raise ValueError(f"request_id must be str, got {type(data['request_id']).__name__}")
+            raise ValueError(
+                f"request_id must be str, got {type(data['request_id']).__name__}"
+            )
         filtered = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
         try:
             return cls(**filtered)
@@ -410,9 +414,7 @@ class FaultRecoveryManager:
             error_message="Unknown strategy",
         )
 
-    def _strategy_retry(
-        self, request_id: str, error: Exception
-    ) -> RecoveryResult:
+    def _strategy_retry(self, request_id: str, error: Exception) -> RecoveryResult:
         """Retry from last checkpoint."""
         # Check checkpoint availability BEFORE consuming a retry slot
         state = self._checkpoints.load(request_id)
@@ -445,9 +447,7 @@ class FaultRecoveryManager:
             metadata={"retry_count": retry_count},
         )
 
-    def _strategy_truncate(
-        self, request_id: str, error: Exception
-    ) -> RecoveryResult:
+    def _strategy_truncate(self, request_id: str, error: Exception) -> RecoveryResult:
         """Reduce max_tokens and retry from checkpoint."""
         state = self._checkpoints.load(request_id)
         if state is None:
@@ -475,9 +475,7 @@ class FaultRecoveryManager:
             },
         )
 
-    def _strategy_fallback(
-        self, request_id: str, error: Exception
-    ) -> RecoveryResult:
+    def _strategy_fallback(self, request_id: str, error: Exception) -> RecoveryResult:
         """Switch to a smaller fallback model."""
         state = self._checkpoints.load(request_id)
         if state is None:
@@ -542,9 +540,7 @@ class FaultRecoveryManager:
         """Return fault recovery statistics."""
         with self._lock:
             total = self._errors_handled
-            success_rate = (
-                self._recoveries_success / total if total > 0 else 0.0
-            )
+            success_rate = self._recoveries_success / total if total > 0 else 0.0
             return {
                 "errors_handled": self._errors_handled,
                 "recoveries_success": self._recoveries_success,
@@ -610,9 +606,7 @@ class ProgressEstimator:
         self._total_error_ms: float = 0.0
         self._completed_estimates: int = 0
 
-    def register(
-        self, request_id: str, max_tokens: int = 256
-    ) -> None:
+    def register(self, request_id: str, max_tokens: int = 256) -> None:
         """Register a new request for progress tracking."""
         now = time.monotonic()
         self._records[request_id] = _ProgressRecord(
@@ -654,8 +648,7 @@ class ProgressEstimator:
             if rec.current_speed_tps > 0:
                 alpha = min(1.0, dt / self._speed_window_s)
                 rec.current_speed_tps = (
-                    alpha * window_speed
-                    + (1 - alpha) * rec.current_speed_tps
+                    alpha * window_speed + (1 - alpha) * rec.current_speed_tps
                 )
             else:
                 rec.current_speed_tps = window_speed

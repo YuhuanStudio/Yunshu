@@ -23,7 +23,9 @@ def show_config(
     try:
         resp = httpx.get(f"{url}/api/v1/admin/config/engine", timeout=5)
     except httpx.ConnectError:
-        console.print("[red]Cannot connect to server.[/] Start with: [bold]yunshu serve[/]")
+        console.print(
+            "[red]Cannot connect to server.[/] Start with: [bold]yunshu serve[/]"
+        )
         raise typer.Exit(1) from None
 
     if resp.status_code != 200:

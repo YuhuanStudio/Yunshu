@@ -54,12 +54,16 @@ class CacheEventBus:
 
     # -- Subscribe / Unsubscribe ------------------------------------------
 
-    def subscribe(self, event_type: str, callback: Callable[[CacheEvent], None]) -> None:
+    def subscribe(
+        self, event_type: str, callback: Callable[[CacheEvent], None]
+    ) -> None:
         """Register *callback* for events of *event_type*."""
         with self._lock:
             self._subscribers.setdefault(event_type, []).append(callback)
 
-    def unsubscribe(self, event_type: str, callback: Callable[[CacheEvent], None]) -> None:
+    def unsubscribe(
+        self, event_type: str, callback: Callable[[CacheEvent], None]
+    ) -> None:
         """Remove *callback* from the subscriber list for *event_type*."""
         with self._lock:
             if event_type in self._subscribers:
@@ -96,7 +100,9 @@ class CacheEventBus:
                 if count >= self._max_failures:
                     logger.error(
                         "CacheEventBus subscriber %r failed %d times on %s — auto-unsubscribing",
-                        cb, count, event.event_type,
+                        cb,
+                        count,
+                        event.event_type,
                     )
                     self.unsubscribe(event.event_type, cb)
                     with self._lock:
@@ -104,7 +110,10 @@ class CacheEventBus:
                 else:
                     logger.warning(
                         "CacheEventBus subscriber %r raised on %s (failure %d/%d)",
-                        cb, event.event_type, count, self._max_failures,
+                        cb,
+                        event.event_type,
+                        count,
+                        self._max_failures,
                         exc_info=True,
                     )
 

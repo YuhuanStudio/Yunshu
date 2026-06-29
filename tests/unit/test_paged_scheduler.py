@@ -1,6 +1,5 @@
 """Tests for PagedScheduler — Scheduler + KVCacheManager integration."""
 
-
 from yunshu_engine.paged_scheduler import PagedScheduler
 from yunshu_engine.request import Request, RequestStatus, SamplingParams
 from yunshu_kv.manager import KVCacheConfig, KVCacheManager
@@ -101,7 +100,9 @@ class TestPagedSchedulerBasic:
         assert "kv_cache" not in stats
 
     def test_create_with_kv_manager(self):
-        scheduler = PagedScheduler(None, _FakeTokenizer(), kv_cache_manager=_make_kv_manager())
+        scheduler = PagedScheduler(
+            None, _FakeTokenizer(), kv_cache_manager=_make_kv_manager()
+        )
         assert scheduler._kv_manager is not None
         stats = scheduler.get_stats()
         assert "kv_cache" in stats

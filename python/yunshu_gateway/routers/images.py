@@ -27,16 +27,18 @@ def _rand_seed() -> int:
     yields DIFFERENT images. : the old `else None` made every image fall to
     the engine's hardcoded default seed (42) → N byte-identical images."""
     import secrets
+
     return secrets.randbits(48)
 
 
 def _decode_image_b64(data: str) -> bytes:
     """Decode a base64 image, stripping any data URL prefix (data:image/png;base64,...)."""
     import base64
+
     if isinstance(data, str) and data.startswith("data:"):
         comma = data.find(",")
         if comma >= 0:
-            data = data[comma+1:]
+            data = data[comma + 1 :]
     return base64.b64decode(data, validate=True)
 
 
@@ -60,11 +62,15 @@ def _select_image_engine(manager, model):
     runs first, so scoped keys are unaffected.
     """
     from yunshu_engine.image_engine import ImageGenEngine
+
     first = None
     n_loaded = 0
     ml = model.lower() if model else ""
     for entry in manager.list_entries():
-        if not (entry.is_loaded and isinstance(getattr(entry, 'engine', None), ImageGenEngine)):
+        if not (
+            entry.is_loaded
+            and isinstance(getattr(entry, "engine", None), ImageGenEngine)
+        ):
             continue
         n_loaded += 1
         if first is None:
@@ -83,9 +89,11 @@ def _register_image_cancel(model):
     non-streaming edit/variation/inpaint routes never had it; only the streaming generate
     path did. Best-effort: returns (None, None, id) if the tracker is unavailable."""
     import uuid as _uuid
+
     _id = f"img-{_uuid.uuid4().hex[:24]}"
     try:
         from yunshu_engine.request_tracker import get_request_tracker
+
         _tracker = get_request_tracker()
         return _tracker.register(_id, model or "image").cancel_event, _tracker, _id
     except Exception:
@@ -98,7 +106,6 @@ def _unregister_image_cancel(tracker, _id) -> None:
             tracker.unregister(_id)
 
 
-
 class ImageGenerateRequest(BaseModel):
     prompt: str
     model: str = "Z-Image-Turbo-MLX-4bit"
@@ -107,7 +114,9 @@ class ImageGenerateRequest(BaseModel):
     response_format: str = "b64_json"
     num_inference_steps: int = Field(default=4, ge=1, le=100)
     seed: int | None = None
-    preview_interval: int = 0  # Decode & emit intermediate preview every N steps (0=off)
+    preview_interval: int = (
+        0  # Decode & emit intermediate preview every N steps (0=off)
+    )
     # ControlNet (Z-Image-Fun-Controlnet-Union): a control map (canny/depth/pose/edge)
     # as base64 PNG/JPEG. When set, structure follows the control map. LoRA and
     # (word:weight) emphasis need no field — they're written inline in `prompt`
@@ -123,7 +132,9 @@ class ImageGenerateRequest(BaseModel):
         if not self.prompt or not self.prompt.strip():
             raise ValueError("prompt: field is required and cannot be empty")
         if self.response_format not in ("b64_json", "url"):
-            raise ValueError(f"response_format: must be 'b64_json' or 'url', got '{self.response_format}'")
+            raise ValueError(
+                f"response_format: must be 'b64_json' or 'url', got '{self.response_format}'"
+            )
         return self
 
 
@@ -131,10 +142,14 @@ class ImageGenerateRequest(BaseModel):
 async def create_image(req: ImageGenerateRequest, request: Request) -> JSONResponse:
     """Generate images from text prompt (OpenAI /v1/images/generations compatible)."""
     from .models import _check_permission
+
     _check_permission(request, "can_infer")
     _rbac_key = getattr(request.state, "rbac_key", None)
     if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
-        raise HTTPException(status_code=403, detail=f"Model '{req.model}' not accessible with this API key")
+        raise HTTPException(
+            status_code=403,
+            detail=f"Model '{req.model}' not accessible with this API key",
+        )
     manager = get_model_manager()
     if manager is None:
         raise HTTPException(status_code=503, detail="Model manager not initialized")
@@ -189,25 +204,37 @@ async def create_image(req: ImageGenerateRequest, request: Request) -> JSONRespo
     # to the global handler as a 500, while every sibling image route correctly
     # returns 400 for bad base64. Match them.
     try:
-        control_bytes = _decode_image_b64(req.control_image) if req.control_image else None
+        control_bytes = (
+            _decode_image_b64(req.control_image) if req.control_image else None
+        )
     except HTTPException:
         raise
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid base64 control_image data") from None
+        raise HTTPException(
+            status_code=400, detail="Invalid base64 control_image data"
+        ) from None
     images_data = []
     # client-disconnect cancellation for the control-image branch (the plain t2i
     # branch is fast 4-step and left as-is). Register once; unregister in finally.
     _img_cancel, _img_tracker, _img_id = _register_image_cancel(req.model)
     try:
         for i in range(req.n):
-            _seed = ((req.seed + i) & 0x7FFFFFFFFFFFFFFF) if req.seed is not None else _rand_seed()
+            _seed = (
+                ((req.seed + i) & 0x7FFFFFFFFFFFFFFF)
+                if req.seed is not None
+                else _rand_seed()
+            )
             if control_bytes is not None:
                 png_bytes = await run_with_disconnect_guard(
                     request,
                     img_engine.generate_controlled_image(
-                        req.prompt, control_bytes, control_scale=req.control_scale,
-                        width=width, height=height,
-                        num_inference_steps=req.num_inference_steps, seed=_seed,
+                        req.prompt,
+                        control_bytes,
+                        control_scale=req.control_scale,
+                        width=width,
+                        height=height,
+                        num_inference_steps=req.num_inference_steps,
+                        seed=_seed,
                         cancel_event=_img_cancel,
                     ),
                     cancel_event=_img_cancel,
@@ -226,18 +253,22 @@ async def create_image(req: ImageGenerateRequest, request: Request) -> JSONRespo
             b64 = base64.b64encode(png_bytes).decode("ascii")
             if req.response_format == "b64_json":
                 # OpenAI spec: only b64_json field populated
-                images_data.append({
-                    "b64_json": b64,
-                })
+                images_data.append(
+                    {
+                        "b64_json": b64,
+                    }
+                )
             else:
                 # response_format == "url": OpenAI spec wants HTTP(S) URL in url field.
                 # Yunshu does not host generated images, so we surface the same data via
                 # b64_json (spec-correct field for inline payloads) and keep the data URI
                 # in url for backwards-compat with existing clients.
-                images_data.append({
-                    "url": f"data:image/png;base64,{b64}",
-                    "b64_json": b64,
-                })
+                images_data.append(
+                    {
+                        "url": f"data:image/png;base64,{b64}",
+                        "b64_json": b64,
+                    }
+                )
     except MemoryError:
         raise HTTPException(status_code=507, detail="Out of GPU memory") from None
     except NotImplementedError as e:
@@ -254,20 +285,26 @@ async def create_image(req: ImageGenerateRequest, request: Request) -> JSONRespo
     finally:
         _unregister_image_cancel(_img_tracker, _img_id)
 
-    return JSONResponse({
-        "created": int(time.time()),
-        "data": images_data,
-    })
+    return JSONResponse(
+        {
+            "created": int(time.time()),
+            "data": images_data,
+        }
+    )
 
 
 @router.post("/images/generations/stream")
 async def stream_image_generation(req: ImageGenerateRequest, request: Request):
     """Stream image generation progress as SSE events."""
     from .models import _check_permission
+
     _check_permission(request, "can_infer")
     _rbac_key = getattr(request.state, "rbac_key", None)
     if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
-        raise HTTPException(status_code=403, detail=f"Model '{req.model}' not accessible with this API key")
+        raise HTTPException(
+            status_code=403,
+            detail=f"Model '{req.model}' not accessible with this API key",
+        )
     manager = get_model_manager()
     if manager is None:
         raise HTTPException(status_code=503, detail="Model manager not initialized")
@@ -288,7 +325,9 @@ async def stream_image_generation(req: ImageGenerateRequest, request: Request):
             logger.debug(f"failed to load image engine for {req.model}", exc_info=True)
 
     if img_engine is None:
-        raise HTTPException(status_code=404, detail="No image generation engine available")
+        raise HTTPException(
+            status_code=404, detail="No image generation engine available"
+        )
 
     # Parse and validate size — reject malformed values rather than silently
     # fall back so callers see an explicit 400 (consistent with /generations).
@@ -312,12 +351,14 @@ async def stream_image_generation(req: ImageGenerateRequest, request: Request):
 
     # Register with request tracker for cancellation support
     import uuid as _uuid
+
     _img_id = f"img-{_uuid.uuid4().hex[:24]}"
     _img_tracker = None
     _img_gen = None
     _cancel_event = None
     try:
         from yunshu_engine.request_tracker import get_request_tracker
+
         _img_tracker = get_request_tracker()
         _img_gen = _img_tracker.register(_img_id, req.model)
         _cancel_event = _img_gen.cancel_event
@@ -398,52 +439,69 @@ class ImageVariationsRequest(BaseModel):
     # denoise_strength + empty prompt destroys the subject and the unguided
     # denoise produces an unrelated image; keep it low so the subject is varied,
     # not replaced. (Edits use 0.8 because their prompt re-guides the denoise.)
-    denoise_strength: float = Field(default=0.45, ge=0.0, le=1.0,
-                                    description="How much to re-denoise (0=keep source, 1=full)")
+    denoise_strength: float = Field(
+        default=0.45,
+        ge=0.0,
+        le=1.0,
+        description="How much to re-denoise (0=keep source, 1=full)",
+    )
 
     @model_validator(mode="after")
     def validate_request(self):
         if not self.image or not self.image.strip():
             raise ValueError("image: field is required and cannot be empty")
         if self.response_format not in ("b64_json", "url"):
-            raise ValueError(f"response_format: must be 'b64_json' or 'url', got '{self.response_format}'")
+            raise ValueError(
+                f"response_format: must be 'b64_json' or 'url', got '{self.response_format}'"
+            )
         return self
 
 
 @router.post("/images/variations")
-async def create_image_variation(req: ImageVariationsRequest, request: Request) -> JSONResponse:
+async def create_image_variation(
+    req: ImageVariationsRequest, request: Request
+) -> JSONResponse:
     """Generate variations of an input image (OpenAI /v1/images/variations compatible).
 
     Uses the input image as a conditioning signal for the diffusion model.
     The image is decoded and used as a starting point for the generation.
     """
     from .models import _check_permission
+
     _check_permission(request, "can_infer")
     _rbac_key = getattr(request.state, "rbac_key", None)
     if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
-        raise HTTPException(status_code=403, detail=f"Model '{req.model}' not accessible with this API key")
+        raise HTTPException(
+            status_code=403,
+            detail=f"Model '{req.model}' not accessible with this API key",
+        )
     import base64
 
     try:
         image_bytes = _decode_image_b64(req.image)
         if len(image_bytes) > MAX_IMAGE_UPLOAD_BYTES:
-            raise HTTPException(status_code=413, detail=f"Image too large ({len(image_bytes)} bytes)")
+            raise HTTPException(
+                status_code=413, detail=f"Image too large ({len(image_bytes)} bytes)"
+            )
     except HTTPException:
         raise
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid base64 image data") from None
+        raise HTTPException(
+            status_code=400, detail="Invalid base64 image data"
+        ) from None
 
     manager = get_model_manager()
     if manager is None:
         raise HTTPException(status_code=503, detail="Model manager not initialized")
-
 
     # match by model_id (was first-of-type, ignoring req.model — wrong-model
     # serving + isolation hole vs the can_access_model(req.model) check above).
     img_engine = _select_image_engine(manager, req.model)
 
     if img_engine is None:
-        raise HTTPException(status_code=404, detail="No image generation model available")
+        raise HTTPException(
+            status_code=404, detail="No image generation model available"
+        )
 
     try:
         width, height = map(int, req.size.split("x"))
@@ -477,7 +535,11 @@ async def create_image_variation(req: ImageVariationsRequest, request: Request) 
         # Generate variation using the input image as conditioning
         images = []
         for i in range(req.n):
-            seed = ((req.seed + i) & 0x7FFFFFFFFFFFFFFF) if req.seed is not None else _rand_seed()
+            seed = (
+                ((req.seed + i) & 0x7FFFFFFFFFFFFFFF)
+                if req.seed is not None
+                else _rand_seed()
+            )
             result = await run_with_disconnect_guard(
                 request,
                 img_engine.generate(
@@ -510,10 +572,12 @@ async def create_image_variation(req: ImageVariationsRequest, request: Request) 
             else:
                 data.append({"url": f"data:image/png;base64,{b64}"})
 
-        return JSONResponse({
-            "created": int(time.time()),
-            "data": data,
-        })
+        return JSONResponse(
+            {
+                "created": int(time.time()),
+                "data": data,
+            }
+        )
     except MemoryError:
         raise HTTPException(status_code=507, detail="Out of GPU memory") from None
     except Exception as e:
@@ -532,7 +596,12 @@ class ImageEditsRequest(BaseModel):
     response_format: str = "b64_json"
     num_inference_steps: int = Field(default=4, ge=1, le=100)
     seed: int | None = None
-    denoise_strength: float = Field(default=0.8, ge=0.0, le=1.0, description="How much to re-denoise (1.0=full, 0.0=keep source)")
+    denoise_strength: float = Field(
+        default=0.8,
+        ge=0.0,
+        le=1.0,
+        description="How much to re-denoise (1.0=full, 0.0=keep source)",
+    )
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -541,7 +610,9 @@ class ImageEditsRequest(BaseModel):
         if not self.prompt or not self.prompt.strip():
             raise ValueError("prompt: field is required and cannot be empty")
         if self.response_format not in ("b64_json", "url"):
-            raise ValueError(f"response_format: must be 'b64_json' or 'url', got '{self.response_format}'")
+            raise ValueError(
+                f"response_format: must be 'b64_json' or 'url', got '{self.response_format}'"
+            )
         return self
 
 
@@ -552,32 +623,41 @@ async def create_image_edit(req: ImageEditsRequest, request: Request) -> JSONRes
     Combines the input image with a text prompt to generate an edited version.
     """
     from .models import _check_permission
+
     _check_permission(request, "can_infer")
     _rbac_key = getattr(request.state, "rbac_key", None)
     if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
-        raise HTTPException(status_code=403, detail=f"Model '{req.model}' not accessible with this API key")
+        raise HTTPException(
+            status_code=403,
+            detail=f"Model '{req.model}' not accessible with this API key",
+        )
     import base64
 
     try:
         image_bytes = _decode_image_b64(req.image)
         if len(image_bytes) > MAX_IMAGE_UPLOAD_BYTES:
-            raise HTTPException(status_code=413, detail=f"Image too large ({len(image_bytes)} bytes)")
+            raise HTTPException(
+                status_code=413, detail=f"Image too large ({len(image_bytes)} bytes)"
+            )
     except HTTPException:
         raise
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid base64 image data") from None
+        raise HTTPException(
+            status_code=400, detail="Invalid base64 image data"
+        ) from None
 
     manager = get_model_manager()
     if manager is None:
         raise HTTPException(status_code=503, detail="Model manager not initialized")
-
 
     # match by model_id (was first-of-type, ignoring req.model — wrong-model
     # serving + isolation hole vs the can_access_model(req.model) check above).
     img_engine = _select_image_engine(manager, req.model)
 
     if img_engine is None:
-        raise HTTPException(status_code=404, detail="No image generation model available")
+        raise HTTPException(
+            status_code=404, detail="No image generation model available"
+        )
 
     try:
         width, height = map(int, req.size.split("x"))
@@ -605,7 +685,11 @@ async def create_image_edit(req: ImageEditsRequest, request: Request) -> JSONRes
     try:
         images = []
         for i in range(req.n):
-            seed = ((req.seed + i) & 0x7FFFFFFFFFFFFFFF) if req.seed is not None else _rand_seed()
+            seed = (
+                ((req.seed + i) & 0x7FFFFFFFFFFFFFFF)
+                if req.seed is not None
+                else _rand_seed()
+            )
             result = await run_with_disconnect_guard(
                 request,
                 img_engine.generate(
@@ -638,10 +722,12 @@ async def create_image_edit(req: ImageEditsRequest, request: Request) -> JSONRes
             else:
                 data.append({"url": f"data:image/png;base64,{b64}"})
 
-        return JSONResponse({
-            "created": int(time.time()),
-            "data": data,
-        })
+        return JSONResponse(
+            {
+                "created": int(time.time()),
+                "data": data,
+            }
+        )
     except MemoryError:
         raise HTTPException(status_code=507, detail="Out of GPU memory") from None
     except Exception as e:
@@ -653,8 +739,12 @@ async def create_image_edit(req: ImageEditsRequest, request: Request) -> JSONRes
 
 class ImageInpaintRequest(BaseModel):
     image: str = Field(description="Base64-encoded source image (PNG/JPEG)")
-    prompt: str = Field(description="Text description of what to fill in the masked region")
-    mask: str | None = Field(default=None, description="Base64-encoded mask image (white=fill, black=keep)")
+    prompt: str = Field(
+        description="Text description of what to fill in the masked region"
+    )
+    mask: str | None = Field(
+        default=None, description="Base64-encoded mask image (white=fill, black=keep)"
+    )
     model: str = "Z-Image-Turbo-MLX-4bit"
     n: int = Field(default=1, ge=1, le=10)
     size: str = "1024x1024"
@@ -666,7 +756,12 @@ class ImageInpaintRequest(BaseModel):
     # a fuller replacement.
     num_inference_steps: int = Field(default=8, ge=1, le=100)
     seed: int | None = None
-    denoise_strength: float = Field(default=0.75, ge=0.0, le=1.0, description="How much to re-denoise (1.0=full replace; lower keeps more of the source)")
+    denoise_strength: float = Field(
+        default=0.75,
+        ge=0.0,
+        le=1.0,
+        description="How much to re-denoise (1.0=full replace; lower keeps more of the source)",
+    )
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -675,14 +770,18 @@ class ImageInpaintRequest(BaseModel):
         if not self.prompt or not self.prompt.strip():
             raise ValueError("prompt: field is required and cannot be empty")
         if self.response_format not in ("b64_json", "url"):
-            raise ValueError(f"response_format: must be 'b64_json' or 'url', got '{self.response_format}'")
+            raise ValueError(
+                f"response_format: must be 'b64_json' or 'url', got '{self.response_format}'"
+            )
         if self.mask is not None and not self.mask.strip():
             raise ValueError("mask: if provided, cannot be empty or whitespace-only")
         return self
 
 
 @router.post("/images/inpaint")
-async def create_image_inpaint(req: ImageInpaintRequest, request: Request) -> JSONResponse:
+async def create_image_inpaint(
+    req: ImageInpaintRequest, request: Request
+) -> JSONResponse:
     """Inpaint masked regions of an image using a text prompt.
 
     Accepts a source image and a mask (white=fill, black=preserve).
@@ -690,18 +789,26 @@ async def create_image_inpaint(req: ImageInpaintRequest, request: Request) -> JS
     the unmasked region is preserved from the original image.
     """
     from .models import _check_permission
+
     _check_permission(request, "can_infer")
     _rbac_key = getattr(request.state, "rbac_key", None)
     if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
-        raise HTTPException(status_code=403, detail=f"Model '{req.model}' not accessible with this API key")
+        raise HTTPException(
+            status_code=403,
+            detail=f"Model '{req.model}' not accessible with this API key",
+        )
     try:
         image_bytes = _decode_image_b64(req.image)
         if len(image_bytes) > MAX_IMAGE_UPLOAD_BYTES:
-            raise HTTPException(status_code=413, detail=f"Image too large ({len(image_bytes)} bytes)")
+            raise HTTPException(
+                status_code=413, detail=f"Image too large ({len(image_bytes)} bytes)"
+            )
     except HTTPException:
         raise
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid base64 image data") from None
+        raise HTTPException(
+            status_code=400, detail="Invalid base64 image data"
+        ) from None
 
     # Sanitize mask: strip data URL prefix so engine receives clean base64
     mask_clean: str | None = None
@@ -709,24 +816,29 @@ async def create_image_inpaint(req: ImageInpaintRequest, request: Request) -> JS
         try:
             mask_bytes = _decode_image_b64(req.mask)
             if len(mask_bytes) > MAX_IMAGE_UPLOAD_BYTES:
-                raise HTTPException(status_code=413, detail=f"Mask too large ({len(mask_bytes)} bytes)")
+                raise HTTPException(
+                    status_code=413, detail=f"Mask too large ({len(mask_bytes)} bytes)"
+                )
             mask_clean = base64.b64encode(mask_bytes).decode("ascii")
         except HTTPException:
             raise
         except Exception:
-            raise HTTPException(status_code=400, detail="Invalid base64 mask data") from None
+            raise HTTPException(
+                status_code=400, detail="Invalid base64 mask data"
+            ) from None
 
     manager = get_model_manager()
     if manager is None:
         raise HTTPException(status_code=503, detail="Model manager not initialized")
-
 
     # match by model_id (was first-of-type, ignoring req.model — wrong-model
     # serving + isolation hole vs the can_access_model(req.model) check above).
     img_engine = _select_image_engine(manager, req.model)
 
     if img_engine is None:
-        raise HTTPException(status_code=404, detail="No image generation model available")
+        raise HTTPException(
+            status_code=404, detail="No image generation model available"
+        )
 
     try:
         width, height = map(int, req.size.split("x"))
@@ -753,7 +865,11 @@ async def create_image_inpaint(req: ImageInpaintRequest, request: Request) -> JS
     try:
         data = []
         for i in range(req.n):
-            seed = ((req.seed + i) & 0x7FFFFFFFFFFFFFFF) if req.seed is not None else _rand_seed()
+            seed = (
+                ((req.seed + i) & 0x7FFFFFFFFFFFFFFF)
+                if req.seed is not None
+                else _rand_seed()
+            )
             png = await run_with_disconnect_guard(
                 request,
                 img_engine.inpaint(
@@ -777,10 +893,12 @@ async def create_image_inpaint(req: ImageInpaintRequest, request: Request) -> JS
             else:
                 data.append({"url": f"data:image/png;base64,{b64}"})
 
-        return JSONResponse({
-            "created": int(time.time()),
-            "data": data,
-        })
+        return JSONResponse(
+            {
+                "created": int(time.time()),
+                "data": data,
+            }
+        )
     except MemoryError:
         raise HTTPException(status_code=507, detail="Out of GPU memory") from None
     except Exception as e:
@@ -792,17 +910,27 @@ async def create_image_inpaint(req: ImageInpaintRequest, request: Request) -> JS
 
 class ImageControlNetRequest(BaseModel):
     prompt: str = Field(description="Text prompt for generation")
-    image: str = Field(description="Base64-encoded conditioning image (edges, depth map, etc.)")
-    condition_type: str = Field(default="canny", description="Conditioning type: canny, depth, raw")
+    image: str = Field(
+        description="Base64-encoded conditioning image (edges, depth map, etc.)"
+    )
+    condition_type: str = Field(
+        default="canny", description="Conditioning type: canny, depth, raw"
+    )
     model: str = "Z-Image-Turbo-MLX-4bit"
     n: int = Field(default=1, ge=1, le=10)
     size: str = "1024x1024"
     response_format: str = "b64_json"
     num_inference_steps: int = Field(default=4, ge=1, le=100)
     seed: int | None = None
-    controlnet_strength: float = Field(default=1.0, ge=0.0, le=2.0, description="Conditioning strength")
-    canny_low: int = Field(default=100, ge=0, le=255, description="Canny lower threshold")
-    canny_high: int = Field(default=200, ge=0, le=255, description="Canny upper threshold")
+    controlnet_strength: float = Field(
+        default=1.0, ge=0.0, le=2.0, description="Conditioning strength"
+    )
+    canny_low: int = Field(
+        default=100, ge=0, le=255, description="Canny lower threshold"
+    )
+    canny_high: int = Field(
+        default=200, ge=0, le=255, description="Canny upper threshold"
+    )
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -811,44 +939,59 @@ class ImageControlNetRequest(BaseModel):
         if not self.image or not self.image.strip():
             raise ValueError("image: field is required and cannot be empty")
         if self.condition_type not in ("canny", "depth", "raw"):
-            raise ValueError(f"condition_type: must be 'canny', 'depth', or 'raw', got '{self.condition_type}'")
+            raise ValueError(
+                f"condition_type: must be 'canny', 'depth', or 'raw', got '{self.condition_type}'"
+            )
         if self.response_format not in ("b64_json", "url"):
-            raise ValueError(f"response_format: must be 'b64_json' or 'url', got '{self.response_format}'")
+            raise ValueError(
+                f"response_format: must be 'b64_json' or 'url', got '{self.response_format}'"
+            )
         return self
 
 
 @router.post("/images/controlnet")
-async def create_image_controlnet(req: ImageControlNetRequest, request: Request) -> JSONResponse:
+async def create_image_controlnet(
+    req: ImageControlNetRequest, request: Request
+) -> JSONResponse:
     """Generate an image with ControlNet spatial conditioning.
 
     Accepts a conditioning image (edge map, depth map, etc.) and a text prompt.
     The conditioning image guides the spatial structure of the generated output.
     """
     from .models import _check_permission
+
     _check_permission(request, "can_infer")
     _rbac_key = getattr(request.state, "rbac_key", None)
     if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
-        raise HTTPException(status_code=403, detail=f"Model '{req.model}' not accessible with this API key")
+        raise HTTPException(
+            status_code=403,
+            detail=f"Model '{req.model}' not accessible with this API key",
+        )
     try:
         image_bytes = _decode_image_b64(req.image)
         if len(image_bytes) > MAX_IMAGE_UPLOAD_BYTES:
-            raise HTTPException(status_code=413, detail=f"Image too large ({len(image_bytes)} bytes)")
+            raise HTTPException(
+                status_code=413, detail=f"Image too large ({len(image_bytes)} bytes)"
+            )
     except HTTPException:
         raise
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid base64 image data") from None
+        raise HTTPException(
+            status_code=400, detail="Invalid base64 image data"
+        ) from None
 
     manager = get_model_manager()
     if manager is None:
         raise HTTPException(status_code=503, detail="Model manager not initialized")
-
 
     # match by model_id (was first-of-type, ignoring req.model — wrong-model
     # serving + isolation hole vs the can_access_model(req.model) check above).
     img_engine = _select_image_engine(manager, req.model)
 
     if img_engine is None:
-        raise HTTPException(status_code=404, detail="No image generation model available")
+        raise HTTPException(
+            status_code=404, detail="No image generation model available"
+        )
 
     try:
         width, height = map(int, req.size.split("x"))
@@ -875,7 +1018,11 @@ async def create_image_controlnet(req: ImageControlNetRequest, request: Request)
     try:
         data = []
         for i in range(req.n):
-            seed = ((req.seed + i) & 0x7FFFFFFFFFFFFFFF) if req.seed is not None else _rand_seed()
+            seed = (
+                ((req.seed + i) & 0x7FFFFFFFFFFFFFFF)
+                if req.seed is not None
+                else _rand_seed()
+            )
             png = await run_with_disconnect_guard(
                 request,
                 img_engine.generate_controlled(
@@ -901,15 +1048,19 @@ async def create_image_controlnet(req: ImageControlNetRequest, request: Request)
             else:
                 data.append({"url": f"data:image/png;base64,{b64}"})
 
-        return JSONResponse({
-            "created": int(time.time()),
-            "data": data,
-        })
+        return JSONResponse(
+            {
+                "created": int(time.time()),
+                "data": data,
+            }
+        )
     except MemoryError:
         raise HTTPException(status_code=507, detail="Out of GPU memory") from None
     except Exception as e:
         logger.error(f"ControlNet gen error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="ControlNet generation failed") from None
+        raise HTTPException(
+            status_code=500, detail="ControlNet generation failed"
+        ) from None
     finally:
         _unregister_image_cancel(_img_tracker, _img_id)
 
@@ -923,7 +1074,9 @@ class ImageDepthGuidedRequest(BaseModel):
     response_format: str = "b64_json"
     num_inference_steps: int = Field(default=4, ge=1, le=100)
     seed: int | None = None
-    depth_strength: float = Field(default=1.0, ge=0.0, le=2.0, description="Depth conditioning strength")
+    depth_strength: float = Field(
+        default=1.0, ge=0.0, le=2.0, description="Depth conditioning strength"
+    )
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -932,42 +1085,56 @@ class ImageDepthGuidedRequest(BaseModel):
         if not self.depth_image or not self.depth_image.strip():
             raise ValueError("depth_image: field is required and cannot be empty")
         if self.response_format not in ("b64_json", "url"):
-            raise ValueError(f"response_format: must be 'b64_json' or 'url', got '{self.response_format}'")
+            raise ValueError(
+                f"response_format: must be 'b64_json' or 'url', got '{self.response_format}'"
+            )
         return self
 
 
 @router.post("/images/depth-guided")
-async def create_image_depth_guided(req: ImageDepthGuidedRequest, request: Request) -> JSONResponse:
+async def create_image_depth_guided(
+    req: ImageDepthGuidedRequest, request: Request
+) -> JSONResponse:
     """Generate a depth-guided image using a depth map for spatial control.
 
     The depth map provides structural guidance — areas with similar depth values
     will maintain spatial coherence in the generated image.
     """
     from .models import _check_permission
+
     _check_permission(request, "can_infer")
     _rbac_key = getattr(request.state, "rbac_key", None)
     if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
-        raise HTTPException(status_code=403, detail=f"Model '{req.model}' not accessible with this API key")
+        raise HTTPException(
+            status_code=403,
+            detail=f"Model '{req.model}' not accessible with this API key",
+        )
     try:
         depth_bytes = _decode_image_b64(req.depth_image)
         if len(depth_bytes) > MAX_IMAGE_UPLOAD_BYTES:
-            raise HTTPException(status_code=413, detail=f"Depth image too large ({len(depth_bytes)} bytes)")
+            raise HTTPException(
+                status_code=413,
+                detail=f"Depth image too large ({len(depth_bytes)} bytes)",
+            )
     except HTTPException:
         raise
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid base64 depth image data") from None
+        raise HTTPException(
+            status_code=400, detail="Invalid base64 depth image data"
+        ) from None
 
     manager = get_model_manager()
     if manager is None:
         raise HTTPException(status_code=503, detail="Model manager not initialized")
-
 
     # match by model_id (was first-of-type, ignoring req.model — wrong-model
     # serving + isolation hole vs the can_access_model(req.model) check above).
     img_engine = _select_image_engine(manager, req.model)
 
     if img_engine is None:
-        raise HTTPException(status_code=404, detail="No image generation model available")
+        raise HTTPException(
+            status_code=404, detail="No image generation model available"
+        )
 
     try:
         width, height = map(int, req.size.split("x"))
@@ -994,7 +1161,11 @@ async def create_image_depth_guided(req: ImageDepthGuidedRequest, request: Reque
     try:
         data = []
         for i in range(req.n):
-            seed = ((req.seed + i) & 0x7FFFFFFFFFFFFFFF) if req.seed is not None else _rand_seed()
+            seed = (
+                ((req.seed + i) & 0x7FFFFFFFFFFFFFFF)
+                if req.seed is not None
+                else _rand_seed()
+            )
             png = await run_with_disconnect_guard(
                 request,
                 img_engine.generate_depth_guided(
@@ -1017,15 +1188,18 @@ async def create_image_depth_guided(req: ImageDepthGuidedRequest, request: Reque
             else:
                 data.append({"url": f"data:image/png;base64,{b64}"})
 
-        return JSONResponse({
-            "created": int(time.time()),
-            "data": data,
-        })
+        return JSONResponse(
+            {
+                "created": int(time.time()),
+                "data": data,
+            }
+        )
     except MemoryError:
         raise HTTPException(status_code=507, detail="Out of GPU memory") from None
     except Exception as e:
         logger.error(f"Depth-guided gen error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Depth-guided generation failed") from None
+        raise HTTPException(
+            status_code=500, detail="Depth-guided generation failed"
+        ) from None
     finally:
         _unregister_image_cancel(_img_tracker, _img_id)
-

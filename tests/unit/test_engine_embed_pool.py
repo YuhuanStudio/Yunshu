@@ -7,6 +7,7 @@ from yunshu_engine.batched_engine import BatchedEngine
 
 class _FakeConfig:
     """Minimal model config with hidden_size."""
+
     hidden_size = 64
     d_model = None
     n_embd = None
@@ -15,11 +16,13 @@ class _FakeConfig:
 
 class _FakeModel:
     """Mock model that returns predictable hidden states."""
+
     config = _FakeConfig()
 
     def __call__(self, input_ids):
         # Return shape [batch=1, seq_len, hidden_size=64]
         import mlx.core as mx
+
         seq_len = input_ids.shape[1]
         # Return ones so mean pooling gives all-ones
         return mx.ones((1, seq_len, 64))
@@ -142,6 +145,7 @@ class TestExtractHiddenStates:
 
     def test_extract_from_plain_array(self):
         import mlx.core as mx
+
         engine = _make_loaded_engine()
         arr = mx.ones((1, 5, 64))
         result = engine._extract_hidden_states(arr)
@@ -149,6 +153,7 @@ class TestExtractHiddenStates:
 
     def test_extract_from_tuple(self):
         import mlx.core as mx
+
         engine = _make_loaded_engine()
         arr = mx.ones((1, 5, 64))
         result = engine._extract_hidden_states((arr, mx.zeros(10)))
@@ -156,6 +161,7 @@ class TestExtractHiddenStates:
 
     def test_extract_from_named_tuple(self):
         import mlx.core as mx
+
         engine = _make_loaded_engine()
         arr = mx.ones((1, 5, 64))
         result = engine._extract_hidden_states((arr,))

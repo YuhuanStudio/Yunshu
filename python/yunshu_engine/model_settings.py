@@ -128,25 +128,40 @@ class ModelSettings:
                         # in Python, so the int branch would swallow bool values.
                         if "bool" in ft and isinstance(value, (bool, int)):
                             value = bool(value)
-                        elif "int" in ft and "float" not in ft and not isinstance(value, bool) and isinstance(value, (int, float)):
+                        elif (
+                            "int" in ft
+                            and "float" not in ft
+                            and not isinstance(value, bool)
+                            and isinstance(value, (int, float))
+                        ):
                             # Warn on silent float→int truncation (e.g. 3.9 → 3)
                             if isinstance(value, float) and value != int(value):
                                 logger.warning(
                                     "settings field '%s' expects int, got float %r "
                                     "with fractional part; truncating to %d",
-                                    key, value, int(value),
+                                    key,
+                                    value,
+                                    int(value),
                                 )
                             value = int(value)
-                        elif "float" in ft and not isinstance(value, bool) and isinstance(value, (int, float)):
+                        elif (
+                            "float" in ft
+                            and not isinstance(value, bool)
+                            and isinstance(value, (int, float))
+                        ):
                             value = float(value)
                     except Exception:
-                        logger.debug("settings field type coercion failed", exc_info=True)
+                        logger.debug(
+                            "settings field type coercion failed", exc_info=True
+                        )
                     setattr(self, key, value)
                     changed.append(key)
         return changed
 
 
-def load_model_settings(model_path: str, model_id: str, use_adaptive: bool = True) -> ModelSettings:
+def load_model_settings(
+    model_path: str, model_id: str, use_adaptive: bool = True
+) -> ModelSettings:
     """Load per-model settings from model directory or env vars.
 
     Priority (highest to lowest):
@@ -158,13 +173,20 @@ def load_model_settings(model_path: str, model_id: str, use_adaptive: bool = Tru
     settings = ModelSettings()
 
     # 3. Apply adaptive hardware defaults (lowest priority override)
-    if use_adaptive and os.environ.get("YUNSHU_ADAPTIVE_DEFAULTS", "1").strip() not in ("0", "false", "no"):
+    if use_adaptive and os.environ.get("YUNSHU_ADAPTIVE_DEFAULTS", "1").strip() not in (
+        "0",
+        "false",
+        "no",
+    ):
         try:
             from yunshu_engine.utils.hardware import compute_adaptive_defaults
+
             adaptive = compute_adaptive_defaults()
             if adaptive:
                 settings.apply_overrides(adaptive)
-                logger.debug(f"Applied {len(adaptive)} adaptive defaults for {model_id}")
+                logger.debug(
+                    f"Applied {len(adaptive)} adaptive defaults for {model_id}"
+                )
         except Exception:
             logger.debug("Adaptive defaults unavailable", exc_info=True)
 
@@ -175,16 +197,20 @@ def load_model_settings(model_path: str, model_id: str, use_adaptive: bool = Tru
             with open(settings_path) as f:
                 overrides = json.load(f)
             settings.apply_overrides(overrides)
-            logger.info(f"Loaded model settings from {settings_path}: {len(overrides)} fields")
+            logger.info(
+                f"Loaded model settings from {settings_path}: {len(overrides)} fields"
+            )
         except Exception:
-            logger.debug(f"Failed to load model settings from {settings_path}", exc_info=True)
+            logger.debug(
+                f"Failed to load model settings from {settings_path}", exc_info=True
+            )
 
     # 1. Override from env vars: YUNSHU_MODEL_{SANITIZED_ID}_{FIELD}
     env_prefix = f"YUNSHU_MODEL_{model_id.upper().replace('-', '_').replace('.', '_').replace('/', '_')}_"
     env_overrides: dict[str, Any] = {}
     for env_key, env_val in os.environ.items():
         if env_key.startswith(env_prefix):
-            field_name = env_key[len(env_prefix):].lower()
+            field_name = env_key[len(env_prefix) :].lower()
             if field_name in settings.__dataclass_fields__:
                 try:
                     # Parse booleans and ints

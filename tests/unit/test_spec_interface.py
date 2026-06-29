@@ -10,6 +10,7 @@ Covers:
   - Stats tracking and reset
   - Edge cases: empty drafts, all rejected, sequential requests
 """
+
 from __future__ import annotations
 
 import os
@@ -48,20 +49,23 @@ class FakeMTPDecoder:
     """Fake MTPDecoder with .stats attribute for testing MTPStrategy."""
 
     def __init__(self):
-        self.stats = type("Stats", (), {
-            "accepts": 10,
-            "rejects": 5,
-            "cooldowns": 2,
-            "tokens_generated": 100,
-            "total_cycles": 15,
-        })()
+        self.stats = type(
+            "Stats",
+            (),
+            {
+                "accepts": 10,
+                "rejects": 5,
+                "cooldowns": 2,
+                "tokens_generated": 100,
+                "total_cycles": 15,
+            },
+        )()
 
 
 # ── NgramStrategy Tests ──
 
 
 class TestNgramStrategy:
-
     def test_name(self):
         s = NgramStrategy()
         assert s.name == "ngram"
@@ -177,7 +181,6 @@ class TestNgramStrategy:
 
 
 class TestCrossModelStrategy:
-
     def test_name(self):
         s = CrossModelStrategy()
         assert s.name == "cross_model"
@@ -198,11 +201,14 @@ class TestCrossModelStrategy:
 
     def test_draft_with_decoder_tracks_stats(self):
         """With a mock decoder, draft records draft_length metadata."""
+
         class MockDecoder:
             class config:
                 draft_length = 3
+
             def get_stats(self):
                 return {}
+
         s = CrossModelStrategy(decoder=MockDecoder())
         proposal = s.draft([1, 2, 3], n=5)
         assert proposal.metadata["draft_length"] == 3
@@ -236,6 +242,7 @@ class TestCrossModelStrategy:
         class MockDecoder:
             def get_stats(self):
                 return {"acceptance_rate": 0.65}
+
         s = CrossModelStrategy(decoder=MockDecoder())
         stats = s.stats()
         assert "decoder_stats" in stats
@@ -253,6 +260,7 @@ class TestCrossModelStrategy:
     def test_decoder_property(self):
         class MockDecoder:
             pass
+
         dec = MockDecoder()
         s = CrossModelStrategy(decoder=dec)
         assert s.decoder is dec
@@ -262,7 +270,6 @@ class TestCrossModelStrategy:
 
 
 class TestMTPStrategy:
-
     def test_name(self):
         s = MTPStrategy()
         assert s.name == "mtp"
@@ -330,7 +337,6 @@ class TestMTPStrategy:
 
 
 class TestCompositeStrategy:
-
     def _make_composite(self):
         """Create a composite with ngram + cross_model fallback."""
         ngram = NgramStrategy(NgramConfig(min_n=1, max_n=3, k=5))
@@ -449,20 +455,21 @@ class TestCompositeStrategy:
 
 
 class TestSpecStrategyFactory:
-
     def test_create_ngram_default(self):
         s = SpecStrategyFactory.create({"type": "ngram"})
         assert isinstance(s, NgramStrategy)
         assert s.name == "ngram"
 
     def test_create_ngram_with_config(self):
-        s = SpecStrategyFactory.create({
-            "type": "ngram",
-            "mode": "hashpool",
-            "max_n": 3,
-            "k": 3,
-            "min_n": 1,
-        })
+        s = SpecStrategyFactory.create(
+            {
+                "type": "ngram",
+                "mode": "hashpool",
+                "max_n": 3,
+                "k": 3,
+                "min_n": 1,
+            }
+        )
         assert isinstance(s, NgramStrategy)
         assert s._config.mode == "hashpool"
         assert s._config.max_n == 3
@@ -476,10 +483,13 @@ class TestSpecStrategyFactory:
     def test_create_cross_model_with_decoder(self):
         class MockDecoder:
             pass
-        s = SpecStrategyFactory.create({
-            "type": "cross_model",
-            "decoder": MockDecoder(),
-        })
+
+        s = SpecStrategyFactory.create(
+            {
+                "type": "cross_model",
+                "decoder": MockDecoder(),
+            }
+        )
         assert s.decoder is not None
 
     def test_create_mtp(self):
@@ -488,13 +498,15 @@ class TestSpecStrategyFactory:
         assert s.name == "mtp"
 
     def test_create_composite(self):
-        s = SpecStrategyFactory.create({
-            "type": "composite",
-            "strategies": [
-                {"type": "ngram", "mode": "hashpool"},
-                {"type": "cross_model"},
-            ],
-        })
+        s = SpecStrategyFactory.create(
+            {
+                "type": "composite",
+                "strategies": [
+                    {"type": "ngram", "mode": "hashpool"},
+                    {"type": "cross_model"},
+                ],
+            }
+        )
         assert isinstance(s, CompositeStrategy)
         assert len(s.strategies) == 2
 
@@ -544,7 +556,6 @@ class TestSpecStrategyFactory:
 
 
 class TestDraftProposal:
-
     def test_default_empty(self):
         p = DraftProposal()
         assert p.tokens == []
@@ -597,6 +608,7 @@ class TestDeltaNetInversionStrategy:
     def test_strategy_with_inverter_returns_empty_tokens(self):
         """DeltaNet inversion does not propose tokens — it recovers state."""
         from unittest.mock import MagicMock
+
         mock_inverter = MagicMock()
         s = DeltaNetInversionStrategy(inverter=mock_inverter)
         s.begin("req-1")
@@ -608,6 +620,7 @@ class TestDeltaNetInversionStrategy:
 
     def test_accept_triggers_inversion_on_partial_reject(self):
         from unittest.mock import MagicMock
+
         mock_inverter = MagicMock()
         mock_inverter.invert_all.return_value = [MagicMock(), MagicMock()]
         s = DeltaNetInversionStrategy(inverter=mock_inverter)
@@ -622,6 +635,7 @@ class TestDeltaNetInversionStrategy:
 
     def test_accept_no_inversion_on_full_accept(self):
         from unittest.mock import MagicMock
+
         mock_inverter = MagicMock()
         s = DeltaNetInversionStrategy(inverter=mock_inverter)
         s.begin("req-1")
@@ -633,6 +647,7 @@ class TestDeltaNetInversionStrategy:
 
     def test_accept_handles_inversion_failure(self):
         from unittest.mock import MagicMock
+
         mock_inverter = MagicMock()
         mock_inverter.invert_all.side_effect = RuntimeError("inversion failed")
         s = DeltaNetInversionStrategy(inverter=mock_inverter)
@@ -661,6 +676,7 @@ class TestDeltaNetInversionStrategy:
 
     def test_stats_tracking_with_inverter(self):
         from unittest.mock import MagicMock
+
         mock_inverter = MagicMock()
         s = DeltaNetInversionStrategy(inverter=mock_inverter)
         s.begin("req-1")
@@ -684,6 +700,7 @@ class TestDeltaNetInversionStrategy:
 
     def test_inverter_property(self):
         from unittest.mock import MagicMock
+
         mock_inv = MagicMock()
         s = DeltaNetInversionStrategy(inverter=mock_inv)
         assert s.inverter is mock_inv
@@ -703,6 +720,7 @@ class TestSpecStrategyFactoryDeltaNet:
 
     def test_factory_deltanet_with_inverter(self):
         from unittest.mock import MagicMock
+
         mock_inv = MagicMock()
         s = SpecStrategyFactory.create({"type": "deltanet", "inverter": mock_inv})
         assert isinstance(s, DeltaNetInversionStrategy)
@@ -714,13 +732,15 @@ class TestSpecStrategyFactoryDeltaNet:
         assert s._inverter is not None
 
     def test_factory_composite_with_deltanet(self):
-        strategy = SpecStrategyFactory.create({
-            "type": "composite",
-            "strategies": [
-                {"type": "ngram"},
-                {"type": "deltanet"},
-            ],
-        })
+        strategy = SpecStrategyFactory.create(
+            {
+                "type": "composite",
+                "strategies": [
+                    {"type": "ngram"},
+                    {"type": "deltanet"},
+                ],
+            }
+        )
         assert isinstance(strategy, CompositeStrategy)
         assert "deltanet_inversion" in strategy.name
 

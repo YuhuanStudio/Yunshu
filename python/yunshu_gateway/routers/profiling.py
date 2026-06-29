@@ -40,7 +40,10 @@ def _check_permission(request: Request) -> None:
     rbac_key = getattr(request.state, "rbac_key", None)
     if rbac_key is not None:
         if not rbac_key.has_permission("can_admin"):
-            raise HTTPException(status_code=403, detail="Insufficient permissions for profiling endpoints")
+            raise HTTPException(
+                status_code=403,
+                detail="Insufficient permissions for profiling endpoints",
+            )
         return
     auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
     if auth_token:
@@ -68,19 +71,29 @@ async def start_profile(req: ProfileRequest, request: Request):
 
     with _profiling_lock:
         if _profiling_active:
-            log_operation("profiling_start", "metal_capture", "failure", actor=actor, detail="already_active")
+            log_operation(
+                "profiling_start",
+                "metal_capture",
+                "failure",
+                actor=actor,
+                detail="already_active",
+            )
             raise HTTPException(status_code=409, detail="Profiling already active")
 
         try:
             import mlx.core as mx
-            if hasattr(mx.metal, 'start_capture'):
+
+            if hasattr(mx.metal, "start_capture"):
                 from pathlib import Path
+
                 _profile_dir = Path("/tmp/yunshu_profiles")
                 _profile_dir.mkdir(parents=True, exist_ok=True)
                 # Apple's mx.metal.start_capture refuses file names that
                 # aren't .gputrace (the Instruments-bundle extension). Default
                 # to a timestamped .gputrace under the profile dir.
-                output = req.output_path or str(_profile_dir / f"yunshu_{int(time.time())}.gputrace")
+                output = req.output_path or str(
+                    _profile_dir / f"yunshu_{int(time.time())}.gputrace"
+                )
                 # auto-append `.gputrace` if missing — Apple's
                 # start_capture refuses any other extension with an opaque
                 # error. Make the API forgiving instead of returning 500.
@@ -89,7 +102,13 @@ async def start_profile(req: ProfileRequest, request: Request):
                 # Validate output_path is under the dedicated profile directory
                 resolved = Path(output).resolve()
                 if not str(resolved).startswith(str(_profile_dir.resolve()) + "/"):
-                    log_operation("profiling_start", "metal_capture", "failure", actor=actor, detail="invalid_output_path")
+                    log_operation(
+                        "profiling_start",
+                        "metal_capture",
+                        "failure",
+                        actor=actor,
+                        detail="invalid_output_path",
+                    )
                     raise HTTPException(
                         status_code=400,
                         detail=f"output_path must be under {_profile_dir}, got: {output}",
@@ -98,8 +117,15 @@ async def start_profile(req: ProfileRequest, request: Request):
                 # clear actionable 400 instead of letting the raw MLX error
                 # bubble as 500.
                 import os as _os
+
                 if not _os.environ.get("MTL_CAPTURE_ENABLED"):
-                    log_operation("profiling_start", "metal_capture", "failure", actor=actor, detail="MTL_CAPTURE_ENABLED unset")
+                    log_operation(
+                        "profiling_start",
+                        "metal_capture",
+                        "failure",
+                        actor=actor,
+                        detail="MTL_CAPTURE_ENABLED unset",
+                    )
                     raise HTTPException(
                         status_code=400,
                         detail=(
@@ -111,20 +137,44 @@ async def start_profile(req: ProfileRequest, request: Request):
                 mx.metal.start_capture(output)
                 _profiling_active = True
                 _profile_start_time = time.perf_counter()
-                log_operation("profiling_start", "metal_capture", "success", actor=actor, output=output)
-                return JSONResponse({
-                    "status": "started",
-                    "output_path": output,
-                    "duration_seconds": req.duration_seconds,
-                })
+                log_operation(
+                    "profiling_start",
+                    "metal_capture",
+                    "success",
+                    actor=actor,
+                    output=output,
+                )
+                return JSONResponse(
+                    {
+                        "status": "started",
+                        "output_path": output,
+                        "duration_seconds": req.duration_seconds,
+                    }
+                )
             else:
-                log_operation("profiling_start", "metal_capture", "failure", actor=actor, detail="not_available")
-                raise HTTPException(status_code=501, detail="Metal profiling not available")
+                log_operation(
+                    "profiling_start",
+                    "metal_capture",
+                    "failure",
+                    actor=actor,
+                    detail="not_available",
+                )
+                raise HTTPException(
+                    status_code=501, detail="Metal profiling not available"
+                )
         except HTTPException:
             raise
         except Exception as e:
-            log_operation("profiling_start", "metal_capture", "failure", actor=actor, detail=str(e)[:120])
-            raise HTTPException(status_code=500, detail=f"Failed to start profiling: {e}") from None
+            log_operation(
+                "profiling_start",
+                "metal_capture",
+                "failure",
+                actor=actor,
+                detail=str(e)[:120],
+            )
+            raise HTTPException(
+                status_code=500, detail=f"Failed to start profiling: {e}"
+            ) from None
 
 
 @router.post("/stop_profile", response_model=None)
@@ -136,23 +186,46 @@ async def stop_profile(request: Request):
 
     with _profiling_lock:
         if not _profiling_active:
-            log_operation("profiling_stop", "metal_capture", "failure", actor=actor, detail="not_active")
+            log_operation(
+                "profiling_stop",
+                "metal_capture",
+                "failure",
+                actor=actor,
+                detail="not_active",
+            )
             raise HTTPException(status_code=409, detail="No active profiling session")
 
         try:
             import mlx.core as mx
+
             mx.metal.stop_capture()
             elapsed = time.perf_counter() - _profile_start_time
             _profiling_active = False
-            log_operation("profiling_stop", "metal_capture", "success", actor=actor, elapsed=f"{elapsed:.3f}")
-            return JSONResponse({
-                "status": "stopped",
-                "elapsed_seconds": round(elapsed, 3),
-            })
+            log_operation(
+                "profiling_stop",
+                "metal_capture",
+                "success",
+                actor=actor,
+                elapsed=f"{elapsed:.3f}",
+            )
+            return JSONResponse(
+                {
+                    "status": "stopped",
+                    "elapsed_seconds": round(elapsed, 3),
+                }
+            )
         except Exception as e:
             _profiling_active = False
-            log_operation("profiling_stop", "metal_capture", "failure", actor=actor, detail=str(e)[:120])
-            raise HTTPException(status_code=500, detail=f"Failed to stop profiling: {e}") from None
+            log_operation(
+                "profiling_stop",
+                "metal_capture",
+                "failure",
+                actor=actor,
+                detail=str(e)[:120],
+            )
+            raise HTTPException(
+                status_code=500, detail=f"Failed to stop profiling: {e}"
+            ) from None
 
 
 @router.get("/profile/status", response_model=None)
@@ -163,10 +236,12 @@ async def profile_status(request: Request):
         active = _profiling_active
         start = _profile_start_time
         elapsed = time.perf_counter() - start if active else 0
-    return JSONResponse({
-        "active": active,
-        "elapsed_seconds": round(elapsed, 3) if active else None,
-    })
+    return JSONResponse(
+        {
+            "active": active,
+            "elapsed_seconds": round(elapsed, 3) if active else None,
+        }
+    )
 
 
 @router.get("/profile/engine", response_model=None)
@@ -183,7 +258,9 @@ async def engine_profiling_stats(request: Request):
 
     if manager is not None:
         for entry in manager.list_entries():
-            if entry.is_loaded and isinstance(getattr(entry, 'engine', None), BatchedEngine):
+            if entry.is_loaded and isinstance(
+                getattr(entry, "engine", None), BatchedEngine
+            ):
                 engines.append((entry.model_id, entry.engine))
     else:
         engine = get_engine()
@@ -192,7 +269,7 @@ async def engine_profiling_stats(request: Request):
 
     for model_id, engine in engines:
         info = {"model_id": model_id}
-        stats: dict = getattr(engine, 'get_stats', lambda: {})()
+        stats: dict = getattr(engine, "get_stats", lambda: {})()
         if "profiler" in stats:
             info["profiler"] = stats["profiler"]
         if "auto_tuner" in stats:
@@ -201,9 +278,9 @@ async def engine_profiling_stats(request: Request):
             info["slo"] = stats["slo"]
 
         # Check for CompositionScheduler profiling mixin
-        core = getattr(engine, '_engine_core', None)
+        core = getattr(engine, "_engine_core", None)
         if core is not None:
-            cs = getattr(core, '_composition_scheduler', None)
+            cs = getattr(core, "_composition_scheduler", None)
             if cs is not None:
                 mixin_stats = cs.get_stats()
                 if "ProfilingMixin" in mixin_stats:
@@ -214,6 +291,7 @@ async def engine_profiling_stats(request: Request):
 
 
 # ── profile-state introspection for other modules ──
+
 
 def is_profile_capture_active() -> bool:
     """Return True if Metal capture is currently active.

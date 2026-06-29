@@ -57,7 +57,9 @@ class MetricsAggregator:
         # are recorded per-request by the routers' record_tokens for both streaming and
         # non-streaming), so per-request token fields were always 0 → the rolling-window
         # summary reported zero token throughput forever. Routers feed record_tokens() here.
-        self._token_points: list[tuple[float, int, int]] = []  # (ts, tokens_in, tokens_out)
+        self._token_points: list[
+            tuple[float, int, int]
+        ] = []  # (ts, tokens_in, tokens_out)
 
     # ------------------------------------------------------------------
     # Recording
@@ -171,7 +173,9 @@ class MetricsAggregator:
             "total_requests": total,
             "error_count": errors,
             "error_rate": round(errors / total, 4) if total else 0.0,
-            "avg_duration_ms": round(sum(durations) / len(durations), 2) if durations else 0.0,
+            "avg_duration_ms": round(sum(durations) / len(durations), 2)
+            if durations
+            else 0.0,
             "total_tokens_in": total_tokens_in,
             "total_tokens_out": total_tokens_out,
             "tokens_per_second": round(total_tokens_out / span, 2),
@@ -179,7 +183,9 @@ class MetricsAggregator:
             "window_seconds": window_seconds,
         }
 
-    def get_percentiles(self, metric: str = "duration_ms", window_seconds: int = 60) -> dict[str, float]:
+    def get_percentiles(
+        self, metric: str = "duration_ms", window_seconds: int = 60
+    ) -> dict[str, float]:
         """Return p50/p90/p95/p99 for *metric* over the last *window_seconds*.
 
         Valid metric names: duration_ms, tokens_in, tokens_out.
@@ -199,7 +205,8 @@ class MetricsAggregator:
                 idx = 1 if metric == "tokens_in" else 2
                 token_vals = [tp[idx] for tp in self._token_points if tp[0] >= cutoff]
                 point_vals = [
-                    getattr(p, metric) for p in self._points
+                    getattr(p, metric)
+                    for p in self._points
                     if p.timestamp >= cutoff and getattr(p, metric, 0)
                 ]
                 values = sorted(token_vals + point_vals)
@@ -251,12 +258,16 @@ class MetricsAggregator:
         for key, points in sorted(buckets.items()):
             durations = [p.duration_ms for p in points]
             tokens_out = [p.tokens_out for p in points]
-            result.append({
-                "endpoint": key,
-                "count": len(points),
-                "avg_duration_ms": round(sum(durations) / len(durations), 2) if durations else 0.0,
-                "total_tokens_out": sum(tokens_out),
-            })
+            result.append(
+                {
+                    "endpoint": key,
+                    "count": len(points),
+                    "avg_duration_ms": round(sum(durations) / len(durations), 2)
+                    if durations
+                    else 0.0,
+                    "total_tokens_out": sum(tokens_out),
+                }
+            )
         return result
 
     # ------------------------------------------------------------------

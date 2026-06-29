@@ -62,6 +62,7 @@ class _FakeGenResponse:
         self.prompt_cache = None
         self.all_tokens = None
         import mlx.core as mx
+
         self.logprobs = mx.zeros(4)
 
 
@@ -139,7 +140,9 @@ class TestOutputTokenTracking:
 
         # Should have tracked all non-stop token IDs
         assert state.output_token_ids == [0, 1]  # Token 2 is stop, not tracked
-        assert state.completion_token_count == 2  # Stop token excluded per OpenAI convention
+        assert (
+            state.completion_token_count == 2
+        )  # Stop token excluded per OpenAI convention
         assert "Hello" in state.generated_text
         assert "world" in state.generated_text
 
@@ -291,6 +294,7 @@ class TestGatewayIntegration:
     @pytest.fixture(autouse=True)
     def _setup(self):
         from yunshu_gateway.engine import set_engine
+
         self._engine = Engine(EngineConfig())
         self._engine._model = object()
         self._engine._tokenizer = _FakeTokenizer()

@@ -4,6 +4,7 @@ the router's "honors cancel_event mid-diffusion" comment was false. Thread cance
 through generate → _generate_variation → _run_img2img_pipeline and check a thread-safe
 flag per denoise step.
 """
+
 from __future__ import annotations
 
 import inspect

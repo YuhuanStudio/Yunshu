@@ -4,6 +4,7 @@ _check_permission copies — models.py (load/unload), sleep.py (sleep/wake), ben
 tenant EVERY permission — so a legacy tenant could load/unload models and run GPU
 benchmarks, outranking even a USER RBAC key (correctly 403'd). Legacy tenants now keep
 inference-class access but admin-class ops require a real admin role."""
+
 from __future__ import annotations
 
 import types

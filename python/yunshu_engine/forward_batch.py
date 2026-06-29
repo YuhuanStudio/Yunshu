@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class RequestSlot:
     """A single request's slot in the schedule batch."""
+
     request_id: str
     prompt_tokens: list[int]
     generated_tokens: list[int] = field(default_factory=list)
@@ -66,7 +67,12 @@ class RequestSlot:
             return True
         if self.generated_tokens and self.generated_tokens[-1] in self.eos_token_ids:
             return True
-        return bool(self.sampling_params is not None and self.generated_tokens and self.generated_tokens[-1] in getattr(self.sampling_params, 'stop_token_ids', []))
+        return bool(
+            self.sampling_params is not None
+            and self.generated_tokens
+            and self.generated_tokens[-1]
+            in getattr(self.sampling_params, "stop_token_ids", [])
+        )
 
     @property
     def ttft_ms(self) -> float | None:
@@ -179,9 +185,7 @@ class ScheduleBatch:
         prefill_count = len(self.prefill_slots)
         decode_count = len(self.decode_slots)
         avg_priority = (
-            sum(s.priority for s in self.slots) / len(self.slots)
-            if self.slots
-            else 0.0
+            sum(s.priority for s in self.slots) / len(self.slots) if self.slots else 0.0
         )
         ttfts = [s.ttft_ms for s in self.slots if s.ttft_ms is not None]
         return {
@@ -261,11 +265,12 @@ class ForwardBatch:
         if all_tokens:
             try:
                 import mlx.core as mx
+
                 input_ids = mx.array(all_tokens, dtype=mx.int32)
                 pos: list[int] = []
                 for length, slot in zip(request_lengths, batch.slots, strict=False):
                     if slot.is_prefill:
-                        offset = getattr(slot, 'cached_tokens', 0) or 0
+                        offset = getattr(slot, "cached_tokens", 0) or 0
                         pos.extend(range(offset, offset + length))
                     else:
                         # Decode step: position of the last generated token.
@@ -275,14 +280,18 @@ class ForwardBatch:
                         # num_prompt_tokens is 0, use total_tokens which accounts
                         # for prompt_tokens list length as a reliable fallback.
                         if slot.generated_tokens:
-                            start = slot.num_prompt_tokens + len(slot.generated_tokens) - 1
+                            start = (
+                                slot.num_prompt_tokens + len(slot.generated_tokens) - 1
+                            )
                         else:
                             # Use the authoritative prompt count: prefer
                             # num_prompt_tokens, but fall back to the actual
                             # prompt_tokens list length if num_prompt_tokens
                             # was never set (e.g. from BatchComposer active_slots
                             # which only sets is_prefill and priority).
-                            prompt_count = slot.num_prompt_tokens or len(slot.prompt_tokens)
+                            prompt_count = slot.num_prompt_tokens or len(
+                                slot.prompt_tokens
+                            )
                             start = prompt_count
                         pos.extend(range(start, start + length))
                 position_ids = mx.array(pos, dtype=mx.int32)
@@ -351,10 +360,18 @@ class BatchResult:
         results = {}
         for i, rid in enumerate(self.request_ids):
             results[rid] = {
-                "token_ids": self.generated_token_ids[i] if i < len(self.generated_token_ids) else [],
-                "finish_reason": self.finish_reasons[i] if i < len(self.finish_reasons) else None,
-                "spec_accepted": self.spec_accepted_count[i] if i < len(self.spec_accepted_count) else 0,
-                "spec_rejected": self.spec_rejected_count[i] if i < len(self.spec_rejected_count) else 0,
+                "token_ids": self.generated_token_ids[i]
+                if i < len(self.generated_token_ids)
+                else [],
+                "finish_reason": self.finish_reasons[i]
+                if i < len(self.finish_reasons)
+                else None,
+                "spec_accepted": self.spec_accepted_count[i]
+                if i < len(self.spec_accepted_count)
+                else 0,
+                "spec_rejected": self.spec_rejected_count[i]
+                if i < len(self.spec_rejected_count)
+                else 0,
             }
         return results
 
@@ -463,14 +480,19 @@ class BatchComposer:
             # The original code used batch.total_tokens which includes all
             # historical tokens for each decode slot — massively over-counting
             # memory usage and blocking all new prefill requests.
-            token_budget = max(0, token_budget - decode_count)  # 1 token per decode step
+            token_budget = max(
+                0, token_budget - decode_count
+            )  # 1 token per decode step
 
         for slot in new_requests:
             if batch.num_slots >= self._max_batch:
                 break
             if prefill_count >= self._max_prefill:
                 break
-            if token_budget > 0 and (slot.num_prompt_tokens or len(slot.prompt_tokens)) > token_budget:
+            if (
+                token_budget > 0
+                and (slot.num_prompt_tokens or len(slot.prompt_tokens)) > token_budget
+            ):
                 continue
             # When budget is exhausted, stop admitting prefill requests
             if token_budget <= 0 and memory_budget_tokens > 0:

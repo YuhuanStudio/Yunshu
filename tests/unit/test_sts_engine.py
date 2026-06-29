@@ -15,10 +15,19 @@ def _make_wav(samples, sample_rate=16000):
     data = int_samples.tobytes()
     header = struct.pack(
         "<4sI4s4sIHHIIHH4sI",
-        b"RIFF", 36 + len(data), b"WAVE", b"fmt ",
-        16, 1, 1, sample_rate,
-        sample_rate * 2, 2, 16,
-        b"data", len(data),
+        b"RIFF",
+        36 + len(data),
+        b"WAVE",
+        b"fmt ",
+        16,
+        1,
+        1,
+        sample_rate,
+        sample_rate * 2,
+        2,
+        16,
+        b"data",
+        len(data),
     )
     return header + data
 

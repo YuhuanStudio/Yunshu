@@ -89,7 +89,9 @@ class SSDSQLiteStore:
             self._conn.commit()
             logger.debug("SSDSQLiteStore: opened %s (WAL mode)", self._db_path)
         except Exception:
-            logger.error("SSDSQLiteStore: failed to open %s", self._db_path, exc_info=True)
+            logger.error(
+                "SSDSQLiteStore: failed to open %s", self._db_path, exc_info=True
+            )
             self._conn = None
 
     def close(self) -> None:
@@ -143,7 +145,9 @@ class SSDSQLiteStore:
                 )
                 self._conn.commit()
             except Exception:
-                logger.debug("SSDSQLiteStore.put failed for %s", block_hash[:16], exc_info=True)
+                logger.debug(
+                    "SSDSQLiteStore.put failed for %s", block_hash[:16], exc_info=True
+                )
 
     def get(self, block_hash: str) -> dict | None:
         """Look up a block by hash.
@@ -166,7 +170,9 @@ class SSDSQLiteStore:
                     (block_hash,),
                 ).fetchone()
             except Exception:
-                logger.debug("SSDSQLiteStore.get failed for %s", block_hash[:16], exc_info=True)
+                logger.debug(
+                    "SSDSQLiteStore.get failed for %s", block_hash[:16], exc_info=True
+                )
                 return None
         if row is None:
             return None
@@ -197,7 +203,11 @@ class SSDSQLiteStore:
                 self._conn.commit()
                 return cursor.rowcount > 0
             except Exception:
-                logger.debug("SSDSQLiteStore.delete failed for %s", block_hash[:16], exc_info=True)
+                logger.debug(
+                    "SSDSQLiteStore.delete failed for %s",
+                    block_hash[:16],
+                    exc_info=True,
+                )
                 return False
 
     def touch(self, block_hash: str) -> bool:
@@ -222,7 +232,9 @@ class SSDSQLiteStore:
                 self._conn.commit()
                 return cursor.rowcount > 0
             except Exception:
-                logger.debug("SSDSQLiteStore.touch failed for %s", block_hash[:16], exc_info=True)
+                logger.debug(
+                    "SSDSQLiteStore.touch failed for %s", block_hash[:16], exc_info=True
+                )
                 return False
 
     def batch_put(
@@ -260,7 +272,11 @@ class SSDSQLiteStore:
                 self._conn.commit()
                 inserted = len(entries)
             except Exception:
-                logger.debug("SSDSQLiteStore.batch_put failed (%d entries)", len(entries), exc_info=True)
+                logger.debug(
+                    "SSDSQLiteStore.batch_put failed (%d entries)",
+                    len(entries),
+                    exc_info=True,
+                )
         return inserted
 
     def batch_get(self, block_hashes: list[str]) -> list[dict | None]:
@@ -286,7 +302,11 @@ class SSDSQLiteStore:
                     block_hashes,
                 ).fetchall()
             except Exception:
-                logger.debug("SSDSQLiteStore.batch_get failed (%d hashes)", len(block_hashes), exc_info=True)
+                logger.debug(
+                    "SSDSQLiteStore.batch_get failed (%d hashes)",
+                    len(block_hashes),
+                    exc_info=True,
+                )
                 return [None] * len(block_hashes)
         # Build lookup by hash
         lookup: dict[str, dict] = {}
@@ -320,7 +340,11 @@ class SSDSQLiteStore:
                 self._conn.commit()
                 return cursor.rowcount
             except Exception:
-                logger.debug("SSDSQLiteStore.batch_delete failed (%d hashes)", len(block_hashes), exc_info=True)
+                logger.debug(
+                    "SSDSQLiteStore.batch_delete failed (%d hashes)",
+                    len(block_hashes),
+                    exc_info=True,
+                )
                 return 0
 
     def list_all(self) -> list[dict]:
@@ -390,7 +414,11 @@ class SSDSQLiteStore:
                     "size_bytes": row[6],
                 }
             except Exception:
-                logger.debug("SSDSQLiteStore.get_and_delete failed for %s", block_hash[:16], exc_info=True)
+                logger.debug(
+                    "SSDSQLiteStore.get_and_delete failed for %s",
+                    block_hash[:16],
+                    exc_info=True,
+                )
                 return None
 
     def get_stats(self) -> dict:
@@ -465,7 +493,9 @@ class SSDSQLiteStore:
                         removed += 1
                 if removed > 0:
                     self._conn.commit()
-                    logger.info("SSDSQLiteStore.recover: removed %d stale entries", removed)
+                    logger.info(
+                        "SSDSQLiteStore.recover: removed %d stale entries", removed
+                    )
             except Exception:
                 logger.debug("SSDSQLiteStore.recover failed", exc_info=True)
         return removed

@@ -62,6 +62,7 @@ class ResponseCacheMiddleware:
                 # synthetic receive — the original receive was consumed.
                 async def _cached_receive():
                     return {"type": "http.request", "body": body, "more_body": False}
+
                 await self.app(scope, _cached_receive, send)
                 return
 
@@ -73,14 +74,18 @@ class ResponseCacheMiddleware:
             # bearer token in means a HIT can only be served to the same key that
             # cached it (and that key already passed model-access for that body).
             _auth = request.headers.get("Authorization", "")
-            cache_key = hashlib.sha256(_auth.encode("utf-8") + b"\x00" + body).hexdigest()
+            cache_key = hashlib.sha256(
+                _auth.encode("utf-8") + b"\x00" + body
+            ).hexdigest()
 
             # Skip caching for non-deterministic sampling (temperature > 0, no seed)
             temperature = body_json.get("temperature", 1.0)
             seed = body_json.get("seed")
             if temperature > 0 and seed is None:
+
                 async def _nondet_receive():
                     return {"type": "http.request", "body": body, "more_body": False}
+
                 await self.app(scope, _nondet_receive, send)
                 return
 
@@ -93,8 +98,10 @@ class ResponseCacheMiddleware:
                 return
         except Exception:
             logger.debug("cache lookup failed", exc_info=True)
+
             async def _fallback_receive():
                 return {"type": "http.request", "body": body, "more_body": False}
+
             await self.app(scope, _fallback_receive, send)
             return
 
@@ -127,16 +134,22 @@ class ResponseCacheMiddleware:
                         # cache.put() is async (uses asyncio.Lock internally).
                         # Add done callback for error logging so failures aren't
                         # silently swallowed by the fire-and-forget task.
-                        _cache_task = asyncio.ensure_future(cache.put(cache_key, result))
+                        _cache_task = asyncio.ensure_future(
+                            cache.put(cache_key, result)
+                        )
                         # hold strong ref in module-level set so
                         # GC doesn't collect the task before cache.put completes.
                         self._pending_cache_tasks.add(_cache_task)
+
                         def _log_cache_error(t):
                             self._pending_cache_tasks.discard(t)
                             if not t.cancelled():
                                 exc = t.exception()
                                 if exc:
-                                    logger.debug("Cache put failed: %s", exc, exc_info=True)
+                                    logger.debug(
+                                        "Cache put failed: %s", exc, exc_info=True
+                                    )
+
                         _cache_task.add_done_callback(_log_cache_error)
                     except Exception:
                         logger.debug("cache store failed", exc_info=True)
@@ -195,8 +208,10 @@ class RequestCoalescingMiddleware:
         # If body read failed (body is None), fall through with original
         # receive — downstream will attempt to read the body itself.
         if body is not None:
+
             async def _replay_receive():
                 return {"type": "http.request", "body": body, "more_body": False}
+
             await self.app(scope, _replay_receive, send)
         else:
             await self.app(scope, receive, send)

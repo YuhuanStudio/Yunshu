@@ -1,4 +1,5 @@
 """Tests for per-model settings (ModelSettings)."""
+
 import json
 import os
 import tempfile
@@ -26,11 +27,13 @@ class TestModelSettings:
 
     def test_apply_overrides(self):
         s = ModelSettings()
-        changed = s.apply_overrides({
-            "max_tokens": 8192,
-            "temperature": 0.3,
-            "prefix_cache_enabled": False,
-        })
+        changed = s.apply_overrides(
+            {
+                "max_tokens": 8192,
+                "temperature": 0.3,
+                "prefix_cache_enabled": False,
+            }
+        )
         assert "max_tokens" in changed
         assert "temperature" in changed
         assert "prefix_cache_enabled" in changed
@@ -100,5 +103,8 @@ class TestModelSettings:
         for name in s.__dataclass_fields__:
             val = getattr(s, name)
             assert val is not None or name in (
-                "kv_cache_quant_bits", "thinking_budget", "enable_thinking", "seed"
+                "kv_cache_quant_bits",
+                "thinking_budget",
+                "enable_thinking",
+                "seed",
             ), f"{name} should have a non-None default"

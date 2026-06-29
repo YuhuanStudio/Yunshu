@@ -22,10 +22,16 @@ router = APIRouter(tags=["models"])
 # Admin-class permissions a legacy (pre-RBAC) tenant must NOT inherit via the
 # "authenticated tenant → allow" branch. Inference-class permissions (can_infer) stay
 # available so legacy tenants can still run inference.
-_TENANT_DENIED_PERMISSIONS = frozenset({
-    "can_load_models", "can_unload_models", "can_admin",
-    "can_benchmark", "can_manage_tokens", "can_manage_tenants",
-})
+_TENANT_DENIED_PERMISSIONS = frozenset(
+    {
+        "can_load_models",
+        "can_unload_models",
+        "can_admin",
+        "can_benchmark",
+        "can_manage_tokens",
+        "can_manage_tenants",
+    }
+)
 
 
 def _check_permission(request: Request, permission: str) -> None:
@@ -56,7 +62,9 @@ def _check_permission(request: Request, permission: str) -> None:
         if permission not in _TENANT_DENIED_PERMISSIONS:
             return  # non-privileged (e.g. can_infer) — allow
         _role = str(getattr(request.state, "role", "") or "")
-        if _role.lower() in ("admin", "system", "owner") or _role.upper().endswith("ADMIN"):
+        if _role.lower() in ("admin", "system", "owner") or _role.upper().endswith(
+            "ADMIN"
+        ):
             return
         raise HTTPException(status_code=403, detail="Insufficient permissions")
     # Static token auth — must verify the request actually provides it
@@ -65,6 +73,7 @@ def _check_permission(request: Request, permission: str) -> None:
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             import hmac
+
             if hmac.compare_digest(auth[7:], auth_token):
                 return  # Valid static token
         # Token is configured but request doesn't provide a valid one
@@ -153,7 +162,9 @@ async def list_models(request: Request) -> dict:
             model_info = {
                 "id": entry.model_id,
                 "object": "model",
-                "created": int(entry.load_time) if entry.load_time > 0 else int(time.time()),
+                "created": int(entry.load_time)
+                if entry.load_time > 0
+                else int(time.time()),
                 "owned_by": "yunshu",
             }
             if _authenticated:
@@ -162,10 +173,16 @@ async def list_models(request: Request) -> dict:
                 model_info["size_gb"] = round(entry.estimated_bytes / 1e9, 1)
             if _authenticated and entry.is_loaded and entry.engine is not None:
                 try:
-                    stats = entry.engine.get_stats() if hasattr(entry.engine, 'get_stats') else {}
+                    stats = (
+                        entry.engine.get_stats()
+                        if hasattr(entry.engine, "get_stats")
+                        else {}
+                    )
                     model_info["stats"] = stats
                 except Exception:
-                    logger.debug(f"failed to get stats for {entry.model_id}", exc_info=True)
+                    logger.debug(
+                        f"failed to get stats for {entry.model_id}", exc_info=True
+                    )
             models.append(model_info)
         result = {"object": "list", "data": models}
         # Include model registry stats for debugging/monitoring — but NOT for a scoped
@@ -177,6 +194,7 @@ async def list_models(request: Request) -> dict:
         if _authenticated and not _filtered:
             try:
                 from yunshu_engine.model_registry import get_registry
+
                 result["registry"] = get_registry().get_stats()
             except Exception:
                 logger.debug("model_registry stats unavailable", exc_info=True)
@@ -191,13 +209,17 @@ async def list_models(request: Request) -> dict:
         # 403'd at inference) would still see its id here (cross-scope name leak).
         _rbac_key = getattr(request.state, "rbac_key", None)
         if _rbac_key is None or _rbac_key.can_access_model(engine.model_name):
-            _load_time = getattr(engine, '_load_time', None) or getattr(engine, 'load_time', None)
-            models.append({
-                "id": engine.model_name,
-                "object": "model",
-                "created": int(_load_time) if _load_time else int(time.time()),
-                "owned_by": "yunshu",
-            })
+            _load_time = getattr(engine, "_load_time", None) or getattr(
+                engine, "load_time", None
+            )
+            models.append(
+                {
+                    "id": engine.model_name,
+                    "object": "model",
+                    "created": int(_load_time) if _load_time else int(time.time()),
+                    "owned_by": "yunshu",
+                }
+            )
     return {"object": "list", "data": models}
 
 
@@ -229,7 +251,9 @@ async def get_model(model_id: str, request: Request) -> dict:
             "size_gb": round(entry.estimated_bytes / 1e9, 1),
             # OpenAI spec: `created` is required int — fall back to wall-clock if model
             # hasn't been loaded yet so we never emit null for a required field.
-            "created": int(entry.load_time) if entry.load_time > 0 else int(time.time()),
+            "created": int(entry.load_time)
+            if entry.load_time > 0
+            else int(time.time()),
         }
 
     engine = get_engine()
@@ -255,14 +279,25 @@ async def load_model(req: LoadModelRequest, request: Request) -> dict:
     actor = resolve_actor(request)
     _check_permission(request, "can_load_models")
     if not req.model or not req.model.strip():
-        log_operation("model_load", req.model or "", "failure", actor=actor, detail="empty_model")
+        log_operation(
+            "model_load", req.model or "", "failure", actor=actor, detail="empty_model"
+        )
         raise HTTPException(status_code=400, detail="model field cannot be empty")
 
     # Guard against concurrent load/unload of the same model
     async with _model_ops_lock:
         if req.model in _model_ops_inflight:
-            log_operation("model_load", req.model, "failure", actor=actor, detail="already_inflight")
-            raise HTTPException(status_code=409, detail=f"Model '{req.model}' is already being loaded or unloaded")
+            log_operation(
+                "model_load",
+                req.model,
+                "failure",
+                actor=actor,
+                detail="already_inflight",
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=f"Model '{req.model}' is already being loaded or unloaded",
+            )
         _model_ops_inflight.add(req.model)
 
     try:
@@ -271,38 +306,69 @@ async def load_model(req: LoadModelRequest, request: Request) -> dict:
         if manager is not None:
             try:
                 engine = await manager.get_engine(req.model)
-                if hasattr(engine, 'is_running') and not engine.is_running:
+                if hasattr(engine, "is_running") and not engine.is_running:
                     await engine.start()
                 log_operation("model_load", req.model, "success", actor=actor)
                 return {"status": "loaded", "model": req.model}
             except KeyError:
-                log_operation("model_load", req.model, "failure", actor=actor, detail="not_registered")
-                raise HTTPException(status_code=404, detail=f"Model '{req.model}' not registered") from None
+                log_operation(
+                    "model_load",
+                    req.model,
+                    "failure",
+                    actor=actor,
+                    detail="not_registered",
+                )
+                raise HTTPException(
+                    status_code=404, detail=f"Model '{req.model}' not registered"
+                ) from None
             except HTTPException:
                 raise
             except Exception as e:
                 logger.error(f"Model load error: {e}", exc_info=True)
-                log_operation("model_load", req.model, "failure", actor=actor, detail=str(e)[:120])
+                log_operation(
+                    "model_load", req.model, "failure", actor=actor, detail=str(e)[:120]
+                )
                 # Surface load-time RuntimeErrors verbatim: these are
                 # deliberate "model unsupported in this build" errors raised by
                 # engines (e.g. quantize shape mismatches for 4-bit Omni)
                 # and the user needs the precise reason, not "Model loading
                 # failed".
                 if isinstance(e, RuntimeError):
-                    raise HTTPException(status_code=400, detail=f"Model loading failed: {e}") from None
-                raise HTTPException(status_code=500, detail="Model loading failed") from None
+                    raise HTTPException(
+                        status_code=400, detail=f"Model loading failed: {e}"
+                    ) from None
+                raise HTTPException(
+                    status_code=500, detail="Model loading failed"
+                ) from None
 
         # Single-engine mode
         engine = get_engine()
         if engine is None:
-            log_operation("model_load", req.model, "failure", actor=actor, detail="engine_not_initialized")
+            log_operation(
+                "model_load",
+                req.model,
+                "failure",
+                actor=actor,
+                detail="engine_not_initialized",
+            )
             raise HTTPException(status_code=503, detail="Engine not initialized")
 
         from yunshu_engine.batched_engine import BatchedEngine
+
         if isinstance(engine, BatchedEngine):
-            log_operation("model_load", req.model, "failure", actor=actor, detail="single_engine_not_supported_in_batched")
-            raise HTTPException(status_code=400, detail="Single-engine load not supported in batched mode — use model manager")
+            log_operation(
+                "model_load",
+                req.model,
+                "failure",
+                actor=actor,
+                detail="single_engine_not_supported_in_batched",
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Single-engine load not supported in batched mode — use model manager",
+            )
         from yunshu_engine.mlx_executor import get_mlx_executor
+
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(get_mlx_executor(), engine.load, req.model)
         await engine.start()
@@ -322,14 +388,29 @@ async def unload_model(model_id: str, request: Request) -> dict:
     # Guard against concurrent load/unload of the same model
     async with _model_ops_lock:
         if model_id in _model_ops_inflight:
-            log_operation("model_unload", model_id, "failure", actor=actor, detail="already_inflight")
-            raise HTTPException(status_code=409, detail=f"Model '{model_id}' is already being loaded or unloaded")
+            log_operation(
+                "model_unload",
+                model_id,
+                "failure",
+                actor=actor,
+                detail="already_inflight",
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=f"Model '{model_id}' is already being loaded or unloaded",
+            )
         _model_ops_inflight.add(model_id)
 
     try:
         manager = get_model_manager()
         if manager is None:
-            log_operation("model_unload", model_id, "failure", actor=actor, detail="multi_model_not_active")
+            log_operation(
+                "model_unload",
+                model_id,
+                "failure",
+                actor=actor,
+                detail="multi_model_not_active",
+            )
             raise HTTPException(status_code=400, detail="Multi-model mode not active")
 
         # Resolve aliases / case / org-prefix the way retrieve and
@@ -339,7 +420,9 @@ async def unload_model(model_id: str, request: Request) -> dict:
         _resolved_id = manager.resolve_model_id(model_id) or model_id
         entry = manager.get_entry(_resolved_id)
         if entry is None:
-            log_operation("model_unload", model_id, "failure", actor=actor, detail="not_found")
+            log_operation(
+                "model_unload", model_id, "failure", actor=actor, detail="not_found"
+            )
             raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
 
         # Safety: refuse unload if the engine has active requests that would
@@ -357,7 +440,13 @@ async def unload_model(model_id: str, request: Request) -> dict:
                 # NOTE: do NOT modify _model_ops_inflight here — the finally
                 # block handles cleanup under the lock.  Modifying the set
                 # without the lock is a race with concurrent load/unload.
-                log_operation("model_unload", model_id, "failure", actor=actor, detail="active_requests")
+                log_operation(
+                    "model_unload",
+                    model_id,
+                    "failure",
+                    actor=actor,
+                    detail="active_requests",
+                )
                 raise HTTPException(
                     status_code=409,
                     detail=f"Cannot unload '{model_id}': active requests in progress. Wait for them to complete or cancel them first.",
@@ -371,7 +460,13 @@ async def unload_model(model_id: str, request: Request) -> dict:
         # actively-serving model was gone. A False also covers already-unloaded/not-found.
         _unloaded = await manager.unload_model(_resolved_id)
         if not _unloaded:
-            log_operation("model_unload", model_id, "skipped", actor=actor, detail="in_use_or_absent")
+            log_operation(
+                "model_unload",
+                model_id,
+                "skipped",
+                actor=actor,
+                detail="in_use_or_absent",
+            )
             raise HTTPException(
                 status_code=409,
                 detail=f"Model '{model_id}' was not unloaded — it became active or was already unloaded. Retry after in-flight requests complete.",
@@ -381,7 +476,9 @@ async def unload_model(model_id: str, request: Request) -> dict:
     except HTTPException:
         raise
     except Exception as e:
-        log_operation("model_unload", model_id, "failure", actor=actor, detail=str(e)[:120])
+        log_operation(
+            "model_unload", model_id, "failure", actor=actor, detail=str(e)[:120]
+        )
         raise
     finally:
         async with _model_ops_lock:

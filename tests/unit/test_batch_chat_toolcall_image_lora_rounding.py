@@ -11,6 +11,7 @@
 (disaggregate.py): _resolve_engine fell back to "any loaded engine" for a named-but-
   absent model — wrong-model output. Now strict when ≥2 models are loaded.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -18,6 +19,7 @@ import inspect
 
 def test_streaming_image_applies_inline_lora():
     from yunshu_engine.image_engine import ImageGenEngine as ImageEngine
+
     src = inspect.getsource(ImageEngine.generate_image_stream)
     assert "_parse_lora_tags(prompt)" in src
     assert "self._apply_inline_loras(_lora_tags)" in src
@@ -28,6 +30,7 @@ def test_streaming_image_applies_inline_lora():
 
 def test_to_png_rounds_before_uint8():
     from yunshu_engine.image_engine import ImageGenEngine as ImageEngine
+
     src = inspect.getsource(ImageEngine._to_png)
     assert "(arr * 255).round().astype(np.uint8)" in src
     assert "(arr * 255).astype(np.uint8)" not in src
@@ -35,15 +38,22 @@ def test_to_png_rounds_before_uint8():
 
 def test_round_behavior_numerically():
     import numpy as np
+
     # a value that truncation and rounding disagree on: 0.5/255 region
     arr = np.array([[0.5019607843, 0.9999]], dtype=np.float64)  # *255 = 128.0.., 254.97
     truncated = (arr * 255).astype(np.uint8)
     rounded = (arr * 255).round().astype(np.uint8)
-    assert rounded[0, 1] == 255 and truncated[0, 1] == 254  # rounding recovers the top value
+    assert (
+        rounded[0, 1] == 255 and truncated[0, 1] == 254
+    )  # rounding recovers the top value
 
 
 def test_vlm_thinking_strip_unconditional():
     from yunshu_gateway.routers import chat
+
     src = inspect.getsource(chat)
     # the VLM gen path no longer gates extract_thinking on enable_thinking
-    assert "if req.enable_thinking:\n            thinking_content, content = extract_thinking" not in src
+    assert (
+        "if req.enable_thinking:\n            thinking_content, content = extract_thinking"
+        not in src
+    )

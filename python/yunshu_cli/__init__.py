@@ -51,6 +51,7 @@ def _global_options(
     # disk, not query http://localhost:8000).
     try:
         from click.core import ParameterSource
+
         src = ctx.get_parameter_source("url")
         if src in (ParameterSource.COMMANDLINE, ParameterSource.ENVIRONMENT):
             os.environ["YUNSHU_GATEWAY_URL"] = url

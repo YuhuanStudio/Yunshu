@@ -6,6 +6,7 @@ decode re-prefilled). set_block_consumer(fn) lets the decode engine register a c
 reconstructs the KV into its reusable cache (load_kv_blocks_into_cache, proven), keeping
 the server engine-agnostic. Real-socket end-to-end proof: scripts/verify/verify_kv_sync_consumer.py.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -16,8 +17,10 @@ import yunshu_engine.kv_transfer as KT  # noqa: N812  # intentional short module
 def test_set_block_consumer_api():
     srv = KT.KVTransferServer(KT.KVTransferConfig(enabled=False))
     assert srv._block_consumer is None
+
     def sentinel(blocks, model):
         return len(blocks)
+
     srv.set_block_consumer(sentinel)
     assert srv._block_consumer is sentinel
 

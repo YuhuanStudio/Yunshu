@@ -10,6 +10,7 @@ prompt — so the penalty was computed over the prompt tail and only a 20-token 
 materially diverging from the fast path (which counts the GENERATED completion only, over
 the full history). The scheduler now uses the same generated-only closure.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -17,6 +18,7 @@ import inspect
 
 def test_add_request_forwards_min_tokens_ignore_eos_suppress():
     from yunshu_engine import engine_core
+
     src = inspect.getsource(engine_core.EngineCore.add_request)
     # the three params are forwarded into SamplingParams from kwargs
     assert "min_tokens=int(kwargs.get('min_tokens'" in src
@@ -26,10 +28,11 @@ def test_add_request_forwards_min_tokens_ignore_eos_suppress():
 
 def test_batched_engine_loop_passes_the_three_params():
     from yunshu_engine.batched_engine import BatchedEngine
+
     src = inspect.getsource(BatchedEngine.generate)
     # the _engine_core.generate call now threads all three
     i = src.index("self._engine_core.generate(")
-    window = src[i:i + 2000]
+    window = src[i : i + 2000]
     assert "min_tokens=min_tokens" in window
     assert "ignore_eos=ignore_eos" in window
     assert "suppress_tokens=suppress_tokens" in window
@@ -37,6 +40,7 @@ def test_batched_engine_loop_passes_the_three_params():
 
 def test_scheduler_freq_pres_penalty_is_generated_only():
     from yunshu_engine import scheduler
+
     src = inspect.getsource(scheduler.Scheduler._make_sampler)
     # presence/frequency are no longer handed to mlx-lm's window-based factory
     assert "presence_penalty=sp.presence_penalty" not in src

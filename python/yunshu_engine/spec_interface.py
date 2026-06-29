@@ -40,6 +40,7 @@ class DraftProposal:
         strategy_name: Name of the strategy that produced this proposal.
         metadata: Optional strategy-specific metadata (e.g., ngram match length).
     """
+
     tokens: list[int] = field(default_factory=list)
     strategy_name: str = ""
     metadata: dict = field(default_factory=dict)
@@ -86,8 +87,12 @@ class SpecStrategy(ABC):
         ...
 
     @abstractmethod
-    def accept(self, draft_tokens: list[int], verified_up_to: int,
-               bonus_token: int | None = None) -> None:
+    def accept(
+        self,
+        draft_tokens: list[int],
+        verified_up_to: int,
+        bonus_token: int | None = None,
+    ) -> None:
         """Accept verified tokens and update internal state.
 
         Called after the target model has verified the draft tokens.
@@ -137,6 +142,7 @@ class NgramStrategy(SpecStrategy):
 
     def __init__(self, config: Any = None) -> None:
         from .ngram_proposer import NgramConfig, NgramProposer
+
         if config is None:
             config = NgramConfig()
         elif isinstance(config, dict):
@@ -169,8 +175,12 @@ class NgramStrategy(SpecStrategy):
             metadata={"mode": self._config.mode},
         )
 
-    def accept(self, draft_tokens: list[int], verified_up_to: int,
-               bonus_token: int | None = None) -> None:
+    def accept(
+        self,
+        draft_tokens: list[int],
+        verified_up_to: int,
+        bonus_token: int | None = None,
+    ) -> None:
         self._total_accepted += 1
         self._total_accepted_tokens += verified_up_to
         # Feed accepted tokens back to the underlying proposer so it can
@@ -194,7 +204,8 @@ class NgramStrategy(SpecStrategy):
             "total_accepted_tokens": self._total_accepted_tokens,
             "acceptance_rate": (
                 self._total_accepted_tokens / self._total_draft_tokens
-                if self._total_draft_tokens > 0 else 0.0
+                if self._total_draft_tokens > 0
+                else 0.0
             ),
             **proposer_stats,
         }
@@ -207,10 +218,10 @@ class NgramStrategy(SpecStrategy):
         self._total_draft_tokens = 0
         self._total_accepted = 0
         self._total_accepted_tokens = 0
-        _hashpool = getattr(self._proposer, '_hashpool', None)
+        _hashpool = getattr(self._proposer, "_hashpool", None)
         if _hashpool is not None:
             _hashpool.clear()
-        _lcg_pool = getattr(self._proposer, '_lcg_pool', None)
+        _lcg_pool = getattr(self._proposer, "_lcg_pool", None)
         if _lcg_pool is not None:
             _lcg_pool.clear()
 
@@ -261,8 +272,12 @@ class CrossModelStrategy(SpecStrategy):
             metadata={"draft_length": K},
         )
 
-    def accept(self, draft_tokens: list[int], verified_up_to: int,
-               bonus_token: int | None = None) -> None:
+    def accept(
+        self,
+        draft_tokens: list[int],
+        verified_up_to: int,
+        bonus_token: int | None = None,
+    ) -> None:
         self._total_accepted += 1
         self._total_accepted_tokens += verified_up_to
 
@@ -275,7 +290,8 @@ class CrossModelStrategy(SpecStrategy):
             "total_accepted_tokens": self._total_accepted_tokens,
             "acceptance_rate": (
                 self._total_accepted_tokens / self._total_draft_tokens
-                if self._total_draft_tokens > 0 else 0.0
+                if self._total_draft_tokens > 0
+                else 0.0
             ),
         }
         if self._decoder is not None:
@@ -338,8 +354,12 @@ class MTPStrategy(SpecStrategy):
             metadata={"draft_length": 1},
         )
 
-    def accept(self, draft_tokens: list[int], verified_up_to: int,
-               bonus_token: int | None = None) -> None:
+    def accept(
+        self,
+        draft_tokens: list[int],
+        verified_up_to: int,
+        bonus_token: int | None = None,
+    ) -> None:
         self._total_accepted += 1
         self._total_accepted_tokens += verified_up_to
 
@@ -352,7 +372,8 @@ class MTPStrategy(SpecStrategy):
             "total_accepted_tokens": self._total_accepted_tokens,
             "acceptance_rate": (
                 self._total_accepted_tokens / self._total_draft_tokens
-                if self._total_draft_tokens > 0 else 0.0
+                if self._total_draft_tokens > 0
+                else 0.0
             ),
         }
         if self._decoder is not None:
@@ -419,24 +440,25 @@ class CompositeStrategy(SpecStrategy):
         # All strategies returned empty
         return DraftProposal(tokens=[], strategy_name="composite(empty)")
 
-    def accept(self, draft_tokens: list[int], verified_up_to: int,
-               bonus_token: int | None = None) -> None:
+    def accept(
+        self,
+        draft_tokens: list[int],
+        verified_up_to: int,
+        bonus_token: int | None = None,
+    ) -> None:
         # Only forward accept to the strategy that actually proposed the draft.
         # Forwarding to ALL children would inflate acceptance stats for
         # non-participating strategies.
         if self._last_proposer is not None:
             for s in self._strategies:
                 if s.name == self._last_proposer:
-                    s.accept(draft_tokens, verified_up_to,
-                             bonus_token=bonus_token)
+                    s.accept(draft_tokens, verified_up_to, bonus_token=bonus_token)
                     break
         self._last_proposer = None
 
     def stats(self) -> dict:
         child_stats = [s.stats() for s in self._strategies]
-        total_draft_tokens = sum(
-            cs.get("total_draft_tokens", 0) for cs in child_stats
-        )
+        total_draft_tokens = sum(cs.get("total_draft_tokens", 0) for cs in child_stats)
         total_accepted_tokens = sum(
             cs.get("total_accepted_tokens", 0) for cs in child_stats
         )
@@ -447,7 +469,8 @@ class CompositeStrategy(SpecStrategy):
             "total_accepted_tokens": total_accepted_tokens,
             "acceptance_rate": (
                 total_accepted_tokens / total_draft_tokens
-                if total_draft_tokens > 0 else 0.0
+                if total_draft_tokens > 0
+                else 0.0
             ),
             "strategy_usage": dict(self._total_used),
             "children": child_stats,
@@ -474,6 +497,7 @@ class GPUNgramStrategy(SpecStrategy):
 
     def __init__(self, config: Any = None) -> None:
         from .gpu_ngram import GPUNgramConfig, GPUNgramProposer
+
         if config is None:
             config = GPUNgramConfig()
         elif isinstance(config, dict):
@@ -503,8 +527,12 @@ class GPUNgramStrategy(SpecStrategy):
             metadata={"mode": "gpu_ngram"},
         )
 
-    def accept(self, draft_tokens: list[int], verified_up_to: int,
-               bonus_token: int | None = None) -> None:
+    def accept(
+        self,
+        draft_tokens: list[int],
+        verified_up_to: int,
+        bonus_token: int | None = None,
+    ) -> None:
         self._total_accepted += 1
         self._total_accepted_tokens += verified_up_to
         # Add accepted tokens to the GPU table for future matching
@@ -521,7 +549,8 @@ class GPUNgramStrategy(SpecStrategy):
             "total_accepted_tokens": self._total_accepted_tokens,
             "acceptance_rate": (
                 self._total_accepted_tokens / self._total_draft_tokens
-                if self._total_draft_tokens > 0 else 0.0
+                if self._total_draft_tokens > 0
+                else 0.0
             ),
             **proposer_stats,
         }
@@ -534,7 +563,7 @@ class GPUNgramStrategy(SpecStrategy):
         self._total_draft_tokens = 0
         self._total_accepted = 0
         self._total_accepted_tokens = 0
-        table = getattr(self._proposer, 'table', None)
+        table = getattr(self._proposer, "table", None)
         if table is not None:
             table.clear()
 
@@ -549,6 +578,7 @@ class SuffixStrategy(SpecStrategy):
 
     def __init__(self, config: Any = None) -> None:
         from .suffix_proposer import SuffixConfig, SuffixProposer
+
         if config is None:
             config = SuffixConfig()
         elif isinstance(config, dict):
@@ -577,12 +607,15 @@ class SuffixStrategy(SpecStrategy):
             metadata={"mode": "suffix"},
         )
 
-    def accept(self, draft_tokens: list[int], verified_up_to: int,
-               bonus_token: int | None = None) -> None:
+    def accept(
+        self,
+        draft_tokens: list[int],
+        verified_up_to: int,
+        bonus_token: int | None = None,
+    ) -> None:
         self._total_accepted += 1
         self._total_accepted_tokens += verified_up_to
-        self._proposer.accept(draft_tokens, verified_up_to,
-                              bonus_token=bonus_token)
+        self._proposer.accept(draft_tokens, verified_up_to, bonus_token=bonus_token)
 
     def stats(self) -> dict:
         proposer_stats = self._proposer.get_stats()
@@ -594,7 +627,8 @@ class SuffixStrategy(SpecStrategy):
             "total_accepted_tokens": self._total_accepted_tokens,
             "acceptance_rate": (
                 self._total_accepted_tokens / self._total_draft_tokens
-                if self._total_draft_tokens > 0 else 0.0
+                if self._total_draft_tokens > 0
+                else 0.0
             ),
             **proposer_stats,
         }
@@ -666,8 +700,12 @@ class DeltaNetInversionStrategy(SpecStrategy):
             metadata={"inversion_available": True},
         )
 
-    def accept(self, draft_tokens: list[int], verified_up_to: int,
-               bonus_token: int | None = None) -> None:
+    def accept(
+        self,
+        draft_tokens: list[int],
+        verified_up_to: int,
+        bonus_token: int | None = None,
+    ) -> None:
         self._total_accepted += 1
         self._total_accepted_tokens += verified_up_to
         # If fewer tokens accepted than proposed, trigger inversion recovery
@@ -688,7 +726,8 @@ class DeltaNetInversionStrategy(SpecStrategy):
             "total_accepted_tokens": self._total_accepted_tokens,
             "acceptance_rate": (
                 self._total_accepted_tokens / self._total_draft_tokens
-                if self._total_draft_tokens > 0 else 0.0
+                if self._total_draft_tokens > 0
+                else 0.0
             ),
             "total_inversions": self._total_inversions,
             "total_inversion_failures": self._total_inversion_failures,
@@ -773,6 +812,7 @@ class SpecStrategyFactory:
     @staticmethod
     def _create_ngram(config: dict) -> NgramStrategy:
         from .ngram_proposer import NgramConfig
+
         ngram_kwargs = {}
         if "mode" in config:
             ngram_kwargs["mode"] = config["mode"]
@@ -792,6 +832,7 @@ class SpecStrategyFactory:
     @staticmethod
     def _create_gpu_ngram(config: dict) -> GPUNgramStrategy:
         from .gpu_ngram import GPUNgramConfig
+
         kwargs: dict[str, Any] = {}
         if "min_n" in config:
             kwargs["min_n"] = int(config["min_n"])
@@ -809,6 +850,7 @@ class SpecStrategyFactory:
     @staticmethod
     def _create_suffix(config: dict) -> SuffixStrategy:
         from .suffix_proposer import SuffixConfig
+
         kwargs: dict[str, Any] = {}
         if "min_suffix_length" in config:
             kwargs["min_suffix_length"] = int(config["min_suffix_length"])
@@ -840,6 +882,7 @@ class SpecStrategyFactory:
         inverter = config.get("inverter")
         if inverter is None:
             from .deltanet_inversion import DeltaNetInverter
+
             inverter = DeltaNetInverter()
         return DeltaNetInversionStrategy(inverter=inverter, config=config)
 
@@ -864,6 +907,7 @@ class SpecStrategyFactory:
             A SpecStrategy, or None if no strategy is configured.
         """
         import os
+
         strategy_type = os.environ.get("YUNSHU_SPEC_STRATEGY", "").strip().lower()
         if not strategy_type:
             return None
@@ -880,11 +924,12 @@ class SpecStrategyFactory:
             config["k"] = int(os.environ.get("YUNSHU_NGRAM_K", "5"))
         elif strategy_type == "suffix":
             config["min_suffix_length"] = int(
-                os.environ.get("YUNSHU_SUFFIX_MIN_LEN", "3"))
+                os.environ.get("YUNSHU_SUFFIX_MIN_LEN", "3")
+            )
             config["max_window"] = int(
-                os.environ.get("YUNSHU_SUFFIX_MAX_WINDOW", "512"))
-            config["max_draft"] = int(
-                os.environ.get("YUNSHU_SUFFIX_MAX_DRAFT", "5"))
+                os.environ.get("YUNSHU_SUFFIX_MAX_WINDOW", "512")
+            )
+            config["max_draft"] = int(os.environ.get("YUNSHU_SUFFIX_MAX_DRAFT", "5"))
         elif strategy_type == "deltanet":
             config["enabled"] = True
         return SpecStrategyFactory.create(config)

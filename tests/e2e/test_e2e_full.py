@@ -22,7 +22,6 @@ with a valid model name are excluded because the mocked engine's async
 step loop does not produce tokens.
 """
 
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -34,6 +33,7 @@ from yunshu_gateway import engine as engine_mod
 from yunshu_gateway.main import create_app
 
 # ─── Fake Components ───────────────────────────────────────────
+
 
 class _FakeDetokenizer:
     """Fake streaming detokenizer for per-request use."""
@@ -112,6 +112,7 @@ def _client_without_engine():
 # 1. Chat Completion Error Tests
 # ═══════════════════════════════════════════════════════════════
 
+
 class TestChatCompletion:
     """Test /v1/chat/completions endpoint error cases.
 
@@ -184,6 +185,7 @@ class TestChatCompletion:
 # 2. Text Completions Tests
 # ═══════════════════════════════════════════════════════════════
 
+
 class TestCompletions:
     """Test /v1/completions endpoint."""
 
@@ -219,6 +221,7 @@ class TestCompletions:
 # ═══════════════════════════════════════════════════════════════
 # 3. Model Management Tests
 # ═══════════════════════════════════════════════════════════════
+
 
 class TestModelManagement:
     """Test model listing and detail endpoints."""
@@ -279,6 +282,7 @@ class TestModelManagement:
 # 4. Embeddings Tests
 # ═══════════════════════════════════════════════════════════════
 
+
 class TestEmbeddings:
     """Test /v1/embeddings endpoint."""
 
@@ -312,6 +316,7 @@ class TestEmbeddings:
 # ═══════════════════════════════════════════════════════════════
 # 5. Health / Version / Metrics Tests
 # ═══════════════════════════════════════════════════════════════
+
 
 class TestHealthVersion:
     """Test health check, version, and metrics endpoints."""
@@ -378,6 +383,7 @@ class TestHealthVersion:
 # 6. Authentication Tests
 # ═══════════════════════════════════════════════════════════════
 
+
 class TestAuthentication:
     """Test API authentication behavior."""
 
@@ -414,6 +420,7 @@ class TestAuthentication:
 # ═══════════════════════════════════════════════════════════════
 # 7. MCP Protocol Tests
 # ═══════════════════════════════════════════════════════════════
+
 
 class TestMCP:
     """Test Model Context Protocol endpoints."""
@@ -494,6 +501,7 @@ class TestMCP:
 # 8. Batch API Tests
 # ═══════════════════════════════════════════════════════════════
 
+
 class TestBatchAPI:
     """Test /v1/batch endpoint validation."""
 
@@ -530,6 +538,7 @@ class TestBatchAPI:
 # ═══════════════════════════════════════════════════════════════
 # 9. Anthropic Compatibility Tests
 # ═══════════════════════════════════════════════════════════════
+
 
 class TestAnthropic:
     """Test Anthropic Messages API compatibility."""
@@ -569,6 +578,7 @@ class TestAnthropic:
 # 10. Rate Limiting Tests
 # ═══════════════════════════════════════════════════════════════
 
+
 class TestRateLimiting:
     """Test rate limiting behavior."""
 
@@ -595,6 +605,7 @@ class TestRateLimiting:
 # ═══════════════════════════════════════════════════════════════
 # 11. Response Format Validation Tests
 # ═══════════════════════════════════════════════════════════════
+
 
 class TestResponseFormat:
     """Validate response format compliance with OpenAI spec."""

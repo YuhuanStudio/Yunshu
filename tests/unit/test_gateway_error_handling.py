@@ -9,6 +9,7 @@ Tests error-handling code paths that have zero test coverage:
 - EngineCore abort_request state removal
 - Engine loop error delivery to output collectors
 """
+
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -36,6 +37,7 @@ class TestChatCompletionsMemoryError:
         mock_engine._tokenizer = None
         # Make it a BatchedEngine instance
         from yunshu_engine.batched_engine import BatchedEngine
+
         mock_engine.__class__ = BatchedEngine
         mock_engine.chat = AsyncMock(side_effect=MemoryError("Out of GPU memory"))
 
@@ -51,11 +53,20 @@ class TestChatCompletionsMemoryError:
             """run_with_disconnect_guard replacement that just awaits the coroutine."""
             return await coro
 
-        with patch("yunshu_gateway.routers.chat.get_engine", return_value=mock_engine), \
-             patch("yunshu_gateway.routers.chat.get_model_manager", return_value=None), \
-             patch("yunshu_gateway.routers.chat.run_with_disconnect_guard", side_effect=_run_and_await), \
-             patch("yunshu_engine.tracing.get_inference_tracer", return_value=mock_tracer), \
-             patch("yunshu_engine.tracing.get_structured_logger", return_value=mock_slog):
+        with (
+            patch("yunshu_gateway.routers.chat.get_engine", return_value=mock_engine),
+            patch("yunshu_gateway.routers.chat.get_model_manager", return_value=None),
+            patch(
+                "yunshu_gateway.routers.chat.run_with_disconnect_guard",
+                side_effect=_run_and_await,
+            ),
+            patch(
+                "yunshu_engine.tracing.get_inference_tracer", return_value=mock_tracer
+            ),
+            patch(
+                "yunshu_engine.tracing.get_structured_logger", return_value=mock_slog
+            ),
+        ):
             req = ChatCompletionRequest(
                 model="test-model",
                 messages=[ChatMessage(role="user", content="hello")],
@@ -65,9 +76,11 @@ class TestChatCompletionsMemoryError:
 
         # The MemoryError handler returns JSONResponse(status_code=507, ...)
         from fastapi.responses import JSONResponse
+
         assert isinstance(response, JSONResponse)
         assert response.status_code == 507
         import json
+
         data = json.loads(response.body)
         assert "error" in data
         assert data["error"]["type"] == "memory_error"
@@ -100,11 +113,20 @@ class TestChatCompletionsMemoryError:
         async def _run_and_await(_req, coro, **_kwargs):
             return await coro
 
-        with patch("yunshu_gateway.routers.chat.get_engine", return_value=mock_engine), \
-             patch("yunshu_gateway.routers.chat.get_model_manager", return_value=None), \
-             patch("yunshu_gateway.routers.chat.run_with_disconnect_guard", side_effect=_run_and_await), \
-             patch("yunshu_engine.tracing.get_inference_tracer", return_value=mock_tracer), \
-             patch("yunshu_engine.tracing.get_structured_logger", return_value=mock_slog):
+        with (
+            patch("yunshu_gateway.routers.chat.get_engine", return_value=mock_engine),
+            patch("yunshu_gateway.routers.chat.get_model_manager", return_value=None),
+            patch(
+                "yunshu_gateway.routers.chat.run_with_disconnect_guard",
+                side_effect=_run_and_await,
+            ),
+            patch(
+                "yunshu_engine.tracing.get_inference_tracer", return_value=mock_tracer
+            ),
+            patch(
+                "yunshu_engine.tracing.get_structured_logger", return_value=mock_slog
+            ),
+        ):
             req = ChatCompletionRequest(
                 model="test-model",
                 messages=[ChatMessage(role="user", content="hello")],
@@ -113,9 +135,11 @@ class TestChatCompletionsMemoryError:
             response = await create_chat_completion(req, mock_request)
 
         from fastapi.responses import JSONResponse
+
         assert isinstance(response, JSONResponse)
         assert response.status_code == 507
         import json
+
         data = json.loads(response.body)
         assert "error" in data
         assert data["error"]["type"] == "memory_error"
@@ -140,13 +164,20 @@ class TestChatCompletionsMemoryError:
         messages = [{"role": "user", "content": "hello"}]
 
         response = await _build_multi_choice(
-            mock_engine, req, messages, "chatcmpl-test", True, None,
+            mock_engine,
+            req,
+            messages,
+            "chatcmpl-test",
+            True,
+            None,
         )
 
         from fastapi.responses import JSONResponse
+
         assert isinstance(response, JSONResponse)
         assert response.status_code == 507
         import json
+
         data = json.loads(response.body)
         assert "error" in data
         assert data["error"]["type"] == "memory_error"
@@ -176,12 +207,16 @@ class TestAnthropicMemoryError:
         )
         stop = []
 
-        response = await _non_stream_batched(mock_engine, [{"role": "user", "content": "hello"}], req, stop)
+        response = await _non_stream_batched(
+            mock_engine, [{"role": "user", "content": "hello"}], req, stop
+        )
 
         from fastapi.responses import JSONResponse
+
         assert isinstance(response, JSONResponse)
         assert response.status_code == 507
         import json
+
         data = json.loads(response.body)
         assert data["type"] == "error"
         assert data["error"]["type"] == "overloaded_error"
@@ -196,7 +231,9 @@ class TestAnthropicMemoryError:
         )
 
         mock_engine = MagicMock()
-        mock_engine.generate = AsyncMock(side_effect=MemoryError("Insufficient GPU memory"))
+        mock_engine.generate = AsyncMock(
+            side_effect=MemoryError("Insufficient GPU memory")
+        )
 
         req = AnthropicMessagesRequest(
             model="claude-3",
@@ -204,12 +241,16 @@ class TestAnthropicMemoryError:
         )
         stop = []
 
-        response = await _non_stream_legacy(mock_engine, [{"role": "user", "content": "hello"}], req, stop)
+        response = await _non_stream_legacy(
+            mock_engine, [{"role": "user", "content": "hello"}], req, stop
+        )
 
         from fastapi.responses import JSONResponse
+
         assert isinstance(response, JSONResponse)
         assert response.status_code == 507
         import json
+
         data = json.loads(response.body)
         assert data["type"] == "error"
         assert data["error"]["type"] == "overloaded_error"
@@ -232,12 +273,16 @@ class TestAnthropicMemoryError:
         )
         stop = []
 
-        response = await _non_stream_batched(mock_engine, [{"role": "user", "content": "hello"}], req, stop)
+        response = await _non_stream_batched(
+            mock_engine, [{"role": "user", "content": "hello"}], req, stop
+        )
 
         from fastapi.responses import JSONResponse
+
         assert isinstance(response, JSONResponse)
         assert response.status_code == 500
         import json
+
         data = json.loads(response.body)
         assert data["type"] == "error"
         assert data["error"]["type"] == "api_error"
@@ -260,12 +305,16 @@ class TestAnthropicMemoryError:
         )
         stop = []
 
-        response = await _non_stream_legacy(mock_engine, [{"role": "user", "content": "hello"}], req, stop)
+        response = await _non_stream_legacy(
+            mock_engine, [{"role": "user", "content": "hello"}], req, stop
+        )
 
         from fastapi.responses import JSONResponse
+
         assert isinstance(response, JSONResponse)
         assert response.status_code == 500
         import json
+
         data = json.loads(response.body)
         assert data["type"] == "error"
         assert data["error"]["type"] == "api_error"
@@ -301,12 +350,14 @@ class TestResponsesAPIBatched:
             finished=True,
         )
         mock_engine.chat = AsyncMock(return_value=gen_output)
-        mock_engine.generate = AsyncMock(return_value=MagicMock(
-            generated_text="Should not be called",
-            prompt_token_count=5,
-            completion_token_count=2,
-            finish_reason="stop",
-        ))
+        mock_engine.generate = AsyncMock(
+            return_value=MagicMock(
+                generated_text="Should not be called",
+                prompt_token_count=5,
+                completion_token_count=2,
+                finish_reason="stop",
+            )
+        )
 
         mock_request = MagicMock()
         mock_request.state = MagicMock()
@@ -372,12 +423,14 @@ class TestResponsesAPIBatched:
         mock_engine.is_loaded = True
         mock_engine.resolve_model_id = MagicMock(return_value=True)
 
-        mock_engine.generate = AsyncMock(return_value=MagicMock(
-            generated_text="Hello from legacy",
-            prompt_token_count=3,
-            completion_token_count=3,
-            finish_reason="stop",
-        ))
+        mock_engine.generate = AsyncMock(
+            return_value=MagicMock(
+                generated_text="Hello from legacy",
+                prompt_token_count=3,
+                completion_token_count=3,
+                finish_reason="stop",
+            )
+        )
 
         req = ResponsesRequest(
             model="test-model",
@@ -536,6 +589,7 @@ class TestFinalizeRequestIdempotency:
     def _make_engine_core(self):
         """Create a minimal EngineCore with mocked internals (bypass __init__)."""
         from yunshu_engine.engine_core import EngineCore
+
         core = object.__new__(EngineCore)
 
         # Mock all internal modules that _finalize_request touches
@@ -628,6 +682,7 @@ class TestAbortRequestRemovesState:
     def _make_engine_core(self):
         """Create a minimal EngineCore with mocked internals (bypass __init__)."""
         from yunshu_engine.engine_core import EngineCore
+
         core = object.__new__(EngineCore)
 
         core._output_collectors = {}
@@ -666,6 +721,7 @@ class TestAbortRequestRemovesState:
             RequestOutputCollector,
             RequestStreamState,
         )
+
         collector = RequestOutputCollector(aggregate=True)
         core._output_collectors[req_id] = collector
         core._stream_states[req_id] = RequestStreamState(stream_interval=1)
@@ -691,6 +747,7 @@ class TestAbortRequestRemovesState:
             RequestOutputCollector,
             RequestStreamState,
         )
+
         collector = RequestOutputCollector(aggregate=True)
         core._output_collectors[req_id] = collector
         core._stream_states[req_id] = RequestStreamState(stream_interval=1)
@@ -714,6 +771,7 @@ class TestEngineLoopErrorDelivery:
     def _make_engine_core(self):
         """Create a minimal EngineCore with mocked internals (bypass __init__)."""
         from yunshu_engine.engine_core import EngineCore
+
         core = object.__new__(EngineCore)
 
         core._output_collectors = {}
@@ -805,12 +863,14 @@ class TestEngineLoopErrorDelivery:
         for rid in core.scheduler.fail_all_requests():
             coll = core._output_collectors.get(rid)
             if coll is not None:
-                coll.put(RequestOutput(
-                    request_id=rid,
-                    finished=True,
-                    finish_reason="error",
-                    error=f"Scheduler step error: {error}",
-                ))
+                coll.put(
+                    RequestOutput(
+                        request_id=rid,
+                        finished=True,
+                        finish_reason="error",
+                        error=f"Scheduler step error: {error}",
+                    )
+                )
                 coll.put(None)  # sentinel
             core._signal_finished(rid)
             core._finalize_request(rid)

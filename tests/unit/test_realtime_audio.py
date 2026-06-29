@@ -103,7 +103,8 @@ class TestAudioBufferCommit:
 
         ws: MockWebSocket = session.ws  # type: ignore[assignment]
         committed_events = [
-            e for e in ws.sent
+            e
+            for e in ws.sent
             if e.get("type") == RealtimeEvent.INPUT_AUDIO_BUFFER_COMMITTED
         ]
         assert len(committed_events) == 1
@@ -117,8 +118,7 @@ class TestAudioBufferCommit:
         # Should only have the committed event, no conversation.item.created
         ws: MockWebSocket = session.ws  # type: ignore[assignment]
         item_events = [
-            e for e in ws.sent
-            if e.get("type") == "conversation.item.created"
+            e for e in ws.sent if e.get("type") == "conversation.item.created"
         ]
         assert len(item_events) == 0
 
@@ -187,8 +187,10 @@ class TestSynthesizeAudio:
         # No audio events sent because there is no model manager
         ws: MockWebSocket = session.ws  # type: ignore[assignment]
         audio_events = [
-            e for e in ws.sent
-            if e.get("type") in (
+            e
+            for e in ws.sent
+            if e.get("type")
+            in (
                 RealtimeEvent.RESPONSE_AUDIO_TRANSCRIPT_DELTA,
                 RealtimeEvent.RESPONSE_AUDIO_TRANSCRIPT_DONE,
             )
@@ -232,8 +234,7 @@ class TestSynthesizeAudio:
         await session._synthesize_audio_response("hello", "resp_3", "item_3")
         ws: MockWebSocket = session.ws  # type: ignore[assignment]
         deltas = [
-            e for e in ws.sent
-            if e.get("type") == RealtimeEvent.RESPONSE_AUDIO_DELTA
+            e for e in ws.sent if e.get("type") == RealtimeEvent.RESPONSE_AUDIO_DELTA
         ]
         assert deltas, "bytes synthesize must produce audio deltas"
         # Each delta is valid base64 and decodes to non-empty audio.
@@ -261,11 +262,13 @@ class TestSessionConfig:
 
     def test_update_applies_and_returns_changed_fields(self):
         config = SessionConfig()
-        changed = config.update({
-            "model": "qwen3",
-            "temperature": 0.3,
-            "modalities": ["text", "audio"],
-        })
+        changed = config.update(
+            {
+                "model": "qwen3",
+                "temperature": 0.3,
+                "modalities": ["text", "audio"],
+            }
+        )
         assert "model" in changed
         assert "temperature" in changed
         assert "modalities" in changed
@@ -378,6 +381,7 @@ class TestBuildMessages:
         (content_part.done + output_item.done) — leaving them open leaks a dangling
         in-progress item for SDK clients."""
         import asyncio as _aio
+
         session = _make_session()
         session._response_item_open = True
         session._cancel_event = None
@@ -385,6 +389,7 @@ class TestBuildMessages:
 
         async def _sleeper():
             await _aio.sleep(10)
+
         task = _aio.create_task(_sleeper())
         await _aio.sleep(0)  # let it start (pending, not done)
         task._response_id = "resp_1"
@@ -405,6 +410,7 @@ class TestBuildMessages:
         as a cancel/barge-in, the cancel handler must NOT emit a SECOND response.done
         (status=cancelled). The _response_done_emitted marker is the discriminator."""
         import asyncio as _aio
+
         session = _make_session()
         # Simulate the post-happy-path state: item already closed, terminal sent.
         session._response_item_open = False
@@ -414,6 +420,7 @@ class TestBuildMessages:
 
         async def _sleeper():
             await _aio.sleep(10)
+
         task = _aio.create_task(_sleeper())
         await _aio.sleep(0)  # pending, not done → enters the teardown branch
         task._response_id = "resp_1"
@@ -432,6 +439,7 @@ class TestBuildMessages:
         on barge_in_min_ms so a one-window blip can't kill a reply — so feed >=120ms."""
         import struct
         from unittest.mock import AsyncMock, MagicMock
+
         session = _make_session()
         session._vad_speaking = False
         session._vad_silence_start = None
@@ -449,7 +457,9 @@ class TestBuildMessages:
     def test_builds_messages_from_conversation_items(self):
         session = self._make_session_with_conversation()
         user_item = ConversationItem(
-            "item_1", "message", role="user",
+            "item_1",
+            "message",
+            role="user",
             content=[{"type": "text", "text": "Hello"}],
         )
         user_item.status = "completed"
@@ -474,8 +484,9 @@ class TestBuildMessages:
         must win over the session-level instructions."""
         session = self._make_session_with_conversation()
         session.session.instructions = "You are a helpful assistant."
-        user = ConversationItem("u", "message", role="user",
-                                content=[{"type": "text", "text": "hi"}])
+        user = ConversationItem(
+            "u", "message", role="user", content=[{"type": "text", "text": "hi"}]
+        )
         user.status = "completed"
         session.conversation.add_item(user)
 
@@ -492,7 +503,9 @@ class TestBuildMessages:
     def test_joins_multiple_text_content_parts(self):
         session = self._make_session_with_conversation()
         item = ConversationItem(
-            "item_1", "message", role="user",
+            "item_1",
+            "message",
+            role="user",
             content=[
                 {"type": "text", "text": "Part one"},
                 {"type": "text", "text": "Part two"},
@@ -508,9 +521,14 @@ class TestBuildMessages:
         # function_call is now mapped (tool roundtrip); a genuinely unknown type
         # is still skipped.
         session = self._make_session_with_conversation()
-        session.conversation.add_item(ConversationItem("item_0", "some_unknown_type", role="user"))
-        session.conversation.add_item(ConversationItem(
-            "item_1", "function_call", call_id="c1", name="f", arguments="{}"))
+        session.conversation.add_item(
+            ConversationItem("item_0", "some_unknown_type", role="user")
+        )
+        session.conversation.add_item(
+            ConversationItem(
+                "item_1", "function_call", call_id="c1", name="f", arguments="{}"
+            )
+        )
 
         messages = session._build_messages()
         assert len(messages) == 1
@@ -520,7 +538,9 @@ class TestBuildMessages:
     def test_handles_string_content(self):
         session = self._make_session_with_conversation()
         item = ConversationItem(
-            "item_1", "message", role="user",
+            "item_1",
+            "message",
+            role="user",
             content=["plain string content"],
         )
         session.conversation.add_item(item)
@@ -532,15 +552,21 @@ class TestBuildMessages:
     def test_multiple_items_in_order(self):
         session = self._make_session_with_conversation()
         user = ConversationItem(
-            "u1", "message", role="user",
+            "u1",
+            "message",
+            role="user",
             content=[{"type": "text", "text": "hi"}],
         )
         asst = ConversationItem(
-            "a1", "message", role="assistant",
+            "a1",
+            "message",
+            role="assistant",
             content=[{"type": "text", "text": "hello"}],
         )
         user2 = ConversationItem(
-            "u2", "message", role="user",
+            "u2",
+            "message",
+            role="user",
             content=[{"type": "text", "text": "how are you?"}],
         )
         session.conversation.add_item(user)

@@ -174,9 +174,15 @@ class KVPrefixCompressor:
                 f"Supported: mean_pool, top_k, frequency_aware"
             )
 
-        compressed_shape = compressed.shape if isinstance(compressed, np.ndarray) and compressed.size > 0 else (0,)
+        compressed_shape = (
+            compressed.shape
+            if isinstance(compressed, np.ndarray) and compressed.size > 0
+            else (0,)
+        )
         original_bytes = sum(b.nbytes for b in blocks_np)
-        compressed_bytes = compressed.nbytes if isinstance(compressed, np.ndarray) else 0
+        compressed_bytes = (
+            compressed.nbytes if isinstance(compressed, np.ndarray) else 0
+        )
         ratio = original_bytes / compressed_bytes if compressed_bytes > 0 else 1.0
 
         self._total_compressions += 1
@@ -197,7 +203,9 @@ class KVPrefixCompressor:
             original_block_count=n_blocks,
         )
 
-    def decompress_blocks(self, compressed_result: CompressionResult) -> list[np.ndarray]:
+    def decompress_blocks(
+        self, compressed_result: CompressionResult
+    ) -> list[np.ndarray]:
         """Restore compressed KV blocks to their approximate original form.
 
         Note: Decompression is lossy for mean_pool and frequency_aware.
@@ -256,8 +264,16 @@ class KVPrefixCompressor:
             if isinstance(block, tuple) and len(block) == 2:
                 # (keys, values) tuple
                 keys, values = block
-                keys_np = np.array(keys, dtype=np.float32) if not isinstance(keys, np.ndarray) else keys.astype(np.float32)
-                values_np = np.array(values, dtype=np.float32) if not isinstance(values, np.ndarray) else values.astype(np.float32)
+                keys_np = (
+                    np.array(keys, dtype=np.float32)
+                    if not isinstance(keys, np.ndarray)
+                    else keys.astype(np.float32)
+                )
+                values_np = (
+                    np.array(values, dtype=np.float32)
+                    if not isinstance(values, np.ndarray)
+                    else values.astype(np.float32)
+                )
                 # Stack into shape (2, layers, heads, block_size, head_dim)
                 combined = np.stack([keys_np, values_np], axis=0)
                 result.append(combined)
@@ -677,7 +693,7 @@ class SlidingWindowKVManager:
                 # MLX prompt cache: each entry is (key, value) or a cache object
                 if isinstance(layer_cache, (list, tuple)) and len(layer_cache) == 2:
                     key, value = layer_cache
-                    seq_len = key.shape[0] if hasattr(key, 'shape') else 0
+                    seq_len = key.shape[0] if hasattr(key, "shape") else 0
                     if seq_len > keep_tokens:
                         trim_from_start = seq_len - keep_tokens
                         if trim_from_start > 0 and n_system > 0:
@@ -691,11 +707,17 @@ class SlidingWindowKVManager:
                             else:
                                 # Keep system prefix + window suffix
                                 new_key = mx.concatenate(
-                                    [key[:system_tokens], key[seq_len - effective_window:]],
+                                    [
+                                        key[:system_tokens],
+                                        key[seq_len - effective_window :],
+                                    ],
                                     axis=0,
                                 )
                                 new_value = mx.concatenate(
-                                    [value[:system_tokens], value[seq_len - effective_window:]],
+                                    [
+                                        value[:system_tokens],
+                                        value[seq_len - effective_window :],
+                                    ],
                                     axis=0,
                                 )
                             # CRITICAL: write back to the original kv_cache list.
@@ -713,7 +735,8 @@ class SlidingWindowKVManager:
         except Exception:
             logger.debug(
                 "trim_kv_cache failed for request %s",
-                request_id, exc_info=True,
+                request_id,
+                exc_info=True,
             )
 
         if trimmed > 0:
@@ -721,7 +744,10 @@ class SlidingWindowKVManager:
             logger.debug(
                 "SlidingWindowKV trimmed %d positions for request %s "
                 "(keep=%d, window=%d)",
-                trimmed, request_id, keep_tokens, self._window_size,
+                trimmed,
+                request_id,
+                keep_tokens,
+                self._window_size,
             )
 
         return trimmed
@@ -762,7 +788,8 @@ class SlidingWindowKVManager:
 
         # Non-system blocks below window_start have been evicted.
         evicted_blocks = [
-            b for b in blocks
+            b
+            for b in blocks
             if not b.is_system_prompt and b.token_position < window_start
         ]
         if not evicted_blocks:
@@ -780,10 +807,10 @@ class SlidingWindowKVManager:
         invalidated = 0
         try:
             # Method 1: prefix cache has a dedicated invalidation method.
-            if hasattr(prefix_cache, 'invalidate_up_to'):
+            if hasattr(prefix_cache, "invalidate_up_to"):
                 invalidated = prefix_cache.invalidate_up_to(max_stale_tokens)
             # Method 2: evict entries with a token count filter.
-            elif hasattr(prefix_cache, 'evict_by_max_tokens'):
+            elif hasattr(prefix_cache, "evict_by_max_tokens"):
                 invalidated = prefix_cache.evict_by_max_tokens(max_stale_tokens)
             else:
                 logger.debug(
@@ -793,7 +820,8 @@ class SlidingWindowKVManager:
         except Exception:
             logger.debug(
                 "Prefix cache invalidation failed for request %s",
-                request_id, exc_info=True,
+                request_id,
+                exc_info=True,
             )
 
         return invalidated

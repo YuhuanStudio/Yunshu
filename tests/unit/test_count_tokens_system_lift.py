@@ -7,6 +7,7 @@ a SECOND <|system|> wrapper per lifted message → an overcount vs the real prom
 tokens per extra system message on the real Qwen tokenizer). count_tokens now mirrors the
 lift so its estimate matches what generation actually prompts.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -30,7 +31,8 @@ def _merge_system_like_w1033(top_system, msgs):
 
 def test_lifted_system_messages_merge_into_one_block():
     parts, survivors = _merge_system_like_w1033(
-        "S0", [("system", "S1"), ("user", "hi"), ("system", "S2")])
+        "S0", [("system", "S1"), ("user", "hi"), ("system", "S2")]
+    )
     # all three system texts in ONE block, top-level first then in-message order
     assert parts == ["S0", "S1", "S2"]
     # the system messages are removed from the conversational turns (no double-count)
@@ -38,7 +40,9 @@ def test_lifted_system_messages_merge_into_one_block():
 
 
 def test_no_system_messages_unchanged():
-    parts, survivors = _merge_system_like_w1033(None, [("user", "a"), ("assistant", "b")])
+    parts, survivors = _merge_system_like_w1033(
+        None, [("user", "a"), ("assistant", "b")]
+    )
     assert parts == []
     assert survivors == [("user", "a"), ("assistant", "b")]
 

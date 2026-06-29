@@ -83,13 +83,20 @@ class TestGemma4MessageAdapter:
         """a system-only request (no user/assistant turn) must NOT drop the
         system prompt. The old `system_prefix and adapted` guard returned [] → Gemma template
         raised → plaintext fallback → system 100% lost. Now it injects a user turn."""
-        result = Gemma4MessageAdapter().adapt([{"role": "system", "content": "You are a pirate."}])
+        result = Gemma4MessageAdapter().adapt(
+            [{"role": "system", "content": "You are a pirate."}]
+        )
         assert result == [{"role": "user", "content": "You are a pirate."}]
 
     def test_multi_system_only_accumulates(self):
         result = Gemma4MessageAdapter().adapt(
-            [{"role": "system", "content": "A"}, {"role": "system", "content": "B"}])
-        assert len(result) == 1 and "A" in result[0]["content"] and "B" in result[0]["content"]
+            [{"role": "system", "content": "A"}, {"role": "system", "content": "B"}]
+        )
+        assert (
+            len(result) == 1
+            and "A" in result[0]["content"]
+            and "B" in result[0]["content"]
+        )
 
     def test_family_name(self):
         assert Gemma4MessageAdapter().family_name() == "gemma4"
@@ -125,7 +132,11 @@ class TestQwenMessageAdapter:
     def test_reasoning_content_preserved(self):
         adapter = QwenMessageAdapter()
         msgs = [
-            {"role": "assistant", "content": "Answer", "reasoning_content": "I thought..."},
+            {
+                "role": "assistant",
+                "content": "Answer",
+                "reasoning_content": "I thought...",
+            },
         ]
         result = adapter.adapt(msgs)
         assert result[0]["reasoning_content"] == "I thought..."
@@ -166,7 +177,9 @@ class TestMistralMessageAdapter:
     def test_system_only_request_keeps_system(self):
         """the Gemma4 drop-on-empty sibling — a system-only request must surface
         the system prompt as an injected user turn, not return [] (→ template raise → lost)."""
-        result = MistralMessageAdapter().adapt([{"role": "system", "content": "You are a pirate."}])
+        result = MistralMessageAdapter().adapt(
+            [{"role": "system", "content": "You are a pirate."}]
+        )
         assert result == [{"role": "user", "content": "You are a pirate."}]
 
     def test_tool_call_id_preserved(self):
@@ -237,7 +250,9 @@ class TestPhiMessageAdapter:
 
     def test_reasoning_content_preserved(self):
         adapter = PhiMessageAdapter()
-        msgs = [{"role": "assistant", "content": "Ans", "reasoning_content": "thinking..."}]
+        msgs = [
+            {"role": "assistant", "content": "Ans", "reasoning_content": "thinking..."}
+        ]
         result = adapter.adapt(msgs)
         assert result[0]["reasoning_content"] == "thinking..."
 
@@ -260,7 +275,9 @@ class TestCohereMessageAdapter:
 
     def test_reasoning_content_preserved(self):
         adapter = CohereMessageAdapter()
-        msgs = [{"role": "assistant", "content": "Ans", "reasoning_content": "thinking..."}]
+        msgs = [
+            {"role": "assistant", "content": "Ans", "reasoning_content": "thinking..."}
+        ]
         result = adapter.adapt(msgs)
         assert result[0]["reasoning_content"] == "thinking..."
 
@@ -298,7 +315,9 @@ class TestLLamaMessageAdapter:
 
     def test_reasoning_content_preserved(self):
         adapter = LLamaMessageAdapter()
-        msgs = [{"role": "assistant", "content": "Ans", "reasoning_content": "thinking..."}]
+        msgs = [
+            {"role": "assistant", "content": "Ans", "reasoning_content": "thinking..."}
+        ]
         result = adapter.adapt(msgs)
         assert result[0]["reasoning_content"] == "thinking..."
 
@@ -330,7 +349,9 @@ class TestInternVLMessageAdapter:
 
     def test_reasoning_content_preserved(self):
         adapter = InternVLMessageAdapter()
-        msgs = [{"role": "assistant", "content": "Ans", "reasoning_content": "thinking..."}]
+        msgs = [
+            {"role": "assistant", "content": "Ans", "reasoning_content": "thinking..."}
+        ]
         result = adapter.adapt(msgs)
         assert result[0]["reasoning_content"] == "thinking..."
 
@@ -362,7 +383,9 @@ class TestGLMMessageAdapter:
 
     def test_reasoning_content_preserved(self):
         adapter = GLMMessageAdapter()
-        msgs = [{"role": "assistant", "content": "Ans", "reasoning_content": "thinking..."}]
+        msgs = [
+            {"role": "assistant", "content": "Ans", "reasoning_content": "thinking..."}
+        ]
         result = adapter.adapt(msgs)
         assert result[0]["reasoning_content"] == "thinking..."
 
@@ -481,6 +504,7 @@ class TestRegisterMessageAdapter:
     def teardown_method(self):
         # Clean up registration
         from yunshu_engine.message_adapter import _REGISTRY
+
         _REGISTRY.pop("custom", None)
 
 
@@ -491,10 +515,13 @@ class TestGemma4MultiPartContent:
         adapter = Gemma4MessageAdapter()
         msgs = [
             {"role": "system", "content": "Be helpful."},
-            {"role": "user", "content": [
-                {"type": "text", "text": "Hello"},
-                {"type": "text", "text": "World"},
-            ]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hello"},
+                    {"type": "text", "text": "World"},
+                ],
+            },
         ]
         result = adapter.adapt(msgs)
         assert len(result) == 1

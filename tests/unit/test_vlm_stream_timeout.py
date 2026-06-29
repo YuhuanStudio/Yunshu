@@ -3,6 +3,7 @@
     so a user timeout was silently ignored (hardcoded 300s).
 (2) the timeout branch did NOT set cancel_event, so the executor thread kept decoding to
     max_tokens (stream_task.cancel() can't stop the executor) — the class."""
+
 from __future__ import annotations
 
 import asyncio
@@ -28,7 +29,7 @@ def test_timeout_branch_sets_cancel_event():
     s = _src()
     # In the VLM stream timeout branch, cancel_event must be set so the GPU loop stops.
     to = s.index('logger.warning(f"VLM stream timeout')
-    region = s[to: to + 1400]
+    region = s[to : to + 1400]
     assert "cancel_event.set()" in region
     assert "if cancel_event is not None" in region
 
@@ -38,6 +39,7 @@ def test_cancel_event_set_works_for_both_event_types():
     # and the GPU loop's _is_cancelled reads asyncio.Event._value (thread-safe read).
     ae = asyncio.Event()
     te = threading.Event()
-    ae.set(); te.set()
+    ae.set()
+    te.set()
     assert ae._value is True  # what _is_cancelled checks for asyncio.Event
     assert te.is_set() is True

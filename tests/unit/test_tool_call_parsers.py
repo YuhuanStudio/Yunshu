@@ -1,4 +1,5 @@
 """Tests for C15: Tool Call Parsers — multi-model format support."""
+
 import json
 
 from yunshu_engine.tool_call_parsers import (
@@ -97,7 +98,7 @@ class TestParseDeepseekToolCalls:
         # Real DeepSeek-V3 wire format: name between markers, args follow sep with
         # no fence (verified vs reference/llama.cpp/tests/test-chat.cpp:3286).
         text = (
-            '<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_weather'
+            "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_weather"
             '<｜tool▁sep｜>{"city": "Taipei"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>'
         )
         calls = parse_deepseek_tool_calls(text)
@@ -116,7 +117,7 @@ class TestParseDeepseekToolCalls:
     def test_r1_format_with_fence(self):
         # Older DeepSeek-R1: literal "function" before sep, name after, ```json fence.
         text = (
-            '<｜tool▁call▁begin｜>function<｜tool▁sep｜>get_weather\n'
+            "<｜tool▁call▁begin｜>function<｜tool▁sep｜>get_weather\n"
             '```json\n{"city": "Taipei"}\n```<｜tool▁call▁end｜>'
         )
         calls = parse_deepseek_tool_calls(text)
@@ -138,17 +139,21 @@ class TestParseGlmToolCalls:
 
     def test_glm_47_flash_arg_kv(self):
         # GLM-4.7-Flash: <tool_call>name<arg_key>k</arg_key><arg_value>v</arg_value></tool_call>
-        text = ('<tool_call>special_function'
-                '<arg_key>arg1</arg_key><arg_value>1</arg_value>'
-                '<arg_key>city</arg_key><arg_value>"Taipei"</arg_value></tool_call>')
+        text = (
+            "<tool_call>special_function"
+            "<arg_key>arg1</arg_key><arg_value>1</arg_value>"
+            '<arg_key>city</arg_key><arg_value>"Taipei"</arg_value></tool_call>'
+        )
         calls = parse_glm_tool_calls(text)
         assert len(calls) == 1
         assert calls[0].name == "special_function"
         assert json.loads(calls[0].arguments) == {"arg1": 1, "city": "Taipei"}
 
     def test_glm_46_arg_kv_newlines(self):
-        text = ('<tool_call>get_weather\n'
-                '<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>')
+        text = (
+            "<tool_call>get_weather\n"
+            "<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>"
+        )
         calls = parse_glm_tool_calls(text)
         assert len(calls) == 1
         assert calls[0].name == "get_weather"

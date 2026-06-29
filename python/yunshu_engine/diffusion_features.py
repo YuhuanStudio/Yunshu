@@ -16,6 +16,7 @@ Generic here:
 
 Per-model (NOT here): module naming, ControlNet architecture, tokenizer.
 """
+
 from __future__ import annotations
 
 import re
@@ -80,6 +81,7 @@ def build_token_weights(parsed, clean, formatted, offset_mapping, num_valid):
     offset_mapping). Tokens outside the clean-prompt span get weight 1.0. Returns a
     numpy float32 array of length num_valid."""
     import numpy as np
+
     cw: list[float] = []
     for seg, w in parsed:
         cw.extend([w] * len(seg))
@@ -113,8 +115,10 @@ _LORA_TAG_RE = re.compile(r"<lora:\s*([^:>]+?)\s*(?::\s*([+-]?[\d.]+)\s*)?>", re
 
 def parse_lora_tags(prompt: str):
     """Extract <lora:NAME:WEIGHT> tags → (clean_prompt, [(name, weight), ...])."""
-    tags = [(m.group(1).strip(), float(m.group(2)) if m.group(2) else 1.0)
-            for m in _LORA_TAG_RE.finditer(prompt)]
+    tags = [
+        (m.group(1).strip(), float(m.group(2)) if m.group(2) else 1.0)
+        for m in _LORA_TAG_RE.finditer(prompt)
+    ]
     clean = re.sub(r"\s{2,}", " ", _LORA_TAG_RE.sub("", prompt)).strip()
     return clean, tags
 
@@ -124,6 +128,7 @@ def resolve_lora_file(name: str, search_dir: str = "models") -> str | None:
     AND URL-decoded filename (so a Chinese name finds a %-encoded file). Excludes
     ControlNet files."""
     import os
+
     # Security: this is reachable from an UNTRUSTED image-generation prompt via
     # <lora:NAME:WEIGHT>, so a bare os.path.isfile(name) would load ANY .safetensors on
     # the host — an absolute path (/Volumes/secret/other_tenant.safetensors) or a ..
@@ -138,11 +143,15 @@ def resolve_lora_file(name: str, search_dir: str = "models") -> str | None:
     if not os.path.isdir(search_dir):
         return None
     nl = name.lower()
-    cands = [p for p in os.listdir(search_dir)
-             if p.endswith(".safetensors") and "controlnet" not in p.lower()]
+    cands = [
+        p
+        for p in os.listdir(search_dir)
+        if p.endswith(".safetensors") and "controlnet" not in p.lower()
+    ]
 
     def forms(p):
         return {p.lower(), urllib.parse.unquote(p).lower()}
+
     for p in cands:
         if any(os.path.splitext(f)[0] == nl for f in forms(p)):
             return os.path.join(search_dir, p)
@@ -183,12 +192,16 @@ def load_diffusion_lora(path, *, resolve_module, key_remap=None, strength=1.0):
     groups: dict[str, dict] = {}
     for k, v in raw.items():
         rk = remap(k)
-        for suf, slot in ((".lora_down.weight", "down"),
-                          (".lora_up.weight", "up"), (".alpha", "alpha")):
+        for suf, slot in (
+            (".lora_down.weight", "down"),
+            (".lora_up.weight", "up"),
+            (".alpha", "alpha"),
+        ):
             if rk.endswith(suf):
                 mp = rk[: -len(suf)]
-                groups.setdefault(mp, {})[slot] = (float(v.reshape(-1)[0])
-                                                   if slot == "alpha" else v)
+                groups.setdefault(mp, {})[slot] = (
+                    float(v.reshape(-1)[0]) if slot == "alpha" else v
+                )
                 break
     restore: list = []
     applied = skipped = 0

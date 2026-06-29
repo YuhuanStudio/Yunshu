@@ -1,6 +1,7 @@
 """cache_tokenizer_vocab — memoizes the HF tokenizer's get_vocab so per-request
 streaming-detokenizer construction doesn't rebuild the ~150k-entry vocab (~98ms/req,
 the bulk of fast-path TTFT). ."""
+
 from yunshu_engine.text_utils import cache_tokenizer_vocab
 
 
@@ -16,6 +17,7 @@ class _FakeHF:
 
 class _FakeWrapper:
     """Mimics mlx-lm TokenizerWrapper holding the HF tokenizer as _tokenizer."""
+
     def __init__(self, hf):
         self._tokenizer = hf
 

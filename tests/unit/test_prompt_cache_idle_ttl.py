@@ -12,6 +12,7 @@ Tests drive the real clock and adjust each entry's created_at / last_accessed di
 (the dataclass default_factory captures the real time.monotonic at class definition, so
 patching the module clock would not affect store-time timestamps).
 """
+
 from __future__ import annotations
 
 import time
@@ -32,7 +33,7 @@ def test_hot_entry_survives_despite_ancient_created_at():
     now = time.monotonic()
     e = _entry(cache, h)
     e.created_at = now - 100_000.0  # stored a day ago by the OLD (broken) semantics
-    e.last_accessed = now - 1.0     # but reused 1s ago → still hot
+    e.last_accessed = now - 1.0  # but reused 1s ago → still hot
 
     assert cache.lookup(h) is not None, "hot entry wrongly expired on created_at"
 
@@ -61,7 +62,7 @@ def test_prune_expired_uses_idle_window():
     cache.store(cold, kv_state=[b"c" * 16])
 
     now = time.monotonic()
-    _entry(cache, hot).last_accessed = now - 3.0    # idle 3s < ttl
+    _entry(cache, hot).last_accessed = now - 3.0  # idle 3s < ttl
     _entry(cache, cold).last_accessed = now - 12.0  # idle 12s > ttl
 
     pruned = cache.prune_expired()

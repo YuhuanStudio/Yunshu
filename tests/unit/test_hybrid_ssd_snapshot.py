@@ -9,6 +9,7 @@ back to a full prefill (the hybrid SSD tier was dead for days; measured Qwen3.5
 SSD restore 400ms → 2880ms ≈ cold). These tests assert the file lands at the FINAL
 path, has() is True, load round-trips, and no temp file leaks.
 """
+
 from __future__ import annotations
 
 import mlx.core as mx
@@ -19,6 +20,7 @@ from yunshu_engine.hybrid_ssd_snapshot import HybridSnapshotStore
 
 def _kv(n=8, layers=2):
     from mlx_lm.models.cache import KVCache
+
     out = []
     for _ in range(layers):
         c = KVCache()

@@ -57,7 +57,8 @@ class ModelRegistry:
                     if force:
                         logger.warning(
                             "Model ownership transfer: %s -> %s",
-                            owner_id, engine_id,
+                            owner_id,
+                            engine_id,
                         )
                         self._reset_owner(owner)
                     else:
@@ -105,17 +106,16 @@ class ModelRegistry:
 
     def cleanup(self) -> int:
         with self._lock:
-            stale = [
-                mid for mid, (ref, _, _) in self._owners.items()
-                if ref() is None
-            ]
+            stale = [mid for mid, (ref, _, _) in self._owners.items() if ref() is None]
             for mid in stale:
                 del self._owners[mid]
         return len(stale)
 
     def get_stats(self) -> dict[str, Any]:
         with self._lock:
-            active = sum(1 for _, (ref, _, _) in self._owners.items() if ref() is not None)
+            active = sum(
+                1 for _, (ref, _, _) in self._owners.items() if ref() is not None
+            )
             return {
                 "total_entries": len(self._owners),
                 "active_owners": active,

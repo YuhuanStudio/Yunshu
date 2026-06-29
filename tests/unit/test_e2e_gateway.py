@@ -3,7 +3,6 @@
 Tests the full HTTP request → SSE response pipeline without a real model.
 """
 
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -60,8 +59,9 @@ class _FakeBatchGen:
             uids.append(uid)
             tokens = ["Hi", " there"]
             self._pending[uid] = [
-                _FakeResponse(uid, t, j,
-                              finish_reason=("stop" if j == len(tokens) - 1 else None))
+                _FakeResponse(
+                    uid, t, j, finish_reason=("stop" if j == len(tokens) - 1 else None)
+                )
                 for j, t in enumerate(tokens)
             ]
         return uids

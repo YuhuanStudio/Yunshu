@@ -47,8 +47,7 @@ class ReasoningParser(ABC):
     _CLOSE_RE: re.Pattern  # closing tag pattern
 
     @abstractmethod
-    def family_name(self) -> str:
-        ...
+    def family_name(self) -> str: ...
 
     def parse(self, text: str) -> ReasoningOutput:
         """Extract reasoning from text, handling multiple cycles.
@@ -70,8 +69,10 @@ class ReasoningParser(ABC):
         # NORMAL thinking-mode wire format for the most common reasoning models.
         _first_open = self._OPEN_RE.search(text)
         _first_close = self._CLOSE_RE.search(text)
-        if _first_close and (_first_open is None or _first_close.start() < _first_open.start()):
-            reasoning_parts.append(text[:_first_close.start()].strip())
+        if _first_close and (
+            _first_open is None or _first_close.start() < _first_open.start()
+        ):
+            reasoning_parts.append(text[: _first_close.start()].strip())
             pos = _first_close.end()
 
         for m in self._OPEN_RE.finditer(text):
@@ -79,12 +80,12 @@ class ReasoningParser(ABC):
             if m.start() < pos:
                 continue
             # Everything before this open tag is content
-            content_parts.append(text[pos:m.start()])
+            content_parts.append(text[pos : m.start()])
             think_start = m.end()
             # Find the matching close tag
             close_m = self._CLOSE_RE.search(text, think_start)
             if close_m:
-                reasoning_parts.append(text[think_start:close_m.start()].strip())
+                reasoning_parts.append(text[think_start : close_m.start()].strip())
                 pos = close_m.end()
             else:
                 # Unclosed tag — rest is reasoning
@@ -129,8 +130,10 @@ _COHERE_CLOSE = re.compile(r"<\|END_THINKING\|>", re.DOTALL)
 
 # ── Parser subclasses ────────────────────────────────────────────────────────
 
+
 class QwenReasoningParser(ReasoningParser):
     """Qwen3/3.5: <think/>...</think/> tags."""
+
     _OPEN_RE = _THINK_OPEN
     _CLOSE_RE = _THINK_CLOSE
 
@@ -140,6 +143,7 @@ class QwenReasoningParser(ReasoningParser):
 
 class DeepSeekReasoningParser(ReasoningParser):
     """DeepSeek-R1/V3: <think/>...</think/> with varied whitespace."""
+
     _OPEN_RE = _THINK_OPEN
     _CLOSE_RE = _THINK_CLOSE
 
@@ -149,6 +153,7 @@ class DeepSeekReasoningParser(ReasoningParser):
 
 class GLMReasoningParser(ReasoningParser):
     """GLM-4/5: <think/>...</think/> with specific newline patterns."""
+
     _OPEN_RE = _THINK_OPEN
     _CLOSE_RE = _THINK_CLOSE
 
@@ -158,6 +163,7 @@ class GLMReasoningParser(ReasoningParser):
 
 class HarmonyReasoningParser(ReasoningParser):
     """Harmony/gpt_oss: [REASONING]...[/REASONING] markers."""
+
     _OPEN_RE = _REASONING_OPEN
     _CLOSE_RE = _REASONING_CLOSE
 
@@ -167,6 +173,7 @@ class HarmonyReasoningParser(ReasoningParser):
 
 class GemmaReasoningParser(ReasoningParser):
     """Gemma4: <start_think/>...</end_think/> tags."""
+
     _OPEN_RE = _START_THINK_OPEN
     _CLOSE_RE = _END_THINK_CLOSE
 
@@ -176,6 +183,7 @@ class GemmaReasoningParser(ReasoningParser):
 
 class MistralReasoningParser(ReasoningParser):
     """Mistral/Codestral: [THINK]...[/THINK] markers."""
+
     _OPEN_RE = _BRACKET_THINK_OPEN
     _CLOSE_RE = _BRACKET_THINK_CLOSE
 
@@ -185,6 +193,7 @@ class MistralReasoningParser(ReasoningParser):
 
 class PhiReasoningParser(ReasoningParser):
     """Phi-3/4: <think/>...</think/> tags."""
+
     _OPEN_RE = _THINK_OPEN
     _CLOSE_RE = _THINK_CLOSE
 
@@ -194,6 +203,7 @@ class PhiReasoningParser(ReasoningParser):
 
 class CohereReasoningParser(ReasoningParser):
     """Cohere Command-R: <|START_THINKING|>...<|END_THINKING|> markers."""
+
     _OPEN_RE = _COHERE_OPEN
     _CLOSE_RE = _COHERE_CLOSE
 
@@ -203,6 +213,7 @@ class CohereReasoningParser(ReasoningParser):
 
 class LLamaReasoningParser(ReasoningParser):
     """LLaMA 3/4: <think/>...</think/> tags."""
+
     _OPEN_RE = _THINK_OPEN
     _CLOSE_RE = _THINK_CLOSE
 
@@ -212,6 +223,7 @@ class LLamaReasoningParser(ReasoningParser):
 
 class InternVLReasoningParser(ReasoningParser):
     """InternVL: <think/>...</think/> tags with image context markers."""
+
     _OPEN_RE = _THINK_OPEN
     _CLOSE_RE = _THINK_CLOSE
 
@@ -221,6 +233,7 @@ class InternVLReasoningParser(ReasoningParser):
 
 class GenericReasoningParser(ReasoningParser):
     """Generic fallback: <think/>...</think/> tags."""
+
     _OPEN_RE = _THINK_OPEN
     _CLOSE_RE = _THINK_CLOSE
 

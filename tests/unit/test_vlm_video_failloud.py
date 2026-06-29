@@ -4,6 +4,7 @@ nonexistent file://, bare-path, or video_file.file_id was log-and-continue. So t
 answered about a video it never saw (hallucination), while image+audio raise ValueError on
 the same conditions. Now a REFERENCED-but-unloadable video fails loud.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -21,7 +22,14 @@ def _run(parts):
 
 def test_http_video_url_fails_loud():
     with pytest.raises(ValueError, match="http"):
-        _run([{"type": "video_url", "video_url": {"url": "https://example.com/clip.mp4"}}])
+        _run(
+            [
+                {
+                    "type": "video_url",
+                    "video_url": {"url": "https://example.com/clip.mp4"},
+                }
+            ]
+        )
 
 
 def test_empty_video_url_fails_loud():
@@ -50,10 +58,20 @@ def test_subtypeless_data_video_url_is_clean_valueerror_not_indexerror():
     # step raises AttributeError — but the point is the header parse is reached at
     # all, i.e. no IndexError; pre-fix the IndexError fired BEFORE _save_base64_file.)
     import base64
+
     payload = base64.b64encode(b"\x00\x00\x00\x18ftypmp42").decode()
     with pytest.raises(Exception) as ei:
-        _run([{"type": "video_url", "video_url": {"url": f"data:video;base64,{payload}"}}])
-    assert not isinstance(ei.value, IndexError), "header parse must not raise IndexError"
+        _run(
+            [
+                {
+                    "type": "video_url",
+                    "video_url": {"url": f"data:video;base64,{payload}"},
+                }
+            ]
+        )
+    assert not isinstance(ei.value, IndexError), (
+        "header parse must not raise IndexError"
+    )
 
 
 def test_commaless_data_video_url_fails_loud_valueerror():

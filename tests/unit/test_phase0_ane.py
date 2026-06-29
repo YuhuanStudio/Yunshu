@@ -9,6 +9,7 @@ Covers:
   - estimate_ane_speedup() from ane_embedding
   - compile_embedding_model() and benchmark_ane_vs_gpu() convenience functions
 """
+
 from __future__ import annotations
 
 # ── Add scripts dir to path for bench_ane import ──
@@ -122,7 +123,14 @@ class TestBenchEmbeddingInference:
         bench = ANEBenchmark(config)
         result = bench.bench_embedding_inference(10, 32, device="gpu")
         assert isinstance(result, dict)
-        expected_keys = {"model_size_m", "seq_length", "device", "latency_ms", "throughput_seq_per_s", "status"}
+        expected_keys = {
+            "model_size_m",
+            "seq_length",
+            "device",
+            "latency_ms",
+            "throughput_seq_per_s",
+            "status",
+        }
         assert set(result.keys()) == expected_keys
 
     def test_returns_dict_with_expected_keys_ane(self):
@@ -135,7 +143,12 @@ class TestBenchEmbeddingInference:
         assert "latency_ms" in result
         assert "status" in result
         # ANE result may be estimated or actual
-        assert result["status"] in ("ok", "estimated", "mlx_unavailable", "ane_unavailable")
+        assert result["status"] in (
+            "ok",
+            "estimated",
+            "mlx_unavailable",
+            "ane_unavailable",
+        )
 
     def test_gpu_result_has_latency_if_mlx_available(self):
         from bench_ane import ANEBenchConfig, ANEBenchmark
@@ -215,7 +228,15 @@ class TestBenchLinearLayer:
         bench = ANEBenchmark(config)
         bench._coreml_available = False
         result = bench.bench_linear_layer(128, 256, 64, device="ane")
-        expected_keys = {"in_dim", "out_dim", "seq_length", "device", "latency_ms", "gflops", "status"}
+        expected_keys = {
+            "in_dim",
+            "out_dim",
+            "seq_length",
+            "device",
+            "latency_ms",
+            "gflops",
+            "status",
+        }
         assert set(result.keys()) == expected_keys
         assert result["in_dim"] == 128
         assert result["out_dim"] == 256
@@ -267,7 +288,14 @@ class TestBenchTransformerLayer:
         bench = ANEBenchmark(config)
         bench._coreml_available = False
         result = bench.bench_transformer_layer(128, 64, device="ane")
-        expected_keys = {"hidden_dim", "seq_length", "device", "latency_ms", "throughput_seq_per_s", "status"}
+        expected_keys = {
+            "hidden_dim",
+            "seq_length",
+            "device",
+            "latency_ms",
+            "throughput_seq_per_s",
+            "status",
+        }
         assert set(result.keys()) == expected_keys
         assert result["hidden_dim"] == 128
         assert result["seq_length"] == 64
@@ -293,10 +321,22 @@ class TestFormatResults:
 
         # Create sample results
         results = [
-            {"model_size_m": 10, "seq_length": 32, "device": "gpu",
-             "latency_ms": 1.5, "throughput_seq_per_s": 666.7, "status": "ok"},
-            {"model_size_m": 10, "seq_length": 32, "device": "ane",
-             "latency_ms": 0.8, "throughput_seq_per_s": 1250.0, "status": "ok"},
+            {
+                "model_size_m": 10,
+                "seq_length": 32,
+                "device": "gpu",
+                "latency_ms": 1.5,
+                "throughput_seq_per_s": 666.7,
+                "status": "ok",
+            },
+            {
+                "model_size_m": 10,
+                "seq_length": 32,
+                "device": "ane",
+                "latency_ms": 0.8,
+                "throughput_seq_per_s": 1250.0,
+                "status": "ok",
+            },
         ]
         output = ANEBenchmark.format_results(results)
         assert isinstance(output, str)
@@ -307,10 +347,24 @@ class TestFormatResults:
         from bench_ane import ANEBenchmark
 
         results = [
-            {"in_dim": 128, "out_dim": 128, "seq_length": 64,
-             "device": "gpu", "latency_ms": 0.5, "gflops": 2.1, "status": "ok"},
-            {"in_dim": 128, "out_dim": 128, "seq_length": 64,
-             "device": "ane", "latency_ms": 0.3, "gflops": 3.5, "status": "ok"},
+            {
+                "in_dim": 128,
+                "out_dim": 128,
+                "seq_length": 64,
+                "device": "gpu",
+                "latency_ms": 0.5,
+                "gflops": 2.1,
+                "status": "ok",
+            },
+            {
+                "in_dim": 128,
+                "out_dim": 128,
+                "seq_length": 64,
+                "device": "ane",
+                "latency_ms": 0.3,
+                "gflops": 3.5,
+                "status": "ok",
+            },
         ]
         output = ANEBenchmark.format_results(results)
         assert "Linear" in output
@@ -319,10 +373,22 @@ class TestFormatResults:
         from bench_ane import ANEBenchmark
 
         results = [
-            {"hidden_dim": 256, "seq_length": 128,
-             "device": "gpu", "latency_ms": 2.0, "throughput_seq_per_s": 500.0, "status": "ok"},
-            {"hidden_dim": 256, "seq_length": 128,
-             "device": "ane", "latency_ms": 1.5, "throughput_seq_per_s": 666.7, "status": "ok"},
+            {
+                "hidden_dim": 256,
+                "seq_length": 128,
+                "device": "gpu",
+                "latency_ms": 2.0,
+                "throughput_seq_per_s": 500.0,
+                "status": "ok",
+            },
+            {
+                "hidden_dim": 256,
+                "seq_length": 128,
+                "device": "ane",
+                "latency_ms": 1.5,
+                "throughput_seq_per_s": 666.7,
+                "status": "ok",
+            },
         ]
         output = ANEBenchmark.format_results(results)
         assert "Transformer" in output
@@ -331,10 +397,22 @@ class TestFormatResults:
         from bench_ane import ANEBenchmark
 
         results = [
-            {"model_size_m": 10, "seq_length": 32, "device": "gpu",
-             "latency_ms": None, "throughput_seq_per_s": None, "status": "mlx_unavailable"},
-            {"model_size_m": 10, "seq_length": 32, "device": "ane",
-             "latency_ms": None, "throughput_seq_per_s": None, "status": "mlx_unavailable"},
+            {
+                "model_size_m": 10,
+                "seq_length": 32,
+                "device": "gpu",
+                "latency_ms": None,
+                "throughput_seq_per_s": None,
+                "status": "mlx_unavailable",
+            },
+            {
+                "model_size_m": 10,
+                "seq_length": 32,
+                "device": "ane",
+                "latency_ms": None,
+                "throughput_seq_per_s": None,
+                "status": "mlx_unavailable",
+            },
         ]
         output = ANEBenchmark.format_results(results)
         assert "N/A" in output
@@ -469,7 +547,9 @@ class TestBenchmarkAneVsGpu:
     def test_returns_expected_keys(self):
         from yunshu_engine.ane_embedding import benchmark_ane_vs_gpu
 
-        with patch("yunshu_engine.ane_embedding.ANEEmbeddingProcessor") as mock_proc_cls:
+        with patch(
+            "yunshu_engine.ane_embedding.ANEEmbeddingProcessor"
+        ) as mock_proc_cls:
             mock_proc = MagicMock()
             mock_proc.embed.return_value = [[0.1] * 384]
             mock_proc_cls.return_value = mock_proc
@@ -480,7 +560,9 @@ class TestBenchmarkAneVsGpu:
     def test_gpu_latency_positive(self):
         from yunshu_engine.ane_embedding import benchmark_ane_vs_gpu
 
-        with patch("yunshu_engine.ane_embedding.ANEEmbeddingProcessor") as mock_proc_cls:
+        with patch(
+            "yunshu_engine.ane_embedding.ANEEmbeddingProcessor"
+        ) as mock_proc_cls:
             mock_proc = MagicMock()
             mock_proc.embed.return_value = [[0.1] * 384]
             mock_proc_cls.return_value = mock_proc
@@ -490,7 +572,9 @@ class TestBenchmarkAneVsGpu:
     def test_returns_dict(self):
         from yunshu_engine.ane_embedding import benchmark_ane_vs_gpu
 
-        with patch("yunshu_engine.ane_embedding.ANEEmbeddingProcessor") as mock_proc_cls:
+        with patch(
+            "yunshu_engine.ane_embedding.ANEEmbeddingProcessor"
+        ) as mock_proc_cls:
             mock_proc = MagicMock()
             mock_proc.embed.return_value = [[0.1] * 384, [0.2] * 384]
             mock_proc_cls.return_value = mock_proc

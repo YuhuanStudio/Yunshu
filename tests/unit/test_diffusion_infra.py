@@ -67,16 +67,17 @@ class TestDiffusionScheduler:
 
     def test_iter_steps_with_range(self):
         sched = DiffusionScheduler(
-            num_inference_steps=10, num_train_timesteps=100,
-            start_step=2, end_step=5)
+            num_inference_steps=10, num_train_timesteps=100, start_step=2, end_step=5
+        )
         steps = list(sched.iter_steps())
         assert len(steps) == 3
         assert steps[0].step_index == 2
         assert steps[2].step_index == 4
 
     def test_reset(self):
-        sched = DiffusionScheduler(num_inference_steps=4, num_train_timesteps=100,
-                                   start_step=0)
+        sched = DiffusionScheduler(
+            num_inference_steps=4, num_train_timesteps=100, start_step=0
+        )
         list(sched.iter_steps())
         sched.reset()
         assert sched.current_step == 0
@@ -212,8 +213,9 @@ class TestDiffusionLoRAOffloader:
 
     def test_load_for_step(self):
         offloader = DiffusionLoRAOffloader(memory_budget_bytes=10000)
-        offloader.register_adapter("style_lora", memory_bytes=1000, priority=5,
-                                   assigned_steps=range(0, 14))
+        offloader.register_adapter(
+            "style_lora", memory_bytes=1000, priority=5, assigned_steps=range(0, 14)
+        )
         loaded = offloader.load_for_step(0)
         assert "style_lora" in loaded
         assert "style_lora" in offloader.loaded_adapters
@@ -226,16 +228,18 @@ class TestDiffusionLoRAOffloader:
 
     def test_unload_after_step(self):
         offloader = DiffusionLoRAOffloader(memory_budget_bytes=10000)
-        offloader.register_adapter("lora_a", memory_bytes=1000,
-                                   assigned_steps=range(0, 5))
+        offloader.register_adapter(
+            "lora_a", memory_bytes=1000, assigned_steps=range(0, 5)
+        )
         offloader.load_for_step(0)
         unloaded = offloader.unload_after_step(4)  # Last step of range
         assert "lora_a" in unloaded
 
     def test_unload_not_needed(self):
         offloader = DiffusionLoRAOffloader(memory_budget_bytes=10000)
-        offloader.register_adapter("lora_a", memory_bytes=1000,
-                                   assigned_steps=range(0, 10))
+        offloader.register_adapter(
+            "lora_a", memory_bytes=1000, assigned_steps=range(0, 10)
+        )
         offloader.load_for_step(0)
         unloaded = offloader.unload_after_step(3)  # Still in range
         assert "lora_a" not in unloaded
@@ -320,23 +324,23 @@ class TestDistributedDiffusionCoordinator:
 
     def test_two_nodes_contiguous(self):
         coord = DistributedDiffusionCoordinator(
-            total_steps=10, num_nodes=2,
-            strategy=StepAssignmentStrategy.CONTIGUOUS)
+            total_steps=10, num_nodes=2, strategy=StepAssignmentStrategy.CONTIGUOUS
+        )
         assert coord.assignments[0].steps == range(0, 5)
         assert coord.assignments[1].steps == range(5, 10)
 
     def test_three_nodes_contiguous(self):
         coord = DistributedDiffusionCoordinator(
-            total_steps=10, num_nodes=3,
-            strategy=StepAssignmentStrategy.CONTIGUOUS)
+            total_steps=10, num_nodes=3, strategy=StepAssignmentStrategy.CONTIGUOUS
+        )
         assert coord.assignments[0].steps == range(0, 4)
         assert coord.assignments[1].steps == range(4, 7)
         assert coord.assignments[2].steps == range(7, 10)
 
     def test_round_robin(self):
         coord = DistributedDiffusionCoordinator(
-            total_steps=8, num_nodes=2,
-            strategy=StepAssignmentStrategy.ROUND_ROBIN)
+            total_steps=8, num_nodes=2, strategy=StepAssignmentStrategy.ROUND_ROBIN
+        )
         assert coord.get_node_for_step(0) == 0
         assert coord.get_node_for_step(1) == 1
         assert coord.get_node_for_step(2) == 0
@@ -344,23 +348,24 @@ class TestDistributedDiffusionCoordinator:
 
     def test_get_node_for_step(self):
         coord = DistributedDiffusionCoordinator(
-            total_steps=10, num_nodes=2,
-            strategy=StepAssignmentStrategy.CONTIGUOUS)
+            total_steps=10, num_nodes=2, strategy=StepAssignmentStrategy.CONTIGUOUS
+        )
         assert coord.get_node_for_step(3) == 0
         assert coord.get_node_for_step(7) == 1
 
     def test_sync_points_computed(self):
         coord = DistributedDiffusionCoordinator(
-            total_steps=10, num_nodes=2,
-            sync_interval=5)
+            total_steps=10, num_nodes=2, sync_interval=5
+        )
         assert 0 in coord.sync_points
         assert 5 in coord.sync_points
         assert 10 in coord.sync_points
 
     def test_sync_latents(self):
-        coord = DistributedDiffusionCoordinator(
-            total_steps=10, num_nodes=2)
-        cp = coord.sync_latents(source_node=0, target_node=1, step=5, latent_data="data")
+        coord = DistributedDiffusionCoordinator(total_steps=10, num_nodes=2)
+        cp = coord.sync_latents(
+            source_node=0, target_node=1, step=5, latent_data="data"
+        )
         assert isinstance(cp, SyncCheckpoint)
         assert cp.step == 5
         assert cp.node_id == 0
@@ -381,7 +386,7 @@ class TestDistributedDiffusionCoordinator:
         assert restart is not None
         assert restart.node_id == 0
         assert restart.steps.start == 4  # Step after checkpoint
-        assert restart.steps.stop == 5   # End of node 0's range
+        assert restart.steps.stop == 5  # End of node 0's range
 
     def test_restart_no_checkpoint(self):
         coord = DistributedDiffusionCoordinator(total_steps=10, num_nodes=2)
@@ -427,7 +432,8 @@ class TestDistributedDiffusionCoordinator:
 
     def test_sync_points_include_node_boundaries(self):
         coord = DistributedDiffusionCoordinator(
-            total_steps=20, num_nodes=4, sync_interval=100)
+            total_steps=20, num_nodes=4, sync_interval=100
+        )
         # Should still have sync points at node boundaries
         assert 0 in coord.sync_points
         assert 5 in coord.sync_points

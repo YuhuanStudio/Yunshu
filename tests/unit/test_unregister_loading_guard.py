@@ -7,6 +7,7 @@ that no longer exists (permanent drift → eventually blocks all loads), the loa
 engine is never reachable by shutdown()/eviction (engine.stop() never runs, the leak class), and the finally's `_loading_events.pop` can pop a re-registered model's
 NEW event so its fresh waiters hang. The is_loaded guard alone left this window open.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -17,8 +18,11 @@ from yunshu_engine.model_manager import ModelEntry, ModelManager, ModelType
 def _mgr_with_state(*, is_loaded=False, is_loading=False):
     mgr = ModelManager()
     mgr._entries["m"] = ModelEntry(
-        model_id="m", model_path="/x", model_type=ModelType.LLM,
-        is_loaded=is_loaded, estimated_bytes=0,
+        model_id="m",
+        model_path="/x",
+        model_type=ModelType.LLM,
+        is_loaded=is_loaded,
+        estimated_bytes=0,
     )
     mgr._entries["m"].is_loading = is_loading
     return mgr

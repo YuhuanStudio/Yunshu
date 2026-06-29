@@ -35,20 +35,28 @@ _background_tasks: list[asyncio.Task] = []
 # Cache UMA size once at module load to avoid sysctl per-request
 try:
     import subprocess as _sp
-    _total_uma_bytes: int = int(_sp.run(
-        ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=5,
-    ).stdout.strip())
+
+    _total_uma_bytes: int = int(
+        _sp.run(
+            ["sysctl", "-n", "hw.memsize"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout.strip()
+    )
 except Exception:
     _total_uma_bytes: int = 0
 
 # Startup timestamp for uptime tracking
 _startup_time: float = 0.0
 
+
 # Shutdown state machine (RUNNING → REQUESTED → SHUTTING_DOWN)
 class ServerState:
     RUNNING = "running"
     REQUESTED = "shutdown_requested"
     SHUTTING_DOWN = "shutting_down"
+
 
 _server_state = ServerState.RUNNING
 _active_requests = 0
@@ -114,18 +122,31 @@ def _validate_env_vars() -> list[str]:
                 else:
                     type_fn(val)
             except (ValueError, TypeError):
-                warnings.append(f"Invalid value for {var}: '{val}' (expected {type_fn.__name__})")
+                warnings.append(
+                    f"Invalid value for {var}: '{val}' (expected {type_fn.__name__})"
+                )
         elif required:
             warnings.append(f"Required env var {var} is not set")
 
     # Boolean-ish env vars
     bool_vars = [
-        "YUNSHU_MULTI_MODEL", "YUNSHU_DATA_PARALLEL", "YUNSHU_DISTRIBUTED",
-        "YUNSHU_AUTH_DISABLED", "YUNSHU_RESPONSE_CACHE", "YUNSHU_PROCESS_ISOLATION",
+        "YUNSHU_MULTI_MODEL",
+        "YUNSHU_DATA_PARALLEL",
+        "YUNSHU_DISTRIBUTED",
+        "YUNSHU_AUTH_DISABLED",
+        "YUNSHU_RESPONSE_CACHE",
+        "YUNSHU_PROCESS_ISOLATION",
     ]
     for var in bool_vars:
         val = os.environ.get(var)
-        if val is not None and val.lower() not in ("0", "1", "true", "false", "yes", "no"):
+        if val is not None and val.lower() not in (
+            "0",
+            "1",
+            "true",
+            "false",
+            "yes",
+            "no",
+        ):
             warnings.append(f"Invalid boolean value for {var}: '{val}'")
 
     # Conflicting config: both YUNSHU_MODEL and YUNSHU_MULTI_MODEL set
@@ -194,7 +215,9 @@ def _get_memory_limit_bytes() -> int:
         # Strip optional "GB"/"gb" suffix for CLI ergonomics
         cleaned = env_val.strip().upper().removesuffix("GB").strip()
         if not cleaned:
-            logger.warning("CONFIG: YUNSHU_MAX_MEMORY_GB is empty after stripping, ignoring")
+            logger.warning(
+                "CONFIG: YUNSHU_MAX_MEMORY_GB is empty after stripping, ignoring"
+            )
             # Fall through to default
         elif cleaned.lower() == "disabled":
             return 0  # unlimited
@@ -202,14 +225,19 @@ def _get_memory_limit_bytes() -> int:
             try:
                 return int(float(cleaned) * 1024**3)
             except (ValueError, OverflowError):
-                logger.warning("CONFIG: Invalid YUNSHU_MAX_MEMORY_GB value '%s', ignoring", env_val)
+                logger.warning(
+                    "CONFIG: Invalid YUNSHU_MAX_MEMORY_GB value '%s', ignoring", env_val
+                )
                 # Fall through to default
 
     # Default: 80% of UMA (reserve for system + KV cache)
     try:
         import subprocess
+
         result = subprocess.run(
-            ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True,
+            ["sysctl", "-n", "hw.memsize"],
+            capture_output=True,
+            text=True,
             timeout=5,
         )
         uma = int(result.stdout.strip())
@@ -251,8 +279,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Validate model path exists in single-model mode
     if DEFAULT_MODEL:
         from pathlib import Path as _P
+
         model_path = _P(DEFAULT_MODEL)
-        if not model_path.exists() and not DEFAULT_MODEL.startswith(("hf://", "mlx-community/", "Qwen")):
+        if not model_path.exists() and not DEFAULT_MODEL.startswith(
+            ("hf://", "mlx-community/", "Qwen")
+        ):
             logger.warning(
                 "CONFIG: Model path '%s' does not exist locally and doesn't look like a HuggingFace ID — "
                 "model loading may fail",
@@ -276,19 +307,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await asyncio.wait_for(engine.start(), timeout=startup_timeout)
             logger.info(
                 "Startup complete: model '%s' loaded (%.1fs)",
-                DEFAULT_MODEL, time.monotonic() - _startup_time,
+                DEFAULT_MODEL,
+                time.monotonic() - _startup_time,
             )
         except TimeoutError:
             logger.error(
                 "FATAL: model '%s' load timed out after %.0fs — server not ready",
-                DEFAULT_MODEL, startup_timeout,
+                DEFAULT_MODEL,
+                startup_timeout,
             )
             await engine.stop()
             # Server starts but /health/ready will report not-ready
         except Exception as e:
             logger.error(
                 "FATAL: model '%s' load failed: %s — server not ready",
-                DEFAULT_MODEL, e,
+                DEFAULT_MODEL,
+                e,
             )
             await engine.stop()
 
@@ -310,7 +344,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             _memory_enforcer = ProcessMemoryEnforcer(
                 model_manager=manager,
                 max_bytes=max_bytes,
-                poll_interval=float(os.environ.get("YUNSHU_MEMORY_POLL_INTERVAL", "2.0")),
+                poll_interval=float(
+                    os.environ.get("YUNSHU_MEMORY_POLL_INTERVAL", "2.0")
+                ),
                 ttl_seconds=float(ttl_seconds) if ttl_seconds else None,
             )
             _memory_enforcer.start()
@@ -322,7 +358,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         logger.info(
             "Startup complete: multi-model mode, %d models registered (%.1fs)",
-            len(manager.list_entries()), time.monotonic() - _startup_time,
+            len(manager.list_entries()),
+            time.monotonic() - _startup_time,
         )
 
     # Initialize MCP client manager (LLM → external MCP tool servers)
@@ -331,13 +368,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if mcp_config_path or mcp_servers_env:
         try:
             from yunshu_engine.mcp_client import init_mcp_client
+
             mcp_mgr = await init_mcp_client(config_path=mcp_config_path)
-            if mcp_mgr and hasattr(app, 'state'):
+            if mcp_mgr and hasattr(app, "state"):
                 app.state.mcp_client = mcp_mgr
             stats = mcp_mgr.get_stats()
             logger.info(
                 "MCP client manager initialized: %d servers, %d tools",
-                stats["connected_servers"], stats["total_tools"],
+                stats["connected_servers"],
+                stats["total_tools"],
             )
         except Exception:
             logger.warning("MCP client initialization failed", exc_info=True)
@@ -346,6 +385,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # (~4s) instead of cold (~30s). Opt out with YUNSHU_OMNI_PRELOAD=0.
     try:
         from .routers.omni import preload_and_warmup
+
         await preload_and_warmup()
     except Exception:
         logger.warning("Omni preload hook failed", exc_info=True)
@@ -373,12 +413,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if _active_requests > 0:
         logger.warning(
             "Shutdown drain timed out after %.0fs: %d requests still active",
-            drain_timeout, _active_requests,
+            drain_timeout,
+            _active_requests,
         )
 
     # Disconnect MCP client manager
     try:
         from yunshu_engine.mcp_client import get_mcp_client_manager
+
         mcp = get_mcp_client_manager()
         if mcp is not None:
             await mcp.disconnect_all()
@@ -434,10 +476,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     # Anthropic API paths — exact matching to avoid overmatching routes that
     # merely end in '/messages' (e.g. /api/v1/admin/messages).
-    _ANTHROPIC_PATHS = frozenset({
-        "/v1/messages", "/messages",
-        "/v1/messages/count_tokens", "/messages/count_tokens",
-    })
+    _ANTHROPIC_PATHS = frozenset(
+        {
+            "/v1/messages",
+            "/messages",
+            "/v1/messages/count_tokens",
+            "/messages/count_tokens",
+        }
+    )
 
     app = FastAPI(
         title="Yunshu",
@@ -514,7 +560,9 @@ def create_app() -> FastAPI:
             )
 
         # Default: OpenAI error format with code field
-        error_type = "invalid_request_error" if exc.status_code < 500 else "server_error"
+        error_type = (
+            "invalid_request_error" if exc.status_code < 500 else "server_error"
+        )
         _code_map = {
             400: "bad_request",
             401: "authentication_required",
@@ -529,7 +577,13 @@ def create_app() -> FastAPI:
         error_code = _code_map.get(exc.status_code)
         return JSONResponse(
             status_code=exc.status_code,
-            content={"error": {"message": str(exc.detail), "type": error_type, "code": error_code}},
+            content={
+                "error": {
+                    "message": str(exc.detail),
+                    "type": error_type,
+                    "code": error_code,
+                }
+            },
         )
 
     @app.exception_handler(Exception)
@@ -540,9 +594,12 @@ def create_app() -> FastAPI:
         Handles MemoryError, RuntimeError, and any other unexpected exception.
         """
         import traceback
+
         logger.error(
             "Unhandled exception on %s %s: %s\n%s",
-            request.method, request.url.path, exc,
+            request.method,
+            request.url.path,
+            exc,
             traceback.format_exc(),
         )
         path = request.url.path
@@ -573,13 +630,15 @@ def create_app() -> FastAPI:
     # Defaults to ["*"] in dev, should be restricted in production.
     # Note: allow_credentials=True is invalid with allow_origins=["*"] per CORS spec;
     # browsers will reject the response. Use specific origins in production.
-    cors_origins_str = os.environ.get("YUNSHU_CORS_ORIGINS", "http://localhost:3000,http://localhost:8000")
-    cors_origins = (
-        cors_origins_str.split(",") if cors_origins_str != "*" else ["*"]
+    cors_origins_str = os.environ.get(
+        "YUNSHU_CORS_ORIGINS", "http://localhost:3000,http://localhost:8000"
     )
+    cors_origins = cors_origins_str.split(",") if cors_origins_str != "*" else ["*"]
     allow_credentials = cors_origins != ["*"]
     if cors_origins == ["*"]:
-        logger.warning("CORS: allow_origins=['*'] — set YUNSHU_CORS_ORIGINS for production")
+        logger.warning(
+            "CORS: allow_origins=['*'] — set YUNSHU_CORS_ORIGINS for production"
+        )
 
     app.add_middleware(
         CORSMiddleware,
@@ -587,11 +646,17 @@ def create_app() -> FastAPI:
         allow_credentials=allow_credentials,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
         allow_headers=[
-            "Authorization", "Content-Type", "Accept", "X-Request-ID",
+            "Authorization",
+            "Content-Type",
+            "Accept",
+            "X-Request-ID",
             # Anthropic SDK headers
-            "anthropic-version", "anthropic-beta", "x-api-key",
+            "anthropic-version",
+            "anthropic-beta",
+            "x-api-key",
             # OpenAI SDK headers
-            "OpenAI-Organization", "OpenAI-Beta",
+            "OpenAI-Organization",
+            "OpenAI-Beta",
         ],
         max_age=3600,  # Cache preflight for 1 hour to reduce OPTIONS overhead
     )
@@ -615,6 +680,7 @@ def create_app() -> FastAPI:
     # Response cache middleware: caches non-streaming responses when enabled
     if os.environ.get("YUNSHU_RESPONSE_CACHE", "").lower() in ("1", "true", "yes"):
         from .middleware.gateway_optimizer import ResponseCacheMiddleware
+
         app.add_middleware(ResponseCacheMiddleware)
         logger.info("ResponseCache middleware registered (YUNSHU_RESPONSE_CACHE=1)")
 
@@ -623,7 +689,7 @@ def create_app() -> FastAPI:
     # because Starlette 1.0+ TestClient may not trigger lifespan for non-context usage.
     @app.middleware("http")
     async def shutdown_guard(request: Request, call_next):
-        state = getattr(request.app.state, 'server_state', ServerState.RUNNING)
+        state = getattr(request.app.state, "server_state", ServerState.RUNNING)
         if state != ServerState.RUNNING:
             path = request.url.path
             # Allow health/metrics even during shutdown
@@ -634,7 +700,10 @@ def create_app() -> FastAPI:
                         status_code=503,
                         content={
                             "type": "error",
-                            "error": {"type": "overloaded_error", "message": "Server is shutting down"},
+                            "error": {
+                                "type": "overloaded_error",
+                                "message": "Server is shutting down",
+                            },
                         },
                         headers={"Retry-After": "5"},
                     )
@@ -655,12 +724,17 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def sleep_guard(request: Request, call_next):
         from .routers.sleep import is_sleeping
+
         path = request.url.path
-        if is_sleeping() and not path.startswith((
-            "/sleep", "/wake-up",
-            "/v1/sleep", "/v1/wake-up",  # canonical /v1/* aliases
-            "/health",
-        )):
+        if is_sleeping() and not path.startswith(
+            (
+                "/sleep",
+                "/wake-up",
+                "/v1/sleep",
+                "/v1/wake-up",  # canonical /v1/* aliases
+                "/health",
+            )
+        ):
             # include Retry-After so clients back off intelligently.
             # 30s is a reasonable poll cadence — most sleep→wake cycles
             # complete in single-digit seconds.
@@ -671,7 +745,10 @@ def create_app() -> FastAPI:
                     status_code=503,
                     content={
                         "type": "error",
-                        "error": {"type": "overloaded_error", "message": "Server is sleeping. POST /wake-up to resume."},
+                        "error": {
+                            "type": "overloaded_error",
+                            "message": "Server is sleeping. POST /wake-up to resume.",
+                        },
                     },
                     headers=retry_headers,
                 )
@@ -690,18 +767,32 @@ def create_app() -> FastAPI:
 
     # Active request tracking for graceful shutdown drain
     _INFERENCE_PATHS = (
-        "/v1/chat/completions", "/v1/completions", "/v1/embeddings",
-        "/v1/messages", "/v1/responses", "/v1/audio/speech",
-        "/v1/audio/transcriptions", "/v1/images/generations",
-        "/v1/images/edits", "/v1/images/variations",
+        "/v1/chat/completions",
+        "/v1/completions",
+        "/v1/embeddings",
+        "/v1/messages",
+        "/v1/responses",
+        "/v1/audio/speech",
+        "/v1/audio/transcriptions",
+        "/v1/images/generations",
+        "/v1/images/edits",
+        "/v1/images/variations",
         # these ALSO hit an engine but were missing from the active-request
         # counter the sleep guard relies on (sleep could tear the model out from under
         # an in-flight one). The sleep guard now ALSO consults engine.has_active_requests
         # as the source of truth, but keep this list complete so the counter is accurate.
-        "/v1/score", "/v1/rerank", "/v1/pooling", "/v1/classify",
-        "/v1/ocr", "/v1/audio/translations", "/v1/audio/speech/stream",
-        "/v1/audio/speech-to-speech", "/v1/audio/voice-pipeline",
-        "/v1/images/inpaint", "/v1/images/controlnet", "/v1/images/depth-guided",
+        "/v1/score",
+        "/v1/rerank",
+        "/v1/pooling",
+        "/v1/classify",
+        "/v1/ocr",
+        "/v1/audio/translations",
+        "/v1/audio/speech/stream",
+        "/v1/audio/speech-to-speech",
+        "/v1/audio/voice-pipeline",
+        "/v1/images/inpaint",
+        "/v1/images/controlnet",
+        "/v1/images/depth-guided",
         "/v1/video/generations",
     )
 
@@ -715,14 +806,17 @@ def create_app() -> FastAPI:
         if path in _INFERENCE_PATHS:
             try:
                 from .routers.profiling import is_profile_capture_active
+
                 if is_profile_capture_active():
                     return JSONResponse(
                         status_code=503,
-                        content={"error": {
-                            "message": "Metal capture active — inference is serialized during profiling.",
-                            "type": "server_error",
-                            "code": "profile_capture_active",
-                        }},
+                        content={
+                            "error": {
+                                "message": "Metal capture active — inference is serialized during profiling.",
+                                "type": "server_error",
+                                "code": "profile_capture_active",
+                            }
+                        },
                         headers={"Retry-After": "5"},
                     )
             except ImportError:
@@ -737,7 +831,10 @@ def create_app() -> FastAPI:
             # Update Prometheus gauge for active requests.
             try:
                 from .middleware.prometheus_exporter import get_prometheus_metrics
-                get_prometheus_metrics().set_gauge("gateway_active_requests", float(_active_requests))
+
+                get_prometheus_metrics().set_gauge(
+                    "gateway_active_requests", float(_active_requests)
+                )
             except Exception:
                 pass
             try:
@@ -746,7 +843,10 @@ def create_app() -> FastAPI:
                 _active_requests -= 1
                 try:
                     from .middleware.prometheus_exporter import get_prometheus_metrics
-                    get_prometheus_metrics().set_gauge("gateway_active_requests", float(_active_requests))
+
+                    get_prometheus_metrics().set_gauge(
+                        "gateway_active_requests", float(_active_requests)
+                    )
                 except Exception:
                     pass
                 if _active_requests == 0 and _drain_event is not None:
@@ -754,7 +854,9 @@ def create_app() -> FastAPI:
         return await call_next(request)
 
     # Request body size limit middleware (reject oversized payloads early)
-    max_request_size = int(os.environ.get("YUNSHU_MAX_REQUEST_SIZE", str(10 * 1024 * 1024)))
+    max_request_size = int(
+        os.environ.get("YUNSHU_MAX_REQUEST_SIZE", str(10 * 1024 * 1024))
+    )
 
     @app.middleware("http")
     async def request_size_limit(request: Request, call_next):
@@ -830,7 +932,11 @@ def create_app() -> FastAPI:
                 # Re-inject the body so downstream handlers (Pydantic validators)
                 # can access it via request.body() or request.json().
                 async def _receive_with_body():
-                    return {"type": "http.request", "body": body_bytes, "more_body": False}
+                    return {
+                        "type": "http.request",
+                        "body": body_bytes,
+                        "more_body": False,
+                    }
 
                 request._receive = _receive_with_body
             except Exception:
@@ -851,6 +957,7 @@ def create_app() -> FastAPI:
         get_response_cache,
         get_streaming_buffer,
     )
+
     app.state.request_coalescer = get_request_coalescer()
     app.state.streaming_buffer = get_streaming_buffer()
 
@@ -910,6 +1017,7 @@ def create_app() -> FastAPI:
     if mcp_servers_env:
         try:
             from yunshu_engine.mcp_client import get_mcp_client_manager
+
             mcp_mgr = get_mcp_client_manager()
             if mcp_mgr:
                 app.state.mcp_client = mcp_mgr
@@ -922,9 +1030,11 @@ def create_app() -> FastAPI:
     from .routers import ocr as ocr_mod
     from .routers import responses as responses_mod
     from .routers import sleep as sleep_mod
+
     app.include_router(chat.router, prefix="/v1")
     from .routers import cached_contents as cached_contents_mod
     from .routers import omni as omni_mod
+
     app.include_router(cached_contents_mod.router, prefix="/v1")
     app.include_router(completions.router, prefix="/v1")
     app.include_router(responses_mod.router, prefix="/v1")
@@ -945,6 +1055,7 @@ def create_app() -> FastAPI:
     app.include_router(bench.router)
 
     from .routers import video as video_mod
+
     app.include_router(video_mod.router, prefix="/v1")
     # Mount sleep/wake-up at both /<path> (legacy) and /v1/<path> (canonical,
     # matches the OpenAI-style /v1/... convention used elsewhere). SDK
@@ -959,7 +1070,7 @@ def create_app() -> FastAPI:
     def _safe_memory_usage(manager):
         if manager is None:
             return None
-        mu = getattr(manager, 'memory_usage', None)
+        mu = getattr(manager, "memory_usage", None)
         if callable(mu):
             return mu()
         return mu
@@ -974,10 +1085,12 @@ def create_app() -> FastAPI:
         # (status + engine-loaded bool + server_state + uptime). The rich detail is
         # available, properly gated, via the authenticated /api/v1/monitoring/* router.
         from .engine import get_engine
+
         engine = get_engine()
-        _loaded = bool(getattr(engine, 'is_loaded', False)) if engine else False
+        _loaded = bool(getattr(engine, "is_loaded", False)) if engine else False
         try:
             from .routers.sleep import get_sleep_state, is_sleeping
+
             _sleeping = is_sleeping()
             _sleep_info = get_sleep_state() if _sleeping else None
         except Exception:
@@ -987,7 +1100,9 @@ def create_app() -> FastAPI:
             "status": "sleeping" if _sleeping else "ok",
             "engine": {"loaded": _loaded},
             "server_state": "sleeping" if _sleeping else _server_state,
-            "uptime_seconds": round(time.monotonic() - _startup_time, 1) if _startup_time > 0 else 0,
+            "uptime_seconds": round(time.monotonic() - _startup_time, 1)
+            if _startup_time > 0
+            else 0,
         }
         if _sleep_info is not None:
             result["sleep"] = _sleep_info
@@ -1001,7 +1116,7 @@ def create_app() -> FastAPI:
 
         # Use app.state for server state (reliable across TestClient
         # instances that may not trigger lifespan in Starlette 1.0+)
-        current_state = getattr(request.app.state, 'server_state', _server_state)
+        current_state = getattr(request.app.state, "server_state", _server_state)
 
         checks = {}
         ready = True
@@ -1017,10 +1132,10 @@ def create_app() -> FastAPI:
         try:
             if manager is not None:
                 for entry in manager.list_entries():
-                    if getattr(entry, 'is_loaded', False):
+                    if getattr(entry, "is_loaded", False):
                         has_loaded_model = True
                         break
-            elif engine and getattr(engine, 'is_loaded', False):
+            elif engine and getattr(engine, "is_loaded", False):
                 has_loaded_model = True
         except Exception:
             logger.debug("model_loaded check failed", exc_info=True)
@@ -1033,6 +1148,7 @@ def create_app() -> FastAPI:
         # Check GPU memory available (uses cached UMA size)
         try:
             import mlx.core as mx
+
             active = mx.get_active_memory()
             total_uma = _total_uma_bytes
             if total_uma > 0:
@@ -1051,6 +1167,7 @@ def create_app() -> FastAPI:
         # ready=False (no model loaded / GPU ≥95% / draining), so the LB kept routing
         # traffic to a dead/OOM/shutting-down node. Return 503 when not ready.
         from fastapi.responses import JSONResponse as _JSONResponse
+
         return _JSONResponse(
             status_code=200 if ready else 503,
             content={"ready": ready, "checks": checks},
@@ -1059,7 +1176,7 @@ def create_app() -> FastAPI:
     @app.get("/health/live")
     async def liveness(request: Request) -> dict:
         """Liveness probe — is the server alive?"""
-        current_state = getattr(request.app.state, 'server_state', _server_state)
+        current_state = getattr(request.app.state, "server_state", _server_state)
         return {"alive": True, "state": current_state}
 
     @app.get("/version")

@@ -198,12 +198,16 @@ class MCPSession:
                 result_text = tool.handler(arguments)
                 if asyncio.iscoroutine(result_text):
                     result_text = await asyncio.wait_for(
-                        result_text, timeout=_TOOL_CALL_TIMEOUT,
+                        result_text,
+                        timeout=_TOOL_CALL_TIMEOUT,
                     )
                 return _rpc_response(
                     {
                         "content": [
-                            {"type": "text", "text": _truncate_tool_result(str(result_text))},
+                            {
+                                "type": "text",
+                                "text": _truncate_tool_result(str(result_text)),
+                            },
                         ],
                         "isError": False,
                     },
@@ -213,7 +217,10 @@ class MCPSession:
                 return _rpc_response(
                     {
                         "content": [
-                            {"type": "text", "text": f"Tool '{tool_name}' timed out after {_TOOL_CALL_TIMEOUT}s"},
+                            {
+                                "type": "text",
+                                "text": f"Tool '{tool_name}' timed out after {_TOOL_CALL_TIMEOUT}s",
+                            },
                         ],
                         "isError": True,
                     },
@@ -236,7 +243,10 @@ class MCPSession:
             return _rpc_response(
                 {
                     "content": [
-                        {"type": "text", "text": f"Tool '{tool_name}' has no handler registered and cannot be executed."},
+                        {
+                            "type": "text",
+                            "text": f"Tool '{tool_name}' has no handler registered and cannot be executed.",
+                        },
                     ],
                     "isError": True,
                 },
@@ -303,20 +313,24 @@ def _rpc_error(code: int, message: str, req_id: int | str | None = None) -> dict
 
 # ── MCP Methods ──
 
+
 async def _handle_initialize(params: dict | None, req_id: int | str | None) -> dict:
     """MCP initialize — server capabilities."""
-    return _rpc_response({
-        "protocolVersion": "2024-11-05",
-        "capabilities": {
-            "tools": {"listChanged": False},
-            "resources": {"subscribe": False, "listChanged": False},
-            "prompts": {"listChanged": False},
+    return _rpc_response(
+        {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {
+                "tools": {"listChanged": False},
+                "resources": {"subscribe": False, "listChanged": False},
+                "prompts": {"listChanged": False},
+            },
+            "serverInfo": {
+                "name": "yunshu",
+                "version": "0.1.0-dev",
+            },
         },
-        "serverInfo": {
-            "name": "yunshu",
-            "version": "0.1.0-dev",
-        },
-    }, req_id)
+        req_id,
+    )
 
 
 async def _handle_tools_list(params: dict | None, req_id: int | str | None) -> dict:
@@ -334,7 +348,10 @@ async def _handle_tools_list(params: dict | None, req_id: int | str | None) -> d
                         "items": {
                             "type": "object",
                             "properties": {
-                                "role": {"type": "string", "enum": ["system", "user", "assistant"]},
+                                "role": {
+                                    "type": "string",
+                                    "enum": ["system", "user", "assistant"],
+                                },
                                 "content": {"type": "string"},
                             },
                             "required": ["role", "content"],
@@ -411,37 +428,61 @@ async def _handle_tools_call(params: dict | None, req_id: int | str | None) -> d
         if tool.handler is not None:
             try:
                 result_text = await asyncio.wait_for(
-                    tool.handler(arguments), timeout=_TOOL_CALL_TIMEOUT,
+                    tool.handler(arguments),
+                    timeout=_TOOL_CALL_TIMEOUT,
                 )
-                return _rpc_response({
-                    "content": [
-                        {"type": "text", "text": _truncate_tool_result(str(result_text))},
-                    ],
-                    "isError": False,
-                }, req_id)
+                return _rpc_response(
+                    {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": _truncate_tool_result(str(result_text)),
+                            },
+                        ],
+                        "isError": False,
+                    },
+                    req_id,
+                )
             except TimeoutError:
-                return _rpc_response({
-                    "content": [
-                        {"type": "text", "text": f"Tool '{tool_name}' timed out after {_TOOL_CALL_TIMEOUT}s"},
-                    ],
-                    "isError": True,
-                }, req_id)
+                return _rpc_response(
+                    {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"Tool '{tool_name}' timed out after {_TOOL_CALL_TIMEOUT}s",
+                            },
+                        ],
+                        "isError": True,
+                    },
+                    req_id,
+                )
             except Exception as e:
-                return _rpc_response({
+                return _rpc_response(
+                    {
+                        "content": [
+                            {"type": "text", "text": f"Tool execution error: {e}"},
+                        ],
+                        "isError": True,
+                    },
+                    req_id,
+                )
+        else:
+            return _rpc_response(
+                {
                     "content": [
-                        {"type": "text", "text": f"Tool execution error: {e}"},
+                        {
+                            "type": "text",
+                            "text": f"Tool '{tool_name}' has no handler registered. Define a handler when registering the tool.",
+                        },
                     ],
                     "isError": True,
-                }, req_id)
-        else:
-            return _rpc_response({
-                "content": [
-                    {"type": "text", "text": f"Tool '{tool_name}' has no handler registered. Define a handler when registering the tool."},
-                ],
-                "isError": True,
-            }, req_id)
+                },
+                req_id,
+            )
     else:
-        return _rpc_error(JSONRPCError.METHOD_NOT_FOUND, f"Unknown tool: {tool_name}", req_id)
+        return _rpc_error(
+            JSONRPCError.METHOD_NOT_FOUND, f"Unknown tool: {tool_name}", req_id
+        )
 
 
 async def _tool_generate(args: dict, req_id: int | str | None) -> dict:
@@ -480,7 +521,8 @@ async def _tool_generate(args: dict, req_id: int | str | None) -> dict:
             except KeyError:
                 return _rpc_error(
                     JSONRPCError.INVALID_PARAMS,
-                    f"Model '{model}' not found or not loaded", req_id,
+                    f"Model '{model}' not found or not loaded",
+                    req_id,
                 )
             # Any other failure (load/OOM) propagates to the outer handler as an
             # isError result — NOT a silent fallback to a different model.
@@ -488,7 +530,9 @@ async def _tool_generate(args: dict, req_id: int | str | None) -> dict:
             engine = get_engine()
 
         if engine is None:
-            return _rpc_error(JSONRPCError.INTERNAL_ERROR, "No engine available", req_id)
+            return _rpc_error(
+                JSONRPCError.INTERNAL_ERROR, "No engine available", req_id
+            )
 
         is_batched = isinstance(engine, BatchedEngine)
 
@@ -525,99 +569,149 @@ async def _tool_generate(args: dict, req_id: int | str | None) -> dict:
             )
             text = state.generated_text
 
-        return _rpc_response({
-            "content": [
-                {"type": "text", "text": _truncate_tool_result(text)},
-            ],
-            "isError": False,
-        }, req_id)
+        return _rpc_response(
+            {
+                "content": [
+                    {"type": "text", "text": _truncate_tool_result(text)},
+                ],
+                "isError": False,
+            },
+            req_id,
+        )
 
     except Exception as e:
         logger.error(f"MCP generate error: {e}", exc_info=True)
-        return _rpc_response({
-            "content": [{"type": "text", "text": f"Error: {e}"}],
-            "isError": True,
-        }, req_id)
+        return _rpc_response(
+            {
+                "content": [{"type": "text", "text": f"Error: {e}"}],
+                "isError": True,
+            },
+            req_id,
+        )
 
 
 async def _tool_synthesize_speech(args: dict, req_id: int | str | None) -> dict:
     """Execute TTS tool via TTSEngine."""
     text = args.get("text", "")
     if not text:
-        return _rpc_error(JSONRPCError.INVALID_PARAMS, "Missing 'text' parameter", req_id)
+        return _rpc_error(
+            JSONRPCError.INVALID_PARAMS, "Missing 'text' parameter", req_id
+        )
 
     from ..engine import get_model_manager
+
     manager = get_model_manager()
     if manager is None:
-        return _rpc_response({
-            "content": [{"type": "text", "text": "No model manager available for TTS"}],
-            "isError": True,
-        }, req_id)
+        return _rpc_response(
+            {
+                "content": [
+                    {"type": "text", "text": "No model manager available for TTS"}
+                ],
+                "isError": True,
+            },
+            req_id,
+        )
 
     try:
         from yunshu_engine.audio_engine import TTSEngine
+
         tts_engine = None
         for entry in manager.list_entries():
-            if entry.is_loaded and isinstance(getattr(entry, 'engine', None), TTSEngine):
+            if entry.is_loaded and isinstance(
+                getattr(entry, "engine", None), TTSEngine
+            ):
                 tts_engine = entry.engine
                 break
 
         if tts_engine is None:
-            return _rpc_response({
-                "content": [{"type": "text", "text": "No TTS engine loaded"}],
-                "isError": True,
-            }, req_id)
+            return _rpc_response(
+                {
+                    "content": [{"type": "text", "text": "No TTS engine loaded"}],
+                    "isError": True,
+                },
+                req_id,
+            )
 
         import base64
+
         voice = args.get("voice", "alloy")
         wav_bytes = await tts_engine.synthesize(text=text, voice=voice)
         audio_b64 = base64.b64encode(wav_bytes).decode("ascii")
 
         # Truncate oversized base64 audio to prevent response explosion
-        audio_data = audio_b64 if len(audio_b64) <= _MAX_TOOL_RESULT_BYTES else audio_b64[:_MAX_TOOL_RESULT_BYTES] + "... [truncated]"
+        audio_data = (
+            audio_b64
+            if len(audio_b64) <= _MAX_TOOL_RESULT_BYTES
+            else audio_b64[:_MAX_TOOL_RESULT_BYTES] + "... [truncated]"
+        )
 
-        return _rpc_response({
-            "content": [
-                {"type": "text", "text": f"Generated speech for: {text[:50]}..."},
-                {"type": "audio", "data": audio_data, "mimeType": "audio/wav"},
-            ],
-            "isError": False,
-        }, req_id)
+        return _rpc_response(
+            {
+                "content": [
+                    {"type": "text", "text": f"Generated speech for: {text[:50]}..."},
+                    {"type": "audio", "data": audio_data, "mimeType": "audio/wav"},
+                ],
+                "isError": False,
+            },
+            req_id,
+        )
     except Exception as e:
         logger.debug(f"TTS tool error: {e}", exc_info=True)
-        return _rpc_response({
-            "content": [{"type": "text", "text": f"TTS error: {e}"}],
-            "isError": True,
-        }, req_id)
+        return _rpc_response(
+            {
+                "content": [{"type": "text", "text": f"TTS error: {e}"}],
+                "isError": True,
+            },
+            req_id,
+        )
 
 
 async def _tool_generate_image(args: dict, req_id: int | str | None) -> dict:
     """Execute image generation tool via ImageGenEngine."""
     prompt = args.get("prompt", "")
     if not prompt:
-        return _rpc_error(JSONRPCError.INVALID_PARAMS, "Missing 'prompt' parameter", req_id)
+        return _rpc_error(
+            JSONRPCError.INVALID_PARAMS, "Missing 'prompt' parameter", req_id
+        )
 
     from ..engine import get_model_manager
+
     manager = get_model_manager()
     if manager is None:
-        return _rpc_response({
-            "content": [{"type": "text", "text": "No model manager available for image generation"}],
-            "isError": True,
-        }, req_id)
+        return _rpc_response(
+            {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "No model manager available for image generation",
+                    }
+                ],
+                "isError": True,
+            },
+            req_id,
+        )
 
     try:
         from yunshu_engine.image_engine import ImageGenEngine
+
         img_engine = None
         for entry in manager.list_entries():
-            if entry.is_loaded and isinstance(getattr(entry, 'engine', None), ImageGenEngine):
+            if entry.is_loaded and isinstance(
+                getattr(entry, "engine", None), ImageGenEngine
+            ):
                 img_engine = entry.engine
                 break
 
         if img_engine is None:
-            return _rpc_response({
-                "content": [{"type": "text", "text": "No image generation engine loaded"}],
-                "isError": True,
-            }, req_id)
+            return _rpc_response(
+                {
+                    "content": [
+                        {"type": "text", "text": "No image generation engine loaded"}
+                    ],
+                    "isError": True,
+                },
+                req_id,
+            )
 
         # honor the ADVERTISED width/height integer params (the inputSchema
         # declares width/height, default 512). The tool previously read an unadvertised
@@ -651,26 +745,41 @@ async def _tool_generate_image(args: dict, req_id: int | str | None) -> dict:
         )
 
         import base64
+
         b64 = base64.b64encode(png_bytes).decode("ascii")
         # Truncate oversized base64 image to prevent response explosion
-        image_data = b64 if len(b64) <= _MAX_TOOL_RESULT_BYTES else b64[:_MAX_TOOL_RESULT_BYTES] + "... [truncated]"
-        return _rpc_response({
-            "content": [
-                {"type": "image", "data": image_data, "mimeType": "image/png"},
-                {"type": "text", "text": f"Generated {width}x{height} image for: {prompt[:50]}..."},
-            ],
-            "isError": False,
-        }, req_id)
+        image_data = (
+            b64
+            if len(b64) <= _MAX_TOOL_RESULT_BYTES
+            else b64[:_MAX_TOOL_RESULT_BYTES] + "... [truncated]"
+        )
+        return _rpc_response(
+            {
+                "content": [
+                    {"type": "image", "data": image_data, "mimeType": "image/png"},
+                    {
+                        "type": "text",
+                        "text": f"Generated {width}x{height} image for: {prompt[:50]}...",
+                    },
+                ],
+                "isError": False,
+            },
+            req_id,
+        )
     except Exception as e:
         logger.debug(f"image generation tool error: {e}", exc_info=True)
-        return _rpc_response({
-            "content": [{"type": "text", "text": f"Image generation error: {e}"}],
-            "isError": True,
-        }, req_id)
+        return _rpc_response(
+            {
+                "content": [{"type": "text", "text": f"Image generation error: {e}"}],
+                "isError": True,
+            },
+            req_id,
+        )
 
 
-async def _handle_resources_list(params: dict | None, req_id: int | str | None,
-                                 rbac_key: Any = None) -> dict:
+async def _handle_resources_list(
+    params: dict | None, req_id: int | str | None, rbac_key: Any = None
+) -> dict:
     """List available resources.
 
     SECURITY: a model-scoped RBAC key must NOT see (id/type/size of) models it
@@ -686,12 +795,14 @@ async def _handle_resources_list(params: dict | None, req_id: int | str | None,
         for model_info in manager.list_models():
             if rbac_key is not None and not rbac_key.can_access_model(model_info["id"]):
                 continue
-            resources.append({
-                "uri": f"yunshu://models/{model_info['id']}",
-                "name": model_info["id"],
-                "description": f"{model_info['type']} model ({model_info['size_gb']:.1f} GB)",
-                "mimeType": "application/json",
-            })
+            resources.append(
+                {
+                    "uri": f"yunshu://models/{model_info['id']}",
+                    "name": model_info["id"],
+                    "description": f"{model_info['type']} model ({model_info['size_gb']:.1f} GB)",
+                    "mimeType": "application/json",
+                }
+            )
 
     return _rpc_response({"resources": resources}, req_id)
 
@@ -706,17 +817,23 @@ async def _handle_resources_read(params: dict | None, req_id: int | str | None) 
     if uri.startswith("yunshu://models/"):
         model_id = uri.replace("yunshu://models/", "")
         from ..engine import get_model_manager
+
         manager = get_model_manager()
         if manager:
             models = {m["id"]: m for m in manager.list_models()}
             if model_id in models:
-                return _rpc_response({
-                    "contents": [{
-                        "uri": uri,
-                        "mimeType": "application/json",
-                        "text": json.dumps(models[model_id]),
-                    }],
-                }, req_id)
+                return _rpc_response(
+                    {
+                        "contents": [
+                            {
+                                "uri": uri,
+                                "mimeType": "application/json",
+                                "text": json.dumps(models[model_id]),
+                            }
+                        ],
+                    },
+                    req_id,
+                )
 
     return _rpc_error(JSONRPCError.INVALID_PARAMS, f"Resource not found: {uri}", req_id)
 
@@ -769,7 +886,11 @@ _PROMPTS = {
         "template": "Translate the following text to {target_language}:\n\n{text}",
         "arguments": [
             {"name": "text", "description": "Text to translate", "required": True},
-            {"name": "target_language", "description": "Target language", "required": True},
+            {
+                "name": "target_language",
+                "description": "Target language",
+                "required": True,
+            },
         ],
     },
     "code_review": {
@@ -777,7 +898,11 @@ _PROMPTS = {
         "template": "Review the following {language} code for bugs, style issues, and improvements:\n\n```{language}\n{code}\n```",
         "arguments": [
             {"name": "code", "description": "Source code to review", "required": True},
-            {"name": "language", "description": "Programming language", "required": True},
+            {
+                "name": "language",
+                "description": "Programming language",
+                "required": True,
+            },
         ],
     },
     "explain": {
@@ -793,11 +918,15 @@ _PROMPTS = {
 async def _handle_prompts_get(params: dict | None, req_id: int | str | None) -> dict:
     """Get a specific prompt template with arguments filled in."""
     if params is None or "name" not in params:
-        return _rpc_error(JSONRPCError.INVALID_PARAMS, "Missing 'name' parameter", req_id)
+        return _rpc_error(
+            JSONRPCError.INVALID_PARAMS, "Missing 'name' parameter", req_id
+        )
 
     name = params["name"]
     if name not in _PROMPTS:
-        return _rpc_error(JSONRPCError.INVALID_PARAMS, f"Unknown prompt: {name}", req_id)
+        return _rpc_error(
+            JSONRPCError.INVALID_PARAMS, f"Unknown prompt: {name}", req_id
+        )
 
     prompt_def = _PROMPTS[name]
     arguments = params.get("arguments", {})
@@ -807,27 +936,39 @@ async def _handle_prompts_get(params: dict | None, req_id: int | str | None) -> 
     # check a caller that omits a required arg would get a malformed prompt with
     # unfilled placeholders instead of an INVALID_PARAMS error.
     missing = [
-        a["name"] for a in prompt_def["arguments"]
+        a["name"]
+        for a in prompt_def["arguments"]
         if a.get("required") and a["name"] not in arguments
     ]
     if missing:
         return _rpc_error(
             JSONRPCError.INVALID_PARAMS,
-            f"Missing required argument(s): {', '.join(missing)}", req_id,
+            f"Missing required argument(s): {', '.join(missing)}",
+            req_id,
         )
 
     try:
         import re
-        template = re.sub(r'\{(\w+)\}', lambda m: str(arguments.get(m.group(1), m.group(0))), prompt_def["template"])
-    except (KeyError, ValueError):
-        return _rpc_error(JSONRPCError.INVALID_PARAMS, "Missing template argument", req_id)
 
-    return _rpc_response({
-        "description": f"Prompt template: {name}",
-        "messages": [
-            {"role": "user", "content": {"type": "text", "text": template}},
-        ],
-    }, req_id)
+        template = re.sub(
+            r"\{(\w+)\}",
+            lambda m: str(arguments.get(m.group(1), m.group(0))),
+            prompt_def["template"],
+        )
+    except (KeyError, ValueError):
+        return _rpc_error(
+            JSONRPCError.INVALID_PARAMS, "Missing template argument", req_id
+        )
+
+    return _rpc_response(
+        {
+            "description": f"Prompt template: {name}",
+            "messages": [
+                {"role": "user", "content": {"type": "text", "text": template}},
+            ],
+        },
+        req_id,
+    )
 
 
 _METHODS["prompts/get"] = _handle_prompts_get
@@ -846,6 +987,7 @@ async def mcp_endpoint(request: Request):
     from pydantic import ValidationError
 
     from .models import _check_model_access, _check_permission
+
     # an MCP permission/auth denial must return a JSON-RPC error object (not the
     # OpenAI HTTP envelope a JSON-RPC client can't parse). _check_permission raises
     # HTTPException — convert it. id is unknown (body not parsed yet) → null per JSON-RPC.
@@ -853,7 +995,9 @@ async def mcp_endpoint(request: Request):
         _check_permission(request, "can_infer")
     except HTTPException as _perm_err:
         return JSONResponse(
-            _rpc_error(JSONRPCError.INVALID_REQUEST, f"Forbidden: {_perm_err.detail}", None),
+            _rpc_error(
+                JSONRPCError.INVALID_REQUEST, f"Forbidden: {_perm_err.detail}", None
+            ),
             status_code=_perm_err.status_code,
         )
 
@@ -866,11 +1010,18 @@ async def mcp_endpoint(request: Request):
     try:
         body = await request.json()
     except Exception:
-        return JSONResponse(_rpc_error(JSONRPCError.PARSE_ERROR, "Parse error: invalid JSON", None))
+        return JSONResponse(
+            _rpc_error(JSONRPCError.PARSE_ERROR, "Parse error: invalid JSON", None)
+        )
     if not isinstance(body, dict):
         # Batch arrays / scalars are not supported — respond with a single error.
-        return JSONResponse(_rpc_error(
-            JSONRPCError.INVALID_REQUEST, "Invalid Request: expected a JSON-RPC object", None))
+        return JSONResponse(
+            _rpc_error(
+                JSONRPCError.INVALID_REQUEST,
+                "Invalid Request: expected a JSON-RPC object",
+                None,
+            )
+        )
     # Per JSON-RPC 2.0 an explicit `id: null` is a REQUEST; only an OMITTED id is a
     # notification. pydantic collapses both to None, so read the RAW body to tell
     # them apart (previously `req.id is None` treated id:null as a notification).
@@ -881,8 +1032,16 @@ async def mcp_endpoint(request: Request):
     except ValidationError as e:
         if is_notification:
             return JSONResponse(content=None, status_code=204)
-        _msg = e.errors()[0].get("msg", "validation error") if e.errors() else "validation error"
-        return JSONResponse(_rpc_error(JSONRPCError.INVALID_REQUEST, f"Invalid Request: {_msg}", _raw_id))
+        _msg = (
+            e.errors()[0].get("msg", "validation error")
+            if e.errors()
+            else "validation error"
+        )
+        return JSONResponse(
+            _rpc_error(
+                JSONRPCError.INVALID_REQUEST, f"Invalid Request: {_msg}", _raw_id
+            )
+        )
     # the `generate` tool resolves an arbitrary
     # body["arguments"]["model"] via get_engine_for_model with no model-access check,
     # so a key scoped to model A could run inference on any loaded model B through MCP.
@@ -890,59 +1049,67 @@ async def mcp_endpoint(request: Request):
     # a model-isolation denial here (HTTPException 403) must also surface as a
     # JSON-RPC error, not the OpenAI HTTP envelope. _raw_id is known now, so echo it.
     try:
-      if req.method == "tools/call" and isinstance(req.params, dict):
-        _p = req.params
-        if _p.get("name") == "generate":
-            # gate REGARDLESS of the arguments shape. The old `and
-            # isinstance(arguments, dict)` meant a tools/call for generate with arguments
-            # OMITTED (or a non-dict) skipped the check entirely → _tool_generate fell
-            # through to the default engine (model=""), so a key scoped away from the
-            # default model could drive it by just omitting arguments (the model-access hole).
-            _args = _p.get("arguments")
-            _gen_model = _args.get("model") if isinstance(_args, dict) else None
-            if not _gen_model:
-                # an omitted model makes _tool_generate serve the DEFAULT
-                # engine; gate THAT model's id (else _check_model_access no-ops on the
-                # empty string and a key scoped away from the default drives it).
-                try:
-                    from ..engine import get_engine as _ge
-                    _gen_model = getattr(_ge(), "model_name", None)
-                except Exception:
-                    _gen_model = None
-            _check_model_access(request, _gen_model)
-        elif _p.get("name") in ("synthesize_speech", "generate_image"):
-            # SECURITY: these modality tools resolve the first loaded
-            # TTS/Image engine with NO access check, so a key scoped away from that
-            # model could drive it via MCP — bypassing the isolation enforced on
-            # /v1/audio/speech and /v1/images. Resolve the model the tool would use
-            # and gate it (mirrors the `generate` branch).
-            try:
-                from yunshu_engine.model_manager import ModelType
+        if req.method == "tools/call" and isinstance(req.params, dict):
+            _p = req.params
+            if _p.get("name") == "generate":
+                # gate REGARDLESS of the arguments shape. The old `and
+                # isinstance(arguments, dict)` meant a tools/call for generate with arguments
+                # OMITTED (or a non-dict) skipped the check entirely → _tool_generate fell
+                # through to the default engine (model=""), so a key scoped away from the
+                # default model could drive it by just omitting arguments (the model-access hole).
+                _args = _p.get("arguments")
+                _gen_model = _args.get("model") if isinstance(_args, dict) else None
+                if not _gen_model:
+                    # an omitted model makes _tool_generate serve the DEFAULT
+                    # engine; gate THAT model's id (else _check_model_access no-ops on the
+                    # empty string and a key scoped away from the default drives it).
+                    try:
+                        from ..engine import get_engine as _ge
 
-                from ..engine import get_model_manager
-                _mgr = get_model_manager()
-                _want = ModelType.TTS if _p["name"] == "synthesize_speech" else ModelType.IMAGE_GEN
-                _mid = None
-                if _mgr is not None:
-                    for _e in _mgr.list_entries():
-                        if _e.is_loaded and _e.model_type == _want:
-                            _mid = _e.model_id
-                            break
-            except Exception:
-                _mid = None
-            _check_model_access(request, _mid)
-      elif req.method == "resources/read" and isinstance(req.params, dict):
-        # resources/read returns full per-model metadata for an arbitrary
-        # yunshu://models/<id> URI behind only can_infer — gate the resolved model id so
-        # a key scoped away from it can't read its status/size/load-error.
-        _uri = req.params.get("uri", "")
-        if isinstance(_uri, str) and _uri.startswith("yunshu://models/"):
-            _check_model_access(request, _uri.replace("yunshu://models/", "", 1))
+                        _gen_model = getattr(_ge(), "model_name", None)
+                    except Exception:
+                        _gen_model = None
+                _check_model_access(request, _gen_model)
+            elif _p.get("name") in ("synthesize_speech", "generate_image"):
+                # SECURITY: these modality tools resolve the first loaded
+                # TTS/Image engine with NO access check, so a key scoped away from that
+                # model could drive it via MCP — bypassing the isolation enforced on
+                # /v1/audio/speech and /v1/images. Resolve the model the tool would use
+                # and gate it (mirrors the `generate` branch).
+                try:
+                    from yunshu_engine.model_manager import ModelType
+
+                    from ..engine import get_model_manager
+
+                    _mgr = get_model_manager()
+                    _want = (
+                        ModelType.TTS
+                        if _p["name"] == "synthesize_speech"
+                        else ModelType.IMAGE_GEN
+                    )
+                    _mid = None
+                    if _mgr is not None:
+                        for _e in _mgr.list_entries():
+                            if _e.is_loaded and _e.model_type == _want:
+                                _mid = _e.model_id
+                                break
+                except Exception:
+                    _mid = None
+                _check_model_access(request, _mid)
+        elif req.method == "resources/read" and isinstance(req.params, dict):
+            # resources/read returns full per-model metadata for an arbitrary
+            # yunshu://models/<id> URI behind only can_infer — gate the resolved model id so
+            # a key scoped away from it can't read its status/size/load-error.
+            _uri = req.params.get("uri", "")
+            if isinstance(_uri, str) and _uri.startswith("yunshu://models/"):
+                _check_model_access(request, _uri.replace("yunshu://models/", "", 1))
     except HTTPException as _acc_err:
         if is_notification:
             return JSONResponse(content=None, status_code=204)
         return JSONResponse(
-            _rpc_error(JSONRPCError.INVALID_REQUEST, f"Forbidden: {_acc_err.detail}", _raw_id),
+            _rpc_error(
+                JSONRPCError.INVALID_REQUEST, f"Forbidden: {_acc_err.detail}", _raw_id
+            ),
             status_code=_acc_err.status_code,
         )
     # is_notification was determined from the RAW body above (an OMITTED id, not an
@@ -951,19 +1118,26 @@ async def mcp_endpoint(request: Request):
     if req.jsonrpc != "2.0":
         if is_notification:
             return JSONResponse(content=None, status_code=204)
-        return JSONResponse(_rpc_error(JSONRPCError.INVALID_REQUEST, "Invalid jsonrpc version", req.id))
+        return JSONResponse(
+            _rpc_error(JSONRPCError.INVALID_REQUEST, "Invalid jsonrpc version", req.id)
+        )
 
     handler = _METHODS.get(req.method)
     if handler is None:
         if is_notification:
             return JSONResponse(content=None, status_code=204)
-        return JSONResponse(_rpc_error(JSONRPCError.METHOD_NOT_FOUND, f"Method not found: {req.method}", req.id))
+        return JSONResponse(
+            _rpc_error(
+                JSONRPCError.METHOD_NOT_FOUND, f"Method not found: {req.method}", req.id
+            )
+        )
 
     try:
         # resources/list must filter by the caller's per-key model access.
         if req.method == "resources/list":
             result = await _handle_resources_list(
-                req.params, req.id, getattr(request.state, "rbac_key", None))
+                req.params, req.id, getattr(request.state, "rbac_key", None)
+            )
         else:
             result = await handler(req.params, req.id)
         if is_notification:
@@ -976,13 +1150,16 @@ async def mcp_endpoint(request: Request):
         # do NOT echo the raw exception string (str(e)) to the client — it can
         # carry a file/model path or internal detail. The traceback is logged above;
         # return a generic message (mirrors the global exception handler's non-leak policy).
-        return JSONResponse(_rpc_error(JSONRPCError.INTERNAL_ERROR, "Internal error", req.id))
+        return JSONResponse(
+            _rpc_error(JSONRPCError.INTERNAL_ERROR, "Internal error", req.id)
+        )
 
 
 @router.get("/mcp/tools")
 async def mcp_tools_discovery(request: Request):
     """REST endpoint for MCP tool discovery."""
     from .models import _check_permission
+
     _check_permission(request, "can_infer")
     result = await _handle_tools_list(None, None)
     return result.get("result", {})
@@ -992,6 +1169,7 @@ async def mcp_tools_discovery(request: Request):
 async def mcp_sse_endpoint(request: Request):
     """MCP SSE endpoint for streaming connections."""
     from .models import _check_permission
+
     _check_permission(request, "can_infer")
     import asyncio
 
@@ -1029,6 +1207,7 @@ async def mcp_sse_endpoint(request: Request):
 async def mcp_client_status(request: Request) -> dict:
     """Get MCP client connection status and discovered tools."""
     from .models import _check_permission
+
     _check_permission(request, "can_infer")
     mcp_mgr = getattr(request.app.state, "mcp_client", None)
     if mcp_mgr is None:
@@ -1043,6 +1222,7 @@ async def mcp_client_tools(request: Request) -> dict:
     Returns tools in both MCP format and OpenAI function format.
     """
     from .models import _check_permission
+
     _check_permission(request, "can_infer")
     mcp_mgr = getattr(request.app.state, "mcp_client", None)
     if mcp_mgr is None:

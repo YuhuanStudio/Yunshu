@@ -39,7 +39,10 @@ def _check_permission(request: Request) -> None:
     rbac_key = getattr(request.state, "rbac_key", None)
     if rbac_key is not None:
         if not rbac_key.has_permission("can_benchmark"):
-            raise HTTPException(status_code=403, detail="Insufficient permissions for benchmark endpoints")
+            raise HTTPException(
+                status_code=403,
+                detail="Insufficient permissions for benchmark endpoints",
+            )
         return
     # Tenant set by TenantAuthMiddleware (legacy tenant auth)
     tenant = getattr(request.state, "tenant", None)
@@ -48,15 +51,20 @@ def _check_permission(request: Request) -> None:
         # (can_benchmark — a permission USER RBAC keys lack). The blanket tenant-allow
         # let any legacy tenant trigger them (privesc keystone). Require admin role.
         _role = str(getattr(request.state, "role", "") or "")
-        if _role.lower() in ("admin", "system", "owner") or _role.upper().endswith("ADMIN"):
+        if _role.lower() in ("admin", "system", "owner") or _role.upper().endswith(
+            "ADMIN"
+        ):
             return
-        raise HTTPException(status_code=403, detail="Insufficient permissions for benchmark endpoints")
+        raise HTTPException(
+            status_code=403, detail="Insufficient permissions for benchmark endpoints"
+        )
     # Static token auth — must verify the request actually provides it
     auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
     if auth_token:
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             import hmac
+
             if hmac.compare_digest(auth[7:], auth_token):
                 return
         raise HTTPException(
@@ -69,6 +77,7 @@ def _check_permission(request: Request) -> None:
         status_code=401,
         detail="Benchmark requires authentication. Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true.",
     )
+
 
 # ── State ──
 
@@ -103,15 +112,23 @@ class RooflineRequest(BaseModel):
 def _validate_base_url(url: str) -> str:
     """Prevent SSRF — only allow http/https to localhost addresses."""
     import re
+
     # Must start with http:// or https://
-    if not re.match(r'^https?://', url, re.IGNORECASE):
-        raise ValueError(f"base_url must use http:// or https:// scheme, got '{url[:50]}'")
+    if not re.match(r"^https?://", url, re.IGNORECASE):
+        raise ValueError(
+            f"base_url must use http:// or https:// scheme, got '{url[:50]}'"
+        )
     # Strip scheme and extract host
-    host = re.sub(r'^https?://', '', url, flags=re.IGNORECASE).split(':')[0].split('/')[0].split('?')[0]
+    host = (
+        re.sub(r"^https?://", "", url, flags=re.IGNORECASE)
+        .split(":")[0]
+        .split("/")[0]
+        .split("?")[0]
+    )
     # Normalize: lowercase, strip brackets from IPv6
-    host_lower = host.lower().strip('[]')
+    host_lower = host.lower().strip("[]")
     # Allow only loopback addresses
-    _ALLOWED = {'localhost', '127.0.0.1', '::1', '0.0.0.0', '[::1]'}
+    _ALLOWED = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "[::1]"}
     if host not in _ALLOWED and host_lower not in _ALLOWED:
         raise ValueError(f"base_url must target localhost, got '{host}'")
     return url
@@ -124,6 +141,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
     None here makes urllib NOT follow the redirect and surface the 3xx response instead,
     so the benchmark just counts it as a failed request rather than fetching the target.
     """
+
     def redirect_request(self, *args, **kwargs):  # noqa: D102
         return None
 
@@ -222,12 +240,12 @@ def _run_roofline(request: RooflineRequest) -> dict:
         elapsed = time.perf_counter() - start
 
         # GFLOPS = 2 * M^3 / time (each multiply-add = 2 FLOPs)
-        ops = 2 * (size ** 3) * request.num_iters
+        ops = 2 * (size**3) * request.num_iters
         gflops = ops / elapsed / 1e9
         gflops_list.append(round(gflops, 1))
 
         # Memory bandwidth estimate (read A + B, write C = 3 * M^2 * dtype_bytes)
-        bytes_moved = 3 * (size ** 2) * 2 * request.num_iters  # 2 bytes for float16
+        bytes_moved = 3 * (size**2) * 2 * request.num_iters  # 2 bytes for float16
         bandwidth = bytes_moved / elapsed / 1e9  # GB/s
         bandwidth_list.append(round(bandwidth, 1))
 
@@ -258,17 +276,21 @@ async def _run_latency(request: LatencyRequest) -> dict:
             latencies = []
 
             # Generate prompt of roughly prompt_len tokens
-            prompt = "The quick brown fox jumps over the lazy dog. " * (prompt_len // 10 + 1)
+            prompt = "The quick brown fox jumps over the lazy dog. " * (
+                prompt_len // 10 + 1
+            )
 
             for _ in range(request.num_requests):
                 start = time.perf_counter()
                 try:
-                    req_data = json.dumps({
-                        "model": request.model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": max_tok,
-                        "stream": False,
-                    }).encode()
+                    req_data = json.dumps(
+                        {
+                            "model": request.model,
+                            "messages": [{"role": "user", "content": prompt}],
+                            "max_tokens": max_tok,
+                            "stream": False,
+                        }
+                    ).encode()
 
                     req = urllib.request.Request(
                         f"{request.base_url}/v1/chat/completions",
@@ -291,17 +313,23 @@ async def _run_latency(request: LatencyRequest) -> dict:
                 continue
 
             latencies.sort()
-            results.append({
-                "prompt_length": prompt_len,
-                "max_tokens": max_tok,
-                "num_requests": len(latencies),
-                "p50_ms": round(latencies[len(latencies) // 2] * 1000, 1),
-                "p95_ms": round(latencies[int(len(latencies) * 0.95)] * 1000, 1),
-                "p99_ms": round(latencies[min(int(len(latencies) * 0.99), len(latencies) - 1)] * 1000, 1),
-                "avg_ms": round(sum(latencies) / len(latencies) * 1000, 1),
-                "min_ms": round(min(latencies) * 1000, 1),
-                "max_ms": round(max(latencies) * 1000, 1),
-            })
+            results.append(
+                {
+                    "prompt_length": prompt_len,
+                    "max_tokens": max_tok,
+                    "num_requests": len(latencies),
+                    "p50_ms": round(latencies[len(latencies) // 2] * 1000, 1),
+                    "p95_ms": round(latencies[int(len(latencies) * 0.95)] * 1000, 1),
+                    "p99_ms": round(
+                        latencies[min(int(len(latencies) * 0.99), len(latencies) - 1)]
+                        * 1000,
+                        1,
+                    ),
+                    "avg_ms": round(sum(latencies) / len(latencies) * 1000, 1),
+                    "min_ms": round(min(latencies) * 1000, 1),
+                    "max_ms": round(max(latencies) * 1000, 1),
+                }
+            )
 
     return {
         "results": results,
@@ -321,7 +349,9 @@ async def _run_throughput(request: ThroughputRequest) -> dict:
 
     results = []
 
-    prompt = "The quick brown fox jumps over the lazy dog. " * (request.prompt_tokens // 10 + 1)
+    prompt = "The quick brown fox jumps over the lazy dog. " * (
+        request.prompt_tokens // 10 + 1
+    )
 
     for concurrency in request.concurrency_levels:
         total_requests = request.num_requests
@@ -329,12 +359,14 @@ async def _run_throughput(request: ThroughputRequest) -> dict:
         def single_request(_i: int) -> float:
             start = time.perf_counter()
             try:
-                req_data = json.dumps({
-                    "model": request.model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": request.max_tokens,
-                    "stream": False,
-                }).encode()
+                req_data = json.dumps(
+                    {
+                        "model": request.model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": request.max_tokens,
+                        "stream": False,
+                    }
+                ).encode()
 
                 req = urllib.request.Request(
                     f"{request.base_url}/v1/chat/completions",
@@ -351,7 +383,10 @@ async def _run_throughput(request: ThroughputRequest) -> dict:
 
         loop = asyncio.get_running_loop()
         with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
-            futures = [loop.run_in_executor(executor, single_request, i) for i in range(total_requests)]
+            futures = [
+                loop.run_in_executor(executor, single_request, i)
+                for i in range(total_requests)
+            ]
             await asyncio.gather(*futures)
 
         wall_time = time.perf_counter() - wall_start
@@ -361,15 +396,17 @@ async def _run_throughput(request: ThroughputRequest) -> dict:
         est_total_tokens = total_requests * request.max_tokens
         tokens_per_s = est_total_tokens / wall_time if wall_time > 0 else 0
 
-        results.append({
-            "concurrency": concurrency,
-            "total_requests": total_requests,
-            "wall_time_s": round(wall_time, 2),
-            "requests_per_s": round(requests_per_s, 2),
-            "tokens_per_s": round(tokens_per_s, 1),
-            "prompt_tokens": request.prompt_tokens,
-            "max_tokens": request.max_tokens,
-        })
+        results.append(
+            {
+                "concurrency": concurrency,
+                "total_requests": total_requests,
+                "wall_time_s": round(wall_time, 2),
+                "requests_per_s": round(requests_per_s, 2),
+                "tokens_per_s": round(tokens_per_s, 1),
+                "prompt_tokens": request.prompt_tokens,
+                "max_tokens": request.max_tokens,
+            }
+        )
 
     return {
         "results": results,
@@ -389,7 +426,10 @@ async def bench_roofline(req: Request, bench_req: RooflineRequest):
     global _active_benchmark
     with _lock:
         if _active_benchmark:
-            raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
+            raise HTTPException(
+                status_code=409,
+                detail=f"Benchmark '{_active_benchmark}' is already running",
+            )
         _active_benchmark = "roofline"
 
     try:
@@ -411,7 +451,10 @@ async def bench_latency(req: Request, bench_req: LatencyRequest):
     global _active_benchmark
     with _lock:
         if _active_benchmark:
-            raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
+            raise HTTPException(
+                status_code=409,
+                detail=f"Benchmark '{_active_benchmark}' is already running",
+            )
         _active_benchmark = "latency"
 
     try:
@@ -433,7 +476,10 @@ async def bench_throughput(req: Request, bench_req: ThroughputRequest):
     global _active_benchmark
     with _lock:
         if _active_benchmark:
-            raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
+            raise HTTPException(
+                status_code=409,
+                detail=f"Benchmark '{_active_benchmark}' is already running",
+            )
         _active_benchmark = "throughput"
     try:
         result = await _run_throughput(bench_req)
@@ -497,7 +543,11 @@ def _resolve_loaded_engine(model_id: str | None):
                 if e.model_id == model_id:
                     entry = e
                     break
-        if entry is not None and entry.is_loaded and getattr(entry, "engine", None) is not None:
+        if (
+            entry is not None
+            and entry.is_loaded
+            and getattr(entry, "engine", None) is not None
+        ):
             return entry.engine, entry.model_id
         return None, None
 
@@ -518,7 +568,10 @@ async def bench_model(req: Request, bench_req: ModelBenchRequest):
     global _active_benchmark
     with _lock:
         if _active_benchmark:
-            raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
+            raise HTTPException(
+                status_code=409,
+                detail=f"Benchmark '{_active_benchmark}' is already running",
+            )
         _active_benchmark = "model"
 
     try:
@@ -578,7 +631,10 @@ async def bench_batch(
     global _active_benchmark
     with _lock:
         if _active_benchmark:
-            raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
+            raise HTTPException(
+                status_code=409,
+                detail=f"Benchmark '{_active_benchmark}' is already running",
+            )
         _active_benchmark = "batch"
 
     try:
@@ -611,7 +667,9 @@ async def bench_batch(
 
 
 class RooflineModelRequest(BaseModel):
-    chip: str = Field(default="auto", description="Chip name (e.g., M4_Max) or 'auto' to detect")
+    chip: str = Field(
+        default="auto", description="Chip name (e.g., M4_Max) or 'auto' to detect"
+    )
     gemm_sizes: list[list[int]] = Field(
         default=[[1, 4096, 4096], [32, 4096, 4096], [1, 4096, 11008]],
         description="GEMM sizes [M, N, K] to analyze",
@@ -625,7 +683,9 @@ class RooflineModelRequest(BaseModel):
         # generic handler → 500 instead of a clean 422 for malformed input.
         for i, g in enumerate(self.gemm_sizes):
             if len(g) != 3:
-                raise ValueError(f"gemm_sizes[{i}] must be exactly [M, N, K] (got {len(g)} values)")
+                raise ValueError(
+                    f"gemm_sizes[{i}] must be exactly [M, N, K] (got {len(g)} values)"
+                )
             if any(v <= 0 for v in g):
                 raise ValueError(f"gemm_sizes[{i}] values must be positive")
         return self
@@ -642,7 +702,10 @@ async def bench_roofline_model(req: Request, bench_req: RooflineModelRequest):
     global _active_benchmark
     with _lock:
         if _active_benchmark:
-            raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
+            raise HTTPException(
+                status_code=409,
+                detail=f"Benchmark '{_active_benchmark}' is already running",
+            )
         _active_benchmark = "roofline-model"
 
     try:
@@ -651,22 +714,25 @@ async def bench_roofline_model(req: Request, bench_req: RooflineModelRequest):
         chip = bench_req.chip
         if chip == "auto":
             from yunshu_engine.utils.hardware import get_chip_name
+
             chip = get_chip_name()
 
         rm = RooflineModel(chip)
         results = []
         for m, n, k in bench_req.gemm_sizes:
             report = rm.compute_gemm_roofline(M=m, N=n, K=k)
-            results.append({
-                "gemm_size": [m, n, k],
-                "arithmetic_intensity": round(report.operational_intensity, 2),
-                "compute_bound": report.bound == "compute",
-                "bound": report.bound,
-                "predicted_gflops": round(report.predicted_gflops, 2),
-                "peak_gflops": round(report.peak_gflops, 2),
-                "flops": report.flops,
-                "bytes_accessed": report.bytes_accessed,
-            })
+            results.append(
+                {
+                    "gemm_size": [m, n, k],
+                    "arithmetic_intensity": round(report.operational_intensity, 2),
+                    "compute_bound": report.bound == "compute",
+                    "bound": report.bound,
+                    "predicted_gflops": round(report.predicted_gflops, 2),
+                    "peak_gflops": round(report.peak_gflops, 2),
+                    "flops": report.flops,
+                    "bytes_accessed": report.bytes_accessed,
+                }
+            )
 
         _benchmark_results["roofline-model"] = {
             "chip": rm.chip_key,
@@ -694,7 +760,9 @@ class BFCLEvalRequest(BaseModel):
     # cap max_samples (0=all). The eval is serialized by the benchmark lock and
     # gated behind admin-class can_benchmark, but an explicit upper bound keeps a single call
     # from running unboundedly long on a huge category set.
-    max_samples: int = Field(default=10, ge=0, le=100000, description="Max test cases per category (0=all)")
+    max_samples: int = Field(
+        default=10, ge=0, le=100000, description="Max test cases per category (0=all)"
+    )
 
 
 @router.post("/bfcl-eval")
@@ -708,7 +776,10 @@ async def bench_bfcl_eval(req: Request, bench_req: BFCLEvalRequest):
     global _active_benchmark
     with _lock:
         if _active_benchmark:
-            raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
+            raise HTTPException(
+                status_code=409,
+                detail=f"Benchmark '{_active_benchmark}' is already running",
+            )
         _active_benchmark = "bfcl-eval"
 
     try:
@@ -720,7 +791,11 @@ async def bench_bfcl_eval(req: Request, bench_req: BFCLEvalRequest):
 
         config = BFCLEvalConfig(
             model_name=engine.model_name or "unknown",
-            test_categories=[c for c in bench_req.categories if c in ("simple", "parallel", "multiple", "parallel_multiple")],
+            test_categories=[
+                c
+                for c in bench_req.categories
+                if c in ("simple", "parallel", "multiple", "parallel_multiple")
+            ],
             max_samples=bench_req.max_samples,
         )
         evaluator = BFCLEvaluator(config, engine=engine)
@@ -731,14 +806,16 @@ async def bench_bfcl_eval(req: Request, bench_req: BFCLEvalRequest):
 
         result_dicts = []
         for r in results:
-            result_dicts.append({
-                "category": r.category,
-                "total": r.total,
-                "correct": r.correct,
-                "accuracy": round(r.accuracy, 3),
-                "avg_latency_ms": round(r.avg_latency_ms, 1),
-                "errors": r.errors[:5],  # Limit error details
-            })
+            result_dicts.append(
+                {
+                    "category": r.category,
+                    "total": r.total,
+                    "correct": r.correct,
+                    "accuracy": round(r.accuracy, 3),
+                    "avg_latency_ms": round(r.avg_latency_ms, 1),
+                    "errors": r.errors[:5],  # Limit error details
+                }
+            )
 
         _benchmark_results["bfcl-eval"] = {
             "model": config.model_name,

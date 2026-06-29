@@ -118,19 +118,26 @@ def _record_metrics(prompt_tokens: int, completion_tokens: int) -> None:
     """
     try:
         from ..middleware.metrics import get_metrics
+
         get_metrics().record_tokens(prompt_tokens, completion_tokens)
         get_metrics().record_inference()
     except Exception:
         logger.debug("metrics recording failed", exc_info=True)
     try:
         from yunshu_engine.tracing import get_metrics_v2
-        get_metrics_v2().counter("yunshu_tokens_total", {"type": "prompt"}, prompt_tokens)
-        get_metrics_v2().counter("yunshu_tokens_total", {"type": "completion"}, completion_tokens)
+
+        get_metrics_v2().counter(
+            "yunshu_tokens_total", {"type": "prompt"}, prompt_tokens
+        )
+        get_metrics_v2().counter(
+            "yunshu_tokens_total", {"type": "completion"}, completion_tokens
+        )
     except Exception:
         logger.debug("metrics recording failed", exc_info=True)
     # feed the per-request TPM box (see usage_context).
     try:
         from ..usage_context import record_billed_tokens
+
         record_billed_tokens((prompt_tokens or 0) + (completion_tokens or 0))
     except Exception:
         logger.debug("billed-token accounting failed", exc_info=True)
@@ -138,6 +145,7 @@ def _record_metrics(prompt_tokens: int, completion_tokens: int) -> None:
 
 class StreamOptions(BaseModel):
     """OpenAI stream_options parameter."""
+
     include_usage: bool = False
 
 
@@ -173,7 +181,9 @@ class CompletionRequest(BaseModel):
     response_format: dict | None = None
     reasoning_effort: str | None = None
     xtc_probability: float = Field(default=0.0, ge=0.0, le=1.0)
-    xtc_threshold: float = Field(default=0.0, ge=0.0, le=0.5)  # engine requires [0,0.5]; le=1.0 made out-of-range 500 not 422
+    xtc_threshold: float = Field(
+        default=0.0, ge=0.0, le=0.5
+    )  # engine requires [0,0.5]; le=1.0 made out-of-range 500 not 422
     # serving parity:
     min_tokens: int = Field(default=0, ge=0)
     ignore_eos: bool = False
@@ -190,15 +200,25 @@ class CompletionRequest(BaseModel):
     guided_json: dict | None = None
     user: str | None = None
     suffix: str | None = None  # OpenAI: suffix after inserted text completion
-    best_of: int | None = Field(default=None, ge=1, le=128)  # OpenAI: server-side best-of selection
+    best_of: int | None = Field(
+        default=None, ge=1, le=128
+    )  # OpenAI: server-side best-of selection
     priority: int = Field(default=0, ge=0, le=100)
     n: int = Field(default=1, ge=1, le=128)
-    logits_processors: list | None = None  # SAMP-2: User-provided custom logits processors
-    timeout: float | None = Field(default=None, ge=1.0, le=600.0)  # Request timeout in seconds
+    logits_processors: list | None = (
+        None  # SAMP-2: User-provided custom logits processors
+    )
+    timeout: float | None = Field(
+        default=None, ge=1.0, le=600.0
+    )  # Request timeout in seconds
 
     def effective_max_tokens(self) -> int:
         """Return max_completion_tokens if set, else max_tokens (OpenAI SDK compat)."""
-        return self.max_completion_tokens if self.max_completion_tokens is not None else self.max_tokens
+        return (
+            self.max_completion_tokens
+            if self.max_completion_tokens is not None
+            else self.max_tokens
+        )
 
     @field_validator("stop", mode="before")
     @classmethod
@@ -223,8 +243,10 @@ class CompletionRequest(BaseModel):
             elif self.guided_grammar is not None:
                 self.grammar = {"type": "cfg", "grammar": self.guided_grammar}
         if self.guided_json is not None and self.response_format is None:
-            self.response_format = {"type": "json_schema",
-                                    "json_schema": {"schema": self.guided_json}}
+            self.response_format = {
+                "type": "json_schema",
+                "json_schema": {"schema": self.guided_json},
+            }
         # Validate prompt: string must be non-empty, list must have elements
         if isinstance(self.prompt, str) and not self.prompt.strip():
             raise ValueError("prompt: cannot be empty or whitespace-only")
@@ -238,14 +260,22 @@ class CompletionRequest(BaseModel):
             raise ValueError("stop_token_ids: maximum 16 stop token IDs")
         # Validate response_format type if provided
         if self.response_format is not None:
-            rf_type = self.response_format.get("type") if isinstance(self.response_format, dict) else None
+            rf_type = (
+                self.response_format.get("type")
+                if isinstance(self.response_format, dict)
+                else None
+            )
             if rf_type not in ("json_object", "json_schema", "text", None):
-                raise ValueError(f"response_format.type: must be 'json_object', 'json_schema', or 'text', got '{rf_type}'")
+                raise ValueError(
+                    f"response_format.type: must be 'json_object', 'json_schema', or 'text', got '{rf_type}'"
+                )
         # Validate grammar type if provided
         if self.grammar is not None:
             gtype = self.grammar.get("type") if isinstance(self.grammar, dict) else None
             if gtype not in ("json", "regex", "choice", "cfg", None):
-                raise ValueError(f"grammar.type: must be one of 'json', 'regex', 'choice', 'cfg', got '{gtype}'")
+                raise ValueError(
+                    f"grammar.type: must be one of 'json', 'regex', 'choice', 'cfg', got '{gtype}'"
+                )
         # Validate best_of: must be >= n, and not used with streaming
         if self.best_of is not None:
             if self.best_of < self.n:
@@ -263,13 +293,16 @@ class CompletionRequest(BaseModel):
         # instead of a clean 422. Excludes bool (subclass of int).
         if self.logit_bias:
             import math
+
             for k, v in self.logit_bias.items():
                 if isinstance(v, bool) or not isinstance(v, (int, float)):
                     raise ValueError(f"logit_bias[{k}]: must be a finite number")
                 if math.isnan(v) or math.isinf(v):
                     raise ValueError(f"logit_bias[{k}]: must be a finite number")
                 if v < -100.0 or v > 100.0:
-                    raise ValueError(f"logit_bias[{k}]={v}: must be between -100 and 100")
+                    raise ValueError(
+                        f"logit_bias[{k}]={v}: must be between -100 and 100"
+                    )
         # bound seed to 64-bit signed range (parity with chat.py:449 — downstream
         # samplers seed numpy/Gumbel PRNGs that overflow on an out-of-range int).
         if self.seed is not None and (self.seed < -(2**63) or self.seed >= 2**63):
@@ -284,7 +317,10 @@ async def create_completion(req: CompletionRequest, request: Request):
     _validate_sampling_params(req.temperature, req.effective_max_tokens(), req.top_p)
     _rbac_key = getattr(request.state, "rbac_key", None)
     if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
-        raise HTTPException(status_code=403, detail=f"Model '{req.model}' not accessible with this API key")
+        raise HTTPException(
+            status_code=403,
+            detail=f"Model '{req.model}' not accessible with this API key",
+        )
 
     # Fast path: max_tokens=0 returns prompt_tokens only (OpenAI API behavior).
     _effective_mt = req.effective_max_tokens()
@@ -299,22 +335,37 @@ async def create_completion(req: CompletionRequest, request: Request):
         tokenizer = None
         engine = get_engine()
         if engine and engine.is_loaded:
-            tokenizer = getattr(engine, '_tokenizer', None)
+            tokenizer = getattr(engine, "_tokenizer", None)
         if tokenizer is None:
             try:
                 from ..engine import get_model_manager
+
                 _mm = get_model_manager()
                 if _mm is not None:
                     _entry = _mm.get_entry(req.model)
-                    if _entry is not None and _entry.is_loaded and _entry.engine is not None:
-                        tokenizer = getattr(_entry.engine, '_tokenizer', None)
+                    if (
+                        _entry is not None
+                        and _entry.is_loaded
+                        and _entry.engine is not None
+                    ):
+                        tokenizer = getattr(_entry.engine, "_tokenizer", None)
             except Exception:
-                logger.debug("max_tokens=0 multi-model tokenizer lookup failed", exc_info=True)
+                logger.debug(
+                    "max_tokens=0 multi-model tokenizer lookup failed", exc_info=True
+                )
         if tokenizer is not None:
             try:
-                if isinstance(req.prompt, list) and req.prompt and isinstance(req.prompt[0], int):
+                if (
+                    isinstance(req.prompt, list)
+                    and req.prompt
+                    and isinstance(req.prompt[0], int)
+                ):
                     prompt_tok = len(req.prompt)
-                elif isinstance(req.prompt, list) and req.prompt and isinstance(req.prompt[0], list):
+                elif (
+                    isinstance(req.prompt, list)
+                    and req.prompt
+                    and isinstance(req.prompt[0], list)
+                ):
                     # list[list[int]] — sum per-prompt token count
                     prompt_tok = sum(len(p) for p in req.prompt)
                 else:
@@ -327,7 +378,12 @@ async def create_completion(req: CompletionRequest, request: Request):
         # …"), so echo previously returned numeric IDs instead of the prompt text. Decode
         # token-array prompts here (the tokenizer is already resolved above for counting).
         _echo_texts = _fp_prompts
-        if req.echo and tokenizer is not None and isinstance(req.prompt, list) and req.prompt:
+        if (
+            req.echo
+            and tokenizer is not None
+            and isinstance(req.prompt, list)
+            and req.prompt
+        ):
             try:
                 if isinstance(req.prompt[0], int):
                     _echo_texts = [tokenizer.decode(req.prompt)]
@@ -336,28 +392,33 @@ async def create_completion(req: CompletionRequest, request: Request):
             except Exception:
                 logger.debug("max_tokens=0 echo decode failed", exc_info=True)
                 _echo_texts = _fp_prompts
-        return JSONResponse({
-            "id": completion_id,
-            "object": "text_completion",
-            "created": int(time.time()),
-            "model": req.model,
-            # n choices PER prompt (OpenAI returns n completions even at max_tokens=0;
-            # the old loop ignored req.n and returned only one per prompt).
-            "choices": [
-                {
-                    "index": idx,
-                    "text": (_echo_texts[idx // max(req.n, 1)]
-                             if req.echo and (idx // max(req.n, 1)) < len(_echo_texts) else ""),
-                    "finish_reason": "length",
-                }
-                for idx in range(len(_fp_prompts) * max(req.n, 1))
-            ],
-            "usage": {
-                "prompt_tokens": prompt_tok,
-                "completion_tokens": 0,
-                "total_tokens": prompt_tok,
-            },
-        })
+        return JSONResponse(
+            {
+                "id": completion_id,
+                "object": "text_completion",
+                "created": int(time.time()),
+                "model": req.model,
+                # n choices PER prompt (OpenAI returns n completions even at max_tokens=0;
+                # the old loop ignored req.n and returned only one per prompt).
+                "choices": [
+                    {
+                        "index": idx,
+                        "text": (
+                            _echo_texts[idx // max(req.n, 1)]
+                            if req.echo and (idx // max(req.n, 1)) < len(_echo_texts)
+                            else ""
+                        ),
+                        "finish_reason": "length",
+                    }
+                    for idx in range(len(_fp_prompts) * max(req.n, 1))
+                ],
+                "usage": {
+                    "prompt_tokens": prompt_tok,
+                    "completion_tokens": 0,
+                    "total_tokens": prompt_tok,
+                },
+            }
+        )
 
     # Validate stop strings: reject empty strings (would match immediately)
     if req.stop:
@@ -370,18 +431,20 @@ async def create_completion(req: CompletionRequest, request: Request):
         try:
             engine = await get_engine_for_model(req.model)
         except (KeyError, Exception):
-            raise HTTPException(status_code=404, detail=f"Model '{req.model}' not found") from None
+            raise HTTPException(
+                status_code=404, detail=f"Model '{req.model}' not found"
+            ) from None
 
     # OpenAI accepts str | list[str] | list[int] | list[list[int]] for prompt.
     # Normalize into a list of string prompts; each becomes its own choice.
-    _prompts = _normalize_prompts(req.prompt, getattr(engine, '_tokenizer', None))
+    _prompts = _normalize_prompts(req.prompt, getattr(engine, "_tokenizer", None))
     # Streaming with multi-prompt produces interleaved choice_index output; keep
     # the streaming path single-prompt-only for now and reject the combo.
     if req.stream and len(_prompts) > 1:
         raise HTTPException(
             status_code=400,
             detail="Multi-prompt (list[str] / list[list[int]]) is not supported when stream is True. "
-                   "Use non-streaming mode for multiple prompts.",
+            "Use non-streaming mode for multiple prompts.",
         )
     # Single-prompt fast path (streaming + most non-streaming clients).
     prompt = _prompts[0]
@@ -390,7 +453,7 @@ async def create_completion(req: CompletionRequest, request: Request):
     # anthropic all do this; completions was missing it — an over-window prompt produced
     # garbage/degraded output and monopolized the executor with no clean 400).
     try:
-        _ctx_tok = getattr(engine, '_tokenizer', None)
+        _ctx_tok = getattr(engine, "_tokenizer", None)
         if _ctx_tok is not None:
             _est_tokens = max((len(_ctx_tok.encode(p)) for p in _prompts), default=0)
             validate_context_window(_est_tokens, req.model, engine)
@@ -409,26 +472,43 @@ async def create_completion(req: CompletionRequest, request: Request):
     tracer = get_inference_tracer()
     slog = get_structured_logger()
     trace_id = f"cmpl-{uuid.uuid4().hex[:16]}"
-    tracer.start_trace(trace_id, metadata={
-        "model": req.model,
-        "max_tokens": req.effective_max_tokens(),
-        "temperature": req.temperature,
-        "stream": req.stream,
-        "endpoint": "/completions",
-    })
+    tracer.start_trace(
+        trace_id,
+        metadata={
+            "model": req.model,
+            "max_tokens": req.effective_max_tokens(),
+            "temperature": req.temperature,
+            "stream": req.stream,
+            "endpoint": "/completions",
+        },
+    )
     tracer.span(trace_id, "prefill", {"model": req.model})
-    slog.info("inference_request", model=req.model, trace_id=trace_id,
-              max_tokens=req.effective_max_tokens(), stream=req.stream)
+    slog.info(
+        "inference_request",
+        model=req.model,
+        trace_id=trace_id,
+        max_tokens=req.effective_max_tokens(),
+        stream=req.stream,
+    )
 
     if req.stream:
         return StreamingResponse(
-            _stream_completion(engine, prompt, req, completion_id, request, json_schema=json_schema, trace_id=trace_id),
+            _stream_completion(
+                engine,
+                prompt,
+                req,
+                completion_id,
+                request,
+                json_schema=json_schema,
+                trace_id=trace_id,
+            ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
     # Non-streaming
     from yunshu_engine.batched_engine import BatchedEngine
+
     is_batched = isinstance(engine, BatchedEngine)
 
     loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
@@ -439,6 +519,7 @@ async def create_completion(req: CompletionRequest, request: Request):
     _ns_cancel_event = None
     try:
         from yunshu_engine.request_tracker import get_request_tracker
+
         _ns_tracker = get_request_tracker()
         _ns_gen = _ns_tracker.register(completion_id, req.model)
         _ns_cancel_event = _ns_gen.cancel_event
@@ -482,7 +563,11 @@ async def create_completion(req: CompletionRequest, request: Request):
                     xtc_probability=req.xtc_probability,
                     xtc_threshold=req.xtc_threshold,
                     logprobs=_want_lp,
-                    top_logprobs=(req.top_logprobs if req.top_logprobs is not None else req.logprobs),
+                    top_logprobs=(
+                        req.top_logprobs
+                        if req.top_logprobs is not None
+                        else req.logprobs
+                    ),
                     priority=req.priority,
                     logits_processors=req.logits_processors,
                     cancel_event=_ns_cancel_event,
@@ -500,23 +585,35 @@ async def create_completion(req: CompletionRequest, request: Request):
                     # tokens. (Single-prompt only; batched-prompt echo+logprobs stays a
                     # documented gap, like the existing per-prompt prompt_logprobs limit.)
                     prompt_logprobs=(
-                        req.prompt_logprobs if req.prompt_logprobs is not None
-                        else (req.logprobs if (req.echo and req.logprobs and len(_prompts) == 1) else None)
+                        req.prompt_logprobs
+                        if req.prompt_logprobs is not None
+                        else (
+                            req.logprobs
+                            if (req.echo and req.logprobs and len(_prompts) == 1)
+                            else None
+                        )
                     ),
                 )
-                if req.prompt_logprobs is not None and getattr(result, "prompt_logprobs", None) is not None:
+                if (
+                    req.prompt_logprobs is not None
+                    and getattr(result, "prompt_logprobs", None) is not None
+                ):
                     _prompt_lp_holder["v"] = result.prompt_logprobs
                 text = result.text
                 pt = result.prompt_tokens
                 ct = result.completion_tokens
                 fr = _normalize_finish_reason(result.finish_reason)
-                rt = getattr(result, 'reasoning_tokens', 0)
+                rt = getattr(result, "reasoning_tokens", 0)
                 lp = None
                 if _want_lp:
                     lp = _format_logprobs(
-                        result, getattr(engine, '_tokenizer', None),
-                        req.top_logprobs if req.top_logprobs is not None else req.logprobs,
-                        echo=req.echo, prompt=_prompt,
+                        result,
+                        getattr(engine, "_tokenizer", None),
+                        req.top_logprobs
+                        if req.top_logprobs is not None
+                        else req.logprobs,
+                        echo=req.echo,
+                        prompt=_prompt,
                     )
             else:
                 state = await engine.generate(
@@ -541,7 +638,11 @@ async def create_completion(req: CompletionRequest, request: Request):
                     spec_decode=req.spec_decode,
                     json_schema=json_schema,
                     logprobs=_want_lp,
-                    top_logprobs=(req.top_logprobs if req.top_logprobs is not None else req.logprobs),
+                    top_logprobs=(
+                        req.top_logprobs
+                        if req.top_logprobs is not None
+                        else req.logprobs
+                    ),
                     priority=req.priority,
                     logits_processors=req.logits_processors,
                     cancel_event=_ns_cancel_event,
@@ -567,11 +668,19 @@ async def create_completion(req: CompletionRequest, request: Request):
                     # prompt_tokens/completion_tokens (batched_engine.py:84-87).
                     # Prior code used non-existent generated_text/*_token_count
                     # → AttributeError on every BatchedEngine completion.
-                    text = getattr(state, "text", None) or getattr(state, "generated_text", "")
-                    pt = getattr(state, "prompt_tokens", None) or getattr(state, "prompt_token_count", 0)
-                    ct = getattr(state, "completion_tokens", None) or getattr(state, "completion_token_count", 0)
-                    fr = _normalize_finish_reason(getattr(state, "finish_reason", None) or "stop")
-                    rt = getattr(state, 'reasoning_tokens', 0)
+                    text = getattr(state, "text", None) or getattr(
+                        state, "generated_text", ""
+                    )
+                    pt = getattr(state, "prompt_tokens", None) or getattr(
+                        state, "prompt_token_count", 0
+                    )
+                    ct = getattr(state, "completion_tokens", None) or getattr(
+                        state, "completion_token_count", 0
+                    )
+                    fr = _normalize_finish_reason(
+                        getattr(state, "finish_reason", None) or "stop"
+                    )
+                    rt = getattr(state, "reasoning_tokens", 0)
                 lp = None
                 # gate on _want_lp, not req.logprobs>0, so the
                 # legacy (non-batched) branch ALSO populates logprobs when best_of needs
@@ -581,9 +690,13 @@ async def create_completion(req: CompletionRequest, request: Request):
                 # first n". The strip-back at line ~610 removes them when the client didn't ask.
                 if _want_lp:
                     lp = _format_logprobs(
-                        state, getattr(engine, '_tokenizer', None),
-                        req.top_logprobs if req.top_logprobs is not None else req.logprobs,
-                        echo=req.echo, prompt=_prompt,
+                        state,
+                        getattr(engine, "_tokenizer", None),
+                        req.top_logprobs
+                        if req.top_logprobs is not None
+                        else req.logprobs,
+                        echo=req.echo,
+                        prompt=_prompt,
                     )
 
             if req.echo:
@@ -601,14 +714,18 @@ async def create_completion(req: CompletionRequest, request: Request):
             # VLM legacy path returns a dict (no attributes) — getattr would always
             # yield 0, dropping cached_tokens for VLM-via-/completions cache hits.
             if isinstance(_gen_result, dict):
-                _cached = _gen_result.get('cached_tokens', 0)
+                _cached = _gen_result.get("cached_tokens", 0)
             else:
-                _cached = getattr(_gen_result, 'cached_tokens', 0) if _gen_result is not None else 0
+                _cached = (
+                    getattr(_gen_result, "cached_tokens", 0)
+                    if _gen_result is not None
+                    else 0
+                )
             # Stop-sequence overcount correction
             if req.stop and fr == "stop":
                 _raw = text
                 if req.echo and _prompt:
-                    _raw = text[len(_prompt):]
+                    _raw = text[len(_prompt) :]
                 # do NOT strip req.suffix from _raw. The
                 # suffix is never appended to `text` (this engine has no FIM
                 # template), so chopping len(req.suffix) chars here truncated the
@@ -617,8 +734,8 @@ async def create_completion(req: CompletionRequest, request: Request):
                 # at the return is `text` and was unaffected).
                 for _seq in req.stop:
                     if _seq and _seq in _raw:
-                        _corrected = _raw[:_raw.find(_seq)]
-                        _tok = getattr(engine, '_tokenizer', None)
+                        _corrected = _raw[: _raw.find(_seq)]
+                        _tok = getattr(engine, "_tokenizer", None)
                         if _tok:
                             try:
                                 _cc = len(_tok.encode(_corrected))
@@ -656,9 +773,12 @@ async def create_completion(req: CompletionRequest, request: Request):
                 # disconnect ran to max_tokens / the 300s timeout, head-of-line-blocking the
                 # serial executor. None return == disconnected → stop.
                 _r = await run_with_disconnect_guard(
-                    request, _gen_one(_gi, _p), cancel_event=_ns_cancel_event)
+                    request, _gen_one(_gi, _p), cancel_event=_ns_cancel_event
+                )
                 if _r is None:
-                    logger.info("Completions: client disconnected mid-generation; aborting")
+                    logger.info(
+                        "Completions: client disconnected mid-generation; aborting"
+                    )
                     break
                 # Tag result with prompt_idx for grouping post-hoc.
                 results.append((_pi, _ci, _r))
@@ -677,14 +797,16 @@ async def create_completion(req: CompletionRequest, request: Request):
         # (the stride no longer lands on each prompt's first choice → the wrong prompts are
         # summed → wrong billed prompt_tokens). _r[1] is pt in the inner tuple.
         _prompt_tokens_by_pi: dict[int, int] = {}
-        for (_pi_r, _ci_r, _r_r) in results:
+        for _pi_r, _ci_r, _r_r in results:
             if _pi_r not in _prompt_tokens_by_pi:
                 _prompt_tokens_by_pi[_pi_r] = _r_r[1]
         # Reduce to (idx, pt, ct, fr, rt, lp, text, _cached) with global idx.
         results = [(gi, *r[2][1:]) for gi, r in enumerate(results)]
 
         if not results:
-            raise HTTPException(status_code=500, detail="All choices failed to generate")
+            raise HTTPException(
+                status_code=500, detail="All choices failed to generate"
+            )
 
         # OpenAI bills ALL best_of generations, not just the
         # returned n. Capture the full completion/reasoning totals BEFORE best_of
@@ -695,6 +817,7 @@ async def create_completion(req: CompletionRequest, request: Request):
 
         # best_of: select top n results by average log probability per token
         if req.best_of is not None and len(results) > n:
+
             def _avg_logprob(r):
                 """Compute average log probability for a result tuple."""
                 _, pt, ct, fr, rt, lp, text, _cached = r
@@ -710,17 +833,26 @@ async def create_completion(req: CompletionRequest, request: Request):
                     # text_offset >= the prompt's char length (the boundary set in
                     # _format_logprobs); slice them off before averaging. Guard on a
                     # str prompt (echo logprobs require string prompts) + aligned lists.
-                    if (req.echo and isinstance(lp.get("text_offset"), list)
-                            and _prompts and isinstance(_prompts[0], str)):
+                    if (
+                        req.echo
+                        and isinstance(lp.get("text_offset"), list)
+                        and _prompts
+                        and isinstance(_prompts[0], str)
+                    ):
                         _offs = lp["text_offset"]
                         _plen = len(_prompts[0])
                         if len(_offs) == len(probs):
-                            probs = [p for p, o in zip(probs, _offs, strict=True) if o >= _plen]
+                            probs = [
+                                p
+                                for p, o in zip(probs, _offs, strict=True)
+                                if o >= _plen
+                            ]
                     # Filter out None values (some tokens may have null logprobs)
                     valid_probs = [p for p in probs if p is not None]
                     if valid_probs:
                         return sum(valid_probs) / len(valid_probs)
-                return float('-inf')  # no logprobs -> lowest priority
+                return float("-inf")  # no logprobs -> lowest priority
+
             results.sort(key=_avg_logprob, reverse=True)
             results = results[:n]
             # Re-index choices after best_of selection
@@ -728,7 +860,9 @@ async def create_completion(req: CompletionRequest, request: Request):
             # Strip the internally-forced selection logprobs when the client didn't ask
             # for them (we forced logprobs on only to score best_of candidates).
             if req.logprobs <= 0:
-                results = [(r[0], r[1], r[2], r[3], r[4], None, r[6], r[7]) for r in results]
+                results = [
+                    (r[0], r[1], r[2], r[3], r[4], None, r[6], r[7]) for r in results
+                ]
 
         # For multi-prompt requests, each unique prompt's tokens are counted
         # once (n choices share the same prompt). For single-prompt, this is
@@ -751,23 +885,33 @@ async def create_completion(req: CompletionRequest, request: Request):
         # per-prompt prompt_logprobs for batched prompts is a future enhancement.
         _plp = _prompt_lp_holder.get("v") if len(_prompts) == 1 else None
         for idx, _pt, _ct, fr, _rt, lp, text, _cached in results:
-            choices.append({
-                "index": idx,
-                "text": text,
-                "finish_reason": fr,
-                **({"logprobs": lp} if lp else {}),
-                **({"prompt_logprobs": _plp} if _plp is not None else {}),
-            })
+            choices.append(
+                {
+                    "index": idx,
+                    "text": text,
+                    "finish_reason": fr,
+                    **({"logprobs": lp} if lp else {}),
+                    **({"prompt_logprobs": _plp} if _plp is not None else {}),
+                }
+            )
 
         # End tracing
         tracer.end_span(trace_id, "prefill")
-        tracer.end_trace(trace_id, result={
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": total_completion_tokens,
-            "finish_reason": max_finish_reason,
-        })
-        slog.info("inference_complete", model=req.model, trace_id=trace_id,
-                  prompt_tokens=prompt_tokens, completion_tokens=total_completion_tokens)
+        tracer.end_trace(
+            trace_id,
+            result={
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": total_completion_tokens,
+                "finish_reason": max_finish_reason,
+            },
+        )
+        slog.info(
+            "inference_complete",
+            model=req.model,
+            trace_id=trace_id,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=total_completion_tokens,
+        )
 
         # Record metrics for completions endpoint
         # total_completion_tokens (engine count) already includes reasoning.
@@ -782,18 +926,22 @@ async def create_completion(req: CompletionRequest, request: Request):
             "total_tokens": prompt_tokens + total_completion_tokens,
         }
         if total_reasoning_tokens:
-            usage["completion_tokens_details"] = {"reasoning_tokens": total_reasoning_tokens}
+            usage["completion_tokens_details"] = {
+                "reasoning_tokens": total_reasoning_tokens
+            }
         if max_cached_tokens > 0:
             usage["prompt_tokens_details"] = {"cached_tokens": max_cached_tokens}
 
-        return JSONResponse({
-            "id": completion_id,
-            "object": "text_completion",
-            "created": int(time.time()),
-            "model": req.model,
-            "choices": choices,
-            "usage": usage,
-        })
+        return JSONResponse(
+            {
+                "id": completion_id,
+                "object": "text_completion",
+                "created": int(time.time()),
+                "model": req.model,
+                "choices": choices,
+                "usage": usage,
+            }
+        )
     except MemoryError:
         return JSONResponse(
             status_code=507,
@@ -803,7 +951,9 @@ async def create_completion(req: CompletionRequest, request: Request):
         logger.error(f"Completions generation error: {e}", exc_info=True)
         return JSONResponse(
             status_code=500,
-            content={"error": {"message": "Internal server error", "type": "internal_error"}},
+            content={
+                "error": {"message": "Internal server error", "type": "internal_error"}
+            },
         )
     finally:
         _release_lora_adapter(engine, loaded_adapter)
@@ -819,10 +969,9 @@ async def _stream_completion(
     from yunshu_engine.batched_engine import BatchedEngine
 
     from ..streaming import with_sse_keepalive
+
     is_batched = isinstance(engine, BatchedEngine)
-    include_usage = (
-        req.stream_options is not None and req.stream_options.include_usage
-    )
+    include_usage = req.stream_options is not None and req.stream_options.include_usage
     prompt_tok = 0
     completion_tok = 0
     # Track reasoning tokens per-choice to avoid overwrite across n>1 choices
@@ -851,27 +1000,48 @@ async def _stream_completion(
             # (same prompt) — choices stream sequentially. Batched engine only (the prompt-
             # logprob forward lives on BatchedEngine); legacy path keeps the bare echo chunk.
             nonlocal _echo_logprobs_cache
-            if (req.logprobs and req.logprobs > 0 and is_batched
-                    and _echo_logprobs_cache is _ECHO_LP_UNSET):
+            if (
+                req.logprobs
+                and req.logprobs > 0
+                and is_batched
+                and _echo_logprobs_cache is _ECHO_LP_UNSET
+            ):
                 _echo_logprobs_cache = None
                 with contextlib.suppress(Exception):
-                    _ptok = getattr(engine, '_tokenizer', None)
+                    _ptok = getattr(engine, "_tokenizer", None)
                     _plp = await engine._compute_prompt_logprobs_for(
-                        prompt, req.enable_thinking, req.logprobs,
+                        prompt,
+                        req.enable_thinking,
+                        req.logprobs,
                     )
-                    _resolved_top = (req.top_logprobs if req.top_logprobs is not None
-                                     else req.logprobs)
-                    _pe = _format_prompt_logprob_entries(_plp, _ptok, _resolved_top, prompt)
+                    _resolved_top = (
+                        req.top_logprobs
+                        if req.top_logprobs is not None
+                        else req.logprobs
+                    )
+                    _pe = _format_prompt_logprob_entries(
+                        _plp, _ptok, _resolved_top, prompt
+                    )
                     if _pe:
                         _po = 0
                         _toks, _lps, _tops, _offs = [], [], [], []
                         for _ent in _pe:
-                            _toks.append(_ent["token"]); _lps.append(_ent["logprob"])
-                            _tops.append(_ent["top_logprobs"]); _offs.append(_po)
+                            _toks.append(_ent["token"])
+                            _lps.append(_ent["logprob"])
+                            _tops.append(_ent["top_logprobs"])
+                            _offs.append(_po)
                             _po += len(_ent["token"])
-                        _echo_logprobs_cache = {"tokens": _toks, "token_logprobs": _lps,
-                                                "top_logprobs": _tops, "text_offset": _offs}
-            _echo_lp = _echo_logprobs_cache if _echo_logprobs_cache is not _ECHO_LP_UNSET else None
+                        _echo_logprobs_cache = {
+                            "tokens": _toks,
+                            "token_logprobs": _lps,
+                            "top_logprobs": _tops,
+                            "text_offset": _offs,
+                        }
+            _echo_lp = (
+                _echo_logprobs_cache
+                if _echo_logprobs_cache is not _ECHO_LP_UNSET
+                else None
+            )
             yield format_openai_completion_chunk(
                 completion_id=completion_id,
                 model=req.model,
@@ -906,7 +1076,9 @@ async def _stream_completion(
                 # Completions API: `logprobs` is the alt-count; fall back to it when
                 # top_logprobs is unset (matches the non-streaming path at line 397 —
                 # streaming previously passed None → engine emitted no alternatives).
-                top_logprobs=(req.top_logprobs if req.top_logprobs is not None else req.logprobs),
+                top_logprobs=(
+                    req.top_logprobs if req.top_logprobs is not None else req.logprobs
+                ),
                 priority=req.priority,
                 logits_processors=req.logits_processors,
                 cancel_event=_comp_cancel_evt,
@@ -917,25 +1089,34 @@ async def _stream_completion(
                 ignore_eos=req.ignore_eos,
                 suppress_tokens=req.suppress_tokens,
             ):
-                if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
+                if hasattr(output, "prompt_tokens") and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
-                if hasattr(output, 'completion_tokens') and output.completion_tokens is not None and output.completion_tokens > 0:
+                if (
+                    hasattr(output, "completion_tokens")
+                    and output.completion_tokens is not None
+                    and output.completion_tokens > 0
+                ):
                     completion_tok_per_choice[choice_idx] = output.completion_tokens
-                elif output.new_text and getattr(output, 'current_state', None) != "reasoning":
+                elif (
+                    output.new_text
+                    and getattr(output, "current_state", None) != "reasoning"
+                ):
                     # Only count non-reasoning tokens toward completion_tok
-                    completion_tok_per_choice[choice_idx] = completion_tok_per_choice.get(choice_idx, 0) + 1
-                _choice_reasoning = getattr(output, 'reasoning_tokens', 0)
+                    completion_tok_per_choice[choice_idx] = (
+                        completion_tok_per_choice.get(choice_idx, 0) + 1
+                    )
+                _choice_reasoning = getattr(output, "reasoning_tokens", 0)
                 reasoning_tok_per_choice[choice_idx] = max(
                     reasoning_tok_per_choice.get(choice_idx, 0), _choice_reasoning
                 )
-                if hasattr(output, 'cached_tokens') and output.cached_tokens:
+                if hasattr(output, "cached_tokens") and output.cached_tokens:
                     cached_tok = max(cached_tok, output.cached_tokens)
                 # Track finish_reason from engine; only emit on final chunk
                 if output.finish_reason is not None:
                     choice_finish_reason = output.finish_reason
                 # emit prefill progress as SSE comment for
                 # client-side progress bars during long chunked prefills.
-                _pf_prog = getattr(output, 'prefill_progress', None)
+                _pf_prog = getattr(output, "prefill_progress", None)
                 if _pf_prog is not None:
                     yield f": prefill-progress {_pf_prog[0]}/{_pf_prog[1]}\n\n"
                     continue  # progress outputs carry no text
@@ -943,20 +1124,32 @@ async def _stream_completion(
                 if output.new_text:
                     _choice_streamed_text += output.new_text
                 if len(_choice_streamed_text) > _MAX_STREAMING_TEXT_BUFFER:
-                    logger.error("Choice streaming text buffer exceeded 1MB — truncating")
+                    logger.error(
+                        "Choice streaming text buffer exceeded 1MB — truncating"
+                    )
                     _choice_streamed_text = _choice_streamed_text[-_TRUNCATE_KEEP:]
                 # Detect stop-sequence overcount on final output
-                if req.stop and choice_finish_reason == "stop" and getattr(output, 'finished', False):
+                if (
+                    req.stop
+                    and choice_finish_reason == "stop"
+                    and getattr(output, "finished", False)
+                ):
                     for _seq in req.stop:
                         if _seq and _seq in _choice_streamed_text:
                             _idx = _choice_streamed_text.find(_seq)
                             _choice_streamed_text = _choice_streamed_text[:_idx]
-                            _tok = getattr(engine, '_tokenizer', None)
+                            _tok = getattr(engine, "_tokenizer", None)
                             if _tok:
                                 try:
-                                    _correct_count = len(_tok.encode(_choice_streamed_text))
-                                    if _correct_count < completion_tok_per_choice.get(choice_idx, 0):
-                                        completion_tok_per_choice[choice_idx] = _correct_count
+                                    _correct_count = len(
+                                        _tok.encode(_choice_streamed_text)
+                                    )
+                                    if _correct_count < completion_tok_per_choice.get(
+                                        choice_idx, 0
+                                    ):
+                                        completion_tok_per_choice[choice_idx] = (
+                                            _correct_count
+                                        )
                                 except Exception:
                                     pass
                             break
@@ -966,8 +1159,10 @@ async def _stream_completion(
                     _chunk_logprobs, _choice_text_offset = _format_streaming_logprobs(
                         output.logprobs,
                         text_offset_start=_choice_text_offset,
-                        top_logprobs=req.top_logprobs if req.top_logprobs is not None else req.logprobs,
-                        tokenizer=getattr(engine, '_tokenizer', None),
+                        top_logprobs=req.top_logprobs
+                        if req.top_logprobs is not None
+                        else req.logprobs,
+                        tokenizer=getattr(engine, "_tokenizer", None),
                     )
                 yield format_openai_completion_chunk(
                     completion_id=completion_id,
@@ -1003,7 +1198,9 @@ async def _stream_completion(
                 logprobs=req.logprobs > 0,
                 # Fall back to `logprobs` (the alt-count) when top_logprobs is unset
                 # — matches non-streaming (line 397). See the batched-path note above.
-                top_logprobs=(req.top_logprobs if req.top_logprobs is not None else req.logprobs),
+                top_logprobs=(
+                    req.top_logprobs if req.top_logprobs is not None else req.logprobs
+                ),
                 logits_processors=req.logits_processors,
                 cancel_event=_comp_cancel_evt,
                 timeout_seconds=req.timeout,
@@ -1013,50 +1210,73 @@ async def _stream_completion(
                 ignore_eos=req.ignore_eos,
                 suppress_tokens=req.suppress_tokens,
             ):
-                if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
+                if hasattr(output, "prompt_tokens") and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
-                if hasattr(output, 'completion_tokens') and output.completion_tokens is not None and output.completion_tokens > 0:
+                if (
+                    hasattr(output, "completion_tokens")
+                    and output.completion_tokens is not None
+                    and output.completion_tokens > 0
+                ):
                     completion_tok_per_choice[choice_idx] = output.completion_tokens
-                elif output.token_text and getattr(output, 'current_state', None) != "reasoning":
+                elif (
+                    output.token_text
+                    and getattr(output, "current_state", None) != "reasoning"
+                ):
                     # Only count non-reasoning tokens toward completion_tok
-                    completion_tok_per_choice[choice_idx] = completion_tok_per_choice.get(choice_idx, 0) + 1
+                    completion_tok_per_choice[choice_idx] = (
+                        completion_tok_per_choice.get(choice_idx, 0) + 1
+                    )
                 # Track reasoning + cached tokens (the batched branch does this; the
                 # legacy branch omitted both → reasoning_tokens detail always 0 and
                 # cached_tokens never reported for engine-loop streaming completions).
-                _choice_reasoning = getattr(output, 'reasoning_tokens', 0)
+                _choice_reasoning = getattr(output, "reasoning_tokens", 0)
                 reasoning_tok_per_choice[choice_idx] = max(
                     reasoning_tok_per_choice.get(choice_idx, 0), _choice_reasoning
                 )
-                if getattr(output, 'cached_tokens', 0):
+                if getattr(output, "cached_tokens", 0):
                     cached_tok = max(cached_tok, output.cached_tokens)
                 if output.finish_reason is not None:
                     choice_finish_reason = output.finish_reason
                 _chunk_lp = None
-                if req.logprobs and hasattr(output, 'logprobs'):
+                if req.logprobs and hasattr(output, "logprobs"):
                     _chunk_lp, _choice_text_offset = _format_streaming_logprobs(
                         output.logprobs,
                         text_offset_start=_choice_text_offset,
-                        top_logprobs=req.top_logprobs if req.top_logprobs is not None else req.logprobs,
-                        tokenizer=getattr(engine, '_tokenizer', None),
+                        top_logprobs=req.top_logprobs
+                        if req.top_logprobs is not None
+                        else req.logprobs,
+                        tokenizer=getattr(engine, "_tokenizer", None),
                     )
                 # Track emitted text for stop-sequence overcount correction
                 if output.token_text:
                     _choice_streamed_text += output.token_text
                 if len(_choice_streamed_text) > _MAX_STREAMING_TEXT_BUFFER:
-                    logger.error("Choice streaming text buffer exceeded 1MB — truncating")
+                    logger.error(
+                        "Choice streaming text buffer exceeded 1MB — truncating"
+                    )
                     _choice_streamed_text = _choice_streamed_text[-_TRUNCATE_KEEP:]
                 # Detect stop-sequence overcount on final output
-                if req.stop and choice_finish_reason == "stop" and getattr(output, 'finished', False):
+                if (
+                    req.stop
+                    and choice_finish_reason == "stop"
+                    and getattr(output, "finished", False)
+                ):
                     for _seq in req.stop:
                         if _seq and _seq in _choice_streamed_text:
                             _idx = _choice_streamed_text.find(_seq)
                             _choice_streamed_text = _choice_streamed_text[:_idx]
-                            _tok = getattr(engine, '_tokenizer', None)
+                            _tok = getattr(engine, "_tokenizer", None)
                             if _tok:
                                 try:
-                                    _correct_count = len(_tok.encode(_choice_streamed_text))
-                                    if _correct_count < completion_tok_per_choice.get(choice_idx, 0):
-                                        completion_tok_per_choice[choice_idx] = _correct_count
+                                    _correct_count = len(
+                                        _tok.encode(_choice_streamed_text)
+                                    )
+                                    if _correct_count < completion_tok_per_choice.get(
+                                        choice_idx, 0
+                                    ):
+                                        completion_tok_per_choice[choice_idx] = (
+                                            _correct_count
+                                        )
                                 except Exception:
                                     pass
                             break
@@ -1091,7 +1311,11 @@ async def _stream_completion(
         if include_usage:
             # Sum reasoning tokens across all choices for total usage
             _total_reasoning = sum(reasoning_tok_per_choice.values())
-            _total_completion = sum(completion_tok_per_choice.values()) if completion_tok_per_choice else completion_tok
+            _total_completion = (
+                sum(completion_tok_per_choice.values())
+                if completion_tok_per_choice
+                else completion_tok
+            )
             yield format_openai_completion_usage_chunk(
                 completion_id=completion_id,
                 model=req.model,
@@ -1102,14 +1326,21 @@ async def _stream_completion(
             )
 
         # Record metrics for completions streaming path
-        _total_completion = sum(completion_tok_per_choice.values()) if completion_tok_per_choice else completion_tok
-        _total_reasoning = sum(reasoning_tok_per_choice.values()) if reasoning_tok_per_choice else 0
+        _total_completion = (
+            sum(completion_tok_per_choice.values())
+            if completion_tok_per_choice
+            else completion_tok
+        )
+        _total_reasoning = (
+            sum(reasoning_tok_per_choice.values()) if reasoning_tok_per_choice else 0
+        )
         if prompt_tok > 0 or _total_completion > 0:
             _record_metrics(prompt_tok, _total_completion)  # already incl. reasoning
 
         metrics_recorded = True
         _done_emitted = True
         yield format_openai_done()
+
     metrics_recorded = False
     _done_emitted = False
     loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
@@ -1118,6 +1349,7 @@ async def _stream_completion(
     _tracker_gen = None
     try:
         from yunshu_engine.request_tracker import get_request_tracker
+
         _tracker = get_request_tracker()
         _tracker_gen = _tracker.register(completion_id, req.model)
     except Exception:
@@ -1176,7 +1408,9 @@ async def _stream_completion(
             for chunk in _drain_sse_buffer():
                 yield chunk
         logger.error(f"Completions streaming error: {e}", exc_info=True)
-        err_payload = {"error": {"message": "Internal server error", "type": "internal_error"}}
+        err_payload = {
+            "error": {"message": "Internal server error", "type": "internal_error"}
+        }
         yield f"data: {json.dumps(err_payload, ensure_ascii=False)}\n\n".encode()
         if not _done_emitted:
             yield b"data: [DONE]\n\n"
@@ -1187,8 +1421,16 @@ async def _stream_completion(
                 _tracker.unregister(completion_id)
         # Fallback metrics recording if generator raised before completing
         if not metrics_recorded:
-            _total = sum(completion_tok_per_choice.values()) if completion_tok_per_choice else completion_tok
-            _total_reasoning = sum(reasoning_tok_per_choice.values()) if reasoning_tok_per_choice else 0
+            _total = (
+                sum(completion_tok_per_choice.values())
+                if completion_tok_per_choice
+                else completion_tok
+            )
+            _total_reasoning = (
+                sum(reasoning_tok_per_choice.values())
+                if reasoning_tok_per_choice
+                else 0
+            )
             if prompt_tok > 0 or _total > 0:
                 with contextlib.suppress(Exception):
                     _record_metrics(prompt_tok, _total)  # already incl. reasoning
@@ -1197,7 +1439,9 @@ async def _stream_completion(
 _ECHO_LP_UNSET = object()  # sentinel: echo prompt-logprobs not yet computed
 
 
-def _format_prompt_logprob_entries(prompt_lp, tokenizer, top_logprobs: int, prompt: str) -> list[dict]:
+def _format_prompt_logprob_entries(
+    prompt_lp, tokenizer, top_logprobs: int, prompt: str
+) -> list[dict]:
     """Shared prompt-token logprob formatter for echo=true. Used by BOTH the
     non-streaming _format_logprobs prepend AND the streaming echo chunk, so the prepend
     + BOS-collapse logic lives in ONE place (no stream↔non-stream drift — the streaming
@@ -1211,7 +1455,11 @@ def _format_prompt_logprob_entries(prompt_lp, tokenizer, top_logprobs: int, prom
     is null — no preceding context). Empty list when prompt_lp is not a usable list. The caller
     computes text_offset by walking token lengths.
     """
-    if not (isinstance(prompt_lp, (list, tuple)) and len(prompt_lp) >= 1 and tokenizer is not None):
+    if not (
+        isinstance(prompt_lp, (list, tuple))
+        and len(prompt_lp) >= 1
+        and tokenizer is not None
+    ):
         return []
     _tail = []
     for _e in prompt_lp[1:]:
@@ -1225,7 +1473,9 @@ def _format_prompt_logprob_entries(prompt_lp, tokenizer, top_logprobs: int, prom
     # no visible text → it is a prepended BOS (Llama/Gemma/Mistral). Collapse it: list only the
     # real tokens and null the first real token's logprob. No-BOS models (Qwen) keep
     # _head=first token, so this branch is skipped and behaviour is unchanged.
-    _bos_collapse = (_head == "" and len(prompt_lp) >= 2 and not isinstance(prompt_lp[0], dict))
+    _bos_collapse = (
+        _head == "" and len(prompt_lp) >= 2 and not isinstance(prompt_lp[0], dict)
+    )
     if _bos_collapse:
         _src = list(prompt_lp[1:])
         _ptoks = list(_tail)
@@ -1238,7 +1488,9 @@ def _format_prompt_logprob_entries(prompt_lp, tokenizer, top_logprobs: int, prom
         if isinstance(_e, dict) and not (_bos_collapse and _i == 0):
             _lpv = _e.get("logprob", 0.0)
             _top = {}
-            for _t in (_e.get("top_logprobs") or [])[:top_logprobs] if top_logprobs else []:
+            for _t in (
+                (_e.get("top_logprobs") or [])[:top_logprobs] if top_logprobs else []
+            ):
                 _ttid = _t.get("token_id")
                 if _ttid is not None:
                     with contextlib.suppress(Exception):
@@ -1250,7 +1502,9 @@ def _format_prompt_logprob_entries(prompt_lp, tokenizer, top_logprobs: int, prom
     return _out
 
 
-def _format_logprobs(state, tokenizer, top_logprobs: int, echo: bool = False, prompt: str = "") -> dict | None:
+def _format_logprobs(
+    state, tokenizer, top_logprobs: int, echo: bool = False, prompt: str = ""
+) -> dict | None:
     """Format logprobs from request state into OpenAI Completions format.
 
     OpenAI Completions API returns logprobs as a flat structure:
@@ -1271,7 +1525,7 @@ def _format_logprobs(state, tokenizer, top_logprobs: int, echo: bool = False, pr
         echo: Whether echo mode is enabled (shifts text_offset by prompt length).
         prompt: The prompt text, used for text_offset shift when echo=True.
     """
-    raw_logprobs = getattr(state, 'logprobs', None)
+    raw_logprobs = getattr(state, "logprobs", None)
     # Guard on type/length, not truthiness: the engine-loop/legacy paths can hand
     # back a raw mx.array, and `not <multi-element array>` raises ValueError.
     # Non-list formats → no logprobs rather than a 500.
@@ -1287,7 +1541,9 @@ def _format_logprobs(state, tokenizer, top_logprobs: int, echo: bool = False, pr
     _prompt_lp = getattr(state, "prompt_logprobs", None) if echo else None
     # prompt-token logprob formatting (prepend + BOS-collapse) lives in
     # the shared _format_prompt_logprob_entries so the streaming echo path reuses it (no drift).
-    _pentries = _format_prompt_logprob_entries(_prompt_lp, tokenizer, top_logprobs, prompt)
+    _pentries = _format_prompt_logprob_entries(
+        _prompt_lp, tokenizer, top_logprobs, prompt
+    )
     if _pentries:
         _poffset = 0
         for _ent in _pentries:
@@ -1317,20 +1573,24 @@ def _format_logprobs(state, tokenizer, top_logprobs: int, echo: bool = False, pr
                             tlp_token = tokenizer.decode([tlp["token_id"]])
                     if tlp_token:
                         decoded_top[tlp_token] = tlp.get("logprob", 0.0)
-                token_logprobs.append({
-                    "token": token_str,
-                    "logprob": lp_entry.get("logprob", 0.0),
-                    "top_logprobs": decoded_top,
-                })
+                token_logprobs.append(
+                    {
+                        "token": token_str,
+                        "logprob": lp_entry.get("logprob", 0.0),
+                        "top_logprobs": decoded_top,
+                    }
+                )
                 text_offsets.append(_offset)
                 _offset += len(token_str)
             elif isinstance(lp_entry, (int, float)) and not isinstance(lp_entry, bool):
                 # bool ⊂ int → True/False would become 1.0/0.0.
-                token_logprobs.append({
-                    "token": "",
-                    "logprob": float(lp_entry),
-                    "top_logprobs": {},
-                })
+                token_logprobs.append(
+                    {
+                        "token": "",
+                        "logprob": float(lp_entry),
+                        "top_logprobs": {},
+                    }
+                )
                 text_offsets.append(_offset)
 
     if not token_logprobs:
@@ -1400,11 +1660,13 @@ def _format_streaming_logprobs(
                     tlp_token = str(tlp["token_id"])
             if tlp_token:
                 decoded_top[tlp_token] = tlp.get("logprob", 0.0)
-        entries.append({
-            "token": token_str,
-            "logprob": lp_entry.get("logprob", 0.0),
-            "top_logprobs": decoded_top,
-        })
+        entries.append(
+            {
+                "token": token_str,
+                "logprob": lp_entry.get("logprob", 0.0),
+                "top_logprobs": decoded_top,
+            }
+        )
         offsets.append(_offset)
         _offset += len(token_str)
     if not entries:

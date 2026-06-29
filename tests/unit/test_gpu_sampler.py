@@ -1,6 +1,7 @@
 """on-GPU Gumbel-max temp>0 sampler (YUNSHU_GPU_SAMPLER=1) is
 distributionally equivalent to the numpy sampler and the streaming make_sampler,
 reproducible via explicit key, and doesn't collapse for n>1."""
+
 from __future__ import annotations
 
 import mlx.core as mx

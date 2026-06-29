@@ -4,6 +4,7 @@ present) — across non-stream, the VLM path, AND the main streaming path — in
 reasoning content part nested in the message. Stream and non-stream stay consistent
 (the invariant): the message's output_item.added is emitted lazily so a leading
 reasoning item can take output_index 0."""
+
 from __future__ import annotations
 
 import asyncio
@@ -25,15 +26,28 @@ def _fake_request():
 
 def _patch_vlm(monkeypatch, content, reasoning):
     from fastapi.responses import JSONResponse
+
     async def _fake(chat_req, messages, request, json_schema=None):
-        return JSONResponse({
-            "object": "chat.completion",
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": content,
-                                                 "reasoning_content": reasoning},
-                         "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 5, "completion_tokens": 4},
-        })
+        return JSONResponse(
+            {
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": content,
+                            "reasoning_content": reasoning,
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 4},
+            }
+        )
+
     from yunshu_gateway.routers import chat as chat_mod
+
     monkeypatch.setattr(chat_mod, "_handle_vlm_chat", _fake)
 
 
@@ -48,6 +62,7 @@ def _collect_sse(monkeypatch, content="the answer", reasoning="thinking..."):
         async for c in resp.body_iterator:
             out.append(c if isinstance(c, str) else c.decode())
         return "".join(out)
+
     return asyncio.run(_run())
 
 
@@ -71,7 +86,9 @@ def test_streaming_reasoning_item_precedes_message(monkeypatch):
     # reasoning summary events carry the rs_ id, not the message id
     rs_id = added[0]["item"]["id"]
     assert rs_id.startswith("rs-")
-    summary = [e for e in evs if e.get("type", "").startswith("response.reasoning_summary")]
+    summary = [
+        e for e in evs if e.get("type", "").startswith("response.reasoning_summary")
+    ]
     assert summary and all(e["item_id"] == rs_id for e in summary)
 
 

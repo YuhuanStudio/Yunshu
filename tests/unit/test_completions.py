@@ -103,7 +103,9 @@ class TestCompletionsEdgeCases:
 
     def test_n_gt_1_with_streaming_rejected(self):
         """n > 1 with streaming should return validation error."""
-        with pytest.raises(ValidationError, match="n > 1 is not supported when stream is True"):
+        with pytest.raises(
+            ValidationError, match="n > 1 is not supported when stream is True"
+        ):
             CompletionRequest(
                 model="test",
                 prompt="hello",
@@ -152,18 +154,27 @@ class TestCompletionsEdgeCases:
         mock_engine.model_name = "other-model"
         mock_engine.resolve_model_id.return_value = False
 
-        with patch("yunshu_gateway.routers.completions.get_engine", return_value=mock_engine), \
-             patch("yunshu_gateway.routers.completions.get_engine_for_model",
-                   side_effect=Exception("no model")):
+        with (
+            patch(
+                "yunshu_gateway.routers.completions.get_engine",
+                return_value=mock_engine,
+            ),
+            patch(
+                "yunshu_gateway.routers.completions.get_engine_for_model",
+                side_effect=Exception("no model"),
+            ),
+        ):
             # Even with no engine loaded, max_tokens=0 should return a response
             # (it hits the fast path before engine lookup)
             import asyncio
+
             result = asyncio.new_event_loop().run_until_complete(
                 create_completion(req, mock_request)
             )
             # Should return JSONResponse with prompt_tokens and completion_tokens=0
             assert result.status_code == 200
             import json
+
             body = json.loads(result.body)
             assert body["usage"]["completion_tokens"] == 0
             assert body["choices"][0]["finish_reason"] == "length"
@@ -174,11 +185,13 @@ class TestPromptLogprobsSchemaW737:
 
     def test_accepts_prompt_logprobs(self):
         from yunshu_gateway.routers.completions import CompletionRequest
+
         r = CompletionRequest(model="m", prompt="hi", prompt_logprobs=5)
         assert r.prompt_logprobs == 5
 
     def test_default_none(self):
         from yunshu_gateway.routers.completions import CompletionRequest
+
         r = CompletionRequest(model="m", prompt="hi")
         assert r.prompt_logprobs is None
 
@@ -188,20 +201,30 @@ class TestGuidedAliasesW744:
 
     def _r(self, **kw):
         from yunshu_gateway.routers.completions import CompletionRequest
+
         return CompletionRequest(model="m", prompt="hi", **kw)
 
     def test_guided_regex(self):
         assert self._r(guided_regex="a+").grammar == {"type": "regex", "pattern": "a+"}
 
     def test_guided_choice(self):
-        assert self._r(guided_choice=["x", "y"]).grammar == {"type": "choice", "choices": ["x", "y"]}
+        assert self._r(guided_choice=["x", "y"]).grammar == {
+            "type": "choice",
+            "choices": ["x", "y"],
+        }
 
     def test_guided_grammar(self):
-        assert self._r(guided_grammar="start: \"a\"").grammar == {"type": "cfg", "grammar": "start: \"a\""}
+        assert self._r(guided_grammar='start: "a"').grammar == {
+            "type": "cfg",
+            "grammar": 'start: "a"',
+        }
 
     def test_guided_json(self):
         s = {"type": "object"}
-        assert self._r(guided_json=s).response_format == {"type": "json_schema", "json_schema": {"schema": s}}
+        assert self._r(guided_json=s).response_format == {
+            "type": "json_schema",
+            "json_schema": {"schema": s},
+        }
 
     def test_native_grammar_wins(self):
         r = self._r(grammar={"type": "regex", "pattern": "z"}, guided_regex="a+")

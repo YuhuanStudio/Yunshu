@@ -91,12 +91,14 @@ class TestKVCacheManager:
         corrupting KV data.
         """
         import numpy as np
+
         config = KVCacheConfig(block_size=4, num_layers=2, num_kv_heads=4, head_dim=64)
         mgr = KVCacheManager(config, num_blocks=100)
 
         # Demote some data to warm tier
         data = np.random.randn(2, 4, 4, 64).astype(np.float32)
         import mlx.core as mx
+
         kv_data = mx.array(data)
         block_hash = 0xDEADBEEF
         mgr._warm_tier.demote(block_hash, kv_data, num_tokens=4)
@@ -119,7 +121,11 @@ class TestKVCacheManager:
             assert cached.ref_count > 0 or cached.cache_only
         # In any case, no block should be in the free queue with a stale hash
         for block in mgr.block_pool.blocks:
-            if block.ref_count == 0 and not block.cache_only and block.block_hash is not None:
+            if (
+                block.ref_count == 0
+                and not block.cache_only
+                and block.block_hash is not None
+            ):
                 pytest.fail(
                     f"Block {block.block_id} has stale hash 0x{block.block_hash:x} "
                     f"but ref_count=0 and cache_only=False — dangling reference"

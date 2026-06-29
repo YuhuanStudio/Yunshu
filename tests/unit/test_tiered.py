@@ -20,6 +20,7 @@ class TestSSDCacheStore:
 
     def test_store_and_contains(self):
         import mlx.core as mx
+
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SSDCacheStore(tmpdir)
             data = mx.zeros((2, 8, 64, 128), dtype=mx.float16)
@@ -29,6 +30,7 @@ class TestSSDCacheStore:
 
     def test_store_and_load(self):
         import mlx.core as mx
+
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SSDCacheStore(tmpdir)
             data = mx.ones((2, 8, 64, 128), dtype=mx.float16)
@@ -49,9 +51,14 @@ class TestSSDCacheStore:
         one (~79% error on V). With per-slice scales both round-trip cleanly."""
         import mlx.core as mx
         import numpy as np
+
         rng = np.random.default_rng(0)
-        k = (rng.standard_normal((2, 8, 64)).astype(np.float16)) * np.float16(2.0)   # large
-        v = (rng.standard_normal((2, 8, 64)).astype(np.float16)) * np.float16(0.01)  # tiny
+        k = (rng.standard_normal((2, 8, 64)).astype(np.float16)) * np.float16(
+            2.0
+        )  # large
+        v = (rng.standard_normal((2, 8, 64)).astype(np.float16)) * np.float16(
+            0.01
+        )  # tiny
         block = mx.array(np.stack([k, v], axis=0))  # [2, 2, 8, 64]
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SSDCacheStore(tmpdir)
@@ -68,6 +75,7 @@ class TestSSDCacheStore:
 
     def test_double_store(self):
         import mlx.core as mx
+
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SSDCacheStore(tmpdir)
             data = mx.zeros((2, 8, 64, 128), dtype=mx.float16)
@@ -77,6 +85,7 @@ class TestSSDCacheStore:
 
     def test_persistence(self):
         import mlx.core as mx
+
         with tempfile.TemporaryDirectory() as tmpdir:
             store1 = SSDCacheStore(tmpdir)
             data = mx.zeros((2, 8, 64, 128), dtype=mx.float16)
@@ -199,6 +208,7 @@ class TestTieredKVCacheManager:
         hot = KVCacheManager(config, num_blocks=100)
         tiered = TieredKVCacheManager(hot)
         from yunshu_kv.block import KVBlock
+
         block = KVBlock(block_id=0)
         assert tiered._extract_kv_for_block(block) is None
 
@@ -304,7 +314,9 @@ class TestKVWarmTier:
         # Now block 2 is LRU
         wt.demote(4, data)  # Should evict block 2 (oldest after promote)
         assert wt.contains(1) is False  # Was promoted (removed from warm)
-        assert wt.contains(2) is True  # Still there (block 1 was promoted, not just touched)
+        assert (
+            wt.contains(2) is True
+        )  # Still there (block 1 was promoted, not just touched)
         # Note: promote removes from warm tier, so 1 was already gone
 
     def test_manual_evict(self):

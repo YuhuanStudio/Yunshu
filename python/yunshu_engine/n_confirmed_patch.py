@@ -89,7 +89,11 @@ def _patch_gated_delta(q35: Any) -> None:
 
         # n_confirmed path: process tokens one-at-a-time, saving rollback state
         # Only used for SSM (linear attention) layers with ArraysCache
-        is_ssm = cache is not None and hasattr(cache, "cache") and isinstance(getattr(cache, "cache", None), list)
+        is_ssm = (
+            cache is not None
+            and hasattr(cache, "cache")
+            and isinstance(getattr(cache, "cache", None), list)
+        )
         if not is_ssm:
             return original_call(self, inputs, mask=mask, cache=cache)
 
@@ -121,6 +125,7 @@ def _forward_n_confirmed(
 
     if self.sharding_group is not None:
         from mlx_lm.models.gated_delta import sum_gradients
+
         inputs = sum_gradients(self.sharding_group)(inputs)
 
     # Projections over all S tokens
@@ -133,8 +138,13 @@ def _forward_n_confirmed(
         qkv = mx.where(mask[..., None], qkv, 0)
 
     # Get initial states
-    conv_state = cache[0] if cache is not None and cache[0] is not None else mx.zeros(
-        (B, self.conv_kernel_size - 1, self.conv_dim), dtype=inputs.dtype,
+    conv_state = (
+        cache[0]
+        if cache is not None and cache[0] is not None
+        else mx.zeros(
+            (B, self.conv_kernel_size - 1, self.conv_dim),
+            dtype=inputs.dtype,
+        )
     )
     ssm_state = cache[1] if cache else None
 
@@ -150,7 +160,13 @@ def _forward_n_confirmed(
 
     # --- Process confirmed chunk ---
     out_c, conv_c, ssm_c = _process_chunk(
-        self, qkv_c, a_c, b_c, conv_state, ssm_state, mask_c,
+        self,
+        qkv_c,
+        a_c,
+        b_c,
+        conv_state,
+        ssm_state,
+        mask_c,
     )
 
     # Save rollback state after confirmed chunk
@@ -159,7 +175,13 @@ def _forward_n_confirmed(
 
     # --- Process draft chunk from confirmed chunk's state ---
     out_d, conv_f, ssm_f = _process_chunk(
-        self, qkv_d, a_d, b_d, conv_c, ssm_c, mask_d,
+        self,
+        qkv_d,
+        a_d,
+        b_d,
+        conv_c,
+        ssm_c,
+        mask_d,
     )
 
     # Concatenate outputs and update cache
@@ -204,7 +226,8 @@ def _process_chunk(
         for t, h, d in zip(
             mx.split(conv_out, [self.key_dim, 2 * self.key_dim], -1),
             [self.num_k_heads, self.num_k_heads, self.num_v_heads],
-            [self.head_k_dim, self.head_k_dim, self.head_v_dim], strict=False,
+            [self.head_k_dim, self.head_k_dim, self.head_v_dim],
+            strict=False,
         )
     ]
 
@@ -213,8 +236,16 @@ def _process_chunk(
     k = inv_scale * mx.fast.rms_norm(k, None, 1e-6)
 
     out, new_ssm_state = gated_delta_update(
-        q, k, v, a_chunk, b_chunk, self.A_log, self.dt_bias,
-        ssm_state, ssm_mask, use_kernel=True,
+        q,
+        k,
+        v,
+        a_chunk,
+        b_chunk,
+        self.A_log,
+        self.dt_bias,
+        ssm_state,
+        ssm_mask,
+        use_kernel=True,
     )
     return out, new_conv_state, new_ssm_state
 
@@ -249,7 +280,9 @@ def _patch_text_model(q35: Any) -> None:
 
         for layer, c in zip(self.layers, cache, strict=False):
             mask = ssm_mask if layer.is_linear else fa_mask
-            hidden_states = layer(hidden_states, mask=mask, cache=c, n_confirmed=n_confirmed)
+            hidden_states = layer(
+                hidden_states, mask=mask, cache=c, n_confirmed=n_confirmed
+            )
 
         return self.norm(hidden_states)
 
@@ -263,11 +296,13 @@ def _patch_decoder_layer(q35: Any) -> None:
     if "_yunshu_n_confirmed_patched" in cls.__dict__:
         return
 
-
     def __call__(self, x, mask=None, cache=None, n_confirmed: int = 0):
         if self.is_linear:
             r = self.linear_attn(
-                self.input_layernorm(x), mask, cache, n_confirmed=n_confirmed,
+                self.input_layernorm(x),
+                mask,
+                cache,
+                n_confirmed=n_confirmed,
             )
         else:
             r = self.self_attn(self.input_layernorm(x), mask, cache)

@@ -67,9 +67,11 @@ def _make_request(model="test", max_tokens=64):
 
 
 def _run(engine, req, mock_request):
-    with patch("yunshu_gateway.routers.chat.get_engine", return_value=engine), \
-         patch("yunshu_gateway.routers.chat.get_model_manager", return_value=None), \
-         patch("yunshu_gateway.routers.chat.validate_context_window", return_value=None):
+    with (
+        patch("yunshu_gateway.routers.chat.get_engine", return_value=engine),
+        patch("yunshu_gateway.routers.chat.get_model_manager", return_value=None),
+        patch("yunshu_gateway.routers.chat.validate_context_window", return_value=None),
+    ):
         result = asyncio.new_event_loop().run_until_complete(
             create_chat_completion(req, mock_request)
         )
@@ -79,10 +81,15 @@ def _run(engine, req, mock_request):
 def test_reasoning_tokens_reconciled_when_engine_returns_zero():
     # Engine emitted a <think> block (3 words) but reported reasoning_tokens=0.
     # completion_token_count=20 already includes those tokens.
-    state = _FakeState("<think>one two three</think>The answer is 42.",
-                       prompt_tokens=10, completion_tokens=20, reasoning_tokens=0)
+    state = _FakeState(
+        "<think>one two three</think>The answer is 42.",
+        prompt_tokens=10,
+        completion_tokens=20,
+        reasoning_tokens=0,
+    )
     req = ChatCompletionRequest(
-        model="test", messages=[ChatMessage(role="user", content="hi")], max_tokens=64)
+        model="test", messages=[ChatMessage(role="user", content="hi")], max_tokens=64
+    )
     body = _run(_FakeEngine(state), req, _make_request())
 
     usage = body["usage"]
@@ -97,10 +104,15 @@ def test_reasoning_tokens_reconciled_when_engine_returns_zero():
 
 
 def test_no_reasoning_detail_when_no_thinking():
-    state = _FakeState("Just a plain answer.",
-                       prompt_tokens=10, completion_tokens=5, reasoning_tokens=0)
+    state = _FakeState(
+        "Just a plain answer.",
+        prompt_tokens=10,
+        completion_tokens=5,
+        reasoning_tokens=0,
+    )
     req = ChatCompletionRequest(
-        model="test", messages=[ChatMessage(role="user", content="hi")], max_tokens=64)
+        model="test", messages=[ChatMessage(role="user", content="hi")], max_tokens=64
+    )
     body = _run(_FakeEngine(state), req, _make_request())
 
     usage = body["usage"]
@@ -111,10 +123,15 @@ def test_no_reasoning_detail_when_no_thinking():
 
 def test_reconciled_reasoning_capped_at_completion():
     # Thinking text has more words than completion_tokens; must cap at completion.
-    state = _FakeState("<think>a b c d e f g h</think>x",
-                       prompt_tokens=4, completion_tokens=3, reasoning_tokens=0)
+    state = _FakeState(
+        "<think>a b c d e f g h</think>x",
+        prompt_tokens=4,
+        completion_tokens=3,
+        reasoning_tokens=0,
+    )
     req = ChatCompletionRequest(
-        model="test", messages=[ChatMessage(role="user", content="hi")], max_tokens=64)
+        model="test", messages=[ChatMessage(role="user", content="hi")], max_tokens=64
+    )
     body = _run(_FakeEngine(state), req, _make_request())
 
     usage = body["usage"]

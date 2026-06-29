@@ -11,6 +11,7 @@ Fix: gate on an exact _external_kv_reuse flag set at insert time (True only when
 request actually warm-started from an external cached_kv via insert_segments, which is the
 one case where extract_cache returns a short/corrupt cache).
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace

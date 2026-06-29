@@ -48,7 +48,11 @@ def _check_auth(request: Request) -> None:
         # Deny by default when no auth is configured (secure default).
         # Explicit opt-in via YUNSHU_AUTH_DISABLED=true is required to
         # skip authentication.
-        if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() not in ("true", "1", "yes"):
+        if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() not in (
+            "true",
+            "1",
+            "yes",
+        ):
             raise HTTPException(
                 status_code=401,
                 detail="No authentication configured. Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true.",
@@ -66,6 +70,7 @@ def _check_auth(request: Request) -> None:
         )
     token = auth[7:]
     import hmac
+
     if not hmac.compare_digest(token, auth_token):
         raise HTTPException(
             status_code=401,
@@ -94,7 +99,11 @@ async def cancel_generation(req: CancelRequest, request: Request):
     # stamps role="owner" on every admitted request (or "admin"/"system" for
     # static-token holders), so the single owner can always cancel_all and
     # cancel by id. Auth-disabled dev mode is also treated as admin.
-    _auth_disabled = os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes")
+    _auth_disabled = os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
     _role_str = str(getattr(request.state, "role", "") or "")
     is_admin = (
         _auth_disabled
@@ -115,11 +124,12 @@ async def cancel_generation(req: CancelRequest, request: Request):
         shadow_count = 0
         try:
             from ..engine import get_engine, get_model_manager
+
             engines_to_check = []
             manager = get_model_manager()
             if manager is not None:
                 for entry in manager.list_entries():
-                    if entry.is_loaded and hasattr(entry, 'engine'):
+                    if entry.is_loaded and hasattr(entry, "engine"):
                         engines_to_check.append(entry.engine)
             else:
                 engine = get_engine()
@@ -127,10 +137,10 @@ async def cancel_generation(req: CancelRequest, request: Request):
                     engines_to_check.append(engine)
 
             for eng in engines_to_check:
-                core = getattr(eng, '_engine_core', None)
+                core = getattr(eng, "_engine_core", None)
                 if core is None:
                     continue
-                for shadow_id in list(getattr(core, '_dedup_shadows', {}).keys()):
+                for shadow_id in list(getattr(core, "_dedup_shadows", {}).keys()):
                     # Only count a REAL cancellation. Dedup shadows are
                     # engine-internal and not tracker-registered, so cancel() returns
                     # False (no-op) — the old unconditional += inflated the reported
@@ -151,8 +161,13 @@ async def cancel_generation(req: CancelRequest, request: Request):
         if not is_admin and hasattr(tracker, "get_owner"):
             owner = tracker.get_owner(req.request_id)
             if owner and owner != actor:
-                log_operation("cancel_request", req.request_id, "failure",
-                              actor=actor, detail=f"not_owner (req owned by {owner})")
+                log_operation(
+                    "cancel_request",
+                    req.request_id,
+                    "failure",
+                    actor=actor,
+                    detail=f"not_owner (req owned by {owner})",
+                )
                 raise HTTPException(
                     status_code=403,
                     detail="cannot cancel another user's request",
@@ -161,10 +176,17 @@ async def cancel_generation(req: CancelRequest, request: Request):
         if found:
             log_operation("cancel_request", req.request_id, "success", actor=actor)
             return {"status": "cancelled", "request_id": req.request_id}
-        log_operation("cancel_request", req.request_id, "failure", actor=actor, detail="not_found")
-        raise HTTPException(status_code=404, detail=f"Request '{req.request_id}' not found or already completed")
+        log_operation(
+            "cancel_request", req.request_id, "failure", actor=actor, detail="not_found"
+        )
+        raise HTTPException(
+            status_code=404,
+            detail=f"Request '{req.request_id}' not found or already completed",
+        )
 
-    raise HTTPException(status_code=400, detail="Provide either request_id or cancel_all=true")
+    raise HTTPException(
+        status_code=400, detail="Provide either request_id or cancel_all=true"
+    )
 
 
 @router.get("/active-generations")
@@ -173,7 +195,11 @@ async def list_active_generations(request: Request):
     admin (was leaking every tenant's live request_id + model)."""
     _check_auth(request)
     actor = resolve_actor(request)
-    _auth_disabled = os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes")
+    _auth_disabled = os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
     _role_str = str(getattr(request.state, "role", "") or "")
     is_admin = (
         _auth_disabled
@@ -182,6 +208,7 @@ async def list_active_generations(request: Request):
     )
 
     from yunshu_engine.request_tracker import get_request_tracker
+
     tracker = get_request_tracker()
     active = tracker.list_active()
     # Don't disclose other tenants' in-flight requests. Mirror the per-request
@@ -189,8 +216,11 @@ async def list_active_generations(request: Request):
     # (owner None = best-effort/unattributed → visible, matching cancel).
     if not is_admin and hasattr(tracker, "get_owner"):
         active = [
-            a for a in active
-            if (lambda o: o is None or o == actor)(tracker.get_owner(a.get("request_id")))
+            a
+            for a in active
+            if (lambda o: o is None or o == actor)(
+                tracker.get_owner(a.get("request_id"))
+            )
         ]
     # Standardize to OpenAI list envelope `{object:"list", data:[...]}` to match
     # the rest of the gateway. Legacy `active`/`count` fields are preserved for

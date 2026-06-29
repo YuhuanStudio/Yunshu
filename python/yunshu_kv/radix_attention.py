@@ -102,8 +102,10 @@ class RadixNode:
         # only -1). Collapse consecutive duplicates of the same physical block.
         deduped: list[KVBlock] = []
         for b in result:
-            if deduped and (deduped[-1] is b
-                            or getattr(deduped[-1], "block_id", None) == getattr(b, "block_id", -2)):
+            if deduped and (
+                deduped[-1] is b
+                or getattr(deduped[-1], "block_id", None) == getattr(b, "block_id", -2)
+            ):
                 continue
             deduped.append(b)
         return deduped
@@ -278,7 +280,7 @@ class RadixTree:
         # coverage.  Insert a reference to the boundary block at the head
         # of the child's block list so that evicting new_node alone does
         # not free a block the child depends on.
-        is_aligned = (split_pos % self._block_size == 0)
+        is_aligned = split_pos % self._block_size == 0
         if not is_aligned and new_node.blocks:
             # The last block in new_node is the boundary block that straddles
             # the split point.  Give the child a reference to it.
@@ -381,7 +383,12 @@ class RadixTree:
                 match_block_idx = (match_len + self._block_size - 1) // self._block_size
                 remaining_blocks = blocks[match_block_idx:]
                 remaining_hashes = block_hashes[match_block_idx:]
-                return self._insert_unlocked(remaining_new, remaining_blocks, remaining_hashes, start_node=split_node)
+                return self._insert_unlocked(
+                    remaining_new,
+                    remaining_blocks,
+                    remaining_hashes,
+                    start_node=split_node,
+                )
             else:
                 # match_len == len(existing.token_ids): the existing child is
                 # fully matched.  Two sub-cases:
@@ -392,7 +399,7 @@ class RadixTree:
                         existing.blocks = list(blocks)
                         # Store old blocks for caller to free via node._replaced_blocks
                         if old_blocks:
-                            if not hasattr(existing, '_replaced_blocks'):
+                            if not hasattr(existing, "_replaced_blocks"):
                                 existing._replaced_blocks = []
                             existing._replaced_blocks.extend(old_blocks)
                     if block_hashes:
@@ -413,11 +420,15 @@ class RadixTree:
                     # boundary block (CEIL) and let the child re-prefill those tokens —
                     # correct, just no cache reuse across a mid-block boundary. For
                     # block-aligned matches ceil == floor (unchanged).
-                    match_block_idx = (match_len + self._block_size - 1) // self._block_size
+                    match_block_idx = (
+                        match_len + self._block_size - 1
+                    ) // self._block_size
                     remaining_blocks = blocks[match_block_idx:]
                     remaining_hashes = block_hashes[match_block_idx:]
                     return self._insert_unlocked(
-                        remaining_new, remaining_blocks, remaining_hashes,
+                        remaining_new,
+                        remaining_blocks,
+                        remaining_hashes,
                         start_node=existing,
                     )
 
@@ -528,7 +539,8 @@ class RadixTree:
                 # _try_merge_unlocked) so the block doesn't leak.
                 _parent_block_ids = (
                     {b.block_id for b in leaf.parent.blocks}
-                    if leaf.parent is not None else set()
+                    if leaf.parent is not None
+                    else set()
                 )
                 for _b in leaf.blocks:
                     if _b.block_id in _parent_block_ids:
@@ -637,9 +649,7 @@ class RadixTree:
         # Since node.ref_count == 0 (merge precondition), addition is
         # equivalent to overwrite but clearer about intent.
         node.ref_count = node.ref_count + child_ref_count
-        node.last_access_time = max(
-            node.last_access_time, child.last_access_time
-        )
+        node.last_access_time = max(node.last_access_time, child.last_access_time)
         node.access_count += child.access_count
         self._total_nodes -= 1
 
@@ -686,7 +696,9 @@ class RadixTree:
 
         with self._lock:
             _walk(self.root, 0)
-        match_rate = (self._match_hits / self._match_total) if self._match_total > 0 else 0.0
+        match_rate = (
+            (self._match_hits / self._match_total) if self._match_total > 0 else 0.0
+        )
         return {
             "total_nodes": self._total_nodes,
             "total_blocks": total_blocks,
@@ -701,7 +713,6 @@ class RadixTree:
             "match_hits": self._match_hits,
             "match_rate": match_rate,
         }
-
 
 
 def _now() -> float:

@@ -11,6 +11,7 @@
   byte-count cap (YUNSHU_VLM_MAX_IMAGE_BYTES, default 25MB), and a size violation skips the
   insecure-SSL retry.
 """
+
 from __future__ import annotations
 
 import inspect

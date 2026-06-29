@@ -32,7 +32,9 @@ def _make_manager():
 class TestLifecycle:
     @pytest.mark.asyncio
     async def test_start_sets_running(self):
-        enf = ProcessMemoryEnforcer(_make_manager(), max_bytes=10 * 1024**3, poll_interval=10.0)
+        enf = ProcessMemoryEnforcer(
+            _make_manager(), max_bytes=10 * 1024**3, poll_interval=10.0
+        )
         assert enf.is_running is False
         enf.start()
         try:
@@ -43,7 +45,9 @@ class TestLifecycle:
 
     @pytest.mark.asyncio
     async def test_start_idempotent(self):
-        enf = ProcessMemoryEnforcer(_make_manager(), max_bytes=10 * 1024**3, poll_interval=10.0)
+        enf = ProcessMemoryEnforcer(
+            _make_manager(), max_bytes=10 * 1024**3, poll_interval=10.0
+        )
         enf.start()
         first_task = enf._task
         enf.start()  # second call should be a no-op
@@ -54,7 +58,9 @@ class TestLifecycle:
 
     @pytest.mark.asyncio
     async def test_stop_clears_task(self):
-        enf = ProcessMemoryEnforcer(_make_manager(), max_bytes=10 * 1024**3, poll_interval=10.0)
+        enf = ProcessMemoryEnforcer(
+            _make_manager(), max_bytes=10 * 1024**3, poll_interval=10.0
+        )
         enf.start()
         await enf.stop()
         assert enf.is_running is False

@@ -93,7 +93,10 @@ class MCPServerConnection:
             await self._discover_tools()
             return True
         except Exception as e:
-            logger.error(f"Failed to connect to MCP server {self.config.server_id}: {e}", exc_info=True)
+            logger.error(
+                f"Failed to connect to MCP server {self.config.server_id}: {e}",
+                exc_info=True,
+            )
             return False
 
     async def _connect_http(self) -> bool:
@@ -110,18 +113,23 @@ class MCPServerConnection:
         never registered → every later ``call_tool`` raised KeyError and was silently treated as
         "not an MCP tool". Best-effort: a lenient server that didn't need it is unaffected."""
         try:
-            await self._send_request("initialize", {
-                "protocolVersion": "2025-06-18",
-                "capabilities": {},
-                "clientInfo": {"name": "yunshu", "version": "1.0"},
-            })
+            await self._send_request(
+                "initialize",
+                {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "yunshu", "version": "1.0"},
+                },
+            )
             await self._send_notification("notifications/initialized", {})
         except Exception:
             logger.debug("MCP initialize handshake failed (continuing)", exc_info=True)
 
     async def _send_notification(self, method: str, params: dict) -> None:
         """Send a JSON-RPC notification (no id, no response expected)."""
-        payload = json.dumps({"jsonrpc": "2.0", "method": method, "params": params}) + "\n"
+        payload = (
+            json.dumps({"jsonrpc": "2.0", "method": method, "params": params}) + "\n"
+        )
         if self.config.transport == "stdio" and self._process and self._process.stdin:
             async with self._stdio_lock:
                 self._process.stdin.write(payload.encode())
@@ -132,20 +140,27 @@ class MCPServerConnection:
         result = await self._send_request("tools/list", {})
         if result and "tools" in result:
             for tool_data in result["tools"]:
-                self.tools.append(MCPTool(
-                    name=tool_data.get("name", ""),
-                    description=tool_data.get("description", ""),
-                    input_schema=tool_data.get("inputSchema", {}),
-                    server_id=self.config.server_id,
-                ))
-            logger.info(f"Discovered {len(self.tools)} tools from {self.config.server_id}")
+                self.tools.append(
+                    MCPTool(
+                        name=tool_data.get("name", ""),
+                        description=tool_data.get("description", ""),
+                        input_schema=tool_data.get("inputSchema", {}),
+                        server_id=self.config.server_id,
+                    )
+                )
+            logger.info(
+                f"Discovered {len(self.tools)} tools from {self.config.server_id}"
+            )
 
     async def call_tool(self, tool_name: str, arguments: dict) -> Any:
         """Execute a tool call on this server."""
-        return await self._send_request("tools/call", {
-            "name": tool_name,
-            "arguments": arguments,
-        })
+        return await self._send_request(
+            "tools/call",
+            {
+                "name": tool_name,
+                "arguments": arguments,
+            },
+        )
 
     async def _send_request(self, method: str, params: dict) -> Any:
         """Send a JSON-RPC request to the MCP server."""
@@ -186,7 +201,9 @@ class MCPServerConnection:
                 while True:
                     remaining = deadline - asyncio.get_event_loop().time()
                     if remaining <= 0:
-                        logger.warning(f"MCP stdio timeout waiting for response to {method}")
+                        logger.warning(
+                            f"MCP stdio timeout waiting for response to {method}"
+                        )
                         return None
                     response_line = await asyncio.wait_for(
                         self._process.stdout.readline(), timeout=remaining
@@ -200,18 +217,25 @@ class MCPServerConnection:
                         continue
                     # Skip notifications (no "id" field) — they're informational
                     if "id" not in response:
-                        logger.debug(f"MCP stdio: skipping notification: {response.get('method', '?')}")
+                        logger.debug(
+                            f"MCP stdio: skipping notification: {response.get('method', '?')}"
+                        )
                         continue
                     # Only accept the response for OUR request id — a mismatched
                     # id is a leftover/out-of-order frame; keep reading.
                     if response.get("id") != req_id:
-                        logger.debug("MCP stdio: skipping response for id %r (want %r)",
-                                     response.get("id"), req_id)
+                        logger.debug(
+                            "MCP stdio: skipping response for id %r (want %r)",
+                            response.get("id"),
+                            req_id,
+                        )
                         continue
                     # Check for error response
                     if "error" in response:
                         err = response["error"]
-                        logger.error(f"MCP server error: {err.get('code')} {err.get('message')}")
+                        logger.error(
+                            f"MCP server error: {err.get('code')} {err.get('message')}"
+                        )
                         return None
                     return response.get("result")
         return None
@@ -219,6 +243,7 @@ class MCPServerConnection:
     async def _send_http(self, method: str, params: dict) -> Any:
         """Send request via HTTP transport."""
         import aiohttp
+
         url = self.config.url
         if not url:
             return None
@@ -240,7 +265,9 @@ class MCPServerConnection:
                         data = await resp.json()
                         if "error" in data:
                             err = data["error"]
-                            logger.error(f"MCP HTTP error: {err.get('code')} {err.get('message')}")
+                            logger.error(
+                                f"MCP HTTP error: {err.get('code')} {err.get('message')}"
+                            )
                             return None
                         return data.get("result")
         except Exception as e:
@@ -292,15 +319,17 @@ class MCPClientManager:
             try:
                 servers = json.loads(env_servers)
                 for s in servers:
-                    configs.append(MCPServerConfig(
-                        server_id=s.get("id") or s.get("name") or "",
-                        transport=s.get("transport", "stdio"),
-                        command=s.get("command", ""),
-                        args=s.get("args", []),
-                        url=s.get("url", ""),
-                        headers=s.get("headers", {}),
-                        enabled=s.get("enabled", True),
-                    ))
+                    configs.append(
+                        MCPServerConfig(
+                            server_id=s.get("id") or s.get("name") or "",
+                            transport=s.get("transport", "stdio"),
+                            command=s.get("command", ""),
+                            args=s.get("args", []),
+                            url=s.get("url", ""),
+                            headers=s.get("headers", {}),
+                            enabled=s.get("enabled", True),
+                        )
+                    )
             except json.JSONDecodeError:
                 logger.error("Failed to parse YUNSHU_MCP_SERVERS env var")
 
@@ -324,18 +353,22 @@ class MCPClientManager:
                 data = json.load(f)
             configs = []
             servers = data.get("mcpServers") or data.get("servers") or []
-            for sid, sdata in servers.items() if isinstance(servers, dict) else enumerate(servers):
+            for sid, sdata in (
+                servers.items() if isinstance(servers, dict) else enumerate(servers)
+            ):
                 if isinstance(sid, int):
                     sid = sdata.get("id", f"server-{sid}")
-                configs.append(MCPServerConfig(
-                    server_id=sid,
-                    transport=sdata.get("transport", "stdio"),
-                    command=sdata.get("command", ""),
-                    args=sdata.get("args", []),
-                    url=sdata.get("url", ""),
-                    headers=sdata.get("headers", {}),
-                    enabled=sdata.get("enabled", True),
-                ))
+                configs.append(
+                    MCPServerConfig(
+                        server_id=sid,
+                        transport=sdata.get("transport", "stdio"),
+                        command=sdata.get("command", ""),
+                        args=sdata.get("args", []),
+                        url=sdata.get("url", ""),
+                        headers=sdata.get("headers", {}),
+                        enabled=sdata.get("enabled", True),
+                    )
+                )
             return configs
         except Exception as e:
             logger.error(f"Failed to parse MCP config from {path}: {e}", exc_info=True)
@@ -354,14 +387,16 @@ class MCPClientManager:
         for tool_name, conn in self._tool_index.items():
             tool = next((t for t in conn.tools if t.name == tool_name), None)
             if tool:
-                result.append({
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": tool.input_schema,
-                    },
-                })
+                result.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": tool.name,
+                            "description": tool.description,
+                            "parameters": tool.input_schema,
+                        },
+                    }
+                )
         return result
 
     def list_tools(self) -> list[dict]:
@@ -369,12 +404,14 @@ class MCPClientManager:
         tools = []
         for conn in self._servers.values():
             for tool in conn.tools:
-                tools.append({
-                    "name": tool.name,
-                    "description": tool.description,
-                    "server_id": tool.server_id,
-                    "input_schema": tool.input_schema,
-                })
+                tools.append(
+                    {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "server_id": tool.server_id,
+                        "input_schema": tool.input_schema,
+                    }
+                )
         return tools
 
     def get_stats(self) -> dict:

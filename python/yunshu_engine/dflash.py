@@ -108,7 +108,9 @@ class BlockPlan:
         return len(self.blocks)
 
     @classmethod
-    def create(cls, width: int, height: int, block_size: int, overlap: int = 16) -> BlockPlan:
+    def create(
+        cls, width: int, height: int, block_size: int, overlap: int = 16
+    ) -> BlockPlan:
         """Create a block plan for the given image dimensions."""
         if overlap >= block_size:
             overlap = max(0, block_size - 1)
@@ -222,12 +224,17 @@ class DFlashEngine:
         if model is None:
             return False
         # Check for diffusion model indicators
-        config = getattr(model, 'config', None) or getattr(model, 'args', None)
+        config = getattr(model, "config", None) or getattr(model, "args", None)
         if config is None:
             return False
         # Models with unet/diffusion backbone
-        model_type = getattr(config, 'model_type', "").lower()
-        return bool(any(t in model_type for t in ("flux", "diffusion", "unet", "sd", "sdxl", "stable")))
+        model_type = getattr(config, "model_type", "").lower()
+        return bool(
+            any(
+                t in model_type
+                for t in ("flux", "diffusion", "unet", "sd", "sdxl", "stable")
+            )
+        )
 
     def generate(
         self,
@@ -252,7 +259,9 @@ class DFlashEngine:
 
         t0 = time.monotonic()
         block_plan = BlockPlan.create(
-            width, height, self._config.block_size,
+            width,
+            height,
+            self._config.block_size,
             self._config.overlap_margin if self._config.overlap_blocks else 0,
         )
 
@@ -274,9 +283,13 @@ class DFlashEngine:
 
             # Generate coarse block
             block_result = self._generate_block(
-                model, processor, prompt,
-                x_end - x, y_end - y,
-                self._config.coarse_steps, seed,
+                model,
+                processor,
+                prompt,
+                x_end - x,
+                y_end - y,
+                self._config.coarse_steps,
+                seed,
             )
             coarse_results[block_key] = block_result
             self._l1_cache.put(block_key, block_result)
@@ -291,9 +304,13 @@ class DFlashEngine:
             warm_start = coarse_results.get(block_key)
 
             refined = self._refine_block(
-                model, processor, prompt,
-                x_end - x, y_end - y,
-                self._config.refine_steps, seed,
+                model,
+                processor,
+                prompt,
+                x_end - x,
+                y_end - y,
+                self._config.refine_steps,
+                seed,
                 warm_start=warm_start,
                 context={"x": x, "y": y, "width": width, "height": height},
             )
@@ -323,35 +340,52 @@ class DFlashEngine:
         }
 
     def _generate_block(
-        self, model: Any, processor: Any, prompt: str,
-        block_w: int, block_h: int, steps: int, seed: int | None,
+        self,
+        model: Any,
+        processor: Any,
+        prompt: str,
+        block_w: int,
+        block_h: int,
+        steps: int,
+        seed: int | None,
     ) -> Any:
         """Generate a single coarse block."""
         # This delegates to the underlying diffusion model
         # In practice, this calls the model's generate with reduced steps
         try:
             import mlx.core as mx
+
             if seed is not None:
                 mx.random.seed(seed)
             # Use the model's native generation with reduced steps
-            if hasattr(model, 'generate'):
-                return model.generate(prompt, width=block_w, height=block_h, num_steps=steps)
+            if hasattr(model, "generate"):
+                return model.generate(
+                    prompt, width=block_w, height=block_h, num_steps=steps
+                )
             return None
         except Exception:
             logger.debug("Block generation failed", exc_info=True)
             return None
 
     def _refine_block(
-        self, model: Any, processor: Any, prompt: str,
-        block_w: int, block_h: int, steps: int, seed: int | None,
-        warm_start: Any = None, context: dict | None = None,
+        self,
+        model: Any,
+        processor: Any,
+        prompt: str,
+        block_w: int,
+        block_h: int,
+        steps: int,
+        seed: int | None,
+        warm_start: Any = None,
+        context: dict | None = None,
     ) -> Any:
         """Refine a block using a warm start from coarse generation."""
         try:
             import mlx.core as mx
+
             if seed is not None:
                 mx.random.seed(seed + 1)  # Different seed for refinement
-            if hasattr(model, 'generate'):
+            if hasattr(model, "generate"):
                 kwargs = {"width": block_w, "height": block_h, "num_steps": steps}
                 if warm_start is not None:
                     kwargs["init_latent"] = warm_start
@@ -364,7 +398,8 @@ class DFlashEngine:
     def _compose_blocks(
         self,
         blocks: list[tuple[tuple[int, int, int, int], Any]],
-        width: int, height: int,
+        width: int,
+        height: int,
     ) -> Any:
         """Compose final image from refined blocks with overlap blending."""
         if not blocks:
@@ -375,21 +410,24 @@ class DFlashEngine:
         # A production implementation would use alpha blending in overlap zones
         try:
             import numpy as np
+
             canvas = None
             for (x, y, _x_end, _y_end), block_data in blocks:
                 if block_data is None:
                     continue
                 block_img = block_data
-                if hasattr(block_img, 'images'):
+                if hasattr(block_img, "images"):
                     block_img = block_img.images[0]
-                if hasattr(block_img, '__array__'):
+                if hasattr(block_img, "__array__"):
                     arr = np.array(block_img)
                     bh, bw = arr.shape[:2]
                     if canvas is None:
                         ch = 3 if len(arr.shape) == 3 else 1
                         canvas = np.zeros((height, width, ch), dtype=arr.dtype)
                     # Place block on canvas
-                    canvas[y:y + bh, x:x + bw] = arr[:min(bh, height - y), :min(bw, width - x)]
+                    canvas[y : y + bh, x : x + bw] = arr[
+                        : min(bh, height - y), : min(bw, width - x)
+                    ]
             return canvas
         except ImportError:
             return None

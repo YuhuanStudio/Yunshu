@@ -16,6 +16,7 @@ from yunshu_engine.scheduler import SchedulingPolicy
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 class _Item:
     """Minimal item with a stable identity for ``is`` checks."""
 
@@ -31,8 +32,8 @@ class _Item:
 # 1. FCFS ordering (FIFO)
 # ===========================================================================
 
-class TestFCFSOrdering:
 
+class TestFCFSOrdering:
     def test_fifo_order(self):
         """Items come out in insertion order under FCFS."""
         q = RequestPriorityQueue(mode=_QueueMode.FCFS)
@@ -51,7 +52,7 @@ class TestFCFSOrdering:
         high = _Item("high", priority=100)
         q.push(low, priority=1)
         q.push(high, priority=100)
-        assert q.pop() is low   # insertion order wins
+        assert q.pop() is low  # insertion order wins
         assert q.pop() is high
 
     def test_large_fcfs_queue(self):
@@ -69,8 +70,8 @@ class TestFCFSOrdering:
 # 2. PRIORITY ordering (higher priority first)
 # ===========================================================================
 
-class TestPriorityOrdering:
 
+class TestPriorityOrdering:
     def test_higher_priority_first(self):
         """Higher priority values are served first."""
         q = RequestPriorityQueue(mode=_QueueMode.PRIORITY)
@@ -100,13 +101,14 @@ class TestPriorityOrdering:
     def test_large_priority_queue(self):
         """10k items with random priorities come out sorted."""
         import random
+
         random.seed(42)
         q = RequestPriorityQueue(mode=_QueueMode.PRIORITY)
         items = [(i, random.randint(0, 1000)) for i in range(10_000)]
         for idx, pri in items:
             q.push(_Item(f"i-{idx}", priority=pri), priority=pri)
         # Should come out in descending priority order
-        prev_pri = float('inf')
+        prev_pri = float("inf")
         while q:
             item = q.pop()
             assert item.priority <= prev_pri
@@ -118,8 +120,8 @@ class TestPriorityOrdering:
 # 3. Same-priority FIFO tiebreaking
 # ===========================================================================
 
-class TestSamePriorityTiebreaking:
 
+class TestSamePriorityTiebreaking:
     def test_same_priority_fifo(self):
         """Among equal-priority items, insertion order (FIFO) wins."""
         q = RequestPriorityQueue(mode=_QueueMode.PRIORITY)
@@ -155,8 +157,8 @@ class TestSamePriorityTiebreaking:
 # 4. push_front for preempted requests
 # ===========================================================================
 
-class TestPushFront:
 
+class TestPushFront:
     def test_push_front_goes_before_normal_push(self):
         """push_front items appear before normal push items at same priority."""
         q = RequestPriorityQueue(mode=_QueueMode.PRIORITY)
@@ -217,8 +219,8 @@ class TestPushFront:
 # 5. Empty queue behavior
 # ===========================================================================
 
-class TestEmptyQueue:
 
+class TestEmptyQueue:
     def test_pop_empty_raises(self):
         """pop() on empty queue raises IndexError."""
         q = RequestPriorityQueue(mode=_QueueMode.FCFS)
@@ -272,8 +274,8 @@ class TestEmptyQueue:
 # 6. Large queue performance (verify O(log n) push/pop)
 # ===========================================================================
 
-class TestLargeQueuePerformance:
 
+class TestLargeQueuePerformance:
     def test_push_pop_50k_fcfs(self):
         """50k push/pop under FCFS completes quickly (O(log n) per op)."""
         q = RequestPriorityQueue(mode=_QueueMode.FCFS)
@@ -295,6 +297,7 @@ class TestLargeQueuePerformance:
     def test_push_pop_50k_priority(self):
         """50k push/pop under PRIORITY completes quickly."""
         import random
+
         random.seed(123)
         q = RequestPriorityQueue(mode=_QueueMode.PRIORITY)
         pairs = [(i, random.randint(0, 100)) for i in range(50_000)]
@@ -304,7 +307,7 @@ class TestLargeQueuePerformance:
         t_push = time.perf_counter() - t0
         assert len(q) == 50_000
         t1 = time.perf_counter()
-        prev = float('inf')
+        prev = float("inf")
         while q:
             item = q.pop()
             assert item.priority <= prev
@@ -320,6 +323,7 @@ class TestLargeQueuePerformance:
         The heap should be competitive or faster.
         """
         import random
+
         random.seed(99)
         n = 10_000
         items = [(i, random.randint(0, 100)) for i in range(n)]
@@ -335,6 +339,7 @@ class TestLargeQueuePerformance:
 
         # Old sort approach (simulate what the scheduler did)
         from collections import deque
+
         old_queue = deque()
         t0 = time.perf_counter()
         for idx, pri in items:
@@ -358,8 +363,8 @@ class TestLargeQueuePerformance:
 # 7. make_waiting_queue factory
 # ===========================================================================
 
-class TestMakeWaitingQueue:
 
+class TestMakeWaitingQueue:
     def test_fcfs_policy_creates_fcfs_queue(self):
         q = make_waiting_queue(SchedulingPolicy.FCFS)
         assert q._mode == _QueueMode.FCFS
@@ -381,8 +386,8 @@ class TestMakeWaitingQueue:
 # 8. Thread safety
 # ===========================================================================
 
-class TestThreadSafety:
 
+class TestThreadSafety:
     def test_concurrent_pushes(self):
         """Multiple threads pushing concurrently should not corrupt the heap."""
         q = RequestPriorityQueue(mode=_QueueMode.FCFS)
@@ -450,8 +455,8 @@ class TestThreadSafety:
 # 9. __contains__ and __getitem__
 # ===========================================================================
 
-class TestContainsAndGetitem:
 
+class TestContainsAndGetitem:
     def test_contains_true(self):
         q = RequestPriorityQueue(mode=_QueueMode.FCFS)
         item = _Item("x")

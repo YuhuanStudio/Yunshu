@@ -7,7 +7,6 @@ Security: All monitoring endpoints require authentication (deny-by-default).
 Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true for access.
 """
 
-
 import hmac
 import logging
 import os
@@ -34,7 +33,7 @@ def _check_permission(request: Request) -> None:
     cancel.py._check_auth.
     """
     # Skip redundant re-check when called from /all aggregator
-    if getattr(request.state, '_monitoring_authed', False):
+    if getattr(request.state, "_monitoring_authed", False):
         return
     if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
         return
@@ -42,7 +41,10 @@ def _check_permission(request: Request) -> None:
     rbac_key = getattr(request.state, "rbac_key", None)
     if rbac_key is not None:
         if not rbac_key.has_permission("can_view_system"):
-            raise HTTPException(status_code=403, detail="Insufficient permissions for monitoring endpoints")
+            raise HTTPException(
+                status_code=403,
+                detail="Insufficient permissions for monitoring endpoints",
+            )
         return
     # Tenant set by TenantAuthMiddleware for static tokens.
     tenant = getattr(request.state, "tenant", None)
@@ -53,7 +55,10 @@ def _check_permission(request: Request) -> None:
         # auth middleware (e.g. "admin" for static tokens) — as the source of truth.
         tenant_role = str(getattr(request.state, "role", "") or "").lower()
         if tenant_role not in ("admin", "system", "owner"):
-            raise HTTPException(status_code=403, detail="Insufficient permissions for monitoring endpoints")
+            raise HTTPException(
+                status_code=403,
+                detail="Insufficient permissions for monitoring endpoints",
+            )
         return
     auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
     if not auth_token:
@@ -84,7 +89,11 @@ def _collect_engines(default_engine, model_manager) -> list[tuple[str, Any]]:
     engines = []
     if model_manager is not None:
         for entry in model_manager.list_entries():
-            if entry.is_loaded and hasattr(entry, 'engine') and entry.engine is not None:
+            if (
+                entry.is_loaded
+                and hasattr(entry, "engine")
+                and entry.engine is not None
+            ):
                 engines.append((entry.model_id, entry.engine))
     if not engines and default_engine is not None:
         engines.append(("default", default_engine))
@@ -94,12 +103,14 @@ def _collect_engines(default_engine, model_manager) -> list[tuple[str, Any]]:
 def _collect_engines_from_globals() -> list[tuple[str, Any]]:
     """Convenience wrapper that reads engine/manager from gateway globals."""
     from ..engine import get_engine, get_model_manager
+
     return _collect_engines(get_engine(), get_model_manager())
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _sysctl(name: str) -> int | None:
     """Read a macOS sysctl integer value, or None on failure."""
@@ -117,6 +128,7 @@ def _get_cpu_info() -> dict[str, Any]:
     """Return CPU usage percent and core count."""
     try:
         import psutil
+
         cpu_pct = psutil.cpu_percent(interval=0.1)
         cores = psutil.cpu_count(logical=True)
         phys_cores = psutil.cpu_count(logical=False)
@@ -131,6 +143,7 @@ def _get_memory_info() -> dict[str, Any]:
     """Return RAM usage stats."""
     try:
         import psutil
+
         mem = psutil.virtual_memory()
         return {
             "total_bytes": mem.total,
@@ -153,6 +166,7 @@ def _get_gpu_info() -> dict[str, Any]:
     """Return Apple GPU / UMA memory info via MLX."""
     try:
         import mlx.core as mx
+
         active = mx.get_active_memory()
         peak = mx.get_peak_memory()
         cache = mx.get_cache_memory()
@@ -191,17 +205,21 @@ def _get_model_status() -> list[dict[str, Any]]:
                 try:
                     info["stats"] = entry.engine.get_stats()
                 except Exception:
-                    logger.debug(f"failed to get stats for {entry.model_id}", exc_info=True)
+                    logger.debug(
+                        f"failed to get stats for {entry.model_id}", exc_info=True
+                    )
             results.append(info)
         return results
 
     engine = get_engine()
-    if engine and hasattr(engine, 'is_loaded') and engine.is_loaded:
-        results.append({
-            "model_id": getattr(engine, 'model_name', 'default'),
-            "loaded": True,
-            "stats": engine.get_stats() if hasattr(engine, "get_stats") else {},
-        })
+    if engine and hasattr(engine, "is_loaded") and engine.is_loaded:
+        results.append(
+            {
+                "model_id": getattr(engine, "model_name", "default"),
+                "loaded": True,
+                "stats": engine.get_stats() if hasattr(engine, "get_stats") else {},
+            }
+        )
     return results
 
 
@@ -218,21 +236,24 @@ def _get_active_requests() -> dict[str, Any]:
         for entry in manager.list_entries():
             if entry.is_loaded and entry.engine and hasattr(entry.engine, "get_stats"):
                 s = entry.engine.get_stats()
-                active += s.get("active_collectors",
-                                s.get("scheduler_running",
-                                      s.get("active", 0)))
-                waiting += s.get("scheduler_waiting",
-                                 s.get("waiting", 0))
+                active += s.get(
+                    "active_collectors", s.get("scheduler_running", s.get("active", 0))
+                )
+                waiting += s.get("scheduler_waiting", s.get("waiting", 0))
                 processed += s.get("num_requests_processed", 0)
     else:
         engine = get_engine()
-        if engine and hasattr(engine, 'is_loaded') and engine.is_loaded and hasattr(engine, "get_stats"):
+        if (
+            engine
+            and hasattr(engine, "is_loaded")
+            and engine.is_loaded
+            and hasattr(engine, "get_stats")
+        ):
             s = engine.get_stats()
-            active = s.get("active_collectors",
-                           s.get("scheduler_running",
-                                 s.get("active", 0)))
-            waiting = s.get("scheduler_waiting",
-                            s.get("waiting", 0))
+            active = s.get(
+                "active_collectors", s.get("scheduler_running", s.get("active", 0))
+            )
+            waiting = s.get("scheduler_waiting", s.get("waiting", 0))
             processed = s.get("num_requests_processed", 0)
 
     # Also include metrics aggregator data.
@@ -250,6 +271,7 @@ def _get_active_requests() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
 
 @router.get("/engine")
 async def engine_stats(request: Request) -> dict[str, Any]:
@@ -293,6 +315,7 @@ async def engine_stats(request: Request) -> dict[str, Any]:
     total_completion_tokens = 0
     try:
         from yunshu_engine.server_metrics import get_server_metrics
+
         snap = get_server_metrics().get_snapshot(scope="session")
         total_prompt_tokens = int(snap.get("total_prompt_tokens", 0))
         total_completion_tokens = int(snap.get("total_completion_tokens", 0))
@@ -332,8 +355,8 @@ async def system_stats(request: Request) -> dict[str, Any]:
         engines = _collect_engines_from_globals()
         util_values = []
         for _model_id, engine in engines:
-            core = getattr(engine, '_engine_core', None)
-            if core is not None and hasattr(core, 'get_compute_utilization'):
+            core = getattr(engine, "_engine_core", None)
+            if core is not None and hasattr(core, "get_compute_utilization"):
                 util_values.append(core.get_compute_utilization())
         if util_values:
             result["compute_utilization_pct"] = round(
@@ -366,13 +389,16 @@ async def requests_stats(
     data = _get_active_requests()
     # Add aggregator percentiles.
     agg = get_metrics_aggregator()
-    data["latency_percentiles"] = agg.get_percentiles("duration_ms", window_seconds=window)
+    data["latency_percentiles"] = agg.get_percentiles(
+        "duration_ms", window_seconds=window
+    )
     data["token_percentiles"] = agg.get_percentiles("tokens_out", window_seconds=window)
     data["endpoint_breakdown"] = agg.get_endpoint_breakdown(window_seconds=window)
 
     # ITL stats from ServerMetrics (batch-path ITL tracking)
     try:
         from yunshu_engine.server_metrics import get_server_metrics
+
         sm = get_server_metrics()
         data["itl"] = sm.get_itl_stats()
     except Exception:
@@ -392,30 +418,62 @@ async def prometheus_export(request: Request) -> str:
     from yunshu_engine.batched_engine import BatchedEngine
 
     from ..engine import get_engine, get_model_manager
+
     manager = get_model_manager()
     if manager is not None:
         for entry in manager.list_entries():
-            if entry.is_loaded and isinstance(getattr(entry, 'engine', None), BatchedEngine):
+            if entry.is_loaded and isinstance(
+                getattr(entry, "engine", None), BatchedEngine
+            ):
                 mid = entry.model_id
                 ml = {"model_id": mid}  # model_id label for multi-model safety
-                ngram_stats = getattr(entry.engine, '_ngram_stats', {})
-                pm.set_counter("spec_ngram_proposals", ngram_stats.get("proposals", 0), labels=ml)
-                pm.set_counter("spec_ngram_accepted", ngram_stats.get("accepted", 0), labels=ml)
-                pm.set_counter("spec_ngram_draft", ngram_stats.get("total_draft", 0), labels=ml)
-                spec_enabled = getattr(entry.engine, '_spec_enabled', False)
-                ngram_proposer = getattr(entry.engine, '_ngram_proposer', None)
-                pm.set_gauge("spec_enabled",
-                    1 if (spec_enabled or ngram_proposer is not None) else 0, labels=ml)
+                ngram_stats = getattr(entry.engine, "_ngram_stats", {})
+                pm.set_counter(
+                    "spec_ngram_proposals", ngram_stats.get("proposals", 0), labels=ml
+                )
+                pm.set_counter(
+                    "spec_ngram_accepted", ngram_stats.get("accepted", 0), labels=ml
+                )
+                pm.set_counter(
+                    "spec_ngram_draft", ngram_stats.get("total_draft", 0), labels=ml
+                )
+                spec_enabled = getattr(entry.engine, "_spec_enabled", False)
+                ngram_proposer = getattr(entry.engine, "_ngram_proposer", None)
+                pm.set_gauge(
+                    "spec_enabled",
+                    1 if (spec_enabled or ngram_proposer is not None) else 0,
+                    labels=ml,
+                )
 
                 # Cross-model speculative decoder stats (SpeculativeDecoder._stats)
-                spec_decoder = getattr(entry.engine, '_spec_decoder', None)
+                spec_decoder = getattr(entry.engine, "_spec_decoder", None)
                 if spec_decoder is not None:
                     sd_stats = spec_decoder.get_stats()
-                    pm.set_counter("spec_draft_tokens", sd_stats.get("total_draft_tokens", 0), labels=ml)
-                    pm.set_counter("spec_accepted_tokens", sd_stats.get("total_accepted_tokens", 0), labels=ml)
-                    pm.set_gauge("spec_acceptance_rate", sd_stats.get("acceptance_rate", 0.0), labels=ml)
-                    pm.set_counter("spec_bonus_tokens", sd_stats.get("total_bonus_tokens", 0), labels=ml)
-                    pm.set_gauge("spec_effective_speedup", sd_stats.get("effective_speedup", 0.0), labels=ml)
+                    pm.set_counter(
+                        "spec_draft_tokens",
+                        sd_stats.get("total_draft_tokens", 0),
+                        labels=ml,
+                    )
+                    pm.set_counter(
+                        "spec_accepted_tokens",
+                        sd_stats.get("total_accepted_tokens", 0),
+                        labels=ml,
+                    )
+                    pm.set_gauge(
+                        "spec_acceptance_rate",
+                        sd_stats.get("acceptance_rate", 0.0),
+                        labels=ml,
+                    )
+                    pm.set_counter(
+                        "spec_bonus_tokens",
+                        sd_stats.get("total_bonus_tokens", 0),
+                        labels=ml,
+                    )
+                    pm.set_gauge(
+                        "spec_effective_speedup",
+                        sd_stats.get("effective_speedup", 0.0),
+                        labels=ml,
+                    )
                 else:
                     pm.set_counter("spec_draft_tokens", 0, labels=ml)
                     pm.set_counter("spec_accepted_tokens", 0, labels=ml)
@@ -424,14 +482,17 @@ async def prometheus_export(request: Request) -> str:
                     pm.set_gauge("spec_effective_speedup", 0.0, labels=ml)
 
                 # MTP speculative decoding stats
-                mtp_decoder = getattr(entry.engine, '_mtp_decoder', None)
-                if mtp_decoder is not None and hasattr(mtp_decoder, 'stats'):
+                mtp_decoder = getattr(entry.engine, "_mtp_decoder", None)
+                if mtp_decoder is not None and hasattr(mtp_decoder, "stats"):
                     ms = mtp_decoder.stats
                     mtp_total = ms.accepts + ms.rejects
                     pm.set_counter("spec_mtp_accepts", ms.accepts, labels=ml)
                     pm.set_counter("spec_mtp_rejects", ms.rejects, labels=ml)
-                    pm.set_gauge("spec_mtp_acceptance_rate",
-                        ms.accepts / mtp_total if mtp_total > 0 else 0.0, labels=ml)
+                    pm.set_gauge(
+                        "spec_mtp_acceptance_rate",
+                        ms.accepts / mtp_total if mtp_total > 0 else 0.0,
+                        labels=ml,
+                    )
                 else:
                     pm.set_counter("spec_mtp_accepts", 0, labels=ml)
                     pm.set_counter("spec_mtp_rejects", 0, labels=ml)
@@ -440,6 +501,7 @@ async def prometheus_export(request: Request) -> str:
                 # ITL stats from ServerMetrics
                 try:
                     from yunshu_engine.server_metrics import get_server_metrics
+
                     sm = get_server_metrics()
                     itl = sm.get_itl_stats()
                     pm.set_gauge("itl_p50_ms", itl.get("itl_p50_ms", 0), labels=ml)
@@ -452,15 +514,35 @@ async def prometheus_export(request: Request) -> str:
                     kv_stats = entry.engine.get_kv_cache_stats()
                     paged = kv_stats.get("paged_kv", {})
                     if paged.get("enabled"):
-                        pm.set_gauge("kv_cache_blocks_used", paged.get("used_blocks", 0), labels=ml)
-                        pm.set_gauge("kv_cache_blocks_total", paged.get("total_blocks", 0), labels=ml)
+                        pm.set_gauge(
+                            "kv_cache_blocks_used",
+                            paged.get("used_blocks", 0),
+                            labels=ml,
+                        )
+                        pm.set_gauge(
+                            "kv_cache_blocks_total",
+                            paged.get("total_blocks", 0),
+                            labels=ml,
+                        )
                     # KV prefix cache stats
                     prefix = kv_stats.get("prefix_cache", {})
                     if prefix:
-                        pm.set_gauge("kv_prefix_cache_entries", prefix.get("entries", 0), labels=ml)
-                        pm.set_counter("kv_prefix_cache_hits", prefix.get("hits", 0), labels=ml)
-                        pm.set_counter("kv_prefix_cache_misses", prefix.get("misses", 0), labels=ml)
-                        pm.set_counter("kv_prefix_cache_hash_collisions", prefix.get("hash_collisions", 0), labels=ml)
+                        pm.set_gauge(
+                            "kv_prefix_cache_entries",
+                            prefix.get("entries", 0),
+                            labels=ml,
+                        )
+                        pm.set_counter(
+                            "kv_prefix_cache_hits", prefix.get("hits", 0), labels=ml
+                        )
+                        pm.set_counter(
+                            "kv_prefix_cache_misses", prefix.get("misses", 0), labels=ml
+                        )
+                        pm.set_counter(
+                            "kv_prefix_cache_hash_collisions",
+                            prefix.get("hash_collisions", 0),
+                            labels=ml,
+                        )
                 except Exception:
                     logger.debug("KV cache gauge population failed", exc_info=True)
 
@@ -468,93 +550,221 @@ async def prometheus_export(request: Request) -> str:
                 try:
                     radix_stats = entry.engine.get_radix_tree_stats()
                     if radix_stats.get("enabled"):
-                        pm.set_gauge("radix_total_nodes", radix_stats.get("total_nodes", 0), labels=ml)
-                        pm.set_gauge("radix_total_tokens", radix_stats.get("total_tokens", 0), labels=ml)
+                        pm.set_gauge(
+                            "radix_total_nodes",
+                            radix_stats.get("total_nodes", 0),
+                            labels=ml,
+                        )
+                        pm.set_gauge(
+                            "radix_total_tokens",
+                            radix_stats.get("total_tokens", 0),
+                            labels=ml,
+                        )
                         # RadixTree.get_stats() returns "eviction_stats" (not "evictions")
                         ev = radix_stats.get("eviction_stats", {})
-                        pm.set_counter("radix_evictions_lru", ev.get("lru", 0), labels=ml)
-                        pm.set_counter("radix_evictions_lfu", ev.get("lfu", 0), labels=ml)
-                        pm.set_counter("radix_evictions_fifo", ev.get("fifo", 0), labels=ml)
-                        pm.set_counter("radix_evictions_freed_blocks", ev.get("total_freed_blocks", 0), labels=ml)
+                        pm.set_counter(
+                            "radix_evictions_lru", ev.get("lru", 0), labels=ml
+                        )
+                        pm.set_counter(
+                            "radix_evictions_lfu", ev.get("lfu", 0), labels=ml
+                        )
+                        pm.set_counter(
+                            "radix_evictions_fifo", ev.get("fifo", 0), labels=ml
+                        )
+                        pm.set_counter(
+                            "radix_evictions_freed_blocks",
+                            ev.get("total_freed_blocks", 0),
+                            labels=ml,
+                        )
                         # RadixTree blocks and match rate
-                        pm.set_gauge("radix_tree_blocks", radix_stats.get("total_blocks", 0), labels=ml)
-                        pm.set_gauge("radix_tree_match_rate", radix_stats.get("match_rate", 0.0), labels=ml)
-                        pm.set_counter("radix_tree_match_total", radix_stats.get("match_total", 0), labels=ml)
-                        pm.set_counter("radix_tree_match_hits", radix_stats.get("match_hits", 0), labels=ml)
+                        pm.set_gauge(
+                            "radix_tree_blocks",
+                            radix_stats.get("total_blocks", 0),
+                            labels=ml,
+                        )
+                        pm.set_gauge(
+                            "radix_tree_match_rate",
+                            radix_stats.get("match_rate", 0.0),
+                            labels=ml,
+                        )
+                        pm.set_counter(
+                            "radix_tree_match_total",
+                            radix_stats.get("match_total", 0),
+                            labels=ml,
+                        )
+                        pm.set_counter(
+                            "radix_tree_match_hits",
+                            radix_stats.get("match_hits", 0),
+                            labels=ml,
+                        )
                 except Exception:
                     logger.debug("RadixTree gauge population failed", exc_info=True)
 
                 # Scheduler monitoring gauges from engine_core
                 try:
-                    core = getattr(entry.engine, '_engine_core', None)
+                    core = getattr(entry.engine, "_engine_core", None)
                     if core is not None:
-                        pm.set_gauge("scheduler_waiting_queue_depth", getattr(core, '_last_queue_depth', 0), labels=ml)
-                        pm.set_gauge("scheduler_batch_size", getattr(core, '_last_batch_size', 0), labels=ml)
-                        pm.set_gauge("compute_utilization_pct",
-                            core.get_compute_utilization() if hasattr(core, 'get_compute_utilization') else 0, labels=ml)
-                        pm.set_gauge("step_duration_ms", getattr(core, '_last_step_wall_ms', 0.0), labels=ml)
+                        pm.set_gauge(
+                            "scheduler_waiting_queue_depth",
+                            getattr(core, "_last_queue_depth", 0),
+                            labels=ml,
+                        )
+                        pm.set_gauge(
+                            "scheduler_batch_size",
+                            getattr(core, "_last_batch_size", 0),
+                            labels=ml,
+                        )
+                        pm.set_gauge(
+                            "compute_utilization_pct",
+                            core.get_compute_utilization()
+                            if hasattr(core, "get_compute_utilization")
+                            else 0,
+                            labels=ml,
+                        )
+                        pm.set_gauge(
+                            "step_duration_ms",
+                            getattr(core, "_last_step_wall_ms", 0.0),
+                            labels=ml,
+                        )
                 except Exception:
-                    logger.debug("scheduler monitoring gauge population failed", exc_info=True)
+                    logger.debug(
+                        "scheduler monitoring gauge population failed", exc_info=True
+                    )
 
                 # H2O attention eviction gauges
                 try:
-                    core = getattr(entry.engine, '_engine_core', None)
+                    core = getattr(entry.engine, "_engine_core", None)
                     if core is not None:
-                        tracker = getattr(getattr(core, 'scheduler', None), '_attention_score_tracker', None)
+                        tracker = getattr(
+                            getattr(core, "scheduler", None),
+                            "_attention_score_tracker",
+                            None,
+                        )
                         if tracker is not None:
                             at_stats = tracker.get_stats()
-                            pm.set_gauge("attention_eviction_tracked_requests", at_stats.get("tracked_requests", 0), labels=ml)
-                            pm.set_gauge("attention_eviction_total_blocks", at_stats.get("total_blocks", 0), labels=ml)
+                            pm.set_gauge(
+                                "attention_eviction_tracked_requests",
+                                at_stats.get("tracked_requests", 0),
+                                labels=ml,
+                            )
+                            pm.set_gauge(
+                                "attention_eviction_total_blocks",
+                                at_stats.get("total_blocks", 0),
+                                labels=ml,
+                            )
                 except Exception:
-                    logger.debug("attention eviction gauge population failed", exc_info=True)
+                    logger.debug(
+                        "attention eviction gauge population failed", exc_info=True
+                    )
 
                 # Response cache Prometheus counters
                 try:
-                    s = entry.engine.get_stats() if hasattr(entry.engine, 'get_stats') else {}
+                    s = (
+                        entry.engine.get_stats()
+                        if hasattr(entry.engine, "get_stats")
+                        else {}
+                    )
                     rc = s.get("response_cache")
                     if rc:
-                        pm.set_counter("response_cache_hits_total", rc.get("hits", 0), labels=ml)
-                        pm.set_counter("response_cache_misses_total", rc.get("misses", 0), labels=ml)
+                        pm.set_counter(
+                            "response_cache_hits_total", rc.get("hits", 0), labels=ml
+                        )
+                        pm.set_counter(
+                            "response_cache_misses_total",
+                            rc.get("misses", 0),
+                            labels=ml,
+                        )
                 except Exception:
-                    logger.debug("response cache gauge population failed", exc_info=True)
+                    logger.debug(
+                        "response cache gauge population failed", exc_info=True
+                    )
 
                 # KV migration Prometheus gauges
                 try:
-                    core = getattr(entry.engine, '_engine_core', None)
-                    if core is not None and hasattr(core, '_kv_migration') and core._kv_migration is not None:
+                    core = getattr(entry.engine, "_engine_core", None)
+                    if (
+                        core is not None
+                        and hasattr(core, "_kv_migration")
+                        and core._kv_migration is not None
+                    ):
                         mig_stats = core._kv_migration.get_stats()
-                        pm.set_counter("kv_migrations_total", mig_stats.get("total_migrations", 0), labels=ml)
-                        pm.set_counter("kv_migration_errors_total", mig_stats.get("failed_migrations", 0), labels=ml)
-                        pm.set_gauge("kv_migration_pending_queue", float(mig_stats.get("pending_queue_size", 0)), labels=ml)
-                        pm.set_gauge("kv_migration_tracked_blocks", float(mig_stats.get("tracked_blocks", 0)), labels=ml)
+                        pm.set_counter(
+                            "kv_migrations_total",
+                            mig_stats.get("total_migrations", 0),
+                            labels=ml,
+                        )
+                        pm.set_counter(
+                            "kv_migration_errors_total",
+                            mig_stats.get("failed_migrations", 0),
+                            labels=ml,
+                        )
+                        pm.set_gauge(
+                            "kv_migration_pending_queue",
+                            float(mig_stats.get("pending_queue_size", 0)),
+                            labels=ml,
+                        )
+                        pm.set_gauge(
+                            "kv_migration_tracked_blocks",
+                            float(mig_stats.get("tracked_blocks", 0)),
+                            labels=ml,
+                        )
                 except Exception:
                     logger.debug("KV migration gauge population failed", exc_info=True)
     else:
         # Single-model mode: refresh gauges from the default engine
         engine = get_engine()
         if isinstance(engine, BatchedEngine):
-            mid = getattr(engine, 'model_name', 'default')
+            mid = getattr(engine, "model_name", "default")
             ml = {"model_id": mid}
 
             # N-gram spec decode stats
-            ngram_stats = getattr(engine, '_ngram_stats', {})
-            pm.set_counter("spec_ngram_proposals", ngram_stats.get("proposals", 0), labels=ml)
-            pm.set_counter("spec_ngram_accepted", ngram_stats.get("accepted", 0), labels=ml)
-            pm.set_counter("spec_ngram_draft", ngram_stats.get("total_draft", 0), labels=ml)
-            spec_enabled = getattr(engine, '_spec_enabled', False)
-            ngram_proposer = getattr(engine, '_ngram_proposer', None)
-            pm.set_gauge("spec_enabled",
-                1 if (spec_enabled or ngram_proposer is not None) else 0, labels=ml)
+            ngram_stats = getattr(engine, "_ngram_stats", {})
+            pm.set_counter(
+                "spec_ngram_proposals", ngram_stats.get("proposals", 0), labels=ml
+            )
+            pm.set_counter(
+                "spec_ngram_accepted", ngram_stats.get("accepted", 0), labels=ml
+            )
+            pm.set_counter(
+                "spec_ngram_draft", ngram_stats.get("total_draft", 0), labels=ml
+            )
+            spec_enabled = getattr(engine, "_spec_enabled", False)
+            ngram_proposer = getattr(engine, "_ngram_proposer", None)
+            pm.set_gauge(
+                "spec_enabled",
+                1 if (spec_enabled or ngram_proposer is not None) else 0,
+                labels=ml,
+            )
 
             # Cross-model speculative decoder stats
-            spec_decoder = getattr(engine, '_spec_decoder', None)
+            spec_decoder = getattr(engine, "_spec_decoder", None)
             if spec_decoder is not None:
                 sd_stats = spec_decoder.get_stats()
-                pm.set_counter("spec_draft_tokens", sd_stats.get("total_draft_tokens", 0), labels=ml)
-                pm.set_counter("spec_accepted_tokens", sd_stats.get("total_accepted_tokens", 0), labels=ml)
-                pm.set_gauge("spec_acceptance_rate", sd_stats.get("acceptance_rate", 0.0), labels=ml)
-                pm.set_counter("spec_bonus_tokens", sd_stats.get("total_bonus_tokens", 0), labels=ml)
-                pm.set_gauge("spec_effective_speedup", sd_stats.get("effective_speedup", 0.0), labels=ml)
+                pm.set_counter(
+                    "spec_draft_tokens",
+                    sd_stats.get("total_draft_tokens", 0),
+                    labels=ml,
+                )
+                pm.set_counter(
+                    "spec_accepted_tokens",
+                    sd_stats.get("total_accepted_tokens", 0),
+                    labels=ml,
+                )
+                pm.set_gauge(
+                    "spec_acceptance_rate",
+                    sd_stats.get("acceptance_rate", 0.0),
+                    labels=ml,
+                )
+                pm.set_counter(
+                    "spec_bonus_tokens",
+                    sd_stats.get("total_bonus_tokens", 0),
+                    labels=ml,
+                )
+                pm.set_gauge(
+                    "spec_effective_speedup",
+                    sd_stats.get("effective_speedup", 0.0),
+                    labels=ml,
+                )
             else:
                 pm.set_counter("spec_draft_tokens", 0, labels=ml)
                 pm.set_counter("spec_accepted_tokens", 0, labels=ml)
@@ -563,14 +773,17 @@ async def prometheus_export(request: Request) -> str:
                 pm.set_gauge("spec_effective_speedup", 0.0, labels=ml)
 
             # MTP speculative decoding stats
-            mtp_decoder = getattr(engine, '_mtp_decoder', None)
-            if mtp_decoder is not None and hasattr(mtp_decoder, 'stats'):
+            mtp_decoder = getattr(engine, "_mtp_decoder", None)
+            if mtp_decoder is not None and hasattr(mtp_decoder, "stats"):
                 ms = mtp_decoder.stats
                 mtp_total = ms.accepts + ms.rejects
                 pm.set_counter("spec_mtp_accepts", ms.accepts, labels=ml)
                 pm.set_counter("spec_mtp_rejects", ms.rejects, labels=ml)
-                pm.set_gauge("spec_mtp_acceptance_rate",
-                    ms.accepts / mtp_total if mtp_total > 0 else 0.0, labels=ml)
+                pm.set_gauge(
+                    "spec_mtp_acceptance_rate",
+                    ms.accepts / mtp_total if mtp_total > 0 else 0.0,
+                    labels=ml,
+                )
             else:
                 pm.set_counter("spec_mtp_accepts", 0, labels=ml)
                 pm.set_counter("spec_mtp_rejects", 0, labels=ml)
@@ -578,51 +791,117 @@ async def prometheus_export(request: Request) -> str:
 
             # Scheduler gauges
             try:
-                core = getattr(engine, '_engine_core', None)
+                core = getattr(engine, "_engine_core", None)
                 if core is not None:
-                    pm.set_gauge("scheduler_waiting_queue_depth", getattr(core, '_last_queue_depth', 0), labels=ml)
-                    pm.set_gauge("scheduler_batch_size", getattr(core, '_last_batch_size', 0), labels=ml)
-                    pm.set_gauge("compute_utilization_pct",
-                        core.get_compute_utilization() if hasattr(core, 'get_compute_utilization') else 0, labels=ml)
-                    pm.set_gauge("step_duration_ms", getattr(core, '_last_step_wall_ms', 0.0), labels=ml)
+                    pm.set_gauge(
+                        "scheduler_waiting_queue_depth",
+                        getattr(core, "_last_queue_depth", 0),
+                        labels=ml,
+                    )
+                    pm.set_gauge(
+                        "scheduler_batch_size",
+                        getattr(core, "_last_batch_size", 0),
+                        labels=ml,
+                    )
+                    pm.set_gauge(
+                        "compute_utilization_pct",
+                        core.get_compute_utilization()
+                        if hasattr(core, "get_compute_utilization")
+                        else 0,
+                        labels=ml,
+                    )
+                    pm.set_gauge(
+                        "step_duration_ms",
+                        getattr(core, "_last_step_wall_ms", 0.0),
+                        labels=ml,
+                    )
             except Exception:
-                logger.debug("single-engine scheduler gauge population failed", exc_info=True)
+                logger.debug(
+                    "single-engine scheduler gauge population failed", exc_info=True
+                )
 
             # KV cache, RadixTree, ITL stats (same as multi-model path)
             try:
                 kv_stats = engine.get_kv_cache_stats()
                 paged = kv_stats.get("paged_kv", {})
                 if paged.get("enabled"):
-                    pm.set_gauge("kv_cache_blocks_used", paged.get("used_blocks", 0), labels=ml)
-                    pm.set_gauge("kv_cache_blocks_total", paged.get("total_blocks", 0), labels=ml)
+                    pm.set_gauge(
+                        "kv_cache_blocks_used", paged.get("used_blocks", 0), labels=ml
+                    )
+                    pm.set_gauge(
+                        "kv_cache_blocks_total", paged.get("total_blocks", 0), labels=ml
+                    )
                 prefix = kv_stats.get("prefix_cache", {})
                 if prefix:
-                    pm.set_gauge("kv_prefix_cache_entries", prefix.get("entries", 0), labels=ml)
-                    pm.set_counter("kv_prefix_cache_hits", prefix.get("hits", 0), labels=ml)
-                    pm.set_counter("kv_prefix_cache_misses", prefix.get("misses", 0), labels=ml)
-                    pm.set_counter("kv_prefix_cache_hash_collisions", prefix.get("hash_collisions", 0), labels=ml)
+                    pm.set_gauge(
+                        "kv_prefix_cache_entries", prefix.get("entries", 0), labels=ml
+                    )
+                    pm.set_counter(
+                        "kv_prefix_cache_hits", prefix.get("hits", 0), labels=ml
+                    )
+                    pm.set_counter(
+                        "kv_prefix_cache_misses", prefix.get("misses", 0), labels=ml
+                    )
+                    pm.set_counter(
+                        "kv_prefix_cache_hash_collisions",
+                        prefix.get("hash_collisions", 0),
+                        labels=ml,
+                    )
             except Exception:
-                logger.debug("single-engine KV cache gauge population failed", exc_info=True)
+                logger.debug(
+                    "single-engine KV cache gauge population failed", exc_info=True
+                )
 
             try:
                 radix_stats = engine.get_radix_tree_stats()
                 if radix_stats.get("enabled"):
-                    pm.set_gauge("radix_total_nodes", radix_stats.get("total_nodes", 0), labels=ml)
-                    pm.set_gauge("radix_total_tokens", radix_stats.get("total_tokens", 0), labels=ml)
+                    pm.set_gauge(
+                        "radix_total_nodes",
+                        radix_stats.get("total_nodes", 0),
+                        labels=ml,
+                    )
+                    pm.set_gauge(
+                        "radix_total_tokens",
+                        radix_stats.get("total_tokens", 0),
+                        labels=ml,
+                    )
                     ev = radix_stats.get("eviction_stats", {})
                     pm.set_counter("radix_evictions_lru", ev.get("lru", 0), labels=ml)
                     pm.set_counter("radix_evictions_lfu", ev.get("lfu", 0), labels=ml)
                     pm.set_counter("radix_evictions_fifo", ev.get("fifo", 0), labels=ml)
-                    pm.set_counter("radix_evictions_freed_blocks", ev.get("total_freed_blocks", 0), labels=ml)
-                    pm.set_gauge("radix_tree_blocks", radix_stats.get("total_blocks", 0), labels=ml)
-                    pm.set_gauge("radix_tree_match_rate", radix_stats.get("match_rate", 0.0), labels=ml)
-                    pm.set_counter("radix_tree_match_total", radix_stats.get("match_total", 0), labels=ml)
-                    pm.set_counter("radix_tree_match_hits", radix_stats.get("match_hits", 0), labels=ml)
+                    pm.set_counter(
+                        "radix_evictions_freed_blocks",
+                        ev.get("total_freed_blocks", 0),
+                        labels=ml,
+                    )
+                    pm.set_gauge(
+                        "radix_tree_blocks",
+                        radix_stats.get("total_blocks", 0),
+                        labels=ml,
+                    )
+                    pm.set_gauge(
+                        "radix_tree_match_rate",
+                        radix_stats.get("match_rate", 0.0),
+                        labels=ml,
+                    )
+                    pm.set_counter(
+                        "radix_tree_match_total",
+                        radix_stats.get("match_total", 0),
+                        labels=ml,
+                    )
+                    pm.set_counter(
+                        "radix_tree_match_hits",
+                        radix_stats.get("match_hits", 0),
+                        labels=ml,
+                    )
             except Exception:
-                logger.debug("single-engine RadixTree gauge population failed", exc_info=True)
+                logger.debug(
+                    "single-engine RadixTree gauge population failed", exc_info=True
+                )
 
             try:
                 from yunshu_engine.server_metrics import get_server_metrics
+
                 sm = get_server_metrics()
                 itl = sm.get_itl_stats()
                 pm.set_gauge("itl_p50_ms", itl.get("itl_p50_ms", 0), labels=ml)
@@ -631,13 +910,20 @@ async def prometheus_export(request: Request) -> str:
                 logger.debug("single-engine ITL gauge population failed", exc_info=True)
 
             try:
-                s = engine.get_stats() if hasattr(engine, 'get_stats') else {}
+                s = engine.get_stats() if hasattr(engine, "get_stats") else {}
                 rc = s.get("response_cache")
                 if rc:
-                    pm.set_counter("response_cache_hits_total", rc.get("hits", 0), labels=ml)
-                    pm.set_counter("response_cache_misses_total", rc.get("misses", 0), labels=ml)
+                    pm.set_counter(
+                        "response_cache_hits_total", rc.get("hits", 0), labels=ml
+                    )
+                    pm.set_counter(
+                        "response_cache_misses_total", rc.get("misses", 0), labels=ml
+                    )
             except Exception:
-                logger.debug("single-engine response cache gauge population failed", exc_info=True)
+                logger.debug(
+                    "single-engine response cache gauge population failed",
+                    exc_info=True,
+                )
 
     return pm.generate()
 
@@ -654,18 +940,25 @@ async def kv_cache_stats(request: Request) -> dict[str, Any]:
     manager = get_model_manager()
     if manager is not None:
         for entry in manager.list_entries():
-            if entry.is_loaded and isinstance(getattr(entry, 'engine', None), BatchedEngine):
+            if entry.is_loaded and isinstance(
+                getattr(entry, "engine", None), BatchedEngine
+            ):
                 try:
                     stats = entry.engine.get_kv_cache_stats()
                     caches.append({"model_id": entry.model_id, **stats})
                 except Exception:
-                    logger.debug(f"kv cache stats unavailable for {entry.model_id}", exc_info=True)
+                    logger.debug(
+                        f"kv cache stats unavailable for {entry.model_id}",
+                        exc_info=True,
+                    )
                     caches.append({"model_id": entry.model_id, "error": "unavailable"})
     else:
         engine = get_engine()
         if engine and isinstance(engine, BatchedEngine):
             try:
-                caches.append({"model_id": engine.model_name, **engine.get_kv_cache_stats()})
+                caches.append(
+                    {"model_id": engine.model_name, **engine.get_kv_cache_stats()}
+                )
             except Exception:
                 logger.debug("kv cache stats unavailable", exc_info=True)
     return {"caches": caches}
@@ -680,9 +973,9 @@ async def spec_decode_stats(request: Request) -> dict[str, Any]:
     from ..engine import get_engine, get_model_manager
 
     def _spec_info(model_id: str, engine: BatchedEngine) -> dict:
-        decoder = getattr(engine, '_spec_decoder', None)
-        ngram = getattr(engine, '_ngram_proposer', None)
-        mtp = getattr(engine, '_mtp_decoder', None)
+        decoder = getattr(engine, "_spec_decoder", None)
+        ngram = getattr(engine, "_ngram_proposer", None)
+        mtp = getattr(engine, "_mtp_decoder", None)
         info = {
             "model_id": model_id,
             "spec_enabled": engine._spec_enabled,
@@ -690,10 +983,10 @@ async def spec_decode_stats(request: Request) -> dict[str, Any]:
             "mtp_enabled": mtp is not None,
         }
         if decoder is not None:
-            info["spec_stats"] = getattr(decoder, '_stats', {})
+            info["spec_stats"] = getattr(decoder, "_stats", {})
         if ngram is not None:
-            info["ngram_stats"] = getattr(engine, '_ngram_stats', {})
-        if mtp is not None and hasattr(mtp, 'stats'):
+            info["ngram_stats"] = getattr(engine, "_ngram_stats", {})
+        if mtp is not None and hasattr(mtp, "stats"):
             s = mtp.stats
             info["mtp_stats"] = {
                 "accepts": s.accepts,
@@ -705,7 +998,7 @@ async def spec_decode_stats(request: Request) -> dict[str, Any]:
                     s.accepts / s.total_cycles if s.total_cycles > 0 else 0.0
                 ),
             }
-        adaptive_spec = getattr(engine, '_adaptive_spec', None)
+        adaptive_spec = getattr(engine, "_adaptive_spec", None)
         if adaptive_spec is not None:
             info["adaptive_spec"] = adaptive_spec.get_stats()
         return info
@@ -714,7 +1007,9 @@ async def spec_decode_stats(request: Request) -> dict[str, Any]:
     manager = get_model_manager()
     if manager is not None:
         for entry in manager.list_entries():
-            if entry.is_loaded and isinstance(getattr(entry, 'engine', None), BatchedEngine):
+            if entry.is_loaded and isinstance(
+                getattr(entry, "engine", None), BatchedEngine
+            ):
                 results.append(_spec_info(entry.model_id, entry.engine))
     else:
         # Single-model mode: no manager; fall back to the lone engine.
@@ -736,7 +1031,9 @@ async def radix_tree_stats(request: Request) -> dict[str, Any]:
     manager = get_model_manager()
     if manager is not None:
         for entry in manager.list_entries():
-            if entry.is_loaded and isinstance(getattr(entry, 'engine', None), BatchedEngine):
+            if entry.is_loaded and isinstance(
+                getattr(entry, "engine", None), BatchedEngine
+            ):
                 try:
                     stats = entry.engine.get_radix_tree_stats()
                     results.append({"model_id": entry.model_id, **stats})
@@ -749,7 +1046,9 @@ async def radix_tree_stats(request: Request) -> dict[str, Any]:
         engine = get_engine()
         if engine and isinstance(engine, BatchedEngine):
             try:
-                results.append({"model_id": engine.model_name, **engine.get_radix_tree_stats()})
+                results.append(
+                    {"model_id": engine.model_name, **engine.get_radix_tree_stats()}
+                )
             except Exception:
                 logger.debug("radix tree stats unavailable", exc_info=True)
     return {"models": results}
@@ -760,6 +1059,7 @@ async def prefill_progress(request: Request) -> dict[str, Any]:
     """Prefill progress tracking."""
     _check_permission(request)
     from yunshu_engine.prefill_progress import get_prefill_tracker
+
     tracker = get_prefill_tracker()
     if tracker is None or tracker.active_count == 0:
         return {"active": False}
@@ -775,17 +1075,19 @@ async def memory_guard_stats(request: Request) -> dict[str, Any]:
     engines = _collect_engines(get_engine(), get_model_manager())
     results = []
     for model_id, engine in engines:
-        guard = getattr(engine, '_memory_guard', None)
+        guard = getattr(engine, "_memory_guard", None)
         if guard is None:
-            core = getattr(engine, '_engine_core', None)
+            core = getattr(engine, "_engine_core", None)
             if core:
-                guard = getattr(core, '_memory_guard', None)
+                guard = getattr(core, "_memory_guard", None)
         if guard is not None:
-            guard_stats = guard.get_stats() if hasattr(guard, 'get_stats') else {}
-            results.append({
-                "model_id": model_id,
-                **guard_stats,
-            })
+            guard_stats = guard.get_stats() if hasattr(guard, "get_stats") else {}
+            results.append(
+                {
+                    "model_id": model_id,
+                    **guard_stats,
+                }
+            )
     if not results:
         return {"active": False}
     return {"active": True, "models": results}
@@ -802,19 +1104,19 @@ async def ssd_cache_stats(request: Request) -> dict[str, Any]:
     for model_id, engine in engines:
         ssd = None
         # Fast-path prefix-cache SSD store.
-        cache = getattr(engine, '_kv_prefix_cache', None)
+        cache = getattr(engine, "_kv_prefix_cache", None)
         if cache is not None:
-            ssd = getattr(cache, '_ssd_store', None)
+            ssd = getattr(cache, "_ssd_store", None)
         # Under the continuous-batching loop the SSD tier lives on the
         # TieredKVCacheManager (engine_core._kv_manager.ssd), NOT on the
         # fast-path prefix cache — the endpoint reported active:false while the
         # 4-tier SSD cache was actively persisting blocks. Also check there.
         if ssd is None:
-            core = getattr(engine, '_engine_core', None)
-            kvm = getattr(core, '_kv_manager', None) if core is not None else None
-            ssd = getattr(kvm, 'ssd', None)
+            core = getattr(engine, "_engine_core", None)
+            kvm = getattr(core, "_kv_manager", None) if core is not None else None
+            ssd = getattr(kvm, "ssd", None)
         if ssd is not None:
-            stats: dict = getattr(ssd, 'get_stats', lambda: {})()
+            stats: dict = getattr(ssd, "get_stats", lambda: {})()
             results.append({"model_id": model_id, **stats})
     if not results:
         return {"active": False}
@@ -837,6 +1139,7 @@ async def per_model_stats(request: Request) -> dict[str, Any]:
     _check_permission(request)
     try:
         from yunshu_engine.server_metrics import get_server_metrics
+
         metrics = get_server_metrics()
         model_ids = metrics.get_model_ids()
         result = {}
@@ -858,7 +1161,7 @@ async def thinking_segment_stats(request: Request) -> dict[str, Any]:
     engines = _collect_engines(get_engine(), get_model_manager())
     results = []
     for model_id, engine in engines:
-        store = getattr(engine, '_thinking_store', None)
+        store = getattr(engine, "_thinking_store", None)
         if store is not None:
             results.append({"model_id": model_id, **store.get_stats()})
     if not results:
@@ -876,6 +1179,7 @@ async def ane_embedding_stats(request: Request) -> dict[str, Any]:
     _check_permission(request)
     try:
         from yunshu_engine.ane_embedding import get_ane_embedding_stats
+
         return get_ane_embedding_stats()
     except Exception:
         logger.debug("ane_embedding module unavailable", exc_info=True)
@@ -893,6 +1197,7 @@ async def external_prefill_stats(request: Request) -> dict[str, Any]:
     _check_permission(request)
     try:
         from yunshu_engine.external_prefill import get_external_prefill_stats
+
         return get_external_prefill_stats()
     except Exception:
         logger.debug("external_prefill module unavailable", exc_info=True)
@@ -910,6 +1215,7 @@ async def health_dashboard(request: Request) -> dict[str, Any]:
     _check_permission(request)
     try:
         from yunshu_engine.tracing import get_health_dashboard
+
         dashboard = get_health_dashboard()
         if dashboard is None:
             return {"enabled": False, "reason": "health dashboard not initialized"}
@@ -928,32 +1234,42 @@ async def reasoning_tokens_stats(request: Request) -> dict[str, Any]:
     """
     _check_permission(request)
     from ..engine import get_engine, get_model_manager
+
     stats: dict = {"engines": []}
     total_reasoning = 0
 
     manager = get_model_manager()
     if manager is not None:
         for entry in manager.list_entries():
-            if entry.is_loaded and entry.engine and hasattr(entry.engine, 'get_stats'):
+            if entry.is_loaded and entry.engine and hasattr(entry.engine, "get_stats"):
                 s = entry.engine.get_stats()
                 rt = s.get("reasoning_tokens", 0)
                 if rt > 0:
                     total_reasoning += rt
-                    stats["engines"].append({
-                        "model_id": entry.model_id,
-                        "reasoning_tokens": rt,
-                    })
+                    stats["engines"].append(
+                        {
+                            "model_id": entry.model_id,
+                            "reasoning_tokens": rt,
+                        }
+                    )
     else:
         engine = get_engine()
-        if engine and hasattr(engine, 'is_loaded') and engine.is_loaded and hasattr(engine, 'get_stats'):
+        if (
+            engine
+            and hasattr(engine, "is_loaded")
+            and engine.is_loaded
+            and hasattr(engine, "get_stats")
+        ):
             s = engine.get_stats()
             rt = s.get("reasoning_tokens", 0)
             if rt > 0:
                 total_reasoning += rt
-                stats["engines"].append({
-                    "model_id": getattr(engine, 'model_name', 'default'),
-                    "reasoning_tokens": rt,
-                })
+                stats["engines"].append(
+                    {
+                        "model_id": getattr(engine, "model_name", "default"),
+                        "reasoning_tokens": rt,
+                    }
+                )
 
     stats["total_reasoning_tokens"] = total_reasoning
     return stats
@@ -968,23 +1284,27 @@ async def response_cache_stats(request: Request) -> dict[str, Any]:
     """
     _check_permission(request)
     from ..engine import get_model_manager
+
     stats: dict = {"engines": []}
 
     manager = get_model_manager()
     if manager is not None:
         for entry in manager.list_entries():
-            if entry.is_loaded and entry.engine and hasattr(entry.engine, 'get_stats'):
+            if entry.is_loaded and entry.engine and hasattr(entry.engine, "get_stats"):
                 s = entry.engine.get_stats()
                 rc = s.get("response_cache")
                 if rc and (rc.get("hits", 0) > 0 or rc.get("misses", 0) > 0):
-                    stats["engines"].append({
-                        "model_id": entry.model_id,
-                        "response_cache": rc,
-                    })
+                    stats["engines"].append(
+                        {
+                            "model_id": entry.model_id,
+                            "response_cache": rc,
+                        }
+                    )
 
     # Underlying cache module stats
     try:
         from yunshu_engine.gateway_optimizer import get_response_cache
+
         cache = get_response_cache()
         stats["cache_module"] = cache.get_stats()
     except Exception:
@@ -1004,6 +1324,7 @@ async def inflight_prefix_sharing_stats(request: Request) -> dict[str, Any]:
     _check_permission(request)
     try:
         from yunshu_engine.inflight_prefix_sharing import get_inflight_tracker
+
         return get_inflight_tracker().get_stats()
     except Exception:
         logger.debug("operation failed", exc_info=True)
@@ -1020,6 +1341,7 @@ async def request_coalescer_stats(request: Request) -> dict[str, Any]:
     _check_permission(request)
     try:
         from yunshu_engine.gateway_optimizer import get_request_coalescer
+
         coalescer = get_request_coalescer()
         return coalescer.get_stats()
     except Exception:
@@ -1040,22 +1362,26 @@ async def token_scheduler_stats(request: Request) -> dict[str, Any]:
         engine = None
         try:
             from ..engine import get_engine
+
             engine = get_engine()
         except Exception:
             pass
-        if engine is not None and hasattr(engine, '_engine_core'):
+        if engine is not None and hasattr(engine, "_engine_core"):
             core = engine._engine_core
             if core is not None:
                 result = {}
-                if hasattr(core, '_token_scheduler'):
+                if hasattr(core, "_token_scheduler"):
                     result["token_scheduler"] = core._token_scheduler.get_stats()
-                if hasattr(core, '_priority_guard'):
+                if hasattr(core, "_priority_guard"):
                     result["priority_inversion"] = core._priority_guard.get_stats()
-                if hasattr(core, '_fairness_tracker'):
+                if hasattr(core, "_fairness_tracker"):
                     result["fairness"] = core._fairness_tracker.get_stats()
                 if result:
                     return result
-                return {"enabled": False, "reason": "scheduler components not initialized"}
+                return {
+                    "enabled": False,
+                    "reason": "scheduler components not initialized",
+                }
         return {"enabled": False, "reason": "engine_core not active"}
     except Exception:
         logger.debug("operation failed", exc_info=True)
@@ -1074,12 +1400,13 @@ async def kv_migration_stats(request: Request) -> dict[str, Any]:
         engine = None
         try:
             from ..engine import get_engine
+
             engine = get_engine()
         except Exception:
             pass
-        if engine is not None and hasattr(engine, '_engine_core'):
+        if engine is not None and hasattr(engine, "_engine_core"):
             core = engine._engine_core
-            if core is not None and hasattr(core, '_kv_migration'):
+            if core is not None and hasattr(core, "_kv_migration"):
                 return core._kv_migration.get_stats()
         return {"enabled": False, "reason": "engine_core not active"}
     except Exception:
@@ -1099,9 +1426,9 @@ async def attention_eviction_stats(request: Request) -> dict[str, Any]:
         engines = _collect_engines_from_globals()
         results = []
         for model_id, engine in engines:
-            if hasattr(engine, '_engine_core') and engine._engine_core is not None:
+            if hasattr(engine, "_engine_core") and engine._engine_core is not None:
                 scheduler = engine._engine_core.scheduler
-                tracker = getattr(scheduler, '_attention_score_tracker', None)
+                tracker = getattr(scheduler, "_attention_score_tracker", None)
                 if tracker is not None:
                     results.append({"model_id": model_id, **tracker.get_stats()})
                 else:
@@ -1123,6 +1450,7 @@ async def batch_size_stats(request: Request) -> dict[str, Any]:
     _check_permission(request)
     try:
         from yunshu_engine.server_metrics import get_server_metrics
+
         sm = get_server_metrics()
         return sm.get_batch_size_stats()
     except Exception:
@@ -1174,23 +1502,23 @@ async def memory_pressure_stats(request: Request) -> dict[str, Any]:
         entry: dict[str, Any] = {"model_id": model_id}
 
         # MemoryGuard (admission control)
-        guard = getattr(engine, '_memory_guard', None)
+        guard = getattr(engine, "_memory_guard", None)
         if guard is None:
-            core = getattr(engine, '_engine_core', None)
+            core = getattr(engine, "_engine_core", None)
             if core:
-                guard = getattr(core, '_memory_guard', None)
+                guard = getattr(core, "_memory_guard", None)
         if guard is not None:
-            entry["guard"] = guard.get_stats() if hasattr(guard, 'get_stats') else {}
+            entry["guard"] = guard.get_stats() if hasattr(guard, "get_stats") else {}
 
         # MemoryAwareScheduler stats (memory-pressure-driven scheduling)
-        core = getattr(engine, '_engine_core', None)
+        core = getattr(engine, "_engine_core", None)
         if core is not None:
-            mas = getattr(core, '_memory_aware_scheduler', None)
-            if mas is not None and hasattr(mas, 'get_stats'):
+            mas = getattr(core, "_memory_aware_scheduler", None)
+            if mas is not None and hasattr(mas, "get_stats"):
                 entry["memory_aware_scheduler"] = mas.get_stats().__dict__
 
         # KV prefix compression stats (memory savings)
-        if hasattr(engine, 'get_stats'):
+        if hasattr(engine, "get_stats"):
             stats = engine.get_stats()
             if "kv_prefix_compression" in stats:
                 entry["kv_compression"] = stats["kv_prefix_compression"]

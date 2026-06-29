@@ -2,6 +2,7 @@
 _evict_if_full can skip entries the block-evict checker pinned and still evict the
 NEXT-best victim. Previously a deterministic strategy kept returning the same pinned
 oldest entry, so eviction gave up after one entry and the cache stayed over capacity."""
+
 from __future__ import annotations
 
 from yunshu_engine.kv_prefix_cache import (

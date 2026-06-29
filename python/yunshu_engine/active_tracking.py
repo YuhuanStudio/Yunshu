@@ -20,6 +20,7 @@ model could be torn down mid-generation (the crash the fail-safe prevents). Deco
 method that internally calls another decorated method is fine: the count just rises
 to 2 and falls back symmetrically; has_active_requests only tests > 0.
 """
+
 from __future__ import annotations
 
 import functools

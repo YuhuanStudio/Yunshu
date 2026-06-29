@@ -29,6 +29,7 @@ class TestLoadModelSettingsAdaptive:
 
     def test_json_overrides_adaptive(self, tmp_path, monkeypatch):
         import json
+
         monkeypatch.delenv("YUNSHU_ADAPTIVE_DEFAULTS", raising=False)
         (tmp_path / "model_settings.json").write_text(json.dumps({"batch_size": 99}))
         settings = load_model_settings(str(tmp_path), "test-model", use_adaptive=True)

@@ -116,6 +116,7 @@ class KVCacheManager:
         self._warm_tier: KVWarmTier | None = KVWarmTier(KVTierConfig())
         # RadixTree for prefix sharing (C8)
         from .radix_attention import RadixTree
+
         self._radix_tree = RadixTree(block_size=config.block_size)
         self._request_nodes: dict[str, Any] = {}  # request_id → RadixNode
         # Thread safety: protects all manager-level mutations involving
@@ -184,7 +185,9 @@ class KVCacheManager:
             (BlockTable for the request, PrefixMatch describing cache hit)
         """
         with self._lock:
-            return self._allocate_for_prefill_unlocked(token_ids, model_hash, request_id)
+            return self._allocate_for_prefill_unlocked(
+                token_ids, model_hash, request_id
+            )
 
     def _allocate_for_prefill_unlocked(
         self,
@@ -205,7 +208,8 @@ class KVCacheManager:
             # _build_table_from_match are safe.
             with self.block_pool._lock:
                 valid_blocks = [
-                    b for b in matched_blocks
+                    b
+                    for b in matched_blocks
                     if b.ref_count > 0
                     or (b.block_hash is not None and not b.cache_only)
                 ]
@@ -215,7 +219,8 @@ class KVCacheManager:
                 logger.debug(
                     "RadixTree match returned %d blocks but only %d are still valid; "
                     "falling back to hash-chain lookup",
-                    len(matched_blocks), len(valid_blocks),
+                    len(matched_blocks),
+                    len(valid_blocks),
                 )
             elif num_matched_tokens >= self.config.block_size:
                 # RadixTree hit: reuse matched blocks
@@ -232,7 +237,9 @@ class KVCacheManager:
                         self._radix_tree.dec_ref(old_node)
                     self._request_nodes[request_id] = matched_node
                 return self._build_table_from_match(
-                    matched_blocks, num_matched_tokens, token_ids,
+                    matched_blocks,
+                    num_matched_tokens,
+                    token_ids,
                 )
 
         # 1. Compute block hashes for the prompt
@@ -279,15 +286,20 @@ class KVCacheManager:
                     try:
                         if self._key_cache is not None:
                             import mlx.core as mx
+
                             if promoted.ndim == 4 and promoted.shape[0] == 2:
                                 if isinstance(self._key_cache, mx.array):
                                     self._key_cache[new_block.block_id] = promoted[0]
                                     if self._value_cache is not None:
-                                        self._value_cache[new_block.block_id] = promoted[1]
+                                        self._value_cache[new_block.block_id] = (
+                                            promoted[1]
+                                        )
                                 else:
                                     self._key_cache[new_block.block_id] = promoted[0]
                                     if self._value_cache is not None:
-                                        self._value_cache[new_block.block_id] = promoted[1]
+                                        self._value_cache[new_block.block_id] = (
+                                            promoted[1]
+                                        )
                             else:
                                 if isinstance(self._key_cache, mx.array):
                                     self._key_cache[new_block.block_id] = promoted
@@ -296,7 +308,8 @@ class KVCacheManager:
                     except Exception:
                         logger.debug(
                             "warm tier KV data write failed for block %d",
-                            new_block.block_id, exc_info=True,
+                            new_block.block_id,
+                            exc_info=True,
                         )
                         # Evict from prefix cache BEFORE freeing to prevent
                         # lookup_hash() from returning a freed block that
@@ -330,7 +343,9 @@ class KVCacheManager:
 
         # 4. Allocate new blocks for the unmatched portion
         remaining_tokens = token_ids[num_matched_tokens:]
-        num_new_blocks = (len(remaining_tokens) + self.config.block_size - 1) // self.config.block_size
+        num_new_blocks = (
+            len(remaining_tokens) + self.config.block_size - 1
+        ) // self.config.block_size
 
         new_blocks = []
         if num_new_blocks > 0:
@@ -443,9 +458,13 @@ class KVCacheManager:
             if blocks:
                 last = blocks[-1]
                 if last.ref_count > 1:
-                    _, self._key_cache, self._value_cache = self.block_pool.cow_block_in_table(
-                        table, len(blocks) - 1,
-                        self._key_cache, self._value_cache,
+                    _, self._key_cache, self._value_cache = (
+                        self.block_pool.cow_block_in_table(
+                            table,
+                            len(blocks) - 1,
+                            self._key_cache,
+                            self._value_cache,
+                        )
                     )
 
             block = self.block_pool.allocate(1)[0]
@@ -527,7 +546,8 @@ class KVCacheManager:
         if len(blocks) != len(block_hashes):
             logger.warning(
                 "cache_to_radix_tree: blocks(%d) != block_hashes(%d), skipping",
-                len(blocks), len(block_hashes),
+                len(blocks),
+                len(block_hashes),
             )
             return
 
@@ -558,8 +578,8 @@ class KVCacheManager:
                 start_node=matched_node if not matched_node.is_root else None,
             )
             # Free old blocks from exact-match replacements in the radix tree
-            if matched_node is not None and hasattr(matched_node, '_replaced_blocks'):
-                _radix_lock = getattr(self._radix_tree, '_lock', None)
+            if matched_node is not None and hasattr(matched_node, "_replaced_blocks"):
+                _radix_lock = getattr(self._radix_tree, "_lock", None)
                 if _radix_lock is not None:
                     with _radix_lock:
                         replaced = list(matched_node._replaced_blocks)
@@ -589,11 +609,13 @@ class KVCacheManager:
             # Publish request_freed event for distributed cache coherency.
             if request_id is not None:
                 block_ids = [b.block_id for b in blocks]
-                self._event_bus.publish(CacheEvent(
-                    "request_freed",
-                    block_ids=block_ids,
-                    node_id=request_id,
-                ))
+                self._event_bus.publish(
+                    CacheEvent(
+                        "request_freed",
+                        block_ids=block_ids,
+                        node_id=request_id,
+                    )
+                )
 
     def evict_for_memory(self, needed_blocks: int) -> bool:
         """Try to evict cached blocks to free up space.
@@ -642,17 +664,26 @@ class KVCacheManager:
                 try:
                     block_idx = block.block_id
                     key_slice = self._key_cache[block_idx]
-                    val_slice = self._value_cache[block_idx] if self._value_cache is not None else None
+                    val_slice = (
+                        self._value_cache[block_idx]
+                        if self._value_cache is not None
+                        else None
+                    )
                     # Pack key + value into a single array for warm storage.
                     # On promotion, the caller must split them back.
                     import mlx.core as mx
+
                     if val_slice is not None:
                         kv_packed = mx.stack([key_slice, val_slice], axis=0)
                     else:
                         kv_packed = key_slice
-                    demoted_ok = self._warm_tier.demote(block.block_hash, kv_packed, num_tokens=self.config.block_size)
+                    demoted_ok = self._warm_tier.demote(
+                        block.block_hash, kv_packed, num_tokens=self.config.block_size
+                    )
                 except Exception:
-                    logger.debug("warm tier demote failed in evict_for_memory", exc_info=True)
+                    logger.debug(
+                        "warm tier demote failed in evict_for_memory", exc_info=True
+                    )
 
             if not demoted_ok and self._warm_tier is not None:
                 # Demotion failed or was skipped — remove any stale warm-tier
@@ -684,14 +715,20 @@ class KVCacheManager:
         # but ref_count never decremented). Free them now.
         if freed_block_count > 0:
             leaked = self._radix_tree.evict(max(1, freed_block_count))
-            freed_ids = {b.block_id for b in cached if b.block_hash is None or b.ref_count == 0}
+            freed_ids = {
+                b.block_id for b in cached if b.block_hash is None or b.ref_count == 0
+            }
             for blk in leaked:
                 if blk.block_id in freed_ids:
                     continue
                 try:
                     self.block_pool.free([blk])
                 except Exception:
-                    logger.debug("Failed to free leaked radix block %d", blk.block_id, exc_info=True)
+                    logger.debug(
+                        "Failed to free leaked radix block %d",
+                        blk.block_id,
+                        exc_info=True,
+                    )
 
         return self.block_pool.get_free_block_count() >= needed_blocks
 
@@ -749,15 +786,25 @@ class KVCacheManager:
                 try:
                     block_idx = block.block_id
                     key_slice = self._key_cache[block_idx]
-                    val_slice = self._value_cache[block_idx] if self._value_cache is not None else None
+                    val_slice = (
+                        self._value_cache[block_idx]
+                        if self._value_cache is not None
+                        else None
+                    )
                     import mlx.core as mx
+
                     if val_slice is not None:
                         kv_packed = mx.stack([key_slice, val_slice], axis=0)
                     else:
                         kv_packed = key_slice
-                    demoted_ok = self._warm_tier.demote(block.block_hash, kv_packed, num_tokens=self.config.block_size)
+                    demoted_ok = self._warm_tier.demote(
+                        block.block_hash, kv_packed, num_tokens=self.config.block_size
+                    )
                 except Exception:
-                    logger.debug("warm tier demote failed in memory_pressure_evict", exc_info=True)
+                    logger.debug(
+                        "warm tier demote failed in memory_pressure_evict",
+                        exc_info=True,
+                    )
 
             if not demoted_ok and self._warm_tier is not None:
                 # Demotion failed or was skipped — remove any stale warm-tier
@@ -780,14 +827,20 @@ class KVCacheManager:
         # Prune stale radix tree nodes and free any leaked blocks.
         if evicted > 0:
             leaked = self._radix_tree.evict(max(1, evicted))
-            freed_ids = {b.block_id for b in cached if b.block_hash is None or b.ref_count == 0}
+            freed_ids = {
+                b.block_id for b in cached if b.block_hash is None or b.ref_count == 0
+            }
             for blk in leaked:
                 if blk.block_id in freed_ids:
                     continue
                 try:
                     self.block_pool.free([blk])
                 except Exception:
-                    logger.debug("Failed to free leaked radix block %d", blk.block_id, exc_info=True)
+                    logger.debug(
+                        "Failed to free leaked radix block %d",
+                        blk.block_id,
+                        exc_info=True,
+                    )
 
         if evicted > 0:
             logger.debug(
@@ -822,7 +875,9 @@ class KVCacheManager:
             "hit_rate": round(_hit_rate, 4),
             **self.block_pool.cow_stats,
         }
-        warm_stats = self._warm_tier.get_stats() if self._warm_tier is not None else None
+        warm_stats = (
+            self._warm_tier.get_stats() if self._warm_tier is not None else None
+        )
         return {
             "hot": hot_stats,
             "warm": warm_stats,
@@ -894,6 +949,7 @@ class KVCacheManager:
             if self._key_cache is not None and self._value_cache is not None:
                 try:
                     import mlx.core as mx
+
                     if isinstance(self._key_cache, mx.array):
                         self._key_cache[new_block.block_id] = key_data
                         self._value_cache[new_block.block_id] = value_data
@@ -924,13 +980,12 @@ class KVCacheManager:
         serializer = KVCacheSerializer()
         parts: list[bytes] = []
 
-        cached_blocks = [
-            b for b in self.block_pool.blocks if b.block_hash is not None
-        ]
+        cached_blocks = [b for b in self.block_pool.blocks if b.block_hash is not None]
         num_cached = len(cached_blocks)
 
         # Header: number of cached blocks
         import struct
+
         parts.append(struct.pack(">I", num_cached))
 
         if cached_blocks and (self._key_cache is None or self._value_cache is None):
@@ -990,7 +1045,8 @@ class KVCacheManager:
                 except ValueError:
                     logger.warning(
                         "load_cached: ran out of free blocks after loading %d/%d",
-                        loaded, num_cached,
+                        loaded,
+                        num_cached,
                     )
                     break
 
@@ -998,6 +1054,7 @@ class KVCacheManager:
                 if self._key_cache is not None and self._value_cache is not None:
                     try:
                         import mlx.core as mx
+
                         if isinstance(self._key_cache, mx.array):
                             self._key_cache[new_block.block_id] = key_data
                             self._value_cache[new_block.block_id] = value_data

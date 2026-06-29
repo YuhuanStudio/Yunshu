@@ -64,11 +64,15 @@ class EmbeddingRequest(BaseModel):
         if isinstance(self.input, str) and not self.input.strip():
             raise ValueError("input: cannot be empty or whitespace-only")
         if isinstance(self.input, str) and len(self.input) > _MAX_INPUT_TEXT_LENGTH:
-            raise ValueError(f"input: text length ({len(self.input)}) exceeds maximum ({_MAX_INPUT_TEXT_LENGTH})")
+            raise ValueError(
+                f"input: text length ({len(self.input)}) exceeds maximum ({_MAX_INPUT_TEXT_LENGTH})"
+            )
         if isinstance(self.input, list) and not self.input:
             raise ValueError("input: cannot be an empty list")
         if isinstance(self.input, list) and len(self.input) > _MAX_TOTAL_INPUTS:
-            raise ValueError(f"input: too many inputs ({len(self.input)} > {_MAX_TOTAL_INPUTS})")
+            raise ValueError(
+                f"input: too many inputs ({len(self.input)} > {_MAX_TOTAL_INPUTS})"
+            )
         # reject mixed-type lists. The handler discriminates on
         # input[0] only, so [1, "abc"] would silently mis-route to token-decode
         # and fail confusingly. Require homogeneous element types.
@@ -88,7 +92,8 @@ class EmbeddingRequest(BaseModel):
                     if len(_s) > _MAX_INPUT_TEXT_LENGTH:
                         raise ValueError(
                             f"input[{_i}]: text length ({len(_s)}) exceeds maximum "
-                            f"({_MAX_INPUT_TEXT_LENGTH})")
+                            f"({_MAX_INPUT_TEXT_LENGTH})"
+                        )
         # Validate dimensions
         if self.dimensions is not None:
             if self.dimensions <= 0:
@@ -128,7 +133,9 @@ async def _embed_and_format(req: EmbeddingRequest) -> dict:
             detail=f"encoding_format must be one of {', '.join(sorted(_VALID_ENCODING_FORMATS))}, got '{req.encoding_format}'",
         )
     if isinstance(req.input, str) and not req.input.strip():
-        raise HTTPException(status_code=422, detail="input cannot be empty or whitespace-only")
+        raise HTTPException(
+            status_code=422, detail="input cannot be empty or whitespace-only"
+        )
     if isinstance(req.input, list):
         if not req.input:
             raise HTTPException(status_code=422, detail="input cannot be an empty list")
@@ -158,14 +165,21 @@ async def _embed_and_format(req: EmbeddingRequest) -> dict:
         # else None` collapsed a missing/unknown model into a misleading 400.
         _eng = await _resolve_embedding_engine(req.model)
         if _eng is None:
-            raise HTTPException(status_code=404, detail=f"Embedding model '{req.model}' not found")
+            raise HTTPException(
+                status_code=404, detail=f"Embedding model '{req.model}' not found"
+            )
         _tok = getattr(_eng, "_tokenizer", None)
         if _tok is None:
-            raise HTTPException(status_code=400, detail="Cannot decode token-id input: model tokenizer unavailable")
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot decode token-id input: model tokenizer unavailable",
+            )
         try:
             texts = [_tok.decode(req.input)]
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Failed to decode token-id input: {e}") from None
+            raise HTTPException(
+                status_code=400, detail=f"Failed to decode token-id input: {e}"
+            ) from None
     elif isinstance(req.input, list) and req.input and isinstance(req.input[0], list):
         # Batch of token-id sequences — validate each sublist contains ints.
         for i, sub in enumerate(req.input):
@@ -182,14 +196,21 @@ async def _embed_and_format(req: EmbeddingRequest) -> dict:
                     )
         _eng = await _resolve_embedding_engine(req.model)
         if _eng is None:
-            raise HTTPException(status_code=404, detail=f"Embedding model '{req.model}' not found")
+            raise HTTPException(
+                status_code=404, detail=f"Embedding model '{req.model}' not found"
+            )
         _tok = getattr(_eng, "_tokenizer", None)
         if _tok is None:
-            raise HTTPException(status_code=400, detail="Cannot decode token-id inputs: model tokenizer unavailable")
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot decode token-id inputs: model tokenizer unavailable",
+            )
         try:
             texts = [_tok.decode(ids) for ids in req.input]
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Failed to decode token-id inputs: {e}") from None
+            raise HTTPException(
+                status_code=400, detail=f"Failed to decode token-id inputs: {e}"
+            ) from None
     else:
         # Already list[str]
         for i, t in enumerate(req.input):
@@ -227,17 +248,22 @@ async def _embed_and_format(req: EmbeddingRequest) -> dict:
 
     try:
         embeddings = await _generate_embeddings(
-            engine, texts, model_id=req.model, pooling_type=req.pooling_type,
+            engine,
+            texts,
+            model_id=req.model,
+            pooling_type=req.pooling_type,
         )
     except MemoryError:
         logger.error("Embedding generation OOM", exc_info=True)
         raise HTTPException(status_code=507, detail="Out of GPU memory") from None
     except Exception as e:
         logger.error(f"Embedding error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Embedding generation failed") from None
+        raise HTTPException(
+            status_code=500, detail="Embedding generation failed"
+        ) from None
 
     # Resolve tokenizer for token counting (shared across iterations)
-    tokenizer = getattr(engine, '_tokenizer', None) if engine else None
+    tokenizer = getattr(engine, "_tokenizer", None) if engine else None
 
     # Format response
     data = []
@@ -295,9 +321,9 @@ async def _embed_and_format(req: EmbeddingRequest) -> dict:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Requested dimensions {req.dimensions} exceeds model's "
-                           f"native embedding dimension {len(emb)}",
+                    f"native embedding dimension {len(emb)}",
                 )
-            emb = emb[:req.dimensions]
+            emb = emb[: req.dimensions]
             # Re-normalize after truncation to maintain unit vector property
             norm = math.sqrt(sum(x * x for x in emb))
             if norm > 0:
@@ -306,16 +332,19 @@ async def _embed_and_format(req: EmbeddingRequest) -> dict:
         if req.encoding_format == "base64":
             import base64
             import struct
+
             packed = struct.pack(f"{len(emb)}f", *emb)
             emb_value = base64.b64encode(packed).decode("ascii")
         else:
             emb_value = emb
 
-        data.append({
-            "object": "embedding",
-            "index": i,
-            "embedding": emb_value,
-        })
+        data.append(
+            {
+                "object": "embedding",
+                "index": i,
+                "embedding": emb_value,
+            }
+        )
         # Use tokenizer for accurate token count, fallback to word count.
         # Exclude special tokens (BOS/EOS) from the count to match OpenAI's
         # behavior where prompt_tokens only includes content tokens.
@@ -350,6 +379,7 @@ def _record_embedding_metrics(prompt_tokens: int) -> None:
     """Record embedding request metrics."""
     try:
         from ..middleware.metrics import get_metrics
+
         get_metrics().record_tokens(prompt_tokens, 0)
         get_metrics().record_inference()
     except Exception:
@@ -357,6 +387,7 @@ def _record_embedding_metrics(prompt_tokens: int) -> None:
     # feed the per-request TPM box (embeddings bill prompt tokens only).
     try:
         from ..usage_context import record_billed_tokens
+
         record_billed_tokens(prompt_tokens or 0)
     except Exception:
         pass
@@ -396,8 +427,9 @@ async def _resolve_embedding_engine(model_id: str):
     return None
 
 
-async def _generate_embeddings(engine, texts: list[str], model_id: str = "",
-                               pooling_type: str | None = None) -> list[list[float]]:
+async def _generate_embeddings(
+    engine, texts: list[str], model_id: str = "", pooling_type: str | None = None
+) -> list[list[float]]:
     """Generate embeddings using the engine.
 
     Supports:
@@ -414,15 +446,18 @@ async def _generate_embeddings(engine, texts: list[str], model_id: str = "",
         import asyncio
 
         from yunshu_engine.mlx_executor import get_mlx_executor
+
         loop = asyncio.get_running_loop()
         vecs = await loop.run_in_executor(
-            get_mlx_executor(), lambda: engine.pool(texts, pooling_type),
+            get_mlx_executor(),
+            lambda: engine.pool(texts, pooling_type),
         )
         # pool() returns UN-normalized vectors, but embed() (the
         # auto-detect path) returns L2-normalized ones and the OpenAI/vLLM
         # contract is unit vectors. L2-normalize here so the override doesn't
         # silently yield non-unit embeddings (wrong cosine similarities).
         import math
+
         out = []
         for v in vecs:
             norm = math.sqrt(sum(x * x for x in v))
@@ -435,34 +470,46 @@ async def _generate_embeddings(engine, texts: list[str], model_id: str = "",
         # model matches (or none was specified) — otherwise it would serve a
         # DIFFERENT model's vectors (wrong dimensionality / embedding space) than
         # the request asked for. Mismatched models fall through to the MLX path.
-        _ane_model = os.environ.get("YUNSHU_ANE_EMBEDDING_MODEL", "intfloat/e5-small-v2")
-        _ane_ok = (not model_id) or model_id == _ane_model \
+        _ane_model = os.environ.get(
+            "YUNSHU_ANE_EMBEDDING_MODEL", "intfloat/e5-small-v2"
+        )
+        _ane_ok = (
+            (not model_id)
+            or model_id == _ane_model
             or model_id.split("/")[-1].lower() == _ane_model.split("/")[-1].lower()
+        )
         try:
             from yunshu_engine.ane_embedding import get_ane_processor
+
             proc = get_ane_processor() if _ane_ok else None
             if proc is not None:
-                logger.debug("Using ANE for embedding inference (model_id=%s)", model_id)
+                logger.debug(
+                    "Using ANE for embedding inference (model_id=%s)", model_id
+                )
                 import asyncio
+
                 loop = asyncio.get_running_loop()
                 return await loop.run_in_executor(None, proc.embed, texts)
         except Exception as exc:
             logger.warning(
-                "ANE embedding failed, falling back to GPU: %s", exc, exc_info=True,
+                "ANE embedding failed, falling back to GPU: %s",
+                exc,
+                exc_info=True,
             )
 
     # ── Engine with embed() method (BatchedEngine.embed normalizes by default) ──
-    if hasattr(engine, 'embed'):
+    if hasattr(engine, "embed"):
         import asyncio
 
         from yunshu_engine.mlx_executor import get_mlx_executor
+
         loop = asyncio.get_running_loop()
         # embed() is synchronous and does GPU work — run on MLX executor thread
         return await loop.run_in_executor(get_mlx_executor(), engine.embed, texts)
 
     # Fallback: use the model's tokenizer + forward pass for last hidden state
-    tokenizer = getattr(engine, '_tokenizer', None)
-    model = getattr(engine, '_model', None)
+    tokenizer = getattr(engine, "_tokenizer", None)
+    model = getattr(engine, "_model", None)
     if tokenizer is None or model is None:
         raise RuntimeError("Engine does not support embedding generation")
 
@@ -481,9 +528,12 @@ async def _generate_embeddings(engine, texts: list[str], model_id: str = "",
         # HF uses model, some use transformer, etc.
         backbone = None
         for path in [
-            lambda m: getattr(m, 'language_model', None) and getattr(m.language_model, 'model', None),
-            lambda m: getattr(m, 'model', None),
-            lambda m: getattr(m, 'transformer', None),
+            lambda m: (
+                getattr(m, "language_model", None)
+                and getattr(m.language_model, "model", None)
+            ),
+            lambda m: getattr(m, "model", None),
+            lambda m: getattr(m, "transformer", None),
         ]:
             candidate = path(model)
             if candidate is not None and callable(candidate):
@@ -505,9 +555,9 @@ async def _generate_embeddings(engine, texts: list[str], model_id: str = "",
                 # make_cache() may be on the backbone, the LanguageModel, or
                 # the top-level model (qwen3_5.Model → language_model → model).
                 caches = None
-                _lm = getattr(model, 'language_model', None)
+                _lm = getattr(model, "language_model", None)
                 for _obj in [backbone, _lm, model]:
-                    if _obj is not None and hasattr(_obj, 'make_cache'):
+                    if _obj is not None and hasattr(_obj, "make_cache"):
                         try:
                             caches = _obj.make_cache()
                             if caches:
@@ -548,11 +598,11 @@ def _extract_hidden(output) -> Any:
         return output
     if isinstance(output, (tuple, list)):
         return output[0]
-    if hasattr(output, 'last_hidden_state'):
+    if hasattr(output, "last_hidden_state"):
         return output.last_hidden_state
-    if hasattr(output, 'hidden_states') and output.hidden_states:
+    if hasattr(output, "hidden_states") and output.hidden_states:
         return output.hidden_states[-1]
-    if hasattr(output, 'logits'):
+    if hasattr(output, "logits"):
         # For causal LMs, the logits tensor IS the last layer output (before
         # softmax).  This is a reasonable approximation for models that don't
         # expose explicit hidden states, but it is not optimal — the logits

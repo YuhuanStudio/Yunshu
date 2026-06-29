@@ -102,7 +102,9 @@ class BitmaskApplicator:
             # one finite value per position so sampling doesn't produce NaN.
             if not mx.any(mx.isfinite(result.reshape(-1))).item():
                 result = result.reshape(-1, vocab_size)
-                result[mx.arange(result.shape[0]), best_per_pos] = mx.array(0.0, dtype=logits.dtype)
+                result[mx.arange(result.shape[0]), best_per_pos] = mx.array(
+                    0.0, dtype=logits.dtype
+                )
                 result = result.reshape(logits.shape)
             return result
 
@@ -147,7 +149,9 @@ class BitmaskApplicator:
             # If even the argmax was -inf, force one finite value per position
             if not mx.any(mx.isfinite(result.reshape(-1))).item():
                 result = result.reshape(-1, vocab_size)
-                result[mx.arange(result.shape[0]), best_per_pos] = mx.array(0.0, dtype=logits.dtype)
+                result[mx.arange(result.shape[0]), best_per_pos] = mx.array(
+                    0.0, dtype=logits.dtype
+                )
                 result = result.reshape(logits.shape)
             return result
 
@@ -318,7 +322,9 @@ class GrammarBitmaskEngine:
     def advance(self, token_text: str) -> None:
         self._constraint.advance(token_text)
 
-    def get_allowed_tokens(self, tokenizer: Any, generated_token_ids: list[int]) -> list[int]:
+    def get_allowed_tokens(
+        self, tokenizer: Any, generated_token_ids: list[int]
+    ) -> list[int]:
         """Compatibility method — delegates to wrapped constraint."""
         return self._constraint.get_allowed_tokens(tokenizer, generated_token_ids)
 
@@ -365,8 +371,11 @@ class GrammarBitmaskEngine:
             self._checkpoint_stack.append(result)
             # Probe whether rollback() expects an argument (takes >1 param
             # i.e. self + saved) by inspecting its signature once.
-            if self._constraint_rollback_needs_arg is None and hasattr(self._constraint, "rollback"):
+            if self._constraint_rollback_needs_arg is None and hasattr(
+                self._constraint, "rollback"
+            ):
                 import inspect
+
                 sig = inspect.signature(self._constraint.rollback)
                 self._constraint_rollback_needs_arg = len(sig.parameters) > 0
 
@@ -393,6 +402,7 @@ class GrammarBitmaskEngine:
             # Probe rollback signature once if not yet determined
             if self._constraint_rollback_needs_arg is None:
                 import inspect
+
                 sig = inspect.signature(self._constraint.rollback)
                 self._constraint_rollback_needs_arg = len(sig.parameters) > 0
 
@@ -454,7 +464,9 @@ class BitmaskConstrainedSampler:
             # Force EOS — do NOT advance the constraint after this,
             # otherwise the EOS token text corrupts the buffer and
             # breaks checkpoint/rollback correctness.
-            masked_logits = self._applicator.apply_allowlist(logits, self._table.eos_ids)
+            masked_logits = self._applicator.apply_allowlist(
+                logits, self._table.eos_ids
+            )
             should_advance = False
         else:
             bitmask = self._engine.compute_bitmask(self._tokenizer)
@@ -465,7 +477,9 @@ class BitmaskConstrainedSampler:
                 # Nothing is grammatically allowed — force EOS to avoid
                 # producing invalid output.  Do NOT advance constraint after
                 # forced EOS — the EOS text would corrupt the state buffer.
-                masked_logits = self._applicator.apply_allowlist(logits, self._table.eos_ids)
+                masked_logits = self._applicator.apply_allowlist(
+                    logits, self._table.eos_ids
+                )
                 should_advance = False
 
         token = self._base_sampler(masked_logits)
@@ -490,22 +504,22 @@ class BitmaskConstrainedSampler:
 
     def checkpoint(self) -> None:
         """Save constraint state for potential rollback."""
-        if hasattr(self._engine, 'checkpoint'):
+        if hasattr(self._engine, "checkpoint"):
             self._engine.checkpoint()
         self._checkpoint_ids_len = len(self._generated_ids)
 
     def rollback(self) -> None:
         """Restore constraint state from last checkpoint."""
-        if hasattr(self._engine, 'rollback'):
+        if hasattr(self._engine, "rollback"):
             self._engine.rollback()
-        if hasattr(self, '_checkpoint_ids_len'):
-            del self._generated_ids[self._checkpoint_ids_len:]
+        if hasattr(self, "_checkpoint_ids_len"):
+            del self._generated_ids[self._checkpoint_ids_len :]
 
     def discard_checkpoint(self) -> None:
         """Discard the most recent checkpoint without restoring."""
-        if hasattr(self._engine, 'discard_checkpoint'):
+        if hasattr(self._engine, "discard_checkpoint"):
             self._engine.discard_checkpoint()
-        if hasattr(self, '_checkpoint_ids_len'):
+        if hasattr(self, "_checkpoint_ids_len"):
             del self._checkpoint_ids_len
 
 

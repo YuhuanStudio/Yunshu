@@ -12,6 +12,7 @@ Tests the KV transfer protocol with mocked networking:
 - ExternalPrefiller.transfer_prefill_result integration
 - Edge cases: empty blocks, single block, large batch
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -82,35 +83,47 @@ class TestKVTransferConfig:
         assert config.enabled is True
 
     def test_from_env_custom_port(self):
-        with patch.dict(os.environ, {
-            "YUNSHU_KV_TRANSFER": "1",
-            "YUNSHU_KV_TRANSFER_PORT": "9999",
-            "YUNSHU_KV_TRANSFER_REMOTE_HOST": "node-2.local",
-            "YUNSHU_KV_TRANSFER_REMOTE_PORT": "8888",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "YUNSHU_KV_TRANSFER": "1",
+                "YUNSHU_KV_TRANSFER_PORT": "9999",
+                "YUNSHU_KV_TRANSFER_REMOTE_HOST": "node-2.local",
+                "YUNSHU_KV_TRANSFER_REMOTE_PORT": "8888",
+            },
+        ):
             config = KVTransferConfig.from_env()
         assert config.listen_port == 9999
         assert config.remote_host == "node-2.local"
         assert config.remote_port == 8888
 
     def test_from_env_compression_invalid_falls_back(self):
-        with patch.dict(os.environ, {
-            "YUNSHU_KV_TRANSFER_COMPRESSION": "invalid",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "YUNSHU_KV_TRANSFER_COMPRESSION": "invalid",
+            },
+        ):
             config = KVTransferConfig.from_env()
         assert config.compression == CompressionType.NONE
 
     def test_from_env_compression_zstd(self):
-        with patch.dict(os.environ, {
-            "YUNSHU_KV_TRANSFER_COMPRESSION": "zstd",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "YUNSHU_KV_TRANSFER_COMPRESSION": "zstd",
+            },
+        ):
             config = KVTransferConfig.from_env()
         assert config.compression == CompressionType.ZSTD
 
     def test_from_env_timeout(self):
-        with patch.dict(os.environ, {
-            "YUNSHU_KV_TRANSFER_TIMEOUT": "60.0",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "YUNSHU_KV_TRANSFER_TIMEOUT": "60.0",
+            },
+        ):
             config = KVTransferConfig.from_env()
         assert config.timeout_seconds == 60.0
 
@@ -172,9 +185,14 @@ class TestKVTransferHeader:
 
     def test_to_json_is_bytes(self):
         header = KVTransferHeader(
-            request_id="r1", block_count=0, model_name="m",
-            compression="none", checksum="", total_tokens=0,
-            layer_count=0, block_size=64,
+            request_id="r1",
+            block_count=0,
+            model_name="m",
+            compression="none",
+            checksum="",
+            total_tokens=0,
+            layer_count=0,
+            block_size=64,
         )
         result = header.to_json()
         assert isinstance(result, bytes)
@@ -182,24 +200,32 @@ class TestKVTransferHeader:
 
     def test_version_default(self):
         header = KVTransferHeader(
-            request_id="r1", block_count=0, model_name="m",
-            compression="none", checksum="", total_tokens=0,
-            layer_count=0, block_size=64,
+            request_id="r1",
+            block_count=0,
+            model_name="m",
+            compression="none",
+            checksum="",
+            total_tokens=0,
+            layer_count=0,
+            block_size=64,
         )
         assert header.version == 1
 
     def test_from_json_missing_version_uses_default(self):
         import json
-        data = json.dumps({
-            "request_id": "r1",
-            "block_count": 0,
-            "model_name": "m",
-            "compression": "none",
-            "checksum": "",
-            "total_tokens": 0,
-            "layer_count": 0,
-            "block_size": 64,
-        }).encode()
+
+        data = json.dumps(
+            {
+                "request_id": "r1",
+                "block_count": 0,
+                "model_name": "m",
+                "compression": "none",
+                "checksum": "",
+                "total_tokens": 0,
+                "layer_count": 0,
+                "block_size": 64,
+            }
+        ).encode()
         header = KVTransferHeader.from_json(data)
         assert header.version == 1
 
@@ -252,7 +278,7 @@ class TestKVTransferProtocol:
             KVBlockData(
                 block_hash=hash(i),
                 token_count=64,
-                layer_data={j: b"\xAB" * 256 for j in range(24)},
+                layer_data={j: b"\xab" * 256 for j in range(24)},
             )
             for i in range(100)
         ]
@@ -367,7 +393,9 @@ class TestKVTransferProtocol:
         (decode silently re-prefilled). Triggered by YUNSHU_KV_TRANSFER_CHECKSUM=xxhash.
         """
         blocks = [
-            KVBlockData(block_hash=0xABCD, token_count=16, layer_data={0: b"payload" * 50}),
+            KVBlockData(
+                block_hash=0xABCD, token_count=16, layer_data={0: b"payload" * 50}
+            ),
         ]
         header = KVTransferHeader(
             request_id="xx-roundtrip",
@@ -626,25 +654,29 @@ class TestKVTransferStats:
     def test_latency_list_trimming(self):
         stats = KVTransferStats()
         for i in range(1001):
-            stats.record_send(KVTransferResult(
-                request_id=f"r{i}",
-                status=TransferStatus.COMPLETED,
-                blocks_transferred=1,
-                bytes_transferred=100,
-                duration_seconds=0.001,
-            ))
+            stats.record_send(
+                KVTransferResult(
+                    request_id=f"r{i}",
+                    status=TransferStatus.COMPLETED,
+                    blocks_transferred=1,
+                    bytes_transferred=100,
+                    duration_seconds=0.001,
+                )
+            )
         assert len(stats.send_latencies) == 500  # trimmed to last 500
 
     def test_to_dict(self):
         stats = KVTransferStats()
-        stats.record_send(KVTransferResult(
-            request_id="r1",
-            status=TransferStatus.COMPLETED,
-            blocks_transferred=1,
-            bytes_transferred=100,
-            bytes_original=100,
-            duration_seconds=0.1,
-        ))
+        stats.record_send(
+            KVTransferResult(
+                request_id="r1",
+                status=TransferStatus.COMPLETED,
+                blocks_transferred=1,
+                bytes_transferred=100,
+                bytes_original=100,
+                duration_seconds=0.1,
+            )
+        )
         d = stats.to_dict()
         assert d["total_transfers"] == 1
         assert d["total_blocks_sent"] == 1
@@ -660,10 +692,12 @@ class TestKVTransferClient:
     def test_client_disabled_returns_failure(self):
         config = KVTransferConfig(enabled=False)
         client = KVTransferClient(config)
-        result = asyncio.run(client.send_blocks(
-            blocks=[KVBlockData(block_hash=1, token_count=10)],
-            request_id="test",
-        ))
+        result = asyncio.run(
+            client.send_blocks(
+                blocks=[KVBlockData(block_hash=1, token_count=10)],
+                request_id="test",
+            )
+        )
         assert result.status == TransferStatus.FAILED
         assert "not enabled" in result.error
 
@@ -674,9 +708,11 @@ class TestKVTransferClient:
     def test_client_auto_request_id(self):
         config = KVTransferConfig(enabled=True)
         client = KVTransferClient(config)
-        result = asyncio.run(client.send_blocks(
-            blocks=[KVBlockData(block_hash=1, token_count=10)],
-        ))
+        result = asyncio.run(
+            client.send_blocks(
+                blocks=[KVBlockData(block_hash=1, token_count=10)],
+            )
+        )
         # When enabled, auto-generated ID should be set
         assert result.request_id  # non-empty
 
@@ -975,8 +1011,10 @@ class TestExternalPrefillerTransfer:
             bytes_transferred=100,
         )
 
-        with patch.dict(os.environ, {"YUNSHU_KV_TRANSFER": "1"}), \
-             patch("yunshu_engine.kv_transfer.KVTransferClient") as MockClient:
+        with (
+            patch.dict(os.environ, {"YUNSHU_KV_TRANSFER": "1"}),
+            patch("yunshu_engine.kv_transfer.KVTransferClient") as MockClient,
+        ):
             mock_instance = MagicMock()
             mock_instance.send_blocks_sync.return_value = mock_transfer_result
             MockClient.return_value = mock_instance
@@ -1002,8 +1040,10 @@ class TestExternalPrefillerTransfer:
             kv_cache=[],
         )
 
-        with patch.dict(os.environ, {"YUNSHU_KV_TRANSFER": "1"}), \
-             patch("yunshu_engine.kv_transfer.KVTransferClient") as MockClient:
+        with (
+            patch.dict(os.environ, {"YUNSHU_KV_TRANSFER": "1"}),
+            patch("yunshu_engine.kv_transfer.KVTransferClient") as MockClient,
+        ):
             MockClient.side_effect = RuntimeError("connection failed")
 
             transfer_result = prefiller.transfer_prefill_result(result)
@@ -1080,18 +1120,28 @@ class TestKVTransferMessage:
 
     def test_total_data_size_empty(self):
         header = KVTransferHeader(
-            request_id="r", block_count=0, model_name="m",
-            compression="none", checksum="", total_tokens=0,
-            layer_count=0, block_size=64,
+            request_id="r",
+            block_count=0,
+            model_name="m",
+            compression="none",
+            checksum="",
+            total_tokens=0,
+            layer_count=0,
+            block_size=64,
         )
         msg = KVTransferMessage(header=header, blocks=[])
         assert msg.total_data_size == 0
 
     def test_total_data_size_with_blocks(self):
         header = KVTransferHeader(
-            request_id="r", block_count=2, model_name="m",
-            compression="none", checksum="", total_tokens=128,
-            layer_count=1, block_size=64,
+            request_id="r",
+            block_count=2,
+            model_name="m",
+            compression="none",
+            checksum="",
+            total_tokens=128,
+            layer_count=1,
+            block_size=64,
         )
         blocks = [
             KVBlockData(block_hash=1, token_count=64, layer_data={0: b"a" * 100}),
@@ -1135,8 +1185,12 @@ class TestTensorSerializationRoundTrip:
         # the model's bf16 weights on every disaggregated handoff.
         assert kr.dtype == dt, f"k dtype {kr.dtype} != original {dt}"
         assert vr.dtype == dt, f"v dtype {vr.dtype} != original {dt}"
-        assert mx.allclose(kr.astype(mx.float32), k.astype(mx.float32), atol=1e-2).item()
-        assert mx.allclose(vr.astype(mx.float32), v.astype(mx.float32), atol=1e-2).item()
+        assert mx.allclose(
+            kr.astype(mx.float32), k.astype(mx.float32), atol=1e-2
+        ).item()
+        assert mx.allclose(
+            vr.astype(mx.float32), v.astype(mx.float32), atol=1e-2
+        ).item()
 
     def test_load_blocks_separates_k_and_v_into_list_cache(self):
         mx = self._mx()
@@ -1152,7 +1206,9 @@ class TestTensorSerializationRoundTrip:
         k = mx.ones((1, 2, 3, 4)).astype(mx.float32)
         v = (mx.ones((1, 2, 3, 4)) * 2).astype(mx.float32)
         block = KVBlockData(
-            block_hash=1, token_count=3, layer_data={0: _tensor_to_bytes(k) + _tensor_to_bytes(v)}
+            block_hash=1,
+            token_count=3,
+            layer_data={0: _tensor_to_bytes(k) + _tensor_to_bytes(v)},
         )
         # list-style layer cache: [keys, values], each starting empty along seq (-2).
         layer_cache = [mx.zeros((1, 2, 0, 4)), mx.zeros((1, 2, 0, 4))]

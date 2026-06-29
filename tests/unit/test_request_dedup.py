@@ -14,7 +14,9 @@ class TestDeduplicationEntry:
         assert entry.fan_out == 3
 
     def test_age_ms(self):
-        entry = DeduplicationEntry(content_hash="abc", created_at=time.monotonic() - 1.0)
+        entry = DeduplicationEntry(
+            content_hash="abc", created_at=time.monotonic() - 1.0
+        )
         assert entry.age_ms >= 900
 
     def test_is_completed(self):
@@ -194,11 +196,15 @@ class TestRequestDeduplicator:
     def test_from_env(self):
         import os
         from unittest.mock import patch
-        with patch.dict(os.environ, {
-            "YUNSHU_DEDUP_WINDOW_MS": "200.0",
-            "YUNSHU_DEDUP_MAX_FANOUT": "16",
-            "YUNSHU_DEDUP_MAX_ENTRIES": "500",
-        }):
+
+        with patch.dict(
+            os.environ,
+            {
+                "YUNSHU_DEDUP_WINDOW_MS": "200.0",
+                "YUNSHU_DEDUP_MAX_FANOUT": "16",
+                "YUNSHU_DEDUP_MAX_ENTRIES": "500",
+            },
+        ):
             dedup = RequestDeduplicator.from_env()
             assert dedup._window_ms == 200.0
             assert dedup._max_fan_out == 16

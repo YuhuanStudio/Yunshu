@@ -4,6 +4,7 @@ applies was never propagated to MCP. resources/list enumerated every model's id/
 resources/read returned full status/size/load-error for an arbitrary yunshu://models/<id>.
 Both reached their handler behind only can_infer (the _check_model_access gate covered
 only tools/call). Now resources/list filters by the key and resources/read is gated."""
+
 from __future__ import annotations
 
 import asyncio
@@ -53,7 +54,10 @@ def test_resources_read_gated_in_endpoint_source():
     # uri and _check_model_access) — mirrors the tools/call gate.
     src = inspect.getsource(MCP)
     assert 'req.method == "resources/read"' in src
-    assert 'yunshu://models/' in src
+    assert "yunshu://models/" in src
     # resources/list is dispatched with the caller's rbac_key
-    assert "_handle_resources_list(\n                req.params, req.id, getattr(request.state, \"rbac_key\", None))" in src \
+    assert (
+        '_handle_resources_list(\n                req.params, req.id, getattr(request.state, "rbac_key", None))'
+        in src
         or "_handle_resources_list(req.params, req.id, getattr(request.state" in src
+    )

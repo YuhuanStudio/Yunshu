@@ -126,7 +126,9 @@ class TestSerializeTable:
         assert restored_table.block_size == 16
 
         # Verify each block's data matches the original slice
-        for orig, rest in zip(table.get_blocks(), restored_table.get_blocks(), strict=False):
+        for orig, rest in zip(
+            table.get_blocks(), restored_table.get_blocks(), strict=False
+        ):
             np.testing.assert_array_equal(
                 np.array(restored_key)[rest.block_id], key[orig.block_id]
             )
@@ -212,7 +214,9 @@ class TestFileIO:
 
             assert rt_table.num_blocks == 4
             assert rt_table.block_size == 16
-            for orig, rest in zip(table.get_blocks(), rt_table.get_blocks(), strict=False):
+            for orig, rest in zip(
+                table.get_blocks(), rt_table.get_blocks(), strict=False
+            ):
                 np.testing.assert_array_equal(
                     np.array(rt_key)[rest.block_id], key[orig.block_id]
                 )

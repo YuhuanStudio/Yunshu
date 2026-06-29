@@ -4,6 +4,7 @@ poll AND the routers' `except` branches that set cancel_event). The hub's finall
 cancel_event on ANY exit so the engine's decode loop (running on the serialized MLX executor,
 where task.cancel() is a no-op) actually stops — else generation runs to max_tokens, wasting
 GPU and head-of-line-blocking every subsequent request."""
+
 from __future__ import annotations
 
 import asyncio
@@ -29,10 +30,14 @@ def test_cancel_event_set_on_consumer_aclose():
             got += 1
             if got == 2:
                 break
-        await wrapped.aclose()  # simulate starlette tearing down the stream on disconnect
+        await (
+            wrapped.aclose()
+        )  # simulate starlette tearing down the stream on disconnect
 
     asyncio.run(_run())
-    assert cancel.is_set(), "cancel_event must be set on stream teardown so the engine stops"
+    assert cancel.is_set(), (
+        "cancel_event must be set on stream teardown so the engine stops"
+    )
 
 
 def test_cancel_event_set_on_normal_completion():

@@ -9,7 +9,6 @@ Covers:
 - System as list[dict] support
 """
 
-
 from yunshu_gateway.routers.anthropic import (
     AnthropicMessage,
     AnthropicMessagesRequest,
@@ -73,7 +72,10 @@ class TestImageBlockSupport:
     def test_has_image_blocks_true(self):
         content = [
             {"type": "text", "text": "hello"},
-            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "abc"}},
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/png", "data": "abc"},
+            },
         ]
         assert _has_image_blocks(content) is True
 
@@ -117,7 +119,11 @@ class TestCacheControlHints:
     def test_cache_control_in_text_block(self):
         """Cache control hints in text blocks should be extracted."""
         system = [
-            {"type": "text", "text": "You are a helpful assistant.", "cache_control": {"type": "ephemeral"}},
+            {
+                "type": "text",
+                "text": "You are a helpful assistant.",
+                "cache_control": {"type": "ephemeral"},
+            },
             {"type": "text", "text": "Additional context."},
         ]
         hints, char_offsets = _extract_cache_control_hints(system)
@@ -151,7 +157,11 @@ class TestCacheControlHints:
     def test_cache_control_not_stripped_from_text(self):
         """Cache control should be a routing hint, not affect text extraction."""
         content = [
-            {"type": "text", "text": "Cacheable content", "cache_control": {"type": "ephemeral"}},
+            {
+                "type": "text",
+                "text": "Cacheable content",
+                "cache_control": {"type": "ephemeral"},
+            },
         ]
         text = _extract_text_from_content(content)
         assert text == "Cacheable content"
@@ -163,7 +173,9 @@ class TestCacheControlHints:
 class TestToolUseDeltas:
     def test_parse_json_tool_call(self):
         """Should detect JSON tool call with name and arguments."""
-        text = 'Some text {"name": "get_weather", "arguments": {"city": "SF"}} more text'
+        text = (
+            'Some text {"name": "get_weather", "arguments": {"city": "SF"}} more text'
+        )
         calls = _try_parse_tool_call_delta(text)
         assert calls is not None
         assert len(calls) == 1
@@ -295,7 +307,10 @@ class TestExtractTextFromContent:
     def test_mixed_blocks(self):
         content = [
             {"type": "text", "text": "Check weather"},
-            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "abc"}},
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/png", "data": "abc"},
+            },
             {"type": "text", "text": "in this map"},
         ]
         text = _extract_text_from_content(content)
@@ -318,7 +333,11 @@ class TestSystemListDict:
             model="claude-3",
             messages=[AnthropicMessage(role="user", content="Hi")],
             system=[
-                {"type": "text", "text": "You are helpful.", "cache_control": {"type": "ephemeral"}},
+                {
+                    "type": "text",
+                    "text": "You are helpful.",
+                    "cache_control": {"type": "ephemeral"},
+                },
                 {"type": "text", "text": "Be concise."},
             ],
         )
@@ -335,7 +354,11 @@ class TestSystemListDict:
 
     def test_system_text_extraction_from_list(self):
         system = [
-            {"type": "text", "text": "Part one.", "cache_control": {"type": "ephemeral"}},
+            {
+                "type": "text",
+                "text": "Part one.",
+                "cache_control": {"type": "ephemeral"},
+            },
             {"type": "text", "text": "Part two."},
         ]
         text = _extract_text_from_content(system)

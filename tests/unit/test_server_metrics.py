@@ -1,4 +1,5 @@
 """Unit tests for ServerMetrics."""
+
 import json
 import tempfile
 import time
@@ -53,7 +54,9 @@ class TestServerMetrics:
 
     def test_session_snapshot_metrics(self):
         m = ServerMetrics()
-        m.record_request_complete(100, 50, prefill_duration=1.0, generation_duration=2.0)
+        m.record_request_complete(
+            100, 50, prefill_duration=1.0, generation_duration=2.0
+        )
         snap = m.get_snapshot()
         assert snap["total_prompt_tokens"] == 100
         assert snap["total_completion_tokens"] == 50

@@ -8,6 +8,7 @@ the embeddings per-input length cap (_MAX_INPUT_TEXT_LENGTH) was checked only fo
   single str input; a list of N (up to 2048) arbitrarily long strings bypassed it
   (uncapped forward-pass / memory-pressure DoS). Enforce per list element.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -18,6 +19,7 @@ import pytest
 
 def test_byte_count_on_any_no_content_length():
     from yunshu_gateway import main
+
     src = inspect.getsource(main)
     # the byte-count branch fires on ANY missing Content-Length (not only chunked)
     assert "if content_length is None:" in src

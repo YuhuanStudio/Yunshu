@@ -6,6 +6,7 @@ tool-call turns vanished from the prompt; and string-form tool args left intact 
 a GLM template's `is not mapping` raise → the whole prompt collapsing to the plaintext
 fallback. Now mirrors the BatchedEngine path: preserve the fields + normalize string args.
 """
+
 from __future__ import annotations
 
 import yunshu_engine.vlm_engine as v
@@ -38,9 +39,17 @@ def test_format_prompt_preserves_tool_fields():
 
     msgs = [
         {"role": "user", "content": "hi"},
-        {"role": "assistant", "content": "",
-         "tool_calls": [{"id": "c1", "type": "function",
-                         "function": {"name": "get_w", "arguments": '{"loc": "SF"}'}}]},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "get_w", "arguments": '{"loc": "SF"}'},
+                }
+            ],
+        },
         {"role": "tool", "tool_call_id": "c1", "name": "get_w", "content": "sunny"},
     ]
     out = eng._format_prompt(msgs)

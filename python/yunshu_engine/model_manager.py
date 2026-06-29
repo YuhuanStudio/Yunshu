@@ -128,7 +128,9 @@ def _detect_model_type(model_path: str) -> ModelType:
     if not model_type or model_type == "":
         _model_name = config.get("model_name", "").lower()
         _config_str = json.dumps(config).lower()
-        if any(k in name_lower for k in ("da3nested", "depth_anything", "depth-anything")):
+        if any(
+            k in name_lower for k in ("da3nested", "depth_anything", "depth-anything")
+        ):
             return ModelType.IMAGE_GEN
         if "depth_anything" in _model_name or "depth_anything" in _config_str:
             return ModelType.IMAGE_GEN
@@ -150,7 +152,11 @@ def _detect_model_type(model_path: str) -> ModelType:
         if "speech" in arch_lower and "text" in arch_lower:
             if "tts" in arch_lower or "synthes" in arch_lower:
                 return ModelType.TTS
-            if "asr" in arch_lower or "recogni" in arch_lower or "whisper" in arch_lower:
+            if (
+                "asr" in arch_lower
+                or "recogni" in arch_lower
+                or "whisper" in arch_lower
+            ):
                 return ModelType.ASR
         if "tts" in arch_lower:
             return ModelType.TTS
@@ -166,7 +172,16 @@ def _detect_model_type(model_path: str) -> ModelType:
         return ModelType.TTS
     if any(k in model_type for k in ("whisper", "asr", "speech_to_text")):
         return ModelType.ASR
-    if any(k in model_type for k in ("sts", "speech_to_speech", "deepfilter", "mossformer", "voice_conversion")):
+    if any(
+        k in model_type
+        for k in (
+            "sts",
+            "speech_to_speech",
+            "deepfilter",
+            "mossformer",
+            "voice_conversion",
+        )
+    ):
         return ModelType.STS
     if any(k in model_type for k in ("video", "text_to_video", "image_to_video")):
         return ModelType.VIDEO
@@ -206,7 +221,9 @@ def _detect_model_type(model_path: str) -> ModelType:
         or config.get("thinker_config", {}).get("vision_config") is not None
     )
     for arch in architectures:
-        if any(k in arch.lower() for k in ("vl", "vision", "omni", "florence", "pixtral")):
+        if any(
+            k in arch.lower() for k in ("vl", "vision", "omni", "florence", "pixtral")
+        ):
             has_vision = True
     if remapped in ("qwen2_vl", "qwen3_vl", "qwen3_vl_moe", "mistral3", "pixtral"):
         has_vision = True
@@ -253,7 +270,9 @@ class ModelEntry:
     is_loaded: bool = False
     load_error: str | None = None
     settings: Any = None  # ModelSettings — loaded lazily
-    load_time: float = 0.0  # monotonic timestamp when model was loaded (for /models endpoint)
+    load_time: float = (
+        0.0  # monotonic timestamp when model was loaded (for /models endpoint)
+    )
 
 
 class ModelManager:
@@ -305,6 +324,7 @@ class ModelManager:
     @staticmethod
     def _get_mlx_executor():
         from .mlx_executor import get_mlx_executor
+
         return get_mlx_executor()
 
     def register_model(
@@ -327,6 +347,7 @@ class ModelManager:
 
             # Load per-model settings from model_settings.json + env vars
             from .model_settings import load_model_settings
+
             settings = load_model_settings(model_path, model_id)
 
             # Memory budget warning: if this single model exceeds the budget,
@@ -335,7 +356,9 @@ class ModelManager:
                 logger.warning(
                     "Model '%s' estimated size (%.1fGB) exceeds memory budget (%.1fGB) "
                     "— loading will fail unless budget is increased or other models evicted",
-                    model_id, estimated_bytes / 1e9, self.max_memory_bytes / 1e9,
+                    model_id,
+                    estimated_bytes / 1e9,
+                    self.max_memory_bytes / 1e9,
                 )
 
             # Guard: never overwrite a loaded entry — would leak the engine's GPU memory
@@ -394,7 +417,9 @@ class ModelManager:
         # Wait on the per-model event instead of raising RuntimeError.
         if entry.is_loading and model_id in self._loading_events:
             load_event = self._loading_events[model_id]
-            logger.info("Waiting for model '%s' load to complete (concurrent request)", model_id)
+            logger.info(
+                "Waiting for model '%s' load to complete (concurrent request)", model_id
+            )
             await load_event.wait()
             # Re-check: the load may have succeeded or failed
             if entry.is_loaded and entry.engine is not None:
@@ -433,14 +458,20 @@ class ModelManager:
                         entry.last_access = time.monotonic()
                         return entry.engine
                     if entry.load_error:
-                        raise RuntimeError(f"Model {model_id} load failed: {entry.load_error}")
+                        raise RuntimeError(
+                            f"Model {model_id} load failed: {entry.load_error}"
+                        )
                     raise KeyError(f"Model {model_id} not available after load attempt")
                 raise RuntimeError(f"Model {model_id} is already being loaded")
 
             # Check memory budget
             if self.max_memory_bytes is not None:
                 required = entry.estimated_bytes
-                kv_headroom = 0 if entry.model_type in (ModelType.TTS, ModelType.ASR) else int(required * self.kv_reserve_ratio)
+                kv_headroom = (
+                    0
+                    if entry.model_type in (ModelType.TTS, ModelType.ASR)
+                    else int(required * self.kv_reserve_ratio)
+                )
                 total_needed = required + kv_headroom
                 await self._ensure_memory_available(total_needed)
 
@@ -475,10 +506,13 @@ class ModelManager:
                 # BatchKVCache conflicts when multiple engines share a model
                 try:
                     from .model_registry import get_registry
-                    model_obj = getattr(engine, '_model', None)
+
+                    model_obj = getattr(engine, "_model", None)
                     if model_obj is not None:
                         get_registry().acquire(
-                            model_obj, engine, f"model_manager:{model_id}",
+                            model_obj,
+                            engine,
+                            f"model_manager:{model_id}",
                         )
                 except Exception:
                     logger.debug("model_registry acquire failed", exc_info=True)
@@ -541,36 +575,42 @@ class ModelManager:
 
         if entry.model_type == ModelType.TTS:
             from .audio_engine import TTSEngine
+
             engine = TTSEngine(entry.model_path, config)
             await engine.start()
             return engine
 
         elif entry.model_type == ModelType.ASR:
             from .audio_engine import ASREngine
+
             engine = ASREngine(entry.model_path, config)
             await engine.start()
             return engine
 
         elif entry.model_type == ModelType.VLM:
             from .vlm_engine import VLMEngine
+
             engine = VLMEngine(entry.model_path, config)
             await engine.start()
             return engine
 
         elif entry.model_type == ModelType.IMAGE_GEN:
             from .image_engine import ImageGenEngine
+
             engine = ImageGenEngine(entry.model_path, config)
             await engine.start()
             return engine
 
         elif entry.model_type == ModelType.STS:
             from .sts_engine import STSEngine
+
             engine = STSEngine(entry.model_path, config)
             engine.start()
             return engine
 
         elif entry.model_type == ModelType.VIDEO:
             from .video_engine import VideoEngine
+
             engine = VideoEngine(entry.model_path, config)
             engine.start()
             return engine
@@ -581,6 +621,7 @@ class ModelManager:
             # supported". OCREngine installs the processor patch so pixel_values
             # reach the model.
             from .ocr_engine import OCREngine
+
             engine = OCREngine(entry.model_path)
             await engine.start()
             return engine
@@ -588,9 +629,10 @@ class ModelManager:
         else:
             # Default: LLM engine (BatchedEngine with EngineCore backend)
             from .batched_engine import BatchedEngine
+
             engine = BatchedEngine(
                 model_name=entry.model_path,
-                stream_interval=getattr(config, 'stream_interval', 1) if config else 1,
+                stream_interval=getattr(config, "stream_interval", 1) if config else 1,
             )
             await engine.start()
             return engine
@@ -646,18 +688,22 @@ class ModelManager:
                 logger.warning(
                     "Skipping non-forced unload of '%s' — engine type %s lacks "
                     "has_active_requests, cannot prove it is idle.",
-                    model_id, type(entry.engine).__name__,
+                    model_id,
+                    type(entry.engine).__name__,
                 )
                 return False
             try:
                 _active = _has_active()
             except Exception:
-                logger.debug("has_active_requests check failed; assuming active", exc_info=True)
+                logger.debug(
+                    "has_active_requests check failed; assuming active", exc_info=True
+                )
                 _active = True
             if _active:
                 logger.warning(
                     "Skipping unload of '%s' — it has active requests (would "
-                    "crash an in-flight generation).", model_id,
+                    "crash an in-flight generation).",
+                    model_id,
                 )
                 return False
 
@@ -677,10 +723,12 @@ class ModelManager:
             # Release model ownership in ModelRegistry
             try:
                 from .model_registry import get_registry
-                model_obj = getattr(entry.engine, '_model', None)
+
+                model_obj = getattr(entry.engine, "_model", None)
                 if model_obj is not None:
                     get_registry().release(
-                        model_obj, f"model_manager:{model_id}",
+                        model_obj,
+                        f"model_manager:{model_id}",
                     )
             except Exception:
                 logger.debug("model_registry release failed", exc_info=True)
@@ -691,7 +739,7 @@ class ModelManager:
             # and the memory callback points to a stale model_manager that
             # may have already been reused for a different model.
             try:
-                lora_mgr = getattr(entry.engine, '_lora_manager', None)
+                lora_mgr = getattr(entry.engine, "_lora_manager", None)
                 if lora_mgr is not None:
                     for adapter_id in list(lora_mgr._adapters.keys()):
                         try:
@@ -699,7 +747,8 @@ class ModelManager:
                         except Exception:
                             logger.debug(
                                 "LoRA unload failed during model eviction: %s",
-                                adapter_id, exc_info=True,
+                                adapter_id,
+                                exc_info=True,
                             )
                     lora_mgr.set_memory_callback(None)
             except Exception:
@@ -723,6 +772,7 @@ class ModelManager:
             from yunshu_gateway.middleware.prometheus_exporter import (
                 get_prometheus_metrics,
             )
+
             get_prometheus_metrics().clear_model_labels(model_id)
         except Exception:
             pass
@@ -777,7 +827,8 @@ class ModelManager:
             # blocking all future loads in _ensure_memory_available.
             if not settled:
                 self._current_memory_bytes = sum(
-                    e.estimated_bytes for e in self._entries.values()
+                    e.estimated_bytes
+                    for e in self._entries.values()
                     if e.is_loaded and e.estimated_bytes > 0
                 )
 
@@ -795,7 +846,9 @@ class ModelManager:
             if new_val < 0:
                 logger.warning(
                     "track_lora_memory underflow: %d + %d = %d, clamping to 0",
-                    self._current_memory_bytes, delta_bytes, new_val,
+                    self._current_memory_bytes,
+                    delta_bytes,
+                    new_val,
                 )
                 new_val = 0
             self._current_memory_bytes = new_val
@@ -860,7 +913,9 @@ class ModelManager:
                 )
             self._eviction_stats["slot_evictions"] += 1
 
-    async def _check_post_load_memory_pressure(self, exclude_model_id: str | None = None) -> None:
+    async def _check_post_load_memory_pressure(
+        self, exclude_model_id: str | None = None
+    ) -> None:
         """Check memory pressure after loading and evict LRU model if needed.
 
         After loading a new model, the combined memory
@@ -890,6 +945,7 @@ class ModelManager:
             limit = int(max_ws.max_recommended_working_set_size)
         if limit <= 0:
             from .utils.hardware import get_total_memory_bytes
+
             limit = int(get_total_memory_bytes() * 0.75)
 
         if limit <= 0:
@@ -911,7 +967,9 @@ class ModelManager:
         # Evict one LRU model to relieve pressure.  Keep evicting while
         # pressure remains high, but stop after a safety limit to avoid
         # unloading everything.
-        max_evictions = sum(1 for e in self._entries.values() if e.is_loaded and not e.is_pinned)
+        max_evictions = sum(
+            1 for e in self._entries.values() if e.is_loaded and not e.is_pinned
+        )
         for _ in range(max_evictions):
             victim = self._find_lru_victim(exclude_model_id=exclude_model_id)
             if victim is None:
@@ -947,7 +1005,9 @@ class ModelManager:
                 return None
             return victim.model_id
 
-    def _find_lru_victim(self, exclude_model_id: str | None = None) -> ModelEntry | None:
+    def _find_lru_victim(
+        self, exclude_model_id: str | None = None
+    ) -> ModelEntry | None:
         """Find the least-recently-used non-pinned, loaded model.
 
         Skip models with active requests to avoid interrupting in-flight
@@ -959,7 +1019,9 @@ class ModelManager:
         victims = [
             e
             for e in self._entries.values()
-            if e.is_loaded and not e.is_pinned and not e.is_loading
+            if e.is_loaded
+            and not e.is_pinned
+            and not e.is_loading
             and e.model_id != exclude_model_id
         ]
         # Filter out engines with active requests.
@@ -974,7 +1036,11 @@ class ModelManager:
         # the selector never nominates a victim the unloader will refuse.
         safe_victims = []
         for v in victims:
-            _has_active = getattr(v.engine, "has_active_requests", None) if v.engine is not None else None
+            _has_active = (
+                getattr(v.engine, "has_active_requests", None)
+                if v.engine is not None
+                else None
+            )
             if not callable(_has_active):
                 # Cannot prove idle → not a safe non-forced victim (would be refused).
                 continue
@@ -982,7 +1048,9 @@ class ModelManager:
                 if _has_active():
                     continue
             except Exception:
-                logger.debug(f"has_active_requests check failed for {v.model_id}", exc_info=True)
+                logger.debug(
+                    f"has_active_requests check failed for {v.model_id}", exc_info=True
+                )
                 continue  # cannot prove idle → skip (matches unload's assume-active)
             safe_victims.append(v)
 
@@ -1028,7 +1096,8 @@ class ModelManager:
         cutoff = now - self.ttl_seconds
         async with self._lock:
             candidates = [
-                e for e in self._entries.values()
+                e
+                for e in self._entries.values()
                 if e.is_loaded and not e.is_pinned and e.last_access <= cutoff
             ]
             for entry in candidates:
@@ -1067,7 +1136,9 @@ class ModelManager:
             if entry is None:
                 return False
             if entry.is_loaded:
-                raise ValueError(f"Cannot unregister loaded model '{model_id}'. Unload first.")
+                raise ValueError(
+                    f"Cannot unregister loaded model '{model_id}'. Unload first."
+                )
             # also refuse while LOADING — symmetric with register_model's
             # is_loading guard (line ~345). Deleting the entry mid-load orphans the
             # in-flight loader's local `entry` reference: the load completes outside
@@ -1078,7 +1149,9 @@ class ModelManager:
             # finally's `_loading_events.pop(model_id)` can pop a re-registered model's
             # NEW event → fresh waiters hang. Force an unload (or wait) first.
             if entry.is_loading:
-                raise ValueError(f"Cannot unregister loading model '{model_id}'. Wait for load or unload first.")
+                raise ValueError(
+                    f"Cannot unregister loading model '{model_id}'. Wait for load or unload first."
+                )
             del self._entries[model_id]
         logger.info("Unregistered model: %s", model_id)
         return True
@@ -1105,7 +1178,13 @@ class ModelManager:
             has_diffusion_dirs = all(
                 (subdir / d).is_dir() for d in ("transformer", "vae", "text_encoder")
             )
-            if not (has_config or has_weights or has_nested_weights or has_model_index or has_diffusion_dirs):
+            if not (
+                has_config
+                or has_weights
+                or has_nested_weights
+                or has_model_index
+                or has_diffusion_dirs
+            ):
                 continue
 
             model_id = subdir.name
@@ -1120,7 +1199,11 @@ class ModelManager:
             was_pinned = existing.is_pinned if existing is not None else False
 
             try:
-                raw_bytes = sum(f.stat().st_size for f in subdir.rglob("*.safetensors") if f.is_file())
+                raw_bytes = sum(
+                    f.stat().st_size
+                    for f in subdir.rglob("*.safetensors")
+                    if f.is_file()
+                )
             except (OSError, PermissionError) as e:
                 logger.warning("Skipping model %s: cannot read files: %s", model_id, e)
                 continue
@@ -1175,9 +1258,7 @@ class ModelManager:
         # Collect loaded model IDs under the lock, then unload each
         async with self._lock:
             self._shutting_down = True
-            loaded_ids = [
-                mid for mid, e in self._entries.items() if e.is_loaded
-            ]
+            loaded_ids = [mid for mid, e in self._entries.items() if e.is_loaded]
 
         for model_id in loaded_ids:
             try:
@@ -1185,7 +1266,9 @@ class ModelManager:
                 # requests (the process is going away regardless).
                 await self.unload_model(model_id, force=True)
             except Exception as e:
-                logger.error(f"Error unloading {model_id} during shutdown: {e}", exc_info=True)
+                logger.error(
+                    f"Error unloading {model_id} during shutdown: {e}", exc_info=True
+                )
 
         logger.info(
             "ModelManager shutdown complete: %d models registered, %d loaded",

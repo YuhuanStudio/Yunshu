@@ -114,8 +114,11 @@ class Engine:
     - EngineCore: Scheduler + RequestOutputCollector orchestration
     """
 
-    def __init__(self, config: EngineConfig | None = None, *, use_engine_core: bool = True) -> None:
+    def __init__(
+        self, config: EngineConfig | None = None, *, use_engine_core: bool = True
+    ) -> None:
         import warnings
+
         warnings.warn(
             "Engine is deprecated. Use BatchedEngine for all new code.",
             DeprecationWarning,
@@ -131,6 +134,7 @@ class Engine:
 
         # Global MLX executor (single-thread, shared across all engines)
         from .mlx_executor import get_mlx_executor
+
         self._executor = get_mlx_executor()
 
         # Lifecycle
@@ -155,6 +159,7 @@ class Engine:
 
         # Memory monitor
         from .memory_monitor import MemoryMonitor
+
         self._memory_monitor = MemoryMonitor()
 
         # EngineCore backend
@@ -183,7 +188,7 @@ class Engine:
 
     @property
     def model_name(self) -> str | None:
-        return getattr(self, '_model_display', self._model_name)
+        return getattr(self, "_model_display", self._model_name)
 
     def resolve_model_id(self, model_id: str) -> bool:
         """Check if a requested model ID matches the loaded model.
@@ -197,7 +202,7 @@ class Engine:
         if not self.is_loaded or not self._model_name:
             return False
 
-        display = getattr(self, '_model_display', '') or ''
+        display = getattr(self, "_model_display", "") or ""
         full = self._model_name
 
         known = {display, full}
@@ -206,8 +211,8 @@ class Engine:
         if model_id in known or model_id.lower() in known_lower:
             return True
 
-        if '/' in model_id:
-            stripped = model_id.rsplit('/', 1)[-1]
+        if "/" in model_id:
+            stripped = model_id.rsplit("/", 1)[-1]
             if stripped in known or stripped.lower() in known_lower:
                 return True
 
@@ -220,16 +225,21 @@ class Engine:
         from .mlx_executor import get_mlx_executor
 
         self._model_name = model_name
-        self._model_display = model_name.rsplit("/", 1)[-1] if "/" in model_name else model_name
+        self._model_display = (
+            model_name.rsplit("/", 1)[-1] if "/" in model_name else model_name
+        )
 
         # Load on MLX executor thread to ensure Metal buffers are on the right stream
         executor = get_mlx_executor()
         self._model, self._tokenizer = executor.submit(load_model, model_name).result()
         from .text_utils import cache_tokenizer_vocab
+
         cache_tokenizer_vocab(self._tokenizer)  # avoid ~98ms/req get_vocab rebuild
 
         self._setup_engine_backend(model_name)
-        logger.info(f"Engine loaded model: {model_name} (engine_core={self._use_engine_core})")
+        logger.info(
+            f"Engine loaded model: {model_name} (engine_core={self._use_engine_core})"
+        )
         self._init_memory_monitor()
 
     def _setup_engine_backend(self, model_name: str) -> None:
@@ -241,6 +251,7 @@ class Engine:
 
         if self._use_engine_core:
             from .engine_core import EngineCore, EngineCoreConfig
+
             # External prefill (opt-in via YUNSHU_EXTERNAL_PREFILL=1)
             _external_prefill = os.environ.get(
                 "YUNSHU_EXTERNAL_PREFILL", ""
@@ -340,6 +351,7 @@ class Engine:
         gc.collect()
         loop = asyncio.get_running_loop()
         from .mlx_executor import sync_and_clear_cache
+
         try:
             await loop.run_in_executor(self._executor, sync_and_clear_cache)
         except Exception:
@@ -360,14 +372,21 @@ class Engine:
         detok.reset()
         return detok
 
-    def _make_sampler(self, temperature: float = 0.7, top_p: float = 1.0,
-                      top_k: int = 0, min_p: float = 0.0,
-                      xtc_probability: float = 0.0, xtc_threshold: float = 0.0):
+    def _make_sampler(
+        self,
+        temperature: float = 0.7,
+        top_p: float = 1.0,
+        top_k: int = 0,
+        min_p: float = 0.0,
+        xtc_probability: float = 0.0,
+        xtc_threshold: float = 0.0,
+    ):
         """Create a per-request sampler with the given parameters.
 
         Supports all mlx-lm sampler params.
         """
         from mlx_lm.sample_utils import make_sampler
+
         return make_sampler(
             temp=temperature,
             top_p=top_p,
@@ -377,8 +396,9 @@ class Engine:
             xtc_threshold=xtc_threshold,
         )
 
-    def _make_state_machine(self, stop: list[str] | None = None,
-                            stop_token_ids: list[int] | None = None):
+    def _make_state_machine(
+        self, stop: list[str] | None = None, stop_token_ids: list[int] | None = None
+    ):
         """Create a SequenceStateMachine for stop sequence detection.
 
         - EOS tokens always stop generation
@@ -391,10 +411,12 @@ class Engine:
 
         tokenizer = self._tokenizer
 
-        eos_ids = list(tokenizer.eos_token_ids) if hasattr(tokenizer, 'eos_token_ids') else []
+        eos_ids = (
+            list(tokenizer.eos_token_ids) if hasattr(tokenizer, "eos_token_ids") else []
+        )
 
         common_stops = [((t,), None) for t in eos_ids]
-        for w in (stop or []):
+        for w in stop or []:
             if not w:
                 continue
             t = tuple(tokenizer.encode(w, add_special_tokens=False))
@@ -402,13 +424,13 @@ class Engine:
                 common_stops.append((t, None))
 
         # Add explicit stop_token_ids
-        for tid in (stop_token_ids or []):
+        for tid in stop_token_ids or []:
             common_stops.append(((tid,), None))
 
         transitions = {}
         transitions["normal"] = list(common_stops)
 
-        if getattr(tokenizer, 'has_thinking', False):
+        if getattr(tokenizer, "has_thinking", False):
             try:
                 ts = tokenizer.think_start_tokens
                 te = tokenizer.think_end_tokens
@@ -454,15 +476,25 @@ class Engine:
 
         # Parameters not supported by legacy engine — log and ignore
         if spec_decode:
-            logger.debug("spec_decode ignored in legacy Engine (requires BatchedEngine)")
+            logger.debug(
+                "spec_decode ignored in legacy Engine (requires BatchedEngine)"
+            )
         if json_schema:
-            logger.debug("json_schema ignored in legacy Engine (requires BatchedEngine)")
+            logger.debug(
+                "json_schema ignored in legacy Engine (requires BatchedEngine)"
+            )
         if thinking_budget is not None:
-            logger.debug("thinking_budget ignored in legacy Engine (requires BatchedEngine)")
+            logger.debug(
+                "thinking_budget ignored in legacy Engine (requires BatchedEngine)"
+            )
         if reasoning_effort is not None:
-            logger.debug("reasoning_effort ignored in legacy Engine (requires BatchedEngine)")
+            logger.debug(
+                "reasoning_effort ignored in legacy Engine (requires BatchedEngine)"
+            )
         if logprobs:
-            logger.debug("logprobs/top_logprobs ignored in legacy Engine (requires BatchedEngine)")
+            logger.debug(
+                "logprobs/top_logprobs ignored in legacy Engine (requires BatchedEngine)"
+            )
         if priority > 0:
             logger.debug("priority ignored in legacy Engine (single-request path)")
 
@@ -627,8 +659,7 @@ class Engine:
                 # BatchGenerator.next() returns List[Response] (flat list).
                 # Filter for generation-phase responses only.
                 gen_responses = [
-                    r for r in all_responses
-                    if not getattr(r, 'end_of_prompt', False)
+                    r for r in all_responses if not getattr(r, "end_of_prompt", False)
                 ]
             except Exception as e:
                 logger.error(f"Step error: {e}", exc_info=True)
@@ -671,6 +702,7 @@ class Engine:
             if should_clear:
                 try:
                     from .mlx_executor import sync_and_clear_cache
+
                     await loop.run_in_executor(self._executor, sync_and_clear_cache)
                 except Exception:
                     logger.debug("deferred Metal cache clear failed", exc_info=True)
@@ -695,9 +727,12 @@ class Engine:
             tokens = state.prompt_tokens
             try:
                 sampler = self._make_sampler(
-                    state.temperature, state.top_p,
-                    state.top_k, state.min_p,
-                    state.xtc_probability, state.xtc_threshold,
+                    state.temperature,
+                    state.top_p,
+                    state.top_k,
+                    state.min_p,
+                    state.xtc_probability,
+                    state.xtc_threshold,
                 )
                 sm = self._make_state_machine(state.stop, state.stop_token_ids)
 
@@ -715,7 +750,9 @@ class Engine:
                 self._total_prompt_tokens += state.prompt_token_count
 
             except Exception as e:
-                logger.error(f"Failed to insert request {state.request_id}: {e}", exc_info=True)
+                logger.error(
+                    f"Failed to insert request {state.request_id}: {e}", exc_info=True
+                )
                 state.finish_reason = "error"
                 state.output_queue.put_nowait(None)
                 state.done_event.set()
@@ -780,7 +817,9 @@ class Engine:
                     state.detokenizer.add_token(resp.token)
                     token_text = state.detokenizer.last_segment
                 else:
-                    token_text = self._tokenizer.decode([resp.token]) if self._tokenizer else ""
+                    token_text = (
+                        self._tokenizer.decode([resp.token]) if self._tokenizer else ""
+                    )
 
                 state.generated_text += token_text
             # finish_reason="stop": stop token should NOT be counted per OpenAI API convention.
@@ -788,14 +827,14 @@ class Engine:
 
             # Extract logprob if available
             logprob = 0.0
-            if hasattr(resp, 'logprobs') and resp.logprobs is not None:
+            if hasattr(resp, "logprobs") and resp.logprobs is not None:
                 try:
                     logprob = float(resp.logprobs[resp.token].item())
                 except Exception:
                     logger.debug("logprob extraction failed", exc_info=True)
 
             # Get state machine state
-            current_state = getattr(resp, 'current_state', 'normal') or 'normal'
+            current_state = getattr(resp, "current_state", "normal") or "normal"
 
             # finish_reason from BatchGenerator
             finish_reason = resp.finish_reason
@@ -855,6 +894,7 @@ class Engine:
                 # Server metrics integration
                 try:
                     from .server_metrics import get_server_metrics
+
                     get_server_metrics().record_request_complete(
                         prompt_tokens=state.prompt_token_count,
                         completion_tokens=state.completion_token_count,
@@ -875,11 +915,16 @@ class Engine:
         - If enable_thinking is explicitly set, passes it to the chat template
         - This controls whether Qwen3/DeepSeek-R1 emit <think/> tags
         """
-        if self._tokenizer is not None and hasattr(self._tokenizer, "apply_chat_template"):
+        if self._tokenizer is not None and hasattr(
+            self._tokenizer, "apply_chat_template"
+        ):
             try:
                 clean_messages = []
                 for msg in messages:
-                    m = {"role": msg.get("role", "user"), "content": msg.get("content", "")}
+                    m = {
+                        "role": msg.get("role", "user"),
+                        "content": msg.get("content", ""),
+                    }
                     # Preserve tool-related fields for correct template rendering
                     if msg.get("tool_calls"):
                         m["tool_calls"] = msg["tool_calls"]
@@ -921,33 +966,28 @@ class Engine:
         if self._model is None:
             return
 
-        config = getattr(self._model, 'config', None)
+        config = getattr(self._model, "config", None)
         if config is None:
             return
 
         # Extract architecture params
-        num_layers = (
-            getattr(config, 'num_hidden_layers', None)
-            or (config.get('num_hidden_layers') if isinstance(config, dict) else None)
+        num_layers = getattr(config, "num_hidden_layers", None) or (
+            config.get("num_hidden_layers") if isinstance(config, dict) else None
         )
-        num_kv_heads = (
-            getattr(config, 'num_key_value_heads', None)
-            or (config.get('num_key_value_heads') if isinstance(config, dict) else None)
+        num_kv_heads = getattr(config, "num_key_value_heads", None) or (
+            config.get("num_key_value_heads") if isinstance(config, dict) else None
         )
-        num_attn_heads = (
-            getattr(config, 'num_attention_heads', None)
-            or (config.get('num_attention_heads') if isinstance(config, dict) else None)
+        num_attn_heads = getattr(config, "num_attention_heads", None) or (
+            config.get("num_attention_heads") if isinstance(config, dict) else None
         )
-        head_dim = (
-            getattr(config, 'head_dim', None)
-            or (config.get('head_dim') if isinstance(config, dict) else None)
+        head_dim = getattr(config, "head_dim", None) or (
+            config.get("head_dim") if isinstance(config, dict) else None
         )
 
         # Infer head_dim from hidden_size / num_heads if not explicit
         if head_dim is None and num_attn_heads:
-            hidden = (
-                getattr(config, 'hidden_size', None)
-                or (config.get('hidden_size') if isinstance(config, dict) else None)
+            hidden = getattr(config, "hidden_size", None) or (
+                config.get("hidden_size") if isinstance(config, dict) else None
             )
             if hidden:
                 head_dim = hidden // num_attn_heads
@@ -977,14 +1017,16 @@ class Engine:
         if self._engine_core is not None:
             base.update(self._engine_core.get_stats())
         else:
-            base.update({
-                "waiting": len(self._waiting),
-                "active": len(self._active),
-                "active_uids": len(self._uid_to_req),
-                "pending_aborts": len(self._abort_set),
-                "step_counter": self._step_counter,
-                "num_requests_processed": self._num_requests_processed,
-                "total_prompt_tokens": self._total_prompt_tokens,
-                "total_completion_tokens": self._total_completion_tokens,
-            })
+            base.update(
+                {
+                    "waiting": len(self._waiting),
+                    "active": len(self._active),
+                    "active_uids": len(self._uid_to_req),
+                    "pending_aborts": len(self._abort_set),
+                    "step_counter": self._step_counter,
+                    "num_requests_processed": self._num_requests_processed,
+                    "total_prompt_tokens": self._total_prompt_tokens,
+                    "total_completion_tokens": self._total_completion_tokens,
+                }
+            )
         return base

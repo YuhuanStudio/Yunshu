@@ -8,6 +8,7 @@ for a segment like "goodbyeEND" with stop "END", "goodbye" was permanently lost 
 append-only SSE stream. The text engine emits BOTH; the VLM (and the dead MTP) paths now do
 too.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -30,7 +31,10 @@ def test_vlm_streaming_emits_feed_plus_take_stopped():
     src = inspect.getsource(vlm_engine)
     # the broken pattern (feed then take_stopped on separate lines, discarding feed) is gone
     assert "_hb.feed(_seg)\n                token_text = _hb.take_stopped()" not in src
-    assert "_hb.feed(_seg)\n                        token_text = _hb.take_stopped()" not in src
+    assert (
+        "_hb.feed(_seg)\n                        token_text = _hb.take_stopped()"
+        not in src
+    )
     # the corrected combined form is present on the VLM stop paths
     assert src.count("_hb.feed(_seg) + _hb.take_stopped()") >= 2
     assert "_hb.feed(token_text) + _hb.take_stopped()" in src

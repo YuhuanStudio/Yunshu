@@ -1,4 +1,5 @@
 """cross-request vision-feature cache (wraps the VLM vision tower)."""
+
 from __future__ import annotations
 
 import mlx.core as mx
@@ -51,8 +52,10 @@ def test_lru_eviction():
     t = _FakeTower()
     w = _CachingVisionTower(t, max_entries=2)
     a, b, c = mx.ones((1, 2)), mx.full((1, 2), 2.0), mx.full((1, 2), 3.0)
-    w(a); w(b); w(c)              # evicts a
-    w(a)                          # a was evicted → miss (re-encode)
+    w(a)
+    w(b)
+    w(c)  # evicts a
+    w(a)  # a was evicted → miss (re-encode)
     assert t.calls == 4
     assert w.cache_stats()["vision_tower_cache_entries"] == 2
 
@@ -65,11 +68,16 @@ def test_attribute_proxy():
 
 def test_wrap_vision_towers_finds_direct_and_nested():
     class _DirectModel:
-        def __init__(self): self.vision_tower = _FakeTower()
+        def __init__(self):
+            self.vision_tower = _FakeTower()
+
     class _Thinker:
-        def __init__(self): self.vision_tower = _FakeTower()
+        def __init__(self):
+            self.vision_tower = _FakeTower()
+
     class _NestedModel:
-        def __init__(self): self.thinker = _Thinker()
+        def __init__(self):
+            self.thinker = _Thinker()
 
     dm = _DirectModel()
     wraps = _wrap_vision_towers(dm)

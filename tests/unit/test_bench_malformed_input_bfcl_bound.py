@@ -7,6 +7,7 @@ defense, benchmark serialization lock). Two LOW in bench:
     → caught by the generic handler → 500 instead of 422.
   - bfcl-eval max_samples had no upper bound.
 """
+
 from __future__ import annotations
 
 import pydantic
@@ -34,4 +35,6 @@ def test_bfcl_max_samples_upper_bound():
     # boundary + default ok
     assert BFCLEvalRequest(model="m", max_samples=100000).max_samples == 100000
     assert BFCLEvalRequest(model="m").max_samples == 10
-    assert BFCLEvalRequest(model="m", max_samples=0).max_samples == 0  # 0 = all, still valid
+    assert (
+        BFCLEvalRequest(model="m", max_samples=0).max_samples == 0
+    )  # 0 = all, still valid

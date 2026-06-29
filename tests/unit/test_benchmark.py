@@ -2,6 +2,7 @@
 
 All tests use a mock engine (no real model required).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -38,24 +39,34 @@ def _make_mock_engine(
     engine = AsyncMock()
 
     async def _generate(prompt: str, max_tokens: int = 256, **kwargs):
-        return type("GenResult", (), {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "text": "x " * completion_tokens,
-            "finished": True,
-            "finish_reason": "length",
-        })()
+        return type(
+            "GenResult",
+            (),
+            {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "text": "x " * completion_tokens,
+                "finished": True,
+                "finish_reason": "length",
+            },
+        )()
 
-    async def _stream(prompt: str, max_tokens: int = 256, temperature: float = 0.0, **kwargs):
+    async def _stream(
+        prompt: str, max_tokens: int = 256, temperature: float = 0.0, **kwargs
+    ):
         for i in range(completion_tokens):
             await asyncio.sleep(delay_per_token)
-            chunk = type("Chunk", (), {
-                "new_text": "x ",
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": i + 1,
-                "finished": i == completion_tokens - 1,
-                "finish_reason": "length" if i == completion_tokens - 1 else None,
-            })()
+            chunk = type(
+                "Chunk",
+                (),
+                {
+                    "new_text": "x ",
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": i + 1,
+                    "finished": i == completion_tokens - 1,
+                    "finish_reason": "length" if i == completion_tokens - 1 else None,
+                },
+            )()
             yield chunk
 
     engine.generate = _generate
@@ -91,9 +102,14 @@ class TestBenchmarkResult:
 
     def test_to_dict(self):
         r = BenchmarkResult(
-            prompt_tokens=10, completion_tokens=20,
-            ttft_ms=1.0, tpot_ms=2.0, total_latency_ms=3.0,
-            throughput_tps=4.0, prefill_time_ms=5.0, decode_time_ms=6.0,
+            prompt_tokens=10,
+            completion_tokens=20,
+            ttft_ms=1.0,
+            tpot_ms=2.0,
+            total_latency_ms=3.0,
+            throughput_tps=4.0,
+            prefill_time_ms=5.0,
+            decode_time_ms=6.0,
         )
         d = r.to_dict()
         assert isinstance(d, dict)
@@ -103,9 +119,14 @@ class TestBenchmarkResult:
 
     def test_zero_values(self):
         r = BenchmarkResult(
-            prompt_tokens=0, completion_tokens=0,
-            ttft_ms=0.0, tpot_ms=0.0, total_latency_ms=0.0,
-            throughput_tps=0.0, prefill_time_ms=0.0, decode_time_ms=0.0,
+            prompt_tokens=0,
+            completion_tokens=0,
+            ttft_ms=0.0,
+            tpot_ms=0.0,
+            total_latency_ms=0.0,
+            throughput_tps=0.0,
+            prefill_time_ms=0.0,
+            decode_time_ms=0.0,
         )
         assert r.prompt_tokens == 0
         assert r.completion_tokens == 0
@@ -117,9 +138,14 @@ class TestBatchBenchmarkResult:
 
     def _make_single_result(self, latency: float) -> BenchmarkResult:
         return BenchmarkResult(
-            prompt_tokens=10, completion_tokens=20,
-            ttft_ms=latency * 0.1, tpot_ms=1.0, total_latency_ms=latency,
-            throughput_tps=10.0, prefill_time_ms=latency * 0.1, decode_time_ms=latency * 0.9,
+            prompt_tokens=10,
+            completion_tokens=20,
+            ttft_ms=latency * 0.1,
+            tpot_ms=1.0,
+            total_latency_ms=latency,
+            throughput_tps=10.0,
+            prefill_time_ms=latency * 0.1,
+            decode_time_ms=latency * 0.9,
         )
 
     def test_construction_and_percentiles(self):
@@ -141,13 +167,17 @@ class TestBatchBenchmarkResult:
 
     def test_to_dict(self):
         batch = BatchBenchmarkResult(
-            num_requests=2, total_tokens=60, total_time_s=0.5,
+            num_requests=2,
+            total_tokens=60,
+            total_time_s=0.5,
             aggregate_tps=120.0,
             per_request=[
                 self._make_single_result(100.0),
                 self._make_single_result(200.0),
             ],
-            latency_p50_ms=150.0, latency_p95_ms=190.0, latency_p99_ms=198.0,
+            latency_p50_ms=150.0,
+            latency_p95_ms=190.0,
+            latency_p99_ms=198.0,
         )
         d = batch.to_dict()
         assert isinstance(d, dict)
@@ -204,7 +234,8 @@ class TestBenchSingleRequest:
         engine = _make_mock_engine(prompt_tokens=50, completion_tokens=10)
         runner = BenchmarkRunner(engine)
         result = await runner.bench_single_request(
-            prompt_tokens=50, max_tokens=10,
+            prompt_tokens=50,
+            max_tokens=10,
         )
         assert isinstance(result, BenchmarkResult)
         assert result.prompt_tokens == 50
@@ -226,7 +257,8 @@ class TestBenchSingleRequest:
         engine.stream_generate = _empty_stream
         runner = BenchmarkRunner(engine)
         result = await runner.bench_single_request(
-            prompt_tokens=10, max_tokens=0,
+            prompt_tokens=10,
+            max_tokens=0,
         )
         assert isinstance(result, BenchmarkResult)
         assert result.ttft_ms >= 0
@@ -238,7 +270,8 @@ class TestBenchSingleRequest:
         engine = _make_mock_engine(prompt_tokens=10, completion_tokens=1)
         runner = BenchmarkRunner(engine)
         result = await runner.bench_single_request(
-            prompt_tokens=10, max_tokens=1,
+            prompt_tokens=10,
+            max_tokens=1,
         )
         assert isinstance(result, BenchmarkResult)
         assert result.ttft_ms > 0
@@ -253,7 +286,10 @@ class TestBenchBatch:
         engine = _make_mock_engine(prompt_tokens=30, completion_tokens=5)
         runner = BenchmarkRunner(engine)
         result = await runner.bench_batch(
-            prompts=3, max_tokens=5, concurrency=3, prompt_tokens=30,
+            prompts=3,
+            max_tokens=5,
+            concurrency=3,
+            prompt_tokens=30,
         )
         assert isinstance(result, BatchBenchmarkResult)
         assert result.num_requests == 3
@@ -278,7 +314,10 @@ class TestBenchBatch:
         engine = _make_mock_engine(prompt_tokens=20, completion_tokens=5)
         runner = BenchmarkRunner(engine)
         result = await runner.bench_batch(
-            prompts=5, max_tokens=5, concurrency=5, prompt_tokens=20,
+            prompts=5,
+            max_tokens=5,
+            concurrency=5,
+            prompt_tokens=20,
         )
         assert result.latency_p50_ms > 0
         assert result.latency_p95_ms >= result.latency_p50_ms
@@ -326,11 +365,15 @@ class TestRunSuite:
 
         # First 3 should be single request results
         for i in range(3):
-            assert isinstance(suite.results[i], BenchmarkResult), f"Result {i} should be BenchmarkResult"
+            assert isinstance(suite.results[i], BenchmarkResult), (
+                f"Result {i} should be BenchmarkResult"
+            )
 
         # Last 2 should be batch results
         for i in range(3, 5):
-            assert isinstance(suite.results[i], BatchBenchmarkResult), f"Result {i} should be BatchBenchmarkResult"
+            assert isinstance(suite.results[i], BatchBenchmarkResult), (
+                f"Result {i} should be BatchBenchmarkResult"
+            )
 
     @pytest.mark.asyncio
     async def test_suite_timestamp(self):
@@ -359,9 +402,14 @@ class TestFormatResults:
 
     def test_format_single(self):
         r = BenchmarkResult(
-            prompt_tokens=128, completion_tokens=256,
-            ttft_ms=12.5, tpot_ms=4.3, total_latency_ms=1100.0,
-            throughput_tps=230.0, prefill_time_ms=12.5, decode_time_ms=1087.5,
+            prompt_tokens=128,
+            completion_tokens=256,
+            ttft_ms=12.5,
+            tpot_ms=4.3,
+            total_latency_ms=1100.0,
+            throughput_tps=230.0,
+            prefill_time_ms=12.5,
+            decode_time_ms=1087.5,
         )
         output = BenchmarkRunner.format_results(r)
         assert "### Single Request Benchmark" in output
@@ -371,9 +419,14 @@ class TestFormatResults:
 
     def test_format_batch(self):
         r = BatchBenchmarkResult(
-            num_requests=4, total_tokens=1000, total_time_s=2.5,
-            aggregate_tps=400.0, per_request=[],
-            latency_p50_ms=200.0, latency_p95_ms=300.0, latency_p99_ms=350.0,
+            num_requests=4,
+            total_tokens=1000,
+            total_time_s=2.5,
+            aggregate_tps=400.0,
+            per_request=[],
+            latency_p50_ms=200.0,
+            latency_p95_ms=300.0,
+            latency_p99_ms=350.0,
         )
         output = BenchmarkRunner.format_results(r)
         assert "### Batch Benchmark" in output
@@ -387,14 +440,24 @@ class TestFormatResults:
             chip="Apple M2",
             results=[
                 BenchmarkResult(
-                    prompt_tokens=10, completion_tokens=20,
-                    ttft_ms=1.0, tpot_ms=2.0, total_latency_ms=3.0,
-                    throughput_tps=4.0, prefill_time_ms=5.0, decode_time_ms=6.0,
+                    prompt_tokens=10,
+                    completion_tokens=20,
+                    ttft_ms=1.0,
+                    tpot_ms=2.0,
+                    total_latency_ms=3.0,
+                    throughput_tps=4.0,
+                    prefill_time_ms=5.0,
+                    decode_time_ms=6.0,
                 ),
                 BatchBenchmarkResult(
-                    num_requests=2, total_tokens=60, total_time_s=0.5,
-                    aggregate_tps=120.0, per_request=[],
-                    latency_p50_ms=100.0, latency_p95_ms=150.0, latency_p99_ms=180.0,
+                    num_requests=2,
+                    total_tokens=60,
+                    total_time_s=0.5,
+                    aggregate_tps=120.0,
+                    per_request=[],
+                    latency_p50_ms=100.0,
+                    latency_p95_ms=150.0,
+                    latency_p99_ms=180.0,
                 ),
             ],
             timestamp="2025-01-01T00:00:00+00:00",
@@ -413,9 +476,14 @@ class TestFormatResults:
     def test_format_results_is_valid_markdown_table(self):
         """Verify the output has proper table formatting."""
         r = BenchmarkResult(
-            prompt_tokens=10, completion_tokens=20,
-            ttft_ms=1.0, tpot_ms=2.0, total_latency_ms=3.0,
-            throughput_tps=4.0, prefill_time_ms=5.0, decode_time_ms=6.0,
+            prompt_tokens=10,
+            completion_tokens=20,
+            ttft_ms=1.0,
+            tpot_ms=2.0,
+            total_latency_ms=3.0,
+            throughput_tps=4.0,
+            prefill_time_ms=5.0,
+            decode_time_ms=6.0,
         )
         output = BenchmarkRunner.format_results(r)
         lines = output.strip().split("\n")
@@ -434,28 +502,38 @@ class TestEdgeCases:
 
         # Override generate to simulate empty prompt
         async def _gen(prompt, **kwargs):
-            return type("R", (), {
-                "prompt_tokens": 0,
-                "completion_tokens": 2,
-                "text": "x",
-                "finished": True,
-                "finish_reason": "length",
-            })()
+            return type(
+                "R",
+                (),
+                {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 2,
+                    "text": "x",
+                    "finished": True,
+                    "finish_reason": "length",
+                },
+            )()
 
         engine.generate = _gen
 
         runner = BenchmarkRunner(engine)
         # _make_prompt(0) still produces a string
         result = await runner.bench_single_request(
-            prompt_tokens=0, max_tokens=2,
+            prompt_tokens=0,
+            max_tokens=2,
         )
         assert isinstance(result, BenchmarkResult)
 
     def test_benchmark_result_json_serializable(self):
         r = BenchmarkResult(
-            prompt_tokens=0, completion_tokens=0,
-            ttft_ms=0.0, tpot_ms=0.0, total_latency_ms=0.0,
-            throughput_tps=0.0, prefill_time_ms=0.0, decode_time_ms=0.0,
+            prompt_tokens=0,
+            completion_tokens=0,
+            ttft_ms=0.0,
+            tpot_ms=0.0,
+            total_latency_ms=0.0,
+            throughput_tps=0.0,
+            prefill_time_ms=0.0,
+            decode_time_ms=0.0,
         )
         serialized = json.dumps(r.to_dict())
         assert isinstance(serialized, str)

@@ -43,9 +43,11 @@ def get_optimization_status() -> dict:
         except Exception:
             logger.debug("MLX memory stats read failed", exc_info=True)
 
-    flash_available = hasattr(mx, "fast") and hasattr(
-        mx.fast, "scaled_dot_product_attention"
-    ) if mx else False
+    flash_available = (
+        hasattr(mx, "fast") and hasattr(mx.fast, "scaled_dot_product_attention")
+        if mx
+        else False
+    )
 
     return {
         "hardware": {

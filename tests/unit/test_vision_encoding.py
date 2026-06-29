@@ -11,6 +11,7 @@ Covers:
   - Environment variable override (YUNSHU_VISION_ENCODER)
   - Integration helpers: create_vision_encoder_for_model, get_vision_encoding_strategy
 """
+
 from __future__ import annotations
 
 import os
@@ -40,6 +41,7 @@ from yunshu_engine.vision_encoding import (
 
 class FakeConfig:
     """Fake model config with model_type."""
+
     def __init__(self, model_type="qwen2_vl", hidden_size=4096):
         self.model_type = model_type
         self.hidden_size = hidden_size
@@ -47,8 +49,10 @@ class FakeConfig:
 
 class FakeModel:
     """Fake model for testing supports_model and encode."""
-    def __init__(self, model_type="qwen2_vl", module="mlx_vlm.models.qwen2_vl",
-                 extra_attrs=None):
+
+    def __init__(
+        self, model_type="qwen2_vl", module="mlx_vlm.models.qwen2_vl", extra_attrs=None
+    ):
         self.config = FakeConfig(model_type)
         self._module = module
         if extra_attrs:
@@ -106,6 +110,7 @@ class TestVisionEncoderABC:
         class Incomplete(VisionEncoder):
             def supports_model(self, model):
                 return True
+
         with pytest.raises(TypeError):
             Incomplete()
 
@@ -113,8 +118,10 @@ class TestVisionEncoderABC:
         class Complete(VisionEncoder):
             def encode_image(self, image, model, processor=None):
                 return mx.zeros((1, 1, 10))
+
             def supports_model(self, model):
                 return True
+
         enc = Complete()
         assert enc.supports_model(None)
         result = enc.encode_image(None, None)
@@ -122,11 +129,14 @@ class TestVisionEncoderABC:
 
     def test_default_encode_images(self):
         """encode_images should default to sequential encode_image calls."""
+
         class Single(VisionEncoder):
             def encode_image(self, image, model, processor=None):
                 return mx.ones((1, 1, 4))
+
             def supports_model(self, model):
                 return True
+
         enc = Single()
         results = enc.encode_images([1, 2, 3], None)
         assert len(results) == 3
@@ -198,7 +208,9 @@ class TestQwenVLEncoder:
         assert enc.supports_model(model)
 
     def test_supports_qwen3_omni_moe(self):
-        model = _make_model_with_module("mlx_vlm.models.qwen3_omni_moe", "qwen3_omni_moe")
+        model = _make_model_with_module(
+            "mlx_vlm.models.qwen3_omni_moe", "qwen3_omni_moe"
+        )
         enc = QwenVLEncoder()
         assert enc.supports_model(model)
 
@@ -337,7 +349,9 @@ class TestLLaVAEncoder:
         enc = LLaVAEncoder()
         processor = MagicMock()
         processor._prepare_image_inputs.side_effect = Exception("no image")
-        results = enc.encode_images(["img1.jpg", "img2.jpg", "img3.jpg"], model, processor)
+        results = enc.encode_images(
+            ["img1.jpg", "img2.jpg", "img3.jpg"], model, processor
+        )
         assert len(results) == 3
 
     def test_encode_images_empty(self):
@@ -443,7 +457,8 @@ class TestVisionEncoderFactory:
     def test_explicit_llava_with_pooling(self):
         model = MagicMock(spec=[])
         enc = VisionEncoderFactory.create_encoder(
-            model, strategy=VisionEncodingStrategy.LLAVA,
+            model,
+            strategy=VisionEncodingStrategy.LLAVA,
             pooling_strategy="spatial_avg",
         )
         assert isinstance(enc, LLaVAEncoder)
@@ -464,7 +479,8 @@ class TestVisionEncoderFactory:
         VisionEncoderFactory.register_custom_encoder("test", my_enc)
         model = MagicMock(spec=[])
         enc = VisionEncoderFactory.create_encoder(
-            model, strategy=VisionEncodingStrategy.CUSTOM,
+            model,
+            strategy=VisionEncodingStrategy.CUSTOM,
             custom_name="test",
         )
         assert isinstance(enc, CustomEncoder)

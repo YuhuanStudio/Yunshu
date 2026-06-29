@@ -8,12 +8,16 @@ from python.yunshu_engine.vlm_engine import VLMEngine
 
 # ── Helpers ──
 
+
 class FakeTokenizer:
     """Minimal tokenizer for VLMEngine init."""
+
     def encode(self, text):
         return [1, 2, 3]
+
     def decode(self, ids, **kw):
         return "decoded"
+
     @property
     def eos_token_id(self):
         return 2
@@ -21,6 +25,7 @@ class FakeTokenizer:
 
 class FakeModel:
     """Minimal model object."""
+
     pass
 
 
@@ -33,6 +38,7 @@ def _make_engine():
     engine._config = {"model_type": "qwen2_vl"}
     engine._temp_files = []
     import threading
+
     engine._temp_files_lock = threading.Lock()
     engine._is_vlm = True
     engine._has_vision = True
@@ -48,39 +54,70 @@ def _make_engine():
 class TestVideoDetection:
     def test_has_video_with_video_url(self):
         from python.yunshu_gateway.routers.chat import _has_video
-        messages = [{"role": "user", "content": [
-            {"type": "text", "text": "Describe this video"},
-            {"type": "video_url", "video_url": {"url": "file:///tmp/test.mp4"}},
-        ]}]
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this video"},
+                    {"type": "video_url", "video_url": {"url": "file:///tmp/test.mp4"}},
+                ],
+            }
+        ]
         assert _has_video(messages) is True
 
     def test_has_video_with_video_file(self):
         from python.yunshu_gateway.routers.chat import _has_video
-        messages = [{"role": "user", "content": [
-            {"type": "text", "text": "Analyze"},
-            {"type": "video_file", "video_file": {"file_id": "/tmp/vid.mp4"}},
-        ]}]
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Analyze"},
+                    {"type": "video_file", "video_file": {"file_id": "/tmp/vid.mp4"}},
+                ],
+            }
+        ]
         assert _has_video(messages) is True
 
     def test_no_video_text_only(self):
         from python.yunshu_gateway.routers.chat import _has_video
+
         messages = [{"role": "user", "content": "Hello"}]
         assert _has_video(messages) is False
 
     def test_no_video_image_only(self):
         from python.yunshu_gateway.routers.chat import _has_video
-        messages = [{"role": "user", "content": [
-            {"type": "image_url", "image_url": {"url": "http://example.com/img.png"}},
-        ]}]
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "http://example.com/img.png"},
+                    },
+                ],
+            }
+        ]
         assert _has_video(messages) is False
 
     def test_has_video_mixed_content(self):
         from python.yunshu_gateway.routers.chat import _has_video
-        messages = [{"role": "user", "content": [
-            {"type": "text", "text": "Look at this"},
-            {"type": "image_url", "image_url": {"url": "http://example.com/img.png"}},
-            {"type": "video_url", "video_url": {"url": "file:///tmp/test.mp4"}},
-        ]}]
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Look at this"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "http://example.com/img.png"},
+                    },
+                    {"type": "video_url", "video_url": {"url": "file:///tmp/test.mp4"}},
+                ],
+            }
+        ]
         assert _has_video(messages) is True
 
 
@@ -99,13 +136,22 @@ class TestVideoFrameExtraction:
     async def test_extract_base64_video(self):
         """Base64 video content should be saved and attempted for frame extraction."""
         import base64
+
         engine = _make_engine()
         # Minimal valid-ish base64 video data (won't produce frames without real video)
         fake_data = base64.b64encode(b"fake video data").decode()
-        messages = [{"role": "user", "content": [
-            {"type": "text", "text": "Describe"},
-            {"type": "video_url", "video_url": {"url": f"data:video/mp4;base64,{fake_data}"}},
-        ]}]
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe"},
+                    {
+                        "type": "video_url",
+                        "video_url": {"url": f"data:video/mp4;base64,{fake_data}"},
+                    },
+                ],
+            }
+        ]
         # This will fail to extract frames (not a real video) but should not crash
         frames = await engine._extract_video_frames(messages)
         assert isinstance(frames, list)
@@ -116,9 +162,17 @@ class TestVideoFrameExtraction:
         # + anti-hallucination), not silently return [] — the old behavior let the model
         # answer about a video it never saw.
         engine = _make_engine()
-        messages = [{"role": "user", "content": [
-            {"type": "video_url", "video_url": {"url": "file:///nonexistent/video.mp4"}},
-        ]}]
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "video_url",
+                        "video_url": {"url": "file:///nonexistent/video.mp4"},
+                    },
+                ],
+            }
+        ]
         with pytest.raises(ValueError):
             await engine._extract_video_frames(messages)
 
@@ -126,9 +180,17 @@ class TestVideoFrameExtraction:
     async def test_extract_video_file_type(self):
         # nonexistent video_file file_id → fail loud (was silent [])
         engine = _make_engine()
-        messages = [{"role": "user", "content": [
-            {"type": "video_file", "video_file": {"file_id": "/nonexistent/video.mp4"}},
-        ]}]
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "video_file",
+                        "video_file": {"file_id": "/nonexistent/video.mp4"},
+                    },
+                ],
+            }
+        ]
         with pytest.raises(ValueError):
             await engine._extract_video_frames(messages)
 
@@ -156,6 +218,7 @@ class TestSaveBase64File:
     @pytest.mark.asyncio
     async def test_save_mp4(self):
         import base64
+
         engine = _make_engine()
         data = base64.b64encode(b"fake video content").decode()
         path = await engine._save_base64_file(data, "mp4")
@@ -169,6 +232,7 @@ class TestSaveBase64File:
     @pytest.mark.asyncio
     async def test_save_webm(self):
         import base64
+
         engine = _make_engine()
         data = base64.b64encode(b"webm data").decode()
         path = await engine._save_base64_file(data, "webm")
@@ -207,11 +271,22 @@ class TestVideoMessageFormats:
     @pytest.mark.asyncio
     async def test_multiple_video_urls(self):
         engine = _make_engine()
-        messages = [{"role": "user", "content": [
-            {"type": "text", "text": "Compare videos"},
-            {"type": "video_url", "video_url": {"url": "file:///nonexistent/a.mp4"}},
-            {"type": "video_url", "video_url": {"url": "file:///nonexistent/b.mp4"}},
-        ]}]
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Compare videos"},
+                    {
+                        "type": "video_url",
+                        "video_url": {"url": "file:///nonexistent/a.mp4"},
+                    },
+                    {
+                        "type": "video_url",
+                        "video_url": {"url": "file:///nonexistent/b.mp4"},
+                    },
+                ],
+            }
+        ]
         # an unloadable referenced video fails loud (was silent [])
         with pytest.raises(ValueError):
             await engine._extract_video_frames(messages)
@@ -219,11 +294,22 @@ class TestVideoMessageFormats:
     @pytest.mark.asyncio
     async def test_video_and_image_mixed(self):
         engine = _make_engine()
-        messages = [{"role": "user", "content": [
-            {"type": "text", "text": "Mixed"},
-            {"type": "image_url", "image_url": {"url": "http://example.com/img.png"}},
-            {"type": "video_url", "video_url": {"url": "file:///nonexistent/v.mp4"}},
-        ]}]
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Mixed"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "http://example.com/img.png"},
+                    },
+                    {
+                        "type": "video_url",
+                        "video_url": {"url": "file:///nonexistent/v.mp4"},
+                    },
+                ],
+            }
+        ]
         # the referenced (nonexistent) video fails loud — it must not be
         # silently dropped just because an image is also present.
         with pytest.raises(ValueError):
@@ -232,9 +318,14 @@ class TestVideoMessageFormats:
     @pytest.mark.asyncio
     async def test_empty_content_parts(self):
         engine = _make_engine()
-        messages = [{"role": "user", "content": [
-            {"type": "text", "text": "Just text"},
-        ]}]
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Just text"},
+                ],
+            }
+        ]
         frames = await engine._extract_video_frames(messages)
         assert frames == []
 

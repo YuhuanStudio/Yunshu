@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class VLMRequestConfig:
     """Configuration for a single VLM request."""
+
     request_id: str = ""
     messages: list[dict] = field(default_factory=list)
     max_tokens: int = 512
@@ -63,6 +64,7 @@ class VLMRequestConfig:
 @dataclass
 class VLMStreamChunk:
     """A single chunk from VLM streaming output."""
+
     token_text: str = ""
     token_id: int = 0
     finish_reason: str | None = None
@@ -75,6 +77,7 @@ class VLMStreamChunk:
 @dataclass
 class _VLMRequestState:
     """Internal state for a VLM request."""
+
     config: VLMRequestConfig
     output_queue: asyncio.Queue
     finished_event: asyncio.Event
@@ -260,9 +263,7 @@ class VLMAsyncEngineCore:
         finally:
             state.done = True
             state.finished_event.set()
-            self._stats["active_requests"] = max(
-                0, self._stats["active_requests"] - 1
-            )
+            self._stats["active_requests"] = max(0, self._stats["active_requests"] - 1)
             if not failed and not state.aborted:
                 self._stats["completed_requests"] += 1
 
@@ -296,7 +297,7 @@ class VLMAsyncEngineCore:
         tokens = result.get("completion_tokens")
         if tokens is None:
             # Fallback: use tokenizer for accurate token count
-            _tok = getattr(self._engine, '_tokenizer', None)
+            _tok = getattr(self._engine, "_tokenizer", None)
             if _tok is not None and text:
                 try:
                     tokens = len(_tok.encode(text))
@@ -347,8 +348,12 @@ class VLMAsyncEngineCore:
             first_token = False
 
             chunk = VLMStreamChunk(
-                token_text=getattr(output, "new_text", getattr(output, "token_text", "")),
-                token_id=getattr(output, "new_token_ids", [0])[0] if hasattr(output, "new_token_ids") else getattr(output, "token_id", 0),
+                token_text=getattr(
+                    output, "new_text", getattr(output, "token_text", "")
+                ),
+                token_id=getattr(output, "new_token_ids", [0])[0]
+                if hasattr(output, "new_token_ids")
+                else getattr(output, "token_id", 0),
                 finish_reason=getattr(output, "finish_reason", None),
                 ttft_ms=ttft,
             )
@@ -418,9 +423,7 @@ class VLMAsyncEngineCore:
             if task is not None and not task.done():
                 task.cancel()
             try:
-                await state.output_queue.put(
-                    VLMStreamChunk(finish_reason="abort")
-                )
+                await state.output_queue.put(VLMStreamChunk(finish_reason="abort"))
             except Exception:
                 logger.debug("failed", exc_info=True)
             self._cleanup_request(request_id)

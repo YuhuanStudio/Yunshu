@@ -69,6 +69,7 @@ class DetokenizeRequest(BaseModel):
 async def tokenize(req: TokenizeRequest, request: Request):
     """Tokenize text into token IDs."""
     from .models import _check_model_access, _check_permission
+
     _check_permission(request, "can_infer")
     _check_model_access(request, req.model)
     tokenizer = _resolve_tokenizer(req.model)
@@ -95,6 +96,7 @@ async def tokenize(req: TokenizeRequest, request: Request):
 async def detokenize(req: DetokenizeRequest, request: Request):
     """Convert token IDs back to text."""
     from .models import _check_model_access, _check_permission
+
     _check_permission(request, "can_infer")
     _check_model_access(request, req.model)
     tokenizer = _resolve_tokenizer(req.model)
@@ -110,7 +112,9 @@ async def detokenize(req: DetokenizeRequest, request: Request):
         else:
             text = tokenizer.decode(req.tokens)
     except (OverflowError, ValueError, IndexError, KeyError) as e:
-        raise HTTPException(status_code=422, detail=f"Invalid token id in 'tokens': {e}") from None
+        raise HTTPException(
+            status_code=422, detail=f"Invalid token id in 'tokens': {e}"
+        ) from None
     return {"text": text, "model": req.model}
 
 
@@ -118,6 +122,7 @@ async def detokenize(req: DetokenizeRequest, request: Request):
 async def token_count(req: TokenCountRequest, request: Request):
     """Count tokens for a prompt."""
     from .models import _check_model_access, _check_permission
+
     _check_permission(request, "can_infer")
     _check_model_access(request, req.model)
     tokenizer = _resolve_tokenizer(req.model)
@@ -136,7 +141,9 @@ async def token_count(req: TokenCountRequest, request: Request):
     # Previously this returned `req.max_tokens` (the request's max OUTPUT
     # tokens, defaulting to 0) under the field name `max_context_tokens`,
     # which is misleading — callers expect the model's CONTEXT window.
-    ctx_limit = req.max_tokens if req.max_tokens > 0 else _resolve_context_limit(req.model)
+    ctx_limit = (
+        req.max_tokens if req.max_tokens > 0 else _resolve_context_limit(req.model)
+    )
     # A list `prompt` is a batch of INDEPENDENT prompts, each sent in its
     # own request — so over_context_limit must be "does ANY single prompt overflow",
     # not "does their SUM overflow" (the old `total > ctx_limit` falsely flagged e.g.
@@ -182,7 +189,11 @@ def _resolve_context_limit(model_id: str) -> int:
                 for sub in ("config", "args"):
                     s = getattr(mdl, sub, None)
                     if s is not None:
-                        for attr in ("max_position_embeddings", "max_seq_len", "context_length"):
+                        for attr in (
+                            "max_position_embeddings",
+                            "max_seq_len",
+                            "context_length",
+                        ):
                             v = getattr(s, attr, None)
                             if isinstance(v, int) and v > 0:
                                 return v
@@ -190,13 +201,23 @@ def _resolve_context_limit(model_id: str) -> int:
             for cfg_attr in ("_config", "config"):
                 cfg = getattr(eng, cfg_attr, None)
                 if isinstance(cfg, dict):
-                    for k in ("max_position_embeddings", "context_length", "max_seq_len"):
+                    for k in (
+                        "max_position_embeddings",
+                        "context_length",
+                        "max_seq_len",
+                    ):
                         v = cfg.get(k)
                         if isinstance(v, int) and v > 0:
                             return v
-                    tc = cfg.get("text_config") or cfg.get("thinker_config", {}).get("text_config")
+                    tc = cfg.get("text_config") or cfg.get("thinker_config", {}).get(
+                        "text_config"
+                    )
                     if isinstance(tc, dict):
-                        for k in ("max_position_embeddings", "context_length", "max_seq_len"):
+                        for k in (
+                            "max_position_embeddings",
+                            "context_length",
+                            "max_seq_len",
+                        ):
                             v = tc.get(k)
                             if isinstance(v, int) and v > 0:
                                 return v
@@ -209,7 +230,7 @@ def _resolve_tokenizer(model_id: str):
     if manager is not None:
         entry = manager.get_entry(model_id)
         if entry and entry.is_loaded and entry.engine:
-            tok = getattr(entry.engine, '_tokenizer', None)
+            tok = getattr(entry.engine, "_tokenizer", None)
             if tok:
                 return tok
 
@@ -217,16 +238,16 @@ def _resolve_tokenizer(model_id: str):
         lower = model_id.lower()
         for e in manager.list_entries():
             if e.model_id.lower() == lower and e.is_loaded and e.engine:
-                tok = getattr(e.engine, '_tokenizer', None)
+                tok = getattr(e.engine, "_tokenizer", None)
                 if tok:
                     return tok
 
         # Provider prefix stripping (e.g. "org/model" -> "model")
-        if '/' in model_id:
-            stripped = model_id.rsplit('/', 1)[-1]
+        if "/" in model_id:
+            stripped = model_id.rsplit("/", 1)[-1]
             for e in manager.list_entries():
                 if e.model_id.lower() == stripped.lower() and e.is_loaded and e.engine:
-                    tok = getattr(e.engine, '_tokenizer', None)
+                    tok = getattr(e.engine, "_tokenizer", None)
                     if tok:
                         return tok
 
@@ -237,18 +258,27 @@ def _resolve_tokenizer(model_id: str):
     # only in single-model mode (no manager) or when the engine's identity matches.
     engine = get_engine()
     if engine:
-        tok = getattr(engine, '_tokenizer', None)
+        tok = getattr(engine, "_tokenizer", None)
         if tok:
             _eng_id = str(getattr(engine, "model_name", "") or "")
             _match = (
-                manager is None  # single-model deployment: the default engine IS the model
+                manager
+                is None  # single-model deployment: the default engine IS the model
                 or not model_id
                 or model_id == _eng_id
                 or model_id.lower() == _eng_id.lower()
-                or (("/" in _eng_id) and model_id.lower() == _eng_id.rsplit("/", 1)[-1].lower())
-                or (("/" in model_id) and model_id.rsplit("/", 1)[-1].lower() == _eng_id.lower())
+                or (
+                    ("/" in _eng_id)
+                    and model_id.lower() == _eng_id.rsplit("/", 1)[-1].lower()
+                )
+                or (
+                    ("/" in model_id)
+                    and model_id.rsplit("/", 1)[-1].lower() == _eng_id.lower()
+                )
             )
             if _match:
                 return tok
 
-    raise HTTPException(status_code=404, detail=f"No tokenizer available for model '{model_id}'")
+    raise HTTPException(
+        status_code=404, detail=f"No tokenizer available for model '{model_id}'"
+    )

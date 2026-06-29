@@ -11,7 +11,6 @@ Covers:
   - TBOMetrics recording and efficiency calculation
 """
 
-
 import pytest
 
 from yunshu_engine.two_batch_overlap import (
@@ -52,7 +51,10 @@ class FakeScheduler:
     def step(self):
         self.step_count += 1
         return FakeSchedulerOutput(
-            outputs=[FakeRequestOutput(request_id=f"req-{i}") for i in range(len(self.running))]
+            outputs=[
+                FakeRequestOutput(request_id=f"req-{i}")
+                for i in range(len(self.running))
+            ]
         )
 
     def has_requests(self):
@@ -209,14 +211,24 @@ class TestTBOMetrics:
 
     def test_overlap_efficiency_with_data(self):
         m = TBOMetrics(_window=10)
-        m.record_step(gpu_time_ms=10.0, cpu_overlap_time_ms=5.0, idle_time_ms=5.0, was_overlapped=True)
+        m.record_step(
+            gpu_time_ms=10.0,
+            cpu_overlap_time_ms=5.0,
+            idle_time_ms=5.0,
+            was_overlapped=True,
+        )
         # efficiency = avg_overlap / avg_gpu = 5.0 / 10.0 = 0.5
         assert m.overlap_efficiency == pytest.approx(0.5, abs=0.01)
 
     def test_overlap_efficiency_capped_at_1(self):
         m = TBOMetrics(_window=10)
         # CPU overlap > GPU time should be capped at 1.0
-        m.record_step(gpu_time_ms=5.0, cpu_overlap_time_ms=10.0, idle_time_ms=0.0, was_overlapped=True)
+        m.record_step(
+            gpu_time_ms=5.0,
+            cpu_overlap_time_ms=10.0,
+            idle_time_ms=0.0,
+            was_overlapped=True,
+        )
         assert m.overlap_efficiency == 1.0
 
     def test_avg_times(self):

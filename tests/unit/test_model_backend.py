@@ -1,4 +1,5 @@
 """Unit tests for the backbone-agnostic serving-capability layer ."""
+
 from yunshu_engine.model_backend import (
     BackendCapabilities,
     BackendKind,
@@ -11,6 +12,7 @@ from yunshu_engine.model_backend import (
 # ── fake cache layers ───────────────────────────────────────────────────────
 class FakeKVCache:
     """Plain full-attention cache: sliceable keys/values, trimmable."""
+
     def __init__(self):
         self.keys = object()
         self.values = object()
@@ -21,6 +23,7 @@ class FakeKVCache:
 
 class FakeRotatingKVCache:
     """Sliding-window cache: has max_size, circular buffer."""
+
     def __init__(self, max_size=512):
         self.keys = object()
         self.values = object()
@@ -32,6 +35,7 @@ class FakeRotatingKVCache:
 
 class FakeArraysCache:
     """Recurrent/linear-attention state: no sliceable keys/values."""
+
     # deliberately no .keys/.values
 
 
@@ -68,9 +72,9 @@ def test_mrope_reusable_but_requires_explicit_positions():
     # must supply explicit position_ids (sequential from the cache offset).
     caps = derive_capabilities(BackendKind.VLM, [FakeKVCache()], is_mrope=True)
     assert caps.cache.resumable
-    assert caps.supports_kv_prefix_reuse           # cache reuse is fine
-    assert caps.requires_explicit_positions        # but positions must be supplied
-    assert caps.bypass_reason() is None            # not bypassed (mRoPE alone)
+    assert caps.supports_kv_prefix_reuse  # cache reuse is fine
+    assert caps.requires_explicit_positions  # but positions must be supplied
+    assert caps.bypass_reason() is None  # not bypassed (mRoPE alone)
 
 
 def test_non_mrope_does_not_require_explicit_positions():
@@ -83,6 +87,7 @@ def test_non_trimmable_flag_marks_hybrid():
     class NonTrimmable(FakeKVCache):
         def is_trimmable(self):
             return False
+
     cc = classify_cache([NonTrimmable()])
     assert cc.is_hybrid
     assert not cc.resumable

@@ -17,6 +17,7 @@ re-advanced on top of the K-draft state and the bonus mask was computed from a c
 buffer (could mask the correct token). Fixed: only re-mask when the rollback genuinely
 succeeded; skip (don't corrupt) for grammar constraints.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -48,12 +49,26 @@ class _Tok:
 
 def test_build_grammar_constraint_routes_each_type():
     tok = _Tok()
-    assert isinstance(_build_grammar_constraint({"type": "regex", "pattern": "[ab]+"}, tok), RegexConstraint)
-    assert isinstance(_build_grammar_constraint({"type": "choice", "choices": ["a", "b"]}, tok), ChoiceConstraint)
-    assert isinstance(_build_grammar_constraint({"type": "cfg", "grammar": 'start: "a"'}, tok), LarkGrammarConstraint)
+    assert isinstance(
+        _build_grammar_constraint({"type": "regex", "pattern": "[ab]+"}, tok),
+        RegexConstraint,
+    )
+    assert isinstance(
+        _build_grammar_constraint({"type": "choice", "choices": ["a", "b"]}, tok),
+        ChoiceConstraint,
+    )
+    assert isinstance(
+        _build_grammar_constraint({"type": "cfg", "grammar": 'start: "a"'}, tok),
+        LarkGrammarConstraint,
+    )
     # JSON schema / json_object still go to JsonSchemaConstraint
-    assert isinstance(_build_grammar_constraint({"type": "object", "properties": {}}, tok), JsonSchemaConstraint)
-    assert isinstance(_build_grammar_constraint("json_object", tok), JsonSchemaConstraint)
+    assert isinstance(
+        _build_grammar_constraint({"type": "object", "properties": {}}, tok),
+        JsonSchemaConstraint,
+    )
+    assert isinstance(
+        _build_grammar_constraint("json_object", tok), JsonSchemaConstraint
+    )
 
 
 def test_rollback_api_mismatch_premise_holds():

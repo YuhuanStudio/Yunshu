@@ -11,6 +11,7 @@ active_owners) to UNauthenticated callers (the gate only fired for a scoped key)
 
 LOW-2: unload didn't resolve aliases/case, so unloading an id that ran chat 404'd.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -57,5 +58,9 @@ def test_router_unload_409s_on_false():
 
 
 def test_registry_stats_gated_on_auth():
-    src = inspect.getsource(MODELS.list_models) if hasattr(MODELS, "list_models") else inspect.getsource(MODELS)
+    src = (
+        inspect.getsource(MODELS.list_models)
+        if hasattr(MODELS, "list_models")
+        else inspect.getsource(MODELS)
+    )
     assert "if _authenticated and not _filtered:" in src

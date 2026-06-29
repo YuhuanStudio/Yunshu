@@ -69,9 +69,7 @@ class WanCausalConv3d(nn.Module):
         padding: tuple[int, int, int] = (0, 0, 0),
     ) -> None:
         super().__init__()
-        self.conv = nn.Conv3d(
-            in_channels, out_channels, kernel_size, stride=stride
-        )
+        self.conv = nn.Conv3d(in_channels, out_channels, kernel_size, stride=stride)
         self.pad_t, self.pad_h, self.pad_w = padding
 
     def __call__(self, x: mx.array, cache_x: mx.array | None = None) -> mx.array:
@@ -82,7 +80,13 @@ class WanCausalConv3d(nn.Module):
             front = max(0, front - cache_x.shape[1])
         x = mx.pad(
             x,
-            [(0, 0), (front, 0), (self.pad_h, self.pad_h), (self.pad_w, self.pad_w), (0, 0)],
+            [
+                (0, 0),
+                (front, 0),
+                (self.pad_h, self.pad_h),
+                (self.pad_w, self.pad_w),
+                (0, 0),
+            ],
         )
         return self.conv(x)
 
@@ -198,7 +202,7 @@ class WanDupUp3D(nn.Module):
         x = x.reshape(b, self.out_channels, t * ft, h * fs, w * fs)
         x = x.transpose(0, 2, 3, 4, 1)  # back to channels-last (B, T', H', W', out)
         if first_chunk:
-            x = x[:, ft - 1:, :, :, :]
+            x = x[:, ft - 1 :, :, :, :]
         return x
 
 
@@ -257,7 +261,8 @@ class WanUpResidualBlock(nn.Module):
         super().__init__()
         self.avg_shortcut = (
             WanDupUp3D(
-                in_dim, out_dim,
+                in_dim,
+                out_dim,
                 factor_t=2 if temperal_upsample else 1,
                 factor_s=2 if up_flag else 1,
             )
@@ -271,7 +276,9 @@ class WanUpResidualBlock(nn.Module):
             d = out_dim
         if up_flag:
             ups.append(
-                WanResample(out_dim, "upsample3d" if temperal_upsample else "upsample2d")
+                WanResample(
+                    out_dim, "upsample3d" if temperal_upsample else "upsample2d"
+                )
             )
         self.upsamples = ups
 
@@ -298,7 +305,8 @@ class WanDownResidualBlock(nn.Module):
     ) -> None:
         super().__init__()
         self.avg_shortcut = WanAvgDown3D(
-            in_dim, out_dim,
+            in_dim,
+            out_dim,
             factor_t=2 if temperal_downsample else 1,
             factor_s=2 if down_flag else 1,
         )
@@ -309,7 +317,9 @@ class WanDownResidualBlock(nn.Module):
             d = out_dim
         if down_flag:
             downs.append(
-                WanResample(out_dim, "downsample3d" if temperal_downsample else "downsample2d")
+                WanResample(
+                    out_dim, "downsample3d" if temperal_downsample else "downsample2d"
+                )
             )
         self.downsamples = downs
 
@@ -341,8 +351,11 @@ class WanEncoder3d(nn.Module):
             t_down = temperal_downsample[i] if i < len(temperal_downsample) else False
             downs.append(
                 WanDownResidualBlock(
-                    in_dim, out_dim, mult=num_res_blocks,
-                    temperal_downsample=t_down, down_flag=i != n - 1,
+                    in_dim,
+                    out_dim,
+                    mult=num_res_blocks,
+                    temperal_downsample=t_down,
+                    down_flag=i != n - 1,
                 )
             )
         self.downsamples = downs
@@ -403,8 +416,11 @@ class WanDecoder3d(nn.Module):
             t_up = temperal_upsample[i] if i < len(temperal_upsample) else False
             ups.append(
                 WanUpResidualBlock(
-                    in_dim, out_dim, mult=num_res_blocks + 1,
-                    temperal_upsample=t_up, up_flag=i != n - 1,
+                    in_dim,
+                    out_dim,
+                    mult=num_res_blocks + 1,
+                    temperal_upsample=t_up,
+                    up_flag=i != n - 1,
                 )
             )
         self.upsamples = ups
@@ -427,7 +443,7 @@ def _map_vae_key(k: str, prefix: str) -> str:
     both ``decoder.`` and ``encoder.`` (same block naming)."""
     import re
 
-    k = k[len(prefix):]
+    k = k[len(prefix) :]
     for a, b in (
         ("residual.layer_0.", "norm1."),
         ("residual.layer_2.", "conv1.conv."),
@@ -465,8 +481,11 @@ def load_wan_decoder(path: str | Path) -> WanDecoder3d:
         if k.startswith("decoder.")
     ]
     dec = WanDecoder3d(
-        dim=256, z_dim=48, dim_mult=(1, 2, 4, 4),
-        num_res_blocks=2, temperal_upsample=(True, True, False),
+        dim=256,
+        z_dim=48,
+        dim_mult=(1, 2, 4, 4),
+        num_res_blocks=2,
+        temperal_upsample=(True, True, False),
     )
     dec.update(tree_unflatten(mapped))
     mx.eval(dec.parameters())
@@ -485,8 +504,11 @@ def load_wan_encoder(path: str | Path) -> WanEncoder3d:
         if k.startswith("encoder.")
     ]
     enc = WanEncoder3d(
-        dim=160, z_dim=96, dim_mult=(1, 2, 4, 4),
-        num_res_blocks=2, temperal_downsample=(False, True, True),
+        dim=160,
+        z_dim=96,
+        dim_mult=(1, 2, 4, 4),
+        num_res_blocks=2,
+        temperal_downsample=(False, True, True),
     )
     enc.update(tree_unflatten(mapped))
     mx.eval(enc.parameters())
@@ -495,20 +517,104 @@ def load_wan_encoder(path: str | Path) -> WanEncoder3d:
 
 # Latent normalization (Wan2.2 VAE scale = [mean, 1/std]), 48 channels.
 _WAN_MEAN = [
-    -0.2289, -0.0052, -0.1323, -0.2339, -0.2799, 0.0174, 0.1838, 0.1557,
-    -0.1382, 0.0542, 0.2813, 0.0891, 0.1570, -0.0098, 0.0375, -0.1825,
-    -0.2246, -0.1207, -0.0698, 0.5109, 0.2665, -0.2108, -0.2158, 0.2502,
-    -0.2055, -0.0322, 0.1109, 0.1567, -0.0729, 0.0899, -0.2799, -0.1230,
-    -0.0313, -0.1649, 0.0117, 0.0723, -0.2839, -0.2083, -0.0520, 0.3748,
-    0.0152, 0.1957, 0.1433, -0.2944, 0.3573, -0.0548, -0.1681, -0.0667,
+    -0.2289,
+    -0.0052,
+    -0.1323,
+    -0.2339,
+    -0.2799,
+    0.0174,
+    0.1838,
+    0.1557,
+    -0.1382,
+    0.0542,
+    0.2813,
+    0.0891,
+    0.1570,
+    -0.0098,
+    0.0375,
+    -0.1825,
+    -0.2246,
+    -0.1207,
+    -0.0698,
+    0.5109,
+    0.2665,
+    -0.2108,
+    -0.2158,
+    0.2502,
+    -0.2055,
+    -0.0322,
+    0.1109,
+    0.1567,
+    -0.0729,
+    0.0899,
+    -0.2799,
+    -0.1230,
+    -0.0313,
+    -0.1649,
+    0.0117,
+    0.0723,
+    -0.2839,
+    -0.2083,
+    -0.0520,
+    0.3748,
+    0.0152,
+    0.1957,
+    0.1433,
+    -0.2944,
+    0.3573,
+    -0.0548,
+    -0.1681,
+    -0.0667,
 ]
 _WAN_STD = [
-    0.4765, 1.0364, 0.4514, 1.1677, 0.5313, 0.4990, 0.4818, 0.5013,
-    0.8158, 1.0344, 0.5894, 1.0901, 0.6885, 0.6165, 0.8454, 0.4978,
-    0.5759, 0.3523, 0.7135, 0.6804, 0.5833, 1.4146, 0.8986, 0.5659,
-    0.7069, 0.5338, 0.4889, 0.4917, 0.4069, 0.4999, 0.6866, 0.4093,
-    0.5709, 0.6065, 0.6415, 0.4944, 0.5726, 1.2042, 0.5458, 1.6887,
-    0.3971, 1.0600, 0.3943, 0.5537, 0.5444, 0.4089, 0.7468, 0.7744,
+    0.4765,
+    1.0364,
+    0.4514,
+    1.1677,
+    0.5313,
+    0.4990,
+    0.4818,
+    0.5013,
+    0.8158,
+    1.0344,
+    0.5894,
+    1.0901,
+    0.6885,
+    0.6165,
+    0.8454,
+    0.4978,
+    0.5759,
+    0.3523,
+    0.7135,
+    0.6804,
+    0.5833,
+    1.4146,
+    0.8986,
+    0.5659,
+    0.7069,
+    0.5338,
+    0.4889,
+    0.4917,
+    0.4069,
+    0.4999,
+    0.6866,
+    0.4093,
+    0.5709,
+    0.6065,
+    0.6415,
+    0.4944,
+    0.5726,
+    1.2042,
+    0.5458,
+    1.6887,
+    0.3971,
+    1.0600,
+    0.3943,
+    0.5537,
+    0.5444,
+    0.4089,
+    0.7468,
+    0.7744,
 ]
 
 
@@ -558,10 +664,22 @@ def load_wan_vae(path: str | Path) -> WanVAE:
     dec = load_wan_decoder(path)
     conv1 = WanCausalConv3d(96, 96, (1, 1, 1))
     conv2 = WanCausalConv3d(48, 48, (1, 1, 1))
-    conv1.update(tree_unflatten([("conv.weight", raw["conv1.weight"].astype(mx.float32)),
-                                 ("conv.bias", raw["conv1.bias"].astype(mx.float32))]))
-    conv2.update(tree_unflatten([("conv.weight", raw["conv2.weight"].astype(mx.float32)),
-                                 ("conv.bias", raw["conv2.bias"].astype(mx.float32))]))
+    conv1.update(
+        tree_unflatten(
+            [
+                ("conv.weight", raw["conv1.weight"].astype(mx.float32)),
+                ("conv.bias", raw["conv1.bias"].astype(mx.float32)),
+            ]
+        )
+    )
+    conv2.update(
+        tree_unflatten(
+            [
+                ("conv.weight", raw["conv2.weight"].astype(mx.float32)),
+                ("conv.bias", raw["conv2.bias"].astype(mx.float32)),
+            ]
+        )
+    )
     mx.eval(conv1.parameters(), conv2.parameters())
     return WanVAE(enc, dec, conv1, conv2)
 

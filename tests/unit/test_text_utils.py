@@ -87,5 +87,7 @@ class TestShouldChunkPrefill:
 
     def test_custom_model_config(self):
         config = {"num_layers": 64, "num_kv_heads": 16, "head_dim": 128}
-        result = should_chunk_prefill(2048, available_memory=1024**2, model_config=config)
+        result = should_chunk_prefill(
+            2048, available_memory=1024**2, model_config=config
+        )
         assert result  # 64 layers with 16 heads needs much more memory

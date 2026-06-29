@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 class PipelineType(StrEnum):
     """Supported diffusion pipeline architectures."""
+
     Z_IMAGE = "z_image"
     FLUX = "flux"
     FLUX2 = "flux2"
@@ -40,6 +41,7 @@ class PipelineType(StrEnum):
 @dataclass
 class PipelineInfo:
     """Metadata about a registered pipeline."""
+
     pipeline_type: PipelineType
     name: str
     description: str
@@ -69,75 +71,123 @@ def list_pipelines() -> dict[str, PipelineInfo]:
 
 
 # Register known pipelines
-register_pipeline("z-image-turbo-mlx-4bit", PipelineInfo(
-    pipeline_type=PipelineType.Z_IMAGE,
-    name="Z-Image-Turbo-MLX-4bit",
-    description="Z-Image Turbo 4-bit quantized, MLX native",
-    supported_features=["text2img", "img2img", "inpaint", "controlnet", "depth", "lora", "teacache", "tiling"],
-    default_steps=4,
-    latent_channels=16,
-    vae_scale=8,
-))
+register_pipeline(
+    "z-image-turbo-mlx-4bit",
+    PipelineInfo(
+        pipeline_type=PipelineType.Z_IMAGE,
+        name="Z-Image-Turbo-MLX-4bit",
+        description="Z-Image Turbo 4-bit quantized, MLX native",
+        supported_features=[
+            "text2img",
+            "img2img",
+            "inpaint",
+            "controlnet",
+            "depth",
+            "lora",
+            "teacache",
+            "tiling",
+        ],
+        default_steps=4,
+        latent_channels=16,
+        vae_scale=8,
+    ),
+)
 
-register_pipeline("z-image-turbo", PipelineInfo(
-    pipeline_type=PipelineType.Z_IMAGE,
-    name="Z-Image-Turbo",
-    description="Z-Image Turbo, full precision",
-    supported_features=["text2img", "img2img", "inpaint", "controlnet", "depth", "lora", "teacache", "tiling"],
-    default_steps=4,
-    latent_channels=16,
-    vae_scale=8,
-))
+register_pipeline(
+    "z-image-turbo",
+    PipelineInfo(
+        pipeline_type=PipelineType.Z_IMAGE,
+        name="Z-Image-Turbo",
+        description="Z-Image Turbo, full precision",
+        supported_features=[
+            "text2img",
+            "img2img",
+            "inpaint",
+            "controlnet",
+            "depth",
+            "lora",
+            "teacache",
+            "tiling",
+        ],
+        default_steps=4,
+        latent_channels=16,
+        vae_scale=8,
+    ),
+)
 
-register_pipeline("z-image-dev", PipelineInfo(
-    pipeline_type=PipelineType.Z_IMAGE,
-    name="Z-Image-Dev",
-    description="Z-Image Dev, full precision",
-    supported_features=["text2img", "img2img", "inpaint", "controlnet", "depth", "lora", "teacache", "tiling"],
-    default_steps=28,
-    latent_channels=16,
-    vae_scale=8,
-))
+register_pipeline(
+    "z-image-dev",
+    PipelineInfo(
+        pipeline_type=PipelineType.Z_IMAGE,
+        name="Z-Image-Dev",
+        description="Z-Image Dev, full precision",
+        supported_features=[
+            "text2img",
+            "img2img",
+            "inpaint",
+            "controlnet",
+            "depth",
+            "lora",
+            "teacache",
+            "tiling",
+        ],
+        default_steps=28,
+        latent_channels=16,
+        vae_scale=8,
+    ),
+)
 
-register_pipeline("flux-dev", PipelineInfo(
-    pipeline_type=PipelineType.FLUX,
-    name="FLUX.1-dev",
-    description="FLUX.1 Dev, dual-stream DiT (placeholder)",
-    supported_features=["text2img", "controlnet", "depth", "lora"],
-    default_steps=28,
-    latent_channels=16,
-    vae_scale=8,
-))
+register_pipeline(
+    "flux-dev",
+    PipelineInfo(
+        pipeline_type=PipelineType.FLUX,
+        name="FLUX.1-dev",
+        description="FLUX.1 Dev, dual-stream DiT (placeholder)",
+        supported_features=["text2img", "controlnet", "depth", "lora"],
+        default_steps=28,
+        latent_channels=16,
+        vae_scale=8,
+    ),
+)
 
-register_pipeline("flux-schnell", PipelineInfo(
-    pipeline_type=PipelineType.FLUX,
-    name="FLUX.1-schnell",
-    description="FLUX.1 Schnell, dual-stream DiT (placeholder)",
-    supported_features=["text2img", "lora"],
-    default_steps=4,
-    latent_channels=16,
-    vae_scale=8,
-))
+register_pipeline(
+    "flux-schnell",
+    PipelineInfo(
+        pipeline_type=PipelineType.FLUX,
+        name="FLUX.1-schnell",
+        description="FLUX.1 Schnell, dual-stream DiT (placeholder)",
+        supported_features=["text2img", "lora"],
+        default_steps=4,
+        latent_channels=16,
+        vae_scale=8,
+    ),
+)
 
-register_pipeline("flux2-klein", PipelineInfo(
-    pipeline_type=PipelineType.FLUX2,
-    name="Flux2Klein",
-    description="Flux2 Klein, next-gen dual-stream DiT (placeholder)",
-    supported_features=["text2img", "inpaint", "controlnet", "depth", "lora"],
-    default_steps=28,
-    latent_channels=16,
-    vae_scale=8,
-))
+register_pipeline(
+    "flux2-klein",
+    PipelineInfo(
+        pipeline_type=PipelineType.FLUX2,
+        name="Flux2Klein",
+        description="Flux2 Klein, next-gen dual-stream DiT (placeholder)",
+        supported_features=["text2img", "inpaint", "controlnet", "depth", "lora"],
+        default_steps=28,
+        latent_channels=16,
+        vae_scale=8,
+    ),
+)
 
-register_pipeline("qwen-image", PipelineInfo(
-    pipeline_type=PipelineType.QWEN_IMAGE,
-    name="Qwen-Image",
-    description="Qwen-Image, Qwen-based DiT (placeholder)",
-    supported_features=["text2img", "inpaint", "lora"],
-    default_steps=28,
-    latent_channels=16,
-    vae_scale=8,
-))
+register_pipeline(
+    "qwen-image",
+    PipelineInfo(
+        pipeline_type=PipelineType.QWEN_IMAGE,
+        name="Qwen-Image",
+        description="Qwen-Image, Qwen-based DiT (placeholder)",
+        supported_features=["text2img", "inpaint", "lora"],
+        default_steps=28,
+        latent_channels=16,
+        vae_scale=8,
+    ),
+)
 
 
 # ── Auto-detection ──
@@ -168,6 +218,7 @@ def detect_pipeline_type(model_path: str) -> PipelineType:
     if (path / "transformer" / "config.json").exists():
         try:
             import json
+
             config = json.loads((path / "transformer" / "config.json").read_text())
             arch = config.get("_class_name", "").lower()
             model_type = config.get("model_type", "").lower()
@@ -225,21 +276,29 @@ def create_pipeline_for_path(model_path: str, config=None):
 
     if pipeline_type == PipelineType.Z_IMAGE:
         from .image_engine import ImageGenEngine
+
         return ImageGenEngine(model_path, config)
 
     if pipeline_type in (PipelineType.FLUX, PipelineType.FLUX2):
-        logger.warning(f"Pipeline type {pipeline_type.value} not yet natively supported, "
-                       f"falling back to Z-Image engine. Check model compatibility.")
+        logger.warning(
+            f"Pipeline type {pipeline_type.value} not yet natively supported, "
+            f"falling back to Z-Image engine. Check model compatibility."
+        )
         from .image_engine import ImageGenEngine
+
         return ImageGenEngine(model_path, config)
 
     if pipeline_type == PipelineType.QWEN_IMAGE:
-        logger.warning(f"Pipeline type {pipeline_type.value} not yet natively supported, "
-                       f"falling back to Z-Image engine.")
+        logger.warning(
+            f"Pipeline type {pipeline_type.value} not yet natively supported, "
+            f"falling back to Z-Image engine."
+        )
         from .image_engine import ImageGenEngine
+
         return ImageGenEngine(model_path, config)
 
     # Unknown type — try Z-Image engine as best effort
     logger.warning(f"Unknown pipeline type for {model_path}, attempting Z-Image engine")
     from .image_engine import ImageGenEngine
+
     return ImageGenEngine(model_path, config)

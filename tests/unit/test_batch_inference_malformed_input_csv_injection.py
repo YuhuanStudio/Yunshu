@@ -9,6 +9,7 @@ Three LOW issues remained:
   - results.csv wrote prompt-controlled model output raw → CSV formula injection when the
     download is opened in a spreadsheet.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -47,5 +48,6 @@ def test_utf8_decode_guarded():
 def test_results_csv_export_uses_csv_safe():
     # the CSV export path sanitizes every cell
     import yunshu_gateway.routers.batch_inference as m
+
     src = inspect.getsource(m)
     assert "_csv_safe(c) for c in row" in src

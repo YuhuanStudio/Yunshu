@@ -96,7 +96,8 @@ class KVQuantizer:
         return self._config
 
     def quantize(
-        self, kv_tensor: list,
+        self,
+        kv_tensor: list,
     ) -> tuple[bytes, dict[str, Any]]:
         """Quantize a float KV tensor to packed bytes.
 
@@ -251,7 +252,9 @@ class KVQuantizer:
         return self._config.compression_ratio
 
     def validate_accuracy(
-        self, original: list, reconstructed: list,
+        self,
+        original: list,
+        reconstructed: list,
     ) -> dict[str, float]:
         """Compute accuracy metrics between original and reconstructed tensors.
 
@@ -443,7 +446,7 @@ def _unflatten_to_shape(flat: list[float], shape: list[int]) -> list:
         return flat
 
     if len(shape) == 1:
-        return list(flat[:shape[0]])
+        return list(flat[: shape[0]])
 
     chunk_size = 1
     for d in shape[1:]:

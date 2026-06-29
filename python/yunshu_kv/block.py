@@ -257,11 +257,14 @@ class BlockPool:
             self._hash_to_block[block_hash] = block
             if self._event_bus is not None:
                 from .cache_events import CacheEvent
-                self._event_bus.publish(CacheEvent(
-                    "block_cached",
-                    block_hash=block_hash,
-                    block_ids=[block.block_id],
-                ))
+
+                self._event_bus.publish(
+                    CacheEvent(
+                        "block_cached",
+                        block_hash=block_hash,
+                        block_ids=[block.block_id],
+                    )
+                )
 
     def lookup_hash(self, block_hash: int) -> KVBlock | None:
         """Find a cached block by hash.
@@ -337,11 +340,14 @@ class BlockPool:
         block.reset_hash()
         if self._event_bus is not None and current is block:
             from .cache_events import CacheEvent
-            self._event_bus.publish(CacheEvent(
-                "block_evicted",
-                block_hash=evicted_hash,
-                block_ids=[block.block_id],
-            ))
+
+            self._event_bus.publish(
+                CacheEvent(
+                    "block_evicted",
+                    block_hash=evicted_hash,
+                    block_ids=[block.block_id],
+                )
+            )
         return current is block
 
     def get_cached_blocks(self) -> list[KVBlock]:
@@ -392,9 +398,7 @@ class BlockPool:
             if block.ref_count == 1:
                 return block
             if self.free_queue.num_free_blocks == 0:
-                raise ValueError(
-                    "COW failed: no free blocks available for cloning"
-                )
+                raise ValueError("COW failed: no free blocks available for cloning")
 
             # Allocate a fresh block
             new_block = self.free_queue.popleft()
@@ -448,25 +452,39 @@ class BlockPool:
                     orig_value_cache = value_cache
                     try:
                         import mlx.core as mx
+
                         mx.eval(
                             key_cache[old_block.block_id],
                             value_cache[old_block.block_id],
                             key_cache[new_block.block_id],
                         )
                         if isinstance(key_cache, mx.array):
-                            key_cache[new_block.block_id] = key_cache[old_block.block_id]
-                            value_cache[new_block.block_id] = value_cache[old_block.block_id]
+                            key_cache[new_block.block_id] = key_cache[
+                                old_block.block_id
+                            ]
+                            value_cache[new_block.block_id] = value_cache[
+                                old_block.block_id
+                            ]
                         else:
-                            key_cache[new_block.block_id] = key_cache[old_block.block_id]
-                            value_cache[new_block.block_id] = value_cache[old_block.block_id]
+                            key_cache[new_block.block_id] = key_cache[
+                                old_block.block_id
+                            ]
+                            value_cache[new_block.block_id] = value_cache[
+                                old_block.block_id
+                            ]
                     except Exception:
-                        logger.warning("KV data copy in cow_block_in_table failed — returning old block to avoid corruption", exc_info=True)
+                        logger.warning(
+                            "KV data copy in cow_block_in_table failed — returning old block to avoid corruption",
+                            exc_info=True,
+                        )
                         new_block.ref_count = 0
                         self.free_queue.append(new_block)
                         # Remove old_block from free queue if cow_block() put
                         # it there (ref_count reached 0).  A block in the free
                         # queue with ref_count > 0 is inconsistent.
-                        if old_block.ref_count == 0 and (old_block.prev is not None or old_block.next is not None):
+                        if old_block.ref_count == 0 and (
+                            old_block.prev is not None or old_block.next is not None
+                        ):
                             self.free_queue.remove(old_block)
                         old_block.ref_count += 1
                         return old_block, orig_key_cache, orig_value_cache

@@ -478,8 +478,12 @@ class TestResponseCache:
         cached response that lacks logprobs."""
         base = ("gpt-4", "hi")
         h_plain = ResponseCache.hash_request(*base, max_tokens=10)
-        h_lp = ResponseCache.hash_request(*base, max_tokens=10, logprobs=True, top_logprobs=2)
-        h_bias = ResponseCache.hash_request(*base, max_tokens=10, logit_bias=str({1: 5.0}))
+        h_lp = ResponseCache.hash_request(
+            *base, max_tokens=10, logprobs=True, top_logprobs=2
+        )
+        h_bias = ResponseCache.hash_request(
+            *base, max_tokens=10, logit_bias=str({1: 5.0})
+        )
         h_xtc = ResponseCache.hash_request(*base, max_tokens=10, xtc_probability=0.3)
         assert h_lp != h_plain
         assert h_bias != h_plain
@@ -487,8 +491,12 @@ class TestResponseCache:
 
     def test_hash_request_with_params(self):
         """Extra params are included in the hash."""
-        h1 = ResponseCache.hash_request("gpt-4", [{"role": "user", "content": "hi"}], temperature=0.7)
-        h2 = ResponseCache.hash_request("gpt-4", [{"role": "user", "content": "hi"}], temperature=0.9)
+        h1 = ResponseCache.hash_request(
+            "gpt-4", [{"role": "user", "content": "hi"}], temperature=0.7
+        )
+        h2 = ResponseCache.hash_request(
+            "gpt-4", [{"role": "user", "content": "hi"}], temperature=0.9
+        )
         assert h1 != h2
 
     def test_hash_request_param_order_invariant(self):
@@ -663,7 +671,7 @@ class TestResponseCache:
             await cache.put(h4, "r4")
 
             assert await cache.get(h1) == "r1"  # Still present (was accessed)
-            assert await cache.get(h2) is None   # Evicted (was LRU)
+            assert await cache.get(h2) is None  # Evicted (was LRU)
             assert await cache.get(h3) == "r3"  # Still present
             assert await cache.get(h4) == "r4"  # Just inserted
         finally:
@@ -736,6 +744,7 @@ class TestResponseCache:
     async def test_large_cache_lru_performance(self):
         """Verify LRU performance is reasonable with 1000+ entries."""
         import time as _time
+
         old = os.environ.get("YUNSHU_RESPONSE_CACHE")
         try:
             os.environ["YUNSHU_RESPONSE_CACHE"] = "1"

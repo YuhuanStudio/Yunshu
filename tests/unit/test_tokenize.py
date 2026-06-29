@@ -6,6 +6,7 @@ Tests:
 - _resolve_context_limit fallback (unknown model -> 0)
 - _resolve_tokenizer 404 path
 """
+
 from __future__ import annotations
 
 import pytest
@@ -58,6 +59,7 @@ class FakeModelManager:
 def _make_app(monkeypatch, *, register_model: str | None = "qwen-test"):
     """Build a FastAPI app with tokenize router and an installed fake manager."""
     import yunshu_gateway.routers.tokenize as tok_mod
+
     # Force auth-disabled so the `_check_permission` import from models.py
     # short-circuits cleanly (it reads os.environ).
     monkeypatch.setenv("YUNSHU_AUTH_DISABLED", "true")
@@ -182,6 +184,7 @@ class TestResolveContextLimit:
 
     def test_unknown_model_returns_zero(self, monkeypatch):
         import yunshu_gateway.routers.tokenize as tok_mod
+
         monkeypatch.setattr(tok_mod, "get_model_manager", lambda: FakeModelManager())
         monkeypatch.setattr(tok_mod, "get_engine", lambda: None)
         assert tok_mod._resolve_context_limit("does-not-exist") == 0
@@ -205,6 +208,7 @@ class TestResolveTokenizer:
 
     def test_resolve_tokenizer_exact_match(self, monkeypatch):
         import yunshu_gateway.routers.tokenize as tok_mod
+
         mgr = FakeModelManager()
         mgr.register("exact", FakeEngine())
         monkeypatch.setattr(tok_mod, "get_model_manager", lambda: mgr)
@@ -214,6 +218,7 @@ class TestResolveTokenizer:
 
     def test_resolve_tokenizer_case_insensitive(self, monkeypatch):
         import yunshu_gateway.routers.tokenize as tok_mod
+
         mgr = FakeModelManager()
         mgr.register("Qwen3-7B", FakeEngine())
         monkeypatch.setattr(tok_mod, "get_model_manager", lambda: mgr)
@@ -226,6 +231,7 @@ class TestResolveTokenizer:
         from fastapi import HTTPException
 
         import yunshu_gateway.routers.tokenize as tok_mod
+
         monkeypatch.setattr(tok_mod, "get_model_manager", lambda: FakeModelManager())
         monkeypatch.setattr(tok_mod, "get_engine", lambda: None)
         with pytest.raises(HTTPException) as ei:

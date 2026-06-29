@@ -7,7 +7,6 @@ to physical KVBlock objects in the BlockPool.
 """
 
 
-
 from .block import KVBlock
 
 
@@ -68,7 +67,9 @@ class BlockTable:
 
     def get_block(self, logical_idx: int) -> KVBlock:
         if logical_idx < 0 or logical_idx >= len(self._blocks):
-            raise IndexError(f"Block index {logical_idx} out of range (0..{len(self._blocks)-1})")
+            raise IndexError(
+                f"Block index {logical_idx} out of range (0..{len(self._blocks) - 1})"
+            )
         return self._blocks[logical_idx]
 
     def get_blocks(self) -> list[KVBlock]:
@@ -132,7 +133,9 @@ class BlockTable:
             self._last_block_occupancy = 0
         else:
             full_blocks = max(0, len(self._blocks) - 1)
-            self.total_tokens = full_blocks * self.block_size + self._last_block_occupancy
+            self.total_tokens = (
+                full_blocks * self.block_size + self._last_block_occupancy
+            )
         return trimmed
 
     def clear(self) -> list[KVBlock]:

@@ -36,7 +36,7 @@ class TestDeepSeekOutputParser:
 
     def test_strips_function_markers(self):
         parser = DeepSeekOutputParser()
-        result = parser.parse("Some text ✿FUNCTION✿ {\"name\":\"foo\"} ✿ end")
+        result = parser.parse('Some text ✿FUNCTION✿ {"name":"foo"} ✿ end')
         assert "✿FUNCTION✿" not in result.content
         assert result.tool_call_text is not None
         assert "FUNCTION" in result.tool_call_text
@@ -133,7 +133,7 @@ class TestMistralOutputParser:
 
     def test_strips_tool_calls(self):
         parser = MistralOutputParser()
-        result = parser.parse("Some text [TOOL_CALLS]\n{\"name\": \"foo\"}")
+        result = parser.parse('Some text [TOOL_CALLS]\n{"name": "foo"}')
         assert "[TOOL_CALLS]" not in result.content
         assert result.tool_call_text is not None
 
@@ -173,7 +173,9 @@ class TestPhiOutputParser:
 class TestCohereOutputParser:
     def test_strips_thinking(self):
         parser = CohereOutputParser()
-        result = parser.parse("<|START_THINKING|>I reasoned<|END_THINKING|>The answer is 42")
+        result = parser.parse(
+            "<|START_THINKING|>I reasoned<|END_THINKING|>The answer is 42"
+        )
         assert result.reasoning == "I reasoned"
         assert result.content == "The answer is 42"
 
@@ -202,7 +204,7 @@ class TestLLamaOutputParser:
 
     def test_strips_python_tag(self):
         parser = LLamaOutputParser()
-        result = parser.parse("Some text <|python_tag|>{\"name\": \"foo\"}")
+        result = parser.parse('Some text <|python_tag|>{"name": "foo"}')
         assert "<|python_tag|>" not in result.content
         assert result.tool_call_text is not None
 
@@ -306,5 +308,6 @@ class TestRegisterOutputParser:
 
         register_output_parser("custom", CustomParser)
         from yunshu_engine.output_parser import _REGISTRY
+
         assert "custom" in _REGISTRY
         _REGISTRY.pop("custom", None)

@@ -48,11 +48,12 @@ class BatchSpecPrefillConfig:
     using a draft model's attention scores to skip unimportant tokens.
     Controlled via YUNSHU_BATCH_SPEC_PREFILL=1.
     """
+
     enabled: bool = False
-    threshold: int = 8192          # Minimum prompt length to trigger
-    keep_rate: float = 0.20        # Fraction of tokens to keep
-    chunk_size: int = 32           # Chunk size for token selection
-    draft_model: Any = None        # Draft model for attention scoring
+    threshold: int = 8192  # Minimum prompt length to trigger
+    keep_rate: float = 0.20  # Fraction of tokens to keep
+    chunk_size: int = 32  # Chunk size for token selection
+    draft_model: Any = None  # Draft model for attention scoring
 
 
 @dataclass
@@ -65,6 +66,7 @@ class SpecBudget:
         spec_slots: Slots reserved for spec verification overhead.
         available_for_new: Slots available for new request insertion.
     """
+
     total_slots: int = 256
     decode_slots: int = 0
     spec_slots: int = 0
@@ -78,15 +80,20 @@ class DraftCollection:
     Maps request_id → list of draft token IDs from all spec strategies.
     Used by the scheduler to batch-verify all drafts in a single forward pass.
     """
+
     drafts: dict[str, list[int]] = field(default_factory=dict)
     strategy_counts: dict[str, int] = field(default_factory=dict)
     total_draft_tokens: int = 0
 
-    def add(self, request_id: str, tokens: list[int], strategy: str = "unknown") -> None:
+    def add(
+        self, request_id: str, tokens: list[int], strategy: str = "unknown"
+    ) -> None:
         """Add draft tokens for a request."""
         if tokens:
             self.drafts[request_id] = tokens
-            self.strategy_counts[strategy] = self.strategy_counts.get(strategy, 0) + len(tokens)
+            self.strategy_counts[strategy] = self.strategy_counts.get(
+                strategy, 0
+            ) + len(tokens)
             self.total_draft_tokens += len(tokens)
 
     def has_drafts(self) -> bool:
@@ -101,7 +108,9 @@ class DraftCollection:
             if rid not in self.drafts:
                 self.drafts[rid] = tokens
         for strategy, count in other.strategy_counts.items():
-            self.strategy_counts[strategy] = self.strategy_counts.get(strategy, 0) + count
+            self.strategy_counts[strategy] = (
+                self.strategy_counts.get(strategy, 0) + count
+            )
         self.total_draft_tokens += other.total_draft_tokens
 
 
@@ -378,7 +387,9 @@ class BatchedDraftCollection:
                     continue
 
             # Try cross-model spec decode (higher overhead)
-            if spec_decoder is not None and isinstance(spec_decoder, SpeculativeDecoder):
+            if spec_decoder is not None and isinstance(
+                spec_decoder, SpeculativeDecoder
+            ):
                 tokens = self._collect_cross_model_draft(req, spec_decoder)
                 if tokens:
                     collection.add(rid, tokens, "cross_model")
@@ -393,7 +404,9 @@ class BatchedDraftCollection:
         return collection
 
     def _collect_ngram_draft(
-        self, req: Request, proposer: NgramProposer,
+        self,
+        req: Request,
+        proposer: NgramProposer,
     ) -> list[int] | None:
         """Collect N-gram draft tokens for a request."""
         try:
@@ -407,7 +420,9 @@ class BatchedDraftCollection:
             return None
 
     def _collect_mtp_draft(
-        self, req: Request, mtp_decoder: Any,
+        self,
+        req: Request,
+        mtp_decoder: Any,
     ) -> list[int] | None:
         """Collect MTP draft tokens for a request (lightweight, no GPU)."""
         try:
@@ -421,7 +436,9 @@ class BatchedDraftCollection:
             return None
 
     def _collect_cross_model_draft(
-        self, req: Request, decoder: SpeculativeDecoder,
+        self,
+        req: Request,
+        decoder: SpeculativeDecoder,
     ) -> list[int] | None:
         """Collect cross-model draft tokens (deferred to per-request path)."""
         # Cross-model drafting requires running the draft model which is
@@ -539,14 +556,18 @@ class SchedulingPolicy(Enum):
        checked (search for ``self.config.policy``).
     4. Add a test in ``tests/unit/test_scheduler.py``.
     """
-    FCFS = auto()       # First-Come-First-Served
-    PRIORITY = auto()   # Priority-based (higher priority = scheduled first)
-    FAIR = auto()       # Round-robin across priority levels (prevents low-priority starvation)
+
+    FCFS = auto()  # First-Come-First-Served
+    PRIORITY = auto()  # Priority-based (higher priority = scheduled first)
+    FAIR = (
+        auto()
+    )  # Round-robin across priority levels (prevents low-priority starvation)
 
 
 @dataclass
 class SchedulerConfig:
     """Scheduler tuning parameters."""
+
     model_name: str = ""
     completion_batch_size: int = 32
     prefill_batch_size: int = 8
@@ -562,34 +583,50 @@ class SchedulerConfig:
     use_external_prefill: bool = False
     prefill_chunk_size: int = 2048
     request_timeout_seconds: float = 300  # 5 min timeout for waiting requests
-    max_waiting_requests: int = 1024     # Backpressure: reject new requests when queue is full
-    memory_guard_enabled: bool = True    # Preflight memory check before scheduling
-    memory_guard_soft_limit: float = 0.85  # Warn when active memory exceeds this fraction of total
+    max_waiting_requests: int = (
+        1024  # Backpressure: reject new requests when queue is full
+    )
+    memory_guard_enabled: bool = True  # Preflight memory check before scheduling
+    memory_guard_soft_limit: float = (
+        0.85  # Warn when active memory exceeds this fraction of total
+    )
     # Sarathi-style hybrid chunked prefill (interleave prefill chunks with decode)
-    hybrid_chunk_size: int = 512        # Tokens per prefill chunk when interleaving
+    hybrid_chunk_size: int = 512  # Tokens per prefill chunk when interleaving
     enable_hybrid_prefill: bool = False  # Enable chunked prefill+decode interleaving
     # Chunked prefill production hardening
-    chunked_prefill_budget: int = 4     # Max chunks per scheduling round (fairness)
-    chunked_prefill_timeout_seconds: float = 30.0  # Per-request prefill timeout (0 = no timeout)
-    chunked_prefill_abort_on_timeout: bool = True  # Abort request on timeout (vs force-feed)
+    chunked_prefill_budget: int = 4  # Max chunks per scheduling round (fairness)
+    chunked_prefill_timeout_seconds: float = (
+        30.0  # Per-request prefill timeout (0 = no timeout)
+    )
+    chunked_prefill_abort_on_timeout: bool = (
+        True  # Abort request on timeout (vs force-feed)
+    )
     # Concurrent partial prefill control (GAP 1.3)
-    max_num_partial_prefills: int = 1   # Max partial (chunked) prefills in-flight at once
+    max_num_partial_prefills: int = (
+        1  # Max partial (chunked) prefills in-flight at once
+    )
     max_long_partial_prefills: int = 1  # Max long partial prefills in-flight at once
-    long_prefill_token_threshold: int = 4096  # Token count above which a prefill is "long"
+    long_prefill_token_threshold: int = (
+        4096  # Token count above which a prefill is "long"
+    )
     # Request retraction (C14)
-    enable_retraction: bool = True     # Temporarily evict decode for prefill under pressure
-    retraction_memory_threshold: float = 0.90  # Retract when memory utilization exceeds this
-    retraction_max_count: int = 4       # Max decode requests to retract per step
+    enable_retraction: bool = (
+        True  # Temporarily evict decode for prefill under pressure
+    )
+    retraction_memory_threshold: float = (
+        0.90  # Retract when memory utilization exceeds this
+    )
+    retraction_max_count: int = 4  # Max decode requests to retract per step
     # Speculative decoding (Phase 4)
-    enable_spec_decode: bool = False     # Enable speculative decoding
-    draft_model: str = ""                # Draft model name or path (empty = auto-detect from target)
-    spec_draft_length: int = 5           # Number of draft tokens per step (K)
+    enable_spec_decode: bool = False  # Enable speculative decoding
+    draft_model: str = ""  # Draft model name or path (empty = auto-detect from target)
+    spec_draft_length: int = 5  # Number of draft tokens per step (K)
     # N-gram speculative decoding (model-free, always available)
-    ngram_spec_enabled: bool = False     # Enable N-gram speculative decoding in batch path
-    ngram_spec_min_n: int = 1            # Min ngram length
-    ngram_spec_max_n: int = 5            # Max ngram length
-    ngram_spec_k: int = 5                # Draft tokens per step
-    ngram_spec_mode: str = "lps"         # Proposer mode: lps, hashpool, lcg
+    ngram_spec_enabled: bool = False  # Enable N-gram speculative decoding in batch path
+    ngram_spec_min_n: int = 1  # Min ngram length
+    ngram_spec_max_n: int = 5  # Max ngram length
+    ngram_spec_k: int = 5  # Draft tokens per step
+    ngram_spec_mode: str = "lps"  # Proposer mode: lps, hashpool, lcg
     # Batch-path SpecPrefill (sparse prefill for long prompts)
     batch_spec_prefill_enabled: bool = False  # Enable via YUNSHU_BATCH_SPEC_PREFILL=1
     batch_spec_prefill_threshold: int = 8192  # Min prompt length to trigger
@@ -597,10 +634,14 @@ class SchedulerConfig:
     # Spec-aware batch scheduling
     spec_overhead_per_request: float = 0.1  # Slot overhead per spec-active request
     # SCHED-3: Starvation prevention aging
-    aging_weight: float = 0.1  # Age bonus per second in waiting queue (higher = less starvation)
+    aging_weight: float = (
+        0.1  # Age bonus per second in waiting queue (higher = less starvation)
+    )
     aging_enabled: bool = True  # Enable/disable aging in scheduling
     # H2O attention-score-based eviction
-    enable_attention_eviction: bool = False  # Enable attention score tracking for smarter KV eviction
+    enable_attention_eviction: bool = (
+        False  # Enable attention score tracking for smarter KV eviction
+    )
     attention_eviction_max_blocks: int = 256  # Max KV blocks tracked per request
 
 
@@ -628,7 +669,7 @@ class _LogitsProcessorSampler:
         token = self._base_sampler(logits)
         # Track token for subsequent calls
         try:
-            tid = token.item() if hasattr(token, 'item') else int(token)
+            tid = token.item() if hasattr(token, "item") else int(token)
             self._tokens.append(tid)
         except Exception:
             logger.debug("failed", exc_info=True)
@@ -655,14 +696,18 @@ class Scheduler:
 
     _DEFERRED_CLEAR_DELAY = 8
 
-    def __init__(self, model: Any, tokenizer: Any, config: SchedulerConfig | None = None):
+    def __init__(
+        self, model: Any, tokenizer: Any, config: SchedulerConfig | None = None
+    ):
         self.model = model
         self.tokenizer = copy.deepcopy(tokenizer)
         self.config = config or SchedulerConfig()
         self.model_id: str = config.model_name if config else ""
 
         # Request queues
-        self.waiting: RequestPriorityQueue[Request] = make_waiting_queue(self.config.policy)
+        self.waiting: RequestPriorityQueue[Request] = make_waiting_queue(
+            self.config.policy
+        )
         self.running: dict[str, Request] = {}
         self.requests: dict[str, Request] = {}
         self.finished_ids: set[str] = set()
@@ -750,6 +795,7 @@ class Scheduler:
             if os.environ.get("YUNSHU_GPU_NGRAM", "").strip() in ("1", "true", "yes"):
                 try:
                     from .gpu_ngram import GPUNgramConfig, GPUNgramProposer
+
                     gpu_config = GPUNgramConfig(
                         min_n=self.config.ngram_spec_min_n,
                         max_n=self.config.ngram_spec_max_n,
@@ -758,24 +804,32 @@ class Scheduler:
                         gpu_fallback=True,
                     )
                     self._ngram_proposer = GPUNgramProposer(gpu_config)
-                    logger.info("GPU-accelerated N-gram proposer enabled (YUNSHU_GPU_NGRAM=1)")
+                    logger.info(
+                        "GPU-accelerated N-gram proposer enabled (YUNSHU_GPU_NGRAM=1)"
+                    )
                 except Exception:
-                    logger.debug("GPU N-gram init failed, falling back to CPU", exc_info=True)
-                    self._ngram_proposer = NgramProposer(NgramConfig(
+                    logger.debug(
+                        "GPU N-gram init failed, falling back to CPU", exc_info=True
+                    )
+                    self._ngram_proposer = NgramProposer(
+                        NgramConfig(
+                            min_n=self.config.ngram_spec_min_n,
+                            max_n=self.config.ngram_spec_max_n,
+                            k=self.config.ngram_spec_k,
+                            mode=self.config.ngram_spec_mode,
+                            max_model_len=self.config.max_kv_size or 32768,
+                        )
+                    )
+            else:
+                self._ngram_proposer = NgramProposer(
+                    NgramConfig(
                         min_n=self.config.ngram_spec_min_n,
                         max_n=self.config.ngram_spec_max_n,
                         k=self.config.ngram_spec_k,
                         mode=self.config.ngram_spec_mode,
                         max_model_len=self.config.max_kv_size or 32768,
-                    ))
-            else:
-                self._ngram_proposer = NgramProposer(NgramConfig(
-                    min_n=self.config.ngram_spec_min_n,
-                    max_n=self.config.ngram_spec_max_n,
-                    k=self.config.ngram_spec_k,
-                    mode=self.config.ngram_spec_mode,
-                    max_model_len=self.config.max_kv_size or 32768,
-                ))
+                    )
+                )
 
         # Speculative decoding — batch-path draft/verify state
         # Maps request_id → list[int] of draft token IDs from the spec decoder.
@@ -787,7 +841,9 @@ class Scheduler:
         self._spec_draft_start_pos: dict[str, int] = {}
 
         # Per-request spec decode statistics
-        self._spec_stats: dict[str, dict[str, int]] = {}  # req_id → {proposals, accepted, rejected}
+        self._spec_stats: dict[
+            str, dict[str, int]
+        ] = {}  # req_id → {proposals, accepted, rejected}
 
         # Aggregate spec decode counters for get_stats()
         self._spec_total_proposals: int = 0
@@ -808,13 +864,14 @@ class Scheduler:
 
         # mRoPE batch delta manager
         from .mrope import BatchRopeDeltaManager
+
         self._rope_delta_mgr = BatchRopeDeltaManager()
         self._last_batch_rope_deltas: list[tuple[int, float]] = []
 
         # Encoder-decoder cache
         from .encoder_cache import EncoderCacheManager
-        self._encoder_cache = EncoderCacheManager()
 
+        self._encoder_cache = EncoderCacheManager()
 
         # Hybrid KV cache for Mamba/hybrid models (layer-type-aware routing)
         # Set by EngineCore when model has mixed attention + SSM layers.
@@ -835,9 +892,15 @@ class Scheduler:
         # Chunked prefill production counters
         self._chunked_prefill_chunks_processed: int = 0
         self._chunked_prefill_fairness: dict[str, int] = {}  # req_id -> chunks served
-        self._chunked_prefill_enqueued_at: dict[str, float] = {}  # req_id -> time.monotonic()
-        self._chunked_prefill_budget_used: int = 0  # Chunks consumed this scheduling round
-        self._chunked_prefill_failed_ids: list[str] = []  # Requests that failed during chunked prefill
+        self._chunked_prefill_enqueued_at: dict[
+            str, float
+        ] = {}  # req_id -> time.monotonic()
+        self._chunked_prefill_budget_used: int = (
+            0  # Chunks consumed this scheduling round
+        )
+        self._chunked_prefill_failed_ids: list[
+            str
+        ] = []  # Requests that failed during chunked prefill
         # Chunked prefill progress outputs — synthetic RequestOutputs
         # carrying (processed, total) progress, emitted each step during chunked prefill.
         self._prefill_progress_outputs: list = []
@@ -847,17 +910,24 @@ class Scheduler:
 
         # Batch-path SpecPrefill (attention-based sparse prefill for long prompts)
         import os as _os
+
         self._batch_spec_prefill: BatchPathSpecPrefill | None = None
-        if self.config.batch_spec_prefill_enabled or _os.environ.get("YUNSHU_BATCH_SPEC_PREFILL", "").strip() in ("1", "true", "yes"):
-            self._batch_spec_prefill = BatchPathSpecPrefill(BatchSpecPrefillConfig(
-                enabled=True,
-                threshold=self.config.batch_spec_prefill_threshold or int(
-                    _os.environ.get("YUNSHU_BATCH_SPEC_PREFILL_THRESHOLD", "8192")
-                ),
-                keep_rate=self.config.batch_spec_prefill_keep_rate or float(
-                    _os.environ.get("YUNSHU_BATCH_SPEC_PREFILL_KEEP_RATE", "0.20")
-                ),
-            ))
+        if self.config.batch_spec_prefill_enabled or _os.environ.get(
+            "YUNSHU_BATCH_SPEC_PREFILL", ""
+        ).strip() in ("1", "true", "yes"):
+            self._batch_spec_prefill = BatchPathSpecPrefill(
+                BatchSpecPrefillConfig(
+                    enabled=True,
+                    threshold=self.config.batch_spec_prefill_threshold
+                    or int(
+                        _os.environ.get("YUNSHU_BATCH_SPEC_PREFILL_THRESHOLD", "8192")
+                    ),
+                    keep_rate=self.config.batch_spec_prefill_keep_rate
+                    or float(
+                        _os.environ.get("YUNSHU_BATCH_SPEC_PREFILL_KEEP_RATE", "0.20")
+                    ),
+                )
+            )
             logger.info(
                 f"Batch SpecPrefill enabled: threshold={self.config.batch_spec_prefill_threshold}, "
                 f"keep_rate={self.config.batch_spec_prefill_keep_rate}"
@@ -868,7 +938,9 @@ class Scheduler:
         # completion_batch_size), not the looser max_num_seqs, so spec slot
         # budgeting is computed against the real concurrent-decode capacity.
         self._spec_aware_scheduler = SpecAwareBatchScheduler(
-            max_num_seqs=min(self.config.max_num_seqs, self.config.completion_batch_size),
+            max_num_seqs=min(
+                self.config.max_num_seqs, self.config.completion_batch_size
+            ),
             spec_overhead_per_request=self.config.spec_overhead_per_request,
         )
 
@@ -885,9 +957,12 @@ class Scheduler:
 
         # Batch composer (ScheduleBatch → ForwardBatch)
         from .forward_batch import BatchComposer
+
         self._batch_composer = BatchComposer(
             max_batch_size=self.config.max_num_seqs,
-            max_prefill_slots=self.config.prefill_batch_size if hasattr(self.config, 'prefill_batch_size') else 8,
+            max_prefill_slots=self.config.prefill_batch_size
+            if hasattr(self.config, "prefill_batch_size")
+            else 8,
             max_decode_slots=self.config.max_num_seqs,
         )
 
@@ -895,6 +970,7 @@ class Scheduler:
         if self.config.enable_hybrid_prefill:
             try:
                 from .kv_optimizations import ChunkedPrefillOptimizer
+
                 self._chunked_prefill_optimizer = ChunkedPrefillOptimizer()
                 logger.info("ChunkedPrefillOptimizer wired (hybrid prefill)")
             except Exception:
@@ -940,10 +1016,15 @@ class Scheduler:
         # Honor the intended chunk granularity so mlx-lm's native chunking matches what
         # the manual chunking used to do (hybrid/Sarathi → hybrid_chunk_size, else
         # prefill_chunk_size).
-        _target_chunk = (self.config.hybrid_chunk_size if self.config.enable_hybrid_prefill
-                         else getattr(self.config, "prefill_chunk_size", 0))
+        _target_chunk = (
+            self.config.hybrid_chunk_size
+            if self.config.enable_hybrid_prefill
+            else getattr(self.config, "prefill_chunk_size", 0)
+        )
         if _target_chunk and _target_chunk > 0:
-            _eff_step = min(_eff_step, _target_chunk) if _eff_step > 0 else _target_chunk
+            _eff_step = (
+                min(_eff_step, _target_chunk) if _eff_step > 0 else _target_chunk
+            )
         self._batch_gen = BatchGenerator(
             self.model,
             max_tokens=self.config.completion_batch_size,
@@ -969,12 +1050,10 @@ class Scheduler:
                 req = self.running.get(req_id) or self.requests.get(req_id)
                 if req is not None:
                     req.set_finished(RequestStatus.FINISHED_ERROR, reason="shutdown")
-            logger.info(
-                f"Shutdown: draining {n_pending} pending chunked prefills"
-            )
+            logger.info(f"Shutdown: draining {n_pending} pending chunked prefills")
         self.deep_reset()
         if self._batch_gen is not None:
-            if hasattr(self._batch_gen, 'close'):
+            if hasattr(self._batch_gen, "close"):
                 try:
                     self._batch_gen.close()
                 except Exception:
@@ -1010,7 +1089,11 @@ class Scheduler:
         the generated tail back to prompt length). Best-effort and per-request
         once — never raises into the step loop.
         """
-        if self._prefix_cache is None or self._batch_gen is None or not self._uid_to_req:
+        if (
+            self._prefix_cache is None
+            or self._batch_gen is None
+            or not self._uid_to_req
+        ):
             return
         for uid, req_id in list(self._uid_to_req.items()):
             self._save_one_prefix(uid, req_id)
@@ -1034,7 +1117,11 @@ class Scheduler:
         if req is None:
             return
         # Need prefill done (>=1 generated token) and a worthwhile prefix.
-        if req.num_output_tokens < 1 or req.num_prompt_tokens < 32 or not req.prompt_token_ids:
+        if (
+            req.num_output_tokens < 1
+            or req.num_prompt_tokens < 32
+            or not req.prompt_token_ids
+        ):
             return
         # CRITICAL: only save requests that did a FULL prefill. A request that
         # warm-started from an external cached prefix keeps the reused KV in the shared
@@ -1050,6 +1137,7 @@ class Scheduler:
             return
         try:
             import mlx.core as mx
+
             extracted = bg.extract_cache([uid])
             ct = extracted.get(uid) if extracted else None
             cache_data = ct[0] if isinstance(ct, (tuple, list)) and ct else None
@@ -1171,6 +1259,7 @@ class Scheduler:
         """Lazy-initialize the ExternalPrefiller."""
         if self._external_prefiller is None:
             from .external_prefill import ExternalPrefiller
+
             self._external_prefiller = ExternalPrefiller(
                 model=self.model,
                 tokenizer=self.tokenizer,
@@ -1189,6 +1278,7 @@ class Scheduler:
         request.status = RequestStatus.WAITING
         self.requests[request.request_id] = request
         import time as _time
+
         # SCHED-3: Record submit time for priority aging.
         # _submit_time is a proper field on Request (default 0.0).
         request._submit_time = _time.monotonic()
@@ -1239,15 +1329,19 @@ class Scheduler:
         if self._failed_insert_ids:
             for fail_id in self._failed_insert_ids:
                 fail_req = self.requests.get(fail_id)
-                actual_reason = getattr(fail_req, 'finish_reason', None) or "error"
-                outputs.append(RequestOutput(
-                    request_id=fail_id,
-                    finished=True,
-                    finish_reason=actual_reason,
-                    error=f"Request {fail_id} failed to insert into batch generator",
-                    prompt_tokens=getattr(fail_req, 'num_prompt_tokens', 0) if fail_req else 0,
-                    completion_tokens=0,
-                ))
+                actual_reason = getattr(fail_req, "finish_reason", None) or "error"
+                outputs.append(
+                    RequestOutput(
+                        request_id=fail_id,
+                        finished=True,
+                        finish_reason=actual_reason,
+                        error=f"Request {fail_id} failed to insert into batch generator",
+                        prompt_tokens=getattr(fail_req, "num_prompt_tokens", 0)
+                        if fail_req
+                        else 0,
+                        completion_tokens=0,
+                    )
+                )
             self._failed_insert_ids.clear()
 
         # 2c. Generate error outputs for requests that failed during chunked prefill.
@@ -1256,14 +1350,19 @@ class Scheduler:
         if self._chunked_prefill_failed_ids:
             for fail_id in self._chunked_prefill_failed_ids:
                 fail_req = self.requests.get(fail_id)
-                outputs.append(RequestOutput(
-                    request_id=fail_id,
-                    finished=True,
-                    finish_reason=getattr(fail_req, 'finish_reason', None) or "error",
-                    error=f"Request {fail_id} failed during chunked prefill",
-                    prompt_tokens=getattr(fail_req, 'num_prompt_tokens', 0) if fail_req else 0,
-                    completion_tokens=0,
-                ))
+                outputs.append(
+                    RequestOutput(
+                        request_id=fail_id,
+                        finished=True,
+                        finish_reason=getattr(fail_req, "finish_reason", None)
+                        or "error",
+                        error=f"Request {fail_id} failed during chunked prefill",
+                        prompt_tokens=getattr(fail_req, "num_prompt_tokens", 0)
+                        if fail_req
+                        else 0,
+                        completion_tokens=0,
+                    )
+                )
             self._chunked_prefill_failed_ids.clear()
 
         if self._batch_gen is None:
@@ -1282,10 +1381,16 @@ class Scheduler:
             # return 0.0 deltas.
             if self.running:
                 try:
-                    _uids = [uid for uid, rid in self._uid_to_req.items() if rid in self.running]
+                    _uids = [
+                        uid
+                        for uid, rid in self._uid_to_req.items()
+                        if rid in self.running
+                    ]
                     if _uids:
                         _rope_deltas = self.get_batch_rope_deltas(_uids)
-                        self._last_batch_rope_deltas = list(zip(_uids, _rope_deltas, strict=False))
+                        self._last_batch_rope_deltas = list(
+                            zip(_uids, _rope_deltas, strict=False)
+                        )
                 except Exception:
                     logger.debug("batch rope deltas collection failed", exc_info=True)
 
@@ -1331,13 +1436,11 @@ class Scheduler:
             # 6b. Speculative decoding: verify drafts, then generate new ones
             # (verify-after — verify pending drafts against
             # target model output, then draft K tokens for next step)
-            spec_decoder_active = (
-                self.config.enable_spec_decode
-                and isinstance(self._spec_decoder, SpeculativeDecoder)
+            spec_decoder_active = self.config.enable_spec_decode and isinstance(
+                self._spec_decoder, SpeculativeDecoder
             )
             mtp_active = (
-                self.config.enable_spec_decode
-                and self._mtp_decoder is not None
+                self.config.enable_spec_decode and self._mtp_decoder is not None
             )
             ngram_active = self._ngram_proposer is not None
             if spec_decoder_active or mtp_active or ngram_active:
@@ -1352,7 +1455,8 @@ class Scheduler:
                 # set we actually store below (rid not already in _spec_drafts).
                 if batch_drafts.drafts:
                     self._spec_total_proposals += sum(
-                        len(t) for rid, t in batch_drafts.drafts.items()
+                        len(t)
+                        for rid, t in batch_drafts.drafts.items()
                         if rid not in self._spec_drafts
                     )
                 for rid, tokens in batch_drafts.drafts.items():
@@ -1361,7 +1465,9 @@ class Scheduler:
                         # Bug 2 fix: record position where drafts start
                         req = self.running.get(rid)
                         if req is not None:
-                            self._spec_draft_start_pos[rid] = len(req.output_token_ids or [])
+                            self._spec_draft_start_pos[rid] = len(
+                                req.output_token_ids or []
+                            )
                 # Generate drafts for still-active requests (per-request fallback
                 # for strategies not covered by batch collection, e.g. MTP/cross-model)
                 for req_id in list(self.running.keys()):
@@ -1378,6 +1484,7 @@ class Scheduler:
         except Exception as e:
             logger.error(f"BatchGenerator step error: {e}", exc_info=True)
             from .exceptions import is_cache_corruption_error
+
             if is_cache_corruption_error(e):
                 logger.warning("Cache corruption detected — resetting BatchGenerator")
                 # deep_reset() clears running/waiting/requests but the old
@@ -1389,12 +1496,16 @@ class Scheduler:
                 _lost = list(self.requests.keys())
                 self.deep_reset()
                 for _rid in _lost:
-                    outputs.append(RequestOutput(
-                        request_id=_rid, finished=True,
-                        finish_reason="error",
-                        error=f"Cache corruption reset: {e}",
-                        prompt_tokens=0, completion_tokens=0,
-                    ))
+                    outputs.append(
+                        RequestOutput(
+                            request_id=_rid,
+                            finished=True,
+                            finish_reason="error",
+                            error=f"Cache corruption reset: {e}",
+                            prompt_tokens=0,
+                            completion_tokens=0,
+                        )
+                    )
             else:
                 # Non-corruption error: fail all running requests to prevent
                 # them from being stuck in RUNNING forever.
@@ -1404,12 +1515,16 @@ class Scheduler:
                 )
                 failed = self.fail_all_requests()
                 for _rid in failed:
-                    outputs.append(RequestOutput(
-                        request_id=_rid, finished=True,
-                        finish_reason="error",
-                        error=f"BatchGenerator step failed: {e}",
-                        prompt_tokens=0, completion_tokens=0,
-                    ))
+                    outputs.append(
+                        RequestOutput(
+                            request_id=_rid,
+                            finished=True,
+                            finish_reason="error",
+                            error=f"BatchGenerator step failed: {e}",
+                            prompt_tokens=0,
+                            completion_tokens=0,
+                        )
+                    )
             return SchedulerOutput(outputs=outputs)
 
         # 7. Step counter
@@ -1500,7 +1615,9 @@ class Scheduler:
                 # Track timed-out request so step() generates an error output
                 # for EngineCore to finalize (otherwise resources leak).
                 self._failed_insert_ids.append(req.request_id)
-                logger.warning(f"Request {req.request_id} timed out after {now - submit:.0f}s in waiting queue")
+                logger.warning(
+                    f"Request {req.request_id} timed out after {now - submit:.0f}s in waiting queue"
+                )
                 continue
             to_insert.append(req)
 
@@ -1520,15 +1637,19 @@ class Scheduler:
         # is applied to the full waiting queue contents (not just the visible
         # top).  Overflow requests pushed back via push_front retain their
         # _submit_time so aging accumulates correctly across scheduling rounds.
-        if (self.config.aging_enabled
+        if (
+            self.config.aging_enabled
             and self.config.policy == SchedulingPolicy.PRIORITY
-            and len(to_insert) > 1):
+            and len(to_insert) > 1
+        ):
             aging_weight = self.config.aging_weight
             _aged_insert = []
             for _req in to_insert:
                 _submit = _req._submit_time if _req._submit_time > 0 else now
                 _age = max(0.0, now - _submit)
-                _effective_priority = _req.sampling_params.priority + _age * aging_weight
+                _effective_priority = (
+                    _req.sampling_params.priority + _age * aging_weight
+                )
                 _aged_insert.append((_effective_priority, _req))
             _aged_insert.sort(key=lambda x: -x[0])  # Higher effective priority first
             to_insert = [_req for _, _req in _aged_insert]
@@ -1540,8 +1661,8 @@ class Scheduler:
         # accumulated aging bonus while the preempted request's _submit_time
         # was reset to now() during preemption.
         if to_insert:
-            _preempted = [r for r in to_insert if getattr(r, 'num_preemptions', 0) > 0]
-            _new = [r for r in to_insert if getattr(r, 'num_preemptions', 0) == 0]
+            _preempted = [r for r in to_insert if getattr(r, "num_preemptions", 0) > 0]
+            _new = [r for r in to_insert if getattr(r, "num_preemptions", 0) == 0]
             if _preempted and _new:
                 to_insert = _preempted + _new
 
@@ -1580,7 +1701,9 @@ class Scheduler:
             # always gets the first slot and low-priority requests starve.
             if len(sorted_priorities) > 1 and self._fair_rr_offset > 0:
                 offset = self._fair_rr_offset % len(sorted_priorities)
-                sorted_priorities = sorted_priorities[offset:] + sorted_priorities[:offset]
+                sorted_priorities = (
+                    sorted_priorities[offset:] + sorted_priorities[:offset]
+                )
             self._fair_rr_offset += 1
             # Round-robin: take one from each priority level in turn
             round_robin = []
@@ -1608,9 +1731,9 @@ class Scheduler:
         # would needlessly cap concurrency ~10% below capacity whenever it's enabled).
         # Only cross-model spec and MTP add a drafting/verification batch cost.
         has_spec = (
-            (self.config.enable_spec_decode and isinstance(self._spec_decoder, SpeculativeDecoder))
-            or self._mtp_decoder is not None
-        )
+            self.config.enable_spec_decode
+            and isinstance(self._spec_decoder, SpeculativeDecoder)
+        ) or self._mtp_decoder is not None
         if has_spec and self._spec_aware_scheduler is not None:
             budget = self._spec_aware_scheduler.compute_spec_budget(active_count)
             available_slots = budget.available_for_new
@@ -1623,7 +1746,8 @@ class Scheduler:
             to_insert = self._apply_batch_spec_prefill(to_insert)
 
         if len(to_insert) > available_slots and self.config.policy in (
-            SchedulingPolicy.PRIORITY, SchedulingPolicy.FAIR,
+            SchedulingPolicy.PRIORITY,
+            SchedulingPolicy.FAIR,
         ):
             # evict lowest-priority running requests
             # to make room for higher-priority waiting requests.
@@ -1644,10 +1768,14 @@ class Scheduler:
                 # overflow.
                 new_active_count = len(self.running)
                 if has_spec and self._spec_aware_scheduler is not None:
-                    budget = self._spec_aware_scheduler.compute_spec_budget(new_active_count)
+                    budget = self._spec_aware_scheduler.compute_spec_budget(
+                        new_active_count
+                    )
                     available_slots = budget.available_for_new
                 else:
-                    available_slots = max(0, self._effective_max_seqs - new_active_count)
+                    available_slots = max(
+                        0, self._effective_max_seqs - new_active_count
+                    )
                 logger.info(
                     f"Preempted {preempted} running requests for {len(to_insert)} waiting "
                     f"(priority policy, available_slots={available_slots})"
@@ -1659,19 +1787,29 @@ class Scheduler:
             if self.config.enable_retraction and self._memory_monitor is not None:
                 try:
                     info = self._memory_monitor.get_memory_info()
-                    if info.utilization_pct >= self.config.retraction_memory_threshold * 100:
+                    if (
+                        info.utilization_pct
+                        >= self.config.retraction_memory_threshold * 100
+                    ):
                         retracted = self._retract_decode_requests(
-                            min(self.config.retraction_max_count, len(to_insert) - available_slots)
+                            min(
+                                self.config.retraction_max_count,
+                                len(to_insert) - available_slots,
+                            )
                         )
                         if retracted > 0:
                             # Recompute available_slots instead of naive addition
                             # (same spec-overhead fix as preemption path above).
                             new_active_count = len(self.running)
                             if has_spec and self._spec_aware_scheduler is not None:
-                                budget = self._spec_aware_scheduler.compute_spec_budget(new_active_count)
+                                budget = self._spec_aware_scheduler.compute_spec_budget(
+                                    new_active_count
+                                )
                                 available_slots = budget.available_for_new
                             else:
-                                available_slots = max(0, self._effective_max_seqs - new_active_count)
+                                available_slots = max(
+                                    0, self._effective_max_seqs - new_active_count
+                                )
                             logger.info(
                                 f"Retracted {retracted} decode requests under memory pressure "
                                 f"(util={info.utilization_pct:.1f}%, available_slots={available_slots})"
@@ -1698,8 +1836,10 @@ class Scheduler:
         if self.config.memory_guard_enabled and to_insert:
             try:
                 import mlx.core as mx
+
                 active_mem = mx.get_active_memory()
                 from .utils.hardware import get_hardware_info
+
                 hw = get_hardware_info()
                 total_mem = hw.total_memory_bytes
                 soft_limit = int(total_mem * self.config.memory_guard_soft_limit)
@@ -1715,12 +1855,16 @@ class Scheduler:
                         victim = self.waiting.pop_lowest_priority()
                         if victim is not None:
                             self._failed_insert_ids.append(victim.request_id)
-                            victim.set_finished(RequestStatus.FINISHED_ERROR, reason="memory_limit")
+                            victim.set_finished(
+                                RequestStatus.FINISHED_ERROR, reason="memory_limit"
+                            )
                             logger.warning(
                                 "Memory guard: rejecting request %s after %d deferrals "
                                 "(%s active > %s soft limit)",
-                                victim.request_id, self._mem_guard_defer_count,
-                                f"{active_mem / 1024**3:.1f}GB", f"{soft_limit / 1024**3:.1f}GB",
+                                victim.request_id,
+                                self._mem_guard_defer_count,
+                                f"{active_mem / 1024**3:.1f}GB",
+                                f"{soft_limit / 1024**3:.1f}GB",
                             )
                             self._mem_guard_defer_count = 0
                         # the in-hand to_insert requests were popped off
@@ -1731,7 +1875,9 @@ class Scheduler:
                         # victim is rejected; push the rest back to retry next step
                         # (matches the deferral branch).
                         for req in reversed(to_insert):
-                            self.waiting.push_front(req, priority=req.sampling_params.priority)
+                            self.waiting.push_front(
+                                req, priority=req.sampling_params.priority
+                            )
                         to_insert = []
                     else:
                         logger.debug(
@@ -1739,7 +1885,9 @@ class Scheduler:
                             f"({active_mem / 1024**3:.1f}GB active > {soft_limit / 1024**3:.1f}GB soft limit)"
                         )
                         for req in reversed(to_insert):
-                            self.waiting.push_front(req, priority=req.sampling_params.priority)
+                            self.waiting.push_front(
+                                req, priority=req.sampling_params.priority
+                            )
                         to_insert = []
                     # When no requests are running, nothing will trigger memory
                     # release via request completion. Force an immediate cache
@@ -1762,15 +1910,18 @@ class Scheduler:
         # Track batch composition via BatchComposer
         if to_insert:
             from .forward_batch import RequestSlot
+
             pending_slots = [
                 RequestSlot(
                     request_id=req.request_id,
                     prompt_tokens=req.prompt_token_ids or [],
-                    max_tokens=req.sampling_params.max_tokens if req.sampling_params else 512,
+                    max_tokens=req.sampling_params.max_tokens
+                    if req.sampling_params
+                    else 512,
                     priority=req.sampling_params.priority if req.sampling_params else 0,
                     is_prefill=True,
                     num_prompt_tokens=len(req.prompt_token_ids or []),
-                    cached_tokens=getattr(req, 'cached_tokens', 0),
+                    cached_tokens=getattr(req, "cached_tokens", 0),
                     arrival_time=req._submit_time if req._submit_time > 0 else now,
                 )
                 for req in to_insert
@@ -1785,11 +1936,16 @@ class Scheduler:
                 RequestSlot(
                     request_id=rid,
                     prompt_tokens=r.prompt_token_ids or [],
-                    max_tokens=r.sampling_params.max_tokens if r.sampling_params else 512,
+                    max_tokens=r.sampling_params.max_tokens
+                    if r.sampling_params
+                    else 512,
                     is_prefill=False,
                     priority=r.sampling_params.priority if r.sampling_params else 0,
-                    num_prompt_tokens=getattr(r, 'num_prompt_tokens', 0) or len(r.prompt_token_ids or []),
-                    generated_tokens=list(r.output_token_ids) if getattr(r, 'output_token_ids', None) else [],
+                    num_prompt_tokens=getattr(r, "num_prompt_tokens", 0)
+                    or len(r.prompt_token_ids or []),
+                    generated_tokens=list(r.output_token_ids)
+                    if getattr(r, "output_token_ids", None)
+                    else [],
                 )
                 for rid, r in self.running.items()
             ]
@@ -1799,15 +1955,14 @@ class Scheduler:
         # When partial prefills are in-flight, short prompts (< threshold) should
         # jump ahead of long partial prefills. Reorder so short requests are
         # scheduled first, avoiding head-of-line blocking by long prefills.
-        if (
-            self._active_partial_prefills > 0
-            and len(to_insert) > 1
-        ):
+        if self._active_partial_prefills > 0 and len(to_insert) > 1:
             _threshold = self.config.long_prefill_token_threshold
+
             def _short_prompt_priority(r: Request) -> int:
                 """0 = short (schedule first), 1 = long."""
                 n = len(r.prompt_token_ids) if r.prompt_token_ids else 0
                 return 1 if n > _threshold else 0
+
             to_insert.sort(key=_short_prompt_priority)
 
         for req in to_insert:
@@ -1854,20 +2009,28 @@ class Scheduler:
                     try:
                         # Use request_id as conversation identifier; callers may
                         # set a stable conversation_id via request metadata.
-                        conv_id = getattr(req, 'conversation_id', None) or req.request_id
-                        conv_segments = self._thinking_store.get_conversation_segments(conv_id)
+                        conv_id = (
+                            getattr(req, "conversation_id", None) or req.request_id
+                        )
+                        conv_segments = self._thinking_store.get_conversation_segments(
+                            conv_id
+                        )
                         if conv_segments:
                             # Attach the most recently accessed segment for
                             # potential KV reuse (prefill optimisation).
                             best = max(conv_segments, key=lambda s: s.last_accessed)
                             req.prompt_cache = best.kv_data
-                            req.cached_tokens = getattr(req, 'cached_tokens', 0) + best.num_tokens
+                            req.cached_tokens = (
+                                getattr(req, "cached_tokens", 0) + best.num_tokens
+                            )
                             logger.debug(
                                 f"Thinking KV reuse: {conv_id} → segment "
                                 f"{best.step_hash} ({best.num_tokens} tokens)"
                             )
                     except Exception as e:
-                        logger.debug(f"Thinking KV lookup failed for {req.request_id}: {e}")
+                        logger.debug(
+                            f"Thinking KV lookup failed for {req.request_id}: {e}"
+                        )
 
                 # ── Chunked prefill: split long prompts across steps ──
                 # Two modes:
@@ -1891,8 +2054,10 @@ class Scheduler:
                 # matches the prompt prefix below, so typically only the generated tokens
                 # are actually re-prefilled. Keyed on num_preemptions>0 so fresh requests
                 # are unaffected (their output_token_ids is empty anyway).
-                if getattr(req, 'num_preemptions', 0) > 0 and req.output_token_ids:
-                    tokens_to_insert = list(req.prompt_token_ids) + list(req.output_token_ids)
+                if getattr(req, "num_preemptions", 0) > 0 and req.output_token_ids:
+                    tokens_to_insert = list(req.prompt_token_ids) + list(
+                        req.output_token_ids
+                    )
 
                 # ── Prefill resume after preemption ──
                 # When a request is preempted mid-prefill, num_computed_tokens
@@ -1909,8 +2074,8 @@ class Scheduler:
                 prefill_resume_offset = 0
                 prefill_resume_kv = None
                 if (
-                    getattr(req, 'num_computed_tokens', 0) > 0
-                    and getattr(req, 'num_preemptions', 0) > 0
+                    getattr(req, "num_computed_tokens", 0) > 0
+                    and getattr(req, "num_preemptions", 0) > 0
                     and len(tokens_to_insert) > req.num_computed_tokens
                 ):
                     prefill_resume_offset = req.num_computed_tokens
@@ -1918,26 +2083,40 @@ class Scheduler:
                     # Check if _preempt_request saved a KV cache for resumption.
                     # This carries the partial KV from the in-flight chunked
                     # prefill at the time of preemption.
-                    saved_progress = getattr(req, '_prefill_progress', None)
-                    if saved_progress is not None and saved_progress.get('kv_cache') is not None:
-                        prefill_resume_kv = saved_progress['kv_cache']
+                    saved_progress = getattr(req, "_prefill_progress", None)
+                    if (
+                        saved_progress is not None
+                        and saved_progress.get("kv_cache") is not None
+                    ):
+                        prefill_resume_kv = saved_progress["kv_cache"]
                     # Also try the prefix cache for a KV hit on the already-computed prefix.
                     if prefill_resume_kv is None and self._prefix_cache is not None:
                         try:
                             import mlx.core as mx
-                            ids_arr = mx.array(req.prompt_token_ids[:prefill_resume_offset])
-                            cached_kv, _, matched = self._prefix_cache.get(ids_arr, exact_refeed_trim=False)
-                            if cached_kv is not None and matched >= prefill_resume_offset:
+
+                            ids_arr = mx.array(
+                                req.prompt_token_ids[:prefill_resume_offset]
+                            )
+                            cached_kv, _, matched = self._prefix_cache.get(
+                                ids_arr, exact_refeed_trim=False
+                            )
+                            if (
+                                cached_kv is not None
+                                and matched >= prefill_resume_offset
+                            ):
                                 prefill_resume_kv = cached_kv
                         except Exception:
-                            logger.debug("prefix cache lookup for prefill resume failed", exc_info=True)
+                            logger.debug(
+                                "prefix cache lookup for prefill resume failed",
+                                exc_info=True,
+                            )
                     logger.info(
                         f"Resuming prefill for preempted request {req.request_id}: "
                         f"skipping {prefill_resume_offset} cached tokens, "
                         f"{len(tokens_to_insert)} tokens remaining"
                     )
                     # Clear the saved progress to avoid stale state on subsequent steps
-                    if hasattr(req, '_prefill_progress'):
+                    if hasattr(req, "_prefill_progress"):
                         del req._prefill_progress
 
                 effective_chunk_size = 0
@@ -1967,7 +2146,10 @@ class Scheduler:
                     num_tokens = len(tokens_to_insert)
                     is_long = num_tokens > self.config.long_prefill_token_threshold
 
-                    if self._active_partial_prefills >= self.config.max_num_partial_prefills:
+                    if (
+                        self._active_partial_prefills
+                        >= self.config.max_num_partial_prefills
+                    ):
                         # Total cap reached — defer this request
                         logger.debug(
                             f"Partial prefill cap reached ({self._active_partial_prefills}/"
@@ -1976,7 +2158,11 @@ class Scheduler:
                         self.waiting.push(req, priority=req.sampling_params.priority)
                         continue
 
-                    if is_long and self._active_partial_prefills >= self.config.max_long_partial_prefills:
+                    if (
+                        is_long
+                        and self._active_partial_prefills
+                        >= self.config.max_long_partial_prefills
+                    ):
                         # Long prefill cap reached — defer this long request
                         logger.debug(
                             f"Long partial prefill cap reached ({self._active_partial_prefills}/"
@@ -1994,19 +2180,20 @@ class Scheduler:
                     # insert_segments must include the resume prefix so KV cache
                     # positions align correctly.
                     all_prompt_for_chunks = (
-                        req.prompt_token_ids if prefill_resume_offset > 0
+                        req.prompt_token_ids
+                        if prefill_resume_offset > 0
                         else tokens_to_insert
                     )
                     # Store remaining tokens for subsequent steps
                     self._pending_prefill[req.request_id] = {
-                        'remaining_tokens': remaining,
-                        'batch_uid': None,
+                        "remaining_tokens": remaining,
+                        "batch_uid": None,
                         # Track chunking mode for _process_pending_prefill
-                        'chunk_size': effective_chunk_size,
-                        'total_prompt_len': len(tokens_to_insert),
-                        'offset': prefill_resume_offset + effective_chunk_size,
-                        'kv_cache': prefill_resume_kv,
-                        'all_prompt_tokens': all_prompt_for_chunks,
+                        "chunk_size": effective_chunk_size,
+                        "total_prompt_len": len(tokens_to_insert),
+                        "offset": prefill_resume_offset + effective_chunk_size,
+                        "kv_cache": prefill_resume_kv,
+                        "all_prompt_tokens": all_prompt_for_chunks,
                     }
                     # Chunked prefill production tracking: fairness + timeout
                     self._chunked_prefill_fairness[req.request_id] = 0
@@ -2028,8 +2215,11 @@ class Scheduler:
                 elif self._prefix_cache is not None:
                     try:
                         import mlx.core as mx
+
                         ids_arr = mx.array(tokens_to_insert)
-                        cached_kv, _, matched = self._prefix_cache.get(ids_arr, exact_refeed_trim=False)
+                        cached_kv, _, matched = self._prefix_cache.get(
+                            ids_arr, exact_refeed_trim=False
+                        )
                         # a FULL-prompt match (matched ==
                         # every token) leaves 0 tokens to prefill, and the
                         # BatchGenerator needs >=1 token to start decoding →
@@ -2049,7 +2239,9 @@ class Scheduler:
                                     f"for {req.request_id}"
                                 )
                     except Exception:
-                        logger.debug("prefix cache lookup failed in batch path", exc_info=True)
+                        logger.debug(
+                            "prefix cache lookup failed in batch path", exc_info=True
+                        )
 
                 # Inflight prefix sharing: if the completed
                 # prefix cache didn't have a match, check if another request
@@ -2063,14 +2255,21 @@ class Scheduler:
                 if cached_kv is None and req.prompt_token_ids:
                     try:
                         from .inflight_prefix_sharing import get_inflight_tracker
+
                         _tracker = get_inflight_tracker()
                         _inflight_entry = _tracker.find_prefix(
                             req.prompt_token_ids,
-                            getattr(self, 'model_id', '') or '',
+                            getattr(self, "model_id", "") or "",
                         )
-                        if _inflight_entry is not None and _inflight_entry.kv_cache_ref is not None:
+                        if (
+                            _inflight_entry is not None
+                            and _inflight_entry.kv_cache_ref is not None
+                        ):
                             cached_kv = _inflight_entry.kv_cache_ref
-                            shared_len = min(len(_inflight_entry.token_ids), len(req.prompt_token_ids))
+                            shared_len = min(
+                                len(_inflight_entry.token_ids),
+                                len(req.prompt_token_ids),
+                            )
                             remaining_tokens = req.prompt_token_ids[shared_len:]
                             req.cached_tokens = shared_len
                             logger.debug(
@@ -2080,13 +2279,15 @@ class Scheduler:
                                 req.request_id[:12],
                             )
                     except Exception:
-                        logger.debug("inflight prefix lookup failed in batch path", exc_info=True)
+                        logger.debug(
+                            "inflight prefix lookup failed in batch path", exc_info=True
+                        )
 
                 # Check encoder cache for encoder-decoder models.
                 # If the request has a cached encoder hidden state (from a prior
                 # request with the same encoder input), attach it so the decoder
                 # can skip re-encoding.
-                if hasattr(req, 'encoder_request_id'):
+                if hasattr(req, "encoder_request_id"):
                     cached_encoder = self._encoder_cache.get(req.encoder_request_id)
                     if cached_encoder is not None:
                         req.cached_encoder_output = cached_encoder
@@ -2100,7 +2301,9 @@ class Scheduler:
                 # positions align correctly.  For non-resume paths, it equals
                 # tokens_to_insert (which is the full prompt in that case).
                 all_tokens_for_segments = (
-                    req.prompt_token_ids if prefill_resume_offset > 0 else tokens_to_insert
+                    req.prompt_token_ids
+                    if prefill_resume_offset > 0
+                    else tokens_to_insert
                 )
 
                 # on continue-resume the already-generated tokens
@@ -2155,11 +2358,17 @@ class Scheduler:
                     )
 
                 if not uids:
-                    logger.error(f"BatchGenerator.insert returned empty UIDs for {req.request_id}")
-                    req.set_finished(RequestStatus.FINISHED_ERROR, reason="insert_failed")
+                    logger.error(
+                        f"BatchGenerator.insert returned empty UIDs for {req.request_id}"
+                    )
+                    req.set_finished(
+                        RequestStatus.FINISHED_ERROR, reason="insert_failed"
+                    )
                     if should_chunk:
                         self._pending_prefill.pop(req.request_id, None)
-                        self._active_partial_prefills = max(0, self._active_partial_prefills - 1)
+                        self._active_partial_prefills = max(
+                            0, self._active_partial_prefills - 1
+                        )
                     # Must track as failed insert so step() generates a synthetic
                     # error output and EngineCore calls _finalize_request.
                     # Without this, per-request resources (output_queue, done_event)
@@ -2177,7 +2386,7 @@ class Scheduler:
                     self._attention_score_tracker.register_request(req.request_id)
 
                 # Register mRoPE delta for batch decode
-                if getattr(req, 'rope_deltas', 0.0) != 0.0:
+                if getattr(req, "rope_deltas", 0.0) != 0.0:
                     self._rope_delta_mgr.register(uids[0], req.rope_deltas)
 
                 # Create fresh detokenizer (never pool)
@@ -2192,34 +2401,49 @@ class Scheduler:
                         ThinkingBudgetProcessor,
                         parse_thinking_budget,
                     )
-                    config = parse_thinking_budget({
-                        'thinking_budget': sp.thinking_budget,
-                        'reasoning_effort': sp.reasoning_effort,
-                    })
+
+                    config = parse_thinking_budget(
+                        {
+                            "thinking_budget": sp.thinking_budget,
+                            "reasoning_effort": sp.reasoning_effort,
+                        }
+                    )
                     if config is not None:
-                        self._thinking_processors[req.request_id] = ThinkingBudgetProcessor(config)
-                elif getattr(sp, 'enable_thinking', False) or getattr(req, 'enable_thinking', False):
+                        self._thinking_processors[req.request_id] = (
+                            ThinkingBudgetProcessor(config)
+                        )
+                elif getattr(sp, "enable_thinking", False) or getattr(
+                    req, "enable_thinking", False
+                ):
                     # Auto-detected thinking mode with default budget
                     from .thinking_budget import (
                         ThinkingBudgetConfig,
                         ThinkingBudgetProcessor,
                         detect_needs_think_prefix,
                     )
-                    if detect_needs_think_prefix(req.prompt_token_ids or [], self.tokenizer):
-                        self._thinking_processors[req.request_id] = ThinkingBudgetProcessor(
-                            ThinkingBudgetConfig(max_thinking_tokens=8192)
+
+                    if detect_needs_think_prefix(
+                        req.prompt_token_ids or [], self.tokenizer
+                    ):
+                        self._thinking_processors[req.request_id] = (
+                            ThinkingBudgetProcessor(
+                                ThinkingBudgetConfig(max_thinking_tokens=8192)
+                            )
                         )
 
                 self._total_prompt_tokens += req.num_prompt_tokens
                 # Only count unique requests — skip re-inserted preempted requests
                 # which were already counted during their first insertion.
-                if getattr(req, 'num_preemptions', 0) == 0:
+                if getattr(req, "num_preemptions", 0) == 0:
                     self._num_requests += 1
 
                 # Track prefill progress
                 if self._prefill_tracker is not None:
                     self._prefill_tracker.update(
-                        req.request_id, 0, req.num_prompt_tokens, self.model_id,
+                        req.request_id,
+                        0,
+                        req.num_prompt_tokens,
+                        self.model_id,
                     )
 
                 # ── Speculative decoding head detection (Phase 4) ──
@@ -2229,14 +2453,16 @@ class Scheduler:
                     self._try_init_spec_decoder()
 
             except Exception as e:
-                logger.error(f"Failed to insert request {req.request_id}: {e}", exc_info=True)
+                logger.error(
+                    f"Failed to insert request {req.request_id}: {e}", exc_info=True
+                )
                 req.set_finished(RequestStatus.FINISHED_ERROR, reason="error")
                 # Undo _total_prompt_tokens increment — the request never ran
                 self._total_prompt_tokens = max(
-                    0, self._total_prompt_tokens - getattr(req, 'num_prompt_tokens', 0)
+                    0, self._total_prompt_tokens - getattr(req, "num_prompt_tokens", 0)
                 )
                 # Signal completion so callers don't hang
-                self._uid_to_req.pop(getattr(req, 'batch_uid', None), None)
+                self._uid_to_req.pop(getattr(req, "batch_uid", None), None)
                 self.finished_ids.add(req.request_id)
                 # Track failed insert so step() generates an error output for
                 # EngineCore to finalize (otherwise resources leak).
@@ -2245,7 +2471,9 @@ class Scheduler:
                 # but never added to self.running (which _cleanup_finished skips).
                 if should_chunk:
                     self._pending_prefill.pop(req.request_id, None)
-                    self._active_partial_prefills = max(0, self._active_partial_prefills - 1)
+                    self._active_partial_prefills = max(
+                        0, self._active_partial_prefills - 1
+                    )
 
     def _run_external_prefill(self, req: Request) -> bool:
         """Run external prefill for a request.
@@ -2269,7 +2497,10 @@ class Scheduler:
         def _on_progress(completed: int, total: int) -> None:
             if self._prefill_tracker is not None:
                 self._prefill_tracker.update(
-                    req.request_id, completed, total, self.model_id,
+                    req.request_id,
+                    completed,
+                    total,
+                    self.model_id,
                 )
 
         try:
@@ -2300,10 +2531,9 @@ class Scheduler:
 
         except Exception as e:
             from .exceptions import PrefillMemoryExceededError
+
             if isinstance(e, PrefillMemoryExceededError):
-                logger.warning(
-                    f"Prefill memory exceeded for {req.request_id}: {e}"
-                )
+                logger.warning(f"Prefill memory exceeded for {req.request_id}: {e}")
             else:
                 logger.error(
                     f"External prefill failed for {req.request_id}: {e}",
@@ -2350,22 +2580,27 @@ class Scheduler:
             # Use effective priority (raw + aging) to match _schedule_waiting
             # ordering. Using raw priority causes priority inversion where
             # an aged-in request is immediately preempted due to low raw priority.
-            raw_pri = getattr(req.sampling_params, 'priority', 0) or 0
-            _age = max(0.0, time.monotonic() - (req._submit_time if req._submit_time > 0 else req.arrival_time))
+            raw_pri = getattr(req.sampling_params, "priority", 0) or 0
+            _age = max(
+                0.0,
+                time.monotonic()
+                - (req._submit_time if req._submit_time > 0 else req.arrival_time),
+            )
             effective_pri = raw_pri + _age * self.config.aging_weight
             return (is_decode, effective_pri, kv_usage, -req.arrival_time)
 
         now = time.monotonic()
         eligible = [
-            rid for rid in self.running
+            rid
+            for rid in self.running
             if self.running[rid].num_preemptions < self._MAX_PREEMPTIONS_PER_REQUEST
             and rid not in self._pending_abort_ids
             # Preemption cascade cooldown: skip requests that were just
             # preempted and reinserted within the cooldown window.  Without
             # this, a request can be preempted → reinserted → immediately
             # preempted again in a feedback loop (cascade).
-            and (now - getattr(self.running[rid], '_last_preempt_time', 0.0))
-                >= self._preemption_cooldown_seconds
+            and (now - getattr(self.running[rid], "_last_preempt_time", 0.0))
+            >= self._preemption_cooldown_seconds
         ]
         if not eligible:
             return 0
@@ -2411,10 +2646,14 @@ class Scheduler:
             extracted_caches: dict = {}
             if uid is not None and self._batch_gen is not None:
                 try:
-                    extracted_caches = self._batch_gen.remove([uid], return_prompt_caches=True)
+                    extracted_caches = self._batch_gen.remove(
+                        [uid], return_prompt_caches=True
+                    )
                 except Exception as e:
                     # Fallback: remove without cache extraction if API differs
-                    logger.debug(f"Failed to extract cache for preempted UID {uid}: {e}")
+                    logger.debug(
+                        f"Failed to extract cache for preempted UID {uid}: {e}"
+                    )
                     try:
                         self._batch_gen.remove([uid])
                     except Exception as e2:
@@ -2431,7 +2670,7 @@ class Scheduler:
             # prompt KV would store stale/corrupted data.
             # Skip saving in that case.
             saved_prefix = 0
-            _sw_window = getattr(self.model, '_yunshu_swa_window', None)
+            _sw_window = getattr(self.model, "_yunshu_swa_window", None)
             _prompt_outside_window = (
                 isinstance(_sw_window, (int, float))
                 and request.num_output_tokens + request.num_prompt_tokens > _sw_window
@@ -2453,6 +2692,7 @@ class Scheduler:
             ):
                 try:
                     import mlx.core as mx
+
                     cache_and_tokens = extracted_caches[uid]
                     if cache_and_tokens is not None:
                         cache_data = cache_and_tokens[0]
@@ -2468,7 +2708,9 @@ class Scheduler:
                                 f"{request.request_id}: {saved_prefix} prompt tokens"
                             )
                 except Exception:
-                    logger.debug("Failed to save KV prefix during preemption", exc_info=True)
+                    logger.debug(
+                        "Failed to save KV prefix during preemption", exc_info=True
+                    )
 
             self._uid_to_req.pop(uid, None)
             # Unregister mRoPE delta for the old UID to prevent stale delta
@@ -2498,7 +2740,9 @@ class Scheduler:
 
             # H2O: Log attention-based eviction order for debugging.
             if self._attention_score_tracker is not None:
-                eviction_order = self._attention_score_tracker.get_eviction_order(request.request_id)
+                eviction_order = self._attention_score_tracker.get_eviction_order(
+                    request.request_id
+                )
                 if eviction_order:
                     logger.debug(
                         f"H2O eviction order for preempted {request.request_id}: "
@@ -2515,11 +2759,18 @@ class Scheduler:
             # If SCHED-1 saved the prefix above, this will find it immediately.
             # Otherwise, fall back to checking existing prefix cache entries.
             cached_prefix = max(saved_prefix, 0)
-            if cached_prefix == 0 and self._prefix_cache is not None and request.prompt_token_ids:
+            if (
+                cached_prefix == 0
+                and self._prefix_cache is not None
+                and request.prompt_token_ids
+            ):
                 try:
                     import mlx.core as mx
+
                     ids_arr = mx.array(request.prompt_token_ids)
-                    _, _, matched = self._prefix_cache.get(ids_arr, exact_refeed_trim=False)
+                    _, _, matched = self._prefix_cache.get(
+                        ids_arr, exact_refeed_trim=False
+                    )
                     if matched > 0:
                         cached_prefix = matched
                 except Exception:
@@ -2538,8 +2789,12 @@ class Scheduler:
             # preempted again in the same or next step (causes cascade feedback).
             request._last_preempt_time = time.monotonic()
             # Preserve cached prefix tokens — only reset beyond cache boundary
-            prompt_len = getattr(request, 'num_prompt_tokens', 0) or len(request.prompt_token_ids)
-            request.num_computed_tokens = min(cached_prefix, request.num_computed_tokens, prompt_len)
+            prompt_len = getattr(request, "num_prompt_tokens", 0) or len(
+                request.prompt_token_ids
+            )
+            request.num_computed_tokens = min(
+                cached_prefix, request.num_computed_tokens, prompt_len
+            )
             request.batch_uid = None
             # BUG FIX: Always increment num_preemptions for both priority
             # preemption and retraction.  Previously, retraction left
@@ -2573,7 +2828,9 @@ class Scheduler:
 
             self.waiting.push_front(request, priority=request.sampling_params.priority)
 
-            prefix_info = f", cached_prefix={cached_prefix}" if cached_prefix > 0 else ""
+            prefix_info = (
+                f", cached_prefix={cached_prefix}" if cached_prefix > 0 else ""
+            )
             logger.info(
                 f"Preempted request {request.request_id} "
                 f"(preemptions={request.num_preemptions}, "
@@ -2616,10 +2873,13 @@ class Scheduler:
         # Sort running requests by output tokens (longest = most memory, evict first).
         # Under PRIORITY policy, use priority as secondary criterion: among equal
         # output tokens, evict lowest-priority requests first.
-        if getattr(self.config, 'policy', None) == SchedulingPolicy.PRIORITY:
+        if getattr(self.config, "policy", None) == SchedulingPolicy.PRIORITY:
             candidates = sorted(
                 [r for r in self.running.values() if r.batch_uid is not None],
-                key=lambda r: (-r.num_output_tokens, r.sampling_params.priority if r.sampling_params else 0),
+                key=lambda r: (
+                    -r.num_output_tokens,
+                    r.sampling_params.priority if r.sampling_params else 0,
+                ),
             )
         else:
             candidates = sorted(
@@ -2632,10 +2892,15 @@ class Scheduler:
         for victim in candidates:
             if retracted >= count:
                 break
-            if getattr(victim, 'num_preemptions', 0) >= self._MAX_PREEMPTIONS_PER_REQUEST:
+            if (
+                getattr(victim, "num_preemptions", 0)
+                >= self._MAX_PREEMPTIONS_PER_REQUEST
+            ):
                 continue
             # Cascade cooldown: same as _preempt_lowest_priority
-            if (_now - getattr(victim, '_last_preempt_time', 0.0)) < self._preemption_cooldown_seconds:
+            if (
+                _now - getattr(victim, "_last_preempt_time", 0.0)
+            ) < self._preemption_cooldown_seconds:
                 continue
             self.running.pop(victim.request_id, None)
             self._preempt_request(victim)
@@ -2699,9 +2964,8 @@ class Scheduler:
         # is aborted between steps.
         if not self._pending_prefill:
             if self._chunked_prefill_enqueued_at or self._chunked_prefill_fairness:
-                orphan_ids = (
-                    set(self._chunked_prefill_enqueued_at.keys())
-                    | set(self._chunked_prefill_fairness.keys())
+                orphan_ids = set(self._chunked_prefill_enqueued_at.keys()) | set(
+                    self._chunked_prefill_fairness.keys()
                 )
                 for rid in orphan_ids:
                     self._chunked_prefill_enqueued_at.pop(rid, None)
@@ -2732,7 +2996,9 @@ class Scheduler:
             state = self._pending_prefill.get(req_id)
             if state is None:
                 continue
-            pending_duration = _now - self._chunked_prefill_enqueued_at.get(req_id, _now)
+            pending_duration = _now - self._chunked_prefill_enqueued_at.get(
+                req_id, _now
+            )
 
             if abort_on_timeout:
                 # Abort the request — return error to the client
@@ -2743,33 +3009,42 @@ class Scheduler:
                 # by a concurrent _cleanup_finished leaks the counter permanently.
                 self._pop_pending_prefill(req_id)
                 if req is not None:
-                    req.set_finished(RequestStatus.FINISHED_ERROR, reason="prefill_timeout")
+                    req.set_finished(
+                        RequestStatus.FINISHED_ERROR, reason="prefill_timeout"
+                    )
                     # Remove from running immediately to free the slot —
                     # _cleanup_finished won't run until end-of-step and
                     # this dead request would waste a preemption slot.
                     self.running.pop(req_id, None)
-                    uid = getattr(req, 'batch_uid', None)
+                    uid = getattr(req, "batch_uid", None)
                     self._uid_to_req.pop(uid, None)
                     # Remove from BatchGenerator if it was inserted
                     if uid is not None and self._batch_gen is not None:
                         try:
                             self._batch_gen.remove([uid])
                         except Exception:
-                            logger.debug("batch gen remove for timeout abort failed", exc_info=True)
+                            logger.debug(
+                                "batch gen remove for timeout abort failed",
+                                exc_info=True,
+                            )
                     # Decrement _total_prompt_tokens — the counter was incremented
                     # when the request was first inserted into the batch (line 1836)
                     # and this abort means the prompt tokens are "wasted" (the request
                     # will never produce output).  Without this, _total_prompt_tokens
                     # grows monotonically even as requests fail, inflating metrics.
                     self._total_prompt_tokens = max(
-                        0, self._total_prompt_tokens - getattr(req, 'num_prompt_tokens', 0)
+                        0,
+                        self._total_prompt_tokens
+                        - getattr(req, "num_prompt_tokens", 0),
                     )
                     # Clean up per-request state.  _pop_pending_prefill was already
                     # called above (outside the if block) so the bottom loop's guard
                     # will correctly skip the second decrement.
                     for cleanup_dict in (
-                        self._detokenizers, self._thinking_processors,
-                        self._thinking_state, self._chunked_prefill_fairness,
+                        self._detokenizers,
+                        self._thinking_processors,
+                        self._thinking_state,
+                        self._chunked_prefill_fairness,
                         self._chunked_prefill_enqueued_at,
                     ):
                         cleanup_dict.pop(req_id, None)
@@ -2785,7 +3060,7 @@ class Scheduler:
                 errored_ids.add(req_id)
             else:
                 # Force-feed: dump all remaining tokens in one shot
-                remaining = state.get('remaining_tokens', [])
+                remaining = state.get("remaining_tokens", [])
                 force_fed = False
                 if remaining and self._batch_gen is not None:
                     req = self.running.get(req_id)
@@ -2797,18 +3072,22 @@ class Scheduler:
                         )
                         try:
                             sp = req.sampling_params
-                            sampler = self._make_sampler(sp, state.get('all_prompt_tokens'))
+                            sampler = self._make_sampler(
+                                sp, state.get("all_prompt_tokens")
+                            )
                             sm = self._make_state_machine(sp.stop, sp.stop_token_ids)
                             # Use insert_segments for KV continuity if cache available
-                            prev_kv = state.get('kv_cache')
-                            all_tokens = state.get('all_prompt_tokens')
+                            prev_kv = state.get("kv_cache")
+                            all_tokens = state.get("all_prompt_tokens")
                             if prev_kv is not None and all_tokens is not None:
-                                processed_count = state.get('offset', 0)
+                                processed_count = state.get("offset", 0)
                                 uids = self._batch_gen.insert_segments(
                                     segments=[[remaining]],
                                     max_tokens=[sp.max_tokens],
                                     caches=[prev_kv],
-                                    all_tokens=[all_tokens[:processed_count] + remaining],
+                                    all_tokens=[
+                                        all_tokens[:processed_count] + remaining
+                                    ],
                                     samplers=[sampler],
                                     state_machines=[sm],
                                 )
@@ -2829,21 +3108,27 @@ class Scheduler:
                                     "force-feed of timed-out chunked prefill %s",
                                     req_id,
                                 )
-                                req.set_finished(RequestStatus.FINISHED_ERROR, reason="insert_failed")
+                                req.set_finished(
+                                    RequestStatus.FINISHED_ERROR, reason="insert_failed"
+                                )
                                 errored_ids.add(req_id)
                                 # Remove old UID from BatchGenerator to prevent KV leak
-                                old_uid_ff = getattr(req, 'batch_uid', None)
-                                if old_uid_ff is not None and self._batch_gen is not None:
+                                old_uid_ff = getattr(req, "batch_uid", None)
+                                if (
+                                    old_uid_ff is not None
+                                    and self._batch_gen is not None
+                                ):
                                     try:
                                         self._batch_gen.remove([old_uid_ff])
                                     except Exception:
                                         logger.debug(
                                             "Failed to remove old UID %s during force-feed failure",
-                                            old_uid_ff, exc_info=True,
+                                            old_uid_ff,
+                                            exc_info=True,
                                         )
                                 continue
                             # Update UID tracking (force-feed creates a new UID)
-                            old_uid = getattr(req, 'batch_uid', None)
+                            old_uid = getattr(req, "batch_uid", None)
                             if old_uid is not None and old_uid != uids[0]:
                                 self._uid_to_req.pop(old_uid, None)
                                 try:
@@ -2852,14 +3137,15 @@ class Scheduler:
                                     logger.warning(
                                         "Failed to remove old UID %s during "
                                         "force-feed — BatchGenerator slot may leak",
-                                        old_uid, exc_info=True,
+                                        old_uid,
+                                        exc_info=True,
                                     )
                             req.batch_uid = uids[0]
                             self._uid_to_req[uids[0]] = req_id
                             self._chunked_prefill_chunks_processed += 1
                             chunks_fed += 1
                             force_fed = True
-                            state['remaining_tokens'] = []
+                            state["remaining_tokens"] = []
                         except Exception as e:
                             logger.error(
                                 f"Failed to force-feed timed-out chunked prefill for {req_id}: {e}",
@@ -2867,17 +3153,27 @@ class Scheduler:
                             )
                             req = self.running.get(req_id)
                             if req is not None:
-                                req.set_finished(RequestStatus.FINISHED_ERROR, reason="prefill_error")
-                                self._total_prompt_tokens = max(
-                                    0, self._total_prompt_tokens - getattr(req, 'num_prompt_tokens', 0)
+                                req.set_finished(
+                                    RequestStatus.FINISHED_ERROR, reason="prefill_error"
                                 )
-                                failed_uid_ff = getattr(req, 'batch_uid', None)
+                                self._total_prompt_tokens = max(
+                                    0,
+                                    self._total_prompt_tokens
+                                    - getattr(req, "num_prompt_tokens", 0),
+                                )
+                                failed_uid_ff = getattr(req, "batch_uid", None)
                                 self._uid_to_req.pop(failed_uid_ff, None)
-                                if failed_uid_ff is not None and self._batch_gen is not None:
+                                if (
+                                    failed_uid_ff is not None
+                                    and self._batch_gen is not None
+                                ):
                                     try:
                                         self._batch_gen.remove([failed_uid_ff])
                                     except Exception:
-                                        logger.debug("Failed to remove UID during force-feed error", exc_info=True)
+                                        logger.debug(
+                                            "Failed to remove UID during force-feed error",
+                                            exc_info=True,
+                                        )
                             errored_ids.add(req_id)
                 # Only mark as completed if force-feed succeeded or there are no remaining tokens.
                 # If force-feed failed (but not errored — e.g., req was None or batch_gen missing),
@@ -2894,9 +3190,14 @@ class Scheduler:
                     # is always False → FINISHED_ERROR branch never ran on
                     # force-feed failures. Call it.
                     if _ff_req is not None and not _ff_req.is_finished():
-                        _ff_req.set_finished(RequestStatus.FINISHED_ERROR, reason="prefill_force_feed_failed")
+                        _ff_req.set_finished(
+                            RequestStatus.FINISHED_ERROR,
+                            reason="prefill_force_feed_failed",
+                        )
                     self._total_prompt_tokens = max(
-                        0, self._total_prompt_tokens - getattr(_ff_req, 'num_prompt_tokens', 0)
+                        0,
+                        self._total_prompt_tokens
+                        - getattr(_ff_req, "num_prompt_tokens", 0),
                     )
                     errored_ids.add(req_id)
 
@@ -2905,16 +3206,18 @@ class Scheduler:
         # preventing a single long prompt from starving others.
         pending_items = list(self._pending_prefill.items())
         if len(pending_items) > 1:
+
             def _fairness_key(item: tuple[str, dict]) -> int:
                 req_id = item[0]
                 return self._chunked_prefill_fairness.get(req_id, 0)
+
             pending_items.sort(key=_fairness_key)
 
         for req_id, state in pending_items:
             if req_id in completed_ids or req_id in errored_ids:
                 continue
 
-            remaining = state['remaining_tokens']
+            remaining = state["remaining_tokens"]
             if not remaining:
                 completed_ids.add(req_id)
                 continue
@@ -2938,7 +3241,7 @@ class Scheduler:
             # decode always gets at least 1 slot. The budget is per-round, so
             # decode requests are never starved across scheduling cycles.
             is_sarathi = self.config.enable_hybrid_prefill
-            is_standard_chunked = state.get('chunk_size') is not None
+            is_standard_chunked = state.get("chunk_size") is not None
 
             if (
                 (is_sarathi or is_standard_chunked)
@@ -2956,14 +3259,19 @@ class Scheduler:
             # - SCHED-2 standard: use the per-request chunk_size from state
             # - Sarathi hybrid: use hybrid_chunk_size from config
             # - Legacy fallback: hybrid_chunk_size
-            _cs = state.get('chunk_size')
+            _cs = state.get("chunk_size")
             chunk_size = _cs if _cs is not None else self.config.hybrid_chunk_size
 
             # Use semantic chunk boundaries when optimizer is available
-            if self._chunked_prefill_optimizer is not None and len(remaining) > chunk_size:
+            if (
+                self._chunked_prefill_optimizer is not None
+                and len(remaining) > chunk_size
+            ):
                 try:
                     chunks = self._chunked_prefill_optimizer.compute_optimal_chunks(
-                        remaining, chunk_size, max_chunks=1,
+                        remaining,
+                        chunk_size,
+                        max_chunks=1,
                     )
                     if chunks:
                         semantic_end = chunks[0].end_token
@@ -2972,27 +3280,27 @@ class Scheduler:
                 except Exception:
                     logger.debug("semantic chunking fallback", exc_info=True)
             chunk = remaining[:chunk_size]
-            state['remaining_tokens'] = remaining[chunk_size:]
+            state["remaining_tokens"] = remaining[chunk_size:]
 
             # SCHED-2: update offset tracker for progress reporting
-            if 'offset' in state:
-                state['offset'] += len(chunk)
+            if "offset" in state:
+                state["offset"] += len(chunk)
 
             try:
                 sp = req.sampling_params
-                sampler = self._make_sampler(sp, state.get('all_prompt_tokens'))
+                sampler = self._make_sampler(sp, state.get("all_prompt_tokens"))
                 sm = self._make_state_machine(sp.stop, sp.stop_token_ids)
 
                 # KV continuity: if we have a cached KV from a previous chunk,
                 # use insert_segments instead of insert to carry forward the
                 # KV cache. This prevents the model from seeing each chunk as
                 # an isolated prompt without context.
-                prev_kv = state.get('kv_cache')
-                all_tokens = state.get('all_prompt_tokens')
+                prev_kv = state.get("kv_cache")
+                all_tokens = state.get("all_prompt_tokens")
                 if prev_kv is not None and all_tokens is not None:
                     # offset was updated above to include this chunk's length,
                     # so all_tokens[:offset] covers everything through this chunk.
-                    processed_count = state.get('offset', len(chunk))
+                    processed_count = state.get("offset", len(chunk))
                     uids = self._batch_gen.insert_segments(
                         segments=[[chunk]],
                         max_tokens=[sp.max_tokens],
@@ -3016,10 +3324,13 @@ class Scheduler:
                     logger.error(
                         "BatchGenerator.insert returned empty UIDs for chunked "
                         "prefill of %s (chunk %d tokens)",
-                        req_id, len(chunk),
+                        req_id,
+                        len(chunk),
                     )
-                    req.set_finished(RequestStatus.FINISHED_ERROR, reason="insert_failed")
-                    self._uid_to_req.pop(getattr(req, 'batch_uid', None), None)
+                    req.set_finished(
+                        RequestStatus.FINISHED_ERROR, reason="insert_failed"
+                    )
+                    self._uid_to_req.pop(getattr(req, "batch_uid", None), None)
                     errored_ids.add(req_id)
                     continue
 
@@ -3033,18 +3344,21 @@ class Scheduler:
                 # KV continuity: extract the KV cache from the old chunk
                 # before removing it, so the next chunk can use insert_segments
                 # to carry forward the accumulated KV state.
-                old_uid = getattr(req, 'batch_uid', None)
+                old_uid = getattr(req, "batch_uid", None)
                 if old_uid is not None and old_uid != uids[0]:
                     self._uid_to_req.pop(old_uid, None)
                     try:
-                        extracted = self._batch_gen.remove([old_uid], return_prompt_caches=True)
+                        extracted = self._batch_gen.remove(
+                            [old_uid], return_prompt_caches=True
+                        )
                         if old_uid in extracted and extracted[old_uid] is not None:
-                            state['kv_cache'] = extracted[old_uid][0]
+                            state["kv_cache"] = extracted[old_uid][0]
                     except Exception:
                         logger.warning(
                             "Failed to remove old chunked UID %s from BatchGenerator "
                             "— latent slot leak possible",
-                            old_uid, exc_info=True,
+                            old_uid,
+                            exc_info=True,
                         )
                 req.batch_uid = uids[0]
                 self._uid_to_req[uids[0]] = req_id
@@ -3055,13 +3369,16 @@ class Scheduler:
                     self._chunked_prefill_fairness.get(req_id, 0) + 1
                 )
 
-                total_prompt = state.get('total_prompt_len', 0)
-                offset = state.get('offset', len(chunk))
+                total_prompt = state.get("total_prompt_len", 0)
+                offset = state.get("offset", len(chunk))
 
                 # ── Progress tracking: report via PrefillProgressTracker ──
                 if self._prefill_tracker is not None and total_prompt > 0:
                     self._prefill_tracker.update(
-                        req_id, offset, total_prompt, self.model_id,
+                        req_id,
+                        offset,
+                        total_prompt,
+                        self.model_id,
                     )
 
                 # ── Emit prefill progress output ──
@@ -3069,16 +3386,18 @@ class Scheduler:
                 # client can show a progress bar during long chunked prefills.
                 # Only emitted when there are remaining tokens (not on the final chunk,
                 # since the final chunk will produce normal generation output).
-                if total_prompt > 0 and state['remaining_tokens']:
-                    self._prefill_progress_outputs.append(RequestOutput(
-                        request_id=req_id,
-                        finished=False,
-                        prompt_tokens=offset,
-                        completion_tokens=0,
-                        prefill_progress=(offset, total_prompt),
-                    ))
+                if total_prompt > 0 and state["remaining_tokens"]:
+                    self._prefill_progress_outputs.append(
+                        RequestOutput(
+                            request_id=req_id,
+                            finished=False,
+                            prompt_tokens=offset,
+                            completion_tokens=0,
+                            prefill_progress=(offset, total_prompt),
+                        )
+                    )
 
-                if not state['remaining_tokens']:
+                if not state["remaining_tokens"]:
                     completed_ids.add(req_id)
                     # Remove from progress tracker — prefill complete
                     if self._prefill_tracker is not None:
@@ -3102,13 +3421,13 @@ class Scheduler:
                 )
                 # ── Error handling: abort entire request on chunk failure ──
                 req.set_finished(RequestStatus.FINISHED_ERROR, reason="prefill_error")
-                failed_uid = getattr(req, 'batch_uid', None)
+                failed_uid = getattr(req, "batch_uid", None)
                 self._uid_to_req.pop(failed_uid, None)
                 # Decrement _total_prompt_tokens — the counter was incremented
                 # when the request was first inserted (line 1836).  This abort
                 # means the prompt tokens are wasted and should not be counted.
                 self._total_prompt_tokens = max(
-                    0, self._total_prompt_tokens - getattr(req, 'num_prompt_tokens', 0)
+                    0, self._total_prompt_tokens - getattr(req, "num_prompt_tokens", 0)
                 )
                 # Remove the failed UID from BatchGenerator to prevent GPU
                 # memory leak (the old chunk's KV cache stays allocated
@@ -3119,7 +3438,8 @@ class Scheduler:
                     except Exception:
                         logger.debug(
                             "Failed to remove failed-chunk UID %s from BatchGenerator",
-                            failed_uid, exc_info=True,
+                            failed_uid,
+                            exc_info=True,
                         )
                 errored_ids.add(req_id)
 
@@ -3130,7 +3450,9 @@ class Scheduler:
             self._chunked_prefill_fairness.pop(rid, None)
             self._chunked_prefill_enqueued_at.pop(rid, None)
             if popped is not None:
-                self._active_partial_prefills = max(0, self._active_partial_prefills - 1)
+                self._active_partial_prefills = max(
+                    0, self._active_partial_prefills - 1
+                )
 
         for rid in errored_ids:
             popped = self._pending_prefill.pop(rid, None)
@@ -3141,18 +3463,31 @@ class Scheduler:
             # The timeout abort path already decremented via _pop_pending_prefill.
             # popped will be None here, so we correctly skip the second decrement.
             if popped is not None:
-                self._active_partial_prefills = max(0, self._active_partial_prefills - 1)
+                self._active_partial_prefills = max(
+                    0, self._active_partial_prefills - 1
+                )
 
         # ── Prometheus observation ──
         try:
             from yunshu_gateway.middleware.prometheus_exporter import (
                 get_prometheus_metrics,
             )
+
             pm = get_prometheus_metrics()
-            pm.set_gauge("chunked_prefill_active_chunks", float(len(self._pending_prefill)))
-            pm.set_counter("chunked_prefill_total_chunks_processed", self._chunked_prefill_chunks_processed)
-            pm.set_gauge("chunked_prefill_budget_used", float(self._chunked_prefill_budget_used))
-            pm.set_gauge("chunked_prefill_budget_limit", float(self.config.chunked_prefill_budget))
+            pm.set_gauge(
+                "chunked_prefill_active_chunks", float(len(self._pending_prefill))
+            )
+            pm.set_counter(
+                "chunked_prefill_total_chunks_processed",
+                self._chunked_prefill_chunks_processed,
+            )
+            pm.set_gauge(
+                "chunked_prefill_budget_used", float(self._chunked_prefill_budget_used)
+            )
+            pm.set_gauge(
+                "chunked_prefill_budget_limit",
+                float(self.config.chunked_prefill_budget),
+            )
         except Exception:
             pass  # Prometheus not available in unit tests
 
@@ -3226,8 +3561,11 @@ class Scheduler:
             except Exception as e:
                 logger.error(f"Hybrid prefill step error: {e}", exc_info=True)
                 from .exceptions import is_cache_corruption_error
+
                 if is_cache_corruption_error(e):
-                    logger.warning("Cache corruption in hybrid prefill — resetting BatchGenerator")
+                    logger.warning(
+                        "Cache corruption in hybrid prefill — resetting BatchGenerator"
+                    )
                     self.deep_reset()
                 break
 
@@ -3268,16 +3606,22 @@ class Scheduler:
             # engine_core.add_request() with kv_cache_ref=None.  After the
             # first forward pass, resp.prompt_cache contains the full prompt
             # KV, which concurrent requests can now reuse.
-            if not is_stop and hasattr(resp, 'prompt_cache') and resp.prompt_cache is not None:
+            if (
+                not is_stop
+                and hasattr(resp, "prompt_cache")
+                and resp.prompt_cache is not None
+            ):
                 try:
                     from .inflight_prefix_sharing import get_inflight_tracker
+
                     _tracker = get_inflight_tracker()
                     _entry = _tracker._entries.get(req_id)
                     if _entry is not None and _entry.kv_cache_ref is None:
                         _entry.kv_cache_ref = resp.prompt_cache
                         logger.debug(
                             "inflight prefix KV updated for req=%s (%d tokens)",
-                            req_id[:12], len(_entry.token_ids),
+                            req_id[:12],
+                            len(_entry.token_ids),
                         )
                 except Exception:
                     logger.debug("inflight KV update failed", exc_info=True)
@@ -3302,7 +3646,9 @@ class Scheduler:
                 # The heuristic gives higher scores to more recent KV blocks,
                 # approximating which blocks the model "pays attention to".
                 if self._attention_score_tracker is not None:
-                    total_tokens = len(req.prompt_token_ids or []) + len(req.output_token_ids)
+                    total_tokens = len(req.prompt_token_ids or []) + len(
+                        req.output_token_ids
+                    )
                     # Estimate block count: each block holds ~256 tokens (typical page size)
                     num_blocks = max(1, total_tokens // 256)
                     self._attention_score_tracker.update_heuristic(req_id, num_blocks)
@@ -3321,41 +3667,54 @@ class Scheduler:
                 pass
 
             logprobs = None
-            if hasattr(resp, 'logprobs') and resp.logprobs is not None:
+            if hasattr(resp, "logprobs") and resp.logprobs is not None:
                 try:
                     logprobs = resp.logprobs
                 except Exception:
                     logger.debug("logprobs extraction failed", exc_info=True)
 
-            current_state = getattr(resp, 'current_state', 'normal') or 'normal'
+            current_state = getattr(resp, "current_state", "normal") or "normal"
             finish_reason = resp.finish_reason
 
             # ── Thinking-segment KV tracking ──
-            is_thinking = current_state == 'reasoning'
+            is_thinking = current_state == "reasoning"
             ts = self._thinking_state.get(req_id)
             if ts is None:
-                ts = {'in_thinking': False, 'thinking_start_idx': None, 'was_in_thinking': False, 'total_reasoning_tokens': 0}
+                ts = {
+                    "in_thinking": False,
+                    "thinking_start_idx": None,
+                    "was_in_thinking": False,
+                    "total_reasoning_tokens": 0,
+                }
                 self._thinking_state[req_id] = ts
 
             # Detect thinking-start transition (normal → reasoning)
-            if is_thinking and not ts['in_thinking']:
+            if is_thinking and not ts["in_thinking"]:
                 # Only record thinking start if we actually appended a token.
                 # When is_stop=True, no token was appended, so there's nothing
                 # to mark as the start of a thinking segment.
                 if not is_stop:
-                    ts['thinking_start_idx'] = len(req.output_token_ids) - 1
-                    ts['in_thinking'] = True
+                    ts["thinking_start_idx"] = len(req.output_token_ids) - 1
+                    ts["in_thinking"] = True
 
             # Detect thinking-end transition (reasoning → normal):
             # store the completed thinking segment in the KV substore.
-            if ts['in_thinking'] and not is_thinking and ts['thinking_start_idx'] is not None:
+            if (
+                ts["in_thinking"]
+                and not is_thinking
+                and ts["thinking_start_idx"] is not None
+            ):
                 thinking_end_idx = len(req.output_token_ids)
-                thinking_tokens = list(req.output_token_ids[ts['thinking_start_idx']:thinking_end_idx])
+                thinking_tokens = list(
+                    req.output_token_ids[ts["thinking_start_idx"] : thinking_end_idx]
+                )
                 # Accumulate reasoning tokens from this completed segment
-                ts['total_reasoning_tokens'] += len(thinking_tokens)
-                context_tokens = list(req.prompt_token_ids) if req.prompt_token_ids else []
+                ts["total_reasoning_tokens"] += len(thinking_tokens)
+                context_tokens = (
+                    list(req.prompt_token_ids) if req.prompt_token_ids else []
+                )
                 # Extract KV data from response if available, else None
-                kv_data = getattr(resp, 'prompt_cache', None)
+                kv_data = getattr(resp, "prompt_cache", None)
                 try:
                     step_hash = self._thinking_store.store(
                         conversation_id=req_id,
@@ -3370,16 +3729,16 @@ class Scheduler:
                         )
                 except Exception as e:
                     logger.debug(f"Thinking segment store failed for {req_id}: {e}")
-                ts['in_thinking'] = False
-                ts['thinking_start_idx'] = None
+                ts["in_thinking"] = False
+                ts["thinking_start_idx"] = None
 
-            ts['was_in_thinking'] = is_thinking
+            ts["was_in_thinking"] = is_thinking
 
             # Thinking budget enforcement
             thinking_proc = self._thinking_processors.get(req_id)
             if thinking_proc is not None and not is_finished:
                 budget_result = thinking_proc.process_token(current_state)
-                if budget_result['force_stop']:
+                if budget_result["force_stop"]:
                     finish_reason = "stop"
                     is_finished = True
                     # Schedule BatchGenerator UID removal on next step
@@ -3399,12 +3758,16 @@ class Scheduler:
                 logprobs=logprobs,
                 current_state=current_state,
                 reasoning_tokens=(
-                    (ts.get('total_reasoning_tokens', 0) or 0)
-                    + (len(req.output_token_ids) - ts['thinking_start_idx']
-                       if ts and ts.get('thinking_start_idx') is not None and ts.get('in_thinking')
-                       else 0)
+                    (ts.get("total_reasoning_tokens", 0) or 0)
+                    + (
+                        len(req.output_token_ids) - ts["thinking_start_idx"]
+                        if ts
+                        and ts.get("thinking_start_idx") is not None
+                        and ts.get("in_thinking")
+                        else 0
+                    )
                 ),
-                cached_tokens=getattr(req, 'cached_tokens', 0),
+                cached_tokens=getattr(req, "cached_tokens", 0),
             )
             outputs.append(output)
 
@@ -3499,7 +3862,7 @@ class Scheduler:
                     )
                     # Record ITL samples to histogram (ITL-1)
                     itl_list = self._itl_samples.pop(req_id, [])
-                    if itl_list and hasattr(self._server_metrics, 'record_itl'):
+                    if itl_list and hasattr(self._server_metrics, "record_itl"):
                         for sample in itl_list:
                             self._server_metrics.record_itl(sample)
 
@@ -3520,7 +3883,7 @@ class Scheduler:
                     continue
                 if req.status in (RequestStatus.WAITING, RequestStatus.PREFILLING):
                     req.status = RequestStatus.RUNNING
-                if hasattr(resp, 'end_of_prompt') and resp.end_of_prompt:
+                if hasattr(resp, "end_of_prompt") and resp.end_of_prompt:
                     if req.status in (RequestStatus.WAITING, RequestStatus.PREFILLING):
                         req.status = RequestStatus.RUNNING
 
@@ -3541,7 +3904,7 @@ class Scheduler:
                     # If the response carries encoder hidden states (e.g. from a
                     # Whisper/T5-style encoder-decoder model), store them in the
                     # encoder cache for potential reuse in subsequent requests.
-                    encoder_output = getattr(resp, 'encoder_outputs', None)
+                    encoder_output = getattr(resp, "encoder_outputs", None)
                     if encoder_output is not None:
                         self._encoder_cache.put(req_id, encoder_output)
 
@@ -3570,15 +3933,19 @@ class Scheduler:
             req = self.requests.get(req_id)
             if req:
                 req.set_finished(RequestStatus.FINISHED_ABORTED, reason="abort")
-                uid = getattr(req, 'batch_uid', None)
+                uid = getattr(req, "batch_uid", None)
                 self._uid_to_req.pop(uid, None)
                 if uid is not None:
                     self._rope_delta_mgr.unregister(uid)
                 if req_id in self.running:
                     self._total_prompt_tokens = max(
-                        0, self._total_prompt_tokens - getattr(req, 'num_prompt_tokens', 0)
+                        0,
+                        self._total_prompt_tokens
+                        - getattr(req, "num_prompt_tokens", 0),
                     )
-                    self._total_completion_tokens += getattr(req, 'num_output_tokens', 0)
+                    self._total_completion_tokens += getattr(
+                        req, "num_output_tokens", 0
+                    )
             self.running.pop(req_id, None)
             self._detokenizers.pop(req_id, None)
             self._thinking_processors.pop(req_id, None)
@@ -3608,8 +3975,13 @@ class Scheduler:
                 with self.waiting._lock:
                     for entry in self.waiting._heap:
                         item = self.waiting._extract_item(entry)
-                        if hasattr(item, 'request_id') and item.request_id in _aborted_ids_snapshot:
-                            item.set_finished(RequestStatus.FINISHED_ABORTED, reason="abort")
+                        if (
+                            hasattr(item, "request_id")
+                            and item.request_id in _aborted_ids_snapshot
+                        ):
+                            item.set_finished(
+                                RequestStatus.FINISHED_ABORTED, reason="abort"
+                            )
                             self._failed_insert_ids.append(item.request_id)
                             # Clean up pending prefill entry if this request
                             # was chunked and waiting for its next chunk.
@@ -3619,6 +3991,7 @@ class Scheduler:
                     if len(remaining) != len(self.waiting._heap):
                         self.waiting._heap = remaining
                         import heapq
+
                         heapq.heapify(self.waiting._heap)
             except Exception:
                 logger.debug("waiting queue abort sweep failed", exc_info=True)
@@ -3641,6 +4014,7 @@ class Scheduler:
         if should_clear and not self.running:
             try:
                 import mlx.core as mx
+
                 mx.synchronize()
                 mx.clear_cache()
             except Exception:
@@ -3654,40 +4028,52 @@ class Scheduler:
         """
         try:
             import mlx.core as mx
+
             active_mem = mx.get_active_memory()
             from .utils.hardware import get_hardware_info
+
             hw = get_hardware_info()
             total_mem = hw.total_memory_bytes
             if total_mem <= 0:
                 return
             usage = active_mem / total_mem
             threshold = self.config.memory_guard_soft_limit
-            if usage >= threshold and hasattr(self, '_prefix_cache') and self._prefix_cache is not None:
+            if (
+                usage >= threshold
+                and hasattr(self, "_prefix_cache")
+                and self._prefix_cache is not None
+            ):
                 # Protect prefix cache entries referenced by running requests.
                 # Evicting a prefix still in active use corrupts the KV state of
                 # decode-phase requests that share that prefix.
                 _active_prefix_tokens = set()
                 for _r in self.running.values():
-                    _pt = getattr(_r, 'prompt_token_ids', None)
+                    _pt = getattr(_r, "prompt_token_ids", None)
                     if _pt:
                         _active_prefix_tokens.add(tuple(_pt))
 
                 # Set a temporary block_evict_checker that skips entries whose
                 # prompt tokens match an active request, preventing corruption.
-                _original_checker = getattr(self._prefix_cache, '_block_evict_checker', None)
+                _original_checker = getattr(
+                    self._prefix_cache, "_block_evict_checker", None
+                )
 
                 def _active_request_checker(block_hash):
                     # Return True if the block is safe to evict.
-                    _cached = getattr(self._prefix_cache, '_block_hashes', None)
+                    _cached = getattr(self._prefix_cache, "_block_hashes", None)
                     if not _cached:
                         return True
                     for _idx, _bhs in enumerate(_cached):
                         if block_hash in _bhs:
-                            _prompts = getattr(self._prefix_cache, '_prompts', None)
+                            _prompts = getattr(self._prefix_cache, "_prompts", None)
                             if _prompts and _idx < len(_prompts):
                                 import numpy as np
+
                                 try:
-                                    _cached_tuple = tuple(int(t) for t in np.array(_prompts[_idx]).flatten())
+                                    _cached_tuple = tuple(
+                                        int(t)
+                                        for t in np.array(_prompts[_idx]).flatten()
+                                    )
                                     return _cached_tuple not in _active_prefix_tokens
                                 except Exception:
                                     # fail-CLOSED, not
@@ -3740,8 +4126,10 @@ class Scheduler:
             }
             try:
                 import mlx.core as mx
+
                 active_mem = mx.get_active_memory()
                 from .utils.hardware import get_hardware_info
+
                 hw = get_hardware_info()
                 total_mem = hw.total_memory_bytes
                 if total_mem > 0:
@@ -3783,7 +4171,7 @@ class Scheduler:
                 self.running.pop(req_id, None)
                 self.finished_ids.add(req_id)
                 # Clean up UID mapping to prevent stale lookups
-                uid = getattr(req, 'batch_uid', None)
+                uid = getattr(req, "batch_uid", None)
                 if uid is not None:
                     self._uid_to_req.pop(uid, None)
                     uids_to_remove.append(uid)
@@ -3814,11 +4202,17 @@ class Scheduler:
                 self._spec_draft_cache_snapshots.pop(req_id, None)
         # Free BatchGenerator's internal resources (KV cache, attention state)
         # for finished requests. Without this, GPU memory leaks indefinitely.
-        if uids_to_remove and hasattr(self, '_batch_gen') and self._batch_gen is not None:
+        if (
+            uids_to_remove
+            and hasattr(self, "_batch_gen")
+            and self._batch_gen is not None
+        ):
             try:
                 self._batch_gen.remove(uids_to_remove)
             except Exception:
-                logger.debug("batch_gen.remove failed in cleanup_finished", exc_info=True)
+                logger.debug(
+                    "batch_gen.remove failed in cleanup_finished", exc_info=True
+                )
 
         # Clear _uids_to_remove to prevent double-removal at the start of the
         # next step().  _process_responses appends finished UIDs to
@@ -3857,12 +4251,14 @@ class Scheduler:
         # for fresh state. Each request still gets its OWN object → no shared-state
         # race; only read-only structures are shared.
         import copy as _copy
+
         # The class is exposed as `_detokenizer_class` (what the `.detokenizer`
         # property instantiates); the public `detokenizer_class` attr is usually
         # None, which is why the old code fell through to the rebuild-every-time
         # `.detokenizer` property.
-        detok_cls = (getattr(self.tokenizer, "_detokenizer_class", None)
-                     or getattr(self.tokenizer, "detokenizer_class", None))
+        detok_cls = getattr(self.tokenizer, "_detokenizer_class", None) or getattr(
+            self.tokenizer, "detokenizer_class", None
+        )
         tmpl = getattr(self, "_detok_template", None)
         if tmpl is None and detok_cls is not None:
             try:
@@ -3887,8 +4283,11 @@ class Scheduler:
         detok.reset()
         return detok
 
-    def _make_sampler(self, sp: SamplingParams, prompt_token_ids: list[int] | None = None):
+    def _make_sampler(
+        self, sp: SamplingParams, prompt_token_ids: list[int] | None = None
+    ):
         from mlx_lm.sample_utils import make_logits_processors, make_sampler
+
         # the engine-loop is the concurrency path, so it is exactly where
         # mlx-lm's PRNG trap bites hardest. `make_sampler(temp>0)` routes through
         # `categorical_sampling`, which is wrapped with
@@ -3904,14 +4303,15 @@ class Scheduler:
         # the concurrency engine-loop.
         if sp.temperature is not None and sp.temperature > 1e-6:
             from .batched_engine import _build_temp_sampler
+
             base_sampler = _build_temp_sampler(
                 temperature=sp.temperature,
                 top_p=sp.top_p,
                 top_k=sp.top_k,
                 min_p=sp.min_p,
                 seed=sp.seed,
-                xtc_probability=getattr(sp, 'xtc_probability', 0.0),
-                xtc_threshold=getattr(sp, 'xtc_threshold', 0.0),
+                xtc_probability=getattr(sp, "xtc_probability", 0.0),
+                xtc_threshold=getattr(sp, "xtc_threshold", 0.0),
             )
         else:
             base_sampler = make_sampler(
@@ -3919,8 +4319,8 @@ class Scheduler:
                 top_p=sp.top_p,
                 top_k=sp.top_k,
                 min_p=sp.min_p,
-                xtc_probability=getattr(sp, 'xtc_probability', 0.0),
-                xtc_threshold=getattr(sp, 'xtc_threshold', 0.0),
+                xtc_probability=getattr(sp, "xtc_probability", 0.0),
+                xtc_threshold=getattr(sp, "xtc_threshold", 0.0),
             )
 
         # Build logits processors. repetition_penalty (20-token window) + logit_bias come
@@ -3932,8 +4332,10 @@ class Scheduler:
         # penalties with the same incremental generated-only closure (n_prompt = prompt
         # length here, since tokens = prompt + generated), leaving rep-penalty/logit_bias.
         logits_processors = make_logits_processors(
-            repetition_penalty=sp.repetition_penalty if sp.repetition_penalty != 1.0 else None,
-            logit_bias=getattr(sp, 'logit_bias', None),
+            repetition_penalty=sp.repetition_penalty
+            if sp.repetition_penalty != 1.0
+            else None,
+            logit_bias=getattr(sp, "logit_bias", None),
         )
         _fp = sp.frequency_penalty if sp.frequency_penalty != 0.0 else 0.0
         _pp = sp.presence_penalty if sp.presence_penalty != 0.0 else 0.0
@@ -3943,7 +4345,9 @@ class Scheduler:
             _fp_state: dict[str, object] = {"counts": {}, "last_len": -1}
             _fp_nprompt = len(prompt_token_ids or [])
 
-            def _freq_pres_penalty(tokens, logits, fp=_fp, pp=_pp, n_prompt=_fp_nprompt, _st=_fp_state):
+            def _freq_pres_penalty(
+                tokens, logits, fp=_fp, pp=_pp, n_prompt=_fp_nprompt, _st=_fp_state
+            ):
                 counts: dict[int, int] = _st["counts"]  # type: ignore[assignment]
                 last_len = int(_st["last_len"])  # type: ignore[arg-type]
                 cur_len = len(tokens)
@@ -3966,10 +4370,11 @@ class Scheduler:
                     if pp != 0.0 and cnt > 0:
                         logits[..., tid] = logits[..., tid] - pp
                 return logits
+
             logits_processors.append(_freq_pres_penalty)
 
         # SAMP-2: Append user-provided custom logits processors
-        custom_procs = getattr(sp, 'logits_processors', None)
+        custom_procs = getattr(sp, "logits_processors", None)
         if custom_procs:
             if logits_processors is None:
                 logits_processors = []
@@ -3980,7 +4385,11 @@ class Scheduler:
         # (batched_engine._generate_fast) but were silently DROPPED here in the
         # opt-in engine loop. The processors receive _tokens = prompt + generated,
         # so the generated count is len(tokens) - n_prompt.
-        _eos_ids = list(self.tokenizer.eos_token_ids) if hasattr(self.tokenizer, 'eos_token_ids') else []
+        _eos_ids = (
+            list(self.tokenizer.eos_token_ids)
+            if hasattr(self.tokenizer, "eos_token_ids")
+            else []
+        )
         _n_prompt = len(prompt_token_ids or [])
 
         def _ban(logits, ids):
@@ -3990,42 +4399,51 @@ class Scheduler:
                     logits[..., tid] = -float("inf")
             return logits
 
-        _supp = getattr(sp, 'suppress_tokens', None)
+        _supp = getattr(sp, "suppress_tokens", None)
         if _supp:
             _sup_ids = [int(t) for t in _supp]
             if logits_processors is None:
                 logits_processors = []
             logits_processors.append(lambda _t, lg, ids=_sup_ids: _ban(lg, ids))
-        if getattr(sp, 'ignore_eos', False) and _eos_ids:
+        if getattr(sp, "ignore_eos", False) and _eos_ids:
             if logits_processors is None:
                 logits_processors = []
             logits_processors.append(lambda _t, lg, ids=_eos_ids: _ban(lg, ids))
-        _min_tok = int(getattr(sp, 'min_tokens', 0) or 0)
+        _min_tok = int(getattr(sp, "min_tokens", 0) or 0)
         # Skip min_tokens EOS-masking when constrained — the constraint governs
         # termination and masking EOS at its DONE state yields invalid output
         # (same reasoning as the fast-path min_tokens guard).
-        if (_min_tok > 0 and _eos_ids
-                and getattr(sp, 'json_schema', None) is None
-                and getattr(sp, 'grammar', None) is None):
+        if (
+            _min_tok > 0
+            and _eos_ids
+            and getattr(sp, "json_schema", None) is None
+            and getattr(sp, "grammar", None) is None
+        ):
             if logits_processors is None:
                 logits_processors = []
-            def _min_tokens_proc(toks, lg, eos=_eos_ids, floor=_min_tok, nprompt=_n_prompt):
+
+            def _min_tokens_proc(
+                toks, lg, eos=_eos_ids, floor=_min_tok, nprompt=_n_prompt
+            ):
                 if (len(toks) - nprompt) < floor:
                     return _ban(lg, eos)
                 return lg
+
             logits_processors.append(_min_tokens_proc)
 
         if logits_processors:
             # Wrap sampler to apply logits processors before sampling.
             # Logits processors take (tokens, logits) and return modified logits.
             # We store generated tokens per-request via _generation_tokens.
-            sampler = _LogitsProcessorSampler(base_sampler, logits_processors, prompt_token_ids)
+            sampler = _LogitsProcessorSampler(
+                base_sampler, logits_processors, prompt_token_ids
+            )
         else:
             sampler = base_sampler
 
         # JSON schema / grammar constrained generation
-        json_schema = getattr(sp, 'json_schema', None)
-        grammar = getattr(sp, 'grammar', None)
+        json_schema = getattr(sp, "json_schema", None)
+        grammar = getattr(sp, "grammar", None)
         if json_schema is not None or grammar is not None:
             from .grammar_constraint import ConstraintFactory
             from .json_schema import ConstrainedSampler, JsonSchemaConstraint
@@ -4044,10 +4462,15 @@ class Scheduler:
                         else:
                             gpayload = None
 
-                        constraint = ConstraintFactory.create(gtype, gpayload, self.tokenizer)
+                        constraint = ConstraintFactory.create(
+                            gtype, gpayload, self.tokenizer
+                        )
                         return ConstrainedSampler(sampler, constraint, self.tokenizer)
                     except Exception:
-                        logger.debug("grammar constraint setup failed, falling back", exc_info=True)
+                        logger.debug(
+                            "grammar constraint setup failed, falling back",
+                            exc_info=True,
+                        )
                 elif gtype == "json":
                     schema = grammar.get("schema")
                     constraint = JsonSchemaConstraint(schema)
@@ -4056,6 +4479,7 @@ class Scheduler:
             # Fallback to json_schema field
             if json_schema is not None:
                 from .json_schema import make_constrained_sampler
+
                 schema = json_schema if isinstance(json_schema, dict) else None
                 constrained_sampler = make_constrained_sampler(
                     base_sampler=sampler if logits_processors else base_sampler,
@@ -4067,12 +4491,18 @@ class Scheduler:
 
         return sampler
 
-    def _make_state_machine(self, stop: list[str] | None = None, stop_token_ids: list[int] | None = None):
+    def _make_state_machine(
+        self, stop: list[str] | None = None, stop_token_ids: list[int] | None = None
+    ):
         from mlx_lm.generate import SequenceStateMachine
 
-        eos_ids = list(self.tokenizer.eos_token_ids) if hasattr(self.tokenizer, 'eos_token_ids') else []
+        eos_ids = (
+            list(self.tokenizer.eos_token_ids)
+            if hasattr(self.tokenizer, "eos_token_ids")
+            else []
+        )
         common_stops = [((t,), None) for t in eos_ids]
-        for w in (stop or []):
+        for w in stop or []:
             if not w:
                 continue  # Skip empty stop strings — they cause immediate stop
             # the model emits SPACE-PREFIXED tokens mid-stream
@@ -4088,13 +4518,13 @@ class Scheduler:
                     _seen.add(t)
                     common_stops.append((t, None))
         # Add raw stop token IDs (e.g., from stop_token_ids parameter)
-        for tid in (stop_token_ids or []):
+        for tid in stop_token_ids or []:
             if ((tid,), None) not in common_stops:
                 common_stops.append(((tid,), None))
 
         transitions = {"normal": list(common_stops)}
 
-        if getattr(self.tokenizer, 'has_thinking', False):
+        if getattr(self.tokenizer, "has_thinking", False):
             try:
                 ts = self.tokenizer.think_start_tokens
                 te = self.tokenizer.think_end_tokens
@@ -4114,7 +4544,7 @@ class Scheduler:
             if req:
                 req.set_finished(RequestStatus.FINISHED_ERROR, reason="error")
                 self._total_prompt_tokens = max(
-                    0, self._total_prompt_tokens - getattr(req, 'num_prompt_tokens', 0)
+                    0, self._total_prompt_tokens - getattr(req, "num_prompt_tokens", 0)
                 )
         self.running.clear()
 
@@ -4133,7 +4563,9 @@ class Scheduler:
             try:
                 self._batch_gen.remove(list(self._uid_to_req.keys()))
             except Exception:
-                logger.debug("batch_gen.remove failed in fail_all_requests", exc_info=True)
+                logger.debug(
+                    "batch_gen.remove failed in fail_all_requests", exc_info=True
+                )
         # Also drop these uids from saved-prefix tracking so the set doesn't grow unbounded.
         if hasattr(self, "_saved_prefix_uids") and self._uid_to_req:
             for _u in self._uid_to_req:
@@ -4176,13 +4608,18 @@ class Scheduler:
 
         # Get model config
         model_config = {}
-        config_obj = getattr(self.model, 'config', None) or getattr(self.model, 'args', None)
+        config_obj = getattr(self.model, "config", None) or getattr(
+            self.model, "args", None
+        )
         if config_obj is not None:
-            if hasattr(config_obj, 'to_dict'):
+            if hasattr(config_obj, "to_dict"):
                 model_config = config_obj.to_dict()
-            elif hasattr(config_obj, '__dict__'):
-                model_config = {k: v for k, v in config_obj.__dict__.items()
-                                if not k.startswith('_')}
+            elif hasattr(config_obj, "__dict__"):
+                model_config = {
+                    k: v
+                    for k, v in config_obj.__dict__.items()
+                    if not k.startswith("_")
+                }
 
         head_info = detect_spec_heads(model_config)
         self._spec_head_info = head_info
@@ -4209,7 +4646,9 @@ class Scheduler:
         # Full integration with BatchGenerator's continuous batching is future work.
         # For Phase 4, we store the head info for use by the single-request path
         # in BatchedEngine.
-        self._spec_decoder = head_info  # Store head info; actual decoder created on demand
+        self._spec_decoder = (
+            head_info  # Store head info; actual decoder created on demand
+        )
 
     def get_spec_head_info(self) -> Any | None:
         """Return detected speculative decoding head info."""
@@ -4228,17 +4667,13 @@ class Scheduler:
         """
         self._spec_decoder = decoder
         self.config.enable_spec_decode = True
-        logger.info(
-            f"Scheduler spec decoder set: type={type(decoder).__name__}"
-        )
+        logger.info(f"Scheduler spec decoder set: type={type(decoder).__name__}")
 
     def set_mtp_decoder(self, mtp_decoder: Any, _config: Any = None) -> None:
         """Set an MTP decoder for batch-path speculative decoding."""
         self._mtp_decoder = mtp_decoder
         self.config.enable_spec_decode = True
-        logger.info(
-            f"Scheduler MTP decoder set: type={type(mtp_decoder).__name__}"
-        )
+        logger.info(f"Scheduler MTP decoder set: type={type(mtp_decoder).__name__}")
 
     def enable_ngram_spec(
         self,
@@ -4261,7 +4696,9 @@ class Scheduler:
         self.config.ngram_spec_max_n = max_n
         self.config.ngram_spec_k = k
         self.config.ngram_spec_mode = mode
-        logger.info(f"N-gram spec decode enabled: mode={mode}, min_n={min_n}, max_n={max_n}, k={k}")
+        logger.info(
+            f"N-gram spec decode enabled: mode={mode}, min_n={min_n}, max_n={max_n}, k={k}"
+        )
 
     # ── Speculative decoding batch-path methods ──
 
@@ -4286,18 +4723,14 @@ class Scheduler:
             return
 
         # Path 1: Cross-model speculative decoder
-        if (
-            self.config.enable_spec_decode
-            and isinstance(self._spec_decoder, SpeculativeDecoder)
+        if self.config.enable_spec_decode and isinstance(
+            self._spec_decoder, SpeculativeDecoder
         ):
             self._try_cross_model_draft(req)
             return
 
         # Path 2: MTP decoder (self-speculative, built-in prediction heads)
-        if (
-            self.config.enable_spec_decode
-            and self._mtp_decoder is not None
-        ):
+        if self.config.enable_spec_decode and self._mtp_decoder is not None:
             self._try_mtp_draft(req)
             return
 
@@ -4318,10 +4751,17 @@ class Scheduler:
             if draft_result is not None and draft_result.token_ids:
                 self._spec_drafts[req.request_id] = draft_result.token_ids
                 # Bug 2 fix: record position where drafts start in output_token_ids
-                self._spec_draft_start_pos[req.request_id] = len(req.output_token_ids or [])
+                self._spec_draft_start_pos[req.request_id] = len(
+                    req.output_token_ids or []
+                )
                 rid = req.request_id
                 if rid not in self._spec_stats:
-                    self._spec_stats[rid] = {"proposals": 0, "accepted": 0, "rejected": 0, "mode": "cross_model"}
+                    self._spec_stats[rid] = {
+                        "proposals": 0,
+                        "accepted": 0,
+                        "rejected": 0,
+                        "mode": "cross_model",
+                    }
                 self._spec_stats[rid]["proposals"] += len(draft_result.token_ids)
                 self._spec_total_proposals += len(draft_result.token_ids)
                 logger.debug(
@@ -4388,7 +4828,7 @@ class Scheduler:
             else:
                 # Fallback: greedy argmax from a single forward pass
                 out = model(input_ids)
-                if hasattr(out, 'logits'):
+                if hasattr(out, "logits"):
                     out = out.logits
                 draft = int(mx.argmax(out[0, -1, :]).item())
                 draft_ids = [draft]
@@ -4399,13 +4839,15 @@ class Scheduler:
                 # Bug 2 fix: record position where drafts start in output_token_ids
                 self._spec_draft_start_pos[rid] = len(req.output_token_ids or [])
                 if rid not in self._spec_stats:
-                    self._spec_stats[rid] = {"proposals": 0, "accepted": 0, "rejected": 0, "mode": "mtp"}
+                    self._spec_stats[rid] = {
+                        "proposals": 0,
+                        "accepted": 0,
+                        "rejected": 0,
+                        "mode": "mtp",
+                    }
                 self._spec_stats[rid]["proposals"] += len(draft_ids)
                 self._spec_total_proposals += len(draft_ids)
-                logger.debug(
-                    f"MTP spec draft for {rid}: "
-                    f"{len(draft_ids)} tokens"
-                )
+                logger.debug(f"MTP spec draft for {rid}: {len(draft_ids)} tokens")
         except Exception as e:
             logger.debug(f"MTP spec draft failed for {req.request_id}: {e}")
 
@@ -4434,13 +4876,15 @@ class Scheduler:
                 # Bug 2 fix: record position where drafts start in output_token_ids
                 self._spec_draft_start_pos[rid] = len(req.output_token_ids or [])
                 if rid not in self._spec_stats:
-                    self._spec_stats[rid] = {"proposals": 0, "accepted": 0, "rejected": 0, "mode": "ngram"}
+                    self._spec_stats[rid] = {
+                        "proposals": 0,
+                        "accepted": 0,
+                        "rejected": 0,
+                        "mode": "ngram",
+                    }
                 self._spec_stats[rid]["proposals"] += len(draft_ids)
                 self._spec_total_proposals += len(draft_ids)
-                logger.debug(
-                    f"N-gram spec draft for {rid}: "
-                    f"{len(draft_ids)} tokens"
-                )
+                logger.debug(f"N-gram spec draft for {rid}: {len(draft_ids)} tokens")
         except Exception as e:
             logger.debug(f"N-gram spec draft failed for {req.request_id}: {e}")
 
@@ -4466,7 +4910,7 @@ class Scheduler:
 
         # Use the draft model's own cache (maintained across calls)
         # If no cache exists yet, create one
-        if not hasattr(req, '_spec_draft_cache') or req._spec_draft_cache is None:
+        if not hasattr(req, "_spec_draft_cache") or req._spec_draft_cache is None:
             req._spec_draft_cache = make_prompt_cache(decoder.draft)
 
         cache = req._spec_draft_cache
@@ -4475,7 +4919,9 @@ class Scheduler:
         # verify path snapshots the already-advanced cache and the restore
         # is a no-op, causing the cache to double-advance by (draft+accepted)
         # tokens instead of just (accepted) tokens.
-        self._spec_draft_cache_snapshots[req.request_id] = SpeculativeDecoder._snapshot_cache(cache)
+        self._spec_draft_cache_snapshots[req.request_id] = (
+            SpeculativeDecoder._snapshot_cache(cache)
+        )
         return decoder.generate_draft(input_ids, cache)
 
     def _verify_spec_drafts(self, outputs: list) -> None:
@@ -4495,6 +4941,7 @@ class Scheduler:
 
         # Check if GPU rejection is enabled for batch comparison
         from .gpu_rejection import should_enable_gpu_rejection
+
         use_gpu = should_enable_gpu_rejection()
 
         verified_ids = []
@@ -4518,7 +4965,7 @@ class Scheduler:
             start_pos = self._spec_draft_start_pos.get(rid)
             if start_pos is not None and start_pos < len(actual_tokens):
                 n_available = min(n_draft, len(actual_tokens) - start_pos)
-                recent_actual = actual_tokens[start_pos:start_pos + n_available]
+                recent_actual = actual_tokens[start_pos : start_pos + n_available]
             elif start_pos is not None:
                 # No tokens generated at start_pos yet — nothing to compare
                 recent_actual = []
@@ -4541,6 +4988,7 @@ class Scheduler:
             # GPU-accelerated batch comparison: find first mismatch via MLX
             if use_gpu and n_compare > 0:
                 import mlx.core as mx
+
                 draft_arr = mx.array(draft_ids[:n_compare])
                 actual_arr = mx.array(recent_actual[:n_compare])
                 match_mask = draft_arr == actual_arr
@@ -4568,7 +5016,7 @@ class Scheduler:
             if (
                 has_cross_model
                 and accepted < len(draft_ids)
-                and hasattr(req, '_spec_draft_cache')
+                and hasattr(req, "_spec_draft_cache")
                 and req._spec_draft_cache is not None
             ):
                 try:
@@ -4579,7 +5027,9 @@ class Scheduler:
                     # (accepted) tokens.
                     pre_draft_snapshot = self._spec_draft_cache_snapshots.pop(rid, None)
                     if pre_draft_snapshot is not None:
-                        SpeculativeDecoder._restore_cache(req._spec_draft_cache, pre_draft_snapshot)
+                        SpeculativeDecoder._restore_cache(
+                            req._spec_draft_cache, pre_draft_snapshot
+                        )
                     else:
                         # No pre-draft snapshot — cannot safely rollback.
                         # The cache is already at post-draft position. Replaying
@@ -4587,11 +5037,13 @@ class Scheduler:
                         # replay entirely to minimize corruption.
                         logger.warning(
                             "No pre-draft snapshot for %s — skipping cache replay "
-                            "to avoid double-advance", rid,
+                            "to avoid double-advance",
+                            rid,
                         )
                         verified_ids.append(rid)
                         continue
                     import mlx.core as mx
+
                     for tok in draft_ids[:accepted]:
                         self._spec_decoder.draft(
                             mx.array([[tok]]),
@@ -4635,7 +5087,7 @@ class Scheduler:
         # from corrupting predictions if the request is re-scheduled after
         # preemption.
         _req = self.running.get(req_id) or self._uid_to_req.get(req_id)
-        if _req is not None and hasattr(_req, '_spec_draft_cache'):
+        if _req is not None and hasattr(_req, "_spec_draft_cache"):
             _req._spec_draft_cache = None
 
     # ── End speculative decoding batch-path methods ──
@@ -4660,7 +5112,11 @@ class Scheduler:
             return to_insert
 
         for req in to_insert:
-            if req.prompt_token_ids and len(req.prompt_token_ids) >= self._batch_spec_prefill.config.threshold:
+            if (
+                req.prompt_token_ids
+                and len(req.prompt_token_ids)
+                >= self._batch_spec_prefill.config.threshold
+            ):
                 selected = self._batch_spec_prefill.compute_skippable_tokens(
                     req.prompt_token_ids,
                 )
@@ -4707,7 +5163,9 @@ class Scheduler:
         """
         return self._draft_collector.collect_all_drafts(
             running=self.running,
-            spec_decoder=self._spec_decoder if isinstance(self._spec_decoder, SpeculativeDecoder) else None,
+            spec_decoder=self._spec_decoder
+            if isinstance(self._spec_decoder, SpeculativeDecoder)
+            else None,
             mtp_decoder=self._mtp_decoder,
             ngram_proposer=self._ngram_proposer,
             pending_abort_ids=self._pending_abort_ids,
@@ -4785,13 +5243,15 @@ class Scheduler:
         self._mtp_decoder = None
         if self._ngram_proposer is not None:
             # Recreate ngram proposer (clears all learned patterns)
-            self._ngram_proposer = NgramProposer(NgramConfig(
-                min_n=self.config.ngram_spec_min_n,
-                max_n=self.config.ngram_spec_max_n,
-                k=self.config.ngram_spec_k,
-                mode=self.config.ngram_spec_mode,
-                max_model_len=self.config.max_kv_size or 32768,
-            ))
+            self._ngram_proposer = NgramProposer(
+                NgramConfig(
+                    min_n=self.config.ngram_spec_min_n,
+                    max_n=self.config.ngram_spec_max_n,
+                    k=self.config.ngram_spec_k,
+                    mode=self.config.ngram_spec_mode,
+                    max_model_len=self.config.max_kv_size or 32768,
+                )
+            )
         self._spec_drafts.clear()
         self._spec_draft_start_pos.clear()
         self._spec_stats.clear()
@@ -4820,7 +5280,9 @@ class Scheduler:
                 # / model reload) compute_spec_budget over-admitted up to max_num_seqs
                 # while the BatchGenerator only decodes completion_batch_size — re-opening
                 # the OOM/policy-defeat surface the effective cap closed.
-                max_num_seqs=min(self.config.max_num_seqs, self.config.completion_batch_size),
+                max_num_seqs=min(
+                    self.config.max_num_seqs, self.config.completion_batch_size
+                ),
                 spec_overhead_per_request=self.config.spec_overhead_per_request,
             )
         if self._draft_collector is not None:
@@ -4844,9 +5306,7 @@ class Scheduler:
             "total_prompt_tokens": self._total_prompt_tokens,
             "total_completion_tokens": self._total_completion_tokens,
             "num_requests_processed": self._num_requests,
-            "total_preemptions": sum(
-                r.num_preemptions for r in self.requests.values()
-            ),
+            "total_preemptions": sum(r.num_preemptions for r in self.requests.values()),
             # Yunshu's own chunked/hybrid prefill subsystem is
             # currently INACTIVE — `should_chunk` is hardwired False (the old
             # manual chunking corrupted KV; now disabled), so
@@ -4878,9 +5338,8 @@ class Scheduler:
         except Exception:
             logger.debug("thinking segment store stats unavailable", exc_info=True)
         # Append speculative decoding stats
-        stats["spec_enabled"] = (
-            self.config.enable_spec_decode
-            and isinstance(self._spec_decoder, SpeculativeDecoder)
+        stats["spec_enabled"] = self.config.enable_spec_decode and isinstance(
+            self._spec_decoder, SpeculativeDecoder
         )
         stats["mtp_spec_enabled"] = self._mtp_decoder is not None
         stats["ngram_spec_enabled"] = self._ngram_proposer is not None
@@ -4928,7 +5387,9 @@ class Scheduler:
         # Cache-locality reordering stats
         stats["cache_locality"] = {
             "tracked_prefixes": len(self._kv_prefix_hashes),
-            "unique_groups": len(set(self._kv_prefix_hashes.values())) if self._kv_prefix_hashes else 0,
+            "unique_groups": len(set(self._kv_prefix_hashes.values()))
+            if self._kv_prefix_hashes
+            else 0,
         }
         return stats
 
@@ -4936,4 +5397,5 @@ class Scheduler:
 @dataclass
 class SchedulerOutput:
     """Output from one scheduler step."""
+
     outputs: list[RequestOutput] = field(default_factory=list)

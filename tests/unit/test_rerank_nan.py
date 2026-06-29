@@ -3,6 +3,7 @@ norm==0 guard doesn't catch Inf) corrupted the ENTIRE /v1/rerank sort (every com
 against NaN is False → Timsort leaves a position-dependent broken order → the top_n slice
 then drops genuinely high-scoring docs) AND serialized as a bare NaN JSON literal (invalid
 per RFC 8259). Coerce non-finite scores to a clean sentinel before sorting/serializing."""
+
 from __future__ import annotations
 
 import math

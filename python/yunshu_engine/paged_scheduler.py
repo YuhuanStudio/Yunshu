@@ -45,6 +45,7 @@ class PagedScheduler(Scheduler):
                 from pathlib import Path
 
                 from yunshu_kv.boundary_snapshot import BoundarySnapshotSSDStore
+
                 self._boundary_store = BoundarySnapshotSSDStore(Path(ssd_dir))
                 self._boundary_store.start()
                 logger.info("BoundarySnapshotSSDStore started for non-sliceable layers")
@@ -72,7 +73,7 @@ class PagedScheduler(Scheduler):
         if req is None:
             return (0, 0)
         total = len(req.prompt_token_ids)
-        matched = getattr(req, 'cached_tokens', 0)
+        matched = getattr(req, "cached_tokens", 0)
         return (matched, total)
 
     def get_memory_status(self) -> dict:
@@ -96,9 +97,12 @@ class PagedScheduler(Scheduler):
     def _add_with_paged_cache(self, request: Request) -> None:
         token_ids = request.prompt_token_ids
 
-        needed_blocks = (len(token_ids) + self._kv_manager.block_size - 1) // self._kv_manager.block_size
+        needed_blocks = (
+            len(token_ids) + self._kv_manager.block_size - 1
+        ) // self._kv_manager.block_size
         decode_reserve = min(
-            (request.sampling_params.max_tokens + self._kv_manager.block_size - 1) // self._kv_manager.block_size,
+            (request.sampling_params.max_tokens + self._kv_manager.block_size - 1)
+            // self._kv_manager.block_size,
             16,
         )
 
@@ -107,7 +111,10 @@ class PagedScheduler(Scheduler):
         # Without this, the admission check rejects requests that would fit
         # due to prefix reuse (false rejection).
         cached_blocks_estimate = 0
-        if hasattr(self._kv_manager, '_radix_tree') and self._kv_manager.config.enable_caching:
+        if (
+            hasattr(self._kv_manager, "_radix_tree")
+            and self._kv_manager.config.enable_caching
+        ):
             try:
                 bs = self._kv_manager.block_size
                 if len(token_ids) >= bs:
@@ -116,7 +123,9 @@ class PagedScheduler(Scheduler):
                     cached_blocks_estimate = cached_tokens // bs
             except Exception:
                 pass  # Best-effort estimate
-        effective_needed = max(0, needed_blocks - cached_blocks_estimate) + decode_reserve
+        effective_needed = (
+            max(0, needed_blocks - cached_blocks_estimate) + decode_reserve
+        )
 
         if self._kv_manager.num_free_blocks < effective_needed:
             if not self._kv_manager.evict_for_memory(effective_needed):
@@ -125,7 +134,9 @@ class PagedScheduler(Scheduler):
                     f"need {effective_needed} blocks (of which {cached_blocks_estimate} cached), "
                     f"only {self._kv_manager.num_free_blocks} free"
                 )
-                request.set_finished(RequestStatus.FINISHED_ERROR, reason="kv_cache_full")
+                request.set_finished(
+                    RequestStatus.FINISHED_ERROR, reason="kv_cache_full"
+                )
                 return
 
         try:
@@ -144,7 +155,7 @@ class PagedScheduler(Scheduler):
             request.set_finished(RequestStatus.FINISHED_ERROR, reason="kv_cache_oom")
             return
         self._block_tables[request.request_id] = table
-        request.cached_tokens = getattr(prefix_match, 'num_matched_tokens', 0)
+        request.cached_tokens = getattr(prefix_match, "num_matched_tokens", 0)
 
         # Check queue capacity BEFORE calling super(), which may reject.
         # If rejected, free the already-allocated blocks to avoid leaks.
@@ -185,7 +196,9 @@ class PagedScheduler(Scheduler):
                         # where the prompt length was an exact multiple of
                         # block_size and the first decode token spilled into a
                         # new block that hadn't been allocated yet.
-                        current_capacity = table.num_blocks * self._kv_manager.block_size
+                        current_capacity = (
+                            table.num_blocks * self._kv_manager.block_size
+                        )
                         if total_tokens > current_capacity:
                             try:
                                 self._kv_manager.allocate_block_for_decode(table)
@@ -196,23 +209,33 @@ class PagedScheduler(Scheduler):
                                 # prevent silent failures that leak KV blocks.
                                 logger.warning(
                                     "KV block allocation failed for request %s: %s",
-                                    req_id, alloc_err,
+                                    req_id,
+                                    alloc_err,
                                 )
-                                if req.batch_uid is not None and req.batch_uid not in self._uids_to_remove:
+                                if (
+                                    req.batch_uid is not None
+                                    and req.batch_uid not in self._uids_to_remove
+                                ):
                                     self._uids_to_remove.append(req.batch_uid)
-                                req.set_finished(RequestStatus.FINISHED_ERROR, reason="kv_cache_oom")
-                                self._uid_to_req.pop(getattr(req, 'batch_uid', None), None)
+                                req.set_finished(
+                                    RequestStatus.FINISHED_ERROR, reason="kv_cache_oom"
+                                )
+                                self._uid_to_req.pop(
+                                    getattr(req, "batch_uid", None), None
+                                )
                                 self._finalize_request_blocks(req_id)
                                 # Generate an error output so the engine loop
                                 # delivers a response to the client instead of
                                 # silently dropping the request.
-                                error_outputs.append(RequestOutput(
-                                    request_id=req_id,
-                                    output_text="",
-                                    finished=True,
-                                    finish_reason="error",
-                                    error="KV block allocation failed",
-                                ))
+                                error_outputs.append(
+                                    RequestOutput(
+                                        request_id=req_id,
+                                        output_text="",
+                                        finished=True,
+                                        finish_reason="error",
+                                        error="KV block allocation failed",
+                                    )
+                                )
         outputs.extend(error_outputs)
 
     def trim_sliding_window_blocks(self, req_id: str, num_blocks: int) -> int:
@@ -253,7 +276,9 @@ class PagedScheduler(Scheduler):
         except (ValueError, IndexError):
             logger.warning(
                 "trim_prefix_blocks failed for request %s (n=%d, table has %d blocks)",
-                req_id, actual, table.num_blocks,
+                req_id,
+                actual,
+                table.num_blocks,
                 exc_info=True,
             )
             return 0
@@ -266,7 +291,9 @@ class PagedScheduler(Scheduler):
             logger.debug(
                 "Sliding window: freed %d physical blocks for request %s "
                 "(%d blocks remaining, %d free in pool)",
-                len(trimmed), req_id, table.num_blocks,
+                len(trimmed),
+                req_id,
+                table.num_blocks,
                 self._kv_manager.num_free_blocks,
             )
 
@@ -310,7 +337,9 @@ class PagedScheduler(Scheduler):
                             cached_hashes.append(b.block_hash)
                     if cached_hashes:
                         self._kv_manager.cache_to_radix_tree(
-                            all_tokens, cached_blocks, cached_hashes,
+                            all_tokens,
+                            cached_blocks,
+                            cached_hashes,
                         )
         finally:
             self._kv_manager.free_request(table, request_id=req_id)
@@ -340,7 +369,9 @@ class PagedScheduler(Scheduler):
                     if prompt_ids:
                         self._kv_manager.cache_completed_blocks(table, prompt_ids)
                         blocks = table.get_blocks()
-                        num_prompt_blocks = len(prompt_ids) // self._kv_manager.block_size
+                        num_prompt_blocks = (
+                            len(prompt_ids) // self._kv_manager.block_size
+                        )
                         cached_blocks = []
                         cached_hashes = []
                         for i, b in enumerate(blocks):
@@ -351,12 +382,15 @@ class PagedScheduler(Scheduler):
                                 cached_hashes.append(b.block_hash)
                         if cached_hashes:
                             self._kv_manager.cache_to_radix_tree(
-                                prompt_ids, cached_blocks, cached_hashes,
+                                prompt_ids,
+                                cached_blocks,
+                                cached_hashes,
                             )
         except Exception:
             logger.error(
                 "Failed to cache prefix blocks during preemption of %s",
-                req_id, exc_info=True,
+                req_id,
+                exc_info=True,
             )
 
         # Free the block table — radix-held prefix blocks keep their extra ref
@@ -385,7 +419,8 @@ class PagedScheduler(Scheduler):
         # removed by the base class _cleanup_finished (no longer in
         # self.running or self.waiting).
         self._finalized_requests -= {
-            rid for rid in self._finalized_requests
+            rid
+            for rid in self._finalized_requests
             if rid not in self.running and rid not in self.waiting
         }
 

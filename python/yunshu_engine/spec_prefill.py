@@ -97,8 +97,11 @@ def _qwen35_extract_queries(attn, x, cache=None):
 def _llama_extract_queries(attn, x, cache=None):
     """Standard transformer: q_proj + reshape + RoPE."""
     B, L, D = x.shape
-    n_heads = getattr(attn, 'num_attention_heads',
-                       getattr(attn, 'n_heads', getattr(attn, 'num_heads', None)))
+    n_heads = getattr(
+        attn,
+        "num_attention_heads",
+        getattr(attn, "n_heads", getattr(attn, "num_heads", None)),
+    )
     queries = attn.q_proj(x)
     queries = queries.reshape(B, L, n_heads, -1).transpose(0, 2, 1, 3)
     if cache is not None:
@@ -110,10 +113,10 @@ def _llama_extract_queries(attn, x, cache=None):
 
 def _detect_query_extractor(attn):
     """Auto-detect the right query extractor for an attention module."""
-    if hasattr(attn, 'q_norm') and hasattr(attn, 'num_attention_heads'):
+    if hasattr(attn, "q_norm") and hasattr(attn, "num_attention_heads"):
         # Qwen3.5 pattern: gated attention with q_norm
         return _qwen35_extract_queries
-    if hasattr(attn, 'q_proj'):
+    if hasattr(attn, "q_proj"):
         # Standard LLaMA pattern
         return _llama_extract_queries
     return None
@@ -122,20 +125,20 @@ def _detect_query_extractor(attn):
 def _find_attention_layers(model):
     """Find all attention layers in the model."""
     results = []
-    layers = getattr(model, 'layers', [])
+    layers = getattr(model, "layers", [])
     if not layers:
-        inner = getattr(model, 'model', None)
+        inner = getattr(model, "model", None)
         if inner is not None:
-            layers = getattr(inner, 'layers', [])
+            layers = getattr(inner, "layers", [])
     for idx, layer in enumerate(layers):
-        if hasattr(layer, 'self_attn'):
+        if hasattr(layer, "self_attn"):
             results.append((idx, layer))
     return results
 
 
 def _get_attn_module(layer):
     """Get attention module from a layer."""
-    if hasattr(layer, 'self_attn'):
+    if hasattr(layer, "self_attn"):
         return layer.self_attn
     return None
 
@@ -208,8 +211,8 @@ def score_tokens(
     step_size = 2048
     while n - processed > 1:
         chunk = min(step_size, n - processed - 1)
-        draft_model(prompt[processed:processed + chunk][None], cache=cache)
-        mx.eval([c.state for c in cache if hasattr(c, 'state')])
+        draft_model(prompt[processed : processed + chunk][None], cache=cache)
+        mx.eval([c.state for c in cache if hasattr(c, "state")])
         processed += chunk
         mx.clear_cache()
 
@@ -223,6 +226,7 @@ def score_tokens(
     try:
         # Lookahead decode to capture query vectors
         from mlx_lm.sample_utils import make_sampler
+
         sampler = make_sampler(temp=temp, top_p=top_p)
         y = sampler(logits[:, -1, :])
         mx.eval(y)
@@ -242,7 +246,7 @@ def score_tokens(
     _cache_to_layer: dict[int, int] = {}
     _valid_cache_idx = 0
     for _ci, c in enumerate(cache):
-        if not hasattr(c, 'keys') or c.keys is None:
+        if not hasattr(c, "keys") or c.keys is None:
             continue
         if c.keys.shape[-2] < n_prompt:
             continue
@@ -251,7 +255,7 @@ def score_tokens(
 
     importance_scores = []
     for cache_idx, c in enumerate(cache):
-        if not hasattr(c, 'keys') or c.keys is None:
+        if not hasattr(c, "keys") or c.keys is None:
             continue
         keys = c.keys
         if keys.shape[-2] < n_prompt:
@@ -273,7 +277,9 @@ def score_tokens(
         all_attn = []
         for q in layer_queries:
             # q: (B, n_heads, 1, d_k), prompt_keys: (B, n_heads, M, d_k)
-            attn_weights = (q[..., -1:, :].astype(mx.float32) @ prompt_keys.transpose(0, 1, 3, 2)) / math.sqrt(d_k)
+            attn_weights = (
+                q[..., -1:, :].astype(mx.float32) @ prompt_keys.transpose(0, 1, 3, 2)
+            ) / math.sqrt(d_k)
             attn_weights = mx.softmax(attn_weights, axis=-1)
             all_attn.append(attn_weights.squeeze(2).squeeze(0))  # (n_heads, M)
 
@@ -338,8 +344,13 @@ def select_chunks(
     return mx.array(indices)
 
 
-def manual_rope(x: mx.array, positions: mx.array, dims: int,
-                base: float = 10000.0, scale: float = 1.0) -> mx.array:
+def manual_rope(
+    x: mx.array,
+    positions: mx.array,
+    dims: int,
+    base: float = 10000.0,
+    scale: float = 1.0,
+) -> mx.array:
     """Apply RoPE at arbitrary (non-contiguous) positions.
 
     Args:
@@ -369,15 +380,17 @@ class _PositionMappedRoPE:
     def __init__(self, original_rope, all_positions, cache_start=0):
         self._original = original_rope
         self._all_positions = all_positions
-        self._cache_start = int(cache_start) if isinstance(cache_start, mx.array) else int(cache_start)
-        self._dims = getattr(original_rope, 'dims', getattr(original_rope, 'dim', None))
-        self._base = getattr(original_rope, 'base', 10000.0)
-        self._scale = getattr(original_rope, 'scale', 1.0)
+        self._cache_start = (
+            int(cache_start) if isinstance(cache_start, mx.array) else int(cache_start)
+        )
+        self._dims = getattr(original_rope, "dims", getattr(original_rope, "dim", None))
+        self._base = getattr(original_rope, "base", 10000.0)
+        self._scale = getattr(original_rope, "scale", 1.0)
 
     def __call__(self, x, offset=0):
         L = x.shape[2]
         idx = int(offset) - self._cache_start
-        positions = self._all_positions[idx:idx + L]
+        positions = self._all_positions[idx : idx + L]
         return manual_rope(x, positions, self._dims, base=self._base, scale=self._scale)
 
 
@@ -439,11 +452,11 @@ def sparse_prefill(
 
     for layer_idx, layer in attn_layers:
         attn = _get_attn_module(layer)
-        if attn is not None and hasattr(attn, 'rope'):
+        if attn is not None and hasattr(attn, "rope"):
             original_ropes[layer_idx] = attn.rope
             cache_start = 0
             for c in cache:
-                if hasattr(c, 'offset'):
+                if hasattr(c, "offset"):
                     cache_start = c.offset
                     break
             attn.rope = _PositionMappedRoPE(attn.rope, selected_positions, cache_start)
@@ -454,8 +467,8 @@ def sparse_prefill(
 
         while n - processed > 1:
             chunk = min(step_size, n - processed - 1)
-            model(selected_tokens[processed:processed + chunk][None], cache=cache)
-            mx.eval([c.state for c in cache if hasattr(c, 'state')])
+            model(selected_tokens[processed : processed + chunk][None], cache=cache)
+            mx.eval([c.state for c in cache if hasattr(c, "state")])
             processed += chunk
             mx.clear_cache()
 
@@ -470,7 +483,11 @@ def sparse_prefill(
 
         for layer_idx, layer in attn_layers:
             attn = _get_attn_module(layer)
-            if attn is not None and hasattr(attn, 'rope') and layer_idx in original_ropes:
+            if (
+                attn is not None
+                and hasattr(attn, "rope")
+                and layer_idx in original_ropes
+            ):
                 original = original_ropes[layer_idx]
                 if adjustment > 0:
                     attn.rope = _OffsetAdjustedRoPE(original, adjustment)
@@ -487,9 +504,8 @@ def cleanup_rope(model: Any) -> None:
     """
     for _, layer in _find_attention_layers(model):
         attn = _get_attn_module(layer)
-        if attn is None or not hasattr(attn, 'rope'):
+        if attn is None or not hasattr(attn, "rope"):
             continue
         rope = attn.rope
         if isinstance(rope, (_OffsetAdjustedRoPE, _PositionMappedRoPE)):
             attn.rope = rope._original
-

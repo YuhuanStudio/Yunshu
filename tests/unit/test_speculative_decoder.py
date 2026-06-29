@@ -1,4 +1,5 @@
 """Tests for speculative decoding engine."""
+
 from unittest.mock import MagicMock
 
 import mlx.core as mx
@@ -62,6 +63,7 @@ class TestSpeculativeDecoderStats:
     def test_initial_stats(self):
         class MockModel:
             pass
+
         class MockTokenizer:
             eos_token_id = 2
 
@@ -73,8 +75,10 @@ class TestSpeculativeDecoderStats:
     def test_acceptance_rate_zero_at_start(self):
         class MockModel:
             pass
+
         class MockTokenizer:
             pass
+
         decoder = SpeculativeDecoder(MockModel(), MockModel(), MockTokenizer())
         assert decoder.acceptance_rate == 0.0
 
@@ -116,10 +120,13 @@ class TestLookaheadReasoning:
 
     def test_with_decoder(self):
         config = SpecDecodingConfig()
+
         class MockModel:
             pass
+
         class MockTokenizer:
             pass
+
         decoder = SpeculativeDecoder(MockModel(), MockModel(), MockTokenizer(), config)
         lookahead = LookaheadReasoning(decoder=decoder)
         stats = lookahead.get_stats()
@@ -159,11 +166,13 @@ class TestDetectSpecHeads:
         assert info.head_type == "mtp"
 
     def test_mtp_qwen35_with_n_predict(self):
-        info = detect_spec_heads({
-            "model_type": "qwen3_5_mtp",
-            "mtp_num_hidden_layers": 1,
-            "n_predict": 4,
-        })
+        info = detect_spec_heads(
+            {
+                "model_type": "qwen3_5_mtp",
+                "mtp_num_hidden_layers": 1,
+                "n_predict": 4,
+            }
+        )
         assert info.head_type == "mtp"
         assert info.draft_length == 4
 
@@ -194,10 +203,12 @@ class TestDetectSpecHeads:
         assert info.head_type == "eagle"
 
     def test_mlp_speculator(self):
-        info = detect_spec_heads({
-            "model_type": "mlp_speculator",
-            "num_speculative_tokens": 5,
-        })
+        info = detect_spec_heads(
+            {
+                "model_type": "mlp_speculator",
+                "num_speculative_tokens": 5,
+            }
+        )
         assert info.head_type == "mlp_speculator"
 
     def test_medusa_via_model_type(self):
@@ -218,17 +229,21 @@ class TestDetectSpecHeads:
         assert info.head_type == "none"
 
     def test_mtp_priority_over_eagle(self):
-        info = detect_spec_heads({
-            "model_type": "deepseek_mtp",
-            "eagle": {"num_speculative_tokens": 3},
-        })
+        info = detect_spec_heads(
+            {
+                "model_type": "deepseek_mtp",
+                "eagle": {"num_speculative_tokens": 3},
+            }
+        )
         assert info.head_type == "mtp"
 
     def test_eagle3_priority_over_eagle(self):
-        info = detect_spec_heads({
-            "eagle3": 3,
-            "eagle": {"num_speculative_tokens": 5},
-        })
+        info = detect_spec_heads(
+            {
+                "eagle3": 3,
+                "eagle": {"num_speculative_tokens": 5},
+            }
+        )
         assert info.head_type == "eagle3"
 
 
@@ -249,14 +264,18 @@ class TestAutoConfigureSpeculative:
         assert config.bonus_token is True
 
     def test_mtp_configured(self):
-        config = auto_configure_speculative({"mtp_num_hidden_layers": 2, "n_predict": 3})
+        config = auto_configure_speculative(
+            {"mtp_num_hidden_layers": 2, "n_predict": 3}
+        )
         assert config.draft_length >= 1
 
     def test_draft_length_capped_at_10(self):
-        config = auto_configure_speculative({
-            "model_type": "medusa",
-            "num_speculative_tokens": 20,
-        })
+        config = auto_configure_speculative(
+            {
+                "model_type": "medusa",
+                "num_speculative_tokens": 20,
+            }
+        )
         assert config.draft_length <= 10
 
     def test_none_input_disables(self):

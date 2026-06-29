@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class DeduplicationEntry:
     """Tracks a deduplicated request group."""
+
     content_hash: str
     request_ids: list[str] = field(default_factory=list)
     primary_request_id: str = ""
@@ -105,6 +106,7 @@ class RequestDeduplicator:
         as this would leak information across tenant boundaries.
         """
         import json
+
         # Deterministic serialization: json.dumps with sort_keys for
         # list[dict] (chat messages) to avoid key-ordering variance.
         if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
@@ -199,6 +201,7 @@ class RequestDeduplicator:
                 # entry with a different hash (append a nonce) so both
                 # inferences run independently.
                 import hashlib
+
                 for _ in range(3):
                     nonce = hashlib.sha256(
                         (content_hash + request_id).encode()
@@ -214,7 +217,10 @@ class RequestDeduplicator:
                 # without finding a free key, keep appending a counter suffix
                 # until we get one that doesn't collide with any in-flight entry.
                 _suffix = 0
-                while content_hash in self._entries and not self._entries[content_hash].is_completed:
+                while (
+                    content_hash in self._entries
+                    and not self._entries[content_hash].is_completed
+                ):
                     content_hash = f"{nonce}{request_id[:8]}_{_suffix}"
                     _suffix += 1
 
@@ -251,7 +257,8 @@ class RequestDeduplicator:
             # accumulate indefinitely when no new requests arrive.
             now = time.monotonic()
             expired = [
-                h for h, e in self._entries.items()
+                h
+                for h, e in self._entries.items()
                 if e.completed_at is not None
                 and (now - e.completed_at) > self._ttl
                 and h != content_hash  # don't prune the one we just completed
@@ -289,15 +296,18 @@ class RequestDeduplicator:
         """
         now = time.monotonic()
         expired = [
-            h for h, e in self._entries.items()
+            h
+            for h, e in self._entries.items()
             if e.completed_at and (now - e.completed_at) > self._ttl
         ]
         # Also evict stuck in-flight entries that have been running for
         # ``stuck_multiplier`` x TTL. These are likely orphaned (primary
         # crashed without calling complete()).
         stuck = [
-            h for h, e in self._entries.items()
-            if e.completed_at is None and (now - e.created_at) > self._ttl * self._stuck_multiplier
+            h
+            for h, e in self._entries.items()
+            if e.completed_at is None
+            and (now - e.created_at) > self._ttl * self._stuck_multiplier
         ]
         orphaned_shadow_groups: list[list[str]] = []
         for h in expired:
@@ -306,14 +316,14 @@ class RequestDeduplicator:
             entry = self._entries[h]
             # Capture shadow IDs before deletion so the caller can notify them.
             shadow_ids = [
-                rid for rid in entry.request_ids
-                if rid != entry.primary_request_id
+                rid for rid in entry.request_ids if rid != entry.primary_request_id
             ]
             if shadow_ids:
                 logger.warning(
                     "Pruning stuck dedup entry %s with %d shadow requests — "
                     "shadows are orphaned (primary likely crashed)",
-                    h[:12], len(shadow_ids),
+                    h[:12],
+                    len(shadow_ids),
                 )
                 orphaned_shadow_groups.append(shadow_ids)
             del self._entries[h]
@@ -325,9 +335,7 @@ class RequestDeduplicator:
         # Only evict completed entries. Evicting an in-flight primary
         # would orphan its shadow requests — they hold references to an
         # entry that no longer exists, breaking fan-out delivery.
-        completed = [
-            h for h, e in self._entries.items() if e.completed_at is not None
-        ]
+        completed = [h for h, e in self._entries.items() if e.completed_at is not None]
         if completed:
             oldest_hash = min(completed, key=lambda h: self._entries[h].created_at)
             del self._entries[oldest_hash]
@@ -348,8 +356,7 @@ class RequestDeduplicator:
         with self._lock:
             active = sum(1 for e in self._entries.values() if not e.is_completed)
             avg_fan_out = (
-                sum(e.fan_out for e in self._entries.values())
-                / len(self._entries)
+                sum(e.fan_out for e in self._entries.values()) / len(self._entries)
                 if self._entries
                 else 0.0
             )

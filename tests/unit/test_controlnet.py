@@ -260,24 +260,31 @@ class TestControlNetEndpoint:
         from fastapi.testclient import TestClient
 
         from yunshu_gateway.main import create_app
+
         app = create_app()
         return TestClient(app)
 
     def test_controlnet_no_model(self, client):
         """ControlNet endpoint should 404 when no image engine loaded."""
         img_b64 = base64.b64encode(_make_png(64, 64)).decode()
-        resp = client.post("/v1/images/controlnet", json={
-            "prompt": "a cat sitting on a table",
-            "image": img_b64,
-            "condition_type": "canny",
-        })
+        resp = client.post(
+            "/v1/images/controlnet",
+            json={
+                "prompt": "a cat sitting on a table",
+                "image": img_b64,
+                "condition_type": "canny",
+            },
+        )
         assert resp.status_code in (404, 503)
 
     def test_controlnet_invalid_base64(self, client):
-        resp = client.post("/v1/images/controlnet", json={
-            "prompt": "test",
-            "image": "not-valid!!!",
-        })
+        resp = client.post(
+            "/v1/images/controlnet",
+            json={
+                "prompt": "test",
+                "image": "not-valid!!!",
+            },
+        )
         assert resp.status_code == 400
 
     def test_controlnet_request_model(self):
@@ -301,22 +308,29 @@ class TestDepthGuidedEndpoint:
         from fastapi.testclient import TestClient
 
         from yunshu_gateway.main import create_app
+
         app = create_app()
         return TestClient(app)
 
     def test_depth_guided_no_model(self, client):
         img_b64 = base64.b64encode(_make_png(64, 64)).decode()
-        resp = client.post("/v1/images/depth-guided", json={
-            "prompt": "a mountain scene",
-            "depth_image": img_b64,
-        })
+        resp = client.post(
+            "/v1/images/depth-guided",
+            json={
+                "prompt": "a mountain scene",
+                "depth_image": img_b64,
+            },
+        )
         assert resp.status_code in (404, 503)
 
     def test_depth_guided_invalid_base64(self, client):
-        resp = client.post("/v1/images/depth-guided", json={
-            "prompt": "test",
-            "depth_image": "not-valid!!!",
-        })
+        resp = client.post(
+            "/v1/images/depth-guided",
+            json={
+                "prompt": "test",
+                "depth_image": "not-valid!!!",
+            },
+        )
         assert resp.status_code == 400
 
     def test_depth_guided_request_model(self):

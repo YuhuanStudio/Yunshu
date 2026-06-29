@@ -53,7 +53,12 @@ def normalize_lora_key(key: str) -> tuple[str, str] | None:
     # Match the LoRA A/B tag wherever it appears; the module path is the prefix
     # before it. find() (not endswith) handles the ``.weight`` /
     # ``.<adapter_name>.weight`` suffixes PEFT appends.
-    for tag, ab in ((".lora_A", "a"), (".lora_B", "b"), (".lora_a", "a"), (".lora_b", "b")):
+    for tag, ab in (
+        (".lora_A", "a"),
+        (".lora_B", "b"),
+        (".lora_a", "a"),
+        (".lora_b", "b"),
+    ):
         idx = k.find(tag)
         if idx != -1:
             return k[:idx], ab
@@ -88,7 +93,9 @@ def get_lora_manager(engine_id: str = "default") -> LoRAAdapterManager | None:
         return _global_lora_managers.get(engine_id)
 
 
-def set_lora_manager(mgr: LoRAAdapterManager | None, engine_id: str = "default") -> None:
+def set_lora_manager(
+    mgr: LoRAAdapterManager | None, engine_id: str = "default"
+) -> None:
     """Set (or clear) the LoRAAdapterManager for the given engine_id.
 
     Passing mgr=None removes the entry for that engine_id.
@@ -121,8 +128,12 @@ class LoRAAdapterManager:
         self._lru_order: list[str] = []  # most recent at end
         self._base_model = None
         self._base_model_copy = None  # saved before any merge
-        self._lock = threading.RLock()  # RLock to avoid deadlock with _loaded_adapters property
-        self._gpu_lock = threading.RLock()  # serializes GPU work (apply/restore); RLock for reentrant LRU eviction
+        self._lock = (
+            threading.RLock()
+        )  # RLock to avoid deadlock with _loaded_adapters property
+        self._gpu_lock = (
+            threading.RLock()
+        )  # serializes GPU work (apply/restore); RLock for reentrant LRU eviction
         self._active_adapter_id: str | None = None  # Currently applied adapter
         # Memory tracking callback: called with (delta_bytes) after
         # load/unload so the model manager can account for LoRA memory.
@@ -161,6 +172,7 @@ class LoRAAdapterManager:
             import gc
 
             import mlx.core as mx
+
             gc.collect()
             mx.synchronize()
             mx.clear_cache()
@@ -188,6 +200,7 @@ class LoRAAdapterManager:
             _base_ref = self._base_model
         import mlx.core as mx
         from mlx.utils import tree_map
+
         # Force independent copies by routing through CPU to break Metal
         # copy-on-write sharing with the live model parameters.
         # `mx.array(x, stream=mx.cpu)` is INVALID — mx.array takes no
@@ -197,7 +210,7 @@ class LoRAAdapterManager:
         # materialize an independent snapshot.
         with mx.stream(mx.cpu):
             copy_result = tree_map(
-                lambda x: (x + 0) if hasattr(x, 'shape') else x,
+                lambda x: (x + 0) if hasattr(x, "shape") else x,
                 _base_ref.parameters(),
             )
             mx.eval(copy_result)
@@ -219,7 +232,9 @@ class LoRAAdapterManager:
         falls back to defaults (rank=8, scale=20.0).
         """
         if ".." in Path(adapter_path).parts:
-            raise ValueError(f"Path traversal not allowed in adapter path: {adapter_path}")
+            raise ValueError(
+                f"Path traversal not allowed in adapter path: {adapter_path}"
+            )
         rank = 8
         scale = 20.0
         config_path = Path(adapter_path) / "adapter_config.json"
@@ -239,7 +254,8 @@ class LoRAAdapterManager:
         except Exception:
             logger.debug(
                 "Could not read adapter config for %s, using defaults",
-                adapter_id, exc_info=True,
+                adapter_id,
+                exc_info=True,
             )
 
         with self._lock:
@@ -253,7 +269,9 @@ class LoRAAdapterManager:
                 estimated_bytes=estimated_bytes,
             )
         logger.info(f"Registered LoRA adapter: {adapter_id} ({adapter_path})")
-        log_operation("lora_register", adapter_id, "success", path=adapter_path, rank=rank)
+        log_operation(
+            "lora_register", adapter_id, "success", path=adapter_path, rank=rank
+        )
 
     def load_adapter(self, adapter_id: str) -> bool:
         """Load and apply a LoRA adapter to the base model.
@@ -297,9 +315,11 @@ class LoRAAdapterManager:
 
             # If a different adapter is currently active, must switch.
             # Only allow switching if the active adapter has no in-flight refs.
-            if (self._active_adapter_id is not None
-                    and self._active_adapter_id != adapter_id
-                    and not entry.is_merged):
+            if (
+                self._active_adapter_id is not None
+                and self._active_adapter_id != adapter_id
+                and not entry.is_merged
+            ):
                 active_entry = self._adapters.get(self._active_adapter_id)
                 if active_entry and active_entry.ref_count > 0:
                     logger.error(
@@ -344,10 +364,14 @@ class LoRAAdapterManager:
             # loading a new adapter B would apply LoRA to fused weights
             # (base + A_delta) instead of original base — silently corrupting
             # LoRA output.  Block this unless the new adapter is itself merged.
-            elif any(e.is_merged for e in self._adapters.values()) and not entry.is_merged:
+            elif (
+                any(e.is_merged for e in self._adapters.values())
+                and not entry.is_merged
+            ):
                 logger.error(
                     "Cannot load non-merged adapter %s when merged adapters exist — "
-                    "new adapter would target corrupted (fused) base weights", adapter_id
+                    "new adapter would target corrupted (fused) base weights",
+                    adapter_id,
                 )
                 return False
 
@@ -387,10 +411,17 @@ class LoRAAdapterManager:
                     try:
                         self._restore_base()
                     except Exception:
-                        logger.debug("_restore_base in load_adapter cleanup failed", exc_info=True)
-                    logger.error(f"Failed to load LoRA adapter {adapter_id}: {e}", exc_info=True)
+                        logger.debug(
+                            "_restore_base in load_adapter cleanup failed",
+                            exc_info=True,
+                        )
+                    logger.error(
+                        f"Failed to load LoRA adapter {adapter_id}: {e}", exc_info=True
+                    )
                     self._record_prometheus_load(adapter_id, success=False)
-                    log_operation("lora_load", adapter_id, "failure", detail=str(e)[:120])
+                    log_operation(
+                        "lora_load", adapter_id, "failure", detail=str(e)[:120]
+                    )
                     return False
 
     def unload_adapter(self, adapter_id: str) -> bool:
@@ -436,8 +467,13 @@ class LoRAAdapterManager:
                     entry.is_loaded = True
                     self._touch(adapter_id)
                     self._active_adapter_id = adapter_id
-                    logger.error(f"Failed to unload LoRA adapter {adapter_id}: {e}", exc_info=True)
-                    log_operation("lora_unload", adapter_id, "failure", detail=str(e)[:120])
+                    logger.error(
+                        f"Failed to unload LoRA adapter {adapter_id}: {e}",
+                        exc_info=True,
+                    )
+                    log_operation(
+                        "lora_unload", adapter_id, "failure", detail=str(e)[:120]
+                    )
                     return False
 
     def acquire_adapter(self, adapter_id: str) -> bool:
@@ -496,9 +532,11 @@ class LoRAAdapterManager:
             # _adapters; only the in-place application is redone). Subtract the bytes
             # to balance load_adapter's add. The engine is serial, so ref 0 means no
             # in-flight generation is reading the model — safe to restore.
-            if (entry.ref_count <= 0
-                    and self._active_adapter_id == adapter_id
-                    and not entry.is_merged):
+            if (
+                entry.ref_count <= 0
+                and self._active_adapter_id == adapter_id
+                and not entry.is_merged
+            ):
                 try:
                     with self._gpu_lock:
                         self._restore_base()
@@ -509,7 +547,10 @@ class LoRAAdapterManager:
                     logger.debug(f"Restored base after releasing adapter {adapter_id}")
                 except Exception:
                     logger.warning(
-                        "LoRA base restore on release failed for %s", adapter_id, exc_info=True)
+                        "LoRA base restore on release failed for %s",
+                        adapter_id,
+                        exc_info=True,
+                    )
 
     def merge_adapter(self, adapter_id: str) -> bool:
         """Merge LoRA weights permanently into base model.
@@ -561,6 +602,7 @@ class LoRAAdapterManager:
 
                     from mlx.utils import tree_unflatten
                     from mlx_lm.tuner.lora import LoRALinear
+
                     # the apply path wraps THREE LoRA types (LoRALinear,
                     # LoRASwitchLinear for MoE experts, LoRAEmbedding); fusing only
                     # LoRALinear here silently dropped MoE/embedding deltas on merge
@@ -574,8 +616,11 @@ class LoRAAdapterManager:
                         from mlx_lm.tuner.lora import LoRAEmbedding
                     except Exception:
                         LoRAEmbedding = ()
-                    _fusable = tuple(t for t in (LoRALinear, LoRASwitchLinear, LoRAEmbedding)
-                                     if isinstance(t, type))
+                    _fusable = tuple(
+                        t
+                        for t in (LoRALinear, LoRASwitchLinear, LoRAEmbedding)
+                        if isinstance(t, type)
+                    )
 
                     # Use fuse() to bake LoRA delta (scale * lora_b @ lora_a) into
                     # the base weight.  Simply taking module.linear would silently
@@ -616,16 +661,23 @@ class LoRAAdapterManager:
                     log_operation("lora_merge", adapter_id, "success")
                     return True
                 except Exception as e:
-                    logger.error(f"Failed to merge LoRA adapter {adapter_id}: {e}", exc_info=True)
+                    logger.error(
+                        f"Failed to merge LoRA adapter {adapter_id}: {e}", exc_info=True
+                    )
                     try:
                         self._restore_base()
                     except Exception:
-                        logger.error("_restore_base after failed merge also failed", exc_info=True)
+                        logger.error(
+                            "_restore_base after failed merge also failed",
+                            exc_info=True,
+                        )
                     if adapter_id in self._adapters:
                         self._adapters[adapter_id].is_loaded = False
                     if self._active_adapter_id == adapter_id:
                         self._active_adapter_id = None
-                    log_operation("lora_merge", adapter_id, "failure", detail=str(e)[:120])
+                    log_operation(
+                        "lora_merge", adapter_id, "failure", detail=str(e)[:120]
+                    )
                     return False
 
     def is_registered(self, adapter_id: str) -> bool:
@@ -638,16 +690,18 @@ class LoRAAdapterManager:
         with self._lock:
             result = []
             for aid, entry in self._adapters.items():
-                result.append({
-                    "adapter_id": aid,
-                    "adapter_path": entry.adapter_path,
-                    "rank": entry.rank,
-                    "scale": entry.scale,
-                    "is_loaded": entry.is_loaded,
-                    "is_merged": entry.is_merged,
-                    "estimated_bytes": entry.estimated_bytes,
-                    "ref_count": entry.ref_count,
-                })
+                result.append(
+                    {
+                        "adapter_id": aid,
+                        "adapter_path": entry.adapter_path,
+                        "rank": entry.rank,
+                        "scale": entry.scale,
+                        "is_loaded": entry.is_loaded,
+                        "is_merged": entry.is_merged,
+                        "estimated_bytes": entry.estimated_bytes,
+                        "ref_count": entry.ref_count,
+                    }
+                )
             return result
 
     def get_stats(self) -> dict:
@@ -670,6 +724,7 @@ class LoRAAdapterManager:
             from yunshu_gateway.middleware.prometheus_exporter import (
                 get_prometheus_metrics,
             )
+
             pm = get_prometheus_metrics()
             labels = {"adapter_id": adapter_id}
             if success:
@@ -685,6 +740,7 @@ class LoRAAdapterManager:
             from yunshu_gateway.middleware.prometheus_exporter import (
                 get_prometheus_metrics,
             )
+
             pm = get_prometheus_metrics()
             pm.inc_counter("lora_unload_total", labels={"adapter_id": adapter_id})
         except Exception:
@@ -696,17 +752,21 @@ class LoRAAdapterManager:
             from yunshu_gateway.middleware.prometheus_exporter import (
                 get_prometheus_metrics,
             )
+
             pm = get_prometheus_metrics()
             pm.inc_counter("lora_merge_total", labels={"adapter_id": adapter_id})
         except Exception:
             pass
 
-    def _update_prometheus_gauges(self, loaded_count: int, registered_count: int) -> None:
+    def _update_prometheus_gauges(
+        self, loaded_count: int, registered_count: int
+    ) -> None:
         """Update Prometheus gauges with current LoRA state."""
         try:
             from yunshu_gateway.middleware.prometheus_exporter import (
                 get_prometheus_metrics,
             )
+
             pm = get_prometheus_metrics()
             pm.set_gauge("lora_loaded_adapters", float(loaded_count))
             pm.set_gauge("lora_registered_adapters", float(registered_count))
@@ -726,7 +786,9 @@ class LoRAAdapterManager:
             for child in sorted(search_path.iterdir()):
                 if child.is_dir() and (child / "adapter_config.json").exists():
                     adapter_id = child.name
-                    size = sum(f.stat().st_size for f in child.rglob("*") if f.is_file())
+                    size = sum(
+                        f.stat().st_size for f in child.rglob("*") if f.is_file()
+                    )
                     self.register_adapter(adapter_id, str(child), estimated_bytes=size)
                     discovered.append(adapter_id)
 
@@ -753,7 +815,12 @@ class LoRAAdapterManager:
         """
         for candidate_id in list(self._lru_order):
             entry = self._adapters.get(candidate_id)
-            if entry and entry.is_loaded and not entry.is_merged and entry.ref_count == 0:
+            if (
+                entry
+                and entry.is_loaded
+                and not entry.is_merged
+                and entry.ref_count == 0
+            ):
                 entry.is_loaded = False
                 self._lru_order.remove(candidate_id)
                 is_active = self._active_adapter_id == candidate_id
@@ -773,7 +840,8 @@ class LoRAAdapterManager:
                             self._active_adapter_id = candidate_id
                             logger.error(
                                 f"Failed to restore base during LRU eviction of "
-                                f"{candidate_id}: {e}", exc_info=True,
+                                f"{candidate_id}: {e}",
+                                exc_info=True,
                             )
                             return False
                 logger.info(f"Unloaded LoRA adapter (LRU eviction): {candidate_id}")
@@ -813,8 +881,8 @@ class LoRAAdapterManager:
         # Architecture validation: prevent applying adapter trained on a
         # different model type (produces garbage output silently).
         adapter_model_type = config.get("model_type", "")
-        if adapter_model_type and hasattr(self._base_model, 'config'):
-            actual_type = getattr(self._base_model.config, 'model_type', '')
+        if adapter_model_type and hasattr(self._base_model, "config"):
+            actual_type = getattr(self._base_model.config, "model_type", "")
             if actual_type and adapter_model_type != actual_type:
                 raise ValueError(
                     f"LoRA adapter trained on model_type='{adapter_model_type}' "
@@ -854,6 +922,7 @@ class LoRAAdapterManager:
                 raise FileNotFoundError(f"LoRA weights not found: {weights_path}")
 
         from safetensors import safe_open
+
         sf = safe_open(str(weights_path), framework="mlx")
         all_keys = list(sf.keys())
         del sf
@@ -873,6 +942,7 @@ class LoRAAdapterManager:
             num_layers = config.get("num_layers", 16)
             try:
                 from mlx_lm.tuner.utils import linear_to_lora_layers
+
                 linear_to_lora_layers(self._base_model, num_layers, lora_params)
             except (ImportError, Exception) as e:
                 logger.warning(f"linear_to_lora_layers fallback failed: {e}")
@@ -888,13 +958,16 @@ class LoRAAdapterManager:
         # adaptation (an MoE LoRA is then effectively inert). Dispatch like mlx-lm's own
         # linear_to_lora_layers.
         from mlx_lm.tuner.lora import LoRAEmbedding, LoRALinear, LoRASwitchLinear
+
         try:
             from mlx_lm.models.switch_layers import QuantizedSwitchLinear, SwitchLinear
+
             _switch_types = (SwitchLinear, QuantizedSwitchLinear)
         except Exception:
             _switch_types = ()
         try:
             from mlx.nn.layers.quantized import QuantizedEmbedding
+
             _embed_types = (nn.Embedding, QuantizedEmbedding)
         except Exception:
             _embed_types = (nn.Embedding,)
@@ -938,6 +1011,7 @@ class LoRAAdapterManager:
         # name is byte-identical, so this is a no-op rename (no regression).
         # Non-LoRA keys pass through unchanged.
         from safetensors import safe_open as _safe_open
+
         _sf = _safe_open(str(weights_path), framework="mlx")
         _renamed = []
         for _k in _sf.keys():  # noqa: SIM118  # safetensors safe_open is not directly iterable
@@ -953,9 +1027,13 @@ class LoRAAdapterManager:
                 # BOTH conventions without trusting the A/B-case key naming, and a
                 # no-op when shapes already match (mlx-format adapter).
                 _exp = _expected_shapes.get(_name)
-                if (_exp is not None and hasattr(_t, "shape")
-                        and len(_t.shape) == 2 and tuple(_t.shape) != _exp
-                        and tuple(_t.shape)[::-1] == _exp):
+                if (
+                    _exp is not None
+                    and hasattr(_t, "shape")
+                    and len(_t.shape) == 2
+                    and tuple(_t.shape) != _exp
+                    and tuple(_t.shape)[::-1] == _exp
+                ):
                     _t = _t.T
                 _renamed.append((_name, _t))
         del _sf
@@ -993,6 +1071,7 @@ class LoRAAdapterManager:
             # embedding adapters) — the apply path now wraps them, so restore must reverse
             # all three or those wrappers would persist and bleed into later requests.
             from mlx_lm.tuner.lora import LoRAEmbedding, LoRALinear, LoRASwitchLinear
+
             for name, module in self._base_model.named_modules():
                 if isinstance(module, (LoRALinear, LoRASwitchLinear)):
                     unwrapped.append((name, module.linear))
@@ -1002,6 +1081,7 @@ class LoRAAdapterManager:
             # LoRALinear unavailable — try remove_lora_layers as fallback
             try:
                 from mlx_lm.tuner.utils import remove_lora_layers
+
                 restored = remove_lora_layers(self._base_model)
                 # remove_lora_layers returns a NEW model; graft its
                 # modules back into the original to keep ext refs valid.
@@ -1037,5 +1117,6 @@ class LoRAAdapterManager:
             e.is_merged for e in self._adapters.values()
         ):
             import mlx.core as mx
+
             self._base_model.update(self._base_model_copy)
             mx.eval(self._base_model.parameters())

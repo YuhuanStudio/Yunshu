@@ -176,10 +176,13 @@ class TestInferenceBudgetManager:
         assert budget.max_tokens == 256
 
     def test_from_env(self):
-        with patch.dict("os.environ", {
-            "YUNSHU_DEFAULT_MAX_TOKENS": "1024",
-            "YUNSHU_MAX_WALL_TIME_MS": "60000.0",
-        }):
+        with patch.dict(
+            "os.environ",
+            {
+                "YUNSHU_DEFAULT_MAX_TOKENS": "1024",
+                "YUNSHU_MAX_WALL_TIME_MS": "60000.0",
+            },
+        ):
             mgr = InferenceBudgetManager.from_env()
             budget = mgr.register("r1")
             assert budget.max_tokens == 1024

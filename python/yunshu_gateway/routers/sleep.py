@@ -47,10 +47,13 @@ def _check_permission(request: Request, permission: str) -> None:
         # blanket tenant-allow. Sleep/wake guard can_unload_models, which is
         # privileged → require a real admin role.
         from .models import _TENANT_DENIED_PERMISSIONS
+
         if permission not in _TENANT_DENIED_PERMISSIONS:
             return
         _role = str(getattr(request.state, "role", "") or "")
-        if _role.lower() in ("admin", "system", "owner") or _role.upper().endswith("ADMIN"):
+        if _role.lower() in ("admin", "system", "owner") or _role.upper().endswith(
+            "ADMIN"
+        ):
             return
         raise HTTPException(status_code=403, detail="Insufficient permissions")
     # Static token auth — must verify the request actually provides it
@@ -59,6 +62,7 @@ def _check_permission(request: Request, permission: str) -> None:
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             import hmac
+
             if hmac.compare_digest(auth[7:], auth_token):
                 return
         raise HTTPException(
@@ -103,7 +107,9 @@ async def sleep_server(req: SleepRequest, request: Request):
 
     with _sleep_lock:
         if _sleeping:
-            raise HTTPException(status_code=409, detail=f"Already sleeping at level {_sleep_level}")
+            raise HTTPException(
+                status_code=409, detail=f"Already sleeping at level {_sleep_level}"
+            )
         if _sleep_transitioning:
             raise HTTPException(status_code=409, detail="Sleep transition in progress")
 
@@ -112,6 +118,7 @@ async def sleep_server(req: SleepRequest, request: Request):
         # _sleeping=True, causing the engine to be torn down mid-generation.
         if level >= 1:
             import yunshu_gateway.main as _main
+
             # The HTTP _active_requests counter only covers _INFERENCE_PATHS,
             # which MISSES many engine-hitting endpoints (/v1/score, /rerank, /pooling,
             # /classify, /ocr, /audio/translations, /audio/speech/stream, /audio/speech-
@@ -123,14 +130,26 @@ async def sleep_server(req: SleepRequest, request: Request):
             _eng_busy = False
             try:
                 from yunshu_gateway.engine import get_engine as _ge
+
                 _eng = _ge()
-                _hac = getattr(_eng, "has_active_requests", None) if _eng is not None else None
+                _hac = (
+                    getattr(_eng, "has_active_requests", None)
+                    if _eng is not None
+                    else None
+                )
                 if callable(_hac):
                     _eng_busy = bool(_hac())
             except Exception:
                 _eng_busy = True  # can't prove idle → fail safe (refuse the sleep)
             if _main._active_requests > 0 or _eng_busy:
-                log_operation("server_sleep", "server", "failure", actor=actor, level=level, detail="active_requests")
+                log_operation(
+                    "server_sleep",
+                    "server",
+                    "failure",
+                    actor=actor,
+                    level=level,
+                    detail="active_requests",
+                )
                 raise HTTPException(
                     status_code=409,
                     detail=(
@@ -155,8 +174,8 @@ async def sleep_server(req: SleepRequest, request: Request):
         if level >= 1 and engine:
             # Save model name before unloading so wake-up can restore it
             _saved_model_name = (
-                getattr(engine, '_model_name', None)
-                or getattr(engine, 'model_name', None)
+                getattr(engine, "_model_name", None)
+                or getattr(engine, "model_name", None)
                 or os.environ.get("YUNSHU_MODEL")
             )
 
@@ -172,11 +191,11 @@ async def sleep_server(req: SleepRequest, request: Request):
             # L2 both do a clean teardown; wake rebuilds.
             with contextlib.suppress(Exception):
                 await engine.stop()
-            if hasattr(engine, '_model'):
+            if hasattr(engine, "_model"):
                 engine._model = None
-            if hasattr(engine, '_loaded'):
+            if hasattr(engine, "_loaded"):
                 engine._loaded = False
-            if hasattr(engine, '_running'):
+            if hasattr(engine, "_running"):
                 engine._running = False
             logger.info("L1 sleep: engine stopped, weights and caches released")
 
@@ -251,13 +270,17 @@ async def wake_up_server(request: Request):
         _saved_model_name = None
         os.environ.pop("YUNSHU_SLEEPING", None)
 
-        log_operation("server_wake", "server", "success", actor=actor, previous_level=level)
+        log_operation(
+            "server_wake", "server", "success", actor=actor, previous_level=level
+        )
         return {"status": "awake", "previous_level": level}
     except Exception:
         # If wake-up fails, clear transitioning flag but leave sleeping=True
         # so the server is still marked as sleeping (it wasn't fully woken up).
         _sleep_transitioning = False
-        log_operation("server_wake", "server", "failure", actor=actor, detail="reload_failed")
+        log_operation(
+            "server_wake", "server", "failure", actor=actor, detail="reload_failed"
+        )
         raise
     finally:
         _sleep_transitioning = False
@@ -271,10 +294,12 @@ async def sleep_status(request: Request):
     fingerprint operational state.
     """
     import os
+
     if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() not in ("true", "1", "yes"):
         rbac_key = getattr(request.state, "rbac_key", None)
         if rbac_key is not None and not rbac_key.has_permission("can_view_system"):
             from fastapi import HTTPException
+
             raise HTTPException(status_code=403, detail="Requires can_view_system")
     return {
         "sleeping": _sleeping,

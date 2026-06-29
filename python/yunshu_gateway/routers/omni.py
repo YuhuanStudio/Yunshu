@@ -12,6 +12,7 @@ Config: set YUNSHU_OMNI_MODEL to a local Thinker+Talker model path
 (e.g. mlx-community/Qwen3-Omni-30B-A3B-Instruct-4bit). Without it the endpoint
 returns 503 (no honest placeholder audio).
 """
+
 from __future__ import annotations
 
 import base64
@@ -62,7 +63,9 @@ async def preload_and_warmup() -> None:
         logger.info("Preloading omni model (warmup at boot)…")
         await eng.warmup()
     except Exception:  # noqa: BLE001
-        logger.warning("Omni preload/warmup failed (first request will be cold)", exc_info=True)
+        logger.warning(
+            "Omni preload/warmup failed (first request will be cold)", exc_info=True
+        )
 
 
 class OmniSpeechRequest(BaseModel):
@@ -101,7 +104,13 @@ async def omni_speech_stream(req: OmniSpeechRequest) -> StreamingResponse:
                 if ch.kind == "text":
                     yield _sse({"type": "text", "delta": ch.data})
                 elif ch.kind == "audio":
-                    yield _sse({"type": "audio", "delta": _pcm16_b64(ch.data), "sr": AUDIO_SAMPLE_RATE})
+                    yield _sse(
+                        {
+                            "type": "audio",
+                            "delta": _pcm16_b64(ch.data),
+                            "sr": AUDIO_SAMPLE_RATE,
+                        }
+                    )
                 elif ch.kind == "done":
                     yield _sse({"type": "done", **ch.data})
             yield b"data: [DONE]\n\n"
@@ -114,4 +123,3 @@ async def omni_speech_stream(req: OmniSpeechRequest) -> StreamingResponse:
 
 def _sse(obj: dict) -> bytes:
     return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n".encode()
-

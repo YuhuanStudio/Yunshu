@@ -1,4 +1,5 @@
 """Tests for AdaptiveSpecController — dynamic draft length for spec decode."""
+
 import pytest
 
 from yunshu_engine.adaptive_spec import AdaptiveSpecConfig, AdaptiveSpecController

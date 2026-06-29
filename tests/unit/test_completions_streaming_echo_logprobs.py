@@ -9,6 +9,7 @@ them in the echo chunk through the SAME shared helper (_format_prompt_logprob_en
 non-streaming path uses, so the prepend + BOS-collapse logic can't drift between
 the two paths.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -42,7 +43,10 @@ def test_helper_bos_collapses_phantom():
     # at index 0 and the first real token (id 1) carrying a logprob given BOS.
     pl = [
         None,
-        {"token_id": 1, "logprob": -1.5},   # first real token — must be nulled, no phantom
+        {
+            "token_id": 1,
+            "logprob": -1.5,
+        },  # first real token — must be nulled, no phantom
         {"token_id": 2, "logprob": -0.8},
         {"token_id": 3, "logprob": -0.2},
     ]
@@ -67,10 +71,16 @@ def test_streaming_echo_branch_emits_prompt_logprobs_via_shared_helper():
     helper = src.index("_format_prompt_logprob_entries", echo)
     # the echo chunk must compute prompt logprobs, reuse the shared helper, gate on batched,
     # and hand the result to the echo chunk via logprobs=
-    assert "_compute_prompt_logprobs_for" in src[echo:helper], "streaming echo must compute prompt logprobs"
-    assert "is_batched" in src[echo:helper], "gated to the batched engine (where the forward lives)"
+    assert "_compute_prompt_logprobs_for" in src[echo:helper], (
+        "streaming echo must compute prompt logprobs"
+    )
+    assert "is_batched" in src[echo:helper], (
+        "gated to the batched engine (where the forward lives)"
+    )
     chunk = src.index("format_openai_completion_chunk", helper)
-    assert "logprobs=_echo_lp" in src[chunk:chunk + 400], "echo chunk must carry the logprobs"
+    assert "logprobs=_echo_lp" in src[chunk : chunk + 400], (
+        "echo chunk must carry the logprobs"
+    )
 
 
 def test_nonstream_format_logprobs_uses_same_helper():

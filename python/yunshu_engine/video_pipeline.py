@@ -61,6 +61,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class VideoGenRequest:
     """Input specification for video generation."""
+
     prompt: str = ""
     negative_prompt: str = ""
     image: mx.array | None = None  # Optional source image for I2V (H, W, C)
@@ -77,6 +78,7 @@ class VideoGenRequest:
 @dataclass
 class VideoGenResult:
     """Output from video generation."""
+
     frames: list[mx.array] = field(default_factory=list)  # (H, W, C) per frame
     latents: mx.array | None = None  # Final latents (1, C, T, H_lat, W_lat)
     width: int = 0
@@ -231,12 +233,14 @@ class TemporalConv3D(nn.Module):
     ) -> None:
         super().__init__()
         self.temporal_conv = nn.Conv1d(
-            in_channels, out_channels,
+            in_channels,
+            out_channels,
             kernel_size=kernel_size,
             padding=kernel_size // 2,
         )
         self.spatial_conv = nn.Conv2d(
-            out_channels, out_channels,
+            out_channels,
+            out_channels,
             kernel_size=(spatial_kernel, spatial_kernel),
             padding=(spatial_kernel // 2, spatial_kernel // 2),
         )
@@ -300,13 +304,19 @@ class VideoVAEDecoder(nn.Module):
 
         # Initial projection: latent channels -> base channels (NHWC Conv2d)
         self.conv_in = nn.Conv2d(
-            latent_channels, base_channels,
-            kernel_size=(3, 3), padding=(1, 1),
+            latent_channels,
+            base_channels,
+            kernel_size=(3, 3),
+            padding=(1, 1),
         )
 
         # Temporal convolution blocks (stored as named attributes for MLX Module)
-        self.temporal_block_0 = TemporalConv3D(base_channels, base_channels, kernel_size=3)
-        self.temporal_block_1 = TemporalConv3D(base_channels, base_channels, kernel_size=3)
+        self.temporal_block_0 = TemporalConv3D(
+            base_channels, base_channels, kernel_size=3
+        )
+        self.temporal_block_1 = TemporalConv3D(
+            base_channels, base_channels, kernel_size=3
+        )
 
         # Upsampling blocks (2x spatial, repeated log2(spatial_scale) times)
         num_up_blocks = int(math.log2(spatial_scale)) if spatial_scale > 1 else 1
@@ -324,8 +334,10 @@ class VideoVAEDecoder(nn.Module):
 
         # Final output projection
         self.conv_out = nn.Conv2d(
-            ch, output_channels,
-            kernel_size=(3, 3), padding=(1, 1),
+            ch,
+            output_channels,
+            kernel_size=(3, 3),
+            padding=(1, 1),
         )
 
     def __call__(self, latents: mx.array) -> list[mx.array]:
@@ -352,9 +364,13 @@ class VideoVAEDecoder(nn.Module):
             if t > 1:
                 neighbors = []
                 if frame_idx > 0:
-                    neighbors.append(latents[:, :, frame_idx - 1, :, :].transpose(0, 2, 3, 1))
+                    neighbors.append(
+                        latents[:, :, frame_idx - 1, :, :].transpose(0, 2, 3, 1)
+                    )
                 if frame_idx < t - 1:
-                    neighbors.append(latents[:, :, frame_idx + 1, :, :].transpose(0, 2, 3, 1))
+                    neighbors.append(
+                        latents[:, :, frame_idx + 1, :, :].transpose(0, 2, 3, 1)
+                    )
                 if neighbors:
                     context = sum(neighbors) / len(neighbors)
                     frame_lat = frame_lat + 0.1 * context
@@ -498,7 +514,9 @@ class WanVideoPipeline(VideoPipeline):
     def model_path(self) -> str:
         return self._model_path_str
 
-    def _get_scheduler(self, request: VideoGenRequest) -> FlowMatchingScheduler | EulerScheduler:
+    def _get_scheduler(
+        self, request: VideoGenRequest
+    ) -> FlowMatchingScheduler | EulerScheduler:
         """Create the appropriate scheduler for a request."""
         if request.scheduler == "euler":
             return EulerScheduler(
@@ -510,7 +528,9 @@ class WanVideoPipeline(VideoPipeline):
             guide_scale=request.guide_scale,
         )
 
-    def _compute_latent_shape(self, request: VideoGenRequest) -> tuple[int, int, int, int]:
+    def _compute_latent_shape(
+        self, request: VideoGenRequest
+    ) -> tuple[int, int, int, int]:
         """Compute the latent tensor shape for a request.
 
         Returns:
@@ -557,6 +577,7 @@ class WanVideoPipeline(VideoPipeline):
         if config_path.exists():
             try:
                 import json
+
                 with open(config_path) as f:
                     model_config = json.load(f)
                 self._latent_channels = model_config.get("latent_channels", 16)
@@ -691,8 +712,11 @@ class WanVideoPipeline(VideoPipeline):
             num_frames=len(frames),
             fps=request.fps,
             duration_s=elapsed,
-            method=(f"wan_native_{request.scheduler}" if _has_real_model
-                    else f"wan_native_{request.scheduler}_placeholder_fallback"),
+            method=(
+                f"wan_native_{request.scheduler}"
+                if _has_real_model
+                else f"wan_native_{request.scheduler}_placeholder_fallback"
+            ),
             seed_used=seed,
         )
 
@@ -788,8 +812,11 @@ class WanVideoPipeline(VideoPipeline):
             num_frames=len(frames),
             fps=request.fps,
             duration_s=elapsed,
-            method=(f"wan_i2v_native_{self._scheduler_type}" if _has_real_model
-                    else f"wan_i2v_native_{self._scheduler_type}_placeholder_fallback"),
+            method=(
+                f"wan_i2v_native_{self._scheduler_type}"
+                if _has_real_model
+                else f"wan_i2v_native_{self._scheduler_type}_placeholder_fallback"
+            ),
             seed_used=seed,
             metadata={"image_conditioned": True},
         )
@@ -871,7 +898,8 @@ class WanVideoPipeline(VideoPipeline):
         # to know the total count.
 
     def _decode_latents_iter(
-        self, latents: mx.array,
+        self,
+        latents: mx.array,
     ) -> Generator[mx.array]:
         """Decode latents frame-by-frame, yielding each as it's decoded.
 
@@ -925,7 +953,8 @@ class WanVideoPipeline(VideoPipeline):
             frame = frame.transpose(1, 2, 0)
             frame_4d = mx.expand_dims(frame, axis=0)
             upsampled = nn.Upsample(
-                scale_factor=self._latent_spatial_scale, mode="nearest",
+                scale_factor=self._latent_spatial_scale,
+                mode="nearest",
             )(frame_4d)
             yield upsampled[0]
 
@@ -941,7 +970,7 @@ class WanVideoPipeline(VideoPipeline):
         uses TeaCache-accelerated forward passes. Otherwise falls back to
         simplified velocity prediction for testing.
         """
-        teacache_hook = getattr(self, '_teacache_hook', None)
+        teacache_hook = getattr(self, "_teacache_hook", None)
 
         for step_idx in range(request.num_steps):
             t = scheduler.get_timestep(step_idx)
@@ -949,13 +978,16 @@ class WanVideoPipeline(VideoPipeline):
 
             if self._model is not None and callable(self._model):
                 # Real transformer forward pass
-                if teacache_hook is not None and hasattr(self._model, 't_embedder'):
+                if teacache_hook is not None and hasattr(self._model, "t_embedder"):
                     # TeaCache-accelerated forward — pass the float timestep,
                     # not the integer step_idx
                     t_tensor = mx.array(t, dtype=mx.float32).reshape((1,))
                     noise_pred = teacache_hook.forward(
-                        self._model, latents, t_tensor, None,
-                        cap_feats=getattr(self, '_text_embeddings', None),
+                        self._model,
+                        latents,
+                        t_tensor,
+                        None,
+                        cap_feats=getattr(self, "_text_embeddings", None),
                     )
                 else:
                     noise_pred = self._model(latents, t)
@@ -1122,6 +1154,7 @@ class VideoLoRAManager:
 
         # Load adapter config
         import json
+
         try:
             with open(config_path) as f:
                 config = json.load(f)
@@ -1136,7 +1169,10 @@ class VideoLoRAManager:
         # Save base weights for restoration
         if self._base_weights is None:
             try:
-                if hasattr(self._pipeline, '_vae_decoder') and self._pipeline._vae_decoder is not None:
+                if (
+                    hasattr(self._pipeline, "_vae_decoder")
+                    and self._pipeline._vae_decoder is not None
+                ):
                     self._base_weights = dict(
                         (k, v) for k, v in self._pipeline._vae_decoder.parameters()
                     )
@@ -1179,7 +1215,10 @@ class VideoLoRAManager:
         # Restore base weights if available
         if self._base_weights is not None:
             try:
-                if hasattr(self._pipeline, '_vae_decoder') and self._pipeline._vae_decoder is not None:
+                if (
+                    hasattr(self._pipeline, "_vae_decoder")
+                    and self._pipeline._vae_decoder is not None
+                ):
                     self._pipeline._vae_decoder.update(self._base_weights)
             except Exception as e:
                 logger.warning(f"Failed to restore base weights: {e}")

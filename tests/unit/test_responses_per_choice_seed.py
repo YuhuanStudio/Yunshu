@@ -2,6 +2,7 @@
 every choice, so with an explicit seed + temperature>0 + n>1 all n choices got the same
 RNG base key → IDENTICAL token streams (n>1 degraded to one response repeated n times,
 still billed n×). chat/completions already offset by +idx; Responses was the outlier."""
+
 from __future__ import annotations
 
 import pathlib

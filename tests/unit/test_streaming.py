@@ -113,7 +113,7 @@ class TestOpenAIFormat:
         )
         assert chunk.startswith("data: ")
         assert chunk.endswith("\n\n")
-        data = json.loads(chunk[len("data: "):])
+        data = json.loads(chunk[len("data: ") :])
         assert data["id"] == "chatcmpl-123"
         assert data["object"] == "chat.completion.chunk"
         assert data["choices"][0]["delta"]["content"] == "Hello"
@@ -126,7 +126,7 @@ class TestOpenAIFormat:
             delta_content="",
             finish_reason="stop",
         )
-        data = json.loads(chunk[len("data: "):])
+        data = json.loads(chunk[len("data: ") :])
         assert data["choices"][0]["finish_reason"] == "stop"
 
     def test_chunk_with_thinking(self):
@@ -136,7 +136,7 @@ class TestOpenAIFormat:
             delta_content="visible",
             thinking_content="reasoning",
         )
-        data = json.loads(chunk[len("data: "):])
+        data = json.loads(chunk[len("data: ") :])
         assert data["choices"][0]["delta"]["reasoning_content"] == "reasoning"
 
     def test_done_signal(self):
@@ -172,7 +172,7 @@ class TestOpenAIFormat:
             model="test-model",
             delta_content="你好世界 🌍",
         )
-        data = json.loads(chunk[len("data: "):])
+        data = json.loads(chunk[len("data: ") :])
         assert data["choices"][0]["delta"]["content"] == "你好世界 🌍"
 
 
@@ -188,7 +188,7 @@ class TestAnthropicFormat:
         )
         lines = chunk.split("\n")
         assert lines[0] == "event: content_block_delta"
-        data = json.loads(lines[1][len("data: "):])
+        data = json.loads(lines[1][len("data: ") :])
         assert data["delta"]["text"] == "Hello"
         assert data["delta"]["type"] == "text_delta"
 
@@ -199,7 +199,7 @@ class TestAnthropicFormat:
             delta_text="",
             event_type="message_start",
         )
-        data = json.loads(chunk.split("\n")[1][len("data: "):])
+        data = json.loads(chunk.split("\n")[1][len("data: ") :])
         assert data["message"]["id"] == "msg-123"
         assert data["message"]["role"] == "assistant"
 
@@ -210,7 +210,7 @@ class TestAnthropicFormat:
             delta_text="",
             event_type="message_delta",
         )
-        data = json.loads(chunk.split("\n")[1][len("data: "):])
+        data = json.loads(chunk.split("\n")[1][len("data: ") :])
         assert data["delta"]["stop_reason"] == "end_turn"
         # Anthropic message_delta must include stop_sequence (null here).
         assert data["delta"]["stop_sequence"] is None
@@ -316,7 +316,7 @@ class TestQwenXmlToolCalls:
         assert "city" in calls[0]["arguments"]
 
     def test_qwen_xml_with_parameters(self):
-        text = '<function=search><parameter=query>test query</parameter></function>'
+        text = "<function=search><parameter=query>test query</parameter></function>"
         calls = extract_tool_calls(text)
         assert len(calls) == 1
         assert calls[0]["name"] == "search"
@@ -331,6 +331,7 @@ class TestQwenXmlToolCalls:
 
     def test_argument_sanitization(self):
         from yunshu_gateway.streaming import _sanitize_arguments
+
         assert _sanitize_arguments({"a": 1}) == '{"a": 1}'
         assert _sanitize_arguments('{"a": 1}') == '{"a": 1}'
         # Invalid JSON is preserved as-is for caller to handle (not silently
@@ -353,7 +354,16 @@ class TestLogprobsFormatting:
     """Tests for logprobs in SSE formatters."""
 
     def test_non_stream_with_logprobs(self):
-        lp = {"content": [{"token": "hello", "logprob": -0.5, "bytes": [104, 101], "top_logprobs": []}]}
+        lp = {
+            "content": [
+                {
+                    "token": "hello",
+                    "logprob": -0.5,
+                    "bytes": [104, 101],
+                    "top_logprobs": [],
+                }
+            ]
+        }
         result = format_openai_non_stream(
             completion_id="test-123",
             model="test-model",
@@ -375,7 +385,11 @@ class TestLogprobsFormatting:
         assert "logprobs" not in result["choices"][0]
 
     def test_chunk_with_logprobs(self):
-        lp = {"content": [{"token": "hi", "logprob": -0.2, "bytes": [], "top_logprobs": []}]}
+        lp = {
+            "content": [
+                {"token": "hi", "logprob": -0.2, "bytes": [], "top_logprobs": []}
+            ]
+        }
         chunk_str = format_openai_chunk(
             completion_id="test-123",
             model="test-model",
@@ -400,6 +414,7 @@ class TestExtractToolCallsV2:
 
     def test_mistral_format(self):
         from yunshu_gateway.streaming import extract_tool_calls_v2
+
         text = '{"function": {"name": "get_weather", "arguments": {"city": "Tokyo"}}}'
         calls = extract_tool_calls_v2(text)
         assert len(calls) == 1
@@ -408,13 +423,17 @@ class TestExtractToolCallsV2:
 
     def test_mistral_format_string_args(self):
         from yunshu_gateway.streaming import extract_tool_calls_v2
-        text = '{"function": {"name": "search", "arguments": "{\\"query\\": \\"test\\"}"}}'
+
+        text = (
+            '{"function": {"name": "search", "arguments": "{\\"query\\": \\"test\\"}"}}'
+        )
         calls = extract_tool_calls_v2(text)
         assert len(calls) == 1
         assert calls[0]["name"] == "search"
 
     def test_chatml_format(self):
         from yunshu_gateway.streaming import extract_tool_calls_v2
+
         text = '[TOOL_CALLS] [{"name": "run_code", "arguments": {"lang": "python"}}]'
         calls = extract_tool_calls_v2(text)
         assert len(calls) == 1
@@ -422,6 +441,7 @@ class TestExtractToolCallsV2:
 
     def test_chatml_multiple_calls(self):
         from yunshu_gateway.streaming import extract_tool_calls_v2
+
         text = '[TOOL_CALLS] [{"name": "f1", "arguments": {}}, {"name": "f2", "arguments": {}}]'
         calls = extract_tool_calls_v2(text)
         assert len(calls) == 2
@@ -430,6 +450,7 @@ class TestExtractToolCallsV2:
 
     def test_deepseek_format(self):
         from yunshu_gateway.streaming import extract_tool_calls_v2
+
         text = '✿FUNCTION✿ {"name": "calculate", "arguments": {"expr": "2+2"}} ✿'
         calls = extract_tool_calls_v2(text)
         assert len(calls) == 1
@@ -437,6 +458,7 @@ class TestExtractToolCallsV2:
 
     def test_fallback_to_original_hermes(self):
         from yunshu_gateway.streaming import extract_tool_calls_v2
+
         text = '<tool_call\n{"name": "test_fn", "arguments": {"x": 1}}\n</tool_call'
         calls = extract_tool_calls_v2(text)
         # Original hermes parser requires proper closing tag with >
@@ -446,6 +468,7 @@ class TestExtractToolCallsV2:
 
     def test_no_calls_returns_empty(self):
         from yunshu_gateway.streaming import extract_tool_calls_v2
+
         calls = extract_tool_calls_v2("just regular text with no tool calls")
         assert calls == []
 
@@ -457,9 +480,9 @@ def _parse_sse_event(raw: str) -> tuple[str, dict]:
     data_json = ""
     for line in lines:
         if line.startswith("event: "):
-            event_type = line[len("event: "):]
+            event_type = line[len("event: ") :]
         elif line.startswith("data: "):
-            data_json = line[len("data: "):]
+            data_json = line[len("data: ") :]
     return event_type, json.loads(data_json)
 
 
@@ -488,7 +511,11 @@ class TestResponsesAPIStreaming:
 
     def test_output_item_added(self):
         raw = format_responses_output_item_added(
-            "resp-abc123", "gpt-4o", item_id="msg-xyz", output_index=0, seq=2,
+            "resp-abc123",
+            "gpt-4o",
+            item_id="msg-xyz",
+            output_index=0,
+            seq=2,
         )
         event_type, data = _parse_sse_event(raw)
         assert event_type == "response.output_item.added"
@@ -502,7 +529,10 @@ class TestResponsesAPIStreaming:
 
     def test_content_part_added(self):
         raw = format_responses_content_part_added(
-            item_id="msg-xyz", output_index=0, content_index=0, seq=3,
+            item_id="msg-xyz",
+            output_index=0,
+            content_index=0,
+            seq=3,
         )
         event_type, data = _parse_sse_event(raw)
         assert event_type == "response.content_part.added"
@@ -516,7 +546,11 @@ class TestResponsesAPIStreaming:
 
     def test_text_delta(self):
         raw = format_responses_text_delta(
-            delta="Hello", item_id="msg-xyz", output_index=0, content_index=0, seq=4,
+            delta="Hello",
+            item_id="msg-xyz",
+            output_index=0,
+            content_index=0,
+            seq=4,
         )
         event_type, data = _parse_sse_event(raw)
         assert event_type == "response.output_text.delta"
@@ -529,7 +563,9 @@ class TestResponsesAPIStreaming:
 
     def test_text_delta_unicode(self):
         raw = format_responses_text_delta(
-            delta="你好世界", item_id="msg-xyz", seq=5,
+            delta="你好世界",
+            item_id="msg-xyz",
+            seq=5,
         )
         event_type, data = _parse_sse_event(raw)
         assert event_type == "response.output_text.delta"
@@ -537,7 +573,11 @@ class TestResponsesAPIStreaming:
 
     def test_text_done(self):
         raw = format_responses_text_done(
-            text="Hello world", item_id="msg-xyz", output_index=0, content_index=0, seq=10,
+            text="Hello world",
+            item_id="msg-xyz",
+            output_index=0,
+            content_index=0,
+            seq=10,
         )
         event_type, data = _parse_sse_event(raw)
         assert event_type == "response.output_text.done"
@@ -547,7 +587,11 @@ class TestResponsesAPIStreaming:
 
     def test_content_part_done(self):
         raw = format_responses_content_part_done(
-            item_id="msg-xyz", text="Hello", output_index=0, content_index=0, seq=11,
+            item_id="msg-xyz",
+            text="Hello",
+            output_index=0,
+            content_index=0,
+            seq=11,
         )
         event_type, data = _parse_sse_event(raw)
         assert event_type == "response.content_part.done"
@@ -557,7 +601,10 @@ class TestResponsesAPIStreaming:
 
     def test_output_item_done(self):
         raw = format_responses_output_item_done(
-            item_id="msg-xyz", text="Hello world", output_index=0, seq=12,
+            item_id="msg-xyz",
+            text="Hello world",
+            output_index=0,
+            seq=12,
         )
         event_type, data = _parse_sse_event(raw)
         assert event_type == "response.output_item.done"
@@ -610,16 +657,42 @@ class TestResponsesAPIStreaming:
         events = []
         events.append(format_responses_created("resp-1", "gpt-4o", seq=1))
         events.append(format_responses_in_progress("resp-1", "gpt-4o", seq=2))
-        events.append(format_responses_output_item_added("resp-1", "gpt-4o", item_id="msg-1", seq=3))
+        events.append(
+            format_responses_output_item_added(
+                "resp-1", "gpt-4o", item_id="msg-1", seq=3
+            )
+        )
         events.append(format_responses_content_part_added(item_id="msg-1", seq=4))
-        events.append(format_responses_text_delta(delta="Hello ", item_id="msg-1", seq=5))
-        events.append(format_responses_text_delta(delta="world", item_id="msg-1", seq=6))
-        events.append(format_responses_text_done(text="Hello world", item_id="msg-1", seq=7))
-        events.append(format_responses_content_part_done(item_id="msg-1", text="Hello world", seq=8))
-        events.append(format_responses_output_item_done(item_id="msg-1", text="Hello world", seq=9))
-        events.append(format_responses_completed(
-            response_id="resp-1", model="gpt-4o", output=[], input_tokens=5, output_tokens=2, total_tokens=7, seq=10,
-        ))
+        events.append(
+            format_responses_text_delta(delta="Hello ", item_id="msg-1", seq=5)
+        )
+        events.append(
+            format_responses_text_delta(delta="world", item_id="msg-1", seq=6)
+        )
+        events.append(
+            format_responses_text_done(text="Hello world", item_id="msg-1", seq=7)
+        )
+        events.append(
+            format_responses_content_part_done(
+                item_id="msg-1", text="Hello world", seq=8
+            )
+        )
+        events.append(
+            format_responses_output_item_done(
+                item_id="msg-1", text="Hello world", seq=9
+            )
+        )
+        events.append(
+            format_responses_completed(
+                response_id="resp-1",
+                model="gpt-4o",
+                output=[],
+                input_tokens=5,
+                output_tokens=2,
+                total_tokens=7,
+                seq=10,
+            )
+        )
 
         types = []
         for raw in events:

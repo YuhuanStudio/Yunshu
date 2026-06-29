@@ -27,6 +27,7 @@ class TestHealthChecks:
 
     def test_health_endpoint(self):
         from yunshu_gateway.main import create_app
+
         app = create_app()
         client = TestClient(app)
 
@@ -38,6 +39,7 @@ class TestHealthChecks:
 
     def test_liveness_probe(self):
         from yunshu_gateway.main import create_app
+
         app = create_app()
         client = TestClient(app)
 
@@ -79,6 +81,7 @@ class TestHealthChecks:
     def test_readiness_probe_no_model(self):
         from yunshu_gateway.engine import set_engine
         from yunshu_gateway.main import create_app
+
         set_engine(None)
 
         app = create_app()
@@ -99,6 +102,7 @@ class TestRequestTracking:
     @pytest.fixture(autouse=True)
     def _setup(self):
         from yunshu_gateway.engine import set_engine
+
         self._engine = Engine(EngineConfig())
         self._engine._model = object()
         self._engine._model_name = "test-model"
@@ -107,6 +111,7 @@ class TestRequestTracking:
 
     def test_request_id_header(self):
         from yunshu_gateway.main import create_app
+
         app = create_app()
         client = TestClient(app)
 
@@ -115,6 +120,7 @@ class TestRequestTracking:
 
     def test_request_id_auto_generated(self):
         from yunshu_gateway.main import create_app
+
         app = create_app()
         client = TestClient(app)
 
@@ -125,9 +131,11 @@ class TestRequestTracking:
 
     def test_active_requests_tracking(self):
         import yunshu_gateway.main as _main
+
         _main._active_requests = 0
 
         from yunshu_gateway.main import create_app
+
         app = create_app()
         client = TestClient(app)
 

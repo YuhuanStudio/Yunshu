@@ -3,6 +3,7 @@ Chat-Completions object (object="chat.completion", choices[].message) for non-st
 and chat.completion.chunk SSE for stream — wrong object type, wrong output shape, wrong
 event family — and silently dropped `store`. _vlm_to_responses now re-wraps the VLM
 text into the proper Responses object / response.* event stream and honors store."""
+
 from __future__ import annotations
 
 import asyncio
@@ -31,12 +32,16 @@ def _patch_vlm(monkeypatch, content="a photo of a cat", reasoning=None, finish="
         msg = {"role": "assistant", "content": content}
         if reasoning:
             msg["reasoning_content"] = reasoning
-        return JSONResponse({
-            "object": "chat.completion",
-            "choices": [{"index": 0, "message": msg, "finish_reason": finish}],
-            "usage": {"prompt_tokens": 12, "completion_tokens": 7},
-        })
+        return JSONResponse(
+            {
+                "object": "chat.completion",
+                "choices": [{"index": 0, "message": msg, "finish_reason": finish}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 7},
+            }
+        )
+
     from yunshu_gateway.routers import chat as chat_mod
+
     monkeypatch.setattr(chat_mod, "_handle_vlm_chat", _fake)
 
 
@@ -108,13 +113,22 @@ def test_streaming_emits_response_events(monkeypatch):
     sse = asyncio.run(_collect())
     # must be the response.* event family, NOT chat.completion.chunk
     assert "chat.completion.chunk" not in sse
-    for ev in ("response.created", "response.in_progress", "response.output_item.added",
-               "response.content_part.added", "response.output_text.delta",
-               "response.output_text.done", "response.completed"):
+    for ev in (
+        "response.created",
+        "response.in_progress",
+        "response.output_item.added",
+        "response.content_part.added",
+        "response.output_text.delta",
+        "response.output_text.done",
+        "response.completed",
+    ):
         assert ev in sse, f"missing {ev}"
     assert "streamed text" in sse
     # sequence_number monotonic from 0
-    seqs = [json.loads(line[5:])["sequence_number"]
-            for line in sse.splitlines() if line.startswith("data:")]
+    seqs = [
+        json.loads(line[5:])["sequence_number"]
+        for line in sse.splitlines()
+        if line.startswith("data:")
+    ]
     assert seqs == sorted(seqs)
     assert seqs[0] == 0

@@ -93,11 +93,19 @@ class RequestOutputCollector:
         # Take max cached_tokens (monotonic, not cumulative)
         _cached = max(existing.cached_tokens or 0, new.cached_tokens or 0)
         # Preserve TTFT: use existing if set (> 0, first-token timing), else new
-        _ttft = existing.ttft_ms if existing.ttft_ms > 0 else (new.ttft_ms if new.ttft_ms > 0 else 0.0)
+        _ttft = (
+            existing.ttft_ms
+            if existing.ttft_ms > 0
+            else (new.ttft_ms if new.ttft_ms > 0 else 0.0)
+        )
         # Preserve existing.request_id so dedup shadow fan-out keeps the
         # original primary ID (new.request_id may be a shadow's ID).
         # Prefill progress: prefer the newer (more recent) value
-        _prefill_progress = new.prefill_progress if new.prefill_progress is not None else existing.prefill_progress
+        _prefill_progress = (
+            new.prefill_progress
+            if new.prefill_progress is not None
+            else existing.prefill_progress
+        )
 
         return RequestOutput(
             request_id=existing.request_id,

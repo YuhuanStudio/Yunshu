@@ -179,6 +179,7 @@ def _model_is_mean_pooled(model_path: str) -> bool:
     """
     import json
     import os
+
     cfg = os.path.join(model_path, "1_Pooling", "config.json")
     pool = None
     if os.path.isfile(cfg):
@@ -198,6 +199,7 @@ def _model_is_mean_pooled(model_path: str) -> bool:
         # offline/lookup failure keeps the documented "assume mean" default.
         try:
             from huggingface_hub import hf_hub_download
+
             _p = hf_hub_download(model_path, "1_Pooling/config.json")
             with open(_p) as f:
                 pool = json.load(f)
@@ -209,8 +211,12 @@ def _model_is_mean_pooled(model_path: str) -> bool:
     if pool.get("pooling_mode_mean_tokens", False):
         return True
     # any explicit non-mean mode (CLS / max / last-token / mean-sqrt) → not plain mean
-    for _k in ("pooling_mode_cls_token", "pooling_mode_max_tokens",
-               "pooling_mode_lasttoken", "pooling_mode_mean_sqrt_len_tokens"):
+    for _k in (
+        "pooling_mode_cls_token",
+        "pooling_mode_max_tokens",
+        "pooling_mode_lasttoken",
+        "pooling_mode_mean_sqrt_len_tokens",
+    ):
         if pool.get(_k, False):
             return False
     # no mode flagged → fall back to assuming mean (matches prior behavior)
@@ -258,12 +264,17 @@ class ANEEmbeddingProcessor:
             if config.model_name:
                 try:
                     self.compile_model(config.model_name)
-                    logger.info("ANE embedding model compiled on init: %s (compiled=%s)",
-                                config.model_name, self._is_compiled)
+                    logger.info(
+                        "ANE embedding model compiled on init: %s (compiled=%s)",
+                        config.model_name,
+                        self._is_compiled,
+                    )
                 except Exception as exc:
                     logger.warning(
                         "ANE compile_on_init failed for %s — embed() will fall back to "
-                        "MLX GPU: %s", config.model_name, exc,
+                        "MLX GPU: %s",
+                        config.model_name,
+                        exc,
                     )
 
     # ── Model compilation ────────────────────────────────────────────────────
@@ -358,8 +369,8 @@ class ANEEmbeddingProcessor:
                     # attention_mask fixes both: pooling is correct AND trace/inference
                     # share the same seq length.
                     mask = attention_mask.unsqueeze(-1).to(last.dtype)  # [B, seq, 1]
-                    summed = (last * mask).sum(dim=1)                   # [B, hidden]
-                    counts = mask.sum(dim=1).clamp(min=1e-9)            # [B, 1]
+                    summed = (last * mask).sum(dim=1)  # [B, hidden]
+                    counts = mask.sum(dim=1).clamp(min=1e-9)  # [B, 1]
                     return summed / counts
 
             wrapped = _MeanPooled(hf_model).eval()
@@ -372,7 +383,9 @@ class ANEEmbeddingProcessor:
                 traced,
                 inputs=[
                     ct.TensorType(name="input_ids", shape=(1, seq), dtype=np.int32),
-                    ct.TensorType(name="attention_mask", shape=(1, seq), dtype=np.int32),
+                    ct.TensorType(
+                        name="attention_mask", shape=(1, seq), dtype=np.int32
+                    ),
                 ],
                 outputs=[ct.TensorType(name="embeddings")],
                 convert_to="mlprogram",
@@ -396,13 +409,24 @@ class ANEEmbeddingProcessor:
         # xcrun step is purely an optional warm-up; its failure must not break serving.
         try:
             subprocess.run(
-                ["xcrun", "coremlcompiler", "compile", str(mlpackage_path), str(self._cache_dir)],
-                capture_output=True, text=True, timeout=300,
+                [
+                    "xcrun",
+                    "coremlcompiler",
+                    "compile",
+                    str(mlpackage_path),
+                    str(self._cache_dir),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=300,
             )
             if mlmodelc_path.exists():
                 logger.info("Pre-compiled CoreML model: %s", mlmodelc_path)
         except Exception:
-            logger.debug("xcrun coremlcompiler pre-compile skipped/failed (non-fatal)", exc_info=True)
+            logger.debug(
+                "xcrun coremlcompiler pre-compile skipped/failed (non-fatal)",
+                exc_info=True,
+            )
 
         # Serving loads the .mlpackage (portable, self-describing, MLModel-loadable).
         self._compiled_path = str(mlpackage_path)
@@ -470,13 +494,19 @@ class ANEEmbeddingProcessor:
         # silent 128 truncation that diverges from the MLX path).
         _seq = int(self._config.max_seq_length)
         for text in texts:
-            encoded = tokenizer(text, padding="max_length",
-                                max_length=_seq,
-                                truncation=True, return_tensors="np")
+            encoded = tokenizer(
+                text,
+                padding="max_length",
+                max_length=_seq,
+                truncation=True,
+                return_tensors="np",
+            )
             input_ids = encoded["input_ids"].astype(np.int32)
             attention_mask = encoded["attention_mask"].astype(np.int32)
 
-            pred = model.predict({"input_ids": input_ids, "attention_mask": attention_mask})
+            pred = model.predict(
+                {"input_ids": input_ids, "attention_mask": attention_mask}
+            )
             # Resolve the output tensor by explicit key lookup — `a or b` on numpy
             # arrays raises "truth value of an array is ambiguous", so the old
             # `pred.get("output") or pred.get("embeddings")` crashed on every real call.
@@ -486,7 +516,11 @@ class ANEEmbeddingProcessor:
             if output is None:
                 output = next(iter(pred.values()))
             if isinstance(output, np.ndarray):
-                emb = output[0, 0].flatten().tolist() if output.ndim >= 3 else output.flatten().tolist()
+                emb = (
+                    output[0, 0].flatten().tolist()
+                    if output.ndim >= 3
+                    else output.flatten().tolist()
+                )
             else:
                 emb = list(map(float, output))
 
@@ -514,6 +548,7 @@ class ANEEmbeddingProcessor:
         # Try to load real model + tokenizer
         try:
             from mlx_lm.utils import load_model, load_tokenizer
+
             model_path = Path(self._config.model_name)
             if not model_path.exists():
                 # Try as HF model ID — not supported without download
@@ -529,7 +564,9 @@ class ANEEmbeddingProcessor:
                 "Provide a valid local model path."
             ) from exc
 
-    def _embed_with_model(self, model, tokenizer, texts: list[str]) -> list[list[float]]:
+    def _embed_with_model(
+        self, model, tokenizer, texts: list[str]
+    ) -> list[list[float]]:
         """Run embedding inference with a loaded MLX model and tokenizer."""
         embeddings: list[list[float]] = []
         for text in texts:
@@ -537,7 +574,7 @@ class ANEEmbeddingProcessor:
             input_ids = mx.array([encoded])
 
             output = model(input_ids)
-            if hasattr(output, 'last_hidden_state'):
+            if hasattr(output, "last_hidden_state"):
                 hidden = output.last_hidden_state
             else:
                 hidden = output
@@ -563,6 +600,7 @@ class ANEEmbeddingProcessor:
             return cached
         try:
             from transformers import AutoTokenizer
+
             tok = AutoTokenizer.from_pretrained(self._config.model_name)
             self._tokenizer_cache = tok
             return tok
@@ -570,6 +608,7 @@ class ANEEmbeddingProcessor:
             logger.debug("transformers tokenizer load failed", exc_info=True)
         try:
             from mlx_lm.utils import load_tokenizer
+
             path = Path(self._config.model_name)
             if path.exists():
                 return load_tokenizer(path)
@@ -692,8 +731,11 @@ def compile_embedding_model(model_path: str, output_path: str = "") -> dict[str,
         # Compile to .mlmodelc
         compile_result = subprocess.run(
             [
-                "xcrun", "coremlcompiler", "compile",
-                str(mlpackage_path), str(out_dir),
+                "xcrun",
+                "coremlcompiler",
+                "compile",
+                str(mlpackage_path),
+                str(out_dir),
             ],
             capture_output=True,
             text=True,
@@ -706,9 +748,7 @@ def compile_embedding_model(model_path: str, output_path: str = "") -> dict[str,
             )
 
         if not mlmodelc_path.exists():
-            raise RuntimeError(
-                f"Compiled .mlmodelc not found at: {mlmodelc_path}"
-            )
+            raise RuntimeError(f"Compiled .mlmodelc not found at: {mlmodelc_path}")
 
     except FileNotFoundError as exc:
         raise RuntimeError(
@@ -716,9 +756,7 @@ def compile_embedding_model(model_path: str, output_path: str = "") -> dict[str,
             "Install with: xcode-select --install"
         ) from exc
     except Exception as exc:
-        raise RuntimeError(
-            f"CoreML model compilation failed: {exc}"
-        ) from exc
+        raise RuntimeError(f"CoreML model compilation failed: {exc}") from exc
 
     compile_time = time.monotonic() - t_start
 
@@ -786,7 +824,9 @@ def compile_drafter_model(model_path: str, output_path: str = "") -> dict[str, A
 
     # Check if already compiled
     if mlmodelc_path.exists():
-        model_size = sum(f.stat().st_size for f in mlmodelc_path.rglob("*") if f.is_file())
+        model_size = sum(
+            f.stat().st_size for f in mlmodelc_path.rglob("*") if f.is_file()
+        )
         logger.info("Drafter model already compiled: %s", mlmodelc_path)
         return {
             "compiled_path": str(mlmodelc_path),
@@ -825,8 +865,11 @@ def compile_drafter_model(model_path: str, output_path: str = "") -> dict[str, A
             # Compile to .mlmodelc
             compile_result = subprocess.run(
                 [
-                    "xcrun", "coremlcompiler", "compile",
-                    str(mlpackage_path), str(out_dir),
+                    "xcrun",
+                    "coremlcompiler",
+                    "compile",
+                    str(mlpackage_path),
+                    str(out_dir),
                 ],
                 capture_output=True,
                 text=True,
@@ -839,16 +882,19 @@ def compile_drafter_model(model_path: str, output_path: str = "") -> dict[str, A
                 )
 
             if not mlmodelc_path.exists():
-                raise RuntimeError(
-                    f"Compiled .mlmodelc not found at: {mlmodelc_path}"
-                )
+                raise RuntimeError(f"Compiled .mlmodelc not found at: {mlmodelc_path}")
 
             compile_time = time.monotonic() - t_start
-            model_size = sum(f.stat().st_size for f in mlmodelc_path.rglob("*") if f.is_file())
+            model_size = sum(
+                f.stat().st_size for f in mlmodelc_path.rglob("*") if f.is_file()
+            )
 
             logger.info(
                 "Compiled drafter model for ANE: %s -> %s (%d bytes, %.2fs)",
-                model_path, mlmodelc_path, model_size, compile_time,
+                model_path,
+                mlmodelc_path,
+                model_size,
+                compile_time,
             )
 
             return {
@@ -880,7 +926,9 @@ def compile_drafter_model(model_path: str, output_path: str = "") -> dict[str, A
     }
 
 
-def draft_token(drafter_path: str, context_tokens: list[int], num_draft: int = 5) -> list[int]:
+def draft_token(
+    drafter_path: str, context_tokens: list[int], num_draft: int = 5
+) -> list[int]:
     """Run draft model to propose K tokens using ANE or GPU fallback.
 
     Uses a compiled CoreML model on the ANE if available, otherwise
@@ -902,7 +950,11 @@ def draft_token(drafter_path: str, context_tokens: list[int], num_draft: int = 5
 
     # Try ANE/CoreML path first
     compiled_path = Path(drafter_path)
-    if compiled_path.suffix == ".mlmodelc" and compiled_path.exists() and _HAS_COREMLTOOLS:
+    if (
+        compiled_path.suffix == ".mlmodelc"
+        and compiled_path.exists()
+        and _HAS_COREMLTOOLS
+    ):
         try:
             return _draft_token_coreml(str(compiled_path), context_tokens, num_draft)
         except Exception as exc:
@@ -913,7 +965,9 @@ def draft_token(drafter_path: str, context_tokens: list[int], num_draft: int = 5
 
 
 def _draft_token_coreml(
-    compiled_path: str, context_tokens: list[int], num_draft: int,
+    compiled_path: str,
+    context_tokens: list[int],
+    num_draft: int,
 ) -> list[int]:
     """Draft tokens via CoreML model on ANE."""
     model = ct.models.MLModel(compiled_path)
@@ -955,7 +1009,9 @@ def _draft_token_coreml(
 
 
 def _draft_token_gpu(
-    model_path: str, context_tokens: list[int], num_draft: int,
+    model_path: str,
+    context_tokens: list[int],
+    num_draft: int,
 ) -> list[int]:
     """Draft tokens via MLX GPU fallback using a real draft model."""
     if not _HAS_MLX:
@@ -963,6 +1019,7 @@ def _draft_token_gpu(
 
     try:
         from mlx_lm.utils import load_model, load_tokenizer
+
         model_path_resolved = Path(model_path)
         if not model_path_resolved.exists():
             raise FileNotFoundError(f"Draft model not found: {model_path}")
@@ -977,7 +1034,9 @@ def _draft_token_gpu(
         input_ids = mx.array(context_tokens)
 
         draft_tokens = []
-        for token_id, _ in generate_step(input_ids, model, max_tokens=num_draft, sampler=sampler):
+        for token_id, _ in generate_step(
+            input_ids, model, max_tokens=num_draft, sampler=sampler
+        ):
             draft_tokens.append(token_id)
             if len(draft_tokens) >= num_draft:
                 break
@@ -1068,7 +1127,9 @@ def benchmark_ane_vs_gpu(
                 import math
 
                 max_cos_dist = 0.0
-                for gpu_emb, ane_emb in zip(gpu_embeddings, ane_embeddings, strict=False):
+                for gpu_emb, ane_emb in zip(
+                    gpu_embeddings, ane_embeddings, strict=False
+                ):
                     # Cosine similarity
                     dot = sum(a * b for a, b in zip(gpu_emb, ane_emb, strict=False))
                     norm_a = math.sqrt(sum(a * a for a in gpu_emb))

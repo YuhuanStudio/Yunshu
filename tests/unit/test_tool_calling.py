@@ -106,7 +106,7 @@ class TestExtractToolCallsFormats:
         assert extract_tool_calls("") == []
 
     def test_malformed_json_in_tags(self):
-        text = '<tool_call/>not valid json</tool_call/>'
+        text = "<tool_call/>not valid json</tool_call/>"
         calls = extract_tool_calls(text)
         assert calls == []
 
@@ -119,9 +119,9 @@ class TestExtractToolCallsFormats:
 
     def test_text_surrounding_tool_call(self):
         text = (
-            'Let me check.\n'
+            "Let me check.\n"
             '<tool_call/>{"name": "lookup", "arguments": {"id": 42}}</tool_call/>\n'
-            'Here is the result.'
+            "Here is the result."
         )
         calls = extract_tool_calls(text)
         assert len(calls) == 1
@@ -134,7 +134,10 @@ class TestExtractToolCallsFormats:
         text = '{"name": "get_current_weather", "parameters": {"location": "SF", "unit": "celsius"}}'
         calls = extract_tool_calls_model_aware(text, "Llama-3.3-70B-Instruct")
         assert len(calls) == 1 and calls[0]["name"] == "get_current_weather"
-        assert json.loads(calls[0]["arguments"]) == {"location": "SF", "unit": "celsius"}
+        assert json.loads(calls[0]["arguments"]) == {
+            "location": "SF",
+            "unit": "celsius",
+        }
 
     def test_chatml_tool_calls_parameters_alias(self):
         """ChatML [TOOL_CALLS] path also only read "arguments"."""
@@ -204,9 +207,12 @@ class TestCleanToolCallMarkup:
     def test_removes_llama_tool_call_and_python_tag(self):
         """Llama [TOOL_CALL] name {..} and <|python_tag|>{..} leaked."""
         assert clean_tool_call_markup('OK.[TOOL_CALL] get_a {"x":1}') == "OK."
-        assert clean_tool_call_markup('Sure<|python_tag|>{"name":"f","arguments":{}}') == "Sure"
+        assert (
+            clean_tool_call_markup('Sure<|python_tag|>{"name":"f","arguments":{}}')
+            == "Sure"
+        )
         # A bare python_tag with no following JSON drops just the marker.
-        assert clean_tool_call_markup('Sure<|python_tag|>') == "Sure"
+        assert clean_tool_call_markup("Sure<|python_tag|>") == "Sure"
 
 
 # ── ToolCallStreamer ──
@@ -225,7 +231,9 @@ class TestToolCallStreamer:
 
     def test_single_tool_call_in_one_chunk(self):
         streamer = ToolCallStreamer()
-        chunk = '<tool_call/>{"name": "weather", "arguments": {"city": "NYC"}}</tool_call/>'
+        chunk = (
+            '<tool_call/>{"name": "weather", "arguments": {"city": "NYC"}}</tool_call/>'
+        )
         outputs = streamer.process_token(chunk)
         tool_calls = [o for o in outputs if o.tool_call is not None]
         assert len(tool_calls) >= 1
@@ -238,11 +246,11 @@ class TestToolCallStreamer:
         streamer = ToolCallStreamer(flush_threshold=20)
         all_outputs: list[StreamOutput] = []
         tokens = [
-            '<tool_call',
-            '/>',
+            "<tool_call",
+            "/>",
             '{"name": "weather", ',
             '"arguments": {"city": "NYC"}}',
-            '</tool_call/>',
+            "</tool_call/>",
         ]
         for token in tokens:
             outputs = streamer.process_token(token)
@@ -419,13 +427,17 @@ class TestInjectToolSystemPrompt:
 
     def test_tool_choice_auto(self):
         messages = [{"role": "user", "content": "Hi"}]
-        result = _inject_tool_system_prompt(messages, self._make_tools(), tool_choice="auto")
+        result = _inject_tool_system_prompt(
+            messages, self._make_tools(), tool_choice="auto"
+        )
         system = result[0]["content"]
         assert "Decide whether to call a tool" in system
 
     def test_tool_choice_none(self):
         messages = [{"role": "user", "content": "Hi"}]
-        result = _inject_tool_system_prompt(messages, self._make_tools(), tool_choice="none")
+        result = _inject_tool_system_prompt(
+            messages, self._make_tools(), tool_choice="none"
+        )
         system = result[0]["content"]
         assert "must NOT call any tools" in system
         assert "tool_call" not in system
@@ -435,7 +447,9 @@ class TestInjectToolSystemPrompt:
         forced = ToolChoiceFunction(
             function=ToolFunction(name="get_weather"),
         )
-        result = _inject_tool_system_prompt(messages, self._make_tools(), tool_choice=forced)
+        result = _inject_tool_system_prompt(
+            messages, self._make_tools(), tool_choice=forced
+        )
         system = result[0]["content"]
         assert "MUST call the tool 'get_weather'" in system
 
@@ -459,12 +473,16 @@ class TestInjectToolSystemPrompt:
 
     def test_tool_choice_none_still_creates_system_message(self):
         messages = [{"role": "user", "content": "Hi"}]
-        result = _inject_tool_system_prompt(messages, self._make_tools(), tool_choice="none")
+        result = _inject_tool_system_prompt(
+            messages, self._make_tools(), tool_choice="none"
+        )
         assert result[0]["role"] == "system"
 
     def test_default_tool_choice_is_auto_like(self):
         messages = [{"role": "user", "content": "Hi"}]
-        result = _inject_tool_system_prompt(messages, self._make_tools(), tool_choice=None)
+        result = _inject_tool_system_prompt(
+            messages, self._make_tools(), tool_choice=None
+        )
         system = result[0]["content"]
         assert "Decide whether to call a tool" in system
 
@@ -630,8 +648,7 @@ class TestToolCallStreamerEdgeCases:
         streamer = ToolCallStreamer(flush_threshold=5)
         all_outputs: list[StreamOutput] = []
         full_text = (
-            'Hello <tool_call/>{"name": "fn", "arguments": {"x": 1}}'
-            '</tool_call/> World'
+            'Hello <tool_call/>{"name": "fn", "arguments": {"x": 1}}</tool_call/> World'
         )
         for char in full_text:
             outputs = streamer.process_token(char)
@@ -646,7 +663,9 @@ class TestToolCallStreamerEdgeCases:
 
     def test_arguments_is_string(self):
         streamer = ToolCallStreamer()
-        chunk = '<tool_call/>{"name": "fn", "arguments": "already serialized"}</tool_call/>'
+        chunk = (
+            '<tool_call/>{"name": "fn", "arguments": "already serialized"}</tool_call/>'
+        )
         outputs = streamer.process_token(chunk)
         all_outputs = outputs + streamer.flush()
         tool_calls = [o for o in all_outputs if o.tool_call is not None]
@@ -672,7 +691,9 @@ class TestToolCallStreamerEdgeCases:
 
     def test_unicode_in_arguments(self):
         streamer = ToolCallStreamer()
-        chunk = '<tool_call/>{"name": "search", "arguments": {"q": "test"}}</tool_call/>'
+        chunk = (
+            '<tool_call/>{"name": "search", "arguments": {"q": "test"}}</tool_call/>'
+        )
         outputs = streamer.process_token(chunk)
         all_outputs = outputs + streamer.flush()
         tool_calls = [o for o in all_outputs if o.tool_call is not None]
@@ -702,9 +723,10 @@ class TestToolCallStreamerBugfixes:
         """
         streamer = ToolCallStreamer()
         tokens = [
-            '<tool_call', '>',
+            "<tool_call",
+            ">",
             '{"name": "get_weather", "arguments": {"city": "Tokyo"}}',
-            '</tool_call',  # Missing closing >
+            "</tool_call",  # Missing closing >
         ]
         all_outputs: list[StreamOutput] = []
         for t in tokens:
@@ -747,7 +769,7 @@ class TestToolCallStreamerBugfixes:
         streamer = ToolCallStreamer()
         # The arguments contain an escaped quote followed by the closing tag text
         json_body = '{"name": "echo", "arguments": {"text": "test\\"</tool_call"}}'
-        chunk = '<tool_call/>' + json_body + '</tool_call/>'
+        chunk = "<tool_call/>" + json_body + "</tool_call/>"
         all_outputs: list[StreamOutput] = []
         for char in chunk:
             outputs = streamer.process_token(char)

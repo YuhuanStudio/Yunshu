@@ -260,9 +260,7 @@ class SpecPrefillEngine:
             "max_queue_size": self._max_queue_size,
             "avg_prefill_time_ms": round(avg_ttft_ms, 2),
             "uptime_seconds": round(elapsed, 1),
-            "current_request": (
-                self._current.request_id if self._current else None
-            ),
+            "current_request": (self._current.request_id if self._current else None),
         }
 
     # ── Internal ──

@@ -20,6 +20,7 @@ Tests the external prefill path with mocked model:
 - ExternalPrefillClient stats
 - EngineCore wiring (YUNSHU_EXTERNAL_PREFILL env vars)
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -88,11 +89,13 @@ class _FakeModel:
         self.calls = []
 
     def __call__(self, input_ids, cache=None, **kwargs):
-        self.calls.append({
-            'input_ids': input_ids,
-            'cache': cache,
-            'kwargs': kwargs,
-        })
+        self.calls.append(
+            {
+                "input_ids": input_ids,
+                "cache": cache,
+                "kwargs": kwargs,
+            }
+        )
         output = MagicMock()
         output.logits = MagicMock()
         return output
@@ -171,8 +174,10 @@ class TestExternalPrefill:
         tokenizer = _FakeTokenizer()
         prefiller = ExternalPrefiller(model, tokenizer)
 
-        with patch.object(prefiller, '_run_model_step') as mock_step, \
-             patch.object(prefiller, '_create_kv_cache', return_value=None):
+        with (
+            patch.object(prefiller, "_run_model_step") as mock_step,
+            patch.object(prefiller, "_create_kv_cache", return_value=None),
+        ):
             result = prefiller.prefill(
                 token_ids=[1, 2, 3, 4, 5],
                 cached_prefix_len=2,
@@ -187,8 +192,10 @@ class TestExternalPrefill:
         tokenizer = _FakeTokenizer()
         prefiller = ExternalPrefiller(model, tokenizer)
 
-        with patch.object(prefiller, '_run_model_step'), \
-             patch.object(prefiller, '_create_kv_cache', return_value=None):
+        with (
+            patch.object(prefiller, "_run_model_step"),
+            patch.object(prefiller, "_create_kv_cache", return_value=None),
+        ):
             result = prefiller.prefill(token_ids=list(range(100)))
 
         assert result.num_tokens == 100
@@ -221,8 +228,10 @@ class TestPrefillChunked:
             progress_calls.append((completed, total))
 
         # 10 tokens, chunk_size=3 → 4 chunks: [0:3], [3:6], [6:9], [9:10]
-        with patch.object(prefiller, '_run_model_step'), \
-             patch.object(prefiller, '_create_kv_cache', return_value=None):
+        with (
+            patch.object(prefiller, "_run_model_step"),
+            patch.object(prefiller, "_create_kv_cache", return_value=None),
+        ):
             result = prefiller.prefill_chunked(
                 token_ids=list(range(10)),
                 chunk_size=3,
@@ -242,8 +251,10 @@ class TestPrefillChunked:
         prefiller = ExternalPrefiller(model, tokenizer)
 
         # Default chunk_size=2048, 100 tokens → 1 chunk
-        with patch.object(prefiller, '_run_model_step') as mock_step, \
-             patch.object(prefiller, '_create_kv_cache', return_value=None):
+        with (
+            patch.object(prefiller, "_run_model_step") as mock_step,
+            patch.object(prefiller, "_create_kv_cache", return_value=None),
+        ):
             result = prefiller.prefill_chunked(
                 token_ids=list(range(100)),
             )
@@ -259,8 +270,10 @@ class TestPrefillChunked:
             prefiller = ExternalPrefiller(model, tokenizer)
             progress_calls = []
 
-            with patch.object(prefiller, '_run_model_step'), \
-                 patch.object(prefiller, '_create_kv_cache', return_value=None):
+            with (
+                patch.object(prefiller, "_run_model_step"),
+                patch.object(prefiller, "_create_kv_cache", return_value=None),
+            ):
                 result = prefiller.prefill_chunked(
                     token_ids=list(range(25)),
                     chunk_size=chunk_size,
@@ -281,8 +294,10 @@ class TestPrefillChunked:
         prefiller = ExternalPrefiller(model, tokenizer)
 
         progress_calls = []
-        with patch.object(prefiller, '_run_model_step'), \
-             patch.object(prefiller, '_create_kv_cache', return_value=None):
+        with (
+            patch.object(prefiller, "_run_model_step"),
+            patch.object(prefiller, "_create_kv_cache", return_value=None),
+        ):
             result = prefiller.prefill_chunked(
                 token_ids=list(range(5)),
                 chunk_size=100,
@@ -306,8 +321,10 @@ class TestPrefillChunked:
             if call_count[0] == 1:
                 raise ValueError("callback error")
 
-        with patch.object(prefiller, '_run_model_step'), \
-             patch.object(prefiller, '_create_kv_cache', return_value=None):
+        with (
+            patch.object(prefiller, "_run_model_step"),
+            patch.object(prefiller, "_create_kv_cache", return_value=None),
+        ):
             # Should not raise
             result = prefiller.prefill_chunked(
                 token_ids=list(range(10)),
@@ -323,8 +340,10 @@ class TestPrefillChunked:
         tokenizer = _FakeTokenizer()
         prefiller = ExternalPrefiller(model, tokenizer)
 
-        with patch.object(prefiller, '_run_model_step') as mock_step, \
-             patch.object(prefiller, '_create_kv_cache', return_value="fake_cache"):
+        with (
+            patch.object(prefiller, "_run_model_step") as mock_step,
+            patch.object(prefiller, "_create_kv_cache", return_value="fake_cache"),
+        ):
             result = prefiller.prefill_chunked(
                 token_ids=list(range(10)),
                 chunk_size=3,
@@ -387,8 +406,10 @@ class TestMidPrefillAbort:
             if completed >= 5:
                 pending.add("req-test")
 
-        with patch.object(prefiller, '_run_model_step'), \
-             patch.object(prefiller, '_create_kv_cache', return_value=None):
+        with (
+            patch.object(prefiller, "_run_model_step"),
+            patch.object(prefiller, "_create_kv_cache", return_value=None),
+        ):
             with pytest.raises(PrefillAbortedError) as exc_info:
                 prefiller.prefill_chunked(
                     token_ids=list(range(15)),
@@ -410,8 +431,10 @@ class TestMidPrefillAbort:
 
         pending = {"req-immediate"}
 
-        with patch.object(prefiller, '_run_model_step'), \
-             patch.object(prefiller, '_create_kv_cache', return_value=None):
+        with (
+            patch.object(prefiller, "_run_model_step"),
+            patch.object(prefiller, "_create_kv_cache", return_value=None),
+        ):
             with pytest.raises(PrefillAbortedError) as exc_info:
                 prefiller.prefill_chunked(
                     token_ids=list(range(10)),
@@ -428,8 +451,10 @@ class TestMidPrefillAbort:
         tokenizer = _FakeTokenizer()
         prefiller = ExternalPrefiller(model, tokenizer)
 
-        with patch.object(prefiller, '_run_model_step'), \
-             patch.object(prefiller, '_create_kv_cache', return_value=None):
+        with (
+            patch.object(prefiller, "_run_model_step"),
+            patch.object(prefiller, "_create_kv_cache", return_value=None),
+        ):
             result = prefiller.prefill_chunked(
                 token_ids=list(range(10)),
                 chunk_size=5,
@@ -519,11 +544,15 @@ class TestMemoryPreflight:
 
         mock_monitor = MagicMock()
         mock_monitor.get_memory_info.return_value = mock_info
-        mock_monitor.estimate_prefill_peak_bytes.return_value = 100 * 1024 * 1024  # 100MB
+        mock_monitor.estimate_prefill_peak_bytes.return_value = (
+            100 * 1024 * 1024
+        )  # 100MB
         mock_monitor.is_under_pressure.return_value = False
 
-        with patch.object(prefiller, '_run_model_step'), \
-             patch.object(prefiller, '_create_kv_cache', return_value=None):
+        with (
+            patch.object(prefiller, "_run_model_step"),
+            patch.object(prefiller, "_create_kv_cache", return_value=None),
+        ):
             result = prefiller.prefill_chunked(
                 token_ids=list(range(100)),
                 chunk_size=50,
@@ -542,9 +571,12 @@ class TestMemoryPreflight:
 
         mock_monitor = MagicMock()
         mock_monitor.get_memory_info.return_value = mock_info
-        mock_monitor.estimate_prefill_peak_bytes.return_value = 10 * 1024 * 1024 * 1024  # 10GB needed
+        mock_monitor.estimate_prefill_peak_bytes.return_value = (
+            10 * 1024 * 1024 * 1024
+        )  # 10GB needed
 
         from yunshu_engine.exceptions import PrefillMemoryExceededError
+
         with pytest.raises(PrefillMemoryExceededError):
             prefiller.prefill_chunked(
                 token_ids=list(range(10000)),
@@ -566,8 +598,10 @@ class TestMemoryPreflight:
         mock_monitor.estimate_prefill_peak_bytes.return_value = 0
         mock_monitor.is_under_pressure.return_value = False
 
-        with patch.object(prefiller, '_run_model_step'), \
-             patch.object(prefiller, '_create_kv_cache', return_value=None):
+        with (
+            patch.object(prefiller, "_run_model_step"),
+            patch.object(prefiller, "_create_kv_cache", return_value=None),
+        ):
             result = prefiller.prefill_chunked(
                 token_ids=list(range(100)),
                 chunk_size=50,
@@ -581,8 +615,10 @@ class TestMemoryPreflight:
         tokenizer = _FakeTokenizer()
         prefiller = ExternalPrefiller(model, tokenizer)
 
-        with patch.object(prefiller, '_run_model_step'), \
-             patch.object(prefiller, '_create_kv_cache', return_value=None):
+        with (
+            patch.object(prefiller, "_run_model_step"),
+            patch.object(prefiller, "_create_kv_cache", return_value=None),
+        ):
             result = prefiller.prefill_chunked(
                 token_ids=list(range(50)),
                 chunk_size=25,
@@ -604,8 +640,10 @@ class TestMemoryPreflight:
         # Under pressure after first chunk
         mock_monitor.is_under_pressure.return_value = True
 
-        with patch.object(prefiller, '_run_model_step'), \
-             patch.object(prefiller, '_create_kv_cache', return_value=None):
+        with (
+            patch.object(prefiller, "_run_model_step"),
+            patch.object(prefiller, "_create_kv_cache", return_value=None),
+        ):
             with pytest.raises(PrefillAbortedError) as exc_info:
                 prefiller.prefill_chunked(
                     token_ids=list(range(20)),
@@ -684,8 +722,10 @@ class TestSchedulerExternalPrefill:
         scheduler._pending_abort_ids.add("req-abort-test")
 
         prefiller = scheduler._get_external_prefiller()
-        with patch.object(prefiller, '_run_model_step'), \
-             patch.object(prefiller, '_create_kv_cache', return_value=None):
+        with (
+            patch.object(prefiller, "_run_model_step"),
+            patch.object(prefiller, "_create_kv_cache", return_value=None),
+        ):
             result = scheduler._run_external_prefill(req)
 
         assert result is False
@@ -711,8 +751,10 @@ class TestSchedulerExternalPrefill:
         scheduler.requests[req.request_id] = req
 
         prefiller = scheduler._get_external_prefiller()
-        with patch.object(prefiller, '_run_model_step'), \
-             patch.object(prefiller, '_create_kv_cache', return_value=None):
+        with (
+            patch.object(prefiller, "_run_model_step"),
+            patch.object(prefiller, "_create_kv_cache", return_value=None),
+        ):
             result = scheduler._run_external_prefill(req)
 
         assert result is True
@@ -782,9 +824,12 @@ class TestExternalPrefillConfig:
         """from_env() uses defaults when env vars not set."""
         # Clear any existing env vars
         env_keys = [
-            "YUNSHU_PREFILL_HOST", "YUNSHU_PREFILL_PORT",
-            "YUNSHU_PREFILL_MAX_CONN", "YUNSHU_PREFILL_CHUNK_SIZE",
-            "YUNSHU_PREFILL_TIMEOUT", "YUNSHU_PREFILL_RETRIES",
+            "YUNSHU_PREFILL_HOST",
+            "YUNSHU_PREFILL_PORT",
+            "YUNSHU_PREFILL_MAX_CONN",
+            "YUNSHU_PREFILL_CHUNK_SIZE",
+            "YUNSHU_PREFILL_TIMEOUT",
+            "YUNSHU_PREFILL_RETRIES",
             "YUNSHU_PREFILL_COMPRESSION",
         ]
         old_vals = {}
@@ -1060,9 +1105,7 @@ class TestExternalPrefillClient:
         server = ExternalPrefillServer(model, tokenizer, config)
 
         # Start server with OS-assigned port
-        server_task = asyncio.create_task(
-            server.serve(host="127.0.0.1", port=0)
-        )
+        server_task = asyncio.create_task(server.serve(host="127.0.0.1", port=0))
         # Wait a moment for server to start and get its port
         await asyncio.sleep(0.2)
 

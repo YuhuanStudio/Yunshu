@@ -371,8 +371,14 @@ def test_real_drafter_forward_runs_nan_free():
     hs = mx.random.normal((t, bb)) * 0.04
     kv = [
         (
-            mx.random.normal((1, layer.self_attn.num_kv_heads, t, layer.self_attn.head_dim)) * 0.04,
-            mx.random.normal((1, layer.self_attn.num_kv_heads, t, layer.self_attn.head_dim)) * 0.04,
+            mx.random.normal(
+                (1, layer.self_attn.num_kv_heads, t, layer.self_attn.head_dim)
+            )
+            * 0.04,
+            mx.random.normal(
+                (1, layer.self_attn.num_kv_heads, t, layer.self_attn.head_dim)
+            )
+            * 0.04,
         )
         for layer in pred.layers
     ]
@@ -406,7 +412,9 @@ def test_real_assistant_proposer_acceptance():
     target = ret[0] if isinstance(ret, tuple) else ret
     tok = load_tokenizer(__import__("pathlib").Path(target_dir))
     tm = target.language_model.model
-    tcfg = json.loads((__import__("pathlib").Path(target_dir) / "config.json").read_text())
+    tcfg = json.loads(
+        (__import__("pathlib").Path(target_dir) / "config.json").read_text()
+    )
     prop = Gemma4AssistantProposer.from_paths(
         str(DRAFTER_DIR_FOR_TEST), tm.embed_tokens.weight, tm.embed_scale, tcfg
     )
@@ -522,7 +530,8 @@ def test_spec_decode_sampling_is_stochastic_and_valid():
     )
     ids = tok.apply_chat_template(
         [{"role": "user", "content": "Write a creative story opening."}],
-        add_generation_prompt=True, tokenize=True,
+        add_generation_prompt=True,
+        tokenize=True,
     )
     mk = lambda: make_prompt_cache(target)  # noqa: E731
     g0 = prop.spec_decode_generate(tm, lm, mk(), ids, 30, k=4, temperature=0.0)

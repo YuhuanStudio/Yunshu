@@ -3,6 +3,7 @@ inline <lora:NAME:WEIGHT> tag) had a bare `if os.path.isfile(name): return name`
 authenticated tenant could load an ARBITRARY .safetensors on the host (an absolute path
 or a .. escape), e.g. another tenant's private adapter, simply by putting the full path in
 the prompt. Now a direct path is honored only when it resolves INSIDE search_dir."""
+
 from __future__ import annotations
 
 import os
@@ -28,7 +29,9 @@ def test_parent_dir_escape_blocked():
     inside_dir = tempfile.mkdtemp()
     outside_dir = tempfile.mkdtemp()
     _mkfile(outside_dir, "secret.safetensors")
-    escape = os.path.join(inside_dir, "..", os.path.basename(outside_dir), "secret.safetensors")
+    escape = os.path.join(
+        inside_dir, "..", os.path.basename(outside_dir), "secret.safetensors"
+    )
     assert resolve_lora_file(escape, inside_dir) is None
 
 

@@ -95,14 +95,18 @@ class KVWarmTier:
 
                 packed, scales = quantize_kv_4bit(kv_data)
                 # Recover original head_dim from the kv_data shape for correct dequantize
-                head_dim = kv_data.shape[-1] if hasattr(kv_data, 'shape') else 0
+                head_dim = kv_data.shape[-1] if hasattr(kv_data, "shape") else 0
 
                 # Approximate memory accounting for the NEW entry
                 packed_nbytes = (
-                    np.array(packed).nbytes if not isinstance(packed, np.ndarray) else packed.nbytes
+                    np.array(packed).nbytes
+                    if not isinstance(packed, np.ndarray)
+                    else packed.nbytes
                 )
                 scales_nbytes = (
-                    np.array(scales).nbytes if not isinstance(scales, np.ndarray) else scales.nbytes
+                    np.array(scales).nbytes
+                    if not isinstance(scales, np.ndarray)
+                    else scales.nbytes
                 )
                 new_entry_bytes = packed_nbytes + scales_nbytes
 
@@ -123,7 +127,10 @@ class KVWarmTier:
 
                 # Evict AFTER compression succeeds — avoids losing a valid
                 # block if quantize_kv_4bit raises (Bug: premature eviction).
-                if len(self._store) >= self.config.max_blocks and block_hash not in self._store:
+                if (
+                    len(self._store) >= self.config.max_blocks
+                    and block_hash not in self._store
+                ):
                     self._evict_unlocked(1)
 
                 # Store num_tokens alongside packed data so SSD flush can
@@ -136,7 +143,11 @@ class KVWarmTier:
 
                 return True
             except Exception:
-                logger.warning("Failed to demote block 0x%x to warm tier", block_hash, exc_info=True)
+                logger.warning(
+                    "Failed to demote block 0x%x to warm tier",
+                    block_hash,
+                    exc_info=True,
+                )
                 return False
 
     def promote(self, block_hash: int) -> bytes | None:
@@ -164,7 +175,12 @@ class KVWarmTier:
             # Handle both old 3-tuple (packed, scales, head_dim) and new
             # 4-tuple (packed, scales, head_dim, num_tokens) formats.
             if len(entry) >= 4:
-                packed, scales, head_dim, _num_tokens = entry[0], entry[1], entry[2], entry[3]
+                packed, scales, head_dim, _num_tokens = (
+                    entry[0],
+                    entry[1],
+                    entry[2],
+                    entry[3],
+                )
             elif len(entry) == 3:
                 packed, scales, head_dim = entry[0], entry[1], entry[2]
             else:
@@ -180,7 +196,8 @@ class KVWarmTier:
                 logger.warning(
                     "Failed to promote block 0x%x from warm tier — "
                     "leaving entry in store for retry",
-                    block_hash, exc_info=True,
+                    block_hash,
+                    exc_info=True,
                 )
                 return None
 
@@ -190,15 +207,21 @@ class KVWarmTier:
             # Adjust memory accounting
             try:
                 packed_nbytes = (
-                    np.array(packed).nbytes if not isinstance(packed, np.ndarray) else packed.nbytes
+                    np.array(packed).nbytes
+                    if not isinstance(packed, np.ndarray)
+                    else packed.nbytes
                 )
                 scales_nbytes = (
-                    np.array(scales).nbytes if not isinstance(scales, np.ndarray) else scales.nbytes
+                    np.array(scales).nbytes
+                    if not isinstance(scales, np.ndarray)
+                    else scales.nbytes
                 )
                 self._memory_used -= packed_nbytes + scales_nbytes
                 self._memory_used = max(0, self._memory_used)
             except Exception:
-                logger.debug("memory accounting adjustment in promote failed", exc_info=True)
+                logger.debug(
+                    "memory accounting adjustment in promote failed", exc_info=True
+                )
 
             return result
 
@@ -214,10 +237,14 @@ class KVWarmTier:
             if entry is not None:
                 packed, scales = entry[0], entry[1]
                 packed_nbytes = (
-                    np.array(packed).nbytes if not isinstance(packed, np.ndarray) else packed.nbytes
+                    np.array(packed).nbytes
+                    if not isinstance(packed, np.ndarray)
+                    else packed.nbytes
                 )
                 scales_nbytes = (
-                    np.array(scales).nbytes if not isinstance(scales, np.ndarray) else scales.nbytes
+                    np.array(scales).nbytes
+                    if not isinstance(scales, np.ndarray)
+                    else scales.nbytes
                 )
                 self._memory_used -= packed_nbytes + scales_nbytes
                 self._memory_used = max(0, self._memory_used)
@@ -256,7 +283,9 @@ class KVWarmTier:
                 self._memory_used -= packed_nbytes + scales_nbytes
                 self._memory_used = max(0, self._memory_used)
             except Exception:
-                logger.debug("memory accounting adjustment in evict failed", exc_info=True)
+                logger.debug(
+                    "memory accounting adjustment in evict failed", exc_info=True
+                )
             evicted += 1
         return evicted
 
@@ -275,7 +304,9 @@ class KVWarmTier:
                 "hit_rate": round(hit_rate, 4),
                 "utilization_pct": round(
                     len(self._store) / self.config.max_blocks * 100, 1
-                ) if self.config.max_blocks > 0 else 0.0,
+                )
+                if self.config.max_blocks > 0
+                else 0.0,
             }
 
     def flush(self) -> None:

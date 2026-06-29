@@ -223,9 +223,7 @@ class EncoderCacheManager:
         with self._lock:
             now = time.monotonic()
             expired_ids = [
-                rid
-                for rid, entry in self._entries.items()
-                if now > entry.deadline
+                rid for rid, entry in self._entries.items() if now > entry.deadline
             ]
             for rid in expired_ids:
                 self._remove_entry_unlocked(rid)

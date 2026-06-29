@@ -4,6 +4,7 @@ was silently ignored, AND it skipped the str→int coercion SessionConfig.update
 so a documented value like "inf" reached stream_chat(max_tokens=) and crashed the turn
 (mlx-lm compares the token counter against a str). The coercion is now a shared helper
 used by both paths; the key is fixed; per-response temperature is validated too."""
+
 from __future__ import annotations
 
 import inspect

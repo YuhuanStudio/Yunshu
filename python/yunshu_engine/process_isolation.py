@@ -619,8 +619,7 @@ class InferenceWorker:
             if self._is_circuit_open():
                 self._state = WorkerState.CIRCUIT_OPEN
                 logger.warning(
-                    "Circuit breaker tripped for worker %s "
-                    "(%d crashes in %.0fs)",
+                    "Circuit breaker tripped for worker %s (%d crashes in %.0fs)",
                     self._config.model_id,
                     len(self._crash_times),
                     self._config.restart_window_seconds,
@@ -678,9 +677,9 @@ class InferenceWorker:
             # intentional stop).  Record crash AND update state atomically
             # under the lifecycle lock to prevent races with stop().
             with self._lifecycle_lock:
-                should_record = (
-                    self._result_thread_running
-                    and self._state not in (WorkerState.STOPPING, WorkerState.STOPPED)
+                should_record = self._result_thread_running and self._state not in (
+                    WorkerState.STOPPING,
+                    WorkerState.STOPPED,
                 )
                 if should_record:
                     now = time.monotonic()
@@ -889,9 +888,7 @@ class WorkerSupervisor:
                     worker.restart()
                     logger.info("Worker '%s' restarted successfully", model_id)
                 except Exception:
-                    logger.exception(
-                        "Failed to restart worker '%s'", model_id
-                    )
+                    logger.exception("Failed to restart worker '%s'", model_id)
                     worker._record_crash()
 
     def _monitor_loop(self) -> None:
@@ -1016,9 +1013,7 @@ def maybe_isolate_inference(
     worker = supervisor.get_healthy_worker(model_id)
     if worker is not None:
         result_future = worker.submit_request(request)
-        return result_future.result(
-            timeout=worker.config.request_timeout_seconds
-        )
+        return result_future.result(timeout=worker.config.request_timeout_seconds)
 
     # No healthy worker — try in-process fallback
     return supervisor.fallback_to_inprocess(model_id, request)

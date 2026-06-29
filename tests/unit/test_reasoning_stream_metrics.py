@@ -14,6 +14,7 @@ MEDIUM (Anthropic metric double-count): /v1/messages recorded completion_tokens 
 reasoning_tokens, but completion_tokens ALREADY includes reasoning (subset, not addend) —
 double-counting the server metric for every thinking-model request. chat.py records it
 correctly."""
+
 from __future__ import annotations
 
 import inspect
@@ -29,7 +30,7 @@ def test_stream_fast_resolves_think_tokens_unconditionally():
     # think-token resolution now goes through _resolve_think_token_ids (bracketed
     # form) instead of the buggy bare encode("<think"). It must still be UNCONDITIONAL.
     i = src.index("_resolve_think_token_ids(tokenizer)")
-    window = src[max(0, i - 400):i]
+    window = src[max(0, i - 400) : i]
     assert "if thinking_budget is not None or enable_thinking:" not in window
 
 

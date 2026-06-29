@@ -22,6 +22,7 @@ docs/VLM_TEXT_KV_PREFIX.md):
 2. sliding-window caches (RotatingKVCache) — circular buffer loses linear history;
 3. mRoPE — position tracked outside the cache, reset per request.
 """
+
 from __future__ import annotations
 
 import enum
@@ -32,16 +33,18 @@ from typing import Any, Protocol, runtime_checkable
 
 class BackendKind(enum.StrEnum):
     """Which model family a backend serves."""
-    LM = "lm"          # mlx-lm language model (BatchedEngine)
-    VLM = "vlm"        # mlx-vlm multimodal model (VLMEngine)
+
+    LM = "lm"  # mlx-lm language model (BatchedEngine)
+    VLM = "vlm"  # mlx-vlm multimodal model (VLMEngine)
 
 
 @dataclass(frozen=True)
 class CacheClass:
     """Classification of a model's per-layer KV cache, derived purely from the
     cache layer objects (no model forward needed)."""
-    has_sliding_window: bool   # any RotatingKVCache / has max_size (window attn)
-    is_hybrid: bool            # any non-sliceable recurrent layer (ArraysCache)
+
+    has_sliding_window: bool  # any RotatingKVCache / has max_size (window attn)
+    is_hybrid: bool  # any non-sliceable recurrent layer (ArraysCache)
     layer_types: tuple[str, ...]
 
     @property
@@ -80,8 +83,9 @@ def classify_cache(cache_layers: Iterable[Any]) -> CacheClass:
                         is_hybrid = True
                 except Exception:
                     is_hybrid = True
-    return CacheClass(has_sliding_window=has_sw, is_hybrid=is_hybrid,
-                      layer_types=tuple(types))
+    return CacheClass(
+        has_sliding_window=has_sw, is_hybrid=is_hybrid, layer_types=tuple(types)
+    )
 
 
 @dataclass(frozen=True)
@@ -91,9 +95,10 @@ class BackendCapabilities:
     ``supports_kv_prefix_reuse`` is the single most important gate: it is True
     only when cross-request KV prefix reuse is byte-lossless for this backbone.
     """
+
     kind: BackendKind
     cache: CacheClass
-    is_mrope: bool             # multimodal RoPE (position tracked outside cache)
+    is_mrope: bool  # multimodal RoPE (position tracked outside cache)
 
     @property
     def supports_kv_prefix_reuse(self) -> bool:

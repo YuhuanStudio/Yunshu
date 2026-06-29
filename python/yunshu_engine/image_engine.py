@@ -58,7 +58,9 @@ class _RotaryEmbedding:
     def __init__(self, dim: int, base: float = 1000000.0):
         self.inv_freq = 1.0 / (base ** (mx.arange(0, dim, 2, dtype=mx.float32) / dim))
 
-    def __call__(self, x: mx.array, position_ids: mx.array) -> tuple[mx.array, mx.array]:
+    def __call__(
+        self, x: mx.array, position_ids: mx.array
+    ) -> tuple[mx.array, mx.array]:
         seq_len = position_ids.shape[-1]
         freqs = mx.outer(mx.arange(seq_len, dtype=mx.float32), self.inv_freq)
         emb = mx.concatenate([freqs, freqs], axis=-1)
@@ -83,13 +85,15 @@ class _TextMLP(nn.Module):
 class _TextAttention(nn.Module):
     """GQA attention for text encoder with QK norm and RoPE."""
 
-    def __init__(self, hidden_size: int, num_heads: int, num_kv_heads: int, head_dim: int):
+    def __init__(
+        self, hidden_size: int, num_heads: int, num_kv_heads: int, head_dim: int
+    ):
         super().__init__()
         self.num_heads = num_heads
         self.num_kv_heads = num_kv_heads
         self.head_dim = head_dim
         self.num_kv_groups = num_heads // num_kv_heads
-        self.scale = head_dim ** -0.5
+        self.scale = head_dim**-0.5
 
         self.q_proj = nn.Linear(hidden_size, num_heads * head_dim, bias=False)
         self.k_proj = nn.Linear(hidden_size, num_kv_heads * head_dim, bias=False)
@@ -98,7 +102,9 @@ class _TextAttention(nn.Module):
         self.q_norm = nn.RMSNorm(head_dim)
         self.k_norm = nn.RMSNorm(head_dim)
 
-    def __call__(self, x: mx.array, mask: mx.array | None, pos_emb: tuple | None) -> mx.array:
+    def __call__(
+        self, x: mx.array, mask: mx.array | None, pos_emb: tuple | None
+    ) -> mx.array:
         B, S, _ = x.shape
         q = self.q_proj(x).reshape(B, S, self.num_heads, self.head_dim)
         k = self.k_proj(x).reshape(B, S, self.num_kv_heads, self.head_dim)
@@ -121,16 +127,20 @@ class _TextAttention(nn.Module):
     def _apply_rope(q, k, cos, sin):
         cos = mx.expand_dims(cos, axis=2)
         sin = mx.expand_dims(sin, axis=2)
+
         def rotate_half(x):
             d = x.shape[-1] // 2
             return mx.concatenate([-x[..., d:], x[..., :d]], axis=-1)
+
         return (q * cos) + (rotate_half(q) * sin), (k * cos) + (rotate_half(k) * sin)
 
 
 class _TextEncoderLayer(nn.Module):
     """Transformer block for text encoder (pre-norm, GQA, SwiGLU)."""
 
-    def __init__(self, hidden_size, num_heads, num_kv_heads, intermediate_size, head_dim, eps):
+    def __init__(
+        self, hidden_size, num_heads, num_kv_heads, intermediate_size, head_dim, eps
+    ):
         super().__init__()
         self.input_layernorm = nn.RMSNorm(hidden_size, eps=eps)
         self.post_attention_layernorm = nn.RMSNorm(hidden_size, eps=eps)
@@ -166,13 +176,17 @@ class TextEncoder(nn.Module):
         super().__init__()
         self.embed_tokens = nn.Embedding(vocab_size, hidden_size)
         self.layers = [
-            _TextEncoderLayer(hidden_size, num_heads, num_kv_heads, intermediate_size, head_dim, eps)
+            _TextEncoderLayer(
+                hidden_size, num_heads, num_kv_heads, intermediate_size, head_dim, eps
+            )
             for _ in range(num_layers)
         ]
         self.norm = nn.RMSNorm(hidden_size, eps=eps)
         self.rotary_emb = _RotaryEmbedding(dim=head_dim, base=rope_theta)
 
-    def __call__(self, input_ids: mx.array, attention_mask: mx.array | None = None) -> mx.array:
+    def __call__(
+        self, input_ids: mx.array, attention_mask: mx.array | None = None
+    ) -> mx.array:
         B, S = input_ids.shape
         h = self.embed_tokens(input_ids).astype(mx.float32)
         pos_ids = mx.broadcast_to(mx.arange(S, dtype=mx.int32)[None, :], (B, S))
@@ -226,7 +240,7 @@ class _DiTAttention(nn.Module):
         super().__init__()
         self.n_heads = n_heads
         self.head_dim = dim // n_heads
-        self.scale = self.head_dim ** -0.5
+        self.scale = self.head_dim**-0.5
         self.to_q = nn.Linear(dim, dim, bias=False)
         self.to_k = nn.Linear(dim, dim, bias=False)
         self.to_v = nn.Linear(dim, dim, bias=False)
@@ -254,8 +268,12 @@ class _DiTAttention(nn.Module):
         v = v.transpose(0, 2, 1, 3)
         attn_mask = None
         if mask is not None:
-            attn_mask = mx.where(mask[:, None, None, :], mx.array(0.0), mx.array(float("-inf")))
-        out = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=attn_mask)
+            attn_mask = mx.where(
+                mask[:, None, None, :], mx.array(0.0), mx.array(float("-inf"))
+            )
+        out = mx.fast.scaled_dot_product_attention(
+            q, k, v, scale=self.scale, mask=attn_mask
+        )
         out = out.transpose(0, 2, 1, 3).reshape(B, S, -1)
         return self.to_out(out)
 
@@ -313,7 +331,9 @@ class _TransformerBlock(nn.Module):
         s_mlp = 1.0 + s_mlp
         g_msa = mx.tanh(g_msa)
         g_mlp = mx.tanh(g_mlp)
-        x = x + g_msa * self.attention_norm2(self.attention(self.attention_norm1(x) * s_msa, attn_mask, freqs_cis))
+        x = x + g_msa * self.attention_norm2(
+            self.attention(self.attention_norm1(x) * s_msa, attn_mask, freqs_cis)
+        )
         x = x + g_mlp * self.ffn_norm2(self.feed_forward(self.ffn_norm1(x) * s_mlp))
         return x
 
@@ -331,7 +351,9 @@ class _ContextBlock(nn.Module):
         self.ffn_norm2 = nn.RMSNorm(dim, eps=eps)
 
     def __call__(self, x, attn_mask, freqs_cis):
-        x = x + self.attention_norm2(self.attention(self.attention_norm1(x), attn_mask, freqs_cis))
+        x = x + self.attention_norm2(
+            self.attention(self.attention_norm1(x), attn_mask, freqs_cis)
+        )
         x = x + self.ffn_norm2(self.feed_forward(self.ffn_norm1(x)))
         return x
 
@@ -352,7 +374,9 @@ class _TimestepEmbedder(nn.Module):
     @staticmethod
     def _sinusoidal(t: mx.array, dim: int, max_period: float = 10000.0) -> mx.array:
         half = dim // 2
-        freqs = mx.exp(-math.log(max_period) * mx.arange(0, half, dtype=mx.float32) / half)
+        freqs = mx.exp(
+            -math.log(max_period) * mx.arange(0, half, dtype=mx.float32) / half
+        )
         args = t[:, None].astype(mx.float32) * freqs[None]
         emb = mx.concatenate([mx.cos(args), mx.sin(args)], axis=-1)
         if dim % 2:
@@ -438,23 +462,43 @@ class ZImageTransformer(nn.Module):
         self.all_final_layer = _FinalLayer(dim, embed_dim)
 
         self.t_embedder = _TimestepEmbedder(out_size=min(dim, 256), mid_size=1024)
+
         # Use named sub-modules instead of list for MLX weight loading
         class _CapEmbedder(nn.Module):
             def __init__(self, feat_dim, dim, eps):
                 super().__init__()
                 self.norm = nn.RMSNorm(feat_dim, eps=eps)
                 self.proj = nn.Linear(feat_dim, dim, bias=True)
+
         self.cap_embedder = _CapEmbedder(cap_feat_dim, dim, norm_eps)
         self.x_pad_token = mx.zeros((1, dim))
         self.cap_pad_token = mx.zeros((1, dim))
 
-        self.noise_refiner = [_TransformerBlock(dim, n_heads, norm_eps, qk_norm) for _ in range(n_refiner_layers)]
-        self.context_refiner = [_ContextBlock(dim, n_heads, norm_eps, qk_norm) for _ in range(n_refiner_layers)]
-        self.layers = [_TransformerBlock(dim, n_heads, norm_eps, qk_norm) for _ in range(n_layers)]
-        self.rope_embedder = _RopeEmbedder(theta=rope_theta, axes_dims=axes_dims, axes_lens=axes_lens)
+        self.noise_refiner = [
+            _TransformerBlock(dim, n_heads, norm_eps, qk_norm)
+            for _ in range(n_refiner_layers)
+        ]
+        self.context_refiner = [
+            _ContextBlock(dim, n_heads, norm_eps, qk_norm)
+            for _ in range(n_refiner_layers)
+        ]
+        self.layers = [
+            _TransformerBlock(dim, n_heads, norm_eps, qk_norm) for _ in range(n_layers)
+        ]
+        self.rope_embedder = _RopeEmbedder(
+            theta=rope_theta, axes_dims=axes_dims, axes_lens=axes_lens
+        )
 
-    def __call__(self, x, timestep, sigmas, cap_feats,
-                 controlnet=None, control_image=None, control_scale=1.0):
+    def __call__(
+        self,
+        x,
+        timestep,
+        sigmas,
+        cap_feats,
+        controlnet=None,
+        control_image=None,
+        control_scale=1.0,
+    ):
         # Time embedding
         if not isinstance(timestep, mx.array):
             if isinstance(timestep, int):
@@ -467,7 +511,9 @@ class ZImageTransformer(nn.Module):
         t_emb = self.t_embedder(timestep.astype(mx.float32) * self.t_scale)
 
         # Patchify
-        x_emb, cap_emb, x_size, x_pos, cap_pos, x_pad, cap_pad = self._patchify(x, cap_feats)
+        x_emb, cap_emb, x_size, x_pos, cap_pos, x_pad, cap_pad = self._patchify(
+            x, cap_feats
+        )
 
         # Image embedding
         x_emb = self.all_x_embedder(x_emb)
@@ -487,7 +533,8 @@ class ZImageTransformer(nn.Module):
             c_emb = mx.where(c_pad[:, None], self.x_pad_token, c_emb)
             c_emb = mx.expand_dims(c_emb, axis=0)
             refiner_hints, control_context = controlnet.forward_refiner(
-                c_emb, x_emb, x_freqs, x_mask, t_emb)
+                c_emb, x_emb, x_freqs, x_mask, t_emb
+            )
             mapping = controlnet.control_layers_mapping
 
         # Noise refiner (+ controlnet refiner hints)
@@ -516,7 +563,8 @@ class ZImageTransformer(nn.Module):
         # ControlNet layer hints (computed once over the pre-loop unified)
         if control_context is not None:
             layer_hints = controlnet.forward_layers(
-                control_context, unified, cap_emb, unified_freqs, unified_mask, t_emb)
+                control_context, unified, cap_emb, unified_freqs, unified_mask, t_emb
+            )
 
         for i, layer in enumerate(self.layers):
             unified = layer(unified, unified_mask, unified_freqs, t_emb)
@@ -535,10 +583,19 @@ class ZImageTransformer(nn.Module):
         # Caption padding to multiple of 32
         cap_len = cap_feats.shape[0]
         cap_pad_len = (-cap_len) % 32
-        cap_pos = self._coord_grid((cap_len + cap_pad_len, 1, 1), (1, 0, 0)).reshape(-1, 3)
-        cap_pad_mask = mx.concatenate([mx.zeros((cap_len,), dtype=mx.bool_), mx.ones((cap_pad_len,), dtype=mx.bool_)])
+        cap_pos = self._coord_grid((cap_len + cap_pad_len, 1, 1), (1, 0, 0)).reshape(
+            -1, 3
+        )
+        cap_pad_mask = mx.concatenate(
+            [
+                mx.zeros((cap_len,), dtype=mx.bool_),
+                mx.ones((cap_pad_len,), dtype=mx.bool_),
+            ]
+        )
         if cap_pad_len > 0:
-            cap_padded = mx.concatenate([cap_feats, mx.repeat(cap_feats[-1:], cap_pad_len, axis=0)], axis=0)
+            cap_padded = mx.concatenate(
+                [cap_feats, mx.repeat(cap_feats[-1:], cap_pad_len, axis=0)], axis=0
+            )
         else:
             cap_padded = cap_feats
 
@@ -553,11 +610,22 @@ class ZImageTransformer(nn.Module):
         # Image padding to multiple of 32
         img_len = img.shape[0]
         img_pad_len = (-img_len) % 32
-        img_pos = self._coord_grid((Ft, Ht, Wt), (cap_len + cap_pad_len + 1, 0, 0)).reshape(-1, 3)
+        img_pos = self._coord_grid(
+            (Ft, Ht, Wt), (cap_len + cap_pad_len + 1, 0, 0)
+        ).reshape(-1, 3)
         if img_pad_len > 0:
-            img_pos = mx.concatenate([img_pos, mx.zeros((img_pad_len, 3), dtype=mx.int32)], axis=0)
-            img = mx.concatenate([img, mx.repeat(img[-1:], img_pad_len, axis=0)], axis=0)
-        img_pad_mask = mx.concatenate([mx.zeros((img_len,), dtype=mx.bool_), mx.ones((img_pad_len,), dtype=mx.bool_)])
+            img_pos = mx.concatenate(
+                [img_pos, mx.zeros((img_pad_len, 3), dtype=mx.int32)], axis=0
+            )
+            img = mx.concatenate(
+                [img, mx.repeat(img[-1:], img_pad_len, axis=0)], axis=0
+            )
+        img_pad_mask = mx.concatenate(
+            [
+                mx.zeros((img_len,), dtype=mx.bool_),
+                mx.ones((img_pad_len,), dtype=mx.bool_),
+            ]
+        )
 
         return img, cap_padded, image_size, img_pos, cap_pos, img_pad_mask, cap_pad_mask
 
@@ -566,14 +634,19 @@ class ZImageTransformer(nn.Module):
         pF = self.f_patch_size
         F, H, W = size
         ori_len = (F // pF) * (H // pH) * (W // pW)
-        x = x[:ori_len].reshape(F // pF, H // pH, W // pW, pF, pH, pW, self.out_channels)
+        x = x[:ori_len].reshape(
+            F // pF, H // pH, W // pW, pF, pH, pW, self.out_channels
+        )
         x = x.transpose(6, 0, 3, 1, 4, 2, 5)
         return x.reshape(self.out_channels, F, H, W)
 
     @staticmethod
     def _coord_grid(size, start=None):
         start = start or tuple(0 for _ in size)
-        axes = [mx.arange(x0, x0 + span, dtype=mx.int32) for x0, span in zip(start, size, strict=False)]
+        axes = [
+            mx.arange(x0, x0 + span, dtype=mx.int32)
+            for x0, span in zip(start, size, strict=False)
+        ]
         grids = mx.meshgrid(*axes, indexing="ij")
         return mx.stack(grids, axis=-1)
 
@@ -586,9 +659,13 @@ class _ResnetBlock2D(nn.Module):
 
     def __init__(self, in_ch, out_ch, use_conv_shortcut=False):
         super().__init__()
-        self.norm1 = nn.GroupNorm(32, in_ch, eps=1e-6, affine=True, pytorch_compatible=True)
+        self.norm1 = nn.GroupNorm(
+            32, in_ch, eps=1e-6, affine=True, pytorch_compatible=True
+        )
         self.conv1 = nn.Conv2d(in_ch, out_ch, kernel_size=3, stride=1, padding=1)
-        self.norm2 = nn.GroupNorm(32, out_ch, eps=1e-6, affine=True, pytorch_compatible=True)
+        self.norm2 = nn.GroupNorm(
+            32, out_ch, eps=1e-6, affine=True, pytorch_compatible=True
+        )
         self.conv2 = nn.Conv2d(out_ch, out_ch, kernel_size=3, stride=1, padding=1)
         if use_conv_shortcut or in_ch != out_ch:
             self.conv_shortcut = nn.Conv2d(in_ch, out_ch, kernel_size=1, stride=1)
@@ -615,7 +692,9 @@ class _VAEAttention(nn.Module):
 
     def __init__(self, channels=512):
         super().__init__()
-        self.group_norm = nn.GroupNorm(32, channels, eps=1e-6, affine=True, pytorch_compatible=True)
+        self.group_norm = nn.GroupNorm(
+            32, channels, eps=1e-6, affine=True, pytorch_compatible=True
+        )
         self.to_q = nn.Linear(channels, channels)
         self.to_k = nn.Linear(channels, channels)
         self.to_v = nn.Linear(channels, channels)
@@ -641,7 +720,9 @@ class _UpSampler(nn.Module):
 
     def __init__(self, in_channels, out_channels):
         super().__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
+        self.conv = nn.Conv2d(
+            in_channels, out_channels, kernel_size=3, stride=1, padding=1
+        )
 
     def __call__(self, x):
         xw = x.transpose(0, 2, 3, 1)
@@ -658,9 +739,11 @@ class _UpDecoderBlock(nn.Module):
         self.resnets = []
         for i in range(num_layers):
             use_sc = (i == 0) and (in_ch != out_ch)
-            self.resnets.append(_ResnetBlock2D(
-                in_ch if i == 0 else out_ch, out_ch, use_conv_shortcut=use_sc
-            ))
+            self.resnets.append(
+                _ResnetBlock2D(
+                    in_ch if i == 0 else out_ch, out_ch, use_conv_shortcut=use_sc
+                )
+            )
         # Must be named "upsamplers" as list to match safetensors key structure
         self.upsamplers = [_UpSampler(out_ch, out_ch)] if add_upsample else None
 
@@ -702,7 +785,9 @@ class VAEDecoder(nn.Module):
             _UpDecoderBlock(512, 256, 3, add_upsample=True),
             _UpDecoderBlock(256, 128, 3, add_upsample=False),
         ]
-        self.conv_norm_out = nn.GroupNorm(32, 128, eps=1e-6, affine=True, pytorch_compatible=True)
+        self.conv_norm_out = nn.GroupNorm(
+            32, 128, eps=1e-6, affine=True, pytorch_compatible=True
+        )
         self.conv_out = nn.Conv2d(128, 3, kernel_size=3, stride=1, padding=1)
 
     def __call__(self, latents):
@@ -839,13 +924,16 @@ class VAE:
                 x_lat_end = min(x_lat + tile_lat_w, W_lat)
 
                 # Skip sliver tiles
-                if (y_lat > 0 and (y_lat_end - y_lat) <= ov_lat_h) or \
-                   (x_lat > 0 and (x_lat_end - x_lat) <= ov_lat_w):
+                if (y_lat > 0 and (y_lat_end - y_lat) <= ov_lat_h) or (
+                    x_lat > 0 and (x_lat_end - x_lat) <= ov_lat_w
+                ):
                     continue
 
                 tile_lat = latents[:, :, y_lat:y_lat_end, x_lat:x_lat_end]
                 decoded_tile = self.decode(tile_lat)
-                tile_np = np.array(decoded_tile.astype(mx.float32))[0].transpose(1, 2, 0)
+                tile_np = np.array(decoded_tile.astype(mx.float32))[0].transpose(
+                    1, 2, 0
+                )
 
                 y_out = y_lat * scale
                 x_out = x_lat * scale
@@ -874,8 +962,12 @@ class VAE:
                         ww[-ov_w_out:] = 1.0 - ramp_w[:ov_w_out]
 
                 w2d = wh[:, None] * ww[None, :]
-                out_np[y_out:y_out + eff_h, x_out:x_out + eff_w, :] += tile_np * w2d[:, :, None]
-                count_np[y_out:y_out + eff_h, x_out:x_out + eff_w, :] += w2d[:, :, None]
+                out_np[y_out : y_out + eff_h, x_out : x_out + eff_w, :] += (
+                    tile_np * w2d[:, :, None]
+                )
+                count_np[y_out : y_out + eff_h, x_out : x_out + eff_w, :] += w2d[
+                    :, :, None
+                ]
 
         out_np = out_np / np.clip(count_np, 1e-6, None)
         out_chw = out_np.transpose(2, 0, 1)
@@ -927,8 +1019,9 @@ class VAE:
             for x_lat in range(0, W_lat, stride_w):
                 x_lat_end = min(x_lat + tile_lat_w, W_lat)
 
-                if (y_lat > 0 and (y_lat_end - y_lat) <= ov_lat_h) or \
-                   (x_lat > 0 and (x_lat_end - x_lat) <= ov_lat_w):
+                if (y_lat > 0 and (y_lat_end - y_lat) <= ov_lat_h) or (
+                    x_lat > 0 and (x_lat_end - x_lat) <= ov_lat_w
+                ):
                     continue
 
                 y_in = y_lat * scale
@@ -963,8 +1056,12 @@ class VAE:
                         ww[-ov_w:] = 1.0 - ramp_w[:ov_w]
 
                 w2d = wh[:, None] * ww[None, :]
-                out_np[y_lat:y_lat + eff_h, x_lat:x_lat + eff_w, :] += enc_np * w2d[:, :, None]
-                count_np[y_lat:y_lat + eff_h, x_lat:x_lat + eff_w, :] += w2d[:, :, None]
+                out_np[y_lat : y_lat + eff_h, x_lat : x_lat + eff_w, :] += (
+                    enc_np * w2d[:, :, None]
+                )
+                count_np[y_lat : y_lat + eff_h, x_lat : x_lat + eff_w, :] += w2d[
+                    :, :, None
+                ]
 
         out_np = out_np / np.clip(count_np, 1e-6, None)
         out_chw = out_np.transpose(2, 0, 1)
@@ -989,14 +1086,20 @@ class _DownSampler(nn.Module):
 
 
 class _DownEncoderBlock(nn.Module):
-    def __init__(self, in_ch: int, out_ch: int, num_layers: int = 2, add_downsample: bool = True):
+    def __init__(
+        self, in_ch: int, out_ch: int, num_layers: int = 2, add_downsample: bool = True
+    ):
         super().__init__()
         self.resnets = []
         for i in range(num_layers):
             use_sc = (i == 0) and (in_ch != out_ch)
-            self.resnets.append(_ResnetBlock2D(
-                in_ch if i == 0 else out_ch, out_ch, use_conv_shortcut=use_sc,
-            ))
+            self.resnets.append(
+                _ResnetBlock2D(
+                    in_ch if i == 0 else out_ch,
+                    out_ch,
+                    use_conv_shortcut=use_sc,
+                )
+            )
         self.downsamplers = [_DownSampler(out_ch)] if add_downsample else None
 
     def __call__(self, x):
@@ -1025,7 +1128,9 @@ class VAEEncoder(nn.Module):
             _DownEncoderBlock(512, 512, 2, add_downsample=False),
         ]
         self.mid_block = _UNetMidBlock(512)
-        self.conv_norm_out = nn.GroupNorm(32, 512, eps=1e-6, affine=True, pytorch_compatible=True)
+        self.conv_norm_out = nn.GroupNorm(
+            32, 512, eps=1e-6, affine=True, pytorch_compatible=True
+        )
         self.conv_out = nn.Conv2d(512, 32, kernel_size=3, stride=1, padding=1)
 
     def __call__(self, x: mx.array) -> tuple[mx.array, mx.array]:
@@ -1064,7 +1169,9 @@ def _load_component_weights(model_path: Path, subdir: str) -> dict:
     return weights
 
 
-def _dequantize_weights(pairs: list[tuple[str, mx.array]], group_size: int = 64, bits: int = 4) -> list[tuple[str, mx.array]]:
+def _dequantize_weights(
+    pairs: list[tuple[str, mx.array]], group_size: int = 64, bits: int = 4
+) -> list[tuple[str, mx.array]]:
     """Dequantize any quantized weight triplets (weight+scales+biases) to float16.
 
     Takes a list of (key, value) pairs. For any .weight key that is uint32
@@ -1086,7 +1193,7 @@ def _dequantize_weights(pairs: list[tuple[str, mx.array]], group_size: int = 64,
             continue
         if k.endswith(".weight") and v.dtype == mx.uint32:
             # Found quantized weight — dequantize
-            prefix = k[:-len(".weight")]
+            prefix = k[: -len(".weight")]
             scales = by_key.get(f"{prefix}.scales")
             biases = by_key.get(f"{prefix}.biases")
             if scales is not None:
@@ -1108,7 +1215,9 @@ def _dequantize_weights(pairs: list[tuple[str, mx.array]], group_size: int = 64,
     return result
 
 
-def _load_weights_into(model: nn.Module, weight_pairs: list[tuple[str, mx.array]]) -> None:
+def _load_weights_into(
+    model: nn.Module, weight_pairs: list[tuple[str, mx.array]]
+) -> None:
     """Load weight pairs into a model by building nested dict and calling update().
 
     Works around MLX tree_unflatten recursion limit for large models.
@@ -1164,7 +1273,7 @@ def _remap_text_encoder_weights(raw: dict) -> list[tuple[str, mx.array]]:
     for key, val in raw.items():
         new_key = key
         if key.startswith("model."):
-            new_key = key[len("model."):]
+            new_key = key[len("model.") :]
         pairs.append((new_key, val))
     return pairs
 
@@ -1215,7 +1324,9 @@ def _remap_transformer_weights(raw: dict) -> list[tuple[str, mx.array]]:
     return pairs
 
 
-def _remap_vae_weights(raw: dict, component: str = "decoder") -> list[tuple[str, mx.array]]:
+def _remap_vae_weights(
+    raw: dict, component: str = "decoder"
+) -> list[tuple[str, mx.array]]:
     """Remap VAE weights for decoder or encoder.
 
     VAE safetensors weights are in PyTorch OIHW format: (out, in, kH, kW)
@@ -1227,17 +1338,19 @@ def _remap_vae_weights(raw: dict, component: str = "decoder") -> list[tuple[str,
     for key, val in raw.items():
         if not key.startswith(prefix):
             continue
-        local_key = key[len(prefix):]
+        local_key = key[len(prefix) :]
         # Flatten to_out.0.* → to_out.*
         if ".to_out.0." in local_key:
             local_key = local_key.replace(".to_out.0.", ".to_out.")
         # Transpose conv weights from OIHW → OHWI (MLX format)
         is_conv_weight = (
-            local_key.endswith(".weight") and val.ndim == 4 and (
-                ".conv" in local_key or
-                local_key.startswith("conv_") or
-                local_key.startswith("conv.") or
-                "/conv" in local_key
+            local_key.endswith(".weight")
+            and val.ndim == 4
+            and (
+                ".conv" in local_key
+                or local_key.startswith("conv_")
+                or local_key.startswith("conv.")
+                or "/conv" in local_key
             )
         )
         if is_conv_weight:
@@ -1296,7 +1409,9 @@ def _compute_sigmas(
     sigmas = mx.linspace(1.0, 1.0 / num_steps, num_steps).astype(mx.float32)
 
     if requires_sigma_shift:
-        m = (sigma_max_shift - sigma_base_shift) / (sigma_max_seq_len - sigma_base_seq_len)
+        m = (sigma_max_shift - sigma_base_shift) / (
+            sigma_max_seq_len - sigma_base_seq_len
+        )
         b = sigma_base_shift - m * sigma_base_seq_len
         mu = m * width * height / 256 + b
         mu = mx.array(mu)
@@ -1334,25 +1449,31 @@ class ImageGenEngine(ActiveRequestMixin):
         self._tf_config: dict = {}
         self._running = False
         from .mlx_executor import get_mlx_executor
+
         self._executor = get_mlx_executor()
 
         # DFlash Block Diffusion (opt-in via YUNSHU_DFLASH=1)
         self._dflash = None
         import os
+
         if os.environ.get("YUNSHU_DFLASH", "").strip() in ("1", "true", "yes"):
             from .dflash import DFlashConfig, DFlashEngine
+
             self._dflash = DFlashEngine(DFlashConfig.from_env())
             logger.info("DFlash Block Diffusion enabled")
 
         # Diffusion scheduler + pipeline registry
         from .diffusion_infra import DiffusionScheduler, SchedulerType
+
         self._diffusion_scheduler_type: SchedulerType | None = None
         scheduler_env = os.environ.get("YUNSHU_DIFFUSION_SCHEDULER", "").strip().lower()
         if scheduler_env:
             scheduler_map = {s.value: s for s in SchedulerType}
             if scheduler_env in scheduler_map:
                 self._diffusion_scheduler_type = scheduler_map[scheduler_env]
-                logger.info(f"DiffusionScheduler override: {self._diffusion_scheduler_type.value}")
+                logger.info(
+                    f"DiffusionScheduler override: {self._diffusion_scheduler_type.value}"
+                )
             else:
                 logger.warning(
                     f"Unknown YUNSHU_DIFFUSION_SCHEDULER={scheduler_env!r}, "
@@ -1361,6 +1482,7 @@ class ImageGenEngine(ActiveRequestMixin):
         # Default scheduler instance (always available, used only when env var is set)
         self._diffusion_scheduler = DiffusionScheduler()
         from .image_pipeline import PipelineType
+
         self._pipeline_type = PipelineType
 
         # DiffusionLoRAOffloader — priority-based LoRA adapter memory management.
@@ -1368,17 +1490,26 @@ class ImageGenEngine(ActiveRequestMixin):
         # When set, LoRA adapters are swapped in/out per diffusion step based on
         # priority and assigned step ranges.
         self._lora_offloader = None
-        self._original_modules: dict[str, object] = {}  # name→original Linear before LoRA wrap
+        self._original_modules: dict[
+            str, object
+        ] = {}  # name→original Linear before LoRA wrap
         self._lora_lock = threading.Lock()
         lora_budget_mb = os.environ.get("YUNSHU_LORA_BUDGET_MB", "").strip()
         if lora_budget_mb:
             try:
                 budget_bytes = int(float(lora_budget_mb) * 1024 * 1024)
                 from .diffusion_infra import DiffusionLoRAOffloader
-                self._lora_offloader = DiffusionLoRAOffloader(memory_budget_bytes=budget_bytes)
-                logger.info(f"DiffusionLoRAOffloader enabled ({lora_budget_mb} MB budget)")
+
+                self._lora_offloader = DiffusionLoRAOffloader(
+                    memory_budget_bytes=budget_bytes
+                )
+                logger.info(
+                    f"DiffusionLoRAOffloader enabled ({lora_budget_mb} MB budget)"
+                )
             except ValueError:
-                logger.warning(f"Invalid YUNSHU_LORA_BUDGET_MB={lora_budget_mb!r}, expected number in MB")
+                logger.warning(
+                    f"Invalid YUNSHU_LORA_BUDGET_MB={lora_budget_mb!r}, expected number in MB"
+                )
 
         # DistributedDiffusionCoordinator — splits diffusion steps across mesh nodes.
         # Opt-in via YUNSHU_DIFFUSION_NODES env var (number of nodes >= 2).
@@ -1390,12 +1521,21 @@ class ImageGenEngine(ActiveRequestMixin):
                 n_nodes = int(diffusion_nodes)
                 if n_nodes >= 2:
                     from .diffusion_infra import DistributedDiffusionCoordinator
-                    self._diffusion_coordinator = DistributedDiffusionCoordinator(num_nodes=n_nodes)
-                    logger.info(f"DistributedDiffusionCoordinator enabled ({n_nodes} nodes)")
+
+                    self._diffusion_coordinator = DistributedDiffusionCoordinator(
+                        num_nodes=n_nodes
+                    )
+                    logger.info(
+                        f"DistributedDiffusionCoordinator enabled ({n_nodes} nodes)"
+                    )
                 else:
-                    logger.warning(f"YUNSHU_DIFFUSION_NODES must be >= 2 for distributed diffusion, got {n_nodes}")
+                    logger.warning(
+                        f"YUNSHU_DIFFUSION_NODES must be >= 2 for distributed diffusion, got {n_nodes}"
+                    )
             except ValueError:
-                logger.warning(f"Invalid YUNSHU_DIFFUSION_NODES={diffusion_nodes!r}, expected integer >= 2")
+                logger.warning(
+                    f"Invalid YUNSHU_DIFFUSION_NODES={diffusion_nodes!r}, expected integer >= 2"
+                )
 
         # TeaCache config (opt-in via YUNSHU_TEACACHE=1 or threshold value).
         # Per-request instances are created in each denoising loop to prevent
@@ -1404,12 +1544,14 @@ class ImageGenEngine(ActiveRequestMixin):
         teacache_env = os.environ.get("YUNSHU_TEACACHE", "").strip()
         if teacache_env in ("1", "true", "yes"):
             from .teacache import TeaCacheConfig
+
             self._teacache_config = TeaCacheConfig(rel_l1_thresh=0.2)
             logger.info("TeaCache enabled (threshold=0.2)")
         elif teacache_env and teacache_env not in ("0", "false", "no"):
             try:
                 thresh = float(teacache_env)
                 from .teacache import TeaCacheConfig
+
                 self._teacache_config = TeaCacheConfig(rel_l1_thresh=thresh)
                 logger.info(f"TeaCache enabled (threshold={thresh})")
             except ValueError:
@@ -1417,7 +1559,11 @@ class ImageGenEngine(ActiveRequestMixin):
 
     @property
     def model_name(self) -> str:
-        return self._model_path.rsplit("/", 1)[-1] if "/" in self._model_path else self._model_path
+        return (
+            self._model_path.rsplit("/", 1)[-1]
+            if "/" in self._model_path
+            else self._model_path
+        )
 
     @property
     def is_loaded(self) -> bool:
@@ -1453,7 +1599,9 @@ class ImageGenEngine(ActiveRequestMixin):
 
         # Load configs
         tf_config = json.loads((model_path / "transformer" / "config.json").read_text())
-        te_config = json.loads((model_path / "text_encoder" / "config.json").read_text())
+        te_config = json.loads(
+            (model_path / "text_encoder" / "config.json").read_text()
+        )
         json.loads((model_path / "vae" / "config.json").read_text())
         self._tf_config = tf_config
 
@@ -1473,7 +1621,11 @@ class ImageGenEngine(ActiveRequestMixin):
         te_weights = _load_component_weights(model_path, "text_encoder")
         te_quant = te_config.get("quantization", {})
         if te_quant:
-            _quantize_model(text_encoder, te_quant, set(dict(_remap_text_encoder_weights(te_weights)).keys()))
+            _quantize_model(
+                text_encoder,
+                te_quant,
+                set(dict(_remap_text_encoder_weights(te_weights)).keys()),
+            )
         text_encoder.load_weights(_remap_text_encoder_weights(te_weights), strict=False)
         mx.eval(text_encoder.parameters())
         text_encoder.eval()
@@ -1540,8 +1692,14 @@ class ImageGenEngine(ActiveRequestMixin):
         # tokenizers we load use standard tokenizer.json — default OFF; opt back in
         # via YUNSHU_TRUST_REMOTE_CODE=1 for a vetted repo that genuinely needs it.
         import os as _os
-        _trc = _os.environ.get("YUNSHU_TRUST_REMOTE_CODE", "").lower() in ("1", "true", "yes")
+
+        _trc = _os.environ.get("YUNSHU_TRUST_REMOTE_CODE", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
         from transformers import AutoTokenizer
+
         self._tokenizer = AutoTokenizer.from_pretrained(
             str(model_path / "tokenizer"), trust_remote_code=_trc
         )
@@ -1589,12 +1747,15 @@ class ImageGenEngine(ActiveRequestMixin):
         gc.collect()
         loop = asyncio.get_running_loop()
         from .mlx_executor import sync_and_clear_cache
+
         await loop.run_in_executor(self._executor, sync_and_clear_cache)
 
     def resolve_model_id(self, model_id: str) -> bool:
         return model_id in {
-            self.model_name, self._model_path,
-            self.model_name.lower(), self._model_path.lower(),
+            self.model_name,
+            self._model_path,
+            self.model_name.lower(),
+            self._model_path.lower(),
         }
 
     @tracks_active
@@ -1629,17 +1790,23 @@ class ImageGenEngine(ActiveRequestMixin):
         if width < 16 or height < 16:
             raise ValueError(f"Dimensions too small: {width}x{height} (minimum 16x16)")
         if width > 8192 or height > 8192:
-            raise ValueError(f"Dimensions too large: {width}x{height} (maximum 8192x8192)")
+            raise ValueError(
+                f"Dimensions too large: {width}x{height} (maximum 8192x8192)"
+            )
         if width % 16 != 0 or height % 16 != 0:
-            raise ValueError(f"Dimensions must be multiples of 16, got {width}x{height}")
+            raise ValueError(
+                f"Dimensions must be multiples of 16, got {width}x{height}"
+            )
 
         # Memory estimate: latent 16×H/8×W/8×2 bytes + transformer activations
         est_bytes = width * height * 2 * 16  # conservative estimate
         try:
             import mlx.core as mx
+
             active = mx.get_active_memory()
             total_uma = 0
             import subprocess
+
             r = subprocess.run(
                 ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True
             )
@@ -1689,11 +1856,14 @@ class ImageGenEngine(ActiveRequestMixin):
             # Clean up GPU memory before re-raising
             gc.collect()
             from .mlx_executor import sync_and_clear_cache
+
             await loop.run_in_executor(self._executor, sync_and_clear_cache)
             raise MemoryError(f"GPU OOM during image generation: {e}") from e
 
         elapsed = time.monotonic() - t0
-        logger.info(f"Image gen: {elapsed:.2f}s, {len(png_bytes)} bytes, prompt='{prompt[:50]}...'")
+        logger.info(
+            f"Image gen: {elapsed:.2f}s, {len(png_bytes)} bytes, prompt='{prompt[:50]}...'"
+        )
         return png_bytes
 
     @tracks_active
@@ -1791,7 +1961,11 @@ class ImageGenEngine(ActiveRequestMixin):
         # thread can poll (asyncio.Event.is_set() is not safe off the loop), like the
         # streaming path does.
         _cancel = threading.Event()
-        if cancel_event is not None and getattr(cancel_event, "is_set", None) and cancel_event.is_set():
+        if (
+            cancel_event is not None
+            and getattr(cancel_event, "is_set", None)
+            and cancel_event.is_set()
+        ):
             _cancel.set()
 
         def _variation_sync() -> bytes:
@@ -1819,7 +1993,9 @@ class ImageGenEngine(ActiveRequestMixin):
 
         t0 = time.monotonic()
         loop = asyncio.get_running_loop()
-        _watcher = loop.create_task(_watch_cancel()) if cancel_event is not None else None
+        _watcher = (
+            loop.create_task(_watch_cancel()) if cancel_event is not None else None
+        )
         try:
             png_bytes = await loop.run_in_executor(self._executor, _variation_sync)
         finally:
@@ -1840,7 +2016,11 @@ class ImageGenEngine(ActiveRequestMixin):
         make_sync(cancel_flag) must return the 0-arg sync callable that threads cancel_flag
         into its denoise loop (which polls cancel_flag.is_set() per step)."""
         _cancel = threading.Event()
-        if cancel_event is not None and getattr(cancel_event, "is_set", None) and cancel_event.is_set():
+        if (
+            cancel_event is not None
+            and getattr(cancel_event, "is_set", None)
+            and cancel_event.is_set()
+        ):
             _cancel.set()
 
         async def _watch():
@@ -1863,9 +2043,16 @@ class ImageGenEngine(ActiveRequestMixin):
 
     @tracks_active
     async def generate_controlled_image(
-        self, prompt: str, control_image: bytes, *, control_scale: float = 0.8,
-        width: int = 1024, height: int = 1024, num_inference_steps: int = 8,
-        seed: int | None = None, controlnet_path: str | None = None,
+        self,
+        prompt: str,
+        control_image: bytes,
+        *,
+        control_scale: float = 0.8,
+        width: int = 1024,
+        height: int = 1024,
+        num_inference_steps: int = 8,
+        seed: int | None = None,
+        controlnet_path: str | None = None,
         cancel_event=None,
     ) -> bytes:
         """Generate an image whose structure follows `control_image` (a canny/depth/
@@ -1879,13 +2066,22 @@ class ImageGenEngine(ActiveRequestMixin):
                 cn = self._get_zimage_controlnet(controlnet_path)
                 if cn is None:
                     raise RuntimeError("Z-Image ControlNet weights not found")
-                ctrl_tensor, _, _ = self._load_image_to_tensor(control_image, target_wh=(width, height))
+                ctrl_tensor, _, _ = self._load_image_to_tensor(
+                    control_image, target_wh=(width, height)
+                )
                 ctx = self._build_control_context(ctrl_tensor)
                 return self._run_pipeline(
-                    prompt, width, height, num_inference_steps,
+                    prompt,
+                    width,
+                    height,
+                    num_inference_steps,
                     seed if seed is not None else 42,
-                    controlnet=cn, control_context=ctx, control_scale=control_scale,
-                    cancel_flag=cancel_flag)
+                    controlnet=cn,
+                    control_context=ctx,
+                    control_scale=control_scale,
+                    cancel_flag=cancel_flag,
+                )
+
             return _sync
 
         return await self._run_cancellable(_make, cancel_event)
@@ -1923,6 +2119,7 @@ class ImageGenEngine(ActiveRequestMixin):
             raise RuntimeError("Engine not started")
 
         import queue as _queue_mod
+
         _thread_queue: _queue_mod.Queue[dict | None] = _queue_mod.Queue(maxsize=64)
 
         # Thread-safe cancel flag for the executor thread.
@@ -1968,7 +2165,11 @@ class ImageGenEngine(ActiveRequestMixin):
                 for t in range(num_inference_steps):
                     # Check cancel before each expensive diffusion step (thread-safe)
                     if _cancel.is_set():
-                        logger.info("Image stream cancelled at step %d/%d", t + 1, num_inference_steps)
+                        logger.info(
+                            "Image stream cancelled at step %d/%d",
+                            t + 1,
+                            num_inference_steps,
+                        )
                         with contextlib.suppress(_queue_mod.Full):
                             _thread_queue.put_nowait(None)
                         return
@@ -1976,7 +2177,10 @@ class ImageGenEngine(ActiveRequestMixin):
                     sigma_t = sigmas[t].reshape((1,))
                     timestep = mx.ones_like(sigma_t) - sigma_t
                     noise_pred = self._transformer(
-                        x=latents, timestep=timestep, sigmas=sigmas, cap_feats=cap_feats,
+                        x=latents,
+                        timestep=timestep,
+                        sigmas=sigmas,
+                        cap_feats=cap_feats,
                     )
                     dt = sigmas[t + 1] - sigmas[t]
                     latents = latents + noise_pred * dt
@@ -1992,15 +2196,19 @@ class ImageGenEngine(ActiveRequestMixin):
                         preview_png = self._to_png(image)
 
                     try:
-                        _thread_queue.put_nowait({
-                            "step": step_num,
-                            "total_steps": num_inference_steps,
-                            "progress": progress,
-                            "image": preview_png,
-                            "is_final": False,
-                        })
+                        _thread_queue.put_nowait(
+                            {
+                                "step": step_num,
+                                "total_steps": num_inference_steps,
+                                "progress": progress,
+                                "image": preview_png,
+                                "is_final": False,
+                            }
+                        )
                     except _queue_mod.Full:
-                        logger.warning("Image stream queue full — dropping preview chunk")
+                        logger.warning(
+                            "Image stream queue full — dropping preview chunk"
+                        )
                         continue
 
                 # Final decode
@@ -2008,13 +2216,15 @@ class ImageGenEngine(ActiveRequestMixin):
                 mx.eval(image)
                 png = self._to_png(image)
                 with contextlib.suppress(_queue_mod.Full):
-                    _thread_queue.put_nowait({
-                        "step": num_inference_steps,
-                        "total_steps": num_inference_steps,
-                        "progress": 1.0,
-                        "image": png,
-                        "is_final": True,
-                    })
+                    _thread_queue.put_nowait(
+                        {
+                            "step": num_inference_steps,
+                            "total_steps": num_inference_steps,
+                            "progress": 1.0,
+                            "image": png,
+                            "is_final": True,
+                        }
+                    )
             except Exception as e:
                 logger.error(f"Image stream error: {e}", exc_info=True)
                 with contextlib.suppress(_queue_mod.Full):
@@ -2083,7 +2293,10 @@ class ImageGenEngine(ActiveRequestMixin):
 
         # Create block plan for the image
         block_plan = BlockPlan.create(
-            width, height, config.block_size, overlap=overlap,
+            width,
+            height,
+            config.block_size,
+            overlap=overlap,
         )
         logger.info(
             f"DFlash pipeline: {width}x{height} → {block_plan.num_blocks} blocks "
@@ -2133,7 +2346,9 @@ class ImageGenEngine(ActiveRequestMixin):
 
             coarse_latents[block_key] = block_latents
             dflash._l1_cache.put(block_key, block_latents)
-            logger.debug(f"DFlash block ({bx},{by}): coarse done ({config.coarse_steps} steps)")
+            logger.debug(
+                f"DFlash block ({bx},{by}): coarse done ({config.coarse_steps} steps)"
+            )
 
         # 5. Stage 2: Refinement using coarse latents as warm start
         # Use the coarse latent as the initial state and refine with full steps
@@ -2149,6 +2364,7 @@ class ImageGenEngine(ActiveRequestMixin):
         _tc = None
         if self._teacache_config is not None:
             from .teacache import TeaCacheHook
+
             _tc = TeaCacheHook(self._teacache_config)
         try:
             # Refinement denoising loop with full steps
@@ -2158,7 +2374,11 @@ class ImageGenEngine(ActiveRequestMixin):
 
                 if _tc is not None:
                     noise_pred = _tc.forward(
-                        self._transformer, latents, timestep, sigmas_refine, cap_feats,
+                        self._transformer,
+                        latents,
+                        timestep,
+                        sigmas_refine,
+                        cap_feats,
                     )
                 else:
                     noise_pred = self._transformer(
@@ -2171,13 +2391,15 @@ class ImageGenEngine(ActiveRequestMixin):
                 dt = sigmas_refine[t + 1] - sigmas_refine[t]
                 latents = latents + noise_pred * dt
                 mx.eval(latents)
-                logger.debug(f"DFlash refine step {t+1}/{config.refine_steps}")
+                logger.debug(f"DFlash refine step {t + 1}/{config.refine_steps}")
 
             if _tc is not None:
                 tc_stats = _tc.get_stats()
-                logger.info(f"TeaCache: {tc_stats['cache_hits']} hits, "
-                            f"{tc_stats['cache_misses']} misses, "
-                            f"hit_rate={tc_stats['hit_rate']:.1%}")
+                logger.info(
+                    f"TeaCache: {tc_stats['cache_hits']} hits, "
+                    f"{tc_stats['cache_misses']} misses, "
+                    f"hit_rate={tc_stats['hit_rate']:.1%}"
+                )
         finally:
             _tc = None
 
@@ -2192,8 +2414,7 @@ class ImageGenEngine(ActiveRequestMixin):
         dflash._stats["total_generations"] += 1
         dflash._stats["total_blocks_processed"] += block_plan.num_blocks
         dflash._stats["l1_cache_saved_steps"] += sum(
-            1 for k in coarse_latents
-            if dflash._l1_cache.get(f"_saved_{k}") is not None
+            1 for k in coarse_latents if dflash._l1_cache.get(f"_saved_{k}") is not None
         )
 
         logger.info(
@@ -2219,6 +2440,7 @@ class ImageGenEngine(ActiveRequestMixin):
         """
         if self._diffusion_scheduler_type is not None:
             from .diffusion_infra import DiffusionScheduler
+
             scheduler = DiffusionScheduler(
                 num_inference_steps=num_steps,
                 scheduler_type=self._diffusion_scheduler_type,
@@ -2264,10 +2486,18 @@ class ImageGenEngine(ActiveRequestMixin):
         has_w = any(abs(w - 1.0) > 1e-3 for _, w in parsed)
         formatted = tok.apply_chat_template(
             [{"role": "user", "content": clean}],
-            tokenize=False, add_generation_prompt=True, enable_thinking=True,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=True,
         )
-        enc = tok([formatted], padding="max_length", max_length=512, truncation=True,
-                  return_tensors="np", return_offsets_mapping=has_w)
+        enc = tok(
+            [formatted],
+            padding="max_length",
+            max_length=512,
+            truncation=True,
+            return_tensors="np",
+            return_offsets_mapping=has_w,
+        )
         input_ids = mx.array(enc["input_ids"])
         attention_mask = mx.array(enc["attention_mask"])
         cap_feats = self._text_encoder(input_ids, attention_mask)
@@ -2283,9 +2513,18 @@ class ImageGenEngine(ActiveRequestMixin):
         mx.eval(cap_feats)
         return cap_feats
 
-    def _run_pipeline(self, prompt, width, height, num_steps, seed,
-                      controlnet=None, control_context=None, control_scale=1.0,
-                      cancel_flag=None) -> bytes:
+    def _run_pipeline(
+        self,
+        prompt,
+        width,
+        height,
+        num_steps,
+        seed,
+        controlnet=None,
+        control_context=None,
+        control_scale=1.0,
+        cancel_flag=None,
+    ) -> bytes:
         """Run the full diffusion pipeline synchronously."""
         # 1+2. Tokenize + text-encode (with (word:weight) emphasis support)
         cap_feats = self._encode_prompt(prompt)
@@ -2320,6 +2559,7 @@ class ImageGenEngine(ActiveRequestMixin):
         _tc = None
         if self._teacache_config is not None:
             from .teacache import TeaCacheHook
+
             _tc = TeaCacheHook(self._teacache_config)
         try:
             # 5b. LoRA offloader: load adapters needed for step 0
@@ -2334,7 +2574,11 @@ class ImageGenEngine(ActiveRequestMixin):
 
                 if _tc is not None and controlnet is None:
                     noise_pred = _tc.forward(
-                        self._transformer, latents, timestep, sigmas, cap_feats,
+                        self._transformer,
+                        latents,
+                        timestep,
+                        sigmas,
+                        cap_feats,
                     )
                 else:
                     noise_pred = self._transformer(
@@ -2351,7 +2595,7 @@ class ImageGenEngine(ActiveRequestMixin):
                 dt = sigmas[t + 1] - sigmas[t]
                 latents = latents + noise_pred * dt
                 mx.eval(latents)
-                logger.debug(f"Step {t+1}/{num_steps}: sigma={float(sigmas[t]):.4f}")
+                logger.debug(f"Step {t + 1}/{num_steps}: sigma={float(sigmas[t]):.4f}")
 
                 # LoRA offloader: swap adapters for next step
                 if self._lora_offloader is not None:
@@ -2362,14 +2606,19 @@ class ImageGenEngine(ActiveRequestMixin):
                 # Distributed coordinator: record sync checkpoint at interval boundaries
                 if self._diffusion_coordinator is not None:
                     self._diffusion_coordinator.sync_latents(
-                        source_node=0, target_node=0, step=t, latent_data=latents,
+                        source_node=0,
+                        target_node=0,
+                        step=t,
+                        latent_data=latents,
                     )
 
             if _tc is not None:
                 tc_stats = _tc.get_stats()
-                logger.info(f"TeaCache: {tc_stats['cache_hits']} hits, "
-                            f"{tc_stats['cache_misses']} misses, "
-                            f"hit_rate={tc_stats['hit_rate']:.1%}")
+                logger.info(
+                    f"TeaCache: {tc_stats['cache_hits']} hits, "
+                    f"{tc_stats['cache_misses']} misses, "
+                    f"hit_rate={tc_stats['hit_rate']:.1%}"
+                )
         finally:
             _tc = None
 
@@ -2377,7 +2626,9 @@ class ImageGenEngine(ActiveRequestMixin):
         if self._lora_offloader is not None:
             unloaded = self._lora_offloader.unload_all()
             if unloaded:
-                logger.info(f"LoRA offloader: unloaded {len(unloaded)} adapters after denoising")
+                logger.info(
+                    f"LoRA offloader: unloaded {len(unloaded)} adapters after denoising"
+                )
 
         # Distributed coordinator progress report
         if self._diffusion_coordinator is not None:
@@ -2398,8 +2649,9 @@ class ImageGenEngine(ActiveRequestMixin):
         # 7. Convert to PNG
         return self._to_png(image)
 
-    def _load_image_to_tensor(self, image_data: bytes,
-                              target_wh: tuple[int, int] | None = None) -> tuple[mx.array, int, int]:
+    def _load_image_to_tensor(
+        self, image_data: bytes, target_wh: tuple[int, int] | None = None
+    ) -> tuple[mx.array, int, int]:
         """Load image bytes → (1, 3, H, W) float tensor in [-1, 1].
 
         Accepts PNG or JPEG bytes. `target_wh=(w,h)` resizes (e.g. a ControlNet map
@@ -2407,6 +2659,7 @@ class ImageGenEngine(ActiveRequestMixin):
         noise patches and the control hints land on the wrong positions).
         """
         from PIL import Image as PILImage
+
         pil = PILImage.open(io.BytesIO(image_data)).convert("RGB")
         if target_wh is not None and pil.size != tuple(target_wh):
             pil = pil.resize(tuple(target_wh), PILImage.BICUBIC)
@@ -2450,8 +2703,11 @@ class ImageGenEngine(ActiveRequestMixin):
         # Resize to target dimensions if needed
         if img_h != height or img_w != width:
             from PIL import Image as PILImage
-            pil = PILImage.open(io.BytesIO(image_data)).convert("RGB").resize(
-                (width, height), PILImage.LANCZOS
+
+            pil = (
+                PILImage.open(io.BytesIO(image_data))
+                .convert("RGB")
+                .resize((width, height), PILImage.LANCZOS)
             )
             arr = np.array(pil, dtype=np.float32) / 255.0
             arr = (arr - 0.5) / 0.5
@@ -2512,7 +2768,9 @@ class ImageGenEngine(ActiveRequestMixin):
             # Blend source latents with noise at the starting timestep's sigma
             sigma_start = sigmas[start_step]
             # Flow-matching interpolation: latents = (1 - sigma) * source + sigma * noise
-            latents = (1.0 - sigma_start) * source_latents_4d.astype(mx.float16) + sigma_start * noise
+            latents = (1.0 - sigma_start) * source_latents_4d.astype(
+                mx.float16
+            ) + sigma_start * noise
 
         mx.eval(latents)
 
@@ -2521,6 +2779,7 @@ class ImageGenEngine(ActiveRequestMixin):
         _tc = None
         if self._teacache_config is not None:
             from .teacache import TeaCacheHook
+
             _tc = TeaCacheHook(self._teacache_config)
         try:
             for t in range(start_step, num_steps):
@@ -2534,7 +2793,11 @@ class ImageGenEngine(ActiveRequestMixin):
 
                 if _tc is not None:
                     noise_pred = _tc.forward(
-                        self._transformer, latents, timestep, sigmas, cap_feats,
+                        self._transformer,
+                        latents,
+                        timestep,
+                        sigmas,
+                        cap_feats,
                     )
                 else:
                     noise_pred = self._transformer(
@@ -2548,7 +2811,9 @@ class ImageGenEngine(ActiveRequestMixin):
                 dt = sigmas[t + 1] - sigmas[t]
                 latents = latents + noise_pred * dt
                 mx.eval(latents)
-                logger.debug(f"img2img step {t + 1}/{num_steps}: sigma={float(sigmas[t]):.4f}")
+                logger.debug(
+                    f"img2img step {t + 1}/{num_steps}: sigma={float(sigmas[t]):.4f}"
+                )
         finally:
             _tc = None
 
@@ -2599,8 +2864,11 @@ class ImageGenEngine(ActiveRequestMixin):
         # Resize to target dimensions if needed
         if img_h != height or img_w != width:
             from PIL import Image as PILImage
-            pil = PILImage.open(io.BytesIO(image_data)).convert("RGB").resize(
-                (width, height), PILImage.LANCZOS
+
+            pil = (
+                PILImage.open(io.BytesIO(image_data))
+                .convert("RGB")
+                .resize((width, height), PILImage.LANCZOS)
             )
             arr = np.array(pil, dtype=np.float32) / 255.0
             arr = (arr - 0.5) / 0.5
@@ -2690,6 +2958,7 @@ class ImageGenEngine(ActiveRequestMixin):
         _tc = None
         if self._teacache_config is not None:
             from .teacache import TeaCacheHook
+
             _tc = TeaCacheHook(self._teacache_config)
         try:
             for t in range(start_step, num_steps):
@@ -2700,7 +2969,11 @@ class ImageGenEngine(ActiveRequestMixin):
 
                 if _tc is not None:
                     noise_pred = _tc.forward(
-                        self._transformer, latents, timestep, sigmas, cap_feats,
+                        self._transformer,
+                        latents,
+                        timestep,
+                        sigmas,
+                        cap_feats,
                     )
                 else:
                     noise_pred = self._transformer(
@@ -2723,15 +2996,19 @@ class ImageGenEngine(ActiveRequestMixin):
                 # early high-sigma steps). At the final step sigma_{t+1}=0 so the kept region
                 # ends fully clean, matching the source exactly.
                 sigma_next = sigmas[t + 1]
-                known_at_sigma = (1 - sigma_next) * known_latents_4d + sigma_next * noise
+                known_at_sigma = (
+                    1 - sigma_next
+                ) * known_latents_4d + sigma_next * noise
                 latents = (1 - mask_4d) * known_at_sigma + mask_4d * denoised
                 mx.eval(latents)
 
             if _tc is not None:
                 tc_stats = _tc.get_stats()
-                logger.info(f"TeaCache (inpaint): {tc_stats['cache_hits']} hits, "
-                            f"{tc_stats['cache_misses']} misses, "
-                            f"hit_rate={tc_stats['hit_rate']:.1%}")
+                logger.info(
+                    f"TeaCache (inpaint): {tc_stats['cache_hits']} hits, "
+                    f"{tc_stats['cache_misses']} misses, "
+                    f"hit_rate={tc_stats['hit_rate']:.1%}"
+                )
         finally:
             _tc = None
 
@@ -2756,7 +3033,9 @@ class ImageGenEngine(ActiveRequestMixin):
         return self._to_png(image)
 
     @staticmethod
-    def _composite_inpaint(generated: mx.array, source: mx.array, mask_px: mx.array) -> mx.array:
+    def _composite_inpaint(
+        generated: mx.array, source: mx.array, mask_px: mx.array
+    ) -> mx.array:
         """Paste-back composite for inpaint.
 
         mask_px (1,1,H,W): 1.0 = inpainted (use generated), 0.0 = kept (use source).
@@ -2773,6 +3052,7 @@ class ImageGenEngine(ActiveRequestMixin):
         Black pixels → 0.0 (preserved region)
         """
         from PIL import Image as PILImage
+
         pil = PILImage.open(io.BytesIO(mask_data))
         # An RGBA / LA / palette-with-transparency mask carries transparency that the
         # old .convert("L") DROPPED — it used only the RGB luma, so a transparent region whose
@@ -2783,7 +3063,9 @@ class ImageGenEngine(ActiveRequestMixin):
         # opaque mask (alpha=255) is unchanged — alpha_composite over black is the identity.
         # (Verified: a transparent region with white RGB underneath flips from inpaint→keep;
         # the common black-RGB-transparent and fully-opaque masks are byte-identical to before.)
-        if pil.mode in ("RGBA", "LA", "PA") or (pil.mode == "P" and "transparency" in pil.info):
+        if pil.mode in ("RGBA", "LA", "PA") or (
+            pil.mode == "P" and "transparency" in pil.info
+        ):
             rgba = pil.convert("RGBA")
             bg = PILImage.new("RGBA", rgba.size, (0, 0, 0, 255))
             pil = PILImage.alpha_composite(bg, rgba)
@@ -2841,6 +3123,7 @@ class ImageGenEngine(ActiveRequestMixin):
                     denoise_strength=denoise_strength,
                     cancel_flag=cancel_flag,
                 )
+
             return _inpaint_sync
 
         t0 = time.monotonic()
@@ -2956,7 +3239,10 @@ class ImageGenEngine(ActiveRequestMixin):
             # overwrote `latents` before the Euler step, causing the
             # conditioning signal to be double-counted.
             conditioned_input = cn_block.inject_condition(
-                latents, condition_latents, t, num_steps,
+                latents,
+                condition_latents,
+                t,
+                num_steps,
             )
 
             noise_pred = self._transformer(
@@ -3029,12 +3315,15 @@ class ImageGenEngine(ActiveRequestMixin):
                     canny_high=canny_high,
                     cancel_flag=cancel_flag,
                 )
+
             return _controlled_sync
 
         t0 = time.monotonic()
         png_bytes = await self._run_cancellable(_make, cancel_event)
         elapsed = time.monotonic() - t0
-        logger.info(f"ControlNet gen: {elapsed:.2f}s, type={condition_type}, prompt='{prompt[:50]}...'")
+        logger.info(
+            f"ControlNet gen: {elapsed:.2f}s, type={condition_type}, prompt='{prompt[:50]}...'"
+        )
         return png_bytes
 
     def _run_depth_guided_pipeline(
@@ -3174,6 +3463,7 @@ class ImageGenEngine(ActiveRequestMixin):
                     depth_strength=depth_strength,
                     cancel_flag=cancel_flag,
                 )
+
             return _depth_sync
 
         t0 = time.monotonic()
@@ -3182,7 +3472,9 @@ class ImageGenEngine(ActiveRequestMixin):
         logger.info(f"Depth-guided gen: {elapsed:.2f}s, prompt='{prompt[:50]}...'")
         return png_bytes
 
-    def load_lora_adapter(self, adapter_path: str, rank: int = 8, scale: float = 20.0) -> bool:
+    def load_lora_adapter(
+        self, adapter_path: str, rank: int = 8, scale: float = 20.0
+    ) -> bool:
         """Load a LoRA adapter into the image transformer.
 
         The adapter's config should specify which layers to apply LoRA to.
@@ -3195,6 +3487,7 @@ class ImageGenEngine(ActiveRequestMixin):
         # LoRA (lora_down/lora_up/alpha on diffusion_model.layers.*), NOT the
         # mlx_lm.tuner directory format. Use the diffusion loader for it.
         import os as _os
+
         if _os.path.isfile(adapter_path) and adapter_path.endswith(".safetensors"):
             return self.load_diffusion_lora(adapter_path, strength=1.0)
         if not self._lora_lock.acquire(timeout=30):
@@ -3206,7 +3499,9 @@ class ImageGenEngine(ActiveRequestMixin):
         finally:
             self._lora_lock.release()
 
-    def _load_lora_adapter_locked(self, adapter_path: str, rank: int = 8, scale: float = 20.0) -> bool:
+    def _load_lora_adapter_locked(
+        self, adapter_path: str, rank: int = 8, scale: float = 20.0
+    ) -> bool:
         """Internal: load LoRA with lock already held."""
         import json
         from pathlib import Path
@@ -3254,9 +3549,17 @@ class ImageGenEngine(ActiveRequestMixin):
                 # encoder), so a PEFT-format image LoRA directory loaded as a
                 # silent 0-layer no-op that still returned success. Include both
                 # naming conventions so transformer- and DiT-style models both hit.
-                if any(k in name for k in (
-                    "q_proj", "v_proj", "qkv", "to_q", "to_v", "to_out",
-                )):
+                if any(
+                    k in name
+                    for k in (
+                        "q_proj",
+                        "v_proj",
+                        "qkv",
+                        "to_q",
+                        "to_v",
+                        "to_out",
+                    )
+                ):
                     self._original_modules[name] = module
                     # Derive dims from the weight and wrap the EXISTING module via
                     # from_base. MLX's nn.Linear has NO PyTorch-style in_features/
@@ -3305,7 +3608,11 @@ class ImageGenEngine(ActiveRequestMixin):
 
             # Register with LoRA offloader if active
             if self._lora_offloader is not None:
-                adapter_id = adapter_path.rsplit("/", 1)[-1] if "/" in adapter_path else adapter_path
+                adapter_id = (
+                    adapter_path.rsplit("/", 1)[-1]
+                    if "/" in adapter_path
+                    else adapter_path
+                )
                 # Estimate memory: rank * (in + out) * 4 bytes per layer
                 est_bytes = applied * _rank * (256 + 256) * 4  # rough estimate
                 self._lora_offloader.register_adapter(
@@ -3358,7 +3665,9 @@ class ImageGenEngine(ActiveRequestMixin):
                 try:
                     self._lora_offloader.unload_all()
                 except Exception:
-                    logger.debug("LoRA offloader cleanup during unload failed", exc_info=True)
+                    logger.debug(
+                        "LoRA offloader cleanup during unload failed", exc_info=True
+                    )
             logger.info("LoRA adapter unloaded, original modules restored")
             return True
         except Exception as e:
@@ -3405,18 +3714,25 @@ class ImageGenEngine(ActiveRequestMixin):
         """Lazy-load the Z-Image ControlNet (cached). `path` defaults to the
         Fun-Controlnet-Union .safetensors in models/."""
         import os
+
         cn = getattr(self, "_zimage_controlnet", None)
         if cn is not None:
             return cn
         if path is None:
-            cands = [p for p in os.listdir("models")
-                     if p.endswith(".safetensors") and "controlnet" in p.lower()]
+            cands = [
+                p
+                for p in os.listdir("models")
+                if p.endswith(".safetensors") and "controlnet" in p.lower()
+            ]
             if not cands:
                 return None
             path = os.path.join("models", cands[0])
         from .zimage_controlnet import load_zimage_controlnet
+
         cn, n_loaded, n_total = load_zimage_controlnet(path, dim=self._transformer.dim)
-        logger.info("Z-Image ControlNet loaded: %d/%d weights from %s", n_loaded, n_total, path)
+        logger.info(
+            "Z-Image ControlNet loaded: %d/%d weights from %s", n_loaded, n_total, path
+        )
         self._zimage_controlnet = cn
         return cn
 
@@ -3450,8 +3766,9 @@ class ImageGenEngine(ActiveRequestMixin):
                 logger.info("Inline LoRA applied: %s @ %.2f", name, weight)
         return applied
 
-    def load_diffusion_lora(self, lora_path: str, strength: float = 1.0,
-                            stack: bool = False) -> bool:
+    def load_diffusion_lora(
+        self, lora_path: str, strength: float = 1.0, stack: bool = False
+    ) -> bool:
         """Load a ComfyUI/diffusion-format LoRA (.safetensors with lora_down/lora_up/
         alpha keys) by WRAPPING each target Linear with a LoRA branch. Works on the
         4-bit quantized Z-Image transformer. `strength` scales the whole adapter.
@@ -3485,29 +3802,37 @@ class ImageGenEngine(ActiveRequestMixin):
         weakening every image LoRA — the product's primary feature.
         """
         if k.startswith("diffusion_model."):
-            k = k[len("diffusion_model."):]
-        return (
-            k.replace("adaLN_modulation.0", "adaLN_modulation")
-             .replace("attention.to_out.0", "attention.to_out")
+            k = k[len("diffusion_model.") :]
+        return k.replace("adaLN_modulation.0", "adaLN_modulation").replace(
+            "attention.to_out.0", "attention.to_out"
         )
 
-    def _load_diffusion_lora_locked(self, lora_path: str, strength: float = 1.0,
-                                    stack: bool = False) -> bool:
+    def _load_diffusion_lora_locked(
+        self, lora_path: str, strength: float = 1.0, stack: bool = False
+    ) -> bool:
         existing = getattr(self, "_diff_lora_restore", None) or []
         if existing and not stack:
             logger.error("Diffusion LoRA already loaded — unload first")
             return False
         try:
             restore, applied, skipped = _df_load_diffusion_lora(
-                lora_path, resolve_module=self._resolve_lora_module,
-                key_remap=self._zimage_lora_key_remap, strength=strength)
+                lora_path,
+                resolve_module=self._resolve_lora_module,
+                key_remap=self._zimage_lora_key_remap,
+                strength=strength,
+            )
             if applied == 0:
                 logger.error("Diffusion LoRA: 0 layers matched (format/model mismatch)")
                 return False
             self._diff_lora_restore = existing + restore  # stack onto any existing
             mx.eval(self._transformer.parameters())
-            logger.info("Diffusion LoRA loaded: %d applied, %d skipped (strength=%.2f, stack=%s)",
-                        applied, skipped, strength, stack)
+            logger.info(
+                "Diffusion LoRA loaded: %d applied, %d skipped (strength=%.2f, stack=%s)",
+                applied,
+                skipped,
+                strength,
+                stack,
+            )
             return True
         except Exception as e:
             logger.error("Failed to load diffusion LoRA: %s", e, exc_info=True)

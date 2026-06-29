@@ -4,6 +4,7 @@ Only the idempotency / flag semantics of apply_mtp_patch() are exercised
 here — the heavy load_model_with_mtp() path needs real Qwen3.5 weights
 and is verified by integration tests.
 """
+
 from __future__ import annotations
 
 import pytest

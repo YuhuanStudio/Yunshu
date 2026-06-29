@@ -1,4 +1,5 @@
 """Tests for SSDSQLiteStore — crash-consistent SQLite metadata for SSD KV cache."""
+
 import json
 import os
 import sqlite3
@@ -387,6 +388,7 @@ class TestSSDKVCacheBackendSelection:
         """Without YUNSHU_SSD_BACKEND, sqlite is default."""
         os.environ.pop("YUNSHU_SSD_BACKEND", None)
         from yunshu_engine.ssd_kv_cache import SSDKVCache
+
         cache = SSDKVCache(cache_dir=str(tmp_path / "kv"), backend="sqlite")
         assert cache._backend == "sqlite"
         assert cache._sqlite_store is not None
@@ -395,6 +397,7 @@ class TestSSDKVCacheBackendSelection:
     def test_json_backend(self, tmp_path):
         """backend='json' skips SQLite store."""
         from yunshu_engine.ssd_kv_cache import SSDKVCache
+
         cache = SSDKVCache(cache_dir=str(tmp_path / "kv-json"), backend="json")
         assert cache._backend == "json"
         assert cache._sqlite_store is None
@@ -403,6 +406,7 @@ class TestSSDKVCacheBackendSelection:
     def test_env_var_backend(self, tmp_path):
         """YUNSHU_SSD_BACKEND env var is respected."""
         from yunshu_engine.ssd_kv_cache import SSDKVCache
+
         os.environ["YUNSHU_SSD_BACKEND"] = "json"
         try:
             cache = SSDKVCache(cache_dir=str(tmp_path / "kv-env"))

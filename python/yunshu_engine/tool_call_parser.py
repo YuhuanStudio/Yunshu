@@ -35,12 +35,10 @@ class ToolCall:
 
 class ToolCallParser(ABC):
     @abstractmethod
-    def parse(self, text: str) -> list[ToolCall]:
-        ...
+    def parse(self, text: str) -> list[ToolCall]: ...
 
     @abstractmethod
-    def format_name(self) -> str:
-        ...
+    def format_name(self) -> str: ...
 
 
 def _sanitize_arguments(args) -> str:
@@ -55,7 +53,7 @@ def _extract_brace_block(text: str, start: int) -> str | None:
     Handles braces inside JSON strings correctly.
     Returns the matched substring or None if unmatched.
     """
-    if start >= len(text) or text[start] != '{':
+    if start >= len(text) or text[start] != "{":
         return None
     depth = 0
     in_string = False
@@ -65,7 +63,7 @@ def _extract_brace_block(text: str, start: int) -> str | None:
         if escape_next:
             escape_next = False
             continue
-        if ch == '\\' and in_string:
+        if ch == "\\" and in_string:
             escape_next = True
             continue
         if ch == '"':
@@ -73,16 +71,17 @@ def _extract_brace_block(text: str, start: int) -> str | None:
             continue
         if in_string:
             continue
-        if ch == '{':
+        if ch == "{":
             depth += 1
-        elif ch == '}':
+        elif ch == "}":
             depth -= 1
             if depth == 0:
-                return text[start:i + 1]
+                return text[start : i + 1]
     return None
 
 
 # ── Format 1: Hermes <tool_call/> ──
+
 
 class HermesToolCallParser(ToolCallParser):
     _RE = re.compile(r"<tool_call\s*/?\s*>(.*?)</tool_call\s*/?\s*>", re.DOTALL)
@@ -93,10 +92,14 @@ class HermesToolCallParser(ToolCallParser):
             try:
                 data = json.loads(m.group(1).strip())
                 if "name" in data:
-                    calls.append(ToolCall(
-                        name=data["name"],
-                        arguments=_sanitize_arguments(data.get("arguments") or data.get("parameters") or {}),
-                    ))
+                    calls.append(
+                        ToolCall(
+                            name=data["name"],
+                            arguments=_sanitize_arguments(
+                                data.get("arguments") or data.get("parameters") or {}
+                            ),
+                        )
+                    )
             except json.JSONDecodeError:
                 continue
         return calls
@@ -106,6 +109,7 @@ class HermesToolCallParser(ToolCallParser):
 
 
 # ── Format 2: Qwen/Llama XML <function=name> ──
+
 
 class QwenXMLToolCallParser(ToolCallParser):
     _FUNC_RE = re.compile(r"<function\s*=\s*([\w.\-]+)>(.*?)</function>", re.DOTALL)
@@ -124,7 +128,11 @@ class QwenXMLToolCallParser(ToolCallParser):
                 for pm in self._PARAM_RE.finditer(body):
                     params[pm.group(1)] = pm.group(2).strip()
                 if params:
-                    calls.append(ToolCall(name=name, arguments=json.dumps(params, ensure_ascii=False)))
+                    calls.append(
+                        ToolCall(
+                            name=name, arguments=json.dumps(params, ensure_ascii=False)
+                        )
+                    )
         return calls
 
     def format_name(self) -> str:
@@ -132,6 +140,7 @@ class QwenXMLToolCallParser(ToolCallParser):
 
 
 # ── Format 3: Direct JSON ──
+
 
 class DirectJSONToolCallParser(ToolCallParser):
     """Parses bare JSON objects containing a 'name' key.
@@ -158,7 +167,7 @@ class DirectJSONToolCallParser(ToolCallParser):
             if escape_next:
                 escape_next = False
                 continue
-            if ch == '\\' and in_string:
+            if ch == "\\" and in_string:
                 escape_next = True
                 continue
             if ch == '"':
@@ -166,23 +175,27 @@ class DirectJSONToolCallParser(ToolCallParser):
                 continue
             if in_string:
                 continue
-            if ch == '{':
+            if ch == "{":
                 if depth == 0:
                     start = i
                 depth += 1
-            elif ch == '}':
+            elif ch == "}":
                 depth -= 1
                 if depth == 0 and start >= 0:
-                    candidate = text[start:i + 1]
+                    candidate = text[start : i + 1]
                     try:
                         data = json.loads(candidate)
                         if isinstance(data, dict) and "name" in data:
-                            calls.append(ToolCall(
-                                name=data["name"],
-                                arguments=_sanitize_arguments(
-                                    data.get("arguments") or data.get("parameters") or {}
-                                ),
-                            ))
+                            calls.append(
+                                ToolCall(
+                                    name=data["name"],
+                                    arguments=_sanitize_arguments(
+                                        data.get("arguments")
+                                        or data.get("parameters")
+                                        or {}
+                                    ),
+                                )
+                            )
                     except json.JSONDecodeError:
                         pass
                     start = -1
@@ -193,6 +206,7 @@ class DirectJSONToolCallParser(ToolCallParser):
 
 
 # ── Format 5: Mistral ──
+
 
 class MistralToolCallParser(ToolCallParser):
     def parse(self, text: str) -> list[ToolCall]:
@@ -205,7 +219,7 @@ class MistralToolCallParser(ToolCallParser):
             if escape_next:
                 escape_next = False
                 continue
-            if ch == '\\' and in_string:
+            if ch == "\\" and in_string:
                 escape_next = True
                 continue
             if ch == '"':
@@ -213,25 +227,31 @@ class MistralToolCallParser(ToolCallParser):
                 continue
             if in_string:
                 continue
-            if ch == '{':
+            if ch == "{":
                 if depth == 0:
                     start = i
                 depth += 1
-            elif ch == '}':
+            elif ch == "}":
                 depth -= 1
                 if depth == 0 and start >= 0:
                     try:
-                        data = json.loads(text[start:i + 1])
+                        data = json.loads(text[start : i + 1])
                         func = data.get("function", {})
                         name = func.get("name", "") if isinstance(func, dict) else ""
-                        if not name and "name" in data and isinstance(data.get("name"), str):
+                        if (
+                            not name
+                            and "name" in data
+                            and isinstance(data.get("name"), str)
+                        ):
                             name = data["name"]
                             func = data
                         if name:
                             args = func.get("arguments", {})
                             if isinstance(args, str):
                                 args = json.loads(args)
-                            calls.append(ToolCall(name=name, arguments=_sanitize_arguments(args)))
+                            calls.append(
+                                ToolCall(name=name, arguments=_sanitize_arguments(args))
+                            )
                     except (json.JSONDecodeError, KeyError):
                         pass
                     start = -1
@@ -243,6 +263,7 @@ class MistralToolCallParser(ToolCallParser):
 
 # ── Format 6: ChatML [TOOL_CALLS] ──
 
+
 class ChatMLToolCallParser(ToolCallParser):
     """Parses Mistral-style ``[TOOL_CALLS] [...]`` blocks.
 
@@ -251,12 +272,12 @@ class ChatMLToolCallParser(ToolCallParser):
     captured correctly.
     """
 
-    _PREFIX_RE = re.compile(r'\[TOOL_CALLS\]\s*', re.DOTALL)
+    _PREFIX_RE = re.compile(r"\[TOOL_CALLS\]\s*", re.DOTALL)
 
     def parse(self, text: str) -> list[ToolCall]:
         calls = []
         for m in self._PREFIX_RE.finditer(text):
-            rest = text[m.end():]
+            rest = text[m.end() :]
             # Extract the JSON array using bracket counting
             arr_text = self._extract_array(rest)
             if arr_text is None:
@@ -267,12 +288,22 @@ class ChatMLToolCallParser(ToolCallParser):
                     continue
                 for item in arr:
                     if isinstance(item, dict):
-                        name = item.get("name") or item.get("function", {}).get("name") or ""
-                        args = item.get("arguments") or item.get("function", {}).get("arguments") or {}
+                        name = (
+                            item.get("name")
+                            or item.get("function", {}).get("name")
+                            or ""
+                        )
+                        args = (
+                            item.get("arguments")
+                            or item.get("function", {}).get("arguments")
+                            or {}
+                        )
                         if name:
                             if isinstance(args, str):
                                 args = json.loads(args)
-                            calls.append(ToolCall(name=name, arguments=_sanitize_arguments(args)))
+                            calls.append(
+                                ToolCall(name=name, arguments=_sanitize_arguments(args))
+                            )
             except (json.JSONDecodeError, KeyError):
                 continue
         return calls
@@ -283,7 +314,7 @@ class ChatMLToolCallParser(ToolCallParser):
 
         Handles brackets inside JSON strings correctly by tracking quote state.
         """
-        if not text or text[0] != '[':
+        if not text or text[0] != "[":
             return None
         depth = 0
         in_string = False
@@ -292,7 +323,7 @@ class ChatMLToolCallParser(ToolCallParser):
             if escape_next:
                 escape_next = False
                 continue
-            if ch == '\\' and in_string:
+            if ch == "\\" and in_string:
                 escape_next = True
                 continue
             if ch == '"':
@@ -300,12 +331,12 @@ class ChatMLToolCallParser(ToolCallParser):
                 continue
             if in_string:
                 continue
-            if ch == '[':
+            if ch == "[":
                 depth += 1
-            elif ch == ']':
+            elif ch == "]":
                 depth -= 1
                 if depth == 0:
-                    return text[:i + 1]
+                    return text[: i + 1]
         return None
 
     def format_name(self) -> str:
@@ -313,6 +344,7 @@ class ChatMLToolCallParser(ToolCallParser):
 
 
 # ── Format 7: DeepSeek ✿FUNCTION✿ ──
+
 
 class DeepSeekToolCallParser(ToolCallParser):
     """Parses DeepSeek-style ✿FUNCTION✿ blocks.
@@ -333,7 +365,7 @@ class DeepSeekToolCallParser(ToolCallParser):
             start = text.find(self._PREFIX, idx)
             if start == -1:
                 break
-            brace_start = text.find('{', start + len(self._PREFIX))
+            brace_start = text.find("{", start + len(self._PREFIX))
             if brace_start == -1:
                 break
             candidate = _extract_brace_block(text, brace_start)
@@ -347,7 +379,9 @@ class DeepSeekToolCallParser(ToolCallParser):
                     args = data.get("arguments") or data.get("parameters") or {}
                     if isinstance(args, str):
                         args = json.loads(args)
-                    calls.append(ToolCall(name=name, arguments=_sanitize_arguments(args)))
+                    calls.append(
+                        ToolCall(name=name, arguments=_sanitize_arguments(args))
+                    )
             except (json.JSONDecodeError, KeyError):
                 pass
             idx = brace_start + len(candidate)
@@ -359,15 +393,16 @@ class DeepSeekToolCallParser(ToolCallParser):
 
 # ── Format 8: Anthropic native (already parsed) ──
 
+
 class AnthropicToolCallParser(ToolCallParser):
     """For Anthropic models that output tool_use blocks (already parsed by API)."""
 
     _RE = re.compile(
-        r'<tool_use\b[^>]*>(.*?)</tool_use>',
+        r"<tool_use\b[^>]*>(.*?)</tool_use>",
         re.DOTALL,
     )
-    _NAME_RE = re.compile(r'<name>(.*?)</name>', re.DOTALL)
-    _INPUT_RE = re.compile(r'<input>(.*?)</input>', re.DOTALL)
+    _NAME_RE = re.compile(r"<name>(.*?)</name>", re.DOTALL)
+    _INPUT_RE = re.compile(r"<input>(.*?)</input>", re.DOTALL)
 
     def parse(self, text: str) -> list[ToolCall]:
         calls = []
@@ -391,6 +426,7 @@ class AnthropicToolCallParser(ToolCallParser):
 
 # ── Format 9: Gemini FunctionCall ──
 
+
 class GeminiToolCallParser(ToolCallParser):
     """Parses Gemini-style functionCall JSON in response parts."""
 
@@ -402,7 +438,7 @@ class GeminiToolCallParser(ToolCallParser):
             pos = text.find(key, idx)
             if pos == -1:
                 break
-            brace_start = text.find('{', pos + len(key))
+            brace_start = text.find("{", pos + len(key))
             if brace_start == -1:
                 break
             # Use string-aware brace counting
@@ -415,7 +451,9 @@ class GeminiToolCallParser(ToolCallParser):
                 name = data.get("name", "")
                 if name:
                     args = data.get("args") or data.get("arguments") or {}
-                    calls.append(ToolCall(name=name, arguments=_sanitize_arguments(args)))
+                    calls.append(
+                        ToolCall(name=name, arguments=_sanitize_arguments(args))
+                    )
             except (json.JSONDecodeError, KeyError):
                 pass
             idx = brace_start + len(candidate)
@@ -439,6 +477,7 @@ class GLMToolCallParser(ToolCallParser):
 
     def parse(self, text: str) -> list[ToolCall]:
         from .tool_call_parsers import parse_glm_tool_calls
+
         return [
             ToolCall(name=r.name, arguments=_sanitize_arguments(r.arguments))
             for r in parse_glm_tool_calls(text)
@@ -516,10 +555,10 @@ def _remove_chatml_blocks(text: str) -> str:
         # Keep text before the block
         result.append(text[i:pos])
         # Find the JSON array after the prefix
-        rest = text[pos + len(prefix):]
+        rest = text[pos + len(prefix) :]
         stripped = rest.lstrip()
         skip = len(rest) - len(stripped)
-        if stripped and stripped[0] == '[':
+        if stripped and stripped[0] == "[":
             block = ChatMLToolCallParser._extract_array(stripped)
             if block is not None:
                 i = pos + len(prefix) + skip + len(block)
@@ -531,7 +570,9 @@ def _remove_chatml_blocks(text: str) -> str:
 
 def clean_tool_markup(text: str) -> str:
     """Remove tool call markup from text, leaving clean content."""
-    text = re.sub(r"<tool_call\s*/?\s*>.*?</tool_call\s*/?\s*>", "", text, flags=re.DOTALL)
+    text = re.sub(
+        r"<tool_call\s*/?\s*>.*?</tool_call\s*/?\s*>", "", text, flags=re.DOTALL
+    )
     text = re.sub(r"<function\s*=\s*[\w.\-]+>.*?</function>", "", text, flags=re.DOTALL)
     text = re.sub(r"<tool_use\b[^>]*>.*?</tool_use>", "", text, flags=re.DOTALL)
     text = _remove_chatml_blocks(text)

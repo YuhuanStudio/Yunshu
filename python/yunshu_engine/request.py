@@ -22,6 +22,7 @@ class RequestStatus(enum.IntEnum):
     WAITING -> PREFILLING -> RUNNING -> FINISHED_*
     PREFILLING is used during external prefill (chunked progress tracking).
     """
+
     WAITING = enum.auto()
     PREFILLING = enum.auto()
     RUNNING = enum.auto()
@@ -59,6 +60,7 @@ RequestStatus.finish_reason = staticmethod(_rs_finish_reason)
 @dataclass
 class SamplingParams:
     """Generation parameters — maps to mlx-lm's make_sampler."""
+
     max_tokens: int = 256
     temperature: float = 0.7
     top_p: float = 1.0
@@ -102,6 +104,7 @@ class RequestOutput:
 
     Supports both incremental (new_text) and cumulative (output_text) output.
     """
+
     request_id: str
     new_token_ids: list[int] = field(default_factory=list)
     new_text: str = ""
@@ -152,6 +155,7 @@ class Request:
     Tracks the full lifecycle: prompt tokenization → generation → output.
     Integrates with mlx-lm's BatchGenerator via batch_uid.
     """
+
     request_id: str
     prompt: str | list[int] | list[dict]
     sampling_params: SamplingParams = field(default_factory=SamplingParams)
@@ -184,10 +188,16 @@ class Request:
     enable_thinking: bool | None = None
 
     # VLM fields
-    rope_deltas: float = 0.0  # mRoPE position delta for multi-modal models (Qwen3 Omni, etc.)
-    vlm_inputs_embeds: Any | None = None  # Precomputed vision embeddings from VLM encoder
+    rope_deltas: float = (
+        0.0  # mRoPE position delta for multi-modal models (Qwen3 Omni, etc.)
+    )
+    vlm_inputs_embeds: Any | None = (
+        None  # Precomputed vision embeddings from VLM encoder
+    )
     vlm_extra_kwargs: dict | None = None  # Extra kwargs for VLM-specific generation
-    vlm_image_hash: str | None = None  # Content hash of input images for feature cache lookup
+    vlm_image_hash: str | None = (
+        None  # Content hash of input images for feature cache lookup
+    )
 
     # Prefix cache fields
     prompt_cache: Any = None
@@ -238,12 +248,14 @@ class Request:
 
     # Valid predecessor states for each finished state.
     # PREEMPTED/WAITING can also go to FINISHED_* (queue_full, timeout, abort).
-    _FINISH_VALID_PREDECESSORS = frozenset({
-        RequestStatus.WAITING,
-        RequestStatus.PREFILLING,
-        RequestStatus.RUNNING,
-        RequestStatus.PREEMPTED,
-    })
+    _FINISH_VALID_PREDECESSORS = frozenset(
+        {
+            RequestStatus.WAITING,
+            RequestStatus.PREFILLING,
+            RequestStatus.RUNNING,
+            RequestStatus.PREEMPTED,
+        }
+    )
 
     def set_finished(self, status: RequestStatus, reason: str | None = None) -> None:
         """Transition to a finished state with optional reason.
@@ -256,6 +268,7 @@ class Request:
         if RequestStatus.is_finished(self.status):
             # Already finished — first reason is authoritative; don't overwrite.
             import logging as _logging
+
             _logging.getLogger(__name__).debug(
                 f"Request {self.request_id}: ignoring re-finish "
                 f"({self.status.name} -> {status.name}), "
@@ -288,7 +301,7 @@ class Request:
         self.images = None
         self.videos = None
         self.detokenizer = None
-        if hasattr(self, '_spec_draft_cache'):
+        if hasattr(self, "_spec_draft_cache"):
             self._spec_draft_cache = None
         # Clear large lists that may hold many tokens
         self.prompt_token_ids = []

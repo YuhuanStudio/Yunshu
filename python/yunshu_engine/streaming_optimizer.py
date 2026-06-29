@@ -52,15 +52,17 @@ logger = logging.getLogger(__name__)
 
 class PipelineStage(enum.IntEnum):
     """Pipeline stages for token generation."""
+
     IDLE = 0
-    GPU_FORWARD = 1      # Stage 1: model forward → logits
-    GPU_SAMPLING = 2     # Stage 2: sampling → token
-    CPU_POST = 3         # Stage 3: detokenize + grammar + distribute
+    GPU_FORWARD = 1  # Stage 1: model forward → logits
+    GPU_SAMPLING = 2  # Stage 2: sampling → token
+    CPU_POST = 3  # Stage 3: detokenize + grammar + distribute
 
 
 @dataclass
 class PipelineToken:
     """A token moving through the pipeline."""
+
     token_id: int = -1
     text: str = ""
     logprobs: Any = None
@@ -115,6 +117,7 @@ class PipelineToken:
 @dataclass
 class PipelineConfig:
     """Configuration for TokenPipeline."""
+
     enable_overlap: bool = True
     async_eval: bool = True
     batch_detokenize: bool = True
@@ -494,7 +497,7 @@ class SamplingPlan:
 
         # Apply top_k filtering
         if self.top_k > 0:
-            top_k_indices = np.argpartition(scaled, -self.top_k)[-self.top_k:]
+            top_k_indices = np.argpartition(scaled, -self.top_k)[-self.top_k :]
             mask = np.full_like(scaled, -np.inf)
             mask[top_k_indices] = scaled[top_k_indices]
             scaled = mask
@@ -674,9 +677,7 @@ class PrefetchSampler:
             else 0.0
         )
         avg_apply = (
-            self._total_apply_ms / self._apply_count
-            if self._apply_count > 0
-            else 0.0
+            self._total_apply_ms / self._apply_count if self._apply_count > 0 else 0.0
         )
         return {
             "prepare_count": self._prepare_count,
@@ -704,6 +705,7 @@ class PrefetchSampler:
 @dataclass
 class _DetokEntry:
     """Internal queued entry for batched detokenization."""
+
     request_id: str
     token_ids: list[int] = field(default_factory=list)
 
@@ -764,7 +766,9 @@ class BatchedDetokenizer:
             if entry.request_id == request_id:
                 entry.token_ids.extend(token_ids)
                 return
-        self._queue.append(_DetokEntry(request_id=request_id, token_ids=list(token_ids)))
+        self._queue.append(
+            _DetokEntry(request_id=request_id, token_ids=list(token_ids))
+        )
 
     def flush(self) -> dict[str, str]:
         """Detokenize all queued tokens in one batch.
@@ -790,9 +794,7 @@ class BatchedDetokenizer:
                     results[entry.request_id] = text
                     self._total_tokens_processed += len(entry.token_ids)
                 except Exception as e:
-                    logger.debug(
-                        "Detokenize failed for %s: %s", entry.request_id, e
-                    )
+                    logger.debug("Detokenize failed for %s: %s", entry.request_id, e)
                     results[entry.request_id] = ""
         else:
             # No tokenizer — return empty strings
@@ -803,7 +805,9 @@ class BatchedDetokenizer:
         self._segments.update(results)
         # Evict oldest segments if over capacity to prevent unbounded growth
         if len(self._segments) > self._max_segments:
-            keys_to_evict = list(self._segments.keys())[: len(self._segments) - self._max_segments]
+            keys_to_evict = list(self._segments.keys())[
+                : len(self._segments) - self._max_segments
+            ]
             for k in keys_to_evict:
                 del self._segments[k]
         self._queue.clear()
@@ -830,9 +834,7 @@ class BatchedDetokenizer:
     def get_stats(self) -> dict[str, Any]:
         """Return detokenizer performance statistics."""
         avg_flush = (
-            self._total_flush_ms / self._flush_count
-            if self._flush_count > 0
-            else 0.0
+            self._total_flush_ms / self._flush_count if self._flush_count > 0 else 0.0
         )
         return {
             "flush_count": self._flush_count,
@@ -859,6 +861,7 @@ class BackpressureConfig:
         ramp_factor: Multiplier per token above threshold for delay ramp-up.
         cooldown_factor: Decay factor for delay when queue drains.
     """
+
     max_queue_size: int = 100
     initial_delay_ms: float = 1.0
     max_delay_ms: float = 50.0

@@ -4,6 +4,7 @@ The real path needs a resident Qwen3-Omni (~22GB); these drive
 _generate_response_omni with a stub engine so CI verifies the OpenAI-Realtime
 event contract (and the opt-in gate) without a model.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -31,23 +32,35 @@ class _FakeOmniEngine:
     def __init__(self):
         self.calls = []
 
-    async def stream(self, text, image_path=None, audio_path=None,
-                     speaker=None, thinker_max_new_tokens=None):
+    async def stream(
+        self,
+        text,
+        image_path=None,
+        audio_path=None,
+        speaker=None,
+        thinker_max_new_tokens=None,
+    ):
         self.calls.append({"text": text, "audio_path": audio_path, "speaker": speaker})
         yield _Chunk("text", "Hi ")
         yield _Chunk("text", "there")
         yield _Chunk("audio", np.linspace(-0.3, 0.3, 2400, dtype=np.float32))
-        yield _Chunk("done", {"first_audio_s": 0.1, "audio_seconds": 0.1, "total_s": 0.2})
+        yield _Chunk(
+            "done", {"first_audio_s": 0.1, "audio_seconds": 0.1, "total_s": 0.2}
+        )
 
 
 def _session_with_user_turn():
     ws = MagicMock()
     ws.send_json = AsyncMock()
     session = rt.RealtimeSession(ws)
-    session.conversation.add_item(rt.ConversationItem(
-        "u1", "message", role="user",
-        content=[{"type": "input_text", "text": "hello"}],
-    ))
+    session.conversation.add_item(
+        rt.ConversationItem(
+            "u1",
+            "message",
+            role="user",
+            content=[{"type": "input_text", "text": "hello"}],
+        )
+    )
     return session, ws
 
 
@@ -150,7 +163,7 @@ async def test_omni_falls_back_to_text_without_audio(monkeypatch):
     await session._generate_response_omni("resp_1", "item_1", ["text", "audio"], {})
 
     assert fake.calls[0]["audio_path"] is None  # text path
-    assert "hello" in fake.calls[0]["text"]    # the user's transcript/text
+    assert "hello" in fake.calls[0]["text"]  # the user's transcript/text
 
 
 @pytest.mark.asyncio

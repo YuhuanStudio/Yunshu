@@ -1,4 +1,5 @@
 """Unit tests for KV block pool."""
+
 import pytest
 
 from yunshu_kv.block import BlockPool, FreeBlockQueue, KVBlock
@@ -128,7 +129,7 @@ class TestBlockPool:
         pool = BlockPool(num_blocks=10, block_size=4)
         # 1 null + 9 free, allocate 3 → 6 free out of 9 total
         pool.allocate(3)
-        assert abs(pool.get_usage() - 3/9) < 0.01
+        assert abs(pool.get_usage() - 3 / 9) < 0.01
 
     def test_get_free_block_count_initial(self):
         pool = BlockPool(num_blocks=10, block_size=4)

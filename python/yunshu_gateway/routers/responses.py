@@ -72,6 +72,7 @@ def _resolve_owner(request) -> str:
     """
     try:
         from yunshu_control.audit_log import resolve_actor
+
         return resolve_actor(request) or ""
     except Exception:
         return ""
@@ -80,10 +81,15 @@ def _resolve_owner(request) -> str:
 def _is_admin(request) -> bool:
     """Admin/static-token/auth-disabled check (matches cancel.py:101-107)."""
     import os
+
     if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
         return True
     role_str = str(getattr(getattr(request, "state", None), "role", "") or "")
-    return role_str.lower() in ("admin", "system", "owner") or role_str.upper().endswith("ADMIN")
+    return role_str.lower() in (
+        "admin",
+        "system",
+        "owner",
+    ) or role_str.upper().endswith("ADMIN")
 
 
 def _owns_stored(request, payload: dict) -> bool:
@@ -104,10 +110,19 @@ def _public_stored(payload: dict) -> dict:
     """Strip internal plumbing keys (``_owner``, ``_input_messages``, …) before
     returning a stored response to the client."""
     return {k: v for k, v in payload.items() if not k.startswith("_")}
+
+
 import contextlib
 
-_INCOMPLETE_FINISH = ("length", "cancel", "cancelled", "abort", "aborted",
-                      "error", "content_filter")
+_INCOMPLETE_FINISH = (
+    "length",
+    "cancel",
+    "cancelled",
+    "abort",
+    "aborted",
+    "error",
+    "content_filter",
+)
 
 
 async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messages):
@@ -131,36 +146,64 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
     ]
     # Force stream=False / n=1: we wrap a single completion into the Responses shape.
     chat_req = ChatCompletionRequest(
-        model=req.model, messages=chat_messages, max_tokens=req.max_output_tokens,
-        temperature=req.temperature, top_p=req.top_p, top_k=req.top_k, min_p=req.min_p,
-        repetition_penalty=req.repetition_penalty, frequency_penalty=req.frequency_penalty,
-        presence_penalty=req.presence_penalty, min_tokens=req.min_tokens,
-        ignore_eos=req.ignore_eos, suppress_tokens=req.suppress_tokens,
-        logit_bias=logit_bias, seed=req.seed, enable_thinking=req.enable_thinking,
-        thinking_budget=req.thinking_budget, reasoning_effort=req.reasoning_effort,
-        stop=req.stop, stop_token_ids=req.stop_token_ids, logprobs=req.logprobs,
-        top_logprobs=req.top_logprobs, spec_decode=req.spec_decode, n=1, stream=False,
-        stream_options=req.stream_options, logits_processors=req.logits_processors,
-        response_format=chat_response_format, xtc_probability=req.xtc_probability,
-        xtc_threshold=req.xtc_threshold, lora_adapter=req.lora_adapter,
-        priority=req.priority, user=req.user, timeout=req.timeout, grammar=req.grammar,
+        model=req.model,
+        messages=chat_messages,
+        max_tokens=req.max_output_tokens,
+        temperature=req.temperature,
+        top_p=req.top_p,
+        top_k=req.top_k,
+        min_p=req.min_p,
+        repetition_penalty=req.repetition_penalty,
+        frequency_penalty=req.frequency_penalty,
+        presence_penalty=req.presence_penalty,
+        min_tokens=req.min_tokens,
+        ignore_eos=req.ignore_eos,
+        suppress_tokens=req.suppress_tokens,
+        logit_bias=logit_bias,
+        seed=req.seed,
+        enable_thinking=req.enable_thinking,
+        thinking_budget=req.thinking_budget,
+        reasoning_effort=req.reasoning_effort,
+        stop=req.stop,
+        stop_token_ids=req.stop_token_ids,
+        logprobs=req.logprobs,
+        top_logprobs=req.top_logprobs,
+        spec_decode=req.spec_decode,
+        n=1,
+        stream=False,
+        stream_options=req.stream_options,
+        logits_processors=req.logits_processors,
+        response_format=chat_response_format,
+        xtc_probability=req.xtc_probability,
+        xtc_threshold=req.xtc_threshold,
+        lora_adapter=req.lora_adapter,
+        priority=req.priority,
+        user=req.user,
+        timeout=req.timeout,
+        grammar=req.grammar,
     )
     vlm_json_schema = _parse_response_format(chat_response_format)
-    chat_resp = await _handle_vlm_chat(chat_req, messages, request, json_schema=vlm_json_schema)
+    chat_resp = await _handle_vlm_chat(
+        chat_req, messages, request, json_schema=vlm_json_schema
+    )
 
     # _handle_vlm_chat returns a JSONResponse (non-stream forced above). Decode it.
     body = getattr(chat_resp, "body", None)
     chat_data = _json.loads(bytes(body)) if body is not None else (chat_resp or {})
     choice0 = (chat_data.get("choices") or [{}])[0]
     msg = choice0.get("message", {}) or {}
-    text = (msg.get("content") or "")
+    text = msg.get("content") or ""
     reasoning = msg.get("reasoning_content")
     finish = choice0.get("finish_reason") or "stop"
     usage = chat_data.get("usage", {}) or {}
     pt = int(usage.get("prompt_tokens", 0) or 0)
     ct = int(usage.get("completion_tokens", 0) or 0)
-    rt = int((usage.get("completion_tokens_details") or {}).get("reasoning_tokens", 0) or 0)
-    cached = int((usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0) or 0)
+    rt = int(
+        (usage.get("completion_tokens_details") or {}).get("reasoning_tokens", 0) or 0
+    )
+    cached = int(
+        (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0) or 0
+    )
     status = "incomplete" if finish in _INCOMPLETE_FINISH else "completed"
 
     # Allocate the response id (consume the background forced id, like the text path).
@@ -179,25 +222,43 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
     # OpenAI Responses spec shape — not a content part of the message.
     rs_id = f"rs-{uuid.uuid4().hex[:24]}" if reasoning else None
     reasoning_item = (
-        {"type": "reasoning", "id": rs_id,
-         "summary": [{"type": "summary_text", "text": reasoning}], "status": "completed"}
-        if reasoning else None
+        {
+            "type": "reasoning",
+            "id": rs_id,
+            "summary": [{"type": "summary_text", "text": reasoning}],
+            "status": "completed",
+        }
+        if reasoning
+        else None
     )
     message_item = {
-        "type": "message", "id": msg_id, "role": "assistant",
-        "content": content_parts, "status": "completed",
+        "type": "message",
+        "id": msg_id,
+        "role": "assistant",
+        "content": content_parts,
+        "status": "completed",
     }
     msg_idx = 1 if reasoning_item else 0
     final_output = ([reasoning_item] if reasoning_item else []) + [message_item]
     payload = {
-        "id": response_id, "object": "response",
-        "created_at": int(time.time()), "completed_at": int(time.time()),
-        "model": req.model, "status": status, "output": final_output,
+        "id": response_id,
+        "object": "response",
+        "created_at": int(time.time()),
+        "completed_at": int(time.time()),
+        "model": req.model,
+        "status": status,
+        "output": final_output,
         "metadata": req.metadata,
         "usage": {
-            "input_tokens": pt, "output_tokens": ct, "total_tokens": pt + ct,
+            "input_tokens": pt,
+            "output_tokens": ct,
+            "total_tokens": pt + ct,
             **({"output_tokens_details": {"reasoning_tokens": rt}} if rt > 0 else {}),
-            **({"input_tokens_details": {"cached_tokens": cached}} if cached > 0 else {}),
+            **(
+                {"input_tokens_details": {"cached_tokens": cached}}
+                if cached > 0
+                else {}
+            ),
         },
     }
     if req.store:
@@ -225,56 +286,136 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
         # message at output_index `msg_idx` (1 if reasoning, else 0).
         if reasoning_item is not None:
             yield format_responses_output_item_added(
-                response_id, req.model, item_id=rs_id, output_index=0, seq=_s(),
-                item_type="reasoning")
-            yield ("event: response.reasoning_summary_part.added\ndata: " + json.dumps(
-                {"type": "response.reasoning_summary_part.added", "item_id": rs_id,
-                 "output_index": 0, "summary_index": 0,
-                 "part": {"type": "summary_text", "text": ""}, "sequence_number": _s()}) + "\n\n")
-            yield ("event: response.reasoning_summary_text.delta\ndata: " + json.dumps(
-                {"type": "response.reasoning_summary_text.delta", "item_id": rs_id,
-                 "output_index": 0, "summary_index": 0, "delta": reasoning,
-                 "sequence_number": _s()}) + "\n\n")
-            yield ("event: response.reasoning_summary_text.done\ndata: " + json.dumps(
-                {"type": "response.reasoning_summary_text.done", "item_id": rs_id,
-                 "output_index": 0, "summary_index": 0, "text": reasoning,
-                 "sequence_number": _s()}) + "\n\n")
-            yield ("event: response.reasoning_summary_part.done\ndata: " + json.dumps(
-                {"type": "response.reasoning_summary_part.done", "item_id": rs_id,
-                 "output_index": 0, "summary_index": 0,
-                 "part": {"type": "summary_text", "text": reasoning}, "sequence_number": _s()}) + "\n\n")
-            yield ("event: response.output_item.done\ndata: " + json.dumps(
-                {"type": "response.output_item.done", "output_index": 0,
-                 "item": reasoning_item, "sequence_number": _s()}) + "\n\n")
+                response_id,
+                req.model,
+                item_id=rs_id,
+                output_index=0,
+                seq=_s(),
+                item_type="reasoning",
+            )
+            yield (
+                "event: response.reasoning_summary_part.added\ndata: "
+                + json.dumps(
+                    {
+                        "type": "response.reasoning_summary_part.added",
+                        "item_id": rs_id,
+                        "output_index": 0,
+                        "summary_index": 0,
+                        "part": {"type": "summary_text", "text": ""},
+                        "sequence_number": _s(),
+                    }
+                )
+                + "\n\n"
+            )
+            yield (
+                "event: response.reasoning_summary_text.delta\ndata: "
+                + json.dumps(
+                    {
+                        "type": "response.reasoning_summary_text.delta",
+                        "item_id": rs_id,
+                        "output_index": 0,
+                        "summary_index": 0,
+                        "delta": reasoning,
+                        "sequence_number": _s(),
+                    }
+                )
+                + "\n\n"
+            )
+            yield (
+                "event: response.reasoning_summary_text.done\ndata: "
+                + json.dumps(
+                    {
+                        "type": "response.reasoning_summary_text.done",
+                        "item_id": rs_id,
+                        "output_index": 0,
+                        "summary_index": 0,
+                        "text": reasoning,
+                        "sequence_number": _s(),
+                    }
+                )
+                + "\n\n"
+            )
+            yield (
+                "event: response.reasoning_summary_part.done\ndata: "
+                + json.dumps(
+                    {
+                        "type": "response.reasoning_summary_part.done",
+                        "item_id": rs_id,
+                        "output_index": 0,
+                        "summary_index": 0,
+                        "part": {"type": "summary_text", "text": reasoning},
+                        "sequence_number": _s(),
+                    }
+                )
+                + "\n\n"
+            )
+            yield (
+                "event: response.output_item.done\ndata: "
+                + json.dumps(
+                    {
+                        "type": "response.output_item.done",
+                        "output_index": 0,
+                        "item": reasoning_item,
+                        "sequence_number": _s(),
+                    }
+                )
+                + "\n\n"
+            )
         yield format_responses_output_item_added(
-            response_id, req.model, item_id=msg_id, output_index=msg_idx, seq=_s())
+            response_id, req.model, item_id=msg_id, output_index=msg_idx, seq=_s()
+        )
         yield format_responses_content_part_added(
-            item_id=msg_id, output_index=msg_idx, content_index=0, seq=_s())
+            item_id=msg_id, output_index=msg_idx, content_index=0, seq=_s()
+        )
         if text_s:
             yield format_responses_text_delta(
-                delta=text_s, item_id=msg_id, output_index=msg_idx, content_index=0, seq=_s())
+                delta=text_s,
+                item_id=msg_id,
+                output_index=msg_idx,
+                content_index=0,
+                seq=_s(),
+            )
         yield format_responses_text_done(
-            text=text_s, item_id=msg_id, output_index=msg_idx, content_index=0, seq=_s())
+            text=text_s, item_id=msg_id, output_index=msg_idx, content_index=0, seq=_s()
+        )
         yield format_responses_content_part_done(
-            item_id=msg_id, text=text_s, output_index=msg_idx, content_index=0, seq=_s())
+            item_id=msg_id, text=text_s, output_index=msg_idx, content_index=0, seq=_s()
+        )
         yield format_responses_output_item_done(
-            item_id=msg_id, text=text_s, output_index=msg_idx, seq=_s())
+            item_id=msg_id, text=text_s, output_index=msg_idx, seq=_s()
+        )
         if status == "incomplete":
             yield format_responses_incomplete(
-                response_id, req.model,
+                response_id,
+                req.model,
                 reason="max_output_tokens" if finish == "length" else finish,
-                output=final_output, input_tokens=pt, output_tokens=ct,
-                total_tokens=pt + ct, reasoning_tokens=rt, cached_tokens=cached, seq=_s())
+                output=final_output,
+                input_tokens=pt,
+                output_tokens=ct,
+                total_tokens=pt + ct,
+                reasoning_tokens=rt,
+                cached_tokens=cached,
+                seq=_s(),
+            )
         else:
             yield format_responses_completed(
-                response_id, req.model, output=final_output, input_tokens=pt,
-                output_tokens=ct, total_tokens=pt + ct, reasoning_tokens=rt,
-                cached_tokens=cached, seq=_s())
+                response_id,
+                req.model,
+                output=final_output,
+                input_tokens=pt,
+                output_tokens=ct,
+                total_tokens=pt + ct,
+                reasoning_tokens=rt,
+                cached_tokens=cached,
+                seq=_s(),
+            )
 
     return StreamingResponse(
-        _replay(), media_type="text/event-stream",
+        _replay(),
+        media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
 
 from ..streaming import (
     format_responses_completed,
@@ -332,6 +473,7 @@ class ResponseTool(BaseModel):
 
 class StreamOptions(BaseModel):
     """OpenAI stream_options parameter."""
+
     include_usage: bool = False
 
 
@@ -373,7 +515,9 @@ class ResponsesRequest(BaseModel):
     top_logprobs: int | None = Field(default=None, ge=0, le=20)
     spec_decode: bool = False
     xtc_probability: float = Field(default=0.0, ge=0.0, le=1.0)
-    xtc_threshold: float = Field(default=0.0, ge=0.0, le=0.5)  # engine requires [0,0.5]; le=1.0 made out-of-range 500 not 422
+    xtc_threshold: float = Field(
+        default=0.0, ge=0.0, le=0.5
+    )  # engine requires [0,0.5]; le=1.0 made out-of-range 500 not 422
     # Extended sampling controls. These were honored on
     # /v1/chat/completions + /v1/completions but were never declared or plumbed here,
     # so a Responses request setting them got them SILENTLY ignored (suppress_tokens →
@@ -405,7 +549,9 @@ class ResponsesRequest(BaseModel):
     metadata: dict | None = None
     priority: int = Field(default=0, ge=0, le=100)
     logits_processors: list | None = None  # User-provided custom logits processors
-    timeout: float | None = Field(default=None, ge=1.0, le=600.0)  # Request timeout in seconds
+    timeout: float | None = Field(
+        default=None, ge=1.0, le=600.0
+    )  # Request timeout in seconds
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -414,7 +560,9 @@ class ResponsesRequest(BaseModel):
         # Alias legacy OpenAI Chat Completions max_completion_tokens →
         # Responses-native max_output_tokens. Caller may pass either.
         if self.max_completion_tokens is not None:
-            object.__setattr__(self, "max_output_tokens", int(self.max_completion_tokens))
+            object.__setattr__(
+                self, "max_output_tokens", int(self.max_completion_tokens)
+            )
         # Map the canonical nested reasoning:{effort} → flat reasoning_effort (the form
         # the engine reads) when the flat alias wasn't also sent.
         if self.reasoning_effort is None and isinstance(self.reasoning, dict):
@@ -428,14 +576,22 @@ class ResponsesRequest(BaseModel):
             raise ValueError("input: cannot be an empty list")
         # Validate response_format type if provided
         if self.response_format is not None:
-            rf_type = self.response_format.get("type") if isinstance(self.response_format, dict) else None
+            rf_type = (
+                self.response_format.get("type")
+                if isinstance(self.response_format, dict)
+                else None
+            )
             if rf_type not in ("json_object", "json_schema", "text", None):
-                raise ValueError(f"response_format.type: must be 'json_object', 'json_schema', or 'text', got '{rf_type}'")
+                raise ValueError(
+                    f"response_format.type: must be 'json_object', 'json_schema', or 'text', got '{rf_type}'"
+                )
         # Validate grammar type if provided
         if self.grammar is not None:
             gtype = self.grammar.get("type") if isinstance(self.grammar, dict) else None
             if gtype not in ("json", "regex", "choice", "cfg", None):
-                raise ValueError(f"grammar.type: must be one of 'json', 'regex', 'choice', 'cfg', got '{gtype}'")
+                raise ValueError(
+                    f"grammar.type: must be one of 'json', 'regex', 'choice', 'cfg', got '{gtype}'"
+                )
         if self.stop and len(self.stop) > 16:
             raise ValueError("stop: maximum 16 stop sequences")
         if self.stop and any(not s for s in self.stop):
@@ -493,7 +649,9 @@ def _extract_input_text(content) -> str | list:
             multimodal.append({"type": "image_url", "image_url": {"url": url}})
         elif btype == "input_audio":
             has_media = True
-            multimodal.append({"type": "input_audio", "input_audio": block.get("input_audio", block)})
+            multimodal.append(
+                {"type": "input_audio", "input_audio": block.get("input_audio", block)}
+            )
     if has_media:
         return multimodal
     return "\n".join(text_parts)
@@ -511,32 +669,44 @@ def _convert_to_messages(req: ResponsesRequest) -> list[dict]:
     elif isinstance(req.input, list):
         for item in req.input:
             # Accept both dicts and pydantic ResponseInputText models.
-            _get = item.get if isinstance(item, dict) else (lambda k, d=None: getattr(item, k, d))
+            _get = (
+                item.get
+                if isinstance(item, dict)
+                else (lambda k, d=None: getattr(item, k, d))
+            )
             itype = _get("type", "message")
             # Tool-conversation items: feed a prior tool call + its result back so
             # multi-turn agent loops work. Previously these had no role/content and
             # became empty "user" messages (the call_id/output were dropped).
             if itype == "function_call_output":
                 _out = _get("output", "")
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": _get("call_id", "") or "",
-                    "content": _out if isinstance(_out, str) else json.dumps(_out, ensure_ascii=False),
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": _get("call_id", "") or "",
+                        "content": _out
+                        if isinstance(_out, str)
+                        else json.dumps(_out, ensure_ascii=False),
+                    }
+                )
                 continue
             if itype == "function_call":
-                messages.append({
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [{
-                        "id": _get("call_id", "") or _get("id", "") or "",
-                        "type": "function",
-                        "function": {
-                            "name": _get("name", "") or "",
-                            "arguments": _get("arguments", "") or "{}",
-                        },
-                    }],
-                })
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": _get("call_id", "") or _get("id", "") or "",
+                                "type": "function",
+                                "function": {
+                                    "name": _get("name", "") or "",
+                                    "arguments": _get("arguments", "") or "{}",
+                                },
+                            }
+                        ],
+                    }
+                )
                 continue
             role = _get("role", "user") or "user"
             content = _get("content", "")
@@ -591,16 +761,19 @@ async def _start_background_response(req: ResponsesRequest, request: Request):
     _store_response(response_id, queued_payload)
 
     def _mark_failed():
-        _store_response(response_id, {
-            **{k: v for k, v in queued_payload.items()},
-            "status": "failed",
-            "completed_at": int(time.time()),
-            "error": {
-                "message": "background generation failed",
-                "type": "server_error",
-                "code": "internal_error",
+        _store_response(
+            response_id,
+            {
+                **{k: v for k, v in queued_payload.items()},
+                "status": "failed",
+                "completed_at": int(time.time()),
+                "error": {
+                    "message": "background generation failed",
+                    "type": "server_error",
+                    "code": "internal_error",
+                },
             },
-        })
+        )
 
     async def _runner():
         # Flip queued → in_progress so a poll mid-generation reflects reality.
@@ -616,7 +789,9 @@ async def _start_background_response(req: ResponsesRequest, request: Request):
             _store_response(response_id, _in)
         try:
             request.state._forced_response_id = response_id
-            req2 = req.model_copy(update={"background": False, "store": True, "stream": False})
+            req2 = req.model_copy(
+                update={"background": False, "store": True, "stream": False}
+            )
             await create_response(req2, request)
             # create_response stores the terminal payload under response_id (store=True).
             # If it returned an error JSONResponse without storing, the entry is still
@@ -641,7 +816,10 @@ async def create_response(req: ResponsesRequest, request: Request):
     _check_permission(request, "can_infer")
     _rbac_key = getattr(request.state, "rbac_key", None)
     if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
-        raise HTTPException(status_code=403, detail=f"Model '{req.model}' not accessible with this API key")
+        raise HTTPException(
+            status_code=403,
+            detail=f"Model '{req.model}' not accessible with this API key",
+        )
     # OpenAI background mode: return a queued response immediately and run the
     # full (non-stream) generation asynchronously under the same id. Streaming +
     # background is not supported here (would require resumable SSE), so it only
@@ -665,9 +843,7 @@ async def create_response(req: ResponsesRequest, request: Request):
     # (user/assistant/tool); only system/instructions are excluded. This hop's own
     # input assistant turns are distinct from this response's GENERATED `output`
     # (replayed separately below), so keeping them cannot double-count.
-    _own_input_messages = [
-        m for m in messages if m.get("role") != "system"
-    ]
+    _own_input_messages = [m for m in messages if m.get("role") != "system"]
 
     # previous_response_id chaining: replay prior turns when store=true on
     # the predecessor. The Responses API contract says the chain provides
@@ -706,27 +882,35 @@ async def create_response(req: ResponsesRequest, request: Request):
             _stored_input = _prev.get("_input_messages")
             if _stored_input:
                 _turn.extend(_stored_input)
-            for out in (_prev.get("output") or []):
+            for out in _prev.get("output") or []:
                 if out.get("role") == "assistant":
-                    for c in (out.get("content") or []):
+                    for c in out.get("content") or []:
                         if c.get("type") == "output_text":
-                            _turn.append({"role": "assistant", "content": c.get("text", "")})
+                            _turn.append(
+                                {"role": "assistant", "content": c.get("text", "")}
+                            )
                 elif out.get("type") == "function_call":
                     # Replay the prior tool call (stored as a top-level item with no
                     # "role") so a chained agent loop remembers it requested the
                     # tool — previously dropped, breaking multi-turn tool use.
-                    _turn.append({
-                        "role": "assistant",
-                        "content": "",
-                        "tool_calls": [{
-                            "id": out.get("call_id", "") or out.get("id", "") or "",
-                            "type": "function",
-                            "function": {
-                                "name": out.get("name", "") or "",
-                                "arguments": out.get("arguments", "") or "{}",
-                            },
-                        }],
-                    })
+                    _turn.append(
+                        {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": out.get("call_id", "")
+                                    or out.get("id", "")
+                                    or "",
+                                    "type": "function",
+                                    "function": {
+                                        "name": out.get("name", "") or "",
+                                        "arguments": out.get("arguments", "") or "{}",
+                                    },
+                                }
+                            ],
+                        }
+                    )
             chain[0:0] = _turn
             _prev_id = _prev.get("previous_response_id")
         if chain:
@@ -745,13 +929,18 @@ async def create_response(req: ResponsesRequest, request: Request):
     _logit_bias = req.logit_bias
     if _logit_bias:
         import math
+
         for _bk, _bv in _logit_bias.items():
             if math.isnan(_bv) or math.isinf(_bv):
-                raise HTTPException(status_code=400,  # OpenAI uses 400 for invalid params
-                                    detail=f"logit_bias[{_bk}] must be finite, got {_bv}")
+                raise HTTPException(
+                    status_code=400,  # OpenAI uses 400 for invalid params
+                    detail=f"logit_bias[{_bk}] must be finite, got {_bv}",
+                )
             if _bv < -100 or _bv > 100:
-                raise HTTPException(status_code=400,  # OpenAI uses 400 for invalid params
-                                    detail=f"logit_bias[{_bk}] must be in [-100, 100], got {_bv}")
+                raise HTTPException(
+                    status_code=400,  # OpenAI uses 400 for invalid params
+                    detail=f"logit_bias[{_bk}] must be in [-100, 100], got {_bv}",
+                )
         # Skip non-integer keys instead of crashing int(k) with 500 (a malformed
         # key is bad input, not a server error). Matches anthropic _convert_logit_bias.
         _converted = {}
@@ -764,14 +953,21 @@ async def create_response(req: ResponsesRequest, request: Request):
 
     # Structured tracing
     from yunshu_engine.tracing import get_inference_tracer, get_structured_logger
+
     tracer = get_inference_tracer()
     slog = get_structured_logger()
     trace_id = f"resp-{uuid.uuid4().hex[:16]}"
-    tracer.start_trace(trace_id, metadata={
-        "model": req.model, "stream": req.stream,
-        "endpoint": "/responses",
-    })
-    slog.info("inference_request", model=req.model, trace_id=trace_id, stream=req.stream)
+    tracer.start_trace(
+        trace_id,
+        metadata={
+            "model": req.model,
+            "stream": req.stream,
+            "endpoint": "/responses",
+        },
+    )
+    slog.info(
+        "inference_request", model=req.model, trace_id=trace_id, stream=req.stream
+    )
 
     engine = get_engine()
     if engine is None or not engine.is_loaded or not engine.resolve_model_id(req.model):
@@ -789,10 +985,15 @@ async def create_response(req: ResponsesRequest, request: Request):
                 _err_model = req.model
 
                 async def _model_not_found_stream():
-                    yield format_responses_created(_err_response_id, _err_model, seq=1).encode("utf-8")
-                    yield format_responses_in_progress(_err_response_id, _err_model, seq=2).encode("utf-8")
+                    yield format_responses_created(
+                        _err_response_id, _err_model, seq=1
+                    ).encode("utf-8")
+                    yield format_responses_in_progress(
+                        _err_response_id, _err_model, seq=2
+                    ).encode("utf-8")
                     yield format_responses_failed(
-                        _err_response_id, _err_model,
+                        _err_response_id,
+                        _err_model,
                         error_code="model_not_found",
                         error_message=f"Model '{_err_model}' not found",
                         seq=3,
@@ -804,7 +1005,9 @@ async def create_response(req: ResponsesRequest, request: Request):
                     media_type="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
                 )
-            raise HTTPException(status_code=404, detail=f"Model '{req.model}' not found") from None
+            raise HTTPException(
+                status_code=404, detail=f"Model '{req.model}' not found"
+            ) from None
 
     # Reject prompts over the context window (400) or too large to prefill (413),
     # before generation (see chat.py).
@@ -812,6 +1015,7 @@ async def create_response(req: ResponsesRequest, request: Request):
         from yunshu_control.token_counter import count_message_tokens
 
         from ..streaming import validate_context_window, validate_prefill_memory
+
         _tok = getattr(engine, "_tokenizer", None) or getattr(engine, "tokenizer", None)
         _est = count_message_tokens(messages, _tok)
         validate_context_window(_est, req.model, engine)
@@ -823,6 +1027,7 @@ async def create_response(req: ResponsesRequest, request: Request):
 
     # Check for VLM/audio routing
     from .chat import _has_audio, _has_images
+
     has_media = _has_images(messages) or _has_audio(messages)
     if has_media:
         # previously this returned `_handle_vlm_chat(...)` verbatim — a
@@ -833,19 +1038,30 @@ async def create_response(req: ResponsesRequest, request: Request):
         # and previous_response_id chaining 404'd). Funnel the VLM text through the
         # proper Responses object / event sequence and honor store.
         return await _vlm_to_responses(
-            req, messages, request, _logit_bias, _own_input_messages,
+            req,
+            messages,
+            request,
+            _logit_bias,
+            _own_input_messages,
         )
 
     # Inject tool definitions
     if req.tools:
         from .chat import ToolDefinition, ToolFunction, _inject_tool_system_prompt
+
         tools = [
-            ToolDefinition(function=ToolFunction(
-                name=t.name, description=t.description, parameters=t.parameters,
-            ))
+            ToolDefinition(
+                function=ToolFunction(
+                    name=t.name,
+                    description=t.description,
+                    parameters=t.parameters,
+                )
+            )
             for t in req.tools
         ]
-        messages = _inject_tool_system_prompt(messages, tools, tool_choice=req.tool_choice)
+        messages = _inject_tool_system_prompt(
+            messages, tools, tool_choice=req.tool_choice
+        )
 
     # Background mode pre-allocates the id (so the queued response returned to the
     # client and the polled/cancellable generation share one id). Consume it once.
@@ -859,6 +1075,7 @@ async def create_response(req: ResponsesRequest, request: Request):
 
     # LoRA adapter lifecycle
     from .chat import _apply_lora_adapter, _release_lora_adapter
+
     loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
 
     # Streaming: must return before the try/finally releases LoRA.
@@ -869,10 +1086,19 @@ async def create_response(req: ResponsesRequest, request: Request):
             raise HTTPException(
                 status_code=400,
                 detail="n>1 is not supported with stream=True for the Responses API. "
-                       "Use stream=False for multiple completions, or stream=True with n=1.",
+                "Use stream=False for multiple completions, or stream=True with n=1.",
             )
         return StreamingResponse(
-            _stream_response(engine, req, messages, response_id, json_schema, loaded_adapter, request=request, own_input_messages=_own_input_messages),
+            _stream_response(
+                engine,
+                req,
+                messages,
+                response_id,
+                json_schema,
+                loaded_adapter,
+                request=request,
+                own_input_messages=_own_input_messages,
+            ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
@@ -883,6 +1109,7 @@ async def create_response(req: ResponsesRequest, request: Request):
     _ns_cancel_event = None
     try:
         from yunshu_engine.request_tracker import get_request_tracker
+
         _ns_tracker = get_request_tracker()
         _ns_gen = _ns_tracker.register(response_id, req.model)
         _ns_cancel_event = _ns_gen.cancel_event
@@ -892,6 +1119,7 @@ async def create_response(req: ResponsesRequest, request: Request):
     # Non-streaming: LoRA is released in the finally block below.
     try:
         from yunshu_engine.batched_engine import BatchedEngine
+
         is_batched = isinstance(engine, BatchedEngine)
 
         # Non-batched Engine path: apply chat template ourselves before
@@ -900,8 +1128,8 @@ async def create_response(req: ResponsesRequest, request: Request):
         # tool-related fields, producing garbage for tool-use conversations.
         _non_batched_prompt: str | list[dict] = messages
         if not is_batched and messages:
-            _tokenizer = getattr(engine, '_tokenizer', None)
-            if _tokenizer is not None and hasattr(_tokenizer, 'apply_chat_template'):
+            _tokenizer = getattr(engine, "_tokenizer", None)
+            if _tokenizer is not None and hasattr(_tokenizer, "apply_chat_template"):
                 # bring this deprecated non-batched path closer to the engine's
                 # hardened _apply_chat_template — remap OpenAI `developer`→`system` /
                 # legacy `function`→`tool` and run _normalize_messages_for_chat_template
@@ -912,9 +1140,20 @@ async def create_response(req: ResponsesRequest, request: Request):
                 _msgs = messages
                 try:
                     from yunshu_engine.batched_engine import BatchedEngine as _BE
+
                     _msgs = [
-                        ({**_m, "role": ("system" if _m.get("role") == "developer" else "tool")}
-                         if _m.get("role") in ("developer", "function") else _m)
+                        (
+                            {
+                                **_m,
+                                "role": (
+                                    "system"
+                                    if _m.get("role") == "developer"
+                                    else "tool"
+                                ),
+                            }
+                            if _m.get("role") in ("developer", "function")
+                            else _m
+                        )
                         for _m in messages
                     ]
                     _msgs = _BE._normalize_messages_for_chat_template(_msgs)
@@ -922,26 +1161,40 @@ async def create_response(req: ResponsesRequest, request: Request):
                     _msgs = messages
                 try:
                     from yunshu_engine.message_adapter import adapt_messages
-                    _adapted = adapt_messages(_msgs, getattr(engine, 'model_name', '') or '')
+
+                    _adapted = adapt_messages(
+                        _msgs, getattr(engine, "model_name", "") or ""
+                    )
                 except Exception:
                     _adapted = _msgs
                 try:
-                    _tpl_kwargs: dict = {"tokenize": False, "add_generation_prompt": True}
+                    _tpl_kwargs: dict = {
+                        "tokenize": False,
+                        "add_generation_prompt": True,
+                    }
                     if req.enable_thinking is not None:
                         _tpl_kwargs["enable_thinking"] = req.enable_thinking
                     _rendered = _tokenizer.apply_chat_template(_adapted, **_tpl_kwargs)
                     if _rendered:
                         _non_batched_prompt = _rendered
                 except TypeError as _te:
-                    if 'enable_thinking' in str(_te):
-                        _tpl_kwargs.pop('enable_thinking', None)
-                        _rendered = _tokenizer.apply_chat_template(_adapted, **_tpl_kwargs)
+                    if "enable_thinking" in str(_te):
+                        _tpl_kwargs.pop("enable_thinking", None)
+                        _rendered = _tokenizer.apply_chat_template(
+                            _adapted, **_tpl_kwargs
+                        )
                         if _rendered:
                             _non_batched_prompt = _rendered
                     else:
-                        logger.debug("chat template failed for non-batched Responses path", exc_info=True)
+                        logger.debug(
+                            "chat template failed for non-batched Responses path",
+                            exc_info=True,
+                        )
                 except Exception:
-                    logger.debug("chat template failed for non-batched Responses path", exc_info=True)
+                    logger.debug(
+                        "chat template failed for non-batched Responses path",
+                        exc_info=True,
+                    )
 
         # ── n>1 support: generate n responses sequentially ──
         # Single GPU cannot parallelize multiple generations; they run
@@ -969,46 +1222,54 @@ async def create_response(req: ResponsesRequest, request: Request):
                 # the engine decode loop stops (chat.py had this; responses only registered
                 # the event and never polled is_disconnected → ran to max_tokens/timeout).
                 try:
-                    result = await run_with_disconnect_guard(request, engine.chat(
-                        messages=messages,
-                        max_tokens=req.max_output_tokens,
-                        temperature=req.temperature,
-                        top_p=req.top_p,
-                        top_k=req.top_k,
-                        # per-choice seed for n>1 (was req.seed for EVERY choice →
-                        # with explicit seed + temp>0 + n>1 all n choices got the same RNG
-                        # base key → IDENTICAL token streams, still billed n×). chat/
-                        # completions already offset by +idx; Responses was the outlier.
-                        seed=_per_choice_seed(req.seed, choice_idx),
-                        enable_thinking=req.enable_thinking,
-                        thinking_budget=req.thinking_budget,
-                        reasoning_effort=req.reasoning_effort,
-                        repetition_penalty=req.repetition_penalty,
-                        frequency_penalty=req.frequency_penalty,
-                        presence_penalty=req.presence_penalty,
-                        min_tokens=req.min_tokens,
-                        ignore_eos=req.ignore_eos,
-                        suppress_tokens=req.suppress_tokens,
-                        logit_bias=_logit_bias,
-                        min_p=req.min_p,
-                        json_schema=json_schema,
-                        stop=req.stop,
-                        stop_token_ids=req.stop_token_ids,
-                        spec_decode=req.spec_decode,
-                        xtc_probability=req.xtc_probability,
-                        xtc_threshold=req.xtc_threshold,
-                        priority=req.priority,
-                        logprobs=req.logprobs,
-                        top_logprobs=req.top_logprobs,
-                        logits_processors=req.logits_processors,
+                    result = await run_with_disconnect_guard(
+                        request,
+                        engine.chat(
+                            messages=messages,
+                            max_tokens=req.max_output_tokens,
+                            temperature=req.temperature,
+                            top_p=req.top_p,
+                            top_k=req.top_k,
+                            # per-choice seed for n>1 (was req.seed for EVERY choice →
+                            # with explicit seed + temp>0 + n>1 all n choices got the same RNG
+                            # base key → IDENTICAL token streams, still billed n×). chat/
+                            # completions already offset by +idx; Responses was the outlier.
+                            seed=_per_choice_seed(req.seed, choice_idx),
+                            enable_thinking=req.enable_thinking,
+                            thinking_budget=req.thinking_budget,
+                            reasoning_effort=req.reasoning_effort,
+                            repetition_penalty=req.repetition_penalty,
+                            frequency_penalty=req.frequency_penalty,
+                            presence_penalty=req.presence_penalty,
+                            min_tokens=req.min_tokens,
+                            ignore_eos=req.ignore_eos,
+                            suppress_tokens=req.suppress_tokens,
+                            logit_bias=_logit_bias,
+                            min_p=req.min_p,
+                            json_schema=json_schema,
+                            stop=req.stop,
+                            stop_token_ids=req.stop_token_ids,
+                            spec_decode=req.spec_decode,
+                            xtc_probability=req.xtc_probability,
+                            xtc_threshold=req.xtc_threshold,
+                            priority=req.priority,
+                            logprobs=req.logprobs,
+                            top_logprobs=req.top_logprobs,
+                            logits_processors=req.logits_processors,
+                            cancel_event=_ns_cancel_event,
+                            timeout_seconds=req.timeout,
+                            lora_adapter=loaded_adapter,
+                        ),
                         cancel_event=_ns_cancel_event,
-                        timeout_seconds=req.timeout,
-                        lora_adapter=loaded_adapter,
-                    ), cancel_event=_ns_cancel_event)
+                    )
                 except HTTPException:
                     raise  # client-disconnect (499) etc. propagate, not a per-choice failure
                 except Exception as _choice_exc:  # isolate this choice's failure
-                    logger.warning("responses n>1: choice %d failed (%s); skipping", choice_idx, _choice_exc)
+                    logger.warning(
+                        "responses n>1: choice %d failed (%s); skipping",
+                        choice_idx,
+                        _choice_exc,
+                    )
                     _choice_errors.append(_choice_exc)
                     continue
                 if result is None:
@@ -1017,50 +1278,61 @@ async def create_response(req: ResponsesRequest, request: Request):
                 pt = result.prompt_tokens
                 ct = result.completion_tokens
                 finish_reason = _normalize_finish_reason(result.finish_reason)
-                _reasoning_tokens = getattr(result, 'reasoning_tokens', 0)
-                _cached_tokens = getattr(result, 'cached_tokens', 0)
+                _reasoning_tokens = getattr(result, "reasoning_tokens", 0)
+                _cached_tokens = getattr(result, "cached_tokens", 0)
             else:
                 try:
-                    state = await run_with_disconnect_guard(request, engine.generate(
-                        prompt=_non_batched_prompt,
-                        max_tokens=req.max_output_tokens,
-                        temperature=req.temperature,
-                        top_p=req.top_p,
-                        top_k=req.top_k,
-                        seed=_per_choice_seed(req.seed, choice_idx),  # per-choice (see chat path)
-                        enable_thinking=req.enable_thinking,
-                        thinking_budget=req.thinking_budget,
-                        reasoning_effort=req.reasoning_effort,
-                        repetition_penalty=req.repetition_penalty,
-                        frequency_penalty=req.frequency_penalty,
-                        presence_penalty=req.presence_penalty,
-                        min_tokens=req.min_tokens,
-                        ignore_eos=req.ignore_eos,
-                        suppress_tokens=req.suppress_tokens,
-                        logit_bias=_logit_bias,
-                        min_p=req.min_p,
-                        json_schema=json_schema,
-                        stop=req.stop,
-                        stop_token_ids=req.stop_token_ids,
-                        spec_decode=req.spec_decode,
-                        xtc_probability=req.xtc_probability,
-                        xtc_threshold=req.xtc_threshold,
-                        priority=req.priority,
-                        logprobs=req.logprobs,
-                        top_logprobs=req.top_logprobs,
-                        logits_processors=req.logits_processors,
+                    state = await run_with_disconnect_guard(
+                        request,
+                        engine.generate(
+                            prompt=_non_batched_prompt,
+                            max_tokens=req.max_output_tokens,
+                            temperature=req.temperature,
+                            top_p=req.top_p,
+                            top_k=req.top_k,
+                            seed=_per_choice_seed(
+                                req.seed, choice_idx
+                            ),  # per-choice (see chat path)
+                            enable_thinking=req.enable_thinking,
+                            thinking_budget=req.thinking_budget,
+                            reasoning_effort=req.reasoning_effort,
+                            repetition_penalty=req.repetition_penalty,
+                            frequency_penalty=req.frequency_penalty,
+                            presence_penalty=req.presence_penalty,
+                            min_tokens=req.min_tokens,
+                            ignore_eos=req.ignore_eos,
+                            suppress_tokens=req.suppress_tokens,
+                            logit_bias=_logit_bias,
+                            min_p=req.min_p,
+                            json_schema=json_schema,
+                            stop=req.stop,
+                            stop_token_ids=req.stop_token_ids,
+                            spec_decode=req.spec_decode,
+                            xtc_probability=req.xtc_probability,
+                            xtc_threshold=req.xtc_threshold,
+                            priority=req.priority,
+                            logprobs=req.logprobs,
+                            top_logprobs=req.top_logprobs,
+                            logits_processors=req.logits_processors,
+                            cancel_event=_ns_cancel_event,
+                            timeout_seconds=req.timeout,
+                            lora_adapter=loaded_adapter,
+                        ),
                         cancel_event=_ns_cancel_event,
-                        timeout_seconds=req.timeout,
-                        lora_adapter=loaded_adapter,
-                    ), cancel_event=_ns_cancel_event)
+                    )
                 except HTTPException:
                     raise  # client-disconnect (499) etc. propagate, not a per-choice failure
                 except Exception as _choice_exc:  # isolate this choice's failure
-                    logger.warning("responses n>1: choice %d failed (%s); skipping", choice_idx, _choice_exc)
+                    logger.warning(
+                        "responses n>1: choice %d failed (%s); skipping",
+                        choice_idx,
+                        _choice_exc,
+                    )
                     _choice_errors.append(_choice_exc)
                     continue
                 if state is None:
                     raise HTTPException(status_code=499, detail="Client disconnected")
+
                 # VLMEngine returns a dict, BatchedEngine returns a state
                 # object. Use a unified accessor that reads from either.
                 def _get(name, fallback=None, default=None):
@@ -1074,19 +1346,21 @@ async def create_response(req: ResponsesRequest, request: Request):
                         v = getattr(state, fallback, None)
                     return default if v is None else v
 
-                text = _get('generated_text', 'text', '')
-                pt = _get('prompt_token_count', 'prompt_tokens', 0)
-                ct = _get('completion_token_count', 'completion_tokens', 0)
-                finish_reason = _normalize_finish_reason(_get('finish_reason', None, None))
-                _reasoning_tokens = _get('reasoning_tokens', None, 0) or 0
-                _cached_tokens = _get('cached_tokens', None, 0) or 0
+                text = _get("generated_text", "text", "")
+                pt = _get("prompt_token_count", "prompt_tokens", 0)
+                ct = _get("completion_token_count", "completion_tokens", 0)
+                finish_reason = _normalize_finish_reason(
+                    _get("finish_reason", None, None)
+                )
+                _reasoning_tokens = _get("reasoning_tokens", None, 0) or 0
+                _cached_tokens = _get("cached_tokens", None, 0) or 0
 
             # Stop-sequence overcount correction
             if req.stop and finish_reason == "stop":
                 for _seq in req.stop:
                     if _seq and _seq in text:
-                        _corrected = text[:text.find(_seq)]
-                        _tok = getattr(engine, '_tokenizer', None)
+                        _corrected = text[: text.find(_seq)]
+                        _tok = getattr(engine, "_tokenizer", None)
                         if _tok:
                             try:
                                 _cc = len(_tok.encode(_corrected))
@@ -1098,6 +1372,7 @@ async def create_response(req: ResponsesRequest, request: Request):
 
             # Extract thinking content for reasoning models
             from ..streaming import extract_thinking
+
             _thinking, text = extract_thinking(text, req.model)
             if _thinking and _reasoning_tokens == 0:
                 # cap at ct. output_tokens (= total_ct) already
@@ -1107,7 +1382,8 @@ async def create_response(req: ResponsesRequest, request: Request):
                 # output_tokens, violating reasoning ≤ output. Matches chat.py's min(...,ct).
                 _reasoning_tokens = (
                     min(len(engine._tokenizer.encode(_thinking)), ct)
-                    if hasattr(engine, '_tokenizer') and engine._tokenizer else 0
+                    if hasattr(engine, "_tokenizer") and engine._tokenizer
+                    else 0
                 )
 
             # Accumulate usage across all choices
@@ -1121,6 +1397,7 @@ async def create_response(req: ResponsesRequest, request: Request):
             tool_calls = None
             if req.tools:
                 from .chat import clean_tool_call_markup, extract_tool_calls_model_aware
+
                 tool_calls = extract_tool_calls_model_aware(text, req.model)
                 if tool_calls:
                     text = clean_tool_call_markup(text)
@@ -1132,9 +1409,15 @@ async def create_response(req: ResponsesRequest, request: Request):
             # Responses API logprobs format: flat list of {"token", "logprob", "top_logprobs"}
             # NOT the Chat Completions {"content": [...]} wrapper.
             if req.logprobs:
-                _result_lp = getattr(result, 'logprobs', None) if is_batched else getattr(state, 'logprobs', None)
+                _result_lp = (
+                    getattr(result, "logprobs", None)
+                    if is_batched
+                    else getattr(state, "logprobs", None)
+                )
                 if isinstance(_result_lp, (list, tuple)) and len(_result_lp) > 0:
-                    _chat_lp = _format_chat_logprobs(_result_lp, top_logprobs=req.top_logprobs)
+                    _chat_lp = _format_chat_logprobs(
+                        _result_lp, top_logprobs=req.top_logprobs
+                    )
                     if _chat_lp:
                         # Unwrap from Chat Completions {"content": [...]} to flat list
                         text_part["logprobs"] = _chat_lp.get("content", [])
@@ -1168,18 +1451,20 @@ async def create_response(req: ResponsesRequest, request: Request):
 
             if tool_calls:
                 for tc in tool_calls:
-                    all_output_items.append({
-                        "type": "function_call",
-                        "id": f"fc-{uuid.uuid4().hex[:24]}",
-                        "call_id": f"call_{uuid.uuid4().hex[:8]}",
-                        "name": tc["name"],
-                        "arguments": tc["arguments"],
-                        # parity with the streaming path's function_call item
-                        # (responses.py ~1465), which includes status — a non-stream
-                        # client reconstructing output items shouldn't see a shape that
-                        # differs from the streamed one by a missing field.
-                        "status": "completed",
-                    })
+                    all_output_items.append(
+                        {
+                            "type": "function_call",
+                            "id": f"fc-{uuid.uuid4().hex[:24]}",
+                            "call_id": f"call_{uuid.uuid4().hex[:8]}",
+                            "name": tc["name"],
+                            "arguments": tc["arguments"],
+                            # parity with the streaming path's function_call item
+                            # (responses.py ~1465), which includes status — a non-stream
+                            # client reconstructing output items shouldn't see a shape that
+                            # differs from the streamed one by a missing field.
+                            "status": "completed",
+                        }
+                    )
 
         # if EVERY choice failed (none produced an output item), re-raise the
         # last error so the outer 507 (MemoryError) / 500 handler responds — don't return a
@@ -1192,13 +1477,22 @@ async def create_response(req: ResponsesRequest, request: Request):
         # so they correctly add reasoning).
         _record_metrics(total_pt, total_ct)
         # End tracing
-        tracer.end_trace(trace_id, result={
-            "prompt_tokens": total_pt,
-            "completion_tokens": total_ct,
-            "choices": req.n,
-        })
-        slog.info("inference_complete", model=req.model, trace_id=trace_id,
-                  prompt_tokens=total_pt, completion_tokens=total_ct, choices=req.n)
+        tracer.end_trace(
+            trace_id,
+            result={
+                "prompt_tokens": total_pt,
+                "completion_tokens": total_ct,
+                "choices": req.n,
+            },
+        )
+        slog.info(
+            "inference_complete",
+            model=req.model,
+            trace_id=trace_id,
+            prompt_tokens=total_pt,
+            completion_tokens=total_ct,
+            choices=req.n,
+        )
 
         # length OR an interrupted/cancelled/aborted/errored generation → "incomplete";
         # only a normal stop/eos/tool_calls/None is "completed" (mirrors streaming path).
@@ -1213,8 +1507,16 @@ async def create_response(req: ResponsesRequest, request: Request):
         else:
             _response_status = (
                 "incomplete"
-                if last_finish_reason in ("length", "cancel", "cancelled", "abort",
-                                          "aborted", "error", "content_filter")
+                if last_finish_reason
+                in (
+                    "length",
+                    "cancel",
+                    "cancelled",
+                    "abort",
+                    "aborted",
+                    "error",
+                    "content_filter",
+                )
                 else "completed"
             )
 
@@ -1233,8 +1535,20 @@ async def create_response(req: ResponsesRequest, request: Request):
                 # reasoning is the detail subset below (was double-added).
                 "output_tokens": total_ct,
                 "total_tokens": total_pt + total_ct,
-                **({"output_tokens_details": {"reasoning_tokens": total_reasoning_tokens}} if total_reasoning_tokens > 0 else {}),
-                **({"input_tokens_details": {"cached_tokens": max_cached_tokens}} if max_cached_tokens > 0 else {}),
+                **(
+                    {
+                        "output_tokens_details": {
+                            "reasoning_tokens": total_reasoning_tokens
+                        }
+                    }
+                    if total_reasoning_tokens > 0
+                    else {}
+                ),
+                **(
+                    {"input_tokens_details": {"cached_tokens": max_cached_tokens}}
+                    if max_cached_tokens > 0
+                    else {}
+                ),
             },
         }
         # Persist when the client requested storage so it can be retrieved
@@ -1270,13 +1584,25 @@ async def create_response(req: ResponsesRequest, request: Request):
     except MemoryError:
         return JSONResponse(
             status_code=507,
-            content={"error": {"message": "Insufficient GPU memory", "type": "server_error", "code": "insufficient_memory"}},
+            content={
+                "error": {
+                    "message": "Insufficient GPU memory",
+                    "type": "server_error",
+                    "code": "insufficient_memory",
+                }
+            },
         )
     except Exception as e:
         logger.error(f"Responses API generation error: {e}", exc_info=True)
         return JSONResponse(
             status_code=500,
-            content={"error": {"message": "Internal server error", "type": "server_error", "code": "internal_error"}},
+            content={
+                "error": {
+                    "message": "Internal server error",
+                    "type": "server_error",
+                    "code": "internal_error",
+                }
+            },
         )
     finally:
         _release_lora_adapter(engine, loaded_adapter)
@@ -1285,7 +1611,16 @@ async def create_response(req: ResponsesRequest, request: Request):
                 _ns_tracker.unregister(response_id)
 
 
-async def _stream_response(engine, req, messages, response_id, json_schema, loaded_adapter=None, request=None, own_input_messages=None):
+async def _stream_response(
+    engine,
+    req,
+    messages,
+    response_id,
+    json_schema,
+    loaded_adapter=None,
+    request=None,
+    own_input_messages=None,
+):
     """SSE streaming for Responses API using proper event types.
 
     Emits the correct Responses API SSE events:
@@ -1305,6 +1640,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
 
     from ..streaming import with_sse_keepalive
     from .chat import _release_lora_adapter
+
     is_batched = isinstance(engine, BatchedEngine)
 
     # Non-batched Engine path: apply chat template ourselves before passing
@@ -1313,15 +1649,24 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
     # tool-related fields, producing garbage for tool-use conversations.
     _stream_prompt: str | list[dict] = messages
     if not is_batched and messages:
-        _tokenizer = getattr(engine, '_tokenizer', None)
-        if _tokenizer is not None and hasattr(_tokenizer, 'apply_chat_template'):
+        _tokenizer = getattr(engine, "_tokenizer", None)
+        if _tokenizer is not None and hasattr(_tokenizer, "apply_chat_template"):
             # same role-remap + normalize as the non-stream sibling above.
             _msgs = messages
             try:
                 from yunshu_engine.batched_engine import BatchedEngine as _BE
+
                 _msgs = [
-                    ({**_m, "role": ("system" if _m.get("role") == "developer" else "tool")}
-                     if _m.get("role") in ("developer", "function") else _m)
+                    (
+                        {
+                            **_m,
+                            "role": (
+                                "system" if _m.get("role") == "developer" else "tool"
+                            ),
+                        }
+                        if _m.get("role") in ("developer", "function")
+                        else _m
+                    )
                     for _m in messages
                 ]
                 _msgs = _BE._normalize_messages_for_chat_template(_msgs)
@@ -1329,7 +1674,10 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 _msgs = messages
             try:
                 from yunshu_engine.message_adapter import adapt_messages
-                _adapted = adapt_messages(_msgs, getattr(engine, 'model_name', '') or '')
+
+                _adapted = adapt_messages(
+                    _msgs, getattr(engine, "model_name", "") or ""
+                )
             except Exception:
                 _adapted = _msgs
             try:
@@ -1340,15 +1688,21 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 if _rendered:
                     _stream_prompt = _rendered
             except TypeError as _te:
-                if 'enable_thinking' in str(_te):
-                    _tpl_kwargs.pop('enable_thinking', None)
+                if "enable_thinking" in str(_te):
+                    _tpl_kwargs.pop("enable_thinking", None)
                     _rendered = _tokenizer.apply_chat_template(_adapted, **_tpl_kwargs)
                     if _rendered:
                         _stream_prompt = _rendered
                 else:
-                    logger.debug("chat template failed for non-batched streaming Responses path", exc_info=True)
+                    logger.debug(
+                        "chat template failed for non-batched streaming Responses path",
+                        exc_info=True,
+                    )
             except Exception:
-                logger.debug("chat template failed for non-batched streaming Responses path", exc_info=True)
+                logger.debug(
+                    "chat template failed for non-batched streaming Responses path",
+                    exc_info=True,
+                )
 
     _logit_bias = req.logit_bias
     if _logit_bias:
@@ -1358,13 +1712,18 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
         # logit_bias={"50256": NaN}/1e9 made that logit NaN/Inf → softmax all-NaN →
         # garbage output instead of a clean 422. Same class fixed elsewhere.
         import math
+
         for _bk, _bv in _logit_bias.items():
             if math.isnan(_bv) or math.isinf(_bv):
-                raise HTTPException(status_code=400,  # OpenAI uses 400 for invalid params
-                                    detail=f"logit_bias[{_bk}] must be finite, got {_bv}")
+                raise HTTPException(
+                    status_code=400,  # OpenAI uses 400 for invalid params
+                    detail=f"logit_bias[{_bk}] must be finite, got {_bv}",
+                )
             if _bv < -100 or _bv > 100:
-                raise HTTPException(status_code=400,  # OpenAI uses 400 for invalid params
-                                    detail=f"logit_bias[{_bk}] must be in [-100, 100], got {_bv}")
+                raise HTTPException(
+                    status_code=400,  # OpenAI uses 400 for invalid params
+                    detail=f"logit_bias[{_bk}] must be in [-100, 100], got {_bv}",
+                )
         _converted = {}
         for k, v in _logit_bias.items():
             try:
@@ -1385,6 +1744,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
     _tracker_gen = None
     try:
         from yunshu_engine.request_tracker import get_request_tracker
+
         _tracker = get_request_tracker()
         _tracker_gen = _tracker.register(_stream_id, req.model or "")
     except Exception:
@@ -1407,9 +1767,13 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
     _resp_tool_streamer = None
     if req.tools and req.tool_choice != "none":
         from yunshu_engine.tool_call_streamer import ToolCallStreamer
-        _tc_forced = (req.tool_choice.get("name")
-                      if isinstance(req.tool_choice, dict) else None)
-        _resp_tool_streamer = ToolCallStreamer(forced_tool_name=_tc_forced, model_name=req.model)
+
+        _tc_forced = (
+            req.tool_choice.get("name") if isinstance(req.tool_choice, dict) else None
+        )
+        _resp_tool_streamer = ToolCallStreamer(
+            forced_tool_name=_tc_forced, model_name=req.model
+        )
 
     def _next_seq():
         nonlocal _seq
@@ -1430,531 +1794,684 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
     _msg_idx = 0
     _rs_id = f"rs-{uuid.uuid4().hex[:24]}"
     try:
-      async def _token_source():
-        nonlocal prompt_tok, completion_tok, reasoning_tok, cached_tok, accumulated_text, accumulated_thinking, _metrics_recorded, _stream_last_finish_reason, _content_part_added, _output_item_added, _reasoning_item_added, _reasoning_done_emitted, _msg_idx
-        last_finish_reason = None
 
-        # ── Lifecycle: response.created ──
-        yield format_responses_created(response_id, req.model, seq=_next_seq())
+        async def _token_source():
+            nonlocal \
+                prompt_tok, \
+                completion_tok, \
+                reasoning_tok, \
+                cached_tok, \
+                accumulated_text, \
+                accumulated_thinking, \
+                _metrics_recorded, \
+                _stream_last_finish_reason, \
+                _content_part_added, \
+                _output_item_added, \
+                _reasoning_item_added, \
+                _reasoning_done_emitted, \
+                _msg_idx
+            last_finish_reason = None
 
-        # ── Lifecycle: response.in_progress ──
-        yield format_responses_in_progress(response_id, req.model, seq=_next_seq())
+            # ── Lifecycle: response.created ──
+            yield format_responses_created(response_id, req.model, seq=_next_seq())
 
-        # NOTE : no unconditional output_item.added here — the message item is
-        # opened lazily by _ensure_msg_item() on the first non-reasoning token (or at
-        # close), so a leading reasoning item can take output_index 0.
+            # ── Lifecycle: response.in_progress ──
+            yield format_responses_in_progress(response_id, req.model, seq=_next_seq())
 
-        def _ensure_reasoning_item():
-            """Open the reasoning output item once (output_index 0)."""
-            nonlocal _reasoning_item_added
-            if _reasoning_item_added:
-                return
-            _reasoning_item_added = True
-            yield format_responses_output_item_added(
-                response_id, req.model, item_id=_rs_id, output_index=0,
-                seq=_next_seq(), item_type="reasoning")
-            yield ("event: response.reasoning_summary_part.added\ndata: " + json.dumps(
-                {"type": "response.reasoning_summary_part.added", "item_id": _rs_id,
-                 "output_index": 0, "summary_index": 0,
-                 "part": {"type": "summary_text", "text": ""},
-                 "sequence_number": _next_seq()}) + "\n\n")
+            # NOTE : no unconditional output_item.added here — the message item is
+            # opened lazily by _ensure_msg_item() on the first non-reasoning token (or at
+            # close), so a leading reasoning item can take output_index 0.
 
-        def _close_reasoning_part():
-            """Close the reasoning item once: summary text.done + part.done +
-            output_item.done (reads accumulated_thinking at iteration time)."""
-            nonlocal _reasoning_done_emitted
-            if _reasoning_done_emitted or not _reasoning_item_added:
-                return
-            _reasoning_done_emitted = True
-            yield ("event: response.reasoning_summary_text.done\ndata: " + json.dumps(
-                {"type": "response.reasoning_summary_text.done", "item_id": _rs_id,
-                 "output_index": 0, "summary_index": 0, "text": accumulated_thinking,
-                 "sequence_number": _next_seq()}) + "\n\n")
-            yield ("event: response.reasoning_summary_part.done\ndata: " + json.dumps(
-                {"type": "response.reasoning_summary_part.done", "item_id": _rs_id,
-                 "output_index": 0, "summary_index": 0,
-                 "part": {"type": "summary_text", "text": accumulated_thinking},
-                 "sequence_number": _next_seq()}) + "\n\n")
-            yield ("event: response.output_item.done\ndata: " + json.dumps(
-                {"type": "response.output_item.done", "output_index": 0,
-                 "item": {"type": "reasoning", "id": _rs_id,
-                          "summary": [{"type": "summary_text", "text": accumulated_thinking}],
-                          "status": "completed"},
-                 "sequence_number": _next_seq()}) + "\n\n")
+            def _ensure_reasoning_item():
+                """Open the reasoning output item once (output_index 0)."""
+                nonlocal _reasoning_item_added
+                if _reasoning_item_added:
+                    return
+                _reasoning_item_added = True
+                yield format_responses_output_item_added(
+                    response_id,
+                    req.model,
+                    item_id=_rs_id,
+                    output_index=0,
+                    seq=_next_seq(),
+                    item_type="reasoning",
+                )
+                yield (
+                    "event: response.reasoning_summary_part.added\ndata: "
+                    + json.dumps(
+                        {
+                            "type": "response.reasoning_summary_part.added",
+                            "item_id": _rs_id,
+                            "output_index": 0,
+                            "summary_index": 0,
+                            "part": {"type": "summary_text", "text": ""},
+                            "sequence_number": _next_seq(),
+                        }
+                    )
+                    + "\n\n"
+                )
 
-        def _ensure_msg_item():
-            """Open the message output item once, at _msg_idx (1 if a reasoning item
-            precedes it, else 0)."""
-            nonlocal _output_item_added, _content_part_added, _msg_idx
-            if _output_item_added:
-                return
-            _msg_idx = 1 if _reasoning_item_added else 0
-            _output_item_added = True
-            yield format_responses_output_item_added(
-                response_id, req.model, item_id=msg_id, output_index=_msg_idx, seq=_next_seq())
-            yield format_responses_content_part_added(
-                item_id=msg_id, output_index=_msg_idx, content_index=0, seq=_next_seq())
-            _content_part_added = True
+            def _close_reasoning_part():
+                """Close the reasoning item once: summary text.done + part.done +
+                output_item.done (reads accumulated_thinking at iteration time)."""
+                nonlocal _reasoning_done_emitted
+                if _reasoning_done_emitted or not _reasoning_item_added:
+                    return
+                _reasoning_done_emitted = True
+                yield (
+                    "event: response.reasoning_summary_text.done\ndata: "
+                    + json.dumps(
+                        {
+                            "type": "response.reasoning_summary_text.done",
+                            "item_id": _rs_id,
+                            "output_index": 0,
+                            "summary_index": 0,
+                            "text": accumulated_thinking,
+                            "sequence_number": _next_seq(),
+                        }
+                    )
+                    + "\n\n"
+                )
+                yield (
+                    "event: response.reasoning_summary_part.done\ndata: "
+                    + json.dumps(
+                        {
+                            "type": "response.reasoning_summary_part.done",
+                            "item_id": _rs_id,
+                            "output_index": 0,
+                            "summary_index": 0,
+                            "part": {
+                                "type": "summary_text",
+                                "text": accumulated_thinking,
+                            },
+                            "sequence_number": _next_seq(),
+                        }
+                    )
+                    + "\n\n"
+                )
+                yield (
+                    "event: response.output_item.done\ndata: "
+                    + json.dumps(
+                        {
+                            "type": "response.output_item.done",
+                            "output_index": 0,
+                            "item": {
+                                "type": "reasoning",
+                                "id": _rs_id,
+                                "summary": [
+                                    {
+                                        "type": "summary_text",
+                                        "text": accumulated_thinking,
+                                    }
+                                ],
+                                "status": "completed",
+                            },
+                            "sequence_number": _next_seq(),
+                        }
+                    )
+                    + "\n\n"
+                )
 
-        def _emit_token(token_text, is_reasoning, lp=None):
-            """Shared per-token emission (both the batched and non-batched loops): lazily
-            opens the reasoning/message items and yields the correct delta at the right
-            output_index. On the reasoning→text transition, closes the reasoning item."""
-            if not token_text:
-                return
-            if is_reasoning:
-                for _ev in _ensure_reasoning_item():
-                    yield _ev
-                yield ("event: response.reasoning_summary_text.delta\ndata: " + json.dumps(
-                    {"type": "response.reasoning_summary_text.delta", "item_id": _rs_id,
-                     "output_index": 0, "summary_index": 0, "delta": token_text,
-                     "sequence_number": _next_seq()}) + "\n\n")
-            else:
-                for _ev in _close_reasoning_part():
-                    yield _ev
-                for _ev in _ensure_msg_item():
-                    yield _ev
-                if _resp_tool_streamer is not None:
-                    # feed through the streamer; emit ONLY the clean-text chunks as
-                    # deltas, holding back any tool-call markup (surfaced as function_call
-                    # items at end-of-stream). logprobs are dropped on this path since the
-                    # emitted text no longer aligns 1:1 with the source token.
-                    for _so in _resp_tool_streamer.process_token(token_text):
-                        if _so.text:
-                            yield format_responses_text_delta(
-                                delta=_so.text, item_id=msg_id, output_index=_msg_idx,
-                                content_index=0, logprobs=None, seq=_next_seq())
+            def _ensure_msg_item():
+                """Open the message output item once, at _msg_idx (1 if a reasoning item
+                precedes it, else 0)."""
+                nonlocal _output_item_added, _content_part_added, _msg_idx
+                if _output_item_added:
+                    return
+                _msg_idx = 1 if _reasoning_item_added else 0
+                _output_item_added = True
+                yield format_responses_output_item_added(
+                    response_id,
+                    req.model,
+                    item_id=msg_id,
+                    output_index=_msg_idx,
+                    seq=_next_seq(),
+                )
+                yield format_responses_content_part_added(
+                    item_id=msg_id,
+                    output_index=_msg_idx,
+                    content_index=0,
+                    seq=_next_seq(),
+                )
+                _content_part_added = True
+
+            def _emit_token(token_text, is_reasoning, lp=None):
+                """Shared per-token emission (both the batched and non-batched loops): lazily
+                opens the reasoning/message items and yields the correct delta at the right
+                output_index. On the reasoning→text transition, closes the reasoning item."""
+                if not token_text:
+                    return
+                if is_reasoning:
+                    for _ev in _ensure_reasoning_item():
+                        yield _ev
+                    yield (
+                        "event: response.reasoning_summary_text.delta\ndata: "
+                        + json.dumps(
+                            {
+                                "type": "response.reasoning_summary_text.delta",
+                                "item_id": _rs_id,
+                                "output_index": 0,
+                                "summary_index": 0,
+                                "delta": token_text,
+                                "sequence_number": _next_seq(),
+                            }
+                        )
+                        + "\n\n"
+                    )
                 else:
-                    yield format_responses_text_delta(
-                        delta=token_text, item_id=msg_id, output_index=_msg_idx,
-                        content_index=0, logprobs=lp, seq=_next_seq())
-
-        if is_batched:
-            async for output in engine.stream_chat(
-                messages=messages,
-                max_tokens=req.max_output_tokens,
-                temperature=req.temperature,
-                top_p=req.top_p,
-                top_k=req.top_k,
-                seed=req.seed,
-                enable_thinking=req.enable_thinking,
-                thinking_budget=req.thinking_budget,
-                reasoning_effort=req.reasoning_effort,
-                repetition_penalty=req.repetition_penalty,
-                frequency_penalty=req.frequency_penalty,
-                presence_penalty=req.presence_penalty,
-                min_tokens=req.min_tokens,
-                ignore_eos=req.ignore_eos,
-                suppress_tokens=req.suppress_tokens,
-                logit_bias=_logit_bias,
-                min_p=req.min_p,
-                json_schema=json_schema,
-                stop=req.stop,
-                stop_token_ids=req.stop_token_ids,
-                spec_decode=req.spec_decode,
-                xtc_probability=req.xtc_probability,
-                xtc_threshold=req.xtc_threshold,
-                priority=req.priority,
-                logprobs=req.logprobs,
-                top_logprobs=req.top_logprobs,
-                logits_processors=req.logits_processors,
-                cancel_event=_cancel_evt,
-                timeout_seconds=req.timeout,
-                lora_adapter=loaded_adapter,
-            ):
-                if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
-                    prompt_tok = output.prompt_tokens
-                if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:
-                    reasoning_tok = output.reasoning_tokens
-                if hasattr(output, 'cached_tokens') and output.cached_tokens:
-                    cached_tok = max(cached_tok, output.cached_tokens)
-                if hasattr(output, 'completion_tokens') and output.completion_tokens:
-                    completion_tok = max(completion_tok, output.completion_tokens)
-                elif output.new_text and getattr(output, 'current_state', None) != "reasoning":
-                    # Only count non-reasoning tokens toward completion_tok
-                    completion_tok += 1
-                _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
-                if output.new_text:
-                    if _is_reasoning:
-                        accumulated_thinking += output.new_text
-                    else:
-                        accumulated_text += output.new_text
-                if len(accumulated_text) > _MAX_STREAMING_TEXT_BUFFER:
-                    logger.error("Responses streaming text exceeded 1MB — truncating")
-                    accumulated_text = accumulated_text[-_TRUNCATE_KEEP:]
-                if output.finish_reason is not None:
-                    last_finish_reason = output.finish_reason
-
-                # ── Per-token emission via the shared lazy-item helper ──
-                if output.new_text:
-                    _delta_lp = None
-                    if req.logprobs and not _is_reasoning:
-                        _flp = _format_chat_logprobs(
-                            getattr(output, 'logprobs', None),
-                            tokenizer=getattr(engine, '_tokenizer', None),
-                            top_logprobs=req.top_logprobs,
-                        )
-                        _delta_lp = _flp.get("content", []) if _flp else None
-                    for _ev in _emit_token(output.new_text, _is_reasoning, _delta_lp):
-                        yield _ev
-        else:
-            async for output in engine.generate_stream(
-                prompt=_stream_prompt,
-                max_tokens=req.max_output_tokens,
-                temperature=req.temperature,
-                top_p=req.top_p,
-                top_k=req.top_k,
-                seed=req.seed,
-                enable_thinking=req.enable_thinking,
-                thinking_budget=req.thinking_budget,
-                reasoning_effort=req.reasoning_effort,
-                repetition_penalty=req.repetition_penalty,
-                frequency_penalty=req.frequency_penalty,
-                presence_penalty=req.presence_penalty,
-                min_tokens=req.min_tokens,
-                ignore_eos=req.ignore_eos,
-                suppress_tokens=req.suppress_tokens,
-                logit_bias=_logit_bias,
-                min_p=req.min_p,
-                json_schema=json_schema,
-                stop=req.stop,
-                stop_token_ids=req.stop_token_ids,
-                spec_decode=req.spec_decode,
-                xtc_probability=req.xtc_probability,
-                xtc_threshold=req.xtc_threshold,
-                priority=req.priority,
-                logprobs=req.logprobs,
-                top_logprobs=req.top_logprobs,
-                logits_processors=req.logits_processors,
-                cancel_event=_cancel_evt,
-                timeout_seconds=req.timeout,
-                lora_adapter=loaded_adapter,
-            ):
-                if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
-                    prompt_tok = output.prompt_tokens
-                if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:
-                    reasoning_tok = output.reasoning_tokens
-                if hasattr(output, 'cached_tokens') and output.cached_tokens:
-                    cached_tok = max(cached_tok, output.cached_tokens)
-                token_text = getattr(output, 'token_text', '')
-                _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
-                if hasattr(output, 'completion_tokens') and output.completion_tokens:
-                    completion_tok = max(completion_tok, output.completion_tokens)
-                elif token_text and not _is_reasoning:
-                    completion_tok += 1
-                if token_text:
-                    if _is_reasoning:
-                        accumulated_thinking += token_text
-                    else:
-                        accumulated_text += token_text
-                if len(accumulated_text) > _MAX_STREAMING_TEXT_BUFFER:
-                    logger.error("Responses streaming text exceeded 1MB — truncating")
-                    accumulated_text = accumulated_text[-_TRUNCATE_KEEP:]
-                if getattr(output, 'finish_reason', None) is not None:
-                    last_finish_reason = output.finish_reason
-
-                # ── Per-token emission via the shared lazy-item helper ──
-                if token_text:
-                    _delta_lp2 = None
-                    if req.logprobs and not _is_reasoning:
-                        _flp2 = _format_chat_logprobs(
-                            getattr(output, 'logprobs', None),
-                            tokenizer=getattr(engine, '_tokenizer', None),
-                            top_logprobs=req.top_logprobs,
-                        )
-                        _delta_lp2 = _flp2.get("content", []) if _flp2 else None
-                    for _ev in _emit_token(token_text, _is_reasoning, _delta_lp2):
-                        yield _ev
-
-        # flush any text the tool streamer was holding back (a partial markup
-        # prefix that turned out to be plain text) before the message item is finalized.
-        if _resp_tool_streamer is not None:
-            for _so in _resp_tool_streamer.flush():
-                if _so.text:
                     for _ev in _close_reasoning_part():
                         yield _ev
                     for _ev in _ensure_msg_item():
                         yield _ev
-                    yield format_responses_text_delta(
-                        delta=_so.text, item_id=msg_id, output_index=_msg_idx,
-                        content_index=0, logprobs=None, seq=_next_seq())
+                    if _resp_tool_streamer is not None:
+                        # feed through the streamer; emit ONLY the clean-text chunks as
+                        # deltas, holding back any tool-call markup (surfaced as function_call
+                        # items at end-of-stream). logprobs are dropped on this path since the
+                        # emitted text no longer aligns 1:1 with the source token.
+                        for _so in _resp_tool_streamer.process_token(token_text):
+                            if _so.text:
+                                yield format_responses_text_delta(
+                                    delta=_so.text,
+                                    item_id=msg_id,
+                                    output_index=_msg_idx,
+                                    content_index=0,
+                                    logprobs=None,
+                                    seq=_next_seq(),
+                                )
+                    else:
+                        yield format_responses_text_delta(
+                            delta=token_text,
+                            item_id=msg_id,
+                            output_index=_msg_idx,
+                            content_index=0,
+                            logprobs=lp,
+                            seq=_next_seq(),
+                        )
 
-        # Close the reasoning item if it never saw a following text token (all-reasoning
-        # response, or the stream ended mid-reasoning) — otherwise it's unterminated. Then
-        # ensure the message item exists (an all-reasoning response still emits an empty
-        # message at output_index 1).
-        for _ev in _close_reasoning_part():
-            yield _ev
-        for _ev in _ensure_msg_item():
-            yield _ev
+            if is_batched:
+                async for output in engine.stream_chat(
+                    messages=messages,
+                    max_tokens=req.max_output_tokens,
+                    temperature=req.temperature,
+                    top_p=req.top_p,
+                    top_k=req.top_k,
+                    seed=req.seed,
+                    enable_thinking=req.enable_thinking,
+                    thinking_budget=req.thinking_budget,
+                    reasoning_effort=req.reasoning_effort,
+                    repetition_penalty=req.repetition_penalty,
+                    frequency_penalty=req.frequency_penalty,
+                    presence_penalty=req.presence_penalty,
+                    min_tokens=req.min_tokens,
+                    ignore_eos=req.ignore_eos,
+                    suppress_tokens=req.suppress_tokens,
+                    logit_bias=_logit_bias,
+                    min_p=req.min_p,
+                    json_schema=json_schema,
+                    stop=req.stop,
+                    stop_token_ids=req.stop_token_ids,
+                    spec_decode=req.spec_decode,
+                    xtc_probability=req.xtc_probability,
+                    xtc_threshold=req.xtc_threshold,
+                    priority=req.priority,
+                    logprobs=req.logprobs,
+                    top_logprobs=req.top_logprobs,
+                    logits_processors=req.logits_processors,
+                    cancel_event=_cancel_evt,
+                    timeout_seconds=req.timeout,
+                    lora_adapter=loaded_adapter,
+                ):
+                    if hasattr(output, "prompt_tokens") and output.prompt_tokens:
+                        prompt_tok = output.prompt_tokens
+                    if hasattr(output, "reasoning_tokens") and output.reasoning_tokens:
+                        reasoning_tok = output.reasoning_tokens
+                    if hasattr(output, "cached_tokens") and output.cached_tokens:
+                        cached_tok = max(cached_tok, output.cached_tokens)
+                    if (
+                        hasattr(output, "completion_tokens")
+                        and output.completion_tokens
+                    ):
+                        completion_tok = max(completion_tok, output.completion_tokens)
+                    elif (
+                        output.new_text
+                        and getattr(output, "current_state", None) != "reasoning"
+                    ):
+                        # Only count non-reasoning tokens toward completion_tok
+                        completion_tok += 1
+                    _is_reasoning = (
+                        getattr(output, "current_state", None) == "reasoning"
+                    )
+                    if output.new_text:
+                        if _is_reasoning:
+                            accumulated_thinking += output.new_text
+                        else:
+                            accumulated_text += output.new_text
+                    if len(accumulated_text) > _MAX_STREAMING_TEXT_BUFFER:
+                        logger.error(
+                            "Responses streaming text exceeded 1MB — truncating"
+                        )
+                        accumulated_text = accumulated_text[-_TRUNCATE_KEEP:]
+                    if output.finish_reason is not None:
+                        last_finish_reason = output.finish_reason
 
-        # ── Stop-sequence overcount correction ──
-        # The engine counts tokens up to and including the stop sequence, but
-        # OpenAI API convention excludes stop tokens from completion_tok.
-        if req.stop and last_finish_reason == "stop":
-            for _stop_seq in req.stop:
-                if _stop_seq and _stop_seq in accumulated_text:
-                    _idx = accumulated_text.find(_stop_seq)
-                    accumulated_text = accumulated_text[:_idx]
-                    _tok = getattr(engine, '_tokenizer', None)
-                    if _tok:
-                        try:
-                            _correct_count = len(_tok.encode(accumulated_text))
-                            if _correct_count < completion_tok:
-                                completion_tok = _correct_count
-                        except Exception:
-                            pass
-                    break
+                    # ── Per-token emission via the shared lazy-item helper ──
+                    if output.new_text:
+                        _delta_lp = None
+                        if req.logprobs and not _is_reasoning:
+                            _flp = _format_chat_logprobs(
+                                getattr(output, "logprobs", None),
+                                tokenizer=getattr(engine, "_tokenizer", None),
+                                top_logprobs=req.top_logprobs,
+                            )
+                            _delta_lp = _flp.get("content", []) if _flp else None
+                        for _ev in _emit_token(
+                            output.new_text, _is_reasoning, _delta_lp
+                        ):
+                            yield _ev
+            else:
+                async for output in engine.generate_stream(
+                    prompt=_stream_prompt,
+                    max_tokens=req.max_output_tokens,
+                    temperature=req.temperature,
+                    top_p=req.top_p,
+                    top_k=req.top_k,
+                    seed=req.seed,
+                    enable_thinking=req.enable_thinking,
+                    thinking_budget=req.thinking_budget,
+                    reasoning_effort=req.reasoning_effort,
+                    repetition_penalty=req.repetition_penalty,
+                    frequency_penalty=req.frequency_penalty,
+                    presence_penalty=req.presence_penalty,
+                    min_tokens=req.min_tokens,
+                    ignore_eos=req.ignore_eos,
+                    suppress_tokens=req.suppress_tokens,
+                    logit_bias=_logit_bias,
+                    min_p=req.min_p,
+                    json_schema=json_schema,
+                    stop=req.stop,
+                    stop_token_ids=req.stop_token_ids,
+                    spec_decode=req.spec_decode,
+                    xtc_probability=req.xtc_probability,
+                    xtc_threshold=req.xtc_threshold,
+                    priority=req.priority,
+                    logprobs=req.logprobs,
+                    top_logprobs=req.top_logprobs,
+                    logits_processors=req.logits_processors,
+                    cancel_event=_cancel_evt,
+                    timeout_seconds=req.timeout,
+                    lora_adapter=loaded_adapter,
+                ):
+                    if hasattr(output, "prompt_tokens") and output.prompt_tokens:
+                        prompt_tok = output.prompt_tokens
+                    if hasattr(output, "reasoning_tokens") and output.reasoning_tokens:
+                        reasoning_tok = output.reasoning_tokens
+                    if hasattr(output, "cached_tokens") and output.cached_tokens:
+                        cached_tok = max(cached_tok, output.cached_tokens)
+                    token_text = getattr(output, "token_text", "")
+                    _is_reasoning = (
+                        getattr(output, "current_state", None) == "reasoning"
+                    )
+                    if (
+                        hasattr(output, "completion_tokens")
+                        and output.completion_tokens
+                    ):
+                        completion_tok = max(completion_tok, output.completion_tokens)
+                    elif token_text and not _is_reasoning:
+                        completion_tok += 1
+                    if token_text:
+                        if _is_reasoning:
+                            accumulated_thinking += token_text
+                        else:
+                            accumulated_text += token_text
+                    if len(accumulated_text) > _MAX_STREAMING_TEXT_BUFFER:
+                        logger.error(
+                            "Responses streaming text exceeded 1MB — truncating"
+                        )
+                        accumulated_text = accumulated_text[-_TRUNCATE_KEEP:]
+                    if getattr(output, "finish_reason", None) is not None:
+                        last_finish_reason = output.finish_reason
 
-        # ── Check for tool calls in the accumulated text (before closing lifecycles) ──
-        tool_calls = None
-        clean_text = accumulated_text
-        if req.tools:
-            from .chat import clean_tool_call_markup, extract_tool_calls_model_aware
-            tool_calls = extract_tool_calls_model_aware(accumulated_text, req.model)
-            if tool_calls:
-                clean_text = clean_tool_call_markup(accumulated_text)
+                    # ── Per-token emission via the shared lazy-item helper ──
+                    if token_text:
+                        _delta_lp2 = None
+                        if req.logprobs and not _is_reasoning:
+                            _flp2 = _format_chat_logprobs(
+                                getattr(output, "logprobs", None),
+                                tokenizer=getattr(engine, "_tokenizer", None),
+                                top_logprobs=req.top_logprobs,
+                            )
+                            _delta_lp2 = _flp2.get("content", []) if _flp2 else None
+                        for _ev in _emit_token(token_text, _is_reasoning, _delta_lp2):
+                            yield _ev
 
-        # ── Lifecycle: response.output_text.done (use cleaned text). output_index is
-        # _msg_idx (1 when a reasoning item precedes the message, else 0) —. ──
-        yield format_responses_text_done(
-            text=clean_text,
-            item_id=msg_id,
-            output_index=_msg_idx,
-            content_index=0,
-            seq=_next_seq(),
-        )
+            # flush any text the tool streamer was holding back (a partial markup
+            # prefix that turned out to be plain text) before the message item is finalized.
+            if _resp_tool_streamer is not None:
+                for _so in _resp_tool_streamer.flush():
+                    if _so.text:
+                        for _ev in _close_reasoning_part():
+                            yield _ev
+                        for _ev in _ensure_msg_item():
+                            yield _ev
+                        yield format_responses_text_delta(
+                            delta=_so.text,
+                            item_id=msg_id,
+                            output_index=_msg_idx,
+                            content_index=0,
+                            logprobs=None,
+                            seq=_next_seq(),
+                        )
 
-        # ── Lifecycle: response.content_part.done (use cleaned text) ──
-        yield format_responses_content_part_done(
-            item_id=msg_id,
-            text=clean_text,
-            output_index=_msg_idx,
-            content_index=0,
-            seq=_next_seq(),
-        )
+            # Close the reasoning item if it never saw a following text token (all-reasoning
+            # response, or the stream ended mid-reasoning) — otherwise it's unterminated. Then
+            # ensure the message item exists (an all-reasoning response still emits an empty
+            # message at output_index 1).
+            for _ev in _close_reasoning_part():
+                yield _ev
+            for _ev in _ensure_msg_item():
+                yield _ev
 
-        # ── Lifecycle: response.output_item.done (use cleaned text) ──
-        yield format_responses_output_item_done(
-            item_id=msg_id,
-            text=clean_text,
-            output_index=_msg_idx,
-            seq=_next_seq(),
-        )
+            # ── Stop-sequence overcount correction ──
+            # The engine counts tokens up to and including the stop sequence, but
+            # OpenAI API convention excludes stop tokens from completion_tok.
+            if req.stop and last_finish_reason == "stop":
+                for _stop_seq in req.stop:
+                    if _stop_seq and _stop_seq in accumulated_text:
+                        _idx = accumulated_text.find(_stop_seq)
+                        accumulated_text = accumulated_text[:_idx]
+                        _tok = getattr(engine, "_tokenizer", None)
+                        if _tok:
+                            try:
+                                _correct_count = len(_tok.encode(accumulated_text))
+                                if _correct_count < completion_tok:
+                                    completion_tok = _correct_count
+                            except Exception:
+                                pass
+                        break
 
-        # ── Build final output for response.completed ── (: reasoning is a
-        # SEPARATE output item preceding the message, matching the streamed events.)
-        final_output = []
-        if accumulated_thinking:
-            final_output.append({
-                "type": "reasoning",
-                "id": _rs_id,
-                "summary": [{"type": "summary_text", "text": accumulated_thinking}],
-                "status": "completed",
-            })
-        final_output.append({
-            "type": "message",
-            "id": msg_id,
-            "role": "assistant",
-            "content": [
-                {"type": "output_text", "text": clean_text, "annotations": []}
-            ],
-            "status": "completed",
-        })
+            # ── Check for tool calls in the accumulated text (before closing lifecycles) ──
+            tool_calls = None
+            clean_text = accumulated_text
+            if req.tools:
+                from .chat import clean_tool_call_markup, extract_tool_calls_model_aware
 
-        # Append function_call items for detected tool calls
-        if tool_calls:
-            for _tc_idx, tc in enumerate(tool_calls):
-                fc_id = f"fc-{uuid.uuid4().hex[:24]}"
-                fc_call_id = f"call_{uuid.uuid4().hex[:8]}"
-                output_index = len(final_output)  # next output slot
+                tool_calls = extract_tool_calls_model_aware(accumulated_text, req.model)
+                if tool_calls:
+                    clean_text = clean_tool_call_markup(accumulated_text)
 
-                # Lifecycle: response.output_item.added for the function_call. :
-                # carry call_id/name/arguments so a strict SDK client reading them off the
-                # `added` event (not just `.done`) sees the call.
-                yield format_responses_output_item_added(
-                    response_id, req.model,
-                    item_id=fc_id,
-                    output_index=output_index,
-                    seq=_next_seq(),
-                    item_type="function_call",
-                    call_id=fc_call_id,
-                    # tc is a dict ({"name","arguments"} from
-                    # extract_tool_calls_model_aware), NOT an object — getattr() on a
-                    # dict returns the default, so the fix silently emitted EMPTY
-                    # name/arguments on the streaming output_item.added (re-breaking
-                    # on the sibling path). Use subscript like the .done events
-                    # below and the non-streaming path do.
-                    name=tc["name"],
-                    arguments=tc["arguments"],
+            # ── Lifecycle: response.output_text.done (use cleaned text). output_index is
+            # _msg_idx (1 when a reasoning item precedes the message, else 0) —. ──
+            yield format_responses_text_done(
+                text=clean_text,
+                item_id=msg_id,
+                output_index=_msg_idx,
+                content_index=0,
+                seq=_next_seq(),
+            )
+
+            # ── Lifecycle: response.content_part.done (use cleaned text) ──
+            yield format_responses_content_part_done(
+                item_id=msg_id,
+                text=clean_text,
+                output_index=_msg_idx,
+                content_index=0,
+                seq=_next_seq(),
+            )
+
+            # ── Lifecycle: response.output_item.done (use cleaned text) ──
+            yield format_responses_output_item_done(
+                item_id=msg_id,
+                text=clean_text,
+                output_index=_msg_idx,
+                seq=_next_seq(),
+            )
+
+            # ── Build final output for response.completed ── (: reasoning is a
+            # SEPARATE output item preceding the message, matching the streamed events.)
+            final_output = []
+            if accumulated_thinking:
+                final_output.append(
+                    {
+                        "type": "reasoning",
+                        "id": _rs_id,
+                        "summary": [
+                            {"type": "summary_text", "text": accumulated_thinking}
+                        ],
+                        "status": "completed",
+                    }
                 )
-
-                # Lifecycle: response.function_call_arguments.done
-                _args_done_data = {
-                    "type": "response.function_call_arguments.done",
-                    "item_id": fc_id,
-                    "output_index": output_index,
-                    "call_id": fc_call_id,
-                    "name": tc["name"],
-                    "arguments": tc["arguments"],
-                    "sequence_number": _next_seq(),
-                }
-                yield "event: response.function_call_arguments.done\ndata: " + json.dumps(_args_done_data, ensure_ascii=False) + "\n\n"
-
-                # Lifecycle: response.output_item.done for the function_call
-                fc_item = {
-                    "type": "function_call",
-                    "id": fc_id,
-                    "call_id": fc_call_id,
-                    "name": tc["name"],
-                    "arguments": tc["arguments"],
+            final_output.append(
+                {
+                    "type": "message",
+                    "id": msg_id,
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": clean_text, "annotations": []}
+                    ],
                     "status": "completed",
                 }
-                _fc_done_data = {
-                    "type": "response.output_item.done",
-                    "output_index": output_index,
-                    "item": fc_item,
-                    "sequence_number": _next_seq(),
-                }
-                yield "event: response.output_item.done\ndata: " + json.dumps(_fc_done_data, ensure_ascii=False) + "\n\n"
-
-                final_output.append(fc_item)
-
-        # ── Lifecycle: response.completed or response.incomplete ──
-        # Per OpenAI Responses API spec, output_tokens includes ALL tokens
-        # (visible + reasoning), with reasoning_tokens as a SUBSET detail.
-        # completion_tok already holds the engine's total completion_tokens
-        # (n_tok includes reasoning; only stop/suffix tokens are excluded — see
-        # batched_engine.py:4368), so output_tokens == completion_tok. The
-        # visible-only `elif completion_tok += 1` fallback never fires on the
-        # real path (output.completion_tokens is always set). Previously this
-        # ADDED reasoning_tok, double-counting it — the non-streaming path
-        # (output_tokens=total_ct) does NOT add it, so streaming over-reported
-        # usage by the reasoning-token count for every thinking-model request.
-        _total_output_tok = completion_tok
-        _stream_last_finish_reason = last_finish_reason
-        # A non-normal termination must NOT report "completed": length → incomplete
-        # (max_output_tokens), and an interrupted/cancelled/aborted/errored stream →
-        # incomplete with its own reason. Only a genuine stop/eos/tool_calls/None
-        # (normal end) is "completed". The old code mapped everything-but-length to
-        # "completed", so a cancelled stream was stored + emitted as completed.
-        _interrupt_reasons = {"cancel": "cancelled", "cancelled": "cancelled",
-                              "abort": "cancelled", "aborted": "cancelled",
-                              "error": "error", "content_filter": "content_filter"}
-        if _cancel_evt is not None and _cancel_evt.is_set():
-            # a POST /v1/responses/{id}/cancel sets this event, but every
-            # engine streaming path emits finish_reason="stop" on cancel (not a
-            # distinct reason), so the _interrupt_reasons map below never matched →
-            # a CANCELLED stream was stored + emitted as "completed". The
-            # cancel_event is the authoritative signal; check it first. (Restores
-            # the cancelled→incomplete behavior on the streaming path,
-            # which the cancel_response docstring promises but never delivered.)
-            _terminal_status = "incomplete"
-            yield format_responses_incomplete(
-                response_id=response_id,
-                model=req.model,
-                reason="cancelled",
-                output=final_output,
-                input_tokens=prompt_tok,
-                output_tokens=_total_output_tok,
-                total_tokens=prompt_tok + _total_output_tok,
-                reasoning_tokens=reasoning_tok,
-                cached_tokens=cached_tok,
-                seq=_next_seq(),
-            )
-        elif last_finish_reason == "length":
-            _terminal_status = "incomplete"
-            yield format_responses_incomplete(
-                response_id=response_id,
-                model=req.model,
-                reason="max_output_tokens",
-                output=final_output,
-                input_tokens=prompt_tok,
-                output_tokens=_total_output_tok,
-                total_tokens=prompt_tok + _total_output_tok,
-                reasoning_tokens=reasoning_tok,
-                cached_tokens=cached_tok,
-                seq=_next_seq(),
-            )
-        elif last_finish_reason in _interrupt_reasons:
-            _terminal_status = "incomplete"
-            yield format_responses_incomplete(
-                response_id=response_id,
-                model=req.model,
-                reason=_interrupt_reasons[last_finish_reason],
-                output=final_output,
-                input_tokens=prompt_tok,
-                output_tokens=_total_output_tok,
-                total_tokens=prompt_tok + _total_output_tok,
-                reasoning_tokens=reasoning_tok,
-                cached_tokens=cached_tok,
-                seq=_next_seq(),
-            )
-        else:
-            _terminal_status = "completed"
-            yield format_responses_completed(
-                response_id=response_id,
-                model=req.model,
-                output=final_output,
-                input_tokens=prompt_tok,
-                output_tokens=_total_output_tok,
-                total_tokens=prompt_tok + _total_output_tok,
-                reasoning_tokens=reasoning_tok,
-                cached_tokens=cached_tok,
-                seq=_next_seq(),
             )
 
-        # Persist final response when the client requested storage. Mirrors
-        # the non-streaming path so GET /v1/responses/{id} succeeds.
-        if getattr(req, "store", None):
-            _usage_dict: dict = {
-                "input_tokens": prompt_tok,
-                "output_tokens": _total_output_tok,
-                "total_tokens": prompt_tok + _total_output_tok,
+            # Append function_call items for detected tool calls
+            if tool_calls:
+                for _tc_idx, tc in enumerate(tool_calls):
+                    fc_id = f"fc-{uuid.uuid4().hex[:24]}"
+                    fc_call_id = f"call_{uuid.uuid4().hex[:8]}"
+                    output_index = len(final_output)  # next output slot
+
+                    # Lifecycle: response.output_item.added for the function_call. :
+                    # carry call_id/name/arguments so a strict SDK client reading them off the
+                    # `added` event (not just `.done`) sees the call.
+                    yield format_responses_output_item_added(
+                        response_id,
+                        req.model,
+                        item_id=fc_id,
+                        output_index=output_index,
+                        seq=_next_seq(),
+                        item_type="function_call",
+                        call_id=fc_call_id,
+                        # tc is a dict ({"name","arguments"} from
+                        # extract_tool_calls_model_aware), NOT an object — getattr() on a
+                        # dict returns the default, so the fix silently emitted EMPTY
+                        # name/arguments on the streaming output_item.added (re-breaking
+                        # on the sibling path). Use subscript like the .done events
+                        # below and the non-streaming path do.
+                        name=tc["name"],
+                        arguments=tc["arguments"],
+                    )
+
+                    # Lifecycle: response.function_call_arguments.done
+                    _args_done_data = {
+                        "type": "response.function_call_arguments.done",
+                        "item_id": fc_id,
+                        "output_index": output_index,
+                        "call_id": fc_call_id,
+                        "name": tc["name"],
+                        "arguments": tc["arguments"],
+                        "sequence_number": _next_seq(),
+                    }
+                    yield (
+                        "event: response.function_call_arguments.done\ndata: "
+                        + json.dumps(_args_done_data, ensure_ascii=False)
+                        + "\n\n"
+                    )
+
+                    # Lifecycle: response.output_item.done for the function_call
+                    fc_item = {
+                        "type": "function_call",
+                        "id": fc_id,
+                        "call_id": fc_call_id,
+                        "name": tc["name"],
+                        "arguments": tc["arguments"],
+                        "status": "completed",
+                    }
+                    _fc_done_data = {
+                        "type": "response.output_item.done",
+                        "output_index": output_index,
+                        "item": fc_item,
+                        "sequence_number": _next_seq(),
+                    }
+                    yield (
+                        "event: response.output_item.done\ndata: "
+                        + json.dumps(_fc_done_data, ensure_ascii=False)
+                        + "\n\n"
+                    )
+
+                    final_output.append(fc_item)
+
+            # ── Lifecycle: response.completed or response.incomplete ──
+            # Per OpenAI Responses API spec, output_tokens includes ALL tokens
+            # (visible + reasoning), with reasoning_tokens as a SUBSET detail.
+            # completion_tok already holds the engine's total completion_tokens
+            # (n_tok includes reasoning; only stop/suffix tokens are excluded — see
+            # batched_engine.py:4368), so output_tokens == completion_tok. The
+            # visible-only `elif completion_tok += 1` fallback never fires on the
+            # real path (output.completion_tokens is always set). Previously this
+            # ADDED reasoning_tok, double-counting it — the non-streaming path
+            # (output_tokens=total_ct) does NOT add it, so streaming over-reported
+            # usage by the reasoning-token count for every thinking-model request.
+            _total_output_tok = completion_tok
+            _stream_last_finish_reason = last_finish_reason
+            # A non-normal termination must NOT report "completed": length → incomplete
+            # (max_output_tokens), and an interrupted/cancelled/aborted/errored stream →
+            # incomplete with its own reason. Only a genuine stop/eos/tool_calls/None
+            # (normal end) is "completed". The old code mapped everything-but-length to
+            # "completed", so a cancelled stream was stored + emitted as completed.
+            _interrupt_reasons = {
+                "cancel": "cancelled",
+                "cancelled": "cancelled",
+                "abort": "cancelled",
+                "aborted": "cancelled",
+                "error": "error",
+                "content_filter": "content_filter",
             }
-            if reasoning_tok > 0:
-                _usage_dict["output_tokens_details"] = {"reasoning_tokens": reasoning_tok}
-            if cached_tok > 0:
-                _usage_dict["input_tokens_details"] = {"cached_tokens": cached_tok}
-            try:
-                _store_response(response_id, {
-                    "id": response_id,
-                    "object": "response",
-                    "created_at": int(time.time()),
-                    "completed_at": int(time.time()),
-                    "model": req.model,
-                    "status": _terminal_status,
-                    "output": final_output,
-                    "metadata": req.metadata,
-                    "usage": _usage_dict,
-                    # Stash the raw input + predecessor id so previous_response_id
-                    # chaining can rebuild the full conversation on follow-up — the
-                    # non-streaming path stores these (see ~line 764); without them a
-                    # streamed-then-stored response breaks as a chaining parent.
-                    "_input_messages": (
-                        own_input_messages
-                        if own_input_messages is not None
-                        else [m for m in messages if m.get("role") not in ("assistant", "system")]
-                    ),
-                    "previous_response_id": req.previous_response_id,
-                    "_owner": _resolve_owner(request) if request is not None else "",
-                })
-            except Exception:
-                logger.debug("failed to store streaming response", exc_info=True)
+            if _cancel_evt is not None and _cancel_evt.is_set():
+                # a POST /v1/responses/{id}/cancel sets this event, but every
+                # engine streaming path emits finish_reason="stop" on cancel (not a
+                # distinct reason), so the _interrupt_reasons map below never matched →
+                # a CANCELLED stream was stored + emitted as "completed". The
+                # cancel_event is the authoritative signal; check it first. (Restores
+                # the cancelled→incomplete behavior on the streaming path,
+                # which the cancel_response docstring promises but never delivered.)
+                _terminal_status = "incomplete"
+                yield format_responses_incomplete(
+                    response_id=response_id,
+                    model=req.model,
+                    reason="cancelled",
+                    output=final_output,
+                    input_tokens=prompt_tok,
+                    output_tokens=_total_output_tok,
+                    total_tokens=prompt_tok + _total_output_tok,
+                    reasoning_tokens=reasoning_tok,
+                    cached_tokens=cached_tok,
+                    seq=_next_seq(),
+                )
+            elif last_finish_reason == "length":
+                _terminal_status = "incomplete"
+                yield format_responses_incomplete(
+                    response_id=response_id,
+                    model=req.model,
+                    reason="max_output_tokens",
+                    output=final_output,
+                    input_tokens=prompt_tok,
+                    output_tokens=_total_output_tok,
+                    total_tokens=prompt_tok + _total_output_tok,
+                    reasoning_tokens=reasoning_tok,
+                    cached_tokens=cached_tok,
+                    seq=_next_seq(),
+                )
+            elif last_finish_reason in _interrupt_reasons:
+                _terminal_status = "incomplete"
+                yield format_responses_incomplete(
+                    response_id=response_id,
+                    model=req.model,
+                    reason=_interrupt_reasons[last_finish_reason],
+                    output=final_output,
+                    input_tokens=prompt_tok,
+                    output_tokens=_total_output_tok,
+                    total_tokens=prompt_tok + _total_output_tok,
+                    reasoning_tokens=reasoning_tok,
+                    cached_tokens=cached_tok,
+                    seq=_next_seq(),
+                )
+            else:
+                _terminal_status = "completed"
+                yield format_responses_completed(
+                    response_id=response_id,
+                    model=req.model,
+                    output=final_output,
+                    input_tokens=prompt_tok,
+                    output_tokens=_total_output_tok,
+                    total_tokens=prompt_tok + _total_output_tok,
+                    reasoning_tokens=reasoning_tok,
+                    cached_tokens=cached_tok,
+                    seq=_next_seq(),
+                )
 
-        # completion_tok already includes reasoning tokens on the
-        # batched path (reasoning_tok is a subset detail); adding it double-counted
-        # the server-side completion metric (reasoning-double-count class,
-        # un-fixed sibling). The non-streaming path + chat/anthropic already use
-        # completion_tok alone.
-        _record_metrics(prompt_tok, completion_tok)
-        _metrics_recorded = True
+            # Persist final response when the client requested storage. Mirrors
+            # the non-streaming path so GET /v1/responses/{id} succeeds.
+            if getattr(req, "store", None):
+                _usage_dict: dict = {
+                    "input_tokens": prompt_tok,
+                    "output_tokens": _total_output_tok,
+                    "total_tokens": prompt_tok + _total_output_tok,
+                }
+                if reasoning_tok > 0:
+                    _usage_dict["output_tokens_details"] = {
+                        "reasoning_tokens": reasoning_tok
+                    }
+                if cached_tok > 0:
+                    _usage_dict["input_tokens_details"] = {"cached_tokens": cached_tok}
+                try:
+                    _store_response(
+                        response_id,
+                        {
+                            "id": response_id,
+                            "object": "response",
+                            "created_at": int(time.time()),
+                            "completed_at": int(time.time()),
+                            "model": req.model,
+                            "status": _terminal_status,
+                            "output": final_output,
+                            "metadata": req.metadata,
+                            "usage": _usage_dict,
+                            # Stash the raw input + predecessor id so previous_response_id
+                            # chaining can rebuild the full conversation on follow-up — the
+                            # non-streaming path stores these (see ~line 764); without them a
+                            # streamed-then-stored response breaks as a chaining parent.
+                            "_input_messages": (
+                                own_input_messages
+                                if own_input_messages is not None
+                                else [
+                                    m
+                                    for m in messages
+                                    if m.get("role") not in ("assistant", "system")
+                                ]
+                            ),
+                            "previous_response_id": req.previous_response_id,
+                            "_owner": _resolve_owner(request)
+                            if request is not None
+                            else "",
+                        },
+                    )
+                except Exception:
+                    logger.debug("failed to store streaming response", exc_info=True)
 
-        # [DONE] sentinel — required by SSE protocol to signal stream end
-        yield "data: [DONE]\n\n"
+            # completion_tok already includes reasoning tokens on the
+            # batched path (reasoning_tok is a subset detail); adding it double-counted
+            # the server-side completion metric (reasoning-double-count class,
+            # un-fixed sibling). The non-streaming path + chat/anthropic already use
+            # completion_tok alone.
+            _record_metrics(prompt_tok, completion_tok)
+            _metrics_recorded = True
 
-      async for chunk in with_sse_keepalive(_token_source(), http_request=request, cancel_event=_cancel_evt):
-        yield chunk.encode("utf-8") if isinstance(chunk, str) else chunk
+            # [DONE] sentinel — required by SSE protocol to signal stream end
+            yield "data: [DONE]\n\n"
+
+        async for chunk in with_sse_keepalive(
+            _token_source(), http_request=request, cancel_event=_cancel_evt
+        ):
+            yield chunk.encode("utf-8") if isinstance(chunk, str) else chunk
     except MemoryError:
         if _cancel_evt is not None:
             _cancel_evt.set()
@@ -1962,28 +2479,82 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
         # first engine output). Clients expect response.created before any
         # terminal event.
         if not _output_item_added and not _reasoning_item_added:
-            yield format_responses_created(response_id, req.model, seq=_next_seq()).encode("utf-8")
-            yield format_responses_in_progress(response_id, req.model, seq=_next_seq()).encode("utf-8")
+            yield format_responses_created(
+                response_id, req.model, seq=_next_seq()
+            ).encode("utf-8")
+            yield format_responses_in_progress(
+                response_id, req.model, seq=_next_seq()
+            ).encode("utf-8")
         # close an open-but-unterminated reasoning item (output_index 0) before
         # reporting failure, so the SDK's reasoning item isn't left dangling.
         if _reasoning_item_added and not _reasoning_done_emitted:
             _reasoning_done_emitted = True
-            yield ("event: response.reasoning_summary_text.done\ndata: " + json.dumps({"type": "response.reasoning_summary_text.done", "item_id": _rs_id, "output_index": 0, "summary_index": 0, "text": accumulated_thinking, "sequence_number": _next_seq()}) + "\n\n").encode("utf-8")
-            yield ("event: response.reasoning_summary_part.done\ndata: " + json.dumps({"type": "response.reasoning_summary_part.done", "item_id": _rs_id, "output_index": 0, "summary_index": 0, "part": {"type": "summary_text", "text": accumulated_thinking}, "sequence_number": _next_seq()}) + "\n\n").encode("utf-8")
-            yield ("event: response.output_item.done\ndata: " + json.dumps({"type": "response.output_item.done", "output_index": 0, "item": {"type": "reasoning", "id": _rs_id, "summary": [{"type": "summary_text", "text": accumulated_thinking}], "status": "completed"}, "sequence_number": _next_seq()}) + "\n\n").encode("utf-8")
+            yield (
+                "event: response.reasoning_summary_text.done\ndata: "
+                + json.dumps(
+                    {
+                        "type": "response.reasoning_summary_text.done",
+                        "item_id": _rs_id,
+                        "output_index": 0,
+                        "summary_index": 0,
+                        "text": accumulated_thinking,
+                        "sequence_number": _next_seq(),
+                    }
+                )
+                + "\n\n"
+            ).encode("utf-8")
+            yield (
+                "event: response.reasoning_summary_part.done\ndata: "
+                + json.dumps(
+                    {
+                        "type": "response.reasoning_summary_part.done",
+                        "item_id": _rs_id,
+                        "output_index": 0,
+                        "summary_index": 0,
+                        "part": {"type": "summary_text", "text": accumulated_thinking},
+                        "sequence_number": _next_seq(),
+                    }
+                )
+                + "\n\n"
+            ).encode("utf-8")
+            yield (
+                "event: response.output_item.done\ndata: "
+                + json.dumps(
+                    {
+                        "type": "response.output_item.done",
+                        "output_index": 0,
+                        "item": {
+                            "type": "reasoning",
+                            "id": _rs_id,
+                            "summary": [
+                                {"type": "summary_text", "text": accumulated_thinking}
+                            ],
+                            "status": "completed",
+                        },
+                        "sequence_number": _next_seq(),
+                    }
+                )
+                + "\n\n"
+            ).encode("utf-8")
         # Close open message lifecycle items (at _msg_idx) before reporting failure
         if _content_part_added:
             yield format_responses_content_part_done(
-                msg_id, text=accumulated_text,
-                output_index=_msg_idx, content_index=0, seq=_next_seq(),
+                msg_id,
+                text=accumulated_text,
+                output_index=_msg_idx,
+                content_index=0,
+                seq=_next_seq(),
             ).encode("utf-8")
         if _output_item_added:
             yield format_responses_output_item_done(
-                msg_id, text=accumulated_text,
-                output_index=_msg_idx, seq=_next_seq(),
+                msg_id,
+                text=accumulated_text,
+                output_index=_msg_idx,
+                seq=_next_seq(),
             ).encode("utf-8")
         yield format_responses_failed(
-            response_id, req.model,
+            response_id,
+            req.model,
             error_code="server_error",
             error_message="Insufficient GPU memory",
             input_tokens=prompt_tok,
@@ -2002,28 +2573,82 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
         # first engine output). Clients expect response.created before any
         # terminal event.
         if not _output_item_added and not _reasoning_item_added:
-            yield format_responses_created(response_id, req.model, seq=_next_seq()).encode("utf-8")
-            yield format_responses_in_progress(response_id, req.model, seq=_next_seq()).encode("utf-8")
+            yield format_responses_created(
+                response_id, req.model, seq=_next_seq()
+            ).encode("utf-8")
+            yield format_responses_in_progress(
+                response_id, req.model, seq=_next_seq()
+            ).encode("utf-8")
         # close an open-but-unterminated reasoning item (output_index 0) before
         # reporting failure, so the SDK's reasoning item isn't left dangling.
         if _reasoning_item_added and not _reasoning_done_emitted:
             _reasoning_done_emitted = True
-            yield ("event: response.reasoning_summary_text.done\ndata: " + json.dumps({"type": "response.reasoning_summary_text.done", "item_id": _rs_id, "output_index": 0, "summary_index": 0, "text": accumulated_thinking, "sequence_number": _next_seq()}) + "\n\n").encode("utf-8")
-            yield ("event: response.reasoning_summary_part.done\ndata: " + json.dumps({"type": "response.reasoning_summary_part.done", "item_id": _rs_id, "output_index": 0, "summary_index": 0, "part": {"type": "summary_text", "text": accumulated_thinking}, "sequence_number": _next_seq()}) + "\n\n").encode("utf-8")
-            yield ("event: response.output_item.done\ndata: " + json.dumps({"type": "response.output_item.done", "output_index": 0, "item": {"type": "reasoning", "id": _rs_id, "summary": [{"type": "summary_text", "text": accumulated_thinking}], "status": "completed"}, "sequence_number": _next_seq()}) + "\n\n").encode("utf-8")
+            yield (
+                "event: response.reasoning_summary_text.done\ndata: "
+                + json.dumps(
+                    {
+                        "type": "response.reasoning_summary_text.done",
+                        "item_id": _rs_id,
+                        "output_index": 0,
+                        "summary_index": 0,
+                        "text": accumulated_thinking,
+                        "sequence_number": _next_seq(),
+                    }
+                )
+                + "\n\n"
+            ).encode("utf-8")
+            yield (
+                "event: response.reasoning_summary_part.done\ndata: "
+                + json.dumps(
+                    {
+                        "type": "response.reasoning_summary_part.done",
+                        "item_id": _rs_id,
+                        "output_index": 0,
+                        "summary_index": 0,
+                        "part": {"type": "summary_text", "text": accumulated_thinking},
+                        "sequence_number": _next_seq(),
+                    }
+                )
+                + "\n\n"
+            ).encode("utf-8")
+            yield (
+                "event: response.output_item.done\ndata: "
+                + json.dumps(
+                    {
+                        "type": "response.output_item.done",
+                        "output_index": 0,
+                        "item": {
+                            "type": "reasoning",
+                            "id": _rs_id,
+                            "summary": [
+                                {"type": "summary_text", "text": accumulated_thinking}
+                            ],
+                            "status": "completed",
+                        },
+                        "sequence_number": _next_seq(),
+                    }
+                )
+                + "\n\n"
+            ).encode("utf-8")
         # Close open message lifecycle items (at _msg_idx) before reporting failure
         if _content_part_added:
             yield format_responses_content_part_done(
-                msg_id, text=accumulated_text,
-                output_index=_msg_idx, content_index=0, seq=_next_seq(),
+                msg_id,
+                text=accumulated_text,
+                output_index=_msg_idx,
+                content_index=0,
+                seq=_next_seq(),
             ).encode("utf-8")
         if _output_item_added:
             yield format_responses_output_item_done(
-                msg_id, text=accumulated_text,
-                output_index=_msg_idx, seq=_next_seq(),
+                msg_id,
+                text=accumulated_text,
+                output_index=_msg_idx,
+                seq=_next_seq(),
             ).encode("utf-8")
         yield format_responses_failed(
-            response_id, req.model,
+            response_id,
+            req.model,
             error_code="server_error",
             error_message="Internal server error",
             input_tokens=prompt_tok,
@@ -2107,11 +2732,13 @@ async def delete_response(response_id: str, request: Request):
             },
         )
     _delete_stored_response(response_id)
-    return JSONResponse({
-        "id": response_id,
-        "object": "response.deleted",
-        "deleted": True,
-    })
+    return JSONResponse(
+        {
+            "id": response_id,
+            "object": "response.deleted",
+            "deleted": True,
+        }
+    )
 
 
 @router.post("/responses/{response_id}/cancel", response_model=None)
@@ -2132,6 +2759,7 @@ async def cancel_response(response_id: str, request: Request):
     cancelled = False
     try:
         from yunshu_engine.request_tracker import get_request_tracker
+
         tracker = get_request_tracker()
         if not _is_admin(request) and hasattr(tracker, "get_owner"):
             _owner = tracker.get_owner(response_id)
@@ -2185,11 +2813,13 @@ async def cancel_response(response_id: str, request: Request):
 
     # In-flight: signalled but not yet finalized. Return a synthetic
     # cancelled envelope mirroring OpenAI's shape.
-    return JSONResponse({
-        "id": response_id,
-        "object": "response",
-        "created_at": int(time.time()),
-        "model": "",
-        "status": "cancelled",
-        "output": [],
-    })
+    return JSONResponse(
+        {
+            "id": response_id,
+            "object": "response",
+            "created_at": int(time.time()),
+            "model": "",
+            "status": "cancelled",
+            "output": [],
+        }
+    )

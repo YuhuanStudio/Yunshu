@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 # ── Integration Base ──
 
+
 @dataclass
 class Integration:
     name: str
@@ -38,10 +39,14 @@ class Integration:
     def is_installed(self) -> bool:
         return shutil.which(self.install_check) is not None
 
-    def configure(self, port: int, api_key: str, model: str, host: str = "127.0.0.1") -> None:
+    def configure(
+        self, port: int, api_key: str, model: str, host: str = "127.0.0.1"
+    ) -> None:
         raise NotImplementedError
 
-    def launch(self, port: int, api_key: str, model: str, host: str = "127.0.0.1", **kwargs) -> None:
+    def launch(
+        self, port: int, api_key: str, model: str, host: str = "127.0.0.1", **kwargs
+    ) -> None:
         raise NotImplementedError
 
     def _write_json_config(self, config_path: Path, updater) -> None:
@@ -65,6 +70,7 @@ class Integration:
 
 # ── Codex Integration ──
 
+
 class CodexIntegration(Integration):
     """OpenAI Codex CLI — configures ~/.codex/config.toml."""
 
@@ -78,7 +84,9 @@ class CodexIntegration(Integration):
             install_hint="npm install -g @openai/codex",
         )
 
-    def configure(self, port: int, api_key: str, model: str, host: str = "127.0.0.1") -> None:
+    def configure(
+        self, port: int, api_key: str, model: str, host: str = "127.0.0.1"
+    ) -> None:
         config_path = self.CONFIG_PATH
         config_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -129,7 +137,9 @@ class CodexIntegration(Integration):
         config_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
         console.print(f"[green]✓[/] Config updated: {config_path}")
 
-    def launch(self, port: int, api_key: str, model: str, host: str = "127.0.0.1", **kwargs) -> None:
+    def launch(
+        self, port: int, api_key: str, model: str, host: str = "127.0.0.1", **kwargs
+    ) -> None:
         self.configure(port, api_key, model, host)
         env = os.environ.copy()
         env["YUNSHU_API_KEY"] = api_key or "yunshu"
@@ -141,6 +151,7 @@ class CodexIntegration(Integration):
 
 
 # ── OpenCode Integration ──
+
 
 class OpenCodeIntegration(Integration):
     """OpenCode — configures ~/.config/opencode/opencode.json."""
@@ -155,7 +166,9 @@ class OpenCodeIntegration(Integration):
             install_hint="curl -fsSL https://opencode.ai/install | bash",
         )
 
-    def configure(self, port: int, api_key: str, model: str, host: str = "127.0.0.1") -> None:
+    def configure(
+        self, port: int, api_key: str, model: str, host: str = "127.0.0.1"
+    ) -> None:
         def updater(config: dict) -> None:
             config.setdefault("provider", {})
             provider_config = {
@@ -179,13 +192,16 @@ class OpenCodeIntegration(Integration):
         self._write_json_config(self.CONFIG_PATH, updater)
         console.print(f"[green]✓[/] Config updated: {self.CONFIG_PATH}")
 
-    def launch(self, port: int, api_key: str, model: str, host: str = "127.0.0.1", **kwargs) -> None:
+    def launch(
+        self, port: int, api_key: str, model: str, host: str = "127.0.0.1", **kwargs
+    ) -> None:
         self.configure(port, api_key, model, host)
         console.print(f"[bold]Launching[/] OpenCode with model {model}...")
         os.execvpe("opencode", ["opencode"], os.environ.copy())
 
 
 # ── Pi Integration ──
+
 
 class PiIntegration(Integration):
     """Pi coding agent — configures ~/.pi/agent/."""
@@ -201,7 +217,9 @@ class PiIntegration(Integration):
             install_hint="npm install -g @mariozechner/pi-coding-agent",
         )
 
-    def configure(self, port: int, api_key: str, model: str, host: str = "127.0.0.1") -> None:
+    def configure(
+        self, port: int, api_key: str, model: str, host: str = "127.0.0.1"
+    ) -> None:
         def update_models(config: dict) -> None:
             config.setdefault("providers", {})
             provider_config: dict = {
@@ -211,12 +229,14 @@ class PiIntegration(Integration):
                 "authHeader": True,
             }
             if model:
-                provider_config["models"] = [{
-                    "id": model,
-                    "name": model,
-                    "input": ["text"],
-                    "cost": {"input": 0, "output": 0},
-                }]
+                provider_config["models"] = [
+                    {
+                        "id": model,
+                        "name": model,
+                        "input": ["text"],
+                        "cost": {"input": 0, "output": 0},
+                    }
+                ]
             config["providers"]["yunshu"] = provider_config
 
         def update_settings(config: dict) -> None:
@@ -228,7 +248,9 @@ class PiIntegration(Integration):
         self._write_json_config(self.SETTINGS_PATH, update_settings)
         console.print(f"[green]✓[/] Config updated: {self.MODELS_PATH}")
 
-    def launch(self, port: int, api_key: str, model: str, host: str = "127.0.0.1", **kwargs) -> None:
+    def launch(
+        self, port: int, api_key: str, model: str, host: str = "127.0.0.1", **kwargs
+    ) -> None:
         self.configure(port, api_key, model, host)
         args = ["pi"]
         if model:
@@ -248,13 +270,17 @@ INTEGRATIONS: dict[str, Integration] = {
 
 def _resolve_model(url: str) -> str | None:
     import httpx
+
     try:
         resp = httpx.get(f"{url}/v1/models", timeout=5)
         if resp.status_code == 200:
             models = resp.json().get("data", [])
             for m in models:
                 mid = m.get("id", "")
-                if any(k in mid.lower() for k in ("qwen", "llama", "gemma", "mistral", "phi", "deepseek")):
+                if any(
+                    k in mid.lower()
+                    for k in ("qwen", "llama", "gemma", "mistral", "phi", "deepseek")
+                ):
                     return mid
             if models:
                 return models[0].get("id")
@@ -264,6 +290,7 @@ def _resolve_model(url: str) -> str | None:
 
 
 # ── Commands ──
+
 
 @launch_app.command("list")
 def list_tools():
@@ -286,7 +313,9 @@ def list_tools():
 
 @launch_app.callback(invoke_without_command=True)
 def launch_tool(
-    tool: str = typer.Argument("list", help="Tool to launch: codex, opencode, pi, or 'list'."),
+    tool: str = typer.Argument(
+        "list", help="Tool to launch: codex, opencode, pi, or 'list'."
+    ),
     model: str | None = typer.Option(None, "--model", "-m", help="Model to use."),
     url: str = typer.Option("http://localhost:8000", "--url", "-u", help="Server URL."),
     api_key: str | None = typer.Option(None, "--api-key", "-k", help="API key."),
@@ -308,6 +337,7 @@ def launch_tool(
 
     # Check server
     import httpx
+
     host = url.replace("http://", "").replace("https://", "")
     port = 8000
     if ":" in host:
@@ -330,4 +360,6 @@ def launch_tool(
         console.print("[red]No model available.[/]")
         raise typer.Exit(1)
 
-    integration.launch(port=port, api_key=api_key or "", model=resolved_model, host=host)
+    integration.launch(
+        port=port, api_key=api_key or "", model=resolved_model, host=host
+    )

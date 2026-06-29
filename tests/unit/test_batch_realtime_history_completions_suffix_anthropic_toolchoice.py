@@ -10,6 +10,7 @@ Anthropic forced tool_choice {"type":"tool","name":X} was never enforced post-ge
 realtime streaming never separated reasoning → <think> leaked into stored history.
   Strip it.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -17,6 +18,7 @@ import inspect
 
 def test_realtime_stores_cleaned_text():
     from yunshu_gateway.routers import realtime
+
     src = inspect.getsource(realtime)
     assert "_visible_text = clean_tool_call_markup(_visible_text).strip()" in src
     # the assistant content/transcript/synth use _visible_text, not raw full_text
@@ -26,12 +28,14 @@ def test_realtime_stores_cleaned_text():
 
 def test_realtime_strips_think():
     from yunshu_gateway.routers import realtime
+
     src = inspect.getsource(realtime)
-    assert '_, _visible_text = extract_thinking(full_text, _snap_model)' in src
+    assert "_, _visible_text = extract_thinking(full_text, _snap_model)" in src
 
 
 def test_completions_no_suffix_append():
     from yunshu_gateway.routers import completions
+
     src = inspect.getsource(completions)
     # the wrong appends are gone
     assert "text = text + req.suffix" not in src
@@ -53,12 +57,15 @@ def test_anthropic_enforces_forced_tool():
     assert _enforce_anthropic_tool_choice(calls, "auto") == calls
     assert _enforce_anthropic_tool_choice(calls, {"type": "auto"}) == calls
     # disable_parallel_tool_use → cap to 1
-    out2 = _enforce_anthropic_tool_choice(calls, {"type": "any", "disable_parallel_tool_use": True})
+    out2 = _enforce_anthropic_tool_choice(
+        calls, {"type": "any", "disable_parallel_tool_use": True}
+    )
     assert len(out2) == 1
 
 
 def test_anthropic_streamer_threads_forced_name_and_none_cleanup():
     from yunshu_gateway.routers import anthropic
+
     src = inspect.getsource(anthropic)
     assert "forced_tool_name=_forced_name" in src
     assert "allow_parallel=_allow_parallel" in src

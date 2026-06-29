@@ -1,4 +1,5 @@
 """Tests for SpecPrefill — attention-based sparse prefill."""
+
 from unittest.mock import MagicMock
 
 import mlx.core as mx
@@ -99,9 +100,11 @@ class TestPositionMappedRoPE:
 class TestOffsetAdjustedRoPE:
     def test_calls_original_with_adjusted_offset(self):
         calls = []
+
         def track_call(x, offset=0):
             calls.append(offset)
             return mx.ones((1, 2, 4, 16))
+
         original = track_call
         oar = _OffsetAdjustedRoPE(original, adjustment=100)
         oar(mx.ones((1, 2, 4, 16)), offset=5)
@@ -109,9 +112,11 @@ class TestOffsetAdjustedRoPE:
 
     def test_zero_adjustment(self):
         calls = []
+
         def track_call(x, offset=0):
             calls.append(offset)
             return mx.ones((1, 2, 4, 16))
+
         original = track_call
         oar = _OffsetAdjustedRoPE(original, adjustment=0)
         oar(mx.ones((1, 2, 4, 16)), offset=10)
@@ -121,9 +126,9 @@ class TestOffsetAdjustedRoPE:
 class TestFindAttentionLayers:
     def test_finds_self_attn_layers(self):
         model = MagicMock()
-        layer1 = MagicMock(spec=['self_attn'])
+        layer1 = MagicMock(spec=["self_attn"])
         layer2 = MagicMock(spec=[])  # no self_attn
-        layer3 = MagicMock(spec=['self_attn'])
+        layer3 = MagicMock(spec=["self_attn"])
         model.layers = [layer1, layer2, layer3]
         result = _find_attention_layers(model)
         assert len(result) == 2
@@ -139,7 +144,7 @@ class TestFindAttentionLayers:
 
 class TestGetAttnModule:
     def test_gets_self_attn(self):
-        layer = MagicMock(spec=['self_attn'])
+        layer = MagicMock(spec=["self_attn"])
         result = _get_attn_module(layer)
         assert result is layer.self_attn
 
@@ -152,7 +157,7 @@ class TestGetAttnModule:
 class TestCleanupRope:
     def test_restores_original_rope(self):
         model = MagicMock()
-        layer = MagicMock(spec=['self_attn'])
+        layer = MagicMock(spec=["self_attn"])
         original_rope = MagicMock()
         layer.self_attn.rope = _OffsetAdjustedRoPE(original_rope, 10)
         model.layers = [layer]
@@ -162,7 +167,7 @@ class TestCleanupRope:
 
     def test_noop_for_position_mapped(self):
         model = MagicMock()
-        layer = MagicMock(spec=['self_attn'])
+        layer = MagicMock(spec=["self_attn"])
         original_rope = MagicMock()
         layer.self_attn.rope = _PositionMappedRoPE(original_rope, mx.arange(10))
         model.layers = [layer]
@@ -172,7 +177,7 @@ class TestCleanupRope:
 
     def test_noop_for_normal_rope(self):
         model = MagicMock()
-        layer = MagicMock(spec=['self_attn'])
+        layer = MagicMock(spec=["self_attn"])
         normal_rope = MagicMock()
         layer.self_attn.rope = normal_rope
         model.layers = [layer]

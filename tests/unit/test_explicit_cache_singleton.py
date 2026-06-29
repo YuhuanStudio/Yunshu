@@ -4,6 +4,7 @@ The unguarded `if _STORE is None: _STORE = ExplicitContextCache()` let two concu
 first requests each build their own store; the last assignment won, so a create() the
 loser store already serviced was silently lost. Fixed with double-checked locking.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -19,7 +20,7 @@ def test_concurrent_get_store_returns_one_singleton():
     lock = threading.Lock()
 
     def _worker():
-        barrier.wait()                       # maximize the race window
+        barrier.wait()  # maximize the race window
         s = explicit_cache.get_store()
         with lock:
             results.append(s)

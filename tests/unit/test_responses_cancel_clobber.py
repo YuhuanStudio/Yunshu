@@ -15,6 +15,7 @@ Fix: before the terminal store, re-read and honor a pre-existing terminal "cance
 not overwrite it. Scoped strictly to the unregistered window: the registered-path cancel
 goes through _ns_cancel_event → "incomplete" and never persists "cancelled".
 """
+
 from __future__ import annotations
 
 import inspect
@@ -34,10 +35,14 @@ def test_clobber_guard_rereads_store_before_terminal_write():
     persist = src.index("_store_response(response_id, _persist_payload)", store_block)
     guard = src.index('_prior.get("status") == "cancelled"', store_block)
     # the guard must come BEFORE the terminal store (so it can skip the clobber)
-    assert store_block < guard < persist, "cancel-clobber guard must precede the terminal store"
+    assert store_block < guard < persist, (
+        "cancel-clobber guard must precede the terminal store"
+    )
     # and it must RE-READ the store (not rely on a stale snapshot)
     window = src[store_block:guard]
-    assert "_get_stored_response(response_id)" in window, "guard must re-read the live store"
+    assert "_get_stored_response(response_id)" in window, (
+        "guard must re-read the live store"
+    )
 
 
 def test_terminal_cancelled_status_survives_a_later_completed_write():
@@ -45,10 +50,17 @@ def test_terminal_cancelled_status_survives_a_later_completed_write():
     the create_response terminal path returns it unchanged rather than clobbering to
     'completed'. We reproduce the exact guard condition against the REAL store helpers."""
     rid = "resp_w1041_clobber_test"
-    _store_response(rid, {
-        "id": rid, "object": "response", "status": "cancelled",
-        "completed_at": 123, "output": [], "_owner": "t",
-    })
+    _store_response(
+        rid,
+        {
+            "id": rid,
+            "object": "response",
+            "status": "cancelled",
+            "completed_at": 123,
+            "output": [],
+            "_owner": "t",
+        },
+    )
     prior = _get_stored_response(rid)
     assert prior is not None and prior.get("status") == "cancelled"
     # _public_stored must expose the cancelled status (what the client GETs) and must
@@ -64,4 +76,6 @@ def test_registered_path_unaffected_non_cancelled_status_proceeds():
     rid = "resp_w1041_normal"
     _store_response(rid, {"id": rid, "status": "in_progress", "output": []})
     prior = _get_stored_response(rid)
-    assert prior.get("status") != "cancelled"  # guard would NOT fire → terminal store proceeds
+    assert (
+        prior.get("status") != "cancelled"
+    )  # guard would NOT fire → terminal store proceeds

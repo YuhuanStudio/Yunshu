@@ -3,6 +3,7 @@ the consumer's per-token inactivity timeout. timeout means 'max total wall time'
 non-streaming path; without a total deadline a steady stream ran to max_tokens, blowing
 past the user's timeout. Mirror the non-streaming gen_t0 + timeout_seconds deadline in
 the streaming GPU loop."""
+
 from __future__ import annotations
 
 import pathlib
@@ -25,7 +26,7 @@ def test_streaming_gpu_loop_checks_total_deadline():
     i = s.index("_stream_timeout_deadline = _stream_gen_t0")
     # find the loop check after the deadline is set
     check = s.index("_timeout_cancel.is_set() or (", i)
-    region = s[check: check + 200]
+    region = s[check : check + 200]
     assert "_stream_timeout_deadline is not None" in region
     assert "time.perf_counter() > _stream_timeout_deadline" in region
 

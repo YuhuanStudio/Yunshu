@@ -12,6 +12,7 @@ clean; these are edge/numeric guards).
 - the VAD frame conversion used *32768 (full-scale +1.0 → 32768 wraps to -32768); now
   *32767 like every other conversion.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -27,16 +28,23 @@ from yunshu_engine.sts_engine import STSEngine
 def _wav(data: bytes, sr=16000, ch=1, bps=16) -> bytes:
     br = sr * ch * bps // 8
     ba = ch * bps // 8
-    return (b"RIFF" + struct.pack("<I", 36 + len(data)) + b"WAVEfmt "
-            + struct.pack("<IHHIIHH", 16, 1, ch, sr, br, ba, bps)
-            + b"data" + struct.pack("<I", len(data)) + data)
+    return (
+        b"RIFF"
+        + struct.pack("<I", 36 + len(data))
+        + b"WAVEfmt "
+        + struct.pack("<IHHIIHH", 16, 1, ch, sr, br, ba, bps)
+        + b"data"
+        + struct.pack("<I", len(data))
+        + data
+    )
 
 
 def test_audio_to_wav_bytes_guards_nan_inf():
     with warnings.catch_warnings():
         warnings.simplefilter("error")  # any RuntimeWarning → failure
         out = audio_engine._audio_to_wav_bytes(
-            np.array([0.5, np.nan, np.inf, -np.inf, -0.5], dtype=np.float32), 16000)
+            np.array([0.5, np.nan, np.inf, -np.inf, -0.5], dtype=np.float32), 16000
+        )
     assert len(out) > 44  # valid WAV (header + data)
 
 
@@ -79,4 +87,6 @@ def test_streaming_tts_encoder_guards_nan():
     nan_pos = code.find("nan_to_num")
     clip_pos = code.find("np.clip(audio")
     assert nan_pos != -1, "streaming encoder must guard NaN/Inf"
-    assert nan_pos < clip_pos, "nan_to_num must precede np.clip (NaN passes through clip)"
+    assert nan_pos < clip_pos, (
+        "nan_to_num must precede np.clip (NaN passes through clip)"
+    )

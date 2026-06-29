@@ -12,6 +12,7 @@ conversation.items was unbounded (capped only the input-audio buffer). Every tur
   flood / long session grows RSS + prompt cost without limit. Cap to the most recent N
   (FIFO eviction), and bound a single item's content size.
 """
+
 from __future__ import annotations
 
 import os
@@ -39,10 +40,14 @@ def test_conversation_history_capped(monkeypatch):
     monkeypatch.setenv("YUNSHU_REALTIME_MAX_CONVERSATION_ITEMS", "5")
     conv = rt.Conversation("c1")
     for i in range(50):
-        conv.add_item(rt.ConversationItem(
-            item_id=f"i{i}", item_type="message", role="user",
-            content=[{"type": "text", "text": str(i)}],
-        ))
+        conv.add_item(
+            rt.ConversationItem(
+                item_id=f"i{i}",
+                item_type="message",
+                role="user",
+                content=[{"type": "text", "text": str(i)}],
+            )
+        )
     assert len(conv.items) == 5
     # the most recent 5 survive, oldest evicted
     assert [it.item_id for it in conv.items] == [f"i{i}" for i in range(45, 50)]
@@ -64,7 +69,9 @@ def test_trim_preserves_previous_item_insert(monkeypatch):
     monkeypatch.setenv("YUNSHU_REALTIME_MAX_CONVERSATION_ITEMS", "3")
     conv = rt.Conversation("c2")
     for i in range(3):
-        conv.add_item(rt.ConversationItem(item_id=f"a{i}", item_type="message", role="user"))
+        conv.add_item(
+            rt.ConversationItem(item_id=f"a{i}", item_type="message", role="user")
+        )
     conv.add_item(
         rt.ConversationItem(item_id="ins", item_type="message", role="user"),
         previous_item_id="a2",

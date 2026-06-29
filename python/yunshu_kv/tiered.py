@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SSDCacheEntry:
     """Metadata for a cached block stored on SSD."""
+
     block_hash: int
     block_index: int
     num_tokens: int
@@ -64,7 +65,7 @@ class SSDCacheStore:
     def __init__(
         self,
         cache_dir: str | Path,
-        max_size_bytes: int = 100 * 1024 ** 3,  # 100GB default
+        max_size_bytes: int = 100 * 1024**3,  # 100GB default
         block_size: int = 64,
     ):
         self.cache_dir = Path(cache_dir)
@@ -86,7 +87,9 @@ class SSDCacheStore:
         # lock release.
         self._pending_index_write: tuple[Path, list[dict]] | None = None
         self._pending_unlinks: list[Path] | None = None
-        self._pending_block_writes: list[tuple[Path, bytes, int, int, int]] | None = None
+        self._pending_block_writes: list[tuple[Path, bytes, int, int, int]] | None = (
+            None
+        )
         # ^ Each tuple: (path, raw_bytes, block_hash, block_index, header_size)
         # block_index is included so _flush_pending_io can skip the write
         # if the entry was already evicted before the write happened.
@@ -162,9 +165,8 @@ class SSDCacheStore:
         """
         try:
             import tempfile
-            fd, tmp_path = tempfile.mkstemp(
-                dir=str(index_path.parent), suffix=".tmp"
-            )
+
+            fd, tmp_path = tempfile.mkstemp(dir=str(index_path.parent), suffix=".tmp")
             try:
                 with os.fdopen(fd, "w") as f:
                     json.dump({"entries": entries}, f)
@@ -235,6 +237,7 @@ class SSDCacheStore:
         # with scale = max(|x|) / 127. Compression: 2x vs FP16.
         try:
             import numpy as np
+
             # Cast to float32, NOT float16, before int8-quantizing. Default KV dtype
             # is bf16 (max ~3.4e38); any element with |x| > 65504 (attention sinks / outlier
             # channels routinely exceed fp16 max) became inf on the fp16 cast → scale =
@@ -249,7 +252,11 @@ class SSDCacheStore:
             # was dominated by the larger tensor and crushed the smaller one (~79% relative
             # error on the restored V tensor, measured). Quantize each axis-0 slice with its
             # own abs-max scale so both K and V round-trip cleanly.
-            _n = original_shape[0] if numpy_data.ndim >= 1 and original_shape[0] > 0 else 1
+            _n = (
+                original_shape[0]
+                if numpy_data.ndim >= 1 and original_shape[0] > 0
+                else 1
+            )
             _flat = numpy_data.reshape(_n, -1)
             _scales: list[float] = []
             _qslices = []
@@ -259,7 +266,9 @@ class SSDCacheStore:
                     _amax = 1.0
                 _sc = _amax / 127.0
                 _scales.append(_sc)
-                _qslices.append(np.clip(np.round(_flat[_i] / _sc), -127, 127).astype(np.int8))
+                _qslices.append(
+                    np.clip(np.round(_flat[_i] / _sc), -127, 127).astype(np.int8)
+                )
             quantized = np.concatenate(_qslices).reshape(original_shape)
             raw_bytes = quantized.tobytes()
             shape = original_shape
@@ -277,17 +286,24 @@ class SSDCacheStore:
         # CRC32 covers the whole header + data. block_hash in the CRC prevents an index
         # mapping a wrong hash to a valid file.
         import zlib
+
         header_size_no_crc = 4 + 4 + 4 * len(shape) + 4 + 4 * len(_scales) + 8
         header_bytes = bytearray(header_size_no_crc)
         off = 0
-        struct.pack_into("<I", header_bytes, off, 0xFFFFFFFE); off += 4
-        struct.pack_into("<I", header_bytes, off, len(shape)); off += 4
+        struct.pack_into("<I", header_bytes, off, 0xFFFFFFFE)
+        off += 4
+        struct.pack_into("<I", header_bytes, off, len(shape))
+        off += 4
         for dim in shape:
-            struct.pack_into("<I", header_bytes, off, dim); off += 4
-        struct.pack_into("<I", header_bytes, off, len(_scales)); off += 4
+            struct.pack_into("<I", header_bytes, off, dim)
+            off += 4
+        struct.pack_into("<I", header_bytes, off, len(_scales))
+        off += 4
         for _sc in _scales:
-            struct.pack_into("<f", header_bytes, off, _sc); off += 4
-        struct.pack_into("<Q", header_bytes, off, block_hash & 0xFFFFFFFFFFFFFFFF); off += 8
+            struct.pack_into("<f", header_bytes, off, _sc)
+            off += 4
+        struct.pack_into("<Q", header_bytes, off, block_hash & 0xFFFFFFFFFFFFFFFF)
+        off += 8
         crc = zlib.crc32(bytes(header_bytes) + raw_bytes) & 0xFFFFFFFF
         header_size = header_size_no_crc + 4  # + CRC32
         file_payload = bytearray(header_size + len(raw_bytes))
@@ -310,13 +326,15 @@ class SSDCacheStore:
         # Step 3: Defer the file write until after the lock is released.
         if self._pending_block_writes is None:
             self._pending_block_writes = []
-        self._pending_block_writes.append((
-            self._block_path(block_index),
-            bytes(file_payload),
-            block_hash,
-            block_index,
-            header_size,
-        ))
+        self._pending_block_writes.append(
+            (
+                self._block_path(block_index),
+                bytes(file_payload),
+                block_hash,
+                block_index,
+                header_size,
+            )
+        )
         # Also snapshot the index for persistence after the write.
         self._pending_index_write = (self._index_path(), self._snapshot_index())
         return True
@@ -341,7 +359,9 @@ class SSDCacheStore:
                     for _, _, phash, _, _ in self._pending_block_writes:
                         if phash == block_hash:
                             return None  # Pending write, don't delete index
-                self._current_size_bytes = max(0, self._current_size_bytes - entry.size_bytes)
+                self._current_size_bytes = max(
+                    0, self._current_size_bytes - entry.size_bytes
+                )
                 del self._index[block_hash]
                 return None
 
@@ -353,33 +373,59 @@ class SSDCacheStore:
                         import zlib as _zl
 
                         import numpy as _np
+
                         ndim = struct.unpack("<I", f.read(4))[0]
-                        shape = tuple(struct.unpack("<I", f.read(4))[0] for _ in range(ndim))
+                        shape = tuple(
+                            struct.unpack("<I", f.read(4))[0] for _ in range(ndim)
+                        )
                         _num_scales = struct.unpack("<I", f.read(4))[0]
-                        _scales = [struct.unpack("<f", f.read(4))[0] for _ in range(_num_scales)]
+                        _scales = [
+                            struct.unpack("<f", f.read(4))[0]
+                            for _ in range(_num_scales)
+                        ]
                         stored_block_hash = struct.unpack("<Q", f.read(8))[0]
                         stored_crc = struct.unpack("<I", f.read(4))[0]
                         raw_bytes = f.read()
-                        _hdr = bytearray(4 + 4 + 4 * len(shape) + 4 + 4 * len(_scales) + 8)
+                        _hdr = bytearray(
+                            4 + 4 + 4 * len(shape) + 4 + 4 * len(_scales) + 8
+                        )
                         _o = 0
-                        struct.pack_into("<I", _hdr, _o, 0xFFFFFFFE); _o += 4
-                        struct.pack_into("<I", _hdr, _o, len(shape)); _o += 4
+                        struct.pack_into("<I", _hdr, _o, 0xFFFFFFFE)
+                        _o += 4
+                        struct.pack_into("<I", _hdr, _o, len(shape))
+                        _o += 4
                         for _d in shape:
-                            struct.pack_into("<I", _hdr, _o, _d); _o += 4
-                        struct.pack_into("<I", _hdr, _o, len(_scales)); _o += 4
+                            struct.pack_into("<I", _hdr, _o, _d)
+                            _o += 4
+                        struct.pack_into("<I", _hdr, _o, len(_scales))
+                        _o += 4
                         for _s in _scales:
-                            struct.pack_into("<f", _hdr, _o, _s); _o += 4
-                        struct.pack_into("<Q", _hdr, _o, block_hash & 0xFFFFFFFFFFFFFFFF); _o += 8
+                            struct.pack_into("<f", _hdr, _o, _s)
+                            _o += 4
+                        struct.pack_into(
+                            "<Q", _hdr, _o, block_hash & 0xFFFFFFFFFFFFFFFF
+                        )
+                        _o += 8
                         _actual = _zl.crc32(bytes(_hdr) + raw_bytes) & 0xFFFFFFFF
-                        if (stored_block_hash != (block_hash & 0xFFFFFFFFFFFFFFFF)
-                                or stored_crc != _actual):
+                        if (
+                            stored_block_hash != (block_hash & 0xFFFFFFFFFFFFFFFF)
+                            or stored_crc != _actual
+                        ):
                             logger.warning(
-                                "SSD v3 block 0x%x failed hash/CRC check, discarding", block_hash)
-                            self._current_size_bytes = max(0, self._current_size_bytes - entry.size_bytes)
+                                "SSD v3 block 0x%x failed hash/CRC check, discarding",
+                                block_hash,
+                            )
+                            self._current_size_bytes = max(
+                                0, self._current_size_bytes - entry.size_bytes
+                            )
                             del self._index[block_hash]
                             return None
                         entry.last_access = time.monotonic()
-                        _q = _np.frombuffer(raw_bytes, dtype=_np.int8).copy().reshape(shape)
+                        _q = (
+                            _np.frombuffer(raw_bytes, dtype=_np.int8)
+                            .copy()
+                            .reshape(shape)
+                        )
                         _n = shape[0] if len(shape) >= 1 and shape[0] > 0 else 1
                         # Dequant in float32, NOT float16. The f32 scale applied in
                         # fp16 overflowed to inf when a slice's abs-max landed near fp16 max
@@ -392,7 +438,9 @@ class SSDCacheStore:
                         return mx.array(_qf.reshape(shape))
                     # ── Legacy size-discriminated formats (v0/v1/v2) ──
                     ndim = _first
-                    shape = tuple(struct.unpack("<I", f.read(4))[0] for _ in range(ndim))
+                    shape = tuple(
+                        struct.unpack("<I", f.read(4))[0] for _ in range(ndim)
+                    )
                     # Detect format by file size:
                     # newest:  ndim + shape + scale + block_hash(u64) + CRC + int8 data
                     # prev:    ndim + shape + scale + CRC + int8 data (no block_hash)
@@ -407,7 +455,9 @@ class SSDCacheStore:
 
                     # Compute expected total size for each format variant
                     newest_header_remain = 4 + 8 + 4  # scale + block_hash + CRC
-                    newest_total = total_header_read + newest_header_remain + int8_data_size
+                    newest_total = (
+                        total_header_read + newest_header_remain + int8_data_size
+                    )
                     prev_header_remain = 4 + 4  # scale + CRC
                     prev_total = total_header_read + prev_header_remain + int8_data_size
                     old_header_remain = 4  # CRC
@@ -440,43 +490,66 @@ class SSDCacheStore:
                         raw_bytes = f.read()
 
                 import zlib
+
                 # CRC covers header + data (not just data) to detect corruption
                 if stored_block_hash is not None:
                     # Newest format: CRC includes ndim + shape + scale + block_hash
                     header_for_crc = bytearray(4 + 4 * len(shape) + 4 + 8)
                     off_h = 0
-                    struct.pack_into("<I", header_for_crc, off_h, len(shape)); off_h += 4
+                    struct.pack_into("<I", header_for_crc, off_h, len(shape))
+                    off_h += 4
                     for dim in shape:
-                        struct.pack_into("<I", header_for_crc, off_h, dim); off_h += 4
-                    struct.pack_into("<f", header_for_crc, off_h, scale); off_h += 4
-                    struct.pack_into("<Q", header_for_crc, off_h, block_hash & 0xFFFFFFFFFFFFFFFF); off_h += 8
-                    actual_crc = zlib.crc32(bytes(header_for_crc) + raw_bytes) & 0xFFFFFFFF
+                        struct.pack_into("<I", header_for_crc, off_h, dim)
+                        off_h += 4
+                    struct.pack_into("<f", header_for_crc, off_h, scale)
+                    off_h += 4
+                    struct.pack_into(
+                        "<Q", header_for_crc, off_h, block_hash & 0xFFFFFFFFFFFFFFFF
+                    )
+                    off_h += 8
+                    actual_crc = (
+                        zlib.crc32(bytes(header_for_crc) + raw_bytes) & 0xFFFFFFFF
+                    )
                 elif scale is not None:
                     # Previous format: CRC includes ndim + shape + scale
                     header_for_crc = bytearray(4 + 4 * len(shape) + 4)
                     off_h = 0
-                    struct.pack_into("<I", header_for_crc, off_h, len(shape)); off_h += 4
+                    struct.pack_into("<I", header_for_crc, off_h, len(shape))
+                    off_h += 4
                     for dim in shape:
-                        struct.pack_into("<I", header_for_crc, off_h, dim); off_h += 4
-                    struct.pack_into("<f", header_for_crc, off_h, scale); off_h += 4
-                    actual_crc = zlib.crc32(bytes(header_for_crc) + raw_bytes) & 0xFFFFFFFF
+                        struct.pack_into("<I", header_for_crc, off_h, dim)
+                        off_h += 4
+                    struct.pack_into("<f", header_for_crc, off_h, scale)
+                    off_h += 4
+                    actual_crc = (
+                        zlib.crc32(bytes(header_for_crc) + raw_bytes) & 0xFFFFFFFF
+                    )
                 else:
                     actual_crc = zlib.crc32(raw_bytes) & 0xFFFFFFFF
-                if stored_block_hash is not None and stored_block_hash != (block_hash & 0xFFFFFFFFFFFFFFFF):
+                if stored_block_hash is not None and stored_block_hash != (
+                    block_hash & 0xFFFFFFFFFFFFFFFF
+                ):
                     # block_hash mismatch means index maps wrong hash to this file
                     logger.warning(
                         "block_hash mismatch for SSD block (index=0x%x stored=0x%x), discarding",
-                        block_hash, stored_block_hash,
+                        block_hash,
+                        stored_block_hash,
                     )
-                    self._current_size_bytes = max(0, self._current_size_bytes - entry.size_bytes)
+                    self._current_size_bytes = max(
+                        0, self._current_size_bytes - entry.size_bytes
+                    )
                     del self._index[block_hash]
                     return None
                 if stored_crc != actual_crc:
                     logger.warning(
                         "CRC mismatch for SSD block 0x%x (stored=%08x actual=%08x), discarding",
-                        block_hash, stored_crc, actual_crc,
+                        block_hash,
+                        stored_crc,
+                        actual_crc,
                     )
-                    self._current_size_bytes = max(0, self._current_size_bytes - entry.size_bytes)
+                    self._current_size_bytes = max(
+                        0, self._current_size_bytes - entry.size_bytes
+                    )
                     del self._index[block_hash]
                     return None
                 # Update last_access on successful read so LRU eviction
@@ -484,18 +557,25 @@ class SSDCacheStore:
                 # blocks appear "stale" and get prematurely evicted.
                 entry.last_access = time.monotonic()
                 import numpy as np
+
                 if scale is not None:
                     # New 8-bit quantized format: dequantize int8 → FP16
-                    quantized = np.frombuffer(raw_bytes, dtype=np.int8).copy().reshape(shape)
-                    numpy_data = (quantized.astype(np.float16) * np.float16(scale))
+                    quantized = (
+                        np.frombuffer(raw_bytes, dtype=np.int8).copy().reshape(shape)
+                    )
+                    numpy_data = quantized.astype(np.float16) * np.float16(scale)
                 else:
                     # Old raw FP16 format (backward compat)
-                    numpy_data = np.frombuffer(raw_bytes, dtype=np.float16).copy().reshape(shape)
+                    numpy_data = (
+                        np.frombuffer(raw_bytes, dtype=np.float16).copy().reshape(shape)
+                    )
                 return mx.array(numpy_data)
             except FileNotFoundError:
                 # Race: file was deleted after existence check (e.g. external cleanup)
                 logger.debug("SSD block file vanished for hash 0x%x", block_hash)
-                self._current_size_bytes = max(0, self._current_size_bytes - entry.size_bytes)
+                self._current_size_bytes = max(
+                    0, self._current_size_bytes - entry.size_bytes
+                )
                 self._index.pop(block_hash, None)
                 return None
             except (ValueError, OSError, EOFError, KeyError) as e:
@@ -506,9 +586,12 @@ class SSDCacheStore:
                 # deserialization errors that legitimately indicate corruption.
                 logger.warning(
                     "Corrupt SSD cache block 0x%x, removing from index: %s",
-                    block_hash, e,
+                    block_hash,
+                    e,
                 )
-                self._current_size_bytes = max(0, self._current_size_bytes - entry.size_bytes)
+                self._current_size_bytes = max(
+                    0, self._current_size_bytes - entry.size_bytes
+                )
                 self._index.pop(block_hash, None)
                 return None
 
@@ -544,8 +627,11 @@ class SSDCacheStore:
             for _, _, phash, _, _ in self._pending_block_writes:
                 pending_hashes.add(phash)
         sorted_entries = sorted(
-            [e for e in self._index.values()
-             if e.ref_count == 0 and e.block_hash not in pending_hashes],
+            [
+                e
+                for e in self._index.values()
+                if e.ref_count == 0 and e.block_hash not in pending_hashes
+            ],
             key=lambda e: e.last_access,
         )
         if not sorted_entries:
@@ -579,7 +665,7 @@ class SSDCacheStore:
         # CRITICAL: was `= paths_to_unlink` which OVERWROTE
         # pending unlinks if two evictions queued before _flush ran. Use
         # extend to preserve all queued unlinks.
-        if not isinstance(getattr(self, '_pending_unlinks', None), list):
+        if not isinstance(getattr(self, "_pending_unlinks", None), list):
             self._pending_unlinks = []
         self._pending_unlinks.extend(paths_to_unlink)
 
@@ -605,14 +691,21 @@ class SSDCacheStore:
         # these blocks.  If the process crashes mid-write, the block file
         # may be truncated/missing, which load() handles gracefully.
         if pending_block_writes:
-            for path, payload, block_hash, block_index, _header_size in pending_block_writes:
+            for (
+                path,
+                payload,
+                block_hash,
+                block_index,
+                _header_size,
+            ) in pending_block_writes:
                 try:
                     with open(path, "wb") as f:
                         f.write(payload)
                 except OSError as e:
                     logger.warning(
                         "Failed to write SSD cache block %d: %s — rolling back index",
-                        block_index, e,
+                        block_index,
+                        e,
                     )
                     # Roll back the in-memory index entry so future lookups
                     # don't reference a missing file.  The space accounting
@@ -643,8 +736,7 @@ class SSDCacheStore:
             "size_gb": round(size_bytes / 1024**3, 2),
             "max_size_gb": round(self.max_size_bytes / 1024**3, 2),
             "utilization_pct": (
-                size_bytes / self.max_size_bytes * 100
-                if self.max_size_bytes > 0 else 0
+                size_bytes / self.max_size_bytes * 100 if self.max_size_bytes > 0 else 0
             ),
         }
 
@@ -739,7 +831,7 @@ class TieredKVCacheManager:
         warm_loaded = 0
         if self.warm:
             for i in range(0, len(remaining), block_size):
-                chunk = remaining[i:i + block_size]
+                chunk = remaining[i : i + block_size]
                 if len(chunk) < block_size:
                     break
                 h = compute_block_hash(parent_hash, chunk, (model_hash,))
@@ -747,7 +839,8 @@ class TieredKVCacheManager:
                 # avoid popping the warm entry and then failing to re-home it.
                 if self.hot.block_pool.get_free_block_count() <= 0:
                     logger.debug(
-                        "Warm promotion skipped: no free hot blocks for 0x%x", h,
+                        "Warm promotion skipped: no free hot blocks for 0x%x",
+                        h,
                     )
                     break
                 # Direct promote() without preceding contains() to avoid
@@ -775,22 +868,27 @@ class TieredKVCacheManager:
                             ssd_ok = False
                             if self.ssd is not None:
                                 try:
-                                    ssd_ok = self.ssd.store(h, kv_data, num_tokens=block_size)
+                                    ssd_ok = self.ssd.store(
+                                        h, kv_data, num_tokens=block_size
+                                    )
                                 except Exception:
                                     logger.debug(
                                         "SSD fallback also failed for hash 0x%x",
-                                        h, exc_info=True,
+                                        h,
+                                        exc_info=True,
                                     )
                             if ssd_ok:
                                 logger.info(
                                     "Warm re-insertion failed, KV data saved to "
-                                    "SSD fallback for hash 0x%x", h,
+                                    "SSD fallback for hash 0x%x",
+                                    h,
                                 )
                             else:
                                 logger.error(
                                     "Warm tier promotion AND re-insertion AND SSD "
                                     "fallback all failed for hash 0x%x — KV data LOST",
-                                    h, exc_info=True,
+                                    h,
+                                    exc_info=True,
                                 )
                         break
                     # Write KV data into hot cache tensors.
@@ -804,7 +902,9 @@ class TieredKVCacheManager:
                             if kv_data.ndim == 4 and kv_data.shape[0] == 2:
                                 self.hot._key_cache[new_block.block_id] = kv_data[0]
                                 if self.hot._value_cache is not None:
-                                    self.hot._value_cache[new_block.block_id] = kv_data[1]
+                                    self.hot._value_cache[new_block.block_id] = kv_data[
+                                        1
+                                    ]
                             else:
                                 self.hot._key_cache[new_block.block_id] = kv_data
                             if isinstance(self.hot._key_cache, mx.array):
@@ -814,7 +914,8 @@ class TieredKVCacheManager:
                     except Exception:
                         logger.debug(
                             "Warm tier KV data write failed for block %d",
-                            new_block.block_id, exc_info=True,
+                            new_block.block_id,
+                            exc_info=True,
                         )
                         # Re-insert into warm tier to avoid data loss, then
                         # free the allocated hot block.
@@ -842,7 +943,7 @@ class TieredKVCacheManager:
 
             if warm_loaded > 0:
                 match.num_matched_tokens += warm_loaded * block_size
-                remaining = remaining[warm_loaded * block_size:]
+                remaining = remaining[warm_loaded * block_size :]
                 match.unmatched_token_ids = remaining
                 logger.debug(
                     f"Warm tier hit: {warm_loaded} blocks "
@@ -857,7 +958,7 @@ class TieredKVCacheManager:
             # to the last warm-promoted block; otherwise to the hot tier's
             # last matched block (or None).
             for i in range(0, len(remaining), block_size):
-                chunk = remaining[i:i + block_size]
+                chunk = remaining[i : i + block_size]
                 if len(chunk) < block_size:
                     break
                 h = compute_block_hash(parent_hash, chunk, (model_hash,))
@@ -886,7 +987,9 @@ class TieredKVCacheManager:
                             if kv_data.ndim == 4 and kv_data.shape[0] == 2:
                                 self.hot._key_cache[new_block.block_id] = kv_data[0]
                                 if self.hot._value_cache is not None:
-                                    self.hot._value_cache[new_block.block_id] = kv_data[1]
+                                    self.hot._value_cache[new_block.block_id] = kv_data[
+                                        1
+                                    ]
                             else:
                                 self.hot._key_cache[new_block.block_id] = kv_data
                             if isinstance(self.hot._key_cache, mx.array):
@@ -896,7 +999,8 @@ class TieredKVCacheManager:
                     except Exception:
                         logger.debug(
                             "SSD cache KV data write failed for block %d",
-                            new_block.block_id, exc_info=True,
+                            new_block.block_id,
+                            exc_info=True,
                         )
                         # Re-store to SSD so the data is not lost, then free
                         # the allocated hot block.
@@ -921,7 +1025,7 @@ class TieredKVCacheManager:
 
             if ssd_loaded > 0:
                 match.num_matched_tokens += ssd_loaded * block_size
-                match.unmatched_token_ids = remaining[ssd_loaded * block_size:]
+                match.unmatched_token_ids = remaining[ssd_loaded * block_size :]
                 logger.debug(
                     f"SSD cache hit: {ssd_loaded} blocks "
                     f"({ssd_loaded * block_size} tokens)"
@@ -940,7 +1044,9 @@ class TieredKVCacheManager:
             existing = table._blocks
             # Promoted blocks replace an equal number of new blocks that
             # were allocated for the same tokens.  Free the surplus.
-            surplus = existing[hot_matched_count:hot_matched_count + len(all_promoted)]
+            surplus = existing[
+                hot_matched_count : hot_matched_count + len(all_promoted)
+            ]
             # Must hold block_pool._lock for the entire sequence of
             # eviction + ref_count reset + free to prevent a concurrent
             # allocate() from grabbing a surplus block between the
@@ -974,21 +1080,25 @@ class TieredKVCacheManager:
             table._blocks = (
                 existing[:hot_matched_count]
                 + all_promoted
-                + existing[hot_matched_count + len(all_promoted):]
+                + existing[hot_matched_count + len(all_promoted) :]
             )
             len(table._blocks)
             # Compute total_tokens from actual token counts rather than
             # block count * block_size, which overcounts when matched blocks
             # are not fully aligned to block boundaries.
             matched_tok = match.num_matched_tokens
-            unmatched_tok = len(match.unmatched_token_ids) if match.unmatched_token_ids else 0
+            unmatched_tok = (
+                len(match.unmatched_token_ids) if match.unmatched_token_ids else 0
+            )
             actual_tokens = matched_tok + unmatched_tok
             table.total_tokens = actual_tokens
             remainder = actual_tokens % block_size
             if actual_tokens == 0:
                 table._last_block_occupancy = 0
             else:
-                table._last_block_occupancy = remainder if remainder != 0 else block_size
+                table._last_block_occupancy = (
+                    remainder if remainder != 0 else block_size
+                )
             match.matched_blocks = match.matched_blocks + all_promoted
 
         return table, match
@@ -1006,14 +1116,15 @@ class TieredKVCacheManager:
         Returns None if the cache tensors aren't allocated or block_id is out of range.
         """
         try:
-            key_cache = getattr(self.hot, '_key_cache', None)
-            val_cache = getattr(self.hot, '_value_cache', None)
+            key_cache = getattr(self.hot, "_key_cache", None)
+            val_cache = getattr(self.hot, "_value_cache", None)
             if key_cache is None or val_cache is None:
                 return None
             bid = block.block_id
             if bid >= key_cache.shape[0]:
                 return None
             import mlx.core as mx
+
             return mx.stack([key_cache[bid], val_cache[bid]], axis=0)
         except Exception:
             logger.debug("KV block extraction from hot cache failed", exc_info=True)
@@ -1111,13 +1222,17 @@ class BackgroundSSDFlush:
             if not self._ssd.contains(block_hash):
                 try:
                     from .compression import dequantize_kv_4bit
+
                     kv_data = dequantize_kv_4bit(packed, scales, head_dim=head_dim)
-                    self._ssd.store(block_hash, mx.array(kv_data), num_tokens=num_tokens)
+                    self._ssd.store(
+                        block_hash, mx.array(kv_data), num_tokens=num_tokens
+                    )
                     flushed += 1
                 except Exception as e:
                     logger.debug(
                         "Failed to flush block 0x%x to SSD: %s",
-                        block_hash, e,
+                        block_hash,
+                        e,
                     )
         with self._stats_lock:
             self._flush_count += 1

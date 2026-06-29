@@ -234,7 +234,9 @@ class TestDetectEagle:
         }
         info = detect_spec_heads(config)
         assert info.head_type == "eagle"
-        assert info.head_config["draft_model_path"] == "yuhuili/EAGLE-LLaMA3-Instruct-8B"
+        assert (
+            info.head_config["draft_model_path"] == "yuhuili/EAGLE-LLaMA3-Instruct-8B"
+        )
 
     def test_eagle_draft_model_path_case_insensitive(self):
         """draft_model_path is matched case-insensitively."""

@@ -26,6 +26,7 @@ async def extract_text_from_image(
     Returns extracted text with optional language detection.
     """
     from .models import _check_model_access, _check_permission
+
     _check_permission(request, "can_infer")
     _check_model_access(request, model)
     content = await file.read()
@@ -46,11 +47,13 @@ async def extract_text_from_image(
     import uuid as _uuid
 
     from ..streaming import run_with_disconnect_guard
+
     _ocr_id = f"ocr-{_uuid.uuid4().hex[:24]}"
     _ocr_tracker = None
     _ocr_cancel = None
     try:
         from yunshu_engine.request_tracker import get_request_tracker
+
         _ocr_tracker = get_request_tracker()
         _ocr_cancel = _ocr_tracker.register(_ocr_id, model or "ocr").cancel_event
     except Exception:
@@ -79,11 +82,16 @@ async def extract_text_from_image(
         _first_ocr_id = None
         _model_lower = model.lower() if model else ""
         for entry in manager.list_entries():
-            if not (entry.is_loaded and isinstance(getattr(entry, 'engine', None), OCREngine)):
+            if not (
+                entry.is_loaded
+                and isinstance(getattr(entry, "engine", None), OCREngine)
+            ):
                 continue
             if _first_ocr is None:
                 _first_ocr, _first_ocr_id = entry.engine, entry.model_id
-            if _model_lower and (entry.model_id == model or entry.model_id.lower() == _model_lower):
+            if _model_lower and (
+                entry.model_id == model or entry.model_id.lower() == _model_lower
+            ):
                 ocr_engine, ocr_model_id = entry.engine, entry.model_id
                 break
         if ocr_engine is None and not _model_lower:
@@ -108,13 +116,20 @@ async def extract_text_from_image(
             # disconnect guard frees the handler promptly on client disconnect
             # (the native blocking generate still runs to completion on the executor, but
             # bounded by max_tokens; None on disconnect → empty result, discarded anyway).
-            result = await run_with_disconnect_guard(
-                request, ocr_engine.extract_text(tmp_path, language=language, task=task),
-                cancel_event=_ocr_cancel) or {}
+            result = (
+                await run_with_disconnect_guard(
+                    request,
+                    ocr_engine.extract_text(tmp_path, language=language, task=task),
+                    cancel_event=_ocr_cancel,
+                )
+                or {}
+            )
             prompt_tokens = int(result.get("prompt_tokens", 0) or 0)
             completion_tokens = int(result.get("completion_tokens", 0) or 0)
             image_tokens = int(result.get("image_tokens", 0) or 0)
-            total_tokens = int(result.get("total_tokens", prompt_tokens + completion_tokens))
+            total_tokens = int(
+                result.get("total_tokens", prompt_tokens + completion_tokens)
+            )
             return {
                 "text": result.get("text", ""),
                 # include the resolved model id — the VLM-fallback path returns
@@ -144,19 +159,23 @@ async def extract_text_from_image(
         if model:
             # Prefer the explicitly requested model when it is a loaded VLM.
             for entry in manager.list_entries():
-                if (entry.model_id == model
-                        and entry.is_loaded
-                        and entry.model_type == ModelType.VLM
-                        and isinstance(getattr(entry, 'engine', None), VLMEngine)):
+                if (
+                    entry.model_id == model
+                    and entry.is_loaded
+                    and entry.model_type == ModelType.VLM
+                    and isinstance(getattr(entry, "engine", None), VLMEngine)
+                ):
                     vlm_engine = entry.engine
                     vlm_model_id = entry.model_id
                     break
         if vlm_engine is None:
             # Any loaded VLM model can serve as an OCR fallback.
             for entry in manager.list_entries():
-                if (entry.is_loaded
-                        and entry.model_type == ModelType.VLM
-                        and isinstance(getattr(entry, 'engine', None), VLMEngine)):
+                if (
+                    entry.is_loaded
+                    and entry.model_type == ModelType.VLM
+                    and isinstance(getattr(entry, "engine", None), VLMEngine)
+                ):
                     vlm_engine = entry.engine
                     vlm_model_id = entry.model_id
                     break
@@ -221,8 +240,12 @@ async def extract_text_from_image(
         except MemoryError:
             raise
         except Exception as e:
-            logger.error(f"VLM OCR fallback failed for {vlm_model_id}: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail="OCR extraction failed") from None
+            logger.error(
+                f"VLM OCR fallback failed for {vlm_model_id}: {e}", exc_info=True
+            )
+            raise HTTPException(
+                status_code=500, detail="OCR extraction failed"
+            ) from None
 
         text = (result.get("text") if isinstance(result, dict) else "") or ""
 
@@ -237,12 +260,17 @@ async def extract_text_from_image(
         # lost). Read top-level first, fall back to a usage dict for forward-compat.
         _res = result if isinstance(result, dict) else {}
         usage = _res.get("usage") or {}
-        prompt_tokens = int(_res.get("prompt_tokens", usage.get("prompt_tokens", 0)) or 0)
-        completion_tokens = int(_res.get("completion_tokens", usage.get("completion_tokens", 0)) or 0)
+        prompt_tokens = int(
+            _res.get("prompt_tokens", usage.get("prompt_tokens", 0)) or 0
+        )
+        completion_tokens = int(
+            _res.get("completion_tokens", usage.get("completion_tokens", 0)) or 0
+        )
         image_tokens = int(_res.get("image_tokens", usage.get("image_tokens", 0)) or 0)
         if image_tokens == 0:
             try:
                 from PIL import Image as _Image
+
                 with _Image.open(tmp_path) as _im:
                     w, h = _im.size
                 getattr(getattr(vlm_engine, "_config", None), "get", lambda *_: {})
@@ -251,10 +279,14 @@ async def extract_text_from_image(
                 if isinstance(cfg, dict):
                     vision_cfg = cfg.get("vision_config", {}) or {}
                     if not vision_cfg:
-                        vision_cfg = (cfg.get("thinker_config", {}) or {}).get("vision_config", {}) or {}
+                        vision_cfg = (cfg.get("thinker_config", {}) or {}).get(
+                            "vision_config", {}
+                        ) or {}
                 patch = int(vision_cfg.get("patch_size", 14) or 14) or 14
                 merge = int(vision_cfg.get("spatial_merge_size", 1) or 1) or 1
-                image_tokens = max(1, (max(1, h // patch) * max(1, w // patch)) // (merge * merge))
+                image_tokens = max(
+                    1, (max(1, h // patch) * max(1, w // patch)) // (merge * merge)
+                )
             except Exception:
                 image_tokens = 0
         # If prompt_tokens was returned without an image contribution, add it.

@@ -5,6 +5,7 @@ _seconds_to_srt/vtt_timestamp computed each field independently with truncation
 as "05,999" instead of "06,000" and 12.555 as ",554" instead of ",555". The whisper
 writer rounds ONCE to total milliseconds then derives all fields; now we match it.
 """
+
 from __future__ import annotations
 
 from yunshu_gateway.routers.audio import (
@@ -14,7 +15,7 @@ from yunshu_gateway.routers.audio import (
 
 
 def test_rounds_at_the_millisecond_not_truncates():
-    assert _seconds_to_srt_timestamp(12.555) == "00:00:12,555"   # was ,554
+    assert _seconds_to_srt_timestamp(12.555) == "00:00:12,555"  # was ,554
     assert _seconds_to_srt_timestamp(5.999999) == "00:00:06,000"  # was 05,999
     assert _seconds_to_srt_timestamp(1.2999999) == "00:00:01,300"  # was ,299
 
@@ -31,6 +32,6 @@ def test_vtt_uses_dot_separator():
 
 
 def test_none_and_negative_tolerated():
-    assert _seconds_to_srt_timestamp(None) == "00:00:00,000"   # tolerance preserved
-    assert _seconds_to_srt_timestamp(-1.0) == "00:00:00,000"   # clamped at 0
+    assert _seconds_to_srt_timestamp(None) == "00:00:00,000"  # tolerance preserved
+    assert _seconds_to_srt_timestamp(-1.0) == "00:00:00,000"  # clamped at 0
     assert _seconds_to_vtt_timestamp("bad") == "00:00:00.000"

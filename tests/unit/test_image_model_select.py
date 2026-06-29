@@ -4,6 +4,7 @@ grabbed the FIRST loaded ImageGenEngine, ignoring req.model. With ≥2 image mod
 that served the WRONG model — and since every image route gates can_access_model(req.model)
 at the top but then served first-of-type, a key authorized for B could be served A (which
 it may not access). _select_image_engine now matches by model_id."""
+
 from __future__ import annotations
 
 import inspect
@@ -28,6 +29,7 @@ def _mgr(entries, monkeypatch):
     # _select_image_engine imports ImageGenEngine and isinstance-checks against it;
     # make our stubs pass by patching the symbol the helper imports.
     import yunshu_engine.image_engine as ie
+
     monkeypatch.setattr(ie, "ImageGenEngine", _ImgEngine)
     return types.SimpleNamespace(list_entries=lambda: entries)
 

@@ -154,16 +154,16 @@ class AdaptiveSpecController:
     def get_stats(self) -> dict:
         """Return controller statistics for monitoring."""
         overall_rate = (
-            self._total_accepted / self._total_draft
-            if self._total_draft > 0
-            else 0.0
+            self._total_accepted / self._total_draft if self._total_draft > 0 else 0.0
         )
         return {
             "enabled": True,
             "current_k": self._current_k,
             "min_k": self._min_k,
             "max_k": self._max_k,
-            "ema_rate": round(self._ema_rate, 4) if self._ema_rate is not None else None,
+            "ema_rate": round(self._ema_rate, 4)
+            if self._ema_rate is not None
+            else None,
             "overall_acceptance_rate": round(overall_rate, 4),
             "total_steps": self._total_steps,
             "total_draft_tokens": self._total_draft,
@@ -186,18 +186,12 @@ class AdaptiveSpecController:
             return None
 
         config = AdaptiveSpecConfig(
-            min_draft_length=int(
-                os.environ.get("YUNSHU_ADAPTIVE_SPEC_MIN_K", "1")
-            ),
-            max_draft_length=int(
-                os.environ.get("YUNSHU_ADAPTIVE_SPEC_MAX_K", "8")
-            ),
+            min_draft_length=int(os.environ.get("YUNSHU_ADAPTIVE_SPEC_MIN_K", "1")),
+            max_draft_length=int(os.environ.get("YUNSHU_ADAPTIVE_SPEC_MAX_K", "8")),
             initial_draft_length=int(
                 os.environ.get("YUNSHU_ADAPTIVE_SPEC_INITIAL_K", "4")
             ),
-            ema_alpha=float(
-                os.environ.get("YUNSHU_ADAPTIVE_SPEC_EMA_ALPHA", "0.3")
-            ),
+            ema_alpha=float(os.environ.get("YUNSHU_ADAPTIVE_SPEC_EMA_ALPHA", "0.3")),
             increase_threshold=float(
                 os.environ.get("YUNSHU_ADAPTIVE_SPEC_INCREASE_THRESH", "0.8")
             ),
@@ -210,9 +204,7 @@ class AdaptiveSpecController:
             decrease_step=int(
                 os.environ.get("YUNSHU_ADAPTIVE_SPEC_DECREASE_STEP", "1")
             ),
-            cooldown_steps=int(
-                os.environ.get("YUNSHU_ADAPTIVE_SPEC_COOLDOWN", "5")
-            ),
+            cooldown_steps=int(os.environ.get("YUNSHU_ADAPTIVE_SPEC_COOLDOWN", "5")),
         )
 
         controller = cls(

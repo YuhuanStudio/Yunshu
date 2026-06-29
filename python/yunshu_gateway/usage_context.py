@@ -14,6 +14,7 @@ ContextVar. Verified empirically (Starlette 1.2.0) to propagate from the auth mi
 reads at request settle (inline for non-stream; in the post-drain background task for
 streaming, via the SAME box object also stashed on `request.state`).
 """
+
 from __future__ import annotations
 
 import contextlib

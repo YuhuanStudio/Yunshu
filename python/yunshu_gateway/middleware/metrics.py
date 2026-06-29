@@ -51,8 +51,12 @@ def _esc_prom(v: str) -> str:
     """Escape a Prometheus label value."""
     # also escape \r — a bare carriage return corrupts parsing in strict
     # OpenMetrics scrapers (only \\, " and \n were escaped before).
-    return (v.replace("\\", "\\\\").replace('"', '\\"')
-            .replace("\n", "\\n").replace("\r", "\\r"))
+    return (
+        v.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
 
 
 @dataclass
@@ -60,10 +64,16 @@ class _Metrics:
     """Thread-safe metrics store."""
 
     request_count: dict[str, int] = field(default_factory=lambda: defaultdict(int))
-    request_latency: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
+    request_latency: dict[str, list[float]] = field(
+        default_factory=lambda: defaultdict(list)
+    )
     # True total observation count and sum per endpoint (not affected by truncation).
-    latency_total_count: dict[str, int] = field(default_factory=lambda: defaultdict(int))
-    latency_total_sum: dict[str, float] = field(default_factory=lambda: defaultdict(float))
+    latency_total_count: dict[str, int] = field(
+        default_factory=lambda: defaultdict(int)
+    )
+    latency_total_sum: dict[str, float] = field(
+        default_factory=lambda: defaultdict(float)
+    )
     prompt_tokens: int = 0
     completion_tokens: int = 0
     inference_count: int = 0
@@ -71,7 +81,9 @@ class _Metrics:
     start_time: float = field(default_factory=time.time)
     _lock: Lock = field(default_factory=Lock)
 
-    def record_request(self, endpoint: str, method: str, status: int, latency: float) -> None:
+    def record_request(
+        self, endpoint: str, method: str, status: int, latency: float
+    ) -> None:
         with self._lock:
             # bound distinct-endpoint cardinality. MetricsMiddleware is the
             # OUTERMOST middleware (runs BEFORE auth rejects a request), and
@@ -79,8 +91,10 @@ class _Metrics:
             # so an unauthenticated attacker looping GET /a, /b, /c… would grow these
             # per-endpoint dicts without limit → OOM. Once we hold _MAX_DISTINCT_ENDPOINTS
             # distinct endpoints, bucket any NEW one under a single overflow label.
-            if (endpoint not in self.latency_total_count
-                    and len(self.latency_total_count) >= _MAX_DISTINCT_ENDPOINTS):
+            if (
+                endpoint not in self.latency_total_count
+                and len(self.latency_total_count) >= _MAX_DISTINCT_ENDPOINTS
+            ):
                 endpoint = "/{other}"
             key = f"{method}:{endpoint}:{status}"
             self.request_count[key] += 1
@@ -109,6 +123,7 @@ class _Metrics:
         # 0. This path covers both streaming and non-streaming requests.
         try:
             from .metrics_aggregator import get_metrics_aggregator
+
             get_metrics_aggregator().record_tokens(prompt, completion)
         except Exception:
             pass
@@ -201,6 +216,7 @@ class _Metrics:
         # GPU memory gauges
         try:
             import mlx.core as mx
+
             active = mx.get_active_memory()
             peak = mx.get_peak_memory()
             cache = mx.get_cache_memory()
@@ -216,6 +232,7 @@ class _Metrics:
         # Engine stats (if available)
         try:
             from yunshu_gateway.engine import get_engine, get_model_manager
+
             manager = get_model_manager()
             total_active = 0
             total_waiting = 0
@@ -238,20 +255,27 @@ class _Metrics:
                                     exc_info=True,
                                 )
                                 continue
-                            total_active += s.get("active_collectors",
-                                                  s.get("scheduler_running",
-                                                        s.get("active", 0)))
-                            total_waiting += s.get("scheduler_waiting",
-                                                   s.get("waiting", 0))
+                            total_active += s.get(
+                                "active_collectors",
+                                s.get("scheduler_running", s.get("active", 0)),
+                            )
+                            total_waiting += s.get(
+                                "scheduler_waiting", s.get("waiting", 0)
+                            )
             else:
                 engine = get_engine()
-                if engine and hasattr(engine, 'is_loaded') and engine.is_loaded and hasattr(engine, "get_stats"):
+                if (
+                    engine
+                    and hasattr(engine, "is_loaded")
+                    and engine.is_loaded
+                    and hasattr(engine, "get_stats")
+                ):
                     s = engine.get_stats()
-                    total_active = s.get("active_collectors",
-                                        s.get("scheduler_running",
-                                              s.get("active", 0)))
-                    total_waiting = s.get("scheduler_waiting",
-                                          s.get("waiting", 0))
+                    total_active = s.get(
+                        "active_collectors",
+                        s.get("scheduler_running", s.get("active", 0)),
+                    )
+                    total_waiting = s.get("scheduler_waiting", s.get("waiting", 0))
                     if s.get("loaded"):
                         total_running = 1
 
@@ -261,7 +285,9 @@ class _Metrics:
             lines.append(f'yunshu_engine_requests{{state="active"}} {total_active}')
             lines.append(f'yunshu_engine_requests{{state="waiting"}} {total_waiting}')
             lines.append(f'yunshu_engine_models{{state="running"}} {total_running}')
-            lines.append(f'yunshu_engine_models{{state="registered"}} {total_registered}')
+            lines.append(
+                f'yunshu_engine_models{{state="registered"}} {total_registered}'
+            )
         except Exception:
             logger.debug("engine stats unavailable", exc_info=True)
 
@@ -340,15 +366,17 @@ class MetricsMiddleware(BaseHTTPMiddleware):
             # Append Prometheus exporter gauges (engine-level metrics)
             try:
                 from .prometheus_exporter import get_prometheus_metrics
+
                 pm = get_prometheus_metrics()
                 # Collect RadixTree eviction metrics from loaded engines
                 try:
                     from yunshu_engine.batched_engine import BatchedEngine
 
                     from ..engine import get_engine, get_model_manager
+
                     engines = []
                     engine = get_engine()
-                    if engine and hasattr(engine, 'is_loaded') and engine.is_loaded:
+                    if engine and hasattr(engine, "is_loaded") and engine.is_loaded:
                         engines.append(("default", engine))
                     manager = get_model_manager()
                     if manager:
@@ -360,48 +388,136 @@ class MetricsMiddleware(BaseHTTPMiddleware):
                         if isinstance(eng, BatchedEngine):
                             radix_stats = eng.get_radix_tree_stats()
                             ev = radix_stats.get("eviction_stats", {})
-                            pm.set_counter("radix_evictions_lru", ev.get("lru", 0), labels=ml)
-                            pm.set_counter("radix_evictions_lfu", ev.get("lfu", 0), labels=ml)
-                            pm.set_counter("radix_evictions_fifo", ev.get("fifo", 0), labels=ml)
-                            pm.set_counter("radix_evictions_freed_blocks", ev.get("total_freed_blocks", 0), labels=ml)
-                            pm.set_gauge("radix_total_nodes", radix_stats.get("total_nodes", 0), labels=ml)
-                            pm.set_gauge("radix_total_tokens", radix_stats.get("total_tokens", 0), labels=ml)
+                            pm.set_counter(
+                                "radix_evictions_lru", ev.get("lru", 0), labels=ml
+                            )
+                            pm.set_counter(
+                                "radix_evictions_lfu", ev.get("lfu", 0), labels=ml
+                            )
+                            pm.set_counter(
+                                "radix_evictions_fifo", ev.get("fifo", 0), labels=ml
+                            )
+                            pm.set_counter(
+                                "radix_evictions_freed_blocks",
+                                ev.get("total_freed_blocks", 0),
+                                labels=ml,
+                            )
+                            pm.set_gauge(
+                                "radix_total_nodes",
+                                radix_stats.get("total_nodes", 0),
+                                labels=ml,
+                            )
+                            pm.set_gauge(
+                                "radix_total_tokens",
+                                radix_stats.get("total_tokens", 0),
+                                labels=ml,
+                            )
                             # RadixTree blocks and match rate
-                            pm.set_gauge("radix_tree_blocks", radix_stats.get("total_blocks", 0), labels=ml)
-                            pm.set_gauge("radix_tree_match_rate", radix_stats.get("match_rate", 0.0), labels=ml)
-                            pm.set_counter("radix_tree_match_total", radix_stats.get("match_total", 0), labels=ml)
-                            pm.set_counter("radix_tree_match_hits", radix_stats.get("match_hits", 0), labels=ml)
+                            pm.set_gauge(
+                                "radix_tree_blocks",
+                                radix_stats.get("total_blocks", 0),
+                                labels=ml,
+                            )
+                            pm.set_gauge(
+                                "radix_tree_match_rate",
+                                radix_stats.get("match_rate", 0.0),
+                                labels=ml,
+                            )
+                            pm.set_counter(
+                                "radix_tree_match_total",
+                                radix_stats.get("match_total", 0),
+                                labels=ml,
+                            )
+                            pm.set_counter(
+                                "radix_tree_match_hits",
+                                radix_stats.get("match_hits", 0),
+                                labels=ml,
+                            )
                             # Scheduler monitoring gauges from engine_core
                             try:
-                                core = getattr(eng, '_engine_core', None)
+                                core = getattr(eng, "_engine_core", None)
                                 if core is not None:
-                                    pm.set_gauge("scheduler_waiting_queue_depth", getattr(core, '_last_queue_depth', 0), labels=ml)
-                                    pm.set_gauge("scheduler_batch_size", getattr(core, '_last_batch_size', 0), labels=ml)
-                                    pm.set_gauge("compute_utilization_pct",
-                                        core.get_compute_utilization() if hasattr(core, 'get_compute_utilization') else 0, labels=ml)
-                                    pm.set_gauge("step_duration_ms", getattr(core, '_last_step_wall_ms', 0.0), labels=ml)
+                                    pm.set_gauge(
+                                        "scheduler_waiting_queue_depth",
+                                        getattr(core, "_last_queue_depth", 0),
+                                        labels=ml,
+                                    )
+                                    pm.set_gauge(
+                                        "scheduler_batch_size",
+                                        getattr(core, "_last_batch_size", 0),
+                                        labels=ml,
+                                    )
+                                    pm.set_gauge(
+                                        "compute_utilization_pct",
+                                        core.get_compute_utilization()
+                                        if hasattr(core, "get_compute_utilization")
+                                        else 0,
+                                        labels=ml,
+                                    )
+                                    pm.set_gauge(
+                                        "step_duration_ms",
+                                        getattr(core, "_last_step_wall_ms", 0.0),
+                                        labels=ml,
+                                    )
                             except Exception:
-                                logger.debug("scheduler monitoring gauge population failed", exc_info=True)
+                                logger.debug(
+                                    "scheduler monitoring gauge population failed",
+                                    exc_info=True,
+                                )
                             # Response cache and KV migration Prometheus gauges
                             try:
-                                core = getattr(eng, '_engine_core', None)
-                                if core is not None and hasattr(core, '_kv_migration') and core._kv_migration is not None:
+                                core = getattr(eng, "_engine_core", None)
+                                if (
+                                    core is not None
+                                    and hasattr(core, "_kv_migration")
+                                    and core._kv_migration is not None
+                                ):
                                     mig_stats = core._kv_migration.get_stats()
-                                    pm.set_counter("kv_migrations_total", mig_stats.get("total_migrations", 0), labels=ml)
-                                    pm.set_counter("kv_migration_errors_total", mig_stats.get("failed_migrations", 0), labels=ml)
-                                    pm.set_gauge("kv_migration_pending_queue", float(mig_stats.get("pending_queue_size", 0)), labels=ml)
-                                    pm.set_gauge("kv_migration_tracked_blocks", float(mig_stats.get("tracked_blocks", 0)), labels=ml)
+                                    pm.set_counter(
+                                        "kv_migrations_total",
+                                        mig_stats.get("total_migrations", 0),
+                                        labels=ml,
+                                    )
+                                    pm.set_counter(
+                                        "kv_migration_errors_total",
+                                        mig_stats.get("failed_migrations", 0),
+                                        labels=ml,
+                                    )
+                                    pm.set_gauge(
+                                        "kv_migration_pending_queue",
+                                        float(mig_stats.get("pending_queue_size", 0)),
+                                        labels=ml,
+                                    )
+                                    pm.set_gauge(
+                                        "kv_migration_tracked_blocks",
+                                        float(mig_stats.get("tracked_blocks", 0)),
+                                        labels=ml,
+                                    )
                             except Exception:
-                                logger.debug("KV migration gauge population failed", exc_info=True)
+                                logger.debug(
+                                    "KV migration gauge population failed",
+                                    exc_info=True,
+                                )
                             # Response cache
                             try:
-                                s = eng.get_stats() if hasattr(eng, 'get_stats') else {}
+                                s = eng.get_stats() if hasattr(eng, "get_stats") else {}
                                 rc = s.get("response_cache")
                                 if rc:
-                                    pm.set_counter("response_cache_hits_total", rc.get("hits", 0), labels=ml)
-                                    pm.set_counter("response_cache_misses_total", rc.get("misses", 0), labels=ml)
+                                    pm.set_counter(
+                                        "response_cache_hits_total",
+                                        rc.get("hits", 0),
+                                        labels=ml,
+                                    )
+                                    pm.set_counter(
+                                        "response_cache_misses_total",
+                                        rc.get("misses", 0),
+                                        labels=ml,
+                                    )
                             except Exception:
-                                logger.debug("response cache gauge population failed", exc_info=True)
+                                logger.debug(
+                                    "response cache gauge population failed",
+                                    exc_info=True,
+                                )
                 except Exception:
                     logger.debug("operation failed", exc_info=True)
                 pm_text = pm.generate()
@@ -425,17 +541,21 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         # use the bucketed endpoint (/{other} past the distinct-endpoint cap) for
         # the exporter + aggregator too, so an endpoint flood can't churn their label-series
         # caps and corrupt rate() with counter-resets.
-        bucketed_ep = _metrics.record_request(
-            endpoint=normalized_ep,
-            method=request.method,
-            status=response.status_code,
-            latency=latency,
-        ) or normalized_ep
+        bucketed_ep = (
+            _metrics.record_request(
+                endpoint=normalized_ep,
+                method=request.method,
+                status=response.status_code,
+                latency=latency,
+            )
+            or normalized_ep
+        )
 
         # Also record into the time-windowed aggregator and the
         # Prometheus exporter for richer observability.
         try:
             from .metrics_aggregator import get_metrics_aggregator
+
             get_metrics_aggregator().record_request(
                 method=request.method,
                 path=bucketed_ep,
@@ -447,15 +567,23 @@ class MetricsMiddleware(BaseHTTPMiddleware):
 
         try:
             from .prometheus_exporter import get_prometheus_metrics
+
             pm = get_prometheus_metrics()
-            pm.inc_counter("request_total", {
-                "method": request.method,
-                "status": str(response.status_code),
-                "endpoint": bucketed_ep,
-            })
-            pm.observe_histogram("request_duration_seconds", latency, {
-                "endpoint": bucketed_ep,
-            })
+            pm.inc_counter(
+                "request_total",
+                {
+                    "method": request.method,
+                    "status": str(response.status_code),
+                    "endpoint": bucketed_ep,
+                },
+            )
+            pm.observe_histogram(
+                "request_duration_seconds",
+                latency,
+                {
+                    "endpoint": bucketed_ep,
+                },
+            )
         except Exception:
             logger.debug("prometheus recording failed", exc_info=True)
 

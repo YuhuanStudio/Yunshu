@@ -1,4 +1,5 @@
 """Tests for Suffix-based Speculative Decoding."""
+
 import pytest
 
 from yunshu_engine.spec_interface import (
@@ -135,9 +136,13 @@ class TestSuffixProposer:
         proposer.end("req-1")
 
     def test_draft_after_accept(self):
-        proposer = SuffixProposer(SuffixConfig(
-            min_suffix_length=2, max_window=100, max_draft=5,
-        ))
+        proposer = SuffixProposer(
+            SuffixConfig(
+                min_suffix_length=2,
+                max_window=100,
+                max_draft=5,
+            )
+        )
         proposer.begin("req-1")
         # Simulate generated text being accepted
         proposer._generated["req-1"] = [1, 2, 3, 4, 5, 1, 2, 3]
@@ -150,9 +155,13 @@ class TestSuffixProposer:
         proposer.end("req-1")
 
     def test_draft_with_long_repetition(self):
-        proposer = SuffixProposer(SuffixConfig(
-            min_suffix_length=2, max_window=200, max_draft=5,
-        ))
+        proposer = SuffixProposer(
+            SuffixConfig(
+                min_suffix_length=2,
+                max_window=200,
+                max_draft=5,
+            )
+        )
         proposer.begin("req-1")
         # Long repeated pattern
         pattern = [1, 2, 3, 4] * 10
@@ -164,9 +173,13 @@ class TestSuffixProposer:
         proposer.end("req-1")
 
     def test_accept_updates_generated_history(self):
-        proposer = SuffixProposer(SuffixConfig(
-            min_suffix_length=2, max_window=100, max_draft=5,
-        ))
+        proposer = SuffixProposer(
+            SuffixConfig(
+                min_suffix_length=2,
+                max_window=100,
+                max_draft=5,
+            )
+        )
         proposer.begin("req-1")
         # Accept tokens
         proposer.accept([1, 2, 3, 4, 5], 5)
@@ -195,9 +208,13 @@ class TestSuffixProposer:
         assert len(proposer._tries) == 0
 
     def test_max_draft_limit(self):
-        proposer = SuffixProposer(SuffixConfig(
-            min_suffix_length=2, max_window=100, max_draft=2,
-        ))
+        proposer = SuffixProposer(
+            SuffixConfig(
+                min_suffix_length=2,
+                max_window=100,
+                max_draft=2,
+            )
+        )
         proposer.begin("req-1")
         proposer._generated["req-1"] = [1, 2, 3, 4, 5, 1, 2, 3, 4, 5]
         trie = proposer._tries["req-1"]
@@ -207,9 +224,13 @@ class TestSuffixProposer:
         proposer.end("req-1")
 
     def test_n_draft_parameter(self):
-        proposer = SuffixProposer(SuffixConfig(
-            min_suffix_length=2, max_window=100, max_draft=10,
-        ))
+        proposer = SuffixProposer(
+            SuffixConfig(
+                min_suffix_length=2,
+                max_window=100,
+                max_draft=10,
+            )
+        )
         proposer.begin("req-1")
         proposer._generated["req-1"] = [1, 2, 3, 4, 5, 1, 2, 3, 4, 5]
         trie = proposer._tries["req-1"]
@@ -251,9 +272,13 @@ class TestSuffixProposer:
         assert stats["avg_proposed_length"] == 0.0
 
     def test_max_window_truncation(self):
-        proposer = SuffixProposer(SuffixConfig(
-            min_suffix_length=2, max_window=10, max_draft=5,
-        ))
+        proposer = SuffixProposer(
+            SuffixConfig(
+                min_suffix_length=2,
+                max_window=10,
+                max_draft=5,
+            )
+        )
         proposer.begin("req-1")
         # Accept more tokens than max_window — _generated stores all
         long_tokens = list(range(100))
@@ -266,9 +291,13 @@ class TestSuffixProposer:
 
     def test_code_pattern_repetition(self):
         """Simulates repetitive code output like indentation patterns."""
-        proposer = SuffixProposer(SuffixConfig(
-            min_suffix_length=3, max_window=512, max_draft=5,
-        ))
+        proposer = SuffixProposer(
+            SuffixConfig(
+                min_suffix_length=3,
+                max_window=512,
+                max_draft=5,
+            )
+        )
         proposer.begin("req-code")
         # Simulate generated code: repeated "indent + keyword + newline"
         pattern = [100, 200, 300, 400] * 8  # e.g., spaces, "def", "(", ")"
@@ -285,9 +314,13 @@ class TestSuffixProposer:
 
 class TestSuffixStrategy:
     def test_lifecycle(self):
-        strategy = SuffixStrategy(SuffixConfig(
-            min_suffix_length=2, max_window=100, max_draft=5,
-        ))
+        strategy = SuffixStrategy(
+            SuffixConfig(
+                min_suffix_length=2,
+                max_window=100,
+                max_draft=5,
+            )
+        )
         strategy.begin("req-1")
         # Seed the proposer with generated tokens
         strategy._proposer.accept([1, 2, 3, 4, 5, 1, 2, 3], 8)
@@ -312,9 +345,13 @@ class TestSuffixStrategy:
         assert strategy.name == "suffix"
 
     def test_reset(self):
-        strategy = SuffixStrategy(SuffixConfig(
-            min_suffix_length=2, max_window=100, max_draft=5,
-        ))
+        strategy = SuffixStrategy(
+            SuffixConfig(
+                min_suffix_length=2,
+                max_window=100,
+                max_draft=5,
+            )
+        )
         strategy.begin("req-3")
         strategy._proposer.accept([1, 2, 3, 4, 5], 5)
         strategy.draft([1, 2, 3, 4], n=3)
@@ -325,9 +362,12 @@ class TestSuffixStrategy:
     def test_composite_with_suffix(self):
         """Suffix strategy works inside CompositeStrategy."""
         suffix = SuffixStrategy(SuffixConfig(min_suffix_length=2))
-        ngram = SpecStrategyFactory.create({
-            "type": "ngram", "mode": "lps",
-        })
+        ngram = SpecStrategyFactory.create(
+            {
+                "type": "ngram",
+                "mode": "lps",
+            }
+        )
         composite = CompositeStrategy([suffix, ngram])
         composite.begin("req-5")
         proposal = composite.draft([1, 2, 3, 1, 2, 3], n=5)
@@ -336,24 +376,59 @@ class TestSuffixStrategy:
         composite.end("req-5")
 
     def test_factory_creation(self):
-        strategy = SpecStrategyFactory.create({
-            "type": "suffix",
-            "min_suffix_length": 3,
-            "max_window": 256,
-            "max_draft": 5,
-        })
+        strategy = SpecStrategyFactory.create(
+            {
+                "type": "suffix",
+                "min_suffix_length": 3,
+                "max_window": 256,
+                "max_draft": 5,
+            }
+        )
         assert isinstance(strategy, SuffixStrategy)
         assert strategy.name == "suffix"
 
     def test_json_pattern_repetition(self):
         """Simulates repetitive JSON output."""
-        strategy = SuffixStrategy(SuffixConfig(
-            min_suffix_length=2, max_window=256, max_draft=5,
-        ))
+        strategy = SuffixStrategy(
+            SuffixConfig(
+                min_suffix_length=2,
+                max_window=256,
+                max_draft=5,
+            )
+        )
         strategy.begin("req-json")
         # Simulate generated JSON: repeated {"key": "value"}, pattern
         # Tokens: { " k e y " : " v a l " } , { " k e y " : " v a l " } ,
-        json_pattern = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+        json_pattern = [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+        ]
         strategy._proposer.accept(json_pattern, len(json_pattern))
         # Draft with context ending in a partial JSON key
         result = strategy.draft([0, 0] + json_pattern[:14] + [1, 2, 3], n=5)
@@ -392,9 +467,13 @@ class TestSuffixEdgeCases:
 
     def test_very_long_sequence(self):
         """Handle sequences longer than max_window."""
-        proposer = SuffixProposer(SuffixConfig(
-            min_suffix_length=2, max_window=50, max_draft=5,
-        ))
+        proposer = SuffixProposer(
+            SuffixConfig(
+                min_suffix_length=2,
+                max_window=50,
+                max_draft=5,
+            )
+        )
         proposer.begin("req-long")
         # Accept a very long sequence
         long_tokens = [i % 10 for i in range(1000)]

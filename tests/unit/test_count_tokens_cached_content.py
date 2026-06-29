@@ -7,6 +7,7 @@ ONE resolver (_resolve_cached_content_text) — generation marks a real READ (mu
 count_tokens does a non-mutating estimation read (mutate=False) — so the estimate matches the
 real prompt and the two can't drift (the recurring "claimed-mirrors but diverged" class).
 """
+
 from __future__ import annotations
 
 import inspect
@@ -59,8 +60,11 @@ def _patch_store(monkeypatch, entry):
 def test_estimation_read_uses_get_not_use(monkeypatch):
     entry = _Entry([{"role": "user", "content": "CACHED PREFIX"}])
     store = _patch_store(monkeypatch, entry)
-    assert _resolve_cached_content_text("cachedContents/x", "m", _req(), mutate=False) == "CACHED PREFIX"
-    assert store.get_called and not store.use_called      # estimation must not bump usage
+    assert (
+        _resolve_cached_content_text("cachedContents/x", "m", _req(), mutate=False)
+        == "CACHED PREFIX"
+    )
+    assert store.get_called and not store.use_called  # estimation must not bump usage
     assert entry.read_count == 0
 
 
@@ -73,15 +77,26 @@ def test_generation_read_bumps_usage(monkeypatch):
 
 
 def test_model_mismatch_raises_400(monkeypatch):
-    _patch_store(monkeypatch, _Entry([{"role": "user", "content": "C"}], model="other-model"))
+    _patch_store(
+        monkeypatch, _Entry([{"role": "user", "content": "C"}], model="other-model")
+    )
     with pytest.raises(HTTPException) as e:
         _resolve_cached_content_text("x", "my-model", _req(), mutate=False)
     assert e.value.status_code == 400
 
 
 def test_block_content_is_flattened(monkeypatch):
-    entry = _Entry([{"role": "user",
-                     "content": [{"type": "text", "text": "A"}, {"type": "text", "text": "B"}]}])
+    entry = _Entry(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "A"},
+                    {"type": "text", "text": "B"},
+                ],
+            }
+        ]
+    )
     _patch_store(monkeypatch, entry)
     assert _resolve_cached_content_text("x", "m", _req(), mutate=False) == "A B"
 
@@ -89,12 +104,16 @@ def test_block_content_is_flattened(monkeypatch):
 def test_absent_or_empty_returns_empty(monkeypatch):
     assert _resolve_cached_content_text(None, "m", _req(), mutate=False) == ""
     assert _resolve_cached_content_text("", "m", _req(), mutate=False) == ""
-    _patch_store(monkeypatch, None)   # handle not found
+    _patch_store(monkeypatch, None)  # handle not found
     assert _resolve_cached_content_text("x", "m", _req(), mutate=False) == ""
 
 
 def test_generation_and_count_tokens_share_the_resolver():
-    gen = "\n".join(ln.split("#", 1)[0] for ln in inspect.getsource(A.create_message).splitlines())
-    ct = "\n".join(ln.split("#", 1)[0] for ln in inspect.getsource(A.count_tokens).splitlines())
+    gen = "\n".join(
+        ln.split("#", 1)[0] for ln in inspect.getsource(A.create_message).splitlines()
+    )
+    ct = "\n".join(
+        ln.split("#", 1)[0] for ln in inspect.getsource(A.count_tokens).splitlines()
+    )
     assert "_resolve_cached_content_text(" in gen and "mutate=True" in gen
     assert "_resolve_cached_content_text(" in ct and "mutate=False" in ct

@@ -7,6 +7,7 @@ Verifies that prompt_tokens is set correctly and consistently in:
 - RequestOutput.usage property
 - GenerationOutput dataclass
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -94,6 +95,7 @@ class TestBatchedEngineFastPathPromptTokens:
 
     def _make_batched_engine(self):
         from yunshu_engine.batched_engine import BatchedEngine
+
         engine = object.__new__(BatchedEngine)
         engine.model_name = "test-model"
         engine.stream_interval = 1
@@ -142,7 +144,7 @@ class TestBatchedEngineFastPathPromptTokens:
         engine._streaming_pipeline_enabled = False
         engine._thinking_store = None
         engine._active_fast_path_count = 0
-        engine._fast_path_lock = __import__('threading').Lock()
+        engine._fast_path_lock = __import__("threading").Lock()
         engine._settings = None
         engine._deltanet_inverter = None
         engine._deltanet_inversion_enabled = False
@@ -176,11 +178,15 @@ class TestBatchedEngineFastPathPromptTokens:
         mock_detokenizer.finalize.return_value = ""
         engine._tokenizer.detokenizer = mock_detokenizer
 
-        with patch('mlx_lm.generate.generate_step') as mock_step, \
-             patch('mlx_lm.sample_utils.make_sampler'), \
-             patch('yunshu_engine.batched_engine._create_prompt_cache_with_quant', return_value=[]), \
-             patch('mlx.core') as mock_mx:
-
+        with (
+            patch("mlx_lm.generate.generate_step") as mock_step,
+            patch("mlx_lm.sample_utils.make_sampler"),
+            patch(
+                "yunshu_engine.batched_engine._create_prompt_cache_with_quant",
+                return_value=[],
+            ),
+            patch("mlx.core") as mock_mx,
+        ):
             mock_step.return_value = iter([(100, None), (2, None)])
             mock_mx.array.return_value = MagicMock()
             mock_mx.eval.return_value = None
@@ -190,8 +196,11 @@ class TestBatchedEngineFastPathPromptTokens:
 
             engine._model.max_seq_len = 4096
 
-            with patch('yunshu_engine.batched_engine._clean_special_tokens', side_effect=lambda x: x):
-                with patch.object(engine, '_apply_chat_template', return_value="test"):
+            with patch(
+                "yunshu_engine.batched_engine._clean_special_tokens",
+                side_effect=lambda x: x,
+            ):
+                with patch.object(engine, "_apply_chat_template", return_value="test"):
                     result = await engine._generate_fast(
                         prompt="hello world test",
                         max_tokens=10,
@@ -253,6 +262,7 @@ class TestVLMEnginePromptTokens:
         import concurrent.futures
 
         from yunshu_engine.vlm_engine import VLMEngine
+
         engine = object.__new__(VLMEngine)
         engine._model_path = "/models/test-model"
         engine._model = MagicMock()
@@ -262,6 +272,7 @@ class TestVLMEnginePromptTokens:
         engine._running = True
         engine._active_count = 0
         import threading
+
         engine._active_count_lock = threading.Lock()
         engine._num_requests_processed = 0
         engine._total_reasoning_tokens = 0
@@ -291,12 +302,16 @@ class TestVLMEnginePromptTokens:
         engine._extract_images = AsyncMock(return_value=[])
         engine._extract_audio = AsyncMock(return_value=[])
         engine._extract_video_frames = AsyncMock(return_value=[])
-        engine._tokenize_with_cache = MagicMock(return_value=MagicMock(ids=[10, 20, 30, 40, 50, 60, 70]))
+        engine._tokenize_with_cache = MagicMock(
+            return_value=MagicMock(ids=[10, 20, 30, 40, 50, 60, 70])
+        )
         engine._get_eos_ids = MagicMock(return_value=[2])
 
-        with patch.object(engine, '_format_prompt', return_value="test prompt"):
-            with patch('mlx_lm.generate.generate_step') as mock_step, \
-                 patch('mlx_lm.sample_utils.make_sampler'):
+        with patch.object(engine, "_format_prompt", return_value="test prompt"):
+            with (
+                patch("mlx_lm.generate.generate_step") as mock_step,
+                patch("mlx_lm.sample_utils.make_sampler"),
+            ):
                 mock_step.return_value = iter([(100, None), (2, None)])
 
                 result = await engine.generate(
@@ -327,13 +342,29 @@ class TestStreamingPromptTokensConsistency:
 
     def test_request_output_final_stream_has_same_prompt_tokens(self):
         stream_outputs = [
-            RequestOutput(request_id="req-1", prompt_tokens=10, completion_tokens=1, new_text="he"),
-            RequestOutput(request_id="req-1", prompt_tokens=10, completion_tokens=2, new_text="llo"),
-            RequestOutput(request_id="req-1", prompt_tokens=10, completion_tokens=3, new_text="", finish_reason="stop", finished=True),
+            RequestOutput(
+                request_id="req-1", prompt_tokens=10, completion_tokens=1, new_text="he"
+            ),
+            RequestOutput(
+                request_id="req-1",
+                prompt_tokens=10,
+                completion_tokens=2,
+                new_text="llo",
+            ),
+            RequestOutput(
+                request_id="req-1",
+                prompt_tokens=10,
+                completion_tokens=3,
+                new_text="",
+                finish_reason="stop",
+                finished=True,
+            ),
         ]
 
         prompt_tokens_set = {o.prompt_tokens for o in stream_outputs}
-        assert len(prompt_tokens_set) == 1, f"Expected consistent prompt_tokens, got {prompt_tokens_set}"
+        assert len(prompt_tokens_set) == 1, (
+            f"Expected consistent prompt_tokens, got {prompt_tokens_set}"
+        )
         assert 10 in prompt_tokens_set
 
     def test_generation_output_prompt_tokens_matches_request_output(self):
@@ -365,34 +396,42 @@ class TestRequestStatusFinishReason:
 
     def test_finished_stopped(self):
         from yunshu_engine.request import RequestStatus
+
         assert RequestStatus.finish_reason(RequestStatus.FINISHED_STOPPED) == "stop"
 
     def test_finished_length(self):
         from yunshu_engine.request import RequestStatus
+
         assert RequestStatus.finish_reason(RequestStatus.FINISHED_LENGTH) == "length"
 
     def test_finished_aborted(self):
         from yunshu_engine.request import RequestStatus
+
         assert RequestStatus.finish_reason(RequestStatus.FINISHED_ABORTED) == "abort"
 
     def test_finished_error(self):
         from yunshu_engine.request import RequestStatus
+
         assert RequestStatus.finish_reason(RequestStatus.FINISHED_ERROR) == "error"
 
     def test_finished_timeout(self):
         from yunshu_engine.request import RequestStatus
+
         assert RequestStatus.finish_reason(RequestStatus.FINISHED_TIMEOUT) == "timeout"
 
     def test_running_returns_none(self):
         from yunshu_engine.request import RequestStatus
+
         assert RequestStatus.finish_reason(RequestStatus.RUNNING) is None
 
     def test_waiting_returns_none(self):
         from yunshu_engine.request import RequestStatus
+
         assert RequestStatus.finish_reason(RequestStatus.WAITING) is None
 
     def test_is_finished(self):
         from yunshu_engine.request import RequestStatus
+
         assert not RequestStatus.is_finished(RequestStatus.WAITING)
         assert not RequestStatus.is_finished(RequestStatus.RUNNING)
         assert not RequestStatus.is_finished(RequestStatus.PREFILLING)
@@ -411,6 +450,7 @@ class TestNormalizeFinishReason:
 
     def test_valid_openai_reasons_passthrough(self):
         from yunshu_gateway.routers.chat import _normalize_finish_reason
+
         assert _normalize_finish_reason("stop") == "stop"
         assert _normalize_finish_reason("length") == "length"
         assert _normalize_finish_reason("tool_calls") == "tool_calls"
@@ -418,11 +458,13 @@ class TestNormalizeFinishReason:
 
     def test_none_returns_stop(self):
         from yunshu_gateway.routers.chat import _normalize_finish_reason
+
         assert _normalize_finish_reason(None) == "stop"
         assert _normalize_finish_reason("") == "stop"
 
     def test_internal_reasons_mapped(self):
         from yunshu_gateway.routers.chat import _normalize_finish_reason
+
         assert _normalize_finish_reason("abort") == "stop"
         assert _normalize_finish_reason("cancel") == "stop"
         assert _normalize_finish_reason("error") == "stop"
@@ -432,4 +474,5 @@ class TestNormalizeFinishReason:
 
     def test_unknown_reason_defaults_to_stop(self):
         from yunshu_gateway.routers.chat import _normalize_finish_reason
+
         assert _normalize_finish_reason("unknown_reason") == "stop"

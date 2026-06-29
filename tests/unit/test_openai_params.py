@@ -6,6 +6,7 @@ Tests the following parameters across Chat and Completions APIs:
 - logit_bias: adds bias to specified token logits
 - parallel_tool_calls: controls whether multiple tool calls can be generated
 """
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,7 +22,9 @@ class TestChatCompletionParams:
     """Test OpenAI Chat Completions request parameters."""
 
     def test_frequency_penalty_default(self):
-        req = ChatCompletionRequest(model="test", messages=[{"role": "user", "content": "hi"}])
+        req = ChatCompletionRequest(
+            model="test", messages=[{"role": "user", "content": "hi"}]
+        )
         assert req.frequency_penalty == 0.0
 
     def test_frequency_penalty_set(self):
@@ -51,7 +54,9 @@ class TestChatCompletionParams:
         assert req.frequency_penalty == 2.0
 
     def test_presence_penalty_default(self):
-        req = ChatCompletionRequest(model="test", messages=[{"role": "user", "content": "hi"}])
+        req = ChatCompletionRequest(
+            model="test", messages=[{"role": "user", "content": "hi"}]
+        )
         assert req.presence_penalty == 0.0
 
     def test_presence_penalty_set(self):
@@ -71,7 +76,9 @@ class TestChatCompletionParams:
         assert req.presence_penalty == -0.5
 
     def test_logit_bias_default(self):
-        req = ChatCompletionRequest(model="test", messages=[{"role": "user", "content": "hi"}])
+        req = ChatCompletionRequest(
+            model="test", messages=[{"role": "user", "content": "hi"}]
+        )
         assert req.logit_bias is None
 
     def test_logit_bias_set(self):
@@ -100,7 +107,9 @@ class TestChatCompletionParams:
             )
 
     def test_parallel_tool_calls_default(self):
-        req = ChatCompletionRequest(model="test", messages=[{"role": "user", "content": "hi"}])
+        req = ChatCompletionRequest(
+            model="test", messages=[{"role": "user", "content": "hi"}]
+        )
         assert req.parallel_tool_calls is True
 
     def test_parallel_tool_calls_false(self):
@@ -327,7 +336,7 @@ class TestEngineCoreParamPassthrough:
         core.scheduler.add_request = capture_add
 
         # Mock event loop
-        with patch('asyncio.get_running_loop') as mock_loop:
+        with patch("asyncio.get_running_loop") as mock_loop:
             mock_loop.return_value.run_in_executor = AsyncMock(
                 side_effect=lambda executor, fn, *args: fn(*args),
             )
@@ -356,7 +365,7 @@ class TestPagedSchedulerIntegration:
         from yunshu_engine.engine_core import EngineCoreConfig
 
         config = EngineCoreConfig()
-        assert hasattr(config, 'enable_paged_kv')
+        assert hasattr(config, "enable_paged_kv")
         assert config.enable_paged_kv is True  # C11: enabled by default
 
         config_with_paged = EngineCoreConfig(enable_paged_kv=True)
@@ -365,6 +374,7 @@ class TestPagedSchedulerIntegration:
     def test_paged_scheduler_class_exists(self):
         """Verify PagedScheduler can be imported."""
         from yunshu_engine.paged_scheduler import PagedScheduler
+
         assert PagedScheduler is not None
 
     def test_scheduler_config_has_spec_decode(self):
@@ -372,5 +382,5 @@ class TestPagedSchedulerIntegration:
         from yunshu_engine.scheduler import SchedulerConfig
 
         config = SchedulerConfig()
-        assert hasattr(config, 'enable_spec_decode')
+        assert hasattr(config, "enable_spec_decode")
         assert config.enable_spec_decode is False

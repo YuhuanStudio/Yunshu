@@ -3,6 +3,7 @@
 The audit module had no dedicated test file. This covers the 4 resolution
 branches enumerated in the docstring.
 """
+
 from __future__ import annotations
 
 import logging

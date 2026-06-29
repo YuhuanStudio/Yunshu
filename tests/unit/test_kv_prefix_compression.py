@@ -11,6 +11,7 @@ Tests cover:
 - Statistics tracking
 - Window boundary edge cases
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -25,7 +26,13 @@ from yunshu_engine.kv_prefix_compression import (
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def _make_block(block_id: int, num_layers: int = 2, num_heads: int = 2, block_size: int = 4, head_dim: int = 4) -> tuple[np.ndarray, np.ndarray]:
+def _make_block(
+    block_id: int,
+    num_layers: int = 2,
+    num_heads: int = 2,
+    block_size: int = 4,
+    head_dim: int = 4,
+) -> tuple[np.ndarray, np.ndarray]:
     """Create a synthetic KV block as (keys, values) tuple."""
     rng = np.random.RandomState(block_id)
     keys = rng.randn(num_layers, num_heads, block_size, head_dim).astype(np.float32)
@@ -57,7 +64,6 @@ def _make_compressor(**kwargs) -> KVPrefixCompressor:
 
 
 class TestMeanPoolCompression:
-
     def test_compress_reduces_block_count(self):
         """Mean pool compresses N blocks into N/K blocks."""
         comp = _make_compressor(compression_factor=4)
@@ -125,7 +131,6 @@ class TestMeanPoolCompression:
 
 
 class TestTopKCompression:
-
     def test_keeps_highest_score_blocks(self):
         """Top-k keeps blocks with highest attention scores."""
         comp = _make_compressor(compression_factor=2)
@@ -173,13 +178,14 @@ class TestTopKCompression:
 
 
 class TestFrequencyAwareCompression:
-
     def test_keeps_high_access_blocks(self):
         """Frequency-aware keeps blocks with high access count at full fidelity."""
         comp = _make_compressor(compression_factor=2)
         blocks = _make_blocks(4)
         counts = [1, 10, 1, 10]  # Blocks 1, 3 are high-access
-        result = comp.compress_blocks(blocks, access_counts=counts, strategy="frequency_aware")
+        result = comp.compress_blocks(
+            blocks, access_counts=counts, strategy="frequency_aware"
+        )
         # High-access blocks (1, 3) should be in result at full fidelity
         assert 1 in result.block_ids
         assert 3 in result.block_ids
@@ -189,7 +195,9 @@ class TestFrequencyAwareCompression:
         comp = _make_compressor(compression_factor=2)
         blocks = _make_blocks(6)
         counts = [1, 1, 1, 10, 10, 10]
-        result = comp.compress_blocks(blocks, access_counts=counts, strategy="frequency_aware")
+        result = comp.compress_blocks(
+            blocks, access_counts=counts, strategy="frequency_aware"
+        )
         # Should have fewer blocks than input
         assert result.compressed.shape[0] < 6
 
@@ -198,7 +206,9 @@ class TestFrequencyAwareCompression:
         comp = _make_compressor(compression_factor=2)
         blocks = _make_blocks(4)
         counts = [1, 5, 1, 5]
-        result = comp.compress_blocks(blocks, access_counts=counts, strategy="frequency_aware")
+        result = comp.compress_blocks(
+            blocks, access_counts=counts, strategy="frequency_aware"
+        )
         decompressed = comp.decompress_blocks(result)
         assert len(decompressed) > 0
 
@@ -207,7 +217,9 @@ class TestFrequencyAwareCompression:
         comp = _make_compressor(compression_factor=2)
         blocks = _make_blocks(4)
         counts = [10, 10, 10, 10]
-        result = comp.compress_blocks(blocks, access_counts=counts, strategy="frequency_aware")
+        result = comp.compress_blocks(
+            blocks, access_counts=counts, strategy="frequency_aware"
+        )
         # All should be kept
         assert result.compressed.shape[0] == 4
 
@@ -225,7 +237,6 @@ class TestFrequencyAwareCompression:
 
 
 class TestCompressorGeneral:
-
     def test_empty_input(self):
         """Empty block list returns empty result."""
         comp = _make_compressor()
@@ -297,7 +308,6 @@ class TestCompressorGeneral:
 
 
 class TestSlidingWindowBasic:
-
     def test_register_request(self):
         """New request starts with empty blocks."""
         mgr = SlidingWindowKVManager(window_size=256, block_size=64)
@@ -346,10 +356,11 @@ class TestSlidingWindowBasic:
 
 
 class TestSystemPromptPreservation:
-
     def test_system_prompt_blocks_never_evicted(self):
         """System prompt blocks are always retained."""
-        mgr = SlidingWindowKVManager(window_size=128, block_size=64, system_prompt_blocks=2)
+        mgr = SlidingWindowKVManager(
+            window_size=128, block_size=64, system_prompt_blocks=2
+        )
         mgr.register_request("req-1", system_prompt_blocks=2)
         # Add many blocks to push past window
         for pos in [0, 64, 128, 192, 256, 320, 384, 448]:
@@ -373,7 +384,9 @@ class TestSystemPromptPreservation:
 
     def test_no_system_prompt_still_works(self):
         """Manager works correctly with zero system prompt blocks."""
-        mgr = SlidingWindowKVManager(window_size=128, block_size=64, system_prompt_blocks=0)
+        mgr = SlidingWindowKVManager(
+            window_size=128, block_size=64, system_prompt_blocks=0
+        )
         mgr.register_request("req-1")
         for pos in [0, 64, 128, 192, 256]:
             mgr.on_new_token(pos, request_id="req-1")
@@ -388,7 +401,6 @@ class TestSystemPromptPreservation:
 
 
 class TestMultiRequest:
-
     def test_independent_windows(self):
         """Each request has independent block tracking."""
         mgr = SlidingWindowKVManager(window_size=256, block_size=64)
@@ -422,7 +434,6 @@ class TestMultiRequest:
 
 
 class TestSlidingWindowConfigure:
-
     def test_configure_window_size(self):
         """configure() updates window size."""
         mgr = SlidingWindowKVManager(window_size=256, block_size=64)
@@ -432,11 +443,13 @@ class TestSlidingWindowConfigure:
     def test_configure_from_model_config(self):
         """configure() reads from model_config dict."""
         mgr = SlidingWindowKVManager()
-        mgr.configure(model_config={
-            "sliding_window": 8192,
-            "block_size": 128,
-            "system_prompt_blocks": 3,
-        })
+        mgr.configure(
+            model_config={
+                "sliding_window": 8192,
+                "block_size": 128,
+                "system_prompt_blocks": 3,
+            }
+        )
         assert mgr.window_size == 8192
         assert mgr.block_size == 128
 
@@ -453,7 +466,6 @@ class TestSlidingWindowConfigure:
 
 
 class TestSlidingWindowStats:
-
     def test_stats_eviction_count(self):
         """Stats track total evictions."""
         mgr = SlidingWindowKVManager(window_size=128, block_size=64)
@@ -488,7 +500,6 @@ class TestSlidingWindowStats:
 
 
 class TestSlidingWindowEdgeCases:
-
     def test_mid_block_positions(self):
         """Mid-block positions don't create new blocks."""
         mgr = SlidingWindowKVManager(window_size=256, block_size=64)

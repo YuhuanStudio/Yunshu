@@ -36,6 +36,7 @@ def test_chat_completions_no_model(client):
     """No model loaded → 503."""
     # Ensure no engine is set for this test
     from yunshu_gateway.engine import set_engine
+
     set_engine(None)
 
     resp = client.post(

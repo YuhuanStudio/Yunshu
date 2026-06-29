@@ -1,4 +1,5 @@
 """Tests for yunshu_engine.image_engine — Image generation engine."""
+
 from __future__ import annotations
 
 import asyncio
@@ -56,6 +57,7 @@ class TestImageGenEngineInit:
 
         # stop() calls run_in_executor for sync_and_clear_cache — mock at module level
         import yunshu_engine.mlx_executor as mlx_exec
+
         original = mlx_exec.sync_and_clear_cache
         mlx_exec.sync_and_clear_cache = lambda: None
         try:

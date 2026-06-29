@@ -3,6 +3,7 @@ so it must NOT route temp>0 through mlx-lm's PRNG-trapped make_sampler. Each
 running sequence must sample from an independent per-request RNG (no @mx.compile
 PRNG-state collapse), reproducibly when a seed is given, while greedy (temp==0)
 stays on argmax. Mirrors the fast-path fix, swept into the engine-loop."""
+
 from __future__ import annotations
 
 import mlx.core as mx
@@ -15,6 +16,7 @@ class _Stub:
     """Minimal carrier for the bound _make_sampler — it only reads self.running
     (len, for the legacy global-seed guard) and self.tokenizer (constrained path,
     unused here)."""
+
     running: list = []
     tokenizer = None
 

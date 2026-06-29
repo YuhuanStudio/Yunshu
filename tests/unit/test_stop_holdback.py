@@ -53,9 +53,9 @@ def test_text_after_potential_prefix_flushes():
 def test_partial_then_complete_across_three_tokens():
     # stop "###" across "#","#","#".
     buf = StopHoldbackBuffer(["###"])
-    assert buf.feed("x#") == "x"   # hold "#"
-    assert buf.feed("#") == ""     # "##" still a prefix
-    assert buf.feed("#") == ""     # "###" now full match (held)
+    assert buf.feed("x#") == "x"  # hold "#"
+    assert buf.feed("#") == ""  # "##" still a prefix
+    assert buf.feed("#") == ""  # "###" now full match (held)
     assert buf.take_stopped() == ""
 
 
@@ -92,6 +92,7 @@ def test_take_stopped_without_match_returns_buffer():
 # stop prefix STILL never leaks AND each token's logprob entry is emitted
 # exactly once aligned to the chunk carrying its text.
 # ---------------------------------------------------------------------------
+
 
 def _drive_lp(stops, tokens):
     """Feed (text, lp) tokens through feed_lp; return list of (text, lp) chunks."""
@@ -143,7 +144,7 @@ def test_feed_lp_held_token_lp_released_when_text_escapes():
     # token 0 = "EN" held (prefix of "END"); token 1 = "X" proves no stop.
     # token 0's lp was pending → it must ride the chunk that first reveals "E".
     buf = StopHoldbackBuffer(["END"])
-    assert buf.feed_lp("EN", {"id": 0}) == []          # fully held
+    assert buf.feed_lp("EN", {"id": 0}) == []  # fully held
     out1 = buf.feed_lp("X", {"id": 1})
     assert out1 == [("EN", {"id": 0}), ("X", {"id": 1})]
 
@@ -166,12 +167,13 @@ def test_stop_mid_segment_does_not_leak():
     leak — the suffix-only holdback used to emit the whole thing. Now feed() emits
     only the pre-stop text, contains_stop() is True, take_stopped() find-truncates."""
     from yunshu_engine.text_utils import StopHoldbackBuffer
+
     b = StopHoldbackBuffer(["STOP"])
     out = b.feed("aSTOPb")
-    assert out == "a", out            # only the pre-stop text is emitted
+    assert out == "a", out  # only the pre-stop text is emitted
     assert "STOP" not in out
     assert b.contains_stop() is True  # the held "STOPb" contains a complete stop
-    assert b.take_stopped() == ""     # find-truncate at the stop → nothing before it
+    assert b.take_stopped() == ""  # find-truncate at the stop → nothing before it
     # 'done' before a mid-segment stop in ONE feed → emit 'done', stop dropped
     b2 = StopHoldbackBuffer(["STOP"])
     assert b2.feed("doneSTOPextra") == "done"
@@ -181,6 +183,7 @@ def test_stop_mid_segment_does_not_leak():
 def test_stop_mid_segment_flush_drops_it():
     """If the engine never fires (held stop reaches flush), flush drops it — no leak."""
     from yunshu_engine.text_utils import StopHoldbackBuffer
+
     b = StopHoldbackBuffer(["STOP"])
     assert b.feed("aSTOPb") == "a"
     assert b.flush() == ""  # held 'STOPb' → flush find-truncates → drops it
@@ -189,6 +192,7 @@ def test_stop_mid_segment_flush_drops_it():
 def test_normal_holdback_unaffected():
     """The split-token suffix case and no-stop passthrough still work."""
     from yunshu_engine.text_utils import StopHoldbackBuffer
+
     b = StopHoldbackBuffer(["STOP"])
     assert b.feed("done") == "done"
     assert b.feed("ST") == ""

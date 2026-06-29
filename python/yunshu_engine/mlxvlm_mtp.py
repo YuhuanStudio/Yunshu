@@ -18,6 +18,7 @@ This is a standalone backend (its own mlx-vlm model + drafter), used only when
 YUNSHU_MTP=1 and the model is MTP-capable. It does NOT touch the default
 mlx-lm fast path.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -43,6 +44,7 @@ def _ensure_mlxvlm_on_path() -> bool:
         sys.path.insert(0, ref)
     # Drop a pre-imported MTP-less mlx_vlm so the reference one is picked up.
     import importlib.util as u
+
     spec = u.find_spec("mlx_vlm.speculative.mtp")
     return spec is not None
 
@@ -63,7 +65,9 @@ def is_mtp_capable(model_path: str) -> bool:
         return False
     # MTP weights present (bare mtp.* or VLM-nested language_model.mtp.*)?
     try:
-        idx = json.loads((Path(model_path) / "model.safetensors.index.json").read_text())
+        idx = json.loads(
+            (Path(model_path) / "model.safetensors.index.json").read_text()
+        )
         wm = idx.get("weight_map", idx)
         return any(".mtp." in k or k.startswith("mtp.") for k in wm)
     except Exception:
@@ -76,6 +80,7 @@ def _tolerant_target_load():
     (they belong to the drafter). Restored immediately after — the drafter and
     everything else still load strictly."""
     import mlx.nn as nn
+
     orig = nn.Module.load_weights
 
     def _lw(self, weights, strict=True):
@@ -96,6 +101,7 @@ def _build_drafter(model_path: str, out_dir: str) -> str:
     the bare ``mtp.*`` layout and this checkpoint's VLM-nested
     ``language_model.mtp.*`` layout (mlx-vlm's own splitter only handles bare)."""
     import mlx.core as mx
+
     out = Path(out_dir)
     if (out / "model.safetensors").exists() and (out / "config.json").exists():
         return str(out)
@@ -104,9 +110,9 @@ def _build_drafter(model_path: str, out_dir: str) -> str:
     for sh in glob.glob(str(Path(model_path) / "*.safetensors")):
         for k, v in mx.load(sh).items():
             if k.startswith("language_model.mtp."):
-                sel[k[len("language_model.mtp."):]] = v
+                sel[k[len("language_model.mtp.") :]] = v
             elif k.startswith("mtp."):
-                sel[k[len("mtp."):]] = v
+                sel[k[len("mtp.") :]] = v
     if not sel:
         raise ValueError(f"No MTP tensors found in {model_path}")
     src_cfg = json.loads((Path(model_path) / "config.json").read_text())
@@ -124,7 +130,12 @@ def _build_drafter(model_path: str, out_dir: str) -> str:
             dcfg["quantization"] = q
             dcfg["quantization_config"] = q
     (out / "config.json").write_text(json.dumps(dict(sorted(dcfg.items())), indent=2))
-    for n in ("tokenizer.json", "tokenizer_config.json", "vocab.json", "chat_template.jinja"):
+    for n in (
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "vocab.json",
+        "chat_template.jinja",
+    ):
         src = Path(model_path) / n
         if src.exists():
             shutil.copy(src, out / n)
@@ -190,11 +201,17 @@ class MLXVLMMtp:
                 m = {**m, "role": "tool"}
             norm.append(m)
         txt = self.tokenizer.apply_chat_template(
-            norm, add_generation_prompt=True, tokenize=False)
+            norm, add_generation_prompt=True, tokenize=False
+        )
         return self._encode_text(txt)
 
-    def generate(self, messages: list[dict], max_tokens: int = 256,
-                 temperature: float = 0.0, prompt: str | None = None) -> dict:
+    def generate(
+        self,
+        messages: list[dict],
+        max_tokens: int = 256,
+        temperature: float = 0.0,
+        prompt: str | None = None,
+    ) -> dict:
         """Greedy → MTP (lossless ~1.8x); temperature>0 → plain generation.
         Returns {text, token_ids, completion_tokens, used_mtp}.
 
@@ -212,7 +229,9 @@ class MLXVLMMtp:
 
         if not self._loaded:
             self.load()
-        ids = self._encode_text(prompt) if prompt is not None else self._encode(messages)
+        ids = (
+            self._encode_text(prompt) if prompt is not None else self._encode(messages)
+        )
         input_mx = mx.array([ids], dtype=mx.int32)
         lm = self.model.language_model
         greedy = temperature <= 0.0
@@ -223,8 +242,10 @@ class MLXVLMMtp:
         # shared-cache collapse. Greedy stays on argmax make_sampler.
         if not greedy:
             from .batched_engine import _build_temp_sampler
-            sampler = _build_temp_sampler(temperature=temperature, top_p=1.0, top_k=0,
-                                          min_p=0.0, seed=None)
+
+            sampler = _build_temp_sampler(
+                temperature=temperature, top_p=1.0, top_k=0, min_p=0.0, seed=None
+            )
         else:
             sampler = make_sampler(temp=0.0)
 
@@ -240,14 +261,23 @@ class MLXVLMMtp:
         if greedy:
             pk = speculative_prefill_kwargs("mtp", self.drafter)
             cache_ = make_speculative_prompt_cache(
-                lm, draft_kind="mtp", batch_size=1, left_padding=[0], make_cache=None)
+                lm, draft_kind="mtp", batch_size=1, left_padding=[0], make_cache=None
+            )
             out = lm(input_mx, cache=cache_, **pk)
             first_tok = sample(out.logits[:, -1:])
             toks: list[int] = []
             for tk, _lp in run_speculative_rounds(
-                self.model, self.drafter, cache_, input_mx, first_tok,
-                out.logits[:, -1:], out, draft_kind="mtp", max_tokens=max_tokens,
-                sampler=sample, sampler_is_greedy=True,
+                self.model,
+                self.drafter,
+                cache_,
+                input_mx,
+                first_tok,
+                out.logits[:, -1:],
+                out,
+                draft_kind="mtp",
+                max_tokens=max_tokens,
+                sampler=sample,
+                sampler_is_greedy=True,
             ):
                 t = int(tk) if not isinstance(tk, list) else int(tk[0])
                 if t in eos:
@@ -256,8 +286,12 @@ class MLXVLMMtp:
                 if len(toks) >= max_tokens:
                     break
             text = self.tokenizer.decode(toks)
-            return {"text": text, "token_ids": toks,
-                    "completion_tokens": len(toks), "used_mtp": True}
+            return {
+                "text": text,
+                "token_ids": toks,
+                "completion_tokens": len(toks),
+                "used_mtp": True,
+            }
 
         # Non-greedy fallback: plain autoregressive on the same model.
         c = kvcache.make_prompt_cache(lm)
@@ -272,5 +306,9 @@ class MLXVLMMtp:
             if t in eos:
                 break
             toks.append(t)
-        return {"text": self.tokenizer.decode(toks), "token_ids": toks,
-                "completion_tokens": len(toks), "used_mtp": False}
+        return {
+            "text": self.tokenizer.decode(toks),
+            "token_ids": toks,
+            "completion_tokens": len(toks),
+            "used_mtp": False,
+        }

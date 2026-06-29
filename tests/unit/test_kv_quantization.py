@@ -10,7 +10,6 @@ Covers:
 - Edge cases: empty tensors, single-element, power-of-2 sizes
 """
 
-
 import pytest
 
 from yunshu_engine.kv_quantization import (
@@ -86,7 +85,10 @@ class TestQuantizeDequantizeRoundtrip:
         # [2 layers, 3 heads, 4 seq, 16 dim] — use small range for 4-bit
         original = [
             [
-                [[float(i * 0.1 + j * 0.2 + k * 0.3 + l * 0.1) for l in range(16)] for k in range(4)]
+                [
+                    [float(i * 0.1 + j * 0.2 + k * 0.3 + l * 0.1) for l in range(16)]
+                    for k in range(4)
+                ]
                 for j in range(3)
             ]
             for i in range(2)

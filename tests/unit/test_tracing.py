@@ -451,7 +451,11 @@ class TestHealthDashboard:
     def test_compute_health_score_healthy(self):
         hd = HealthDashboard()
         report = {
-            "system": {"cpu_percent": 30, "memory_percent": 50, "gpu_utilization_pct": 40},
+            "system": {
+                "cpu_percent": 30,
+                "memory_percent": 50,
+                "gpu_utilization_pct": 40,
+            },
             "models": {"total": 1, "loaded": 1},
             "requests": {"error_rate": 0.0, "avg_latency_ms": 200},
             "memory_guard": {"active": True, "max_pressure": "normal"},
@@ -463,7 +467,11 @@ class TestHealthDashboard:
     def test_compute_health_score_degraded(self):
         hd = HealthDashboard()
         report = {
-            "system": {"cpu_percent": 95, "memory_percent": 97, "gpu_utilization_pct": 95},
+            "system": {
+                "cpu_percent": 95,
+                "memory_percent": 97,
+                "gpu_utilization_pct": 95,
+            },
             "models": {"total": 3, "loaded": 1},
             "requests": {"error_rate": 0.5, "avg_latency_ms": 8000},
             "memory_guard": {"active": True, "max_pressure": "critical"},
@@ -493,7 +501,9 @@ class TestHealthDashboard:
     def test_collect_returns_report(self):
         hd = HealthDashboard()
         with patch.object(hd, "_collect_system", return_value={"cpu_percent": 50}):
-            with patch.object(hd, "_collect_models", return_value={"total": 0, "loaded": 0}):
+            with patch.object(
+                hd, "_collect_models", return_value={"total": 0, "loaded": 0}
+            ):
                 with patch.object(hd, "_collect_requests", return_value={"active": 0}):
                     report = hd.collect()
         assert "timestamp" in report
@@ -515,7 +525,11 @@ class TestHealthDashboard:
         scores = {}
         for level in ["normal", "warning", "critical"]:
             report = {
-                "system": {"cpu_percent": 50, "memory_percent": 50, "gpu_utilization_pct": 50},
+                "system": {
+                    "cpu_percent": 50,
+                    "memory_percent": 50,
+                    "gpu_utilization_pct": 50,
+                },
                 "models": {"total": 1, "loaded": 1},
                 "requests": {"error_rate": 0, "avg_latency_ms": 100},
                 "memory_guard": {"active": True, "max_pressure": level},
@@ -530,7 +544,11 @@ class TestHealthDashboard:
         hd = HealthDashboard()
         # All loaded
         r1 = {
-            "system": {"cpu_percent": 50, "memory_percent": 50, "gpu_utilization_pct": 50},
+            "system": {
+                "cpu_percent": 50,
+                "memory_percent": 50,
+                "gpu_utilization_pct": 50,
+            },
             "models": {"total": 3, "loaded": 3},
             "requests": {"error_rate": 0, "avg_latency_ms": 100},
             "memory_guard": {"active": False},
@@ -561,8 +579,14 @@ class TestSpanTraceDataclasses:
         assert s.duration_ms == 0.0
 
     def test_span_to_dict(self):
-        s = Span(span_id="s1", name="test", kind=SpanKind.SERVER,
-                 start_time=1.0, end_time=2.0, attributes={"key": "val"})
+        s = Span(
+            span_id="s1",
+            name="test",
+            kind=SpanKind.SERVER,
+            start_time=1.0,
+            end_time=2.0,
+            attributes={"key": "val"},
+        )
         d = s.to_dict()
         assert d["spanId"] == "s1"
         assert d["name"] == "test"
@@ -581,8 +605,13 @@ class TestSpanTraceDataclasses:
         assert t.span_count == 2
 
     def test_trace_to_dict(self):
-        t = Trace(trace_id="t1", start_time=1.0, end_time=2.0,
-                  metadata={"model": "m"}, result={"tokens": 10})
+        t = Trace(
+            trace_id="t1",
+            start_time=1.0,
+            end_time=2.0,
+            metadata={"model": "m"},
+            result={"tokens": 10},
+        )
         t.spans.append(Span(span_id="s1", name="test"))
         d = t.to_dict()
         assert d["traceId"] == "t1"

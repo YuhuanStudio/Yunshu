@@ -23,15 +23,31 @@ class FakeVLMEngine:
         self.generate_calls = []
         self.generate_stream_calls = []
 
-    async def generate(self, *, messages, max_tokens=512, temperature=0.7,
-                       top_p=1.0, top_k=0, seed=None, repetition_penalty=1.0,
-                       stop=None, enable_thinking=None, frequency_penalty=0.0,
-                       presence_penalty=0.0, logit_bias=None, json_schema=None,
-                       **kwargs):
-        self.generate_calls.append({
-            "messages": messages, "max_tokens": max_tokens,
-            "temperature": temperature,
-        })
+    async def generate(
+        self,
+        *,
+        messages,
+        max_tokens=512,
+        temperature=0.7,
+        top_p=1.0,
+        top_k=0,
+        seed=None,
+        repetition_penalty=1.0,
+        stop=None,
+        enable_thinking=None,
+        frequency_penalty=0.0,
+        presence_penalty=0.0,
+        logit_bias=None,
+        json_schema=None,
+        **kwargs,
+    ):
+        self.generate_calls.append(
+            {
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            }
+        )
         return {
             "text": self._text,
             "finish_reason": "stop",
@@ -39,14 +55,30 @@ class FakeVLMEngine:
             "completion_tokens": 5,
         }
 
-    async def generate_stream(self, *, messages, max_tokens=512, temperature=0.7,
-                               top_p=1.0, top_k=0, seed=None, repetition_penalty=1.0,
-                               stop=None, enable_thinking=None, frequency_penalty=0.0,
-                               presence_penalty=0.0, logit_bias=None, json_schema=None,
-                               **kwargs):
-        self.generate_stream_calls.append({
-            "messages": messages, "max_tokens": max_tokens,
-        })
+    async def generate_stream(
+        self,
+        *,
+        messages,
+        max_tokens=512,
+        temperature=0.7,
+        top_p=1.0,
+        top_k=0,
+        seed=None,
+        repetition_penalty=1.0,
+        stop=None,
+        enable_thinking=None,
+        frequency_penalty=0.0,
+        presence_penalty=0.0,
+        logit_bias=None,
+        json_schema=None,
+        **kwargs,
+    ):
+        self.generate_stream_calls.append(
+            {
+                "messages": messages,
+                "max_tokens": max_tokens,
+            }
+        )
         words = self._text.split()
         for i, w in enumerate(words):
             yield VLMStreamChunk(

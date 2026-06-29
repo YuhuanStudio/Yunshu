@@ -15,6 +15,7 @@ Covers:
   - VideoLoRAManager: merged state cannot unload
   - Edge cases: empty request, invalid path, large dimensions
 """
+
 from __future__ import annotations
 
 import json

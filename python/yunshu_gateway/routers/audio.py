@@ -67,10 +67,10 @@ def _strip_leading_wav_header(data: bytes) -> bytes:
     if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WAVE":
         off = 12
         while off + 8 <= len(data):
-            cid = data[off:off + 4]
-            sz = int.from_bytes(data[off + 4:off + 8], "little")
+            cid = data[off : off + 4]
+            sz = int.from_bytes(data[off + 4 : off + 8], "little")
             if cid == b"data":
-                return data[off + 8:]
+                return data[off + 8 :]
             off += 8 + sz + (sz & 1)
         return data[44:]  # fallback: standard 44-byte PCM header
     return data
@@ -98,6 +98,7 @@ def _transcode_wav(wav_bytes: bytes, fmt: str) -> tuple[bytes, str, bool]:
         # otherwise unplayable since the bare "audio/L16" carried no rate.
         import io
         import wave
+
         try:
             with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
                 _sr = wf.getframerate()
@@ -110,18 +111,34 @@ def _transcode_wav(wav_bytes: bytes, fmt: str) -> tuple[bytes, str, bool]:
 
     import shutil
     import subprocess
+
     if shutil.which("ffmpeg") is None:
-        logger.warning("ffmpeg unavailable; cannot transcode WAV→%s, returning WAV", fmt)
+        logger.warning(
+            "ffmpeg unavailable; cannot transcode WAV→%s, returning WAV", fmt
+        )
         return wav_bytes, _AUDIO_MIME["wav"], False
     try:
         proc = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
-             *_FFMPEG_FMT[fmt], "pipe:1"],
-            input=wav_bytes, capture_output=True, timeout=30, check=True,
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                "pipe:0",
+                *_FFMPEG_FMT[fmt],
+                "pipe:1",
+            ],
+            input=wav_bytes,
+            capture_output=True,
+            timeout=30,
+            check=True,
         )
         return proc.stdout, _AUDIO_MIME[fmt], True
     except Exception:
-        logger.warning("ffmpeg WAV→%s transcode failed; returning WAV", fmt, exc_info=True)
+        logger.warning(
+            "ffmpeg WAV→%s transcode failed; returning WAV", fmt, exc_info=True
+        )
         return wav_bytes, _AUDIO_MIME["wav"], False
 
 
@@ -157,11 +174,15 @@ def _select_audio_engine(manager, model: str, engine_cls):
     first_of_type = None
     model_lower = model.lower() if model else ""
     for entry in manager.list_entries():
-        if not (entry.is_loaded and isinstance(getattr(entry, "engine", None), engine_cls)):
+        if not (
+            entry.is_loaded and isinstance(getattr(entry, "engine", None), engine_cls)
+        ):
             continue
         if first_of_type is None:
             first_of_type = entry.engine
-        if model_lower and (entry.model_id == model or entry.model_id.lower() == model_lower):
+        if model_lower and (
+            entry.model_id == model or entry.model_id.lower() == model_lower
+        ):
             return entry.engine
     return first_of_type if not model_lower else None
 
@@ -197,8 +218,18 @@ async def _extract_audio_from_video(video_path: str) -> str:
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-i", video_path, "-vn", "-acodec", "pcm_s16le",
-            "-ar", "16000", "-ac", "1", "-y", audio_path,
+            "ffmpeg",
+            "-i",
+            video_path,
+            "-vn",
+            "-acodec",
+            "pcm_s16le",
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            "-y",
+            audio_path,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -213,7 +244,8 @@ async def _extract_audio_from_video(video_path: str) -> str:
             if (
                 "does not contain any stream" in lowered
                 or "output file does not contain any stream" in lowered
-                or "stream map" in lowered and "matches no streams" in lowered
+                or "stream map" in lowered
+                and "matches no streams" in lowered
             ):
                 raise HTTPException(
                     status_code=415,
@@ -262,21 +294,21 @@ def _split_text_segments(text: str, max_chars: int = 300) -> list[str]:
         # Look for sentence boundary within max_chars
         split_pos = -1
         for i in range(min(len(remaining), max_chars), max_chars // 2, -1):
-            if i < len(remaining) and remaining[i - 1] in '.!?。！？':
+            if i < len(remaining) and remaining[i - 1] in ".!?。！？":
                 split_pos = i
                 break
 
         # Fall back to comma or semicolon
         if split_pos == -1:
             for i in range(min(len(remaining), max_chars), max_chars // 2, -1):
-                if i < len(remaining) and remaining[i - 1] in ',;，、':
+                if i < len(remaining) and remaining[i - 1] in ",;，、":
                     split_pos = i
                     break
 
         # Fall back to word/space boundary
         if split_pos == -1:
             for i in range(min(len(remaining), max_chars), max_chars // 2, -1):
-                if i < len(remaining) and remaining[i - 1] in ' \t\n':
+                if i < len(remaining) and remaining[i - 1] in " \t\n":
                     split_pos = i
                     break
 
@@ -325,9 +357,7 @@ class TTSRequest(BaseModel):
             raise ValueError("input: field is required and cannot be empty")
         # OpenAI TTS API limits input to 4096 chars; allow some slack for legitimate use
         if len(self.input) > 32768:
-            raise ValueError(
-                f"input: maximum 32768 characters, got {len(self.input)}"
-            )
+            raise ValueError(f"input: maximum 32768 characters, got {len(self.input)}")
         if not self.voice or not self.voice.strip():
             raise ValueError("voice: field is required and cannot be empty")
         # was hard-rejecting anything but "wav".
@@ -347,18 +377,25 @@ class TTSRequest(BaseModel):
             if not ra:
                 raise ValueError("ref_audio: must not be blank")
             if "://" in ra or ra.startswith("file:"):
-                raise ValueError("ref_audio: URI schemes are not allowed; provide a local filesystem path")
+                raise ValueError(
+                    "ref_audio: URI schemes are not allowed; provide a local filesystem path"
+                )
             if ".." in ra.replace("\\", "/").split("/"):
-                raise ValueError("ref_audio: path traversal segments ('..') are not allowed")
+                raise ValueError(
+                    "ref_audio: path traversal segments ('..') are not allowed"
+                )
             # SECURITY: the '..' check alone let an ABSOLUTE host path
             # (e.g. "/etc/passwd") through to load_audio → arbitrary file read.
             # Reject absolute paths unless the operator opts into local files.
             import os as _os
+
             if _os.path.isabs(ra) and _os.environ.get(
-                "YUNSHU_ALLOW_LOCAL_FILES", "").lower() not in ("1", "true", "yes"):
+                "YUNSHU_ALLOW_LOCAL_FILES", ""
+            ).lower() not in ("1", "true", "yes"):
                 raise ValueError(
                     "ref_audio: absolute paths are not allowed "
-                    "(set YUNSHU_ALLOW_LOCAL_FILES=1 to permit local files)")
+                    "(set YUNSHU_ALLOW_LOCAL_FILES=1 to permit local files)"
+                )
         return self
 
 
@@ -388,7 +425,9 @@ async def _parse_tts_request(request: Request) -> TTSRequest:
             try:
                 return float(v)
             except (TypeError, ValueError):
-                raise HTTPException(status_code=400, detail=f"invalid numeric value: {v!r}") from None
+                raise HTTPException(
+                    status_code=400, detail=f"invalid numeric value: {v!r}"
+                ) from None
 
         def _to_int(v, default):
             if v is None or v == "":
@@ -396,7 +435,9 @@ async def _parse_tts_request(request: Request) -> TTSRequest:
             try:
                 return int(v)
             except (TypeError, ValueError):
-                raise HTTPException(status_code=400, detail=f"invalid integer value: {v!r}") from None
+                raise HTTPException(
+                    status_code=400, detail=f"invalid integer value: {v!r}"
+                ) from None
 
         payload = {
             "model": _f("model", default=""),
@@ -423,19 +464,25 @@ async def _parse_tts_request(request: Request) -> TTSRequest:
         try:
             return TTSRequest(**payload)
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"invalid form body: {exc}") from None
+            raise HTTPException(
+                status_code=400, detail=f"invalid form body: {exc}"
+            ) from None
 
     # Default: JSON
     try:
         body = await request.json()
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"invalid JSON body: {exc}") from None
+        raise HTTPException(
+            status_code=400, detail=f"invalid JSON body: {exc}"
+        ) from None
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="body must be a JSON object")
     try:
         return TTSRequest(**body)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"invalid TTS request: {exc}") from None
+        raise HTTPException(
+            status_code=400, detail=f"invalid TTS request: {exc}"
+        ) from None
 
 
 @router.post("/audio/speech", response_class=Response)
@@ -448,6 +495,7 @@ async def create_speech(request: Request) -> Response:
     """
     req = await _parse_tts_request(request)
     from .models import _check_model_access, _check_permission
+
     _check_permission(request, "can_infer")
     _check_model_access(request, req.model)
     manager = get_model_manager()
@@ -460,12 +508,17 @@ async def create_speech(request: Request) -> Response:
     # Find the TTS engine
     tts_engine = None
     for entry in manager.list_entries():
-        if entry.is_loaded and hasattr(entry, '_engine') and entry.engine:
+        if entry.is_loaded and hasattr(entry, "_engine") and entry.engine:
             # Check if it's a TTS engine
             engine_type = type(entry.engine).__name__
-            if engine_type == "TTSEngine" and (req.model in {
-                entry.model_id, entry.model_id.lower(),
-            } or entry.model_id.lower() == req.model.lower()):
+            if engine_type == "TTSEngine" and (
+                req.model
+                in {
+                    entry.model_id,
+                    entry.model_id.lower(),
+                }
+                or entry.model_id.lower() == req.model.lower()
+            ):
                 tts_engine = entry.engine
                 break
 
@@ -481,6 +534,7 @@ async def create_speech(request: Request) -> Response:
             ) from None
 
     from yunshu_engine.audio_engine import TTSEngine
+
     if not isinstance(tts_engine, TTSEngine):
         # re-select by model_id (was: first loaded TTSEngine, wrong-model
         # sibling of the streaming/ASR keystone) rather than grabbing any of the type.
@@ -502,7 +556,7 @@ async def create_speech(request: Request) -> Response:
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported response_format '{req.response_format}'. "
-                   f"Allowed: {', '.join(_OPENAI_SUPPORTED)}.",
+            f"Allowed: {', '.join(_OPENAI_SUPPORTED)}.",
         )
     try:
         # VoiceDesign models require 'instruct' for voice description
@@ -514,8 +568,9 @@ async def create_speech(request: Request) -> Response:
                 "ethan": "A calm young male voice with warm tone",
                 "aiden": "A neutral young voice with moderate pace",
             }
-            instruct = voice_defaults.get(req.voice.lower(),
-                f"A clear {req.voice} voice with natural intonation")
+            instruct = voice_defaults.get(
+                req.voice.lower(), f"A clear {req.voice} voice with natural intonation"
+            )
 
         wav_bytes = await tts_engine.synthesize(
             text=req.input,
@@ -556,6 +611,7 @@ async def create_speech(request: Request) -> Response:
 async def stream_speech(req: TTSRequest, request: Request):
     """Stream TTS synthesis as SSE events with audio chunks."""
     from .models import _check_model_access, _check_permission
+
     _check_permission(request, "can_infer")
     _check_model_access(request, req.model)
     manager = get_model_manager()
@@ -577,7 +633,9 @@ async def stream_speech(req: TTSRequest, request: Request):
     if tts_engine is None:
         raise HTTPException(
             status_code=404,
-            detail=f"TTS model '{req.model}' not found." if req.model else "No TTS engine available",
+            detail=f"TTS model '{req.model}' not found."
+            if req.model
+            else "No TTS engine available",
         )
 
     # advertise the model's REAL output rate (was hardcoded 24000
@@ -587,8 +645,10 @@ async def stream_speech(req: TTSRequest, request: Request):
 
     # Register with request tracker for cancellation support
     import uuid as _uuid
+
     _tts_id = f"tts-{_uuid.uuid4().hex[:24]}"
     from yunshu_engine.request_tracker import get_request_tracker
+
     _tts_tracker = get_request_tracker()
     _tts_gen = _tts_tracker.register(_tts_id, req.model)
 
@@ -596,9 +656,7 @@ async def stream_speech(req: TTSRequest, request: Request):
         # Emit a WAV header in the first event so the client can construct
         # a playable stream.  data_size=0 signals "unknown length" which most
         # WAV players handle gracefully.
-        wav_hdr_b64 = base64.b64encode(
-            make_wav_header(0, _sr)
-        ).decode("ascii")
+        wav_hdr_b64 = base64.b64encode(make_wav_header(0, _sr)).decode("ascii")
         yield f"data: {json.dumps({'type': 'header', 'wav_header': wav_hdr_b64, 'sample_rate': _sr})}\n\n"
         # The engine's synthesize_stream prepends its OWN WAV header to the first audio
         # chunk OF EACH segment (each segment is a separate synthesize_stream call); we
@@ -616,8 +674,9 @@ async def stream_speech(req: TTSRequest, request: Request):
                 "ethan": "A calm young male voice with warm tone",
                 "aiden": "A neutral young voice with moderate pace",
             }
-            stream_instruct = voice_defaults.get(req.voice.lower(),
-                f"A clear {req.voice} voice with natural intonation")
+            stream_instruct = voice_defaults.get(
+                req.voice.lower(), f"A clear {req.voice} voice with natural intonation"
+            )
 
         # Split long text into segments for progressive synthesis
         text = req.input
@@ -630,7 +689,9 @@ async def stream_speech(req: TTSRequest, request: Request):
             if _tts_gen.cancel_event.is_set():
                 yield f"data: {json.dumps({'type': 'cancelled'})}\n\n"
                 return
-            _first_audio = True  # strip the embedded WAV header on THIS segment's first chunk
+            _first_audio = (
+                True  # strip the embedded WAV header on THIS segment's first chunk
+            )
             async for chunk in tts_engine.synthesize_stream(
                 text=segment,
                 voice=req.voice,
@@ -727,14 +788,19 @@ async def create_transcription(
     # `timestamp_granularities[]` (PHP-style array). FastAPI binds by exact key, so
     # without this alias the SDK's request never reached the param → word_timestamps
     # was never enabled → verbose_json.words came back empty. Accept both spellings.
-    timestamp_granularities_bracket: list[str] | None = Form(None, alias="timestamp_granularities[]"),
+    timestamp_granularities_bracket: list[str] | None = Form(
+        None, alias="timestamp_granularities[]"
+    ),
 ) -> dict:
     """Transcribe audio file (OpenAI /v1/audio/transcriptions compatible)."""
     from .models import _check_model_access, _check_permission
+
     timestamp_granularities = timestamp_granularities or timestamp_granularities_bracket
     _check_permission(request, "can_infer")
     if not model or not model.strip():
-        raise HTTPException(status_code=400, detail="model: field is required and cannot be empty")
+        raise HTTPException(
+            status_code=400, detail="model: field is required and cannot be empty"
+        )
     # validate response_format (mirrors TTS/STS). The handler is an
     # if/elif chain with no final else, so an unknown value (a typo, or a format we
     # don't support) silently fell through to the default json shape with a 200 — the
@@ -756,6 +822,7 @@ async def create_transcription(
     # Find ASR engine — match by model_id (was: first loaded ASREngine,
     # ignoring `model` → a request for whisper served by qwen3-asr when both loaded).
     from yunshu_engine.audio_engine import ASREngine
+
     asr_engine = _select_audio_engine(manager, model, ASREngine)
 
     if asr_engine is None:
@@ -784,7 +851,9 @@ async def create_transcription(
     _VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".ts", ".mts"}
     raw_suffix = os.path.splitext(file.filename or "audio.wav")[1].lower()
 
-    fd, tmp_path = tempfile.mkstemp(suffix=raw_suffix if raw_suffix in _SAFE_AUDIO | _VIDEO_EXTENSIONS else ".wav")
+    fd, tmp_path = tempfile.mkstemp(
+        suffix=raw_suffix if raw_suffix in _SAFE_AUDIO | _VIDEO_EXTENSIONS else ".wav"
+    )
     asr_path = tmp_path  # Initialize before try so finally can always access it
     try:
         with os.fdopen(fd, "wb") as f:
@@ -810,7 +879,9 @@ async def create_transcription(
         raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
         logger.error(f"ASR transcription error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Audio transcription failed") from None
+        raise HTTPException(
+            status_code=500, detail="Audio transcription failed"
+        ) from None
     finally:
         with contextlib.suppress(OSError):
             os.unlink(tmp_path)
@@ -874,6 +945,7 @@ async def create_translation(
     load a translate-capable ASR model (Whisper variants) once supported.
     """
     from .models import _check_permission
+
     _check_permission(request, "can_infer")
 
     # Discover the currently loaded ASR engine (if any) to give a precise error.
@@ -884,8 +956,11 @@ async def create_translation(
             from yunshu_engine.audio_engine import (
                 ASREngine,  # local import to avoid cycles
             )
+
             for entry in manager.list_entries():
-                if entry.is_loaded and isinstance(getattr(entry, "engine", None), ASREngine):
+                if entry.is_loaded and isinstance(
+                    getattr(entry, "engine", None), ASREngine
+                ):
                     asr_loaded_id = entry.model_id
                     break
         except Exception:
@@ -907,6 +982,7 @@ async def create_translation(
 async def list_voices(request: Request) -> dict:
     """List available TTS voices."""
     from .models import _check_permission
+
     _check_permission(request, "can_infer")
     return {
         "object": "list",
@@ -923,7 +999,9 @@ async def voice_pipeline(
     speed: float = Form(1.0, ge=0.25, le=4.0),
     llm_temperature: float = Form(0.7, ge=0.0, le=2.0),
     llm_max_tokens: int = Form(256, ge=1, le=131072),
-    system_prompt: str = Form("You are a helpful voice assistant. Keep responses concise."),
+    system_prompt: str = Form(
+        "You are a helpful voice assistant. Keep responses concise."
+    ),
     stream: bool = Form(False),
 ):
     """STT → LLM → TTS end-to-end voice pipeline.
@@ -932,9 +1010,12 @@ async def voice_pipeline(
     and synthesizes the response as audio.
     """
     from .models import _check_model_access, _check_permission
+
     _check_permission(request, "can_infer")
     if not llm_model or not llm_model.strip():
-        raise HTTPException(status_code=400, detail="llm_model: field is required and cannot be empty")
+        raise HTTPException(
+            status_code=400, detail="llm_model: field is required and cannot be empty"
+        )
     _check_model_access(request, llm_model)
 
     from yunshu_engine.voice_pipeline import VoicePipeline, VoicePipelineConfig
@@ -963,8 +1044,10 @@ async def voice_pipeline(
         if stream:
             # Register with request tracker for cancellation support
             import uuid as _uuid
+
             _vp_id = f"vp-{_uuid.uuid4().hex[:24]}"
             from yunshu_engine.request_tracker import get_request_tracker
+
             _vp_tracker = get_request_tracker()
             _vp_gen = _vp_tracker.register(_vp_id, llm_model)
             import base64 as _b64
@@ -976,18 +1059,21 @@ async def voice_pipeline(
                 # coerced non-str data to '' and silently dropped all audio (the
                 # whole point of the endpoint). Base64-encode bytes instead.
                 if isinstance(e.data, (bytes, bytearray)):
-                    payload = {"stage": e.stage, "audio_b64": _b64.b64encode(bytes(e.data)).decode("ascii")}
+                    payload = {
+                        "stage": e.stage,
+                        "audio_b64": _b64.b64encode(bytes(e.data)).decode("ascii"),
+                    }
                 else:
-                    payload = {"stage": e.stage, "data": e.data if isinstance(e.data, str) else ""}
+                    payload = {
+                        "stage": e.stage,
+                        "data": e.data if isinstance(e.data, str) else "",
+                    }
                 return f"data: {json.dumps(payload)}\n\n"
 
             async def _event_stream():
                 try:
                     async for event in with_sse_keepalive(
-                        (
-                            _vp_sse(e)
-                            async for e in pipeline.process_stream(tmp_path)
-                        ),
+                        (_vp_sse(e) async for e in pipeline.process_stream(tmp_path)),
                         http_request=request,
                         cancel_event=_vp_gen.cancel_event,
                     ):
@@ -1011,7 +1097,9 @@ async def voice_pipeline(
         result = await pipeline.process(tmp_path)
         return {
             "text": result.get("text", ""),
-            "audio": base64.b64encode(result.get("audio", b"")).decode("ascii") if result.get("audio") else None,
+            "audio": base64.b64encode(result.get("audio", b"")).decode("ascii")
+            if result.get("audio")
+            else None,
             "transcription": result.get("transcription", {}),
         }
     except RuntimeError as e:
@@ -1192,12 +1280,29 @@ def _sts_response(result, response_format: str):
         # Best-effort: invoke ffmpeg if available; otherwise fall back to WAV.
         import shutil as _shutil
         import subprocess as _subprocess
+
         if _shutil.which("ffmpeg"):
             try:
                 proc = _subprocess.run(
-                    ["ffmpeg", "-loglevel", "error", "-f", "wav", "-i", "pipe:0",
-                     "-f", "mp3", "-codec:a", "libmp3lame", "-q:a", "4", "pipe:1"],
-                    input=audio_bytes, capture_output=True, timeout=30,
+                    [
+                        "ffmpeg",
+                        "-loglevel",
+                        "error",
+                        "-f",
+                        "wav",
+                        "-i",
+                        "pipe:0",
+                        "-f",
+                        "mp3",
+                        "-codec:a",
+                        "libmp3lame",
+                        "-q:a",
+                        "4",
+                        "pipe:1",
+                    ],
+                    input=audio_bytes,
+                    capture_output=True,
+                    timeout=30,
                 )
                 if proc.returncode == 0 and proc.stdout:
                     return Response(
@@ -1218,7 +1323,9 @@ def _sts_response(result, response_format: str):
             },
         )
     # Should never reach here — validator gates the set.
-    raise HTTPException(status_code=400, detail=f"Unsupported response_format '{response_format}'")
+    raise HTTPException(
+        status_code=400, detail=f"Unsupported response_format '{response_format}'"
+    )
 
 
 class STSEnhanceRequest(BaseModel):
@@ -1234,9 +1341,12 @@ class STSEnhanceRequest(BaseModel):
         # Validate base64 decode won't exceed size limit
         try:
             import base64
+
             _decoded_len = len(base64.b64decode(self.audio, validate=True))
             if _decoded_len > MAX_AUDIO_UPLOAD_BYTES:
-                raise ValueError(f"audio: decoded size ({_decoded_len}) exceeds limit ({MAX_AUDIO_UPLOAD_BYTES})")
+                raise ValueError(
+                    f"audio: decoded size ({_decoded_len}) exceeds limit ({MAX_AUDIO_UPLOAD_BYTES})"
+                )
         except Exception as e:
             if "exceeds limit" in str(e):
                 raise
@@ -1257,9 +1367,12 @@ class STSSeparateRequest(BaseModel):
             raise ValueError("audio: field is required and cannot be empty")
         try:
             import base64
+
             _decoded_len = len(base64.b64decode(self.audio, validate=True))
             if _decoded_len > MAX_AUDIO_UPLOAD_BYTES:
-                raise ValueError(f"audio: decoded size ({_decoded_len}) exceeds limit ({MAX_AUDIO_UPLOAD_BYTES})")
+                raise ValueError(
+                    f"audio: decoded size ({_decoded_len}) exceeds limit ({MAX_AUDIO_UPLOAD_BYTES})"
+                )
         except Exception as e:
             if "exceeds limit" in str(e):
                 raise
@@ -1280,9 +1393,12 @@ class STSTransformRequest(BaseModel):
             raise ValueError("audio: field is required and cannot be empty")
         try:
             import base64
+
             _decoded_len = len(base64.b64decode(self.audio, validate=True))
             if _decoded_len > MAX_AUDIO_UPLOAD_BYTES:
-                raise ValueError(f"audio: decoded size ({_decoded_len}) exceeds limit ({MAX_AUDIO_UPLOAD_BYTES})")
+                raise ValueError(
+                    f"audio: decoded size ({_decoded_len}) exceeds limit ({MAX_AUDIO_UPLOAD_BYTES})"
+                )
         except Exception as e:
             if "exceeds limit" in str(e):
                 raise
@@ -1295,14 +1411,19 @@ class STSTransformRequest(BaseModel):
 async def sts_enhance(req: STSEnhanceRequest, request: Request):
     """Enhance audio quality — noise reduction and dereverberation."""
     from .models import _check_permission
+
     _check_permission(request, "can_infer")
     try:
         engine = _get_sts_engine(request)
         audio_bytes = base64.b64decode(req.audio)
         if len(audio_bytes) > MAX_AUDIO_UPLOAD_BYTES:
-            raise HTTPException(status_code=413, detail=f"Audio too large ({len(audio_bytes)} bytes)")
+            raise HTTPException(
+                status_code=413, detail=f"Audio too large ({len(audio_bytes)} bytes)"
+            )
         result = await engine.enhance(
-            audio_bytes, method=req.method, noise_floor_db=req.noise_floor_db,
+            audio_bytes,
+            method=req.method,
+            noise_floor_db=req.noise_floor_db,
         )
     except HTTPException:
         raise
@@ -1313,7 +1434,9 @@ async def sts_enhance(req: STSEnhanceRequest, request: Request):
         raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
         logger.error(f"STS enhance error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Audio enhancement failed") from None
+        raise HTTPException(
+            status_code=500, detail="Audio enhancement failed"
+        ) from None
     return _sts_response(result, req.response_format)
 
 
@@ -1321,14 +1444,19 @@ async def sts_enhance(req: STSEnhanceRequest, request: Request):
 async def sts_separate(req: STSSeparateRequest, request: Request):
     """Separate audio sources — isolate specific sounds."""
     from .models import _check_permission
+
     _check_permission(request, "can_infer")
     try:
         engine = _get_sts_engine(request)
         audio_bytes = base64.b64decode(req.audio)
         if len(audio_bytes) > MAX_AUDIO_UPLOAD_BYTES:
-            raise HTTPException(status_code=413, detail=f"Audio too large ({len(audio_bytes)} bytes)")
+            raise HTTPException(
+                status_code=413, detail=f"Audio too large ({len(audio_bytes)} bytes)"
+            )
         result = await engine.separate(
-            audio_bytes, source_text=req.source_text, method=req.method,
+            audio_bytes,
+            source_text=req.source_text,
+            method=req.method,
         )
         return _sts_response(result, req.response_format)
     except HTTPException:
@@ -1347,14 +1475,19 @@ async def sts_separate(req: STSSeparateRequest, request: Request):
 async def sts_transform(req: STSTransformRequest, request: Request):
     """Transform voice characteristics — pitch shifting, formant modification."""
     from .models import _check_permission
+
     _check_permission(request, "can_infer")
     try:
         engine = _get_sts_engine(request)
         audio_bytes = base64.b64decode(req.audio)
         if len(audio_bytes) > MAX_AUDIO_UPLOAD_BYTES:
-            raise HTTPException(status_code=413, detail=f"Audio too large ({len(audio_bytes)} bytes)")
+            raise HTTPException(
+                status_code=413, detail=f"Audio too large ({len(audio_bytes)} bytes)"
+            )
         result = await engine.transform(
-            audio_bytes, pitch_shift=req.pitch_shift, formant_ratio=req.formant_ratio,
+            audio_bytes,
+            pitch_shift=req.pitch_shift,
+            formant_ratio=req.formant_ratio,
         )
     except HTTPException:
         raise
@@ -1376,6 +1509,7 @@ def _get_sts_engine(request: Request):
     when the FastAPI application shuts down (via lifespan or atexit).
     """
     from yunshu_engine.sts_engine import STSEngine
+
     sts = getattr(request.app.state, "sts_engine", None)
     if sts is None:
         sts = STSEngine()
@@ -1384,6 +1518,7 @@ def _get_sts_engine(request: Request):
         # Register shutdown hook so the engine is cleaned up on app teardown
         _prev_shutdown = getattr(request.app.state, "_sts_shutdown_hook", None)
         if _prev_shutdown is None:
+
             async def _shutdown_sts():
                 engine = getattr(request.app.state, "sts_engine", None)
                 if engine is not None:
@@ -1392,5 +1527,6 @@ def _get_sts_engine(request: Request):
                     except Exception:
                         logger.debug("STS engine shutdown error", exc_info=True)
                     request.app.state.sts_engine = None
+
             request.app.state._sts_shutdown_hook = _shutdown_sts
     return sts

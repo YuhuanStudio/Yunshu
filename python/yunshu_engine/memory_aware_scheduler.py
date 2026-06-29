@@ -84,7 +84,7 @@ class SchedulerStats:
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 # Default memory budget: 4 GB
-_DEFAULT_BUDGET = 4 * 1024 ** 3
+_DEFAULT_BUDGET = 4 * 1024**3
 
 # Default model parameters for estimation
 _DEFAULT_NUM_LAYERS = 32
@@ -224,7 +224,9 @@ class MemoryAwareScheduler:
             # Check pressure pause
             if self._is_paused:
                 # Check if we can resume
-                if budget.utilization_pct <= (self._pressure_threshold - self._hysteresis):
+                if budget.utilization_pct <= (
+                    self._pressure_threshold - self._hysteresis
+                ):
                     self._is_paused = False
                     self._paused_since = None
                     self._stats.pressure_resumes += 1
@@ -303,7 +305,9 @@ class MemoryAwareScheduler:
                 # pressure was triggered by the admission check itself.
                 if self._is_paused:
                     fresh_budget = self._get_budget()
-                    if fresh_budget.utilization_pct <= (self._pressure_threshold - self._hysteresis):
+                    if fresh_budget.utilization_pct <= (
+                        self._pressure_threshold - self._hysteresis
+                    ):
                         self._is_paused = False
                         self._paused_since = None
                         self._stats.pressure_resumes += 1
@@ -357,7 +361,9 @@ class MemoryAwareScheduler:
             # Check if we can resume from pressure pause
             if self._is_paused:
                 budget = self._get_budget()
-                if budget.utilization_pct <= (self._pressure_threshold - self._hysteresis):
+                if budget.utilization_pct <= (
+                    self._pressure_threshold - self._hysteresis
+                ):
                     self._is_paused = False
                     self._paused_since = None
                     self._stats.pressure_resumes += 1
@@ -367,9 +373,7 @@ class MemoryAwareScheduler:
                         f"(utilization={budget.utilization_pct:.1f}%)"
                     )
 
-            logger.debug(
-                f"Released {released} bytes for request {request_id}"
-            )
+            logger.debug(f"Released {released} bytes for request {request_id}")
             return released
 
     def get_memory_budget(self) -> MemoryBudget:
@@ -420,13 +424,17 @@ class MemoryAwareScheduler:
         Per layer: keys + values, each (1, kv_heads, 1, head_dim).
         Total = num_layers * 2 * kv_heads * head_dim * dtype_size.
         """
-        return self._num_layers * 2 * self._num_kv_heads * self._head_dim * self._dtype_size
+        return (
+            self._num_layers
+            * 2
+            * self._num_kv_heads
+            * self._head_dim
+            * self._dtype_size
+        )
 
     def _get_budget(self) -> MemoryBudget:
         """Compute current memory budget (caller must hold lock)."""
-        reserved = sum(
-            entry.reserved_bytes for entry in self._reservations.values()
-        )
+        reserved = sum(entry.reserved_bytes for entry in self._reservations.values())
         usable = int(self._total_budget * self._safety_margin)
         used = min(reserved, usable)
         available = max(0, usable - used)

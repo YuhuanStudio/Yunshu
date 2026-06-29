@@ -10,6 +10,7 @@ Covers 8 categories of production-critical scenarios:
 7. Thinking budget enforcement — verify thinking stops at budget
 8. Anthropic streaming format — verify message_start/message_stop pairing
 """
+
 import asyncio
 import json
 import threading
@@ -167,8 +168,7 @@ class TestConcurrentLoRARefs:
                 errors.append(e)
 
         threads = [
-            threading.Thread(target=_worker, args=(f"adapter-{i}",))
-            for i in range(4)
+            threading.Thread(target=_worker, args=(f"adapter-{i}",)) for i in range(4)
         ]
         for t in threads:
             t.start()
@@ -196,9 +196,7 @@ class TestConcurrentLoRARefs:
         mgr = self._make_manager()
         for i in range(4):
             mgr.acquire_adapter(f"adapter-{i}")
-        assert all(
-            mgr._adapters[f"adapter-{i}"].ref_count > 0 for i in range(4)
-        )
+        assert all(mgr._adapters[f"adapter-{i}"].ref_count > 0 for i in range(4))
         mgr.shutdown()
         # All adapters should be gone after shutdown
         assert len(mgr._adapters) == 0
@@ -245,11 +243,11 @@ class TestEmptyInputs:
 
         input_ids = []
         if not input_ids:
-            bos_id = getattr(tokenizer, 'bos_token_id', None)
+            bos_id = getattr(tokenizer, "bos_token_id", None)
             if bos_id is not None:
                 input_ids = [bos_id]
             else:
-                eos_id = getattr(tokenizer, 'eos_token_id', 1)
+                eos_id = getattr(tokenizer, "eos_token_id", 1)
                 input_ids = [eos_id]
 
         assert len(input_ids) > 0
@@ -264,11 +262,11 @@ class TestEmptyInputs:
 
         input_ids = []
         if not input_ids:
-            bos_id = getattr(tokenizer, 'bos_token_id', None)
+            bos_id = getattr(tokenizer, "bos_token_id", None)
             if bos_id is not None:
                 input_ids = [bos_id]
             else:
-                eos_id = getattr(tokenizer, 'eos_token_id', 1)
+                eos_id = getattr(tokenizer, "eos_token_id", 1)
                 input_ids = [eos_id]
 
         assert len(input_ids) > 0
@@ -280,11 +278,11 @@ class TestEmptyInputs:
 
         input_ids = []
         if not input_ids:
-            bos_id = getattr(tokenizer, 'bos_token_id', None)
+            bos_id = getattr(tokenizer, "bos_token_id", None)
             if bos_id is not None:
                 input_ids = [bos_id]
             else:
-                eos_id = getattr(tokenizer, 'eos_token_id', 1)
+                eos_id = getattr(tokenizer, "eos_token_id", 1)
                 input_ids = [eos_id]
 
         assert len(input_ids) > 0
@@ -321,6 +319,7 @@ class TestEmptyInputs:
     def test_generation_output_default_values(self):
         """GenerationOutput defaults are safe for empty generation."""
         from yunshu_engine.batched_engine import GenerationOutput
+
         out = GenerationOutput()
         assert out.text == ""
         assert out.prompt_tokens == 0
@@ -342,6 +341,7 @@ class TestTimeoutDuringGeneration:
         from yunshu_engine.request_lifecycle import (
             RequestLifecycleState,
         )
+
         state = RequestLifecycleState(request_id="timeout-1")
         state.queued_at = time.monotonic() - 10.0  # 10s ago
         state.prefill_start = time.monotonic() - 9.0
@@ -369,6 +369,7 @@ class TestTimeoutDuringGeneration:
     def test_request_phase_aborted(self):
         """ABORTED phase exists for timeout/cancel scenarios."""
         from yunshu_engine.request_lifecycle import RequestPhase
+
         assert RequestPhase.ABORTED is not None
         state_aborted = RequestPhase.ABORTED
         assert state_aborted.name == "ABORTED"
@@ -379,6 +380,7 @@ class TestTimeoutDuringGeneration:
             RequestLifecycleState,
             RequestPhase,
         )
+
         state = RequestLifecycleState(request_id="abort-1")
         state.phase = RequestPhase.DECODING
         result = state.transition(RequestPhase.ABORTED)
@@ -501,6 +503,7 @@ class TestNPlusOneIsolation:
     def test_format_choice_chunk_index(self):
         """Each choice chunk must have the correct index."""
         from yunshu_gateway.routers.chat import _format_choice_chunk
+
         for idx in range(5):
             chunk = _format_choice_chunk(
                 completion_id="chatcmpl-test",
@@ -526,6 +529,7 @@ class TestNPlusOneIsolation:
     def test_per_choice_finish_reason(self):
         """Each choice must have its own finish_reason."""
         from yunshu_gateway.routers.chat import _format_choice_chunk
+
         # Choice 0: length limit
         c0 = _format_choice_chunk("id", "model", 0, "", "length")
         p0 = json.loads(c0.removeprefix("data: ").removesuffix("\n\n"))
@@ -539,6 +543,7 @@ class TestNPlusOneIsolation:
     def test_n1_is_default(self):
         """ChatCompletionRequest defaults to n=1."""
         from yunshu_gateway.routers.chat import ChatCompletionRequest
+
         req = ChatCompletionRequest(
             model="test",
             messages=[{"role": "user", "content": "hi"}],
@@ -548,6 +553,7 @@ class TestNPlusOneIsolation:
     def test_per_choice_tool_call_streamer_isolation(self):
         """Each choice gets its own ToolCallStreamer for independent extraction."""
         from yunshu_engine.tool_call_streamer import ToolCallStreamer
+
         streamer0 = ToolCallStreamer()
         streamer1 = ToolCallStreamer()
         # They are independent instances
@@ -560,19 +566,16 @@ class TestNPlusOneIsolation:
     def test_cancel_stops_remaining_choices(self):
         """When cancel event fires, remaining choices get finish_reason='stop'."""
         from yunshu_gateway.routers.chat import _format_choice_chunk
+
         n = 5
         cancelled_after = 2
         results = []
         for i in range(n):
             if i >= cancelled_after:
                 # Simulate cancel — emit stop chunk
-                results.append(
-                    _format_choice_chunk("id", "model", i, "", "stop")
-                )
+                results.append(_format_choice_chunk("id", "model", i, "", "stop"))
             else:
-                results.append(
-                    _format_choice_chunk("id", "model", i, "text", None)
-                )
+                results.append(_format_choice_chunk("id", "model", i, "text", None))
 
         # Choices after cancellation should have finish_reason
         for i, chunk in enumerate(results):
@@ -689,9 +692,18 @@ class TestThinkingBudgetEnforcement:
 
     def test_parse_thinking_budget_from_effort(self):
         """parse_thinking_budget maps reasoning_effort to token budgets."""
-        assert parse_thinking_budget({"reasoning_effort": "low"}).max_thinking_tokens == 2048
-        assert parse_thinking_budget({"reasoning_effort": "medium"}).max_thinking_tokens == 8192
-        assert parse_thinking_budget({"reasoning_effort": "high"}).max_thinking_tokens == 32768
+        assert (
+            parse_thinking_budget({"reasoning_effort": "low"}).max_thinking_tokens
+            == 2048
+        )
+        assert (
+            parse_thinking_budget({"reasoning_effort": "medium"}).max_thinking_tokens
+            == 8192
+        )
+        assert (
+            parse_thinking_budget({"reasoning_effort": "high"}).max_thinking_tokens
+            == 32768
+        )
 
     def test_parse_thinking_budget_none(self):
         """parse_thinking_budget returns None when no params provided."""
@@ -847,15 +859,59 @@ class TestAnthropicStreamingFormat:
         content_block_stop → message_delta → message_stop"""
         events = []
         # message_start
-        events.append(("message_start", {"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "content": [], "stop_reason": None, "usage": {"input_tokens": 5, "output_tokens": 0}}}))
+        events.append(
+            (
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_1",
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [],
+                        "stop_reason": None,
+                        "usage": {"input_tokens": 5, "output_tokens": 0},
+                    },
+                },
+            )
+        )
         # content_block_start (text)
-        events.append(("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}))
+        events.append(
+            (
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            )
+        )
         # content_block_delta
-        events.append(("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}}))
+        events.append(
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "Hello"},
+                },
+            )
+        )
         # content_block_stop
-        events.append(("content_block_stop", {"type": "content_block_stop", "index": 0}))
+        events.append(
+            ("content_block_stop", {"type": "content_block_stop", "index": 0})
+        )
         # message_delta
-        events.append(("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 1}}))
+        events.append(
+            (
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                    "usage": {"output_tokens": 1},
+                },
+            )
+        )
         # message_stop
         events.append(("message_stop", {"type": "message_stop"}))
 
@@ -878,17 +934,85 @@ class TestAnthropicStreamingFormat:
         content_block_start(text) → content_block_delta(text)* →
         content_block_stop → message_delta → message_stop"""
         events = []
-        events.append(("message_start", {"type": "message_start", "message": {"id": "msg_2", "type": "message", "role": "assistant", "content": [], "stop_reason": None, "usage": {"input_tokens": 5, "output_tokens": 0}}}))
+        events.append(
+            (
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_2",
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [],
+                        "stop_reason": None,
+                        "usage": {"input_tokens": 5, "output_tokens": 0},
+                    },
+                },
+            )
+        )
         # Thinking block
-        events.append(("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": "", "signature": "yunshu-reasoning"}}))
-        events.append(("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "Let me think..."}}))
-        events.append(("content_block_stop", {"type": "content_block_stop", "index": 0}))
+        events.append(
+            (
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {
+                        "type": "thinking",
+                        "thinking": "",
+                        "signature": "yunshu-reasoning",
+                    },
+                },
+            )
+        )
+        events.append(
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "thinking_delta", "thinking": "Let me think..."},
+                },
+            )
+        )
+        events.append(
+            ("content_block_stop", {"type": "content_block_stop", "index": 0})
+        )
         # Text block
-        events.append(("content_block_start", {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}}))
-        events.append(("content_block_delta", {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "Answer"}}))
-        events.append(("content_block_stop", {"type": "content_block_stop", "index": 1}))
+        events.append(
+            (
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 1,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            )
+        )
+        events.append(
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 1,
+                    "delta": {"type": "text_delta", "text": "Answer"},
+                },
+            )
+        )
+        events.append(
+            ("content_block_stop", {"type": "content_block_stop", "index": 1})
+        )
         # Close
-        events.append(("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 5}}))
+        events.append(
+            (
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                    "usage": {"output_tokens": 5},
+                },
+            )
+        )
         events.append(("message_stop", {"type": "message_stop"}))
 
         # Validate structure
@@ -913,27 +1037,34 @@ class TestAnthropicStreamingFormat:
     def test_stop_reason_map_end_turn(self):
         """Default finish maps to end_turn."""
         from yunshu_gateway.routers.anthropic import _map_stop_reason
+
         assert _map_stop_reason("stop") == "end_turn"
 
     def test_stop_reason_map_stop_sequence(self):
         """matched_stop maps to stop_sequence."""
         from yunshu_gateway.routers.anthropic import _map_stop_reason
+
         assert _map_stop_reason(None, matched_stop="<end>") == "stop_sequence"
 
     def test_stop_reason_map_tool_use(self):
         """has_tool_calls=True maps to tool_use."""
         from yunshu_gateway.routers.anthropic import _map_stop_reason
+
         assert _map_stop_reason("stop", has_tool_calls=True) == "tool_use"
 
     def test_stop_reason_map_max_tokens(self):
         """'length' finish_reason maps to max_tokens."""
         from yunshu_gateway.routers.anthropic import _map_stop_reason
+
         assert _map_stop_reason("length") == "max_tokens"
 
     def test_message_stop_emitted_on_error(self):
         """message_stop must be emitted even after errors."""
         # Simulating the pattern from anthropic.py lines 1088-1096
-        error_event = {"type": "error", "error": {"type": "api_error", "message": "Internal server error"}}
+        error_event = {
+            "type": "error",
+            "error": {"type": "api_error", "message": "Internal server error"},
+        }
         msg_stop = {"type": "message_stop"}
 
         # Both must be present

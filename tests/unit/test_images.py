@@ -9,6 +9,7 @@ Tests:
 - Edge cases (invalid size, missing model manager)
 - Endpoint-level integration via FastAPI TestClient
 """
+
 import os
 import time
 
@@ -152,6 +153,7 @@ class TestImageResponseFormat:
     def test_b64_response_structure(self):
         """Verify b64_json response structure."""
         import base64
+
         fake_png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100  # Minimal PNG header
         b64 = base64.b64encode(fake_png).decode("ascii")
 
@@ -170,6 +172,7 @@ class TestImageResponseFormat:
     def test_url_response_structure(self):
         """Verify URL response structure (data URI format)."""
         import base64
+
         fake_png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
         b64 = base64.b64encode(fake_png).decode("ascii")
 
@@ -207,6 +210,7 @@ class TestImageStreamingResponse:
     def test_progress_event_format(self):
         """Progress events should have step, total_steps, progress, is_final."""
         import json
+
         event = {
             "step": 2,
             "total_steps": 4,
@@ -224,6 +228,7 @@ class TestImageStreamingResponse:
     def test_final_event_format(self):
         """Final events should have is_final=True and image data."""
         import base64
+
         fake_png = b"\x89PNG"
         event = {
             "step": 4,
@@ -245,6 +250,7 @@ def _setup_engine():
     os.environ["YUNSHU_AUTH_DISABLED"] = "true"
     from yunshu_engine.engine import Engine, EngineConfig
     from yunshu_gateway.engine import set_engine
+
     engine = Engine(EngineConfig())
     engine._model = object()
     engine._model_name = "test-model"
@@ -258,6 +264,7 @@ def _setup_engine():
 
 def _client():
     from yunshu_gateway.main import create_app
+
     return TestClient(create_app(), raise_server_exceptions=False)
 
 
@@ -267,59 +274,77 @@ class TestImagesEndpoint:
     def test_images_generations_no_model_manager(self, _setup_engine):
         """Should fail when no model manager is initialized."""
         client = _client()
-        resp = client.post("/v1/images/generations", json={
-            "model": "test",
-            "prompt": "a cat",
-        })
+        resp = client.post(
+            "/v1/images/generations",
+            json={
+                "model": "test",
+                "prompt": "a cat",
+            },
+        )
         # Model manager may not be set up, so 503 or 404
         assert resp.status_code in (200, 404, 500, 503)
 
     def test_images_validates_prompt_required(self, _setup_engine):
         """Should return 400 or 422 when prompt is missing."""
         client = _client()
-        resp = client.post("/v1/images/generations", json={
-            "model": "test",
-        })
+        resp = client.post(
+            "/v1/images/generations",
+            json={
+                "model": "test",
+            },
+        )
         assert resp.status_code in (400, 422)
 
     def test_images_accepts_all_params(self, _setup_engine):
         """Should accept all valid parameters without 422."""
         client = _client()
-        resp = client.post("/v1/images/generations", json={
-            "prompt": "a beautiful sunset",
-            "model": "Z-Image-Turbo-MLX-4bit",
-            "n": 2,
-            "size": "512x512",
-            "response_format": "b64_json",
-            "num_inference_steps": 8,
-            "seed": 42,
-        })
+        resp = client.post(
+            "/v1/images/generations",
+            json={
+                "prompt": "a beautiful sunset",
+                "model": "Z-Image-Turbo-MLX-4bit",
+                "n": 2,
+                "size": "512x512",
+                "response_format": "b64_json",
+                "num_inference_steps": 8,
+                "seed": 42,
+            },
+        )
         # May fail due to engine, but should NOT be 422
         assert resp.status_code in (200, 404, 500, 503)
 
     def test_images_accepts_url_format(self, _setup_engine):
         """Should accept URL response format."""
         client = _client()
-        resp = client.post("/v1/images/generations", json={
-            "prompt": "a cat",
-            "response_format": "url",
-        })
+        resp = client.post(
+            "/v1/images/generations",
+            json={
+                "prompt": "a cat",
+                "response_format": "url",
+            },
+        )
         assert resp.status_code in (200, 404, 500, 503)
 
     def test_images_streaming_endpoint_no_engine(self, _setup_engine):
         """Streaming endpoint should fail gracefully when no engine available."""
         client = _client()
-        resp = client.post("/v1/images/generations/stream", json={
-            "prompt": "a cat",
-        })
+        resp = client.post(
+            "/v1/images/generations/stream",
+            json={
+                "prompt": "a cat",
+            },
+        )
         assert resp.status_code in (200, 404, 500, 503)
 
     def test_images_default_model(self, _setup_engine):
         """Should use default model when not specified."""
         client = _client()
-        resp = client.post("/v1/images/generations", json={
-            "prompt": "a cat",
-        })
+        resp = client.post(
+            "/v1/images/generations",
+            json={
+                "prompt": "a cat",
+            },
+        )
         assert resp.status_code in (200, 404, 500, 503)
 
 
@@ -332,6 +357,7 @@ class TestImageVariationsDenoise:
 
     def test_variations_default_denoise_is_low(self):
         from yunshu_gateway.routers.images import ImageVariationsRequest
+
         req = ImageVariationsRequest(image="x")
         assert req.denoise_strength < 0.6, (
             "variations denoise_strength default too high — prompt-less variations "
@@ -340,6 +366,7 @@ class TestImageVariationsDenoise:
 
     def test_variations_denoise_override_accepted(self):
         from yunshu_gateway.routers.images import ImageVariationsRequest
+
         req = ImageVariationsRequest(image="x", denoise_strength=0.3)
         assert req.denoise_strength == 0.3
 
@@ -348,6 +375,7 @@ class TestImageVariationsDenoise:
         import inspect
 
         from yunshu_gateway.routers import images
+
         src = inspect.getsource(images.create_image_variation)
         assert "denoise_strength=req.denoise_strength" in src
 

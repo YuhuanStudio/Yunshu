@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class GPUNgramConfig:
     """Configuration for GPU N-gram speculative decoding."""
+
     min_n: int = 1
     max_n: int = 5
     k: int = 5  # max draft tokens per proposal

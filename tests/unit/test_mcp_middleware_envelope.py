@@ -4,6 +4,7 @@ a JSON-RPC client can't parse {"error":{...}}. had made only the auth-error path
 MCP-aware. Centralize the path-aware envelope (OpenAI / Anthropic / JSON-RPC) in
 format_error_response and route rate_limit.py's 429s + tenant_auth's lockout/concurrency/
 TPM 429s through it."""
+
 from __future__ import annotations
 
 import inspect
@@ -34,7 +35,11 @@ def test_anthropic_path_envelope():
 
 
 def test_openai_default_envelope_429_and_401():
-    b429 = _body(format_error_response("/v1/chat/completions", "x", 429, code="rate_limit_exceeded"))
+    b429 = _body(
+        format_error_response(
+            "/v1/chat/completions", "x", 429, code="rate_limit_exceeded"
+        )
+    )
     assert b429["error"]["type"] == "rate_limit_error"
     assert b429["error"]["code"] == "rate_limit_exceeded"
     b401 = _body(format_error_response("/v1/chat/completions", "bad", 401))
@@ -43,12 +48,17 @@ def test_openai_default_envelope_429_and_401():
 
 
 def test_custom_code_preserved():
-    b = _body(format_error_response("/v1/chat/completions", "conc", 429, code="concurrency_limit"))
+    b = _body(
+        format_error_response(
+            "/v1/chat/completions", "conc", 429, code="concurrency_limit"
+        )
+    )
     assert b["error"]["code"] == "concurrency_limit"
 
 
 def test_rate_limit_middleware_uses_shared_envelope():
     from yunshu_gateway.middleware import rate_limit
+
     src = inspect.getsource(rate_limit)
     assert "format_error_response" in src
     # the old hardcoded OpenAI/Anthropic 429 branches are gone
@@ -57,6 +67,7 @@ def test_rate_limit_middleware_uses_shared_envelope():
 
 def test_tenant_auth_uses_shared_envelope():
     from yunshu_gateway.middleware import tenant_auth
+
     src = inspect.getsource(tenant_auth)
     # Single-consumer model: the simplified middleware routes its 401 denial
     # through the in-module _ErrorFormatter.auth_error helper, which produces

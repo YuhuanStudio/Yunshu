@@ -7,6 +7,7 @@ Covers:
 - ASREngine (lifecycle, transcribe with mock)
 - Module-level transcribe() and synthesize() convenience functions
 """
+
 import asyncio
 import os
 import struct
@@ -35,10 +36,10 @@ class TestWavHelpers:
         """WAV output should start with RIFF header."""
         pcm = np.zeros(100, dtype=np.int16)
         wav = _pcm_to_wav(pcm)
-        assert wav[:4] == b'RIFF'
-        assert wav[8:12] == b'WAVE'
-        assert wav[12:16] == b'fmt '
-        assert wav[36:40] == b'data'
+        assert wav[:4] == b"RIFF"
+        assert wav[8:12] == b"WAVE"
+        assert wav[12:16] == b"fmt "
+        assert wav[36:40] == b"data"
 
     def test_pcm_to_wav_correct_size(self):
         """WAV data size should match PCM bytes + 44 byte header."""
@@ -52,16 +53,16 @@ class TestWavHelpers:
         """Float audio array should be clipped and converted to 16-bit PCM."""
         audio = np.array([0.0, 0.5, -0.5, 1.0, -1.0], dtype=np.float32)
         wav = _audio_to_wav_bytes(audio)
-        assert wav[:4] == b'RIFF'
+        assert wav[:4] == b"RIFF"
         # Check data chunk size
-        data_size = struct.unpack_from('<I', wav, 40)[0]
+        data_size = struct.unpack_from("<I", wav, 40)[0]
         assert data_size == 5 * 2  # 5 samples * 2 bytes
 
     def test_audio_to_wav_bytes_clipping(self):
         """Values > 1.0 should be clipped."""
         audio = np.array([2.0, -2.0], dtype=np.float32)
         wav = _audio_to_wav_bytes(audio)
-        data_size = struct.unpack_from('<I', wav, 40)[0]
+        data_size = struct.unpack_from("<I", wav, 40)[0]
         assert data_size == 2 * 2
 
     def test_make_wav_header_length(self):
@@ -73,19 +74,19 @@ class TestWavHelpers:
         """RIFF chunk size should be 36 + data_size."""
         data_size = 5000
         hdr = make_wav_header(data_size, sample_rate=22050)
-        riff_size = struct.unpack_from('<I', hdr, 4)[0]
+        riff_size = struct.unpack_from("<I", hdr, 4)[0]
         assert riff_size == 36 + data_size
 
     def test_make_wav_header_sample_rate(self):
         """Sample rate should be correctly encoded."""
         hdr = make_wav_header(100, sample_rate=48000)
-        sr = struct.unpack_from('<I', hdr, 24)[0]
+        sr = struct.unpack_from("<I", hdr, 24)[0]
         assert sr == 48000
 
     def test_make_wav_header_num_channels(self):
         """Channel count should be correctly encoded."""
         hdr = make_wav_header(100, sample_rate=24000, num_channels=2)
-        channels = struct.unpack_from('<H', hdr, 22)[0]
+        channels = struct.unpack_from("<H", hdr, 22)[0]
         assert channels == 2
 
     def test_pcm_roundtrip(self):
@@ -120,17 +121,17 @@ class TestWavHelpers:
         """Streaming mode should write data_size=0 in both RIFF and data fields."""
         hdr = make_wav_header(data_size=99999, sample_rate=24000, streaming=True)
         assert len(hdr) == 44
-        riff_size = struct.unpack_from('<I', hdr, 4)[0]
+        riff_size = struct.unpack_from("<I", hdr, 4)[0]
         assert riff_size == 36  # 36 + 0
-        data_size_field = struct.unpack_from('<I', hdr, 40)[0]
+        data_size_field = struct.unpack_from("<I", hdr, 40)[0]
         assert data_size_field == 0
 
     def test_make_wav_header_non_streaming_unchanged(self):
         """Non-streaming mode should still write actual data_size."""
         hdr = make_wav_header(data_size=5000, sample_rate=24000, streaming=False)
-        riff_size = struct.unpack_from('<I', hdr, 4)[0]
+        riff_size = struct.unpack_from("<I", hdr, 4)[0]
         assert riff_size == 36 + 5000
-        data_size_field = struct.unpack_from('<I', hdr, 40)[0]
+        data_size_field = struct.unpack_from("<I", hdr, 40)[0]
         assert data_size_field == 5000
 
 
@@ -238,7 +239,7 @@ class TestASREngine:
             tmp_path = tmp.name
 
         # Verify the WAV we wrote has 48000 in its header
-        sr_in_file = struct.unpack_from('<I', wav_bytes, 24)[0]
+        sr_in_file = struct.unpack_from("<I", wav_bytes, 24)[0]
         assert sr_in_file == 48000
 
         try:
@@ -274,6 +275,7 @@ class TestSubtitleSegmentKeys:
 
     def test_srt_handles_start_time_end_time(self):
         from yunshu_gateway.routers.audio import _format_srt
+
         segs = [{"start_time": 1.5, "end_time": 3.0, "text": "hello"}]
         out = _format_srt(segs)
         assert "00:00:00,000 --> 00:00:00,000" not in out
@@ -282,12 +284,14 @@ class TestSubtitleSegmentKeys:
 
     def test_vtt_handles_start_time_end_time(self):
         from yunshu_gateway.routers.audio import _format_vtt
+
         segs = [{"start_time": 1.5, "end_time": 3.0, "text": "hi"}]
         out = _format_vtt(segs)
         assert "00:00:01.500 --> 00:00:03.000" in out
 
     def test_srt_still_handles_whisper_start_end(self):
         from yunshu_gateway.routers.audio import _format_srt
+
         out = _format_srt([{"start": 2.0, "end": 4.0, "text": "x"}])
         assert "00:00:02,000 --> 00:00:04,000" in out
 
@@ -300,6 +304,7 @@ class TestModuleLevelTranscribe:
     async def test_file_not_found(self):
         """transcribe() should raise FileNotFoundError for missing files."""
         from yunshu_engine.audio_engine import transcribe
+
         with pytest.raises(FileNotFoundError, match="Audio file not found"):
             await transcribe("/nonexistent/path/audio.wav")
 
@@ -317,8 +322,17 @@ class TestModuleLevelTranscribe:
             tmp_path = tmp.name
 
         try:
-            with patch("yunshu_engine.audio_engine._find_asr_engine", return_value=None):
-                with patch.dict("sys.modules", {"mlx_audio": None, "mlx_audio.stt": None, "mlx_audio.stt.utils": None}):
+            with patch(
+                "yunshu_engine.audio_engine._find_asr_engine", return_value=None
+            ):
+                with patch.dict(
+                    "sys.modules",
+                    {
+                        "mlx_audio": None,
+                        "mlx_audio.stt": None,
+                        "mlx_audio.stt.utils": None,
+                    },
+                ):
                     with pytest.raises(RuntimeError):
                         await transcribe(tmp_path, language="en")
         finally:
@@ -333,16 +347,19 @@ class TestTTSVoiceDesign:
 
         engine = TTSEngine("Qwen3-TTS-VoiceDesign")
         mock_model = MagicMock()
+
         # Simulate a VoiceDesign model whose generate() accepts 'instruct'
         def _generate(text, instruct=None, verbose=False):
             result = MagicMock()
             result.audio = np.zeros(1600)
             return [result]
+
         mock_model.generate = _generate
         mock_model.sample_rate = 16000
         engine._model = mock_model
 
         import asyncio
+
         loop = asyncio.new_event_loop()
         try:
             wav = loop.run_until_complete(
@@ -359,16 +376,19 @@ class TestTTSVoiceDesign:
 
         engine = TTSEngine("Qwen3-TTS-VoiceDesign")
         mock_model = MagicMock()
+
         def _generate(text, instruct=None, verbose=False):
             received["instruct"] = instruct
             result = MagicMock()
             result.audio = np.zeros(1600)
             return [result]
+
         mock_model.generate = _generate
         mock_model.sample_rate = 16000
         engine._model = mock_model
 
         import asyncio
+
         loop = asyncio.new_event_loop()
         try:
             loop.run_until_complete(engine.synthesize("Hi"))
@@ -386,16 +406,19 @@ class TestTTSVoiceDesign:
 
         engine = TTSEngine("Qwen3-TTS-VoiceDesign")
         mock_model = MagicMock()
+
         def _generate(text, instruct=None, verbose=False):
             received["instruct"] = instruct
             result = MagicMock()
             result.audio = np.zeros(1600)
             return [result]
+
         mock_model.generate = _generate
         mock_model.sample_rate = 16000
         engine._model = mock_model
 
         import asyncio
+
         loop = asyncio.new_event_loop()
         try:
             loop.run_until_complete(engine.synthesize("Hi", voice="chelsie"))
@@ -410,9 +433,10 @@ class TestModuleLevelSynthesize:
     async def test_empty_text_returns_silence(self):
         """Empty text input should produce a valid WAV with silence."""
         from yunshu_engine.audio_engine import synthesize
+
         result = await synthesize("")
-        assert result[:4] == b'RIFF'
-        assert result[8:12] == b'WAVE'
+        assert result[:4] == b"RIFF"
+        assert result[8:12] == b"WAVE"
 
     @pytest.mark.asyncio
     async def test_fallback_raises_without_backend(self):
@@ -421,6 +445,9 @@ class TestModuleLevelSynthesize:
         from yunshu_engine.audio_engine import synthesize
 
         with patch("yunshu_engine.audio_engine._find_tts_engine", return_value=None):
-            with patch.dict("sys.modules", {"mlx_audio": None, "mlx_audio.tts": None, "mlx_audio.tts.utils": None}):
+            with patch.dict(
+                "sys.modules",
+                {"mlx_audio": None, "mlx_audio.tts": None, "mlx_audio.tts.utils": None},
+            ):
                 with pytest.raises(RuntimeError):
                     await synthesize("Hello world")

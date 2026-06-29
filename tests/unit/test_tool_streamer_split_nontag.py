@@ -11,6 +11,7 @@ Fix: TAG_START now applies the same delimiter validation when it completes the t
 non-tag reverts to TEXT and is re-scanned as plain content (nothing lost). Real tool calls
 — including ones whose open tag is split across deltas — still parse.
 """
+
 from __future__ import annotations
 
 from yunshu_engine.tool_call_streamer import ToolCallStreamer
@@ -52,7 +53,7 @@ def test_split_tool_callback_nontag_preserves_content():
 
 def test_real_tool_call_still_parses_unsplit():
     content, calls = _run(
-        ['<tool_call>', '{"name": "search", "arguments": {"q": "hi"}}', '</tool_call>']
+        ["<tool_call>", '{"name": "search", "arguments": {"q": "hi"}}', "</tool_call>"]
     )
     assert calls == 1
     assert content == ""

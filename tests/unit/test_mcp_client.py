@@ -1,4 +1,5 @@
 """Tests for MCP Client Manager."""
+
 import json
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 class TestMCPServerConfig:
     def test_config_defaults(self):
         from yunshu_engine.mcp_client import MCPServerConfig
+
         config = MCPServerConfig(server_id="test")
         assert config.transport == "stdio"
         assert config.enabled is True
@@ -16,6 +18,7 @@ class TestMCPServerConfig:
 class TestMCPClientManager:
     def test_empty_manager(self):
         from yunshu_engine.mcp_client import MCPClientManager
+
         mgr = MCPClientManager()
         stats = mgr.get_stats()
         assert stats["connected_servers"] == 0
@@ -23,23 +26,28 @@ class TestMCPClientManager:
 
     def test_list_tools_empty(self):
         from yunshu_engine.mcp_client import MCPClientManager
+
         mgr = MCPClientManager()
         assert mgr.list_tools() == []
 
     def test_get_tools_as_openai_empty(self):
         from yunshu_engine.mcp_client import MCPClientManager
+
         mgr = MCPClientManager()
         assert mgr.get_tools_as_openai() == []
 
     def test_call_tool_not_found(self):
         from yunshu_engine.mcp_client import MCPClientManager
+
         mgr = MCPClientManager()
         with pytest.raises(KeyError):
             import asyncio
+
             asyncio.run(mgr.call_tool("nonexistent", {}))
 
     def test_parse_config_file(self, tmp_path):
         from yunshu_engine.mcp_client import MCPClientManager
+
         config = {
             "mcpServers": {
                 "filesystem": {
@@ -66,19 +74,22 @@ class TestMCPClientManager:
 
     def test_parse_nonexistent_config(self, tmp_path):
         from yunshu_engine.mcp_client import MCPClientManager
+
         mgr = MCPClientManager()
         configs = mgr._parse_config_file(tmp_path / "nonexistent.json")
         assert configs == []
 
     def test_load_config_env(self, monkeypatch):
         from yunshu_engine.mcp_client import MCPClientManager
-        servers = json.dumps([
-            {"id": "test", "command": "echo", "transport": "stdio", "enabled": False}
-        ])
+
+        servers = json.dumps(
+            [{"id": "test", "command": "echo", "transport": "stdio", "enabled": False}]
+        )
         monkeypatch.setenv("YUNSHU_MCP_SERVERS", servers)
         mgr = MCPClientManager()
         # This is async, just test the config parsing
         import asyncio
+
         result = asyncio.run(mgr.load_config())
         assert result == 0  # disabled, so 0 connected
 
@@ -86,6 +97,7 @@ class TestMCPClientManager:
 class TestMCPServerConnection:
     def test_connection_initial_state(self):
         from yunshu_engine.mcp_client import MCPServerConfig, MCPServerConnection
+
         config = MCPServerConfig(server_id="test", command="echo")
         conn = MCPServerConnection(config)
         assert conn.is_connected is False

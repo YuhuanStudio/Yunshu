@@ -5,6 +5,7 @@ that dropped mid-request ran to max_tokens / the 300s timeout, head-of-line-bloc
 subsequent request on the serial max_workers=1 executor. Each non-streaming engine await is
 now wrapped so a disconnect SETS the cancel_event and the decode loop stops.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -12,6 +13,7 @@ import inspect
 
 def test_completions_nonstream_uses_disconnect_guard():
     from yunshu_gateway.routers import completions
+
     src = inspect.getsource(completions)
     assert "run_with_disconnect_guard(\n                    request, _gen_one" in src
     # None return == disconnected → stop the generation loop
@@ -20,6 +22,7 @@ def test_completions_nonstream_uses_disconnect_guard():
 
 def test_responses_nonstream_uses_disconnect_guard():
     from yunshu_gateway.routers import responses
+
     src = inspect.getsource(responses)
     # both batched (engine.chat) and non-batched (engine.generate) awaits are wrapped
     assert "run_with_disconnect_guard(request, engine.chat(" in src
@@ -30,6 +33,7 @@ def test_responses_nonstream_uses_disconnect_guard():
 
 def test_anthropic_nonstream_uses_disconnect_guard():
     from yunshu_gateway.routers import anthropic
+
     src = inspect.getsource(anthropic)
     # both helpers thread `request` and guard the engine coroutine
     assert src.count("run_with_disconnect_guard(request, _chat_coro") >= 1

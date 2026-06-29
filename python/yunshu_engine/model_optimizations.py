@@ -51,6 +51,7 @@ def _safe_int(val: Any, default: int = 0) -> int:
 
 class RopeScalingType(StrEnum):
     """Supported RoPE scaling strategies."""
+
     LINEAR = "linear"
     DYNAMIC_NTK = "dynamic_ntk"
     YARN = "yarn"
@@ -62,6 +63,7 @@ class RopeScalingType(StrEnum):
 @dataclass
 class RopeScalingConfig:
     """RoPE scaling configuration for a model."""
+
     scaling_type: RopeScalingType = RopeScalingType.NONE
     base_freq: float = 10000.0
     head_dim: int = 128
@@ -119,9 +121,7 @@ class RoPEScalingOptimizer:
         if not head_dim and hidden_size and num_heads:
             head_dim = hidden_size // num_heads
 
-        original_context = _safe_int(
-            getattr(config, "max_position_embeddings", 0)
-        )
+        original_context = _safe_int(getattr(config, "max_position_embeddings", 0))
         base_freq = float(getattr(config, "rope_theta", 10000.0))
 
         # Respect existing rope_scaling from model config
@@ -129,9 +129,7 @@ class RoPEScalingOptimizer:
 
         if rope_scaling and isinstance(rope_scaling, dict):
             scaling_type_str = (
-                rope_scaling.get("type")
-                or rope_scaling.get("rope_type")
-                or ""
+                rope_scaling.get("type") or rope_scaling.get("rope_type") or ""
             ).lower()
             scaling_factor = float(rope_scaling.get("factor", 1.0))
         else:
@@ -164,12 +162,8 @@ class RoPEScalingOptimizer:
             self._config.yarn_attention_factor = float(
                 rope_scaling.get("attention_factor", 0.0)
             )
-            self._config.yarn_beta_fast = float(
-                rope_scaling.get("beta_fast", 32.0)
-            )
-            self._config.yarn_beta_slow = float(
-                rope_scaling.get("beta_slow", 1.0)
-            )
+            self._config.yarn_beta_fast = float(rope_scaling.get("beta_fast", 32.0))
+            self._config.yarn_beta_slow = float(rope_scaling.get("beta_slow", 1.0))
             self._config.llama3_low_freq_factor = float(
                 rope_scaling.get("low_freq_factor", 1.0)
             )
@@ -249,7 +243,9 @@ class RoPEScalingOptimizer:
                 ) / (2 * math.log(base_freq))
 
             low_corr = max(math.floor(_yarn_correction_dim(yarn_beta_fast)), 0)
-            high_corr = min(math.ceil(_yarn_correction_dim(yarn_beta_slow)), half_dim - 1)
+            high_corr = min(
+                math.ceil(_yarn_correction_dim(yarn_beta_slow)), half_dim - 1
+            )
 
             # Linear ramp mask: 0 at low_corr, 1 at high_corr
             if low_corr == high_corr:
@@ -284,9 +280,8 @@ class RoPEScalingOptimizer:
                     result.append(f)
                 else:
                     # Medium: smooth interpolation
-                    smooth = (
-                        (original_max_position / wavelen - low_freq_factor)
-                        / (high_freq_factor - low_freq_factor)
+                    smooth = (original_max_position / wavelen - low_freq_factor) / (
+                        high_freq_factor - low_freq_factor
                     )
                     # MLX formula: freq / ((1-smooth)/factor + smooth)
                     result.append(f / ((1 - smooth) / scaling_factor + smooth))
@@ -401,23 +396,25 @@ class RoPEScalingOptimizer:
 
 class AttentionType(StrEnum):
     """Attention head configuration type."""
-    MHA = "mha"    # Multi-Head Attention
-    GQA = "gqa"    # Grouped-Query Attention
-    MQA = "mqa"    # Multi-Query Attention
-    SWA = "swa"    # Sliding Window Attention
-    MLA = "mla"    # Multi-Head Latent Attention (DeepSeek)
+
+    MHA = "mha"  # Multi-Head Attention
+    GQA = "gqa"  # Grouped-Query Attention
+    MQA = "mqa"  # Multi-Query Attention
+    SWA = "swa"  # Sliding Window Attention
+    MLA = "mla"  # Multi-Head Latent Attention (DeepSeek)
 
 
 @dataclass
 class AttentionConfig:
     """Detected attention configuration."""
+
     attention_type: AttentionType = AttentionType.MHA
     num_heads: int = 0
     num_kv_heads: int = 0
     head_dim: int = 0
     sliding_window: int | None = None  # None = full attention
-    kv_repeat_needed: bool = False     # True if GQA needs KV expansion
-    mla_mode: bool = False             # DeepSeek MLA compression
+    kv_repeat_needed: bool = False  # True if GQA needs KV expansion
+    mla_mode: bool = False  # DeepSeek MLA compression
     optimizations_applied: list[str] = field(default_factory=list)
 
 
@@ -570,6 +567,7 @@ class AttentionOptimizer:
 @dataclass
 class MoEEfficiencyStats:
     """Runtime statistics for MoE expert utilisation."""
+
     expert_counts: dict[int, int] = field(default_factory=dict)
     total_tokens: int = 0
     cache_hits: int = 0
@@ -706,9 +704,7 @@ class MoEEfficiencyOptimizer:
                         penalised[i] *= 0.9
 
             # Select top-k experts
-            indexed = sorted(
-                enumerate(penalised), key=lambda x: x[1], reverse=True
-            )
+            indexed = sorted(enumerate(penalised), key=lambda x: x[1], reverse=True)
             selected = indexed[:dynamic_k]
             indices = [idx for idx, _ in selected]
             raw_weights = [w for _, w in selected]
@@ -716,9 +712,7 @@ class MoEEfficiencyOptimizer:
             # Normalise weights
             weight_sum = sum(raw_weights)
             weights = (
-                [w / weight_sum for w in raw_weights]
-                if weight_sum > 0
-                else raw_weights
+                [w / weight_sum for w in raw_weights] if weight_sum > 0 else raw_weights
             )
 
             # Cache preference boost: track cache hits
@@ -771,9 +765,7 @@ class MoEEfficiencyOptimizer:
             "top_k": self._top_k,
             "expert_utilization": dict(self._stats.expert_counts),
             "cache_hit_rate": (
-                self._stats.cache_hits / cache_total
-                if cache_total > 0
-                else 0.0
+                self._stats.cache_hits / cache_total if cache_total > 0 else 0.0
             ),
             "cache_hits": self._stats.cache_hits,
             "cache_misses": self._stats.cache_misses,
@@ -789,6 +781,7 @@ class MoEEfficiencyOptimizer:
 @dataclass
 class WarmupResult:
     """Result of a warmup run."""
+
     warmup_time_s: float = 0.0
     compile_cached: bool = False
     prompts_warmed: int = 0
@@ -800,6 +793,7 @@ class WarmupResult:
 @dataclass
 class WarmPromptResult:
     """Result of warm prompt preloading into KV prefix cache."""
+
     prompts_loaded: int = 0
     prompts_prefilled: int = 0
     prompts_skipped_cached: int = 0
@@ -876,9 +870,7 @@ class ModelWarmupManager:
                 logger.warning(f"Compile warmup failed (non-fatal): {exc}")
 
         # Step 2: inference warmup with model-specific prompts
-        prompts = self._WARMUP_PROMPTS.get(
-            model_type, self._WARMUP_PROMPTS["generic"]
-        )
+        prompts = self._WARMUP_PROMPTS.get(model_type, self._WARMUP_PROMPTS["generic"])
         try:
             self.warmup_kv_cache(model, prompts)
         except Exception as exc:
@@ -907,14 +899,18 @@ class ModelWarmupManager:
             from yunshu_gateway.middleware.prometheus_exporter import (
                 get_prometheus_metrics,
             )
+
             pm = get_prometheus_metrics()
             pm.inc_counter("model_warmup_total", labels={"model_type": model_type})
-            pm.observe_histogram("model_warmup_duration_seconds", elapsed,
-                                 labels={"model_type": model_type})
-            pm.set_gauge("model_warmup_compile_cached",
-                         1.0 if self._compile_cached else 0.0)
-            pm.set_counter("model_warmup_prompts_prefilled",
-                           len(self._prompts_warmed))
+            pm.observe_histogram(
+                "model_warmup_duration_seconds",
+                elapsed,
+                labels={"model_type": model_type},
+            )
+            pm.set_gauge(
+                "model_warmup_compile_cached", 1.0 if self._compile_cached else 0.0
+            )
+            pm.set_counter("model_warmup_prompts_prefilled", len(self._prompts_warmed))
         except Exception:
             pass
 
@@ -930,9 +926,7 @@ class ModelWarmupManager:
             import mlx.core as mx
 
             config = _get_config(model)
-            _safe_int(
-                getattr(config, "hidden_size", 1), 1
-            ) if config else 1
+            _safe_int(getattr(config, "hidden_size", 1), 1) if config else 1
 
             # Build a minimal input that the model can actually process.
             # MLX causal language models expect (batch, seq_len) token ids.
@@ -964,6 +958,7 @@ class ModelWarmupManager:
                 # Some MLX models require cache= to be provided.
                 try:
                     from mlx_lm.models.cache import make_prompt_cache
+
                     cache = make_prompt_cache(model)
                     _ = model(dummy_ids, cache=cache)
                     mx.eval(_)
@@ -1024,7 +1019,7 @@ class ModelWarmupManager:
 
         for prompt in prompts:
             try:
-                if tokenizer is not None and hasattr(tokenizer, 'encode'):
+                if tokenizer is not None and hasattr(tokenizer, "encode"):
                     ids = mx.array(tokenizer.encode(prompt))
                 else:
                     ids = mx.array([1], dtype=mx.int32)
@@ -1035,10 +1030,16 @@ class ModelWarmupManager:
                 # generate_step is synchronous (Metal kernels), so we use a
                 # thread + futures timeout.
                 def _run_step():
-                    for step_output in generate_step(ids, model, max_tokens=1, sampler=sampler, prompt_cache=cache):
+                    for step_output in generate_step(
+                        ids, model, max_tokens=1, sampler=sampler, prompt_cache=cache
+                    ):
                         # Validate output tensors from the warmup forward pass.
                         # generate_step yields (logits, token) tuples.
-                        logits = step_output[0] if isinstance(step_output, tuple) else step_output
+                        logits = (
+                            step_output[0]
+                            if isinstance(step_output, tuple)
+                            else step_output
+                        )
                         # Only need first token; result is whether warmup output validated
                         return self._validate_warmup_output(logits, model)
                     return True  # No output is also OK (empty model)
@@ -1095,8 +1096,7 @@ class ModelWarmupManager:
                     if has_inf:
                         reasons.append("inf")
                     logger.warning(
-                        "Warmup output validation FAILED for %s: "
-                        "logits contain %s",
+                        "Warmup output validation FAILED for %s: logits contain %s",
                         model_label,
                         "/".join(reasons),
                     )
@@ -1174,9 +1174,7 @@ class ModelWarmupManager:
                     else:
                         logger.debug(f"Warm prompt file empty: {text}")
                 except Exception:
-                    logger.debug(
-                        f"Warm prompt file not found: {text}", exc_info=True
-                    )
+                    logger.debug(f"Warm prompt file not found: {text}", exc_info=True)
             else:
                 prompts.append(text)
 
@@ -1226,7 +1224,9 @@ class ModelWarmupManager:
             try:
                 max_tokens = int(env_max)
             except ValueError:
-                logger.warning(f"Invalid YUNSHU_WARM_MAX_TOKENS={env_max}, using {max_tokens}")
+                logger.warning(
+                    f"Invalid YUNSHU_WARM_MAX_TOKENS={env_max}, using {max_tokens}"
+                )
 
         result = WarmPromptResult(
             prompts_loaded=len(warm_prompts),
@@ -1289,13 +1289,17 @@ class ModelWarmupManager:
                     # so the prefix cache matches the prompt token count.
                     cache = make_prompt_cache(model)
                     for _ in generate_step(
-                        ids, model, max_tokens=1,
-                        sampler=sampler, prompt_cache=cache,
+                        ids,
+                        model,
+                        max_tokens=1,
+                        sampler=sampler,
+                        prompt_cache=cache,
                     ):
                         break
                     # Trim the 1 extra decode entry from generate_step
                     try:
                         from mlx_lm.models.cache import trim_prompt_cache
+
                         trim_prompt_cache(cache, 1)
                     except (ImportError, Exception):
                         pass

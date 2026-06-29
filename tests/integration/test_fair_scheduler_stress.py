@@ -20,6 +20,7 @@ Total: 50 requests. Simulated batch slot capacity: 4 per round. We run
 12+ rounds and verify that low-priority requests appear within a bounded
 number of rounds.
 """
+
 from __future__ import annotations
 
 import time
@@ -32,9 +33,7 @@ from yunshu_engine.request import Request, SamplingParams
 pytestmark = pytest.mark.timeout(30)
 
 
-def _build_mix(
-    n_high: int = 10, n_mid: int = 20, n_low: int = 20
-) -> list[Request]:
+def _build_mix(n_high: int = 10, n_mid: int = 20, n_low: int = 20) -> list[Request]:
     """Build the 50-request mixed-priority bundle, with monotonic arrival_time."""
     reqs: list[Request] = []
     now = time.monotonic()
@@ -180,9 +179,7 @@ class TestFAIRStress:
         # First 10 rounds should each contain exactly one p=10 request
         # (since 10 high-priority items / 1-per-round = 10 rounds).
         for i in range(10):
-            count_high = sum(
-                1 for r in log[i] if r.sampling_params.priority == 10
-            )
+            count_high = sum(1 for r in log[i] if r.sampling_params.priority == 10)
             assert count_high == 1, (
                 f"round {i}: expected exactly 1 high-priority, got {count_high}"
             )
@@ -200,13 +197,10 @@ class TestFAIRStress:
             if any(r.sampling_params.priority == 0 for r in batch):
                 low_seen_rounds.append(i)
         assert len(low_seen_rounds) >= 5, (
-            f"p=0 only scheduled {len(low_seen_rounds)} times across "
-            f"{len(log)} rounds"
+            f"p=0 only scheduled {len(low_seen_rounds)} times across {len(log)} rounds"
         )
         # Gap between consecutive p=0 appearances ≤ 3
-        for prev, curr in zip(
-            low_seen_rounds, low_seen_rounds[1:], strict=False
-        ):
+        for prev, curr in zip(low_seen_rounds, low_seen_rounds[1:], strict=False):
             gap = curr - prev
             # Allow gap of up to 3 (one full rotation cycle)
             assert gap <= 3, (

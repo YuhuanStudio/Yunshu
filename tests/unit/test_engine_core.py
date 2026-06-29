@@ -7,6 +7,7 @@ Tests the full request lifecycle through the new EngineCore:
 - Concurrent requests (continuous batching)
 - Stats tracking
 """
+
 import asyncio
 
 import pytest
@@ -130,8 +131,12 @@ class TestRequestOutputCollector:
 
     def test_aggregation_merges_outputs(self):
         collector = RequestOutputCollector(aggregate=True)
-        collector.put(RequestOutput(request_id="test", new_text="Hello", new_token_ids=[0]))
-        collector.put(RequestOutput(request_id="test", new_text=" world", new_token_ids=[1]))
+        collector.put(
+            RequestOutput(request_id="test", new_text="Hello", new_token_ids=[0])
+        )
+        collector.put(
+            RequestOutput(request_id="test", new_text=" world", new_token_ids=[1])
+        )
         result = collector.get_nowait()
         assert result.new_text == "Hello world"
         assert result.new_token_ids == [0, 1]
@@ -194,6 +199,7 @@ class TestRequestStreamState:
 class TestScheduler:
     def test_add_request_to_waiting(self):
         from yunshu_engine.request import Request
+
         scheduler = Scheduler(None, _FakeTokenizer())
         req = Request(
             request_id="test-1",
@@ -208,6 +214,7 @@ class TestScheduler:
 
     def test_abort_request(self):
         from yunshu_engine.request import Request
+
         scheduler = Scheduler(None, _FakeTokenizer())
         req = Request(
             request_id="test-1",
@@ -222,6 +229,7 @@ class TestScheduler:
 
     def test_has_requests(self):
         from yunshu_engine.request import Request
+
         scheduler = Scheduler(None, _FakeTokenizer())
         assert not scheduler.has_requests()
         req = Request(
@@ -243,6 +251,7 @@ class TestScheduler:
 
     def test_schedule_waiting_with_mock_batch_gen(self):
         from yunshu_engine.request import Request
+
         scheduler = Scheduler(None, _FakeTokenizer())
         scheduler._batch_gen = _FakeBatchGen()
 
@@ -263,6 +272,7 @@ class TestScheduler:
 
     def test_process_responses(self):
         from yunshu_engine.request import Request
+
         scheduler = Scheduler(None, _FakeTokenizer())
         scheduler._batch_gen = _FakeBatchGen()
 
@@ -285,6 +295,7 @@ class TestScheduler:
 
     def test_full_lifecycle_through_scheduler(self):
         from yunshu_engine.request import Request
+
         scheduler = Scheduler(None, _FakeTokenizer())
         scheduler._batch_gen = _FakeBatchGen()
 
@@ -489,7 +500,7 @@ class TestEngineCoreIntegration:
                     break
                 if result is None:
                     result = output
-                elif hasattr(collector, '_merge'):
+                elif hasattr(collector, "_merge"):
                     result = collector._merge(result, output)
 
         assert result is not None
@@ -569,6 +580,7 @@ class TestEngineWithEngineCore:
 def _fake_executor():
     """Create a fake executor that runs sync functions immediately."""
     from concurrent.futures import ThreadPoolExecutor
+
     return ThreadPoolExecutor(max_workers=1)
 
 
@@ -579,30 +591,43 @@ class TestSchedulerPolicyPlumbing:
     def test_default_is_fcfs(self):
         from yunshu_engine.engine_core import EngineCore
         from yunshu_engine.scheduler import SchedulingPolicy
+
         core = EngineCore(None, _FakeTokenizer(), executor=_fake_executor())
         assert core.scheduler.config.policy == SchedulingPolicy.FCFS
 
     def test_priority_policy_plumbed(self):
         from yunshu_engine.engine_core import EngineCore, EngineCoreConfig
         from yunshu_engine.scheduler import SchedulingPolicy
-        core = EngineCore(None, _FakeTokenizer(),
-                          config=EngineCoreConfig(scheduler_policy="priority", aging_weight=0.25),
-                          executor=_fake_executor())
+
+        core = EngineCore(
+            None,
+            _FakeTokenizer(),
+            config=EngineCoreConfig(scheduler_policy="priority", aging_weight=0.25),
+            executor=_fake_executor(),
+        )
         assert core.scheduler.config.policy == SchedulingPolicy.PRIORITY
         assert core.scheduler.config.aging_weight == 0.25
 
     def test_fair_policy_plumbed(self):
         from yunshu_engine.engine_core import EngineCore, EngineCoreConfig
         from yunshu_engine.scheduler import SchedulingPolicy
-        core = EngineCore(None, _FakeTokenizer(),
-                          config=EngineCoreConfig(scheduler_policy="fair"),
-                          executor=_fake_executor())
+
+        core = EngineCore(
+            None,
+            _FakeTokenizer(),
+            config=EngineCoreConfig(scheduler_policy="fair"),
+            executor=_fake_executor(),
+        )
         assert core.scheduler.config.policy == SchedulingPolicy.FAIR
 
     def test_unknown_policy_falls_back_to_fcfs(self):
         from yunshu_engine.engine_core import EngineCore, EngineCoreConfig
         from yunshu_engine.scheduler import SchedulingPolicy
-        core = EngineCore(None, _FakeTokenizer(),
-                          config=EngineCoreConfig(scheduler_policy="bogus"),
-                          executor=_fake_executor())
+
+        core = EngineCore(
+            None,
+            _FakeTokenizer(),
+            config=EngineCoreConfig(scheduler_policy="bogus"),
+            executor=_fake_executor(),
+        )
         assert core.scheduler.config.policy == SchedulingPolicy.FCFS

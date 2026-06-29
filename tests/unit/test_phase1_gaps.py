@@ -21,7 +21,7 @@ class TestStreamOptionsFormat:
         )
         assert chunk.startswith("data: ")
         assert chunk.endswith("\n\n")
-        data = json.loads(chunk[len("data: "):])
+        data = json.loads(chunk[len("data: ") :])
         assert data["id"] == "chatcmpl-123"
         assert data["object"] == "chat.completion.chunk"
         assert data["choices"] == []
@@ -38,7 +38,7 @@ class TestStreamOptionsFormat:
             prompt_tokens=0,
             completion_tokens=0,
         )
-        data = json.loads(chunk[len("data: "):])
+        data = json.loads(chunk[len("data: ") :])
         assert data["usage"]["total_tokens"] == 0
 
     def test_usage_chunk_large_tokens(self):
@@ -50,7 +50,7 @@ class TestStreamOptionsFormat:
             prompt_tokens=50000,
             completion_tokens=10000,
         )
-        data = json.loads(chunk[len("data: "):])
+        data = json.loads(chunk[len("data: ") :])
         assert data["usage"]["total_tokens"] == 60000
 
     def test_usage_chunk_reasoning_not_double_counted(self):
@@ -67,7 +67,7 @@ class TestStreamOptionsFormat:
             completion_tokens=100,  # already includes the 30 reasoning tokens
             reasoning_tokens=30,
         )
-        data = json.loads(chunk[len("data: "):])
+        data = json.loads(chunk[len("data: ") :])
         assert data["usage"]["completion_tokens"] == 100  # NOT 130
         assert data["usage"]["total_tokens"] == 110  # NOT 140
         assert data["usage"]["completion_tokens_details"]["reasoning_tokens"] == 30
@@ -82,7 +82,7 @@ class TestStreamOptionsFormat:
             completion_tokens=100,
             reasoning_tokens=30,
         )
-        data = json.loads(chunk[len("data: "):])
+        data = json.loads(chunk[len("data: ") :])
         assert data["usage"]["completion_tokens"] == 100
         assert data["usage"]["total_tokens"] == 110
 
@@ -166,6 +166,7 @@ class TestVersionEndpoint:
 
     def test_version_endpoint(self):
         from yunshu_gateway.main import create_app
+
         app = create_app()
         client = TestClient(app)
 
@@ -191,7 +192,7 @@ class TestStreamFormattersStillWork:
             model="test",
             delta_content="Hello",
         )
-        data = json.loads(chunk[len("data: "):])
+        data = json.loads(chunk[len("data: ") :])
         assert data["choices"][0]["delta"]["content"] == "Hello"
 
     def test_openai_done_unchanged(self):

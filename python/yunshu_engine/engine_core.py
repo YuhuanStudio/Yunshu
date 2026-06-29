@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class EngineCoreConfig:
     """EngineCore tuning parameters."""
+
     step_interval: float = 0.001
     stream_interval: int = 1
     completion_batch_size: int = 32
@@ -56,7 +57,9 @@ class EngineCoreConfig:
     deferred_clear_delay: int = 8
     cache_cleanup_interval: int = 512
     # Paged KV cache (PagedAttention)
-    enable_paged_kv: bool = True  # C11: enabled by default for radix tree + memory efficiency
+    enable_paged_kv: bool = (
+        True  # C11: enabled by default for radix tree + memory efficiency
+    )
     kv_block_size: int = 64
     kv_cache_ratio: float = 0.25  # fraction of UMA for KV cache
     # Model architecture (for KV cache memory budget)
@@ -65,7 +68,9 @@ class EngineCoreConfig:
     head_dim: int = 0
     kv_num_blocks: int = 0  # pre-computed block count (0 = auto-compute)
     # C18: CPU/GPU overlap scheduling
-    enable_cpu_gpu_overlap: bool = False  # Disabled by default; enable via YUNSHU_CPU_GPU_OVERLAP=1
+    enable_cpu_gpu_overlap: bool = (
+        False  # Disabled by default; enable via YUNSHU_CPU_GPU_OVERLAP=1
+    )
     # N-gram speculative decoding in batch path (model-free, zero GPU overhead)
     ngram_spec_enabled: bool = False
     ngram_spec_min_n: int = 1
@@ -87,9 +92,13 @@ class EngineCoreConfig:
     enable_hybrid_prefill: bool = False
     hybrid_chunk_size: int = 512
     # Chunked prefill production hardening
-    chunked_prefill_budget: int = 4     # Max chunks per scheduling round (fairness)
-    chunked_prefill_timeout_seconds: float = 30.0  # Per-request prefill timeout (0 = no timeout)
-    chunked_prefill_abort_on_timeout: bool = True  # Abort request on timeout (vs force-feed)
+    chunked_prefill_budget: int = 4  # Max chunks per scheduling round (fairness)
+    chunked_prefill_timeout_seconds: float = (
+        30.0  # Per-request prefill timeout (0 = no timeout)
+    )
+    chunked_prefill_abort_on_timeout: bool = (
+        True  # Abort request on timeout (vs force-feed)
+    )
     # Per-request generation timeout (seconds, 0 = no timeout)
     request_timeout_seconds: float = 300.0
 
@@ -133,7 +142,10 @@ class EngineCore:
             "fcfs": SchedulingPolicy.FCFS,
             "priority": SchedulingPolicy.PRIORITY,
             "fair": SchedulingPolicy.FAIR,
-        }.get(str(getattr(self.config, "scheduler_policy", "fcfs")).lower(), SchedulingPolicy.FCFS)
+        }.get(
+            str(getattr(self.config, "scheduler_policy", "fcfs")).lower(),
+            SchedulingPolicy.FCFS,
+        )
 
         scheduler_config = SchedulerConfig(
             policy=_policy,
@@ -198,6 +210,7 @@ class EngineCore:
                         # Auto-compute from UMA budget minus model weights
                         try:
                             from .utils.hardware import get_hardware_info
+
                             _hw = get_hardware_info()
                             uma_bytes = _hw.total_memory_bytes
                             # Compute actual model weight bytes so we don't
@@ -208,19 +221,25 @@ class EngineCore:
                             try:
                                 if model is not None:
                                     _model_bytes = sum(
-                                        p.nbytes
-                                        for p in model.parameters()
+                                        p.nbytes for p in model.parameters()
                                     )
                             except Exception:
-                                logger.debug("model parameter scan failed", exc_info=True)
+                                logger.debug(
+                                    "model parameter scan failed", exc_info=True
+                                )
                             if uma_bytes > 0:
                                 num_blocks = compute_num_blocks(
-                                    kv_config, uma_bytes, _model_bytes,
+                                    kv_config,
+                                    uma_bytes,
+                                    _model_bytes,
                                 )
                             else:
                                 num_blocks = 1024  # safe default
                         except Exception:
-                            logger.debug("memory monitor unavailable, using default block count", exc_info=True)
+                            logger.debug(
+                                "memory monitor unavailable, using default block count",
+                                exc_info=True,
+                            )
                             num_blocks = 1024  # safe default
 
                     kv_manager = KVCacheManager(kv_config, num_blocks=num_blocks)
@@ -240,6 +259,7 @@ class EngineCore:
                         # derive a stable key from the model config (exact path if present,
                         # else an architecture signature).
                         from .kv_prefix_cache import KVPrefixCache
+
                         _mcfg = getattr(model, "config", None)
                         _model_key = ""
                         if _mcfg is not None:
@@ -248,9 +268,15 @@ class EngineCore:
                                 or getattr(_mcfg, "name_or_path", "")
                             )
                             if not _model_key:
-                                _model_key = "-".join(str(getattr(_mcfg, _a, "")) for _a in (
-                                    "model_type", "hidden_size", "num_hidden_layers", "vocab_size",
-                                ))
+                                _model_key = "-".join(
+                                    str(getattr(_mcfg, _a, ""))
+                                    for _a in (
+                                        "model_type",
+                                        "hidden_size",
+                                        "num_hidden_layers",
+                                        "vocab_size",
+                                    )
+                                )
                         _scoped_dir = KVPrefixCache._scoped_ssd_dir(ssd_dir, _model_key)
                         ssd_store = SSDCacheStore(
                             cache_dir=_scoped_dir,
@@ -263,14 +289,18 @@ class EngineCore:
                         )
                         logger.info(f"TieredKVCacheManager enabled: SSD dir={ssd_dir}")
 
-                    self.scheduler = PagedScheduler(model, tokenizer, scheduler_config, kv_manager)
+                    self.scheduler = PagedScheduler(
+                        model, tokenizer, scheduler_config, kv_manager
+                    )
                     self._kv_manager = kv_manager
                     logger.info(
                         f"PagedScheduler enabled: block_size={self.config.kv_block_size}, "
                         f"num_blocks={num_blocks}"
                     )
                 except Exception as e:
-                    logger.warning(f"Paged KV init failed ({e}), falling back to non-paged")
+                    logger.warning(
+                        f"Paged KV init failed ({e}), falling back to non-paged"
+                    )
                     self.config.enable_paged_kv = False
 
         if not self.config.enable_paged_kv:
@@ -280,24 +310,29 @@ class EngineCore:
             # Wire KV optimization modules into PagedScheduler
             try:
                 from .kv_optimizations import KVBlockCompactor, KVEvictionPredictor
+
                 compactor = KVBlockCompactor()
                 predictor = KVEvictionPredictor()
-                if hasattr(self.scheduler, 'set_compactor'):
+                if hasattr(self.scheduler, "set_compactor"):
                     self.scheduler.set_compactor(compactor)
-                if hasattr(self.scheduler, 'set_eviction_predictor'):
+                if hasattr(self.scheduler, "set_eviction_predictor"):
                     self.scheduler.set_eviction_predictor(predictor)
-                logger.info("KVBlockCompactor + KVEvictionPredictor wired into PagedScheduler")
+                logger.info(
+                    "KVBlockCompactor + KVEvictionPredictor wired into PagedScheduler"
+                )
             except Exception:
                 logger.debug("KV optimization wiring skipped", exc_info=True)
 
         # Wire ServerMetrics + PrefillProgressTracker into scheduler
         try:
             from .server_metrics import get_server_metrics
+
             self.scheduler.set_server_metrics(get_server_metrics())
         except Exception:
             logger.debug("server_metrics unavailable", exc_info=True)
         try:
             from .prefill_progress import get_prefill_tracker
+
             self.scheduler.set_prefill_tracker(get_prefill_tracker())
         except Exception:
             logger.debug("prefill_progress tracker unavailable", exc_info=True)
@@ -316,6 +351,7 @@ class EngineCore:
 
         # C18: CPU/GPU overlap scheduler
         from .cpu_gpu_overlap import OverlapConfig, OverlapScheduler
+
         overlap_cfg = OverlapConfig.from_env()
         if self.config.enable_cpu_gpu_overlap:
             overlap_cfg.enabled = True
@@ -323,22 +359,28 @@ class EngineCore:
 
         # Two-Batch Overlap scheduler (TBO)
         from .two_batch_overlap import TBOConfig, TwoBatchOverlapScheduler
+
         tbo_cfg = TBOConfig.from_env()
         self._tbo_scheduler = TwoBatchOverlapScheduler(tbo_cfg)
 
         # Adaptive batch scheduler (load-aware batch sizing)
         from .adaptive_batch import AdaptiveBatchConfig, AdaptiveBatchScheduler
+
         self._adaptive_batch = AdaptiveBatchScheduler(AdaptiveBatchConfig())
 
         # Telemetry (sampled metric collection)
         from .telemetry import TelemetryCollector, TelemetryConfig
+
         telemetry_enabled = os.environ.get("YUNSHU_TELEMETRY", "0") == "1"
         self._telemetry = TelemetryCollector(TelemetryConfig(enabled=telemetry_enabled))
 
         # KV offload manager (async tier-to-tier block migration)
         from .kv_offload import KVOffloadConfig, KVOffloadManager
+
         kv_offload_cfg = KVOffloadConfig.from_env()
-        self._kv_offload_manager = KVOffloadManager(kv_offload_cfg, kv_manager=self._kv_manager)
+        self._kv_offload_manager = KVOffloadManager(
+            kv_offload_cfg, kv_manager=self._kv_manager
+        )
 
         # Pass offload manager to scheduler for periodic sync offload checks
         self.scheduler.set_kv_offload_manager(self._kv_offload_manager)
@@ -350,6 +392,7 @@ class EngineCore:
             ExternalPrefillServer,
             get_prefill_role,
         )
+
         self._prefill_server: ExternalPrefillServer | None = None
         self._prefill_client: ExternalPrefillClient | None = None
         self._prefill_task: asyncio.Task | None = None
@@ -359,7 +402,9 @@ class EngineCore:
         if prefill_role == "server":
             prefill_config = ExternalPrefillConfig.from_env()
             self._prefill_server = ExternalPrefillServer(
-                model, tokenizer, prefill_config,
+                model,
+                tokenizer,
+                prefill_config,
             )
             logger.info("ExternalPrefillServer configured (disaggregated prefill)")
         elif prefill_role == "client":
@@ -375,6 +420,7 @@ class EngineCore:
                 KVTransferServer,
                 is_kv_transfer_enabled,
             )
+
             if is_kv_transfer_enabled():
                 kv_xfer_config = KVTransferConfig.from_env()
                 self._kv_transfer_server = KVTransferServer(
@@ -395,33 +441,47 @@ class EngineCore:
             AdaptiveConcurrencyController,
             RequestLifecycleOrchestrator,
         )
+
         concurrency_ctrl = AdaptiveConcurrencyController.from_env()
         self._lifecycle_orchestrator = RequestLifecycleOrchestrator(
             concurrency_controller=concurrency_ctrl,
         )
-        logger.info(f"RequestLifecycleOrchestrator wired (max_concurrent={concurrency_ctrl._maximum})")
+        logger.info(
+            f"RequestLifecycleOrchestrator wired (max_concurrent={concurrency_ctrl._maximum})"
+        )
 
         # Inference budget manager (token/time/cost/thinking 4-dimension budgets)
         from .inference_budget import InferenceBudgetManager
+
         self._budget_manager = InferenceBudgetManager.from_env()
-        self._sched_full_ab = os.environ.get('YUNSHU_SCHED_FULL','').strip() in ('1','true','yes')
+        self._sched_full_ab = os.environ.get("YUNSHU_SCHED_FULL", "").strip() in (
+            "1",
+            "true",
+            "yes",
+        )
         logger.info("InferenceBudgetManager wired")
 
         # Request deduplication (SHA-256 content-hash dedup with fan-out)
         from .request_dedup import RequestDeduplicator
+
         self._request_dedup: RequestDeduplicator | None = None
         self._dedup_hashes: dict[str, str] = {}  # req_id → content_hash
         self._dedup_shadows: dict[str, str] = {}  # shadow_req_id → primary_req_id
         self._finalized_ids: set[str] = set()  # idempotency guard for _finalize_request
         self._ttft_done: set[str] = set()  # TTFT deduplication guard
-        self._request_block_ids: dict[str, int] = {}  # req_id → _block_id for KV lifecycle
-        self._pbs_halve_cooldown: int = 0  # Cooldown steps after prefill_batch_size halving
+        self._request_block_ids: dict[
+            str, int
+        ] = {}  # req_id → _block_id for KV lifecycle
+        self._pbs_halve_cooldown: int = (
+            0  # Cooldown steps after prefill_batch_size halving
+        )
         if os.environ.get("YUNSHU_REQUEST_DEDUP", "").strip() in ("1", "true", "yes"):
             self._request_dedup = RequestDeduplicator.from_env()
             logger.info("RequestDeduplicator wired (SHA-256 content-hash dedup)")
 
         # KV lifecycle manager (4-tier hot/warm/cool/cold admission/migration/eviction)
         from .kv_lifecycle import KVLifecycleManager
+
         self._kv_lifecycle = KVLifecycleManager()
         logger.info("KVLifecycleManager wired (4-tier KV lifecycle)")
 
@@ -431,6 +491,7 @@ class EngineCore:
             PriorityInversionGuard,
             TokenLevelScheduler,
         )
+
         self._token_scheduler = TokenLevelScheduler()
         self._priority_guard = PriorityInversionGuard()
         self._fairness_tracker = FairnessTracker()
@@ -442,10 +503,13 @@ class EngineCore:
             PerformanceProfiler,
             SLOMonitor,
         )
+
         self._profiler = PerformanceProfiler()
         self._profiler_started = False  # started in start(), stopped in stop()
         self._slo_monitor = SLOMonitor()
-        self._auto_tuner = AutoTuner(profiler=self._profiler, slo_monitor=self._slo_monitor)
+        self._auto_tuner = AutoTuner(
+            profiler=self._profiler, slo_monitor=self._slo_monitor
+        )
         # seed the sizer's current batch to the CONFIGURED completion_batch_size
         # (not its min_batch=1 default) and remember the baseline. The old apply-site gate
         # was down-only AND the sizer started at 1, so the first non-empty step slammed
@@ -453,7 +517,8 @@ class EngineCore:
         # the continuous-batching loop. Keep a ceiling so scale-up can't exceed config.
         self._original_completion_batch_size = max(1, self.config.completion_batch_size)
         self._adaptive_batch_sizer = AdaptiveBatchSizer(
-            max_batch=max(1, self.config.completion_batch_size))
+            max_batch=max(1, self.config.completion_batch_size)
+        )
         self._adaptive_batch_sizer._current_batch = self._original_completion_batch_size
         # Wire SLO callback to trigger auto-tuning when SLOs are persistently
         # violated (the callback fires outside the SLOMonitor lock).
@@ -472,6 +537,7 @@ class EngineCore:
             ProfilingMixin,
             SpecDecodeMixin,
         )
+
         try:
             self._composition_scheduler = CompositionScheduler(self.scheduler)
             self._composition_scheduler.add_mixin(MetricsMixin())
@@ -483,28 +549,44 @@ class EngineCore:
 
             # DisaggregationMixin — YUNSHU_DISAGGREGATED=1 with node lists
             if os.environ.get("YUNSHU_DISAGGREGATED", "").strip() == "1":
-                prefill_nodes = os.environ.get("YUNSHU_PREFILL_NODES", "").split(",") if os.environ.get("YUNSHU_PREFILL_NODES") else []
-                decode_nodes = os.environ.get("YUNSHU_DECODE_NODES", "").split(",") if os.environ.get("YUNSHU_DECODE_NODES") else []
-                self._composition_scheduler.add_mixin(DisaggregationMixin(
-                    prefill_nodes=[n.strip() for n in prefill_nodes if n.strip()],
-                    decode_nodes=[n.strip() for n in decode_nodes if n.strip()],
-                ))
+                prefill_nodes = (
+                    os.environ.get("YUNSHU_PREFILL_NODES", "").split(",")
+                    if os.environ.get("YUNSHU_PREFILL_NODES")
+                    else []
+                )
+                decode_nodes = (
+                    os.environ.get("YUNSHU_DECODE_NODES", "").split(",")
+                    if os.environ.get("YUNSHU_DECODE_NODES")
+                    else []
+                )
+                self._composition_scheduler.add_mixin(
+                    DisaggregationMixin(
+                        prefill_nodes=[n.strip() for n in prefill_nodes if n.strip()],
+                        decode_nodes=[n.strip() for n in decode_nodes if n.strip()],
+                    )
+                )
 
             # DataParallelMixin — YUNSHU_DATA_PARALLEL=1 with replica count
             dp_replicas = int(os.environ.get("YUNSHU_DP_REPLICAS", "1"))
             if dp_replicas > 1:
-                self._composition_scheduler.add_mixin(DataParallelMixin(
-                    num_replicas=dp_replicas,
-                    strategy=os.environ.get("YUNSHU_DP_STRATEGY", "least_loaded"),
-                ))
+                self._composition_scheduler.add_mixin(
+                    DataParallelMixin(
+                        num_replicas=dp_replicas,
+                        strategy=os.environ.get("YUNSHU_DP_STRATEGY", "least_loaded"),
+                    )
+                )
 
             # PipelineParallelMixin — YUNSHU_PIPELINE_PARALLEL=1
             if os.environ.get("YUNSHU_PIPELINE_PARALLEL", "").strip() == "1":
-                self._composition_scheduler.add_mixin(PipelineParallelMixin(
-                    num_stages=int(os.environ.get("YUNSHU_PP_STAGES", "1")),
-                    stage_id=int(os.environ.get("YUNSHU_PP_STAGE_ID", "0")),
-                    micro_batch_size=int(os.environ.get("YUNSHU_PP_MICRO_BATCH", "1")),
-                ))
+                self._composition_scheduler.add_mixin(
+                    PipelineParallelMixin(
+                        num_stages=int(os.environ.get("YUNSHU_PP_STAGES", "1")),
+                        stage_id=int(os.environ.get("YUNSHU_PP_STAGE_ID", "0")),
+                        micro_batch_size=int(
+                            os.environ.get("YUNSHU_PP_MICRO_BATCH", "1")
+                        ),
+                    )
+                )
 
             # SpecDecodeMixin — YUNSHU_SPEC_DECODE_TRACKING=1
             if os.environ.get("YUNSHU_SPEC_DECODE_TRACKING", "").strip() == "1":
@@ -520,46 +602,57 @@ class EngineCore:
         self._was_started = False  # True after first start(), even if later stopped
         self._loop_task: asyncio.Task | None = None
         self._start_time: float | None = None
-        self._wake_event: asyncio.Event | None = None  # Event-driven wake-up for idle loop
+        self._wake_event: asyncio.Event | None = (
+            None  # Event-driven wake-up for idle loop
+        )
         self._stopped = False  # True after stop() completes; reset by start()
 
         # ── Additional production wiring ──
 
         # Forward batch hierarchy (ScheduleBatch → ForwardBatch → BatchResult)
         from .forward_batch import BatchComposer
+
         self._batch_composer = BatchComposer()
 
         # Memory-aware scheduler (admission control with memory budget)
         from .memory_aware_scheduler import MemoryAwareScheduler
+
         self._memory_aware_scheduler = MemoryAwareScheduler()
 
         # Configure memory-aware scheduler with model parameters for accurate estimation
         try:
-            model_config = getattr(model, 'config', model) if model else None
+            model_config = getattr(model, "config", model) if model else None
             if model_config is not None:
-                layers = _safe_get(model_config, 'num_hidden_layers', 0)
-                heads = _safe_get(model_config, 'num_key_value_heads',
-                                  _safe_get(model_config, 'num_attention_heads', 0))
-                h_dim = _safe_get(model_config, 'head_dim', 0)
+                layers = _safe_get(model_config, "num_hidden_layers", 0)
+                heads = _safe_get(
+                    model_config,
+                    "num_key_value_heads",
+                    _safe_get(model_config, "num_attention_heads", 0),
+                )
+                h_dim = _safe_get(model_config, "head_dim", 0)
                 self._memory_aware_scheduler.set_model_config(
-                    num_layers=layers, num_kv_heads=heads, head_dim=h_dim,
+                    num_layers=layers,
+                    num_kv_heads=heads,
+                    head_dim=h_dim,
                 )
         except Exception:
             logger.debug("memory_aware_scheduler model config skipped", exc_info=True)
 
         # Context window manager (4 truncation strategies for long prompts)
         from .context_window import ContextWindowManager
+
         self._context_window_mgr = ContextWindowManager()
 
         # KV prefix compression (mean_pool/top_k/frequency_aware strategies)
         from .kv_prefix_compression import KVPrefixCompressor, SlidingWindowKVManager
+
         self._kv_compressor = KVPrefixCompressor()
         self._sliding_window_mgr: SlidingWindowKVManager | None = None
         # Auto-detect sliding window from model config
         try:
-            model_cfg = getattr(model, 'config', model) if model else None
+            model_cfg = getattr(model, "config", model) if model else None
             if model_cfg is not None:
-                sw = getattr(model_cfg, 'sliding_window', None)
+                sw = getattr(model_cfg, "sliding_window", None)
                 if sw is not None and sw > 0:
                     self._sliding_window_mgr = SlidingWindowKVManager(window_size=sw)
                     logger.info(f"SlidingWindowKVManager enabled: window={sw}")
@@ -568,14 +661,17 @@ class EngineCore:
 
         # KV migration manager (multi-tier migration with temperature tracking)
         from .kv_migration import KVMigrationManager
+
         self._kv_migration = KVMigrationManager()
 
         # Mamba/Hybrid KV cache (SSM state management)
         from .mamba_cache import HybridKVCache
+
         self._hybrid_kv = HybridKVCache()
 
         # Batch sampler (vectorized batch sampling + logits processing)
         from .batch_sampler import BatchSampler
+
         self._batch_sampler = BatchSampler()
 
         # Model optimizations (RoPE scaling, attention type detection, MoE efficiency)
@@ -585,6 +681,7 @@ class EngineCore:
             MoEEfficiencyOptimizer,
             RoPEScalingOptimizer,
         )
+
         self._rope_optimizer = RoPEScalingOptimizer()
         self._attention_optimizer = AttentionOptimizer()
         self._moe_optimizer = MoEEfficiencyOptimizer()
@@ -592,8 +689,13 @@ class EngineCore:
 
         # Process isolation (opt-in via YUNSHU_PROCESS_ISOLATION=1)
         self._isolation_enabled = False
-        if os.environ.get("YUNSHU_PROCESS_ISOLATION", "").lower() in ("1", "true", "yes"):
+        if os.environ.get("YUNSHU_PROCESS_ISOLATION", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
             from .process_isolation import is_isolation_enabled
+
             self._isolation_enabled = is_isolation_enabled()
             if self._isolation_enabled:
                 logger.info("Process isolation enabled (YUNSHU_PROCESS_ISOLATION=1)")
@@ -603,6 +705,7 @@ class EngineCore:
         _cp_interval = int(os.environ.get("YUNSHU_CHECKPOINT_INTERVAL", "0"))
         if _cp_interval > 0:
             from .checkpoint import AutoCheckpointPolicy, InferenceCheckpoint
+
             self._checkpoint_mgr = InferenceCheckpoint(
                 auto_checkpoint_interval=_cp_interval,
                 auto_checkpoint_policy=AutoCheckpointPolicy.EVERY_N_TOKENS,
@@ -611,28 +714,35 @@ class EngineCore:
 
         # Output parser (model-specific output extraction)
         from .output_parser import parse_output
+
         self._parse_output = parse_output
 
         # Model preprocessor registry (auto-detects model family for multimodal input)
         from .model_preprocessor import PreprocessorRegistry
+
         self._preprocessor_registry = PreprocessorRegistry()
 
         # SpecPrefill engine (priority prefill queue for GPU idle time)
         from .spec_prefill_engine import SpecPrefillEngine
+
         self._spec_prefill_engine = SpecPrefillEngine()
 
         # TurboQuant (fast quantization utilities)
         from .turbo_quant import TurboQuantConfig, TurboQuantManager
+
         self._turbo_quant = TurboQuantManager(TurboQuantConfig())
 
         # Staged multimodal pipeline coordinator (7-stage processing)
         from .staged_pipeline import MultimodalPipelineCoordinator
+
         self._multimodal_pipeline = MultimodalPipelineCoordinator()
 
         # Stats
         self._num_requests_processed: int = 0
         self._request_timestamps: dict[str, float] = {}  # req_id → monotonic start time
-        self._ttft_timestamps: dict[str, float] = {}  # req_id → monotonic first-token time
+        self._ttft_timestamps: dict[
+            str, float
+        ] = {}  # req_id → monotonic first-token time
         self._request_lora_adapters: dict[str, str] = {}  # req_id → lora_adapter_id
         self._original_prefill_batch_size = self.config.prefill_batch_size
 
@@ -655,7 +765,7 @@ class EngineCore:
         self.scheduler.set_prefix_cache(cache)
         # Wire MemoryGuard.should_evict_block into the prefix cache's eviction
         # path so prediction-based eviction decisions are respected.
-        if self._memory_guard is not None and hasattr(cache, '_block_evict_checker'):
+        if self._memory_guard is not None and hasattr(cache, "_block_evict_checker"):
             cache._block_evict_checker = self._memory_guard.should_evict_block
 
     @property
@@ -699,7 +809,11 @@ class EngineCore:
         # left the spec slot budget frozen at the init value when the tuner changed
         # completion_batch_size → spec budget drifted from the real decode width (the
         # same dual-field drift, left on the spec field).
-        _spec = getattr(_sched, "_spec_aware_scheduler", None) if _sched is not None else None
+        _spec = (
+            getattr(_sched, "_spec_aware_scheduler", None)
+            if _sched is not None
+            else None
+        )
         if _spec is not None and _scfg is not None and hasattr(_spec, "max_num_seqs"):
             _spec.max_num_seqs = min(getattr(_scfg, "max_num_seqs", n), n)
 
@@ -718,7 +832,8 @@ class EngineCore:
                 if self.config.completion_batch_size != old:
                     logger.info(
                         "AutoTuner: batch_size %d -> %d",
-                        old, self.config.completion_batch_size,
+                        old,
+                        self.config.completion_batch_size,
                     )
             # Apply prefill chunk size tuning
             if params.prefill_chunk_size != self.config.prefill_chunk_size:
@@ -727,11 +842,12 @@ class EngineCore:
                 if self.config.prefill_chunk_size != old:
                     logger.info(
                         "AutoTuner: prefill_chunk_size %d -> %d",
-                        old, self.config.prefill_chunk_size,
+                        old,
+                        self.config.prefill_chunk_size,
                     )
             # Apply spec decode draft length tuning
-            spec_dec = getattr(self.scheduler, '_spec_decoder', None)
-            if spec_dec is not None and hasattr(spec_dec, 'config'):
+            spec_dec = getattr(self.scheduler, "_spec_decoder", None)
+            if spec_dec is not None and hasattr(spec_dec, "config"):
                 new_dl = params.spec_draft_length
                 if new_dl != spec_dec.config.draft_length:
                     old = spec_dec.config.draft_length
@@ -775,6 +891,7 @@ class EngineCore:
         kv_budget = 0
         try:
             from .utils.hardware import get_hardware_info
+
             _hw = get_hardware_info()
             kv_budget = int(_hw.max_working_set_bytes * self.config.kv_cache_ratio)
         except Exception:
@@ -809,12 +926,15 @@ class EngineCore:
         if total_layers <= 0:
             return
         from .turbo_quant import TurboQuantConfig, TurboQuantManager
+
         if kv_quant_bits is not None:
             config = TurboQuantConfig(
                 enabled=True,
                 total_layers=total_layers,
                 fp16_end_layer=max(kv_quant_start_layer - 1, 0),
-                int8_end_layer=min(kv_quant_start_layer + total_layers // 3, total_layers - 1),
+                int8_end_layer=min(
+                    kv_quant_start_layer + total_layers // 3, total_layers - 1
+                ),
                 int4_group_size=kv_quant_group_size,
             )
         else:
@@ -843,54 +963,67 @@ class EngineCore:
         registers them so the scheduler can route allocate/free correctly.
         """
         from .mamba_cache import CacheBlockType
+
         registered = 0
         for idx in range(total_layers):
             try:
-                layer = model.layers[idx] if hasattr(model, 'layers') else None
+                layer = model.layers[idx] if hasattr(model, "layers") else None
                 if layer is None:
                     continue
                 # Detect SSM layers by presence of state attribute or class name
                 layer_cls = type(layer).__name__.lower()
                 has_ssm = (
-                    hasattr(layer, 'state')
-                    or 'mamba' in layer_cls
-                    or 'ssm' in layer_cls
-                    or 'deltanet' in layer_cls
+                    hasattr(layer, "state")
+                    or "mamba" in layer_cls
+                    or "ssm" in layer_cls
+                    or "deltanet" in layer_cls
                 )
                 if has_ssm:
                     self._hybrid_kv.register_layer(
-                        idx, CacheBlockType.MAMBA_SSM,
+                        idx,
+                        CacheBlockType.MAMBA_SSM,
                         cache_shape=(48, 16),
                     )
                 else:
-                    model_cfg = getattr(model, 'config', model)
-                    num_heads = getattr(model_cfg, 'num_key_value_heads', 1)
-                    head_dim = getattr(model_cfg, 'hidden_size', 1) // max(
-                        getattr(model_cfg, 'num_attention_heads', 1), 1
+                    model_cfg = getattr(model, "config", model)
+                    num_heads = getattr(model_cfg, "num_key_value_heads", 1)
+                    head_dim = getattr(model_cfg, "hidden_size", 1) // max(
+                        getattr(model_cfg, "num_attention_heads", 1), 1
                     )
                     # Detect sliding window attention
-                    sw = getattr(model_cfg, 'sliding_window', None)
+                    sw = getattr(model_cfg, "sliding_window", None)
                     # Detect MLA (DeepSeek) by kv_lora_rank or q_lora_rank
                     has_mla = (
-                        hasattr(layer, 'kv_lora_rank')
-                        or 'mla' in layer_cls
-                        or getattr(model_cfg, 'kv_lora_rank', None) is not None
+                        hasattr(layer, "kv_lora_rank")
+                        or "mla" in layer_cls
+                        or getattr(model_cfg, "kv_lora_rank", None) is not None
                     )
                     if has_mla:
-                        latent_dim = getattr(model_cfg, 'kv_lora_rank', head_dim)
+                        latent_dim = getattr(model_cfg, "kv_lora_rank", head_dim)
                         self._hybrid_kv.register_layer(
-                            idx, CacheBlockType.MLA,
+                            idx,
+                            CacheBlockType.MLA,
                             cache_shape=(latent_dim, self.config.kv_block_size),
                         )
                     elif sw is not None and sw > 0:
                         self._hybrid_kv.register_layer(
-                            idx, CacheBlockType.SLIDING_WINDOW,
-                            cache_shape=(num_heads, head_dim, self.config.kv_block_size),
+                            idx,
+                            CacheBlockType.SLIDING_WINDOW,
+                            cache_shape=(
+                                num_heads,
+                                head_dim,
+                                self.config.kv_block_size,
+                            ),
                         )
                     else:
                         self._hybrid_kv.register_layer(
-                            idx, CacheBlockType.ATTENTION,
-                            cache_shape=(num_heads, head_dim, self.config.kv_block_size),
+                            idx,
+                            CacheBlockType.ATTENTION,
+                            cache_shape=(
+                                num_heads,
+                                head_dim,
+                                self.config.kv_block_size,
+                            ),
                         )
                 registered += 1
             except Exception:
@@ -922,6 +1055,7 @@ class EngineCore:
         # Recreate executor if stop() cleared it (restart support)
         if self._executor is None:
             from .mlx_executor import get_mlx_executor
+
             self._executor = get_mlx_executor()
         # Start profiler (deferred from __init__ to avoid resource leak if init fails)
         if not self._profiler_started:
@@ -937,12 +1071,14 @@ class EngineCore:
             except Exception:
                 logger.debug("KV offload manager start failed", exc_info=True)
         self._loop_task = asyncio.get_running_loop().create_task(self._engine_loop())
+
         # Surface a dead engine-loop task instead of letting requests hang
         # silently: without this, an exception in _engine_loop is swallowed
         # and every request times out with no traceback.
         def _loop_done(t: asyncio.Task) -> None:
             if not t.cancelled() and t.exception() is not None:
                 logger.error("engine_core loop task DIED", exc_info=t.exception())
+
         self._loop_task.add_done_callback(_loop_done)
 
         # Start KV migration background thread
@@ -975,7 +1111,9 @@ class EngineCore:
             try:
                 saved_ids = self._checkpoint_mgr.list_checkpoints()
                 if saved_ids:
-                    logger.info(f"Checkpoint recovery: {len(saved_ids)} saved states found")
+                    logger.info(
+                        f"Checkpoint recovery: {len(saved_ids)} saved states found"
+                    )
                     for ckpt_id in saved_ids:
                         state = self._checkpoint_mgr.load(ckpt_id)
                         if state is not None:
@@ -1055,18 +1193,21 @@ class EngineCore:
                 logger.debug("KV offload manager stop failed", exc_info=True)
 
         # Flush KV prefix cache to SSD for persistence across restarts
-        _prefix_cache = getattr(self.scheduler, '_prefix_cache', None)
-        if _prefix_cache is not None and hasattr(_prefix_cache, 'flush_to_ssd'):
+        _prefix_cache = getattr(self.scheduler, "_prefix_cache", None)
+        if _prefix_cache is not None and hasattr(_prefix_cache, "flush_to_ssd"):
             try:
                 _loop = asyncio.get_running_loop()
                 if self._executor is not None:
                     blocks_flushed = await _loop.run_in_executor(
-                        self._executor, _prefix_cache.flush_to_ssd,
+                        self._executor,
+                        _prefix_cache.flush_to_ssd,
                     )
                 else:
                     blocks_flushed = _prefix_cache.flush_to_ssd()
                 if blocks_flushed > 0:
-                    logger.info(f"KV prefix cache flushed {blocks_flushed} blocks to SSD")
+                    logger.info(
+                        f"KV prefix cache flushed {blocks_flushed} blocks to SSD"
+                    )
             except Exception:
                 logger.debug("KV prefix cache SSD flush failed", exc_info=True)
 
@@ -1117,7 +1258,7 @@ class EngineCore:
         self._stream_states.clear()
         self._finished_events.clear()
         self._request_timestamps.clear()
-        if hasattr(self, '_ttft_timestamps'):
+        if hasattr(self, "_ttft_timestamps"):
             self._ttft_timestamps.clear()
         self._request_lora_adapters.clear()
         self._kv_prefix_hashes.clear()
@@ -1132,13 +1273,14 @@ class EngineCore:
         self._model = None
         self._tokenizer = None
         # Also clear scheduler's model refs to prevent GC leak on hot-reload
-        if hasattr(self.scheduler, 'model'):
+        if hasattr(self.scheduler, "model"):
             self.scheduler.model = None
-        if hasattr(self.scheduler, 'tokenizer'):
+        if hasattr(self.scheduler, "tokenizer"):
             self.scheduler.tokenizer = None
         gc.collect()
         loop = asyncio.get_running_loop()
         from .mlx_executor import sync_and_clear_cache
+
         try:
             await loop.run_in_executor(self._executor, sync_and_clear_cache)
         except Exception:
@@ -1198,6 +1340,7 @@ class EngineCore:
         if self._stopped:
             from .output_collector import RequestOutputCollector, RequestStreamState
             from .request import RequestOutput
+
             self._output_collectors[req_id] = RequestOutputCollector(aggregate=True)
             self._stream_states[req_id] = RequestStreamState(
                 stream_interval=self.config.stream_interval
@@ -1220,6 +1363,7 @@ class EngineCore:
         if self._shutdown_requested:
             from .output_collector import RequestOutputCollector, RequestStreamState
             from .request import RequestOutput
+
             self._output_collectors[req_id] = RequestOutputCollector(aggregate=True)
             self._stream_states[req_id] = RequestStreamState(
                 stream_interval=self.config.stream_interval
@@ -1250,20 +1394,29 @@ class EngineCore:
         # executor's generate_step. Gating the acquire on `not _running` removes that
         # transient off-thread mutation entirely.
         loaded_lora = None
-        if lora_adapter and not getattr(self, '_running', False):
+        if lora_adapter and not getattr(self, "_running", False):
             try:
                 from .lora_manager import get_lora_manager
-                lora_mgr = get_lora_manager(engine_id=getattr(self.scheduler, 'model_id', 'default') or 'default')
+
+                lora_mgr = get_lora_manager(
+                    engine_id=getattr(self.scheduler, "model_id", "default")
+                    or "default"
+                )
                 if lora_mgr is not None:
                     loaded_lora = lora_mgr.acquire_adapter(lora_adapter)
                     if loaded_lora:
-                        logger.debug(f"LoRA adapter '{lora_adapter}' acquired for request {req_id}")
+                        logger.debug(
+                            f"LoRA adapter '{lora_adapter}' acquired for request {req_id}"
+                        )
             except Exception:
-                logger.debug(f"LoRA adapter acquire failed: {lora_adapter}", exc_info=True)
+                logger.debug(
+                    f"LoRA adapter acquire failed: {lora_adapter}", exc_info=True
+                )
 
-        if lora_adapter and not loaded_lora and getattr(self, '_running', False):
+        if lora_adapter and not loaded_lora and getattr(self, "_running", False):
             from .output_collector import RequestOutputCollector, RequestStreamState
             from .request import RequestOutput
+
             # Create collector + event BEFORE putting error output — they
             # won't be created later because this path returns early.
             self._output_collectors[req_id] = RequestOutputCollector(aggregate=True)
@@ -1276,7 +1429,7 @@ class EngineCore:
                 finished=True,
                 finish_reason="error",
                 error="Per-request LoRA is not supported in batched (engine loop) mode. "
-                      "Use the fast path (use_engine_loop=False) for LoRA requests.",
+                "Use the fast path (use_engine_loop=False) for LoRA requests.",
                 prompt_tokens=0,
                 completion_tokens=0,
             )
@@ -1295,18 +1448,24 @@ class EngineCore:
             )
             if has_multimodal and self._preprocessor_registry is not None:
                 try:
-                    model_config = {"model_type": getattr(self.scheduler, 'model_id', '') or ""}
+                    model_config = {
+                        "model_type": getattr(self.scheduler, "model_id", "") or ""
+                    }
                     if self._model is not None:
-                        cfg = getattr(self._model, 'config', self._model)
-                        if hasattr(cfg, 'model_type'):
+                        cfg = getattr(self._model, "config", self._model)
+                        if hasattr(cfg, "model_type"):
                             model_config["model_type"] = cfg.model_type
                     preprocessor = self._preprocessor_registry.detect(model_config)
                     if preprocessor is not None:
-                        processed = preprocessor.preprocess(prompt, tokenizer=self._tokenizer)
+                        processed = preprocessor.preprocess(
+                            prompt, tokenizer=self._tokenizer
+                        )
                         if processed.token_ids:
                             prompt = processed.token_ids
                 except Exception:
-                    logger.debug("model preprocessor failed, using raw prompt", exc_info=True)
+                    logger.debug(
+                        "model preprocessor failed, using raw prompt", exc_info=True
+                    )
 
         # Encode prompt
         if isinstance(prompt, str):
@@ -1320,11 +1479,11 @@ class EngineCore:
         # Guard against empty prompt: inject BOS/EOS so the scheduler
         # doesn't crash with a zero-length token sequence.
         if not token_ids:
-            bos_id = getattr(self._tokenizer, 'bos_token_id', None)
+            bos_id = getattr(self._tokenizer, "bos_token_id", None)
             if bos_id is not None:
                 token_ids = [bos_id]
             else:
-                eos_id = getattr(self._tokenizer, 'eos_token_id', 1)
+                eos_id = getattr(self._tokenizer, "eos_token_id", 1)
                 token_ids = [eos_id]
 
         num_prompt_tokens = len(token_ids)
@@ -1335,31 +1494,45 @@ class EngineCore:
         # pass produces a prompt_cache (see scheduler response processing loop).
         try:
             from .inflight_prefix_sharing import get_inflight_tracker
+
             _inflight_tracker = get_inflight_tracker()
             _inflight_tracker.register(
                 req_id,
                 token_ids,
                 None,  # KV cache ref updated by scheduler after first response
-                getattr(self.scheduler, 'model_id', '') or '',
+                getattr(self.scheduler, "model_id", "") or "",
             )
         except Exception:
             logger.debug("inflight prefix register failed", exc_info=True)
 
         # Multimodal pipeline: process images/audio/video via staged pipeline
         # (staged_pipeline.py MultimodalPipelineCoordinator)
-        _mm_images = kwargs.get('images') or kwargs.get('image')
-        _mm_audio = kwargs.get('audio')
-        _mm_video = kwargs.get('video')
+        _mm_images = kwargs.get("images") or kwargs.get("image")
+        _mm_audio = kwargs.get("audio")
+        _mm_video = kwargs.get("video")
         if _mm_images or _mm_audio or _mm_video:
             try:
                 from .staged_pipeline import PipelineRequest
+
                 _mm_req = PipelineRequest(
                     request_id=req_id,
-                    model_id=getattr(self.scheduler, 'model_id', ''),
+                    model_id=getattr(self.scheduler, "model_id", ""),
                     text=prompt if isinstance(prompt, str) else None,
-                    images=_mm_images if isinstance(_mm_images, list) else [_mm_images] if _mm_images else None,
-                    audio=_mm_audio if isinstance(_mm_audio, list) else [_mm_audio] if _mm_audio else None,
-                    video=_mm_video if isinstance(_mm_video, list) else [_mm_video] if _mm_video else None,
+                    images=_mm_images
+                    if isinstance(_mm_images, list)
+                    else [_mm_images]
+                    if _mm_images
+                    else None,
+                    audio=_mm_audio
+                    if isinstance(_mm_audio, list)
+                    else [_mm_audio]
+                    if _mm_audio
+                    else None,
+                    video=_mm_video
+                    if isinstance(_mm_video, list)
+                    else [_mm_video]
+                    if _mm_video
+                    else None,
                 )
                 _mm_results = self._multimodal_pipeline.process(_mm_req)
                 _mm_errors = [r for r in _mm_results if r.error is not None]
@@ -1378,7 +1551,9 @@ class EngineCore:
         # *in addition to* the max_tokens completion tokens, so they must
         # be subtracted from the available prompt budget to avoid generating
         # garbage when prompt + thinking + completion > max_seq_len.
-        _thinking_overhead = thinking_budget if (thinking_budget and enable_thinking) else 0
+        _thinking_overhead = (
+            thinking_budget if (thinking_budget and enable_thinking) else 0
+        )
         # Total tokens that the generation will consume beyond the prompt.
         _generation_budget = max_tokens + _thinking_overhead
         if max_seq_len > 0 and num_prompt_tokens + _generation_budget > max_seq_len:
@@ -1388,7 +1563,11 @@ class EngineCore:
                 # original messages — it preserves system/developer messages
                 # and keeps tool-call/response pairs intact.
                 truncated_messages = None
-                if isinstance(_original_prompt, list) and _original_prompt and isinstance(_original_prompt[0], dict):
+                if (
+                    isinstance(_original_prompt, list)
+                    and _original_prompt
+                    and isinstance(_original_prompt[0], dict)
+                ):
                     try:
                         trunc_result = self._context_window_mgr.compute_truncation(
                             messages=_original_prompt,
@@ -1397,12 +1576,17 @@ class EngineCore:
                         )
                         truncated_messages = trunc_result.messages
                     except Exception:
-                        logger.debug("message-level truncation failed, falling back to token-level", exc_info=True)
+                        logger.debug(
+                            "message-level truncation failed, falling back to token-level",
+                            exc_info=True,
+                        )
 
                 if truncated_messages is not None:
                     # Re-encode the truncated messages
                     try:
-                        text = self._messages_to_text(truncated_messages, enable_thinking)
+                        text = self._messages_to_text(
+                            truncated_messages, enable_thinking
+                        )
                         token_ids = self._tokenizer.encode(text)
                         num_prompt_tokens = len(token_ids)
                         prompt = truncated_messages
@@ -1413,7 +1597,10 @@ class EngineCore:
                         )
                     except Exception:
                         # Fallback to token-level truncation
-                        logger.debug("re-encoding truncated messages failed, falling back to token-level", exc_info=True)
+                        logger.debug(
+                            "re-encoding truncated messages failed, falling back to token-level",
+                            exc_info=True,
+                        )
                         token_ids = token_ids[excess:]
                         num_prompt_tokens = len(token_ids)
                         try:
@@ -1447,6 +1634,7 @@ class EngineCore:
                 # with an overlength prompt that produces garbage output.
                 from .output_collector import RequestOutputCollector, RequestStreamState
                 from .request import RequestOutput
+
                 self._output_collectors[req_id] = RequestOutputCollector(aggregate=True)
                 self._stream_states[req_id] = RequestStreamState(
                     stream_interval=self.config.stream_interval
@@ -1470,19 +1658,32 @@ class EngineCore:
                 # Clean up resources acquired before this point
                 try:
                     from .inflight_prefix_sharing import get_inflight_tracker
+
                     get_inflight_tracker().unregister(req_id)
                 except Exception:
-                    logger.debug(f"inflight unregister failed in context window rejection for {req_id}", exc_info=True)
+                    logger.debug(
+                        f"inflight unregister failed in context window rejection for {req_id}",
+                        exc_info=True,
+                    )
                 self._budget_manager.remove(req_id)
                 if loaded_lora and lora_adapter:
                     try:
                         from .lora_manager import get_lora_manager
-                        lora_mgr = get_lora_manager(engine_id=getattr(self.scheduler, 'model_id', 'default') or 'default')
+
+                        lora_mgr = get_lora_manager(
+                            engine_id=getattr(self.scheduler, "model_id", "default")
+                            or "default"
+                        )
                         if lora_mgr is not None:
                             lora_mgr.release_adapter(lora_adapter)
                     except Exception:
-                        logger.debug(f"LoRA release failed in context window rejection for {req_id}", exc_info=True)
-                self._fail_dedup_shadows(req_id, "Prompt exceeds context window", "error")
+                        logger.debug(
+                            f"LoRA release failed in context window rejection for {req_id}",
+                            exc_info=True,
+                        )
+                self._fail_dedup_shadows(
+                    req_id, "Prompt exceeds context window", "error"
+                )
                 return req_id
 
         # ── Budget check (token/time/cost/thinking) ──
@@ -1499,18 +1700,30 @@ class EngineCore:
             if loaded_lora and lora_adapter:
                 try:
                     from .lora_manager import get_lora_manager
-                    lora_mgr = get_lora_manager(engine_id=getattr(self.scheduler, 'model_id', 'default') or 'default')
+
+                    lora_mgr = get_lora_manager(
+                        engine_id=getattr(self.scheduler, "model_id", "default")
+                        or "default"
+                    )
                     if lora_mgr is not None:
                         lora_mgr.release_adapter(lora_adapter)
                 except Exception:
-                    logger.debug(f"LoRA release failed in budget rejection for {req_id}", exc_info=True)
+                    logger.debug(
+                        f"LoRA release failed in budget rejection for {req_id}",
+                        exc_info=True,
+                    )
             try:
                 from .inflight_prefix_sharing import get_inflight_tracker
+
                 get_inflight_tracker().unregister(req_id)
             except Exception:
-                logger.debug(f"inflight unregister failed in budget rejection for {req_id}", exc_info=True)
+                logger.debug(
+                    f"inflight unregister failed in budget rejection for {req_id}",
+                    exc_info=True,
+                )
             from .output_collector import RequestOutputCollector, RequestStreamState
             from .request import RequestOutput
+
             self._output_collectors[req_id] = RequestOutputCollector(aggregate=True)
             self._stream_states[req_id] = RequestStreamState(
                 stream_interval=self.config.stream_interval
@@ -1527,12 +1740,15 @@ class EngineCore:
             self._output_collectors[req_id].put(error_output)
             self._output_collectors[req_id].put(None)
             self._finished_events[req_id].set()
-            self._fail_dedup_shadows(req_id, f"Budget exceeded: {budget_reason}", budget_reason)
+            self._fail_dedup_shadows(
+                req_id, f"Budget exceeded: {budget_reason}", budget_reason
+            )
             return req_id
 
         # ── Request dedup ──
         if self._request_dedup is not None:
             from .request_dedup import RequestDeduplicator
+
             # Scope the hash by the requesting actor (tenant/API key) so two DIFFERENT
             # tenants sending an identical prompt within the dedup window don't collide
             # and leak one tenant's output to the other — compute_hash takes tenant_id
@@ -1540,15 +1756,19 @@ class EngineCore:
             # actor is stamped on the request coroutine's context by the auth middleware.
             try:
                 from .request_tracker import current_actor
+
                 _dedup_tenant = str(current_actor.get() or "")
             except Exception:
                 _dedup_tenant = ""
             content_hash = RequestDeduplicator.compute_hash(
-                model=str(getattr(self.scheduler, 'model_id', '') or ''),
+                model=str(getattr(self.scheduler, "model_id", "") or ""),
                 tenant_id=_dedup_tenant,
-                prompt=prompt, max_tokens=max_tokens,
-                temperature=temperature, top_p=top_p,
-                top_k=top_k, min_p=min_p,
+                prompt=prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
                 repetition_penalty=repetition_penalty,
                 frequency_penalty=frequency_penalty,
                 presence_penalty=presence_penalty,
@@ -1566,32 +1786,35 @@ class EngineCore:
                 top_logprobs=top_logprobs,
                 logit_bias=str(logit_bias) if logit_bias else None,
             )
-            dedup_result, orphaned_shadow_groups = self._request_dedup.check(req_id, content_hash)
+            dedup_result, orphaned_shadow_groups = self._request_dedup.check(
+                req_id, content_hash
+            )
             # Deliver error outputs to any shadows orphaned by stuck-entry pruning.
             # Without this, those shadows would hang until their per-request timeout
             # fires (default 300 s) because the dedup entry that would normally
             # trigger their fan-out delivery has been removed.
             if orphaned_shadow_groups:
                 from .request import RequestOutput as _OrphanRO
+
                 for _group in orphaned_shadow_groups:
                     for _orphan_sid in _group:
                         _oc = self._output_collectors.get(_orphan_sid)
                         if _oc is not None:
-                            _oc.put(_OrphanRO(
-                                request_id=_orphan_sid,
-                                finished=True,
-                                finish_reason="error",
-                                error="Dedup primary entry pruned (stuck/orphaned)",
-                            ))
+                            _oc.put(
+                                _OrphanRO(
+                                    request_id=_orphan_sid,
+                                    finished=True,
+                                    finish_reason="error",
+                                    error="Dedup primary entry pruned (stuck/orphaned)",
+                                )
+                            )
                             _oc.put(None)
                         self._signal_finished(_orphan_sid)
                         self._finalize_request(_orphan_sid)
             if dedup_result is not None:
                 # Shadow request: don't add to scheduler, wait for primary's output
                 primary_id = dedup_result.primary_request_id
-                logger.debug(
-                    f"Request {req_id} dedup hit, shadowing {primary_id}"
-                )
+                logger.debug(f"Request {req_id} dedup hit, shadowing {primary_id}")
                 self._dedup_shadows[req_id] = primary_id
                 self._dedup_hashes[req_id] = content_hash
                 # Clean up registrations that won't be used by shadow path
@@ -1600,18 +1823,30 @@ class EngineCore:
                 if loaded_lora and lora_adapter:
                     try:
                         from .lora_manager import get_lora_manager
-                        lora_mgr = get_lora_manager(engine_id=getattr(self.scheduler, 'model_id', 'default') or 'default')
+
+                        lora_mgr = get_lora_manager(
+                            engine_id=getattr(self.scheduler, "model_id", "default")
+                            or "default"
+                        )
                         if lora_mgr is not None:
                             lora_mgr.release_adapter(lora_adapter)
                     except Exception:
-                        logger.debug(f"LoRA release failed in dedup shadow for {req_id}", exc_info=True)
+                        logger.debug(
+                            f"LoRA release failed in dedup shadow for {req_id}",
+                            exc_info=True,
+                        )
                 try:
                     from .inflight_prefix_sharing import get_inflight_tracker
+
                     get_inflight_tracker().unregister(req_id)
                 except Exception:
-                    logger.debug(f"inflight unregister failed in dedup shadow for {req_id}", exc_info=True)
+                    logger.debug(
+                        f"inflight unregister failed in dedup shadow for {req_id}",
+                        exc_info=True,
+                    )
                 # Create output collector + finished event so the caller can await
                 from .output_collector import RequestOutputCollector, RequestStreamState
+
                 shadow_collector = RequestOutputCollector(aggregate=True)
                 self._output_collectors[req_id] = shadow_collector
                 self._stream_states[req_id] = RequestStreamState(
@@ -1627,42 +1862,55 @@ class EngineCore:
                 # have already had tokens consumed by its stream — but it's the
                 # best we can do without maintaining a separate replay buffer.
                 primary_collector = self._output_collectors.get(primary_id)
-                if primary_collector is not None and primary_collector.output is not None:
+                if (
+                    primary_collector is not None
+                    and primary_collector.output is not None
+                ):
                     from .request import RequestOutput as _RO
+
                     primary_out = primary_collector.output
-                    shadow_collector.put(_RO(
-                        request_id=req_id,
-                        new_token_ids=list(primary_out.new_token_ids),
-                        new_text=primary_out.new_text,
-                        output_text=primary_out.output_text,
-                        output_token_ids=list(primary_out.output_token_ids) if primary_out.output_token_ids else [],
-                        completion_tokens=primary_out.completion_tokens,
-                        finished=False,
-                        prompt_tokens=primary_out.prompt_tokens,
-                        logprobs=primary_out.logprobs,
-                        current_state=primary_out.current_state,
-                        reasoning_tokens=primary_out.reasoning_tokens,
-                        cached_tokens=primary_out.cached_tokens,
-                        error=None,
-                        ttft_ms=0.0,  # TTFT is for primary, not shadow
-                    ))
+                    shadow_collector.put(
+                        _RO(
+                            request_id=req_id,
+                            new_token_ids=list(primary_out.new_token_ids),
+                            new_text=primary_out.new_text,
+                            output_text=primary_out.output_text,
+                            output_token_ids=list(primary_out.output_token_ids)
+                            if primary_out.output_token_ids
+                            else [],
+                            completion_tokens=primary_out.completion_tokens,
+                            finished=False,
+                            prompt_tokens=primary_out.prompt_tokens,
+                            logprobs=primary_out.logprobs,
+                            current_state=primary_out.current_state,
+                            reasoning_tokens=primary_out.reasoning_tokens,
+                            cached_tokens=primary_out.cached_tokens,
+                            error=None,
+                            ttft_ms=0.0,  # TTFT is for primary, not shadow
+                        )
+                    )
 
                 return req_id
             else:
-                dedup_entry, orphaned_groups = self._request_dedup.register(req_id, content_hash)
+                dedup_entry, orphaned_groups = self._request_dedup.register(
+                    req_id, content_hash
+                )
                 # Deliver error outputs to shadows orphaned by stuck-entry pruning.
                 if orphaned_groups:
                     from .request import RequestOutput as _OrphanRO
+
                     for _group in orphaned_groups:
                         for _orphan_sid in _group:
                             _oc = self._output_collectors.get(_orphan_sid)
                             if _oc is not None:
-                                _oc.put(_OrphanRO(
-                                    request_id=_orphan_sid,
-                                    finished=True,
-                                    finish_reason="error",
-                                    error="Dedup primary entry pruned (stuck/orphaned)",
-                                ))
+                                _oc.put(
+                                    _OrphanRO(
+                                        request_id=_orphan_sid,
+                                        finished=True,
+                                        finish_reason="error",
+                                        error="Dedup primary entry pruned (stuck/orphaned)",
+                                    )
+                                )
                                 _oc.put(None)
                             self._signal_finished(_orphan_sid)
                             self._finalize_request(_orphan_sid)
@@ -1681,7 +1929,9 @@ class EngineCore:
             # bytes/token was ~64x too small for typical 32-layer models, causing
             # kv_lifecycle to wildly under-count and migration tier decisions to be
             # based on incorrect size information.
-            estimated_kv_bytes = self._memory_aware_scheduler.estimate_kv_memory(num_prompt_tokens)
+            estimated_kv_bytes = self._memory_aware_scheduler.estimate_kv_memory(
+                num_prompt_tokens
+            )
             if estimated_kv_bytes <= 0:
                 # Fallback: rough estimate if memory-aware scheduler has no model info
                 estimated_kv_bytes = num_prompt_tokens * 2048
@@ -1692,7 +1942,10 @@ class EngineCore:
             )
             # Register block in migration manager for temperature-based tier management
             from .kv_migration import KVTier
-            self._kv_migration.register_block(_block_id, tier=KVTier.HOT, byte_size=estimated_kv_bytes)
+
+            self._kv_migration.register_block(
+                _block_id, tier=KVTier.HOT, byte_size=estimated_kv_bytes
+            )
         except Exception:
             logger.debug("kv_lifecycle admit failed", exc_info=True)
 
@@ -1706,7 +1959,8 @@ class EngineCore:
         # ── Memory-aware admission control ──
         try:
             estimated_bytes = self._memory_aware_scheduler.estimate_kv_memory(
-                num_prompt_tokens, max_tokens=max_tokens,
+                num_prompt_tokens,
+                max_tokens=max_tokens,
             )
             if isinstance(estimated_bytes, int) and estimated_bytes > 0:
                 admitted = self._memory_aware_scheduler.reserve_memory(
@@ -1715,48 +1969,78 @@ class EngineCore:
                     num_tokens=num_prompt_tokens,
                 )
                 if not admitted:
-                    logger.warning(f"Memory-aware scheduler rejected request {req_id}: estimated {estimated_bytes} bytes")
+                    logger.warning(
+                        f"Memory-aware scheduler rejected request {req_id}: estimated {estimated_bytes} bytes"
+                    )
                     # Release all resources acquired before this point
                     try:
                         from .inflight_prefix_sharing import get_inflight_tracker
+
                         get_inflight_tracker().unregister(req_id)
                     except Exception:
-                        logger.debug(f"inflight unregister failed in mem-aware rejection for {req_id}", exc_info=True)
+                        logger.debug(
+                            f"inflight unregister failed in mem-aware rejection for {req_id}",
+                            exc_info=True,
+                        )
                     self._budget_manager.remove(req_id)
                     if loaded_lora and lora_adapter:
                         try:
                             from .lora_manager import get_lora_manager
-                            lora_mgr = get_lora_manager(engine_id=getattr(self.scheduler, 'model_id', 'default') or 'default')
+
+                            lora_mgr = get_lora_manager(
+                                engine_id=getattr(self.scheduler, "model_id", "default")
+                                or "default"
+                            )
                             if lora_mgr is not None:
                                 lora_mgr.release_adapter(lora_adapter)
                         except Exception:
-                            logger.debug(f"LoRA release failed in mem-aware rejection for {req_id}", exc_info=True)
+                            logger.debug(
+                                f"LoRA release failed in mem-aware rejection for {req_id}",
+                                exc_info=True,
+                            )
                     try:
                         self._lifecycle_orchestrator.on_request_failed(
-                            req_id, error="Memory-aware scheduler: insufficient memory", retryable=True,
+                            req_id,
+                            error="Memory-aware scheduler: insufficient memory",
+                            retryable=True,
                         )
                     except Exception:
-                        logger.debug(f"lifecycle cleanup failed in mem-aware rejection for {req_id}", exc_info=True)
+                        logger.debug(
+                            f"lifecycle cleanup failed in mem-aware rejection for {req_id}",
+                            exc_info=True,
+                        )
                     try:
                         self._kv_lifecycle.release(_block_id)
                     except Exception:
-                        logger.debug(f"kv_lifecycle release failed in mem-aware rejection for {req_id}", exc_info=True)
+                        logger.debug(
+                            f"kv_lifecycle release failed in mem-aware rejection for {req_id}",
+                            exc_info=True,
+                        )
                     try:
                         self._kv_migration.unregister_block(_block_id)
                     except Exception:
-                        logger.debug(f"kv_migration unregister failed in mem-aware rejection for {req_id}", exc_info=True)
+                        logger.debug(
+                            f"kv_migration unregister failed in mem-aware rejection for {req_id}",
+                            exc_info=True,
+                        )
                     if self._sliding_window_mgr is not None:
                         try:
                             self._sliding_window_mgr.remove_request(req_id)
                         except Exception:
-                            logger.debug(f"sliding window cleanup failed in mem-aware rejection for {req_id}", exc_info=True)
+                            logger.debug(
+                                f"sliding window cleanup failed in mem-aware rejection for {req_id}",
+                                exc_info=True,
+                            )
                     # Set up output collector with error response
                     from .output_collector import (
                         RequestOutputCollector,
                         RequestStreamState,
                     )
                     from .request import RequestOutput
-                    self._output_collectors[req_id] = RequestOutputCollector(aggregate=True)
+
+                    self._output_collectors[req_id] = RequestOutputCollector(
+                        aggregate=True
+                    )
                     self._stream_states[req_id] = RequestStreamState(
                         stream_interval=self.config.stream_interval
                     )
@@ -1774,7 +2058,11 @@ class EngineCore:
                     self._output_collectors[req_id].put(None)  # sentinel
                     self._finished_events[req_id].set()
                     # Fail any dedup shadows waiting for this primary
-                    self._fail_dedup_shadows(req_id, "Memory-aware scheduler: insufficient memory", "memory_exceeded")
+                    self._fail_dedup_shadows(
+                        req_id,
+                        "Memory-aware scheduler: insufficient memory",
+                        "memory_exceeded",
+                    )
                     return req_id
         except Exception:
             logger.debug("memory-aware admission check skipped", exc_info=True)
@@ -1789,42 +2077,68 @@ class EngineCore:
                 # Clean up all registrations before early return
                 try:
                     from .inflight_prefix_sharing import get_inflight_tracker
+
                     get_inflight_tracker().unregister(req_id)
                 except Exception:
-                    logger.debug(f"inflight unregister failed in memguard rejection for {req_id}", exc_info=True)
+                    logger.debug(
+                        f"inflight unregister failed in memguard rejection for {req_id}",
+                        exc_info=True,
+                    )
                 self._memory_aware_scheduler.release_memory(req_id)
                 self._budget_manager.remove(req_id)
                 # Bug 5 fix: release LoRA adapter on early return
                 if loaded_lora and lora_adapter:
                     try:
                         from .lora_manager import get_lora_manager
-                        lora_mgr = get_lora_manager(engine_id=getattr(self.scheduler, 'model_id', 'default') or 'default')
+
+                        lora_mgr = get_lora_manager(
+                            engine_id=getattr(self.scheduler, "model_id", "default")
+                            or "default"
+                        )
                         if lora_mgr is not None:
                             lora_mgr.release_adapter(lora_adapter)
                     except Exception:
-                        logger.debug(f"LoRA release failed in memguard rejection for {req_id}", exc_info=True)
+                        logger.debug(
+                            f"LoRA release failed in memguard rejection for {req_id}",
+                            exc_info=True,
+                        )
                 try:
                     self._lifecycle_orchestrator.on_request_failed(
-                        req_id, error=f"Memory guard rejected: {reason}", retryable=False,
+                        req_id,
+                        error=f"Memory guard rejected: {reason}",
+                        retryable=False,
                     )
                 except Exception:
-                    logger.debug(f"lifecycle cleanup failed in memguard rejection for {req_id}", exc_info=True)
+                    logger.debug(
+                        f"lifecycle cleanup failed in memguard rejection for {req_id}",
+                        exc_info=True,
+                    )
                 try:
                     self._kv_lifecycle.release(_block_id)
                 except Exception:
-                    logger.debug(f"kv_lifecycle release failed in memguard rejection for {req_id}", exc_info=True)
+                    logger.debug(
+                        f"kv_lifecycle release failed in memguard rejection for {req_id}",
+                        exc_info=True,
+                    )
                 try:
                     self._kv_migration.unregister_block(_block_id)
                 except Exception:
-                    logger.debug(f"kv_migration unregister failed in memguard rejection for {req_id}", exc_info=True)
+                    logger.debug(
+                        f"kv_migration unregister failed in memguard rejection for {req_id}",
+                        exc_info=True,
+                    )
                 if self._sliding_window_mgr is not None:
                     try:
                         self._sliding_window_mgr.remove_request(req_id)
                     except Exception:
-                        logger.debug(f"sliding window cleanup failed in memguard rejection for {req_id}", exc_info=True)
+                        logger.debug(
+                            f"sliding window cleanup failed in memguard rejection for {req_id}",
+                            exc_info=True,
+                        )
                 # Set up output collector with error response
                 from .output_collector import RequestOutputCollector, RequestStreamState
                 from .request import RequestOutput
+
                 self._output_collectors[req_id] = RequestOutputCollector(aggregate=True)
                 self._stream_states[req_id] = RequestStreamState(
                     stream_interval=self.config.stream_interval
@@ -1843,7 +2157,9 @@ class EngineCore:
                 self._output_collectors[req_id].put(None)  # sentinel
                 self._finished_events[req_id].set()
                 # Fail any dedup shadows waiting for this primary
-                self._fail_dedup_shadows(req_id, f"Memory guard rejected: {reason}", "memory_exceeded")
+                self._fail_dedup_shadows(
+                    req_id, f"Memory guard rejected: {reason}", "memory_exceeded"
+                )
                 return req_id
 
         sampling_params = SamplingParams(
@@ -1866,16 +2182,16 @@ class EngineCore:
             logprobs=logprobs,
             top_logprobs=top_logprobs,
             priority=priority,
-            xtc_probability=kwargs.get('xtc_probability', 0.0),
-            xtc_threshold=kwargs.get('xtc_threshold', 0.0),
+            xtc_probability=kwargs.get("xtc_probability", 0.0),
+            xtc_threshold=kwargs.get("xtc_threshold", 0.0),
             reasoning_effort=reasoning_effort,
             logits_processors=logits_processors,
             # forward min_tokens / ignore_eos / suppress_tokens into SamplingParams
             # so _make_sampler (which reads them off sp) actually applies them on the engine
             # loop. They arrive via **kwargs; previously they fell on the floor here.
-            min_tokens=int(kwargs.get('min_tokens', 0) or 0),
-            ignore_eos=bool(kwargs.get('ignore_eos', False)),
-            suppress_tokens=kwargs.get('suppress_tokens'),
+            min_tokens=int(kwargs.get("min_tokens", 0) or 0),
+            ignore_eos=bool(kwargs.get("ignore_eos", False)),
+            suppress_tokens=kwargs.get("suppress_tokens"),
         )
 
         request = Request(
@@ -1897,12 +2213,16 @@ class EngineCore:
         if token_ids:
             try:
                 from .inflight_prefix_sharing import get_inflight_tracker
+
                 _tracker = get_inflight_tracker()
                 _inflight_match = _tracker.find_prefix(
                     token_ids,
-                    getattr(self.scheduler, 'model_id', '') or '',
+                    getattr(self.scheduler, "model_id", "") or "",
                 )
-                if _inflight_match is not None and _inflight_match.kv_cache_ref is not None:
+                if (
+                    _inflight_match is not None
+                    and _inflight_match.kv_cache_ref is not None
+                ):
                     request.prompt_cache = _inflight_match.kv_cache_ref
                     shared_len = min(len(_inflight_match.token_ids), len(token_ids))
                     request.cached_tokens = shared_len
@@ -1918,6 +2238,7 @@ class EngineCore:
 
         # Set up per-request output management
         from .output_collector import RequestOutputCollector, RequestStreamState
+
         self._output_collectors[req_id] = RequestOutputCollector(aggregate=True)
         self._stream_states[req_id] = RequestStreamState(
             stream_interval=self.config.stream_interval
@@ -1944,18 +2265,23 @@ class EngineCore:
         except Exception as exc:
             # Executor or scheduler threw — clean up all per-request state
             # that was allocated above (collector, event, timestamps, LoRA).
-            logger.error("add_request scheduler insert failed for %s: %s", req_id[:12], exc)
+            logger.error(
+                "add_request scheduler insert failed for %s: %s", req_id[:12], exc
+            )
             collector = self._output_collectors.pop(req_id, None)
             if collector is not None:
                 from .request import RequestOutput
-                collector.put(RequestOutput(
-                    request_id=req_id,
-                    finished=True,
-                    finish_reason="error",
-                    error=f"Scheduler insert failed: {exc}",
-                    prompt_tokens=num_prompt_tokens,
-                    completion_tokens=0,
-                ))
+
+                collector.put(
+                    RequestOutput(
+                        request_id=req_id,
+                        finished=True,
+                        finish_reason="error",
+                        error=f"Scheduler insert failed: {exc}",
+                        prompt_tokens=num_prompt_tokens,
+                        completion_tokens=0,
+                    )
+                )
                 collector.put(None)
             self._signal_finished(req_id)
             self._cleanup_request(req_id)
@@ -1971,23 +2297,29 @@ class EngineCore:
         # but consumer-side state (collector, event) must remain until the
         # consumer reads them.
         from .request import RequestStatus
+
         if RequestStatus.is_finished(request.status):
             error_reason = request.finish_reason or "rejected"
             from .request import RequestOutput
+
             collector = self._output_collectors.get(req_id)
             if collector is not None:
-                collector.put(RequestOutput(
-                    request_id=req_id,
-                    finished=True,
-                    finish_reason=error_reason,
-                    error=f"Request rejected by scheduler: {error_reason}",
-                    prompt_tokens=num_prompt_tokens,
-                    completion_tokens=0,
-                ))
+                collector.put(
+                    RequestOutput(
+                        request_id=req_id,
+                        finished=True,
+                        finish_reason=error_reason,
+                        error=f"Request rejected by scheduler: {error_reason}",
+                        prompt_tokens=num_prompt_tokens,
+                        completion_tokens=0,
+                    )
+                )
                 collector.put(None)  # sentinel
             self._signal_finished(req_id)
             self._finalize_request(req_id)
-            self._fail_dedup_shadows(req_id, f"Scheduler rejected: {error_reason}", "error")
+            self._fail_dedup_shadows(
+                req_id, f"Scheduler rejected: {error_reason}", "error"
+            )
             return req_id
 
         # Wake engine loop from idle sleep (event-driven scheduling)
@@ -2003,6 +2335,7 @@ class EngineCore:
         waiting for output from a primary that will never produce more tokens.
         """
         from .request import RequestOutput
+
         # Look up request to preserve token counts in abort output
         req = self.scheduler.requests.get(request_id)
         prompt_tok = req.num_prompt_tokens if req else 0
@@ -2011,14 +2344,16 @@ class EngineCore:
         # Put error output to wake up any waiting consumer
         collector = self._output_collectors.get(request_id)
         if collector is not None:
-            collector.put(RequestOutput(
-                request_id=request_id,
-                finished=True,
-                finish_reason="abort",
-                error="Request aborted",
-                prompt_tokens=prompt_tok,
-                completion_tokens=completion_tok,
-            ))
+            collector.put(
+                RequestOutput(
+                    request_id=request_id,
+                    finished=True,
+                    finish_reason="abort",
+                    error="Request aborted",
+                    prompt_tokens=prompt_tok,
+                    completion_tokens=completion_tok,
+                )
+            )
             collector.put(None)  # sentinel
 
         # Bug fix: fail dedup shadows so their consumers don't hang forever.
@@ -2027,18 +2362,21 @@ class EngineCore:
         # to hang until the engine-wide timeout enforcement rescues them.
         if self._request_dedup is not None:
             shadow_ids = [
-                sid for sid, pid in list(self._dedup_shadows.items())
+                sid
+                for sid, pid in list(self._dedup_shadows.items())
                 if pid == request_id
             ]
             for sid in shadow_ids:
                 s_collector = self._output_collectors.get(sid)
                 if s_collector is not None:
-                    s_collector.put(RequestOutput(
-                        request_id=sid,
-                        finished=True,
-                        finish_reason="abort",
-                        error=f"Primary request {request_id} was aborted",
-                    ))
+                    s_collector.put(
+                        RequestOutput(
+                            request_id=sid,
+                            finished=True,
+                            finish_reason="abort",
+                            error=f"Primary request {request_id} was aborted",
+                        )
+                    )
                     s_collector.put(None)
                 self._signal_finished(sid)
                 self._cleanup_request(sid)
@@ -2053,16 +2391,19 @@ class EngineCore:
         but have collectors waiting for output from a primary.
         """
         from .request import RequestOutput
+
         failed_ids = self.scheduler.fail_all_requests()
         for req_id in failed_ids:
             collector = self._output_collectors.get(req_id)
             if collector is not None:
-                collector.put(RequestOutput(
-                    request_id=req_id,
-                    finished=True,
-                    finish_reason="abort",
-                    error="All requests aborted",
-                ))
+                collector.put(
+                    RequestOutput(
+                        request_id=req_id,
+                        finished=True,
+                        finish_reason="abort",
+                        error="All requests aborted",
+                    )
+                )
                 collector.put(None)  # sentinel
             self._signal_finished(req_id)
             self._cleanup_request(req_id)
@@ -2076,12 +2417,14 @@ class EngineCore:
                 if sid not in failed_ids:
                     s_collector = self._output_collectors.get(sid)
                     if s_collector is not None:
-                        s_collector.put(RequestOutput(
-                            request_id=sid,
-                            finished=True,
-                            finish_reason="abort",
-                            error="All requests aborted (dedup shadow)",
-                        ))
+                        s_collector.put(
+                            RequestOutput(
+                                request_id=sid,
+                                finished=True,
+                                finish_reason="abort",
+                                error="All requests aborted (dedup shadow)",
+                            )
+                        )
                         s_collector.put(None)
                     self._signal_finished(sid)
                     self._cleanup_request(sid)
@@ -2142,7 +2485,8 @@ class EngineCore:
                     # Race collector.get() against cancel_event
                     _get_task = asyncio.ensure_future(collector.get())
                     _cancel_waiter = asyncio.ensure_future(
-                        cancel_event.wait() if isinstance(cancel_event, asyncio.Event)
+                        cancel_event.wait()
+                        if isinstance(cancel_event, asyncio.Event)
                         else asyncio.sleep(0.05)  # polling for non-Event types
                     )
                     try:
@@ -2214,7 +2558,7 @@ class EngineCore:
         # Extract cancel_event before passing kwargs to add_request — it is
         # not a scheduler parameter but we need it to detect early cancellation
         # during event.wait().
-        _cancel_event = kwargs.pop('cancel_event', None)
+        _cancel_event = kwargs.pop("cancel_event", None)
 
         req_id = await self.add_request(**kwargs)
         _cleaned_up = False
@@ -2228,7 +2572,7 @@ class EngineCore:
             # Wait for completion with timeout protection
             event = self._finished_events.get(req_id)
             if event:
-                timeout_s = kwargs.get('timeout_seconds')
+                timeout_s = kwargs.get("timeout_seconds")
                 if timeout_s is None:
                     timeout_s = self.config.request_timeout_seconds
                 try:
@@ -2264,7 +2608,9 @@ class EngineCore:
                                     if _cancelled:
                                         if not _wait_task.done():
                                             _wait_task.cancel()
-                                            with contextlib.suppress(asyncio.CancelledError, Exception):
+                                            with contextlib.suppress(
+                                                asyncio.CancelledError, Exception
+                                            ):
                                                 await _wait_task
                                         await self.abort_request(req_id)
                                         _cleaned_up = True
@@ -2282,14 +2628,18 @@ class EngineCore:
                                     # on a done task is a no-op).
                                     if not _cancel_waiter.done():
                                         _cancel_waiter.cancel()
-                                    _cancel_waiter = asyncio.ensure_future(asyncio.sleep(0.05))
+                                    _cancel_waiter = asyncio.ensure_future(
+                                        asyncio.sleep(0.05)
+                                    )
                                     continue
                                 if _wait_task in done:
                                     # Completion fired — cancel the pending
                                     # cancel_waiter sleep so it does not leak.
                                     if not _cancel_waiter.done():
                                         _cancel_waiter.cancel()
-                                        with contextlib.suppress(asyncio.CancelledError, Exception):
+                                        with contextlib.suppress(
+                                            asyncio.CancelledError, Exception
+                                        ):
                                             await _cancel_waiter
                                     break
                                 # Neither task in done means asyncio.wait
@@ -2325,7 +2675,11 @@ class EngineCore:
             # Compute TTFT from tracked first-token timestamp (set by engine loop)
             # not total wall time (which would include full generation).
             _start_ts = self._request_timestamps.get(req_id)
-            _ttft_ts = self._ttft_timestamps.get(req_id) if hasattr(self, '_ttft_timestamps') else None
+            _ttft_ts = (
+                self._ttft_timestamps.get(req_id)
+                if hasattr(self, "_ttft_timestamps")
+                else None
+            )
             _ttft_ms = 0.0
             if _start_ts is not None and _ttft_ts is not None:
                 _ttft_ms = round((_ttft_ts - _start_ts) * 1000, 1)
@@ -2348,6 +2702,7 @@ class EngineCore:
             else:
                 # No output received (engine may have shut down mid-request)
                 from .request import RequestOutput
+
                 result = RequestOutput(
                     request_id=req_id,
                     finished=True,
@@ -2409,8 +2764,14 @@ class EngineCore:
                 _bw = getattr(self, "_batch_wait_s", None)
                 if _bw is None:
                     try:
-                        _bw = float(os.environ.get(
-                            "YUNSHU_BATCH_WAIT_MS", self.config.batch_wait_ms)) / 1000.0
+                        _bw = (
+                            float(
+                                os.environ.get(
+                                    "YUNSHU_BATCH_WAIT_MS", self.config.batch_wait_ms
+                                )
+                            )
+                            / 1000.0
+                        )
                     except Exception:
                         _bw = self.config.batch_wait_ms / 1000.0
                     self._batch_wait_s = _bw
@@ -2453,7 +2814,10 @@ class EngineCore:
             try:
                 _pre_step_queue_depth = len(self.scheduler.waiting)
             except Exception:
-                logger.debug("scheduler.waiting access failed for queue depth metric", exc_info=True)
+                logger.debug(
+                    "scheduler.waiting access failed for queue depth metric",
+                    exc_info=True,
+                )
                 _pre_step_queue_depth = 0
 
             try:
@@ -2467,10 +2831,13 @@ class EngineCore:
                         self._composition_scheduler.pre_step(self.scheduler)
                         # Apply memory pressure recommendations
                         from .scheduler_mixins import MemoryPressureMixin
+
                         for m in self._composition_scheduler._mixins:
                             if isinstance(m, MemoryPressureMixin):
                                 if m.is_admission_paused:
-                                    logger.debug("MemoryPressureMixin: admission paused")
+                                    logger.debug(
+                                        "MemoryPressureMixin: admission paused"
+                                    )
                                 rec_batch = m.recommended_batch_size
                                 if 0 < rec_batch < self.config.completion_batch_size:
                                     # sync to the scheduler's admission cap too
@@ -2496,42 +2863,90 @@ class EngineCore:
                     if hasattr(self.scheduler.waiting, "__len__")
                     else (1 if self.scheduler.waiting else 0)
                 )
-                if self._sched_full_ab:  # A/B toggle (YUNSHU_SCHED_FULL=1): force old path
+                if (
+                    self._sched_full_ab
+                ):  # A/B toggle (YUNSHU_SCHED_FULL=1): force old path
                     _n_waiting = max(_n_waiting, 1)
                 # Priority inversion guard: detect and resolve priority inversion
                 # before scheduling (token_scheduler.py PriorityInversionGuard)
                 if _n_waiting > 0:
-                  try:
-                    from .token_scheduler import SchedulableRequest as _SReq
-                    _running = [
-                        _SReq(request_id=rid, priority=r.sampling_params.priority if r.sampling_params else 0,
-                              wait_time=0.0, context_length=r.num_prompt_tokens,
-                              output_length=len(r.output_token_ids) if r.output_token_ids else 0)
-                        for rid, r in list(self.scheduler.running.items())
-                    ]
-                    _waiting = [
-                        _SReq(request_id=r.request_id, priority=r.sampling_params.priority if r.sampling_params else 0,
-                              wait_time=time.monotonic() - r._submit_time if r._submit_time > 0 else 0.0,
-                              context_length=r.num_prompt_tokens)
-                        for r in list(self.scheduler.waiting)
-                    ] if hasattr(self.scheduler.waiting, '__iter__') else []
-                    inversions = self._priority_guard.check_inversion(_running, _waiting)
-                    for inv in inversions:
-                        low_req = next((r for r in _running if r.request_id == inv.low_request_id), None)
-                        high_req = next((r for r in _waiting if r.request_id == inv.high_request_id), None)
-                        if low_req and high_req:
-                            self._priority_guard.apply_inheritance(low_req, high_req)
-                            # Boost effective priority on the actual running request.
-                            # Save the original priority so it can be restored when
-                            # the boost expires (PriorityInversionGuard._expire_boosts).
-                            actual = self.scheduler.running.get(inv.low_request_id)
-                            if actual and actual.sampling_params:
-                                if not hasattr(actual.sampling_params, '_original_priority'):
-                                    actual.sampling_params._original_priority = actual.sampling_params.priority
-                                actual.sampling_params.priority = low_req.effective_priority
-                            logger.debug(f"Priority inheritance: {inv.low_request_id} boosted to {low_req.effective_priority}")
-                  except Exception:
-                    logger.debug("priority inversion guard failed", exc_info=True)
+                    try:
+                        from .token_scheduler import SchedulableRequest as _SReq
+
+                        _running = [
+                            _SReq(
+                                request_id=rid,
+                                priority=r.sampling_params.priority
+                                if r.sampling_params
+                                else 0,
+                                wait_time=0.0,
+                                context_length=r.num_prompt_tokens,
+                                output_length=len(r.output_token_ids)
+                                if r.output_token_ids
+                                else 0,
+                            )
+                            for rid, r in list(self.scheduler.running.items())
+                        ]
+                        _waiting = (
+                            [
+                                _SReq(
+                                    request_id=r.request_id,
+                                    priority=r.sampling_params.priority
+                                    if r.sampling_params
+                                    else 0,
+                                    wait_time=time.monotonic() - r._submit_time
+                                    if r._submit_time > 0
+                                    else 0.0,
+                                    context_length=r.num_prompt_tokens,
+                                )
+                                for r in list(self.scheduler.waiting)
+                            ]
+                            if hasattr(self.scheduler.waiting, "__iter__")
+                            else []
+                        )
+                        inversions = self._priority_guard.check_inversion(
+                            _running, _waiting
+                        )
+                        for inv in inversions:
+                            low_req = next(
+                                (
+                                    r
+                                    for r in _running
+                                    if r.request_id == inv.low_request_id
+                                ),
+                                None,
+                            )
+                            high_req = next(
+                                (
+                                    r
+                                    for r in _waiting
+                                    if r.request_id == inv.high_request_id
+                                ),
+                                None,
+                            )
+                            if low_req and high_req:
+                                self._priority_guard.apply_inheritance(
+                                    low_req, high_req
+                                )
+                                # Boost effective priority on the actual running request.
+                                # Save the original priority so it can be restored when
+                                # the boost expires (PriorityInversionGuard._expire_boosts).
+                                actual = self.scheduler.running.get(inv.low_request_id)
+                                if actual and actual.sampling_params:
+                                    if not hasattr(
+                                        actual.sampling_params, "_original_priority"
+                                    ):
+                                        actual.sampling_params._original_priority = (
+                                            actual.sampling_params.priority
+                                        )
+                                    actual.sampling_params.priority = (
+                                        low_req.effective_priority
+                                    )
+                                logger.debug(
+                                    f"Priority inheritance: {inv.low_request_id} boosted to {low_req.effective_priority}"
+                                )
+                    except Exception:
+                        logger.debug("priority inversion guard failed", exc_info=True)
 
                 # Restore expired priority boosts on actual running requests.
                 # PriorityInversionGuard._expire_boosts removes the boost record
@@ -2539,11 +2954,17 @@ class EngineCore:
                 try:
                     for rid in list(self.scheduler.running.keys()):
                         req = self.scheduler.running[rid]
-                        if req and hasattr(req, 'sampling_params') and hasattr(req.sampling_params, '_original_priority'):
+                        if (
+                            req
+                            and hasattr(req, "sampling_params")
+                            and hasattr(req.sampling_params, "_original_priority")
+                        ):
                             boost = self._priority_guard.get_boost(rid)
                             if boost is None:
                                 # Boost expired or was cleared — restore original priority
-                                req.sampling_params.priority = req.sampling_params._original_priority
+                                req.sampling_params.priority = (
+                                    req.sampling_params._original_priority
+                                )
                                 del req.sampling_params._original_priority
                                 logger.debug(f"Priority boost restored for {rid}")
                 except Exception:
@@ -2555,28 +2976,34 @@ class EngineCore:
                 # only). Skip the O(running) rebuild + budget compute in steady
                 # decode (no waiting). No behavior change.
                 if _n_waiting > 0:
-                  try:
-                    from .token_scheduler import SchedulableRequest as _SReq
-                    _sched_requests = [
-                        _SReq(
-                            request_id=rid,
-                            priority=r.sampling_params.priority if r.sampling_params else 0,
-                            wait_time=0.0,
-                            context_length=r.num_prompt_tokens,
-                            output_length=len(r.output_token_ids) if r.output_token_ids else 0,
-                            is_prefilling=r.status.name == 'PREFILLING',
+                    try:
+                        from .token_scheduler import SchedulableRequest as _SReq
+
+                        _sched_requests = [
+                            _SReq(
+                                request_id=rid,
+                                priority=r.sampling_params.priority
+                                if r.sampling_params
+                                else 0,
+                                wait_time=0.0,
+                                context_length=r.num_prompt_tokens,
+                                output_length=len(r.output_token_ids)
+                                if r.output_token_ids
+                                else 0,
+                                is_prefilling=r.status.name == "PREFILLING",
+                            )
+                            for rid, r in self.scheduler.running.items()
+                        ]
+                        _budget = self.config.completion_batch_size * 64
+                        self._token_scheduler.compute_token_budget(
+                            _sched_requests,
+                            _budget,
                         )
-                        for rid, r in self.scheduler.running.items()
-                    ]
-                    _budget = self.config.completion_batch_size * 64
-                    self._token_scheduler.compute_token_budget(
-                        _sched_requests, _budget,
-                    )
-                    self._token_scheduler._stats["steps_with_allocations"] += 1
-                    # Note: fairness tracker records are based on actual output tokens
-                    # (recorded below in profiler section), not budget allocations.
-                  except Exception:
-                    logger.debug("token-level scheduling failed", exc_info=True)
+                        self._token_scheduler._stats["steps_with_allocations"] += 1
+                        # Note: fairness tracker records are based on actual output tokens
+                        # (recorded below in profiler section), not budget allocations.
+                    except Exception:
+                        logger.debug("token-level scheduling failed", exc_info=True)
 
                 # Run scheduler step on MLX executor thread
                 # TBO takes priority when enabled; else C18 overlap; else plain
@@ -2586,11 +3013,13 @@ class EngineCore:
                 _gpu_step_start = time.monotonic()
                 if self._tbo_scheduler.config.enabled:
                     scheduler_output = await loop.run_in_executor(
-                        self._executor, self._tbo_step,
+                        self._executor,
+                        self._tbo_step,
                     )
                 elif self._overlap_scheduler.config.enabled:
                     scheduler_output = await loop.run_in_executor(
-                        self._executor, self._overlap_step,
+                        self._executor,
+                        self._overlap_step,
                     )
                 else:
                     scheduler_output = await loop.run_in_executor(
@@ -2599,9 +3028,15 @@ class EngineCore:
                 _gpu_step_ms = (time.monotonic() - _gpu_step_start) * 1000
 
                 # CompositionScheduler post_step hooks
-                if self._composition_scheduler is not None and hasattr(scheduler_output, 'outputs') and scheduler_output.outputs:
+                if (
+                    self._composition_scheduler is not None
+                    and hasattr(scheduler_output, "outputs")
+                    and scheduler_output.outputs
+                ):
                     try:
-                        self._composition_scheduler.post_step(self.scheduler, scheduler_output)
+                        self._composition_scheduler.post_step(
+                            self.scheduler, scheduler_output
+                        )
                     except Exception:
                         logger.debug("composition post_step failed", exc_info=True)
 
@@ -2616,10 +3051,14 @@ class EngineCore:
                     queue_depth = _pre_step_queue_depth
                     if _hw_info is None:
                         from .utils.hardware import get_hardware_info as _ghw
+
                         _hw_info = _ghw()
                         _total_mem_bytes = _hw_info.total_memory_bytes
                     import mlx.core as _mx
-                    _mem_avail = 1.0 - (_mx.get_active_memory() / max(_total_mem_bytes, 1))
+
+                    _mem_avail = 1.0 - (
+                        _mx.get_active_memory() / max(_total_mem_bytes, 1)
+                    )
                     suggested = self._adaptive_batch_sizer.compute_optimal_batch(
                         queue_depth=queue_depth,
                         memory_available=_mem_avail,
@@ -2630,8 +3069,11 @@ class EngineCore:
                     # [1, original]. The old `if suggested < current` one-way gate pinned
                     # completion_batch_size at the first low value forever (defeating batching);
                     # mirror the prefill recovery which scales back toward its baseline.
-                    self._set_completion_batch_size(max(
-                        1, min(int(suggested), self._original_completion_batch_size)))
+                    self._set_completion_batch_size(
+                        max(
+                            1, min(int(suggested), self._original_completion_batch_size)
+                        )
+                    )
                 except Exception:
                     logger.debug("adaptive batch sizing failed", exc_info=True)
 
@@ -2642,16 +3084,25 @@ class EngineCore:
                     # output distribution + profiler overhead is accumulated
                     # separately from _step_start at the end of the loop.
                     self._last_step_wall_ms = _step_wall_ms
-                    self._last_batch_size = len(scheduler_output.outputs) if hasattr(scheduler_output, 'outputs') else 0
+                    self._last_batch_size = (
+                        len(scheduler_output.outputs)
+                        if hasattr(scheduler_output, "outputs")
+                        else 0
+                    )
                     self._last_queue_depth = _pre_step_queue_depth
                     # Record batch size in ServerMetrics for histogram distribution
                     try:
                         from .server_metrics import get_server_metrics
+
                         get_server_metrics().record_batch_size(self._last_batch_size)
                     except Exception:
-                        logger.debug("ServerMetrics record_batch_size failed", exc_info=True)
+                        logger.debug(
+                            "ServerMetrics record_batch_size failed", exc_info=True
+                        )
                 except Exception:
-                    logger.debug("Post-step metrics/profiling block failed", exc_info=True)
+                    logger.debug(
+                        "Post-step metrics/profiling block failed", exc_info=True
+                    )
             except asyncio.CancelledError:
                 self._total_step_time_ms += (time.monotonic() - _step_start) * 1000
                 logger.info("Engine loop cancelled, failing all in-flight requests")
@@ -2663,9 +3114,13 @@ class EngineCore:
                 # If the executor thread pool is broken (e.g. BrokenThreadPool
                 # or RuntimeError from shutdown), every subsequent submit will
                 # fail — recreate the executor to recover.
-                if isinstance(e, (RuntimeError,)) or 'BrokenThreadPool' in type(e).__name__:
+                if (
+                    isinstance(e, (RuntimeError,))
+                    or "BrokenThreadPool" in type(e).__name__
+                ):
                     try:
                         from .mlx_executor import reset_mlx_executor
+
                         self._executor = reset_mlx_executor()
                         logger.info("Recreated MLX executor after thread pool failure")
                     except Exception:
@@ -2685,9 +3140,11 @@ class EngineCore:
 
                 # Guard: scheduler_output must have 'outputs' attribute (defensive
                 # against TBO/overlap step returning non-standard types)
-                if not hasattr(scheduler_output, 'outputs'):
-                    logger.warning("scheduler_output missing 'outputs' attribute (type=%s), skipping post-step",
-                                   type(scheduler_output).__name__)
+                if not hasattr(scheduler_output, "outputs"):
+                    logger.warning(
+                        "scheduler_output missing 'outputs' attribute (type=%s), skipping post-step",
+                        type(scheduler_output).__name__,
+                    )
                     self._total_step_time_ms += (time.monotonic() - _step_start) * 1000
                     continue
 
@@ -2707,16 +3164,24 @@ class EngineCore:
                         # Lifecycle: transition QUEUED → PREFILLING on first output
                         if rid not in self._finalized_ids:
                             _lc_state = self._lifecycle_orchestrator.get_state(rid)
-                            if _lc_state is not None and _lc_state.phase.name == "QUEUED":
+                            if (
+                                _lc_state is not None
+                                and _lc_state.phase.name == "QUEUED"
+                            ):
                                 self._lifecycle_orchestrator.on_prefill_start(rid)
 
                         # Output parser: extract reasoning/tool_calls from raw text
                         # (output_parser.py parse_output — model-specific extraction)
                         if req_output.finished and req_output.output_text:
                             try:
-                                model_name = getattr(self.scheduler, 'model_id', None)
-                                parsed = self._parse_output(req_output.output_text, model_name)
-                                if parsed.reasoning and parsed.content != req_output.output_text:
+                                model_name = getattr(self.scheduler, "model_id", None)
+                                parsed = self._parse_output(
+                                    req_output.output_text, model_name
+                                )
+                                if (
+                                    parsed.reasoning
+                                    and parsed.content != req_output.output_text
+                                ):
                                     req_output.output_text = parsed.content
                                 if parsed.finish_reason:
                                     req_output.finish_reason = parsed.finish_reason
@@ -2738,32 +3203,44 @@ class EngineCore:
                         # Forward intermediate output to dedup shadow requests
                         if not req_output.finished and self._request_dedup is not None:
                             shadow_ids = [
-                                sid for sid, pid in self._dedup_shadows.items()
+                                sid
+                                for sid, pid in self._dedup_shadows.items()
                                 if pid == rid
                             ]
                             for sid in shadow_ids:
                                 s_collector = self._output_collectors.get(sid)
                                 if s_collector is not None:
                                     from .request import RequestOutput as _RO
-                                    s_collector.put(_RO(
-                                        request_id=sid,
-                                        # Bug fix: deep-copy mutable list fields so shadow
-                                        # collector doesn't share state with primary. Without
-                                        # this, _merge or downstream mutation would corrupt
-                                        # the primary's accumulated output.
-                                        new_token_ids=list(req_output.new_token_ids) if req_output.new_token_ids else req_output.new_token_ids,
-                                        new_text=req_output.new_text,
-                                        output_token_ids=list(req_output.output_token_ids) if req_output.output_token_ids else req_output.output_token_ids,
-                                        output_text=req_output.output_text,
-                                        completion_tokens=req_output.completion_tokens,
-                                        finished=False,
-                                        prompt_tokens=req_output.prompt_tokens,
-                                        logprobs=list(req_output.logprobs) if isinstance(req_output.logprobs, list) else req_output.logprobs,
-                                        current_state=req_output.current_state,
-                                        reasoning_tokens=req_output.reasoning_tokens,
-                                        cached_tokens=req_output.cached_tokens,
-                                        prefill_progress=req_output.prefill_progress,
-                                    ))
+
+                                    s_collector.put(
+                                        _RO(
+                                            request_id=sid,
+                                            # Bug fix: deep-copy mutable list fields so shadow
+                                            # collector doesn't share state with primary. Without
+                                            # this, _merge or downstream mutation would corrupt
+                                            # the primary's accumulated output.
+                                            new_token_ids=list(req_output.new_token_ids)
+                                            if req_output.new_token_ids
+                                            else req_output.new_token_ids,
+                                            new_text=req_output.new_text,
+                                            output_token_ids=list(
+                                                req_output.output_token_ids
+                                            )
+                                            if req_output.output_token_ids
+                                            else req_output.output_token_ids,
+                                            output_text=req_output.output_text,
+                                            completion_tokens=req_output.completion_tokens,
+                                            finished=False,
+                                            prompt_tokens=req_output.prompt_tokens,
+                                            logprobs=list(req_output.logprobs)
+                                            if isinstance(req_output.logprobs, list)
+                                            else req_output.logprobs,
+                                            current_state=req_output.current_state,
+                                            reasoning_tokens=req_output.reasoning_tokens,
+                                            cached_tokens=req_output.cached_tokens,
+                                            prefill_progress=req_output.prefill_progress,
+                                        )
+                                    )
 
                         if req_output.finished:
                             self._num_requests_processed += 1
@@ -2772,46 +3249,71 @@ class EngineCore:
                             if _start_ts is not None:
                                 try:
                                     self._fairness_tracker.record_completion(
-                                        rid, 0.0, time.monotonic() - _start_ts,
+                                        rid,
+                                        0.0,
+                                        time.monotonic() - _start_ts,
                                     )
                                 except Exception:
-                                    logger.debug("fairness record_completion failed", exc_info=True)
+                                    logger.debug(
+                                        "fairness record_completion failed",
+                                        exc_info=True,
+                                    )
                             # Checkpoint: save final state for crash recovery
                             if self._checkpoint_mgr is not None:
                                 try:
                                     from .checkpoint import InferenceState
-                                    self._checkpoint_mgr.save(rid, InferenceState(
-                                        request_id=rid,
-                                        output_text=req_output.output_text or "",
-                                        position=req_output.prompt_tokens + req_output.completion_tokens,
-                                    ))
+
+                                    self._checkpoint_mgr.save(
+                                        rid,
+                                        InferenceState(
+                                            request_id=rid,
+                                            output_text=req_output.output_text or "",
+                                            position=req_output.prompt_tokens
+                                            + req_output.completion_tokens,
+                                        ),
+                                    )
                                 except Exception:
-                                    logger.debug("checkpoint save failed", exc_info=True)
+                                    logger.debug(
+                                        "checkpoint save failed", exc_info=True
+                                    )
                             # Dedup fan-out: deliver output to shadow requests before finalize
                             if self._request_dedup is not None:
                                 content_hash = self._dedup_hashes.get(rid)
                                 if content_hash:
                                     all_ids = self._request_dedup.complete(content_hash)
                                     from .request import RequestOutput as _RO
+
                                     for shadow_id in all_ids:
                                         if shadow_id == rid:
                                             continue
-                                        shadow_collector = self._output_collectors.get(shadow_id)
+                                        shadow_collector = self._output_collectors.get(
+                                            shadow_id
+                                        )
                                         if shadow_collector is not None:
                                             shadow_output = _RO(
                                                 request_id=shadow_id,
                                                 # Bug fix: deep-copy mutable list fields to
                                                 # prevent shared-state corruption between
                                                 # primary and shadow collectors.
-                                                new_token_ids=list(req_output.new_token_ids) if req_output.new_token_ids else req_output.new_token_ids,
+                                                new_token_ids=list(
+                                                    req_output.new_token_ids
+                                                )
+                                                if req_output.new_token_ids
+                                                else req_output.new_token_ids,
                                                 new_text=req_output.new_text,
-                                                output_token_ids=list(req_output.output_token_ids) if req_output.output_token_ids else req_output.output_token_ids,
+                                                output_token_ids=list(
+                                                    req_output.output_token_ids
+                                                )
+                                                if req_output.output_token_ids
+                                                else req_output.output_token_ids,
                                                 output_text=req_output.output_text,
                                                 finished=True,
                                                 finish_reason=req_output.finish_reason,
                                                 prompt_tokens=req_output.prompt_tokens,
                                                 completion_tokens=req_output.completion_tokens,
-                                                logprobs=list(req_output.logprobs) if isinstance(req_output.logprobs, list) else req_output.logprobs,
+                                                logprobs=list(req_output.logprobs)
+                                                if isinstance(req_output.logprobs, list)
+                                                else req_output.logprobs,
                                                 current_state=req_output.current_state,
                                                 reasoning_tokens=req_output.reasoning_tokens,
                                                 cached_tokens=req_output.cached_tokens,
@@ -2838,11 +3340,12 @@ class EngineCore:
                     except Exception as _output_err:
                         logger.error(
                             "Output distribution error for %s: %s",
-                            getattr(req_output, 'request_id', '?'), _output_err,
+                            getattr(req_output, "request_id", "?"),
+                            _output_err,
                             exc_info=True,
                         )
                         # Ensure the request is finalized even if distribution failed
-                        _rid = getattr(req_output, 'request_id', None)
+                        _rid = getattr(req_output, "request_id", None)
                         if _rid:
                             # Put error output + sentinel into collector so
                             # generate()/stream_outputs() consumers don't hang
@@ -2851,21 +3354,29 @@ class EngineCore:
                             if _err_collector is not None:
                                 try:
                                     from .request import RequestOutput
-                                    _err_collector.put(RequestOutput(
-                                        request_id=_rid,
-                                        finished=True,
-                                        finish_reason="error",
-                                        error=f"Output distribution failed: {_output_err}",
-                                    ))
+
+                                    _err_collector.put(
+                                        RequestOutput(
+                                            request_id=_rid,
+                                            finished=True,
+                                            finish_reason="error",
+                                            error=f"Output distribution failed: {_output_err}",
+                                        )
+                                    )
                                     _err_collector.put(None)  # sentinel
                                 except Exception:
                                     logger.debug(
                                         "error collector put failed for %s",
-                                        _rid, exc_info=True,
+                                        _rid,
+                                        exc_info=True,
                                     )
                             self._signal_finished(_rid)
                             self._finalize_request(_rid)
-                            self._fail_dedup_shadows(_rid, f"Output distribution failed: {_output_err}", "error")
+                            self._fail_dedup_shadows(
+                                _rid,
+                                f"Output distribution failed: {_output_err}",
+                                "error",
+                            )
 
                 # Update adaptive batch scheduler metrics
                 if scheduler_output.outputs:
@@ -2879,7 +3390,9 @@ class EngineCore:
                             # so lifecycle state is accurate for metrics and TTFT.
                             if rid not in self._finalized_ids:
                                 state = self._lifecycle_orchestrator.get_state(rid)
-                                if state is not None and state.phase.name in ("PREFILLING",):
+                                if state is not None and state.phase.name in (
+                                    "PREFILLING",
+                                ):
                                     self._lifecycle_orchestrator.on_decode_start(rid)
                             # Skip budget/sliding-window work for finished requests —
                             # their lifecycle ends at FINISHED, not DECODING.
@@ -2896,46 +3409,64 @@ class EngineCore:
                             # cumulative completion_tokens.  completion_tokens is the
                             # total generated so far; feeding it to consume() on every
                             # step would over-count by 1+2+3+...+N instead of N.
-                            _incr_tokens = len(req_output.new_token_ids) if req_output.new_token_ids else 1
-                            budget_result = self._budget_manager.consume(rid, tokens=_incr_tokens)
+                            _incr_tokens = (
+                                len(req_output.new_token_ids)
+                                if req_output.new_token_ids
+                                else 1
+                            )
+                            budget_result = self._budget_manager.consume(
+                                rid, tokens=_incr_tokens
+                            )
                             if budget_result is not None:
                                 # Budget exhausted — abort request so scheduler stops generating
-                                logger.info(f"Budget exhausted for {rid}: {budget_result}")
+                                logger.info(
+                                    f"Budget exhausted for {rid}: {budget_result}"
+                                )
                                 self.scheduler.abort_request(rid)
                                 from .request import RequestOutput as _RO
+
                                 _bc = self._output_collectors.get(rid)
                                 if _bc is not None:
-                                    _bc.put(_RO(
-                                        request_id=rid,
-                                        finished=True,
-                                        finish_reason=budget_result,
-                                        error=f"Budget exhausted: {budget_result}",
-                                        prompt_tokens=req_output.prompt_tokens,
-                                        completion_tokens=req_output.completion_tokens,
-                                    ))
+                                    _bc.put(
+                                        _RO(
+                                            request_id=rid,
+                                            finished=True,
+                                            finish_reason=budget_result,
+                                            error=f"Budget exhausted: {budget_result}",
+                                            prompt_tokens=req_output.prompt_tokens,
+                                            completion_tokens=req_output.completion_tokens,
+                                        )
+                                    )
                                     _bc.put(None)
                                 # Fail dedup shadows so their consumers don't hang
                                 if self._request_dedup is not None:
                                     _shadow_ids = [
-                                        sid for sid, pid in self._dedup_shadows.items()
+                                        sid
+                                        for sid, pid in self._dedup_shadows.items()
                                         if pid == rid
                                     ]
                                     for _sid in _shadow_ids:
                                         _sc = self._output_collectors.get(_sid)
                                         if _sc is not None:
-                                            _sc.put(_RO(
-                                                request_id=_sid,
-                                                finished=True,
-                                                finish_reason=budget_result,
-                                                error=f"Primary request {rid} budget exhausted",
-                                                prompt_tokens=req_output.prompt_tokens,
-                                                completion_tokens=req_output.completion_tokens,
-                                            ))
+                                            _sc.put(
+                                                _RO(
+                                                    request_id=_sid,
+                                                    finished=True,
+                                                    finish_reason=budget_result,
+                                                    error=f"Primary request {rid} budget exhausted",
+                                                    prompt_tokens=req_output.prompt_tokens,
+                                                    completion_tokens=req_output.completion_tokens,
+                                                )
+                                            )
                                             _sc.put(None)
                                         self._signal_finished(_sid)
                                         self._finalize_request(_sid)
                                 self._signal_finished(rid)
-                                self._finalize_request(rid, completion_tokens=req_output.completion_tokens, finish_reason=budget_result)
+                                self._finalize_request(
+                                    rid,
+                                    completion_tokens=req_output.completion_tokens,
+                                    finish_reason=budget_result,
+                                )
                                 # Request is fully finalized — skip remaining per-output
                                 # processing (sliding window, lifecycle) to avoid operating
                                 # on a request whose scheduler state has already been
@@ -2944,7 +3475,10 @@ class EngineCore:
                             # Sliding window tracking
                             if self._sliding_window_mgr is not None:
                                 try:
-                                    total_pos = req_output.prompt_tokens + req_output.completion_tokens
+                                    total_pos = (
+                                        req_output.prompt_tokens
+                                        + req_output.completion_tokens
+                                    )
                                     evicted = self._sliding_window_mgr.on_new_token(
                                         token_position=total_pos,
                                         request_id=rid,
@@ -2959,7 +3493,8 @@ class EngineCore:
                                             # Trim the per-request prompt cache (MLX KV arrays)
                                             if req.prompt_cache is not None:
                                                 self._sliding_window_mgr.trim_kv_cache(
-                                                    req.prompt_cache, request_id=rid,
+                                                    req.prompt_cache,
+                                                    request_id=rid,
                                                 )
                                             # Invalidate prefix cache entries whose blocks
                                             # have slid out of the window. Without this,
@@ -2967,11 +3502,14 @@ class EngineCore:
                                             # stale KV blocks that the model will never
                                             # attend to.
                                             prefix_cache = getattr(
-                                                self.scheduler, '_prefix_cache', None,
+                                                self.scheduler,
+                                                "_prefix_cache",
+                                                None,
                                             )
                                             if prefix_cache is not None:
                                                 self._sliding_window_mgr.invalidate_prefix_cache(
-                                                    prefix_cache, request_id=rid,
+                                                    prefix_cache,
+                                                    request_id=rid,
                                                 )
                                         # Free physical KV blocks back to the BlockPool.
                                         # Without this, the sliding window manager only
@@ -2980,31 +3518,44 @@ class EngineCore:
                                         # remain allocated — a memory leak proportional to
                                         # sequence length.
                                         trim_fn = getattr(
-                                            self.scheduler, 'trim_sliding_window_blocks', None,
+                                            self.scheduler,
+                                            "trim_sliding_window_blocks",
+                                            None,
                                         )
                                         if trim_fn is not None:
                                             trim_fn(rid, len(evicted))
                                 except Exception:
-                                    logger.debug("sliding window tracking failed", exc_info=True)
+                                    logger.debug(
+                                        "sliding window tracking failed", exc_info=True
+                                    )
 
                     # Auto-checkpoint: save inference state periodically for crash recovery
                     if self._checkpoint_mgr is not None:
                         try:
                             for req_output in scheduler_output.outputs:
-                                if not req_output.finished and req_output.completion_tokens > 0:
+                                if (
+                                    not req_output.finished
+                                    and req_output.completion_tokens > 0
+                                ):
                                     if self._checkpoint_mgr.should_auto_checkpoint(
                                         req_output.request_id,
                                         req_output.completion_tokens,
                                     ):
                                         from .checkpoint import InferenceState
+
                                         self._checkpoint_mgr.save(
                                             req_output.request_id,
                                             InferenceState(
                                                 request_id=req_output.request_id,
-                                                position=req_output.prompt_tokens + req_output.completion_tokens,
+                                                position=req_output.prompt_tokens
+                                                + req_output.completion_tokens,
                                                 generated_tokens=[],
-                                                output_text=getattr(req_output, 'output_text', ''),
-                                                model_name=getattr(self.scheduler, 'model_id', ''),
+                                                output_text=getattr(
+                                                    req_output, "output_text", ""
+                                                ),
+                                                model_name=getattr(
+                                                    self.scheduler, "model_id", ""
+                                                ),
                                             ),
                                         )
                         except Exception:
@@ -3019,13 +3570,19 @@ class EngineCore:
                         # new_token_ids length (incremental) rather than cumulative
                         # completion_tokens to avoid over-counting.
                         _tokens_gen = sum(
-                            len(o.new_token_ids) for o in scheduler_output.outputs if o.new_token_ids
+                            len(o.new_token_ids)
+                            for o in scheduler_output.outputs
+                            if o.new_token_ids
                         )
                         # Fallback: if new_token_ids is empty (some scheduler paths
                         # don't populate it), use batch_size as a reasonable estimate.
                         if _tokens_gen == 0 and batch_size > 0:
                             _tokens_gen = batch_size
-                        _throughput = _tokens_gen / (_step_wall_ms / 1000) if _step_wall_ms > 0 else 0.0
+                        _throughput = (
+                            _tokens_gen / (_step_wall_ms / 1000)
+                            if _step_wall_ms > 0
+                            else 0.0
+                        )
 
                         # Estimate per-step ITL from step wall time and tokens generated
                         _est_itl_ms = 0.0
@@ -3039,17 +3596,19 @@ class EngineCore:
                         _est_ttft_ms = 0.0
                         _ttft_count = 0
                         for o in scheduler_output.outputs:
-                            rid = getattr(o, 'request_id', None)
+                            rid = getattr(o, "request_id", None)
                             if not rid or rid in self._ttft_done:
                                 continue
                             # Do NOT skip finished requests — a request that
                             # finishes on its first decode step (e.g. max_tokens=1)
                             # still has a valid TTFT that should be recorded.
                             # Skipping it biases TTFT estimates upward.
-                            if getattr(o, 'completion_tokens', 0) > 0:
+                            if getattr(o, "completion_tokens", 0) > 0:
                                 _start_ts = self._request_timestamps.get(rid)
                                 if _start_ts is not None:
-                                    _est_ttft_ms += (time.monotonic() - _start_ts) * 1000
+                                    _est_ttft_ms += (
+                                        time.monotonic() - _start_ts
+                                    ) * 1000
                                     _ttft_count += 1
                                     self._ttft_done.add(rid)
                                     self._ttft_timestamps[rid] = time.monotonic()
@@ -3070,16 +3629,22 @@ class EngineCore:
                         _gpu_mem_util = 0.0
                         try:
                             import mlx.core as mx
+
                             active_mem = mx.get_active_memory()
                             if _hw_info is None:
                                 from .utils.hardware import get_hardware_info as _ghw
+
                                 _hw_info = _ghw()
                                 _total_mem_bytes = _hw_info.total_memory_bytes
                             _gpu_mem_util = active_mem / max(_total_mem_bytes, 1)
                         except Exception:
-                            logger.debug("GPU memory util read failed for auto-tuner", exc_info=True)
+                            logger.debug(
+                                "GPU memory util read failed for auto-tuner",
+                                exc_info=True,
+                            )
 
                         from .auto_tuner import StepMetrics
+
                         step_metrics = StepMetrics(
                             batch_size=batch_size,
                             tokens_generated=_tokens_gen,
@@ -3094,13 +3659,18 @@ class EngineCore:
                         if self._profiler._total_steps % 100 == 0:
                             # Evaluate previous tuning decisions for regression
                             for prev in self._auto_tuner._history[-1:]:
-                                if getattr(prev, 'after_metrics', None) is None and prev.before_metrics is not None:
+                                if (
+                                    getattr(prev, "after_metrics", None) is None
+                                    and prev.before_metrics is not None
+                                ):
                                     self._auto_tuner.evaluate_tuning(prev, step_metrics)
                                     break
                             tuning_decisions = self._auto_tuner.auto_tune()
                             if tuning_decisions:
                                 self._apply_tuning_to_config(tuning_decisions)
-                                logger.debug(f"AutoTuner applied: {[d.param_name for d in tuning_decisions]}")
+                                logger.debug(
+                                    f"AutoTuner applied: {[d.param_name for d in tuning_decisions]}"
+                                )
                         # SLO checks
                         if _est_ttft_ms > 0:
                             self._slo_monitor.check_slo("ttft", _est_ttft_ms)
@@ -3110,12 +3680,21 @@ class EngineCore:
                         # When idle (throughput=0 and no running requests), recording
                         # a violation inflates the violation rate and triggers
                         # spurious auto-tuning decisions.
-                        if step_metrics.throughput_tok_s > 0 or len(self.scheduler.running) > 0:
-                            self._slo_monitor.check_slo("throughput", step_metrics.throughput_tok_s)
+                        if (
+                            step_metrics.throughput_tok_s > 0
+                            or len(self.scheduler.running) > 0
+                        ):
+                            self._slo_monitor.check_slo(
+                                "throughput", step_metrics.throughput_tok_s
+                            )
                         # Fairness tracker: use incremental tokens (new_token_ids length)
                         # not cumulative completion_tokens, which grows every step.
                         for req_output in scheduler_output.outputs:
-                            _alloc = len(req_output.new_token_ids) if req_output.new_token_ids else 1
+                            _alloc = (
+                                len(req_output.new_token_ids)
+                                if req_output.new_token_ids
+                                else 1
+                            )
                             self._fairness_tracker.record_allocation(
                                 req_output.request_id,
                                 tokens_allocated=_alloc,
@@ -3131,15 +3710,22 @@ class EngineCore:
                             for rid in list(self._request_timestamps.keys()):
                                 # Skip requests already finalized in this step
                                 # (normal completion or earlier timeout processing)
-                                if rid not in self.scheduler.running and rid not in getattr(self.scheduler, 'waiting', {}):
+                                if (
+                                    rid not in self.scheduler.running
+                                    and rid
+                                    not in getattr(self.scheduler, "waiting", {})
+                                ):
                                     continue
                                 start = self._request_timestamps[rid]
                                 if (now - start) > timeout_s:
-                                    logger.warning(f"Request {rid} timed out ({now - start:.0f}s > {timeout_s}s)")
+                                    logger.warning(
+                                        f"Request {rid} timed out ({now - start:.0f}s > {timeout_s}s)"
+                                    )
                                     self.scheduler.abort_request(rid)
                                     collector = self._output_collectors.get(rid)
                                     if collector is not None:
                                         from .request import RequestOutput
+
                                         timeout_output = RequestOutput(
                                             request_id=rid,
                                             finished=True,
@@ -3151,19 +3737,25 @@ class EngineCore:
                                     # Dedup fan-out: deliver timeout to shadow requests
                                     if self._request_dedup is not None:
                                         shadow_ids = [
-                                            sid for sid, pid in self._dedup_shadows.items()
+                                            sid
+                                            for sid, pid in self._dedup_shadows.items()
                                             if pid == rid
                                         ]
                                         for sid in shadow_ids:
-                                            s_collector = self._output_collectors.get(sid)
+                                            s_collector = self._output_collectors.get(
+                                                sid
+                                            )
                                             if s_collector is not None:
                                                 from .request import RequestOutput
-                                                s_collector.put(RequestOutput(
-                                                    request_id=sid,
-                                                    finished=True,
-                                                    finish_reason="timeout",
-                                                    error=f"Primary request {rid} timed out",
-                                                ))
+
+                                                s_collector.put(
+                                                    RequestOutput(
+                                                        request_id=sid,
+                                                        finished=True,
+                                                        finish_reason="timeout",
+                                                        error=f"Primary request {rid} timed out",
+                                                    )
+                                                )
                                                 s_collector.put(None)
                                             self._signal_finished(sid)
                                             # Shadow cleanup deferred to consumer
@@ -3195,12 +3787,15 @@ class EngineCore:
                                         s_collector = self._output_collectors.get(sid)
                                         if s_collector is not None:
                                             from .request import RequestOutput
-                                            s_collector.put(RequestOutput(
-                                                request_id=sid,
-                                                finished=True,
-                                                finish_reason="timeout",
-                                                error=f"Dedup shadow timed out after {timeout_s}s (primary never completed)",
-                                            ))
+
+                                            s_collector.put(
+                                                RequestOutput(
+                                                    request_id=sid,
+                                                    finished=True,
+                                                    finish_reason="timeout",
+                                                    error=f"Dedup shadow timed out after {timeout_s}s (primary never completed)",
+                                                )
+                                            )
                                             s_collector.put(None)
                                         self._signal_finished(sid)
                                         self._cleanup_request(sid)
@@ -3213,9 +3808,11 @@ class EngineCore:
 
                     try:
                         import mlx.core as mx
+
                         active_mem = mx.get_active_memory()
                         if _hw_info is None:
                             from .utils.hardware import get_hardware_info
+
                             _hw_info = get_hardware_info()
                             _total_mem_bytes = _hw_info.total_memory_bytes
                         mem_usage = active_mem / max(_total_mem_bytes, 1)
@@ -3237,17 +3834,26 @@ class EngineCore:
                             # eviction can release them.  Without this, the
                             # scheduler admits large prefills that immediately
                             # re-fill the KV pool and perpetuate OOM.
-                            if self.config.prefill_batch_size > 1 and self._pbs_halve_cooldown <= 0:
+                            if (
+                                self.config.prefill_batch_size > 1
+                                and self._pbs_halve_cooldown <= 0
+                            ):
                                 old_pbs = self.config.prefill_batch_size
                                 self.config.prefill_batch_size = max(1, old_pbs // 2)
-                                self._pbs_halve_cooldown = 64  # Don't halve again for 64 steps
+                                self._pbs_halve_cooldown = (
+                                    64  # Don't halve again for 64 steps
+                                )
                                 logger.info(
                                     "Memory pressure: reducing prefill_batch_size %d -> %d (mem_usage=%.1f%%)",
-                                    old_pbs, self.config.prefill_batch_size, mem_usage * 100,
+                                    old_pbs,
+                                    self.config.prefill_batch_size,
+                                    mem_usage * 100,
                                 )
                             if self._kv_compressor is not None:
                                 try:
-                                    kv_mgr = getattr(self.scheduler, '_kv_manager', None)
+                                    kv_mgr = getattr(
+                                        self.scheduler, "_kv_manager", None
+                                    )
                                     if kv_mgr is not None:
                                         evicted = kv_mgr.memory_pressure_evict(0.90)
                                         if evicted > 0:
@@ -3255,24 +3861,30 @@ class EngineCore:
                                                 f"KV memory pressure eviction: {evicted} blocks"
                                             )
                                 except Exception:
-                                    logger.debug("KV pressure eviction failed", exc_info=True)
+                                    logger.debug(
+                                        "KV pressure eviction failed", exc_info=True
+                                    )
                         # Recovery: when memory usage drops below 70%, restore
                         # prefill_batch_size back toward original.
                         if mem_usage < 0.70:
-                            if self.config.prefill_batch_size < self._original_prefill_batch_size:
+                            if (
+                                self.config.prefill_batch_size
+                                < self._original_prefill_batch_size
+                            ):
                                 self.config.prefill_batch_size = min(
                                     self.config.prefill_batch_size * 2,
                                     self._original_prefill_batch_size,
                                 )
                                 logger.info(
                                     "Memory recovered: restoring prefill_batch_size to %d (mem_usage=%.1f%%)",
-                                    self.config.prefill_batch_size, mem_usage * 100,
+                                    self.config.prefill_batch_size,
+                                    mem_usage * 100,
                                 )
                         # Telemetry: record step-level metrics
                         self._telemetry.collect(
                             "engine_step_batch_size",
                             float(len(scheduler_output.outputs)),
-                            tags={"model": getattr(self.scheduler, 'model_id', '')},
+                            tags={"model": getattr(self.scheduler, "model_id", "")},
                         )
                         self._telemetry.collect(
                             "engine_step_memory_usage",
@@ -3285,15 +3897,32 @@ class EngineCore:
                         if mem_usage < 0.7 and self._spec_prefill_engine is not None:
                             try:
                                 batch_size = len(scheduler_output.outputs)
-                                budget = max(0, self.config.completion_batch_size - batch_size) * 512
+                                budget = (
+                                    max(
+                                        0,
+                                        self.config.completion_batch_size - batch_size,
+                                    )
+                                    * 512
+                                )
                                 if budget > 0:
-                                    entry = self._spec_prefill_engine.try_prefill(budget)
-                                    if entry is not None and entry.status == "completed":
-                                        self._spec_prefill_engine.remove_entry(entry.request_id)
+                                    entry = self._spec_prefill_engine.try_prefill(
+                                        budget
+                                    )
+                                    if (
+                                        entry is not None
+                                        and entry.status == "completed"
+                                    ):
+                                        self._spec_prefill_engine.remove_entry(
+                                            entry.request_id
+                                        )
                             except Exception:
-                                logger.debug("spec prefill attempt failed", exc_info=True)
+                                logger.debug(
+                                    "spec prefill attempt failed", exc_info=True
+                                )
                     except Exception:
-                        logger.debug("memory telemetry collection failed", exc_info=True)
+                        logger.debug(
+                            "memory telemetry collection failed", exc_info=True
+                        )
 
                 # Accumulate total active time (GPU step + output distribution
                 # + profiler overhead).  This must happen after all post-step
@@ -3314,38 +3943,52 @@ class EngineCore:
                 # otherwise crash the engine loop, leaving all active requests
                 # hanging forever.  Log and continue to the next iteration.
                 logger.error(
-                    "Post-step processing error: %s", _post_step_err,
+                    "Post-step processing error: %s",
+                    _post_step_err,
                     exc_info=True,
                 )
                 # Best-effort cleanup: finalize any unfinalized requests
                 try:
-                    if hasattr(scheduler_output, 'outputs'):
+                    if hasattr(scheduler_output, "outputs"):
                         for _ro in scheduler_output.outputs:
-                            _rid = getattr(_ro, 'request_id', None)
+                            _rid = getattr(_ro, "request_id", None)
                             if _rid and _rid not in self._finalized_ids:
                                 _fc = self._output_collectors.get(_rid)
                                 if _fc is not None:
                                     try:
                                         from .request import RequestOutput
-                                        _fc.put(RequestOutput(
-                                            request_id=_rid,
-                                            finished=True,
-                                            finish_reason="error",
-                                            error=f"Post-step processing error: {_post_step_err}",
-                                        ))
+
+                                        _fc.put(
+                                            RequestOutput(
+                                                request_id=_rid,
+                                                finished=True,
+                                                finish_reason="error",
+                                                error=f"Post-step processing error: {_post_step_err}",
+                                            )
+                                        )
                                         _fc.put(None)
                                     except Exception:
-                                        logger.debug("output collector put failed in post-step error cleanup for %s", _rid, exc_info=True)
+                                        logger.debug(
+                                            "output collector put failed in post-step error cleanup for %s",
+                                            _rid,
+                                            exc_info=True,
+                                        )
                                 self._signal_finished(_rid)
                                 self._finalize_request(_rid)
-                                self._fail_dedup_shadows(_rid, f"Post-step processing error: {_post_step_err}", "error")
+                                self._fail_dedup_shadows(
+                                    _rid,
+                                    f"Post-step processing error: {_post_step_err}",
+                                    "error",
+                                )
                 except Exception:
                     logger.debug("post-step error cleanup failed", exc_info=True)
                 # Accumulate step time even on post-step error so
                 # compute_utilization doesn't understate active time.
                 self._total_step_time_ms += (time.monotonic() - _step_start) * 1000
 
-    def _compute_prefix_hash_for_request(self, req_id: str, prompt_token_ids: list[int]) -> int | None:
+    def _compute_prefix_hash_for_request(
+        self, req_id: str, prompt_token_ids: list[int]
+    ) -> int | None:
         """Compute and store a KV prefix hash for a request.
 
         Uses the first complete KV block's worth of tokens as the prefix hash.
@@ -3357,6 +4000,7 @@ class EngineCore:
             return None
         try:
             from yunshu_kv.hash import compute_block_hash
+
             first_block_tokens = prompt_token_ids[:block_size]
             return compute_block_hash(None, first_block_tokens)
         except Exception:
@@ -3369,7 +4013,9 @@ class EngineCore:
         if event:
             event.set()
 
-    def _finalize_request(self, request_id: str, completion_tokens: int = 0, finish_reason: str = "stop") -> None:
+    def _finalize_request(
+        self, request_id: str, completion_tokens: int = 0, finish_reason: str = "stop"
+    ) -> None:
         """Release scheduler-side per-request resources (NOT consumer-side state).
 
         Called from:
@@ -3383,7 +4029,7 @@ class EngineCore:
         is only removed by _cleanup_request() to ensure generate() and
         stream_outputs() can drain the collector after this call.
         """
-        if not hasattr(self, '_finalized_ids'):
+        if not hasattr(self, "_finalized_ids"):
             self._finalized_ids = set()
         if request_id in self._finalized_ids:
             return
@@ -3391,19 +4037,26 @@ class EngineCore:
         # Periodic pruning: remove entries whose requests are fully gone
         # from all tracking dicts (no longer in scheduler, collectors, etc.)
         if len(self._finalized_ids) > 500:
-            _active = (
-                set(self._output_collectors.keys())
-                | set(self._request_timestamps.keys())
+            _active = set(self._output_collectors.keys()) | set(
+                self._request_timestamps.keys()
             )
             try:
                 _active |= set(self.scheduler.requests.keys())
             except Exception:
-                logger.debug("scheduler.requests access failed during finalized cleanup", exc_info=True)
-            self._finalized_ids -= (self._finalized_ids - _active)
-        _block_id = self._request_block_ids.pop(request_id, -1) if hasattr(self, '_request_block_ids') else -1
+                logger.debug(
+                    "scheduler.requests access failed during finalized cleanup",
+                    exc_info=True,
+                )
+            self._finalized_ids -= self._finalized_ids - _active
+        _block_id = (
+            self._request_block_ids.pop(request_id, -1)
+            if hasattr(self, "_request_block_ids")
+            else -1
+        )
         # Inflight prefix sharing
         try:
             from .inflight_prefix_sharing import get_inflight_tracker
+
             get_inflight_tracker().unregister(request_id)
         except Exception:
             logger.debug("inflight prefix unregister failed", exc_info=True)
@@ -3412,7 +4065,11 @@ class EngineCore:
         if lora_id:
             try:
                 from .lora_manager import get_lora_manager
-                lora_mgr = get_lora_manager(engine_id=getattr(self.scheduler, 'model_id', 'default') or 'default')
+
+                lora_mgr = get_lora_manager(
+                    engine_id=getattr(self.scheduler, "model_id", "default")
+                    or "default"
+                )
                 if lora_mgr is not None:
                     lora_mgr.release_adapter(lora_id)
             except Exception:
@@ -3424,7 +4081,11 @@ class EngineCore:
             logger.debug("priority boost cleanup failed", exc_info=True)
         # Lifecycle + budget + memory + KV lifecycle
         try:
-            self._lifecycle_orchestrator.on_request_finished(request_id, completion_tokens=completion_tokens, finish_reason=finish_reason)
+            self._lifecycle_orchestrator.on_request_finished(
+                request_id,
+                completion_tokens=completion_tokens,
+                finish_reason=finish_reason,
+            )
         except Exception:
             logger.debug("lifecycle orchestrator finish failed", exc_info=True)
         try:
@@ -3491,7 +4152,9 @@ class EngineCore:
         try:
             failed = self.scheduler.fail_all_requests()
         except Exception:
-            logger.debug("scheduler.fail_all_requests() failed during cleanup", exc_info=True)
+            logger.debug(
+                "scheduler.fail_all_requests() failed during cleanup", exc_info=True
+            )
             failed = list(self._output_collectors.keys())
 
         # Also collect dedup shadow request IDs that have collectors but
@@ -3524,12 +4187,14 @@ class EngineCore:
         for req_id in all_ids:
             collector = self._output_collectors.get(req_id)
             if collector is not None:
-                collector.put(RequestOutput(
-                    request_id=req_id,
-                    finished=True,
-                    finish_reason="error",
-                    error=error_msg,
-                ))
+                collector.put(
+                    RequestOutput(
+                        request_id=req_id,
+                        finished=True,
+                        finish_reason="error",
+                        error=error_msg,
+                    )
+                )
                 collector.put(None)  # sentinel
             self._signal_finished(req_id)
             # Use _cleanup_request (not just _finalize_request) to also
@@ -3549,7 +4214,9 @@ class EngineCore:
         if new_fails:
             self._num_requests_processed += len(new_fails)
 
-    def _fail_dedup_shadows(self, primary_id: str, error_msg: str, finish_reason: str = "error") -> None:
+    def _fail_dedup_shadows(
+        self, primary_id: str, error_msg: str, finish_reason: str = "error"
+    ) -> None:
         """Deliver error output to all dedup shadows of a failed primary request.
 
         When a primary request is rejected before entering the scheduler (memory
@@ -3557,21 +4224,23 @@ class EngineCore:
         This method delivers error outputs to all of them so consumers don't hang.
         """
         from .request import RequestOutput
+
         shadow_ids = [
-            sid for sid, pid in list(self._dedup_shadows.items())
-            if pid == primary_id
+            sid for sid, pid in list(self._dedup_shadows.items()) if pid == primary_id
         ]
         for sid in shadow_ids:
             collector = self._output_collectors.get(sid)
             if collector is not None:
-                collector.put(RequestOutput(
-                    request_id=sid,
-                    finished=True,
-                    finish_reason=finish_reason,
-                    error=error_msg,
-                    prompt_tokens=0,
-                    completion_tokens=0,
-                ))
+                collector.put(
+                    RequestOutput(
+                        request_id=sid,
+                        finished=True,
+                        finish_reason=finish_reason,
+                        error=error_msg,
+                        prompt_tokens=0,
+                        completion_tokens=0,
+                    )
+                )
                 collector.put(None)
             self._signal_finished(sid)
             # Finalize scheduler-side resources (lifecycle, budget, KV) but
@@ -3596,9 +4265,9 @@ class EngineCore:
         self._stream_states.pop(request_id, None)
         self._finished_events.pop(request_id, None)
         self._request_timestamps.pop(request_id, None)
-        if hasattr(self, '_ttft_timestamps'):
+        if hasattr(self, "_ttft_timestamps"):
             self._ttft_timestamps.pop(request_id, None)
-        if hasattr(self, '_ttft_done'):
+        if hasattr(self, "_ttft_done"):
             self._ttft_done.discard(request_id)
         self._kv_prefix_hashes.pop(request_id, None)
         # Bug fix: do NOT discard from _finalized_ids here.  The idempotency
@@ -3613,9 +4282,14 @@ class EngineCore:
         """Get the model's maximum sequence length from config."""
         try:
             model = self._model
-            config = getattr(model, 'config', model)
-            for attr in ('max_seq_len', 'max_position_embeddings', 'n_positions',
-                         'max_sequence_length', 'seq_length'):
+            config = getattr(model, "config", model)
+            for attr in (
+                "max_seq_len",
+                "max_position_embeddings",
+                "n_positions",
+                "max_sequence_length",
+                "seq_length",
+            ):
                 val = _safe_get(config, attr, 0)
                 if val and isinstance(val, int) and val > 0:
                     return val
@@ -3638,7 +4312,8 @@ class EngineCore:
                     # extract only text parts so apply_chat_template gets a string.
                     if isinstance(content, list):
                         text_parts = [
-                            p.get("text", "") for p in content
+                            p.get("text", "")
+                            for p in content
                             if isinstance(p, dict) and p.get("type") == "text"
                         ]
                         content = "\n".join(t for t in text_parts if t)
@@ -3652,9 +4327,11 @@ class EngineCore:
                 try:
                     text = self._tokenizer.apply_chat_template(clean, **kwargs)
                 except TypeError as e:
-                    if 'enable_thinking' in str(e):
-                        logger.warning("Model doesn't support enable_thinking, retrying without")
-                        kwargs.pop('enable_thinking', None)
+                    if "enable_thinking" in str(e):
+                        logger.warning(
+                            "Model doesn't support enable_thinking, retrying without"
+                        )
+                        kwargs.pop("enable_thinking", None)
                         text = self._tokenizer.apply_chat_template(clean, **kwargs)
                     else:
                         raise
@@ -3666,7 +4343,9 @@ class EngineCore:
         # Generic fallback
         parts = []
         for m in messages:
-            parts.append(f"{m.get('role', 'user').capitalize()}: {m.get('content', '')}")
+            parts.append(
+                f"{m.get('role', 'user').capitalize()}: {m.get('content', '')}"
+            )
         parts.append("Assistant:")
         return "\n".join(parts)
 
@@ -3690,7 +4369,7 @@ class EngineCore:
         if self._kv_offload_manager is not None:
             stats["kv_offload"] = self._kv_offload_manager.get_stats()
         # encoder-decoder cache stats
-        if hasattr(self.scheduler, '_encoder_cache'):
+        if hasattr(self.scheduler, "_encoder_cache"):
             stats["encoder_cache"] = self.scheduler._encoder_cache.get_stats()
         # external prefill server/client stats
         if self._prefill_server is not None:
@@ -3715,7 +4394,9 @@ class EngineCore:
             stats["composition_scheduler"] = self._composition_scheduler.get_stats()
         # Additional module stats
         stats["forward_batch"] = self._batch_composer.get_stats()
-        stats["memory_aware_scheduler"] = self._memory_aware_scheduler.get_stats().__dict__
+        stats["memory_aware_scheduler"] = (
+            self._memory_aware_scheduler.get_stats().__dict__
+        )
         stats["context_window"] = self._context_window_mgr.get_stats()
         stats["kv_prefix_compression"] = self._kv_compressor.get_stats()
         if self._checkpoint_mgr is not None:
@@ -3740,6 +4421,7 @@ class EngineCore:
         # Inflight prefix sharing stats
         try:
             from .inflight_prefix_sharing import get_inflight_tracker
+
             stats["inflight_prefix_sharing"] = get_inflight_tracker().get_stats()
         except Exception:
             logger.debug("inflight prefix stats unavailable", exc_info=True)
@@ -3781,9 +4463,7 @@ class EngineCore:
             "hit_rate": round(mgr.hit_rate, 4),
             "total_lookups": mgr._total_lookups,
             "total_hits": mgr._total_hits,
-            "active_block_tables": len(
-                getattr(self.scheduler, '_block_tables', {})
-            ),
+            "active_block_tables": len(getattr(self.scheduler, "_block_tables", {})),
         }
         # Append KV offload stats
         if self._kv_offload_manager is not None:

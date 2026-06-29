@@ -11,6 +11,7 @@
    - GenerationOutput.prefill_progress forwarded to gateway
    - SSE comment emission for client-side progress bars
 """
+
 import asyncio
 
 import pytest
@@ -115,6 +116,7 @@ class _FakeBatchGen:
 
 def _fake_executor():
     import concurrent.futures
+
     return concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
 
@@ -187,14 +189,16 @@ class TestCancelPropagationStreamOutputs:
         # Put output into collector to simulate engine loop producing output
         collector = core._output_collectors.get(req_id)
         assert collector is not None
-        collector.put(RequestOutput(
-            request_id=req_id,
-            new_text="Hello",
-            finished=True,
-            finish_reason="stop",
-            prompt_tokens=5,
-            completion_tokens=1,
-        ))
+        collector.put(
+            RequestOutput(
+                request_id=req_id,
+                new_text="Hello",
+                finished=True,
+                finish_reason="stop",
+                prompt_tokens=5,
+                completion_tokens=1,
+            )
+        )
         collector.put(None)  # sentinel
 
         collected = []
@@ -237,9 +241,9 @@ class TestCancelPropagationStreamOutputs:
 
         # Simulate the request being in pending_prefill
         scheduler._pending_prefill[req_id] = {
-            'remaining_tokens': [1, 2, 3],
-            'total_prompt_len': 10,
-            'offset': 5,
+            "remaining_tokens": [1, 2, 3],
+            "total_prompt_len": 10,
+            "offset": 5,
         }
         scheduler._active_partial_prefills = 1
 
@@ -282,7 +286,7 @@ class TestPrefillProgressField:
     def test_request_output_has_prefill_progress(self):
         """RequestOutput should have a prefill_progress field."""
         output = RequestOutput(request_id="test-1")
-        assert hasattr(output, 'prefill_progress')
+        assert hasattr(output, "prefill_progress")
         assert output.prefill_progress is None
 
     def test_request_output_prefill_progress_tuple(self):
@@ -298,7 +302,7 @@ class TestPrefillProgressField:
     def test_generation_output_has_prefill_progress(self):
         """GenerationOutput should have a prefill_progress field."""
         output = GenerationOutput()
-        assert hasattr(output, 'prefill_progress')
+        assert hasattr(output, "prefill_progress")
         assert output.prefill_progress is None
 
     def test_generation_output_prefill_progress_tuple(self):
@@ -313,18 +317,22 @@ class TestPrefillProgressInCollector:
     def test_merge_preserves_prefill_progress(self):
         """Merging two outputs should preserve the newer prefill_progress."""
         collector = RequestOutputCollector(aggregate=True)
-        collector.put(RequestOutput(
-            request_id="test-1",
-            new_text="",
-            new_token_ids=[0],
-            prefill_progress=(1024, 4096),
-        ))
-        collector.put(RequestOutput(
-            request_id="test-1",
-            new_text="",
-            new_token_ids=[1],
-            prefill_progress=(2048, 4096),
-        ))
+        collector.put(
+            RequestOutput(
+                request_id="test-1",
+                new_text="",
+                new_token_ids=[0],
+                prefill_progress=(1024, 4096),
+            )
+        )
+        collector.put(
+            RequestOutput(
+                request_id="test-1",
+                new_text="",
+                new_token_ids=[1],
+                prefill_progress=(2048, 4096),
+            )
+        )
         result = collector.get_nowait()
         assert result is not None
         assert result.prefill_progress == (2048, 4096)
@@ -332,34 +340,42 @@ class TestPrefillProgressInCollector:
     def test_merge_uses_newer_when_existing_is_none(self):
         """If existing has no progress but new does, use new's progress."""
         collector = RequestOutputCollector(aggregate=True)
-        collector.put(RequestOutput(
-            request_id="test-1",
-            new_text="Hello",
-            new_token_ids=[0],
-        ))
-        collector.put(RequestOutput(
-            request_id="test-1",
-            new_text=" world",
-            new_token_ids=[1],
-            prefill_progress=(512, 2048),
-        ))
+        collector.put(
+            RequestOutput(
+                request_id="test-1",
+                new_text="Hello",
+                new_token_ids=[0],
+            )
+        )
+        collector.put(
+            RequestOutput(
+                request_id="test-1",
+                new_text=" world",
+                new_token_ids=[1],
+                prefill_progress=(512, 2048),
+            )
+        )
         result = collector.get_nowait()
         assert result.prefill_progress == (512, 2048)
 
     def test_merge_keeps_existing_when_new_is_none(self):
         """If new has no progress but existing does, keep existing's progress."""
         collector = RequestOutputCollector(aggregate=True)
-        collector.put(RequestOutput(
-            request_id="test-1",
-            new_text="Hello",
-            new_token_ids=[0],
-            prefill_progress=(512, 2048),
-        ))
-        collector.put(RequestOutput(
-            request_id="test-1",
-            new_text=" world",
-            new_token_ids=[1],
-        ))
+        collector.put(
+            RequestOutput(
+                request_id="test-1",
+                new_text="Hello",
+                new_token_ids=[0],
+                prefill_progress=(512, 2048),
+            )
+        )
+        collector.put(
+            RequestOutput(
+                request_id="test-1",
+                new_text=" world",
+                new_token_ids=[1],
+            )
+        )
         result = collector.get_nowait()
         assert result.prefill_progress == (512, 2048)
 
@@ -370,7 +386,7 @@ class TestPrefillProgressInScheduler:
     def test_scheduler_has_prefill_progress_outputs_list(self):
         """Scheduler should have _prefill_progress_outputs instance variable."""
         scheduler = Scheduler(None, _FakeTokenizer())
-        assert hasattr(scheduler, '_prefill_progress_outputs')
+        assert hasattr(scheduler, "_prefill_progress_outputs")
         assert isinstance(scheduler._prefill_progress_outputs, list)
 
     def test_scheduler_step_clears_progress_outputs(self):
@@ -380,6 +396,7 @@ class TestPrefillProgressInScheduler:
         scheduler._prefill_progress_outputs = ["stale"]
 
         from yunshu_engine.request import Request
+
         req = Request(
             request_id="test-1",
             prompt="Hello",
@@ -402,6 +419,7 @@ class TestPrefillProgressInScheduler:
         scheduler._batch_gen = _FakeBatchGen()
 
         from yunshu_engine.request import Request
+
         req = Request(
             request_id="test-1",
             prompt="Long prompt",
@@ -413,14 +431,16 @@ class TestPrefillProgressInScheduler:
 
         # Manually simulate chunked prefill state
         scheduler._pending_prefill["test-1"] = {
-            'remaining_tokens': list(range(50)),
-            'total_prompt_len': 100,
-            'offset': 50,
-            'all_prompt_tokens': list(range(100)),
+            "remaining_tokens": list(range(50)),
+            "total_prompt_len": 100,
+            "offset": 50,
+            "all_prompt_tokens": list(range(100)),
         }
         scheduler._active_partial_prefills = 1
         scheduler._chunked_prefill_fairness["test-1"] = 0
-        scheduler._chunked_prefill_enqueued_at["test-1"] = __import__('time').monotonic()
+        scheduler._chunked_prefill_enqueued_at["test-1"] = __import__(
+            "time"
+        ).monotonic()
 
         # Put request into running
         req.status = RequestStatus.RUNNING
@@ -434,13 +454,14 @@ class TestPrefillProgressInScheduler:
         # Since _FakeBatchGen.insert works, we should see progress outputs
         # IF there are still remaining tokens after the chunk
         progress_outputs = [
-            o for o in scheduler._prefill_progress_outputs
-            if hasattr(o, 'prefill_progress') and o.prefill_progress is not None
+            o
+            for o in scheduler._prefill_progress_outputs
+            if hasattr(o, "prefill_progress") and o.prefill_progress is not None
         ]
 
         # After one chunk is processed, there should be progress outputs
         # if remaining tokens still exist
-        if scheduler._pending_prefill.get("test-1", {}).get('remaining_tokens'):
+        if scheduler._pending_prefill.get("test-1", {}).get("remaining_tokens"):
             assert len(progress_outputs) > 0, (
                 "Expected progress output when remaining tokens exist"
             )
@@ -457,6 +478,7 @@ class TestPrefillProgressInScheduler:
         scheduler._batch_gen = _FakeBatchGen()
 
         from yunshu_engine.request import Request
+
         req = Request(
             request_id="test-final",
             prompt="Short",
@@ -470,21 +492,24 @@ class TestPrefillProgressInScheduler:
 
         # Simulate final chunk: only 2 tokens remaining, chunk_size = 2048
         scheduler._pending_prefill["test-final"] = {
-            'remaining_tokens': [0, 1],
-            'total_prompt_len': 3,
-            'offset': 1,
-            'all_prompt_tokens': [0, 1, 2],
+            "remaining_tokens": [0, 1],
+            "total_prompt_len": 3,
+            "offset": 1,
+            "all_prompt_tokens": [0, 1, 2],
         }
         scheduler._active_partial_prefills = 1
         scheduler._chunked_prefill_fairness["test-final"] = 0
-        scheduler._chunked_prefill_enqueued_at["test-final"] = __import__('time').monotonic()
+        scheduler._chunked_prefill_enqueued_at["test-final"] = __import__(
+            "time"
+        ).monotonic()
 
         scheduler._process_pending_prefill()
 
         # Final chunk has no remaining tokens, so no progress output
         progress_outputs = [
-            o for o in scheduler._prefill_progress_outputs
-            if hasattr(o, 'prefill_progress') and o.prefill_progress is not None
+            o
+            for o in scheduler._prefill_progress_outputs
+            if hasattr(o, "prefill_progress") and o.prefill_progress is not None
         ]
         assert len(progress_outputs) == 0, (
             "No progress output should be emitted for final chunk"
@@ -525,14 +550,21 @@ class TestCancelAdminGating:
         class _Tracker:
             def cancel_all(self):
                 return 0
+
             def cancel(self, _id):
                 return False
+
             def get_owner(self, _id):
                 return None
-        monkeypatch.setattr(cancel_mod, "get_request_tracker", lambda: _Tracker(), raising=False)
+
+        monkeypatch.setattr(
+            cancel_mod, "get_request_tracker", lambda: _Tracker(), raising=False
+        )
         # Auth is tested elsewhere — stub _check_auth so we can drive the admin
         # gate directly with an arbitrary role.
-        monkeypatch.setattr(cancel_mod, "_check_auth", lambda request: None, raising=False)
+        monkeypatch.setattr(
+            cancel_mod, "_check_auth", lambda request: None, raising=False
+        )
         # Simulate a real authenticated (non dev-bypass) deployment.
         monkeypatch.delenv("YUNSHU_AUTH_DISABLED", raising=False)
         # request.state.role is set by the simplified TenantAuthMiddleware for
@@ -545,18 +577,23 @@ class TestCancelAdminGating:
     @pytest.mark.asyncio
     async def test_role_unset_denied_cancel_all(self, monkeypatch):
         from fastapi import HTTPException
+
         with pytest.raises(HTTPException) as exc:
             await self._call(role=None, cancel_all=True, monkeypatch=monkeypatch)
         assert exc.value.status_code == 403
 
     @pytest.mark.asyncio
     async def test_admin_role_allowed_cancel_all(self, monkeypatch):
-        result = await self._call(role="admin", cancel_all=True, monkeypatch=monkeypatch)
+        result = await self._call(
+            role="admin", cancel_all=True, monkeypatch=monkeypatch
+        )
         assert result.get("status") == "cancelled"
 
     @pytest.mark.asyncio
     async def test_owner_role_allowed_cancel_all(self, monkeypatch):
         # Single-consumer default: role="owner" (stamped by the simplified middleware).
-        result = await self._call(role="owner", cancel_all=True, monkeypatch=monkeypatch)
+        result = await self._call(
+            role="owner", cancel_all=True, monkeypatch=monkeypatch
+        )
         assert result.get("status") == "cancelled"
         assert result.get("status") == "cancelled"

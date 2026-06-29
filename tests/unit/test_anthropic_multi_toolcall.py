@@ -7,6 +7,7 @@ per call, so breaking after the first DROPPED every subsequent call (and trailin
 that token. Anthropic supports parallel tool_use blocks and the OpenAI chat path has no such
 break. Fix: remove the break so the loop drains all of the token's outputs.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -35,8 +36,8 @@ def test_anthropic_tool_loop_no_longer_breaks_after_first_call():
     src = inspect.getsource(anthropic._stream_anthropic)
     # the buggy pattern: the tool_call branch's `_tc_args_streamed = False` followed
     # (next non-comment, non-blank line) by a bare `break`.
-    assert not re.search(
-        r"_tc_args_streamed = False\s*\n\s*break\b", src
-    ), "the tool_call branch still breaks out of the drain loop, dropping later calls"
+    assert not re.search(r"_tc_args_streamed = False\s*\n\s*break\b", src), (
+        "the tool_call branch still breaks out of the drain loop, dropping later calls"
+    )
     # and the rationale comment is present at the fix site
     assert "do NOT break" in src

@@ -4,6 +4,7 @@
 class TestRadixTreeEvictionStrategies:
     def _make_tree_with_leaves(self, strategy="lru"):
         from yunshu_kv.radix_attention import RadixTree
+
         tree = RadixTree(eviction_strategy=strategy)
         # Insert some nodes
         node = tree.insert([1, 2, 3], [], [])
@@ -48,11 +49,13 @@ class TestRadixTreeEvictionStrategies:
 
     def test_default_is_lru(self):
         from yunshu_kv.radix_attention import RadixTree
+
         tree = RadixTree()
         assert tree._eviction_strategy == "lru"
 
     def test_eviction_respects_ref_count(self):
         from yunshu_kv.radix_attention import RadixTree
+
         tree = RadixTree(eviction_strategy="lru")
         node = tree.insert([1, 2, 3], [], [])
         node.creation_time = 100.0
@@ -65,6 +68,7 @@ class TestRadixTreeEvictionStrategies:
 class TestRadixNodeAccessTracking:
     def test_access_count_increments(self):
         from yunshu_kv.radix_attention import RadixTree
+
         tree = RadixTree()
         node = tree.insert([1, 2, 3], [], [])
         assert node.access_count == 0
@@ -75,6 +79,7 @@ class TestRadixNodeAccessTracking:
 
     def test_creation_time_set(self):
         from yunshu_kv.radix_attention import RadixTree
+
         tree = RadixTree()
         node = tree.insert([1, 2, 3], [], [])
         assert node.creation_time > 0

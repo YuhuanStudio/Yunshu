@@ -1,4 +1,5 @@
 """Tests for replication modules."""
+
 import json
 import tempfile
 from pathlib import Path
@@ -9,6 +10,7 @@ import pytest
 class TestHardwareDetection:
     def test_detect_hardware(self):
         from yunshu_engine.utils.hardware import detect_hardware
+
         hw = detect_hardware()
         assert hw.chip_name
         assert hw.total_memory_gb > 0
@@ -16,13 +18,15 @@ class TestHardwareDetection:
 
     def test_format_bytes(self):
         from yunshu_engine.utils.hardware import format_bytes
+
         assert format_bytes(0) == "0 B"
-        assert "GB" in format_bytes(16 * 1024 ** 3)
-        assert "MB" in format_bytes(512 * 1024 ** 2)
+        assert "GB" in format_bytes(16 * 1024**3)
+        assert "MB" in format_bytes(512 * 1024**2)
         assert "KB" in format_bytes(1024)
 
     def test_parse_chip_info(self):
         from yunshu_engine.utils.hardware import parse_chip_info
+
         assert parse_chip_info("Apple M4 Pro") == ("M4", "Pro")
         assert parse_chip_info("Apple M3 Max") == ("M3", "Max")
         assert parse_chip_info("Apple M2") == ("M2", "")
@@ -33,11 +37,13 @@ class TestHardwareDetection:
         import sys
 
         from yunshu_engine.utils.hardware import is_apple_silicon
+
         if sys.platform == "darwin" and platform.machine() == "arm64":
             assert is_apple_silicon()
 
     def test_get_system_memory_gb(self):
         from yunshu_engine.utils.hardware import get_system_memory_gb
+
         gb = get_system_memory_gb()
         assert gb > 0
 
@@ -45,6 +51,7 @@ class TestHardwareDetection:
 class TestOptimizations:
     def test_get_optimization_status(self):
         from yunshu_engine.optimizations import get_optimization_status
+
         status = get_optimization_status()
         assert "hardware" in status
         assert "chip" in status["hardware"]
@@ -55,12 +62,14 @@ class TestOptimizations:
 class TestModelRegistry:
     def test_singleton(self):
         from yunshu_engine.model_registry import ModelRegistry
+
         r1 = ModelRegistry()
         r2 = ModelRegistry()
         assert r1 is r2
 
     def test_acquire_release(self):
         from yunshu_engine.model_registry import get_registry
+
         registry = get_registry()
 
         class FakeModel:
@@ -82,6 +91,7 @@ class TestModelRegistry:
 
     def test_ownership_error(self):
         from yunshu_engine.model_registry import ModelOwnershipError, get_registry
+
         registry = get_registry()
 
         class FakeModel:
@@ -102,6 +112,7 @@ class TestModelRegistry:
 
     def test_stats(self):
         from yunshu_engine.model_registry import get_registry
+
         stats = get_registry().get_stats()
         assert "total_entries" in stats
         assert "active_owners" in stats
@@ -110,53 +121,74 @@ class TestModelRegistry:
 class TestModelDiscovery:
     def test_detect_llm(self):
         from yunshu_engine.model_discovery import detect_model_type
+
         with tempfile.TemporaryDirectory() as tmp:
             model_dir = Path(tmp) / "test-llm"
             model_dir.mkdir()
-            (model_dir / "config.json").write_text(json.dumps({
-                "model_type": "llama",
-                "architectures": ["LlamaForCausalLM"],
-            }))
+            (model_dir / "config.json").write_text(
+                json.dumps(
+                    {
+                        "model_type": "llama",
+                        "architectures": ["LlamaForCausalLM"],
+                    }
+                )
+            )
             assert detect_model_type(model_dir) == "llm"
 
     def test_detect_vlm(self):
         from yunshu_engine.model_discovery import detect_model_type
+
         with tempfile.TemporaryDirectory() as tmp:
             model_dir = Path(tmp) / "test-vlm"
             model_dir.mkdir()
-            (model_dir / "config.json").write_text(json.dumps({
-                "model_type": "qwen3_omni",
-                "architectures": ["Qwen3OmniForConditionalGeneration"],
-                "vision_config": {"hidden_size": 1152},
-            }))
+            (model_dir / "config.json").write_text(
+                json.dumps(
+                    {
+                        "model_type": "qwen3_omni",
+                        "architectures": ["Qwen3OmniForConditionalGeneration"],
+                        "vision_config": {"hidden_size": 1152},
+                    }
+                )
+            )
             assert detect_model_type(model_dir) == "vlm"
 
     def test_detect_tts(self):
         from yunshu_engine.model_discovery import detect_model_type
+
         with tempfile.TemporaryDirectory() as tmp:
             model_dir = Path(tmp) / "test-tts"
             model_dir.mkdir()
-            (model_dir / "config.json").write_text(json.dumps({
-                "model_type": "qwen3_tts",
-                "architectures": ["Qwen3TTSForConditionalGeneration"],
-            }))
+            (model_dir / "config.json").write_text(
+                json.dumps(
+                    {
+                        "model_type": "qwen3_tts",
+                        "architectures": ["Qwen3TTSForConditionalGeneration"],
+                    }
+                )
+            )
             assert detect_model_type(model_dir) == "audio_tts"
 
     def test_detect_asr(self):
         from yunshu_engine.model_discovery import detect_model_type
+
         with tempfile.TemporaryDirectory() as tmp:
             model_dir = Path(tmp) / "test-asr"
             model_dir.mkdir()
-            (model_dir / "config.json").write_text(json.dumps({
-                "model_type": "qwen3_asr",
-                "architectures": ["Qwen3ASRForConditionalGeneration"],
-            }))
+            (model_dir / "config.json").write_text(
+                json.dumps(
+                    {
+                        "model_type": "qwen3_asr",
+                        "architectures": ["Qwen3ASRForConditionalGeneration"],
+                    }
+                )
+            )
             assert detect_model_type(model_dir) == "audio_stt"
 
     def test_detect_from_name(self):
         # Dynamic detection delegates to model_manager._detect_model_type
         # For dirs without config.json, it falls back to directory name heuristics
         from yunshu_engine.model_manager import ModelType, _detect_model_type
+
         with tempfile.TemporaryDirectory() as tmp:
             # TTS by name heuristic
             tts_dir = Path(tmp) / "Qwen3-TTS-1.7B"
@@ -175,6 +207,7 @@ class TestModelDiscovery:
 
     def test_discover_models(self):
         from yunshu_engine.model_discovery import discover_models
+
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
 
@@ -214,6 +247,7 @@ class TestRequest:
 
     def test_vlm_fields(self):
         from yunshu_engine.request import Request
+
         req = Request(
             request_id="vlm-test",
             prompt="describe this",
@@ -225,6 +259,7 @@ class TestRequest:
 
     def test_append_token_tracks_output(self):
         from yunshu_engine.request import Request
+
         req = Request(request_id="test", prompt="hello")
         assert req.num_computed_tokens == 0
         req.append_token(42)
@@ -237,6 +272,7 @@ class TestRequest:
 class TestPrefillProgress:
     def test_update_and_get(self):
         from yunshu_engine.prefill_progress import PrefillProgressTracker
+
         tracker = PrefillProgressTracker()
 
         tracker.update("req-1", 500, 1000, "test-model")
@@ -247,6 +283,7 @@ class TestPrefillProgress:
 
     def test_auto_remove_on_complete(self):
         from yunshu_engine.prefill_progress import PrefillProgressTracker
+
         tracker = PrefillProgressTracker()
 
         tracker.update("req-1", 500, 1000, "test-model")
@@ -257,6 +294,7 @@ class TestPrefillProgress:
 
     def test_remove(self):
         from yunshu_engine.prefill_progress import PrefillProgressTracker
+
         tracker = PrefillProgressTracker()
 
         tracker.update("req-1", 100, 1000, "test-model")
@@ -267,6 +305,7 @@ class TestPrefillProgress:
 class TestServerMetrics:
     def test_record_and_snapshot(self):
         from yunshu_engine.server_metrics import ServerMetrics
+
         m = ServerMetrics()
         m.record_request_complete(
             prompt_tokens=100,
@@ -285,6 +324,7 @@ class TestServerMetrics:
 
     def test_per_model_snapshot(self):
         from yunshu_engine.server_metrics import ServerMetrics
+
         m = ServerMetrics()
         m.record_request_complete(100, 50, model_id="model-a")
         m.record_request_complete(200, 100, model_id="model-b")
@@ -297,6 +337,7 @@ class TestServerMetrics:
 
     def test_clear_session(self):
         from yunshu_engine.server_metrics import ServerMetrics
+
         m = ServerMetrics()
         m.record_request_complete(100, 50)
         m.clear_session()
@@ -306,6 +347,7 @@ class TestServerMetrics:
     def test_alltime_persistence(self):
         with tempfile.TemporaryDirectory() as tmp:
             from yunshu_engine.server_metrics import ServerMetrics
+
             path = Path(tmp) / "stats.json"
             m1 = ServerMetrics(stats_path=path)
             m1.record_request_complete(100, 50)
@@ -341,12 +383,14 @@ class TestOutputCollector:
 
     def test_sentinel(self):
         from yunshu_engine.output_collector import RequestOutputCollector
+
         c = RequestOutputCollector()
         c.put(None)
         assert c.get_nowait() is None
 
     def test_stream_state(self):
         from yunshu_engine.output_collector import RequestStreamState
+
         ss = RequestStreamState(stream_interval=5)
         assert ss.should_send(1, finished=False)  # first token
         ss.mark_sent(1)

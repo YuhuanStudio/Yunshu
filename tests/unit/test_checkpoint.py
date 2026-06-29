@@ -5,6 +5,7 @@ Tests:
 - FaultRecoveryManager: all 4 strategies, priority config, stats
 - ProgressEstimator: speed estimation, progress tracking, accuracy stats
 """
+
 import threading
 import time
 
@@ -86,11 +87,13 @@ class TestInferenceState:
 
     def test_from_dict_ignores_unknown_fields(self):
         """from_dict should ignore fields not in the dataclass."""
-        state = InferenceState.from_dict({
-            "request_id": "req-extra",
-            "unknown_field": "ignored",
-            "temperature": 0.3,
-        })
+        state = InferenceState.from_dict(
+            {
+                "request_id": "req-extra",
+                "unknown_field": "ignored",
+                "temperature": 0.3,
+            }
+        )
         assert state.request_id == "req-extra"
         assert state.temperature == 0.3
 
@@ -221,7 +224,9 @@ class TestAutoCheckpoint:
             auto_checkpoint_policy=AutoCheckpointPolicy.EVERY_N_TOKENS,
         )
         state = InferenceState(request_id="auto-1", generated_tokens=list(range(5)))
-        assert cp.auto_checkpoint(state) is False  # 5 tokens, no prev cp, interval 0 == 0
+        assert (
+            cp.auto_checkpoint(state) is False
+        )  # 5 tokens, no prev cp, interval 0 == 0
 
         # 10 tokens — no prev checkpoint, prev_interval=0, curr=1 → triggers
         state = InferenceState(request_id="auto-1", generated_tokens=list(range(10)))
@@ -286,7 +291,9 @@ class TestAutoCheckpoint:
             except Exception as e:
                 errors.append(e)
 
-        threads = [threading.Thread(target=writer, args=(f"t-{i}", 50)) for i in range(4)]
+        threads = [
+            threading.Thread(target=writer, args=(f"t-{i}", 50)) for i in range(4)
+        ]
         for t in threads:
             t.start()
         for t in threads:
@@ -392,7 +399,10 @@ class TestFaultRecoveryTruncate:
         cp = InferenceCheckpoint()
         frm = FaultRecoveryManager(
             cp,
-            strategy_priority=[RecoveryStrategy.TRUNCATE, RecoveryStrategy.GRACEFUL_ERROR],
+            strategy_priority=[
+                RecoveryStrategy.TRUNCATE,
+                RecoveryStrategy.GRACEFUL_ERROR,
+            ],
         )
         result = frm.handle_error("no-cp", MemoryError("OOM"))
         # Truncate fails, graceful_error succeeds
@@ -423,10 +433,13 @@ class TestFaultRecoveryFallback:
 
     def test_fallback_to_smaller_model(self):
         cp = InferenceCheckpoint()
-        cp.save("fb-1", InferenceState(
-            request_id="fb-1",
-            model_name="qwen-2.5-7b",
-        ))
+        cp.save(
+            "fb-1",
+            InferenceState(
+                request_id="fb-1",
+                model_name="qwen-2.5-7b",
+            ),
+        )
         frm = FaultRecoveryManager(
             cp,
             strategy_priority=[RecoveryStrategy.FALLBACK_MODEL],
@@ -442,13 +455,19 @@ class TestFaultRecoveryFallback:
 
     def test_fallback_no_mapping(self):
         cp = InferenceCheckpoint()
-        cp.save("fb-nm", InferenceState(
-            request_id="fb-nm",
-            model_name="unknown-model",
-        ))
+        cp.save(
+            "fb-nm",
+            InferenceState(
+                request_id="fb-nm",
+                model_name="unknown-model",
+            ),
+        )
         frm = FaultRecoveryManager(
             cp,
-            strategy_priority=[RecoveryStrategy.FALLBACK_MODEL, RecoveryStrategy.GRACEFUL_ERROR],
+            strategy_priority=[
+                RecoveryStrategy.FALLBACK_MODEL,
+                RecoveryStrategy.GRACEFUL_ERROR,
+            ],
             fallback_models={"qwen-2.5-7b": "qwen-2.5-0.5b"},
         )
         result = frm.handle_error("fb-nm", RuntimeError("err"))
@@ -459,7 +478,10 @@ class TestFaultRecoveryFallback:
         cp = InferenceCheckpoint()
         frm = FaultRecoveryManager(
             cp,
-            strategy_priority=[RecoveryStrategy.FALLBACK_MODEL, RecoveryStrategy.GRACEFUL_ERROR],
+            strategy_priority=[
+                RecoveryStrategy.FALLBACK_MODEL,
+                RecoveryStrategy.GRACEFUL_ERROR,
+            ],
         )
         result = frm.handle_error("no-cp", RuntimeError("err"))
         assert result.strategy == RecoveryStrategy.GRACEFUL_ERROR
@@ -470,12 +492,15 @@ class TestFaultRecoveryGraceful:
 
     def test_graceful_error_returns_partial(self):
         cp = InferenceCheckpoint()
-        cp.save("gr-1", InferenceState(
-            request_id="gr-1",
-            output_text="Partial generation text",
-            generated_tokens=list(range(10)),
-            position=20,
-        ))
+        cp.save(
+            "gr-1",
+            InferenceState(
+                request_id="gr-1",
+                output_text="Partial generation text",
+                generated_tokens=list(range(10)),
+                position=20,
+            ),
+        )
         frm = FaultRecoveryManager(
             cp,
             strategy_priority=[RecoveryStrategy.GRACEFUL_ERROR],
@@ -680,8 +705,12 @@ class TestProgressEstimator:
 
     def test_record_completion_accuracy(self):
         pe = ProgressEstimator()
-        pe.record_completion("done", actual_remaining_ms=5000.0, estimated_remaining_ms=4800.0)
-        pe.record_completion("done2", actual_remaining_ms=3000.0, estimated_remaining_ms=3500.0)
+        pe.record_completion(
+            "done", actual_remaining_ms=5000.0, estimated_remaining_ms=4800.0
+        )
+        pe.record_completion(
+            "done2", actual_remaining_ms=3000.0, estimated_remaining_ms=3500.0
+        )
 
         stats = pe.get_stats()
         assert stats["completed_estimates"] == 2

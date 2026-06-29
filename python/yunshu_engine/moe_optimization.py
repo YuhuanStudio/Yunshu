@@ -47,9 +47,11 @@ def _is_renormalizing_gate(module) -> bool:
     """True iff the gate renormalizes its surviving experts' weights, so reducing
     top_k keeps the MoE output correctly SCALED. Covers the common config flag names
     (norm_topk_prob on Qwen/DeepSeek/GLM, plus a couple of aliases)."""
-    return bool(getattr(module, "norm_topk_prob", None)
-                or getattr(module, "norm_topk_probs", None)
-                or getattr(module, "renormalize", None))
+    return bool(
+        getattr(module, "norm_topk_prob", None)
+        or getattr(module, "norm_topk_probs", None)
+        or getattr(module, "renormalize", None)
+    )
 
 
 def apply_moe_top_k(model, target_top_k: int) -> dict:
@@ -83,12 +85,15 @@ def apply_moe_top_k(model, target_top_k: int) -> dict:
     if patched:
         logger.info(
             "MoE top-k optimization: %s -> %d (%d gates patched)",
-            original_top_k, target_top_k, len(patched),
+            original_top_k,
+            target_top_k,
+            len(patched),
         )
     if skipped_unsafe:
         logger.info(
             "MoE top-k: skipped %d non-renormalizing gate(s) — reducing k there would "
-            "scale the MoE output down; left at the trained top_k", skipped_unsafe,
+            "scale the MoE output down; left at the trained top_k",
+            skipped_unsafe,
         )
 
     return {

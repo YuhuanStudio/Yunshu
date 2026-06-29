@@ -33,17 +33,22 @@ def _make_mock_tokenizer():
 @pytest.fixture(autouse=True)
 def _patch_engine():
     from concurrent.futures import ThreadPoolExecutor
+
     real_executor = ThreadPoolExecutor(max_workers=1)
     with ExitStack() as stack:
         stack.enter_context(
-            patch('yunshu_engine.mlx_executor.get_mlx_executor', return_value=real_executor)
+            patch(
+                "yunshu_engine.mlx_executor.get_mlx_executor",
+                return_value=real_executor,
+            )
         )
-        stack.enter_context(patch('yunshu_engine.scheduler.Scheduler'))
+        stack.enter_context(patch("yunshu_engine.scheduler.Scheduler"))
         yield
 
 
 def _make_core(**env_overrides):
     from yunshu_engine.engine_core import EngineCore, EngineCoreConfig
+
     patches = []
     for k, v in env_overrides.items():
         p = patch.dict(os.environ, {k: v})
@@ -51,7 +56,8 @@ def _make_core(**env_overrides):
         patches.append(p)
     try:
         core = EngineCore(
-            _make_mock_model(), _make_mock_tokenizer(),
+            _make_mock_model(),
+            _make_mock_tokenizer(),
             config=EngineCoreConfig(),
         )
     finally:
@@ -96,8 +102,11 @@ class TestEngineCoreWave43Stats:
         core._start_time = None
         stats = core.get_stats()
         expected_keys = [
-            "forward_batch", "memory_aware_scheduler", "context_window",
-            "kv_prefix_compression", "batch_sampler",
+            "forward_batch",
+            "memory_aware_scheduler",
+            "context_window",
+            "kv_prefix_compression",
+            "batch_sampler",
         ]
         for key in expected_keys:
             assert key in stats, f"Missing stats key: {key}"
@@ -109,6 +118,7 @@ class TestBatchedEngineContextWindow:
 
     def test_preprocessor_and_context_window_available(self):
         from yunshu_engine.batched_engine import BatchedEngine
+
         engine = BatchedEngine(model_name="test-model")
         assert engine._preprocessor_registry is not None
 
@@ -123,12 +133,19 @@ class TestCrossModuleWave43:
 
         # All + 43 modules should produce valid stats
         all_keys = [
-
-            "lifecycle", "budget", "kv_lifecycle", "token_scheduler",
-            "auto_tuner", "fairness", "profiler", "slo",
-
-            "forward_batch", "memory_aware_scheduler", "context_window",
-            "kv_prefix_compression", "batch_sampler",
+            "lifecycle",
+            "budget",
+            "kv_lifecycle",
+            "token_scheduler",
+            "auto_tuner",
+            "fairness",
+            "profiler",
+            "slo",
+            "forward_batch",
+            "memory_aware_scheduler",
+            "context_window",
+            "kv_prefix_compression",
+            "batch_sampler",
         ]
         for key in all_keys:
             assert key in stats, f"Missing: {key}"
@@ -136,12 +153,14 @@ class TestCrossModuleWave43:
 
     def test_batch_sampler_functional(self):
         from yunshu_engine.batch_sampler import BatchSampler
+
         sampler = BatchSampler()
         stats = sampler.get_stats()
         assert isinstance(stats, dict)
 
     def test_context_window_functional(self):
         from yunshu_engine.context_window import ContextWindowManager
+
         mgr = ContextWindowManager()
         result = mgr.compute_truncation(
             messages=[{"role": "user", "content": "Hello world"}],
@@ -154,14 +173,16 @@ class TestCrossModuleWave43:
 
     def test_memory_aware_scheduler_functional(self):
         from yunshu_engine.memory_aware_scheduler import MemoryAwareScheduler
+
         sched = MemoryAwareScheduler()
         stats = sched.get_stats()
         # SchedulerStats is a dataclass, not a dict
-        assert hasattr(stats, 'total_admissions')
-        assert hasattr(stats, 'is_paused')
+        assert hasattr(stats, "total_admissions")
+        assert hasattr(stats, "is_paused")
 
     def test_kv_compressor_functional(self):
         from yunshu_engine.kv_prefix_compression import KVPrefixCompressor
+
         comp = KVPrefixCompressor()
         stats = comp.get_stats()
         assert isinstance(stats, dict)

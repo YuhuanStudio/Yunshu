@@ -4,6 +4,7 @@ Uses a FAKE Silero model (monkeypatched) so CI never downloads/loads weights.
 The real model is validated separately; here we cover the integration contract:
 the gate, the streaming-window scoring, and that _run_vad uses the probability.
 """
+
 from __future__ import annotations
 
 import struct
@@ -49,8 +50,11 @@ def _session():
     ws = MagicMock()
     ws.send_json = AsyncMock()
     s = rt.RealtimeSession(ws)
-    s.session.turn_detection = {"type": "server_vad", "threshold": 0.5,
-                                "silence_duration_ms": 500}
+    s.session.turn_detection = {
+        "type": "server_vad",
+        "threshold": 0.5,
+        "silence_duration_ms": 500,
+    }
     return s, ws
 
 
@@ -73,7 +77,7 @@ def test_silero_speech_prob_windows_and_carries_leftover(monkeypatch):
     # 1s @24k → ~16k samples @16k → ~31 windows of 512
     prob = s._silero_speech_prob(_pcm24k(24000))
     assert prob == 0.9
-    assert fake.feeds >= 30          # scored many 32ms windows
+    assert fake.feeds >= 30  # scored many 32ms windows
     assert s._silero_leftover is not None  # remainder carried for continuity
 
 

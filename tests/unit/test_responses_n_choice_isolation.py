@@ -10,6 +10,7 @@ and only an all-choices-failed request re-raises so the outer 507/500 handler re
 This endpoint is a deep async handler needing a live engine/model-manager, so the isolation
 structure is source-guarded (matching test_responses_per_choice_seed.py's approach).
 """
+
 from __future__ import annotations
 
 import inspect

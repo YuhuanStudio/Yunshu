@@ -133,14 +133,17 @@ class ProcessMemoryEnforcer:
                     aborted_any = False
                     for entry in list(self._manager._entries.values()):
                         if entry.is_loading:
-                            logger.warning(f"Aborting load of '{entry.model_id}' — memory limit")
+                            logger.warning(
+                                f"Aborting load of '{entry.model_id}' — memory limit"
+                            )
                             aborted_any = True
                     if not aborted_any:
                         logger.warning("Memory limit exceeded but no models to evict")
                     break
 
                 loaded_non_pinned = [
-                    e for e in self._manager._entries.values()
+                    e
+                    for e in self._manager._entries.values()
                     if e.is_loaded and not e.is_pinned
                 ]
 
@@ -150,14 +153,14 @@ class ProcessMemoryEnforcer:
                 else:
                     victim_id = None
                     # Single model: abort requests, keep loaded (frees KV cache)
-                    if victim.engine and hasattr(victim.engine, 'has_active_requests'):
+                    if victim.engine and hasattr(victim.engine, "has_active_requests"):
                         if victim.engine.has_active_requests():
                             logger.warning(
                                 f"Aborting active requests on '{victim.model_id}' "
                                 f"due to memory pressure (model kept loaded)"
                             )
-                            active_dict = getattr(victim.engine, '_active', None)
-                            abort_set = getattr(victim.engine, '_abort_set', None)
+                            active_dict = getattr(victim.engine, "_active", None)
+                            abort_set = getattr(victim.engine, "_abort_set", None)
                             if active_dict is not None and abort_set is not None:
                                 for rid in list(active_dict.keys()):
                                     abort_set.add(rid)
@@ -171,6 +174,7 @@ class ProcessMemoryEnforcer:
         gc.collect()
         try:
             from .mlx_executor import sync_and_clear_cache
+
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 self._manager._get_mlx_executor(),

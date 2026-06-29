@@ -7,6 +7,7 @@ from python.yunshu_engine.image_engine import ImageGenEngine
 class FakeVAE:
     def decode(self, latents):
         import mlx.core as mx
+
         return mx.zeros((1, 3, 64, 64))
 
 
@@ -17,10 +18,14 @@ class FakeTransformer:
 class FakeTokenizer:
     def apply_chat_template(self, *a, **kw):
         return "test prompt"
+
     def __call__(self, *a, **kw):
         import numpy as np
-        return {"input_ids": np.zeros((1, 512), dtype=np.int64),
-                "attention_mask": np.zeros((1, 512), dtype=np.int64)}
+
+        return {
+            "input_ids": np.zeros((1, 512), dtype=np.int64),
+            "attention_mask": np.zeros((1, 512), dtype=np.int64),
+        }
 
 
 def _make_engine():
@@ -33,6 +38,7 @@ def _make_engine():
     engine._model_path = "/fake"
     engine._model_name = "test-image"
     import concurrent.futures
+
     engine._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     return engine
 
@@ -71,6 +77,7 @@ class TestGenerateUnified:
         engine = _make_engine()
         # Test the method signature accepts the expected kwargs
         import inspect
+
         sig = inspect.signature(engine.generate)
         assert "image" in sig.parameters
         assert "prompt" in sig.parameters
@@ -87,6 +94,7 @@ class TestGenerateVariation:
         engine = _make_engine()
         # Verify the method exists and accepts expected params
         import inspect
+
         sig = inspect.signature(engine._generate_variation)
         assert "source_image" in sig.parameters
         assert "prompt" in sig.parameters
@@ -123,6 +131,7 @@ class TestImageEditsEndpoint:
 
     def test_edits_request_model(self):
         from python.yunshu_gateway.routers.images import ImageEditsRequest
+
         req = ImageEditsRequest(
             image="dGVzdA==",  # base64 of "test"
             prompt="make it red",
@@ -132,6 +141,7 @@ class TestImageEditsEndpoint:
 
     def test_variations_request_model(self):
         from python.yunshu_gateway.routers.images import ImageVariationsRequest
+
         req = ImageVariationsRequest(
             image="dGVzdA==",
         )

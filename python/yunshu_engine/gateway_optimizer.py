@@ -183,17 +183,13 @@ class RequestCoalescer:
         async with self._lock:
             return getattr(self, "_last_flushed", None)
 
-    async def resolve_batch(
-        self, batch: _PendingBatch, results: list[Any]
-    ) -> None:
+    async def resolve_batch(self, batch: _PendingBatch, results: list[Any]) -> None:
         """Resolve all futures in a flushed batch with their results."""
         for future, result in zip(batch.futures, results, strict=False):
             if not future.done():
                 future.set_result(result)
 
-    async def reject_batch(
-        self, batch: _PendingBatch, error: Exception
-    ) -> None:
+    async def reject_batch(self, batch: _PendingBatch, error: Exception) -> None:
         """Reject all futures in a flushed batch with an error.
 
         Called when the engine fails to process the batch, so that
@@ -254,7 +250,8 @@ class StreamingResponseBuffer:
             logger.warning(
                 "StreamingResponseBuffer: truncated write %d -> %d bytes "
                 "(buffer full, flush before writing)",
-                original_n, n,
+                original_n,
+                n,
             )
 
         if n == 0:
@@ -262,7 +259,9 @@ class StreamingResponseBuffer:
 
         # Write into ring buffer (may wrap around)
         first_chunk = min(n, self._capacity - self._write_pos)
-        self._buffer[self._write_pos : self._write_pos + first_chunk] = data[:first_chunk]
+        self._buffer[self._write_pos : self._write_pos + first_chunk] = data[
+            :first_chunk
+        ]
         if first_chunk < n:
             # Wrap around
             self._buffer[0 : n - first_chunk] = data[first_chunk:]
@@ -324,9 +323,8 @@ class StreamingResponseBuffer:
             return bytes(self._buffer[self._read_pos : self._read_pos + self._used])
         # Wrap-around
         first = self._capacity - self._read_pos
-        return (
-            bytes(self._buffer[self._read_pos : self._capacity])
-            + bytes(self._buffer[0 : self._used - first])
+        return bytes(self._buffer[self._read_pos : self._capacity]) + bytes(
+            self._buffer[0 : self._used - first]
         )
 
     def _available(self) -> int:
@@ -351,7 +349,9 @@ class StreamingResponseBuffer:
             "capacity": self._capacity,
             "used": self._used,
             "available": self._available(),
-            "utilization_pct": (self._used / self._capacity * 100) if self._capacity else 0,
+            "utilization_pct": (self._used / self._capacity * 100)
+            if self._capacity
+            else 0,
             "flush_count": self._flush_count,
             "write_count": self._write_count,
             "bytes_written": self._bytes_written,
@@ -441,7 +441,9 @@ class GatewayConnectionPool:
 
             # Prune stale connections to make room
             before = len(conns)
-            self._pool[endpoint] = [c for c in conns if c.active or not self._is_stale(c)]
+            self._pool[endpoint] = [
+                c for c in conns if c.active or not self._is_stale(c)
+            ]
             pruned = before - len(self._pool[endpoint])
             self._eviction_count += pruned
             conns = self._pool[endpoint]
@@ -487,8 +489,7 @@ class GatewayConnectionPool:
                 conns = self._pool[endpoint]
                 before = len(conns)
                 self._pool[endpoint] = [
-                    c for c in conns
-                    if c.active or not self._is_stale(c)
+                    c for c in conns if c.active or not self._is_stale(c)
                 ]
                 removed += before - len(self._pool[endpoint])
             self._eviction_count += removed
@@ -505,10 +506,13 @@ class GatewayConnectionPool:
             for endpoint, conns in self._pool.items():
                 for conn in conns:
                     conn.active = False
-                    if conn.connection is not None and hasattr(conn.connection, "aclose"):
+                    if conn.connection is not None and hasattr(
+                        conn.connection, "aclose"
+                    ):
                         try:
                             # aclose is typically async
                             import inspect
+
                             if inspect.iscoroutinefunction(conn.connection.aclose):
                                 await conn.connection.aclose()
                             else:
@@ -516,7 +520,8 @@ class GatewayConnectionPool:
                         except Exception:
                             logger.debug(
                                 "Failed to close connection to %s",
-                                endpoint, exc_info=True,
+                                endpoint,
+                                exc_info=True,
                             )
             self._pool.clear()
 
@@ -525,9 +530,7 @@ class GatewayConnectionPool:
         active = sum(1 for c in self._pool.values() for conn in c if conn.active)
         idle = total - active
         reuse_rate = (
-            self._reuse_count / self._total_gets
-            if self._total_gets > 0
-            else 0.0
+            self._reuse_count / self._total_gets if self._total_gets > 0 else 0.0
         )
         return {
             "pool_size": total,
@@ -551,9 +554,7 @@ class GatewayConnectionPool:
         """Remove stale idle connections for a specific endpoint."""
         conns = self._pool[endpoint]
         before = len(conns)
-        self._pool[endpoint] = [
-            c for c in conns if not self._is_stale(c) or c.active
-        ]
+        self._pool[endpoint] = [c for c in conns if not self._is_stale(c) or c.active]
         pruned = before - len(self._pool[endpoint])
         self._eviction_count += pruned
 
@@ -737,9 +738,7 @@ class ResponseCache:
                 self._evictions += count
                 return count
 
-            to_remove = [
-                k for k in self._entries if k.startswith(pattern)
-            ]
+            to_remove = [k for k in self._entries if k.startswith(pattern)]
             for k in to_remove:
                 self._remove_entry(k)
             self._evictions += len(to_remove)
@@ -791,8 +790,7 @@ class ResponseCache:
         # Evict expired entries first
         now = time.monotonic()
         expired = [
-            k for k, e in self._entries.items()
-            if (now - e.created_at) > self._ttl
+            k for k, e in self._entries.items() if (now - e.created_at) > self._ttl
         ]
         for k in expired:
             self._remove_entry(k)
@@ -822,9 +820,7 @@ def _sort_dict(d: dict) -> dict:
         if isinstance(v, dict):
             result[k] = _sort_dict(v)
         elif isinstance(v, list):
-            result[k] = [
-                _sort_dict(i) if isinstance(i, dict) else i for i in v
-            ]
+            result[k] = [_sort_dict(i) if isinstance(i, dict) else i for i in v]
         elif isinstance(v, tuple):
             result[k] = list(v)
         else:

@@ -693,9 +693,7 @@ class TestCacheWarmingSchedulerStats:
     def test_get_stats_after_warming(self):
         coord = MultiTierCacheCoordinator()
         coord.store("stat_test", b"data", predicted_access=0)
-        sched = CacheWarmingScheduler(
-            coordinator=coord, prediction_threshold=2
-        )
+        sched = CacheWarmingScheduler(coordinator=coord, prediction_threshold=2)
         for _ in range(3):
             sched.record_request("stat_test")
         preds = sched.predict_hot_prefixes()

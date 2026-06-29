@@ -47,8 +47,11 @@ def _is_cancelled(event: Any) -> bool:
         return event._value
     return event.is_set()
 
+
 _REASONING_EFFORT_MAP = {"low": 2048, "medium": 8192, "high": 32768}
-_MAX_STREAMING_TEXT_BUFFER = 1 * 1024 * 1024  # 1MB safety limit for streaming text buffer
+_MAX_STREAMING_TEXT_BUFFER = (
+    1 * 1024 * 1024
+)  # 1MB safety limit for streaming text buffer
 
 
 def _resolve_think_token_ids(tokenizer):
@@ -64,6 +67,7 @@ def _resolve_think_token_ids(tokenizer):
     DEFAULT path for the most common reasoning models. Encode the BRACKETED form with
     add_special_tokens=False (so a BOS-prepending tokenizer doesn't inflate the length).
     """
+
     def _enc(s: str):
         try:
             return tokenizer.encode(s, add_special_tokens=False)
@@ -76,6 +80,7 @@ def _resolve_think_token_ids(tokenizer):
             return ids
         except Exception:
             return None
+
     try:
         _ts = _enc("<think>")
         _te = _enc("</think>")
@@ -97,6 +102,7 @@ def _wired_limit_ctx(model):
     old_limit = None
     try:
         import mlx.core as mx
+
         max_rec = mx.metal.recommended_max_working_memory_size()
         model_bytes = sum(p.nbytes for p in model.parameters())
         old_limit = mx.set_wired_limit(max_rec) if model_bytes > max_rec * 0.5 else None
@@ -118,6 +124,7 @@ def _wired_limit_ctx(model):
 @dataclass
 class GenerationOutput:
     """Output from generation."""
+
     text: str = ""
     new_text: str = ""
     prompt_tokens: int = 0
@@ -130,7 +137,9 @@ class GenerationOutput:
     reasoning_tokens: int = 0
     current_state: str | None = None  # "reasoning" or "normal" — matches RequestOutput
     error: str | None = None  # Error message if generation failed
-    prefill_progress: tuple[int, int] | None = None  # (processed, total) during chunked prefill
+    prefill_progress: tuple[int, int] | None = (
+        None  # (processed, total) during chunked prefill
+    )
     # True ONLY when a user-supplied stop sequence fired (not natural EOS). finish_reason
     # is "stop" for both, so protocols that must distinguish (Anthropic stop_sequence vs
     # end_turn) read this flag rather than guessing from finish_reason.
@@ -143,7 +152,9 @@ class GenerationOutput:
 _PROGRESSIVE_QUANT_INTERVAL = 256
 
 
-def _create_prompt_cache_with_quant(model, kv_quant_bits: int | None = None, kv_quant_group_size: int = 64):
+def _create_prompt_cache_with_quant(
+    model, kv_quant_bits: int | None = None, kv_quant_group_size: int = 64
+):
     """Create a prompt cache. KV quantization is applied LATER by the generation
     loop's ``_maybe_quantize_kv_cache`` once the cache offset reaches
     ``quantized_kv_start`` — this is the mlx-lm pattern (generate.py).
@@ -158,6 +169,7 @@ def _create_prompt_cache_with_quant(model, kv_quant_bits: int | None = None, kv_
     take effect. ``kv_quant_bits`` is accepted for signature compatibility.
     """
     from mlx_lm.models.cache import make_prompt_cache
+
     return make_prompt_cache(model)
 
 
@@ -175,6 +187,7 @@ def _parse_quant_config_env(s: str) -> dict | None:
     s = s.strip()
     try:
         import json as _json
+
         parsed = _json.loads(s)
         if isinstance(parsed, dict):
             return parsed
@@ -205,6 +218,7 @@ def _prefill_step_size() -> int:
     when memory is ample. Tuned via YUNSHU_PREFILL_STEP_SIZE.
     """
     import os
+
     try:
         v = int(os.environ.get("YUNSHU_PREFILL_STEP_SIZE", "2048"))
     except (TypeError, ValueError):
@@ -221,12 +235,12 @@ def _wrap_custom_logits_processor(proc):
     But mlx-lm's generate_step passes (tokens: mx.array, logits: mx.array).
     This wrapper converts mx.array tokens → list[int] before calling the user processor.
     """
+
     def _wrapped(tokens_mx, logits):
         token_ids = [int(t) for t in tokens_mx]
         return proc(token_ids, logits)
+
     return _wrapped
-
-
 
 
 def _apply_spec_bonus_penalties(
@@ -261,7 +275,11 @@ def _apply_spec_bonus_penalties(
     import mlx.core as _mx
 
     # Generated tokens only (exclude prompt)
-    gen_tokens = all_token_ids[prompt_token_count:] if len(all_token_ids) > prompt_token_count else []
+    gen_tokens = (
+        all_token_ids[prompt_token_count:]
+        if len(all_token_ids) > prompt_token_count
+        else []
+    )
 
     if repetition_penalty != 1.0 and len(gen_tokens) > 0:
         recent = gen_tokens[-recent_ctx:]
@@ -295,6 +313,7 @@ def _apply_spec_bonus_penalties(
 
     return logits
 
+
 def _maybe_quantize_kv_cache(
     prompt_cache: list,
     quantized_kv_start: int,
@@ -318,15 +337,13 @@ def _maybe_quantize_kv_cache(
     try:
         from mlx_lm.models.cache import RotatingKVCache
     except Exception:
-        RotatingKVCache = ()  #type: ignore[assignment]
+        RotatingKVCache = ()  # type: ignore[assignment]
     for i, c in enumerate(prompt_cache):
         if isinstance(c, RotatingKVCache):
             continue
         if hasattr(c, "to_quantized") and hasattr(c, "offset"):
             if c.offset >= quantized_kv_start:
-                prompt_cache[i] = c.to_quantized(
-                    group_size=kv_group_size, bits=kv_bits
-                )
+                prompt_cache[i] = c.to_quantized(group_size=kv_group_size, bits=kv_bits)
 
 
 def _progressive_quantize_kv_cache(
@@ -348,10 +365,13 @@ def _progressive_quantize_kv_cache(
     _maybe_quantize_kv_cache(prompt_cache, quantized_kv_start, kv_group_size, kv_bits)
 
 
-def _store_thinking_segment(ids, thinking_tokens: list[int], thinking_store, kv_cache=None) -> None:
+def _store_thinking_segment(
+    ids, thinking_tokens: list[int], thinking_store, kv_cache=None
+) -> None:
     """Store a thinking segment KV for future reuse."""
     try:
         import hashlib as _hl
+
         conv_id = _hl.sha256(str([int(t) for t in ids[:16]]).encode()).hexdigest()[:16]
         # Snapshot to avoid sharing mutable reference with prefix_cache
         _kv_snapshot = [c for c in kv_cache] if kv_cache else None
@@ -365,8 +385,15 @@ def _store_thinking_segment(ids, thinking_tokens: list[int], thinking_store, kv_
         logger.debug("thinking segment store failed", exc_info=True)
 
 
-def _build_noncached_sampler_text(temperature: float, top_p: float, top_k: int, min_p: float, seed: int | None,
-                                  xtc_probability: float = 0.0, xtc_threshold: float = 0.0):
+def _build_noncached_sampler_text(
+    temperature: float,
+    top_p: float,
+    top_k: int,
+    min_p: float,
+    seed: int | None,
+    xtc_probability: float = 0.0,
+    xtc_threshold: float = 0.0,
+):
     """Numpy-backed sampler that bypasses mlx-lm's @mx.compile cache.
 
     mlx-lm's `categorical_sampling` is wrapped with
@@ -383,7 +410,12 @@ def _build_noncached_sampler_text(temperature: float, top_p: float, top_k: int, 
     import time as _t
 
     import numpy as _np
-    base = int(seed) & ((1 << 63) - 1) if seed is not None else _t.time_ns() & ((1 << 63) - 1)
+
+    base = (
+        int(seed) & ((1 << 63) - 1)
+        if seed is not None
+        else _t.time_ns() & ((1 << 63) - 1)
+    )
     rng = _np.random.default_rng(base)
     _t_ = float(temperature)
     _tp = float(top_p) if top_p else 1.0
@@ -397,6 +429,7 @@ def _build_noncached_sampler_text(temperature: float, top_p: float, top_k: int, 
 
     def _sampler(logits):
         import mlx.core as _mx
+
         arr = _np.asarray(logits.astype(_mx.float32))
         flat = arr.reshape(-1, arr.shape[-1])
         out = _np.empty(flat.shape[0], dtype=_np.int64)
@@ -412,25 +445,30 @@ def _build_noncached_sampler_text(temperature: float, top_p: float, top_k: int, 
             # `stream` flag. An earlier fix only corrected the order AMONG the filters.
             raw = flat[i].astype(_np.float64)
             l = raw - _np.max(raw)
-            p = _np.exp(l); p = p / p.sum()
+            p = _np.exp(l)
+            p = p / p.sum()
             # Apply filters in mlx-lm make_sampler's ORDER — top_p → min_p →
             # XTC → top_k — so this non-streaming temp>0 sampler produces the SAME
             # distribution as the streaming path (which uses make_sampler) for the same
             # params. The old order (top_k first) gave a different surviving token set
             # when both top_k and top_p were set → stream/non-stream diverged.
             if 0 < _tp < 1:
-                order = _np.argsort(-p); cum = _np.cumsum(p[order])
+                order = _np.argsort(-p)
+                cum = _np.cumsum(p[order])
                 # Nucleus = smallest set whose cumulative prob >= top_p, INCLUDING
                 # the token that crosses the threshold (matches mlx-lm apply_top_p).
                 # `order[cum <= _tp]` dropped the crossing token → nucleus too narrow.
                 k = int(_np.searchsorted(cum, _tp, side="left")) + 1
-                keep = order[:max(1, min(k, len(order)))]
-                m = _np.zeros_like(p); m[keep] = 1.0
-                p = p * m; p = p / p.sum()
+                keep = order[: max(1, min(k, len(order)))]
+                m = _np.zeros_like(p)
+                m[keep] = 1.0
+                p = p * m
+                p = p / p.sum()
             if _mp > 0:
                 pmax = p.max()
                 m = (p >= _mp * pmax).astype(_np.float64)
-                p = p * m; p = p / p.sum()
+                p = p * m
+                p = p / p.sum()
             # XTC: with probability _xtc_p, remove every token whose prob is above the
             # threshold EXCEPT the least-probable one among them (matches mlx-lm
             # apply_xtc: mask = probs > min(probs where probs > threshold)). Keeps the
@@ -447,8 +485,10 @@ def _build_noncached_sampler_text(temperature: float, top_p: float, top_k: int, 
                             p = p / _s
             if _tk and _tk < len(p):
                 idx = _np.argpartition(p, -_tk)[-_tk:]
-                m = _np.zeros_like(p); m[idx] = 1.0
-                p = p * m; p = p / p.sum()
+                m = _np.zeros_like(p)
+                m[idx] = 1.0
+                p = p * m
+                p = p / p.sum()
             # Apply temperature LAST, restricted to the survivor set (p>0), exactly
             # like mlx-lm's categorical_sampling(masked_logprobs, temp). Sampling
             # the un-tempered survivor `p` directly would ignore temperature; sample
@@ -456,7 +496,8 @@ def _build_noncached_sampler_text(temperature: float, top_p: float, top_k: int, 
             keep = p > 0
             lf = _np.where(keep, raw / _t_, -_np.inf)
             lf = lf - _np.max(lf)
-            pf = _np.exp(lf); _sf = pf.sum()
+            pf = _np.exp(lf)
+            _sf = pf.sum()
             pf = pf / _sf if _sf > 0 else p
             out[i] = int(rng.choice(len(pf), p=pf))
         return _mx.array(out.reshape(arr.shape[:-1]).astype(_np.int64))
@@ -464,9 +505,15 @@ def _build_noncached_sampler_text(temperature: float, top_p: float, top_k: int, 
     return _sampler
 
 
-def _build_gpu_sampler_text(temperature: float, top_p: float, top_k: int, min_p: float,
-                            seed: int | None, xtc_probability: float = 0.0,
-                            xtc_threshold: float = 0.0):
+def _build_gpu_sampler_text(
+    temperature: float,
+    top_p: float,
+    top_k: int,
+    min_p: float,
+    seed: int | None,
+    xtc_probability: float = 0.0,
+    xtc_threshold: float = 0.0,
+):
     """On-GPU temp>0 sampler (opt-in via YUNSHU_GPU_SAMPLER=1).
 
     The default numpy sampler (_build_noncached_sampler_text) does
@@ -521,7 +568,11 @@ def _build_gpu_sampler_text(temperature: float, top_p: float, top_k: int, min_p:
     if _xtc_on and not (0 <= _xt <= 0.5):
         raise ValueError(f"xtc_threshold must be in [0, 0.5], got {_xt}")
 
-    base = int(seed) & ((1 << 63) - 1) if seed is not None else _t.time_ns() & ((1 << 63) - 1)
+    base = (
+        int(seed) & ((1 << 63) - 1)
+        if seed is not None
+        else _t.time_ns() & ((1 << 63) - 1)
+    )
     state = {"key": mx.random.key(base)}
 
     def _sampler(logprobs):
@@ -551,17 +602,25 @@ def _build_gpu_sampler_text(temperature: float, top_p: float, top_k: int, min_p:
     return _sampler
 
 
-def _build_temp_sampler(temperature, top_p, top_k, min_p, seed,
-                        xtc_probability=0.0, xtc_threshold=0.0):
+def _build_temp_sampler(
+    temperature, top_p, top_k, min_p, seed, xtc_probability=0.0, xtc_threshold=0.0
+):
     """Pick the temp>0 sampler. Default = numpy (proven, avoids the
     @mx.compile PRNG trap). YUNSHU_GPU_SAMPLER=1 = on-GPU Gumbel-max (no per-token
     GPU→CPU sync, preserves mlx-lm's async pipeline; same distribution)."""
     import os as _os
-    if _os.environ.get("YUNSHU_GPU_SAMPLER", "").strip().lower() in ("1", "true", "yes"):
-        return _build_gpu_sampler_text(temperature, top_p, top_k, min_p, seed,
-                                       xtc_probability, xtc_threshold)
-    return _build_noncached_sampler_text(temperature, top_p, top_k, min_p, seed,
-                                         xtc_probability, xtc_threshold)
+
+    if _os.environ.get("YUNSHU_GPU_SAMPLER", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        return _build_gpu_sampler_text(
+            temperature, top_p, top_k, min_p, seed, xtc_probability, xtc_threshold
+        )
+    return _build_noncached_sampler_text(
+        temperature, top_p, top_k, min_p, seed, xtc_probability, xtc_threshold
+    )
 
 
 def _build_constrained_sampler(sampler, json_schema, tokenizer):
@@ -581,7 +640,11 @@ def _build_constrained_sampler(sampler, json_schema, tokenizer):
     grammar_type = None
     grammar = None
 
-    if isinstance(json_schema, dict) and json_schema.get("type") in ("regex", "choice", "cfg"):
+    if isinstance(json_schema, dict) and json_schema.get("type") in (
+        "regex",
+        "choice",
+        "cfg",
+    ):
         grammar_type = json_schema["type"]
         if grammar_type == "regex":
             grammar = json_schema.get("pattern", "")
@@ -602,34 +665,47 @@ def _build_constrained_sampler(sampler, json_schema, tokenizer):
             build_bitmask_engine,
             is_bitmask_enabled,
         )
+
         if is_bitmask_enabled():
             try:
                 engine = build_bitmask_engine(grammar_type, grammar)
                 return BitmaskConstrainedSampler(sampler, engine, tokenizer)
             except Exception:
-                logger.debug("bitmask engine setup failed, falling back to allowlist", exc_info=True)
+                logger.debug(
+                    "bitmask engine setup failed, falling back to allowlist",
+                    exc_info=True,
+                )
     except ImportError:
-        logger.debug("grammar_bitmask module not available, using allowlist path", exc_info=True)
+        logger.debug(
+            "grammar_bitmask module not available, using allowlist path", exc_info=True
+        )
 
     # ── Standard allowlist path ──
     if grammar_type in ("regex", "choice", "cfg"):
         from .grammar_constraint import ConstraintFactory
+
         try:
             constraint = ConstraintFactory.create(grammar_type, grammar, tokenizer)
             from .json_schema import ConstrainedSampler
+
             return ConstrainedSampler(sampler, constraint, tokenizer)
         except Exception:
-            logger.debug("grammar constraint setup failed, returning unconstrained sampler", exc_info=True)
+            logger.debug(
+                "grammar constraint setup failed, returning unconstrained sampler",
+                exc_info=True,
+            )
             return sampler
 
     # Standard JSON schema path
     from .json_schema import ConstrainedSampler, JsonSchemaConstraint
+
     if isinstance(json_schema, str):
         if json_schema == "json_object":
             # Generic JSON object mode — no specific schema
             constraint = JsonSchemaConstraint(None)
         else:
             import json as _json
+
             schema = _json.loads(json_schema)
             constraint = JsonSchemaConstraint(schema)
     else:
@@ -653,7 +729,11 @@ def _build_grammar_constraint(json_schema, tokenizer):
     choice / cfg constraint was dropped with no error. This mirrors the correct routing
     in _build_constrained_sampler.
     """
-    if isinstance(json_schema, dict) and json_schema.get("type") in ("regex", "choice", "cfg"):
+    if isinstance(json_schema, dict) and json_schema.get("type") in (
+        "regex",
+        "choice",
+        "cfg",
+    ):
         gtype = json_schema["type"]
         if gtype == "regex":
             grammar = json_schema.get("pattern", "")
@@ -662,11 +742,14 @@ def _build_grammar_constraint(json_schema, tokenizer):
         else:  # cfg
             grammar = json_schema.get("grammar", "")
         from .grammar_constraint import ConstraintFactory
+
         return ConstraintFactory.create(gtype, grammar, tokenizer)
 
     from .json_schema import JsonSchemaConstraint
+
     if isinstance(json_schema, str) and json_schema != "json_object":
         import json as _json
+
         try:
             return JsonSchemaConstraint(_json.loads(json_schema))
         except Exception:
@@ -682,10 +765,10 @@ def _resolve_model_max_ctx(model) -> int:
     a bare max_seq_len — so the old single-attr lookups were dead for most
     models. Check the model, its .config, and its .args for the usual keys.
     Returns 0 when undeterminable (caller treats that as 'no clamp')."""
-    for src in (model, getattr(model, 'config', None), getattr(model, 'args', None)):
+    for src in (model, getattr(model, "config", None), getattr(model, "args", None)):
         if src is None:
             continue
-        for attr in ('max_position_embeddings', 'max_seq_len', 'n_positions'):
+        for attr in ("max_position_embeddings", "max_seq_len", "n_positions"):
             v = getattr(src, attr, None)
             if isinstance(v, int) and v > 0:
                 return v
@@ -726,9 +809,12 @@ class BatchedEngine:
         # Derive a short basename for label use without disturbing
         # callers that still rely on `model_name` for the loader.
         import os as _os
+
         self.model_label = (
-            _os.path.basename(model_name.rstrip("/")) if model_name else ""
-        ) or model_name or "default"
+            (_os.path.basename(model_name.rstrip("/")) if model_name else "")
+            or model_name
+            or "default"
+        )
 
         self._model = None
         self._tokenizer = None
@@ -744,6 +830,7 @@ class BatchedEngine:
         # ── Wired production modules ──
         # Model preprocessor registry (auto-detects model family for multimodal input)
         from .model_preprocessor import PreprocessorRegistry
+
         self._preprocessor_registry = PreprocessorRegistry()
 
         # Speculative decoding state (Phase 4)
@@ -768,12 +855,14 @@ class BatchedEngine:
 
         # GPU-accelerated rejection sampling (opt-in via YUNSHU_GPU_REJECTION=1)
         from .gpu_rejection import GPURejectionSampler, should_enable_gpu_rejection
+
         self._gpu_rejection_sampler = GPURejectionSampler()
         self._gpu_rejection_enabled = should_enable_gpu_rejection()
 
         # Spec draft verifier: production-grade draft verification with
         # KV cache trimming and bonus token emission
         from .spec_draft_verifier import SpecDraftVerifier
+
         self._spec_draft_verifier = SpecDraftVerifier(track_stats=True)
 
         # Adaptive speculative decode controller (opt-in via YUNSHU_ADAPTIVE_SPEC=1)
@@ -781,6 +870,7 @@ class BatchedEngine:
 
         # Lookahead reasoning: boosts spec decode during <think/> blocks
         from .speculative_decoder import LookaheadReasoning
+
         self._lookahead_reasoning = LookaheadReasoning()
 
         # Medusa speculative decoding (multi-head prediction on hidden state)
@@ -800,10 +890,12 @@ class BatchedEngine:
         import os as _os
 
         from .kv_prefix_cache import KVPrefixCache
+
         _pc_max = int(_os.environ.get("YUNSHU_PREFIX_MAX_ENTRIES", "128"))
         _pc_hot = int(_os.environ.get("YUNSHU_PREFIX_HOT_LIMIT", "32"))
         self._kv_prefix_cache = KVPrefixCache(
-            max_entries=_pc_max, hot_limit=_pc_hot, min_prefix_length=32)
+            max_entries=_pc_max, hot_limit=_pc_hot, min_prefix_length=32
+        )
         # HYBRID-model prefix reuse on the fast path. Hybrid
         # models (Qwen3.5: KVCache + ArraysCache) normally bypass the prefix
         # cache because trimming the recurrent ArraysCache state corrupts it.
@@ -816,9 +908,11 @@ class BatchedEngine:
         # YUNSHU_HYBRID_PREFIX_BLOCK=64 buys more reuse for a steeper cold cost,
         # 256 the reverse. Set YUNSHU_HYBRID_PREFIX=0 to fall back to bypass.
         self._hybrid_prefix_enabled = _os.environ.get(
-            "YUNSHU_HYBRID_PREFIX", "1").strip() in ("1", "true", "yes")
-        self._hybrid_prefix_block = int(_os.environ.get(
-            "YUNSHU_HYBRID_PREFIX_BLOCK", "128"))
+            "YUNSHU_HYBRID_PREFIX", "1"
+        ).strip() in ("1", "true", "yes")
+        self._hybrid_prefix_block = int(
+            _os.environ.get("YUNSHU_HYBRID_PREFIX_BLOCK", "128")
+        )
         # Opt-in MTP (YUNSHU_MTP=1). mlx-vlm is the supported MTP
         # implementation (its speculative path is the only correct one — see mlxvlm_mtp.py).
         # HONESTY: the often-quoted "1.82x lossless" is from a STANDALONE PROOF
@@ -829,10 +923,11 @@ class BatchedEngine:
         # is the gemma-4 assistant drafter. When set and the model has native MTP weights,
         # the engine serves via that backend (single-backend swap, no dual-load): greedy →
         # MTP; sampling → plain gen on the same model. (YUNSHU_MLXVLM_MTP kept as an alias.)
-        self._mlxvlm_mtp_enabled = (
-            _os.environ.get("YUNSHU_MTP", "").strip() in ("1", "true", "yes")
-            or _os.environ.get("YUNSHU_MLXVLM_MTP", "0").strip() in ("1", "true", "yes")
-        )
+        self._mlxvlm_mtp_enabled = _os.environ.get("YUNSHU_MTP", "").strip() in (
+            "1",
+            "true",
+            "yes",
+        ) or _os.environ.get("YUNSHU_MLXVLM_MTP", "0").strip() in ("1", "true", "yes")
         self._mlxvlm_mtp = None
 
         # Warm prompt prefill stats (tracked across _warm_prompt_prefill calls)
@@ -850,6 +945,7 @@ class BatchedEngine:
         # When the same prompt text is submitted multiple times, the prompt cache
         # returns the full KV state directly — zero prefill compute.
         from .prompt_cache import PromptCacheManager
+
         self._prompt_cache = PromptCacheManager(
             max_entries=256,
             max_memory_mb=512.0,
@@ -858,23 +954,28 @@ class BatchedEngine:
 
         # SSD KV cache persistence (opt-in via YUNSHU_SSD_CACHE=1)
         import os
+
         if os.environ.get("YUNSHU_SSD_CACHE", "").strip() in ("1", "true", "yes"):
             ssd_dir = os.environ.get("YUNSHU_SSD_CACHE_DIR", "~/.cache/yunshu/kv-ssd")
             _ssd_raw = os.environ.get("YUNSHU_SSD_CACHE_MAX_GB", "10")
             try:
                 _ssd_float = float(_ssd_raw)
             except (TypeError, ValueError):
-                logger.warning("YUNSHU_SSD_CACHE_MAX_GB invalid value %r, using default 10", _ssd_raw)
+                logger.warning(
+                    "YUNSHU_SSD_CACHE_MAX_GB invalid value %r, using default 10",
+                    _ssd_raw,
+                )
                 _ssd_float = 10.0
             ssd_max_gb = int(_ssd_float)
             if _ssd_float != ssd_max_gb:
                 logger.warning(
                     "YUNSHU_SSD_CACHE_MAX_GB=%r truncated to %d GB (fractional GB not supported)",
-                    _ssd_raw, ssd_max_gb,
+                    _ssd_raw,
+                    ssd_max_gb,
                 )
             self._kv_prefix_cache.enable_ssd_cache(
                 cache_dir=ssd_dir,
-                max_size_bytes=ssd_max_gb * 1024 ** 3,
+                max_size_bytes=ssd_max_gb * 1024**3,
                 model_name=model_name,
             )
 
@@ -897,9 +998,7 @@ class BatchedEngine:
         self._kv_quant_group_size: int = int(
             os.environ.get("YUNSHU_KV_QUANT_GROUP_SIZE", "64")
         )
-        self._kv_quant_start: int = int(
-            os.environ.get("YUNSHU_KV_QUANT_START", "0")
-        )
+        self._kv_quant_start: int = int(os.environ.get("YUNSHU_KV_QUANT_START", "0"))
 
         # KV Transfer client — distributed KV cache transfer between nodes.
         # In single-node mode, used for KV serialization/persistence.
@@ -912,11 +1011,13 @@ class BatchedEngine:
         }
         if os.environ.get("YUNSHU_KV_TRANSFER", "").strip() in ("1", "true", "yes"):
             from .kv_transfer import KVTransferClient, KVTransferConfig
+
             _kv_transfer_cfg = KVTransferConfig.from_env()
             self._kv_transfer_client = KVTransferClient(_kv_transfer_cfg)
             logger.info(
                 "KV transfer client initialized (remote=%s:%d)",
-                _kv_transfer_cfg.remote_host, _kv_transfer_cfg.remote_port,
+                _kv_transfer_cfg.remote_host,
+                _kv_transfer_cfg.remote_port,
             )
 
         # Memory pressure eviction config (vllm-mlx pattern)
@@ -958,6 +1059,7 @@ class BatchedEngine:
                 ThinkingSegmentConfig,
                 ThinkingSegmentSubstore,
             )
+
             _thinking_cfg = ThinkingSegmentConfig(
                 max_segments_per_conversation=int(
                     os.environ.get("YUNSHU_THINKING_MAX_PER_CONV", "10")
@@ -968,16 +1070,14 @@ class BatchedEngine:
                 min_tokens_to_cache=int(
                     os.environ.get("YUNSHU_THINKING_MIN_TOKENS", "32")
                 ),
-                ttl_seconds=float(
-                    os.environ.get("YUNSHU_THINKING_TTL", "3600")
-                ),
-                enable_ssd=os.environ.get(
-                    "YUNSHU_THINKING_SSD", ""
-                ).strip() in ("1", "true", "yes"),
+                ttl_seconds=float(os.environ.get("YUNSHU_THINKING_TTL", "3600")),
+                enable_ssd=os.environ.get("YUNSHU_THINKING_SSD", "").strip()
+                in ("1", "true", "yes"),
                 ssd_cache_dir=os.environ.get("YUNSHU_THINKING_SSD_DIR", ""),
                 enable_compression=os.environ.get(
                     "YUNSHU_THINKING_COMPRESS", ""
-                ).strip() in ("1", "true", "yes"),
+                ).strip()
+                in ("1", "true", "yes"),
             )
             self._thinking_store = ThinkingSegmentSubstore(_thinking_cfg)
 
@@ -1055,10 +1155,11 @@ class BatchedEngine:
         # Without this, two concurrent generate() calls that both see
         # _loaded=False can race and both load the model simultaneously,
         # doubling memory usage and causing model ref leaks.
-        if getattr(self, '_starting', False):
+        if getattr(self, "_starting", False):
             # Another coroutine is already starting — wait for it
             import asyncio
-            while getattr(self, '_starting', False):
+
+            while getattr(self, "_starting", False):
                 await asyncio.sleep(0.05)
             if self._loaded:
                 return
@@ -1084,6 +1185,7 @@ class BatchedEngine:
         if self._mlxvlm_mtp_enabled:
             try:
                 from .mlxvlm_mtp import MLXVLMMtp, is_mtp_capable
+
                 if is_mtp_capable(self.model_name):
                     backend = MLXVLMMtp(self.model_name)
                     await loop.run_in_executor(executor, backend.load)
@@ -1093,15 +1195,20 @@ class BatchedEngine:
                     self._loaded = True
                     logger.info("mlx-vlm MTP backend active for %s", self.model_name)
                     return
-                logger.info("YUNSHU_MTP set but %s is not MTP-capable; "
-                            "using standard path", self.model_name)
+                logger.info(
+                    "YUNSHU_MTP set but %s is not MTP-capable; using standard path",
+                    self.model_name,
+                )
             except Exception:
-                logger.warning("mlx-vlm MTP backend load failed; falling back to "
-                               "standard path", exc_info=True)
+                logger.warning(
+                    "mlx-vlm MTP backend load failed; falling back to standard path",
+                    exc_info=True,
+                )
 
         # Load model on MLX executor thread (non-blocking)
         def _load():
             from mlx_lm.utils import load as load_model
+
             kwargs = {}
             # Check for quantization override from env or settings.
             # The old code did kwargs["quantization"] = <str> and passed it to
@@ -1115,9 +1222,15 @@ class BatchedEngine:
             if qconfig:
                 _qd = _parse_quant_config_env(qconfig)
                 if _qd:
-                    kwargs["model_config"] = {**kwargs.get("model_config", {}), "quantization": _qd}
+                    kwargs["model_config"] = {
+                        **kwargs.get("model_config", {}),
+                        "quantization": _qd,
+                    }
                 else:
-                    logger.warning("YUNSHU_QUANT_CONFIG=%r not parseable as JSON or bits[,group_size]; ignored", qconfig)
+                    logger.warning(
+                        "YUNSHU_QUANT_CONFIG=%r not parseable as JSON or bits[,group_size]; ignored",
+                        qconfig,
+                    )
             # Distributed model load
             # via mlx-lm's NATIVE sharded_load — the single biggest missing piece
             # was that every engine loaded single-node (load(name)) with no group.
@@ -1129,8 +1242,16 @@ class BatchedEngine:
             # Single-process (world_size=1) → trivial size-1 shard = full model,
             # so the path is verifiable on one Mac. Falls back to single-node load
             # on any failure (e.g. model class lacks .shard / .pipeline).
-            _tp = os.environ.get("YUNSHU_TENSOR_PARALLEL", "").strip().lower() in ("1", "true", "yes")
-            _pp = os.environ.get("YUNSHU_PIPELINE_PARALLEL", "").strip().lower() in ("1", "true", "yes")
+            _tp = os.environ.get("YUNSHU_TENSOR_PARALLEL", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            _pp = os.environ.get("YUNSHU_PIPELINE_PARALLEL", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            )
             if _tp and _pp:
                 # Combined TP+PP needs a 2D device mesh: a tensor sub-group and a
                 # pipeline sub-group whose sizes multiply to world_size. Passing the
@@ -1149,6 +1270,7 @@ class BatchedEngine:
                 try:
                     import mlx.core as _mx
                     from mlx_lm.utils import sharded_load
+
                     _group = _mx.distributed.init()
                     _sl_kwargs = {}
                     if _tp:
@@ -1157,7 +1279,11 @@ class BatchedEngine:
                         _sl_kwargs["pipeline_group"] = _group
                     logger.info(
                         "Distributed model load: TP=%s PP=%s world_size=%d rank=%d (%s)",
-                        _tp, _pp, _group.size(), _group.rank(), self.model_name,
+                        _tp,
+                        _pp,
+                        _group.size(),
+                        _group.rank(),
+                        self.model_name,
                     )
                     return sharded_load(self.model_name, **_sl_kwargs)
                 except Exception as _sl_err:
@@ -1165,7 +1291,8 @@ class BatchedEngine:
                         "Distributed sharded_load failed (%s); falling back to "
                         "single-node load. Note: the model class must expose "
                         ".shard (TP) or model.model.pipeline (PP).",
-                        _sl_err, exc_info=True,
+                        _sl_err,
+                        exc_info=True,
                     )
                     # fall through to the normal single-node load below.
             try:
@@ -1189,7 +1316,8 @@ class BatchedEngine:
                     raise
                 logger.warning(
                     "Checkpoint has extra params not in the model class; "
-                    "retrying load with strict=False (%s)", str(e)[:100],
+                    "retrying load with strict=False (%s)",
+                    str(e)[:100],
                 )
                 from pathlib import Path as _Path
 
@@ -1203,6 +1331,7 @@ class BatchedEngine:
                 mp = _Path(self.model_name)
                 if not mp.exists():
                     from mlx_lm.utils import hf_repo_to_path
+
                     mp = hf_repo_to_path(self.model_name)
                 ret = _load_strict_false(mp, strict=False)
                 model = ret[0] if isinstance(ret, tuple) else ret
@@ -1226,7 +1355,10 @@ class BatchedEngine:
             self._loaded = True
         except Exception:
             # Partial init: clean up model that was loaded but subsystems failed
-            logger.error("BatchedEngine start failed after model load, cleaning up", exc_info=True)
+            logger.error(
+                "BatchedEngine start failed after model load, cleaning up",
+                exc_info=True,
+            )
             await self.stop()
             raise
 
@@ -1239,6 +1371,7 @@ class BatchedEngine:
         # Apply model-specific patches (DeepSeek MLA, Qwen 3.5 YARN, Gemma softcap)
         try:
             from .model_patches import apply_model_patches
+
             patches = apply_model_patches(self._model, self._tokenizer, self.model_name)
             if patches:
                 logger.info(f"Model patches applied: {patches}")
@@ -1252,11 +1385,16 @@ class BatchedEngine:
                 MoEEfficiencyOptimizer,
                 RoPEScalingOptimizer,
             )
+
             rope_opt = RoPEScalingOptimizer()
-            target_ctx = getattr(self._model, 'max_seq_len', None)
+            target_ctx = getattr(self._model, "max_seq_len", None)
             if target_ctx is None:
-                config = getattr(self._model, 'config', None) or getattr(self._model, 'args', None)
-                target_ctx = getattr(config, 'max_position_embeddings', 4096) if config else 4096
+                config = getattr(self._model, "config", None) or getattr(
+                    self._model, "args", None
+                )
+                target_ctx = (
+                    getattr(config, "max_position_embeddings", 4096) if config else 4096
+                )
             rope_opt.configure(self._model, target_context_length=target_ctx)
             attn_opt = AttentionOptimizer()
             attn_opt.detect_attention_type(self._model)
@@ -1264,10 +1402,14 @@ class BatchedEngine:
             # Auto-detect MoE config from model
             moe_num_experts = 0
             moe_top_k = 0
-            if hasattr(self._model, 'config'):
+            if hasattr(self._model, "config"):
                 cfg = self._model.config
-                moe_num_experts = getattr(cfg, 'num_experts', getattr(cfg, 'num_local_experts', 0))
-                moe_top_k = getattr(cfg, 'num_experts_per_tok', getattr(cfg, 'num_selected_experts', 0))
+                moe_num_experts = getattr(
+                    cfg, "num_experts", getattr(cfg, "num_local_experts", 0)
+                )
+                moe_top_k = getattr(
+                    cfg, "num_experts_per_tok", getattr(cfg, "num_selected_experts", 0)
+                )
             if moe_num_experts > 0 and moe_top_k > 0:
                 moe_opt.configure(self._model, moe_num_experts, moe_top_k)
             logger.info(
@@ -1288,12 +1430,14 @@ class BatchedEngine:
         if os.environ.get("YUNSHU_LEGACY_MTP", "0").strip() in ("1", "true", "yes"):
             try:
                 from .n_confirmed_patch import apply_n_confirmed_patch
+
                 if apply_n_confirmed_patch():
                     logger.info("[legacy] n_confirmed patch applied")
             except Exception:
                 logger.debug("n_confirmed patch skipped", exc_info=True)
             try:
                 from .mtp_patch import apply_mtp_patch
+
                 if apply_mtp_patch():
                     logger.info("[legacy] MTP patch applied")
             except Exception:
@@ -1307,6 +1451,7 @@ class BatchedEngine:
             from mlx_lm.models.cache import make_prompt_cache
 
             from yunshu_kv.model_cache_config import ModelCacheConfig
+
             test_cache = make_prompt_cache(self._model)
             self._cache_config = ModelCacheConfig.build_from_cache(test_cache)
             logger.info(
@@ -1329,6 +1474,7 @@ class BatchedEngine:
             import mlx.core as mx
             from mlx_lm.generate import generate_step
             from mlx_lm.sample_utils import make_sampler
+
             ids = mx.array(self._tokenizer.encode("Hi"))
             sampler = make_sampler(temp=0.0)
             for _ in generate_step(ids, self._model, max_tokens=1, sampler=sampler):
@@ -1339,6 +1485,7 @@ class BatchedEngine:
         def _model_warmup():
             """Full warmup using ModelWarmupManager (compile + KV cache prefill)."""
             from .model_optimizations import ModelWarmupManager
+
             mgr = ModelWarmupManager()
             model_type = "generic"
             name_lower = self.model_name.lower()
@@ -1386,13 +1533,19 @@ class BatchedEngine:
         # Auto-start EngineCore for continuous batching (default production path)
         # Previously was lazy-loaded only when use_engine_loop=True.
         # Now always starts so the scheduler is ready for concurrent requests.
-        use_fast_only = os.environ.get("YUNSHU_FAST_PATH_ONLY", "").strip() in ("1", "true", "yes")
+        use_fast_only = os.environ.get("YUNSHU_FAST_PATH_ONLY", "").strip() in (
+            "1",
+            "true",
+            "yes",
+        )
         if not use_fast_only:
             try:
                 await self._ensure_engine_core()
                 logger.info("EngineCore auto-started — continuous batching ready")
             except Exception as e:
-                logger.warning(f"EngineCore auto-start failed ({e}), falling back to fast-path only")
+                logger.warning(
+                    f"EngineCore auto-start failed ({e}), falling back to fast-path only"
+                )
                 self._engine_core = None
 
         # KV-5: Apply auto-tuner KV quantization recommendation if available
@@ -1414,13 +1567,11 @@ class BatchedEngine:
         """
         try:
             from .deltanet_inversion import DeltaNetInverter
+
             self._deltanet_inverter = DeltaNetInverter()
 
             # Register capture hooks on any SSM layers the model has
-            has_ssm = any(
-                hasattr(m, 'state')
-                for _, m in self._model.named_modules()
-            )
+            has_ssm = any(hasattr(m, "state") for _, m in self._model.named_modules())
             if has_ssm:
                 self._deltanet_inverter.register_hooks(self._model)
                 logger.info(
@@ -1437,11 +1588,14 @@ class BatchedEngine:
             # engine -> _kv_prefix_cache -> _pre_evict_callback -> engine
             if self._kv_prefix_cache is not None:
                 import weakref
+
                 _weak_self = weakref.ref(self)
+
                 def _on_evict(prompt_tokens, cache):
                     strong = _weak_self()
                     if strong is not None:
                         strong._on_prefix_cache_eviction(prompt_tokens, cache)
+
                 self._kv_prefix_cache._pre_evict_callback = _on_evict
                 logger.info("DeltaNet eviction callback wired into KV prefix cache")
 
@@ -1469,7 +1623,7 @@ class BatchedEngine:
             return
 
         for layer in cache:
-            state = getattr(layer, 'state', None)
+            state = getattr(layer, "state", None)
             if state is None:
                 continue
             # If the inverter has captured entries (from model hooks),
@@ -1486,7 +1640,9 @@ class BatchedEngine:
                         f"from evicted cache"
                     )
             except Exception:
-                logger.debug("DeltaNet inversion failed for evicted layer", exc_info=True)
+                logger.debug(
+                    "DeltaNet inversion failed for evicted layer", exc_info=True
+                )
 
     def invert_evicted_state(self, _prompt_tokens: list[int] | None = None) -> list:
         """Trigger DeltaNet state inversion for evicted or current SSM states.
@@ -1503,7 +1659,9 @@ class BatchedEngine:
             list if inversion is disabled or no state is available.
         """
         if self._deltanet_inverter is None:
-            logger.debug("DeltaNet inversion not enabled — invert_evicted_state() is no-op")
+            logger.debug(
+                "DeltaNet inversion not enabled — invert_evicted_state() is no-op"
+            )
             return []
 
         try:
@@ -1520,15 +1678,18 @@ class BatchedEngine:
     def _load_model_settings(self):
         """Load per-model settings from model directory and apply to engine."""
         from .model_settings import load_model_settings
+
         model_path = ""
         if self._model is not None:
-            config = getattr(self._model, 'config', None)
+            config = getattr(self._model, "config", None)
             if config is not None:
                 if isinstance(config, dict):
                     model_path = config.get("_name_or_path", self.model_name)
                 else:
-                    model_path = getattr(config, '_name_or_path', self.model_name)
-        self._settings = load_model_settings(model_path or self.model_name, self.model_name)
+                    model_path = getattr(config, "_name_or_path", self.model_name)
+        self._settings = load_model_settings(
+            model_path or self.model_name, self.model_name
+        )
         self._apply_settings()
 
     def _apply_settings(self):
@@ -1571,13 +1732,14 @@ class BatchedEngine:
         if s.ssd_cache_enabled and self._kv_prefix_cache is not None:
             self._kv_prefix_cache.enable_ssd_cache(
                 cache_dir=s.ssd_cache_dir,
-                max_size_bytes=s.ssd_cache_max_gb * 1024 ** 3,
+                max_size_bytes=s.ssd_cache_max_gb * 1024**3,
                 model_name=self.model_name,
             )
         if s.enable_thinking is not None:
             self.enable_thinking = s.enable_thinking
         if s.moe_top_k > 0 and self._model is not None:
             from .moe_optimization import apply_moe_top_k
+
             result = apply_moe_top_k(self._model, s.moe_top_k)
             if result["patched_layers"] > 0:
                 logger.info(f"MoE top-k applied: {result}")
@@ -1585,8 +1747,9 @@ class BatchedEngine:
     def get_settings(self):
         return self._settings
 
-    def _jump_forward_generate_sync(self, input_ids, constraint, max_tokens,
-                                    eos_ids, stop=None):
+    def _jump_forward_generate_sync(
+        self, input_ids, constraint, max_tokens, eos_ids, stop=None
+    ):
         """Jump-forward decoding (opt-in YUNSHU_JUMP_FORWARD=1) for
         JSON-schema/grammar-constrained generation. Runs on the MLX executor.
 
@@ -1628,7 +1791,7 @@ class BatchedEngine:
         logits = model(mx.array([input_ids]), cache=cache)[:, -1, :]
         gen_ids: list[int] = []
         pieces: list[str] = []
-        acc = ""           # running detokenized text, for incremental stop scanning
+        acc = ""  # running detokenized text, for incremental stop scanning
         stop_hit = False
         n_fwd = 1
         max_tokens = int(max_tokens)
@@ -1658,7 +1821,9 @@ class BatchedEngine:
             try:
                 constraint.advance(ttext)
             except Exception:
-                logger.debug("jump-forward: constraint.advance(token) failed", exc_info=True)
+                logger.debug(
+                    "jump-forward: constraint.advance(token) failed", exc_info=True
+                )
                 break
             batch = [tid]
             # Jump-forward: emit the grammar-forced continuation in this same forward.
@@ -1689,7 +1854,9 @@ class BatchedEngine:
                         # desynced the constraint from gen_ids.
                         constraint.advance(femit)
                     except Exception:
-                        logger.debug("jump-forward: advance(forced) failed", exc_info=True)
+                        logger.debug(
+                            "jump-forward: advance(forced) failed", exc_info=True
+                        )
                     if stops and _first_stop(acc) != -1:
                         stop_hit = True
                         break
@@ -1720,7 +1887,12 @@ class BatchedEngine:
             import mlx.nn as nn
         except Exception:
             return
-        defaults = {"affine": (64, 4), "mxfp4": (32, 4), "nvfp4": (16, 4), "mxfp8": (32, 8)}
+        defaults = {
+            "affine": (64, 4),
+            "mxfp4": (32, 4),
+            "nvfp4": (16, 4),
+            "mxfp8": (32, 8),
+        }
         group_size, bits = defaults.get(mode, (64, 4))
 
         def _pred(path, module):
@@ -1728,16 +1900,23 @@ class BatchedEngine:
                 return False
             w = getattr(module, "weight", None)
             return w is not None and w.shape[-1] % group_size == 0
+
         try:
             nn.quantize(self._model, group_size, bits, mode=mode, class_predicate=_pred)
             logger.info(
                 "On-the-fly quantization applied: mode=%s group_size=%d bits=%d (%s)",
-                mode, group_size, bits, self.model_name,
+                mode,
+                group_size,
+                bits,
+                self.model_name,
             )
         except Exception as e:
             logger.error(
                 "On-the-fly quantization (mode=%s) failed (%s); serving the model "
-                "as loaded.", mode, e, exc_info=True,
+                "as loaded.",
+                mode,
+                e,
+                exc_info=True,
             )
 
     def _kv_bytes_per_token(self) -> int:
@@ -1752,6 +1931,7 @@ class BatchedEngine:
             return 0
         # Some models nest text config (VLM/omni).
         text_cfg = getattr(cfg, "text_config", None)
+
         def _g(names):
             for obj in (text_cfg, cfg):
                 if obj is None:
@@ -1761,9 +1941,11 @@ class BatchedEngine:
                     if v:
                         return int(v)
             return 0
+
         n_layers = _g(("num_hidden_layers", "n_layers", "num_layers"))
-        n_kv = _g(("num_key_value_heads", "n_kv_heads", "num_kv_heads")) \
-            or _g(("num_attention_heads", "n_heads", "num_heads"))
+        n_kv = _g(("num_key_value_heads", "n_kv_heads", "num_kv_heads")) or _g(
+            ("num_attention_heads", "n_heads", "num_heads")
+        )
         hidden = _g(("hidden_size", "d_model", "n_embd"))
         n_heads = _g(("num_attention_heads", "n_heads", "num_heads")) or 1
         head_dim = _g(("head_dim",)) or (hidden // n_heads if hidden else 0)
@@ -1791,12 +1973,18 @@ class BatchedEngine:
         when model dims can't be read."""
         if self._kv_quant_bits is not None:
             return self._kv_quant_bits
-        if os.environ.get("YUNSHU_KV_QUANT_AUTO", "1").strip().lower() in ("0", "false", "no"):
+        if os.environ.get("YUNSHU_KV_QUANT_AUTO", "1").strip().lower() in (
+            "0",
+            "false",
+            "no",
+        ):
             return None
         per_tok = self._kv_bytes_per_token()
         if per_tok > 0:
             try:
-                min_bytes = int(os.environ.get("YUNSHU_KV_QUANT_AUTO_MIN_BYTES", str(2 * 1024**3)))
+                min_bytes = int(
+                    os.environ.get("YUNSHU_KV_QUANT_AUTO_MIN_BYTES", str(2 * 1024**3))
+                )
             except ValueError:
                 min_bytes = 2 * 1024**3
             return 8 if (per_tok * total_tokens) >= min_bytes else None
@@ -1823,7 +2011,7 @@ class BatchedEngine:
 
         # Check EngineCore's auto-tuner if available
         if self._engine_core is not None:
-            auto_tuner = getattr(self._engine_core, '_auto_tuner', None)
+            auto_tuner = getattr(self._engine_core, "_auto_tuner", None)
             if auto_tuner is not None:
                 recommended_bits = auto_tuner.params.kv_quantization_bits
                 if recommended_bits < 16:  # 16 means no quantization
@@ -1836,6 +2024,7 @@ class BatchedEngine:
         """Initialize LoRA adapter manager after model load."""
         max_loras = int(os.environ.get("YUNSHU_MAX_LORAS", "4"))
         from .lora_manager import LoRAAdapterManager, set_lora_manager
+
         self._lora_manager = LoRAAdapterManager(max_loras=max_loras)
         self._lora_manager.set_base_model(self._model)
         # Wire LoRA memory tracking into model manager budget. The singleton
@@ -1844,6 +2033,7 @@ class BatchedEngine:
         # fails gracefully when the engine runs standalone (no gateway).
         try:
             from yunshu_gateway.engine import get_model_manager
+
             _mm = get_model_manager()
             if _mm is not None:
                 self._lora_manager.set_memory_callback(_mm.track_lora_memory)
@@ -1861,12 +2051,12 @@ class BatchedEngine:
 
         # Auto-discover adapters in model directory
         model_path = ""
-        config = getattr(self._model, 'config', None)
+        config = getattr(self._model, "config", None)
         if config is not None:
             if isinstance(config, dict):
                 model_path = config.get("_name_or_path", "")
             else:
-                model_path = getattr(config, '_name_or_path', "")
+                model_path = getattr(config, "_name_or_path", "")
         if model_path:
             discovered = self._lora_manager.discover_adapters(model_path)
             if discovered:
@@ -1886,20 +2076,22 @@ class BatchedEngine:
         arch_kwargs = self._extract_model_arch(self._model)
 
         # Sarathi-style hybrid chunked prefill (opt-in via YUNSHU_HYBRID_PREFILL=1)
-        hybrid_prefill = os.environ.get(
-            "YUNSHU_HYBRID_PREFILL", ""
-        ).strip() in ("1", "true", "yes")
+        hybrid_prefill = os.environ.get("YUNSHU_HYBRID_PREFILL", "").strip() in (
+            "1",
+            "true",
+            "yes",
+        )
         hybrid_chunk = int(os.environ.get("YUNSHU_HYBRID_CHUNK_SIZE", "512"))
 
         # External prefill (opt-in via YUNSHU_EXTERNAL_PREFILL=1)
         # Enables memory preflight checks, chunked progress tracking,
         # and mid-prefill abort before BatchGenerator.insert().
-        external_prefill = os.environ.get(
-            "YUNSHU_EXTERNAL_PREFILL", ""
-        ).strip() in ("1", "true", "yes")
-        prefill_chunk_size = int(
-            os.environ.get("YUNSHU_PREFILL_CHUNK_SIZE", "2048")
+        external_prefill = os.environ.get("YUNSHU_EXTERNAL_PREFILL", "").strip() in (
+            "1",
+            "true",
+            "yes",
         )
+        prefill_chunk_size = int(os.environ.get("YUNSHU_PREFILL_CHUNK_SIZE", "2048"))
 
         self._engine_core = EngineCore(
             model=self._model,
@@ -1919,14 +2111,17 @@ class BatchedEngine:
                 # pressure without more throughput. The N>=32 throughput plateau
                 # is the hardware ceiling, not a tunable software limit.
                 completion_batch_size=int(
-                    __import__("os").environ.get("YUNSHU_COMPLETION_BATCH_SIZE", "32")),
+                    __import__("os").environ.get("YUNSHU_COMPLETION_BATCH_SIZE", "32")
+                ),
                 # Scheduling policy is now plumbed through (was hardwired
                 # FCFS → PRIORITY/FAIR preemption + aging were unreachable). Opt in
                 # with YUNSHU_SCHEDULER_POLICY=priority|fair (engine-loop only).
-                scheduler_policy=__import__("os").environ.get(
-                    "YUNSHU_SCHEDULER_POLICY", "fcfs").lower(),
-                aging_weight=float(__import__("os").environ.get(
-                    "YUNSHU_SCHEDULER_AGING_WEIGHT", "0.1")),
+                scheduler_policy=__import__("os")
+                .environ.get("YUNSHU_SCHEDULER_POLICY", "fcfs")
+                .lower(),
+                aging_weight=float(
+                    __import__("os").environ.get("YUNSHU_SCHEDULER_AGING_WEIGHT", "0.1")
+                ),
                 **arch_kwargs,
             ),
             executor=executor,
@@ -1938,12 +2133,16 @@ class BatchedEngine:
 
         # Setup memory guard with model dimensions
         try:
-            model_cfg = getattr(self._model, 'config', self._model) if self._model else None
+            model_cfg = (
+                getattr(self._model, "config", self._model) if self._model else None
+            )
             if model_cfg is not None:
-                num_layers = getattr(model_cfg, 'num_hidden_layers', 0)
-                num_kv_heads = getattr(model_cfg, 'num_key_value_heads', 0)
-                head_dim = getattr(model_cfg, 'hidden_size', 0) // max(getattr(model_cfg, 'num_attention_heads', 1), 1)
-                num_attn_heads = getattr(model_cfg, 'num_attention_heads', None)
+                num_layers = getattr(model_cfg, "num_hidden_layers", 0)
+                num_kv_heads = getattr(model_cfg, "num_key_value_heads", 0)
+                head_dim = getattr(model_cfg, "hidden_size", 0) // max(
+                    getattr(model_cfg, "num_attention_heads", 1), 1
+                )
+                num_attn_heads = getattr(model_cfg, "num_attention_heads", None)
                 if num_layers and num_kv_heads and head_dim:
                     self._engine_core.setup_memory_guard(
                         num_layers=num_layers,
@@ -1956,21 +2155,31 @@ class BatchedEngine:
 
         # Setup TurboQuant per-layer mixed-precision KV quantization
         try:
-            model_cfg = getattr(self._model, 'config', self._model) if self._model else None
+            model_cfg = (
+                getattr(self._model, "config", self._model) if self._model else None
+            )
             if model_cfg is not None:
-                num_layers = getattr(model_cfg, 'num_hidden_layers', 0)
+                num_layers = getattr(model_cfg, "num_hidden_layers", 0)
                 if num_layers > 0:
-                    quant_bits = getattr(model_cfg, 'kv_cache_quant_bits', None)
-                    quant_start = int(os.environ.get(
-                        "YUNSHU_TURBOQUANT_START_LAYER",
-                        getattr(model_cfg, 'kv_cache_quant_start_layer', 0),
-                    ))
-                    quant_group = int(os.environ.get(
-                        "YUNSHU_TURBOQUANT_GROUP_SIZE",
-                        getattr(model_cfg, 'kv_cache_quant_group_size', 64),
-                    ))
+                    quant_bits = getattr(model_cfg, "kv_cache_quant_bits", None)
+                    quant_start = int(
+                        os.environ.get(
+                            "YUNSHU_TURBOQUANT_START_LAYER",
+                            getattr(model_cfg, "kv_cache_quant_start_layer", 0),
+                        )
+                    )
+                    quant_group = int(
+                        os.environ.get(
+                            "YUNSHU_TURBOQUANT_GROUP_SIZE",
+                            getattr(model_cfg, "kv_cache_quant_group_size", 64),
+                        )
+                    )
                     # Enable if model has quant settings or env opt-in
-                    env_enable = os.environ.get("YUNSHU_TURBOQUANT", "").strip() in ("1", "true", "yes")
+                    env_enable = os.environ.get("YUNSHU_TURBOQUANT", "").strip() in (
+                        "1",
+                        "true",
+                        "yes",
+                    )
                     if quant_bits is not None or env_enable:
                         self._engine_core.setup_turbo_quant(
                             total_layers=num_layers,
@@ -1983,9 +2192,11 @@ class BatchedEngine:
 
         # Setup HybridKVCache layer type registration for Mamba/hybrid models
         try:
-            model_cfg = getattr(self._model, 'config', self._model) if self._model else None
+            model_cfg = (
+                getattr(self._model, "config", self._model) if self._model else None
+            )
             if model_cfg is not None and self._model is not None:
-                num_layers = getattr(model_cfg, 'num_hidden_layers', 0)
+                num_layers = getattr(model_cfg, "num_hidden_layers", 0)
                 if num_layers > 0:
                     self._engine_core.setup_hybrid_kv(
                         model=self._model,
@@ -2112,6 +2323,7 @@ class BatchedEngine:
                 logger.debug("LoRA manager cleanup failed", exc_info=True)
             self._lora_manager = None
             from .lora_manager import set_lora_manager
+
             set_lora_manager(None, engine_id=self.model_name or "default")
 
         # 3. Release model + tokenizer refs, then GC + clear MLX cache
@@ -2121,6 +2333,7 @@ class BatchedEngine:
         self._compiled = False
 
         import gc
+
         gc.collect()
 
         # Per-engine cleanup: synchronize GPU work and clear the MLX cache.
@@ -2129,6 +2342,7 @@ class BatchedEngine:
         # VLM, Video, OCR, etc.). The global executor should only be shut
         # down at process teardown, not per-engine.
         from .mlx_executor import get_mlx_executor
+
         loop = asyncio.get_running_loop()
         import mlx.core as mx
 
@@ -2158,14 +2372,16 @@ class BatchedEngine:
         # BatchGenerator._currently_processing vs _prompt_batch (IndexError in
         # mlx_lm.generate._next). This guard must run BEFORE the forced-mode
         # check so YUNSHU_ENGINE_LOOP=1 cannot bypass it.
-        if getattr(self, '_active_fast_path_count', 0) > 0:
+        if getattr(self, "_active_fast_path_count", 0) > 0:
             return False
         # Forced continuous-batching mode (YUNSHU_ENGINE_LOOP=1): route to the
         # engine loop whenever no fast-path request occupies the executor.
-        if getattr(self, '_engine_loop_default', False):
+        if getattr(self, "_engine_loop_default", False):
             return True
         # Auto-detect: switch to batch path when concurrency is detected
-        return bool(self._engine_core is not None and self._engine_core.has_active_requests)
+        return bool(
+            self._engine_core is not None and self._engine_core.has_active_requests
+        )
 
     # ── Non-generative tasks: embeddings, pooling ────────────────────────────
 
@@ -2186,6 +2402,7 @@ class BatchedEngine:
         try:
             import json as _json
             import os as _os
+
             cand = self.model_name if isinstance(self.model_name, str) else ""
             # Resolve a HF repo id (e.g. "BAAI/bge-base-en-v1.5") to its local
             # snapshot before looking for 1_Pooling/config.json. The old code joined the RAW
@@ -2197,6 +2414,7 @@ class BatchedEngine:
             if cand and not _os.path.isdir(cand):
                 try:
                     from mlx_lm.utils import hf_repo_to_path
+
                     cand = str(hf_repo_to_path(self.model_name))
                 except Exception:
                     pass
@@ -2265,7 +2483,9 @@ class BatchedEngine:
 
         return embeddings
 
-    def _compute_prompt_logprobs_sync(self, input_ids: list[int], top_k: int = 0) -> list:
+    def _compute_prompt_logprobs_sync(
+        self, input_ids: list[int], top_k: int = 0
+    ) -> list:
         """Compute per-prompt-token logprobs (eval/perplexity).
 
         Runs ONE forward over the prompt (separate from generation — does not
@@ -2278,6 +2498,7 @@ class BatchedEngine:
         Caller runs this on the MLX executor. Length-capped by the caller.
         """
         import mlx.core as mx
+
         if not input_ids or len(input_ids) < 2:
             return [None] * len(input_ids)
         ids = mx.array([input_ids])
@@ -2300,7 +2521,9 @@ class BatchedEngine:
                     ((int(t), float(row[int(t)].item())) for t in topk_idx.tolist()),
                     key=lambda x: -x[1],
                 )
-                entry["top_logprobs"] = [{"token_id": t, "logprob": lp} for t, lp in topk]
+                entry["top_logprobs"] = [
+                    {"token_id": t, "logprob": lp} for t, lp in topk
+                ]
             result.append(entry)
         return result
 
@@ -2337,9 +2560,16 @@ class BatchedEngine:
         if kv_cache is None or first_logits is None:
             text = self._tokenizer.decode(token_ids) if self._tokenizer else ""
             return await self.generate(
-                prompt=text, max_tokens=max_tokens, temperature=temperature,
-                top_p=top_p, top_k=top_k, min_p=min_p, seed=seed,
-                stop=stop, stop_token_ids=stop_token_ids, **kwargs,
+                prompt=text,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
+                seed=seed,
+                stop=stop,
+                stop_token_ids=stop_token_ids,
+                **kwargs,
             )
 
         # Forward penalties + logit_bias (advertised DecodeRequest
@@ -2352,17 +2582,40 @@ class BatchedEngine:
         return await loop.run_in_executor(
             get_mlx_executor(),
             lambda: self._decode_from_kv_sync(
-                kv_cache, token_ids, first_logits, max_tokens, temperature,
-                top_p, top_k, min_p, seed, stop_token_ids, stop,
-                repetition_penalty=_rep, frequency_penalty=_freq,
-                presence_penalty=_pres, logit_bias=_lb,
+                kv_cache,
+                token_ids,
+                first_logits,
+                max_tokens,
+                temperature,
+                top_p,
+                top_k,
+                min_p,
+                seed,
+                stop_token_ids,
+                stop,
+                repetition_penalty=_rep,
+                frequency_penalty=_freq,
+                presence_penalty=_pres,
+                logit_bias=_lb,
             ),
         )
 
     def _decode_from_kv_sync(
-        self, kv_cache, token_ids, first_logits, max_tokens, temperature,
-        top_p, top_k, min_p, seed, stop_token_ids, stop,
-        repetition_penalty=1.0, frequency_penalty=0.0, presence_penalty=0.0,
+        self,
+        kv_cache,
+        token_ids,
+        first_logits,
+        max_tokens,
+        temperature,
+        top_p,
+        top_k,
+        min_p,
+        seed,
+        stop_token_ids,
+        stop,
+        repetition_penalty=1.0,
+        frequency_penalty=0.0,
+        presence_penalty=0.0,
         logit_bias=None,
     ) -> GenerationOutput:
         """Synchronous decode loop reusing a prefilled cache (runs on the MLX
@@ -2391,9 +2644,11 @@ class BatchedEngine:
 
         if temperature is not None and temperature > 1e-6:
             sampler = _build_temp_sampler(
-                temperature=temperature, top_p=top_p,
+                temperature=temperature,
+                top_p=top_p,
                 top_k=top_k if top_k and top_k > 0 else 0,
-                min_p=min_p if min_p else 0.0, seed=seed,
+                min_p=min_p if min_p else 0.0,
+                seed=seed,
             )
         else:
             sampler = make_sampler(temp=0.0)
@@ -2401,12 +2656,17 @@ class BatchedEngine:
         # Penalty / logit_bias processors (applied to raw logits BEFORE sampling),
         # matching the normal generate path so the reuse path doesn't silently
         # ignore these validated request fields.
-        _procs = make_logits_processors(
-            repetition_penalty=repetition_penalty if (repetition_penalty and repetition_penalty != 1.0) else None,
-            frequency_penalty=frequency_penalty if frequency_penalty else None,
-            presence_penalty=presence_penalty if presence_penalty else None,
-            logit_bias=logit_bias or None,
-        ) or []
+        _procs = (
+            make_logits_processors(
+                repetition_penalty=repetition_penalty
+                if (repetition_penalty and repetition_penalty != 1.0)
+                else None,
+                frequency_penalty=frequency_penalty if frequency_penalty else None,
+                presence_penalty=presence_penalty if presence_penalty else None,
+                logit_bias=logit_bias or None,
+            )
+            or []
+        )
 
         # Clamp max_tokens to the model's context window. The normal/streaming
         # generate paths clamp, but this KV-reuse decode path bypassed it — a
@@ -2419,7 +2679,9 @@ class BatchedEngine:
 
         logits = first_logits
         generated: list[int] = []
-        _hist = list(token_ids)  # penalty history = prompt + generated (matches generate_step)
+        _hist = list(
+            token_ids
+        )  # penalty history = prompt + generated (matches generate_step)
         _stop_list = [s for s in (stop or []) if s]
         finish_reason = "length"
         t0 = _time.perf_counter()
@@ -2453,19 +2715,26 @@ class BatchedEngine:
                     finish_reason = "stop"
                     break
         return GenerationOutput(
-            text=text, new_text=text,
-            prompt_tokens=len(token_ids), completion_tokens=len(generated),
-            finished=True, finish_reason=finish_reason,
+            text=text,
+            new_text=text,
+            prompt_tokens=len(token_ids),
+            completion_tokens=len(generated),
+            finished=True,
+            finish_reason=finish_reason,
             ttft_ms=(_time.perf_counter() - t0) * 1000.0,
         )
 
     async def _compute_prompt_logprobs_for(
-        self, prompt, enable_thinking, top_k: int,
+        self,
+        prompt,
+        enable_thinking,
+        top_k: int,
     ) -> list | None:
         """Async wrapper: derive input_ids from the prompt (templating chat
         messages) and compute prompt logprobs on the MLX executor. Length-gated
         to bound the [seq, vocab] logits memory."""
         import os
+
         cap = int(os.environ.get("YUNSHU_PROMPT_LOGPROBS_MAX_TOKENS", "8192"))
         if isinstance(prompt, list):
             text = self._apply_chat_template(prompt, enable_thinking=enable_thinking)
@@ -2478,12 +2747,14 @@ class BatchedEngine:
             logger.warning(
                 "prompt_logprobs skipped: prompt %d tokens exceeds cap %d "
                 "(set YUNSHU_PROMPT_LOGPROBS_MAX_TOKENS to raise)",
-                len(input_ids), cap,
+                len(input_ids),
+                cap,
             )
             return None
         import asyncio as _asyncio
 
         from .mlx_executor import get_mlx_executor
+
         loop = _asyncio.get_running_loop()
         return await loop.run_in_executor(
             get_mlx_executor(),
@@ -2531,7 +2802,9 @@ class BatchedEngine:
             elif pooling_type.upper() == "LAST":
                 pooled = hidden[0, -1, :]  # batch=0, last token
             else:  # MEAN
-                pooled = mx.mean(hidden, axis=1).squeeze(0)  # [1, seq, d] -> [1, d] -> [d]
+                pooled = mx.mean(hidden, axis=1).squeeze(
+                    0
+                )  # [1, seq, d] -> [1, d] -> [d]
 
             results.append(pooled.tolist())
 
@@ -2551,7 +2824,7 @@ class BatchedEngine:
             hidden = output  # [batch, seq_len, hidden_size] — OR vocab-space logits
         elif isinstance(output, (tuple, list)):
             hidden = output[0]
-        elif hasattr(output, 'last_hidden_state'):
+        elif hasattr(output, "last_hidden_state"):
             return output.last_hidden_state
         else:
             # Fallback: try subscript access, otherwise return as-is
@@ -2566,14 +2839,21 @@ class BatchedEngine:
         # fallback already has this awareness; the engine path was silent.
         try:
             _hs = self._get_hidden_size()
-            if (getattr(hidden, "ndim", 0) >= 1 and _hs and hidden.shape[-1] != _hs
-                    and not getattr(self, "_warned_logits_pool", False)):
+            if (
+                getattr(hidden, "ndim", 0) >= 1
+                and _hs
+                and hidden.shape[-1] != _hs
+                and not getattr(self, "_warned_logits_pool", False)
+            ):
                 logger.warning(
                     "embed/pool: no transformer backbone resolved for %s — pooling raw "
                     "model output of dim %d (expected hidden_size %d). This is likely "
                     "vocab-space LOGITS → embeddings will be wrong-dimensioned and "
                     "semantically meaningless. Use a model with a recognizable backbone.",
-                    self.model_name, hidden.shape[-1], _hs)
+                    self.model_name,
+                    hidden.shape[-1],
+                    _hs,
+                )
                 self._warned_logits_pool = True
         except Exception:
             pass
@@ -2581,27 +2861,27 @@ class BatchedEngine:
 
     def _get_hidden_size(self) -> int:
         """Get the model's hidden dimension size."""
-        if hasattr(self._model, 'config'):
+        if hasattr(self._model, "config"):
             cfg = self._model.config
-            for attr in ('hidden_size', 'd_model', 'n_embd', 'embed_dim'):
+            for attr in ("hidden_size", "d_model", "n_embd", "embed_dim"):
                 val = getattr(cfg, attr, None)
                 if val is not None:
                     return val
         # Check args (MLX models store config in .args)
-        args = getattr(self._model, 'args', None)
+        args = getattr(self._model, "args", None)
         if args is not None:
             # Text config may be nested
-            text_config = getattr(args, 'text_config', None)
+            text_config = getattr(args, "text_config", None)
             for obj in (text_config, args):
                 if obj is not None:
-                    for attr in ('hidden_size', 'd_model', 'n_embd', 'embed_dim'):
+                    for attr in ("hidden_size", "d_model", "n_embd", "embed_dim"):
                         val = getattr(obj, attr, None)
                         if val is not None:
                             return val
         # Heuristic: check model layers
-        if hasattr(self._model, 'layers') and len(self._model.layers) > 0:
+        if hasattr(self._model, "layers") and len(self._model.layers) > 0:
             layer = self._model.layers[0]
-            if hasattr(layer, 'mlp') and hasattr(layer.mlp, 'fc1'):
+            if hasattr(layer, "mlp") and hasattr(layer.mlp, "fc1"):
                 return layer.mlp.fc1.weight.shape[1]
         # Default fallback for common models
         return 768
@@ -2619,17 +2899,17 @@ class BatchedEngine:
         """
         m = self._model
         # Qwen3.5 and similar: model.language_model.model
-        lm = getattr(m, 'language_model', None)
+        lm = getattr(m, "language_model", None)
         if lm is not None:
-            inner = getattr(lm, 'model', None)
+            inner = getattr(lm, "model", None)
             if inner is not None and callable(inner):
                 return inner
         # Standard: model.model
-        inner = getattr(m, 'model', None)
+        inner = getattr(m, "model", None)
         if inner is not None and callable(inner):
             return inner
         # Some architectures: model.transformer
-        inner = getattr(m, 'transformer', None)
+        inner = getattr(m, "transformer", None)
         if inner is not None and callable(inner):
             return inner
         return None
@@ -2695,7 +2975,11 @@ class BatchedEngine:
             _pt = 0
             if self._tokenizer is not None:
                 try:
-                    if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
+                    if (
+                        isinstance(prompt, list)
+                        and prompt
+                        and isinstance(prompt[0], dict)
+                    ):
                         _text = self._apply_chat_template(prompt, enable_thinking)
                     else:
                         _text = prompt if isinstance(prompt, str) else str(prompt)
@@ -2726,21 +3010,29 @@ class BatchedEngine:
         # output. Everything else falls back to the verified fast path.
         if spec_decode:
             if (not _use_engine_loop) and self._gemma4_spec_eligible(
-                logprobs=logprobs, json_schema=json_schema,
-                logits_processors=logits_processors, logit_bias=logit_bias,
-                top_p=top_p, top_k=top_k, min_p=min_p,
+                logprobs=logprobs,
+                json_schema=json_schema,
+                logits_processors=logits_processors,
+                logit_bias=logit_bias,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
                 repetition_penalty=repetition_penalty,
                 frequency_penalty=frequency_penalty,
                 presence_penalty=presence_penalty,
                 xtc_probability=xtc_probability,
                 lora_adapter=lora_adapter,
             ):
-                logger.debug("spec_decode: routing to verified Gemma-4 assistant "
-                             "primitive (lossless, ~2x)")
+                logger.debug(
+                    "spec_decode: routing to verified Gemma-4 assistant "
+                    "primitive (lossless, ~2x)"
+                )
             else:
-                logger.debug("spec_decode requested — using standard generation "
-                             "(only the Gemma-4 assistant primitive is proven "
-                             "lossless here; MTP/cross-model/n-gram are not)")
+                logger.debug(
+                    "spec_decode requested — using standard generation "
+                    "(only the Gemma-4 assistant primitive is proven "
+                    "lossless here; MTP/cross-model/n-gram are not)"
+                )
                 spec_decode = False
 
         # Memory guard preflight check
@@ -2769,10 +3061,13 @@ class BatchedEngine:
         # temperature>0 && seed is None (it would freeze one random sample and replay it for
         # every identical request); the engine cache had NO such guard, so a sampled/creative
         # request got the same frozen completion every time. Mirror the middleware.
-        _rc_deterministic = not (temperature is not None and temperature > 0 and seed is None)
+        _rc_deterministic = not (
+            temperature is not None and temperature > 0 and seed is None
+        )
         if not spec_decode and _rc_deterministic:
             try:
                 from .gateway_optimizer import get_response_cache
+
                 _rc = get_response_cache()
                 if _rc.enabled:
                     _rc_hash = _rc.hash_request(
@@ -2820,24 +3115,29 @@ class BatchedEngine:
         # ── Context window truncation for long prompts ──
         if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
             try:
-                if self._tokenizer and hasattr(self._tokenizer, 'encode'):
+                if self._tokenizer and hasattr(self._tokenizer, "encode"):
                     text = self._apply_chat_template(prompt, enable_thinking)
                     token_count = len(self._tokenizer.encode(text))
-                    max_ctx = getattr(self._model, 'max_seq_len', None)
+                    max_ctx = getattr(self._model, "max_seq_len", None)
                     if max_ctx is None:
                         max_ctx = getattr(
-                            getattr(self._model, 'config', None), 'max_seq_len', None
+                            getattr(self._model, "config", None), "max_seq_len", None
                         ) or getattr(
-                            getattr(self._model, 'args', None), 'max_seq_len', None
+                            getattr(self._model, "args", None), "max_seq_len", None
                         )
                     # Thinking tokens also consume context window positions —
                     # subtract them from the available prompt budget.
-                    _thinking_overhead = thinking_budget if (thinking_budget and enable_thinking) else 0
+                    _thinking_overhead = (
+                        thinking_budget if (thinking_budget and enable_thinking) else 0
+                    )
                     _generation_budget = max_tokens + _thinking_overhead
                     if max_ctx and token_count + _generation_budget > max_ctx:
                         from .context_window import ContextWindowManager
+
                         ctx_mgr = ContextWindowManager(
-                            token_counter=lambda text: len(self._tokenizer.encode(text)),
+                            token_counter=lambda text: len(
+                                self._tokenizer.encode(text)
+                            ),
                         )
                         result = ctx_mgr.compute_truncation(
                             messages=prompt,
@@ -2856,24 +3156,37 @@ class BatchedEngine:
         # validated dual-load primitive (~2.5x, lossless). Eligibility-gated so
         # the output is identical to normal generation; only active when the
         # drafter was loaded (YUNSHU_GEMMA4_ASSISTANT).
-        if spec_decode and not _use_engine_loop and self._gemma4_spec_eligible(
-            logprobs=logprobs, json_schema=json_schema,
-            logits_processors=logits_processors, logit_bias=logit_bias,
-            top_p=top_p, top_k=top_k, min_p=min_p,
-            repetition_penalty=repetition_penalty,
-            frequency_penalty=frequency_penalty,
-            presence_penalty=presence_penalty,
-            xtc_probability=xtc_probability,
-            lora_adapter=lora_adapter,
+        if (
+            spec_decode
+            and not _use_engine_loop
+            and self._gemma4_spec_eligible(
+                logprobs=logprobs,
+                json_schema=json_schema,
+                logits_processors=logits_processors,
+                logit_bias=logit_bias,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
+                repetition_penalty=repetition_penalty,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                xtc_probability=xtc_probability,
+                lora_adapter=lora_adapter,
+            )
         ):
             try:
                 return await self._generate_gemma4_assistant_spec(
-                    prompt=prompt, max_tokens=max_tokens, temperature=temperature,
-                    seed=seed, enable_thinking=enable_thinking,
+                    prompt=prompt,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    seed=seed,
+                    enable_thinking=enable_thinking,
                     stop_token_ids=stop_token_ids,
                 )
             except Exception:
-                logger.warning("Gemma-4 assistant spec decode failed; falling back", exc_info=True)
+                logger.warning(
+                    "Gemma-4 assistant spec decode failed; falling back", exc_info=True
+                )
 
         # Speculative decoding path (Phase 4: single-request EAGLE-3).
         # NB: all spec paths below are gated on `not logprobs` — none of them
@@ -2885,8 +3198,14 @@ class BatchedEngine:
         # temperature>0 (output distribution is biased toward the greedy
         # sequence). Restrict it to GREEDY requests, where longest-exact-argmax
         # acceptance IS lossless; temp>0 falls through to correct normal decode.
-        if (spec_decode and not logprobs and not _use_engine_loop and self._spec_enabled
-                and self._spec_decoder is not None and temperature <= 0.0):
+        if (
+            spec_decode
+            and not logprobs
+            and not _use_engine_loop
+            and self._spec_enabled
+            and self._spec_decoder is not None
+            and temperature <= 0.0
+        ):
             return await self._generate_speculative(
                 prompt=prompt,
                 max_tokens=max_tokens,
@@ -2915,7 +3234,12 @@ class BatchedEngine:
             )
 
         # MTP speculative decoding (built-in multi-token prediction heads)
-        if spec_decode and not logprobs and self._mtp_decoder is not None and not _use_engine_loop:
+        if (
+            spec_decode
+            and not logprobs
+            and self._mtp_decoder is not None
+            and not _use_engine_loop
+        ):
             return await self._generate_mtp(
                 prompt=prompt,
                 max_tokens=max_tokens,
@@ -2948,8 +3272,13 @@ class BatchedEngine:
         # target's ARGMAX but samples the bonus at the request temperature, so for
         # temperature>0 accepted tokens are forced to the greedy sequence (biased,
         # not lossless). Restrict to GREEDY requests; temp>0 → normal decode.
-        if (spec_decode and not logprobs and self._ngram_proposer is not None
-                and not _use_engine_loop and temperature <= 0.0):
+        if (
+            spec_decode
+            and not logprobs
+            and self._ngram_proposer is not None
+            and not _use_engine_loop
+            and temperature <= 0.0
+        ):
             return await self._generate_ngram_spec(
                 prompt=prompt,
                 max_tokens=max_tokens,
@@ -3013,6 +3342,7 @@ class BatchedEngine:
             if _rc_hash is not None and result.finish_reason != "error":
                 try:
                     from .gateway_optimizer import get_response_cache
+
                     await get_response_cache().put(_rc_hash, result)
                 except Exception:
                     logger.debug("response cache store failed", exc_info=True)
@@ -3023,7 +3353,9 @@ class BatchedEngine:
             if prompt_logprobs is not None and result.finish_reason != "error":
                 try:
                     _pl = await self._compute_prompt_logprobs_for(
-                        prompt, enable_thinking, int(prompt_logprobs),
+                        prompt,
+                        enable_thinking,
+                        int(prompt_logprobs),
                     )
                     result.prompt_logprobs = _pl
                 except Exception:
@@ -3069,7 +3401,9 @@ class BatchedEngine:
         )
 
         if result is None:
-            return GenerationOutput(finished=True, finish_reason="error", error="engine_core returned None")
+            return GenerationOutput(
+                finished=True, finish_reason="error", error="engine_core returned None"
+            )
 
         # Map engine_core finish_reason to OpenAI-compatible finish_reason
         finish_reason = result.finish_reason
@@ -3084,6 +3418,7 @@ class BatchedEngine:
         _reasoning_tok = 0
         try:
             from .output_parser import parse_output
+
             parsed = parse_output(output_text, self.model_name)
             if parsed.finish_reason:
                 finish_reason = parsed.finish_reason
@@ -3096,9 +3431,10 @@ class BatchedEngine:
         # Reasoning parser: model-specific reasoning extraction with token count
         # Supplements output_parser with per-model reasoning token counting.
         # Fall back to scheduler-computed reasoning_tokens when parser returns 0.
-        _reasoning_tok = getattr(result, 'reasoning_tokens', 0) or 0
+        _reasoning_tok = getattr(result, "reasoning_tokens", 0) or 0
         try:
             from .reasoning_parser import get_reasoning_parser
+
             rp = get_reasoning_parser(self.model_name)
             rp_out = rp.parse(output_text)
             if rp_out.reasoning and rp_out.reasoning_tokens > 0:
@@ -3107,7 +3443,7 @@ class BatchedEngine:
             logger.debug("reasoning_parser failed", exc_info=True)
 
         # TTFT from engine_core (computed before request cleanup)
-        _ttft_ms = getattr(result, 'ttft_ms', 0.0)
+        _ttft_ms = getattr(result, "ttft_ms", 0.0)
 
         # Record TTFT in Prometheus (consistency with fast path)
         if _ttft_ms > 0:
@@ -3115,10 +3451,17 @@ class BatchedEngine:
                 from yunshu_gateway.middleware.prometheus_exporter import (
                     get_prometheus_metrics,
                 )
+
                 pm = get_prometheus_metrics()
-                pm.observe_histogram("ttft_seconds", _ttft_ms / 1000.0, labels={"model_id": self.model_label})
+                pm.observe_histogram(
+                    "ttft_seconds",
+                    _ttft_ms / 1000.0,
+                    labels={"model_id": self.model_label},
+                )
             except Exception:
-                logger.debug("engine loop TTFT prometheus recording failed", exc_info=True)
+                logger.debug(
+                    "engine loop TTFT prometheus recording failed", exc_info=True
+                )
 
         engine_loop_result = GenerationOutput(
             text=output_text,
@@ -3128,21 +3471,23 @@ class BatchedEngine:
             finished=True,
             finish_reason=finish_reason,
             reasoning_tokens=_reasoning_tok,
-            cached_tokens=getattr(result, 'cached_tokens', 0),
-            logprobs=getattr(result, 'logprobs', None),
+            cached_tokens=getattr(result, "cached_tokens", 0),
+            logprobs=getattr(result, "logprobs", None),
             ttft_ms=_ttft_ms,
-            error=getattr(result, 'error', None),
+            error=getattr(result, "error", None),
         )
         if _rc_hash is not None and engine_loop_result.finish_reason != "error":
             try:
                 from .gateway_optimizer import get_response_cache
+
                 await get_response_cache().put(_rc_hash, engine_loop_result)
             except Exception:
                 logger.debug("response cache store failed", exc_info=True)
         return engine_loop_result
 
-    def _capture_hybrid_prefix(self, model, full_ids, cache, prefix_cache,
-                               start_offset, block):
+    def _capture_hybrid_prefix(
+        self, model, full_ids, cache, prefix_cache, start_offset, block
+    ):
         """Advance `cache` through full_ids[start_offset:-1] in block-sized
         chunks, storing a trim=0 block-boundary snapshot into `prefix_cache` at
         each boundary. The last token is intentionally NOT consumed — it is left
@@ -3160,7 +3505,7 @@ class BatchedEngine:
         p = int(start_offset)
         end = n - 1  # leave the final token for generate_step
         while p < end:
-            chunk = full_ids[p:min(p + block, end)]
+            chunk = full_ids[p : min(p + block, end)]
             cn = int(chunk.shape[0])
             if cn == 0:
                 break
@@ -3236,7 +3581,7 @@ class BatchedEngine:
             if has_multimodal and self._preprocessor_registry is not None:
                 try:
                     model_config = {"model_type": self.model_name or ""}
-                    if hasattr(model, 'config') and hasattr(model.config, 'model_type'):
+                    if hasattr(model, "config") and hasattr(model.config, "model_type"):
                         model_config["model_type"] = model.config.model_type
                     preprocessor = self._preprocessor_registry.detect(model_config)
                     if preprocessor is not None:
@@ -3244,7 +3589,9 @@ class BatchedEngine:
                         if processed.token_ids:
                             prompt = processed.token_ids
                 except Exception:
-                    logger.debug("model preprocessor failed, using raw prompt", exc_info=True)
+                    logger.debug(
+                        "model preprocessor failed, using raw prompt", exc_info=True
+                    )
 
         # ── Pre-encoding context window truncation (message-level) ──
         # When prompt is a list of message dicts, use ContextWindowManager to
@@ -3252,22 +3599,22 @@ class BatchedEngine:
         # This preserves system prompts — the engine-loop path does the same.
         if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
             try:
-                _max_ctx_pre = getattr(model, 'max_seq_len', None)
+                _max_ctx_pre = getattr(model, "max_seq_len", None)
                 if _max_ctx_pre is None:
                     _max_ctx_pre = getattr(
-                        getattr(model, 'config', None), 'max_seq_len', None
-                    ) or getattr(
-                        getattr(model, 'args', None), 'max_seq_len', None
-                    )
+                        getattr(model, "config", None), "max_seq_len", None
+                    ) or getattr(getattr(model, "args", None), "max_seq_len", None)
                 if _max_ctx_pre and _max_ctx_pre > 0:
-                    _thinking_overhead = thinking_budget if (thinking_budget and enable_thinking) else 0
+                    _thinking_overhead = (
+                        thinking_budget if (thinking_budget and enable_thinking) else 0
+                    )
                     _generation_budget = max_tokens + _thinking_overhead
                     _est_tokens = sum(
-                        len(str(m.get("content", ""))) // 4 + 4
-                        for m in prompt
+                        len(str(m.get("content", ""))) // 4 + 4 for m in prompt
                     )
                     if _est_tokens + _generation_budget > _max_ctx_pre:
                         from .context_window import ContextWindowManager
+
                         ctx_mgr = ContextWindowManager(
                             token_counter=lambda text: len(tokenizer.encode(text)),
                         )
@@ -3279,10 +3626,13 @@ class BatchedEngine:
                         prompt = result.messages
                         logger.debug(
                             "Fast path pre-encode truncation: estimated %d → %d tokens",
-                            _est_tokens, result.truncated_token_count,
+                            _est_tokens,
+                            result.truncated_token_count,
                         )
             except Exception:
-                logger.debug("context window truncation skipped in fast path", exc_info=True)
+                logger.debug(
+                    "context window truncation skipped in fast path", exc_info=True
+                )
 
         # Encode prompt
         if isinstance(prompt, str):
@@ -3302,11 +3652,11 @@ class BatchedEngine:
         prompt_tokens = len(input_ids)
 
         if not input_ids:
-            bos_id = getattr(tokenizer, 'bos_token_id', None)
+            bos_id = getattr(tokenizer, "bos_token_id", None)
             if bos_id is not None:
                 input_ids = [bos_id]
             else:
-                eos_id = getattr(tokenizer, 'eos_token_id', 1)
+                eos_id = getattr(tokenizer, "eos_token_id", 1)
                 input_ids = [eos_id]
             prompt_tokens = len(input_ids)
 
@@ -3324,11 +3674,13 @@ class BatchedEngine:
             # (The gateway context guard normally rejects this with a 400 first.)
             if prompt_tokens >= _max_ctx:
                 _orig = prompt_tokens
-                input_ids = input_ids[-max(1, _max_ctx - 1):]
+                input_ids = input_ids[-max(1, _max_ctx - 1) :]
                 prompt_tokens = len(input_ids)
                 logger.warning(
                     "Fast path prompt truncated to fit context: %d → %d tokens (ctx=%d)",
-                    _orig, prompt_tokens, _max_ctx,
+                    _orig,
+                    prompt_tokens,
+                    _max_ctx,
                 )
             # Clamp max_tokens so prompt + generation stays within the window
             # (prevents RoPE-extrapolated garbage past max_position_embeddings).
@@ -3336,7 +3688,11 @@ class BatchedEngine:
             if _room >= 1 and max_tokens > _room:
                 logger.info(
                     "Fast path clamped max_tokens %d → %d to fit context "
-                    "(prompt=%d, ctx=%d)", max_tokens, _room, prompt_tokens, _max_ctx,
+                    "(prompt=%d, ctx=%d)",
+                    max_tokens,
+                    _room,
+                    prompt_tokens,
+                    _max_ctx,
                 )
                 max_tokens = _room
 
@@ -3348,12 +3704,14 @@ class BatchedEngine:
         # Collect EOS ids SEPARATELY so ignore_eos can suppress only the
         # model EOS (not user stop_token_ids), and min_tokens can mask them.
         _eos_ids: set[int] = set()
-        _eid = getattr(tokenizer, 'eos_token_id', None)
+        _eid = getattr(tokenizer, "eos_token_id", None)
         if _eid is not None:
             _eos_ids.update(_eid if isinstance(_eid, (list, tuple, set)) else (_eid,))
-        _eids = getattr(tokenizer, 'eos_token_ids', None)
+        _eids = getattr(tokenizer, "eos_token_ids", None)
         if _eids is not None:
-            _eos_ids.update(_eids if isinstance(_eids, (list, tuple, set)) else (_eids,))
+            _eos_ids.update(
+                _eids if isinstance(_eids, (list, tuple, set)) else (_eids,)
+            )
         if not ignore_eos:
             stop_ids.update(_eos_ids)
 
@@ -3409,7 +3767,10 @@ class BatchedEngine:
             try:
                 sampler = _build_constrained_sampler(sampler, json_schema, tokenizer)
             except Exception:
-                logger.warning("Grammar constraint setup failed, falling back to unconstrained", exc_info=True)
+                logger.warning(
+                    "Grammar constraint setup failed, falling back to unconstrained",
+                    exc_info=True,
+                )
 
         # Jump-forward decoding (opt-in YUNSHU_JUMP_FORWARD=1) for
         # JSON-schema-constrained GREEDY generation — emits the grammar-forced
@@ -3421,19 +3782,29 @@ class BatchedEngine:
         # min_tokens. Gate OFF whenever any of those are set so we never silently
         # ignore a request constraint; those requests fall through to the normal
         # constrained decode below.
-        if (os.environ.get("YUNSHU_JUMP_FORWARD", "").strip().lower() in ("1", "true", "yes")
-                and json_schema is not None and not logprobs
-                and (temperature is None or temperature <= 1e-6)
-                and lora_adapter is None and cancel_event is None
-                and not logit_bias and not suppress_tokens and not min_tokens
-                and not (isinstance(json_schema, dict)
-                         and json_schema.get("type") in ("regex", "choice", "cfg"))):
+        if (
+            os.environ.get("YUNSHU_JUMP_FORWARD", "").strip().lower()
+            in ("1", "true", "yes")
+            and json_schema is not None
+            and not logprobs
+            and (temperature is None or temperature <= 1e-6)
+            and lora_adapter is None
+            and cancel_event is None
+            and not logit_bias
+            and not suppress_tokens
+            and not min_tokens
+            and not (
+                isinstance(json_schema, dict)
+                and json_schema.get("type") in ("regex", "choice", "cfg")
+            )
+        ):
             try:
                 import json as _json
                 import time as _jf_time
 
                 from .json_schema import JsonSchemaConstraint
                 from .mlx_executor import get_mlx_executor
+
                 if json_schema == "json_object":
                     _jf_schema = None
                 elif isinstance(json_schema, str):
@@ -3447,30 +3818,49 @@ class BatchedEngine:
                 # path (it occupies the same single MLX executor thread).
                 self._active_fast_path_count += 1
                 try:
-                    _jf_text, _jf_ids, _jf_nfwd, _jf_stop = await _jf_loop.run_in_executor(
+                    (
+                        _jf_text,
+                        _jf_ids,
+                        _jf_nfwd,
+                        _jf_stop,
+                    ) = await _jf_loop.run_in_executor(
                         get_mlx_executor(),
                         lambda: self._jump_forward_generate_sync(
-                            input_ids, _jf_constraint, max_tokens, stop_ids, stop),
+                            input_ids, _jf_constraint, max_tokens, stop_ids, stop
+                        ),
                     )
                 finally:
                     self._active_fast_path_count -= 1
-                logger.debug("jump-forward: %d tokens in %d forwards (%.1fx)",
-                             len(_jf_ids), _jf_nfwd, len(_jf_ids) / max(_jf_nfwd, 1))
+                logger.debug(
+                    "jump-forward: %d tokens in %d forwards (%.1fx)",
+                    len(_jf_ids),
+                    _jf_nfwd,
+                    len(_jf_ids) / max(_jf_nfwd, 1),
+                )
                 # A stop-substring termination is finish_reason="stop"
                 # (and _jf_ids is now truncated at the stop, so completion_tokens is
                 # accurate) — only report "length" when we genuinely hit the budget
                 # without a stop.
-                _jf_fr = "length" if (not _jf_stop and len(_jf_ids) >= max_tokens) else "stop"
+                _jf_fr = (
+                    "length"
+                    if (not _jf_stop and len(_jf_ids) >= max_tokens)
+                    else "stop"
+                )
                 return GenerationOutput(
-                    text=_jf_text, new_text=_jf_text,
-                    prompt_tokens=prompt_tokens, completion_tokens=len(_jf_ids),
+                    text=_jf_text,
+                    new_text=_jf_text,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=len(_jf_ids),
                     finished=True,
                     finish_reason=_jf_fr,
                     ttft_ms=(_jf_time.perf_counter() - _jf_t0) * 1000.0,
                 )
             except Exception:
-                logger.warning("jump-forward path failed; falling back to normal "
-                               "constrained decode", exc_info=True)
+                logger.warning(
+                    "jump-forward path failed; falling back to normal "
+                    "constrained decode",
+                    exc_info=True,
+                )
 
         # SAMP-2: Save user-provided custom logits processors before building internal list
         # Length-gated KV-quant bits for THIS request (8-bit default at
@@ -3479,14 +3869,17 @@ class BatchedEngine:
         _custom_logits_processors = logits_processors or []
         logits_processors = []
         if repetition_penalty != 1.0:
+
             def _rep_penalty(tokens, logits, rp=repetition_penalty, ctx=20):
                 if len(tokens) > 0:
                     recent = tokens[-ctx:]
                     import mlx.core as _mx
+
                     sel = logits[..., recent]
                     sel = _mx.where(sel < 0, sel * rp, sel / rp)
                     logits[..., _mx.array(recent)] = sel
                 return logits
+
             logits_processors.append(_rep_penalty)
         if frequency_penalty != 0.0 or presence_penalty != 0.0:
             # Maintain incremental counts dict instead of rebuilding
@@ -3494,6 +3887,7 @@ class BatchedEngine:
             # closure captures a mutable state dict so successive calls only
             # observe the newest token.
             _fp_state: dict[str, object] = {"counts": {}, "last_len": -1}
+
             # The prompt offset inside the processor is 1, NOT the full
             # prompt length. mlx-lm prefills all-but-the-last prompt token OUTSIDE
             # _step, so the `tokens` accumulator handed to logits_processors is
@@ -3501,9 +3895,16 @@ class BatchedEngine:
             # guard `cur_len <= n_prompt` made frequency/presence penalty INERT for
             # the first ~prompt_len generated tokens (short completions never
             # penalized at all) and then tokens[n_prompt:] under-counted repeats.
-            def _freq_pres_penalty(tokens, logits, fp=frequency_penalty, pp=presence_penalty, n_prompt=1, _st=_fp_state):
-                counts: dict[int, int] = _st["counts"]  #type: ignore[assignment]
-                last_len = int(_st["last_len"])  #type: ignore[arg-type]
+            def _freq_pres_penalty(
+                tokens,
+                logits,
+                fp=frequency_penalty,
+                pp=presence_penalty,
+                n_prompt=1,
+                _st=_fp_state,
+            ):
+                counts: dict[int, int] = _st["counts"]  # type: ignore[assignment]
+                last_len = int(_st["last_len"])  # type: ignore[arg-type]
                 cur_len = len(tokens)
                 if cur_len <= n_prompt:
                     _st["last_len"] = cur_len
@@ -3530,8 +3931,10 @@ class BatchedEngine:
                     if pp != 0.0 and cnt > 0:
                         logits[..., tid] = logits[..., tid] - pp
                 return logits
+
             logits_processors.append(_freq_pres_penalty)
         if logit_bias:
+
             def _logit_bias_proc(_tokens, logits, biases=logit_bias):
                 # Skip token ids outside [0, vocab) — a user-supplied out-of-range
                 # or negative id would otherwise index out of bounds and crash the
@@ -3542,17 +3945,20 @@ class BatchedEngine:
                     if 0 <= tid < vocab:
                         logits[..., tid] = logits[..., tid] + bias
                 return logits
+
             logits_processors.append(_logit_bias_proc)
 
         # suppress_tokens — hard-ban specific token ids (logits → -inf).
         if suppress_tokens:
             _sup = [int(t) for t in suppress_tokens]
+
             def _suppress_proc(_tokens, logits, sup=_sup):
                 vocab = logits.shape[-1]
                 for tid in sup:
                     if 0 <= tid < vocab:
                         logits[..., tid] = -float("inf")
                 return logits
+
             logits_processors.append(_suppress_proc)
 
         # min_tokens — mask EOS + single-token stops to -inf until at
@@ -3567,6 +3973,7 @@ class BatchedEngine:
         # must win over min_tokens (which can't lengthen structured output anyway).
         if min_tokens and min_tokens > 0 and stop_ids and json_schema is None:
             _mask_ids = list(stop_ids)
+
             def _min_tokens_proc(tokens, logits, ids=_mask_ids, floor=int(min_tokens)):
                 if (len(tokens) - 1) < floor:
                     vocab = logits.shape[-1]
@@ -3574,13 +3981,16 @@ class BatchedEngine:
                         if 0 <= tid < vocab:
                             logits[..., tid] = -float("inf")
                 return logits
+
             logits_processors.append(_min_tokens_proc)
 
         # SAMP-2: Wrap user-provided custom logits processors to adapt signature.
         # User processors take (token_ids: list[int], logits: mx.array) -> mx.array
         # but generate_step passes (tokens: mx.array, logits: mx.array).
         if _custom_logits_processors:
-            logits_processors.extend(_wrap_custom_logits_processor(p) for p in _custom_logits_processors)
+            logits_processors.extend(
+                _wrap_custom_logits_processor(p) for p in _custom_logits_processors
+            )
 
         # Convert KV cache breakpoint char offsets to token positions.
         _kv_breakpoint_token_positions: list[int] = []
@@ -3592,13 +4002,17 @@ class BatchedEngine:
                     prefix_ids = tokenizer.encode(text[:char_off])
                     _kv_breakpoint_token_positions.append(len(prefix_ids))
                 except Exception:
-                    logger.debug("KV breakpoint char->token conversion failed at offset %d", char_off, exc_info=True)
+                    logger.debug(
+                        "KV breakpoint char->token conversion failed at offset %d",
+                        char_off,
+                        exc_info=True,
+                    )
 
         # Generate inflight request ID outside the closure so it is
         # accessible in the outer exception handlers below. Previously
         # this was defined inside _run() which caused a NameError when
         # an exception fired before the executor ran the closure.
-        _inflight_req_id = f"fp-{id(generate_step)}-{int(time.monotonic()*1e6)}"
+        _inflight_req_id = f"fp-{id(generate_step)}-{int(time.monotonic() * 1e6)}"
 
         # LoRA concurrency keystone: acquire+apply and release+restore are NO
         # LONGER done here on the event loop. They run inside `_run_with_lora` on the
@@ -3608,6 +4022,7 @@ class BatchedEngine:
 
         def _run():
             import mlx.core as mx
+
             if seed is not None:
                 mx.random.seed(seed)
             ids = mx.array(input_ids)
@@ -3630,12 +4045,15 @@ class BatchedEngine:
             _stopped_by_stop_id = False
 
             # Prefill progress tracking for the fast path
-            _prefill_req_id = f"fp-{id(_run)}-{int(time.monotonic()*1e6)}"
+            _prefill_req_id = f"fp-{id(_run)}-{int(time.monotonic() * 1e6)}"
             _prefill_tracker = None
             try:
                 from .prefill_progress import get_prefill_tracker
+
                 _prefill_tracker = get_prefill_tracker()
-                _prefill_tracker.update(_prefill_req_id, 0, prompt_tokens, self.model_name or "default")
+                _prefill_tracker.update(
+                    _prefill_req_id, 0, prompt_tokens, self.model_name or "default"
+                )
             except Exception:
                 logger.debug("prefill tracker setup failed", exc_info=True)
                 _prefill_tracker = None
@@ -3656,9 +4074,7 @@ class BatchedEngine:
             # caches when seed is set restores cold==warm reproducibility at
             # the cost of TTFT on repeat prompts (acceptable for a seeded
             # request).
-            _bypass_cache_for_seed = (
-                seed is not None and temperature > 0
-            )
+            _bypass_cache_for_seed = seed is not None and temperature > 0
 
             # Hybrid-model guard: prompt/prefix KV reuse both rely on trimming
             # the cached KV (snapshot trim at store, trim=1 + re-feed at lookup,
@@ -3684,7 +4100,8 @@ class BatchedEngine:
             if _hybrid_mode:
                 self._kv_prefix_cache._no_trim_mode = True
             _bypass_cache = _bypass_cache_for_seed or (
-                (not _cache_trimmable) and not _hybrid_mode)
+                (not _cache_trimmable) and not _hybrid_mode
+            )
             # The KV prefix cache AND the exact-match prompt cache are
             # keyed on token ids (+ model name) but NOT on the active LoRA adapter. The
             # cached KV is computed with whatever adapter was applied when it was stored,
@@ -3703,11 +4120,15 @@ class BatchedEngine:
             # corrupts non-trimmable recurrent layers. Hybrid uses boundary
             # snapshots only.
             _pc_hit = False
-            if (not _bypass_cache and not _hybrid_mode
-                    and hasattr(self, '_prompt_cache')
-                    and self._prompt_cache is not None):
+            if (
+                not _bypass_cache
+                and not _hybrid_mode
+                and hasattr(self, "_prompt_cache")
+                and self._prompt_cache is not None
+            ):
                 try:
                     from .prompt_cache import compute_messages_hash
+
                     _pc_hash = compute_messages_hash(
                         [{"role": "user", "content": text}],
                         model=self.model_name,
@@ -3736,10 +4157,14 @@ class BatchedEngine:
                         if self._kv_prefix_cache is not None:
                             try:
                                 cache = self._kv_prefix_cache._snapshot_cache(
-                                    _pc_entry.kv_state, trim=_refeed,
+                                    _pc_entry.kv_state,
+                                    trim=_refeed,
                                 )
                             except Exception:
-                                logger.debug("prompt cache snapshot failed; falling back to direct ref", exc_info=True)
+                                logger.debug(
+                                    "prompt cache snapshot failed; falling back to direct ref",
+                                    exc_info=True,
+                                )
                                 cache = _pc_entry.kv_state
                                 _refeed = 0
                         else:
@@ -3771,11 +4196,24 @@ class BatchedEngine:
                         logger.debug("paged KV pressure eviction failed", exc_info=True)
             if not _pc_hit:
                 try:
-                    cached_kv, _, matched = (prefix_cache.get(ids) if prefix_cache is not None else (None, None, 0))
+                    cached_kv, _, matched = (
+                        prefix_cache.get(ids)
+                        if prefix_cache is not None
+                        else (None, None, 0)
+                    )
                 except Exception:
-                    logger.warning("KV prefix cache get failed — falling back to full prefill", exc_info=True)
+                    logger.warning(
+                        "KV prefix cache get failed — falling back to full prefill",
+                        exc_info=True,
+                    )
                     cached_kv, _, matched = None, None, 0
-                cache = cached_kv if cached_kv is not None else _create_prompt_cache_with_quant(model, _req_kv_bits, self._kv_quant_group_size)
+                cache = (
+                    cached_kv
+                    if cached_kv is not None
+                    else _create_prompt_cache_with_quant(
+                        model, _req_kv_bits, self._kv_quant_group_size
+                    )
+                )
                 if cached_kv is not None:
                     cached_tokens = matched
                     ids_to_prefill = ids[matched:]
@@ -3803,6 +4241,7 @@ class BatchedEngine:
             if cached_kv is None and not _bypass_cache and not _hybrid_mode:
                 try:
                     from .inflight_prefix_sharing import get_inflight_tracker
+
                     _tracker = get_inflight_tracker()
                     _inflight_entry = _tracker.find_prefix(
                         [int(t) for t in ids], self.model_name or ""
@@ -3824,6 +4263,7 @@ class BatchedEngine:
             # Register our prefill as in-flight for concurrent requests to share
             try:
                 from .inflight_prefix_sharing import get_inflight_tracker
+
                 get_inflight_tracker().register(
                     _inflight_req_id,
                     [int(t) for t in ids],
@@ -3845,8 +4285,11 @@ class BatchedEngine:
             if self._thinking_store is not None and enable_thinking:
                 try:
                     import hashlib as _hl
+
                     _conv_id = _hl.sha256(str(ids[:16]).encode()).hexdigest()[:16]
-                    _conv_segs = self._thinking_store.get_conversation_segments(_conv_id)
+                    _conv_segs = self._thinking_store.get_conversation_segments(
+                        _conv_id
+                    )
                     if _conv_segs:
                         _best = max(_conv_segs, key=lambda s: s.last_accessed)
                         if _best.kv_data is not None:
@@ -3866,18 +4309,25 @@ class BatchedEngine:
             spec_prefill_done = False
 
             # SpecPrefill: sparse prefill for long prompts
-            if (self._spec_prefill_enabled
+            if (
+                self._spec_prefill_enabled
                 and self._spec_prefill_draft_model is not None
-                and len(ids_to_prefill) >= self._spec_prefill_threshold):
+                and len(ids_to_prefill) >= self._spec_prefill_threshold
+            ):
                 from .spec_prefill import (
                     cleanup_rope,
                     score_tokens,
                     select_chunks,
                     sparse_prefill,
                 )
+
                 try:
-                    importance = score_tokens(self._spec_prefill_draft_model, ids_to_prefill)
-                    selected = select_chunks(importance, keep_pct=self._spec_prefill_keep_rate)
+                    importance = score_tokens(
+                        self._spec_prefill_draft_model, ids_to_prefill
+                    )
+                    selected = select_chunks(
+                        importance, keep_pct=self._spec_prefill_keep_rate
+                    )
                     logits = sparse_prefill(model, ids_to_prefill, selected, cache)
                     mx.eval(logits)
                     ttft_s = time.perf_counter() - gen_t0
@@ -3886,45 +4336,75 @@ class BatchedEngine:
                     tokens.append(first_token)
                     if logprobs:
                         _lp_logits = logits[:, -1, :].astype(mx.float32)
-                        log_probs = _lp_logits - mx.logsumexp(_lp_logits, axis=-1, keepdims=True)
-                        log_probs = mx.where(mx.isnan(log_probs), mx.array(-100.0, dtype=log_probs.dtype), log_probs)
+                        log_probs = _lp_logits - mx.logsumexp(
+                            _lp_logits, axis=-1, keepdims=True
+                        )
+                        log_probs = mx.where(
+                            mx.isnan(log_probs),
+                            mx.array(-100.0, dtype=log_probs.dtype),
+                            log_probs,
+                        )
                         tok_lp = float(log_probs[0, first_token])
-                        token_logprobs.append({"token_id": first_token, "logprob": tok_lp})
+                        token_logprobs.append(
+                            {"token_id": first_token, "logprob": tok_lp}
+                        )
                     if first_token in stop_ids:
                         tokens.pop()
                         _stopped_by_stop_id = True
                     else:
                         detokenizer.add_token(first_token)
                         # Check stop suffix on first_token (was missing)
-                        if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                        if stop_suffixes and any(
+                            detokenizer.text.endswith(s) for s in stop_suffixes
+                        ):
                             tokens.pop()
                             _stopped_by_suffix = True
                         else:
                             # Check if first_token starts a thinking segment
-                            if think_start_token is not None and first_token == think_start_token:
+                            if (
+                                think_start_token is not None
+                                and first_token == think_start_token
+                            ):
                                 _in_thinking = True
                                 _thinking_tokens = []
                     remaining = max_tokens - 1
-                    if remaining > 0 and first_token not in stop_ids and not _stopped_by_suffix:
+                    if (
+                        remaining > 0
+                        and first_token not in stop_ids
+                        and not _stopped_by_suffix
+                    ):
                         for token, logits in generate_step(
-                            mx.array([first_token]).reshape(1, -1), model,
-                            max_tokens=remaining, sampler=sampler,
-                            prompt_cache=cache, logits_processors=_lprocs,
+                            mx.array([first_token]).reshape(1, -1),
+                            model,
+                            max_tokens=remaining,
+                            sampler=sampler,
+                            prompt_cache=cache,
+                            logits_processors=_lprocs,
                         ):
                             tokens.append(token)
                             if logprobs:
                                 _lp_logits = logits.astype(mx.float32)
-                                log_probs = _lp_logits - mx.logsumexp(_lp_logits, axis=-1, keepdims=True)
-                                log_probs = mx.where(mx.isnan(log_probs), mx.array(-100.0, dtype=log_probs.dtype), log_probs)
+                                log_probs = _lp_logits - mx.logsumexp(
+                                    _lp_logits, axis=-1, keepdims=True
+                                )
+                                log_probs = mx.where(
+                                    mx.isnan(log_probs),
+                                    mx.array(-100.0, dtype=log_probs.dtype),
+                                    log_probs,
+                                )
                                 tok_lp = float(log_probs[token])
-                                token_logprobs.append({"token_id": int(token), "logprob": tok_lp})
+                                token_logprobs.append(
+                                    {"token_id": int(token), "logprob": tok_lp}
+                                )
                             if token in stop_ids:
                                 tokens.pop()
                                 _stopped_by_stop_id = True
                                 break
                             detokenizer.add_token(token)
                             if stop_suffixes:
-                                if any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                                if any(
+                                    detokenizer.text.endswith(s) for s in stop_suffixes
+                                ):
                                     tokens.pop()  # Exclude suffix-triggering token from count
                                     _stopped_by_suffix = True
                                     break
@@ -3934,8 +4414,13 @@ class BatchedEngine:
                                 mx.synchronize()
                                 break
                             # Timeout check (was missing — SpecPrefill could run indefinitely)
-                            if len(tokens) % 32 == 0 and time.perf_counter() > _timeout_deadline:
-                                logger.warning(f"SpecPrefill generation timed out after {timeout_seconds}s ({len(tokens)} tokens)")
+                            if (
+                                len(tokens) % 32 == 0
+                                and time.perf_counter() > _timeout_deadline
+                            ):
+                                logger.warning(
+                                    f"SpecPrefill generation timed out after {timeout_seconds}s ({len(tokens)} tokens)"
+                                )
                                 break
                             # Track thinking segment boundaries BEFORE budget check
                             # (was missing — thinking mode was non-functional in SpecPrefill)
@@ -3952,7 +4437,10 @@ class BatchedEngine:
                             # is NOT already the natural closing tag (avoids duplicate).
                             if thinking_budget is not None and _in_thinking:
                                 thinking_tokens_used += 1
-                                if thinking_tokens_used >= thinking_budget and think_end_token is not None:
+                                if (
+                                    thinking_tokens_used >= thinking_budget
+                                    and think_end_token is not None
+                                ):
                                     _in_thinking = False
                                     if token != think_end_token:
                                         tokens.append(think_end_token)
@@ -3962,10 +4450,15 @@ class BatchedEngine:
                     cleanup_rope(model)
                     spec_prefill_done = True
                 except Exception:
-                    logger.warning("SpecPrefill failed, falling back to standard prefill", exc_info=True)
+                    logger.warning(
+                        "SpecPrefill failed, falling back to standard prefill",
+                        exc_info=True,
+                    )
                     tokens.clear()
                     detokenizer.reset()
-                    cache = _create_prompt_cache_with_quant(model, _req_kv_bits, self._kv_quant_group_size)
+                    cache = _create_prompt_cache_with_quant(
+                        model, _req_kv_bits, self._kv_quant_group_size
+                    )
                     ids_to_prefill = ids
                     first = True
                     _thinking_tokens = []
@@ -3981,7 +4474,10 @@ class BatchedEngine:
             if _hybrid_mode and not spec_prefill_done and len(ids_to_prefill) > 1:
                 try:
                     _resident = self._capture_hybrid_prefix(
-                        model, ids, cache, self._kv_prefix_cache,
+                        model,
+                        ids,
+                        cache,
+                        self._kv_prefix_cache,
                         start_offset=cached_tokens,
                         block=self._hybrid_prefix_block,
                     )
@@ -3997,8 +4493,12 @@ class BatchedEngine:
                 _timeout_check_interval = 32
                 with _wired_limit_ctx(model):
                     for token, logits in generate_step(
-                        ids_to_prefill, model, max_tokens=max_tokens, sampler=sampler,
-                        prompt_cache=cache, logits_processors=_lprocs,
+                        ids_to_prefill,
+                        model,
+                        max_tokens=max_tokens,
+                        sampler=sampler,
+                        prompt_cache=cache,
+                        logits_processors=_lprocs,
                         prefill_step_size=_prefill_step_size(),
                     ):
                         if first:
@@ -4010,17 +4510,23 @@ class BatchedEngine:
                             # prompt, where ttft_s ≈ pure prefill of ids_to_prefill.
                             if cached_tokens == 0 and ttft_s > 0:
                                 try:
-                                    _n_pf = (int(ids_to_prefill.shape[0])
-                                             if hasattr(ids_to_prefill, "shape")
-                                             else len(ids_to_prefill))
+                                    _n_pf = (
+                                        int(ids_to_prefill.shape[0])
+                                        if hasattr(ids_to_prefill, "shape")
+                                        else len(ids_to_prefill)
+                                    )
                                     if _n_pf >= 256:
-                                        self._kv_prefix_cache.note_prefill_tps(_n_pf / ttft_s)
+                                        self._kv_prefix_cache.note_prefill_tps(
+                                            _n_pf / ttft_s
+                                        )
                                 except Exception:
                                     pass
                             # Prefill complete — remove from progress tracker
                             if _prefill_tracker is not None:
                                 _prefill_tracker.update(
-                                    _prefill_req_id, prompt_tokens, prompt_tokens,
+                                    _prefill_req_id,
+                                    prompt_tokens,
+                                    prompt_tokens,
                                     self.model_name or "default",
                                 )
                             _last_tok_time = time.perf_counter()
@@ -4035,22 +4541,33 @@ class BatchedEngine:
                         # Request-level timeout: check every N tokens
                         if len(tokens) % _timeout_check_interval == 0:
                             if time.perf_counter() > _timeout_deadline:
-                                logger.warning(f"Generation timed out after {timeout_seconds}s ({len(tokens)} tokens)")
+                                logger.warning(
+                                    f"Generation timed out after {timeout_seconds}s ({len(tokens)} tokens)"
+                                )
                                 break
                         # Progressive KV quantization (C6: keep memory flat during generation)
                         if _req_kv_bits is not None:
                             _progressive_quantize_kv_cache(
-                                cache, self._kv_quant_start,
-                                self._kv_quant_group_size, _req_kv_bits,
+                                cache,
+                                self._kv_quant_start,
+                                self._kv_quant_group_size,
+                                _req_kv_bits,
                                 len(tokens),
                             )
                         # Compute logprobs BEFORE stop checks — logprobs for stop
                         # tokens are trimmed later via lp_result[:len(tokens)].
                         if logprobs:
                             import mlx.core as mx
+
                             _lp_logits = logits.astype(mx.float32)
-                            log_probs = _lp_logits - mx.logsumexp(_lp_logits, axis=-1, keepdims=True)
-                            log_probs = mx.where(mx.isnan(log_probs), mx.array(-100.0, dtype=log_probs.dtype), log_probs)
+                            log_probs = _lp_logits - mx.logsumexp(
+                                _lp_logits, axis=-1, keepdims=True
+                            )
+                            log_probs = mx.where(
+                                mx.isnan(log_probs),
+                                mx.array(-100.0, dtype=log_probs.dtype),
+                                log_probs,
+                            )
                             tok_lp = float(log_probs[token])
                             entry = {"token_id": int(token), "logprob": tok_lp}
                             if top_logprobs and top_logprobs > 0:
@@ -4058,7 +4575,10 @@ class BatchedEngine:
                                 sorted_idx = mx.argsort(-log_probs)
                                 top_k_idx = sorted_idx[:k]
                                 entry["top_logprobs"] = [
-                                    {"token_id": int(top_k_idx[j]), "logprob": float(log_probs[int(top_k_idx[j])])}
+                                    {
+                                        "token_id": int(top_k_idx[j]),
+                                        "logprob": float(log_probs[int(top_k_idx[j])]),
+                                    }
                                     for j in range(k)
                                 ]
                             token_logprobs.append(entry)
@@ -4073,7 +4593,9 @@ class BatchedEngine:
                         # was non-empty, leaving the detokenizer empty and its
                         # state stale when no suffix matching was requested.
                         detokenizer.add_token(token)
-                        if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                        if stop_suffixes and any(
+                            detokenizer.text.endswith(s) for s in stop_suffixes
+                        ):
                             tokens.pop()  # Exclude suffix-triggering token from count
                             _stopped_by_suffix = True
                             break
@@ -4088,19 +4610,26 @@ class BatchedEngine:
                             if not _in_thinking and token == think_start_token:
                                 _in_thinking = True
                                 _thinking_tokens = []
-                                self._lookahead_reasoning.check_thinking_state_text("<think")
+                                self._lookahead_reasoning.check_thinking_state_text(
+                                    "<think"
+                                )
                             elif _in_thinking:
                                 _thinking_tokens.append(token)
                                 if token == think_end_token:
                                     _in_thinking = False
-                                    self._lookahead_reasoning.check_thinking_state_text("</think")
+                                    self._lookahead_reasoning.check_thinking_state_text(
+                                        "</think"
+                                    )
 
                         # Thinking budget enforcement: cap thinking tokens.
                         # Only force-append think_end_token if the current token
                         # is NOT already the natural closing tag (avoids duplicate).
                         if thinking_budget is not None and _in_thinking:
                             thinking_tokens_used += 1
-                            if thinking_tokens_used >= thinking_budget and think_end_token is not None:
+                            if (
+                                thinking_tokens_used >= thinking_budget
+                                and think_end_token is not None
+                            ):
                                 _in_thinking = False
                                 # Add forced closing tag to tokens so it appears in
                                 # tokenizer.decode(tokens) output (non-streaming path).
@@ -4119,8 +4648,10 @@ class BatchedEngine:
             # Quantize cache layers to save memory (mlx-lm pattern)
             if _req_kv_bits is not None:
                 _maybe_quantize_kv_cache(
-                    cache, self._kv_quant_start,
-                    self._kv_quant_group_size, _req_kv_bits,
+                    cache,
+                    self._kv_quant_start,
+                    self._kv_quant_group_size,
+                    _req_kv_bits,
                 )
             # For HYBRID models the boundary snapshots were
             # already stored DURING prefill (before any generation). The post-
@@ -4135,9 +4666,13 @@ class BatchedEngine:
             # KV cache breakpoints: save prefix entries at Anthropic
             # cache_control positions so future requests can reuse the
             # KV state up to each breakpoint (multi-turn speedup).
-            if (_kv_breakpoint_token_positions and prefix_cache is not None
-                    and not _hybrid_mode):
+            if (
+                _kv_breakpoint_token_positions
+                and prefix_cache is not None
+                and not _hybrid_mode
+            ):
                 from .kv_prefix_cache import cache_length as _cache_len_bp
+
                 for bp_pos in _kv_breakpoint_token_positions:
                     if bp_pos < len(ids) and bp_pos >= 32:
                         bp_tokens = ids[:bp_pos]
@@ -4151,16 +4686,23 @@ class BatchedEngine:
                         # this hand-computed snapshot bypassed that.
                         trim_count = max(0, _cache_len_bp(cache) - bp_pos)
                         try:
-                            bp_cache = prefix_cache._snapshot_cache(cache, trim=trim_count)
+                            bp_cache = prefix_cache._snapshot_cache(
+                                cache, trim=trim_count
+                            )
                             prefix_cache.add(bp_tokens, bp_cache)
                         except Exception:
-                            logger.debug("KV breakpoint prefix add failed at pos %d", bp_pos, exc_info=True)
+                            logger.debug(
+                                "KV breakpoint prefix add failed at pos %d",
+                                bp_pos,
+                                exc_info=True,
+                            )
 
             # KV Transfer: serialize and send KV blocks to remote decode node.
             # In single-node mode, this is a no-op (client is None).
             if self._kv_transfer_client is not None:
                 try:
                     from .kv_transfer import extract_kv_blocks_from_cache
+
                     blocks = extract_kv_blocks_from_cache(
                         cache,
                         [int(t) for t in ids],
@@ -4173,8 +4715,12 @@ class BatchedEngine:
                             layer_count=len(cache),
                         )
                         if result.status.value == "completed":
-                            self._kv_transfer_stats["blocks_transferred"] += result.blocks_transferred
-                            self._kv_transfer_stats["bytes_transferred"] += result.bytes_transferred
+                            self._kv_transfer_stats["blocks_transferred"] += (
+                                result.blocks_transferred
+                            )
+                            self._kv_transfer_stats["bytes_transferred"] += (
+                                result.bytes_transferred
+                            )
                         else:
                             self._kv_transfer_stats["transfer_failures"] += 1
                 except Exception:
@@ -4188,11 +4734,17 @@ class BatchedEngine:
             # last prompt token against KV state that contains *prior*
             # completion tokens, and produces gibberish that continues the
             # earlier response (BUG-A cross-request leakage).
-            if (not _pc_hit and not _bypass_cache and not _hybrid_mode
-                    and hasattr(self, '_prompt_cache') and self._prompt_cache is not None):
+            if (
+                not _pc_hit
+                and not _bypass_cache
+                and not _hybrid_mode
+                and hasattr(self, "_prompt_cache")
+                and self._prompt_cache is not None
+            ):
                 try:
                     from .kv_prefix_cache import cache_length as _cache_len
                     from .prompt_cache import compute_messages_hash
+
                     _pc_hash = compute_messages_hash(
                         [{"role": "user", "content": text}],
                         model=self.model_name,
@@ -4207,7 +4759,8 @@ class BatchedEngine:
                     else:
                         _trimmed_cache = cache
                     self._prompt_cache.store(
-                        _pc_hash, _trimmed_cache,
+                        _pc_hash,
+                        _trimmed_cache,
                         token_count=_prompt_only_len,
                     )
                 except Exception:
@@ -4217,6 +4770,7 @@ class BatchedEngine:
             if _thinking_tokens and self._thinking_store is not None:
                 try:
                     import hashlib as _hl
+
                     conv_id = _hl.sha256(str(ids[:16]).encode()).hexdigest()[:16]
                     # Snapshot the cache so the thinking store doesn't hold a
                     # reference to the same mutable list as prefix_cache.
@@ -4248,7 +4802,7 @@ class BatchedEngine:
                 # Trim the matched suffix from detokenizer text
                 for s in stop_suffixes:
                     if output_text.endswith(s):
-                        output_text = output_text[:-len(s)]
+                        output_text = output_text[: -len(s)]
                         break
                 output_text = _clean_special_tokens(output_text)
             else:
@@ -4275,11 +4829,22 @@ class BatchedEngine:
             # Unregister from inflight prefix tracker
             try:
                 from .inflight_prefix_sharing import get_inflight_tracker
+
                 get_inflight_tracker().unregister(_inflight_req_id)
             except Exception:
                 logger.debug("inflight prefix unregister failed", exc_info=True)
 
-            return tokens, output_text, token_logprobs, ttft_s, cached_tokens, _stopped_by_suffix, _stopped_by_stop_id, _itl_samples, _thinking_tokens
+            return (
+                tokens,
+                output_text,
+                token_logprobs,
+                ttft_s,
+                cached_tokens,
+                _stopped_by_suffix,
+                _stopped_by_stop_id,
+                _itl_samples,
+                _thinking_tokens,
+            )
 
         def _run_with_lora():
             # LoRA concurrency keystone: acquire+apply / release+restore on the
@@ -4289,7 +4854,7 @@ class BatchedEngine:
             # event-loop _restore_base mutated the shared model while a different request's
             # generation read it. (Gateway-side apply is deferred for self-managing engines.)
             _lora_applied = False
-            if lora_adapter and getattr(self, '_lora_manager', None) is not None:
+            if lora_adapter and getattr(self, "_lora_manager", None) is not None:
                 try:
                     _lora_applied = self._lora_manager.acquire_adapter(lora_adapter)
                 except Exception as _lora_err:
@@ -4308,33 +4873,55 @@ class BatchedEngine:
             try:
                 return _run()
             finally:
-                if _lora_applied and getattr(self, '_lora_manager', None) is not None:
+                if _lora_applied and getattr(self, "_lora_manager", None) is not None:
                     try:
                         self._lora_manager.release_adapter(lora_adapter)
                     except Exception:
-                        logger.debug("LoRA release failed (fast-path executor)", exc_info=True)
+                        logger.debug(
+                            "LoRA release failed (fast-path executor)", exc_info=True
+                        )
 
         from .mlx_executor import get_mlx_executor
+
         executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
-        _fp_lock = getattr(self, '_fast_path_lock', None)
+        _fp_lock = getattr(self, "_fast_path_lock", None)
         if _fp_lock is not None:
             with _fp_lock:
                 self._active_fast_path_count += 1
         try:
             try:
-                tokens, output_text, token_logprobs, ttft_s, cached_tokens, _stopped_by_suffix, _stopped_by_stop_id, _itl_samples, _thinking_tokens = await loop.run_in_executor(executor, _run_with_lora)
+                (
+                    tokens,
+                    output_text,
+                    token_logprobs,
+                    ttft_s,
+                    cached_tokens,
+                    _stopped_by_suffix,
+                    _stopped_by_stop_id,
+                    _itl_samples,
+                    _thinking_tokens,
+                ) = await loop.run_in_executor(executor, _run_with_lora)
             except MemoryError:
-                logger.warning("OOM during generation — returning memory_limit finish reason")
+                logger.warning(
+                    "OOM during generation — returning memory_limit finish reason"
+                )
                 try:
                     from .inflight_prefix_sharing import get_inflight_tracker
+
                     get_inflight_tracker().unregister(_inflight_req_id)
                 except Exception:
-                    logger.debug("inflight prefix unregister failed in OOM handler", exc_info=True)
+                    logger.debug(
+                        "inflight prefix unregister failed in OOM handler",
+                        exc_info=True,
+                    )
                 # Clear Metal buffers left behind by the OOM
                 try:
                     import mlx.core as _mx
-                    await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
+
+                    await loop.run_in_executor(
+                        executor, lambda: (_mx.synchronize(), _mx.clear_cache())
+                    )
                 except Exception:
                     logger.debug("GPU cache cleanup failed after OOM", exc_info=True)
                 return GenerationOutput(
@@ -4351,15 +4938,25 @@ class BatchedEngine:
                     logger.warning(f"MLX OOM during generation: {e}")
                     try:
                         from .inflight_prefix_sharing import get_inflight_tracker
+
                         get_inflight_tracker().unregister(_inflight_req_id)
                     except Exception:
-                        logger.debug("inflight prefix unregister failed in OOM handler", exc_info=True)
+                        logger.debug(
+                            "inflight prefix unregister failed in OOM handler",
+                            exc_info=True,
+                        )
                     # Clear Metal buffers left behind by the OOM
                     try:
                         import mlx.core as _mx
-                        await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
+
+                        await loop.run_in_executor(
+                            executor, lambda: (_mx.synchronize(), _mx.clear_cache())
+                        )
                     except Exception:
-                        logger.debug("GPU cache cleanup failed after OOM (RuntimeError path)", exc_info=True)
+                        logger.debug(
+                            "GPU cache cleanup failed after OOM (RuntimeError path)",
+                            exc_info=True,
+                        )
                     return GenerationOutput(
                         finished=True,
                         finish_reason="memory_limit",
@@ -4371,9 +4968,13 @@ class BatchedEngine:
                     )
                 try:
                     from .inflight_prefix_sharing import get_inflight_tracker
+
                     get_inflight_tracker().unregister(_inflight_req_id)
                 except Exception:
-                    logger.debug("inflight prefix unregister failed in error handler", exc_info=True)
+                    logger.debug(
+                        "inflight prefix unregister failed in error handler",
+                        exc_info=True,
+                    )
                 # Return error output for non-OOM RuntimeError too (e.g. shape
                 # mismatch, unsupported op) instead of propagating to caller.
                 return GenerationOutput(
@@ -4389,9 +4990,13 @@ class BatchedEngine:
                 logger.error(f"Unexpected error during generation: {e}", exc_info=True)
                 try:
                     from .inflight_prefix_sharing import get_inflight_tracker
+
                     get_inflight_tracker().unregister(_inflight_req_id)
                 except Exception:
-                    logger.debug("inflight prefix unregister failed in error handler", exc_info=True)
+                    logger.debug(
+                        "inflight prefix unregister failed in error handler",
+                        exc_info=True,
+                    )
                 # Return an error GenerationOutput instead of propagating the
                 # exception to the caller (which expects GenerationOutput, not
                 # an exception). Previously this re-raised, causing unhandled
@@ -4415,7 +5020,9 @@ class BatchedEngine:
             _ct_override = None
             if _stopped_by_suffix and stop_suffixes and output_text is not None:
                 try:
-                    _ct_re = len(tokenizer.encode(output_text, add_special_tokens=False))
+                    _ct_re = len(
+                        tokenizer.encode(output_text, add_special_tokens=False)
+                    )
                     if _ct_re < len(tokens):
                         _ct_override = _ct_re
                 except Exception:
@@ -4431,7 +5038,10 @@ class BatchedEngine:
                         # Raw token bytes (NOT the decoded-string bytes, which
                         # are the U+FFFD replacement for a split multi-byte char).
                         from .text_utils import token_id_to_bytes
-                        lp_entry["bytes"] = token_id_to_bytes(tokenizer, tid, lp_entry["token"])
+
+                        lp_entry["bytes"] = token_id_to_bytes(
+                            tokenizer, tid, lp_entry["token"]
+                        )
                     except Exception:
                         logger.debug("logprob token decode failed", exc_info=True)
                         lp_entry["token"] = ""
@@ -4441,9 +5051,14 @@ class BatchedEngine:
                             try:
                                 tlp["token"] = tokenizer.decode([tlp["token_id"]])
                                 from .text_utils import token_id_to_bytes
-                                tlp["bytes"] = token_id_to_bytes(tokenizer, tlp["token_id"], tlp["token"])
+
+                                tlp["bytes"] = token_id_to_bytes(
+                                    tokenizer, tlp["token_id"], tlp["token"]
+                                )
                             except Exception:
-                                logger.debug("top_logprob token decode failed", exc_info=True)
+                                logger.debug(
+                                    "top_logprob token decode failed", exc_info=True
+                                )
                                 tlp["token"] = ""
                                 tlp["bytes"] = []
                 lp_result = token_logprobs
@@ -4454,7 +5069,7 @@ class BatchedEngine:
             if _stopped_by_suffix and stop_suffixes:
                 for s in stop_suffixes:
                     if output_text.endswith(s):
-                        output_text = output_text[:-len(s)]
+                        output_text = output_text[: -len(s)]
                         break
 
             # Determine finish_reason.
@@ -4473,7 +5088,7 @@ class BatchedEngine:
             # `token_logprobs`. Trim the stale entry so logprobs count matches
             # `completion_tokens`.
             if lp_result is not None:
-                lp_result = lp_result[:len(tokens)]
+                lp_result = lp_result[: len(tokens)]
 
             # Record TTFT + ITL in Prometheus
             _ttft_ms_val = round(ttft_s * 1000, 1)
@@ -4482,6 +5097,7 @@ class BatchedEngine:
                     from yunshu_gateway.middleware.prometheus_exporter import (
                         get_prometheus_metrics,
                     )
+
                     pm = get_prometheus_metrics()
                     _ml = {"model_id": self.model_label}
                     pm.observe_histogram("ttft_seconds", ttft_s, labels=_ml)
@@ -4499,6 +5115,7 @@ class BatchedEngine:
             # Record in ServerMetrics (consistency with engine loop path)
             try:
                 from .server_metrics import get_server_metrics
+
                 _sm = get_server_metrics()
                 _total_gen_s = sum(_itl_samples) + ttft_s if _itl_samples else ttft_s
                 _sm.record_request_complete(
@@ -4513,7 +5130,9 @@ class BatchedEngine:
                     for _itl in _itl_samples:
                         _sm.record_itl(_itl)
             except Exception:
-                logger.debug("ServerMetrics recording failed in fast path", exc_info=True)
+                logger.debug(
+                    "ServerMetrics recording failed in fast path", exc_info=True
+                )
 
             self._total_reasoning_tokens += len(_thinking_tokens)
 
@@ -4523,6 +5142,7 @@ class BatchedEngine:
             if output_text:
                 try:
                     from .reasoning_parser import get_reasoning_parser
+
                     rp = get_reasoning_parser(self.model_name)
                     rp_out = rp.parse(output_text)
                     if rp_out.reasoning:
@@ -4536,7 +5156,9 @@ class BatchedEngine:
                 text=output_text,
                 new_text=output_text,
                 prompt_tokens=prompt_tokens,
-                completion_tokens=_ct_override if _ct_override is not None else len(tokens),
+                completion_tokens=_ct_override
+                if _ct_override is not None
+                else len(tokens),
                 finished=True,
                 finish_reason=finish_reason,
                 cached_tokens=cached_tokens,
@@ -4549,7 +5171,7 @@ class BatchedEngine:
         finally:
             # LoRA release+restore now happens inside _run_with_lora on the executor
             # thread — not here on the event loop.
-            _fp_lock = getattr(self, '_fast_path_lock', None)
+            _fp_lock = getattr(self, "_fast_path_lock", None)
             if _fp_lock is not None:
                 with _fp_lock:
                     self._active_fast_path_count -= 1
@@ -4608,8 +5230,10 @@ class BatchedEngine:
         # path for the full rationale (fast-path spec routes are not currently
         # lossless and give no speedup on Apple Silicon).
         if spec_decode:
-            logger.debug("spec_decode requested — using standard streaming generation "
-                         "(fast-path spec routes are not currently lossless)")
+            logger.debug(
+                "spec_decode requested — using standard streaming generation "
+                "(fast-path spec routes are not currently lossless)"
+            )
             spec_decode = False
         # Resolve reasoning_effort → thinking_budget if not explicitly set
         if thinking_budget is None and reasoning_effort is not None:
@@ -4646,9 +5270,11 @@ class BatchedEngine:
 
         # Register with request tracker for cancellation support (all paths)
         import uuid as _uuid
+
         _stream_req_id = f"stream-{_uuid.uuid4().hex[:8]}"
         try:
             from .request_tracker import get_request_tracker
+
             _tracker = get_request_tracker()
             _active_gen = _tracker.register(_stream_req_id, self.model_name or "")
             _cancel_event = _active_gen.cancel_event
@@ -4669,10 +5295,11 @@ class BatchedEngine:
                 Thread-safe: reads asyncio.Event._value directly (GIL-protected bool)
                 instead of calling .is_set() which is not safe from executor threads.
                 """
+
                 def is_set(self):
                     if _internal is not None:
                         # asyncio.Event: read _value (GIL-protected bool)
-                        if hasattr(_internal, '_value'):
+                        if hasattr(_internal, "_value"):
                             if _internal._value:
                                 return True
                         elif _internal.is_set():
@@ -4682,17 +5309,29 @@ class BatchedEngine:
             _cancel_event = _CompositeCancelEvent()
 
         # Speculative decoding path (Phase 4)
-        if spec_decode and not logprobs and not _use_engine_loop and self._spec_enabled and self._spec_decoder is not None:
+        if (
+            spec_decode
+            and not logprobs
+            and not _use_engine_loop
+            and self._spec_enabled
+            and self._spec_decoder is not None
+        ):
             try:
                 async for output in self._stream_generate_speculative(
-                    prompt=prompt, max_tokens=max_tokens, temperature=temperature,
-                    top_p=top_p, top_k=top_k, min_p=min_p,
+                    prompt=prompt,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    min_p=min_p,
                     repetition_penalty=repetition_penalty,
                     frequency_penalty=frequency_penalty,
                     presence_penalty=presence_penalty,
                     logit_bias=logit_bias,
-                    logprobs=logprobs, top_logprobs=top_logprobs,
-                    stop=stop, stop_token_ids=stop_token_ids,
+                    logprobs=logprobs,
+                    top_logprobs=top_logprobs,
+                    stop=stop,
+                    stop_token_ids=stop_token_ids,
                     seed=seed,
                     enable_thinking=enable_thinking,
                     thinking_budget=thinking_budget,
@@ -4720,18 +5359,30 @@ class BatchedEngine:
         # and emits a single chunk with `stop` trimmed post-hoc, so it has no
         # multi-token-stop streaming leak. The hold-back fix in _stream_generate_mtp
         # is defensive — correct if this branch is ever re-enabled.
-        if spec_decode and not logprobs and self._mtp_decoder is not None and not _use_engine_loop:
+        if (
+            spec_decode
+            and not logprobs
+            and self._mtp_decoder is not None
+            and not _use_engine_loop
+        ):
             try:
                 async for output in self._stream_generate_mtp(
-                    prompt=prompt, max_tokens=max_tokens, temperature=temperature,
-                    top_p=top_p, top_k=top_k, min_p=min_p,
+                    prompt=prompt,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    min_p=min_p,
                     repetition_penalty=repetition_penalty,
                     frequency_penalty=frequency_penalty,
                     presence_penalty=presence_penalty,
                     logit_bias=logit_bias,
-                    logprobs=logprobs, top_logprobs=top_logprobs,
-                    stop=stop, stop_token_ids=stop_token_ids,
-                    seed=seed, cancel_event=_cancel_event,
+                    logprobs=logprobs,
+                    top_logprobs=top_logprobs,
+                    stop=stop,
+                    stop_token_ids=stop_token_ids,
+                    seed=seed,
+                    cancel_event=_cancel_event,
                     enable_thinking=enable_thinking,
                     thinking_budget=thinking_budget,
                     timeout_seconds=timeout_seconds or 300.0,
@@ -4763,17 +5414,29 @@ class BatchedEngine:
         # the method was "not yet implemented"; the truth is it's implemented but
         # buggy — fixing it is low-value, deferred.) Output is correct; only the
         # spec speedup is forgone for streaming.
-        if spec_decode and not logprobs and self._ngram_proposer is not None and not _use_engine_loop:
+        if (
+            spec_decode
+            and not logprobs
+            and self._ngram_proposer is not None
+            and not _use_engine_loop
+        ):
             try:
                 async for output in self._stream_generate_fast(
-                    prompt=prompt, max_tokens=max_tokens, temperature=temperature,
-                    top_p=top_p, top_k=top_k, min_p=min_p,
+                    prompt=prompt,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    min_p=min_p,
                     repetition_penalty=repetition_penalty,
                     frequency_penalty=frequency_penalty,
                     presence_penalty=presence_penalty,
                     logit_bias=logit_bias,
-                    stop=stop, stop_token_ids=stop_token_ids, seed=seed,
-                    json_schema=json_schema, logprobs=logprobs,
+                    stop=stop,
+                    stop_token_ids=stop_token_ids,
+                    seed=seed,
+                    json_schema=json_schema,
+                    logprobs=logprobs,
                     top_logprobs=top_logprobs,
                     xtc_probability=xtc_probability,
                     xtc_threshold=xtc_threshold,
@@ -4800,14 +5463,20 @@ class BatchedEngine:
         if not _use_engine_loop:
             try:
                 async for output in self._stream_generate_fast(
-                    prompt=prompt, max_tokens=max_tokens, temperature=temperature,
-                    top_p=top_p, top_k=top_k, min_p=min_p,
+                    prompt=prompt,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    min_p=min_p,
                     repetition_penalty=repetition_penalty,
                     frequency_penalty=frequency_penalty,
                     presence_penalty=presence_penalty,
                     logit_bias=logit_bias,
-                    stop=stop, stop_token_ids=stop_token_ids,
-                    seed=seed, enable_thinking=enable_thinking,
+                    stop=stop,
+                    stop_token_ids=stop_token_ids,
+                    seed=seed,
+                    enable_thinking=enable_thinking,
                     thinking_budget=thinking_budget,
                     xtc_probability=xtc_probability,
                     xtc_threshold=xtc_threshold,
@@ -4837,12 +5506,20 @@ class BatchedEngine:
         await self._ensure_engine_core()
         _stream_t0 = time.perf_counter()
         request_id = await self._engine_core.add_request(
-            prompt=prompt, max_tokens=max_tokens, temperature=temperature,
-            top_p=top_p, top_k=top_k, min_p=min_p,
-            repetition_penalty=repetition_penalty, frequency_penalty=frequency_penalty,
-            presence_penalty=presence_penalty, logit_bias=logit_bias,
-            stop=stop, stop_token_ids=stop_token_ids,
-            seed=seed, json_schema=json_schema,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            min_p=min_p,
+            repetition_penalty=repetition_penalty,
+            frequency_penalty=frequency_penalty,
+            presence_penalty=presence_penalty,
+            logit_bias=logit_bias,
+            stop=stop,
+            stop_token_ids=stop_token_ids,
+            seed=seed,
+            json_schema=json_schema,
             enable_thinking=enable_thinking,
             thinking_budget=thinking_budget,
             priority=priority,
@@ -4860,21 +5537,29 @@ class BatchedEngine:
         _first_token = True
         _stream_ttft_ms = 0.0
         try:
-            async for output in self._engine_core.stream_outputs(request_id, cancel_event=_cancel_event):
+            async for output in self._engine_core.stream_outputs(
+                request_id, cancel_event=_cancel_event
+            ):
                 # Check cancel event (gateway disconnect or internal cancel)
                 if _cancel_event is not None and _cancel_event.is_set():
-                    logger.debug(f"Cancel event triggered during streaming: {request_id}")
+                    logger.debug(
+                        f"Cancel event triggered during streaming: {request_id}"
+                    )
                     # Yield terminal stop chunk so consumer sees finished=True
                     yield GenerationOutput(
                         text="",
                         new_text="",
-                        prompt_tokens=getattr(output, 'prompt_tokens', 0) if hasattr(output, 'prompt_tokens') else 0,
-                        completion_tokens=getattr(output, 'completion_tokens', 0) if hasattr(output, 'completion_tokens') else 0,
+                        prompt_tokens=getattr(output, "prompt_tokens", 0)
+                        if hasattr(output, "prompt_tokens")
+                        else 0,
+                        completion_tokens=getattr(output, "completion_tokens", 0)
+                        if hasattr(output, "completion_tokens")
+                        else 0,
                         finished=True,
                         finish_reason="stop",
                         ttft_ms=_stream_ttft_ms,
-                        cached_tokens=getattr(output, 'cached_tokens', 0),
-                        reasoning_tokens=getattr(output, 'reasoning_tokens', 0),
+                        cached_tokens=getattr(output, "cached_tokens", 0),
+                        reasoning_tokens=getattr(output, "reasoning_tokens", 0),
                     )
                     break
                 cleaned = _clean_special_tokens(output.new_text)
@@ -4887,7 +5572,9 @@ class BatchedEngine:
                 # Compute TTFT on first streamed output
                 _ttft_ms = 0.0
                 if _first_token:
-                    _stream_ttft_ms = round((time.perf_counter() - _stream_t0) * 1000, 1)
+                    _stream_ttft_ms = round(
+                        (time.perf_counter() - _stream_t0) * 1000, 1
+                    )
                     _ttft_ms = _stream_ttft_ms
                     _first_token = False
                     # Record TTFT in Prometheus (consistency with fast path)
@@ -4895,10 +5582,18 @@ class BatchedEngine:
                         from yunshu_gateway.middleware.prometheus_exporter import (
                             get_prometheus_metrics,
                         )
+
                         pm = get_prometheus_metrics()
-                        pm.observe_histogram("ttft_seconds", _stream_ttft_ms / 1000.0, labels={"model_id": self.model_label})
+                        pm.observe_histogram(
+                            "ttft_seconds",
+                            _stream_ttft_ms / 1000.0,
+                            labels={"model_id": self.model_label},
+                        )
                     except Exception:
-                        logger.debug("engine loop streaming TTFT prometheus recording failed", exc_info=True)
+                        logger.debug(
+                            "engine loop streaming TTFT prometheus recording failed",
+                            exc_info=True,
+                        )
                 gen_output = GenerationOutput(
                     text=_clean_special_tokens(output.output_text),
                     new_text=cleaned,
@@ -4906,13 +5601,13 @@ class BatchedEngine:
                     completion_tokens=output.completion_tokens,
                     finished=output.finished,
                     finish_reason=finish_reason,
-                    reasoning_tokens=getattr(output, 'reasoning_tokens', 0),
-                    cached_tokens=getattr(output, 'cached_tokens', 0),
-                    logprobs=getattr(output, 'logprobs', None),
+                    reasoning_tokens=getattr(output, "reasoning_tokens", 0),
+                    cached_tokens=getattr(output, "cached_tokens", 0),
+                    logprobs=getattr(output, "logprobs", None),
                     ttft_ms=_ttft_ms,
-                    current_state=getattr(output, 'current_state', None),
-                    error=getattr(output, 'error', None),
-                    prefill_progress=getattr(output, 'prefill_progress', None),
+                    current_state=getattr(output, "current_state", None),
+                    error=getattr(output, "error", None),
+                    prefill_progress=getattr(output, "prefill_progress", None),
                 )
                 if output.finished:
                     finished_normally = True
@@ -4975,12 +5670,14 @@ class BatchedEngine:
 
         # Streaming optimizer components
         from .streaming_optimizer import StreamingBackpressureController
+
         _backpressure = StreamingBackpressureController(max_queue_size=100)
 
         # TokenPipeline for GPU/CPU overlap — activated via YUNSHU_STREAMING_PIPELINE=1
         _pipeline = None
         if self._streaming_pipeline_enabled:
             from .streaming_optimizer import PipelineConfig, TokenPipeline
+
             _pipeline = TokenPipeline(PipelineConfig(enable_overlap=True))
             _pipeline.start_pipeline(request=None)
             logger.debug("TokenPipeline active for streaming fast path")
@@ -4992,7 +5689,7 @@ class BatchedEngine:
         if self._preprocessor_registry is not None:
             try:
                 model_config = {"model_type": self.model_name or ""}
-                if hasattr(model, 'config') and hasattr(model.config, 'model_type'):
+                if hasattr(model, "config") and hasattr(model.config, "model_type"):
                     model_config["model_type"] = model.config.model_type
                 preprocessor = self._preprocessor_registry.detect(model_config)
                 if preprocessor is not None:
@@ -5005,22 +5702,22 @@ class BatchedEngine:
         # ── Pre-encoding context window truncation (message-level) ──
         if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
             try:
-                _max_ctx_pre = getattr(model, 'max_seq_len', None)
+                _max_ctx_pre = getattr(model, "max_seq_len", None)
                 if _max_ctx_pre is None:
                     _max_ctx_pre = getattr(
-                        getattr(model, 'config', None), 'max_seq_len', None
-                    ) or getattr(
-                        getattr(model, 'args', None), 'max_seq_len', None
-                    )
+                        getattr(model, "config", None), "max_seq_len", None
+                    ) or getattr(getattr(model, "args", None), "max_seq_len", None)
                 if _max_ctx_pre and _max_ctx_pre > 0:
-                    _thinking_overhead = thinking_budget if (thinking_budget and enable_thinking) else 0
+                    _thinking_overhead = (
+                        thinking_budget if (thinking_budget and enable_thinking) else 0
+                    )
                     _generation_budget = max_tokens + _thinking_overhead
                     _est_tokens = sum(
-                        len(str(m.get("content", ""))) // 4 + 4
-                        for m in prompt
+                        len(str(m.get("content", ""))) // 4 + 4 for m in prompt
                     )
                     if _est_tokens + _generation_budget > _max_ctx_pre:
                         from .context_window import ContextWindowManager
+
                         ctx_mgr = ContextWindowManager(
                             token_counter=lambda text: len(tokenizer.encode(text)),
                         )
@@ -5032,10 +5729,14 @@ class BatchedEngine:
                         prompt = result.messages
                         logger.debug(
                             "Streaming fast path pre-encode truncation: estimated %d → %d tokens",
-                            _est_tokens, result.truncated_token_count,
+                            _est_tokens,
+                            result.truncated_token_count,
                         )
             except Exception:
-                logger.debug("context window truncation skipped in streaming fast path", exc_info=True)
+                logger.debug(
+                    "context window truncation skipped in streaming fast path",
+                    exc_info=True,
+                )
 
         if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
             # Route through _apply_chat_template (NOT raw) — same reason as the
@@ -5050,11 +5751,11 @@ class BatchedEngine:
 
         # Guard against empty prompt (same as _generate_fast)
         if not input_ids:
-            bos_id = getattr(tokenizer, 'bos_token_id', None)
+            bos_id = getattr(tokenizer, "bos_token_id", None)
             if bos_id is not None:
                 input_ids = [bos_id]
             else:
-                eos_id = getattr(tokenizer, 'eos_token_id', 1)
+                eos_id = getattr(tokenizer, "eos_token_id", 1)
                 input_ids = [eos_id]
             prompt_tokens = len(input_ids)
 
@@ -5067,17 +5768,23 @@ class BatchedEngine:
         if _max_ctx and _max_ctx > 0:
             if prompt_tokens >= _max_ctx:
                 _orig = prompt_tokens
-                input_ids = input_ids[-max(1, _max_ctx - 1):]
+                input_ids = input_ids[-max(1, _max_ctx - 1) :]
                 prompt_tokens = len(input_ids)
                 logger.warning(
                     "Streaming fast path prompt truncated to fit context: %d → %d tokens (ctx=%d)",
-                    _orig, prompt_tokens, _max_ctx,
+                    _orig,
+                    prompt_tokens,
+                    _max_ctx,
                 )
             _room = _max_ctx - prompt_tokens
             if _room >= 1 and max_tokens > _room:
                 logger.info(
                     "Streaming fast path clamped max_tokens %d → %d to fit context "
-                    "(prompt=%d, ctx=%d)", max_tokens, _room, prompt_tokens, _max_ctx,
+                    "(prompt=%d, ctx=%d)",
+                    max_tokens,
+                    _room,
+                    prompt_tokens,
+                    _max_ctx,
                 )
                 max_tokens = _room
 
@@ -5091,7 +5798,11 @@ class BatchedEngine:
                     prefix_ids = tokenizer.encode(prompt[:char_off])
                     _stream_kv_breakpoints.append(len(prefix_ids))
                 except Exception:
-                    logger.debug("KV breakpoint char->token conversion failed at offset %d", char_off, exc_info=True)
+                    logger.debug(
+                        "KV breakpoint char->token conversion failed at offset %d",
+                        char_off,
+                        exc_info=True,
+                    )
 
         # normalize eos ids — some tokenizers (Qwen3.6-27B) expose eos_token_ids
         # as a BARE INT, which crashed stop_ids.update(...) with "'int' object is not
@@ -5101,12 +5812,14 @@ class BatchedEngine:
         stop_ids = set()
         # collect EOS separately (ignore_eos / min_tokens) — see _generate_fast.
         _eos_ids: set[int] = set()
-        _eid = getattr(tokenizer, 'eos_token_id', None)
+        _eid = getattr(tokenizer, "eos_token_id", None)
         if _eid is not None:
             _eos_ids.update(_eid if isinstance(_eid, (list, tuple, set)) else (_eid,))
-        _eids = getattr(tokenizer, 'eos_token_ids', None)
+        _eids = getattr(tokenizer, "eos_token_ids", None)
         if _eids is not None:
-            _eos_ids.update(_eids if isinstance(_eids, (list, tuple, set)) else (_eids,))
+            _eos_ids.update(
+                _eids if isinstance(_eids, (list, tuple, set)) else (_eids,)
+            )
         if not ignore_eos:
             stop_ids.update(_eos_ids)
 
@@ -5156,8 +5869,12 @@ class BatchedEngine:
             )
         else:
             sampler = make_sampler(
-                temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0,
-                min_p=min_p, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold,
+                temp=temperature,
+                top_p=top_p,
+                top_k=top_k if top_k > 0 else 0,
+                min_p=min_p,
+                xtc_probability=xtc_probability,
+                xtc_threshold=xtc_threshold,
             )
 
         # Grammar constraint for streaming fast path
@@ -5165,7 +5882,9 @@ class BatchedEngine:
             try:
                 sampler = _build_constrained_sampler(sampler, json_schema, tokenizer)
             except Exception:
-                logger.warning("Grammar constraint setup failed in streaming", exc_info=True)
+                logger.warning(
+                    "Grammar constraint setup failed in streaming", exc_info=True
+                )
 
         # Build logits processors for penalty/bias params
         # length-gated KV-quant bits for THIS request (stream path).
@@ -5173,14 +5892,17 @@ class BatchedEngine:
         _custom_logits_processors = logits_processors or []
         logits_processors = []
         if repetition_penalty != 1.0:
+
             def _repetition_penalty(tokens, logits, rp=repetition_penalty, ctx=20):
                 if len(tokens) > 0:
                     recent = tokens[-ctx:]
                     import mlx.core as _mx
+
                     sel = logits[..., recent]
                     sel = _mx.where(sel < 0, sel * rp, sel / rp)
                     logits[..., _mx.array(recent)] = sel
                 return logits
+
             logits_processors.append(_repetition_penalty)
         if frequency_penalty != 0.0 or presence_penalty != 0.0:
             # Maintain incremental counts dict instead of rebuilding
@@ -5188,6 +5910,7 @@ class BatchedEngine:
             # closure captures a mutable state dict so successive calls only
             # observe the newest token.
             _fp_state: dict[str, object] = {"counts": {}, "last_len": -1}
+
             # The prompt offset inside the processor is 1, NOT the full
             # prompt length. mlx-lm prefills all-but-the-last prompt token OUTSIDE
             # _step, so the `tokens` accumulator handed to logits_processors is
@@ -5195,9 +5918,16 @@ class BatchedEngine:
             # guard `cur_len <= n_prompt` made frequency/presence penalty INERT for
             # the first ~prompt_len generated tokens (short completions never
             # penalized at all) and then tokens[n_prompt:] under-counted repeats.
-            def _freq_pres_penalty(tokens, logits, fp=frequency_penalty, pp=presence_penalty, n_prompt=1, _st=_fp_state):
-                counts: dict[int, int] = _st["counts"]  #type: ignore[assignment]
-                last_len = int(_st["last_len"])  #type: ignore[arg-type]
+            def _freq_pres_penalty(
+                tokens,
+                logits,
+                fp=frequency_penalty,
+                pp=presence_penalty,
+                n_prompt=1,
+                _st=_fp_state,
+            ):
+                counts: dict[int, int] = _st["counts"]  # type: ignore[assignment]
+                last_len = int(_st["last_len"])  # type: ignore[arg-type]
                 cur_len = len(tokens)
                 if cur_len <= n_prompt:
                     _st["last_len"] = cur_len
@@ -5224,8 +5954,10 @@ class BatchedEngine:
                     if pp != 0.0 and cnt > 0:
                         logits[..., tid] = logits[..., tid] - pp
                 return logits
+
             logits_processors.append(_freq_pres_penalty)
         if logit_bias:
+
             def _logit_bias_proc(_tokens, logits, biases=logit_bias):
                 # Skip token ids outside [0, vocab) — a user-supplied out-of-range
                 # or negative id would otherwise index out of bounds and crash the
@@ -5236,17 +5968,20 @@ class BatchedEngine:
                     if 0 <= tid < vocab:
                         logits[..., tid] = logits[..., tid] + bias
                 return logits
+
             logits_processors.append(_logit_bias_proc)
 
         # suppress_tokens + min_tokens (mirror _generate_fast).
         if suppress_tokens:
             _sup = [int(t) for t in suppress_tokens]
+
             def _suppress_proc(_tokens, logits, sup=_sup):
                 vocab = logits.shape[-1]
                 for tid in sup:
                     if 0 <= tid < vocab:
                         logits[..., tid] = -float("inf")
                 return logits
+
             logits_processors.append(_suppress_proc)
         # skip min_tokens EOS-masking when a JSON/grammar constraint is
         # active — the un-propagated streaming sibling of the non-streaming
@@ -5256,6 +5991,7 @@ class BatchedEngine:
         # token after a complete JSON value.
         if min_tokens and min_tokens > 0 and stop_ids and json_schema is None:
             _mask_ids = list(stop_ids)
+
             def _min_tokens_proc(tokens, logits, ids=_mask_ids, floor=int(min_tokens)):
                 if (len(tokens) - 1) < floor:
                     vocab = logits.shape[-1]
@@ -5263,11 +5999,14 @@ class BatchedEngine:
                         if 0 <= tid < vocab:
                             logits[..., tid] = -float("inf")
                 return logits
+
             logits_processors.append(_min_tokens_proc)
 
         # SAMP-2: Wrap user-provided custom logits processors to adapt signature.
         if _custom_logits_processors:
-            logits_processors.extend(_wrap_custom_logits_processor(p) for p in _custom_logits_processors)
+            logits_processors.extend(
+                _wrap_custom_logits_processor(p) for p in _custom_logits_processors
+            )
 
         # Thread-safe bridge: executor puts via call_soon_threadsafe so the
         # event loop's async consumer is woken for every token.
@@ -5309,7 +6048,9 @@ class BatchedEngine:
                     Exception("Streaming queue overflow — output truncated"),
                 )
             except Exception:
-                logger.debug("Failed to put error sentinel into streaming queue", exc_info=True)
+                logger.debug(
+                    "Failed to put error sentinel into streaming queue", exc_info=True
+                )
 
         # (LoRA concurrency keystone): acquire+apply / release+restore moved into
         # _run_with_lora on the executor thread (serialized with generate_step), not here on
@@ -5317,14 +6058,17 @@ class BatchedEngine:
 
         # Inflight prefix sharing: defined at _run level so it's accessible
         # from exception handlers even if _run_inner crashes early
-        _inflight_req_id = f"fp-s-{int(time.monotonic()*1e6)}"
+        _inflight_req_id = f"fp-s-{int(time.monotonic() * 1e6)}"
 
         def _unregister_inflight():
             try:
                 from .inflight_prefix_sharing import get_inflight_tracker
+
                 get_inflight_tracker().unregister(_inflight_req_id)
             except Exception:
-                logger.debug("inflight prefix unregister failed in streaming", exc_info=True)
+                logger.debug(
+                    "inflight prefix unregister failed in streaming", exc_info=True
+                )
 
         _stream_gen_t0 = time.perf_counter()  # TTFT timing for streaming fast path
         # a TOTAL-generation deadline for the streaming path. The consumer's
@@ -5333,7 +6077,9 @@ class BatchedEngine:
         # would run to max_tokens, blowing far past the user's timeout. The non-streaming
         # path enforces gen_t0 + timeout_seconds as a hard total deadline — mirror it in
         # the streaming GPU loop so `timeout` means the same (total wall time) for both.
-        _stream_timeout_deadline = _stream_gen_t0 + timeout_seconds if timeout_seconds else None
+        _stream_timeout_deadline = (
+            _stream_gen_t0 + timeout_seconds if timeout_seconds else None
+        )
         _stream_ttft_recorded = [False]  # mutable box to track first-token observation
         _stream_ttft_box = [0.0]  # mutable box for TTFT value
         # define BEFORE the _run_inner closure is submitted to the
@@ -5368,6 +6114,7 @@ class BatchedEngine:
             if not _stream_kv_breakpoints or prefix_cache is None:
                 return
             from .kv_prefix_cache import cache_length as _cache_len_bp
+
             for bp_pos in _stream_kv_breakpoints:
                 if bp_pos < len(token_ids) and bp_pos >= 32:
                     bp_tokens = token_ids[:bp_pos]
@@ -5377,13 +6124,20 @@ class BatchedEngine:
                     # bp_pos-token key leaked the prior completion into a future hit.
                     trim_count = max(0, _cache_len_bp(kv_cache) - bp_pos)
                     try:
-                        bp_cache = prefix_cache._snapshot_cache(kv_cache, trim=trim_count)
+                        bp_cache = prefix_cache._snapshot_cache(
+                            kv_cache, trim=trim_count
+                        )
                         prefix_cache.add(bp_tokens, bp_cache)
                     except Exception:
-                        logger.debug("KV breakpoint prefix add failed at pos %d", bp_pos, exc_info=True)
+                        logger.debug(
+                            "KV breakpoint prefix add failed at pos %d",
+                            bp_pos,
+                            exc_info=True,
+                        )
 
         def _run_inner():
             import mlx.core as mx
+
             if seed is not None:
                 mx.random.seed(seed)
             ids = mx.array(input_ids)
@@ -5403,12 +6157,15 @@ class BatchedEngine:
             _thinking_tokens: list[int] = []
 
             # Prefill progress tracking for streaming fast path
-            _prefill_req_id = f"fp-s-{id(_run_inner)}-{int(time.monotonic()*1e6)}"
+            _prefill_req_id = f"fp-s-{id(_run_inner)}-{int(time.monotonic() * 1e6)}"
             _prefill_tracker = None
             try:
                 from .prefill_progress import get_prefill_tracker
+
                 _prefill_tracker = get_prefill_tracker()
-                _prefill_tracker.update(_prefill_req_id, 0, prompt_tokens, self.model_name or "default")
+                _prefill_tracker.update(
+                    _prefill_req_id, 0, prompt_tokens, self.model_name or "default"
+                )
             except Exception:
                 logger.debug("prefill tracker setup failed", exc_info=True)
                 _prefill_tracker = None
@@ -5439,6 +6196,7 @@ class BatchedEngine:
             if think_end_token is not None and not _in_thinking:
                 try:
                     from .thinking_budget import detect_needs_think_prefix
+
                     if detect_needs_think_prefix(list(input_ids), tokenizer):
                         _in_thinking = True
                         _thinking_tokens = []
@@ -5458,11 +6216,24 @@ class BatchedEngine:
                     except Exception:
                         logger.debug("paged KV pressure eviction failed", exc_info=True)
             try:
-                cached_kv, _, matched = (prefix_cache.get(ids) if prefix_cache is not None else (None, None, 0))
+                cached_kv, _, matched = (
+                    prefix_cache.get(ids)
+                    if prefix_cache is not None
+                    else (None, None, 0)
+                )
             except Exception:
-                logger.warning("KV prefix cache get failed in streaming — falling back to full prefill", exc_info=True)
+                logger.warning(
+                    "KV prefix cache get failed in streaming — falling back to full prefill",
+                    exc_info=True,
+                )
                 cached_kv, _, matched = None, None, 0
-            cache = cached_kv if cached_kv is not None else _create_prompt_cache_with_quant(model, _req_kv_bits, self._kv_quant_group_size)
+            cache = (
+                cached_kv
+                if cached_kv is not None
+                else _create_prompt_cache_with_quant(
+                    model, _req_kv_bits, self._kv_quant_group_size
+                )
+            )
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
             if len(ids_to_prefill) == 0 and len(ids) > 0:
                 ids_to_prefill = ids[-1:]
@@ -5474,6 +6245,7 @@ class BatchedEngine:
             if cached_kv is None:
                 try:
                     from .inflight_prefix_sharing import get_inflight_tracker
+
                     _tracker = get_inflight_tracker()
                     _inflight_entry = _tracker.find_prefix(
                         [int(t) for t in ids], self.model_name or ""
@@ -5483,11 +6255,14 @@ class BatchedEngine:
                     # crash + cross-request corruption against a growing donor
                     # cache, unsafe under the now-working engine loop).
                 except Exception:
-                    logger.debug("inflight prefix lookup failed in streaming", exc_info=True)
+                    logger.debug(
+                        "inflight prefix lookup failed in streaming", exc_info=True
+                    )
 
             # Register our prefill as in-flight for concurrent requests to share
             try:
                 from .inflight_prefix_sharing import get_inflight_tracker
+
                 get_inflight_tracker().register(
                     _inflight_req_id,
                     [int(t) for t in ids],
@@ -5495,7 +6270,9 @@ class BatchedEngine:
                     self.model_name or "",
                 )
             except Exception:
-                logger.debug("inflight prefix register failed in streaming", exc_info=True)
+                logger.debug(
+                    "inflight prefix register failed in streaming", exc_info=True
+                )
 
             _lprocs = logits_processors if logits_processors else None
             _last_stream_tok_time = 0.0
@@ -5507,14 +6284,19 @@ class BatchedEngine:
             if _stream_kv_bits is not None:
                 try:
                     from mlx_lm.models.cache import RotatingKVCache
+
                     if any(isinstance(c, RotatingKVCache) for c in cache):
                         _stream_kv_bits = None
                 except Exception:
                     pass
             with _wired_limit_ctx(model):
                 for token, logits in generate_step(
-                    ids_to_prefill, model, max_tokens=max_tokens, sampler=sampler,
-                    prompt_cache=cache, logits_processors=_lprocs,
+                    ids_to_prefill,
+                    model,
+                    max_tokens=max_tokens,
+                    sampler=sampler,
+                    prompt_cache=cache,
+                    logits_processors=_lprocs,
                     prefill_step_size=_prefill_step_size(),
                     # the streaming path had NO KV-quant — mlx-lm
                     # quantizes the cache per-step internally, but only when these
@@ -5531,15 +6313,20 @@ class BatchedEngine:
                     if not stop_hit:
                         detokenizer.add_token(token)
                         if stop_suffixes:
-                            suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
+                            suffix_hit = any(
+                                detokenizer.text.endswith(s) for s in stop_suffixes
+                            )
                     # Compute per-token logprobs (same pattern as _generate_fast)
                     _lp_entry = None
                     if logprobs and logits is not None:
                         import mlx.core as _mx
+
                         _lp_logits = logits.astype(_mx.float32)
-                        _log_probs = _lp_logits - _mx.logsumexp(_lp_logits, axis=-1, keepdims=True)
+                        _log_probs = _lp_logits - _mx.logsumexp(
+                            _lp_logits, axis=-1, keepdims=True
+                        )
                         _tok_lp = float(_log_probs[token])
-                        if _tok_lp != _tok_lp or _tok_lp == float('-inf'):
+                        if _tok_lp != _tok_lp or _tok_lp == float("-inf"):
                             _tok_lp = -100.0
                         _lp_entry = {"token_id": int(token), "logprob": _tok_lp}
                         if top_logprobs and top_logprobs > 0:
@@ -5549,14 +6336,20 @@ class BatchedEngine:
                             _top_entries = []
                             for j in range(_k):
                                 _tlp = float(_log_probs[int(_top_k_idx[j])])
-                                if _tlp != _tlp or _tlp == float('-inf'):
+                                if _tlp != _tlp or _tlp == float("-inf"):
                                     _tlp = -100.0
-                                _top_entries.append({"token_id": int(_top_k_idx[j]), "logprob": _tlp})
+                                _top_entries.append(
+                                    {"token_id": int(_top_k_idx[j]), "logprob": _tlp}
+                                )
                             _lp_entry["top_logprobs"] = _top_entries
                     # TokenPipeline: submit GPU stages for tracking
                     if _pipeline is not None and _pipeline.is_running:
-                        _ptok = _pipeline.submit_stage1_result(logits=None, token_id=int(token))
-                        _ptok = _pipeline.submit_stage2_result(_ptok, sampled_id=int(token))
+                        _ptok = _pipeline.submit_stage1_result(
+                            logits=None, token_id=int(token)
+                        )
+                        _ptok = _pipeline.submit_stage2_result(
+                            _ptok, sampled_id=int(token)
+                        )
                     # Check cancellation
                     if _is_cancelled(cancel_event):
                         mx.synchronize()
@@ -5569,11 +6362,32 @@ class BatchedEngine:
                                 # output that merely looked like a stop-prefix).
                                 remaining = _hb.feed(remaining) + _hb.flush()
                             if remaining:
-                                _put((remaining, n_tok, None, len(_thinking_tokens), None, "reasoning" if _in_thinking else "normal"))
+                                _put(
+                                    (
+                                        remaining,
+                                        n_tok,
+                                        None,
+                                        len(_thinking_tokens),
+                                        None,
+                                        "reasoning" if _in_thinking else "normal",
+                                    )
+                                )
                         except Exception:
-                            logger.debug("detokenizer finalize in cancel handler failed", exc_info=True)
+                            logger.debug(
+                                "detokenizer finalize in cancel handler failed",
+                                exc_info=True,
+                            )
                         # Emit terminal stop chunk so consumer sees finished=True
-                        _put(("", n_tok, "stop", len(_thinking_tokens), None, "reasoning" if _in_thinking else "normal"))
+                        _put(
+                            (
+                                "",
+                                n_tok,
+                                "stop",
+                                len(_thinking_tokens),
+                                None,
+                                "reasoning" if _in_thinking else "normal",
+                            )
+                        )
                         if _pipeline is not None:
                             _pipeline.finish()
                         if _prefill_tracker is not None:
@@ -5596,10 +6410,31 @@ class BatchedEngine:
                                 # output that merely looked like a stop-prefix).
                                 remaining = _hb.feed(remaining) + _hb.flush()
                             if remaining:
-                                _put((remaining, n_tok, None, len(_thinking_tokens), None, "reasoning" if _in_thinking else "normal"))
+                                _put(
+                                    (
+                                        remaining,
+                                        n_tok,
+                                        None,
+                                        len(_thinking_tokens),
+                                        None,
+                                        "reasoning" if _in_thinking else "normal",
+                                    )
+                                )
                         except Exception:
-                            logger.debug("detokenizer finalize in timeout cancel failed", exc_info=True)
-                        _put(("", n_tok, "timeout", len(_thinking_tokens), None, "reasoning" if _in_thinking else "normal"))
+                            logger.debug(
+                                "detokenizer finalize in timeout cancel failed",
+                                exc_info=True,
+                            )
+                        _put(
+                            (
+                                "",
+                                n_tok,
+                                "timeout",
+                                len(_thinking_tokens),
+                                None,
+                                "reasoning" if _in_thinking else "normal",
+                            )
+                        )
                         if _pipeline is not None:
                             _pipeline.finish()
                         if _prefill_tracker is not None:
@@ -5616,7 +6451,9 @@ class BatchedEngine:
                         _last_stream_tok_time = time.perf_counter()
                         if _prefill_tracker is not None:
                             _prefill_tracker.update(
-                                _prefill_req_id, prompt_tokens, prompt_tokens,
+                                _prefill_req_id,
+                                prompt_tokens,
+                                prompt_tokens,
                                 self.model_name or "default",
                             )
                     else:
@@ -5651,24 +6488,40 @@ class BatchedEngine:
                         if not _in_thinking and token == think_start_token:
                             _in_thinking = True
                             _thinking_tokens = []
-                            self._lookahead_reasoning.check_thinking_state_text("<think")
+                            self._lookahead_reasoning.check_thinking_state_text(
+                                "<think"
+                            )
                         elif _in_thinking:
                             _thinking_tokens.append(token)
                             if token == think_end_token:
                                 _in_thinking = False
-                                self._lookahead_reasoning.check_thinking_state_text("</think")
+                                self._lookahead_reasoning.check_thinking_state_text(
+                                    "</think"
+                                )
                     # Thinking budget enforcement in streaming.
                     # Only force-append think_end_token + add to detokenizer
                     # if the current token is NOT already the natural closing tag.
                     if thinking_budget is not None and _in_thinking:
                         thinking_tokens_used += 1
-                        if thinking_tokens_used >= thinking_budget and think_end_token is not None:
+                        if (
+                            thinking_tokens_used >= thinking_budget
+                            and think_end_token is not None
+                        ):
                             # Token was already appended at line ~3298 — don't
                             # duplicate it. Only force-emit the closing tag.
                             _in_thinking = False
                             # Emit current token's text first (still reasoning content)
                             if new_text:
-                                _put((new_text, n_tok, None, len(_thinking_tokens), _lp_entry, "reasoning"))
+                                _put(
+                                    (
+                                        new_text,
+                                        n_tok,
+                                        None,
+                                        len(_thinking_tokens),
+                                        _lp_entry,
+                                        "reasoning",
+                                    )
+                                )
                             # Only force-emit closing tag if the token isn't already it
                             if token != think_end_token:
                                 n_tok += 1  # Count the forced closing tag token
@@ -5676,19 +6529,51 @@ class BatchedEngine:
                                 _thinking_tokens.append(think_end_token)
                                 _end_text = detokenizer.last_segment
                                 if _end_text:
-                                    _put((_end_text, n_tok, None, len(_thinking_tokens), None, "reasoning"))
+                                    _put(
+                                        (
+                                            _end_text,
+                                            n_tok,
+                                            None,
+                                            len(_thinking_tokens),
+                                            None,
+                                            "reasoning",
+                                        )
+                                    )
                             # Store thinking segment before returning
                             if _thinking_tokens and self._thinking_store is not None:
-                                _store_thinking_segment(ids, _thinking_tokens, self._thinking_store, kv_cache=cache)
+                                _store_thinking_segment(
+                                    ids,
+                                    _thinking_tokens,
+                                    self._thinking_store,
+                                    kv_cache=cache,
+                                )
                             detokenizer.finalize()
                             _remaining = detokenizer.last_segment
                             if _hb_active:
                                 _remaining = _hb.feed(_remaining) + _hb.flush()
                             if _remaining:
-                                _put((_remaining, n_tok, None, len(_thinking_tokens), None, "normal"))
+                                _put(
+                                    (
+                                        _remaining,
+                                        n_tok,
+                                        None,
+                                        len(_thinking_tokens),
+                                        None,
+                                        "normal",
+                                    )
+                                )
                             # thinking_budget exhausted → "length" (matches fast-path and
                             # OpenAI semantics: budget == token limit)
-                            _put(("", n_tok, "length", len(_thinking_tokens), None, "normal"))
+                            _put(
+                                (
+                                    "",
+                                    n_tok,
+                                    "length",
+                                    len(_thinking_tokens),
+                                    None,
+                                    "normal",
+                                )
+                            )
                             if _pipeline is not None:
                                 _pipeline.finish()
                             if prefix_cache is not None:
@@ -5705,9 +6590,14 @@ class BatchedEngine:
                     # text ("</think>") would leak into visible content. Keep the
                     # boundary token classified as reasoning so the tag stays out of
                     # delta.content (matches the non-streaming parser stripping it).
-                    _just_closed = (think_end_token is not None and token == think_end_token
-                                    and not (stop_hit or suffix_hit))
-                    _cur_state = "reasoning" if (_in_thinking or _just_closed) else "normal"
+                    _just_closed = (
+                        think_end_token is not None
+                        and token == think_end_token
+                        and not (stop_hit or suffix_hit)
+                    )
+                    _cur_state = (
+                        "reasoning" if (_in_thinking or _just_closed) else "normal"
+                    )
                     if _is_stopping:
                         # Emit current text without finish_reason so the consumer
                         # reads it before breaking on done=True below.
@@ -5717,24 +6607,78 @@ class BatchedEngine:
                             # withheld so they never leak with logprobs on.
                             for _t, _lp in _hb.feed_lp(new_text, _lp_entry):
                                 if _t or _lp is not None:
-                                    _put((_t, n_tok, None, len(_thinking_tokens), _lp, _cur_state))
+                                    _put(
+                                        (
+                                            _t,
+                                            n_tok,
+                                            None,
+                                            len(_thinking_tokens),
+                                            _lp,
+                                            _cur_state,
+                                        )
+                                    )
                         elif _hb_active:
                             _emit = _hb.feed(new_text)
                             if _emit:
-                                _put((_emit, n_tok, None, len(_thinking_tokens), _lp_entry, _cur_state))
+                                _put(
+                                    (
+                                        _emit,
+                                        n_tok,
+                                        None,
+                                        len(_thinking_tokens),
+                                        _lp_entry,
+                                        _cur_state,
+                                    )
+                                )
                         elif new_text:
-                            _put((new_text, n_tok, None, len(_thinking_tokens), _lp_entry, _cur_state))
+                            _put(
+                                (
+                                    new_text,
+                                    n_tok,
+                                    None,
+                                    len(_thinking_tokens),
+                                    _lp_entry,
+                                    _cur_state,
+                                )
+                            )
                     else:
                         if _hb_active and logprobs:
                             for _t, _lp in _hb.feed_lp(new_text, _lp_entry):
                                 if _t or _lp is not None:
-                                    _put((_t, n_tok, None, len(_thinking_tokens), _lp, _cur_state))
+                                    _put(
+                                        (
+                                            _t,
+                                            n_tok,
+                                            None,
+                                            len(_thinking_tokens),
+                                            _lp,
+                                            _cur_state,
+                                        )
+                                    )
                         elif _hb_active:
                             _emit = _hb.feed(new_text)
                             if _emit:
-                                _put((_emit, n_tok, None, len(_thinking_tokens), _lp_entry, _cur_state))
+                                _put(
+                                    (
+                                        _emit,
+                                        n_tok,
+                                        None,
+                                        len(_thinking_tokens),
+                                        _lp_entry,
+                                        _cur_state,
+                                    )
+                                )
                         else:
-                            _put((new_text, n_tok, None, len(_thinking_tokens), _lp_entry, _cur_state))
+                            _put(
+                                (
+                                    new_text,
+                                    n_tok,
+                                    None,
+                                    len(_thinking_tokens),
+                                    _lp_entry,
+                                    _cur_state,
+                                )
+                            )
                     # A complete stop that landed MID-segment (e.g. one token decodes to
                     # "aSTOPb") is missed by the endswith() suffix_hit but is now held in
                     # the buffer — fire the stop so generation ends and take_stopped()
@@ -5744,7 +6688,12 @@ class BatchedEngine:
                     if _is_stopping:
                         # Store thinking segment on stop
                         if _thinking_tokens and self._thinking_store is not None:
-                            _store_thinking_segment(ids, _thinking_tokens, self._thinking_store, kv_cache=cache)
+                            _store_thinking_segment(
+                                ids,
+                                _thinking_tokens,
+                                self._thinking_store,
+                                kv_cache=cache,
+                            )
                         detokenizer.finalize()
                         _remaining = detokenizer.last_segment
                         if _hb_active:
@@ -5755,10 +6704,28 @@ class BatchedEngine:
                             # tokens) without leaking it.
                             _emit = _hb.feed(_remaining)
                             if _emit:
-                                _put((_emit, n_tok, None, len(_thinking_tokens), None, _cur_state))
+                                _put(
+                                    (
+                                        _emit,
+                                        n_tok,
+                                        None,
+                                        len(_thinking_tokens),
+                                        None,
+                                        _cur_state,
+                                    )
+                                )
                             _tail = _hb.take_stopped()
                             if _tail:
-                                _put((_tail, n_tok, None, len(_thinking_tokens), None, _cur_state))
+                                _put(
+                                    (
+                                        _tail,
+                                        n_tok,
+                                        None,
+                                        len(_thinking_tokens),
+                                        None,
+                                        _cur_state,
+                                    )
+                                )
                         else:
                             # Trim stop suffix from remaining text — the suffix may
                             # span multiple tokens, so detokenizer.text still contains
@@ -5767,12 +6734,23 @@ class BatchedEngine:
                             if suffix_hit and stop_suffixes and _remaining:
                                 for s in stop_suffixes:
                                     if _remaining.endswith(s):
-                                        _remaining = _remaining[:-len(s)]
+                                        _remaining = _remaining[: -len(s)]
                                         break
                             if _remaining:
-                                _put((_remaining, n_tok, None, len(_thinking_tokens), None, _cur_state))
+                                _put(
+                                    (
+                                        _remaining,
+                                        n_tok,
+                                        None,
+                                        len(_thinking_tokens),
+                                        None,
+                                        _cur_state,
+                                    )
+                                )
                         # Final stop chunk — consumer breaks on this
-                        _put(("", n_tok, "stop", len(_thinking_tokens), None, _cur_state))
+                        _put(
+                            ("", n_tok, "stop", len(_thinking_tokens), None, _cur_state)
+                        )
                         if _pipeline is not None:
                             _pipeline.finish()
                         if prefix_cache is not None:
@@ -5783,7 +6761,9 @@ class BatchedEngine:
                         return
                 # Store thinking segment at end of generation
                 if _thinking_tokens and self._thinking_store is not None:
-                    _store_thinking_segment(ids, _thinking_tokens, self._thinking_store, kv_cache=cache)
+                    _store_thinking_segment(
+                        ids, _thinking_tokens, self._thinking_store, kv_cache=cache
+                    )
                 if prefix_cache is not None:
                     prefix_cache.add(ids, cache)
                 _save_breakpoint_prefixes(ids, cache)
@@ -5795,7 +6775,16 @@ class BatchedEngine:
                     remaining = _hb.feed(remaining) + _hb.flush()
                 _final_state = "reasoning" if _in_thinking else "normal"
                 if remaining:
-                    _put((remaining, n_tok, None, len(_thinking_tokens), None, _final_state))
+                    _put(
+                        (
+                            remaining,
+                            n_tok,
+                            None,
+                            len(_thinking_tokens),
+                            None,
+                            _final_state,
+                        )
+                    )
                 _put(("", n_tok, "length", len(_thinking_tokens), None, _final_state))
                 mx.synchronize()
                 # Finish pipeline tracking at end of generation
@@ -5813,7 +6802,9 @@ class BatchedEngine:
                 try:
                     _dtk.finalize()
                 except Exception:
-                    logger.debug("detokenizer finalize in error handler failed", exc_info=True)
+                    logger.debug(
+                        "detokenizer finalize in error handler failed", exc_info=True
+                    )
 
         def _run():
             try:
@@ -5822,6 +6813,7 @@ class BatchedEngine:
                 # accumulation across sequential streaming requests.
                 try:
                     import mlx.core as _cleanup_mx
+
                     _cleanup_mx.synchronize()
                     _cleanup_mx.clear_cache()
                 except Exception:
@@ -5831,12 +6823,17 @@ class BatchedEngine:
                 _finalize_detokenizer()
                 try:
                     import mlx.core as _cleanup_mx
+
                     _cleanup_mx.synchronize()
                     _cleanup_mx.clear_cache()
                     import gc
+
                     gc.collect()  # Force GC of KV cache tensors
                 except Exception:
-                    logger.debug("GPU cache cleanup failed in streaming OOM handler", exc_info=True)
+                    logger.debug(
+                        "GPU cache cleanup failed in streaming OOM handler",
+                        exc_info=True,
+                    )
                 if isinstance(e, MemoryError) or "memory" in str(e).lower():
                     logger.warning(f"OOM during streaming: {e}")
                 _put(e)
@@ -5845,10 +6842,14 @@ class BatchedEngine:
                 _finalize_detokenizer()
                 try:
                     import mlx.core as _cleanup_mx
+
                     _cleanup_mx.synchronize()
                     _cleanup_mx.clear_cache()
                 except Exception:
-                    logger.debug("GPU cache cleanup failed in streaming error handler", exc_info=True)
+                    logger.debug(
+                        "GPU cache cleanup failed in streaming error handler",
+                        exc_info=True,
+                    )
                 _put(e)
             finally:
                 _put(_sentinel)
@@ -5857,23 +6858,30 @@ class BatchedEngine:
             # (LoRA concurrency keystone): adapter lifecycle on the executor thread,
             # serialized with generate_step (see the non-streaming twin).
             _lora_applied = False
-            if lora_adapter and getattr(self, '_lora_manager', None) is not None:
+            if lora_adapter and getattr(self, "_lora_manager", None) is not None:
                 try:
                     _lora_applied = self._lora_manager.acquire_adapter(lora_adapter)
                 except Exception as _le:  # fail loud, don't serve base
-                    raise RuntimeError(f"LoRA adapter '{lora_adapter}' could not be applied") from _le
+                    raise RuntimeError(
+                        f"LoRA adapter '{lora_adapter}' could not be applied"
+                    ) from _le
                 if not _lora_applied:
-                    raise RuntimeError(f"LoRA adapter '{lora_adapter}' could not be applied")
+                    raise RuntimeError(
+                        f"LoRA adapter '{lora_adapter}' could not be applied"
+                    )
             try:
                 return _run()
             finally:
-                if _lora_applied and getattr(self, '_lora_manager', None) is not None:
+                if _lora_applied and getattr(self, "_lora_manager", None) is not None:
                     try:
                         self._lora_manager.release_adapter(lora_adapter)
                     except Exception:
-                        logger.debug("LoRA release failed (stream executor)", exc_info=True)
+                        logger.debug(
+                            "LoRA release failed (stream executor)", exc_info=True
+                        )
 
         from .mlx_executor import get_mlx_executor
+
         executor = get_mlx_executor()
         future = loop.run_in_executor(executor, _run_with_lora)
 
@@ -5881,7 +6889,7 @@ class BatchedEngine:
         n_tok = 0
         _reasoning_tokens = 0
         # _cached_tokens_box now defined above, before run_in_executor .
-        _fp_lock = getattr(self, '_fast_path_lock', None)
+        _fp_lock = getattr(self, "_fast_path_lock", None)
         if _fp_lock is not None:
             with _fp_lock:
                 self._active_fast_path_count += 1
@@ -5890,7 +6898,9 @@ class BatchedEngine:
                 try:
                     item = await asyncio.wait_for(_q.get(), timeout=timeout_seconds)
                 except TimeoutError:
-                    logger.warning(f"Streaming fast path timeout: no token for {timeout_seconds}s")
+                    logger.warning(
+                        f"Streaming fast path timeout: no token for {timeout_seconds}s"
+                    )
                     _timeout_cancel.set()  # Signal GPU loop to stop
                     # Yield terminal output so consumer sees finished=True
                     yield GenerationOutput(
@@ -5901,7 +6911,9 @@ class BatchedEngine:
                         finished=True,
                         finish_reason="timeout",
                         error=f"Streaming timeout: no token for {timeout_seconds}s",
-                        ttft_ms=round(_stream_ttft_box[0] * 1000, 1) if _stream_ttft_box[0] > 0 else 0.0,
+                        ttft_ms=round(_stream_ttft_box[0] * 1000, 1)
+                        if _stream_ttft_box[0] > 0
+                        else 0.0,
                         cached_tokens=_cached_tokens_box[0],
                         reasoning_tokens=_reasoning_tokens,
                     )
@@ -5913,34 +6925,49 @@ class BatchedEngine:
                     is_oom = isinstance(item, MemoryError) or "memory" in err_msg
                     if is_oom:
                         yield GenerationOutput(
-                            text=_clean_special_tokens(accumulated) if accumulated else "",
+                            text=_clean_special_tokens(accumulated)
+                            if accumulated
+                            else "",
                             new_text="",
                             prompt_tokens=prompt_tokens,
                             completion_tokens=n_tok,
                             finished=True,
                             finish_reason="memory_limit",
                             error=str(item),
-                            ttft_ms=round(_stream_ttft_box[0] * 1000, 1) if _stream_ttft_box[0] > 0 else 0.0,
+                            ttft_ms=round(_stream_ttft_box[0] * 1000, 1)
+                            if _stream_ttft_box[0] > 0
+                            else 0.0,
                             cached_tokens=_cached_tokens_box[0],
                             reasoning_tokens=_reasoning_tokens,
                         )
                     else:
                         # Non-OOM exception: yield terminal error output
                         yield GenerationOutput(
-                            text=_clean_special_tokens(accumulated) if accumulated else "",
+                            text=_clean_special_tokens(accumulated)
+                            if accumulated
+                            else "",
                             new_text="",
                             prompt_tokens=prompt_tokens,
                             completion_tokens=n_tok,
                             finished=True,
                             finish_reason="error",
                             error=str(item),
-                            ttft_ms=round(_stream_ttft_box[0] * 1000, 1) if _stream_ttft_box[0] > 0 else 0.0,
+                            ttft_ms=round(_stream_ttft_box[0] * 1000, 1)
+                            if _stream_ttft_box[0] > 0
+                            else 0.0,
                             cached_tokens=_cached_tokens_box[0],
                             reasoning_tokens=_reasoning_tokens,
                         )
                     break
                 if len(item) >= 6:
-                    new_text, tok_count, _fr_val, _reasoning_tokens, _lp_entry, _cur_state = item[:6]
+                    (
+                        new_text,
+                        tok_count,
+                        _fr_val,
+                        _reasoning_tokens,
+                        _lp_entry,
+                        _cur_state,
+                    ) = item[:6]
                 elif len(item) == 5:
                     new_text, tok_count, _fr_val, _reasoning_tokens, _lp_entry = item
                     _cur_state = None
@@ -5976,13 +7003,19 @@ class BatchedEngine:
                         error="Streaming text buffer exceeded 1MB limit",
                         cached_tokens=_cached_tokens_box[0],
                         reasoning_tokens=_reasoning_tokens,
-                        ttft_ms=round(_stream_ttft_box[0] * 1000, 1) if _stream_ttft_box[0] > 0 else 0.0,
+                        ttft_ms=round(_stream_ttft_box[0] * 1000, 1)
+                        if _stream_ttft_box[0] > 0
+                        else 0.0,
                     )
                     break
                 n_tok = tok_count
 
                 # TokenPipeline: run stage 3 overlap for stats tracking
-                if _pipeline is not None and _pipeline.is_running and _pipeline._current is not None:
+                if (
+                    _pipeline is not None
+                    and _pipeline.is_running
+                    and _pipeline._current is not None
+                ):
                     await _pipeline.next_token(
                         detokenize_fn=lambda _tid, _t=new_text: _t,
                     )
@@ -5999,10 +7032,17 @@ class BatchedEngine:
                         from yunshu_gateway.middleware.prometheus_exporter import (
                             get_prometheus_metrics,
                         )
+
                         pm = get_prometheus_metrics()
-                        pm.observe_histogram("ttft_seconds", _stream_ttft_box[0], labels={"model_id": self.model_label})
+                        pm.observe_histogram(
+                            "ttft_seconds",
+                            _stream_ttft_box[0],
+                            labels={"model_id": self.model_label},
+                        )
                     except Exception:
-                        logger.debug("streaming TTFT prometheus recording failed", exc_info=True)
+                        logger.debug(
+                            "streaming TTFT prometheus recording failed", exc_info=True
+                        )
                     _stream_ttft_recorded[0] = False  # only observe once
                 # Attach logprobs to output if computed for this token
                 _lp_list = None
@@ -6011,10 +7051,14 @@ class BatchedEngine:
                     try:
                         _lp_entry["token"] = tokenizer.decode([_lp_entry["token_id"]])
                         from .text_utils import token_id_to_bytes  # raw bytes
+
                         _lp_entry["bytes"] = token_id_to_bytes(
-                            tokenizer, _lp_entry["token_id"], _lp_entry["token"])
+                            tokenizer, _lp_entry["token_id"], _lp_entry["token"]
+                        )
                     except Exception:
-                        logger.debug("logprob token decode failed in streaming", exc_info=True)
+                        logger.debug(
+                            "logprob token decode failed in streaming", exc_info=True
+                        )
                         _lp_entry["token"] = ""
                         _lp_entry["bytes"] = []
                     _lp_list = [_lp_entry]
@@ -6028,7 +7072,9 @@ class BatchedEngine:
                     reasoning_tokens=_reasoning_tokens,
                     logprobs=_lp_list,
                     cached_tokens=_cached_tokens_box[0],
-                    ttft_ms=round(_stream_ttft_box[0] * 1000, 1) if _stream_ttft_box[0] > 0 else 0.0,
+                    ttft_ms=round(_stream_ttft_box[0] * 1000, 1)
+                    if _stream_ttft_box[0] > 0
+                    else 0.0,
                     current_state=_cur_state,
                 )
                 if done:
@@ -6039,6 +7085,7 @@ class BatchedEngine:
             if n_tok > 0:
                 try:
                     from .server_metrics import get_server_metrics
+
                     _sm = get_server_metrics()
                     _sm.record_request_complete(
                         prompt_tokens=prompt_tokens,
@@ -6057,13 +7104,26 @@ class BatchedEngine:
                             from yunshu_gateway.middleware.prometheus_exporter import (
                                 get_prometheus_metrics,
                             )
+
                             pm = get_prometheus_metrics()
-                            avg_itl = sum(_stream_itl_samples) / len(_stream_itl_samples)
-                            pm.observe_histogram("itl_seconds", avg_itl, labels={"model_id": self.model_label})
+                            avg_itl = sum(_stream_itl_samples) / len(
+                                _stream_itl_samples
+                            )
+                            pm.observe_histogram(
+                                "itl_seconds",
+                                avg_itl,
+                                labels={"model_id": self.model_label},
+                            )
                         except Exception:
-                            logger.debug("streaming ITL prometheus recording failed", exc_info=True)
+                            logger.debug(
+                                "streaming ITL prometheus recording failed",
+                                exc_info=True,
+                            )
                 except Exception:
-                    logger.debug("ServerMetrics recording failed in streaming fast path", exc_info=True)
+                    logger.debug(
+                        "ServerMetrics recording failed in streaming fast path",
+                        exc_info=True,
+                    )
             # Stop pipeline and log stats
             if _pipeline is not None:
                 _pipeline.stop()
@@ -6084,7 +7144,7 @@ class BatchedEngine:
                 except asyncio.QueueEmpty:
                     break
             # Decrement active fast path count
-            _fp_lock = getattr(self, '_fast_path_lock', None)
+            _fp_lock = getattr(self, "_fast_path_lock", None)
             if _fp_lock is not None:
                 with _fp_lock:
                     self._active_fast_path_count -= 1
@@ -6106,9 +7166,17 @@ class BatchedEngine:
             logger.debug("MTP prompt_tokens estimate failed", exc_info=True)
         return 0
 
-    def _warn_mtp_dropped_params(self, top_p, top_k, min_p, repetition_penalty,
-                                 frequency_penalty, presence_penalty, logit_bias,
-                                 json_schema) -> None:
+    def _warn_mtp_dropped_params(
+        self,
+        top_p,
+        top_k,
+        min_p,
+        repetition_penalty,
+        frequency_penalty,
+        presence_penalty,
+        logit_bias,
+        json_schema,
+    ) -> None:
         """Warn once when shaping/constraint params are silently dropped by the
         mlx-vlm MTP backend, which honors only temperature."""
         dropped = []
@@ -6132,7 +7200,9 @@ class BatchedEngine:
             self._mtp_dropped_warned = True
             logger.warning(
                 "YUNSHU_MTP backend honors only temperature; these request params "
-                "are NOT applied and were ignored: %s", ", ".join(dropped))
+                "are NOT applied and were ignored: %s",
+                ", ".join(dropped),
+            )
 
     async def chat(
         self,
@@ -6158,12 +7228,20 @@ class BatchedEngine:
             import asyncio as _asyncio
 
             from .mlx_executor import get_mlx_executor
+
             # (honesty): the MTP backend only honors temperature — warn
             # when shaping/constraint params are set but silently dropped, so a
             # caller isn't misled into thinking json_schema/top_p/penalties applied.
-            self._warn_mtp_dropped_params(top_p, top_k, min_p, repetition_penalty,
-                                          frequency_penalty, presence_penalty,
-                                          logit_bias, kwargs.get("json_schema"))
+            self._warn_mtp_dropped_params(
+                top_p,
+                top_k,
+                min_p,
+                repetition_penalty,
+                frequency_penalty,
+                presence_penalty,
+                logit_bias,
+                kwargs.get("json_schema"),
+            )
             _loop = _asyncio.get_running_loop()
             # build the prompt via the engine's _apply_chat_template
             # (role remap developer→system / function→tool, family adapter, BOS
@@ -6174,19 +7252,23 @@ class BatchedEngine:
             _r = await _loop.run_in_executor(
                 get_mlx_executor(),
                 lambda: self._mlxvlm_mtp.generate(
-                    messages, max_tokens=max_tokens, temperature=temperature,
-                    prompt=_mtp_prompt),
+                    messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    prompt=_mtp_prompt,
+                ),
             )
             _txt = _r.get("text", "")
             # the MTP backend ignores `stop`; honor it post-hoc.
             if stop:
                 for _s in stop:
                     if _s and _s in _txt:
-                        _txt = _txt[:_txt.find(_s)]
+                        _txt = _txt[: _txt.find(_s)]
                         break
             _ct = _r.get("completion_tokens", 0)
             return GenerationOutput(
-                text=_txt, new_text=_txt,
+                text=_txt,
+                new_text=_txt,
                 # report real prompt_tokens (was hardcoded 0 → under-billing).
                 prompt_tokens=self._mtp_prompt_tokens(_r, messages, enable_thinking),
                 completion_tokens=_ct,
@@ -6233,27 +7315,39 @@ class BatchedEngine:
         # doesn't token-stream). Honor `stop` post-hoc since the backend ignores it.
         if self._mlxvlm_mtp is not None:
             from .mlx_executor import get_mlx_executor
-            self._warn_mtp_dropped_params(top_p, top_k, min_p, repetition_penalty,
-                                          frequency_penalty, presence_penalty,
-                                          logit_bias, kwargs.get("json_schema"))
+
+            self._warn_mtp_dropped_params(
+                top_p,
+                top_k,
+                min_p,
+                repetition_penalty,
+                frequency_penalty,
+                presence_penalty,
+                logit_bias,
+                kwargs.get("json_schema"),
+            )
             _loop = asyncio.get_running_loop()
             # see chat() — template via the engine (role remap + BOS guard).
             _mtp_prompt = self._apply_chat_template(messages, enable_thinking)
             _r = await _loop.run_in_executor(
                 get_mlx_executor(),
                 lambda: self._mlxvlm_mtp.generate(
-                    messages, max_tokens=max_tokens, temperature=temperature,
-                    prompt=_mtp_prompt),
+                    messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    prompt=_mtp_prompt,
+                ),
             )
             _txt = _r.get("text", "")
             if stop:
                 for _s in stop:
                     if _s and _s in _txt:
-                        _txt = _txt[:_txt.find(_s)]
+                        _txt = _txt[: _txt.find(_s)]
                         break
             _ct = _r.get("completion_tokens", 0)
             yield GenerationOutput(
-                text=_txt, new_text=_txt,
+                text=_txt,
+                new_text=_txt,
                 # real prompt_tokens (was hardcoded 0 → under-billing).
                 prompt_tokens=self._mtp_prompt_tokens(_r, messages, enable_thinking),
                 completion_tokens=_ct,
@@ -6290,6 +7384,7 @@ class BatchedEngine:
         matching prefix (vllm-mlx pattern).
         """
         from .model_optimizations import ModelWarmupManager
+
         mgr = ModelWarmupManager()
 
         # Quick check: skip entirely if no warm prompts configured
@@ -6297,6 +7392,7 @@ class BatchedEngine:
             return
 
         from .mlx_executor import get_mlx_executor
+
         executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
 
@@ -6340,24 +7436,35 @@ class BatchedEngine:
         """
         # Always initialize N-gram proposer (model-free, zero overhead when idle)
         import os
+
         if os.environ.get("YUNSHU_NGRAM_SPEC", "").strip() not in ("0", "false", "no"):
             from .ngram_proposer import NgramConfig, NgramProposer
+
             max_n = int(os.environ.get("YUNSHU_NGRAM_MAX_N", "5"))
             k = int(os.environ.get("YUNSHU_NGRAM_K", "5"))
             mode = os.environ.get("YUNSHU_NGRAM_MODE", "lps").strip()
-            self._ngram_proposer = NgramProposer(NgramConfig(max_n=max_n, k=k, mode=mode))
-            logger.info(f"N-gram proposer initialized: max_n={max_n}, k={k}, mode={mode}")
+            self._ngram_proposer = NgramProposer(
+                NgramConfig(max_n=max_n, k=k, mode=mode)
+            )
+            logger.info(
+                f"N-gram proposer initialized: max_n={max_n}, k={k}, mode={mode}"
+            )
 
         # Adaptive spec controller (requires N-gram proposer active)
         if self._ngram_proposer is not None:
             from .adaptive_spec import AdaptiveSpecController
+
             self._adaptive_spec = AdaptiveSpecController.from_env()
 
         # SpecPrefill for long prompts (requires YUNSHU_SPEC_PREFILL=1)
         if os.environ.get("YUNSHU_SPEC_PREFILL", "").strip() in ("1", "true", "yes"):
             self._spec_prefill_enabled = True
-            self._spec_prefill_threshold = int(os.environ.get("YUNSHU_SPEC_PREFILL_THRESHOLD", "8192"))
-            self._spec_prefill_keep_rate = float(os.environ.get("YUNSHU_SPEC_PREFILL_KEEP_RATE", "0.20"))
+            self._spec_prefill_threshold = int(
+                os.environ.get("YUNSHU_SPEC_PREFILL_THRESHOLD", "8192")
+            )
+            self._spec_prefill_keep_rate = float(
+                os.environ.get("YUNSHU_SPEC_PREFILL_KEEP_RATE", "0.20")
+            )
             logger.info(
                 f"SpecPrefill enabled: threshold={self._spec_prefill_threshold}, "
                 f"keep_rate={self._spec_prefill_keep_rate}"
@@ -6371,13 +7478,18 @@ class BatchedEngine:
         from .speculative_decoder import auto_configure_speculative, detect_spec_heads
 
         model_config = {}
-        config_obj = getattr(self._model, 'config', None) or getattr(self._model, 'args', None)
+        config_obj = getattr(self._model, "config", None) or getattr(
+            self._model, "args", None
+        )
         if config_obj is not None:
-            if hasattr(config_obj, 'to_dict'):
+            if hasattr(config_obj, "to_dict"):
                 model_config = config_obj.to_dict()
-            elif hasattr(config_obj, '__dict__'):
-                model_config = {k: v for k, v in config_obj.__dict__.items()
-                                if not k.startswith('_')}
+            elif hasattr(config_obj, "__dict__"):
+                model_config = {
+                    k: v
+                    for k, v in config_obj.__dict__.items()
+                    if not k.startswith("_")
+                }
 
         head_info = detect_spec_heads(model_config)
 
@@ -6393,10 +7505,14 @@ class BatchedEngine:
         if draft_path:
             try:
                 from mlx_lm.utils import load as load_model
+
                 draft_model, _ = load_model(draft_path)
                 from .speculative_decoder import SpeculativeDecoder
+
                 self._spec_decoder = SpeculativeDecoder(
-                    self._model, draft_model, self._tokenizer,
+                    self._model,
+                    draft_model,
+                    self._tokenizer,
                     lookahead=self._lookahead_reasoning,
                 )
                 self._spec_enabled = True
@@ -6405,7 +7521,9 @@ class BatchedEngine:
                     f"speculative decoding ACTIVE (type={head_info.head_type})"
                 )
             except Exception as e:
-                logger.warning(f"Draft model load failed ({e}), speculative decoding disabled")
+                logger.warning(
+                    f"Draft model load failed ({e}), speculative decoding disabled"
+                )
 
         if head_info.head_type == "none":
             logger.debug("No speculative decoding heads detected (native)")
@@ -6426,12 +7544,15 @@ class BatchedEngine:
         # HONESTY: mlx-vlm MTP is EXPERIMENTAL (the "1.8x" figure is proof-script
         # only, not served/gated; the path drops sampling params + is non-streaming) — not a
         # shipped prod win.
-        if (head_info.head_type == "mtp"
-                and os.environ.get("YUNSHU_LEGACY_MTP", "0").strip() not in ("1", "true", "yes")):
+        if head_info.head_type == "mtp" and os.environ.get(
+            "YUNSHU_LEGACY_MTP", "0"
+        ).strip() not in ("1", "true", "yes"):
             logger.info(
                 "Native MTP head detected on %s, but the home-grown MTP path is "
                 "deprecated — set YUNSHU_MTP=1 for the (experimental) mlx-vlm MTP backend "
-                "or YUNSHU_LEGACY_MTP=1 for the old path.", self.model_name)
+                "or YUNSHU_LEGACY_MTP=1 for the old path.",
+                self.model_name,
+            )
         elif head_info.head_type == "mtp" and self._spec_decoder is None:
             try:
                 # Load MTP head weights if available
@@ -6439,25 +7560,34 @@ class BatchedEngine:
                 if not hasattr(inner, "mtp"):
                     try:
                         from .mtp_patch import load_model_with_mtp
-                        model_name_or_path = model_config.get("_name_or_path", self.model_name)
+
+                        model_name_or_path = model_config.get(
+                            "_name_or_path", self.model_name
+                        )
                         self._model = load_model_with_mtp(model_name_or_path)
                         logger.info("MTP head weights loaded from model directory")
                     except FileNotFoundError as e:
-                        logger.info(f"MTP weights not found ({e}), using backbone-only MTP")
+                        logger.info(
+                            f"MTP weights not found ({e}), using backbone-only MTP"
+                        )
                     except Exception as e:
-                        logger.warning(f"MTP weights load failed ({e}), using backbone-only MTP")
+                        logger.warning(
+                            f"MTP weights load failed ({e}), using backbone-only MTP"
+                        )
 
                 from .mtp_decoder import MTPConfig, MTPDecoder
+
                 mtp_config = MTPConfig(
                     max_tokens=256,
-                    cooldown_on_reject=os.environ.get(
-                        "YUNSHU_MTP_COOLDOWN", ""
-                    ).strip() in ("1", "true", "yes"),
+                    cooldown_on_reject=os.environ.get("YUNSHU_MTP_COOLDOWN", "").strip()
+                    in ("1", "true", "yes"),
                     fastmtp_top_k=int(os.environ.get("YUNSHU_MTP_FASTMTP_TOP_K", "0")),
                     use_n_confirmed=True,
                 )
                 self._mtp_decoder = MTPDecoder(
-                    self._model, self._tokenizer, mtp_config,
+                    self._model,
+                    self._tokenizer,
+                    mtp_config,
                 )
                 # (: the _mtp_strategy wrapper was dead — routing uses
                 # _mtp_decoder directly; removed the unread MTPStrategy build.)
@@ -6497,6 +7627,7 @@ class BatchedEngine:
         (greedy-only). Graceful no-op when unset or on any load failure.
         """
         import os
+
         drafter_dir = os.environ.get("YUNSHU_GEMMA4_ASSISTANT", "").strip()
         if not drafter_dir:
             return
@@ -6510,12 +7641,15 @@ class BatchedEngine:
             # the drafter's KV-share resolution needs.
             import json as _json
             from pathlib import Path
+
             mp = Path(self.model_name)
             if not (mp / "config.json").exists():
                 from mlx_lm.utils import hf_repo_to_path
+
                 mp = Path(hf_repo_to_path(self.model_name))
             tcfg = _json.loads((mp / "config.json").read_text())
             from .gemma4_assistant import Gemma4AssistantProposer
+
             self._gemma4_assistant_proposer = Gemma4AssistantProposer.from_paths(
                 drafter_dir, embed.weight, embed_scale, tcfg
             )
@@ -6530,8 +7664,12 @@ class BatchedEngine:
             self._gemma4_assistant_proposer = None
 
     def gemma4_spec_generate(
-        self, prompt_ids: list[int], max_tokens: int = 256, k: int = 4,
-        temperature: float = 0.0, seed: int | None = None,
+        self,
+        prompt_ids: list[int],
+        max_tokens: int = 256,
+        k: int = 4,
+        temperature: float = 0.0,
+        seed: int | None = None,
     ) -> list[int]:
         """Single-sequence generation via the Gemma-4 assistant drafter.
 
@@ -6548,6 +7686,7 @@ class BatchedEngine:
                 "(set YUNSHU_GEMMA4_ASSISTANT to the drafter dir before start())"
             )
         from mlx_lm.models.cache import make_prompt_cache
+
         inner = getattr(self._model, "language_model", self._model)
         tm = getattr(inner, "model", inner)
         eos: set[int] = set()
@@ -6568,6 +7707,7 @@ class BatchedEngine:
         _base_head = tm.embed_tokens.as_linear
         if _softcap:
             import mlx.core as _mx_sc
+
             _cap = float(_softcap)
 
             def _lm_head(_h, _f=_base_head, _c=_cap, _mx=_mx_sc):
@@ -6575,15 +7715,32 @@ class BatchedEngine:
         else:
             _lm_head = _base_head
         return self._gemma4_assistant_proposer.spec_decode_generate(
-            tm, _lm_head, cache, prompt_ids,
-            max_tokens=max_tokens, k=k, eos_ids=eos,
-            temperature=temperature, seed=seed,
+            tm,
+            _lm_head,
+            cache,
+            prompt_ids,
+            max_tokens=max_tokens,
+            k=k,
+            eos_ids=eos,
+            temperature=temperature,
+            seed=seed,
         )
 
     def _gemma4_spec_eligible(
-        self, *, logprobs, json_schema, logits_processors, logit_bias,
-        top_p, top_k, min_p, repetition_penalty, frequency_penalty,
-        presence_penalty, xtc_probability, lora_adapter=None,
+        self,
+        *,
+        logprobs,
+        json_schema,
+        logits_processors,
+        logit_bias,
+        top_p,
+        top_k,
+        min_p,
+        repetition_penalty,
+        frequency_penalty,
+        presence_penalty,
+        xtc_probability,
+        lora_adapter=None,
     ) -> bool:
         """Whether an n=1 request can be served by the Gemma-4 spec primitive.
 
@@ -6664,14 +7821,18 @@ class BatchedEngine:
             eos_ids.update(stop_token_ids)
 
         from .mlx_executor import get_mlx_executor
+
         executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
         t0 = time.monotonic()
 
         def _run():
             gen_ids = self.gemma4_spec_generate(
-                input_ids, max_tokens=max_tokens, k=k,
-                temperature=temperature or 0.0, seed=seed,
+                input_ids,
+                max_tokens=max_tokens,
+                k=k,
+                temperature=temperature or 0.0,
+                seed=seed,
             )
             finished_by_eos = bool(gen_ids) and gen_ids[-1] in eos_ids
             visible_ids = gen_ids[:-1] if finished_by_eos else gen_ids
@@ -6690,7 +7851,9 @@ class BatchedEngine:
             detok.finalize()
             return visible_ids, detok.text, finished_by_eos
 
-        visible_ids, out_text, finished_by_eos = await loop.run_in_executor(executor, _run)
+        visible_ids, out_text, finished_by_eos = await loop.run_in_executor(
+            executor, _run
+        )
         ttft_ms = (time.monotonic() - t0) * 1000.0
         out_text = _clean_special_tokens(out_text)
         # (self-audit): record ServerMetrics. This is the ONE reachable
@@ -6699,6 +7862,7 @@ class BatchedEngine:
         # same defect class as the VLM non-streaming metrics loss.
         try:
             from .server_metrics import get_server_metrics
+
             get_server_metrics().record_request_complete(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=len(visible_ids),
@@ -6706,7 +7870,9 @@ class BatchedEngine:
                 model_id=self.model_name,
             )
         except Exception:
-            logger.debug("ServerMetrics record failed (gemma4 assistant spec)", exc_info=True)
+            logger.debug(
+                "ServerMetrics record failed (gemma4 assistant spec)", exc_info=True
+            )
         return GenerationOutput(
             text=out_text,
             new_text=out_text,
@@ -6754,15 +7920,22 @@ class BatchedEngine:
         if self._spec_decoder is None:
             # Fall back to standard generation if no decoder
             return await self._generate_fast(
-                prompt=prompt, max_tokens=max_tokens, temperature=temperature,
-                top_p=top_p, top_k=top_k, min_p=min_p,
+                prompt=prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
                 repetition_penalty=repetition_penalty,
                 frequency_penalty=frequency_penalty,
                 presence_penalty=presence_penalty,
                 logit_bias=logit_bias,
-                stop=stop, stop_token_ids=stop_token_ids, seed=seed,
+                stop=stop,
+                stop_token_ids=stop_token_ids,
+                seed=seed,
                 enable_thinking=enable_thinking,
-                logprobs=logprobs, top_logprobs=top_logprobs,
+                logprobs=logprobs,
+                top_logprobs=top_logprobs,
                 thinking_budget=thinking_budget,
                 xtc_probability=xtc_probability,
                 xtc_threshold=xtc_threshold,
@@ -6774,6 +7947,7 @@ class BatchedEngine:
             )
 
         from .mlx_executor import get_mlx_executor
+
         executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
 
@@ -6796,7 +7970,7 @@ class BatchedEngine:
 
         # Build EOS + stop token sets
         eos_ids = set()
-        if hasattr(self._tokenizer, 'eos_token_id'):
+        if hasattr(self._tokenizer, "eos_token_id"):
             eid = self._tokenizer.eos_token_id
             if isinstance(eid, (list, tuple)):
                 eos_ids.update(eid)
@@ -6811,7 +7985,9 @@ class BatchedEngine:
                     if len(ids) == 1:
                         eos_ids.add(ids[0])
                 except Exception:
-                    logger.debug(f"failed to encode stop sequence: {s!r}", exc_info=True)
+                    logger.debug(
+                        f"failed to encode stop sequence: {s!r}", exc_info=True
+                    )
 
         # Run speculative generation on the MLX executor thread
         # Use incremental detokenizer for correct multi-byte UTF-8
@@ -6824,9 +8000,13 @@ class BatchedEngine:
         _spec_constraint = None
         if json_schema is not None:
             try:
-                _spec_constraint = _build_grammar_constraint(json_schema, self._tokenizer)
+                _spec_constraint = _build_grammar_constraint(
+                    json_schema, self._tokenizer
+                )
             except Exception:
-                logger.warning("Grammar constraint setup failed for spec decode", exc_info=True)
+                logger.warning(
+                    "Grammar constraint setup failed for spec decode", exc_info=True
+                )
         _prev_constraint = self._spec_decoder.constraint
         self._spec_decoder.constraint = _spec_constraint
 
@@ -6862,21 +8042,27 @@ class BatchedEngine:
         def _run_spec_with_lora():
             # adapter acquire+apply / release+restore on the executor thread.
             _applied = False
-            if lora_adapter and getattr(self, '_lora_manager', None) is not None:
+            if lora_adapter and getattr(self, "_lora_manager", None) is not None:
                 try:
                     _applied = self._lora_manager.acquire_adapter(lora_adapter)
                 except Exception as _le:  # fail loud, don't serve base
-                    raise RuntimeError(f"LoRA adapter '{lora_adapter}' could not be applied") from _le
+                    raise RuntimeError(
+                        f"LoRA adapter '{lora_adapter}' could not be applied"
+                    ) from _le
                 if not _applied:
-                    raise RuntimeError(f"LoRA adapter '{lora_adapter}' could not be applied")
+                    raise RuntimeError(
+                        f"LoRA adapter '{lora_adapter}' could not be applied"
+                    )
             try:
                 return _run_spec()
             finally:
-                if _applied and getattr(self, '_lora_manager', None) is not None:
+                if _applied and getattr(self, "_lora_manager", None) is not None:
                     try:
                         self._lora_manager.release_adapter(lora_adapter)
                     except Exception:
-                        logger.debug("LoRA release failed (spec executor)", exc_info=True)
+                        logger.debug(
+                            "LoRA release failed (spec executor)", exc_info=True
+                        )
 
         _spec_gen_t0 = time.perf_counter()
         try:
@@ -6888,15 +8074,26 @@ class BatchedEngine:
             logger.warning(f"Speculative generation timed out after {timeout_seconds}s")
             try:
                 import mlx.core as _mx
-                await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
+
+                await loop.run_in_executor(
+                    executor, lambda: (_mx.synchronize(), _mx.clear_cache())
+                )
             except Exception:
-                logger.debug("GPU cache cleanup failed after spec decode timeout", exc_info=True)
+                logger.debug(
+                    "GPU cache cleanup failed after spec decode timeout", exc_info=True
+                )
             self._spec_decoder.constraint = _prev_constraint
-            if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+            if (
+                _lora_applied
+                and hasattr(self, "_lora_manager")
+                and self._lora_manager is not None
+            ):
                 try:
                     self._lora_manager.release_adapter(lora_adapter)
                 except Exception:
-                    logger.warning("LoRA release failed after spec decode timeout", exc_info=True)
+                    logger.warning(
+                        "LoRA release failed after spec decode timeout", exc_info=True
+                    )
             return GenerationOutput(
                 finished=True,
                 finish_reason="error",
@@ -6907,18 +8104,31 @@ class BatchedEngine:
                 cached_tokens=0,
             )
         except MemoryError:
-            logger.warning("OOM during speculative generation — returning memory_limit finish reason")
+            logger.warning(
+                "OOM during speculative generation — returning memory_limit finish reason"
+            )
             try:
                 import mlx.core as _mx
-                await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
+
+                await loop.run_in_executor(
+                    executor, lambda: (_mx.synchronize(), _mx.clear_cache())
+                )
             except Exception:
-                logger.debug("GPU cache cleanup failed after spec decode OOM", exc_info=True)
+                logger.debug(
+                    "GPU cache cleanup failed after spec decode OOM", exc_info=True
+                )
             self._spec_decoder.constraint = _prev_constraint
-            if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+            if (
+                _lora_applied
+                and hasattr(self, "_lora_manager")
+                and self._lora_manager is not None
+            ):
                 try:
                     self._lora_manager.release_adapter(lora_adapter)
                 except Exception:
-                    logger.warning("LoRA release failed after spec decode OOM", exc_info=True)
+                    logger.warning(
+                        "LoRA release failed after spec decode OOM", exc_info=True
+                    )
             return GenerationOutput(
                 finished=True,
                 finish_reason="memory_limit",
@@ -6933,15 +8143,28 @@ class BatchedEngine:
                 logger.warning(f"MLX OOM during speculative generation: {e}")
                 try:
                     import mlx.core as _mx
-                    await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
+
+                    await loop.run_in_executor(
+                        executor, lambda: (_mx.synchronize(), _mx.clear_cache())
+                    )
                 except Exception:
-                    logger.debug("GPU cache cleanup failed after spec decode OOM (RuntimeError)", exc_info=True)
+                    logger.debug(
+                        "GPU cache cleanup failed after spec decode OOM (RuntimeError)",
+                        exc_info=True,
+                    )
                 self._spec_decoder.constraint = _prev_constraint
-                if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+                if (
+                    _lora_applied
+                    and hasattr(self, "_lora_manager")
+                    and self._lora_manager is not None
+                ):
                     try:
                         self._lora_manager.release_adapter(lora_adapter)
                     except Exception:
-                        logger.warning("LoRA release failed after spec decode OOM (RuntimeError)", exc_info=True)
+                        logger.warning(
+                            "LoRA release failed after spec decode OOM (RuntimeError)",
+                            exc_info=True,
+                        )
                 return GenerationOutput(
                     finished=True,
                     finish_reason="memory_limit",
@@ -6952,11 +8175,18 @@ class BatchedEngine:
                     cached_tokens=0,
                 )
             self._spec_decoder.constraint = _prev_constraint
-            if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+            if (
+                _lora_applied
+                and hasattr(self, "_lora_manager")
+                and self._lora_manager is not None
+            ):
                 try:
                     self._lora_manager.release_adapter(lora_adapter)
                 except Exception:
-                    logger.warning("LoRA release failed after spec decode RuntimeError", exc_info=True)
+                    logger.warning(
+                        "LoRA release failed after spec decode RuntimeError",
+                        exc_info=True,
+                    )
             # Return error output for non-OOM RuntimeError instead of
             # propagating to caller (which expects GenerationOutput).
             return GenerationOutput(
@@ -6969,13 +8199,22 @@ class BatchedEngine:
                 cached_tokens=0,
             )
         except Exception as e:
-            logger.error(f"Unexpected error during speculative generation: {e}", exc_info=True)
+            logger.error(
+                f"Unexpected error during speculative generation: {e}", exc_info=True
+            )
             self._spec_decoder.constraint = _prev_constraint
-            if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+            if (
+                _lora_applied
+                and hasattr(self, "_lora_manager")
+                and self._lora_manager is not None
+            ):
                 try:
                     self._lora_manager.release_adapter(lora_adapter)
                 except Exception:
-                    logger.warning("LoRA release failed after spec decode unexpected error", exc_info=True)
+                    logger.warning(
+                        "LoRA release failed after spec decode unexpected error",
+                        exc_info=True,
+                    )
             # Return error output instead of propagating exception to caller.
             return GenerationOutput(
                 finished=True,
@@ -7004,10 +8243,16 @@ class BatchedEngine:
                 from yunshu_gateway.middleware.prometheus_exporter import (
                     get_prometheus_metrics,
                 )
+
                 pm = get_prometheus_metrics()
-                pm.observe_histogram("ttft_seconds", _spec_ttft_s, labels={"model_id": self.model_label})
+                pm.observe_histogram(
+                    "ttft_seconds", _spec_ttft_s, labels={"model_id": self.model_label}
+                )
             except Exception:
-                logger.debug("TTFT prometheus recording failed in spec decode path", exc_info=True)
+                logger.debug(
+                    "TTFT prometheus recording failed in spec decode path",
+                    exc_info=True,
+                )
 
         # Determine finish_reason with cancel awareness
         _cancelled = _is_cancelled(cancel_event)
@@ -7023,6 +8268,7 @@ class BatchedEngine:
         if text:
             try:
                 from .reasoning_parser import get_reasoning_parser
+
                 rp = get_reasoning_parser(self.model_name)
                 rp_out = rp.parse(text)
                 if rp_out.reasoning and rp_out.reasoning_tokens > 0:
@@ -7030,14 +8276,23 @@ class BatchedEngine:
                     if rp_out.content != text:
                         text = rp_out.content
             except Exception:
-                logger.debug("reasoning_parser failed in spec decode path", exc_info=True)
+                logger.debug(
+                    "reasoning_parser failed in spec decode path", exc_info=True
+                )
 
         self._spec_decoder.constraint = _prev_constraint
-        if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+        if (
+            _lora_applied
+            and hasattr(self, "_lora_manager")
+            and self._lora_manager is not None
+        ):
             try:
                 self._lora_manager.release_adapter(lora_adapter)
             except Exception:
-                logger.warning("LoRA release failed after spec decode normal completion", exc_info=True)
+                logger.warning(
+                    "LoRA release failed after spec decode normal completion",
+                    exc_info=True,
+                )
         return GenerationOutput(
             text=text,
             new_text=text,
@@ -7097,13 +8352,19 @@ class BatchedEngine:
         if self._spec_decoder is None:
             # Fall back to fast path streaming (avoid recursive dispatch)
             async for output in self._stream_generate_fast(
-                prompt=prompt, max_tokens=max_tokens, temperature=temperature,
-                top_p=top_p, top_k=top_k, min_p=min_p,
+                prompt=prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
                 repetition_penalty=repetition_penalty,
                 frequency_penalty=frequency_penalty,
                 presence_penalty=presence_penalty,
                 logit_bias=logit_bias,
-                stop=stop, stop_token_ids=stop_token_ids, seed=seed,
+                stop=stop,
+                stop_token_ids=stop_token_ids,
+                seed=seed,
                 enable_thinking=enable_thinking,
                 thinking_budget=thinking_budget,
                 xtc_probability=xtc_probability,
@@ -7119,6 +8380,7 @@ class BatchedEngine:
             return
 
         from .mlx_executor import get_mlx_executor
+
         executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
 
@@ -7142,7 +8404,7 @@ class BatchedEngine:
         # Get EOS IDs + stop tokens
         eos_ids = set()
         stop_suffixes = []
-        if hasattr(self._tokenizer, 'eos_token_id'):
+        if hasattr(self._tokenizer, "eos_token_id"):
             eid = self._tokenizer.eos_token_id
             if isinstance(eid, (list, tuple)):
                 eos_ids.update(eid)
@@ -7162,14 +8424,17 @@ class BatchedEngine:
                     # rarely matches the space-prefixed emitted token).
                     stop_suffixes.append(s)
                 except Exception:
-                    logger.debug(f"failed to encode stop sequence: {s!r}", exc_info=True)
+                    logger.debug(
+                        f"failed to encode stop sequence: {s!r}", exc_info=True
+                    )
 
-        _eids = getattr(self._tokenizer, 'eos_token_ids', None)
+        _eids = getattr(self._tokenizer, "eos_token_ids", None)
         if _eids is not None:  # may be a bare int (Qwen3.6-27B), not iterable
             eos_ids.update(_eids if isinstance(_eids, (list, tuple, set)) else (_eids,))
 
         # Run speculative steps on executor thread, yielding after each step
         from mlx_lm.models.cache import make_prompt_cache
+
         target_cache = make_prompt_cache(self._spec_decoder.target)
         draft_cache = make_prompt_cache(self._spec_decoder.draft)
 
@@ -7181,9 +8446,13 @@ class BatchedEngine:
         _spec_constraint = None
         if json_schema is not None:
             try:
-                _spec_constraint = _build_grammar_constraint(json_schema, self._tokenizer)
+                _spec_constraint = _build_grammar_constraint(
+                    json_schema, self._tokenizer
+                )
             except Exception:
-                logger.warning("Grammar constraint setup failed for spec streaming", exc_info=True)
+                logger.warning(
+                    "Grammar constraint setup failed for spec streaming", exc_info=True
+                )
         _prev_constraint = self._spec_decoder.constraint
         self._spec_decoder.constraint = _spec_constraint
 
@@ -7200,7 +8469,9 @@ class BatchedEngine:
         _spec_think_end_token = None
         if thinking_budget is not None or enable_thinking:
             # bracketed-form helper (bare "</think" tokenized to 2 → guard failed).
-            _spec_think_start_token, _spec_think_end_token = _resolve_think_token_ids(self._tokenizer)
+            _spec_think_start_token, _spec_think_end_token = _resolve_think_token_ids(
+                self._tokenizer
+            )
         _spec_in_thinking = False
         _spec_thinking_tokens_used = 0
 
@@ -7208,13 +8479,19 @@ class BatchedEngine:
         def _prefill():
             # Acquire+apply the LoRA adapter HERE on the executor thread, before any
             # forward pass, serialized with every other request's generate_step.
-            if lora_adapter and getattr(self, '_lora_manager', None) is not None:
+            if lora_adapter and getattr(self, "_lora_manager", None) is not None:
                 try:
-                    _lora_state["applied"] = self._lora_manager.acquire_adapter(lora_adapter)
+                    _lora_state["applied"] = self._lora_manager.acquire_adapter(
+                        lora_adapter
+                    )
                 except Exception as _le:  # fail loud, don't serve base
-                    raise RuntimeError(f"LoRA adapter '{lora_adapter}' could not be applied") from _le
+                    raise RuntimeError(
+                        f"LoRA adapter '{lora_adapter}' could not be applied"
+                    ) from _le
                 if not _lora_state["applied"]:
-                    raise RuntimeError(f"LoRA adapter '{lora_adapter}' could not be applied")
+                    raise RuntimeError(
+                        f"LoRA adapter '{lora_adapter}' could not be applied"
+                    )
             self._spec_decoder.target(input_array, cache=target_cache)
             self._spec_decoder.draft(input_array, cache=draft_cache)
 
@@ -7228,10 +8505,14 @@ class BatchedEngine:
             # prompt token (it's already in both caches from prefill).
             try:
                 from mlx_lm.models.cache import trim_prompt_cache
+
                 trim_prompt_cache(target_cache, 1)
                 trim_prompt_cache(draft_cache, 1)
             except Exception:
-                logger.debug("trim_prompt_cache failed, falling back to per-layer trim", exc_info=True)
+                logger.debug(
+                    "trim_prompt_cache failed, falling back to per-layer trim",
+                    exc_info=True,
+                )
                 for c in target_cache:
                     if hasattr(c, "trim"):
                         c.trim(1)
@@ -7254,322 +8535,405 @@ class BatchedEngine:
         except Exception as e:
             logger.error(f"Spec decode streaming prefill failed: {e}", exc_info=True)
             self._spec_decoder.constraint = _prev_constraint
-            if _lora_state["applied"] and getattr(self, '_lora_manager', None) is not None:
+            if (
+                _lora_state["applied"]
+                and getattr(self, "_lora_manager", None) is not None
+            ):
                 try:
                     self._lora_manager.release_adapter(lora_adapter)
                 except Exception:
-                    logger.warning("LoRA release failed after spec decode prefill error", exc_info=True)
+                    logger.warning(
+                        "LoRA release failed after spec decode prefill error",
+                        exc_info=True,
+                    )
             raise
         _spec_gen_t0 = time.perf_counter()  # TTFT timing starts after prefill
         try:
-          _spec_ttft_ms_val = 0.0
-          _spec_ttft_recorded = False
-          while len(generated_tokens) < max_tokens:
-            if _is_cancelled(cancel_event):
-                logger.debug("Cancel event triggered during spec decode streaming")
-                # Yield terminal stop chunk so consumer sees finished=True
-                if generated_tokens:
-                    detokenizer.finalize()
-                    _final_text = _clean_special_tokens(detokenizer.text)
-                else:
-                    _final_text = ""
-                yield GenerationOutput(
-                    text=_final_text,
-                    new_text="",
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=len(generated_tokens),
-                    finished=True,
-                    finish_reason="stop",
-                    ttft_ms=_spec_ttft_ms_val,
-                    reasoning_tokens=0,
-                    cached_tokens=0,
-                    logprobs=None,
-                )
-                break
-
-            # Snapshot draft cache for rollback on rejection
-            draft_snap = self._spec_decoder._snapshot_cache(draft_cache)
-
-            # Cap draft length to remaining thinking budget
-            _effective_spec_K = None
-            if thinking_budget is not None and _spec_in_thinking:
-                remaining = thinking_budget - _spec_thinking_tokens_used
-                if remaining <= 0:
-                    if _spec_think_end_token is not None:
-                        _spec_in_thinking = False
-                        generated_tokens.append(_spec_think_end_token)
-                        detokenizer.add_token(_spec_think_end_token)
+            _spec_ttft_ms_val = 0.0
+            _spec_ttft_recorded = False
+            while len(generated_tokens) < max_tokens:
+                if _is_cancelled(cancel_event):
+                    logger.debug("Cancel event triggered during spec decode streaming")
+                    # Yield terminal stop chunk so consumer sees finished=True
+                    if generated_tokens:
+                        detokenizer.finalize()
+                        _final_text = _clean_special_tokens(detokenizer.text)
+                    else:
+                        _final_text = ""
+                    yield GenerationOutput(
+                        text=_final_text,
+                        new_text="",
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=len(generated_tokens),
+                        finished=True,
+                        finish_reason="stop",
+                        ttft_ms=_spec_ttft_ms_val,
+                        reasoning_tokens=0,
+                        cached_tokens=0,
+                        logprobs=None,
+                    )
                     break
-                _effective_spec_K = max(1, remaining - 1)
 
-            _spec_target_trimmed = False  # Set by _spec_step if SP-PEN trims target cache
+                # Snapshot draft cache for rollback on rejection
+                draft_snap = self._spec_decoder._snapshot_cache(draft_cache)
 
-            def _spec_step():
-                # First iteration: last prompt token (already in cache from prefill,
-                # so forward pass advances the cache by 1 and returns logits).
-                # Subsequent iterations: last accepted/bonus token.
-                draft_result = self._spec_decoder.generate_draft(current_ids, draft_cache, max_draft_tokens=_effective_spec_K)
-                # verify_draft: includes current_ids as alignment token so logits
-                # are correctly positioned. Returns accepted tokens + bonus.
-                # NOTE: verify_draft feeds [current_ids, draft_tokens] to target,
-                # populating target_cache with K+1 tokens. We must NOT re-feed
-                # accepted tokens to target (that would double-populate the cache).
-                verify_result = self._spec_decoder.verify_draft(
-                    draft_result, current_ids, target_cache,
+                # Cap draft length to remaining thinking budget
+                _effective_spec_K = None
+                if thinking_budget is not None and _spec_in_thinking:
+                    remaining = thinking_budget - _spec_thinking_tokens_used
+                    if remaining <= 0:
+                        if _spec_think_end_token is not None:
+                            _spec_in_thinking = False
+                            generated_tokens.append(_spec_think_end_token)
+                            detokenizer.add_token(_spec_think_end_token)
+                        break
+                    _effective_spec_K = max(1, remaining - 1)
+
+                _spec_target_trimmed = (
+                    False  # Set by _spec_step if SP-PEN trims target cache
                 )
 
-                # SP-PEN: Apply penalty/bias to bonus token logits.
-                # After verify_draft, target_cache has K+1 entries but only the
-                # first (accepted_count + 1) are valid. Trim the rejected entries
-                # so the cache is consistent, then do a single forward pass for
-                # the bonus position to get fresh logits with penalties applied.
-                _has_penalties = (
-                    repetition_penalty != 1.0
-                    or frequency_penalty != 0.0
-                    or presence_penalty != 0.0
-                    or (logit_bias is not None and len(logit_bias) > 0)
-                )
-                if _has_penalties:
-                    import mlx.core as _sp_mx
-                    K_local = len(draft_result.token_ids)
-                    ac = verify_result.accepted_count
-                    _already_trimmed = K_local > 0 and ac < K_local
-                    if _already_trimmed:
-                        from mlx_lm.models.cache import trim_prompt_cache
-                        _trim_n = K_local - ac
+                def _spec_step():
+                    # First iteration: last prompt token (already in cache from prefill,
+                    # so forward pass advances the cache by 1 and returns logits).
+                    # Subsequent iterations: last accepted/bonus token.
+                    draft_result = self._spec_decoder.generate_draft(
+                        current_ids, draft_cache, max_draft_tokens=_effective_spec_K
+                    )
+                    # verify_draft: includes current_ids as alignment token so logits
+                    # are correctly positioned. Returns accepted tokens + bonus.
+                    # NOTE: verify_draft feeds [current_ids, draft_tokens] to target,
+                    # populating target_cache with K+1 tokens. We must NOT re-feed
+                    # accepted tokens to target (that would double-populate the cache).
+                    verify_result = self._spec_decoder.verify_draft(
+                        draft_result,
+                        current_ids,
+                        target_cache,
+                    )
+
+                    # SP-PEN: Apply penalty/bias to bonus token logits.
+                    # After verify_draft, target_cache has K+1 entries but only the
+                    # first (accepted_count + 1) are valid. Trim the rejected entries
+                    # so the cache is consistent, then do a single forward pass for
+                    # the bonus position to get fresh logits with penalties applied.
+                    _has_penalties = (
+                        repetition_penalty != 1.0
+                        or frequency_penalty != 0.0
+                        or presence_penalty != 0.0
+                        or (logit_bias is not None and len(logit_bias) > 0)
+                    )
+                    if _has_penalties:
+                        import mlx.core as _sp_mx
+
+                        K_local = len(draft_result.token_ids)
+                        ac = verify_result.accepted_count
+                        _already_trimmed = K_local > 0 and ac < K_local
+                        if _already_trimmed:
+                            from mlx_lm.models.cache import trim_prompt_cache
+
+                            _trim_n = K_local - ac
+                            try:
+                                trim_prompt_cache(target_cache, _trim_n)
+                            except Exception:
+                                logger.debug(
+                                    "trim_prompt_cache (SP-PEN partial) failed, falling back",
+                                    exc_info=True,
+                                )
+                                for _c in target_cache:
+                                    if hasattr(_c, "trim"):
+                                        _c.trim(_trim_n)
+                            nonlocal _spec_target_trimmed
+                            _spec_target_trimmed = True
+                        # Feed last accepted token (or current_ids if none accepted) to get bonus logits
+                        _bonus_input = (
+                            mx.array([[verify_result.accepted_ids[-1]]])
+                            if verify_result.accepted_ids
+                            else current_ids
+                        )
+                        _bonus_out = self._spec_decoder.target(
+                            _bonus_input, cache=target_cache
+                        )
+                        _bonus_logits = (
+                            _bonus_out.logits
+                            if hasattr(_bonus_out, "logits")
+                            else _bonus_out
+                        )
+                        _bonus_logits = _bonus_logits[0, -1, :]
+                        # Undo the bonus forward — next iteration's verify_draft will feed
+                        # current_ids (= bonus) into target_cache, and we must not have
+                        # the SP-PEN probe already in the cache or it double-populates.
                         try:
-                            trim_prompt_cache(target_cache, _trim_n)
+                            from mlx_lm.models.cache import trim_prompt_cache
+
+                            trim_prompt_cache(target_cache, 1)
                         except Exception:
-                            logger.debug("trim_prompt_cache (SP-PEN partial) failed, falling back", exc_info=True)
+                            logger.debug(
+                                "trim_prompt_cache (SP-PEN bonus undo) failed, falling back",
+                                exc_info=True,
+                            )
                             for _c in target_cache:
                                 if hasattr(_c, "trim"):
-                                    _c.trim(_trim_n)
-                        nonlocal _spec_target_trimmed
-                        _spec_target_trimmed = True
-                    # Feed last accepted token (or current_ids if none accepted) to get bonus logits
-                    _bonus_input = mx.array([[verify_result.accepted_ids[-1]]]) if verify_result.accepted_ids else current_ids
-                    _bonus_out = self._spec_decoder.target(_bonus_input, cache=target_cache)
-                    _bonus_logits = _bonus_out.logits if hasattr(_bonus_out, 'logits') else _bonus_out
-                    _bonus_logits = _bonus_logits[0, -1, :]
-                    # Undo the bonus forward — next iteration's verify_draft will feed
-                    # current_ids (= bonus) into target_cache, and we must not have
-                    # the SP-PEN probe already in the cache or it double-populates.
-                    try:
-                        from mlx_lm.models.cache import trim_prompt_cache
-                        trim_prompt_cache(target_cache, 1)
-                    except Exception:
-                        logger.debug("trim_prompt_cache (SP-PEN bonus undo) failed, falling back", exc_info=True)
-                        for _c in target_cache:
-                            if hasattr(_c, "trim"):
-                                _c.trim(1)
-                    # Build token history: prompt + all generated so far + accepted drafts
-                    _token_hist = list(input_ids) + generated_tokens + verify_result.accepted_ids
-                    _bonus_logits = _apply_spec_bonus_penalties(
-                        _bonus_logits, _token_hist, len(input_ids),
-                        repetition_penalty=repetition_penalty,
-                        frequency_penalty=frequency_penalty,
-                        presence_penalty=presence_penalty,
-                        logit_bias=logit_bias,
-                    )
-                    # Re-sample bonus token from penalized logits using configured sampler
-                    from mlx_lm.sample_utils import make_sampler as _make_sp_sampler
-                    # mlx-lm make_sampler's first param is `temp`,
-                    # not `temperature` — the old kwarg raised TypeError and failed the
-                    # whole request (no fallback at the _spec_step call site) whenever
-                    # cross-model spec decode ran with any penalty/bias set.
-                    _sp_sampler = _make_sp_sampler(
-                        temp=temperature,
-                        top_p=top_p,
-                        top_k=top_k if top_k and top_k > 0 else -1,
-                        min_p=min_p if min_p and min_p > 0 else 0.0,
-                    )
-                    _bonus_id = int(_sp_sampler(_sp_mx.expand_dims(_bonus_logits, axis=(0, 1))).item())
-                    # Overwrite bonus token in verify_result (simple reconstruction)
-                    verify_result = type(verify_result)(
-                        accepted_count=verify_result.accepted_count,
-                        accepted_ids=verify_result.accepted_ids,
-                        rejected_at=verify_result.rejected_at,
-                        bonus_token_id=_bonus_id,
-                        target_logprobs=verify_result.target_logprobs,
-                    )
+                                    _c.trim(1)
+                        # Build token history: prompt + all generated so far + accepted drafts
+                        _token_hist = (
+                            list(input_ids)
+                            + generated_tokens
+                            + verify_result.accepted_ids
+                        )
+                        _bonus_logits = _apply_spec_bonus_penalties(
+                            _bonus_logits,
+                            _token_hist,
+                            len(input_ids),
+                            repetition_penalty=repetition_penalty,
+                            frequency_penalty=frequency_penalty,
+                            presence_penalty=presence_penalty,
+                            logit_bias=logit_bias,
+                        )
+                        # Re-sample bonus token from penalized logits using configured sampler
+                        from mlx_lm.sample_utils import make_sampler as _make_sp_sampler
 
-                return draft_result, verify_result
+                        # mlx-lm make_sampler's first param is `temp`,
+                        # not `temperature` — the old kwarg raised TypeError and failed the
+                        # whole request (no fallback at the _spec_step call site) whenever
+                        # cross-model spec decode ran with any penalty/bias set.
+                        _sp_sampler = _make_sp_sampler(
+                            temp=temperature,
+                            top_p=top_p,
+                            top_k=top_k if top_k and top_k > 0 else -1,
+                            min_p=min_p if min_p and min_p > 0 else 0.0,
+                        )
+                        _bonus_id = int(
+                            _sp_sampler(
+                                _sp_mx.expand_dims(_bonus_logits, axis=(0, 1))
+                            ).item()
+                        )
+                        # Overwrite bonus token in verify_result (simple reconstruction)
+                        verify_result = type(verify_result)(
+                            accepted_count=verify_result.accepted_count,
+                            accepted_ids=verify_result.accepted_ids,
+                            rejected_at=verify_result.rejected_at,
+                            bonus_token_id=_bonus_id,
+                            target_logprobs=verify_result.target_logprobs,
+                        )
 
-            draft_result, verify_result = await loop.run_in_executor(executor, _spec_step)
+                    return draft_result, verify_result
 
-            K = len(draft_result.token_ids)
-            accepted_count = verify_result.accepted_count
-            new_tokens = verify_result.accepted_ids[:]
-            if verify_result.bonus_token_id is not None and verify_result.bonus_token_id >= 0:
-                new_tokens.append(verify_result.bonus_token_id)
+                draft_result, verify_result = await loop.run_in_executor(
+                    executor, _spec_step
+                )
 
-            self._spec_decoder._stats["total_draft_tokens"] += K
-            self._spec_decoder._stats["total_accepted_tokens"] += accepted_count
-            self._spec_decoder._stats["total_bonus_tokens"] += 1
-            self._spec_decoder._stats["total_steps"] += 1
-            if self._lookahead_reasoning is not None:
-                self._lookahead_reasoning.record_accept(accepted_count)
+                K = len(draft_result.token_ids)
+                accepted_count = verify_result.accepted_count
+                new_tokens = verify_result.accepted_ids[:]
+                if (
+                    verify_result.bonus_token_id is not None
+                    and verify_result.bonus_token_id >= 0
+                ):
+                    new_tokens.append(verify_result.bonus_token_id)
 
-            hit_eos = False
-            _hit_suffix = False
-            _yielded_token_count = 0  # Track how many tokens were actually yielded before break
-            for token_id in new_tokens:
-                if token_id in eos_ids:
-                    hit_eos = True
-                    break
-                # Thinking budget tracking — detect <think/</think via token IDs
-                if _spec_think_start_token is not None:
-                    if not _spec_in_thinking and token_id == _spec_think_start_token:
-                        _spec_in_thinking = True
-                    elif _spec_in_thinking:
-                        _spec_thinking_tokens_used += 1
-                        if token_id == _spec_think_end_token:
-                            _spec_in_thinking = False
-                generated_tokens.append(token_id)
-                detokenizer.add_token(token_id)
-                _yielded_token_count += 1
-                # Thinking budget enforcement: force </think when budget exceeded
-                if (thinking_budget is not None and _spec_in_thinking
-                        and _spec_thinking_tokens_used >= thinking_budget
-                        and _spec_think_end_token is not None):
-                    _spec_in_thinking = False
-                    # Force-insert </think token
-                    generated_tokens.append(_spec_think_end_token)
-                    detokenizer.add_token(_spec_think_end_token)
+                self._spec_decoder._stats["total_draft_tokens"] += K
+                self._spec_decoder._stats["total_accepted_tokens"] += accepted_count
+                self._spec_decoder._stats["total_bonus_tokens"] += 1
+                self._spec_decoder._stats["total_steps"] += 1
+                if self._lookahead_reasoning is not None:
+                    self._lookahead_reasoning.record_accept(accepted_count)
+
+                hit_eos = False
+                _hit_suffix = False
+                _yielded_token_count = (
+                    0  # Track how many tokens were actually yielded before break
+                )
+                for token_id in new_tokens:
+                    if token_id in eos_ids:
+                        hit_eos = True
+                        break
+                    # Thinking budget tracking — detect <think/</think via token IDs
+                    if _spec_think_start_token is not None:
+                        if (
+                            not _spec_in_thinking
+                            and token_id == _spec_think_start_token
+                        ):
+                            _spec_in_thinking = True
+                        elif _spec_in_thinking:
+                            _spec_thinking_tokens_used += 1
+                            if token_id == _spec_think_end_token:
+                                _spec_in_thinking = False
+                    generated_tokens.append(token_id)
+                    detokenizer.add_token(token_id)
                     _yielded_token_count += 1
-                    # Treat as stop — no more tokens after budget hit
-                    hit_eos = True
-                    break
-                if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
-                    _hit_suffix = True
-                    # Remove the suffix-triggering token — it should not
-                    # appear in the output, matching the non-spec pattern.
-                    generated_tokens.pop()
-                    _yielded_token_count -= 1
-                    # Reset detokenizer to state before the suffix token was
-                    # added. Simply popping from detokenizer.tokens is not
-                    # sufficient because NaiveStreamingDetokenizer computes
-                    # .text from _current_tokens (an internal list), not from
-                    # the .tokens attribute. Re-decode all remaining tokens
-                    # to produce clean text without the suffix.
-                    _kept_tokens = list(detokenizer.tokens[:-1]) if detokenizer.tokens else []
-                    detokenizer.reset()
-                    for _t in _kept_tokens:
-                        detokenizer.add_token(_t)
-                    break
-
-            # Compute TTFT before first yield
-            if not _spec_ttft_recorded:
-                _spec_ttft_recorded = True
-                _spec_ttft_s = time.perf_counter() - _spec_gen_t0
-                _spec_ttft_ms_val = round(_spec_ttft_s * 1000, 1)
-                try:
-                    from yunshu_gateway.middleware.prometheus_exporter import (
-                        get_prometheus_metrics,
-                    )
-                    pm = get_prometheus_metrics()
-                    pm.observe_histogram("ttft_seconds", _spec_ttft_s, labels={"model_id": self.model_label})
-                except Exception:
-                    logger.debug("spec streaming TTFT prometheus recording failed", exc_info=True)
-
-            # Yield accepted text via incremental detokenizer
-            chunk_text = _clean_special_tokens(detokenizer.last_segment)
-            finish_reason = None
-            if hit_eos or _hit_suffix:
-                finish_reason = "stop"
-            elif len(generated_tokens) >= max_tokens:
-                finish_reason = "length"
-
-            # Trim stop suffix from chunk text when matched
-            if _hit_suffix and stop_suffixes:
-                for s in stop_suffixes:
-                    if chunk_text.endswith(s):
-                        chunk_text = chunk_text[:-len(s)]
+                    # Thinking budget enforcement: force </think when budget exceeded
+                    if (
+                        thinking_budget is not None
+                        and _spec_in_thinking
+                        and _spec_thinking_tokens_used >= thinking_budget
+                        and _spec_think_end_token is not None
+                    ):
+                        _spec_in_thinking = False
+                        # Force-insert </think token
+                        generated_tokens.append(_spec_think_end_token)
+                        detokenizer.add_token(_spec_think_end_token)
+                        _yielded_token_count += 1
+                        # Treat as stop — no more tokens after budget hit
+                        hit_eos = True
+                        break
+                    if stop_suffixes and any(
+                        detokenizer.text.endswith(s) for s in stop_suffixes
+                    ):
+                        _hit_suffix = True
+                        # Remove the suffix-triggering token — it should not
+                        # appear in the output, matching the non-spec pattern.
+                        generated_tokens.pop()
+                        _yielded_token_count -= 1
+                        # Reset detokenizer to state before the suffix token was
+                        # added. Simply popping from detokenizer.tokens is not
+                        # sufficient because NaiveStreamingDetokenizer computes
+                        # .text from _current_tokens (an internal list), not from
+                        # the .tokens attribute. Re-decode all remaining tokens
+                        # to produce clean text without the suffix.
+                        _kept_tokens = (
+                            list(detokenizer.tokens[:-1]) if detokenizer.tokens else []
+                        )
+                        detokenizer.reset()
+                        for _t in _kept_tokens:
+                            detokenizer.add_token(_t)
                         break
 
-            # Build logprobs from target model verification
-            # Only include logprobs for tokens that were actually yielded
-            # (before hit_eos or _hit_suffix broke the loop). Without this
-            # guard, logprobs included EOS and post-break tokens that were
-            # never added to generated_tokens / detokenizer.
-            _chunk_logprobs = None
-            if logprobs and new_tokens:
-                _chunk_logprobs = []
-                _lp_count = min(_yielded_token_count, len(new_tokens))
-                for i in range(_lp_count):
-                    tid = new_tokens[i]
-                    tok_text = _clean_special_tokens(self._tokenizer.decode([tid]))
-                    lp = verify_result.target_logprobs[i] if i < len(verify_result.target_logprobs) else 0.0
-                    _chunk_logprobs.append({
-                        "token": tok_text,
-                        "logprob": float(lp),
-                        "top_logprobs": [{"token": tok_text, "logprob": float(lp)}],
-                    })
+                # Compute TTFT before first yield
+                if not _spec_ttft_recorded:
+                    _spec_ttft_recorded = True
+                    _spec_ttft_s = time.perf_counter() - _spec_gen_t0
+                    _spec_ttft_ms_val = round(_spec_ttft_s * 1000, 1)
+                    try:
+                        from yunshu_gateway.middleware.prometheus_exporter import (
+                            get_prometheus_metrics,
+                        )
 
-            yield GenerationOutput(
-                text=_clean_special_tokens(detokenizer.text),
-                new_text=chunk_text,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=len(generated_tokens),
-                finished=finish_reason is not None,
-                finish_reason=finish_reason,
-                reasoning_tokens=_spec_thinking_tokens_used if _spec_think_start_token is not None else 0,
-                cached_tokens=0,
-                logprobs=_chunk_logprobs,
-                ttft_ms=_spec_ttft_ms_val,
-            )
+                        pm = get_prometheus_metrics()
+                        pm.observe_histogram(
+                            "ttft_seconds",
+                            _spec_ttft_s,
+                            labels={"model_id": self.model_label},
+                        )
+                    except Exception:
+                        logger.debug(
+                            "spec streaming TTFT prometheus recording failed",
+                            exc_info=True,
+                        )
 
-            if finish_reason is not None:
-                detokenizer.finalize()
-                break
+                # Yield accepted text via incremental detokenizer
+                chunk_text = _clean_special_tokens(detokenizer.last_segment)
+                finish_reason = None
+                if hit_eos or _hit_suffix:
+                    finish_reason = "stop"
+                elif len(generated_tokens) >= max_tokens:
+                    finish_reason = "length"
 
-            # Update caches for next iteration:
-            # - Target cache: verify_draft already fed [last_tok, d0..dK-1].
-            # If all accepted, target has exactly the right state (last_tok + K drafts).
-            # If partially accepted, we need to trim rejected tokens from target cache.
-            # - Draft cache: if all accepted, draft already has K tokens from generate_draft.
-            # If partially accepted, restore snapshot and refeed accepted + bonus.
-            def _update_caches():
-                nonlocal draft_snap
+                # Trim stop suffix from chunk text when matched
+                if _hit_suffix and stop_suffixes:
+                    for s in stop_suffixes:
+                        if chunk_text.endswith(s):
+                            chunk_text = chunk_text[: -len(s)]
+                            break
 
-                if accepted_count < K:
-                    if not _spec_target_trimmed:
-                        # Partial acceptance: trim target cache to remove rejected entries.
-                        # verify_draft fed K+1 tokens (last_tok + K drafts).
-                        # We want to keep: last_tok + accepted_count drafts = accepted_count + 1
-                        # Trim: (K+1) - (accepted_count + 1) = K - accepted_count entries.
-                        from mlx_lm.models.cache import trim_prompt_cache
-                        trim_count = K - accepted_count
-                        try:
-                            trim_prompt_cache(target_cache, trim_count)
-                        except Exception:
-                            logger.debug("trim_prompt_cache (partial acceptance) failed, falling back", exc_info=True)
-                            for c in target_cache:
-                                if hasattr(c, "trim"):
-                                    c.trim(trim_count)
+                # Build logprobs from target model verification
+                # Only include logprobs for tokens that were actually yielded
+                # (before hit_eos or _hit_suffix broke the loop). Without this
+                # guard, logprobs included EOS and post-break tokens that were
+                # never added to generated_tokens / detokenizer.
+                _chunk_logprobs = None
+                if logprobs and new_tokens:
+                    _chunk_logprobs = []
+                    _lp_count = min(_yielded_token_count, len(new_tokens))
+                    for i in range(_lp_count):
+                        tid = new_tokens[i]
+                        tok_text = _clean_special_tokens(self._tokenizer.decode([tid]))
+                        lp = (
+                            verify_result.target_logprobs[i]
+                            if i < len(verify_result.target_logprobs)
+                            else 0.0
+                        )
+                        _chunk_logprobs.append(
+                            {
+                                "token": tok_text,
+                                "logprob": float(lp),
+                                "top_logprobs": [
+                                    {"token": tok_text, "logprob": float(lp)}
+                                ],
+                            }
+                        )
 
-                    # Restore draft cache to pre-draft state and refeed accepted tokens.
-                    # This MUST run even when SP-PEN already trimmed the target cache,
-                    # otherwise the draft cache accumulates incorrect state from rejected
-                    # tokens, corrupting subsequent draft generation.
-                    # Do NOT refeed the bonus token here — generate_draft will feed
-                    # current_ids (= bonus token) at the start of the next iteration,
-                    # so including it now would cause a double-feed.
-                    self._spec_decoder._restore_cache(draft_cache, draft_snap)
-                    for tok in verify_result.accepted_ids:
-                        self._spec_decoder.draft(mx.array([[tok]]), cache=draft_cache)
+                yield GenerationOutput(
+                    text=_clean_special_tokens(detokenizer.text),
+                    new_text=chunk_text,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=len(generated_tokens),
+                    finished=finish_reason is not None,
+                    finish_reason=finish_reason,
+                    reasoning_tokens=_spec_thinking_tokens_used
+                    if _spec_think_start_token is not None
+                    else 0,
+                    cached_tokens=0,
+                    logprobs=_chunk_logprobs,
+                    ttft_ms=_spec_ttft_ms_val,
+                )
 
-                # Feed bonus token to both caches (target already has it from verify_draft
-                # when all accepted; when partial, we trimmed and need to re-add).
-                # For draft: bonus token needs to be fed in both cases.
-                # For target: when all accepted, bonus is the last token from verify_draft
-                # logits[K] — already in cache. When partial, we trimmed and re-added
-                # accepted+bonus above, so target is current.
+                if finish_reason is not None:
+                    detokenizer.finalize()
+                    break
 
-                # Update current_ids for next iteration
-                return mx.array([[verify_result.bonus_token_id]])
+                # Update caches for next iteration:
+                # - Target cache: verify_draft already fed [last_tok, d0..dK-1].
+                # If all accepted, target has exactly the right state (last_tok + K drafts).
+                # If partially accepted, we need to trim rejected tokens from target cache.
+                # - Draft cache: if all accepted, draft already has K tokens from generate_draft.
+                # If partially accepted, restore snapshot and refeed accepted + bonus.
+                def _update_caches():
+                    nonlocal draft_snap
 
-            current_ids = await loop.run_in_executor(executor, _update_caches)
+                    if accepted_count < K:
+                        if not _spec_target_trimmed:
+                            # Partial acceptance: trim target cache to remove rejected entries.
+                            # verify_draft fed K+1 tokens (last_tok + K drafts).
+                            # We want to keep: last_tok + accepted_count drafts = accepted_count + 1
+                            # Trim: (K+1) - (accepted_count + 1) = K - accepted_count entries.
+                            from mlx_lm.models.cache import trim_prompt_cache
+
+                            trim_count = K - accepted_count
+                            try:
+                                trim_prompt_cache(target_cache, trim_count)
+                            except Exception:
+                                logger.debug(
+                                    "trim_prompt_cache (partial acceptance) failed, falling back",
+                                    exc_info=True,
+                                )
+                                for c in target_cache:
+                                    if hasattr(c, "trim"):
+                                        c.trim(trim_count)
+
+                        # Restore draft cache to pre-draft state and refeed accepted tokens.
+                        # This MUST run even when SP-PEN already trimmed the target cache,
+                        # otherwise the draft cache accumulates incorrect state from rejected
+                        # tokens, corrupting subsequent draft generation.
+                        # Do NOT refeed the bonus token here — generate_draft will feed
+                        # current_ids (= bonus token) at the start of the next iteration,
+                        # so including it now would cause a double-feed.
+                        self._spec_decoder._restore_cache(draft_cache, draft_snap)
+                        for tok in verify_result.accepted_ids:
+                            self._spec_decoder.draft(
+                                mx.array([[tok]]), cache=draft_cache
+                            )
+
+                    # Feed bonus token to both caches (target already has it from verify_draft
+                    # when all accepted; when partial, we trimmed and need to re-add).
+                    # For draft: bonus token needs to be fed in both cases.
+                    # For target: when all accepted, bonus is the last token from verify_draft
+                    # logits[K] — already in cache. When partial, we trimmed and re-added
+                    # accepted+bonus above, so target is current.
+
+                    # Update current_ids for next iteration
+                    return mx.array([[verify_result.bonus_token_id]])
+
+                current_ids = await loop.run_in_executor(executor, _update_caches)
         except GeneratorExit:
             logger.debug("Client disconnected during spec decode streaming")
         except Exception as e:
@@ -7596,11 +8960,17 @@ class BatchedEngine:
             raise
         finally:
             self._spec_decoder.constraint = _prev_constraint
-            if _lora_state["applied"] and getattr(self, '_lora_manager', None) is not None:
+            if (
+                _lora_state["applied"]
+                and getattr(self, "_lora_manager", None) is not None
+            ):
                 try:
                     self._lora_manager.release_adapter(lora_adapter)
                 except Exception:
-                    logger.warning("LoRA release failed in spec decode streaming finally", exc_info=True)
+                    logger.warning(
+                        "LoRA release failed in spec decode streaming finally",
+                        exc_info=True,
+                    )
 
     async def _generate_ngram_spec(
         self,
@@ -7660,34 +9030,53 @@ class BatchedEngine:
             from mlx_lm.models.cache import (
                 make_prompt_cache as _mk_cache,
             )
+
             _spec_cache_supported = _can_trim(_mk_cache(model))
         except Exception:
             _spec_cache_supported = False
         if not _spec_cache_supported:
-            logger.info("N-gram spec disabled: model cache is not trimmable — "
-                        "using the plain fast path.")
+            logger.info(
+                "N-gram spec disabled: model cache is not trimmable — "
+                "using the plain fast path."
+            )
             return await self._generate_fast(
-                prompt=prompt, max_tokens=max_tokens, temperature=temperature,
-                top_p=top_p, top_k=top_k, min_p=min_p,
+                prompt=prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
                 repetition_penalty=repetition_penalty,
-                frequency_penalty=frequency_penalty, presence_penalty=presence_penalty,
-                logit_bias=logit_bias, stop=stop, stop_token_ids=stop_token_ids,
-                seed=seed, enable_thinking=enable_thinking, logprobs=logprobs,
-                top_logprobs=top_logprobs, thinking_budget=thinking_budget,
-                xtc_probability=xtc_probability, xtc_threshold=xtc_threshold,
-                json_schema=json_schema, cancel_event=cancel_event,
-                logits_processors=logits_processors, timeout_seconds=timeout_seconds,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                logit_bias=logit_bias,
+                stop=stop,
+                stop_token_ids=stop_token_ids,
+                seed=seed,
+                enable_thinking=enable_thinking,
+                logprobs=logprobs,
+                top_logprobs=top_logprobs,
+                thinking_budget=thinking_budget,
+                xtc_probability=xtc_probability,
+                xtc_threshold=xtc_threshold,
+                json_schema=json_schema,
+                cancel_event=cancel_event,
+                logits_processors=logits_processors,
+                timeout_seconds=timeout_seconds,
                 lora_adapter=lora_adapter,
             )
         # Create a per-request NgramProposer to avoid race conditions
         # when concurrent requests call reset()/propose() on a shared instance.
         from .ngram_proposer import NgramConfig as _NgramConfig
         from .ngram_proposer import NgramProposer as _NgramProposer
-        proposer = _NgramProposer(_NgramConfig(
-            max_n=self._ngram_proposer.config.max_n,
-            k=self._ngram_proposer.config.k,
-            mode=self._ngram_proposer.config.mode,
-        ))
+
+        proposer = _NgramProposer(
+            _NgramConfig(
+                max_n=self._ngram_proposer.config.max_n,
+                k=self._ngram_proposer.config.k,
+                mode=self._ngram_proposer.config.mode,
+            )
+        )
 
         # Handle messages-format prompts (list of dicts) — apply chat template.
         # route through _apply_chat_template + _encode_prompt (NOT raw tokenizer
@@ -7707,15 +9096,17 @@ class BatchedEngine:
         # Build stop token sets
         stop_ids: set[int] = set()
         stop_suffixes = []
-        if hasattr(tokenizer, 'eos_token_id'):
+        if hasattr(tokenizer, "eos_token_id"):
             eid = tokenizer.eos_token_id
             if isinstance(eid, (list, tuple)):
                 stop_ids.update(eid)
             elif eid is not None:
                 stop_ids.add(eid)
-        _eids = getattr(tokenizer, 'eos_token_ids', None)
+        _eids = getattr(tokenizer, "eos_token_ids", None)
         if _eids is not None:  # may be a bare int (Qwen3.6-27B), not iterable
-            stop_ids.update(_eids if isinstance(_eids, (list, tuple, set)) else (_eids,))
+            stop_ids.update(
+                _eids if isinstance(_eids, (list, tuple, set)) else (_eids,)
+            )
         if stop_token_ids:
             stop_ids.update(stop_token_ids)
         if stop:
@@ -7727,22 +9118,31 @@ class BatchedEngine:
                     elif len(ids) > 1:
                         stop_suffixes.append(s)
                 except Exception:
-                    logger.debug(f"failed to encode stop sequence: {s!r}", exc_info=True)
+                    logger.debug(
+                        f"failed to encode stop sequence: {s!r}", exc_info=True
+                    )
 
         # route temp>0 off mlx-lm's PRNG-trapped make_sampler (its
         # categorical_sampling @mx.compile cache traps the global PRNG state, so
         # sequential/concurrent temp>0 spec requests collapse + seed is a no-op).
         if temperature is not None and temperature > 1e-6:
             sampler = _build_temp_sampler(
-                temperature=temperature, top_p=top_p,
-                top_k=top_k if top_k > 0 else 0, min_p=min_p, seed=seed,
-                xtc_probability=xtc_probability, xtc_threshold=xtc_threshold,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k if top_k > 0 else 0,
+                min_p=min_p,
+                seed=seed,
+                xtc_probability=xtc_probability,
+                xtc_threshold=xtc_threshold,
             )
         else:
             sampler = make_sampler(
-                temp=temperature, top_p=top_p,
-                top_k=top_k if top_k > 0 else 0, min_p=min_p,
-                xtc_probability=xtc_probability, xtc_threshold=xtc_threshold,
+                temp=temperature,
+                top_p=top_p,
+                top_k=top_k if top_k > 0 else 0,
+                min_p=min_p,
+                xtc_probability=xtc_probability,
+                xtc_threshold=xtc_threshold,
             )
 
         # Grammar constraint: pre-validate draft tokens against allowed set
@@ -7750,9 +9150,13 @@ class BatchedEngine:
         if json_schema is not None:
             try:
                 sampler = _build_constrained_sampler(sampler, json_schema, tokenizer)
-                _grammar_constraint = sampler.constraint if hasattr(sampler, 'constraint') else None
+                _grammar_constraint = (
+                    sampler.constraint if hasattr(sampler, "constraint") else None
+                )
             except Exception:
-                logger.warning("Grammar constraint setup failed for n-gram spec", exc_info=True)
+                logger.warning(
+                    "Grammar constraint setup failed for n-gram spec", exc_info=True
+                )
 
         def _grammar_filter_drafts(
             draft_ids: list[int],
@@ -7780,9 +9184,13 @@ class BatchedEngine:
                     try:
                         _grammar_constraint.rollback()
                     except Exception:
-                        logger.debug("grammar rollback failed in n-gram filter", exc_info=True)
+                        logger.debug(
+                            "grammar rollback failed in n-gram filter", exc_info=True
+                        )
                 except Exception:
-                    logger.debug("grammar rollback failed in n-gram filter", exc_info=True)
+                    logger.debug(
+                        "grammar rollback failed in n-gram filter", exc_info=True
+                    )
 
             allowed = _grammar_constraint.get_allowed_tokens(tokenizer, generated_ids)
             if not allowed:
@@ -7799,7 +9207,9 @@ class BatchedEngine:
                     except Exception:
                         logger.debug("grammar constraint advance failed", exc_info=True)
                         break
-                    allowed = _grammar_constraint.get_allowed_tokens(tokenizer, generated_ids + filtered)
+                    allowed = _grammar_constraint.get_allowed_tokens(
+                        tokenizer, generated_ids + filtered
+                    )
                     if allowed:
                         allowed_set = set(allowed)
                     else:
@@ -7812,14 +9222,17 @@ class BatchedEngine:
         # Inflight prefix sharing: defined before _run so cleanup is accessible
         # in exception handlers. Use timestamp instead of id(_run) since _run
         # is not yet defined at this point.
-        _ng_inflight_req_id = f"ng-{int(time.monotonic()*1e6)}"
+        _ng_inflight_req_id = f"ng-{int(time.monotonic() * 1e6)}"
 
         def _unregister_inflight():
             try:
                 from .inflight_prefix_sharing import get_inflight_tracker
+
                 get_inflight_tracker().unregister(_ng_inflight_req_id)
             except Exception:
-                logger.debug("inflight prefix unregister failed in n-gram spec", exc_info=True)
+                logger.debug(
+                    "inflight prefix unregister failed in n-gram spec", exc_info=True
+                )
 
         def _run():
             if seed is not None:
@@ -7852,9 +9265,16 @@ class BatchedEngine:
                 except Exception:
                     logger.debug("paged KV pressure eviction failed", exc_info=True)
             try:
-                cached_kv, _, matched = (prefix_cache.get(ids) if prefix_cache is not None else (None, None, 0))
+                cached_kv, _, matched = (
+                    prefix_cache.get(ids)
+                    if prefix_cache is not None
+                    else (None, None, 0)
+                )
             except Exception:
-                logger.warning("KV prefix cache get failed in spec path — falling back to full prefill", exc_info=True)
+                logger.warning(
+                    "KV prefix cache get failed in spec path — falling back to full prefill",
+                    exc_info=True,
+                )
                 cached_kv, _, matched = None, None, 0
             cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
@@ -7867,6 +9287,7 @@ class BatchedEngine:
             # Inflight prefix sharing: register for concurrent KV block sharing
             try:
                 from .inflight_prefix_sharing import get_inflight_tracker
+
                 get_inflight_tracker().register(
                     _ng_inflight_req_id,
                     [int(t) for t in ids],
@@ -7874,7 +9295,9 @@ class BatchedEngine:
                     self.model_name or "",
                 )
             except Exception:
-                logger.debug("inflight prefix register failed in n-gram spec", exc_info=True)
+                logger.debug(
+                    "inflight prefix register failed in n-gram spec", exc_info=True
+                )
 
             try:
                 gen_t0 = time.perf_counter()
@@ -7882,20 +9305,33 @@ class BatchedEngine:
                 _timeout_check_interval = 32
                 detokenizer = tokenizer.detokenizer
                 detokenizer.reset()
-                all_token_ids = list(input_ids)  # Track full history for N-gram matching
+                all_token_ids = list(
+                    input_ids
+                )  # Track full history for N-gram matching
 
                 with _wired_limit_ctx(model):
                     # Step 1: Prefill
                     first_logits = None
-                    for token, logits in generate_step(  #noqa: B007 # token used after loop (line ~5650)
-                        ids_to_prefill, model, max_tokens=1, sampler=sampler,
+                    for token, logits in generate_step(  # noqa: B007 # token used after loop (line ~5650)
+                        ids_to_prefill,
+                        model,
+                        max_tokens=1,
+                        sampler=sampler,
                         prompt_cache=cache,
                     ):
                         first_logits = logits
                         break
 
                     if first_logits is None:
-                        return tokens, "", [], time.perf_counter() - gen_t0, matched, False, False
+                        return (
+                            tokens,
+                            "",
+                            [],
+                            time.perf_counter() - gen_t0,
+                            matched,
+                            False,
+                            False,
+                        )
 
                     ttft_s = time.perf_counter() - gen_t0
 
@@ -7932,8 +9368,14 @@ class BatchedEngine:
                                 break
                         # Propose K draft tokens via N-gram
                         # Use adaptive K if controller is active, else use proposer default
-                        _adaptive_k = self._adaptive_spec.get_draft_length() if self._adaptive_spec else None
-                        draft_ids = proposer.propose(all_token_ids)[:(_adaptive_k or len(all_token_ids))]
+                        _adaptive_k = (
+                            self._adaptive_spec.get_draft_length()
+                            if self._adaptive_spec
+                            else None
+                        )
+                        draft_ids = proposer.propose(all_token_ids)[
+                            : (_adaptive_k or len(all_token_ids))
+                        ]
                         # Grammar-aware draft filtering: reject drafts that violate constraints
                         draft_ids = _grammar_filter_drafts(draft_ids, all_token_ids)
                         n_draft = min(len(draft_ids), remaining)
@@ -7945,9 +9387,14 @@ class BatchedEngine:
                             # yields the next token (also left out of the cache). No
                             # pre-trim, no extra feed — consistent with the verify
                             # path, which now also keeps the last token out of cache.
-                            step_input = mx.array([tokens[-1]])  # 1D — generate_step adds the batch dim
+                            step_input = mx.array(
+                                [tokens[-1]]
+                            )  # 1D — generate_step adds the batch dim
                             for token, _logits in generate_step(
-                                step_input, model, max_tokens=1, sampler=sampler,
+                                step_input,
+                                model,
+                                max_tokens=1,
+                                sampler=sampler,
                                 prompt_cache=cache,
                             ):
                                 token_id = int(token)
@@ -7959,7 +9406,9 @@ class BatchedEngine:
                                     _stopped_by_stop_id = True
                                     break
                                 detokenizer.add_token(token_id)
-                                if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                                if stop_suffixes and any(
+                                    detokenizer.text.endswith(s) for s in stop_suffixes
+                                ):
                                     tokens.pop()  # Exclude suffix-triggering token from count
                                     _stopped_by_suffix = True
                                     break
@@ -7994,7 +9443,9 @@ class BatchedEngine:
                                 _stopped_by_stop_id = True
                                 break
                             detokenizer.add_token(tid)
-                            if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                            if stop_suffixes and any(
+                                detokenizer.text.endswith(s) for s in stop_suffixes
+                            ):
                                 tokens.pop()  # Exclude suffix-triggering token from count
                                 _stopped = True
                                 _stopped_by_suffix = True
@@ -8005,10 +9456,18 @@ class BatchedEngine:
                                     tok_text = tokenizer.decode([tid])
                                     _grammar_constraint.advance(tok_text)
                                 except Exception:
-                                    logger.debug("Grammar constraint advance failed for token %d", tid, exc_info=True)
+                                    logger.debug(
+                                        "Grammar constraint advance failed for token %d",
+                                        tid,
+                                        exc_info=True,
+                                    )
 
                         # Emit bonus token (model's own prediction at rejection/last point)
-                        if not _stopped and result.bonus_token is not None and remaining > 0:
+                        if (
+                            not _stopped
+                            and result.bonus_token is not None
+                            and remaining > 0
+                        ):
                             bonus = result.bonus_token
                             tokens.append(bonus)
                             all_token_ids.append(bonus)
@@ -8023,7 +9482,9 @@ class BatchedEngine:
                                 # a stop_id the detokenizer text was stale and a coincidental
                                 # suffix match from prior tokens would cause a spurious
                                 # tokens.pop() (double-pop) and incorrect _stopped_by_suffix.
-                                if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                                if stop_suffixes and any(
+                                    detokenizer.text.endswith(s) for s in stop_suffixes
+                                ):
                                     tokens.pop()  # Exclude suffix-triggering token from count
                                     _stopped_by_suffix = True
                                     _stopped = True
@@ -8033,7 +9494,10 @@ class BatchedEngine:
                                     tok_text = tokenizer.decode([bonus])
                                     _grammar_constraint.advance(tok_text)
                                 except Exception:
-                                    logger.debug("grammar advance failed for n-gram bonus token", exc_info=True)
+                                    logger.debug(
+                                        "grammar advance failed for n-gram bonus token",
+                                        exc_info=True,
+                                    )
                             # do NOT feed the bonus token into the cache.
                             # Aligning with mlx-lm, the bonus is the next token to
                             # feed — it stays OUT of the cache and the next
@@ -8047,11 +9511,18 @@ class BatchedEngine:
 
                         # Feed back to adaptive spec controller
                         if self._adaptive_spec is not None:
-                            self._adaptive_spec.record_step(n_draft, result.accepted_count)
+                            self._adaptive_spec.record_step(
+                                n_draft, result.accepted_count
+                            )
 
                 # Cache KV state
                 if self._kv_quant_bits is not None:
-                    _maybe_quantize_kv_cache(cache, self._kv_quant_start, self._kv_quant_group_size, self._kv_quant_bits)
+                    _maybe_quantize_kv_cache(
+                        cache,
+                        self._kv_quant_start,
+                        self._kv_quant_group_size,
+                        self._kv_quant_bits,
+                    )
                 if prefix_cache is not None:
                     prefix_cache.add(mx.array(input_ids), cache)
 
@@ -8062,7 +9533,9 @@ class BatchedEngine:
                 try:
                     detokenizer.finalize()
                 except Exception:
-                    logger.debug("detokenizer finalize failed in n-gram spec", exc_info=True)
+                    logger.debug(
+                        "detokenizer finalize failed in n-gram spec", exc_info=True
+                    )
 
                 # Use detokenizer text when suffix matching is active (same
                 # pattern as _generate_fast) because tokenizer.decode(tokens)
@@ -8071,13 +9544,21 @@ class BatchedEngine:
                     output_text = detokenizer.text
                     for s in stop_suffixes:
                         if output_text.endswith(s):
-                            output_text = output_text[:-len(s)]
+                            output_text = output_text[: -len(s)]
                             break
                     output_text = _clean_special_tokens(output_text)
                 else:
                     output_text = tokenizer.decode(tokens, skip_special_tokens=True)
                 mx.synchronize()
-                return tokens, output_text, [], ttft_s, matched, _stopped_by_suffix, _stopped_by_stop_id
+                return (
+                    tokens,
+                    output_text,
+                    [],
+                    ttft_s,
+                    matched,
+                    _stopped_by_suffix,
+                    _stopped_by_stop_id,
+                )
             finally:
                 _unregister_inflight()
 
@@ -8093,36 +9574,63 @@ class BatchedEngine:
 
         def _run_with_lora():
             _applied = False
-            if lora_adapter and getattr(self, '_lora_manager', None) is not None:
+            if lora_adapter and getattr(self, "_lora_manager", None) is not None:
                 try:
                     _applied = self._lora_manager.acquire_adapter(lora_adapter)
                 except Exception as _le:  # fail loud, don't serve base
-                    raise RuntimeError(f"LoRA adapter '{lora_adapter}' could not be applied") from _le
+                    raise RuntimeError(
+                        f"LoRA adapter '{lora_adapter}' could not be applied"
+                    ) from _le
                 if not _applied:
-                    raise RuntimeError(f"LoRA adapter '{lora_adapter}' could not be applied")
+                    raise RuntimeError(
+                        f"LoRA adapter '{lora_adapter}' could not be applied"
+                    )
             try:
                 return _run()
             finally:
-                if _applied and getattr(self, '_lora_manager', None) is not None:
+                if _applied and getattr(self, "_lora_manager", None) is not None:
                     try:
                         self._lora_manager.release_adapter(lora_adapter)
                     except Exception:
-                        logger.debug("LoRA release failed (n-gram spec executor)", exc_info=True)
+                        logger.debug(
+                            "LoRA release failed (n-gram spec executor)", exc_info=True
+                        )
 
         try:
-            tokens, output_text, _, ttft_s, cached_tokens, _stopped_by_suffix, _stopped_by_stop_id = await loop.run_in_executor(executor, _run_with_lora)
+            (
+                tokens,
+                output_text,
+                _,
+                ttft_s,
+                cached_tokens,
+                _stopped_by_suffix,
+                _stopped_by_stop_id,
+            ) = await loop.run_in_executor(executor, _run_with_lora)
         except MemoryError:
-            logger.warning("OOM during N-gram spec generation — returning memory_limit finish reason")
+            logger.warning(
+                "OOM during N-gram spec generation — returning memory_limit finish reason"
+            )
             try:
                 import mlx.core as _mx
-                await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
+
+                await loop.run_in_executor(
+                    executor, lambda: (_mx.synchronize(), _mx.clear_cache())
+                )
             except Exception:
-                logger.debug("GPU cache cleanup failed after n-gram spec OOM", exc_info=True)
-            if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+                logger.debug(
+                    "GPU cache cleanup failed after n-gram spec OOM", exc_info=True
+                )
+            if (
+                _lora_applied
+                and hasattr(self, "_lora_manager")
+                and self._lora_manager is not None
+            ):
                 try:
                     self._lora_manager.release_adapter(lora_adapter)
                 except Exception:
-                    logger.warning("LoRA release failed after n-gram spec OOM", exc_info=True)
+                    logger.warning(
+                        "LoRA release failed after n-gram spec OOM", exc_info=True
+                    )
             return GenerationOutput(
                 finished=True,
                 finish_reason="memory_limit",
@@ -8137,14 +9645,27 @@ class BatchedEngine:
                 logger.warning(f"MLX OOM during N-gram spec generation: {e}")
                 try:
                     import mlx.core as _mx
-                    await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
+
+                    await loop.run_in_executor(
+                        executor, lambda: (_mx.synchronize(), _mx.clear_cache())
+                    )
                 except Exception:
-                    logger.debug("GPU cache cleanup failed after n-gram spec OOM (RuntimeError)", exc_info=True)
-                if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+                    logger.debug(
+                        "GPU cache cleanup failed after n-gram spec OOM (RuntimeError)",
+                        exc_info=True,
+                    )
+                if (
+                    _lora_applied
+                    and hasattr(self, "_lora_manager")
+                    and self._lora_manager is not None
+                ):
                     try:
                         self._lora_manager.release_adapter(lora_adapter)
                     except Exception:
-                        logger.warning("LoRA release failed after n-gram spec OOM (RuntimeError)", exc_info=True)
+                        logger.warning(
+                            "LoRA release failed after n-gram spec OOM (RuntimeError)",
+                            exc_info=True,
+                        )
                 return GenerationOutput(
                     finished=True,
                     finish_reason="memory_limit",
@@ -8154,11 +9675,18 @@ class BatchedEngine:
                     ttft_ms=0.0,
                     cached_tokens=0,
                 )
-            if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+            if (
+                _lora_applied
+                and hasattr(self, "_lora_manager")
+                and self._lora_manager is not None
+            ):
                 try:
                     self._lora_manager.release_adapter(lora_adapter)
                 except Exception:
-                    logger.warning("LoRA release failed after n-gram spec RuntimeError", exc_info=True)
+                    logger.warning(
+                        "LoRA release failed after n-gram spec RuntimeError",
+                        exc_info=True,
+                    )
             # Return error output for non-OOM RuntimeError instead of
             # propagating to caller (which expects GenerationOutput).
             return GenerationOutput(
@@ -8171,12 +9699,21 @@ class BatchedEngine:
                 cached_tokens=0,
             )
         except Exception as e:
-            logger.error(f"Unexpected error during N-gram spec generation: {e}", exc_info=True)
-            if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+            logger.error(
+                f"Unexpected error during N-gram spec generation: {e}", exc_info=True
+            )
+            if (
+                _lora_applied
+                and hasattr(self, "_lora_manager")
+                and self._lora_manager is not None
+            ):
                 try:
                     self._lora_manager.release_adapter(lora_adapter)
                 except Exception:
-                    logger.warning("LoRA release failed after n-gram spec unexpected error", exc_info=True)
+                    logger.warning(
+                        "LoRA release failed after n-gram spec unexpected error",
+                        exc_info=True,
+                    )
             # Return error output instead of propagating exception to caller.
             return GenerationOutput(
                 finished=True,
@@ -8201,7 +9738,7 @@ class BatchedEngine:
         if _stopped_by_suffix and stop_suffixes:
             for s in stop_suffixes:
                 if output_text.endswith(s):
-                    output_text = output_text[:-len(s)]
+                    output_text = output_text[: -len(s)]
                     break
 
         # Build logprobs from generated tokens — n-gram spec decode does not
@@ -8217,10 +9754,16 @@ class BatchedEngine:
                 from yunshu_gateway.middleware.prometheus_exporter import (
                     get_prometheus_metrics,
                 )
+
                 pm = get_prometheus_metrics()
-                pm.observe_histogram("ttft_seconds", ttft_s, labels={"model_id": self.model_label})
+                pm.observe_histogram(
+                    "ttft_seconds", ttft_s, labels={"model_id": self.model_label}
+                )
             except Exception:
-                logger.debug("TTFT prometheus recording failed in n-gram spec path", exc_info=True)
+                logger.debug(
+                    "TTFT prometheus recording failed in n-gram spec path",
+                    exc_info=True,
+                )
 
         # Reasoning parser: extract thinking tokens from n-gram spec output.
         # N-gram spec decode does not track thinking tokens internally,
@@ -8229,6 +9772,7 @@ class BatchedEngine:
         if output_text:
             try:
                 from .reasoning_parser import get_reasoning_parser
+
                 rp = get_reasoning_parser(self.model_name)
                 rp_out = rp.parse(output_text)
                 if rp_out.reasoning and rp_out.reasoning_tokens > 0:
@@ -8236,13 +9780,22 @@ class BatchedEngine:
                     if rp_out.content != output_text:
                         output_text = rp_out.content
             except Exception:
-                logger.debug("reasoning_parser failed in n-gram spec path", exc_info=True)
+                logger.debug(
+                    "reasoning_parser failed in n-gram spec path", exc_info=True
+                )
 
-        if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+        if (
+            _lora_applied
+            and hasattr(self, "_lora_manager")
+            and self._lora_manager is not None
+        ):
             try:
                 self._lora_manager.release_adapter(lora_adapter)
             except Exception:
-                logger.warning("LoRA release failed after n-gram spec normal completion", exc_info=True)
+                logger.warning(
+                    "LoRA release failed after n-gram spec normal completion",
+                    exc_info=True,
+                )
         return GenerationOutput(
             text=output_text,
             new_text=output_text,
@@ -8316,23 +9869,38 @@ class BatchedEngine:
             from mlx_lm.models.cache import (
                 make_prompt_cache as _mk_cache,
             )
+
             _spec_cache_supported = _can_trim(_mk_cache(model))
         except Exception:
             _spec_cache_supported = False
         if not _spec_cache_supported:
-            logger.info("N-gram spec disabled (streaming): cache not trimmable — "
-                        "using the plain streaming fast path.")
+            logger.info(
+                "N-gram spec disabled (streaming): cache not trimmable — "
+                "using the plain streaming fast path."
+            )
             async for _chunk in self._stream_generate_fast(
-                prompt=prompt, max_tokens=max_tokens, temperature=temperature,
-                top_p=top_p, top_k=top_k, min_p=min_p,
+                prompt=prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
                 repetition_penalty=repetition_penalty,
-                frequency_penalty=frequency_penalty, presence_penalty=presence_penalty,
-                logit_bias=logit_bias, stop=stop, stop_token_ids=stop_token_ids,
-                seed=seed, enable_thinking=enable_thinking,
-                thinking_budget=thinking_budget, xtc_probability=xtc_probability,
-                xtc_threshold=xtc_threshold, json_schema=json_schema,
-                cancel_event=cancel_event, logprobs=logprobs,
-                top_logprobs=top_logprobs, logits_processors=logits_processors,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                logit_bias=logit_bias,
+                stop=stop,
+                stop_token_ids=stop_token_ids,
+                seed=seed,
+                enable_thinking=enable_thinking,
+                thinking_budget=thinking_budget,
+                xtc_probability=xtc_probability,
+                xtc_threshold=xtc_threshold,
+                json_schema=json_schema,
+                cancel_event=cancel_event,
+                logprobs=logprobs,
+                top_logprobs=top_logprobs,
+                logits_processors=logits_processors,
             ):
                 yield _chunk
             return
@@ -8340,11 +9908,14 @@ class BatchedEngine:
         # when concurrent requests call reset()/propose() on a shared instance.
         from .ngram_proposer import NgramConfig as _NgramConfig
         from .ngram_proposer import NgramProposer as _NgramProposer
-        proposer = _NgramProposer(_NgramConfig(
-            max_n=self._ngram_proposer.config.max_n,
-            k=self._ngram_proposer.config.k,
-            mode=self._ngram_proposer.config.mode,
-        ))
+
+        proposer = _NgramProposer(
+            _NgramConfig(
+                max_n=self._ngram_proposer.config.max_n,
+                k=self._ngram_proposer.config.k,
+                mode=self._ngram_proposer.config.mode,
+            )
+        )
 
         # Handle messages-format prompts (list of dicts) — apply chat template.
         # route through _apply_chat_template + _encode_prompt (NOT raw tokenizer
@@ -8363,15 +9934,17 @@ class BatchedEngine:
 
         stop_ids: set[int] = set()
         stop_suffixes = []
-        if hasattr(tokenizer, 'eos_token_id'):
+        if hasattr(tokenizer, "eos_token_id"):
             eid = tokenizer.eos_token_id
             if isinstance(eid, (list, tuple)):
                 stop_ids.update(eid)
             elif eid is not None:
                 stop_ids.add(eid)
-        _eids = getattr(tokenizer, 'eos_token_ids', None)
+        _eids = getattr(tokenizer, "eos_token_ids", None)
         if _eids is not None:  # may be a bare int (Qwen3.6-27B), not iterable
-            stop_ids.update(_eids if isinstance(_eids, (list, tuple, set)) else (_eids,))
+            stop_ids.update(
+                _eids if isinstance(_eids, (list, tuple, set)) else (_eids,)
+            )
         if stop_token_ids:
             stop_ids.update(stop_token_ids)
         if stop:
@@ -8383,21 +9956,30 @@ class BatchedEngine:
                     elif len(ids) > 1:
                         stop_suffixes.append(s)
                 except Exception:
-                    logger.debug(f"failed to encode stop sequence: {s!r}", exc_info=True)
+                    logger.debug(
+                        f"failed to encode stop sequence: {s!r}", exc_info=True
+                    )
 
         # route temp>0 off mlx-lm's PRNG-trapped make_sampler (see the
         # non-streaming sibling). Greedy (temp==0) stays on argmax make_sampler.
         if temperature is not None and temperature > 1e-6:
             sampler = _build_temp_sampler(
-                temperature=temperature, top_p=top_p,
-                top_k=top_k if top_k > 0 else 0, min_p=min_p, seed=seed,
-                xtc_probability=xtc_probability, xtc_threshold=xtc_threshold,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k if top_k > 0 else 0,
+                min_p=min_p,
+                seed=seed,
+                xtc_probability=xtc_probability,
+                xtc_threshold=xtc_threshold,
             )
         else:
             sampler = make_sampler(
-                temp=temperature, top_p=top_p,
-                top_k=top_k if top_k > 0 else 0, min_p=min_p,
-                xtc_probability=xtc_probability, xtc_threshold=xtc_threshold,
+                temp=temperature,
+                top_p=top_p,
+                top_k=top_k if top_k > 0 else 0,
+                min_p=min_p,
+                xtc_probability=xtc_probability,
+                xtc_threshold=xtc_threshold,
             )
 
         # Grammar constraint: pre-validate draft tokens against allowed set
@@ -8405,9 +9987,14 @@ class BatchedEngine:
         if json_schema is not None:
             try:
                 sampler = _build_constrained_sampler(sampler, json_schema, tokenizer)
-                _stream_grammar_constraint = sampler.constraint if hasattr(sampler, 'constraint') else None
+                _stream_grammar_constraint = (
+                    sampler.constraint if hasattr(sampler, "constraint") else None
+                )
             except Exception:
-                logger.warning("Grammar constraint setup failed for streaming n-gram spec", exc_info=True)
+                logger.warning(
+                    "Grammar constraint setup failed for streaming n-gram spec",
+                    exc_info=True,
+                )
 
         # LoRA adapter: the acquire+apply / release+restore lifecycle MUST run on the
         # executor thread (inside _run), NOT here on the event loop — acquiring here
@@ -8425,7 +10012,9 @@ class BatchedEngine:
             if _stream_grammar_constraint is None:
                 return draft_ids
             _stream_grammar_constraint.checkpoint()
-            allowed = _stream_grammar_constraint.get_allowed_tokens(tokenizer, generated_ids)
+            allowed = _stream_grammar_constraint.get_allowed_tokens(
+                tokenizer, generated_ids
+            )
             if not allowed:
                 _stream_grammar_constraint.rollback()
                 return draft_ids
@@ -8438,9 +10027,14 @@ class BatchedEngine:
                         tok_text = tokenizer.decode([tid])
                         _stream_grammar_constraint.advance(tok_text)
                     except Exception:
-                        logger.debug("grammar constraint advance failed in streaming filter", exc_info=True)
+                        logger.debug(
+                            "grammar constraint advance failed in streaming filter",
+                            exc_info=True,
+                        )
                         break
-                    allowed = _stream_grammar_constraint.get_allowed_tokens(tokenizer, generated_ids + filtered)
+                    allowed = _stream_grammar_constraint.get_allowed_tokens(
+                        tokenizer, generated_ids + filtered
+                    )
                     if allowed:
                         allowed_set = set(allowed)
                     else:
@@ -8454,6 +10048,7 @@ class BatchedEngine:
         _q: asyncio.Queue = asyncio.Queue(maxsize=512)
         loop = asyncio.get_running_loop()
         from .streaming_optimizer import StreamingBackpressureController
+
         _backpressure = StreamingBackpressureController(max_queue_size=100)
 
         def _put(item):
@@ -8479,17 +10074,24 @@ class BatchedEngine:
                     Exception("N-gram streaming queue overflow — output truncated"),
                 )
             except Exception:
-                logger.debug("Failed to put error sentinel into n-gram streaming queue", exc_info=True)
+                logger.debug(
+                    "Failed to put error sentinel into n-gram streaming queue",
+                    exc_info=True,
+                )
 
         # Inflight prefix sharing for streaming n-gram spec
-        _ng_s_inflight_req_id = f"ng-s-{int(time.monotonic()*1e6)}"
+        _ng_s_inflight_req_id = f"ng-s-{int(time.monotonic() * 1e6)}"
 
         def _unregister_inflight():
             try:
                 from .inflight_prefix_sharing import get_inflight_tracker
+
                 get_inflight_tracker().unregister(_ng_s_inflight_req_id)
             except Exception:
-                logger.debug("inflight prefix unregister failed in streaming n-gram spec", exc_info=True)
+                logger.debug(
+                    "inflight prefix unregister failed in streaming n-gram spec",
+                    exc_info=True,
+                )
 
         _ng_timeout_cancel = threading.Event()
         _ng_gen_t0 = time.perf_counter()
@@ -8499,30 +10101,41 @@ class BatchedEngine:
             # with generate_step (max_workers=1) — never on the event loop (which would
             # mutate the shared model while another request reads it).
             _applied = False
-            if lora_adapter and getattr(self, '_lora_manager', None) is not None:
+            if lora_adapter and getattr(self, "_lora_manager", None) is not None:
                 try:
                     _applied = self._lora_manager.acquire_adapter(lora_adapter)
                 except Exception as _le:  # fail loud, don't serve base
-                    raise RuntimeError(f"LoRA adapter '{lora_adapter}' could not be applied") from _le
+                    raise RuntimeError(
+                        f"LoRA adapter '{lora_adapter}' could not be applied"
+                    ) from _le
                 if not _applied:
-                    raise RuntimeError(f"LoRA adapter '{lora_adapter}' could not be applied")
+                    raise RuntimeError(
+                        f"LoRA adapter '{lora_adapter}' could not be applied"
+                    )
             try:
                 _run_inner()
             except Exception as e:
                 logger.error(f"N-gram streaming generation failed: {e}", exc_info=True)
                 try:
                     import mlx.core as _cleanup_mx
+
                     _cleanup_mx.synchronize()
                     _cleanup_mx.clear_cache()
                 except Exception:
-                    logger.debug("GPU cache cleanup failed in n-gram streaming error handler", exc_info=True)
+                    logger.debug(
+                        "GPU cache cleanup failed in n-gram streaming error handler",
+                        exc_info=True,
+                    )
                 _put(e)
             finally:
-                if _applied and getattr(self, '_lora_manager', None) is not None:
+                if _applied and getattr(self, "_lora_manager", None) is not None:
                     try:
                         self._lora_manager.release_adapter(lora_adapter)
                     except Exception:
-                        logger.debug("LoRA release failed (streaming n-gram spec executor)", exc_info=True)
+                        logger.debug(
+                            "LoRA release failed (streaming n-gram spec executor)",
+                            exc_info=True,
+                        )
                 _unregister_inflight()
                 _put(_sentinel)
 
@@ -8545,9 +10158,16 @@ class BatchedEngine:
                 except Exception:
                     logger.debug("paged KV pressure eviction failed", exc_info=True)
             try:
-                cached_kv, _, matched = (prefix_cache.get(ids) if prefix_cache is not None else (None, None, 0))
+                cached_kv, _, matched = (
+                    prefix_cache.get(ids)
+                    if prefix_cache is not None
+                    else (None, None, 0)
+                )
             except Exception:
-                logger.warning("KV prefix cache get failed in spec path — falling back to full prefill", exc_info=True)
+                logger.warning(
+                    "KV prefix cache get failed in spec path — falling back to full prefill",
+                    exc_info=True,
+                )
                 cached_kv, _, matched = None, None, 0
             cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
@@ -8557,6 +10177,7 @@ class BatchedEngine:
             # Inflight prefix sharing: register for concurrent KV block sharing
             try:
                 from .inflight_prefix_sharing import get_inflight_tracker
+
                 get_inflight_tracker().register(
                     _ng_s_inflight_req_id,
                     [int(t) for t in ids],
@@ -8564,7 +10185,10 @@ class BatchedEngine:
                     self.model_name or "",
                 )
             except Exception:
-                logger.debug("inflight prefix register failed in streaming n-gram spec", exc_info=True)
+                logger.debug(
+                    "inflight prefix register failed in streaming n-gram spec",
+                    exc_info=True,
+                )
 
             detokenizer = tokenizer.detokenizer
             detokenizer.reset()
@@ -8575,7 +10199,9 @@ class BatchedEngine:
             _ng_think_end_token = None
             if thinking_budget is not None or enable_thinking:
                 # bracketed-form helper (bare "</think" tokenized to 2 → guard failed).
-                _ng_think_start_token, _ng_think_end_token = _resolve_think_token_ids(tokenizer)
+                _ng_think_start_token, _ng_think_end_token = _resolve_think_token_ids(
+                    tokenizer
+                )
             _ng_in_thinking = False
             _ng_thinking_tokens_used = 0
 
@@ -8591,9 +10217,11 @@ class BatchedEngine:
                     if tid == _ng_think_end_token:
                         _ng_in_thinking = False
                         return False
-                    if (thinking_budget is not None
-                            and _ng_thinking_tokens_used >= thinking_budget
-                            and _ng_think_end_token is not None):
+                    if (
+                        thinking_budget is not None
+                        and _ng_thinking_tokens_used >= thinking_budget
+                        and _ng_think_end_token is not None
+                    ):
                         _ng_in_thinking = False
                         # Force-insert </think token
                         tokens.append(_ng_think_end_token)
@@ -8611,7 +10239,10 @@ class BatchedEngine:
             with _wired_limit_ctx(model):
                 # Prefill + first token
                 for token, _logits in generate_step(
-                    ids_to_prefill, model, max_tokens=1, sampler=sampler,
+                    ids_to_prefill,
+                    model,
+                    max_tokens=1,
+                    sampler=sampler,
                     prompt_cache=cache,
                 ):
                     first_token = int(token)
@@ -8651,7 +10282,11 @@ class BatchedEngine:
                             _put((_remaining, n_tok, None, 0))
                         _put(("", n_tok, "timeout", 0))
                         return
-                    _adaptive_k = self._adaptive_spec.get_draft_length() if self._adaptive_spec else None
+                    _adaptive_k = (
+                        self._adaptive_spec.get_draft_length()
+                        if self._adaptive_spec
+                        else None
+                    )
                     draft_ids = proposer.propose(all_token_ids)
                     if _adaptive_k is not None:
                         draft_ids = draft_ids[:_adaptive_k]
@@ -8660,9 +10295,14 @@ class BatchedEngine:
                     n_draft = min(len(draft_ids), remaining)
 
                     if n_draft == 0:
-                        step_input = mx.array([tokens[-1]])  # 1D — generate_step adds the batch dim
+                        step_input = mx.array(
+                            [tokens[-1]]
+                        )  # 1D — generate_step adds the batch dim
                         for token, _logits in generate_step(
-                            step_input, model, max_tokens=1, sampler=sampler,
+                            step_input,
+                            model,
+                            max_tokens=1,
+                            sampler=sampler,
                             prompt_cache=cache,
                         ):
                             token_id = int(token)
@@ -8689,18 +10329,22 @@ class BatchedEngine:
                                 return
                             suffix_hit = False
                             if stop_suffixes:
-                                suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
+                                suffix_hit = any(
+                                    detokenizer.text.endswith(s) for s in stop_suffixes
+                                )
                             _text = "" if suffix_hit else detokenizer.last_segment
                             if suffix_hit:
                                 n_tok -= 1  # Exclude suffix-triggering token from count
-                            _put((_text, n_tok, "stop" if suffix_hit else None, token_id))
+                            _put(
+                                (_text, n_tok, "stop" if suffix_hit else None, token_id)
+                            )
                             if suffix_hit:
                                 detokenizer.finalize()
                                 _remaining = detokenizer.last_segment
                                 if stop_suffixes and _remaining:
                                     for s in stop_suffixes:
                                         if _remaining.endswith(s):
-                                            _remaining = _remaining[:-len(s)]
+                                            _remaining = _remaining[: -len(s)]
                                             break
                                 if _remaining:
                                     _put((_remaining, n_tok, None, token_id))
@@ -8719,12 +10363,13 @@ class BatchedEngine:
                     # C10: Batch verify all K draft tokens in one forward pass
                     draft_arr = mx.array(draft_ids[:n_draft]).reshape(1, -1)
                     batch_logits = model(draft_arr, cache=cache)
-                    if hasattr(batch_logits, 'logits'):
+                    if hasattr(batch_logits, "logits"):
                         batch_logits = batch_logits.logits
 
                     # GPU-accelerated rejection sampling when enabled
                     if self._gpu_rejection_enabled:
                         from .gpu_rejection import GPURejectionSampler as _GRS
+
                         rej_result = self._gpu_rejection_sampler.verify_greedy(
                             batch_logits[0, :n_draft], draft_ids[:n_draft]
                         )
@@ -8743,7 +10388,9 @@ class BatchedEngine:
                             _ng_bonus_logits = batch_logits[0, accepted, :]
                             _ng_token_hist = all_token_ids
                             _ng_bonus_logits = _apply_spec_bonus_penalties(
-                                _ng_bonus_logits, _ng_token_hist, len(input_ids),
+                                _ng_bonus_logits,
+                                _ng_token_hist,
+                                len(input_ids),
                                 repetition_penalty=repetition_penalty,
                                 frequency_penalty=frequency_penalty,
                                 presence_penalty=presence_penalty,
@@ -8776,11 +10423,23 @@ class BatchedEngine:
                                     break
                                 suffix_hit = False
                                 if stop_suffixes:
-                                    suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
+                                    suffix_hit = any(
+                                        detokenizer.text.endswith(s)
+                                        for s in stop_suffixes
+                                    )
                                 _text = "" if suffix_hit else detokenizer.last_segment
                                 if suffix_hit:
-                                    n_tok -= 1  # Exclude suffix-triggering token from count
-                                _put((_text, n_tok, "stop" if suffix_hit else None, accepted_id))
+                                    n_tok -= (
+                                        1  # Exclude suffix-triggering token from count
+                                    )
+                                _put(
+                                    (
+                                        _text,
+                                        n_tok,
+                                        "stop" if suffix_hit else None,
+                                        accepted_id,
+                                    )
+                                )
                                 if suffix_hit:
                                     stopped = True
                             # Advance grammar constraint for accepted/bonus token
@@ -8789,7 +10448,10 @@ class BatchedEngine:
                                     tok_text = tokenizer.decode([accepted_id])
                                     _stream_grammar_constraint.advance(tok_text)
                                 except Exception:
-                                    logger.debug("grammar advance failed for n-gram streaming accepted token", exc_info=True)
+                                    logger.debug(
+                                        "grammar advance failed for n-gram streaming accepted token",
+                                        exc_info=True,
+                                    )
                             if i >= accepted:
                                 stopped = True
                             if stopped:
@@ -8803,9 +10465,13 @@ class BatchedEngine:
                         if accepted < n_draft:
                             try:
                                 from mlx_lm.models.cache import trim_prompt_cache
+
                                 trim_prompt_cache(cache, n_draft - accepted)
                             except Exception:
-                                logger.debug("trim_prompt_cache (n-gram GPU partial) failed, falling back", exc_info=True)
+                                logger.debug(
+                                    "trim_prompt_cache (n-gram GPU partial) failed, falling back",
+                                    exc_info=True,
+                                )
                                 for c in cache:
                                     if hasattr(c, "trim"):
                                         c.trim(n_draft - accepted)
@@ -8829,16 +10495,20 @@ class BatchedEngine:
                                 _ng_bonus_logits_cpu = batch_logits[0, i, :]
                                 _ng_token_hist_cpu = all_token_ids
                                 _ng_bonus_logits_cpu = _apply_spec_bonus_penalties(
-                                    _ng_bonus_logits_cpu, _ng_token_hist_cpu, len(input_ids),
+                                    _ng_bonus_logits_cpu,
+                                    _ng_token_hist_cpu,
+                                    len(input_ids),
                                     repetition_penalty=repetition_penalty,
                                     frequency_penalty=frequency_penalty,
                                     presence_penalty=presence_penalty,
                                     logit_bias=logit_bias,
                                 )
                                 batch_logits[0, i, :] = _ng_bonus_logits_cpu
-                            model_pick = int(mx.argmax(batch_logits[0, i], axis=-1).item())
+                            model_pick = int(
+                                mx.argmax(batch_logits[0, i], axis=-1).item()
+                            )
                             draft_id = draft_ids[i]
-                            is_accept = (model_pick == draft_id)
+                            is_accept = model_pick == draft_id
                             accepted_id = draft_id if is_accept else model_pick
                             tokens.append(accepted_id)
                             all_token_ids.append(accepted_id)
@@ -8858,11 +10528,23 @@ class BatchedEngine:
                                     break
                                 suffix_hit = False
                                 if stop_suffixes:
-                                    suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
+                                    suffix_hit = any(
+                                        detokenizer.text.endswith(s)
+                                        for s in stop_suffixes
+                                    )
                                 _text = "" if suffix_hit else detokenizer.last_segment
                                 if suffix_hit:
-                                    n_tok -= 1  # Exclude suffix-triggering token from count
-                                _put((_text, n_tok, "stop" if suffix_hit else None, accepted_id))
+                                    n_tok -= (
+                                        1  # Exclude suffix-triggering token from count
+                                    )
+                                _put(
+                                    (
+                                        _text,
+                                        n_tok,
+                                        "stop" if suffix_hit else None,
+                                        accepted_id,
+                                    )
+                                )
                                 if suffix_hit:
                                     stopped = True
                             # Advance grammar constraint for accepted/bonus token
@@ -8871,7 +10553,10 @@ class BatchedEngine:
                                     tok_text = tokenizer.decode([accepted_id])
                                     _stream_grammar_constraint.advance(tok_text)
                                 except Exception:
-                                    logger.debug("grammar advance failed for n-gram streaming CPU token", exc_info=True)
+                                    logger.debug(
+                                        "grammar advance failed for n-gram streaming CPU token",
+                                        exc_info=True,
+                                    )
                             if not is_accept:
                                 stopped = True
                             if stopped:
@@ -8881,9 +10566,13 @@ class BatchedEngine:
                         if accepted < n_draft:
                             try:
                                 from mlx_lm.models.cache import trim_prompt_cache
+
                                 trim_prompt_cache(cache, n_draft - accepted)
                             except Exception:
-                                logger.debug("trim_prompt_cache (n-gram CPU fallback) failed, falling back", exc_info=True)
+                                logger.debug(
+                                    "trim_prompt_cache (n-gram CPU fallback) failed, falling back",
+                                    exc_info=True,
+                                )
                                 for c in cache:
                                     if hasattr(c, "trim"):
                                         c.trim(n_draft - accepted)
@@ -8904,7 +10593,7 @@ class BatchedEngine:
                         if stop_suffixes and _remaining:
                             for s in stop_suffixes:
                                 if _remaining.endswith(s):
-                                    _remaining = _remaining[:-len(s)]
+                                    _remaining = _remaining[: -len(s)]
                                     break
                         if _remaining:
                             _put((_remaining, n_tok, None, 0))
@@ -8937,8 +10626,10 @@ class BatchedEngine:
         _ng_consumer_thinking_tokens = 0
         if thinking_budget is not None or enable_thinking:
             # bracketed-form helper (bare "</think" tokenized to 2 → guard failed).
-            _ng_consumer_think_start, _ng_consumer_think_end = _resolve_think_token_ids(tokenizer)
-        _ng_fp_lock = getattr(self, '_fast_path_lock', None)
+            _ng_consumer_think_start, _ng_consumer_think_end = _resolve_think_token_ids(
+                tokenizer
+            )
+        _ng_fp_lock = getattr(self, "_fast_path_lock", None)
         if _ng_fp_lock is not None:
             with _ng_fp_lock:
                 self._active_fast_path_count += 1
@@ -8961,7 +10652,9 @@ class BatchedEngine:
                 try:
                     item = await asyncio.wait_for(_q.get(), timeout=timeout_seconds)
                 except TimeoutError:
-                    logger.warning(f"N-gram streaming timeout: no token for {timeout_seconds}s")
+                    logger.warning(
+                        f"N-gram streaming timeout: no token for {timeout_seconds}s"
+                    )
                     _ng_timeout_cancel.set()  # Signal GPU loop to stop
                     # Yield terminal output so consumer sees finished=True
                     yield GenerationOutput(
@@ -9018,14 +10711,19 @@ class BatchedEngine:
                         finish_reason="length",
                         error="Streaming text buffer exceeded 1MB limit",
                         cached_tokens=0,
-                        reasoning_tokens=_ng_consumer_thinking_tokens if _ng_consumer_think_start is not None else 0,
+                        reasoning_tokens=_ng_consumer_thinking_tokens
+                        if _ng_consumer_think_start is not None
+                        else 0,
                         ttft_ms=_ng_ttft_ms_val,
                     )
                     break
                 n_tok = tok_count
                 # Consumer-side thinking state tracking for reasoning_tokens reporting
                 if _ng_consumer_think_start is not None and isinstance(token_id, int):
-                    if not _ng_consumer_in_thinking and token_id == _ng_consumer_think_start:
+                    if (
+                        not _ng_consumer_in_thinking
+                        and token_id == _ng_consumer_think_start
+                    ):
                         _ng_consumer_in_thinking = True
                     elif _ng_consumer_in_thinking:
                         _ng_consumer_thinking_tokens += 1
@@ -9047,10 +10745,18 @@ class BatchedEngine:
                         from yunshu_gateway.middleware.prometheus_exporter import (
                             get_prometheus_metrics,
                         )
+
                         pm = get_prometheus_metrics()
-                        pm.observe_histogram("ttft_seconds", _ng_ttft_s, labels={"model_id": self.model_label})
+                        pm.observe_histogram(
+                            "ttft_seconds",
+                            _ng_ttft_s,
+                            labels={"model_id": self.model_label},
+                        )
                     except Exception:
-                        logger.debug("N-gram streaming TTFT prometheus recording failed", exc_info=True)
+                        logger.debug(
+                            "N-gram streaming TTFT prometheus recording failed",
+                            exc_info=True,
+                        )
 
                 # Build logprobs for this token — n-gram spec decode does not
                 # expose per-token logits in the queue-based streaming path.
@@ -9073,7 +10779,9 @@ class BatchedEngine:
                     completion_tokens=n_tok,
                     finished=done,
                     finish_reason=finish_reason,
-                    reasoning_tokens=_ng_consumer_thinking_tokens if _ng_consumer_think_start is not None else 0,
+                    reasoning_tokens=_ng_consumer_thinking_tokens
+                    if _ng_consumer_think_start is not None
+                    else 0,
                     cached_tokens=0,
                     logprobs=_chunk_logprobs,
                     ttft_ms=_ng_ttft_ms_val,
@@ -9083,12 +10791,19 @@ class BatchedEngine:
         finally:
             # Decrement active fast path count (prevents model eviction mid-generation)
             # Release LoRA adapter ref acquired at start of streaming n-gram spec
-            if _ng_s_lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+            if (
+                _ng_s_lora_applied
+                and hasattr(self, "_lora_manager")
+                and self._lora_manager is not None
+            ):
                 try:
                     self._lora_manager.release_adapter(lora_adapter)
                 except Exception:
-                    logger.debug("LoRA release failed in streaming n-gram spec path", exc_info=True)
-            _ng_fp_lock = getattr(self, '_fast_path_lock', None)
+                    logger.debug(
+                        "LoRA release failed in streaming n-gram spec path",
+                        exc_info=True,
+                    )
+            _ng_fp_lock = getattr(self, "_fast_path_lock", None)
             if _ng_fp_lock is not None:
                 with _ng_fp_lock:
                     self._active_fast_path_count -= 1
@@ -9147,12 +10862,17 @@ class BatchedEngine:
         if json_schema is not None:
             try:
                 from mlx_lm.sample_utils import make_sampler as _make_s
+
                 _tmp_sampler = _make_s(temp=0.0)
                 _constrained_sampler = _build_constrained_sampler(
-                    _tmp_sampler, json_schema, self._tokenizer,
+                    _tmp_sampler,
+                    json_schema,
+                    self._tokenizer,
                 )
                 _mtp_constraint = getattr(
-                    _constrained_sampler, 'constraint', None,
+                    _constrained_sampler,
+                    "constraint",
+                    None,
                 )
             except Exception:
                 logger.warning(
@@ -9160,6 +10880,7 @@ class BatchedEngine:
                     exc_info=True,
                 )
         import mlx.core as mx
+
         executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
 
@@ -9178,7 +10899,7 @@ class BatchedEngine:
 
         # Build EOS + stop token sets
         eos_ids: set[int] = set()
-        if hasattr(tokenizer, 'eos_token_id'):
+        if hasattr(tokenizer, "eos_token_id"):
             eid = tokenizer.eos_token_id
             if isinstance(eid, (list, tuple)):
                 eos_ids.update(eid)
@@ -9196,7 +10917,9 @@ class BatchedEngine:
                     elif len(ids) > 1:
                         stop_suffixes.append(s)
                 except Exception:
-                    logger.debug(f"failed to encode stop sequence: {s!r}", exc_info=True)
+                    logger.debug(
+                        f"failed to encode stop sequence: {s!r}", exc_info=True
+                    )
 
         if seed is not None:
             mx.random.seed(seed)
@@ -9204,20 +10927,28 @@ class BatchedEngine:
         # Build sampler for MTP path — applied to bonus tokens and rejection
         # corrections while the draft/verify comparison stays greedy.
         from mlx_lm.sample_utils import make_sampler
+
         # temp>0 → per-request sampler (no mlx-lm PRNG-trap collapse, seed
         # honored); temp==0 with filters → make_sampler (argmax, unchanged); fully
         # greedy-unconstrained → None.
         if temperature is not None and temperature > 1e-6:
             _mtp_sampler = _build_temp_sampler(
-                temperature=temperature, top_p=top_p,
-                top_k=top_k if top_k > 0 else 0, min_p=min_p, seed=seed,
-                xtc_probability=xtc_probability, xtc_threshold=xtc_threshold,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k if top_k > 0 else 0,
+                min_p=min_p,
+                seed=seed,
+                xtc_probability=xtc_probability,
+                xtc_threshold=xtc_threshold,
             )
         elif top_p < 1.0 or top_k > 0 or min_p > 0 or xtc_probability > 0:
             _mtp_sampler = make_sampler(
-                temp=temperature, top_p=top_p,
-                top_k=top_k if top_k > 0 else 0, min_p=min_p,
-                xtc_probability=xtc_probability, xtc_threshold=xtc_threshold,
+                temp=temperature,
+                top_p=top_p,
+                top_k=top_k if top_k > 0 else 0,
+                min_p=min_p,
+                xtc_probability=xtc_probability,
+                xtc_threshold=xtc_threshold,
             )
         else:
             _mtp_sampler = None
@@ -9228,7 +10959,8 @@ class BatchedEngine:
 
         def _run():
             return mtp_decoder.generate(
-                input_ids, max_tokens=max_tokens,
+                input_ids,
+                max_tokens=max_tokens,
                 cancel_event=cancel_event,
                 sampler=_mtp_sampler,
                 repetition_penalty=repetition_penalty,
@@ -9247,7 +10979,11 @@ class BatchedEngine:
         _lora_applied = False
 
         def _lora_release():
-            if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+            if (
+                _lora_applied
+                and hasattr(self, "_lora_manager")
+                and self._lora_manager is not None
+            ):
                 try:
                     self._lora_manager.release_adapter(lora_adapter)
                 except Exception:
@@ -9255,21 +10991,27 @@ class BatchedEngine:
 
         def _run_with_lora():
             _applied = False
-            if lora_adapter and getattr(self, '_lora_manager', None) is not None:
+            if lora_adapter and getattr(self, "_lora_manager", None) is not None:
                 try:
                     _applied = self._lora_manager.acquire_adapter(lora_adapter)
                 except Exception as _le:  # fail loud, don't serve base
-                    raise RuntimeError(f"LoRA adapter '{lora_adapter}' could not be applied") from _le
+                    raise RuntimeError(
+                        f"LoRA adapter '{lora_adapter}' could not be applied"
+                    ) from _le
                 if not _applied:
-                    raise RuntimeError(f"LoRA adapter '{lora_adapter}' could not be applied")
+                    raise RuntimeError(
+                        f"LoRA adapter '{lora_adapter}' could not be applied"
+                    )
             try:
                 return _run()
             finally:
-                if _applied and getattr(self, '_lora_manager', None) is not None:
+                if _applied and getattr(self, "_lora_manager", None) is not None:
                     try:
                         self._lora_manager.release_adapter(lora_adapter)
                     except Exception:
-                        logger.debug("LoRA release failed (MTP executor)", exc_info=True)
+                        logger.debug(
+                            "LoRA release failed (MTP executor)", exc_info=True
+                        )
 
         _mtp_gen_t0 = time.perf_counter()
         try:
@@ -9281,9 +11023,14 @@ class BatchedEngine:
             logger.warning(f"MTP generation timed out after {timeout_seconds}s")
             try:
                 import mlx.core as _mx
-                await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
+
+                await loop.run_in_executor(
+                    executor, lambda: (_mx.synchronize(), _mx.clear_cache())
+                )
             except Exception:
-                logger.debug("GPU cache cleanup failed after MTP timeout", exc_info=True)
+                logger.debug(
+                    "GPU cache cleanup failed after MTP timeout", exc_info=True
+                )
             _lora_release()
             return GenerationOutput(
                 finished=True,
@@ -9295,10 +11042,15 @@ class BatchedEngine:
                 cached_tokens=0,
             )
         except MemoryError:
-            logger.warning("OOM during MTP generation — returning memory_limit finish reason")
+            logger.warning(
+                "OOM during MTP generation — returning memory_limit finish reason"
+            )
             try:
                 import mlx.core as _mx
-                await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
+
+                await loop.run_in_executor(
+                    executor, lambda: (_mx.synchronize(), _mx.clear_cache())
+                )
             except Exception:
                 logger.debug("GPU cache cleanup failed after MTP OOM", exc_info=True)
             _lora_release()
@@ -9316,9 +11068,15 @@ class BatchedEngine:
                 logger.warning(f"MLX OOM during MTP generation: {e}")
                 try:
                     import mlx.core as _mx
-                    await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
+
+                    await loop.run_in_executor(
+                        executor, lambda: (_mx.synchronize(), _mx.clear_cache())
+                    )
                 except Exception:
-                    logger.debug("GPU cache cleanup failed after MTP OOM (RuntimeError)", exc_info=True)
+                    logger.debug(
+                        "GPU cache cleanup failed after MTP OOM (RuntimeError)",
+                        exc_info=True,
+                    )
                 _lora_release()
                 return GenerationOutput(
                     finished=True,
@@ -9367,7 +11125,9 @@ class BatchedEngine:
         _mtp_think_budget_truncate_idx = None
         if (thinking_budget is not None or enable_thinking) and token_ids:
             # bracketed-form helper (bare "</think" tokenized to 2 → guard failed).
-            _mtp_think_start_token, _mtp_think_end_token = _resolve_think_token_ids(tokenizer)
+            _mtp_think_start_token, _mtp_think_end_token = _resolve_think_token_ids(
+                tokenizer
+            )
             if _mtp_think_end_token is not None:
                 for _i, _tid in enumerate(token_ids):
                     if not _mtp_in_thinking and _tid == _mtp_think_start_token:
@@ -9377,7 +11137,10 @@ class BatchedEngine:
                             _mtp_in_thinking = False
                         else:
                             _mtp_thinking_tokens_used += 1
-                            if thinking_budget is not None and _mtp_thinking_tokens_used >= thinking_budget:
+                            if (
+                                thinking_budget is not None
+                                and _mtp_thinking_tokens_used >= thinking_budget
+                            ):
                                 _mtp_think_budget_truncate_idx = _i
                                 break
 
@@ -9408,16 +11171,22 @@ class BatchedEngine:
             # Probe suffix match using the main detokenizer, but be
             # prepared to roll back if it triggers.
             detokenizer.add_token(tid)
-            if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+            if stop_suffixes and any(
+                detokenizer.text.endswith(s) for s in stop_suffixes
+            ):
                 # Roll back: remove the suffix-triggering token from the
                 # detokenizer so its state matches the truncated token_ids.
                 # NaiveStreamingDetokenizer supports .tokens attribute.
-                if hasattr(detokenizer, 'tokens') and detokenizer.tokens:
+                if hasattr(detokenizer, "tokens") and detokenizer.tokens:
                     detokenizer.tokens.pop()
                 # Re-initialize detokenizer state from remaining tokens
                 # to ensure .text is consistent (simply popping .tokens
                 # does not update the internal byte buffer).
-                _kept = list(detokenizer.tokens) if hasattr(detokenizer, 'tokens') else token_ids[:i]
+                _kept = (
+                    list(detokenizer.tokens)
+                    if hasattr(detokenizer, "tokens")
+                    else token_ids[:i]
+                )
                 detokenizer.reset()
                 for _t in _kept:
                     detokenizer.add_token(_t)
@@ -9440,13 +11209,18 @@ class BatchedEngine:
             from yunshu_gateway.middleware.prometheus_exporter import (
                 get_prometheus_metrics,
             )
+
             pm = get_prometheus_metrics()
             s = mtp_decoder.stats
             if s.total_cycles > 0:
                 _ml = {"model_id": self.model_label}
-                pm.set_gauge("mtp_acceptance_rate", s.accepts / s.total_cycles, labels=_ml)
+                pm.set_gauge(
+                    "mtp_acceptance_rate", s.accepts / s.total_cycles, labels=_ml
+                )
                 pm.set_counter("mtp_total_cycles", s.total_cycles, labels=_ml)
-            pm.observe_histogram("ttft_seconds", _mtp_ttft_s, labels={"model_id": self.model_label})
+            pm.observe_histogram(
+                "ttft_seconds", _mtp_ttft_s, labels={"model_id": self.model_label}
+            )
         except Exception:
             logger.debug("MTP metrics export failed", exc_info=True)
 
@@ -9463,6 +11237,7 @@ class BatchedEngine:
         if _mtp_reasoning_tok == 0 and output_text:
             try:
                 from .reasoning_parser import get_reasoning_parser
+
                 rp = get_reasoning_parser(self.model_name)
                 rp_out = rp.parse(output_text)
                 if rp_out.reasoning and rp_out.reasoning_tokens > 0:
@@ -9530,12 +11305,17 @@ class BatchedEngine:
         if json_schema is not None:
             try:
                 from mlx_lm.sample_utils import make_sampler as _make_s
+
                 _tmp_sampler = _make_s(temp=0.0)
                 _constrained_sampler = _build_constrained_sampler(
-                    _tmp_sampler, json_schema, self._tokenizer,
+                    _tmp_sampler,
+                    json_schema,
+                    self._tokenizer,
                 )
                 _mtp_grammar_constraint = getattr(
-                    _constrained_sampler, 'constraint', None,
+                    _constrained_sampler,
+                    "constraint",
+                    None,
                 )
             except Exception:
                 logger.warning(
@@ -9560,13 +11340,13 @@ class BatchedEngine:
 
         eos_ids: set[int] = set()
         stop_suffixes: list[str] = []
-        if hasattr(tokenizer, 'eos_token_id'):
+        if hasattr(tokenizer, "eos_token_id"):
             eid = tokenizer.eos_token_id
             if isinstance(eid, (list, tuple)):
                 eos_ids.update(eid)
             elif eid is not None:
                 eos_ids.add(eid)
-        _eids = getattr(tokenizer, 'eos_token_ids', None)
+        _eids = getattr(tokenizer, "eos_token_ids", None)
         if _eids is not None:  # may be a bare int (Qwen3.6-27B), not iterable
             eos_ids.update(_eids if isinstance(_eids, (list, tuple, set)) else (_eids,))
         if stop_token_ids:
@@ -9580,7 +11360,9 @@ class BatchedEngine:
                     elif len(ids) > 1:
                         stop_suffixes.append(s)
                 except Exception:
-                    logger.debug(f"failed to encode stop sequence: {s!r}", exc_info=True)
+                    logger.debug(
+                        f"failed to encode stop sequence: {s!r}", exc_info=True
+                    )
 
         if seed is not None:
             mx.random.seed(seed)
@@ -9588,28 +11370,37 @@ class BatchedEngine:
         # Build sampler for MTP streaming path — applied to bonus tokens,
         # rejection corrections, and first token (NOT draft/verify comparison).
         from mlx_lm.sample_utils import make_sampler
+
         # temp>0 → per-request sampler (no mlx-lm PRNG-trap collapse, seed
         # honored); temp==0 with filters → make_sampler (argmax, unchanged); fully
         # greedy-unconstrained → None.
         if temperature is not None and temperature > 1e-6:
             _mtp_sampler = _build_temp_sampler(
-                temperature=temperature, top_p=top_p,
-                top_k=top_k if top_k > 0 else 0, min_p=min_p, seed=seed,
-                xtc_probability=xtc_probability, xtc_threshold=xtc_threshold,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k if top_k > 0 else 0,
+                min_p=min_p,
+                seed=seed,
+                xtc_probability=xtc_probability,
+                xtc_threshold=xtc_threshold,
             )
         elif top_p < 1.0 or top_k > 0 or min_p > 0 or xtc_probability > 0:
             _mtp_sampler = make_sampler(
-                temp=temperature, top_p=top_p,
-                top_k=top_k if top_k > 0 else 0, min_p=min_p,
-                xtc_probability=xtc_probability, xtc_threshold=xtc_threshold,
+                temp=temperature,
+                top_p=top_p,
+                top_k=top_k if top_k > 0 else 0,
+                min_p=min_p,
+                xtc_probability=xtc_probability,
+                xtc_threshold=xtc_threshold,
             )
         else:
             _mtp_sampler = None
 
         # Inflight prefix sharing: register for concurrent KV block sharing
-        _inflight_req_id = f"mtp-s-{id(self)}-{int(time.monotonic()*1e6)}"
+        _inflight_req_id = f"mtp-s-{id(self)}-{int(time.monotonic() * 1e6)}"
         try:
             from .inflight_prefix_sharing import get_inflight_tracker
+
             get_inflight_tracker().register(
                 _inflight_req_id,
                 token_ids=input_ids,
@@ -9621,23 +11412,33 @@ class BatchedEngine:
         def _unregister_inflight():
             try:
                 from .inflight_prefix_sharing import get_inflight_tracker
+
                 get_inflight_tracker().unregister(_inflight_req_id)
             except Exception:
                 logger.debug("MTP inflight prefix unregister failed", exc_info=True)
 
         _lora_applied = False
-        if lora_adapter and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+        if (
+            lora_adapter
+            and hasattr(self, "_lora_manager")
+            and self._lora_manager is not None
+        ):
             try:
                 _lora_applied = self._lora_manager.acquire_adapter(lora_adapter)
             except Exception as _le:  # fail loud, don't serve base
-                raise RuntimeError(f"LoRA adapter '{lora_adapter}' could not be applied") from _le
+                raise RuntimeError(
+                    f"LoRA adapter '{lora_adapter}' could not be applied"
+                ) from _le
             if not _lora_applied:
-                raise RuntimeError(f"LoRA adapter '{lora_adapter}' could not be applied")
+                raise RuntimeError(
+                    f"LoRA adapter '{lora_adapter}' could not be applied"
+                )
 
         _sentinel = object()
         _q: asyncio.Queue = asyncio.Queue(maxsize=512)
         loop = asyncio.get_running_loop()
         from .streaming_optimizer import StreamingBackpressureController
+
         _mtp_timeout_cancel = threading.Event()
         _mtp_gen_t0 = time.perf_counter()
         _backpressure = StreamingBackpressureController(max_queue_size=100)
@@ -9665,7 +11466,10 @@ class BatchedEngine:
                     Exception("MTP streaming queue overflow — output truncated"),
                 )
             except Exception:
-                logger.debug("Failed to put error sentinel into MTP streaming queue", exc_info=True)
+                logger.debug(
+                    "Failed to put error sentinel into MTP streaming queue",
+                    exc_info=True,
+                )
 
         def _run():
             try:
@@ -9685,7 +11489,9 @@ class BatchedEngine:
                 _mtp_think_end_token = None
                 if thinking_budget is not None or enable_thinking:
                     # bracketed-form helper (bare "</think" tokenized to 2 → guard failed).
-                    _mtp_think_start_token, _mtp_think_end_token = _resolve_think_token_ids(tokenizer)
+                    _mtp_think_start_token, _mtp_think_end_token = (
+                        _resolve_think_token_ids(tokenizer)
+                    )
                 _mtp_in_thinking = False
                 _mtp_thinking_tokens_used = 0
 
@@ -9701,9 +11507,11 @@ class BatchedEngine:
                         if tid == _mtp_think_end_token:
                             _mtp_in_thinking = False
                             return False
-                        if (thinking_budget is not None
-                                and _mtp_thinking_tokens_used >= thinking_budget
-                                and _mtp_think_end_token is not None):
+                        if (
+                            thinking_budget is not None
+                            and _mtp_thinking_tokens_used >= thinking_budget
+                            and _mtp_think_end_token is not None
+                        ):
                             _mtp_in_thinking = False
                             # Force-insert </think token
                             generated.append(_mtp_think_end_token)
@@ -9751,7 +11559,9 @@ class BatchedEngine:
                 # _mtp_flush_held() instead to release genuine held text.
                 def _mtp_emit(tok):
                     _seg = _clean_special_tokens(detokenizer.last_segment)
-                    if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                    if stop_suffixes and any(
+                        detokenizer.text.endswith(s) for s in stop_suffixes
+                    ):
                         # include feed()'s pre-stop return (else content fused with
                         # the stop token is lost). Parity with the VLM/text paths (this MTP
                         # streaming path is currently unreachable, but fixed for correctness).
@@ -9772,7 +11582,9 @@ class BatchedEngine:
                     if _f:
                         _put((_f, len(generated) - 1, None, tok))
 
-                _early_stop = False  # Set True when while loop breaks due to stop/cancel
+                _early_stop = (
+                    False  # Set True when while loop breaks due to stop/cancel
+                )
 
                 while len(generated) < max_tokens:
                     # Check cancel_event
@@ -9797,21 +11609,26 @@ class BatchedEngine:
 
                     # MTP draft — always greedy, with optional grammar constraint masking
                     # Checkpoint grammar constraint before draft
-                    if _mtp_grammar_constraint is not None and hasattr(_mtp_grammar_constraint, 'checkpoint'):
+                    if _mtp_grammar_constraint is not None and hasattr(
+                        _mtp_grammar_constraint, "checkpoint"
+                    ):
                         try:
                             _mtp_grammar_constraint.checkpoint()
                         except Exception:
                             logger.debug("MTP grammar checkpoint failed", exc_info=True)
                     draft = mtp_decoder._mtp_draft(
-                        primary_h, primary,
+                        primary_h,
+                        primary,
                         constraint=_mtp_grammar_constraint,
                         generated_ids=generated,
                     )
 
                     # Verify: backbone forward [primary, draft] with n_confirmed=1
                     verify_out, verify_h = model(
-                        mx.array([[primary, draft]]), cache=cache,
-                        return_hidden=True, n_confirmed=1,
+                        mx.array([[primary, draft]]),
+                        cache=cache,
+                        return_hidden=True,
+                        n_confirmed=1,
                     )
                     mx.synchronize()
                     # v0 MUST be greedy for spec decode acceptance check
@@ -9829,7 +11646,9 @@ class BatchedEngine:
                     if _has_mtp_pen:
                         _mtp_token_hist = list(input_ids) + generated
                         _mtp_bonus_logits = _apply_spec_bonus_penalties(
-                            _mtp_bonus_logits, _mtp_token_hist, len(input_ids),
+                            _mtp_bonus_logits,
+                            _mtp_token_hist,
+                            len(input_ids),
                             repetition_penalty=repetition_penalty,
                             frequency_penalty=frequency_penalty,
                             presence_penalty=presence_penalty,
@@ -9848,10 +11667,15 @@ class BatchedEngine:
                         # Discard grammar constraint checkpoint (all accepted)
                         if _mtp_grammar_constraint is not None:
                             try:
-                                if hasattr(_mtp_grammar_constraint, 'discard_checkpoint'):
+                                if hasattr(
+                                    _mtp_grammar_constraint, "discard_checkpoint"
+                                ):
                                     _mtp_grammar_constraint.discard_checkpoint()
                             except Exception:
-                                logger.debug("MTP grammar discard_checkpoint failed", exc_info=True)
+                                logger.debug(
+                                    "MTP grammar discard_checkpoint failed",
+                                    exc_info=True,
+                                )
                         generated.append(draft)
                         if draft in eos_ids:
                             # Stop token — flush held text, exclude EOS from count
@@ -9871,9 +11695,14 @@ class BatchedEngine:
                         # Advance grammar constraint with accepted draft token
                         if _mtp_grammar_constraint is not None and draft not in eos_ids:
                             try:
-                                _mtp_grammar_constraint.advance(tokenizer.decode([draft]))
+                                _mtp_grammar_constraint.advance(
+                                    tokenizer.decode([draft])
+                                )
                             except Exception:
-                                logger.debug("MTP grammar advance (draft accepted) failed", exc_info=True)
+                                logger.debug(
+                                    "MTP grammar advance (draft accepted) failed",
+                                    exc_info=True,
+                                )
 
                         # Bonus token
                         generated.append(v1)
@@ -9896,25 +11725,33 @@ class BatchedEngine:
                             try:
                                 _mtp_grammar_constraint.advance(tokenizer.decode([v1]))
                             except Exception:
-                                logger.debug("MTP grammar advance (bonus) failed", exc_info=True)
+                                logger.debug(
+                                    "MTP grammar advance (bonus) failed", exc_info=True
+                                )
                         primary = v1
                         primary_h = verify_h[:, -1:, :]
                     else:
                         # Reject: restore rollback (zero-cost)
                         restore_rollback(cache)
                         # Rollback grammar constraint to pre-draft state
-                        if _mtp_grammar_constraint is not None and hasattr(_mtp_grammar_constraint, 'rollback'):
+                        if _mtp_grammar_constraint is not None and hasattr(
+                            _mtp_grammar_constraint, "rollback"
+                        ):
                             try:
                                 _mtp_grammar_constraint.rollback()
                             except Exception:
-                                logger.debug("MTP grammar rollback failed", exc_info=True)
+                                logger.debug(
+                                    "MTP grammar rollback failed", exc_info=True
+                                )
                         # MTP-PEN: Apply penalty/bias to rejection correction logits (v0).
                         # The correction token is the first new token after the rejection.
                         if _has_mtp_pen:
                             _mtp_corr_logits = verify_out[0, 0, :]
                             _mtp_token_hist_corr = list(input_ids) + generated
                             _mtp_corr_logits = _apply_spec_bonus_penalties(
-                                _mtp_corr_logits, _mtp_token_hist_corr, len(input_ids),
+                                _mtp_corr_logits,
+                                _mtp_token_hist_corr,
+                                len(input_ids),
                                 repetition_penalty=repetition_penalty,
                                 frequency_penalty=frequency_penalty,
                                 presence_penalty=presence_penalty,
@@ -9944,14 +11781,18 @@ class BatchedEngine:
                             try:
                                 _mtp_grammar_constraint.advance(tokenizer.decode([v0]))
                             except Exception:
-                                logger.debug("MTP grammar advance (correction) failed", exc_info=True)
+                                logger.debug(
+                                    "MTP grammar advance (correction) failed",
+                                    exc_info=True,
+                                )
                         primary = v0
                         # Re-feed correction token through rolled-back cache to
                         # get a hidden state consistent with the new primary token.
                         # Using verify_h[:, 0:1, :] here is WRONG because verify_h
                         # was computed before rollback — the cache state has changed.
                         _out_corr, _hid_corr = model(
-                            mx.array([[v0]]), cache=cache,
+                            mx.array([[v0]]),
+                            cache=cache,
                             return_hidden=True,
                         )
                         mx.synchronize()
@@ -9977,12 +11818,18 @@ class BatchedEngine:
                     if _final_segment:
                         _put((_final_segment, len(generated), None, None))
                 except Exception:
-                    logger.debug("detokenizer finalize in MTP error handler failed", exc_info=True)
+                    logger.debug(
+                        "detokenizer finalize in MTP error handler failed",
+                        exc_info=True,
+                    )
                 try:
                     mx.synchronize()
                     mx.clear_cache()
                 except Exception:
-                    logger.debug("GPU cache cleanup failed in MTP streaming error handler", exc_info=True)
+                    logger.debug(
+                        "GPU cache cleanup failed in MTP streaming error handler",
+                        exc_info=True,
+                    )
                 _put(e)
             finally:
                 _put(_sentinel)
@@ -10002,8 +11849,10 @@ class BatchedEngine:
         _mtp_consumer_thinking_tokens = 0
         if thinking_budget is not None or enable_thinking:
             # bracketed-form helper (bare "</think" tokenized to 2 → guard failed).
-            _mtp_consumer_think_start, _mtp_consumer_think_end = _resolve_think_token_ids(tokenizer)
-        _mtp_fp_lock = getattr(self, '_fast_path_lock', None)
+            _mtp_consumer_think_start, _mtp_consumer_think_end = (
+                _resolve_think_token_ids(tokenizer)
+            )
+        _mtp_fp_lock = getattr(self, "_fast_path_lock", None)
         if _mtp_fp_lock is not None:
             with _mtp_fp_lock:
                 self._active_fast_path_count += 1
@@ -10027,7 +11876,9 @@ class BatchedEngine:
                 try:
                     item = await asyncio.wait_for(_q.get(), timeout=timeout_seconds)
                 except TimeoutError:
-                    logger.warning(f"MTP streaming timeout: no token for {timeout_seconds}s")
+                    logger.warning(
+                        f"MTP streaming timeout: no token for {timeout_seconds}s"
+                    )
                     _mtp_timeout_cancel.set()  # Signal GPU loop to stop
                     # Yield terminal output so consumer sees finished=True
                     yield GenerationOutput(
@@ -10084,14 +11935,19 @@ class BatchedEngine:
                         finish_reason="length",
                         error="Streaming text buffer exceeded 1MB limit",
                         cached_tokens=0,
-                        reasoning_tokens=_mtp_consumer_thinking_tokens if _mtp_consumer_think_start is not None else 0,
+                        reasoning_tokens=_mtp_consumer_thinking_tokens
+                        if _mtp_consumer_think_start is not None
+                        else 0,
                         ttft_ms=_mtp_ttft_ms_val,
                     )
                     break
                 n_tok = tok_count
                 # Consumer-side thinking state tracking for reasoning_tokens reporting
                 if _mtp_consumer_think_start is not None and isinstance(token_id, int):
-                    if not _mtp_consumer_in_thinking and token_id == _mtp_consumer_think_start:
+                    if (
+                        not _mtp_consumer_in_thinking
+                        and token_id == _mtp_consumer_think_start
+                    ):
                         _mtp_consumer_in_thinking = True
                     elif _mtp_consumer_in_thinking:
                         _mtp_consumer_thinking_tokens += 1
@@ -10113,10 +11969,18 @@ class BatchedEngine:
                         from yunshu_gateway.middleware.prometheus_exporter import (
                             get_prometheus_metrics,
                         )
+
                         pm = get_prometheus_metrics()
-                        pm.observe_histogram("ttft_seconds", _mtp_ttft_s, labels={"model_id": self.model_label})
+                        pm.observe_histogram(
+                            "ttft_seconds",
+                            _mtp_ttft_s,
+                            labels={"model_id": self.model_label},
+                        )
                     except Exception:
-                        logger.debug("MTP streaming TTFT prometheus recording failed", exc_info=True)
+                        logger.debug(
+                            "MTP streaming TTFT prometheus recording failed",
+                            exc_info=True,
+                        )
 
                 # Build logprobs for this token — MTP uses greedy decoding
                 # internally and does not expose per-token logits in the
@@ -10140,7 +12004,9 @@ class BatchedEngine:
                     completion_tokens=n_tok,
                     finished=done,
                     finish_reason=finish_reason,
-                    reasoning_tokens=_mtp_consumer_thinking_tokens if _mtp_consumer_think_start is not None else 0,
+                    reasoning_tokens=_mtp_consumer_thinking_tokens
+                    if _mtp_consumer_think_start is not None
+                    else 0,
                     cached_tokens=0,
                     logprobs=_chunk_logprobs,
                     ttft_ms=_mtp_ttft_ms_val,
@@ -10149,13 +12015,19 @@ class BatchedEngine:
                     break
         finally:
             _unregister_inflight()
-            if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+            if (
+                _lora_applied
+                and hasattr(self, "_lora_manager")
+                and self._lora_manager is not None
+            ):
                 try:
                     self._lora_manager.release_adapter(lora_adapter)
                 except Exception:
-                    logger.warning("LoRA release failed in MTP streaming finally", exc_info=True)
+                    logger.warning(
+                        "LoRA release failed in MTP streaming finally", exc_info=True
+                    )
             # Decrement active fast path count (prevents model eviction mid-generation)
-            _mtp_fp_lock = getattr(self, '_fast_path_lock', None)
+            _mtp_fp_lock = getattr(self, "_fast_path_lock", None)
             if _mtp_fp_lock is not None:
                 with _mtp_fp_lock:
                     self._active_fast_path_count -= 1
@@ -10183,6 +12055,7 @@ class BatchedEngine:
           iterate argument keys.
         """
         import json as _json
+
         normalized = []
         for m in messages:
             if m.get("role") != "assistant":
@@ -10190,11 +12063,18 @@ class BatchedEngine:
                 continue
             m = dict(m)
             content = m.get("content")
-            if isinstance(content, str) and "<tool_call>" in content and "<think>" in content:
+            if (
+                isinstance(content, str)
+                and "<tool_call>" in content
+                and "<think>" in content
+            ):
                 last_think = content.rfind("<think>")
                 last_close = content.rfind("</think>")
                 tool_pos = content.find("<tool_call>")
-                if not (last_close >= last_think and last_close != -1) and tool_pos > last_think:
+                if (
+                    not (last_close >= last_think and last_close != -1)
+                    and tool_pos > last_think
+                ):
                     m["content"] = content[:tool_pos] + "</think>" + content[tool_pos:]
             tool_calls = m.get("tool_calls")
             if isinstance(tool_calls, list):
@@ -10213,7 +12093,11 @@ class BatchedEngine:
                                 parsed = {"value": args}
                             tc = dict(tc)
                             tc["function"] = dict(func)
-                            tc["function"]["arguments"] = parsed if isinstance(parsed, dict) else {"value": parsed}
+                            tc["function"]["arguments"] = (
+                                parsed
+                                if isinstance(parsed, dict)
+                                else {"value": parsed}
+                            )
                     patched.append(tc)
                 m["tool_calls"] = patched
             normalized.append(m)
@@ -10245,7 +12129,9 @@ class BatchedEngine:
         enable_thinking: bool | None = None,
     ) -> str:
         """Apply chat template to convert messages to text."""
-        thinking = enable_thinking if enable_thinking is not None else self.enable_thinking
+        thinking = (
+            enable_thinking if enable_thinking is not None else self.enable_thinking
+        )
         tokenizer = self._tokenizer
 
         # normalize OpenAI's `developer` role → `system` and the
@@ -10268,6 +12154,7 @@ class BatchedEngine:
         # Apply model-specific message adapter
         try:
             from yunshu_engine.message_adapter import adapt_messages
+
             messages = adapt_messages(messages, self.model_name)
         except Exception:
             logger.debug("message adapter failed", exc_info=True)
@@ -10290,7 +12177,10 @@ class BatchedEngine:
                     # fallback. The Gemma adapter and VLMEngine._format_prompt already coerce
                     # None→"" via _extract_text; this is the un-swept BatchedEngine text sibling.
                     _content = m.get("content")
-                    msg = {"role": m.get("role", "user"), "content": "" if _content is None else _content}
+                    msg = {
+                        "role": m.get("role", "user"),
+                        "content": "" if _content is None else _content,
+                    }
                     # Preserve tool-related fields for correct template rendering
                     if m.get("tool_calls"):
                         msg["tool_calls"] = m["tool_calls"]
@@ -10325,8 +12215,10 @@ class BatchedEngine:
                 # as a completed turn → normal add_generation_prompt.
                 _last = clean[-1] if clean else None
                 _is_prefill = (
-                    _last is not None and _last.get("role") == "assistant"
-                    and isinstance(_last.get("content"), str) and _last["content"] != ""
+                    _last is not None
+                    and _last.get("role") == "assistant"
+                    and isinstance(_last.get("content"), str)
+                    and _last["content"] != ""
                 )
                 kwargs = {"tokenize": False}
                 if _is_prefill:
@@ -10339,25 +12231,29 @@ class BatchedEngine:
                     text = tokenizer.apply_chat_template(clean, **kwargs)
                 except (TypeError, ValueError) as e:
                     _es = str(e)
-                    if 'continue_final_message' in _es:
+                    if "continue_final_message" in _es:
                         # TypeError = tokenizer too old for the kwarg; ValueError
                         # = template rejects continue_final_message (e.g. "no content to
                         # continue"). Either way, retry without it — don't open a NEW turn
                         # after the prefix, and never collapse to the plaintext fallback.
-                        logger.warning(f"Model {self.model_name} rejected continue_final_message ({_es[:80]}); retrying without")
-                        kwargs.pop('continue_final_message', None)
-                        kwargs['add_generation_prompt'] = False
+                        logger.warning(
+                            f"Model {self.model_name} rejected continue_final_message ({_es[:80]}); retrying without"
+                        )
+                        kwargs.pop("continue_final_message", None)
+                        kwargs["add_generation_prompt"] = False
                         try:
                             text = tokenizer.apply_chat_template(clean, **kwargs)
                         except (TypeError, ValueError) as e2:
-                            if 'enable_thinking' in str(e2):
-                                kwargs.pop('enable_thinking', None)
+                            if "enable_thinking" in str(e2):
+                                kwargs.pop("enable_thinking", None)
                                 text = tokenizer.apply_chat_template(clean, **kwargs)
                             else:
                                 raise
-                    elif 'enable_thinking' in _es:
-                        logger.warning(f"Model {self.model_name} doesn't support enable_thinking, retrying without")
-                        kwargs.pop('enable_thinking', None)
+                    elif "enable_thinking" in _es:
+                        logger.warning(
+                            f"Model {self.model_name} doesn't support enable_thinking, retrying without"
+                        )
+                        kwargs.pop("enable_thinking", None)
                         text = tokenizer.apply_chat_template(clean, **kwargs)
                     else:
                         raise
@@ -10371,14 +12267,16 @@ class BatchedEngine:
         for m in messages:
             # same None→"" coercion as the template clean step, so the plaintext
             # fallback doesn't print a literal "None" for a content=null assistant turn.
-            _fc = m.get('content')
-            parts.append(f"{m.get('role', 'user').capitalize()}: {'' if _fc is None else _fc}")
+            _fc = m.get("content")
+            parts.append(
+                f"{m.get('role', 'user').capitalize()}: {'' if _fc is None else _fc}"
+            )
         parts.append("Assistant:")
         return "\n".join(parts)
 
     def has_active_requests(self) -> bool:
         """Check if engine has in-flight requests (including fast-path)."""
-        if getattr(self, '_active_fast_path_count', 0) > 0:
+        if getattr(self, "_active_fast_path_count", 0) > 0:
             return True
         if self._engine_core:
             return bool(self._engine_core.has_active_requests)
@@ -10388,7 +12286,11 @@ class BatchedEngine:
         """Check if a model ID matches this engine."""
         if not self.model_name:
             return False
-        display = self.model_name.rsplit("/", 1)[-1] if "/" in self.model_name else self.model_name
+        display = (
+            self.model_name.rsplit("/", 1)[-1]
+            if "/" in self.model_name
+            else self.model_name
+        )
         known = {display, self.model_name}
         known_lower = {k.lower() for k in known if k}
         if model_id in known or model_id.lower() in known_lower:
@@ -10410,10 +12312,10 @@ class BatchedEngine:
             stats["thinking_segment_store"] = self._thinking_store.get_stats()
         if self._adaptive_spec is not None:
             stats["adaptive_spec"] = self._adaptive_spec.get_stats()
-        if getattr(self, '_spec_decoder', None) is not None:
+        if getattr(self, "_spec_decoder", None) is not None:
             stats["spec_decode"] = {
                 **self._spec_decoder._stats,
-                "enabled": getattr(self, '_spec_enabled', False),
+                "enabled": getattr(self, "_spec_enabled", False),
             }
         if self._ngram_proposer is not None:
             stats["ngram"] = {**self._ngram_stats, **self._ngram_proposer.get_stats()}
@@ -10432,54 +12334,71 @@ class BatchedEngine:
         # ANE embedding co-processor status (when enabled via YUNSHU_ANE_EMBEDDINGS=1)
         try:
             from .ane_embedding import get_ane_embedding_stats
+
             stats["ane_embeddings"] = get_ane_embedding_stats()
         except Exception:
             logger.debug("ane embedding stats failed", exc_info=True)
             stats["ane_embeddings"] = {"enabled": False, "active": False}
         # DeltaNet inversion status (when enabled via YUNSHU_DELTANET_INVERSION=1)
         stats["deltanet_inversion"] = {
-            "enabled": getattr(self, '_deltanet_inversion_enabled', False),
-            "hooks_registered": getattr(self, '_deltanet_inverter', None) is not None,
-            **getattr(self, '_deltanet_inversion_stats', {
-                "evictions_captured": 0,
-                "inversions_attempted": 0,
-                "inversions_succeeded": 0,
-                "states_stored": 0,
-            }),
+            "enabled": getattr(self, "_deltanet_inversion_enabled", False),
+            "hooks_registered": getattr(self, "_deltanet_inverter", None) is not None,
+            **getattr(
+                self,
+                "_deltanet_inversion_stats",
+                {
+                    "evictions_captured": 0,
+                    "inversions_attempted": 0,
+                    "inversions_succeeded": 0,
+                    "states_stored": 0,
+                },
+            ),
         }
         # Model preprocessor registry stats
-        if hasattr(self, '_preprocessor_registry') and self._preprocessor_registry is not None:
+        if (
+            hasattr(self, "_preprocessor_registry")
+            and self._preprocessor_registry is not None
+        ):
             stats["model_preprocessor"] = self._preprocessor_registry.get_stats()
-        stats["reasoning_tokens"] = getattr(self, '_total_reasoning_tokens', 0)
+        stats["reasoning_tokens"] = getattr(self, "_total_reasoning_tokens", 0)
         stats["response_cache"] = {
-            "hits": getattr(self, '_response_cache_hits', 0),
-            "misses": getattr(self, '_response_cache_misses', 0),
+            "hits": getattr(self, "_response_cache_hits", 0),
+            "misses": getattr(self, "_response_cache_misses", 0),
         }
         # KV Transfer stats (distributed prefill/decode wire protocol)
         stats["kv_transfer"] = {
-            "enabled": getattr(self, '_kv_transfer_client', None) is not None,
-            **getattr(self, '_kv_transfer_stats', {
-                "blocks_transferred": 0,
-                "bytes_transferred": 0,
-                "transfer_failures": 0,
-            }),
+            "enabled": getattr(self, "_kv_transfer_client", None) is not None,
+            **getattr(
+                self,
+                "_kv_transfer_stats",
+                {
+                    "blocks_transferred": 0,
+                    "bytes_transferred": 0,
+                    "transfer_failures": 0,
+                },
+            ),
         }
         # Prompt cache stats (exact-match KV state reuse)
-        if hasattr(self, '_prompt_cache') and self._prompt_cache is not None:
+        if hasattr(self, "_prompt_cache") and self._prompt_cache is not None:
             stats["prompt_cache"] = self._prompt_cache.get_stats()
         # Warm prompt preloading stats (prefill popular prefixes at startup)
-        stats["warm_prompt_prefill"] = getattr(self, '_warm_prompt_stats', {
-            "prompts_loaded": 0,
-            "prompts_prefilled": 0,
-            "prompts_skipped_cached": 0,
-            "prompts_failed": 0,
-            "total_tokens_prefilled": 0,
-            "prefill_time_s": 0.0,
-            "source": "none",
-        })
+        stats["warm_prompt_prefill"] = getattr(
+            self,
+            "_warm_prompt_stats",
+            {
+                "prompts_loaded": 0,
+                "prompts_prefilled": 0,
+                "prompts_skipped_cached": 0,
+                "prompts_failed": 0,
+                "total_tokens_prefilled": 0,
+                "prefill_time_s": 0.0,
+                "source": "none",
+            },
+        )
         # Inflight prefix sharing stats
         try:
             from .inflight_prefix_sharing import get_inflight_tracker
+
             stats["inflight_prefix_sharing"] = get_inflight_tracker().get_stats()
         except Exception:
             logger.debug("inflight prefix stats unavailable", exc_info=True)
@@ -10493,11 +12412,13 @@ class BatchedEngine:
         SAME logic. LM models are never mRoPE. Not memoized (cheap; called rarely
         for introspection). See docs/VLM_TEXT_KV_PREFIX.md."""
         from .model_backend import BackendKind, derive_capabilities
+
         if model is None:
             model = getattr(self, "model", None) or getattr(self, "_model", None)
         layers = []
         try:
             from mlx_lm.models.cache import make_prompt_cache
+
             layers = make_prompt_cache(model) if model is not None else []
         except Exception:
             logger.debug("LM cache probe failed; assuming non-reusable", exc_info=True)
@@ -10513,11 +12434,15 @@ class BatchedEngine:
         and memoize the verdict per model object.
         """
         cached = getattr(self, "_cache_trimmable_flag", None)
-        if cached is not None and getattr(self, "_cache_trimmable_model", None) is model:
+        if (
+            cached is not None
+            and getattr(self, "_cache_trimmable_model", None) is model
+        ):
             return cached
         ok = True
         try:
             from mlx_lm.models.cache import make_prompt_cache
+
             probe = make_prompt_cache(model)
             # Sliding-window (RotatingKVCache) layers report is_trimmable()=True ONLY
             # while empty (offset < max_size); once a prompt exceeds the window the
@@ -10528,6 +12453,7 @@ class BatchedEngine:
             _rotating = False
             try:
                 from mlx_lm.models.cache import RotatingKVCache
+
                 _rotating = any(isinstance(c, RotatingKVCache) for c in probe)
             except Exception:
                 _rotating = False
@@ -10536,6 +12462,7 @@ class BatchedEngine:
             else:
                 try:
                     from mlx_lm.models.cache import can_trim_prompt_cache
+
                     ok = bool(can_trim_prompt_cache(probe))
                 except Exception:
                     # Fall back to per-layer is_trimmable() inspection.
@@ -10548,16 +12475,20 @@ class BatchedEngine:
                                 return False
                         # Standard attention caches expose keys/values and slice fine.
                         return hasattr(c, "keys") and hasattr(c, "values")
+
                     ok = all(_trimmable(c) for c in probe)
         except Exception:
-            logger.debug("cache trimmability probe failed; assuming trimmable", exc_info=True)
+            logger.debug(
+                "cache trimmability probe failed; assuming trimmable", exc_info=True
+            )
             ok = True
         self._cache_trimmable_flag = ok
         self._cache_trimmable_model = model
         if not ok:
             logger.info(
                 "KV prefix/prompt caching disabled for %s: cache is not trimmable "
-                "(hybrid/recurrent model)", self.model_name,
+                "(hybrid/recurrent model)",
+                self.model_name,
             )
         return ok
 
@@ -10589,10 +12520,14 @@ class BatchedEngine:
             return {"enabled": False}
         # Attr is `scheduler`, not `_scheduler` — the old typo made this always
         # return {"enabled": False}, masking real RadixTree state .
-        scheduler = getattr(self._engine_core, "scheduler", None) or getattr(self._engine_core, "_scheduler", None)
+        scheduler = getattr(self._engine_core, "scheduler", None) or getattr(
+            self._engine_core, "_scheduler", None
+        )
         if scheduler is None:
             return {"enabled": False}
-        kv_mgr = getattr(scheduler, "_kv_manager", None) or getattr(scheduler, "kv_manager", None)
+        kv_mgr = getattr(scheduler, "_kv_manager", None) or getattr(
+            scheduler, "kv_manager", None
+        )
         if kv_mgr is None:
             return {"enabled": False}
         # In tiered mode (YUNSHU_SSD_CACHE_DIR), kv_mgr is a TieredKVCacheManager
@@ -10626,7 +12561,11 @@ class BatchedEngine:
             return default
 
         # Try several naming conventions (HF + mlx-lm ModelArgs variants).
-        num_layers = _first(config, ("num_hidden_layers", "n_layers", "num_layers")) if config else 0
+        num_layers = (
+            _first(config, ("num_hidden_layers", "n_layers", "num_layers"))
+            if config
+            else 0
+        )
         # Robust fallback: count the actual decoder layers on the model.
         if not num_layers:
             layers = getattr(model, "layers", None)
@@ -10637,13 +12576,23 @@ class BatchedEngine:
             except TypeError:
                 num_layers = 0
 
-        num_kv_heads = _first(config, ("num_key_value_heads", "n_kv_heads", "num_kv_heads")) if config else 0
-        num_attn_heads = _first(config, ("num_attention_heads", "n_heads", "num_heads")) if config else 0
+        num_kv_heads = (
+            _first(config, ("num_key_value_heads", "n_kv_heads", "num_kv_heads"))
+            if config
+            else 0
+        )
+        num_attn_heads = (
+            _first(config, ("num_attention_heads", "n_heads", "num_heads"))
+            if config
+            else 0
+        )
         if not num_kv_heads:
             num_kv_heads = num_attn_heads  # MHA models: kv heads == attn heads
         head_dim = _first(config, ("head_dim", "kv_head_dim")) if config else 0
         if not head_dim:
-            hidden = _first(config, ("hidden_size", "dim", "model_dim")) if config else 0
+            hidden = (
+                _first(config, ("hidden_size", "dim", "model_dim")) if config else 0
+            )
             if hidden and num_attn_heads:
                 head_dim = hidden // num_attn_heads
 
@@ -10683,29 +12632,40 @@ class BatchedEngine:
                     return None
                 from .memory_guard import MemoryGuard
                 from .memory_monitor import MemoryMonitor
+
                 kv_budget = 0
                 try:
                     from .utils.hardware import get_hardware_info
+
                     kv_budget = int(get_hardware_info().max_working_set_bytes * 0.6)
                 except Exception:
                     logger.debug("fast-path guard: hw info failed", exc_info=True)
                 monitor = MemoryMonitor(max_kv_cache_memory=kv_budget)
-                _cfg = getattr(self._model, "config", None) or getattr(self._model, "args", None)
+                _cfg = getattr(self._model, "config", None) or getattr(
+                    self._model, "args", None
+                )
                 monitor.set_model_info(
-                    num_layers=arch["num_layers"], num_kv_heads=arch["num_kv_heads"],
+                    num_layers=arch["num_layers"],
+                    num_kv_heads=arch["num_kv_heads"],
                     head_dim=arch["head_dim"],
-                    num_attention_heads=getattr(_cfg, "num_attention_heads", None) if _cfg else None,
+                    num_attention_heads=getattr(_cfg, "num_attention_heads", None)
+                    if _cfg
+                    else None,
                 )
                 monitor.set_baseline_memory()
                 guard = MemoryGuard(memory_monitor=monitor)
             except Exception:
-                logger.debug("fast-path memory guard construction failed", exc_info=True)
+                logger.debug(
+                    "fast-path memory guard construction failed", exc_info=True
+                )
                 guard = None
         self._fastpath_memory_guard = guard
         return guard
 
     def _check_memory_guard(
-        self, prompt: str | list, max_tokens: int,
+        self,
+        prompt: str | list,
+        max_tokens: int,
     ) -> GenerationOutput | None:
         """Run memory guard preflight check. Returns None if OK.
 
@@ -10732,7 +12692,9 @@ class BatchedEngine:
                         _chars += len(_c)
                     elif isinstance(_c, list):
                         for _part in _c:
-                            if isinstance(_part, dict) and isinstance(_part.get("text"), str):
+                            if isinstance(_part, dict) and isinstance(
+                                _part.get("text"), str
+                            ):
                                 _chars += len(_part["text"])
                 else:
                     _chars += len(str(_m))
@@ -10768,7 +12730,8 @@ def _clean_special_tokens(text: str) -> str:
     if not text:
         return ""
     import re
-    text = re.sub(r'<\|im_end\|>', '', text)
-    text = re.sub(r'<\|endoftext\|>', '', text)
-    text = re.sub(r'<\|end\|>', '', text)
+
+    text = re.sub(r"<\|im_end\|>", "", text)
+    text = re.sub(r"<\|endoftext\|>", "", text)
+    text = re.sub(r"<\|end\|>", "", text)
     return text

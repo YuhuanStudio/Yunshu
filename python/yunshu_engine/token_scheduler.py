@@ -213,7 +213,9 @@ class TokenLevelScheduler:
         self._stats["budget_utilization"].append(utilization)
         # Keep only last 1000 utilization samples
         if len(self._stats["budget_utilization"]) > 1000:
-            self._stats["budget_utilization"] = self._stats["budget_utilization"][-1000:]
+            self._stats["budget_utilization"] = self._stats["budget_utilization"][
+                -1000:
+            ]
 
         weights = [a.weight for a in allocations if a.weight > 0]
         if weights:
@@ -260,7 +262,9 @@ class TokenLevelScheduler:
         if self.prefill_strategy == PrefillStrategy.EQUAL:
             per_request = prefill_budget // len(requests)
             for req in requests:
-                tokens = max(self.min_prefill_tokens, min(per_request, self.max_prefill_tokens))
+                tokens = max(
+                    self.min_prefill_tokens, min(per_request, self.max_prefill_tokens)
+                )
                 allocations.append(
                     TokenBudgetAllocation(
                         request_id=req.request_id,
@@ -273,7 +277,9 @@ class TokenLevelScheduler:
 
         elif self.prefill_strategy == PrefillStrategy.PRIORITY_FIRST:
             # Sort by priority descending
-            sorted_reqs = sorted(requests, key=lambda r: r.effective_priority, reverse=True)
+            sorted_reqs = sorted(
+                requests, key=lambda r: r.effective_priority, reverse=True
+            )
             weights = []
             for req in sorted_reqs:
                 w = self._compute_weight(req)
@@ -326,24 +332,31 @@ class TokenLevelScheduler:
             total_alloc = sum(a.prefill_tokens for a in allocations)
             if total_alloc > prefill_budget:
                 overage = total_alloc - prefill_budget
-                above_min = [(i, a) for i, a in enumerate(allocations)
-                             if a.prefill_tokens > self.min_prefill_tokens]
+                above_min = [
+                    (i, a)
+                    for i, a in enumerate(allocations)
+                    if a.prefill_tokens > self.min_prefill_tokens
+                ]
                 if above_min:
-                    reducible = sum(a.prefill_tokens - self.min_prefill_tokens
-                                    for _, a in above_min)
+                    reducible = sum(
+                        a.prefill_tokens - self.min_prefill_tokens for _, a in above_min
+                    )
                     if reducible > 0:
                         to_reduce = min(overage, reducible)
                         total_reduced = 0
                         for idx, (_i, alloc) in enumerate(above_min):
-                            frac = (alloc.prefill_tokens - self.min_prefill_tokens) / reducible
+                            frac = (
+                                alloc.prefill_tokens - self.min_prefill_tokens
+                            ) / reducible
                             if idx == len(above_min) - 1:
                                 # Last allocation gets the remainder to avoid truncation leak
                                 share = to_reduce - total_reduced
                             else:
                                 share = int(to_reduce * frac)
                                 total_reduced += share
-                            alloc.prefill_tokens = max(self.min_prefill_tokens,
-                                                       alloc.prefill_tokens - share)
+                            alloc.prefill_tokens = max(
+                                self.min_prefill_tokens, alloc.prefill_tokens - share
+                            )
 
         return allocations
 
@@ -371,7 +384,9 @@ class TokenLevelScheduler:
             per_request = max(1, decode_budget // max(len(requests), 1))
             remaining_budget = decode_budget
             for req in requests:
-                tokens = min(per_request, remaining_budget) if remaining_budget > 0 else 0
+                tokens = (
+                    min(per_request, remaining_budget) if remaining_budget > 0 else 0
+                )
                 allocations.append(
                     TokenBudgetAllocation(
                         request_id=req.request_id,
@@ -604,7 +619,12 @@ class PriorityInversionGuard:
         now = time.monotonic()
 
         # Find highest-priority waiting request
-        highest_waiting = max(waiting_requests, key=lambda r: r.effective_priority if hasattr(r, 'effective_priority') else r.priority)
+        highest_waiting = max(
+            waiting_requests,
+            key=lambda r: (
+                r.effective_priority if hasattr(r, "effective_priority") else r.priority
+            ),
+        )
 
         # Find running requests with lower priority
         for running in running_requests:
@@ -612,15 +632,28 @@ class PriorityInversionGuard:
             if running.request_id in self._active_boosts:
                 continue
 
-            priority_gap = (highest_waiting.effective_priority if hasattr(highest_waiting, 'effective_priority') else highest_waiting.priority) - (running.effective_priority if hasattr(running, 'effective_priority') else running.priority)
+            priority_gap = (
+                highest_waiting.effective_priority
+                if hasattr(highest_waiting, "effective_priority")
+                else highest_waiting.priority
+            ) - (
+                running.effective_priority
+                if hasattr(running, "effective_priority")
+                else running.priority
+            )
             if priority_gap < self.min_priority_gap:
                 continue
 
             # Check running time threshold — use output_length * typical_tps
             # to estimate decode time (output_length is token count,
             # running_time_threshold is seconds)
-            estimated_decode_time = running.output_length * 0.02 if running.output_length > 0 else 0.0
-            if estimated_decode_time < self.running_time_threshold and running.wait_time < self.running_time_threshold:
+            estimated_decode_time = (
+                running.output_length * 0.02 if running.output_length > 0 else 0.0
+            )
+            if (
+                estimated_decode_time < self.running_time_threshold
+                and running.wait_time < self.running_time_threshold
+            ):
                 continue
 
             # Inversion detected
@@ -655,12 +688,20 @@ class PriorityInversionGuard:
         Returns:
             The amount of priority boost applied.
         """
-        boost_amount = (high_req.effective_priority if hasattr(high_req, 'effective_priority') else high_req.priority) - low_req.effective_priority
+        boost_amount = (
+            high_req.effective_priority
+            if hasattr(high_req, "effective_priority")
+            else high_req.priority
+        ) - low_req.effective_priority
         if boost_amount <= 0:
             return 0
 
         original_priority = low_req.priority
-        boosted_priority = high_req.effective_priority if hasattr(high_req, 'effective_priority') else high_req.priority
+        boosted_priority = (
+            high_req.effective_priority
+            if hasattr(high_req, "effective_priority")
+            else high_req.priority
+        )
         now = time.monotonic()
 
         low_req.effective_priority = boosted_priority
@@ -756,7 +797,7 @@ class PriorityInversionGuard:
 
             self._events.append(event)
             if len(self._events) > self._max_events:
-                self._events = self._events[-self._max_events // 2:]
+                self._events = self._events[-self._max_events // 2 :]
 
         return inversions
 
@@ -884,9 +925,7 @@ class FairnessTracker:
         self._total_allocations: int = 0
         self._total_unique_requests: int = 0  # Unique request IDs ever tracked
 
-    def record_allocation(
-        self, request_id: str, tokens_allocated: int
-    ) -> None:
+    def record_allocation(self, request_id: str, tokens_allocated: int) -> None:
         """Record a token allocation event.
 
         Args:

@@ -51,7 +51,13 @@ def count_message_tokens(messages: list[dict], tokenizer=None) -> int:
                 if isinstance(part, dict):
                     if part.get("type") == "text":
                         total += count_tokens(part.get("text", ""), tokenizer)
-                    elif part.get("type") in ("image_url", "image", "image_data", "video", "video_url"):
+                    elif part.get("type") in (
+                        "image_url",
+                        "image",
+                        "image_data",
+                        "video",
+                        "video_url",
+                    ):
                         total += IMAGE_TOKEN_ESTIMATE
                     elif part.get("type") in ("input_audio", "audio", "audio_url"):
                         # Audio cost varies with duration; a fixed non-zero estimate

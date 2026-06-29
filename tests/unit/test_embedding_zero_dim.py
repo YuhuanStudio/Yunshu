@@ -3,6 +3,7 @@ batch was empty. A 768-dim zero vector silently mismatches a 384-dim (e5-small) 
 1024-dim (bge-large) model — the OpenAI contract requires every data[] entry in one
 response to be equal-length, and a wrong-dim zero vector poisons the client's vector
 store. Fallback now asks the engine for its real hidden_size."""
+
 from __future__ import annotations
 
 import asyncio
@@ -13,6 +14,7 @@ from yunshu_gateway.routers.embeddings import EmbeddingRequest, _embed_and_forma
 
 class _FakeEngine:
     """Reports a non-768 hidden_size; has no real tokenizer."""
+
     _tokenizer = None
     is_loaded = True
 
@@ -52,5 +54,6 @@ def test_large_model_hidden_size(monkeypatch):
 
 def test_source_consults_get_hidden_size():
     import inspect
+
     src = inspect.getsource(emb_mod)
     assert "engine._get_hidden_size()" in src

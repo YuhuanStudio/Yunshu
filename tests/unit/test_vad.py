@@ -1,4 +1,5 @@
 """Tests for VAD (Voice Activity Detection)."""
+
 import struct
 
 
@@ -21,6 +22,7 @@ def _silence_pcm(duration_ms=30, sample_rate=16000):
 def _speech_pcm(duration_ms=30, sample_rate=16000, freq=440):
     """Generate speech-like PCM bytes (sine wave)."""
     import math
+
     n = int(sample_rate * duration_ms / 1000)
     samples = [math.sin(2 * math.pi * freq * i / sample_rate) * 0.5 for i in range(n)]
     return _make_pcm_samples(samples, amplitude=0.8)
@@ -29,6 +31,7 @@ def _speech_pcm(duration_ms=30, sample_rate=16000, freq=440):
 class TestEnergyVAD:
     def test_silence_not_speech(self):
         from yunshu_engine.vad import EnergyVAD
+
         vad = EnergyVAD(threshold=0.01)
         frame = _silence_pcm()
         result = vad.process_frame(frame)
@@ -36,6 +39,7 @@ class TestEnergyVAD:
 
     def test_speech_detected(self):
         from yunshu_engine.vad import EnergyVAD
+
         vad = EnergyVAD(threshold=0.01, speech_duration_ms=30, silence_duration_ms=600)
         # Feed enough speech frames to trigger
         speech = _speech_pcm()
@@ -45,6 +49,7 @@ class TestEnergyVAD:
 
     def test_energy_computation(self):
         from yunshu_engine.vad import EnergyVAD
+
         silence = _silence_pcm()
         speech = _speech_pcm()
         silence_energy = EnergyVAD._compute_energy(silence)
@@ -53,6 +58,7 @@ class TestEnergyVAD:
 
     def test_reset(self):
         from yunshu_engine.vad import EnergyVAD
+
         vad = EnergyVAD()
         vad._is_speaking = True
         vad.reset()
@@ -60,12 +66,14 @@ class TestEnergyVAD:
 
     def test_empty_audio(self):
         from yunshu_engine.vad import EnergyVAD
+
         vad = EnergyVAD()
         result = vad.process_frame(b"")
         assert result.energy == 0.0
 
     def test_result_fields(self):
         from yunshu_engine.vad import VADResult
+
         r = VADResult(is_speech=True, energy=0.5, confidence=0.9)
         assert r.is_speech is True
         assert r.energy == 0.5
@@ -75,16 +83,19 @@ class TestEnergyVAD:
 class TestCreateVAD:
     def test_create_energy(self):
         from yunshu_engine.vad import EnergyVAD, create_vad
+
         vad = create_vad("energy")
         assert isinstance(vad, EnergyVAD)
 
     def test_create_webrtc_fallback(self):
         from yunshu_engine.vad import WebRTCVAD, create_vad
+
         vad = create_vad("webrtc")
         assert isinstance(vad, WebRTCVAD)
 
     def test_create_with_params(self):
         from yunshu_engine.vad import create_vad
+
         vad = create_vad("energy", threshold=0.05, sample_rate=8000)
         assert vad.threshold == 0.05
         assert vad.sample_rate == 8000

@@ -1,4 +1,5 @@
 """Tests for LoRA adapter manager — concurrent safety, ref counting, LRU eviction."""
+
 import json
 import threading
 
@@ -6,6 +7,7 @@ import threading
 class TestLoRAAdapterEntry:
     def test_entry_defaults(self):
         from yunshu_engine.lora_manager import LoRAAdapterEntry
+
         entry = LoRAAdapterEntry(adapter_id="test", adapter_path="/tmp/test")
         assert entry.adapter_id == "test"
         assert entry.is_loaded is False
@@ -17,6 +19,7 @@ class TestLoRAAdapterEntry:
 class TestLoRAAdapterManager:
     def test_register_adapter(self):
         from yunshu_engine.lora_manager import LoRAAdapterManager
+
         mgr = LoRAAdapterManager(max_loras=2)
         mgr.register_adapter("test-adapter", "/tmp/test-adapter")
         adapters = mgr.list_adapters()
@@ -25,6 +28,7 @@ class TestLoRAAdapterManager:
 
     def test_register_duplicate_ignored(self):
         from yunshu_engine.lora_manager import LoRAAdapterManager
+
         mgr = LoRAAdapterManager()
         mgr.register_adapter("a1", "/tmp/a1")
         mgr.register_adapter("a1", "/tmp/a1")
@@ -32,6 +36,7 @@ class TestLoRAAdapterManager:
 
     def test_get_stats(self):
         from yunshu_engine.lora_manager import LoRAAdapterManager
+
         mgr = LoRAAdapterManager(max_loras=4)
         mgr.register_adapter("a1", "/tmp/a1")
         mgr.register_adapter("a2", "/tmp/a2")
@@ -42,22 +47,26 @@ class TestLoRAAdapterManager:
 
     def test_load_without_base_model(self):
         from yunshu_engine.lora_manager import LoRAAdapterManager
+
         mgr = LoRAAdapterManager()
         mgr.register_adapter("a1", "/tmp/a1")
         assert mgr.load_adapter("a1") is False
 
     def test_load_unknown_adapter(self):
         from yunshu_engine.lora_manager import LoRAAdapterManager
+
         mgr = LoRAAdapterManager()
         assert mgr.load_adapter("nonexistent") is False
 
     def test_unload_unknown_adapter(self):
         from yunshu_engine.lora_manager import LoRAAdapterManager
+
         mgr = LoRAAdapterManager()
         assert mgr.unload_adapter("nonexistent") is False
 
     def test_discover_adapters(self, tmp_path):
         from yunshu_engine.lora_manager import LoRAAdapterManager
+
         mgr = LoRAAdapterManager()
 
         # Create a fake adapter directory
@@ -73,12 +82,14 @@ class TestLoRAAdapterManager:
 
     def test_discover_no_adapters(self, tmp_path):
         from yunshu_engine.lora_manager import LoRAAdapterManager
+
         mgr = LoRAAdapterManager()
         discovered = mgr.discover_adapters(str(tmp_path))
         assert len(discovered) == 0
 
     def test_max_loras_enforcement(self):
         from yunshu_engine.lora_manager import LoRAAdapterEntry, LoRAAdapterManager
+
         mgr = LoRAAdapterManager(max_loras=1)
         mgr._base_model = None  # Can't actually load but test the logic
 
@@ -96,6 +107,7 @@ class TestLoRARefCounting:
 
     def _make_manager(self, max_loras=4):
         from yunshu_engine.lora_manager import LoRAAdapterEntry, LoRAAdapterManager
+
         mgr = LoRAAdapterManager(max_loras=max_loras)
         # Simulate loaded adapters (no real model needed)
         for i in range(3):
@@ -228,6 +240,7 @@ class TestLoRALRUConcurrency:
     def test_concurrent_acquire_release(self):
         """Multiple threads acquiring/releasing the same adapter."""
         from yunshu_engine.lora_manager import LoRAAdapterEntry, LoRAAdapterManager
+
         mgr = LoRAAdapterManager(max_loras=4)
         aid = "shared-adapter"
         mgr._adapters[aid] = LoRAAdapterEntry(
@@ -260,6 +273,7 @@ class TestLoRALRUConcurrency:
     def test_concurrent_acquire_eviction(self):
         """Eviction should never remove an adapter with refs > 0."""
         from yunshu_engine.lora_manager import LoRAAdapterEntry, LoRAAdapterManager
+
         mgr = LoRAAdapterManager(max_loras=2)
         for i in range(3):
             aid = f"a{i}"
@@ -278,6 +292,7 @@ class TestLoRALRUConcurrency:
                 barrier.wait(timeout=5)
                 mgr.acquire_adapter("a0")
                 import time
+
                 time.sleep(0.01)
                 mgr.release_adapter("a0")
             except Exception as e:
@@ -291,9 +306,9 @@ class TestLoRALRUConcurrency:
             except Exception as e:
                 errors.append(e)
 
-        threads = [
-            threading.Thread(target=acquirer) for _ in range(3)
-        ] + [threading.Thread(target=evictor)]
+        threads = [threading.Thread(target=acquirer) for _ in range(3)] + [
+            threading.Thread(target=evictor)
+        ]
         for t in threads:
             t.start()
         for t in threads:
@@ -311,6 +326,7 @@ class TestLoRACrossModel:
     def test_separate_managers_independent(self):
         """Two LoRAAdapterManager instances are fully independent."""
         from yunshu_engine.lora_manager import LoRAAdapterEntry, LoRAAdapterManager
+
         mgr_a = LoRAAdapterManager(max_loras=2)
         mgr_b = LoRAAdapterManager(max_loras=2)
 
@@ -343,6 +359,7 @@ class TestLoRACrossModel:
     def test_adapter_namespaces_isolated(self):
         """Same adapter_id in different managers are independent."""
         from yunshu_engine.lora_manager import LoRAAdapterEntry, LoRAAdapterManager
+
         mgr_x = LoRAAdapterManager(max_loras=2)
         mgr_y = LoRAAdapterManager(max_loras=2)
 
@@ -369,8 +386,11 @@ class TestLoRAListAdaptersRefCount:
 
     def test_list_includes_ref_count(self):
         from yunshu_engine.lora_manager import LoRAAdapterEntry, LoRAAdapterManager
+
         mgr = LoRAAdapterManager()
-        mgr._adapters["a1"] = LoRAAdapterEntry("a1", "/tmp/a1", is_loaded=True, ref_count=3)
+        mgr._adapters["a1"] = LoRAAdapterEntry(
+            "a1", "/tmp/a1", is_loaded=True, ref_count=3
+        )
         adapters = mgr.list_adapters()
         assert adapters[0]["ref_count"] == 3
 
@@ -384,13 +404,16 @@ class TestLoRACrossModelConcurrent:
     def _make_managers(n_models: int, adapters_per_model: int, max_loras: int = 3):
         """Create N independent LoRAAdapterManager instances, each with adapters."""
         from yunshu_engine.lora_manager import LoRAAdapterEntry, LoRAAdapterManager
+
         managers = {}
         for m in range(n_models):
             mgr = LoRAAdapterManager(max_loras=max_loras)
             for a in range(adapters_per_model):
                 aid = f"model{m}-adapter{a}"
                 mgr._adapters[aid] = LoRAAdapterEntry(
-                    adapter_id=aid, adapter_path=f"/tmp/{aid}", is_loaded=True,
+                    adapter_id=aid,
+                    adapter_path=f"/tmp/{aid}",
+                    is_loaded=True,
                 )
                 mgr._lru_order.append(aid)
             mgr._active_adapter_id = f"model{m}-adapter0"
@@ -400,6 +423,7 @@ class TestLoRACrossModelConcurrent:
     def test_concurrent_acquire_release_multi_model(self):
         """Multiple threads operating on different model managers simultaneously."""
         import threading
+
         managers = self._make_managers(4, 3)
         errors = []
         barrier = threading.Barrier(8)
@@ -435,6 +459,7 @@ class TestLoRACrossModelConcurrent:
     def test_concurrent_cross_model_eviction(self):
         """Eviction on one model's manager must never touch another model's adapters."""
         import threading
+
         managers = self._make_managers(3, 3, max_loras=2)
         errors = []
         barrier = threading.Barrier(6)
@@ -446,6 +471,7 @@ class TestLoRACrossModelConcurrent:
                 barrier.wait(timeout=5)
                 mgr.acquire_adapter(aid)
                 import time
+
                 time.sleep(0.05)
                 mgr.release_adapter(aid)
             except Exception as e:
@@ -483,6 +509,7 @@ class TestLoRACrossModelConcurrent:
     def test_concurrent_acquire_eviction_different_models(self):
         """Stress test: acquire on model A while evicting on model B."""
         import threading
+
         managers = self._make_managers(2, 4, max_loras=2)
         errors = []
         barrier = threading.Barrier(4)
@@ -541,6 +568,7 @@ class TestLoRACrossModelConcurrent:
     def test_ref_count_isolation_under_contention(self):
         """Verify ref counts don't leak across model managers under contention."""
         import threading
+
         managers = self._make_managers(3, 2)
         errors = []
         barrier = threading.Barrier(6)
@@ -581,6 +609,7 @@ class TestLoRACrossModelConcurrent:
     def test_lru_order_independent_per_model(self):
         """LRU order in one manager is unaffected by operations on another."""
         from yunshu_engine.lora_manager import LoRAAdapterEntry, LoRAAdapterManager
+
         mgr_a = LoRAAdapterManager(max_loras=4)
         mgr_b = LoRAAdapterManager(max_loras=4)
 
@@ -588,7 +617,9 @@ class TestLoRACrossModelConcurrent:
             for mgr, prefix in [(mgr_a, "a"), (mgr_b, "b")]:
                 aid = f"{prefix}-{i}"
                 mgr._adapters[aid] = LoRAAdapterEntry(
-                    adapter_id=aid, adapter_path=f"/tmp/{aid}", is_loaded=True,
+                    adapter_id=aid,
+                    adapter_path=f"/tmp/{aid}",
+                    is_loaded=True,
                 )
                 mgr._lru_order.append(aid)
             mgr_a._active_adapter_id = "a-0"
@@ -608,6 +639,7 @@ class TestLoRACrossModelConcurrent:
     def test_shutdown_one_manager_does_not_affect_others(self):
         """Shutting down one model's LoRA manager doesn't touch others."""
         from yunshu_engine.lora_manager import LoRAAdapterEntry, LoRAAdapterManager
+
         mgr_a = LoRAAdapterManager(max_loras=2)
         mgr_b = LoRAAdapterManager(max_loras=2)
 
@@ -615,7 +647,9 @@ class TestLoRACrossModelConcurrent:
             for mgr, prefix in [(mgr_a, "a"), (mgr_b, "b")]:
                 aid = f"{prefix}-{i}"
                 mgr._adapters[aid] = LoRAAdapterEntry(
-                    adapter_id=aid, adapter_path=f"/tmp/{aid}", is_loaded=True,
+                    adapter_id=aid,
+                    adapter_path=f"/tmp/{aid}",
+                    is_loaded=True,
                 )
                 mgr._lru_order.append(aid)
             mgr_a._active_adapter_id = "a-0"
@@ -639,19 +673,25 @@ class TestLoRACrossModelConcurrent:
 class TestGrammarParameter:
     def test_parse_grammar_json_schema(self):
         from yunshu_gateway.routers.chat import _parse_response_format
-        grammar = {"type": "json", "schema": {"type": "object", "properties": {"name": {"type": "string"}}}}
+
+        grammar = {
+            "type": "json",
+            "schema": {"type": "object", "properties": {"name": {"type": "string"}}},
+        }
         result = _parse_response_format(None, grammar)
         assert isinstance(result, dict)
         assert result["type"] == "object"
 
     def test_parse_grammar_json_no_schema(self):
         from yunshu_gateway.routers.chat import _parse_response_format
+
         grammar = {"type": "json"}
         result = _parse_response_format(None, grammar)
         assert result == "json_object"
 
     def test_grammar_overrides_response_format(self):
         from yunshu_gateway.routers.chat import _parse_response_format
+
         grammar = {"type": "json", "schema": {"type": "string"}}
         rf = {"type": "json_object"}
         result = _parse_response_format(rf, grammar)
@@ -660,6 +700,7 @@ class TestGrammarParameter:
 
     def test_no_grammar_no_response_format(self):
         from yunshu_gateway.routers.chat import _parse_response_format
+
         result = _parse_response_format(None, None)
         assert result is None
 
@@ -670,31 +711,38 @@ class TestNormalizeLoraKey:
 
     def test_mlx_format_lowercase(self):
         from yunshu_engine.lora_manager import normalize_lora_key
+
         path = "model.layers.0.self_attn.q_proj"
         assert normalize_lora_key(f"{path}.lora_a") == (path, "a")
         assert normalize_lora_key(f"{path}.lora_b") == (path, "b")
 
     def test_hf_peft_format_with_prefix_and_weight_suffix(self):
         from yunshu_engine.lora_manager import normalize_lora_key
+
         # PEFT: "base_model.model." wrapper + capital A/B + ".weight"
         path = "model.layers.0.self_attn.q_proj"
-        assert normalize_lora_key(
-            f"base_model.model.{path}.lora_A.weight"
-        ) == (path, "a")
-        assert normalize_lora_key(
-            f"base_model.model.{path}.lora_B.weight"
-        ) == (path, "b")
+        assert normalize_lora_key(f"base_model.model.{path}.lora_A.weight") == (
+            path,
+            "a",
+        )
+        assert normalize_lora_key(f"base_model.model.{path}.lora_B.weight") == (
+            path,
+            "b",
+        )
 
     def test_hf_peft_named_adapter_variant(self):
         from yunshu_engine.lora_manager import normalize_lora_key
+
         path = "model.layers.3.mlp.gate_proj"
         # PEFT with an explicit adapter name segment before ".weight"
-        assert normalize_lora_key(
-            f"base_model.model.{path}.lora_A.default.weight"
-        ) == (path, "a")
+        assert normalize_lora_key(f"base_model.model.{path}.lora_A.default.weight") == (
+            path,
+            "a",
+        )
 
     def test_mlx_and_hf_map_to_same_path(self):
         from yunshu_engine.lora_manager import normalize_lora_key
+
         path = "model.layers.7.self_attn.v_proj"
         mlx = normalize_lora_key(f"{path}.lora_b")
         hf = normalize_lora_key(f"base_model.model.{path}.lora_B.weight")
@@ -702,6 +750,7 @@ class TestNormalizeLoraKey:
 
     def test_non_lora_key_returns_none(self):
         from yunshu_engine.lora_manager import normalize_lora_key
+
         assert normalize_lora_key("model.layers.0.self_attn.q_proj.weight") is None
         assert normalize_lora_key("model.embed_tokens.weight") is None
         assert normalize_lora_key("") is None
@@ -710,8 +759,11 @@ class TestNormalizeLoraKey:
         # The load-path rebuilds "<module>.lora_<ab>"; for MLX-format input it
         # must reproduce the original key byte-for-byte (no regression).
         from yunshu_engine.lora_manager import normalize_lora_key
-        for key in ("model.layers.0.self_attn.q_proj.lora_a",
-                    "model.layers.2.mlp.down_proj.lora_b"):
+
+        for key in (
+            "model.layers.0.self_attn.q_proj.lora_a",
+            "model.layers.2.mlp.down_proj.lora_b",
+        ):
             mp, ab = normalize_lora_key(key)
             assert f"{mp}.lora_{ab}" == key
 
@@ -752,6 +804,7 @@ class TestPEFTTransposeOnLoad:
         adir.mkdir()
         (adir / "adapter_config.json").write_text(json.dumps({"r": r, "lora_alpha": r}))
         import numpy as np
+
         save_file(
             {
                 "base_model.model.proj.lora_A.weight": np.array(a_peft),

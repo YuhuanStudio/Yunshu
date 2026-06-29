@@ -1,4 +1,5 @@
 """Unit tests for ThinkingSegmentSubstore — reasoning token KV cache reuse."""
+
 import time
 
 import pytest
@@ -12,6 +13,7 @@ from yunshu_kv.thinking_segment import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_tokens(n: int, start: int = 0) -> list[int]:
     """Return a list of n sequential token IDs starting from *start*."""
@@ -373,8 +375,8 @@ class TestThinkingSegmentSubstore:
         context = _make_tokens(10)
 
         step_hash = store.store("conv-1", thinking, context, _dummy_kv())
-        store.lookup("conv-1", step_hash)   # hit
-        store.lookup("conv-1", "nope")       # miss
+        store.lookup("conv-1", step_hash)  # hit
+        store.lookup("conv-1", "nope")  # miss
 
         stats = store.get_stats()
         assert stats["stored"] == 1
@@ -446,14 +448,20 @@ class TestThinkingSegmentSubstore:
         )
         store = ThinkingSegmentSubstore(cfg)
 
-        h1 = store.store("conv-1", _make_tokens(10, start=0), _make_tokens(5), _dummy_kv())
+        h1 = store.store(
+            "conv-1", _make_tokens(10, start=0), _make_tokens(5), _dummy_kv()
+        )
         time.sleep(0.01)
-        h2 = store.store("conv-2", _make_tokens(10, start=100), _make_tokens(5), _dummy_kv())
+        h2 = store.store(
+            "conv-2", _make_tokens(10, start=100), _make_tokens(5), _dummy_kv()
+        )
         time.sleep(0.01)
         # Third store evicts the globally oldest (h1)
-        h3 = store.store("conv-3", _make_tokens(10, start=200), _make_tokens(5), _dummy_kv())
+        h3 = store.store(
+            "conv-3", _make_tokens(10, start=200), _make_tokens(5), _dummy_kv()
+        )
 
-        assert store.lookup("conv-1", h1) is None   # evicted
+        assert store.lookup("conv-1", h1) is None  # evicted
         assert store.lookup("conv-2", h2) is not None  # survived
         assert store.lookup("conv-3", h3) is not None  # just stored
 

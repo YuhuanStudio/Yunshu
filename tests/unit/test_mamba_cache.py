@@ -10,6 +10,7 @@ Covers:
 - State compression (zlib, 8-bit, 4-bit)
 - Eviction respects layer boundaries
 """
+
 from __future__ import annotations
 
 import mlx.core as mx
@@ -160,6 +161,7 @@ class TestMambaSSMStateCheckpoint:
 
         r_conv, r_ssm = restored.get_layer(0)
         import numpy as np
+
         np.testing.assert_allclose(np.array(r_conv), np.array(conv), rtol=1e-5)
         np.testing.assert_allclose(np.array(r_ssm), np.array(ssm), rtol=1e-5)
 
@@ -198,6 +200,7 @@ class TestMambaSSMStateCheckpoint:
 
         r_conv, _ = restored.get_layer(0)
         import numpy as np
+
         # 8-bit quantization: max error ~scale/127
         np.testing.assert_allclose(
             np.array(r_conv), np.array(conv), atol=0.02, rtol=0.1
@@ -217,6 +220,7 @@ class TestMambaSSMStateCheckpoint:
 
         r_conv, _ = restored.get_layer(0)
         import numpy as np
+
         # 4-bit has coarser quantization
         np.testing.assert_allclose(
             np.array(r_conv), np.array(conv), atol=0.15, rtol=0.2
@@ -590,13 +594,17 @@ class TestMixedModelScenario:
         for i in range(32):
             if i % 4 in (0, 3):
                 cache.register_layer(
-                    i, CacheBlockType.ATTENTION,
-                    (16, 64, 128), block_size=64,
+                    i,
+                    CacheBlockType.ATTENTION,
+                    (16, 64, 128),
+                    block_size=64,
                 )
             else:
                 cache.register_layer(
-                    i, CacheBlockType.MAMBA_SSM,
-                    (48, 16), block_size=1,
+                    i,
+                    CacheBlockType.MAMBA_SSM,
+                    (48, 16),
+                    block_size=1,
                 )
 
         assert cache.num_layers == 32
@@ -621,7 +629,8 @@ class TestMixedModelScenario:
         # Set up SSM state
         ssm = MambaSSMState(num_layers=1, inner_dim=16, state_dim=4)
         ssm.initialize(batch_size=1)
-        ssm.update_layer(0,
+        ssm.update_layer(
+            0,
             conv_state=mx.ones((1, 16, 4), dtype=mx.float16),
             ssm_state=mx.ones((1, 16, 4), dtype=mx.float16) * 0.5,
         )
@@ -708,6 +717,7 @@ class TestSchedulerIntegration:
     def test_cache_type_in_config(self):
         """Verify CacheBlockType can be used as a config field."""
         from yunshu_engine.scheduler import SchedulerConfig
+
         config = SchedulerConfig()
         # The module can be imported and CacheBlockType can be used
         # alongside SchedulerConfig without conflicts

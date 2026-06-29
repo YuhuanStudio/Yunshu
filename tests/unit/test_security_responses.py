@@ -8,6 +8,7 @@ cancel, or chain off another tenant's stored response by id (the SSE stream
 leaks the resp- id). Every other per-handle router enforces ownership;
 Responses was missed.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -32,7 +33,10 @@ def _req(actor="", role=""):
 def _stub_actor(monkeypatch):
     """resolve_actor(request) -> request._actor (mirrors the real per-request actor)."""
     import yunshu_control.audit_log as al
-    monkeypatch.setattr(al, "resolve_actor", lambda request: getattr(request, "_actor", ""))
+
+    monkeypatch.setattr(
+        al, "resolve_actor", lambda request: getattr(request, "_actor", "")
+    )
     # Permission check is orthogonal to ownership — stub it permissive.
     monkeypatch.setattr(R, "_check_permission", lambda request, perm: None)
     # Ensure auth-disabled env doesn't auto-grant admin.
@@ -43,6 +47,7 @@ def _stub_actor(monkeypatch):
 
 
 # ── _owns_stored / _public_stored helpers ──
+
 
 def test_owns_stored_owner_match():
     assert R._owns_stored(_req(actor="alice"), {"_owner": "alice"}) is True
@@ -62,31 +67,42 @@ def test_owns_stored_unowned_is_permissive():
 
 
 def test_public_stored_strips_internal_keys():
-    pub = R._public_stored({"id": "r1", "_owner": "alice", "_input_messages": [1], "status": "completed"})
+    pub = R._public_stored(
+        {"id": "r1", "_owner": "alice", "_input_messages": [1], "status": "completed"}
+    )
     assert pub == {"id": "r1", "status": "completed"}
     assert "_owner" not in pub and "_input_messages" not in pub
 
 
 # ── GET /v1/responses/{id} ownership gate ──
 
+
 def _run(coro):
     return asyncio.run(coro)
 
 
 def test_get_response_cross_tenant_is_404():
-    R._store_response("resp-1", {"id": "resp-1", "status": "completed", "_owner": "alice"})
+    R._store_response(
+        "resp-1", {"id": "resp-1", "status": "completed", "_owner": "alice"}
+    )
     resp = _run(R.get_response("resp-1", _req(actor="bob")))
     assert resp.status_code == 404
 
 
 def test_get_response_owner_ok_and_stripped():
-    R._store_response("resp-2", {
-        "id": "resp-2", "status": "completed", "_owner": "alice",
-        "_input_messages": [{"role": "user", "content": "SECRET"}],
-    })
+    R._store_response(
+        "resp-2",
+        {
+            "id": "resp-2",
+            "status": "completed",
+            "_owner": "alice",
+            "_input_messages": [{"role": "user", "content": "SECRET"}],
+        },
+    )
     resp = _run(R.get_response("resp-2", _req(actor="alice")))
     assert resp.status_code == 200
     import json
+
     body = json.loads(bytes(resp.body))
     assert body["id"] == "resp-2"
     # Internal plumbing must not leak even to the owner.
@@ -94,22 +110,30 @@ def test_get_response_owner_ok_and_stripped():
 
 
 def test_get_response_admin_can_read_any():
-    R._store_response("resp-3", {"id": "resp-3", "status": "completed", "_owner": "alice"})
+    R._store_response(
+        "resp-3", {"id": "resp-3", "status": "completed", "_owner": "alice"}
+    )
     resp = _run(R.get_response("resp-3", _req(actor="bob", role="admin")))
     assert resp.status_code == 200
 
 
 # ── cancel ownership gate ──
 
+
 def test_cancel_cross_tenant_in_flight_is_404(monkeypatch):
     """Tenant B cannot cancel tenant A's in-flight (tracker-owned) response."""
+
     class _Tracker:
         def get_owner(self, rid):
             return "alice"
+
         def cancel(self, rid):
-            raise AssertionError("cancel() must not be reached for a cross-tenant request")
+            raise AssertionError(
+                "cancel() must not be reached for a cross-tenant request"
+            )
 
     import yunshu_engine.request_tracker as rt
+
     monkeypatch.setattr(rt, "get_request_tracker", lambda: _Tracker())
     resp = _run(R.cancel_response("resp-x", _req(actor="bob")))
     assert resp.status_code == 404
@@ -119,10 +143,12 @@ def test_cancel_owner_in_flight_ok(monkeypatch):
     class _Tracker:
         def get_owner(self, rid):
             return "alice"
+
         def cancel(self, rid):
             return True
 
     import yunshu_engine.request_tracker as rt
+
     monkeypatch.setattr(rt, "get_request_tracker", lambda: _Tracker())
     resp = _run(R.cancel_response("resp-y", _req(actor="alice")))
     # In-flight cancelled → synthetic cancelled envelope (200).

@@ -1,4 +1,5 @@
 """Tests for remaining gateway endpoints: models, images, audio, batches."""
+
 import os
 from unittest.mock import patch
 
@@ -11,6 +12,7 @@ def _setup_engine():
     os.environ["YUNSHU_AUTH_DISABLED"] = "true"
     from yunshu_engine.engine import Engine, EngineConfig
     from yunshu_gateway.engine import set_engine
+
     engine = Engine(EngineConfig())
     engine._model = object()
     engine._model_name = "test-model"
@@ -23,6 +25,7 @@ def _setup_engine():
 
 def _client():
     from yunshu_gateway.main import create_app
+
     return TestClient(create_app())
 
 
@@ -47,25 +50,32 @@ class TestModelsEndpoint:
 class TestTokenizeEndpoint:
     def test_tokenize_no_model(self):
         client = _client()
-        resp = client.post("/v1/tokenize", json={"model": "nonexistent", "text": "hello"})
+        resp = client.post(
+            "/v1/tokenize", json={"model": "nonexistent", "text": "hello"}
+        )
         # Should fail with 404 since no real tokenizer
         assert resp.status_code in (404, 500)
 
     def test_token_count_no_model(self):
         client = _client()
-        resp = client.post("/v1/token_count", json={"model": "nonexistent", "prompt": "hello"})
+        resp = client.post(
+            "/v1/token_count", json={"model": "nonexistent", "prompt": "hello"}
+        )
         assert resp.status_code in (404, 500)
 
 
 class TestImagesEndpoint:
     def test_images_generations_no_engine(self):
         client = _client()
-        resp = client.post("/v1/images/generations", json={
-            "model": "test",
-            "prompt": "a cat",
-            "n": 1,
-            "size": "256x256",
-        })
+        resp = client.post(
+            "/v1/images/generations",
+            json={
+                "model": "test",
+                "prompt": "a cat",
+                "n": 1,
+                "size": "256x256",
+            },
+        )
         # Will fail since image engine not loaded
         assert resp.status_code in (200, 404, 500, 503)
 
@@ -73,24 +83,33 @@ class TestImagesEndpoint:
 class TestAudioEndpoint:
     def test_tts_no_engine(self):
         client = _client()
-        resp = client.post("/v1/audio/speech", json={
-            "model": "test",
-            "input": "Hello world",
-            "voice": "default",
-        })
+        resp = client.post(
+            "/v1/audio/speech",
+            json={
+                "model": "test",
+                "input": "Hello world",
+                "voice": "default",
+            },
+        )
         assert resp.status_code in (200, 404, 500, 503)
 
     def test_transcription_no_engine(self):
         client = _client()
-        resp = client.post("/v1/audio/transcriptions", json={
-            "model": "test",
-        })
+        resp = client.post(
+            "/v1/audio/transcriptions",
+            json={
+                "model": "test",
+            },
+        )
         # Might fail with missing file or no engine (400 for validation error from custom handler)
         assert resp.status_code in (200, 400, 404, 422, 500, 503)
 
     def test_list_voices_uses_engine_catalogue(self):
         client = _client()
-        with patch("yunshu_gateway.routers.audio._list_tts_voices", return_value=["voice_a", "voice_b"]):
+        with patch(
+            "yunshu_gateway.routers.audio._list_tts_voices",
+            return_value=["voice_a", "voice_b"],
+        ):
             resp = client.get("/v1/audio/voices")
         assert resp.status_code == 200
         assert resp.json()["data"] == [
@@ -119,26 +138,34 @@ class TestCancelEndpoint:
     def test_legacy_double_v1_cancel_routes_are_not_mounted(self):
         client = _client()
         assert client.get("/v1/v1/active-generations").status_code == 404
-        assert client.post("/v1/v1/cancel", json={"cancel_all": True}).status_code == 404
+        assert (
+            client.post("/v1/v1/cancel", json={"cancel_all": True}).status_code == 404
+        )
 
 
 class TestBatchEndpoint:
     def test_batch_status_no_batch(self):
         client = _client()
-        resp = client.post("/v1/batches", json={
-            "input_file_id": "test",
-            "endpoint": "/v1/chat/completions",
-        })
+        resp = client.post(
+            "/v1/batches",
+            json={
+                "input_file_id": "test",
+                "endpoint": "/v1/chat/completions",
+            },
+        )
         assert resp.status_code in (200, 404, 500, 503)
 
 
 class TestEmbeddingsEndpoint:
     def test_embeddings_no_model(self):
         client = _client()
-        resp = client.post("/v1/embeddings", json={
-            "model": "nonexistent",
-            "input": "hello world",
-        })
+        resp = client.post(
+            "/v1/embeddings",
+            json={
+                "model": "nonexistent",
+                "input": "hello world",
+            },
+        )
         assert resp.status_code in (404, 500, 503)
 
 
@@ -147,40 +174,52 @@ class TestChatLogprobs:
 
     def test_chat_request_accepts_logprobs(self):
         client = TestClient(_client().app, raise_server_exceptions=False)
-        resp = client.post("/v1/chat/completions", json={
-            "model": "test-model",
-            "messages": [{"role": "user", "content": "hi"}],
-            "logprobs": True,
-            "top_logprobs": 5,
-        })
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "logprobs": True,
+                "top_logprobs": 5,
+            },
+        )
         # Engine has no tokenizer so this 500s — schema parsing is what we test
         assert resp.status_code == 500
 
     def test_chat_request_accepts_n(self):
         client = TestClient(_client().app, raise_server_exceptions=False)
-        resp = client.post("/v1/chat/completions", json={
-            "model": "test-model",
-            "messages": [{"role": "user", "content": "hi"}],
-            "n": 3,
-        })
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "n": 3,
+            },
+        )
         assert resp.status_code == 500
 
     def test_chat_request_accepts_user(self):
         client = TestClient(_client().app, raise_server_exceptions=False)
-        resp = client.post("/v1/chat/completions", json={
-            "model": "test-model",
-            "messages": [{"role": "user", "content": "hi"}],
-            "user": "user-123",
-        })
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "user": "user-123",
+            },
+        )
         assert resp.status_code == 500
 
     def test_chat_rejects_invalid_logprobs_type(self):
         client = _client()
-        resp = client.post("/v1/chat/completions", json={
-            "model": "test-model",
-            "messages": [{"role": "user", "content": "hi"}],
-            "logprobs": "not_a_bool",
-        })
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "logprobs": "not_a_bool",
+            },
+        )
         assert resp.status_code in (400, 422)
 
 
@@ -190,11 +229,14 @@ class TestChatLoRAAdapter:
     def test_chat_accepts_lora_adapter_field(self):
         """lora_adapter field should be accepted without 422."""
         client = TestClient(_client().app, raise_server_exceptions=False)
-        resp = client.post("/v1/chat/completions", json={
-            "model": "test-model",
-            "messages": [{"role": "user", "content": "hi"}],
-            "lora_adapter": "my-lora-v1",
-        })
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "lora_adapter": "my-lora-v1",
+            },
+        )
         # Schema accepts the field (not 422). A requested adapter that can't be
         # served is now a hard error instead of silently running the base model:
         # 400 if the engine has no LoRA manager (legacy Engine here), 404 if the
@@ -203,30 +245,39 @@ class TestChatLoRAAdapter:
 
     def test_chat_accepts_null_lora_adapter(self):
         client = TestClient(_client().app, raise_server_exceptions=False)
-        resp = client.post("/v1/chat/completions", json={
-            "model": "test-model",
-            "messages": [{"role": "user", "content": "hi"}],
-            "lora_adapter": None,
-        })
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "lora_adapter": None,
+            },
+        )
         assert resp.status_code == 500
 
     def test_chat_without_lora_adapter_still_works(self):
         """Backward compatibility: requests without lora_adapter work."""
         client = TestClient(_client().app, raise_server_exceptions=False)
-        resp = client.post("/v1/chat/completions", json={
-            "model": "test-model",
-            "messages": [{"role": "user", "content": "hi"}],
-        })
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
         assert resp.status_code == 500
 
     def test_chat_streaming_accepts_lora_adapter(self):
         """Streaming path also accepts lora_adapter."""
         client = TestClient(_client().app, raise_server_exceptions=False)
-        resp = client.post("/v1/chat/completions", json={
-            "model": "test-model",
-            "messages": [{"role": "user", "content": "hi"}],
-            "lora_adapter": "test-adapter",
-            "stream": True,
-        })
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "lora_adapter": "test-adapter",
+                "stream": True,
+            },
+        )
         # Streaming may 500 due to no real engine, but not 422
         assert resp.status_code in (200, 500)

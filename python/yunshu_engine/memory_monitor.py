@@ -40,19 +40,24 @@ def get_system_memory() -> int:
     """Return total system RAM in bytes."""
     try:
         import psutil
+
         return psutil.virtual_memory().total
     except ImportError:
         pass
     import subprocess
+
     try:
         result = subprocess.run(
             ["sysctl", "-n", "hw.memsize"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         return int(result.stdout.strip())
     except Exception:
-        logger.debug("sysctl hw.memsize detection failed, using 16GB default", exc_info=True)
-        return 16 * 1024 ** 3
+        logger.debug(
+            "sysctl hw.memsize detection failed, using 16GB default", exc_info=True
+        )
+        return 16 * 1024**3
 
 
 def get_max_working_set_bytes() -> int:
@@ -63,7 +68,7 @@ def get_max_working_set_bytes() -> int:
     if HAS_MLX_METAL:
         try:
             info = mx.metal.get_memory_info()
-            if hasattr(info, 'max_recommended_working_set_size'):
+            if hasattr(info, "max_recommended_working_set_size"):
                 return int(info.max_recommended_working_set_size)
         except Exception:
             logger.debug("MLX max_working_set_size detection failed", exc_info=True)
@@ -135,7 +140,9 @@ class MemoryMonitor:
         if HAS_MLX_METAL:
             try:
                 self._baseline_memory = mx.get_active_memory()
-                logger.info(f"Baseline memory set: {format_bytes(self._baseline_memory)}")
+                logger.info(
+                    f"Baseline memory set: {format_bytes(self._baseline_memory)}"
+                )
             except Exception as e:
                 logger.warning(f"Failed to set baseline memory: {e}")
 
@@ -182,7 +189,7 @@ class MemoryMonitor:
                     active = mx.get_active_memory()
                     peak = mx.get_peak_memory()
                     info = mx.metal.get_memory_info()
-                    if hasattr(info, 'cache_memory'):
+                    if hasattr(info, "cache_memory"):
                         cache = int(info.cache_memory)
                 except Exception:
                     logger.debug("MLX memory info read failed", exc_info=True)
@@ -201,6 +208,7 @@ class MemoryMonitor:
             self._last_check_time = now
             # Return a copy to prevent callers from mutating cached state
             import dataclasses
+
             return dataclasses.replace(self._last_info)
 
     def is_under_pressure(self, threshold_pct: float = 90.0) -> bool:
@@ -214,7 +222,9 @@ class MemoryMonitor:
         kv_heads = self._num_kv_heads
         dim = self._head_dim
         if not (layers and kv_heads and dim):
-            logger.warning("estimate_block_memory called before set_model_info — returning 0")
+            logger.warning(
+                "estimate_block_memory called before set_model_info — returning 0"
+            )
             return 0
         dtype = self._dtype_size
 
@@ -233,7 +243,9 @@ class MemoryMonitor:
         return num_tokens * per_token
 
     def estimate_prefill_peak_bytes(
-        self, total_prompt_tokens: int, chunk_size: int,
+        self,
+        total_prompt_tokens: int,
+        chunk_size: int,
     ) -> int:
         """Estimate worst-case peak memory during prefill .
 
@@ -268,5 +280,3 @@ class MemoryMonitor:
             "max_kv_cache_memory": self._max_kv_cache_memory,
             "baseline_memory": self._baseline_memory,
         }
-
-

@@ -4,6 +4,7 @@ prefilled text. _apply_chat_template unconditionally passed add_generation_promp
 which CLOSES the prefilled assistant turn and opens an empty new one → the prefix is
 ignored and generation restarts from scratch. Now a trailing-assistant message routes to
 continue_final_message=True; the normal case is byte-identical to before."""
+
 from __future__ import annotations
 
 from yunshu_engine.batched_engine import BatchedEngine
@@ -12,6 +13,7 @@ from yunshu_engine.batched_engine import BatchedEngine
 class _RecordingTokenizer:
     """Records the kwargs apply_chat_template was called with, and emulates a real
     template: continue_final_message keeps the assistant turn open (no end token)."""
+
     def __init__(self):
         self.last_kwargs = None
 
@@ -19,7 +21,7 @@ class _RecordingTokenizer:
         self.last_kwargs = kwargs
         out = []
         for m in messages:
-            out.append(f"<|{m['role']}|>{m.get('content','')}")
+            out.append(f"<|{m['role']}|>{m.get('content', '')}")
         if kwargs.get("add_generation_prompt"):
             out.append("<|assistant|>")  # fresh empty turn opened
         elif kwargs.get("continue_final_message"):
@@ -38,8 +40,10 @@ def _engine(tok):
 def test_trailing_assistant_uses_continue_final_message():
     tok = _RecordingTokenizer()
     eng = _engine(tok)
-    msgs = [{"role": "user", "content": "What is 2+2?"},
-            {"role": "assistant", "content": "The answer is"}]
+    msgs = [
+        {"role": "user", "content": "What is 2+2?"},
+        {"role": "assistant", "content": "The answer is"},
+    ]
     out = eng._apply_chat_template(msgs)
     assert tok.last_kwargs.get("continue_final_message") is True
     assert "add_generation_prompt" not in tok.last_kwargs
@@ -60,10 +64,21 @@ def test_normal_request_unchanged():
 def test_trailing_tool_message_is_not_prefill():
     tok = _RecordingTokenizer()
     eng = _engine(tok)
-    msgs = [{"role": "user", "content": "x"},
-            {"role": "assistant", "content": "", "tool_calls": [{"id": "1", "type": "function",
-             "function": {"name": "f", "arguments": "{}"}}]},
-            {"role": "tool", "tool_call_id": "1", "content": "42"}]
+    msgs = [
+        {"role": "user", "content": "x"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "1",
+                    "type": "function",
+                    "function": {"name": "f", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "1", "content": "42"},
+    ]
     eng._apply_chat_template(msgs)
     # last message is a tool result → normal generation prompt, NOT prefill
     assert tok.last_kwargs.get("add_generation_prompt") is True
@@ -74,11 +89,15 @@ def test_old_tokenizer_falls_back_gracefully():
     class _OldTok:
         def __init__(self):
             self.calls = []
+
         def apply_chat_template(self, messages, **kwargs):
             self.calls.append(dict(kwargs))
             if kwargs.get("continue_final_message"):
-                raise TypeError("apply_chat_template() got an unexpected keyword argument 'continue_final_message'")
-            return "".join(f"<|{m['role']}|>{m.get('content','')}" for m in messages)
+                raise TypeError(
+                    "apply_chat_template() got an unexpected keyword argument 'continue_final_message'"
+                )
+            return "".join(f"<|{m['role']}|>{m.get('content', '')}" for m in messages)
+
     tok = _OldTok()
     eng = _engine(tok)
     msgs = [{"role": "user", "content": "x"}, {"role": "assistant", "content": "pre"}]

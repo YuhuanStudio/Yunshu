@@ -21,6 +21,7 @@ def _fresh_instance():
 # Counter tests
 # ---------------------------------------------------------------------------
 
+
 class TestCounterIncrement:
     def test_increment_default(self):
         pm = PrometheusMetrics()
@@ -68,6 +69,7 @@ class TestCounterIncrement:
 # Histogram tests
 # ---------------------------------------------------------------------------
 
+
 class TestHistogramObservation:
     def test_observe_and_generate(self):
         pm = PrometheusMetrics()
@@ -75,7 +77,7 @@ class TestHistogramObservation:
         pm.observe_histogram("request_duration_seconds", 0.5)
         text = pm.generate()
         assert "yunshu_request_duration_seconds" in text
-        assert '# TYPE yunshu_request_duration_seconds histogram' in text
+        assert "# TYPE yunshu_request_duration_seconds histogram" in text
         assert "_sum" in text
         assert "_count" in text
         assert '_bucket{le="+Inf"}' in text
@@ -153,6 +155,7 @@ class TestHistogramObservation:
 # Gauge tests (via set/inc/dec)
 # ---------------------------------------------------------------------------
 
+
 class TestGaugeOperations:
     def test_set_and_get(self):
         pm = PrometheusMetrics()
@@ -183,6 +186,7 @@ class TestGaugeOperations:
 # ---------------------------------------------------------------------------
 # Format generation tests
 # ---------------------------------------------------------------------------
+
 
 class TestFormatGeneration:
     def test_generate_produces_valid_text(self):
@@ -217,6 +221,7 @@ class TestFormatGeneration:
 # ---------------------------------------------------------------------------
 # Singleton tests
 # ---------------------------------------------------------------------------
+
 
 class TestSingleton:
     def test_get_prometheus_metrics_returns_same(self):
@@ -256,7 +261,9 @@ class TestMetricClassification:
         pm.set_counter("chunked_prefill_total_chunks_processed", 42)
         text = pm.generate()
         assert "yunshu_chunked_prefill_total_chunks_processed_total" in text
-        assert "# TYPE yunshu_chunked_prefill_total_chunks_processed_total counter" in text
+        assert (
+            "# TYPE yunshu_chunked_prefill_total_chunks_processed_total counter" in text
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -54,6 +54,7 @@ logger = logging.getLogger(__name__)
 # which can be mocked in tests.
 try:
     import mlx.core as mx
+
     _HAS_MLX = True
 except ImportError:
     mx = None  # type: ignore
@@ -383,7 +384,8 @@ class ExternalPrefiller:
 
             if not blocks:
                 logger.debug(
-                    "No KV blocks extracted for %s", request_id,
+                    "No KV blocks extracted for %s",
+                    request_id,
                 )
                 return None
 
@@ -457,11 +459,12 @@ class ExternalPrefiller:
         if not _HAS_MLX or mx is None or self._model is None:
             return None
 
-        if hasattr(self._model, 'make_cache'):
+        if hasattr(self._model, "make_cache"):
             return self._model.make_cache()
         # Try mlx-lm's create_kv_cache utility
         try:
             from mlx_lm.models.cache import make_prompt_cache as create_kv_cache
+
             return create_kv_cache(self._model)
         except (ImportError, AttributeError):
             pass
@@ -471,6 +474,7 @@ class ExternalPrefiller:
         """Get the MLX generation stream for GPU work."""
         try:
             import sys
+
             gen_mod = sys.modules.get("mlx_lm.generate")
             if gen_mod is not None and hasattr(gen_mod, "generation_stream"):
                 return gen_mod.generation_stream
@@ -491,11 +495,13 @@ class ExternalPrefiller:
         """
         info = memory_monitor.get_memory_info()
         estimated_peak = memory_monitor.estimate_prefill_peak_bytes(
-            total_tokens, chunk_size,
+            total_tokens,
+            chunk_size,
         )
 
         if estimated_peak > 0 and estimated_peak > info.available_bytes:
             from .exceptions import PrefillMemoryExceededError
+
             raise PrefillMemoryExceededError(
                 message=(
                     f"Prefill would require ~{estimated_peak} bytes "
@@ -569,9 +575,9 @@ def _decode_message(data: bytes) -> tuple[dict, bytes]:
     if magic != _WIRE_MAGIC:
         raise ValueError(f"Invalid magic: {magic!r}")
     header_len = struct.unpack(">I", data[4:8])[0]
-    header_bytes = data[8:8 + header_len]
+    header_bytes = data[8 : 8 + header_len]
     header = json.loads(header_bytes.decode("utf-8"))
-    payload = data[8 + header_len:]
+    payload = data[8 + header_len :]
     return header, payload
 
 
@@ -610,18 +616,27 @@ def _serialize_kv_blocks(blocks: list) -> bytes:
 def _deserialize_kv_blocks(data: bytes) -> list:
     """Inverse of _serialize_kv_blocks → list[KVBlockData] ready for load_kv_blocks_into_cache."""
     from .kv_transfer import KVBlockData
+
     blocks: list = []
     if not data:
         return blocks
     off = 0
-    (n_blocks,) = struct.unpack_from(">I", data, off); off += 4
+    (n_blocks,) = struct.unpack_from(">I", data, off)
+    off += 4
     for _ in range(n_blocks):
-        block_hash, token_count, n_layers = struct.unpack_from(">QII", data, off); off += 16
+        block_hash, token_count, n_layers = struct.unpack_from(">QII", data, off)
+        off += 16
         layer_data: dict[int, bytes] = {}
         for _ in range(n_layers):
-            layer_idx, ln = struct.unpack_from(">II", data, off); off += 8
-            layer_data[layer_idx] = data[off:off + ln]; off += ln
-        blocks.append(KVBlockData(block_hash=block_hash, token_count=token_count, layer_data=layer_data))
+            layer_idx, ln = struct.unpack_from(">II", data, off)
+            off += 8
+            layer_data[layer_idx] = data[off : off + ln]
+            off += ln
+        blocks.append(
+            KVBlockData(
+                block_hash=block_hash, token_count=token_count, layer_data=layer_data
+            )
+        )
     return blocks
 
 
@@ -634,24 +649,35 @@ def _serialize_prefill_result(result: PrefillResult) -> bytes:
       [len:u32][token_bytes] [len:u32][logits_bytes] [len:u32][kv_blocks_bytes]
     The old format shipped only token_bytes and forced a re-prefill (the disagg no-op).
     """
-    token_bytes = struct.pack(f">{len(result.token_ids)}I", *result.token_ids) if result.token_ids else b""
+    token_bytes = (
+        struct.pack(f">{len(result.token_ids)}I", *result.token_ids)
+        if result.token_ids
+        else b""
+    )
     kv_bytes = b""
     logits_bytes = b""
     if result.kv_cache is not None and result.token_ids:
         try:
             from .kv_transfer import _tensor_to_bytes, extract_kv_blocks_from_cache
+
             blocks = extract_kv_blocks_from_cache(result.kv_cache, result.token_ids)
             kv_bytes = _serialize_kv_blocks(blocks)
             if result.last_logits is not None:
                 logits_bytes = _tensor_to_bytes(result.last_logits)
         except Exception:
-            logger.debug("KV serialization for prefill wire failed; decode will re-prefill", exc_info=True)
+            logger.debug(
+                "KV serialization for prefill wire failed; decode will re-prefill",
+                exc_info=True,
+            )
             kv_bytes = b""
             logits_bytes = b""
     payload = (
-        struct.pack(">I", len(token_bytes)) + token_bytes
-        + struct.pack(">I", len(logits_bytes)) + logits_bytes
-        + struct.pack(">I", len(kv_bytes)) + kv_bytes
+        struct.pack(">I", len(token_bytes))
+        + token_bytes
+        + struct.pack(">I", len(logits_bytes))
+        + logits_bytes
+        + struct.pack(">I", len(kv_bytes))
+        + kv_bytes
     )
     header = {
         "num_tokens": result.num_tokens,
@@ -678,23 +704,30 @@ def _deserialize_prefill_result(data: bytes) -> PrefillResult:
     last_logits = None
     try:
         off = 0
-        (tlen,) = struct.unpack_from(">I", payload, off); off += 4
-        tbytes = payload[off:off + tlen]; off += tlen
+        (tlen,) = struct.unpack_from(">I", payload, off)
+        off += 4
+        tbytes = payload[off : off + tlen]
+        off += tlen
         if tbytes and n_tokens > 0:
-            token_ids = list(struct.unpack(f">{n_tokens}I", tbytes[:n_tokens * 4]))
-        (llen,) = struct.unpack_from(">I", payload, off); off += 4
-        lbytes = payload[off:off + llen]; off += llen
-        (klen,) = struct.unpack_from(">I", payload, off); off += 4
-        kbytes = payload[off:off + klen]; off += klen
+            token_ids = list(struct.unpack(f">{n_tokens}I", tbytes[: n_tokens * 4]))
+        (llen,) = struct.unpack_from(">I", payload, off)
+        off += 4
+        lbytes = payload[off : off + llen]
+        off += llen
+        (klen,) = struct.unpack_from(">I", payload, off)
+        off += 4
+        kbytes = payload[off : off + klen]
+        off += klen
         if kbytes:
             kv_blocks = _deserialize_kv_blocks(kbytes)
             if lbytes:
                 from .kv_transfer import _bytes_to_tensor
+
                 last_logits = _bytes_to_tensor(lbytes)
     except (struct.error, IndexError):
         # Legacy/short payload (bare token_bytes) — fall back to token-only parse.
         if payload and n_tokens > 0:
-            token_ids = list(struct.unpack(f">{n_tokens}I", payload[:n_tokens * 4]))
+            token_ids = list(struct.unpack(f">{n_tokens}I", payload[: n_tokens * 4]))
     return PrefillResult(
         token_ids=token_ids,
         num_tokens=n_tokens,
@@ -850,13 +883,17 @@ class ExternalPrefillServer:
         token_ids: list[int] = []
         if payload and num_tokens > 0:
             try:
-                token_ids = list(struct.unpack(f">{num_tokens}I", payload[:num_tokens * 4]))
+                token_ids = list(
+                    struct.unpack(f">{num_tokens}I", payload[: num_tokens * 4])
+                )
             except struct.error as e:
                 self._errors += 1
-                return _encode_message({
-                    "type": "error",
-                    "message": f"Invalid payload: {e}",
-                })
+                return _encode_message(
+                    {
+                        "type": "error",
+                        "message": f"Invalid payload: {e}",
+                    }
+                )
 
         if not token_ids:
             result = PrefillResult(token_ids=[], num_tokens=0)
@@ -882,25 +919,31 @@ class ExternalPrefillServer:
 
         except TimeoutError:
             self._errors += 1
-            return _encode_message({
-                "type": "error",
-                "message": f"Prefill timed out after {self._config.timeout_seconds}s",
-            })
+            return _encode_message(
+                {
+                    "type": "error",
+                    "message": f"Prefill timed out after {self._config.timeout_seconds}s",
+                }
+            )
         except PrefillAbortedError as e:
             self._errors += 1
-            return _encode_message({
-                "type": "error",
-                "message": f"Prefill aborted: {e}",
-                "completed_tokens": e.completed_tokens,
-                "total_tokens": e.total_tokens,
-            })
+            return _encode_message(
+                {
+                    "type": "error",
+                    "message": f"Prefill aborted: {e}",
+                    "completed_tokens": e.completed_tokens,
+                    "total_tokens": e.total_tokens,
+                }
+            )
         except Exception as e:
             self._errors += 1
             logger.warning("Prefill server error: %s", e, exc_info=True)
-            return _encode_message({
-                "type": "error",
-                "message": str(e),
-            })
+            return _encode_message(
+                {
+                    "type": "error",
+                    "message": str(e),
+                }
+            )
 
     def get_stats(self) -> dict:
         """Return server statistics."""
@@ -998,10 +1041,13 @@ class ExternalPrefillClient:
                 last_error = e
                 self._failures += 1
                 if attempt < self._config.retry_attempts - 1:
-                    backoff = 0.1 * (2 ** attempt)
+                    backoff = 0.1 * (2**attempt)
                     logger.info(
                         "Prefill client retry %d/%d after %.1fs: %s",
-                        attempt + 1, self._config.retry_attempts, backoff, e,
+                        attempt + 1,
+                        self._config.retry_attempts,
+                        backoff,
+                        e,
                     )
                     await asyncio.sleep(backoff)
 
@@ -1076,9 +1122,7 @@ class ExternalPrefillClient:
             else 0.0
         )
         success_rate = (
-            self._successes / self._requests_sent
-            if self._requests_sent > 0
-            else 0.0
+            self._successes / self._requests_sent if self._requests_sent > 0 else 0.0
         )
         return {
             "requests_sent": self._requests_sent,
@@ -1107,14 +1151,15 @@ def get_external_prefill_stats() -> dict:
     """
     try:
         from .batched_engine import get_batched_engine
+
         engine = get_batched_engine()
         if engine is None:
             return {"active": False}
-        core = getattr(engine, '_engine_core', None)
+        core = getattr(engine, "_engine_core", None)
         if core is None:
             return {"active": False}
-        server = getattr(core, '_prefill_server', None)
-        client = getattr(core, '_prefill_client', None)
+        server = getattr(core, "_prefill_server", None)
+        client = getattr(core, "_prefill_client", None)
         result: dict = {"active": True, "role": get_prefill_role()}
         if server is not None:
             result["server"] = server.get_stats()

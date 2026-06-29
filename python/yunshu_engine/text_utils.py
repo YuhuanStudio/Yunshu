@@ -188,6 +188,7 @@ class StopHoldbackBuffer:
                 first = i
         return buf[:first] if first >= 0 else buf
 
+
 # Pattern matching common special tokens that should be removed from output.
 # These tokens sometimes appear in output due to tokenizer quirks.
 SPECIAL_TOKENS_PATTERN = re.compile(
@@ -218,6 +219,7 @@ def cache_tokenizer_vocab(tok) -> None:
     the immutable vocab lookup is shared.
     """
     import logging
+
     _log = logging.getLogger(__name__)
     try:
         hf = getattr(tok, "_tokenizer", None) or tok
@@ -237,8 +239,10 @@ def cache_tokenizer_vocab(tok) -> None:
 
         _cached_get_vocab._yunshu_cached = True
         hf.get_vocab = _cached_get_vocab
-        _log.debug("cached tokenizer vocab (%d entries) — skips per-request rebuild",
-                   len(_cached))
+        _log.debug(
+            "cached tokenizer vocab (%d entries) — skips per-request rebuild",
+            len(_cached),
+        )
     except Exception:
         _log.debug("tokenizer vocab cache setup failed", exc_info=True)
 
@@ -343,9 +347,11 @@ def get_eos_token_ids(tokenizer) -> list[int]:
 def _build_gpt2_byte_decoder() -> dict:
     """The GPT-2 byte-level BPE surface-char → raw-byte map (the standard
     bytes_to_unicode, inverted)."""
-    bs = (list(range(ord("!"), ord("~") + 1))
-          + list(range(ord("¡"), ord("¬") + 1))
-          + list(range(ord("®"), ord("ÿ") + 1)))
+    bs = (
+        list(range(ord("!"), ord("~") + 1))
+        + list(range(ord("¡"), ord("¬") + 1))
+        + list(range(ord("®"), ord("ÿ") + 1))
+    )
     cs = bs[:]
     n = 0
     for b in range(256):
@@ -380,8 +386,10 @@ def _is_byte_level_tokenizer(tokenizer) -> bool:
     try:
         backend = getattr(tokenizer, "backend_tokenizer", None)
         if backend is not None:
-            for comp in (getattr(backend, "decoder", None),
-                         getattr(backend, "pre_tokenizer", None)):
+            for comp in (
+                getattr(backend, "decoder", None),
+                getattr(backend, "pre_tokenizer", None),
+            ):
                 if comp is not None and "ByteLevel" in repr(comp):
                     result = True
                     break
@@ -392,7 +400,9 @@ def _is_byte_level_tokenizer(tokenizer) -> bool:
     return result
 
 
-def token_id_to_bytes(tokenizer, token_id: int, fallback_str: str | None = None) -> list[int]:
+def token_id_to_bytes(
+    tokenizer, token_id: int, fallback_str: str | None = None
+) -> list[int]:
     """Recover the RAW UTF-8 bytes a single token id represents.
 
     OpenAI's logprobs `bytes` field exists so clients can reassemble a
@@ -423,7 +433,9 @@ def token_id_to_bytes(tokenizer, token_id: int, fallback_str: str | None = None)
         # sentencepiece surface 'é' (U+00E9) is ALSO all-in-the-map but means the
         # character UTF-8 [195,169], NOT byte [233]; only byte-level tokenizers may
         # take this branch (see _is_byte_level_tokenizer).
-        if _is_byte_level_tokenizer(tokenizer) and all(c in _GPT2_BYTE_DECODER for c in surface):
+        if _is_byte_level_tokenizer(tokenizer) and all(
+            c in _GPT2_BYTE_DECODER for c in surface
+        ):
             return [_GPT2_BYTE_DECODER[c] for c in surface]
     # Fallback (non-byte-level tokenizers, or recovery failed): the decoded string's
     # UTF-8 (correct for whole, non-split tokens — the common case there).

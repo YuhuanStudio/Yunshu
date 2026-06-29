@@ -145,6 +145,7 @@ def _record_metrics(prompt_tokens: int, completion_tokens: int) -> None:
     """Record token counts to the metrics middleware."""
     try:
         from ..middleware.metrics import get_metrics
+
         get_metrics().record_tokens(prompt_tokens, completion_tokens)
         get_metrics().record_inference()
     except Exception:
@@ -152,6 +153,7 @@ def _record_metrics(prompt_tokens: int, completion_tokens: int) -> None:
     # feed the per-request TPM box (see usage_context).
     try:
         from ..usage_context import record_billed_tokens
+
         record_billed_tokens((prompt_tokens or 0) + (completion_tokens or 0))
     except Exception:
         logger.debug("billed-token accounting failed", exc_info=True)
@@ -173,6 +175,7 @@ class AnthropicTool(BaseModel):
     Anthropic server-side tools (web_search, computer, etc.) carry versioned
     types like ``web_search_20250305`` but user-defined tools have no type.
     """
+
     name: str
     description: str | None = None
     input_schema: dict | None = None
@@ -189,6 +192,7 @@ class AnthropicMessagesRequest(BaseModel):
     Extended fields (Yunshu-specific, not in the Anthropic spec) are marked
     with comments and forwarded to the engine for additional functionality.
     """
+
     # ── Anthropic-native fields ──
     model: str
     messages: list[AnthropicMessage]
@@ -212,7 +216,9 @@ class AnthropicMessagesRequest(BaseModel):
 
     # ── Yunshu-extended fields (forwarded to engine) ──
     lora_adapter: str | None = None
-    cached_content: str | None = None  # Gemini-style explicit context-cache handle to prepend
+    cached_content: str | None = (
+        None  # Gemini-style explicit context-cache handle to prepend
+    )
     min_p: float = Field(default=0.0, ge=0.0, le=1.0)
     repetition_penalty: float = Field(default=1.0, ge=0.0, le=2.0)
     frequency_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
@@ -223,7 +229,9 @@ class AnthropicMessagesRequest(BaseModel):
     stop_token_ids: list[int] | None = None
     spec_decode: bool = False
     xtc_probability: float = Field(default=0.0, ge=0.0, le=1.0)
-    xtc_threshold: float = Field(default=0.0, ge=0.0, le=0.5)  # engine requires [0,0.5]; le=1.0 made out-of-range 500 not 422
+    xtc_threshold: float = Field(
+        default=0.0, ge=0.0, le=0.5
+    )  # engine requires [0,0.5]; le=1.0 made out-of-range 500 not 422
     # sampling controls, missing on /v1/messages —
     # silently ignored (see responses.py / chat.py:352-354).
     min_tokens: int = Field(default=0, ge=0)
@@ -236,7 +244,9 @@ class AnthropicMessagesRequest(BaseModel):
     logits_processors: list | None = None
     # Client-forwarded field (not Anthropic spec, but commonly sent by SDKs)
     response_format: dict | None = None
-    timeout: float | None = Field(default=None, ge=1.0, le=600.0)  # Request timeout in seconds
+    timeout: float | None = Field(
+        default=None, ge=1.0, le=600.0
+    )  # Request timeout in seconds
     grammar: dict | None = None  # Grammar constraint (regex, choice, CFG)
     stream_options: dict | None = None  # Anthropic stream_options (include_usage)
 
@@ -258,25 +268,38 @@ class AnthropicMessagesRequest(BaseModel):
             if thinking_type == "enabled":
                 budget = self.thinking.get("budget_tokens")
                 if budget is None:
-                    raise ValueError("thinking: budget_tokens is required when thinking is enabled")
+                    raise ValueError(
+                        "thinking: budget_tokens is required when thinking is enabled"
+                    )
                 if not isinstance(budget, int) or budget < 1:
-                    raise ValueError("thinking: budget_tokens must be a positive integer")
+                    raise ValueError(
+                        "thinking: budget_tokens must be a positive integer"
+                    )
                 # Anthropic mandates max_tokens > thinking.budget_tokens (the budget
                 # is the reasoning allowance, which must leave room for the visible answer);
                 # the API returns 400 otherwise. Was accepted leniently before.
                 if isinstance(self.max_tokens, int) and budget >= self.max_tokens:
                     raise ValueError(
                         f"thinking.budget_tokens ({budget}) must be less than max_tokens "
-                        f"({self.max_tokens})")
+                        f"({self.max_tokens})"
+                    )
             elif thinking_type == "disabled":
                 pass  # Explicitly disabling thinking is valid
             elif thinking_type is not None:
-                raise ValueError(f"thinking.type must be 'enabled' or 'disabled', got '{thinking_type}'")
+                raise ValueError(
+                    f"thinking.type must be 'enabled' or 'disabled', got '{thinking_type}'"
+                )
         # Validate response_format type if provided
         if self.response_format is not None:
-            rf_type = self.response_format.get("type") if isinstance(self.response_format, dict) else None
+            rf_type = (
+                self.response_format.get("type")
+                if isinstance(self.response_format, dict)
+                else None
+            )
             if rf_type not in ("json_object", "json_schema", "text", None):
-                raise ValueError(f"response_format.type: must be 'json_object', 'json_schema', or 'text', got '{rf_type}'")
+                raise ValueError(
+                    f"response_format.type: must be 'json_object', 'json_schema', or 'text', got '{rf_type}'"
+                )
         # Per Anthropic spec: top_logprobs requires logprobs=True
         if self.top_logprobs is not None and not self.logprobs:
             raise ValueError("top_logprobs requires logprobs to be true")
@@ -295,25 +318,25 @@ def _resolve_json_schema(req) -> dict | str | None:
     # Forced-tool grammar from tool_choice="any"/"tool" takes highest
     # priority — clients enforcing a specific tool call should not have
     # their constraint silently overridden by a less specific schema.
-    forced = getattr(req, '_forced_tool_grammar', None)
+    forced = getattr(req, "_forced_tool_grammar", None)
     if forced is not None:
         return forced
     # Forced-thinking grammar — set when thinking={enabled,...} on a model
     # that doesn't natively emit <think> tags. Forces the output to start
     # with <think>...</think> so downstream extract_thinking() can split.
-    forced_think = getattr(req, '_forced_thinking_grammar', None)
+    forced_think = getattr(req, "_forced_thinking_grammar", None)
     if forced_think is not None:
         return forced_think
     # Direct json_schema field takes priority
-    js = getattr(req, 'json_schema', None)
+    js = getattr(req, "json_schema", None)
     if js is not None:
         return js
     # Grammar constraint (regex, choice, CFG) — only if actually provided
-    grammar = getattr(req, 'grammar', None)
+    grammar = getattr(req, "grammar", None)
     if grammar is not None and isinstance(grammar, (dict, str)):
         return grammar
     # Fall back to OpenAI-style response_format
-    rf = getattr(req, 'response_format', None)
+    rf = getattr(req, "response_format", None)
     if rf is not None:
         rf_type = rf.get("type")
         if rf_type == "json_object":
@@ -439,12 +462,10 @@ def _convert_anthropic_messages(
 
         # Check for tool_use and tool_result blocks
         has_tool_use = any(
-            isinstance(b, dict) and b.get("type") == "tool_use"
-            for b in content
+            isinstance(b, dict) and b.get("type") == "tool_use" for b in content
         )
         has_tool_result = any(
-            isinstance(b, dict) and b.get("type") == "tool_result"
-            for b in content
+            isinstance(b, dict) and b.get("type") == "tool_result" for b in content
         )
 
         if has_tool_use and role == "assistant":
@@ -470,11 +491,13 @@ def _convert_anthropic_messages(
                         _args = json.dumps(tool_input)
                     except (TypeError, ValueError):
                         _args = json.dumps({"value": str(tool_input)})
-                    tool_calls.append({
-                        "id": tool_id,
-                        "type": "function",
-                        "function": {"name": tool_name, "arguments": _args},
-                    })
+                    tool_calls.append(
+                        {
+                            "id": tool_id,
+                            "type": "function",
+                            "function": {"name": tool_name, "arguments": _args},
+                        }
+                    )
                 else:
                     text_parts.append(_extract_text_from_content([block]))
 
@@ -500,8 +523,11 @@ def _convert_anthropic_messages(
                         # _convert_image_block) so the VLM actually SEES a tool-returned
                         # screenshot (vision-tool / computer-use agents). Previously every
                         # image was flattened to the literal "[Image: …]" → model blind.
-                        _img_blocks = [x for x in inner
-                                       if isinstance(x, dict) and x.get("type") == "image"]
+                        _img_blocks = [
+                            x
+                            for x in inner
+                            if isinstance(x, dict) and x.get("type") == "image"
+                        ]
                         _text_blocks = [x for x in inner if x not in _img_blocks]
                         inner_text = _extract_text_from_content(_text_blocks)
                     else:
@@ -511,7 +537,11 @@ def _convert_anthropic_messages(
                     # failed; the old code dropped it → the model saw a FAILED result as a
                     # success and proceeded (skipped retries, hallucinated on garbage). Mark it.
                     if block.get("is_error"):
-                        _content = f"[tool_error] {_content}" if _content else "[tool_error] (no detail)"
+                        _content = (
+                            f"[tool_error] {_content}"
+                            if _content
+                            else "[tool_error] (no detail)"
+                        )
                     _tmsg = {
                         "role": "tool",
                         "content": _content,
@@ -532,9 +562,13 @@ def _convert_anthropic_messages(
                             except HTTPException:
                                 raise
                             except Exception:
-                                logger.debug("tool_result image conversion failed", exc_info=True)
+                                logger.debug(
+                                    "tool_result image conversion failed", exc_info=True
+                                )
                 elif bt == "text":
-                    intermediate.append({"role": "user", "content": block.get("text", "")})
+                    intermediate.append(
+                        {"role": "user", "content": block.get("text", "")}
+                    )
                 elif bt == "image" and has_images:
                     # Handle image blocks in VLM path
                     _convert_image_block(block, intermediate, temp_files)
@@ -552,7 +586,9 @@ def _convert_anthropic_messages(
                     continue
                 bt = block.get("type", "")
                 if bt == "text":
-                    converted_parts.append({"type": "text", "text": block.get("text", "")})
+                    converted_parts.append(
+                        {"type": "text", "text": block.get("text", "")}
+                    )
                 elif bt == "image":
                     source = block.get("source", {})
                     media_type = source.get("media_type", "unknown")
@@ -561,40 +597,60 @@ def _convert_anthropic_messages(
                     if data and source_type == "base64":
                         import base64 as _b64
                         import tempfile as _tf
+
                         try:
                             raw = _b64.b64decode(data, validate=False)
                         except Exception:
-                            logger.debug("base64 decode failed, trying with padding", exc_info=True)
+                            logger.debug(
+                                "base64 decode failed, trying with padding",
+                                exc_info=True,
+                            )
                             raw = _b64.b64decode(data + "==", validate=False)
-                        ext_map = {"image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}
+                        ext_map = {
+                            "image/png": "png",
+                            "image/jpeg": "jpg",
+                            "image/gif": "gif",
+                            "image/webp": "webp",
+                        }
                         ext = ext_map.get(media_type, "png")
                         # delete=False is intentional — file must outlive function for
                         # downstream image inference; cleanup via temp_files registry.
-                        tmp = _tf.NamedTemporaryFile(suffix=f".{ext}", delete=False)  #noqa: SIM115
+                        tmp = _tf.NamedTemporaryFile(suffix=f".{ext}", delete=False)  # noqa: SIM115
                         try:
                             tmp.write(raw)
                             tmp.close()
                         except Exception:
                             tmp.close()
                             import os as _os
+
                             with contextlib.suppress(OSError):
                                 _os.unlink(tmp.name)
                             raise
                         temp_files.append(tmp.name)
-                        converted_parts.append({"type": "image_url", "image_url": {"url": f"file://{tmp.name}"}})
+                        converted_parts.append(
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"file://{tmp.name}"},
+                            }
+                        )
                     elif source_type == "url" and source.get("url"):
                         # Anthropic url source: scheme-validate before pass-through
                         # to prevent SSRF (mirror the check in chat.py).
                         _src_url = source["url"]
                         from .chat import _is_safe_image_url
+
                         if not _is_safe_image_url(_src_url):
                             raise HTTPException(
                                 status_code=400,
                                 detail=f"Image URL blocked by SSRF protection: '{_src_url[:80]}'",
                             )
-                        converted_parts.append({"type": "image_url", "image_url": {"url": _src_url}})
+                        converted_parts.append(
+                            {"type": "image_url", "image_url": {"url": _src_url}}
+                        )
                     else:
-                        converted_parts.append({"type": "text", "text": f"[Image: {media_type}]"})
+                        converted_parts.append(
+                            {"type": "text", "text": f"[Image: {media_type}]"}
+                        )
                 else:
                     text = _extract_text_from_content([block])
                     converted_parts.append({"type": "text", "text": text})
@@ -608,7 +664,9 @@ def _convert_anthropic_messages(
     return intermediate, temp_files
 
 
-def _convert_image_block(block: dict, intermediate: list[dict], temp_files: list[str]) -> None:
+def _convert_image_block(
+    block: dict, intermediate: list[dict], temp_files: list[str]
+) -> None:
     """Convert an Anthropic image block and append to intermediate messages."""
     source = block.get("source", {})
     media_type = source.get("media_type", "unknown")
@@ -617,42 +675,56 @@ def _convert_image_block(block: dict, intermediate: list[dict], temp_files: list
     if data and source_type == "base64":
         import base64 as _b64
         import tempfile as _tf
+
         try:
             raw = _b64.b64decode(data, validate=False)
         except Exception:
             raw = _b64.b64decode(data + "==", validate=False)
-        ext_map = {"image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}
+        ext_map = {
+            "image/png": "png",
+            "image/jpeg": "jpg",
+            "image/gif": "gif",
+            "image/webp": "webp",
+        }
         ext = ext_map.get(media_type, "png")
         # delete=False is intentional — file must outlive function for downstream
         # image inference; cleanup via temp_files registry.
-        tmp = _tf.NamedTemporaryFile(suffix=f".{ext}", delete=False)  #noqa: SIM115
+        tmp = _tf.NamedTemporaryFile(suffix=f".{ext}", delete=False)  # noqa: SIM115
         try:
             tmp.write(raw)
             tmp.close()
         except Exception:
             tmp.close()
             import os as _os
+
             with contextlib.suppress(OSError):
                 _os.unlink(tmp.name)
             raise
         temp_files.append(tmp.name)
-        intermediate.append({
-            "role": "user",
-            "content": [{"type": "image_url", "image_url": {"url": f"file://{tmp.name}"}}],
-        })
+        intermediate.append(
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"file://{tmp.name}"}}
+                ],
+            }
+        )
     elif source_type == "url" and source.get("url"):
         # Anthropic url source: scheme-validate before pass-through (SSRF).
         _src_url = source["url"]
         from .chat import _is_safe_image_url
+
         if not _is_safe_image_url(_src_url):
             raise HTTPException(
                 status_code=400,
                 detail=f"Image URL blocked by SSRF protection: '{_src_url[:80]}'",
             )
-        intermediate.append({
-            "role": "user",
-            "content": [{"type": "image_url", "image_url": {"url": _src_url}}],
-        })
+        intermediate.append(
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": _src_url}}],
+            }
+        )
     else:
         intermediate.append({"role": "user", "content": f"[Image: {media_type}]"})
 
@@ -683,8 +755,9 @@ def _cacheable_prefix_token_count(system, char_offsets, tokenizer) -> int:
         return 0
 
 
-def _anthropic_cache_usage(prompt_tokens: int, cached_tokens: int,
-                           cacheable_prefix_tokens: int = 0) -> tuple[int, int, int]:
+def _anthropic_cache_usage(
+    prompt_tokens: int, cached_tokens: int, cacheable_prefix_tokens: int = 0
+) -> tuple[int, int, int]:
     """Map our single `cached_tokens` signal to Anthropic's three usage counters,
     respecting the invariant input + cache_creation + cache_read == prompt_tokens
     (the old code double-counted: input_tokens=prompt AND cache_read=cached → 2×).
@@ -710,7 +783,9 @@ def _anthropic_cache_usage(prompt_tokens: int, cached_tokens: int,
     return input_tokens, cache_creation, cache_read
 
 
-def _extract_cache_control_hints(system: str | list[dict] | None) -> tuple[list[dict], list[int]]:
+def _extract_cache_control_hints(
+    system: str | list[dict] | None,
+) -> tuple[list[dict], list[int]]:
     """Extract cache_control hints and character offsets from system messages.
 
     Anthropic uses cache_control to signal prompt-caching breakpoints.
@@ -758,7 +833,7 @@ _TOOL_CALL_JSON_RE = re.compile(
     r'\{[\s\n]*"name"\s*:\s*"([^"]+)"\s*,\s*"arguments"\s*:\s*',
 )
 _TOOL_CALL_XML_RE = re.compile(
-    r'<tool_call\s*/?\s*>\s*(.*?)\s*</tool_call\s*/?\s*>',
+    r"<tool_call\s*/?\s*>\s*(.*?)\s*</tool_call\s*/?\s*>",
     re.DOTALL,
 )
 
@@ -770,7 +845,7 @@ def _try_parse_tool_call_delta(text: str) -> list[dict] | None:
     is detected, or None if the text doesn't contain a recognisable tool call.
     """
     # Fast rejection: skip regex entirely if no tool-call trigger chars present
-    if '<' not in text and '{' not in text:
+    if "<" not in text and "{" not in text:
         return None
     # Try XML-wrapped tool calls first
     for m in _TOOL_CALL_XML_RE.finditer(text):
@@ -778,7 +853,12 @@ def _try_parse_tool_call_delta(text: str) -> list[dict] | None:
         try:
             data = json.loads(inner)
             if "name" in data:
-                return [{"name": data["name"], "arguments": json.dumps(data.get("arguments", {}))}]
+                return [
+                    {
+                        "name": data["name"],
+                        "arguments": json.dumps(data.get("arguments", {})),
+                    }
+                ]
         except json.JSONDecodeError:
             pass
 
@@ -789,7 +869,7 @@ def _try_parse_tool_call_delta(text: str) -> list[dict] | None:
     calls: list[dict] = []
     for m in _TOOL_CALL_JSON_RE.finditer(text):
         name = m.group(1)
-        rest = text[m.end():]
+        rest = text[m.end() :]
         try:
             decoder = json.JSONDecoder()
             obj, end_idx = decoder.raw_decode(rest)
@@ -800,7 +880,9 @@ def _try_parse_tool_call_delta(text: str) -> list[dict] | None:
     return calls or None
 
 
-def _resolve_cached_content_text(cached_content, model, request, *, mutate: bool) -> str:
+def _resolve_cached_content_text(
+    cached_content, model, request, *, mutate: bool
+) -> str:
     """Resolve a Gemini-style ``cached_content`` handle to its stored prefix text (or "").
 
     Shared by create_message (mutate=True — marks a real READ, bumps last_used/read_count)
@@ -816,6 +898,7 @@ def _resolve_cached_content_text(cached_content, model, request, *, mutate: bool
     if not cached_content:
         return ""
     from ..explicit_cache import get_store
+
     _cc = cached_content
     _key = _cc if _cc.startswith("cachedContents/") else f"cachedContents/{_cc}"
     store = get_store()
@@ -823,25 +906,35 @@ def _resolve_cached_content_text(cached_content, model, request, *, mutate: bool
     _cc_owner = getattr(entry, "owner", None) if entry is not None else None
     if _cc_owner and _cc_owner != "anonymous":
         from yunshu_control.audit_log import resolve_actor
+
         if resolve_actor(request) != _cc_owner:
-            logger.warning("anthropic cached_content '%s' owned by another tenant — ignoring", _cc)
+            logger.warning(
+                "anthropic cached_content '%s' owned by another tenant — ignoring", _cc
+            )
             entry = None
-    if entry is not None and getattr(entry, 'model', None) and entry.model != model:
+    if entry is not None and getattr(entry, "model", None) and entry.model != model:
         raise HTTPException(
             status_code=400,
-            detail=(f"cached_content '{_cc}' was created for model '{entry.model}' "
-                    f"and cannot be used with '{model}'"))
+            detail=(
+                f"cached_content '{_cc}' was created for model '{entry.model}' "
+                f"and cannot be used with '{model}'"
+            ),
+        )
     if entry is not None and entry.messages:
+
         def _cc_msg_text(_m):
             _c = _m.get("content")
             if isinstance(_c, str):
                 return _c
             if isinstance(_c, list):
                 return " ".join(
-                    _b.get("text", "") for _b in _c
+                    _b.get("text", "")
+                    for _b in _c
                     if isinstance(_b, dict)
-                    and _b.get("type") in ("text", "input_text", "output_text"))
+                    and _b.get("type") in ("text", "input_text", "output_text")
+                )
             return ""
+
         return "\n".join(_cc_msg_text(m) for m in entry.messages).strip()
     return ""
 
@@ -877,7 +970,8 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
             # cross-tenant ownership guard + model-mismatch 400; flattens block content.
             # count_tokens reuses the SAME resolver so the estimate can't drift.
             _cc_text = _resolve_cached_content_text(
-                req.cached_content, req.model, request, mutate=True)
+                req.cached_content, req.model, request, mutate=True
+            )
             if _cc_text:
                 if isinstance(req.system, str):
                     req.system = _cc_text + "\n" + req.system
@@ -898,14 +992,19 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     # where the engine should save KV prefix cache entries.
     _cache_hints, _kv_cache_breakpoints = _extract_cache_control_hints(req.system)
     if _kv_cache_breakpoints:
-        logger.debug("Anthropic cache_control breakpoints (char offsets): %s", _kv_cache_breakpoints)
+        logger.debug(
+            "Anthropic cache_control breakpoints (char offsets): %s",
+            _kv_cache_breakpoints,
+        )
 
     has_images = any(_has_image_blocks(m.content) for m in req.messages)
 
     # Convert Anthropic messages to OpenAI-compatible format
     # This properly handles tool_use/tool_result blocks instead of flattening them
     converted_msgs, _temp_files = _convert_anthropic_messages(
-        req.messages, has_images=has_images, temp_files=_temp_files,
+        req.messages,
+        has_images=has_images,
+        temp_files=_temp_files,
     )
     messages.extend(converted_msgs)
 
@@ -924,7 +1023,11 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     # role="system" entries from messages[].
     _all_system: list[str] = []
     if req.system:
-        _all_system.append(_extract_text_from_content(req.system) if isinstance(req.system, list) else req.system)
+        _all_system.append(
+            _extract_text_from_content(req.system)
+            if isinstance(req.system, list)
+            else req.system
+        )
     _all_system.extend(p for p in _system_parts if p)
     # snapshot the ORIGINAL system (the list-of-blocks carrying cache_control)
     # before collapsing it to a string below. _cacheable_prefix_token_count needs the LIST
@@ -947,7 +1050,11 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     # is set, so we inject a system instruction telling the model to
     # wrap its reasoning. Native-thinking models (Qwen3 etc.) ignore the
     # added hint because their template emits <think> tokens regardless.
-    if req.thinking and isinstance(req.thinking, dict) and req.thinking.get("type") == "enabled":
+    if (
+        req.thinking
+        and isinstance(req.thinking, dict)
+        and req.thinking.get("type") == "enabled"
+    ):
         _budget = req.thinking.get("budget_tokens")
         _think_instruction = (
             "\n\nIMPORTANT FORMAT REQUIREMENT: You MUST begin every reply with "
@@ -957,13 +1064,15 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
             "Example shape: <think>...reasoning...</think>final answer."
         )
         if isinstance(_budget, int) and _budget > 0:
-            _think_instruction += (
-                f" Keep the reasoning inside <think>...</think> to roughly {_budget} tokens."
-            )
+            _think_instruction += f" Keep the reasoning inside <think>...</think> to roughly {_budget} tokens."
         if messages and messages[0].get("role") == "system":
-            messages[0]["content"] = (messages[0].get("content") or "") + _think_instruction
+            messages[0]["content"] = (
+                messages[0].get("content") or ""
+            ) + _think_instruction
         else:
-            messages.insert(0, {"role": "system", "content": _think_instruction.strip()})
+            messages.insert(
+                0, {"role": "system", "content": _think_instruction.strip()}
+            )
         # Mark that we requested thinking via prompt injection — used later
         # to apply a heuristic-based <think> wrapper around the model's
         # natural reasoning prose if the model declined to emit literal tags.
@@ -972,9 +1081,12 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
         # force the model to start with <think>...</think> via a regex
         # grammar. This is the most reliable way to guarantee the Anthropic
         # response contains a "thinking" content block.
-        if not req.tools and getattr(req, 'json_schema', None) is None \
-                and getattr(req, 'grammar', None) is None \
-                and getattr(req, 'response_format', None) is None:
+        if (
+            not req.tools
+            and getattr(req, "json_schema", None) is None
+            and getattr(req, "grammar", None) is None
+            and getattr(req, "response_format", None) is None
+        ):
             req._forced_thinking_grammar = {
                 "type": "regex",
                 # Require at least one non-trivial character inside <think>...</think>
@@ -984,7 +1096,9 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
 
     # Inject tool definitions into system prompt if provided
     if req.tools:
-        tool_prompt = "\n\nYou have access to the following tools. When you need to call a tool, "
+        tool_prompt = (
+            "\n\nYou have access to the following tools. When you need to call a tool, "
+        )
         tool_prompt += 'output a tool call in the following format:\n<tool_call\\>{"name": "...", "arguments": {...}}</tool_call\\>\n\n'
         tool_prompt += "Available tools:\n"
         for tool in req.tools:
@@ -1023,6 +1137,7 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
                         if name is None and isinstance(t, dict):
                             name = t.get("name")
                         return str(name or "")
+
                     tool_names = ", ".join(
                         n for n in (_tool_name(t) for t in (req.tools or [])) if n
                     )
@@ -1089,7 +1204,9 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
             content={
                 "type": "error",
                 "error": {
-                    "type": "not_found_error" if e.status_code == 404 else "overloaded_error",
+                    "type": "not_found_error"
+                    if e.status_code == 404
+                    else "overloaded_error",
                     "message": e.detail,
                 },
             },
@@ -1102,14 +1219,20 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
         from yunshu_control.token_counter import count_message_tokens
 
         from ..streaming import validate_context_window, validate_prefill_memory
-        _pf_tok = getattr(engine, "_tokenizer", None) or getattr(engine, "tokenizer", None)
+
+        _pf_tok = getattr(engine, "_tokenizer", None) or getattr(
+            engine, "tokenizer", None
+        )
         _pf_est = count_message_tokens(messages, _pf_tok)
         validate_context_window(_pf_est, req.model, engine)
         validate_prefill_memory(_pf_est)
     except HTTPException as e:
         return JSONResponse(
             status_code=e.status_code,
-            content={"type": "error", "error": {"type": "invalid_request_error", "message": e.detail}},
+            content={
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": e.detail},
+            },
         )
     except Exception:
         logger.debug("anthropic prefill validation skipped", exc_info=True)
@@ -1125,14 +1248,27 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     except HTTPException as e:
         return JSONResponse(
             status_code=e.status_code,
-            content={"type": "error", "error": {"type": "invalid_request_error", "message": e.detail}},
+            content={
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": e.detail},
+            },
         )
 
     loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
 
     if req.stream:
         return StreamingResponse(
-            _stream_anthropic(engine, messages, req, stop, request, is_batched=is_batched, temp_files=_temp_files, lora_adapter=loaded_adapter, kv_cache_breakpoints=_kv_cache_breakpoints),
+            _stream_anthropic(
+                engine,
+                messages,
+                req,
+                stop,
+                request,
+                is_batched=is_batched,
+                temp_files=_temp_files,
+                lora_adapter=loaded_adapter,
+                kv_cache_breakpoints=_kv_cache_breakpoints,
+            ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache"},
         )
@@ -1144,6 +1280,7 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     _ns_cancel_event = None
     try:
         from yunshu_engine.request_tracker import get_request_tracker
+
         _ns_tracker = get_request_tracker()
         _ns_gen = _ns_tracker.register(message_id, req.model)
         _ns_cancel_event = _ns_gen.cancel_event
@@ -1152,8 +1289,26 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
 
     try:
         if is_batched:
-            return await _non_stream_batched(engine, messages, req, stop, cancel_event=_ns_cancel_event, lora_adapter=loaded_adapter, kv_cache_breakpoints=_kv_cache_breakpoints, request=request)
-        return await _non_stream_legacy(engine, messages, req, stop, cancel_event=_ns_cancel_event, lora_adapter=loaded_adapter, kv_cache_breakpoints=_kv_cache_breakpoints, request=request)
+            return await _non_stream_batched(
+                engine,
+                messages,
+                req,
+                stop,
+                cancel_event=_ns_cancel_event,
+                lora_adapter=loaded_adapter,
+                kv_cache_breakpoints=_kv_cache_breakpoints,
+                request=request,
+            )
+        return await _non_stream_legacy(
+            engine,
+            messages,
+            req,
+            stop,
+            cancel_event=_ns_cancel_event,
+            lora_adapter=loaded_adapter,
+            kv_cache_breakpoints=_kv_cache_breakpoints,
+            request=request,
+        )
     finally:
         _release_lora_adapter(engine, loaded_adapter)
         if _ns_tracker is not None:
@@ -1161,6 +1316,7 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
                 _ns_tracker.unregister(message_id)
         # Clean up temp files created for image blocks
         import os as _os
+
         for _tf_path in _temp_files:
             with contextlib.suppress(OSError):
                 _os.unlink(_tf_path)
@@ -1169,6 +1325,7 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
 async def _resolve_engine(model_id: str):
     """Resolve engine, returning (engine, is_batched) tuple."""
     from yunshu_engine.batched_engine import BatchedEngine
+
     engine = get_engine()
 
     if engine is not None and engine.is_loaded and engine.resolve_model_id(model_id):
@@ -1176,6 +1333,7 @@ async def _resolve_engine(model_id: str):
 
     # Multi-model mode
     from ..engine import get_engine_for_model
+
     try:
         engine = await get_engine_for_model(model_id)
     except (KeyError, Exception):
@@ -1187,6 +1345,7 @@ async def _resolve_engine(model_id: str):
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
 
     from yunshu_engine.batched_engine import BatchedEngine
+
     is_batched = isinstance(engine, BatchedEngine)
     return engine, is_batched
 
@@ -1196,14 +1355,25 @@ def _convert_logit_bias(req):
     _lb = req.logit_bias
     if _lb:
         import math
+
         result = {}
         for k, v in _lb.items():
             # validate the VALUE (chat/responses do this; anthropic was missing
             # it). A NaN/Inf bias → all-NaN softmax → garbage.
-            if isinstance(v, bool) or not isinstance(v, (int, float)) or math.isnan(v) or math.isinf(v):
-                raise HTTPException(status_code=400, detail=f"logit_bias[{k}]: must be a finite number")
+            if (
+                isinstance(v, bool)
+                or not isinstance(v, (int, float))
+                or math.isnan(v)
+                or math.isinf(v)
+            ):
+                raise HTTPException(
+                    status_code=400, detail=f"logit_bias[{k}]: must be a finite number"
+                )
             if v < -100.0 or v > 100.0:
-                raise HTTPException(status_code=400, detail=f"logit_bias[{k}]={v}: must be between -100 and 100")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"logit_bias[{k}]={v}: must be between -100 and 100",
+                )
             try:
                 result[int(k)] = v
             except (ValueError, TypeError):
@@ -1212,9 +1382,19 @@ def _convert_logit_bias(req):
     return None
 
 
-async def _non_stream_batched(engine, messages, req, stop, cancel_event=None, lora_adapter=None, kv_cache_breakpoints=None, request=None):
+async def _non_stream_batched(
+    engine,
+    messages,
+    req,
+    stop,
+    cancel_event=None,
+    lora_adapter=None,
+    kv_cache_breakpoints=None,
+    request=None,
+):
     """Non-streaming response via BatchedEngine."""
     from fastapi.responses import JSONResponse
+
     enable_thinking = req.thinking and req.thinking.get("type") == "enabled"
     budget_tokens = req.thinking.get("budget_tokens") if req.thinking else None
     _logit_bias = _convert_logit_bias(req)
@@ -1257,7 +1437,9 @@ async def _non_stream_batched(engine, messages, req, stop, cancel_event=None, lo
         # decode loop stops (was: registered cancel_event but never polled is_disconnected
         # → a disconnect ran to max_tokens/timeout, HOL-blocking the serial executor).
         if request is not None:
-            result = await run_with_disconnect_guard(request, _chat_coro, cancel_event=cancel_event)
+            result = await run_with_disconnect_guard(
+                request, _chat_coro, cancel_event=cancel_event
+            )
             if result is None:
                 raise HTTPException(status_code=499, detail="Client disconnected")
         else:
@@ -1267,13 +1449,22 @@ async def _non_stream_batched(engine, messages, req, stop, cancel_event=None, lo
     except MemoryError:
         return JSONResponse(
             status_code=507,
-            content={"type": "error", "error": {"type": "overloaded_error", "message": "Insufficient GPU memory"}},
+            content={
+                "type": "error",
+                "error": {
+                    "type": "overloaded_error",
+                    "message": "Insufficient GPU memory",
+                },
+            },
         )
     except Exception as e:
         logger.error(f"Anthropic batched generation error: {e}", exc_info=True)
         return JSONResponse(
             status_code=500,
-            content={"type": "error", "error": {"type": "api_error", "message": "Internal server error"}},
+            content={
+                "type": "error",
+                "error": {"type": "api_error", "message": "Internal server error"},
+            },
         )
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
     # the engine's completion_tokens ALREADY includes reasoning tokens
@@ -1292,13 +1483,16 @@ async def _non_stream_batched(engine, messages, req, stop, cancel_event=None, lo
     # no-op without think tags. Emit the thinking block when there IS reasoning OR thinking
     # was explicitly requested (the Anthropic-spec placeholder for an injected-but-silent CoT).
     from ..streaming import extract_thinking
+
     thinking_text, visible_text = extract_thinking(result.text, req.model)
-    if thinking_text or getattr(req, '_thinking_prompt_injected', False):
-        content.append({
-            "type": "thinking",
-            "thinking": thinking_text,
-            "signature": "",
-        })
+    if thinking_text or getattr(req, "_thinking_prompt_injected", False):
+        content.append(
+            {
+                "type": "thinking",
+                "thinking": thinking_text,
+                "signature": "",
+            }
+        )
 
     text_block: dict = {"type": "text", "text": visible_text}
 
@@ -1309,7 +1503,9 @@ async def _non_stream_batched(engine, messages, req, stop, cancel_event=None, lo
     # and "<stop_sequence>" as a placeholder otherwise) so `stop_reason`
     # is set truthfully per Anthropic's protocol.
     matched_stop = _detect_matched_stop(
-        visible_text, stop, getattr(result, "finish_reason", None),
+        visible_text,
+        stop,
+        getattr(result, "finish_reason", None),
         stopped_by_stop_sequence=getattr(result, "stopped_by_stop_sequence", None),
     )
     if matched_stop and visible_text:
@@ -1320,7 +1516,7 @@ async def _non_stream_batched(engine, messages, req, stop, cancel_event=None, lo
 
     # Include logprobs in the text content block if requested
     if req.logprobs:
-        _result_lp = getattr(result, 'logprobs', None)
+        _result_lp = getattr(result, "logprobs", None)
         if _result_lp:
             # Anthropic format: logprobs array in the content block
             # Each entry: {"token": str, "logprob": float, "top_logprobs": [...]}
@@ -1333,16 +1529,18 @@ async def _non_stream_batched(engine, messages, req, stop, cancel_event=None, lo
     # Extract tool calls from model output if tools were provided
     # (but not when tool_choice is "none" — see create_message where tools are
     # suppressed from the prompt; skip extraction to avoid false stop_reason)
-    _suppress_tool_extraction = getattr(req, '_suppress_tools', False)
+    _suppress_tool_extraction = getattr(req, "_suppress_tools", False)
     has_tool_calls = False
     if _suppress_tool_extraction and req.tools:
         # tool_choice="none" suppresses tool_use emission, but the model may still
         # emit <tool_call> markup — strip it from the visible text so it doesn't leak (the
         # chat router cleans even under "none"; the old Anthropic path skipped cleanup).
         from ..streaming import clean_tool_call_markup
+
         text_block["text"] = clean_tool_call_markup(visible_text)
     if req.tools and not _suppress_tool_extraction:
         from ..streaming import clean_tool_call_markup, extract_tool_calls_model_aware
+
         tool_calls = extract_tool_calls_model_aware(visible_text, req.model)
         # enforce a forced/none-parallel tool_choice post-generation (parity with
         # chat's _enforce_tool_choice) — drop wrong-named / surplus calls.
@@ -1358,23 +1556,39 @@ async def _non_stream_batched(engine, messages, req, stop, cancel_event=None, lo
             for tc in tool_calls:
                 tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
                 try:
-                    inp = json.loads(tc["arguments"]) if isinstance(tc["arguments"], str) else tc["arguments"]
+                    inp = (
+                        json.loads(tc["arguments"])
+                        if isinstance(tc["arguments"], str)
+                        else tc["arguments"]
+                    )
                 except (json.JSONDecodeError, TypeError):
                     inp = {}
-                content.append({
-                    "type": "tool_use",
-                    "id": tool_id,
-                    "name": tc["name"],
-                    "input": inp,
-                })
+                content.append(
+                    {
+                        "type": "tool_use",
+                        "id": tool_id,
+                        "name": tc["name"],
+                        "input": inp,
+                    }
+                )
 
-    stop_reason = _map_stop_reason(result.finish_reason, matched_stop, has_tool_calls=has_tool_calls)
+    stop_reason = _map_stop_reason(
+        result.finish_reason, matched_stop, has_tool_calls=has_tool_calls
+    )
 
-    _cache_tok = getattr(engine, "_tokenizer", None) or getattr(engine, "tokenizer", None)
+    _cache_tok = getattr(engine, "_tokenizer", None) or getattr(
+        engine, "tokenizer", None
+    )
     _input_tok, cache_creation, cache_read = _anthropic_cache_usage(
-        getattr(result, 'prompt_tokens', 0), getattr(result, 'cached_tokens', 0),
-        _cacheable_prefix_token_count(getattr(req, "_anthropic_orig_system", req.system), kv_cache_breakpoints, _cache_tok))
-    reasoning_tok = getattr(result, 'reasoning_tokens', 0) or 0
+        getattr(result, "prompt_tokens", 0),
+        getattr(result, "cached_tokens", 0),
+        _cacheable_prefix_token_count(
+            getattr(req, "_anthropic_orig_system", req.system),
+            kv_cache_breakpoints,
+            _cache_tok,
+        ),
+    )
+    reasoning_tok = getattr(result, "reasoning_tokens", 0) or 0
 
     # For models that don't natively report reasoning_tokens (e.g. Qwen2.5
     # with our prompt-injected <think> path), approximate by tokenizing
@@ -1382,10 +1596,12 @@ async def _non_stream_batched(engine, messages, req, stop, cancel_event=None, lo
     # includes the thinking tokens (engine sees one undifferentiated stream),
     # so we only surface reasoning_tokens for client visibility — do NOT
     # double-add to output_tokens.
-    _engine_reasoning_tok = getattr(result, 'reasoning_tokens', 0) or 0
+    _engine_reasoning_tok = getattr(result, "reasoning_tokens", 0) or 0
     if _engine_reasoning_tok == 0 and thinking_text:
         try:
-            _tok = getattr(engine, "_tokenizer", None) or getattr(engine, "tokenizer", None)
+            _tok = getattr(engine, "_tokenizer", None) or getattr(
+                engine, "tokenizer", None
+            )
             if _tok is not None and hasattr(_tok, "encode"):
                 reasoning_tok = len(_tok.encode(thinking_text))
         except Exception:
@@ -1421,9 +1637,19 @@ async def _non_stream_batched(engine, messages, req, stop, cancel_event=None, lo
     return JSONResponse(resp)
 
 
-async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None, lora_adapter=None, kv_cache_breakpoints=None, request=None):
+async def _non_stream_legacy(
+    engine,
+    messages,
+    req,
+    stop,
+    cancel_event=None,
+    lora_adapter=None,
+    kv_cache_breakpoints=None,
+    request=None,
+):
     """Non-streaming response via Engine or BatchedEngine."""
     from fastapi.responses import JSONResponse
+
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
     enable_thinking = req.thinking and req.thinking.get("type") == "enabled"
     budget_tokens = req.thinking.get("budget_tokens") if req.thinking else None
@@ -1464,7 +1690,9 @@ async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None, lor
         )
         # disconnect guard (see _non_stream_batched).
         if request is not None:
-            result = await run_with_disconnect_guard(request, _gen_coro, cancel_event=cancel_event)
+            result = await run_with_disconnect_guard(
+                request, _gen_coro, cancel_event=cancel_event
+            )
             if result is None:
                 raise HTTPException(status_code=499, detail="Client disconnected")
         else:
@@ -1474,14 +1702,24 @@ async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None, lor
     except MemoryError:
         return JSONResponse(
             status_code=507,
-            content={"type": "error", "error": {"type": "overloaded_error", "message": "Insufficient GPU memory"}},
+            content={
+                "type": "error",
+                "error": {
+                    "type": "overloaded_error",
+                    "message": "Insufficient GPU memory",
+                },
+            },
         )
     except Exception as e:
         logger.error(f"Anthropic legacy generation error: {e}", exc_info=True)
         return JSONResponse(
             status_code=500,
-            content={"type": "error", "error": {"type": "api_error", "message": "Internal server error"}},
+            content={
+                "type": "error",
+                "error": {"type": "api_error", "message": "Internal server error"},
+            },
         )
+
     # Handle Engine (prompt_token_count attr), BatchedEngine (prompt_tokens
     # attr), and VLMEngine (returns a dict with prompt_tokens/text keys).
     def _g(name, fallback_name=None, default=0):
@@ -1495,11 +1733,11 @@ async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None, lor
             v = getattr(result, fallback_name, None)
         return default if v is None else v
 
-    prompt_toks = _g('prompt_tokens', 'prompt_token_count', 0)
-    completion_toks = _g('completion_tokens', 'completion_token_count', 0)
-    text = _g('text', 'generated_text', '')
-    finish_reason = _g('finish_reason', 'finish_state', None)
-    cached_toks = _g('cached_tokens', None, 0) or 0
+    prompt_toks = _g("prompt_tokens", "prompt_token_count", 0)
+    completion_toks = _g("completion_tokens", "completion_token_count", 0)
+    text = _g("text", "generated_text", "")
+    finish_reason = _g("finish_reason", "finish_state", None)
+    cached_toks = _g("cached_tokens", None, 0) or 0
     # completion_toks already includes reasoning (subset, not addend) — don't
     # re-add it (double-count). Matches the chat endpoint + the batched path above.
     _record_metrics(prompt_toks, completion_toks)
@@ -1513,6 +1751,7 @@ async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None, lor
     # unconditionally; Anthropic was the lone outlier. extract_thinking is a no-op when
     # there are no think tags, so non-thinking models are unaffected.
     from ..streaming import extract_thinking
+
     thinking_text, visible_text = extract_thinking(text, req.model)
     if thinking_text:
         content.append({"type": "thinking", "thinking": thinking_text, "signature": ""})
@@ -1525,7 +1764,9 @@ async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None, lor
     # and "<stop_sequence>" as a placeholder otherwise) so `stop_reason`
     # is set truthfully per Anthropic's protocol.
     matched_stop = _detect_matched_stop(
-        visible_text, stop, getattr(result, "finish_reason", None),
+        visible_text,
+        stop,
+        getattr(result, "finish_reason", None),
         stopped_by_stop_sequence=getattr(result, "stopped_by_stop_sequence", None),
     )
     if matched_stop and visible_text:
@@ -1536,7 +1777,7 @@ async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None, lor
 
     # Include logprobs in the text content block if requested
     if req.logprobs:
-        _result_lp = _g('logprobs', None, None)
+        _result_lp = _g("logprobs", None, None)
         if _result_lp:
             formatted_lp = _format_anthropic_logprobs(_result_lp)
             if formatted_lp:
@@ -1545,16 +1786,18 @@ async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None, lor
     content.append(text_block)
 
     # Extract tool calls from model output if tools were provided
-    _suppress_tool_extraction = getattr(req, '_suppress_tools', False)
+    _suppress_tool_extraction = getattr(req, "_suppress_tools", False)
     has_tool_calls = False
     if _suppress_tool_extraction and req.tools:
         # tool_choice="none" suppresses tool_use emission, but the model may still
         # emit <tool_call> markup — strip it from the visible text so it doesn't leak (the
         # chat router cleans even under "none"; the old Anthropic path skipped cleanup).
         from ..streaming import clean_tool_call_markup
+
         text_block["text"] = clean_tool_call_markup(visible_text)
     if req.tools and not _suppress_tool_extraction:
         from ..streaming import clean_tool_call_markup, extract_tool_calls_model_aware
+
         tool_calls = extract_tool_calls_model_aware(visible_text, req.model)
         # enforce a forced/none-parallel tool_choice post-generation (parity with
         # chat's _enforce_tool_choice) — drop wrong-named / surplus calls.
@@ -1570,26 +1813,42 @@ async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None, lor
             for tc in tool_calls:
                 tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
                 try:
-                    inp = json.loads(tc["arguments"]) if isinstance(tc["arguments"], str) else tc["arguments"]
+                    inp = (
+                        json.loads(tc["arguments"])
+                        if isinstance(tc["arguments"], str)
+                        else tc["arguments"]
+                    )
                 except (json.JSONDecodeError, TypeError):
                     inp = {}
-                content.append({
-                    "type": "tool_use",
-                    "id": tool_id,
-                    "name": tc["name"],
-                    "input": inp,
-                })
+                content.append(
+                    {
+                        "type": "tool_use",
+                        "id": tool_id,
+                        "name": tc["name"],
+                        "input": inp,
+                    }
+                )
 
-    stop_reason = _map_stop_reason(finish_reason, matched_stop, has_tool_calls=has_tool_calls)
+    stop_reason = _map_stop_reason(
+        finish_reason, matched_stop, has_tool_calls=has_tool_calls
+    )
 
     # completion_toks already includes reasoning tokens (reasoning_tokens is the
     # detail subset, not an addend) — same fix as _non_stream_batched / chat.py.
-    _reasoning_tok = _g('reasoning_tokens', None, 0) or 0
+    _reasoning_tok = _g("reasoning_tokens", None, 0) or 0
     _legacy_total_output = completion_toks
-    _lg_cache_tok = getattr(engine, "_tokenizer", None) or getattr(engine, "tokenizer", None)
+    _lg_cache_tok = getattr(engine, "_tokenizer", None) or getattr(
+        engine, "tokenizer", None
+    )
     _lg_input, _lg_creation, _lg_read = _anthropic_cache_usage(
-        prompt_toks, cached_toks,
-        _cacheable_prefix_token_count(getattr(req, "_anthropic_orig_system", req.system), kv_cache_breakpoints, _lg_cache_tok))
+        prompt_toks,
+        cached_toks,
+        _cacheable_prefix_token_count(
+            getattr(req, "_anthropic_orig_system", req.system),
+            kv_cache_breakpoints,
+            _lg_cache_tok,
+        ),
+    )
     _legacy_usage: dict[str, Any] = {
         "input_tokens": _lg_input,
         "output_tokens": _legacy_total_output,
@@ -1599,22 +1858,31 @@ async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None, lor
     if _reasoning_tok > 0:
         _legacy_usage["output_tokens_details"] = {"reasoning_tokens": _reasoning_tok}
 
-    return JSONResponse({
-        "id": message_id,
-        "type": "message",
-        "role": "assistant",
-        "content": content,
-        "model": req.model,
-        "stop_reason": stop_reason,
-        "stop_sequence": _public_stop_sequence(matched_stop),
-        "usage": _legacy_usage,
-        **({"metadata": req.metadata} if req.metadata else {}),
-    })
+    return JSONResponse(
+        {
+            "id": message_id,
+            "type": "message",
+            "role": "assistant",
+            "content": content,
+            "model": req.model,
+            "stop_reason": stop_reason,
+            "stop_sequence": _public_stop_sequence(matched_stop),
+            "usage": _legacy_usage,
+            **({"metadata": req.metadata} if req.metadata else {}),
+        }
+    )
 
 
 async def _stream_anthropic(
-    engine, messages, req, stop, request, is_batched=False, temp_files=None,
-    lora_adapter=None, kv_cache_breakpoints=None,
+    engine,
+    messages,
+    req,
+    stop,
+    request,
+    is_batched=False,
+    temp_files=None,
+    lora_adapter=None,
+    kv_cache_breakpoints=None,
 ) -> AsyncIterator[bytes]:
     """Anthropic SSE streaming with keepalive, disconnect detection, and tool-use deltas."""
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
@@ -1629,16 +1897,25 @@ async def _stream_anthropic(
     # tool_use blocks either — otherwise stray tool-call markup becomes a tool_use
     # block + stop_reason="tool_use", which "none" forbids (non-streaming already
     # honors this via _suppress_tool_extraction).
-    has_tools = (req.tools is not None and len(req.tools) > 0
-                 and not getattr(req, '_suppress_tools', False))
+    has_tools = (
+        req.tools is not None
+        and len(req.tools) > 0
+        and not getattr(req, "_suppress_tools", False)
+    )
     # thread the forced tool name + parallel cap so streaming enforces tool_choice
     # like the non-streaming path (parity with chat's ToolCallStreamer wiring).
     _tc = req.tool_choice if isinstance(req.tool_choice, dict) else None
     _forced_name = _tc.get("name") if (_tc and _tc.get("type") == "tool") else None
     _allow_parallel = not (_tc.get("disable_parallel_tool_use") if _tc else False)
-    _tool_streamer = ToolCallStreamer(
-        model_name=req.model, forced_tool_name=_forced_name, allow_parallel=_allow_parallel,
-    ) if has_tools else None
+    _tool_streamer = (
+        ToolCallStreamer(
+            model_name=req.model,
+            forced_tool_name=_forced_name,
+            allow_parallel=_allow_parallel,
+        )
+        if has_tools
+        else None
+    )
     block_index = 0
     thinking_block_started = False
     _thinking_block_idx = 0
@@ -1647,7 +1924,7 @@ async def _stream_anthropic(
     tool_use_block_started = False
     _tool_block_idx = 0
     _tc_args_streamed = False  # did we already emit input_json_delta chunks for the
-                               # current tool block? (avoid re-emitting full args)
+    # current tool block? (avoid re-emitting full args)
     _has_tool_calls = False  # persists across blocks (unlike tool_use_block_started)
     accumulated_text = ""  # for tool-call detection
     matched_stop: str | None = None
@@ -1659,6 +1936,7 @@ async def _stream_anthropic(
     _anth_tracker = None
     try:
         from yunshu_engine.request_tracker import get_request_tracker
+
         _anth_tracker = get_request_tracker()
         _anth_gen = _anth_tracker.register(message_id, req.model)
     except Exception:
@@ -1677,11 +1955,17 @@ async def _stream_anthropic(
         # pass the REAL cacheable-prefix token count, not bool(breakpoints) (which
         # capped cache_creation_input_tokens at 1). The streaming scope has engine + req +
         # breakpoints, so this can be computed exactly like the non-stream path.
-        _ms_tok = getattr(engine, "_tokenizer", None) or getattr(engine, "tokenizer", None)
+        _ms_tok = getattr(engine, "_tokenizer", None) or getattr(
+            engine, "tokenizer", None
+        )
         _ms_cacheable = _cacheable_prefix_token_count(
-            getattr(req, "_anthropic_orig_system", req.system), kv_cache_breakpoints, _ms_tok)
+            getattr(req, "_anthropic_orig_system", req.system),
+            kv_cache_breakpoints,
+            _ms_tok,
+        )
         _ms_input, cache_creation, cache_read = _anthropic_cache_usage(
-            inp_tokens, cached_toks, _ms_cacheable)
+            inp_tokens, cached_toks, _ms_cacheable
+        )
         msg_start = {
             "type": "message_start",
             "message": {
@@ -1709,7 +1993,12 @@ async def _stream_anthropic(
     async def _token_source():
         nonlocal input_tokens, output_tokens, block_index, cached_tokens
         nonlocal thinking_block_started, text_block_started, tool_use_block_started
-        nonlocal accumulated_text, matched_stop, _message_start_emitted, _streaming_finish_reason, reasoning_tok
+        nonlocal \
+            accumulated_text, \
+            matched_stop, \
+            _message_start_emitted, \
+            _streaming_finish_reason, \
+            reasoning_tok
         nonlocal _has_tool_calls
         # these were assigned inside _token_source WITHOUT a
         # nonlocal, so they shadowed the enclosing scope's copies (which stayed 0). The
@@ -1757,12 +2046,12 @@ async def _stream_anthropic(
                 # Use engine's current_state (token-level tracking) for
                 # thinking routing — more accurate than text-level ThinkingParser
                 # which may miss model-specific tags like Qwen3.5's special tokens.
-                _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
+                _is_reasoning = getattr(output, "current_state", None) == "reasoning"
                 _token_text = output.new_text
 
                 if output.prompt_tokens and not input_tokens:
                     input_tokens = output.prompt_tokens
-                if hasattr(output, 'cached_tokens') and output.cached_tokens:
+                if hasattr(output, "cached_tokens") and output.cached_tokens:
                     cached_tokens = max(cached_tokens, output.cached_tokens)
 
                 # Capture finish_reason from the last streaming output.
@@ -1797,9 +2086,12 @@ async def _stream_anthropic(
                     output_tokens += 1
                     reasoning_tok += 1
                     # Use engine's authoritative count when available
-                    if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:
+                    if hasattr(output, "reasoning_tokens") and output.reasoning_tokens:
                         reasoning_tok = max(reasoning_tok, output.reasoning_tokens)
-                        output_tokens = max(output_tokens, reasoning_tok + (output_tokens - reasoning_tok))
+                        output_tokens = max(
+                            output_tokens,
+                            reasoning_tok + (output_tokens - reasoning_tok),
+                        )
                     yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'thinking_delta', 'thinking': _token_text}})}\n\n"
                 elif _token_text and not _is_reasoning:
                     # Visible text content (skip reasoning tokens when thinking is disabled)
@@ -1819,7 +2111,9 @@ async def _stream_anthropic(
                     if not (has_tools and _tool_streamer):
                         accumulated_text += _token_text
                         if len(accumulated_text) > _MAX_STREAMING_TEXT_BUFFER:
-                            logger.error("Anthropic streaming text exceeded 1MB — truncating")
+                            logger.error(
+                                "Anthropic streaming text exceeded 1MB — truncating"
+                            )
                             accumulated_text = accumulated_text[-_TRUNCATE_KEEP:]
                         _token_boundaries.append(len(accumulated_text))
 
@@ -1853,7 +2147,8 @@ async def _stream_anthropic(
                         if _safe_len > 0:
                             _safe_delta = _token_text[:_safe_len]
                             if not text_block_started:
-                                text_block_started = True; _text_block_idx = block_index
+                                text_block_started = True
+                                _text_block_idx = block_index
                                 yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
                             yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _safe_delta}})}\n\n"
                     else:
@@ -1868,9 +2163,16 @@ async def _stream_anthropic(
                                 if _tc_out.text:
                                     _prev_len = len(accumulated_text)
                                     accumulated_text += _tc_out.text
-                                    if len(accumulated_text) > _MAX_STREAMING_TEXT_BUFFER:
-                                        logger.error("Anthropic streaming text exceeded 1MB — truncating")
-                                        accumulated_text = accumulated_text[-_TRUNCATE_KEEP:]
+                                    if (
+                                        len(accumulated_text)
+                                        > _MAX_STREAMING_TEXT_BUFFER
+                                    ):
+                                        logger.error(
+                                            "Anthropic streaming text exceeded 1MB — truncating"
+                                        )
+                                        accumulated_text = accumulated_text[
+                                            -_TRUNCATE_KEEP:
+                                        ]
                                     _token_boundaries.append(len(accumulated_text))
                                     # Check for stop sequences after streamer text
                                     # is accumulated (the pre-streamer check at
@@ -1880,7 +2182,9 @@ async def _stream_anthropic(
                                     if stop:
                                         for seq in stop:
                                             if seq in accumulated_text:
-                                                accumulated_text = accumulated_text[:accumulated_text.find(seq)]
+                                                accumulated_text = accumulated_text[
+                                                    : accumulated_text.find(seq)
+                                                ]
                                                 matched_stop = seq
                                                 _stop_hit = True
                                                 break
@@ -1890,7 +2194,9 @@ async def _stream_anthropic(
                                         # suffix — same logic as the non-tools path.
                                         _safe_end = len(accumulated_text)
                                         _tokens_to_trim = 0
-                                        for _bi in range(len(_token_boundaries) - 1, -1, -1):
+                                        for _bi in range(
+                                            len(_token_boundaries) - 1, -1, -1
+                                        ):
                                             if _token_boundaries[_bi] > _safe_end:
                                                 _tokens_to_trim += 1
                                             else:
@@ -1898,15 +2204,19 @@ async def _stream_anthropic(
                                         _safe_len = len(accumulated_text) - _prev_len
                                         if _tokens_to_trim == 0 and _safe_len == 0:
                                             _tokens_to_trim = 1
-                                        output_tokens = max(0, output_tokens - _tokens_to_trim)
+                                        output_tokens = max(
+                                            0, output_tokens - _tokens_to_trim
+                                        )
                                         if _safe_len > 0:
                                             if not text_block_started:
-                                                text_block_started = True; _text_block_idx = block_index
+                                                text_block_started = True
+                                                _text_block_idx = block_index
                                                 yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
                                             yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _tc_out.text[:_safe_len]}})}\n\n"
                                     else:
                                         if not text_block_started:
-                                            text_block_started = True; _text_block_idx = block_index
+                                            text_block_started = True
+                                            _text_block_idx = block_index
                                             yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
                                         yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _tc_out.text}})}\n\n"
                                 elif _tc_out.tool_call_start:
@@ -1936,7 +2246,8 @@ async def _stream_anthropic(
                                             yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                             block_index += 1
                                             text_block_started = False
-                                        tool_use_block_started = True; _tool_block_idx = block_index
+                                        tool_use_block_started = True
+                                        _tool_block_idx = block_index
                                         _has_tool_calls = True
                                         _tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
                                         yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'tool_use', 'id': _tool_id, 'name': _tc_out.tool_call.name, 'input': {}}})}\n\n"
@@ -1953,10 +2264,14 @@ async def _stream_anthropic(
                                     # this block (the forced-grammar single-token case);
                                     # otherwise the client would receive the partial_json
                                     # DUPLICATED (incremental deltas + full re-emit).
-                                    _args_str = _tc_out.tool_call.arguments or '{}'
-                                    if _args_str and _args_str != '{}' and not _tc_args_streamed:
+                                    _args_str = _tc_out.tool_call.arguments or "{}"
+                                    if (
+                                        _args_str
+                                        and _args_str != "{}"
+                                        and not _tc_args_streamed
+                                    ):
                                         for _ci in range(0, len(_args_str), 8):
-                                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci:_ci + 8]}})}\n\n"
+                                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci : _ci + 8]}})}\n\n"
                                     yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                     block_index += 1
                                     tool_use_block_started = False
@@ -1974,7 +2289,8 @@ async def _stream_anthropic(
                         else:
                             # No tools — emit text directly
                             if not text_block_started:
-                                text_block_started = True; _text_block_idx = block_index
+                                text_block_started = True
+                                _text_block_idx = block_index
                                 yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
                             yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _token_text}})}\n\n"
         else:
@@ -2011,15 +2327,22 @@ async def _stream_anthropic(
                 lora_adapter=lora_adapter,
                 kv_cache_breakpoints=kv_cache_breakpoints,
             ):
-                if hasattr(output, 'prompt_tokens') and output.prompt_tokens and not input_tokens:
+                if (
+                    hasattr(output, "prompt_tokens")
+                    and output.prompt_tokens
+                    and not input_tokens
+                ):
                     input_tokens = output.prompt_tokens
-                if hasattr(output, 'cached_tokens') and output.cached_tokens:
+                if hasattr(output, "cached_tokens") and output.cached_tokens:
                     cached_tokens = max(cached_tokens, output.cached_tokens)
 
                 # Capture finish_reason from the last streaming output.
                 # Use finish_reason whenever it's set (not just when finished=True)
                 # because some engines set finish_reason without the finished flag.
-                if hasattr(output, 'finish_reason') and output.finish_reason is not None:
+                if (
+                    hasattr(output, "finish_reason")
+                    and output.finish_reason is not None
+                ):
                     _streaming_finish_reason = output.finish_reason
 
                 # Emit message_start on first output with prompt_tokens
@@ -2032,7 +2355,7 @@ async def _stream_anthropic(
 
                 # Use engine's current_state (token-level tracking) when available,
                 # fall back to ThinkingParser for engines that don't set current_state
-                _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
+                _is_reasoning = getattr(output, "current_state", None) == "reasoning"
                 _token_text = output.token_text
 
                 if _is_reasoning and _token_text:  # route on _is_reasoning alone
@@ -2044,9 +2367,12 @@ async def _stream_anthropic(
                     output_tokens += 1
                     reasoning_tok += 1
                     # Use engine's authoritative count when available
-                    if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:
+                    if hasattr(output, "reasoning_tokens") and output.reasoning_tokens:
                         reasoning_tok = max(reasoning_tok, output.reasoning_tokens)
-                        output_tokens = max(output_tokens, reasoning_tok + (output_tokens - reasoning_tok))
+                        output_tokens = max(
+                            output_tokens,
+                            reasoning_tok + (output_tokens - reasoning_tok),
+                        )
                     yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'thinking_delta', 'thinking': _token_text}})}\n\n"
                 elif _token_text and not _is_reasoning:
                     # Visible text content (skip reasoning tokens when thinking is disabled)
@@ -2065,26 +2391,35 @@ async def _stream_anthropic(
                         for _tc_out in _tool_streamer.process_token(_token_text):
                             if _tc_out.text:
                                 if not text_block_started:
-                                    text_block_started = True; _text_block_idx = block_index
+                                    text_block_started = True
+                                    _text_block_idx = block_index
                                     yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
                                 _prev_len = len(accumulated_text)
                                 accumulated_text += _tc_out.text
                                 if len(accumulated_text) > _MAX_STREAMING_TEXT_BUFFER:
-                                    logger.error("Anthropic streaming text exceeded 1MB — truncating")
-                                    accumulated_text = accumulated_text[-_TRUNCATE_KEEP:]
+                                    logger.error(
+                                        "Anthropic streaming text exceeded 1MB — truncating"
+                                    )
+                                    accumulated_text = accumulated_text[
+                                        -_TRUNCATE_KEEP:
+                                    ]
                                 _token_boundaries.append(len(accumulated_text))
                                 _stop_hit = False
                                 if stop:
                                     for seq in stop:
                                         if seq in accumulated_text:
-                                            accumulated_text = accumulated_text[:accumulated_text.find(seq)]
+                                            accumulated_text = accumulated_text[
+                                                : accumulated_text.find(seq)
+                                            ]
                                             matched_stop = seq
                                             _stop_hit = True
                                             break
                                 if _stop_hit:
                                     _safe_end = len(accumulated_text)
                                     _tokens_to_trim = 0
-                                    for _bi in range(len(_token_boundaries) - 1, -1, -1):
+                                    for _bi in range(
+                                        len(_token_boundaries) - 1, -1, -1
+                                    ):
                                         if _token_boundaries[_bi] > _safe_end:
                                             _tokens_to_trim += 1
                                         else:
@@ -2092,7 +2427,9 @@ async def _stream_anthropic(
                                     _safe_len = len(accumulated_text) - _prev_len
                                     if _tokens_to_trim == 0 and _safe_len == 0:
                                         _tokens_to_trim = 1
-                                    output_tokens = max(0, output_tokens - _tokens_to_trim)
+                                    output_tokens = max(
+                                        0, output_tokens - _tokens_to_trim
+                                    )
                                     if _safe_len > 0:
                                         yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _tc_out.text[:_safe_len]}})}\n\n"
                                 else:
@@ -2102,13 +2439,14 @@ async def _stream_anthropic(
                                     yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                     block_index += 1
                                     text_block_started = False
-                                tool_use_block_started = True; _tool_block_idx = block_index
+                                tool_use_block_started = True
+                                _tool_block_idx = block_index
                                 _has_tool_calls = True
                                 _tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
                                 yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'tool_use', 'id': _tool_id, 'name': _tc_out.tool_call.name, 'input': {}}})}\n\n"
-                                _args_str = _tc_out.tool_call.arguments or '{}'
+                                _args_str = _tc_out.tool_call.arguments or "{}"
                                 for _ci in range(0, len(_args_str), 8):
-                                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci:_ci + 8]}})}\n\n"
+                                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci : _ci + 8]}})}\n\n"
                                 yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                 block_index += 1
                                 tool_use_block_started = False
@@ -2121,13 +2459,16 @@ async def _stream_anthropic(
                     else:
                         # No tool streamer — emit text directly
                         if not text_block_started:
-                            text_block_started = True; _text_block_idx = block_index
+                            text_block_started = True
+                            _text_block_idx = block_index
                             yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
                         output_tokens += 1
                         _prev_len = len(accumulated_text)
                         accumulated_text += _token_text
                         if len(accumulated_text) > _MAX_STREAMING_TEXT_BUFFER:
-                            logger.error("Anthropic streaming text exceeded 1MB — truncating")
+                            logger.error(
+                                "Anthropic streaming text exceeded 1MB — truncating"
+                            )
                             accumulated_text = accumulated_text[-_TRUNCATE_KEEP:]
                         _token_boundaries.append(len(accumulated_text))
 
@@ -2135,7 +2476,9 @@ async def _stream_anthropic(
                         if stop:
                             for seq in stop:
                                 if seq in accumulated_text:
-                                    accumulated_text = accumulated_text[:accumulated_text.find(seq)]
+                                    accumulated_text = accumulated_text[
+                                        : accumulated_text.find(seq)
+                                    ]
                                     matched_stop = seq
                                     _stop_matched_this_token = True
                                     break
@@ -2171,7 +2514,8 @@ async def _stream_anthropic(
             for _tc_out in _tool_streamer.flush():
                 if _tc_out.text:
                     if not text_block_started:
-                        text_block_started = True; _text_block_idx = block_index
+                        text_block_started = True
+                        _text_block_idx = block_index
                         yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
                     yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _tc_out.text}})}\n\n"
                 elif _tc_out.tool_call:
@@ -2179,13 +2523,14 @@ async def _stream_anthropic(
                         yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                         block_index += 1
                         text_block_started = False
-                    tool_use_block_started = True; _tool_block_idx = block_index
+                    tool_use_block_started = True
+                    _tool_block_idx = block_index
                     _has_tool_calls = True
                     _tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
                     yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'tool_use', 'id': _tool_id, 'name': _tc_out.tool_call.name, 'input': {}}})}\n\n"
-                    _args_str = _tc_out.tool_call.arguments or '{}'
+                    _args_str = _tc_out.tool_call.arguments or "{}"
                     for _ci in range(0, len(_args_str), 8):
-                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci:_ci + 8]}})}\n\n"
+                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci : _ci + 8]}})}\n\n"
                     yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                     block_index += 1
                     tool_use_block_started = False
@@ -2200,9 +2545,14 @@ async def _stream_anthropic(
         # so that the response always has at least one content block (Anthropic protocol requirement).
         # Always use text block, NOT thinking — thinking blocks should only appear when
         # the model actually produces reasoning output.
-        if not text_block_started and not thinking_block_started and not tool_use_block_started:
+        if (
+            not text_block_started
+            and not thinking_block_started
+            and not tool_use_block_started
+        ):
             yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
-            text_block_started = True; _text_block_idx = block_index
+            text_block_started = True
+            _text_block_idx = block_index
 
         # Close last content block (only if one was actually started and not
         # already closed — tool_use blocks are closed inside the loop above).
@@ -2270,9 +2620,14 @@ async def _stream_anthropic(
             yield _emit_message_start(input_tokens, cached_tokens)
         # If no content blocks were opened, emit an empty text block (Anthropic
         # spec requires at least one content block in every message).
-        if not text_block_started and not thinking_block_started and not tool_use_block_started:
+        if (
+            not text_block_started
+            and not thinking_block_started
+            and not tool_use_block_started
+        ):
             yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n".encode()
-            text_block_started = True; _text_block_idx = block_index
+            text_block_started = True
+            _text_block_idx = block_index
         # Close ALL open blocks — the Anthropic spec requires every
         # content_block_start to have a matching content_block_stop.
         if tool_use_block_started:
@@ -2282,12 +2637,19 @@ async def _stream_anthropic(
         if thinking_block_started:
             yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': _thinking_block_idx})}\n\n".encode()
         # Emit message_delta with stop_reason before message_stop (Anthropic protocol requirement)
-        _error_stop_reason = _map_stop_reason(_streaming_finish_reason, None, has_tool_calls=_has_tool_calls)
+        _error_stop_reason = _map_stop_reason(
+            _streaming_finish_reason, None, has_tool_calls=_has_tool_calls
+        )
         _error_delta_usage: dict = {"output_tokens": output_tokens}
         if reasoning_tok > 0:
-            _error_delta_usage["output_tokens_details"] = {"reasoning_tokens": reasoning_tok}
+            _error_delta_usage["output_tokens_details"] = {
+                "reasoning_tokens": reasoning_tok
+            }
         yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': _error_stop_reason, 'stop_sequence': None}, 'usage': _error_delta_usage})}\n\n".encode()
-        error_event = {"type": "error", "error": {"type": "overloaded_error", "message": "Out of GPU memory"}}
+        error_event = {
+            "type": "error",
+            "error": {"type": "overloaded_error", "message": "Out of GPU memory"},
+        }
         yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode()
     except Exception:
         logger.error("Anthropic streaming error", exc_info=True)
@@ -2297,9 +2659,14 @@ async def _stream_anthropic(
             yield _emit_message_start(input_tokens, cached_tokens)
         # If no content blocks were opened, emit an empty text block (Anthropic
         # spec requires at least one content block in every message).
-        if not text_block_started and not thinking_block_started and not tool_use_block_started:
+        if (
+            not text_block_started
+            and not thinking_block_started
+            and not tool_use_block_started
+        ):
             yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n".encode()
-            text_block_started = True; _text_block_idx = block_index
+            text_block_started = True
+            _text_block_idx = block_index
         # Close ALL open blocks — same logic as MemoryError handler.
         if tool_use_block_started:
             yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': _tool_block_idx})}\n\n".encode()
@@ -2308,12 +2675,19 @@ async def _stream_anthropic(
         if thinking_block_started:
             yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': _thinking_block_idx})}\n\n".encode()
         # Emit message_delta with stop_reason before message_stop (Anthropic protocol requirement)
-        _exc_stop_reason = _map_stop_reason(_streaming_finish_reason, None, has_tool_calls=_has_tool_calls)
+        _exc_stop_reason = _map_stop_reason(
+            _streaming_finish_reason, None, has_tool_calls=_has_tool_calls
+        )
         _exc_delta_usage: dict = {"output_tokens": output_tokens}
         if reasoning_tok > 0:
-            _exc_delta_usage["output_tokens_details"] = {"reasoning_tokens": reasoning_tok}
+            _exc_delta_usage["output_tokens_details"] = {
+                "reasoning_tokens": reasoning_tok
+            }
         yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': _exc_stop_reason, 'stop_sequence': None}, 'usage': _exc_delta_usage})}\n\n".encode()
-        error_event = {"type": "error", "error": {"type": "api_error", "message": "Internal server error"}}
+        error_event = {
+            "type": "error",
+            "error": {"type": "api_error", "message": "Internal server error"},
+        }
         yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode()
     finally:
         _release_lora_adapter(engine, lora_adapter)
@@ -2325,6 +2699,7 @@ async def _stream_anthropic(
         # Clean up temp files created for image blocks during streaming
         if temp_files:
             import os as _os
+
             for _tf_path in temp_files:
                 with contextlib.suppress(OSError):
                     _os.unlink(_tf_path)
@@ -2353,11 +2728,13 @@ def _format_anthropic_logprobs(logprobs_list: list[dict] | None) -> list[dict] |
             {"token": tlp.get("token", ""), "logprob": tlp.get("logprob", 0.0)}
             for tlp in top_lps
         ]
-        entries.append({
-            "token": lp_entry.get("token", ""),
-            "logprob": lp_entry.get("logprob", 0.0),
-            "top_logprobs": decoded_top,
-        })
+        entries.append(
+            {
+                "token": lp_entry.get("token", ""),
+                "logprob": lp_entry.get("logprob", 0.0),
+                "top_logprobs": decoded_top,
+            }
+        )
     return entries if entries else None
 
 
@@ -2373,21 +2750,39 @@ async def count_tokens(req: AnthropicMessagesRequest, request: Request) -> dict:
     if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
         return JSONResponse(
             status_code=403,
-            content={"type": "error", "error": {"type": "permission_error", "message": f"Model '{req.model}' not accessible"}},
+            content={
+                "type": "error",
+                "error": {
+                    "type": "permission_error",
+                    "message": f"Model '{req.model}' not accessible",
+                },
+            },
         )
     try:
         engine, _ = await _resolve_engine(req.model)
     except HTTPException as e:
         return JSONResponse(
             status_code=e.status_code,
-            content={"type": "error", "error": {"type": "not_found_error" if e.status_code == 404 else "api_error", "message": e.detail}},
+            content={
+                "type": "error",
+                "error": {
+                    "type": "not_found_error" if e.status_code == 404 else "api_error",
+                    "message": e.detail,
+                },
+            },
         )
 
-    tokenizer = getattr(engine, '_tokenizer', None)
+    tokenizer = getattr(engine, "_tokenizer", None)
     if tokenizer is None:
         return JSONResponse(
             status_code=503,
-            content={"type": "error", "error": {"type": "overloaded_error", "message": "No tokenizer available"}},
+            content={
+                "type": "error",
+                "error": {
+                    "type": "overloaded_error",
+                    "message": "No tokenizer available",
+                },
+            },
         )
 
     # Apply chat template for accurate token counting (plain-text join undercounts
@@ -2408,23 +2803,32 @@ async def count_tokens(req: AnthropicMessagesRequest, request: Request) -> dict:
     if req.cached_content:
         try:
             _cc_text = _resolve_cached_content_text(
-                req.cached_content, req.model, request, mutate=False)
+                req.cached_content, req.model, request, mutate=False
+            )
             if _cc_text:
                 _sys_parts.append(_cc_text)
         except HTTPException as _cc_e:
             return JSONResponse(
                 status_code=_cc_e.status_code,
-                content={"type": "error", "error": {"type": "invalid_request_error", "message": _cc_e.detail}},
+                content={
+                    "type": "error",
+                    "error": {"type": "invalid_request_error", "message": _cc_e.detail},
+                },
             )
         except Exception:
             logger.debug("count_tokens cached_content resolve failed", exc_info=True)
     if req.system:
         _sys_parts.append(
-            _extract_text_from_content(req.system) if isinstance(req.system, list) else req.system)
+            _extract_text_from_content(req.system)
+            if isinstance(req.system, list)
+            else req.system
+        )
     for _m in req.messages:
         if getattr(_m, "role", None) == "system":
             _c = _m.content
-            _sys_parts.append(_extract_text_from_content(_c) if isinstance(_c, list) else (_c or ""))
+            _sys_parts.append(
+                _extract_text_from_content(_c) if isinstance(_c, list) else (_c or "")
+            )
     _sys_parts = [p for p in _sys_parts if p]
     if _sys_parts:
         messages.append({"role": "system", "content": "\n\n".join(_sys_parts)})
@@ -2433,7 +2837,9 @@ async def count_tokens(req: AnthropicMessagesRequest, request: Request) -> dict:
     # matches what the actual /messages endpoint would send. Mirrors the
     # tool-prompt injection in create_message (lines 532-552).
     if req.tools:
-        tool_prompt = "\n\nYou have access to the following tools. When you need to call a tool, "
+        tool_prompt = (
+            "\n\nYou have access to the following tools. When you need to call a tool, "
+        )
         tool_prompt += 'output a tool call in the following format:\n<tool_call\\>{"name": "...", "arguments": {...}}</tool_call\\>\n\n'
         tool_prompt += "Available tools:\n"
         for tool in req.tools:
@@ -2448,8 +2854,15 @@ async def count_tokens(req: AnthropicMessagesRequest, request: Request) -> dict:
         # was ~20-60 tokens shorter than what generation actually injects).
         if req.tool_choice:
             _tc_tool_names = ", ".join(
-                n for n in ((getattr(t, "name", None) or (t.get("name") if isinstance(t, dict) else None))
-                            for t in (req.tools or [])) if n
+                n
+                for n in (
+                    (
+                        getattr(t, "name", None)
+                        or (t.get("name") if isinstance(t, dict) else None)
+                    )
+                    for t in (req.tools or [])
+                )
+                if n
             )
             if isinstance(req.tool_choice, dict):
                 tc_type = req.tool_choice.get("type", "")
@@ -2489,7 +2902,11 @@ async def count_tokens(req: AnthropicMessagesRequest, request: Request) -> dict:
     # input_tokens reflects what /messages actually sends for thinking-enabled
     # requests — it was previously omitted, under-counting by the instruction block.
     # .
-    if req.thinking and isinstance(req.thinking, dict) and req.thinking.get("type") == "enabled":
+    if (
+        req.thinking
+        and isinstance(req.thinking, dict)
+        and req.thinking.get("type") == "enabled"
+    ):
         _budget = req.thinking.get("budget_tokens")
         _think_instruction = (
             "\n\nIMPORTANT FORMAT REQUIREMENT: You MUST begin every reply with "
@@ -2499,13 +2916,15 @@ async def count_tokens(req: AnthropicMessagesRequest, request: Request) -> dict:
             "Example shape: <think>...reasoning...</think>final answer."
         )
         if isinstance(_budget, int) and _budget > 0:
-            _think_instruction += (
-                f" Keep the reasoning inside <think>...</think> to roughly {_budget} tokens."
-            )
+            _think_instruction += f" Keep the reasoning inside <think>...</think> to roughly {_budget} tokens."
         if messages and messages[0].get("role") == "system":
-            messages[0]["content"] = (messages[0].get("content") or "") + _think_instruction
+            messages[0]["content"] = (
+                messages[0].get("content") or ""
+            ) + _think_instruction
         else:
-            messages.insert(0, {"role": "system", "content": _think_instruction.strip()})
+            messages.insert(
+                0, {"role": "system", "content": _think_instruction.strip()}
+            )
 
     # Use the same conversion as /messages for accurate token counting.
     # _extract_text_from_content flattens tool_use/tool_result to text which
@@ -2513,7 +2932,8 @@ async def count_tokens(req: AnthropicMessagesRequest, request: Request) -> dict:
     # the /messages endpoint sends to the engine.
     has_images = any(_has_image_blocks(m.content) for m in req.messages)
     converted_msgs, _ct_temp_files = _convert_anthropic_messages(
-        req.messages, has_images=has_images,
+        req.messages,
+        has_images=has_images,
     )
     # the role="system" entries were lifted into the canonical system block
     # above (mirroring generation) — drop them here so the system wrapper isn't counted
@@ -2522,7 +2942,9 @@ async def count_tokens(req: AnthropicMessagesRequest, request: Request) -> dict:
     try:
         try:
             prompt = tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True,
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
             )
         except Exception:
             # Fallback: if chat template fails (e.g. missing template), use plain join.
@@ -2530,7 +2952,8 @@ async def count_tokens(req: AnthropicMessagesRequest, request: Request) -> dict:
             # str.join over a list-valued content raised an uncaught TypeError → 500 instead
             # of a count for any image request whose text template rejected list content.
             text_parts = [
-                m["content"] if isinstance(m["content"], str)
+                m["content"]
+                if isinstance(m["content"], str)
                 else _extract_text_from_content(m["content"])
                 for m in messages
             ]
@@ -2538,7 +2961,12 @@ async def count_tokens(req: AnthropicMessagesRequest, request: Request) -> dict:
         # avoid double-BOS (Gemma/Llama/Mistral) so count_tokens
         # matches the generation path's prompt_tokens, which now applies the same guard.
         _bos = getattr(tokenizer, "bos_token", None)
-        _add = not (isinstance(_bos, str) and _bos and isinstance(prompt, str) and prompt.startswith(_bos))
+        _add = not (
+            isinstance(_bos, str)
+            and _bos
+            and isinstance(prompt, str)
+            and prompt.startswith(_bos)
+        )
         try:
             tokens = tokenizer.encode(prompt, add_special_tokens=_add)
         except TypeError:
@@ -2562,6 +2990,7 @@ async def count_tokens(req: AnthropicMessagesRequest, request: Request) -> dict:
         # cleans these up in its finally — this path previously discarded the list).
         if _ct_temp_files:
             import os as _ct_os
+
             for _ct_path in _ct_temp_files:
                 with contextlib.suppress(OSError):
                     _ct_os.unlink(_ct_path)

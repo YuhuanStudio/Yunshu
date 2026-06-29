@@ -1,4 +1,5 @@
 """Unit tests for model discovery."""
+
 import json
 from pathlib import Path
 
@@ -12,7 +13,9 @@ from yunshu_engine.model_discovery import (
 )
 
 
-def _make_model_dir(base: Path, name: str, config: dict, files: dict | None = None) -> Path:
+def _make_model_dir(
+    base: Path, name: str, config: dict, files: dict | None = None
+) -> Path:
     d = base / name
     d.mkdir(parents=True, exist_ok=True)
     with open(d / "config.json", "w") as f:
@@ -32,9 +35,13 @@ class TestDetectModelType:
         assert detect_model_type(tmp_path / "qwen") == "llm"
 
     def test_vlm_from_architecture(self, tmp_path):
-        _make_model_dir(tmp_path, "qwen-vl", {
-            "architectures": ["Qwen2VLForConditionalGeneration"],
-        })
+        _make_model_dir(
+            tmp_path,
+            "qwen-vl",
+            {
+                "architectures": ["Qwen2VLForConditionalGeneration"],
+            },
+        )
         assert detect_model_type(tmp_path / "qwen-vl") == "vlm"
 
     def test_vlm_model_type_is_vlm(self, tmp_path):
@@ -43,16 +50,24 @@ class TestDetectModelType:
         assert detect_model_type(tmp_path / "vlm-model") == "vlm"
 
     def test_vlm_from_vision_config(self, tmp_path):
-        _make_model_dir(tmp_path, "model", {
-            "model_type": "qwen2_vl",
-            "vision_config": {"hidden_size": 1024},
-        })
+        _make_model_dir(
+            tmp_path,
+            "model",
+            {
+                "model_type": "qwen2_vl",
+                "vision_config": {"hidden_size": 1024},
+            },
+        )
         assert detect_model_type(tmp_path / "model") == "vlm"
 
     def test_tts_from_architecture(self, tmp_path):
-        _make_model_dir(tmp_path, "tts", {
-            "architectures": ["Qwen3TTSForConditionalGeneration"],
-        })
+        _make_model_dir(
+            tmp_path,
+            "tts",
+            {
+                "architectures": ["Qwen3TTSForConditionalGeneration"],
+            },
+        )
         assert detect_model_type(tmp_path / "tts") == "audio_tts"
 
     def test_tts_from_model_type(self, tmp_path):
@@ -60,9 +75,13 @@ class TestDetectModelType:
         assert detect_model_type(tmp_path / "tts2") == "audio_tts"
 
     def test_asr_from_architecture(self, tmp_path):
-        _make_model_dir(tmp_path, "whisper", {
-            "architectures": ["WhisperForConditionalGeneration"],
-        })
+        _make_model_dir(
+            tmp_path,
+            "whisper",
+            {
+                "architectures": ["WhisperForConditionalGeneration"],
+            },
+        )
         assert detect_model_type(tmp_path / "whisper") == "audio_stt"
 
     def test_image_gen_from_model_type(self, tmp_path):
@@ -70,9 +89,13 @@ class TestDetectModelType:
         assert detect_model_type(tmp_path / "flux") == "image_gen"
 
     def test_image_gen_from_architecture(self, tmp_path):
-        _make_model_dir(tmp_path, "sd3", {
-            "architectures": ["SD3Transformer2DModel"],
-        })
+        _make_model_dir(
+            tmp_path,
+            "sd3",
+            {
+                "architectures": ["SD3Transformer2DModel"],
+            },
+        )
         assert detect_model_type(tmp_path / "sd3") == "image_gen"
 
     def test_no_config_falls_back_to_name(self, tmp_path):
@@ -108,12 +131,16 @@ class TestEstimateModelSize:
         assert estimate_model_size(d) == 0
 
     def test_safetensors(self, tmp_path):
-        d = _make_model_dir(tmp_path, "model", {}, {"model.safetensors": b"\x00" * 1000})
+        d = _make_model_dir(
+            tmp_path, "model", {}, {"model.safetensors": b"\x00" * 1000}
+        )
         size = estimate_model_size(d)
         assert size >= 1000
 
     def test_includes_overhead(self, tmp_path):
-        d = _make_model_dir(tmp_path, "model", {}, {"model.safetensors": b"\x00" * 1000})
+        d = _make_model_dir(
+            tmp_path, "model", {}, {"model.safetensors": b"\x00" * 1000}
+        )
         size = estimate_model_size(d)
         assert size > 1000  # 5% overhead
 
@@ -132,7 +159,9 @@ class TestDiscoverModels:
 
     def test_multiple_models(self, tmp_path):
         _make_model_dir(tmp_path, "llama", {"model_type": "llama"})
-        _make_model_dir(tmp_path, "qwen-vl", {"model_type": "qwen2_vl", "vision_config": {}})
+        _make_model_dir(
+            tmp_path, "qwen-vl", {"model_type": "qwen2_vl", "vision_config": {}}
+        )
         models = discover_models(tmp_path)
         assert len(models) == 2
         assert models["llama"].model_type == "llm"

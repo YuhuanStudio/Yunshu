@@ -3,6 +3,7 @@ must resolve to a path or RAISE — never silently drop, which desyncs the uncon
 placeholder → masked_scatter crash, hallucination, or image-order shift) only covered
 the file:// branches. Extend it to the sibling branches: audio with no data / http url,
 and image/image_data parts with no usable url."""
+
 from __future__ import annotations
 
 import pytest
@@ -12,12 +13,18 @@ from yunshu_gateway.routers.chat import _normalize_image_part
 
 # ── _extract_audio fail-loud ──
 
+
 @pytest.mark.asyncio
 async def test_input_audio_without_data_raises():
     engine = VLMEngine("/models/test")
-    messages = [{"role": "user", "content": [
-        {"type": "input_audio", "input_audio": {"format": "wav"}},  # no 'data'
-    ]}]
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_audio", "input_audio": {"format": "wav"}},  # no 'data'
+            ],
+        }
+    ]
     with pytest.raises(ValueError):
         await engine._extract_audio(messages)
 
@@ -25,9 +32,17 @@ async def test_input_audio_without_data_raises():
 @pytest.mark.asyncio
 async def test_audio_url_http_raises():
     engine = VLMEngine("/models/test")
-    messages = [{"role": "user", "content": [
-        {"type": "audio_url", "audio_url": {"url": "https://example.com/a.wav"}},
-    ]}]
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "audio_url",
+                    "audio_url": {"url": "https://example.com/a.wav"},
+                },
+            ],
+        }
+    ]
     with pytest.raises(ValueError):
         await engine._extract_audio(messages)
 
@@ -40,6 +55,7 @@ async def test_audio_text_only_no_raise():
 
 
 # ── _normalize_image_part fail-loud ──
+
 
 def test_normalize_image_data_without_url_raises():
     with pytest.raises(ValueError):

@@ -78,6 +78,7 @@ class MockModel:
 
 # ── VerifyResult dataclass tests ──
 
+
 class TestVerifyResult:
     """Tests for the VerifyResult dataclass."""
 
@@ -119,6 +120,7 @@ class TestVerifyResult:
 
 # ── Helper function tests ──
 
+
 class TestFindAcceptanceBoundary:
     """Tests for _find_acceptance_boundary."""
 
@@ -148,8 +150,8 @@ class TestFindAcceptanceBoundary:
         assert rej is None
 
 
-
 # ── SpecDraftVerifier.verify() tests ──
+
 
 class TestVerify:
     """Tests for SpecDraftVerifier.verify().
@@ -184,7 +186,9 @@ class TestVerify:
 
         assert result.accepted_count == 3
         assert result.accepted_tokens == [5, 10, 15]
-        assert result.bonus_token == 20  # model_picks[K-1] = prediction after all drafts
+        assert (
+            result.bonus_token == 20
+        )  # model_picks[K-1] = prediction after all drafts
         assert result.rejection_position is None
         assert result.all_accepted is True
         assert result.rejected_count == 0
@@ -403,6 +407,7 @@ class TestVerify:
 
 # ── Stats tracking tests ──
 
+
 class TestVerifierStats:
     """Tests for SpecDraftVerifier statistics tracking."""
 
@@ -466,6 +471,7 @@ class TestVerifierStats:
 
 
 # ── verify_with_last_token() tests ──
+
 
 class TestVerifyWithLastToken:
     """Tests for the correct-alignment verify_with_last_token method."""
@@ -609,6 +615,7 @@ class TestVerifyWithLastToken:
 
 # ── Sampler-based verification tests ──
 
+
 class TestVerifyWithSampler:
     """Tests using a custom sampler instead of argmax."""
 
@@ -629,9 +636,7 @@ class TestVerifyWithSampler:
         def greedy_sampler(logprobs):
             return mx.argmax(logprobs, axis=-1)
 
-        result = self.verifier.verify(
-            model, [5, 10, 15], cache, sampler=greedy_sampler
-        )
+        result = self.verifier.verify(model, [5, 10, 15], cache, sampler=greedy_sampler)
 
         assert result.accepted_count == 3
         assert result.all_accepted is True
@@ -650,9 +655,7 @@ class TestVerifyWithSampler:
             # Always return token 99
             return mx.array([99, 99, 99])
 
-        result = self.verifier.verify(
-            model, [5, 10, 15], cache, sampler=force_token_99
-        )
+        result = self.verifier.verify(model, [5, 10, 15], cache, sampler=force_token_99)
 
         # d0 trusted, d1 rejected (99 != 10)
         assert result.accepted_count == 1
@@ -661,6 +664,7 @@ class TestVerifyWithSampler:
 
 
 # ── Large draft batch tests ──
+
 
 class TestLargeDraftBatches:
     """Tests with larger draft batches (K > 5)."""
@@ -714,6 +718,7 @@ class TestLargeDraftBatches:
 
 # ── Multiple cache objects test ──
 
+
 class TestMultipleCacheObjects:
     """Tests with multiple KV cache objects (simulating multi-layer model)."""
 
@@ -738,6 +743,7 @@ class TestMultipleCacheObjects:
 
 
 # ── Integration pattern tests ──
+
 
 class TestIntegrationPattern:
     """Tests that mimic the actual usage pattern in batched_engine."""
@@ -809,6 +815,7 @@ class TestIntegrationPattern:
 
 
 # ── Cache trimming edge cases ──
+
 
 class TestCacheTrimming:
     """Tests for KV cache trimming behavior."""
@@ -899,9 +906,7 @@ class TestSamplerAcceptanceArgmax:
             # Always returns 99 — would reject everything if used for acceptance
             return mx.array([[99]])
 
-        result = self.verifier.verify(
-            model, [5, 10, 15], cache, sampler=broken_sampler
-        )
+        result = self.verifier.verify(model, [5, 10, 15], cache, sampler=broken_sampler)
 
         # Acceptance uses argmax: all 3 accepted (d0 trusted + d1, d2 verified)
         assert result.accepted_count == 3
@@ -924,8 +929,11 @@ class TestSamplerAcceptanceArgmax:
             return mx.array([[99]])
 
         result = self.verifier.verify_with_last_token(
-            model, last_token_id=0, draft_ids=[5, 10, 15],
-            prompt_cache=cache, sampler=broken_sampler,
+            model,
+            last_token_id=0,
+            draft_ids=[5, 10, 15],
+            prompt_cache=cache,
+            sampler=broken_sampler,
         )
 
         # Acceptance uses argmax: all 3 accepted

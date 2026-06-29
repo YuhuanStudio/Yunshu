@@ -189,7 +189,7 @@ class SpecDraftVerifier:
         # Step 2: Apply logits processors if provided
         if logits_processors and token_history is not None:
             for i in range(K):
-                context_ids = token_history + draft_ids[:i + 1]
+                context_ids = token_history + draft_ids[: i + 1]
                 for processor in logits_processors:
                     batch_logits[i] = processor(
                         mx.array(context_ids), batch_logits[i : i + 1]
@@ -242,7 +242,7 @@ class SpecDraftVerifier:
             else:
                 bonus_pos = K - 1
             if sampler is not None:
-                _sampled = sampler(batch_logits[bonus_pos:bonus_pos + 1])
+                _sampled = sampler(batch_logits[bonus_pos : bonus_pos + 1])
                 bonus_token = int(_sampled.reshape(-1)[0].item())
             else:
                 bonus_token = model_picks[bonus_pos]
@@ -360,7 +360,7 @@ class SpecDraftVerifier:
         # Step 3: Apply logits processors
         if logits_processors and token_history is not None:
             for i in range(K + 1):
-                context_ids = token_history + all_input[:i + 1]
+                context_ids = token_history + all_input[: i + 1]
                 for processor in logits_processors:
                     batch_logits[i] = processor(
                         mx.array(context_ids), batch_logits[i : i + 1]
@@ -379,10 +379,8 @@ class SpecDraftVerifier:
         )
 
         if use_probabilistic:
-            accepted_tokens, rejection_position, bonus_token = (
-                _probabilistic_accept(
-                    target_logprobs, draft_ids, draft_logprobs, K
-                )
+            accepted_tokens, rejection_position, bonus_token = _probabilistic_accept(
+                target_logprobs, draft_ids, draft_logprobs, K
             )
         else:
             # Acceptance comparison MUST use greedy argmax regardless of
@@ -402,7 +400,7 @@ class SpecDraftVerifier:
             # the output distribution respects the caller's temperature.
             bonus_pos = rejection_position if rejection_position is not None else K
             if sampler is not None:
-                _sampled = sampler(batch_logits[bonus_pos:bonus_pos + 1])
+                _sampled = sampler(batch_logits[bonus_pos : bonus_pos + 1])
                 bonus_token = int(_sampled.reshape(-1)[0].item())
             else:
                 bonus_token = model_picks[bonus_pos]
@@ -496,9 +494,9 @@ def _probabilistic_accept(
     """
     # Gather target logprob for each draft token at positions 0..K-1
     draft_ids_arr = mx.array(draft_ids).reshape(K, 1)
-    target_lp = mx.take_along_axis(
-        target_logprobs[:K], draft_ids_arr, axis=-1
-    ).squeeze(-1)
+    target_lp = mx.take_along_axis(target_logprobs[:K], draft_ids_arr, axis=-1).squeeze(
+        -1
+    )
     draft_lp = mx.array(draft_logprobs)
 
     # Acceptance ratio: min(1, exp(target_lp - draft_lp))
@@ -618,7 +616,9 @@ def _sample_correction(
         if total > 0:
             adjusted = adjusted / total
             # mx.random.categorical expects logits, not probabilities.
-            return int(mx.random.categorical(mx.log(adjusted + 1e-30).reshape(1, -1)).item())
+            return int(
+                mx.random.categorical(mx.log(adjusted + 1e-30).reshape(1, -1)).item()
+            )
 
     # Without full draft distribution, we cannot compute the true correction.
     # Sampling from target is still correct (guarantees target distribution
@@ -634,6 +634,7 @@ def _sample_bonus(target_logprobs_row) -> int:
 def _math_exp(x: float) -> float:
     """Safe exp that clamps to avoid overflow."""
     import math
+
     if x > 50.0:
         return math.exp(50.0)
     if x < -50.0:

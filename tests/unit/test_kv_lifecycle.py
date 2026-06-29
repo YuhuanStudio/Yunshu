@@ -45,9 +45,11 @@ class TestKVLifecycleManager:
         assert block.tier == KVTier.HOT
 
     def test_admit_with_budget(self):
-        mgr = KVLifecycleManager(tier_configs=[
-            KVTierConfig(tier=KVTier.HOT, max_bytes=2048),
-        ])
+        mgr = KVLifecycleManager(
+            tier_configs=[
+                KVTierConfig(tier=KVTier.HOT, max_bytes=2048),
+            ]
+        )
         assert mgr.admit(1, 1024)
         assert mgr.admit(2, 1024)
         # Third block exceeds budget — should trigger eviction or reject
@@ -93,9 +95,11 @@ class TestKVLifecycleManager:
         assert mgr.get_block(1) is not None
 
     def test_migrate_hot_to_warm(self):
-        mgr = KVLifecycleManager(tier_configs=[
-            KVTierConfig(tier=KVTier.WARM, max_bytes=4096),
-        ])
+        mgr = KVLifecycleManager(
+            tier_configs=[
+                KVTierConfig(tier=KVTier.WARM, max_bytes=4096),
+            ]
+        )
         mgr.admit(1, 1024)
         assert mgr.migrate(1, KVTier.WARM)
         block = mgr.get_block(1)
@@ -107,9 +111,11 @@ class TestKVLifecycleManager:
         assert not mgr.migrate(999, KVTier.WARM)
 
     def test_migrate_exceeds_budget(self):
-        mgr = KVLifecycleManager(tier_configs=[
-            KVTierConfig(tier=KVTier.WARM, max_bytes=512),
-        ])
+        mgr = KVLifecycleManager(
+            tier_configs=[
+                KVTierConfig(tier=KVTier.WARM, max_bytes=512),
+            ]
+        )
         mgr.admit(1, 1024)
         assert not mgr.migrate(1, KVTier.WARM)
 
@@ -134,9 +140,11 @@ class TestKVLifecycleManager:
         assert result["blocks_migrated"] >= 1
 
     def test_eviction_for_space(self):
-        mgr = KVLifecycleManager(tier_configs=[
-            KVTierConfig(tier=KVTier.HOT, max_bytes=1024),
-        ])
+        mgr = KVLifecycleManager(
+            tier_configs=[
+                KVTierConfig(tier=KVTier.HOT, max_bytes=1024),
+            ]
+        )
         mgr.admit(1, 512)
         mgr.admit(2, 512)
         # Third block should evict first
@@ -215,7 +223,7 @@ class TestKVCompactionScheduler:
         sched = KVCompactionScheduler(interval_steps=3)
         assert not sched.should_compact()  # step 1
         assert not sched.should_compact()  # step 2
-        assert sched.should_compact()      # step 3
+        assert sched.should_compact()  # step 3
 
     def test_compact_empty(self):
         sched = KVCompactionScheduler()

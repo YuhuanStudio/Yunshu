@@ -2,6 +2,7 @@
 field correctness, RequestOutput.usage edge cases, streaming cancel_event
 propagation, VLM finish_reason error paths, and prompt tokens with KV prefix cache.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -23,18 +24,21 @@ class TestNormalizeFinishReasonEdgeCases:
     def test_whitespace_only_string(self):
         """Whitespace-only strings should map to 'stop' (falsy check)."""
         from yunshu_gateway.routers.chat import _normalize_finish_reason
+
         # "   " is truthy but not in valid set or internal map → default "stop"
         assert _normalize_finish_reason("   ") == "stop"
 
     def test_case_sensitive_unknown(self):
         """Unknown reasons are case-sensitive: 'Stop' != 'stop'."""
         from yunshu_gateway.routers.chat import _normalize_finish_reason
+
         assert _normalize_finish_reason("Stop") == "stop"  # unknown -> default
         assert _normalize_finish_reason("LENGTH") == "stop"  # unknown -> default
 
     def test_all_internal_reasons(self):
         """Verify every entry in _INTERNAL_MAP is correct."""
         from yunshu_gateway.routers.chat import _normalize_finish_reason
+
         expected = {
             "abort": "stop",
             "cancel": "stop",
@@ -44,30 +48,37 @@ class TestNormalizeFinishReasonEdgeCases:
             "memory_exceeded": "length",
         }
         for internal, expected_openai in expected.items():
-            assert _normalize_finish_reason(internal) == expected_openai, \
+            assert _normalize_finish_reason(internal) == expected_openai, (
                 f"Expected {internal} -> {expected_openai}, got {_normalize_finish_reason(internal)}"
+            )
 
     def test_stable_return_values(self):
         """Calling _normalize_finish_reason multiple times returns the same value."""
         from yunshu_gateway.routers.chat import _normalize_finish_reason
+
         for reason in ["stop", None, "", "timeout", "cancel", "unknown"]:
             first = _normalize_finish_reason(reason)
             second = _normalize_finish_reason(reason)
-            assert first == second, f"Inconsistent results for {reason!r}: {first} vs {second}"
+            assert first == second, (
+                f"Inconsistent results for {reason!r}: {first} vs {second}"
+            )
 
     def test_reason_with_surrounding_whitespace(self):
         """Reasons with surrounding whitespace should NOT match valid reasons."""
         from yunshu_gateway.routers.chat import _normalize_finish_reason
+
         assert _normalize_finish_reason(" stop ") == "stop"
 
     def test_content_filter_passthrough(self):
         """content_filter is a valid OpenAI finish reason."""
         from yunshu_gateway.routers.chat import _normalize_finish_reason
+
         assert _normalize_finish_reason("content_filter") == "content_filter"
 
     def test_tool_calls_passthrough(self):
         """tool_calls is a valid OpenAI finish reason."""
         from yunshu_gateway.routers.chat import _normalize_finish_reason
+
         assert _normalize_finish_reason("tool_calls") == "tool_calls"
 
 
@@ -222,7 +233,11 @@ class TestRequestOutputUsageEdgeCases:
             cached_tokens=8,
         )
         usage = out.usage
-        assert set(usage.keys()) == {"prompt_tokens", "completion_tokens", "total_tokens"}
+        assert set(usage.keys()) == {
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+        }
 
     def test_token_text_backward_compat(self):
         """token_text property should return new_text."""
@@ -296,7 +311,7 @@ class TestStreamingCancelEventPropagation:
         tracker = RequestTracker()
         gen = tracker.register("test-req-1", "test-model")
 
-        assert hasattr(gen, 'cancel_event')
+        assert hasattr(gen, "cancel_event")
         assert isinstance(gen.cancel_event, threading.Event)
         assert not gen.cancel_event.is_set()
 
@@ -352,10 +367,12 @@ class TestStreamingCancelEventPropagation:
         sig_batched = inspect.signature(_non_stream_batched)
         sig_legacy = inspect.signature(_non_stream_legacy)
 
-        assert "cancel_event" in sig_batched.parameters, \
+        assert "cancel_event" in sig_batched.parameters, (
             "_non_stream_batched must accept cancel_event parameter"
-        assert "cancel_event" in sig_legacy.parameters, \
+        )
+        assert "cancel_event" in sig_legacy.parameters, (
             "_non_stream_legacy must accept cancel_event parameter"
+        )
 
     @pytest.mark.asyncio
     async def test_completions_non_streaming_cancel_event(self):
@@ -380,6 +397,7 @@ class TestVLMFinishReasonErrorPaths:
     def _make_vlm_engine(self):
         """Create a VLMEngine with mocked internals."""
         from yunshu_engine.vlm_engine import VLMEngine
+
         engine = object.__new__(VLMEngine)
         engine._model_path = "/models/test-model"
         engine._model = MagicMock()
@@ -423,9 +441,11 @@ class TestVLMFinishReasonErrorPaths:
         engine._extract_video_frames = AsyncMock(return_value=[])
         engine._tokenize_with_cache = MagicMock(return_value=[1, 2, 3])
 
-        with patch.object(engine, '_format_prompt', return_value="test prompt"):
-            with patch('mlx_lm.generate.generate_step') as mock_step, \
-                 patch('mlx_lm.sample_utils.make_sampler'):
+        with patch.object(engine, "_format_prompt", return_value="test prompt"):
+            with (
+                patch("mlx_lm.generate.generate_step") as mock_step,
+                patch("mlx_lm.sample_utils.make_sampler"),
+            ):
                 # No tokens at all (immediate EOS)
                 mock_step.return_value = iter([(2, None)])
                 engine._get_eos_ids = MagicMock(return_value=[2])
@@ -451,9 +471,11 @@ class TestVLMFinishReasonErrorPaths:
         engine._extract_video_frames = AsyncMock(return_value=[])
         engine._tokenize_with_cache = MagicMock(return_value=[1, 2, 3])
 
-        with patch.object(engine, '_format_prompt', return_value="test prompt"):
-            with patch('mlx_lm.generate.generate_step') as mock_step, \
-                 patch('mlx_lm.sample_utils.make_sampler'):
+        with patch.object(engine, "_format_prompt", return_value="test prompt"):
+            with (
+                patch("mlx_lm.generate.generate_step") as mock_step,
+                patch("mlx_lm.sample_utils.make_sampler"),
+            ):
                 mock_step.return_value = iter([(100, None)])
                 engine._get_eos_ids = MagicMock(return_value=[2])
 
@@ -480,12 +502,15 @@ class TestVLMFinishReasonErrorPaths:
             if text == "\n":
                 return [10]
             return [1, 2, 3]
+
         engine._tokenizer.encode.side_effect = mock_encode
         engine._tokenize_with_cache = MagicMock(return_value=[1, 2, 3])
 
-        with patch.object(engine, '_format_prompt', return_value="test prompt"):
-            with patch('mlx_lm.generate.generate_step') as mock_step, \
-                 patch('mlx_lm.sample_utils.make_sampler'):
+        with patch.object(engine, "_format_prompt", return_value="test prompt"):
+            with (
+                patch("mlx_lm.generate.generate_step") as mock_step,
+                patch("mlx_lm.sample_utils.make_sampler"),
+            ):
                 # Token 10 = "\n" which is in stop list
                 mock_step.return_value = iter([(100, None), (10, None)])
                 engine._get_eos_ids = MagicMock(return_value=[2])
@@ -511,7 +536,9 @@ class TestVLMFinishReasonErrorPaths:
         engine._extract_audio = AsyncMock(return_value=[])
         engine._extract_video_frames = AsyncMock(return_value=[])
 
-        with patch('mlx_lm.generate.generate_step', side_effect=RuntimeError("GPU OOM")):
+        with patch(
+            "mlx_lm.generate.generate_step", side_effect=RuntimeError("GPU OOM")
+        ):
             engine._get_eos_ids = MagicMock(return_value=[2])
             engine._tokenize_with_cache = MagicMock(return_value=[1, 2, 3])
 
@@ -610,12 +637,16 @@ class TestPromptTokensWithKVPrefixCache:
         engine._extract_images = AsyncMock(return_value=[])
         engine._extract_audio = AsyncMock(return_value=[])
         engine._extract_video_frames = AsyncMock(return_value=[])
-        engine._tokenize_with_cache = MagicMock(return_value=[10, 20, 30, 40, 50, 60, 70])
+        engine._tokenize_with_cache = MagicMock(
+            return_value=[10, 20, 30, 40, 50, 60, 70]
+        )
         engine._get_eos_ids = MagicMock(return_value=[2])
 
-        with patch.object(engine, '_format_prompt', return_value="test prompt"):
-            with patch('mlx_lm.generate.generate_step') as mock_step, \
-                 patch('mlx_lm.sample_utils.make_sampler'):
+        with patch.object(engine, "_format_prompt", return_value="test prompt"):
+            with (
+                patch("mlx_lm.generate.generate_step") as mock_step,
+                patch("mlx_lm.sample_utils.make_sampler"),
+            ):
                 mock_step.return_value = iter([(100, None), (2, None)])
 
                 result = await engine.generate(
@@ -628,6 +659,7 @@ class TestPromptTokensWithKVPrefixCache:
     def _make_vlm_engine(self):
         """Create a VLMEngine with mocked internals."""
         from yunshu_engine.vlm_engine import VLMEngine
+
         engine = object.__new__(VLMEngine)
         engine._model_path = "/models/test-model"
         engine._model = MagicMock()
@@ -667,42 +699,54 @@ class TestAnthropicMapStopReason:
 
     def test_stop_maps_to_end_turn(self):
         from yunshu_gateway.routers.anthropic import _map_stop_reason
+
         assert _map_stop_reason("stop") == "end_turn"
 
     def test_length_maps_to_max_tokens(self):
         from yunshu_gateway.routers.anthropic import _map_stop_reason
+
         assert _map_stop_reason("length") == "max_tokens"
 
     def test_tool_calls_maps_to_tool_use(self):
         from yunshu_gateway.routers.anthropic import _map_stop_reason
+
         assert _map_stop_reason("tool_calls") == "tool_use"
 
     def test_matched_stop_sequence(self):
         from yunshu_gateway.routers.anthropic import _map_stop_reason
+
         assert _map_stop_reason(None, matched_stop="\n\n") == "stop_sequence"
 
     def test_has_tool_calls_overrides(self):
         from yunshu_gateway.routers.anthropic import _map_stop_reason
+
         assert _map_stop_reason("stop", has_tool_calls=True) == "tool_use"
         assert _map_stop_reason("length", has_tool_calls=True) == "tool_use"
 
     def test_matched_stop_overrides_has_tool_calls(self):
         """When both matched_stop and has_tool_calls, tool_use wins."""
         from yunshu_gateway.routers.anthropic import _map_stop_reason
+
         # has_tool_calls is checked first
-        assert _map_stop_reason("stop", matched_stop="END", has_tool_calls=True) == "tool_use"
+        assert (
+            _map_stop_reason("stop", matched_stop="END", has_tool_calls=True)
+            == "tool_use"
+        )
 
     def test_unknown_falls_to_end_turn(self):
         from yunshu_gateway.routers.anthropic import _map_stop_reason
+
         assert _map_stop_reason("unknown") == "end_turn"
 
     def test_none_no_match_returns_end_turn(self):
         from yunshu_gateway.routers.anthropic import _map_stop_reason
+
         assert _map_stop_reason(None) == "end_turn"
 
     def test_internal_timeout_maps_to_max_tokens(self):
         """Internal 'timeout' is not in _FINISH_REASON_MAP, but goes to end_turn."""
         from yunshu_gateway.routers.anthropic import _map_stop_reason
+
         assert _map_stop_reason("timeout") == "end_turn"
 
 
@@ -715,16 +759,34 @@ class TestParameterForwardingCompleteness:
     def test_chat_completion_request_has_all_params(self):
         """ChatCompletionRequest model should have all required parameters."""
         from yunshu_gateway.routers.chat import ChatCompletionRequest
+
         fields = set(ChatCompletionRequest.model_fields.keys())
 
         required_fields = {
-            'temperature', 'top_p', 'top_k', 'min_p',
-            'frequency_penalty', 'presence_penalty', 'repetition_penalty',
-            'stop', 'stop_token_ids', 'max_tokens', 'seed',
-            'logprobs', 'top_logprobs', 'thinking_budget', 'reasoning_effort',
-            'enable_thinking', 'response_format', 'grammar', 'spec_decode',
-            'priority', 'xtc_probability', 'xtc_threshold',
-            'logit_bias', 'n',
+            "temperature",
+            "top_p",
+            "top_k",
+            "min_p",
+            "frequency_penalty",
+            "presence_penalty",
+            "repetition_penalty",
+            "stop",
+            "stop_token_ids",
+            "max_tokens",
+            "seed",
+            "logprobs",
+            "top_logprobs",
+            "thinking_budget",
+            "reasoning_effort",
+            "enable_thinking",
+            "response_format",
+            "grammar",
+            "spec_decode",
+            "priority",
+            "xtc_probability",
+            "xtc_threshold",
+            "logit_bias",
+            "n",
         }
         missing = required_fields - fields
         assert not missing, f"ChatCompletionRequest missing fields: {sorted(missing)}"
@@ -732,16 +794,35 @@ class TestParameterForwardingCompleteness:
     def test_completion_request_has_all_params(self):
         """CompletionRequest model should have all required parameters."""
         from yunshu_gateway.routers.completions import CompletionRequest
+
         fields = set(CompletionRequest.model_fields.keys())
 
         required_fields = {
-            'temperature', 'top_p', 'top_k', 'min_p',
-            'frequency_penalty', 'presence_penalty', 'repetition_penalty',
-            'stop', 'stop_token_ids', 'max_tokens', 'seed',
-            'logprobs', 'top_logprobs', 'thinking_budget', 'reasoning_effort',
-            'enable_thinking', 'response_format', 'grammar', 'spec_decode',
-            'priority', 'xtc_probability', 'xtc_threshold',
-            'logit_bias', 'n', 'timeout',
+            "temperature",
+            "top_p",
+            "top_k",
+            "min_p",
+            "frequency_penalty",
+            "presence_penalty",
+            "repetition_penalty",
+            "stop",
+            "stop_token_ids",
+            "max_tokens",
+            "seed",
+            "logprobs",
+            "top_logprobs",
+            "thinking_budget",
+            "reasoning_effort",
+            "enable_thinking",
+            "response_format",
+            "grammar",
+            "spec_decode",
+            "priority",
+            "xtc_probability",
+            "xtc_threshold",
+            "logit_bias",
+            "n",
+            "timeout",
         }
         missing = required_fields - fields
         assert not missing, f"CompletionRequest missing fields: {sorted(missing)}"
@@ -749,31 +830,64 @@ class TestParameterForwardingCompleteness:
     def test_anthropic_request_has_extended_params(self):
         """AnthropicMessagesRequest should have Yunshu-extended fields."""
         from yunshu_gateway.routers.anthropic import AnthropicMessagesRequest
+
         fields = set(AnthropicMessagesRequest.model_fields.keys())
 
         extended_fields = {
-            'min_p', 'repetition_penalty', 'frequency_penalty', 'presence_penalty',
-            'logit_bias', 'seed', 'reasoning_effort', 'stop_token_ids',
-            'spec_decode', 'xtc_probability', 'xtc_threshold',
-            'priority', 'json_schema', 'logprobs', 'top_logprobs',
-            'timeout',
+            "min_p",
+            "repetition_penalty",
+            "frequency_penalty",
+            "presence_penalty",
+            "logit_bias",
+            "seed",
+            "reasoning_effort",
+            "stop_token_ids",
+            "spec_decode",
+            "xtc_probability",
+            "xtc_threshold",
+            "priority",
+            "json_schema",
+            "logprobs",
+            "top_logprobs",
+            "timeout",
         }
         missing = extended_fields - fields
-        assert not missing, f"AnthropicMessagesRequest missing extended fields: {sorted(missing)}"
+        assert not missing, (
+            f"AnthropicMessagesRequest missing extended fields: {sorted(missing)}"
+        )
 
     def test_responses_request_has_all_params(self):
         """ResponsesRequest model should have all required parameters."""
         from yunshu_gateway.routers.responses import ResponsesRequest
+
         fields = set(ResponsesRequest.model_fields.keys())
 
         required_fields = {
-            'temperature', 'top_p', 'top_k', 'min_p',
-            'frequency_penalty', 'presence_penalty', 'repetition_penalty',
-            'stop', 'stop_token_ids', 'max_output_tokens', 'seed',
-            'logprobs', 'top_logprobs', 'thinking_budget', 'reasoning_effort',
-            'enable_thinking', 'response_format', 'grammar', 'spec_decode',
-            'priority', 'xtc_probability', 'xtc_threshold',
-            'logit_bias', 'n', 'timeout',
+            "temperature",
+            "top_p",
+            "top_k",
+            "min_p",
+            "frequency_penalty",
+            "presence_penalty",
+            "repetition_penalty",
+            "stop",
+            "stop_token_ids",
+            "max_output_tokens",
+            "seed",
+            "logprobs",
+            "top_logprobs",
+            "thinking_budget",
+            "reasoning_effort",
+            "enable_thinking",
+            "response_format",
+            "grammar",
+            "spec_decode",
+            "priority",
+            "xtc_probability",
+            "xtc_threshold",
+            "logit_bias",
+            "n",
+            "timeout",
         }
         missing = required_fields - fields
         assert not missing, f"ResponsesRequest missing fields: {sorted(missing)}"
@@ -787,12 +901,14 @@ class TestAnthropicLogitBiasConversion:
 
     def test_none_logit_bias(self):
         from yunshu_gateway.routers.anthropic import _convert_logit_bias
+
         req = MagicMock()
         req.logit_bias = None
         assert _convert_logit_bias(req) is None
 
     def test_string_keys_converted_to_int(self):
         from yunshu_gateway.routers.anthropic import _convert_logit_bias
+
         req = MagicMock()
         req.logit_bias = {"100": 5.0, "200": -1.0}
         result = _convert_logit_bias(req)
@@ -800,6 +916,7 @@ class TestAnthropicLogitBiasConversion:
 
     def test_invalid_keys_skipped(self):
         from yunshu_gateway.routers.anthropic import _convert_logit_bias
+
         req = MagicMock()
         req.logit_bias = {"100": 5.0, "abc": -1.0, "200": 3.0}
         result = _convert_logit_bias(req)
@@ -809,6 +926,7 @@ class TestAnthropicLogitBiasConversion:
 
     def test_empty_logit_bias(self):
         from yunshu_gateway.routers.anthropic import _convert_logit_bias
+
         req = MagicMock()
         req.logit_bias = {}
         assert _convert_logit_bias(req) is None
@@ -822,74 +940,92 @@ class TestResponseFormatParsing:
 
     def test_chat_parse_json_object(self):
         from yunshu_gateway.routers.chat import _parse_response_format
+
         result = _parse_response_format({"type": "json_object"})
         assert result == "json_object"
 
     def test_chat_parse_json_schema(self):
         from yunshu_gateway.routers.chat import _parse_response_format
+
         schema = {"type": "object", "properties": {"name": {"type": "string"}}}
-        result = _parse_response_format({
-            "type": "json_schema",
-            "json_schema": {"name": "test", "schema": schema},
-        })
+        result = _parse_response_format(
+            {
+                "type": "json_schema",
+                "json_schema": {"name": "test", "schema": schema},
+            }
+        )
         assert result == schema
 
     def test_chat_parse_grammar_json(self):
         from yunshu_gateway.routers.chat import _parse_response_format
+
         schema = {"type": "object"}
-        result = _parse_response_format(None, grammar={"type": "json", "schema": schema})
+        result = _parse_response_format(
+            None, grammar={"type": "json", "schema": schema}
+        )
         assert result == schema
 
     def test_chat_parse_grammar_regex(self):
         from yunshu_gateway.routers.chat import _parse_response_format
+
         grammar = {"type": "regex", "pattern": "[0-9]+"}
         result = _parse_response_format(None, grammar=grammar)
         assert result == grammar
 
     def test_chat_parse_none(self):
         from yunshu_gateway.routers.chat import _parse_response_format
+
         assert _parse_response_format(None) is None
 
     def test_chat_parse_text_type(self):
         from yunshu_gateway.routers.chat import _parse_response_format
+
         result = _parse_response_format({"type": "text"})
         assert result is None
 
     def test_responses_parse_json_object(self):
         from yunshu_gateway.routers.responses import _parse_response_format
+
         result = _parse_response_format({"type": "json_object"})
         assert result == "json_object"
 
     def test_responses_parse_json_schema(self):
         from yunshu_gateway.routers.responses import _parse_response_format
+
         schema = {"type": "object"}
-        result = _parse_response_format({
-            "type": "json_schema",
-            "json_schema": {"schema": schema},
-        })
+        result = _parse_response_format(
+            {
+                "type": "json_schema",
+                "json_schema": {"schema": schema},
+            }
+        )
         assert result == schema
 
     def test_responses_parse_grammar_json_no_schema(self):
         from yunshu_gateway.routers.responses import _parse_response_format
+
         result = _parse_response_format(None, grammar={"type": "json"})
         assert result == "json_object"
 
     def test_responses_parse_none(self):
         from yunshu_gateway.routers.responses import _parse_response_format
+
         assert _parse_response_format(None) is None
 
     def test_anthropic_resolve_json_schema_direct(self):
         from yunshu_gateway.routers.anthropic import _resolve_json_schema
+
         req = MagicMock()
         req._forced_tool_grammar = None  # tool_choice="any"/"tool" not set
         req._forced_thinking_grammar = None  # thinking={enabled} not set
-        req.json_schema ={"type": "object"}
+        req.json_schema = {"type": "object"}
         req.grammar = None
         req.response_format = None
         assert _resolve_json_schema(req) == {"type": "object"}
 
     def test_anthropic_resolve_json_schema_from_response_format(self):
         from yunshu_gateway.routers.anthropic import _resolve_json_schema
+
         req = MagicMock()
         req._forced_tool_grammar = None
         req._forced_thinking_grammar = None
@@ -900,6 +1036,7 @@ class TestResponseFormatParsing:
 
     def test_anthropic_resolve_none(self):
         from yunshu_gateway.routers.anthropic import _resolve_json_schema
+
         req = MagicMock()
         req._forced_tool_grammar = None
         req._forced_thinking_grammar = None

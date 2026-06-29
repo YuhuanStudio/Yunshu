@@ -26,15 +26,16 @@ logger = logging.getLogger(__name__)
 
 
 class KVTier(Enum):
-    HOT = auto()    # GPU memory (MLX active)
-    WARM = auto()   # CPU memory (MLX managed)
-    COOL = auto()   # SSD (SQLite-backed)
-    COLD = auto()   # Remote (compressed transfer)
+    HOT = auto()  # GPU memory (MLX active)
+    WARM = auto()  # CPU memory (MLX managed)
+    COOL = auto()  # SSD (SQLite-backed)
+    COLD = auto()  # Remote (compressed transfer)
 
 
 @dataclass
 class KVBlock:
     """Represents a KV cache block in the lifecycle."""
+
     block_id: int
     tier: KVTier = KVTier.HOT
     size_bytes: int = 0
@@ -59,6 +60,7 @@ class KVBlock:
 @dataclass
 class KVTierConfig:
     """Configuration for a KV tier."""
+
     tier: KVTier
     max_bytes: int = 0
     block_size: int = 64
@@ -102,7 +104,13 @@ class KVLifecycleManager:
         # Optimization triggers
         self._last_optimization = time.monotonic()
 
-    def admit(self, block_id: int, size_bytes: int, prefix_hash: str = "", model_hash: str = "") -> bool:
+    def admit(
+        self,
+        block_id: int,
+        size_bytes: int,
+        prefix_hash: str = "",
+        model_hash: str = "",
+    ) -> bool:
         """Decide whether to admit a new KV block."""
         hot_config = self._tier_configs.get(KVTier.HOT)
         if hot_config and hot_config.max_bytes > 0:
@@ -165,7 +173,9 @@ class KVLifecycleManager:
                 return False
 
         source_tier = block.tier
-        self._tier_usage[source_tier] = max(0, self._tier_usage[source_tier] - block.size_bytes)
+        self._tier_usage[source_tier] = max(
+            0, self._tier_usage[source_tier] - block.size_bytes
+        )
         block.tier = target_tier
         self._tier_usage[target_tier] += block.size_bytes
 
@@ -193,10 +203,18 @@ class KVLifecycleManager:
 
         # Phase 1: Downgrade cold blocks
         for block in list(self._blocks.values()):
-            if block.tier == KVTier.HOT and block.age_seconds > 60.0 and block.ref_count == 0:
+            if (
+                block.tier == KVTier.HOT
+                and block.age_seconds > 60.0
+                and block.ref_count == 0
+            ):
                 if self.migrate(block.block_id, KVTier.WARM):
                     migrated += 1
-            elif block.tier == KVTier.WARM and block.age_seconds > 300.0 and block.ref_count == 0:
+            elif (
+                block.tier == KVTier.WARM
+                and block.age_seconds > 300.0
+                and block.ref_count == 0
+            ):
                 cool_config = self._tier_configs.get(KVTier.COOL)
                 if cool_config:
                     if self.migrate(block.block_id, KVTier.COOL):
@@ -216,7 +234,8 @@ class KVLifecycleManager:
     def _evict_for_space(self, needed_bytes: int) -> bool:
         """Evict blocks to make room for new allocation."""
         hot_blocks = [
-            b for b in self._blocks.values()
+            b
+            for b in self._blocks.values()
             if b.tier == KVTier.HOT and b.ref_count == 0 and not b.is_shared
         ]
         hot_blocks.sort(key=lambda b: b.last_access)
@@ -232,7 +251,9 @@ class KVLifecycleManager:
 
     def _evict_block(self, block: KVBlock) -> None:
         """Evict a single block."""
-        self._tier_usage[block.tier] = max(0, self._tier_usage[block.tier] - block.size_bytes)
+        self._tier_usage[block.tier] = max(
+            0, self._tier_usage[block.tier] - block.size_bytes
+        )
         self._blocks.pop(block.block_id, None)
         self._evictions += 1
 
@@ -298,9 +319,7 @@ class CacheWarmingPredictor:
         history.append(now)
         # Prune old entries
         cutoff = now - self._prediction_window * 2
-        self._prefix_history[prefix_hash] = [
-            t for t in history if t > cutoff
-        ]
+        self._prefix_history[prefix_hash] = [t for t in history if t > cutoff]
 
     def predict_warm_candidates(self) -> list[str]:
         """Return prefixes likely to be accessed soon."""
@@ -380,8 +399,7 @@ class KVCompactionScheduler:
             Number of blocks freed.
         """
         fragmented = [
-            (bid, ratio) for bid, ratio in block_usage.items()
-            if ratio < self._min_frag
+            (bid, ratio) for bid, ratio in block_usage.items() if ratio < self._min_frag
         ]
         fragmented.sort(key=lambda x: x[1])
 

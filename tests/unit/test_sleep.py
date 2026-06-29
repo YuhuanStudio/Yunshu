@@ -6,6 +6,7 @@ Tests:
 - POST /v1/sleep level boundary validation (0/1/2 allowed, 3 rejected)
 - Auth-disabled bypass path
 """
+
 from __future__ import annotations
 
 import os
@@ -18,6 +19,7 @@ from fastapi.testclient import TestClient
 def _make_app_with_sleep_router():
     """Mount the sleep router on a bare FastAPI app for isolated testing."""
     from yunshu_gateway.routers.sleep import router as sleep_router
+
     app = FastAPI()
     # Mirror the gateway's /v1 prefix used in production
     app.include_router(sleep_router, prefix="/v1")
@@ -27,6 +29,7 @@ def _make_app_with_sleep_router():
 def _reset_sleep_state():
     """Clear module-global sleep state between tests."""
     import yunshu_gateway.routers.sleep as sleep_mod
+
     sleep_mod._sleeping = False
     sleep_mod._sleep_level = -1
     sleep_mod._sleep_transitioning = False
@@ -64,6 +67,7 @@ class TestSleepStatus:
         """After flipping the module-global _sleeping, status mirrors it."""
         monkeypatch.setenv("YUNSHU_AUTH_DISABLED", "true")
         import yunshu_gateway.routers.sleep as sleep_mod
+
         sleep_mod._sleeping = True
         sleep_mod._sleep_level = 1
         app = _make_app_with_sleep_router()
@@ -117,15 +121,18 @@ class TestSleepHelpers:
 
     def test_is_sleeping_default_false(self):
         from yunshu_gateway.routers.sleep import is_sleeping
+
         assert is_sleeping() is False
 
     def test_is_sleeping_after_flag_set(self):
         import yunshu_gateway.routers.sleep as sleep_mod
+
         sleep_mod._sleeping = True
         assert sleep_mod.is_sleeping() is True
 
     def test_get_sleep_state_awake(self):
         from yunshu_gateway.routers.sleep import get_sleep_state
+
         snap = get_sleep_state()
         assert snap["sleeping"] is False
         assert snap["level"] == -1
@@ -133,6 +140,7 @@ class TestSleepHelpers:
 
     def test_get_sleep_state_sleeping(self):
         import yunshu_gateway.routers.sleep as sleep_mod
+
         sleep_mod._sleeping = True
         sleep_mod._sleep_level = 2
         sleep_mod._sleep_transitioning = True
@@ -179,10 +187,12 @@ class TestSleepInflightGuardW804:
 
     def _reset(self):
         import yunshu_gateway.routers.sleep as sleep_mod
+
         sleep_mod._sleeping = False
         sleep_mod._sleep_level = -1
         sleep_mod._sleep_transitioning = False
         import yunshu_gateway.main as _main
+
         _main._active_requests = 0
 
     def test_sleep_refused_when_engine_busy(self, monkeypatch):
@@ -207,6 +217,7 @@ class TestSleepInflightGuardW804:
         class _IdleEngine:
             def has_active_requests(self):
                 return False
+
             def __init__(self):
                 self._model = object()
 

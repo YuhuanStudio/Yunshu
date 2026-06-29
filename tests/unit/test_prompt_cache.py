@@ -89,7 +89,9 @@ class TestStoreAndLookup:
     def test_store_and_lookup(self):
         cache = PromptCacheManager(max_entries=10, max_memory_mb=1.0)
         h = "hash-1"
-        assert cache.store(h, kv_state=[1, 2, 3], token_count=10, size_bytes=100) is True
+        assert (
+            cache.store(h, kv_state=[1, 2, 3], token_count=10, size_bytes=100) is True
+        )
         entry = cache.lookup(h)
         assert entry is not None
         assert entry.kv_state == [1, 2, 3]
@@ -335,7 +337,9 @@ class TestGetStats:
         assert stats["memory_usage_bytes"] == 500
         expected_max = int(0.001 * 1024 * 1024)
         assert stats["max_memory_bytes"] == expected_max
-        assert stats["memory_utilization"] == pytest.approx(500.0 / expected_max, abs=0.01)
+        assert stats["memory_utilization"] == pytest.approx(
+            500.0 / expected_max, abs=0.01
+        )
 
     def test_stats_after_eviction(self):
         cache = PromptCacheManager(max_entries=2, max_memory_mb=100.0)

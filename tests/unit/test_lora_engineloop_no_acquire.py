@@ -5,6 +5,7 @@ ON THE EVENT-LOOP THREAD, racing the executor's generate_step → a rejected LoR
 could transiently corrupt a concurrent batched request's weights. Now the acquire is gated
 on `not _running`, removing the off-thread mutation entirely; the request is still rejected.
 """
+
 from __future__ import annotations
 
 import inspect

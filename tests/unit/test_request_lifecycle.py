@@ -136,13 +136,16 @@ class TestAdaptiveConcurrencyController:
         assert ctrl.current_limit == 8
 
     def test_from_env(self):
-        with patch.dict("os.environ", {
-            "YUNSHU_CONCURRENCY_INITIAL": "16",
-            "YUNSHU_CONCURRENCY_MIN": "2",
-            "YUNSHU_CONCURRENCY_MAX": "256",
-            "YUNSHU_SLO_TTFT_MS": "300.0",
-            "YUNSHU_SLO_TOTAL_MS": "5000.0",
-        }):
+        with patch.dict(
+            "os.environ",
+            {
+                "YUNSHU_CONCURRENCY_INITIAL": "16",
+                "YUNSHU_CONCURRENCY_MIN": "2",
+                "YUNSHU_CONCURRENCY_MAX": "256",
+                "YUNSHU_SLO_TTFT_MS": "300.0",
+                "YUNSHU_SLO_TOTAL_MS": "5000.0",
+            },
+        ):
             ctrl = AdaptiveConcurrencyController.from_env()
             assert ctrl.current_limit == 16
             assert ctrl._minimum == 2
@@ -252,6 +255,7 @@ class TestRequestLifecycleOrchestrator:
 
     def test_concurrency_min_floored_at_one(self):
         import os
+
         # YUNSHU_CONCURRENCY_MIN=0 must be floored to 1 (a 0 limit deadlocks
         # admission once active>=limit is always true).
         os.environ["YUNSHU_CONCURRENCY_MIN"] = "0"

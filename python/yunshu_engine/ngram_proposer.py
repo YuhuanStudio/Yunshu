@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class NgramConfig:
     """Configuration for N-gram speculative decoding."""
+
     # Minimum N-gram length to match
     min_n: int = 1
     # Maximum N-gram length to match
@@ -87,10 +88,10 @@ def _find_longest_ngram_and_propose(
     _SCAN_WINDOW = 4096
 
     for n in range(min(max_n, total - 1), min_n - 1, -1):
-        suffix = token_ids[total - n:]
+        suffix = token_ids[total - n :]
         start = max(0, total - n - _SCAN_WINDOW)
         for i in range(start, total - n):
-            if token_ids[i:i + n] == suffix:
+            if token_ids[i : i + n] == suffix:
                 cont_start = i + n
                 cont_end = min(cont_start + k, total)
                 return token_ids[cont_start:cont_end]
@@ -133,7 +134,7 @@ class NgramHashPool:
         if total < min_n + 1:
             return
 
-        _cur_len = getattr(self, '_indexed_len', 0)
+        _cur_len = getattr(self, "_indexed_len", 0)
         if total < _cur_len:
             _cur_len = 0
         start = max(0, _cur_len - max_n)
@@ -141,7 +142,7 @@ class NgramHashPool:
 
         for n in range(min_n, max_n + 1):
             for i in range(max(0, start), total - n):
-                ngram = tuple(token_ids[i:i + n])
+                ngram = tuple(token_ids[i : i + n])
                 cont_start = i + n
                 cont_end = min(cont_start + k, total)
                 if cont_start < total:
@@ -175,7 +176,7 @@ class NgramHashPool:
             continuation = self._pool.get(suffix)
             if continuation:
                 k = min(self.config.k, self.config.max_model_len - total)
-                return continuation[:max(k, 0)] if k > 0 else []
+                return continuation[: max(k, 0)] if k > 0 else []
 
         return []
 
@@ -210,9 +211,19 @@ class LCGHashPool:
     """
 
     __slots__ = (
-        "_capacity", "_mask", "_keys", "_ngrams", "_values",
-        "_total_inserts", "_total_lookups", "_total_hits", "_total_evictions",
-        "_min_n", "_max_n", "_k", "_max_model_len",
+        "_capacity",
+        "_mask",
+        "_keys",
+        "_ngrams",
+        "_values",
+        "_total_inserts",
+        "_total_lookups",
+        "_total_hits",
+        "_total_evictions",
+        "_min_n",
+        "_max_n",
+        "_k",
+        "_max_model_len",
         "_indexed_len",
     )
 
@@ -261,7 +272,7 @@ class LCGHashPool:
         if total < min_n + 1:
             return
 
-        start = max(0, getattr(self, '_indexed_len', 0) - max_n)
+        start = max(0, getattr(self, "_indexed_len", 0) - max_n)
         self._indexed_len = total
 
         for n in range(min_n, max_n + 1):
@@ -269,7 +280,7 @@ class LCGHashPool:
                 cont_start = i + n
                 if cont_start >= total:
                     break
-                ngram = tuple(token_ids[i:i + n])
+                ngram = tuple(token_ids[i : i + n])
                 cont_end = min(cont_start + k, total)
                 continuation = tuple(token_ids[cont_start:cont_end])
                 h = self._hash_ngram(ngram)
@@ -280,7 +291,9 @@ class LCGHashPool:
         """Open-addressing insert with LCG probing."""
         for probe in range(8):
             slot = self._slot(h, probe)
-            if self._keys[slot] == 0 or (self._keys[slot] == h and self._ngrams[slot] == ngram):
+            if self._keys[slot] == 0 or (
+                self._keys[slot] == h and self._ngrams[slot] == ngram
+            ):
                 self._keys[slot] = h
                 self._ngrams[slot] = ngram
                 self._values[slot] = value
@@ -344,11 +357,15 @@ class LCGHashPool:
         return {
             "pool_size": occupied,
             "capacity": self._capacity,
-            "load_factor": round(occupied / self._capacity, 3) if self._capacity > 0 else 0.0,
+            "load_factor": round(occupied / self._capacity, 3)
+            if self._capacity > 0
+            else 0.0,
             "total_inserts": self._total_inserts,
             "total_lookups": self._total_lookups,
             "total_hits": self._total_hits,
-            "hit_rate": round(self._total_hits / self._total_lookups, 3) if self._total_lookups > 0 else 0.0,
+            "hit_rate": round(self._total_hits / self._total_lookups, 3)
+            if self._total_lookups > 0
+            else 0.0,
             "total_evictions": self._total_evictions,
         }
 

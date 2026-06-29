@@ -1,7 +1,5 @@
 """Realtime WebSocket protocol tests."""
 
-
-
 from yunshu_gateway.routers.realtime import (
     Conversation,
     ConversationItem,
@@ -61,8 +59,8 @@ class TestSessionConfig:
         for bad in ("server_vad", [], 42, "null"):
             changed = config.update({"turn_detection": bad})
             assert "turn_detection" not in changed
-            assert config.turn_detection == _default          # unchanged
-            assert isinstance(config.turn_detection, dict)     # never a str/list
+            assert config.turn_detection == _default  # unchanged
+            assert isinstance(config.turn_detection, dict)  # never a str/list
 
     def test_null_turn_detection_disables_vad(self):
         # null is the documented way to disable VAD — must be accepted.
@@ -73,7 +71,9 @@ class TestSessionConfig:
 
     def test_valid_dict_turn_detection_accepted(self):
         config = SessionConfig()
-        changed = config.update({"turn_detection": {"type": "server_vad", "threshold": 0.7}})
+        changed = config.update(
+            {"turn_detection": {"type": "server_vad", "threshold": 0.7}}
+        )
         assert "turn_detection" in changed
         assert config.turn_detection["threshold"] == 0.7
         # an unsupported type is still rejected (existing behavior preserved)
@@ -84,7 +84,12 @@ class TestSessionConfig:
 class TestConversation:
     def test_add_item(self):
         conv = Conversation("conv_test")
-        item = ConversationItem("item_1", "message", role="user", content=[{"type": "text", "text": "hello"}])
+        item = ConversationItem(
+            "item_1",
+            "message",
+            role="user",
+            content=[{"type": "text", "text": "hello"}],
+        )
         conv.add_item(item)
         assert len(conv.items) == 1
         assert conv.items[0].item_id == "item_1"
@@ -99,7 +104,9 @@ class TestConversation:
 
 class TestConversationItem:
     def test_to_dict(self):
-        item = ConversationItem("item_1", "message", role="user", content=[{"type": "text", "text": "hi"}])
+        item = ConversationItem(
+            "item_1", "message", role="user", content=[{"type": "text", "text": "hi"}]
+        )
         item.status = "completed"
         d = item.to_dict()
         assert d["id"] == "item_1"
@@ -141,13 +148,21 @@ class TestRealtimeSession:
         session = RealtimeSession.__new__(RealtimeSession)
         session.conversation = Conversation("conv_test")
 
-        user_item = ConversationItem("item_1", "message", role="user",
-                                     content=[{"type": "text", "text": "Hello"}])
+        user_item = ConversationItem(
+            "item_1",
+            "message",
+            role="user",
+            content=[{"type": "text", "text": "Hello"}],
+        )
         user_item.status = "completed"
         session.conversation.add_item(user_item)
 
-        assistant_item = ConversationItem("item_2", "message", role="assistant",
-                                          content=[{"type": "text", "text": "Hi there"}])
+        assistant_item = ConversationItem(
+            "item_2",
+            "message",
+            role="assistant",
+            content=[{"type": "text", "text": "Hi there"}],
+        )
         assistant_item.status = "completed"
         session.conversation.add_item(assistant_item)
 
@@ -165,10 +180,20 @@ class TestRealtimeSession:
         session.conversation = Conversation("conv_test")
         session.session = None
 
-        session.conversation.add_item(ConversationItem(
-            "item_1", "function_call", call_id="call_x", name="get_weather", arguments='{"city":"NYC"}'))
-        session.conversation.add_item(ConversationItem(
-            "item_2", "function_call_output", call_id="call_x", output="sunny"))
+        session.conversation.add_item(
+            ConversationItem(
+                "item_1",
+                "function_call",
+                call_id="call_x",
+                name="get_weather",
+                arguments='{"city":"NYC"}',
+            )
+        )
+        session.conversation.add_item(
+            ConversationItem(
+                "item_2", "function_call_output", call_id="call_x", output="sunny"
+            )
+        )
         session.conversation.add_item(ConversationItem("item_3", "some_unknown_type"))
 
         messages = session._build_messages()
@@ -187,9 +212,12 @@ class TestRealtimeSession:
         # Patch the resolvers so we actually test the "no engine" path the name
         # promises.
         from unittest.mock import patch
+
         session = RealtimeSession.__new__(RealtimeSession)
-        with patch("yunshu_gateway.engine.get_model_manager", return_value=None), \
-             patch("yunshu_gateway.engine.get_engine", return_value=None):
+        with (
+            patch("yunshu_gateway.engine.get_model_manager", return_value=None),
+            patch("yunshu_gateway.engine.get_engine", return_value=None),
+        ):
             assert session._resolve_engine() is None
 
     def test_item_truncate_trims_assistant_audio_transcript(self):
@@ -211,14 +239,19 @@ class TestRealtimeSession:
 
         session.send_event = _noop
         item = ConversationItem(
-            item_id="a1", item_type="message", role="assistant",
+            item_id="a1",
+            item_type="message",
+            role="assistant",
             content=[{"type": "audio", "transcript": "A" * 40, "duration_ms": 2800}],
         )
         item.status = "completed"
         session.conversation.add_item(item)
         assert session._build_messages()[-1]["content"] == "A" * 40
-        asyncio.run(session._handle_conversation_item_truncate(
-            {"item_id": "a1", "content_index": 0, "audio_end_ms": 1400}))
+        asyncio.run(
+            session._handle_conversation_item_truncate(
+                {"item_id": "a1", "content_index": 0, "audio_end_ms": 1400}
+            )
+        )
         kept = len(session._build_messages()[-1]["content"])
         assert 15 <= kept <= 25  # ~half (proportional), no longer the full 40
 
@@ -229,51 +262,61 @@ class TestG711OutputEncoding:
 
     def _R(self):
         from yunshu_gateway.routers.realtime import RealtimeSession
+
         return RealtimeSession
 
     def test_ulaw_encode_roundtrips(self):
         import math
+
         R = self._R()
         dec = R._get_ulaw_table()
         enc = R._get_ulaw_encode_lut()
         # encode→decode a 440Hz tone, expect G.711-grade SNR (~33-38 dB)
         sig = [int(20000 * math.sin(2 * math.pi * 440 * i / 8000)) for i in range(4000)]
         recov = [dec[enc[s & 0xFFFF]] for s in sig]
-        err = (sum((r - s) ** 2 for r, s in zip(recov, sig, strict=False)) / len(sig)) ** 0.5
+        err = (
+            sum((r - s) ** 2 for r, s in zip(recov, sig, strict=False)) / len(sig)
+        ) ** 0.5
         rms = (sum(s * s for s in sig) / len(sig)) ** 0.5
         snr = 20 * math.log10(rms / err) if err else 99
         assert snr > 28, f"ulaw round-trip SNR {snr:.1f} too low"
 
     def test_alaw_encode_roundtrips(self):
         import math
+
         R = self._R()
         dec = R._get_alaw_table()
         enc = R._get_alaw_encode_lut()
         sig = [int(20000 * math.sin(2 * math.pi * 440 * i / 8000)) for i in range(4000)]
         recov = [dec[enc[s & 0xFFFF]] for s in sig]
-        err = (sum((r - s) ** 2 for r, s in zip(recov, sig, strict=False)) / len(sig)) ** 0.5
+        err = (
+            sum((r - s) ** 2 for r, s in zip(recov, sig, strict=False)) / len(sig)
+        ) ** 0.5
         rms = (sum(s * s for s in sig) / len(sig)) ** 0.5
         snr = 20 * math.log10(rms / err) if err else 99
         assert snr > 28, f"alaw round-trip SNR {snr:.1f} too low"
 
     def test_output_format_dispatch(self):
         import struct
+
         R = self._R()
         r = R.__new__(R)
 
         class _S:
             output_audio_format = "g711_ulaw"
+
         r.session = _S()
         pcm24 = struct.pack("<720h", *([1000] * 720))  # 30ms @ 24kHz
         enc, csz = r._encode_output_audio(pcm24)
-        assert csz == 160                # 20ms @ 8kHz, 1 byte/sample
-        assert 230 <= len(enc) <= 245    # 720/3 ≈ 240 g711 bytes
+        assert csz == 160  # 20ms @ 8kHz, 1 byte/sample
+        assert 230 <= len(enc) <= 245  # 720/3 ≈ 240 g711 bytes
 
         class _S2:
             output_audio_format = "pcm16"
+
         r.session = _S2()
         out, csz2 = r._encode_output_audio(pcm24)
-        assert out == pcm24 and csz2 == 960   # pcm16 unchanged, 20ms @ 24kHz
+        assert out == pcm24 and csz2 == 960  # pcm16 unchanged, 20ms @ 24kHz
 
     def test_g711_resample_continuous_across_chunks(self):
         """streaming g711 output must NOT drop samples or reset the
@@ -281,11 +324,13 @@ class TestG711OutputEncoding:
         counts aren't multiples of 3 must yield the same total output as one
         contiguous resample (= floor(total_samples/3) g711 bytes)."""
         import struct
+
         R = self._R()
         r = R.__new__(R)
 
         class _S:
             output_audio_format = "g711_ulaw"
+
         r.session = _S()
         r._g711_resample_remainder = b""
 

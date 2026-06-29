@@ -11,6 +11,7 @@ so it passed while end-to-end SSE was still broken.
 Fix: track `_choice_tc_start_emitted`; in the `out.tool_call` branch, synthesize the start
 chunk (id+name) before the args delta when no start was emitted. (Both streaming choice blocks.)
 """
+
 from __future__ import annotations
 
 import inspect
@@ -37,7 +38,10 @@ def test_both_streaming_blocks_fixed():
     src = inspect.getsource(chat)
     # the start-synthesis appears in BOTH blocks (replace_all applied)
     assert src.count("tc_id=out.tool_call.id") == 2
-    assert src.count("_choice_tc_start_emitted = False  # next index needs its own start") == 2
+    assert (
+        src.count("_choice_tc_start_emitted = False  # next index needs its own start")
+        == 2
+    )
 
 
 def test_start_synthesis_precedes_args_in_source_order():

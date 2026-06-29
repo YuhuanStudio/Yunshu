@@ -7,6 +7,7 @@ window_sum stayed at its 1e-8 floor → that tail reconstructed as pure SILENCE 
 on every separate/transform and every long-enough enhance). Fixed by iterating to len(arr)
 (a final zero-padded frame anchors the tail; the end=min(start+fft,len) write already clamps).
 """
+
 from __future__ import annotations
 
 import inspect
@@ -24,7 +25,9 @@ def _sine(n, sr=16000, f=440.0, amp=0.5):
 
 def _tail_has_energy(out, tail=256):
     arr = np.asarray(out, dtype=np.float32)
-    return float(np.max(np.abs(arr[-tail:]))) > 1e-3   # clearly not the 1e-8-floor silence
+    return (
+        float(np.max(np.abs(arr[-tail:]))) > 1e-3
+    )  # clearly not the 1e-8-floor silence
 
 
 def test_separate_tail_not_silenced():
@@ -38,7 +41,9 @@ def test_transform_formant_tail_not_silenced():
     e = STSEngine.__new__(STSEngine)
     out = e._formant_shift(_sine(5000), 16000, 1.2)
     assert len(out) == 5000
-    assert _tail_has_energy(out), "transform/formant dropped the trailing samples to silence"
+    assert _tail_has_energy(out), (
+        "transform/formant dropped the trailing samples to silence"
+    )
 
 
 def test_enhance_tail_not_silenced():

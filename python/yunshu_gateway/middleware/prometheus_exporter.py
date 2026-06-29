@@ -56,6 +56,7 @@ def _fmt_value(value) -> str:
 # Internal data containers
 # ---------------------------------------------------------------------------
 
+
 class _Counter:
     """Thread-safe labelled counter."""
 
@@ -190,19 +191,46 @@ class _Histogram:
     """
 
     __slots__ = (
-        "_name", "_help", "_lock",
-        "_bucket_counts", "_sums", "_counts", "_buckets",
+        "_name",
+        "_help",
+        "_lock",
+        "_bucket_counts",
+        "_sums",
+        "_counts",
+        "_buckets",
     )
 
     # Default Prometheus-style exponential buckets (seconds).
     DEFAULT_BUCKETS = (
-        0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5,
-        1.0, 2.5, 5.0, 10.0, 30.0, 60.0,
+        0.005,
+        0.01,
+        0.025,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
+        30.0,
+        60.0,
     )
     # Inference-specific buckets for sub-second latency (TTFT, ITL).
     INFERENCE_BUCKETS = (
-        0.001, 0.002, 0.005, 0.01, 0.02, 0.05,
-        0.1, 0.2, 0.5, 1.0, 2.5, 5.0, 10.0,
+        0.001,
+        0.002,
+        0.005,
+        0.01,
+        0.02,
+        0.05,
+        0.1,
+        0.2,
+        0.5,
+        1.0,
+        2.5,
+        5.0,
+        10.0,
     )
 
     def __init__(
@@ -217,7 +245,9 @@ class _Histogram:
         self._buckets = buckets or self.DEFAULT_BUCKETS
         # Running bucket counters — updated incrementally in observe().
         # Each value is a list aligned with self._buckets.
-        self._bucket_counts: dict[frozenset[tuple[str, str]], list[int]] = defaultdict(lambda: [0] * len(self._buckets))
+        self._bucket_counts: dict[frozenset[tuple[str, str]], list[int]] = defaultdict(
+            lambda: [0] * len(self._buckets)
+        )
         self._sums: dict[frozenset[tuple[str, str]], float] = defaultdict(float)
         self._counts: dict[frozenset[tuple[str, str]], int] = defaultdict(int)
 
@@ -226,7 +256,10 @@ class _Histogram:
     def observe(self, value: float, labels: dict[str, str] | None = None) -> None:
         key = frozenset((labels or {}).items())
         with self._lock:
-            if key not in self._bucket_counts and len(self._bucket_counts) >= self.MAX_LABEL_SERIES:
+            if (
+                key not in self._bucket_counts
+                and len(self._bucket_counts) >= self.MAX_LABEL_SERIES
+            ):
                 oldest_key = next(iter(self._bucket_counts))
                 del self._bucket_counts[oldest_key]
                 self._sums.pop(oldest_key, None)
@@ -266,7 +299,9 @@ class _Histogram:
         # acquisitions (keys could be deleted, counts could change).
         with self._lock:
             keys = sorted(self._bucket_counts.keys(), key=_label_sort_key)
-            snap: list[tuple[frozenset[tuple[str, str]], str, int, float, list[int]]] = []
+            snap: list[
+                tuple[frozenset[tuple[str, str]], str, int, float, list[int]]
+            ] = []
             for key in keys:
                 count = self._counts.get(key, 0)
                 if count == 0:
@@ -288,18 +323,12 @@ class _Histogram:
                         f'{self._name}_bucket{{le="{upper}",{extra}}} {bucket_val}'
                     )
                 else:
-                    lines.append(
-                        f'{self._name}_bucket{{le="{upper}"}} {bucket_val}'
-                    )
+                    lines.append(f'{self._name}_bucket{{le="{upper}"}} {bucket_val}')
             # +Inf bucket.
             if extra:
-                lines.append(
-                    f'{self._name}_bucket{{le="+Inf",{extra}}} {count}'
-                )
+                lines.append(f'{self._name}_bucket{{le="+Inf",{extra}}} {count}')
             else:
-                lines.append(
-                    f'{self._name}_bucket{{le="+Inf"}} {count}'
-                )
+                lines.append(f'{self._name}_bucket{{le="+Inf"}} {count}')
             lines.append(f"{self._name}_sum{label_str} {_fmt_value(total)}")
             lines.append(f"{self._name}_count{label_str} {count}")
         return "\n".join(lines)
@@ -308,6 +337,7 @@ class _Histogram:
 # ---------------------------------------------------------------------------
 # Label helpers
 # ---------------------------------------------------------------------------
+
 
 def _label_sort_key(key: frozenset[tuple[str, str]]) -> str:
     """Stable sort key for label sets."""
@@ -318,11 +348,17 @@ def _format_labels(key: frozenset[tuple[str, str]]) -> str:
     """Serialise label set to Prometheus label string, e.g. {a="b",c="d"}."""
     if not key:
         return ""
+
     def _esc(v: str) -> str:
         # Also escape carriage return — a raw \r in a label value would
         # corrupt the Prometheus exposition line.
-        return (v.replace("\\", "\\\\").replace('"', '\\"')
-                .replace("\n", "\\n").replace("\r", "\\r"))
+        return (
+            v.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+        )
+
     pairs = ",".join(f'{k}="{_esc(v)}"' for k, v in sorted(key))
     return f"{{{pairs}}}"
 
@@ -330,6 +366,7 @@ def _format_labels(key: frozenset[tuple[str, str]]) -> str:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 class PrometheusMetrics:
     """Central Prometheus-compatible metrics registry.
@@ -664,14 +701,18 @@ class PrometheusMetrics:
 
     # --- Counter API ---
 
-    def inc_counter(self, name: str, labels: dict[str, str] | None = None, amount: int = 1) -> None:
+    def inc_counter(
+        self, name: str, labels: dict[str, str] | None = None, amount: int = 1
+    ) -> None:
         """Increment a named counter by *amount*."""
         with self._lock:
             if name not in self._counters:
                 raise KeyError(f"Unknown counter: {name!r}")
             self._counters[name].inc(labels, amount)
 
-    def set_counter(self, name: str, value: int, labels: dict[str, str] | None = None) -> None:
+    def set_counter(
+        self, name: str, value: int, labels: dict[str, str] | None = None
+    ) -> None:
         """Set a named counter to an absolute value (for snapshot-based reporting).
 
         Used when engine stats provide cumulative totals rather than deltas.
@@ -691,20 +732,26 @@ class PrometheusMetrics:
 
     # --- Gauge API ---
 
-    def set_gauge(self, name: str, value: float, labels: dict[str, str] | None = None) -> None:
+    def set_gauge(
+        self, name: str, value: float, labels: dict[str, str] | None = None
+    ) -> None:
         """Set a named gauge to *value*."""
         with self._lock:
             if name not in self._gauges:
                 raise KeyError(f"Unknown gauge: {name!r}")
             self._gauges[name].set(value, labels)
 
-    def inc_gauge(self, name: str, labels: dict[str, str] | None = None, amount: float = 1.0) -> None:
+    def inc_gauge(
+        self, name: str, labels: dict[str, str] | None = None, amount: float = 1.0
+    ) -> None:
         with self._lock:
             if name not in self._gauges:
                 raise KeyError(f"Unknown gauge: {name!r}")
             self._gauges[name].inc(labels, amount)
 
-    def dec_gauge(self, name: str, labels: dict[str, str] | None = None, amount: float = 1.0) -> None:
+    def dec_gauge(
+        self, name: str, labels: dict[str, str] | None = None, amount: float = 1.0
+    ) -> None:
         with self._lock:
             if name not in self._gauges:
                 raise KeyError(f"Unknown gauge: {name!r}")
@@ -712,7 +759,9 @@ class PrometheusMetrics:
 
     # --- Histogram API ---
 
-    def observe_histogram(self, name: str, value: float, labels: dict[str, str] | None = None) -> None:
+    def observe_histogram(
+        self, name: str, value: float, labels: dict[str, str] | None = None
+    ) -> None:
         """Observe *value* in a named histogram."""
         with self._lock:
             if name not in self._histograms:
@@ -760,9 +809,13 @@ class PrometheusMetrics:
             sections.append(h.format())
 
         # Append an uptime gauge.
-        sections.append("# HELP yunshu_exporter_uptime_seconds Prometheus exporter uptime")
+        sections.append(
+            "# HELP yunshu_exporter_uptime_seconds Prometheus exporter uptime"
+        )
         sections.append("# TYPE yunshu_exporter_uptime_seconds gauge")
-        sections.append(f"yunshu_exporter_uptime_seconds {time.monotonic() - _BORN:.1f}")
+        sections.append(
+            f"yunshu_exporter_uptime_seconds {time.monotonic() - _BORN:.1f}"
+        )
 
         return "\n".join(sections) + "\n"
 

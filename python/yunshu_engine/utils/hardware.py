@@ -19,6 +19,7 @@ from dataclasses import dataclass
 
 try:
     import mlx.core as mx
+
     HAS_MLX = True
 except ImportError:
     HAS_MLX = False
@@ -26,7 +27,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MEMORY_BYTES = 8 * 1024 ** 3
+DEFAULT_MEMORY_BYTES = 8 * 1024**3
 
 
 @dataclass
@@ -47,7 +48,9 @@ def get_chip_name() -> str:
     try:
         r = subprocess.run(
             ["sysctl", "-n", "machdep.cpu.brand_string"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         )
         return r.stdout.strip()
     except Exception:
@@ -59,7 +62,9 @@ def get_total_memory_bytes() -> int:
     try:
         r = subprocess.run(
             ["sysctl", "-n", "hw.memsize"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         )
         return int(r.stdout.strip())
     except Exception:
@@ -76,7 +81,7 @@ def get_total_memory_bytes() -> int:
 
 
 def get_system_memory_gb() -> float:
-    return get_total_memory_bytes() / (1024 ** 3)
+    return get_total_memory_bytes() / (1024**3)
 
 
 def get_max_working_set_bytes() -> int:
@@ -91,6 +96,7 @@ def get_max_working_set_bytes() -> int:
             logger.debug("failed", exc_info=True)
     try:
         import psutil
+
         return int(psutil.virtual_memory().total * 0.75)
     except ImportError:
         pass
@@ -101,7 +107,10 @@ def get_gpu_core_count() -> int | None:
     try:
         r = subprocess.run(
             ["system_profiler", "SPDisplaysDataType"],
-            capture_output=True, text=True, check=True, timeout=5,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
         )
         for line in r.stdout.splitlines():
             if "Total Number of Cores" in line:
@@ -139,6 +148,7 @@ def get_mlx_version() -> str:
     # attribute is unavailable.
     try:
         import mlx.core
+
         v = getattr(mlx.core, "__version__", None)
         if v:
             return v
@@ -146,6 +156,7 @@ def get_mlx_version() -> str:
         logger.debug("mlx.core version detection failed", exc_info=True)
     try:
         import importlib.metadata
+
         return importlib.metadata.version("mlx")
     except Exception:
         logger.debug("mlx package metadata lookup failed", exc_info=True)
@@ -161,7 +172,10 @@ def get_gpu_family() -> str | None:
     try:
         r = subprocess.run(
             ["system_profiler", "SPDisplaysDataType"],
-            capture_output=True, text=True, check=True, timeout=5,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
         )
         for line in r.stdout.splitlines():
             # Match lines like "Chipset Model: Apple M2 Max"
@@ -181,7 +195,9 @@ def get_gpu_family() -> str | None:
     try:
         r = subprocess.run(
             ["sysctl", "-n", "hw.model"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         )
         hw_model = r.stdout.strip()
         if hw_model:
@@ -269,7 +285,9 @@ def get_ane_available() -> bool | None:
     try:
         r = subprocess.run(
             ["ioreg", "-l", "-w0"],
-            capture_output=True, text=True, timeout=3,
+            capture_output=True,
+            text=True,
+            timeout=3,
         )
         if "AppleNeuralEngine" in r.stdout:
             return True
@@ -279,6 +297,7 @@ def get_ane_available() -> bool | None:
     # Method 2: CoreML availability
     try:
         import coremltools  # noqa: F401
+
         return True
     except ImportError:
         pass
@@ -290,6 +309,7 @@ def get_ane_available() -> bool | None:
 def get_mlx_lm_version() -> str:
     try:
         import mlx_lm
+
         return getattr(mlx_lm, "__version__", "unknown")
     except Exception:
         logger.debug("mlx-lm version detection failed", exc_info=True)
@@ -334,7 +354,7 @@ def detect_hardware() -> HardwareInfo:
     total_mem_bytes = get_total_memory_bytes()
     return HardwareInfo(
         chip_name=get_chip_name(),
-        total_memory_gb=total_mem_bytes / (1024 ** 3),
+        total_memory_gb=total_mem_bytes / (1024**3),
         total_memory_bytes=total_mem_bytes,
         max_working_set_bytes=get_max_working_set_bytes(),
         gpu_cores=get_gpu_core_count(),
@@ -385,7 +405,7 @@ def compute_adaptive_defaults(hw: HardwareInfo | None = None) -> dict:
     chip_gen, chip_tier = parse_chip_info(hw.chip_name)
     mem_gb = hw.total_memory_gb
     ws_bytes = hw.max_working_set_bytes
-    ws_bytes / (1024 ** 3)
+    ws_bytes / (1024**3)
 
     # ── Max KV cache memory ──
     # Reserve 40% of working set for model weights + activations, rest for KV
@@ -470,7 +490,7 @@ def get_hardware_profile() -> dict:
         "chip_generation": chip_gen,
         "chip_tier": chip_tier,
         "total_memory_gb": round(hw.total_memory_gb, 1),
-        "working_set_gb": round(hw.max_working_set_bytes / (1024 ** 3), 1),
+        "working_set_gb": round(hw.max_working_set_bytes / (1024**3), 1),
         "gpu_cores": hw.gpu_cores,
         "gpu_family": hw.gpu_family,
         "memory_bandwidth_gb": hw.memory_bandwidth_gb,

@@ -10,6 +10,7 @@ blocks after each write.
 65504 max (large-model KV outliers / attention sinks; bf16 is the default KV dtype)
 silently overflowed to inf → NaN attention on restore. Now dequantizes in float32.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -36,8 +37,12 @@ def _add_block(cache, name, size, age_s):
         f.write(b"\0" * size)
     cache._index[name] = _BlockMeta(
         block_hash=name.encode(),
-        file_path=fp, token_count=10, model_name="m",
-        created_at=time.time() - age_s, file_size=size, last_accessed=time.time() - age_s,
+        file_path=fp,
+        token_count=10,
+        model_name="m",
+        created_at=time.time() - age_s,
+        file_size=size,
+        last_accessed=time.time() - age_s,
     )
     return fp
 

@@ -8,6 +8,7 @@ Tests cover:
 - Stats reporting (spec_proposals, spec_accepted, spec_rejected, spec_enabled)
 - Cleanup on finish / abort / preempt
 """
+
 from unittest.mock import MagicMock, patch
 
 from yunshu_engine.request import Request, RequestOutput, SamplingParams
@@ -131,7 +132,9 @@ class TestSpecDecodeDraftGeneration:
 
         # Mock _generate_draft_tokens to return draft tokens (avoids MLX ops)
         draft_result = DraftResult(token_ids=[40, 50, 60], logprobs=[-1.0, -0.5, -0.8])
-        with patch.object(scheduler, '_generate_draft_tokens', return_value=draft_result):
+        with patch.object(
+            scheduler, "_generate_draft_tokens", return_value=draft_result
+        ):
             scheduler._try_spec_decode_draft(req)
 
         assert "req-1" in scheduler._spec_drafts
@@ -412,7 +415,9 @@ class TestSpecDecodeStepLoop:
 
         # Mock _generate_draft_tokens to avoid MLX ops
         draft_result = DraftResult(token_ids=[30, 40, 50], logprobs=[-0.1, -0.2, -0.3])
-        with patch.object(scheduler, '_generate_draft_tokens', return_value=draft_result):
+        with patch.object(
+            scheduler, "_generate_draft_tokens", return_value=draft_result
+        ):
             scheduler.step()
 
         # Draft should have been generated for the active request
@@ -444,7 +449,7 @@ class TestSpecDecodeStepLoop:
 
         # Mock _generate_draft_tokens for new drafts after verification
         new_draft = DraftResult(token_ids=[50, 60], logprobs=[-0.1, -0.2])
-        with patch.object(scheduler, '_generate_draft_tokens', return_value=new_draft):
+        with patch.object(scheduler, "_generate_draft_tokens", return_value=new_draft):
             scheduler.step()
 
         # After step, output_token_ids = [10, 20, 30, 40]
@@ -457,7 +462,9 @@ class TestSpecDecodeStepLoop:
         """When _spec_decoder is just SpecHeadInfo (not SpeculativeDecoder), no drafts."""
         scheduler = _make_scheduler(enable_spec=True)
         # Set to head_info (not a real decoder)
-        scheduler._spec_decoder = SpecHeadInfo(head_type="mtp", num_heads=1, draft_length=3)
+        scheduler._spec_decoder = SpecHeadInfo(
+            head_type="mtp", num_heads=1, draft_length=3
+        )
 
         req = _make_request()
         req.batch_uid = 0
@@ -524,13 +531,15 @@ class TestSpecDecodeMultipleRequests:
 
         # Mock _generate_draft_tokens to avoid MLX ops
         draft_count = [0]
+
         def mock_gen(req, decoder, K):
             draft_count[0] += 1
             return DraftResult(
                 token_ids=[40 + draft_count[0], 50 + draft_count[0]],
                 logprobs=[-0.1, -0.2],
             )
-        with patch.object(scheduler, '_generate_draft_tokens', side_effect=mock_gen):
+
+        with patch.object(scheduler, "_generate_draft_tokens", side_effect=mock_gen):
             scheduler.step()
 
         # Both requests should have drafts

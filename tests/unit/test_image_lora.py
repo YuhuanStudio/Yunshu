@@ -1,13 +1,14 @@
 """Tests for ImageGenEngine LoRA adapter loading."""
 
-
 from python.yunshu_engine.image_engine import ImageGenEngine
 
 
 class FakeTransformer:
     """Fake transformer with named_modules for LoRA testing."""
+
     def __init__(self):
         import mlx.nn as nn
+
         self.q_proj = nn.Linear(64, 64, bias=False)
         self.v_proj = nn.Linear(64, 64, bias=False)
         self.out_proj = nn.Linear(64, 64, bias=False)
@@ -26,6 +27,7 @@ class FakeTransformer:
 
 def _make_engine():
     import threading
+
     engine = ImageGenEngine.__new__(ImageGenEngine)
     engine._transformer = FakeTransformer()
     engine._model_path = "/fake"
@@ -39,6 +41,7 @@ class TestImageLoRA:
     def test_load_lora_no_transformer(self):
         """Should fail gracefully when transformer not loaded."""
         import threading
+
         engine = ImageGenEngine.__new__(ImageGenEngine)
         engine._transformer = None
         engine._lora_lock = threading.Lock()
@@ -54,6 +57,7 @@ class TestImageLoRA:
     def test_load_lora_with_config(self, tmp_path):
         """Should attempt to load LoRA layers from config."""
         import json
+
         config = {
             "lora_parameters": {"rank": 4, "scale": 10.0},
             "num_layers": 2,
@@ -71,6 +75,7 @@ class TestImageLoRA:
     def test_load_lora_with_weights(self, tmp_path):
         """Config + weights path handling."""
         import json
+
         config = {
             "lora_parameters": {"rank": 4, "scale": 10.0},
             "num_layers": 2,
@@ -85,12 +90,13 @@ class TestImageLoRA:
 
     def test_engine_has_lora_method(self):
         """ImageGenEngine should expose load_lora_adapter."""
-        assert hasattr(ImageGenEngine, 'load_lora_adapter')
+        assert hasattr(ImageGenEngine, "load_lora_adapter")
         import inspect
+
         sig = inspect.signature(ImageGenEngine.load_lora_adapter)
-        assert 'adapter_path' in sig.parameters
-        assert 'rank' in sig.parameters
-        assert 'scale' in sig.parameters
+        assert "adapter_path" in sig.parameters
+        assert "rank" in sig.parameters
+        assert "scale" in sig.parameters
 
 
 import mlx.nn as _nn
@@ -167,6 +173,7 @@ class TestZImageLoRAKeyRemap:
         assert ok is True
         # Every attention to_q/to_v/to_out across BOTH list-indexed layers wrapped.
         from mlx_lm.tuner.lora import LoRALinear
+
         for layer in engine._transformer.layers:
             assert isinstance(layer.attention.to_q, LoRALinear)
             assert isinstance(layer.attention.to_v, LoRALinear)
@@ -193,6 +200,7 @@ class TestZImageLoRAKeyRemap:
 
         # Module path AFTER the remap → resolves to the flat Linear.
         import mlx.nn as nn
+
         good, parent, last = engine._resolve_lora_module("layers.0.attention.to_out")
         assert isinstance(good, nn.Linear)
         assert last == "to_out"

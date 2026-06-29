@@ -6,6 +6,7 @@ KVTransferServer could send magic + 0xFFFFFFFF and force a multi-GB readexactly 
 memory-pressure SIGABRT on a 36GB Mac. Now header_len is bounded (_MAX_HEADER_SIZE) before
 the read, mirroring the existing payload guard.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,14 +23,15 @@ from yunshu_engine.kv_transfer import _MAGIC, _MAX_HEADER_SIZE, KVTransferProtoc
 class _FakeReader:
     """Feeds a fixed byte string to readexactly; raises if asked for more than supplied
     (so an UNBOUNDED header_len read would surface as an over-read, not a real 4GB alloc)."""
+
     def __init__(self, data: bytes):
         self._data = data
         self._pos = 0
 
     async def readexactly(self, n: int):
         if self._pos + n > len(self._data):
-            raise asyncio.IncompleteReadError(self._data[self._pos:], n)
-        chunk = self._data[self._pos:self._pos + n]
+            raise asyncio.IncompleteReadError(self._data[self._pos :], n)
+        chunk = self._data[self._pos : self._pos + n]
         self._pos += n
         return chunk
 

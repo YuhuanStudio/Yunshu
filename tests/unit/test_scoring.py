@@ -1,4 +1,5 @@
 """Tests for scoring endpoints (/v1/pooling, /v1/score, /v1/rerank, /v1/classify)."""
+
 import math
 
 import pytest
@@ -47,17 +48,20 @@ class TestSimilarityComputation:
 class TestPoolingRequest:
     def test_pooling_request_model(self):
         from yunshu_gateway.routers.scoring import PoolingRequest
+
         req = PoolingRequest(model="test-model", input="hello")
         assert req.model == "test-model"
         assert req.pooling_type == "CLS"
 
     def test_pooling_request_mean(self):
         from yunshu_gateway.routers.scoring import PoolingRequest
+
         req = PoolingRequest(model="test", input=["a", "b"], pooling_type="MEAN")
         assert req.pooling_type == "MEAN"
 
     def test_pooling_request_last(self):
         from yunshu_gateway.routers.scoring import PoolingRequest
+
         req = PoolingRequest(model="test", input="hello", pooling_type="LAST")
         assert req.pooling_type == "LAST"
 
@@ -65,11 +69,13 @@ class TestPoolingRequest:
 class TestScoreRequest:
     def test_score_request_basic(self):
         from yunshu_gateway.routers.scoring import ScoreRequest
+
         req = ScoreRequest(model="test", text_1="hello", text_2="world")
         assert req.scoring_type == "cosine"
 
     def test_score_request_broadcast(self):
         from yunshu_gateway.routers.scoring import ScoreRequest
+
         req = ScoreRequest(
             model="test",
             text_1=["hello"],
@@ -85,6 +91,7 @@ class TestScoreRequest:
 class TestRerankRequest:
     def test_rerank_request_basic(self):
         from yunshu_gateway.routers.scoring import RerankRequest
+
         req = RerankRequest(
             model="test",
             query="what is AI?",
@@ -95,6 +102,7 @@ class TestRerankRequest:
 
     def test_rerank_request_top_n(self):
         from yunshu_gateway.routers.scoring import RerankRequest
+
         req = RerankRequest(
             model="test",
             query="query",
@@ -109,6 +117,7 @@ class TestRerankRequest:
 class TestClassifyRequest:
     def test_classify_request_basic(self):
         from yunshu_gateway.routers.scoring import ClassifyRequest
+
         req = ClassifyRequest(
             model="test",
             input="The stock market crashed",
@@ -122,6 +131,7 @@ class TestClassifyRequest:
         from pydantic import ValidationError
 
         from yunshu_gateway.routers.scoring import ClassifyRequest
+
         with pytest.raises(ValidationError):
             ClassifyRequest(model="test", input="hello")
 
@@ -130,6 +140,7 @@ class TestClassifyRequest:
         from pydantic import ValidationError
 
         from yunshu_gateway.routers.scoring import ClassifyRequest
+
         with pytest.raises(ValidationError):
             ClassifyRequest(model="test", input="hello", labels=["only_one"])
 
@@ -140,6 +151,7 @@ class TestClassifyTemperature:
     def test_softmax_with_temperature(self):
         """Cosine similarities with temperature=0.07 should produce sharp distribution."""
         import math
+
         # Simulate cosine similarities for 3 labels
         cos_sims = [0.8, 0.3, -0.1]
         temperature = 0.07
@@ -157,6 +169,7 @@ class TestClassifyTemperature:
     def test_softmax_without_temperature_uniform(self):
         """Without temperature, softmax on cosines is too flat."""
         import math
+
         cos_sims = [0.8, 0.3, -0.1]
 
         max_score = max(cos_sims)
@@ -183,6 +196,7 @@ class TestRerankScoring:
     def test_similarity_empty_vectors(self):
         """Empty vectors should return 0.0."""
         from yunshu_gateway.routers.scoring import _compute_similarity
+
         assert _compute_similarity([], [1.0, 2.0], "cosine") == 0.0
         assert _compute_similarity([1.0, 2.0], [], "cosine") == 0.0
         assert _compute_similarity([], [], "cosine") == 0.0
@@ -193,10 +207,12 @@ class TestValidationConstants:
 
     def test_valid_pooling_types(self):
         from yunshu_gateway.routers.scoring import _VALID_POOLING_TYPES
+
         assert {"CLS", "MEAN", "LAST"} == _VALID_POOLING_TYPES
 
     def test_valid_scoring_types(self):
         from yunshu_gateway.routers.scoring import _VALID_SCORING_TYPES
+
         assert {"cosine", "dot", "euclidean"} == _VALID_SCORING_TYPES
 
 
@@ -205,21 +221,25 @@ class TestDimensionMismatch:
 
     def test_cosine_dimension_mismatch_raises(self):
         from yunshu_gateway.routers.scoring import _compute_similarity
+
         with pytest.raises(ValueError, match="dimension mismatch"):
             _compute_similarity([1.0, 2.0], [1.0, 2.0, 3.0], "cosine")
 
     def test_dot_dimension_mismatch_raises(self):
         from yunshu_gateway.routers.scoring import _compute_similarity
+
         with pytest.raises(ValueError, match="dimension mismatch"):
             _compute_similarity([1.0, 2.0], [1.0, 2.0, 3.0], "dot")
 
     def test_euclidean_dimension_mismatch_raises(self):
         from yunshu_gateway.routers.scoring import _compute_similarity
+
         with pytest.raises(ValueError, match="dimension mismatch"):
             _compute_similarity([1.0, 2.0], [1.0, 2.0, 3.0], "euclidean")
 
     def test_same_dimensions_works(self):
         from yunshu_gateway.routers.scoring import _compute_similarity
+
         # Should not raise
         result = _compute_similarity([1.0, 2.0], [3.0, 4.0], "cosine")
         assert isinstance(result, float)
@@ -231,6 +251,7 @@ class TestClassifySoftmaxOverflow:
     def test_softmax_underflow_uniform_fallback(self):
         """When all exp scores underflow to 0, uniform distribution is returned."""
         import math
+
         # Extreme negative scores that cause exp to underflow
         scores = [-1e308, -1e308, -1e308]
         max_score = max(scores)
@@ -248,6 +269,7 @@ class TestClassifySoftmaxOverflow:
     def test_softmax_normal_case(self):
         """Normal softmax should not trigger the underflow fallback."""
         import math
+
         scores = [0.8 / 0.07, 0.3 / 0.07, -0.1 / 0.07]
         max_score = max(scores)
         exp_scores = [math.exp(s - max_score) for s in scores]
@@ -263,6 +285,7 @@ class TestScoreRequestEmptyStrings:
 
     def test_score_request_list_of_one(self):
         from yunshu_gateway.routers.scoring import ScoreRequest
+
         req = ScoreRequest(
             model="test",
             text_1=["hello"],

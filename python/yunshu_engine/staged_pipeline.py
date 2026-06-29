@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 
 class PipelineStage(StrEnum):
     """Processing stages for multimodal requests."""
+
     TEXT_PREPROCESS = "text_preprocess"
     IMAGE_PREPROCESS = "image_preprocess"
     AUDIO_PREPROCESS = "audio_preprocess"
@@ -73,6 +74,7 @@ _STAGE_ORDER = [
 @dataclass
 class StageConfig:
     """Configuration for a single pipeline stage."""
+
     stage_type: PipelineStage
     modality: str  # "text", "image", "audio", "video"
     model_id: str | None = None
@@ -89,6 +91,7 @@ class StageConfig:
 @dataclass
 class StageResult:
     """Output from a single pipeline stage."""
+
     stage: PipelineStage
     data: Any
     cached: bool = False
@@ -99,6 +102,7 @@ class StageResult:
 @dataclass
 class PipelineRequest:
     """Input to the pipeline coordinator."""
+
     request_id: str
     model_id: str
     text: str | None = None
@@ -111,6 +115,7 @@ class PipelineRequest:
 @dataclass
 class StageStats:
     """Per-stage statistics."""
+
     call_count: int = 0
     cache_hits: int = 0
     cache_misses: int = 0
@@ -148,8 +153,11 @@ class StageCache:
     @staticmethod
     def _make_key(stage: PipelineStage, inputs: Any) -> str:
         """Create a deterministic cache key from stage + inputs."""
-        raw = json.dumps({"stage": stage.value, "inputs": _stable_repr(inputs)},
-                         sort_keys=True, default=str)
+        raw = json.dumps(
+            {"stage": stage.value, "inputs": _stable_repr(inputs)},
+            sort_keys=True,
+            default=str,
+        )
         return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
     def get(self, stage: PipelineStage, inputs: Any) -> Any | None:
@@ -236,8 +244,9 @@ class MultimodalPipelineCoordinator:
     independent stages (image + audio preprocessing).
     """
 
-    def __init__(self, *, enable_cache: bool = True, cache_max: int = 256,
-                 max_workers: int = 4):
+    def __init__(
+        self, *, enable_cache: bool = True, cache_max: int = 256, max_workers: int = 4
+    ):
         self._processors: dict[tuple[PipelineStage, str], ProcessorFn] = {}
         self._configs: dict[tuple[PipelineStage, str], StageConfig] = {}
         self._stats: dict[PipelineStage, StageStats] = defaultdict(StageStats)
@@ -249,9 +258,13 @@ class MultimodalPipelineCoordinator:
         """Shut down the pipeline coordinator and release resources."""
         self._executor.shutdown(wait=False)
 
-    def register_processor(self, stage: PipelineStage, modality: str,
-                           processor_fn: ProcessorFn,
-                           config: StageConfig | None = None) -> None:
+    def register_processor(
+        self,
+        stage: PipelineStage,
+        modality: str,
+        processor_fn: ProcessorFn,
+        config: StageConfig | None = None,
+    ) -> None:
         """Register a processing function for a (stage, modality) pair."""
         self._processors[(stage, modality)] = processor_fn
         if config is None:
@@ -288,7 +301,9 @@ class MultimodalPipelineCoordinator:
                 results.extend(stage_results)
                 for sr in stage_results:
                     if sr.error is None:
-                        accumulated[f"{stage.value}:{sr.data.__class__.__name__}"] = sr.data
+                        accumulated[f"{stage.value}:{sr.data.__class__.__name__}"] = (
+                            sr.data
+                        )
             else:
                 for modality in applicable:
                     sr = self._run_single(stage, modality, accumulated)
@@ -299,16 +314,21 @@ class MultimodalPipelineCoordinator:
 
         return results
 
-    def process_stage(self, stage: PipelineStage, inputs: Any,
-                      modality: str = "text") -> StageResult:
+    def process_stage(
+        self, stage: PipelineStage, inputs: Any, modality: str = "text"
+    ) -> StageResult:
         """Run a single stage manually."""
-        config = self._configs.get((stage, modality),
-                                   StageConfig(stage_type=stage, modality=modality))
+        config = self._configs.get(
+            (stage, modality), StageConfig(stage_type=stage, modality=modality)
+        )
         processor = self._processors.get((stage, modality))
 
         if processor is None:
-            return StageResult(stage=stage, data=None,
-                               error=f"No processor for ({stage.value}, {modality})")
+            return StageResult(
+                stage=stage,
+                data=None,
+                error=f"No processor for ({stage.value}, {modality})",
+            )
 
         t0 = time.monotonic()
         try:
@@ -319,8 +339,9 @@ class MultimodalPipelineCoordinator:
             duration_ms = (time.monotonic() - t0) * 1000
             stats = self._stats[stage]
             stats.error_count += 1
-            return StageResult(stage=stage, data=None, error=str(e),
-                               duration_ms=duration_ms)
+            return StageResult(
+                stage=stage, data=None, error=str(e), duration_ms=duration_ms
+            )
 
     def get_stats(self) -> dict[str, dict]:
         """Per-stage timing, cache hit rates, throughput."""
@@ -350,8 +371,9 @@ class MultimodalPipelineCoordinator:
         if self._cache is not None:
             self._cache.clear()
 
-    def _applicable_modalities(self, stage: PipelineStage,
-                               present: set[str]) -> list[str]:
+    def _applicable_modalities(
+        self, stage: PipelineStage, present: set[str]
+    ) -> list[str]:
         """Determine which modalities apply for a given stage."""
         stage_modality_map = {
             PipelineStage.TEXT_PREPROCESS: ["text"],
@@ -365,11 +387,13 @@ class MultimodalPipelineCoordinator:
         candidates = stage_modality_map.get(stage, [])
         return [m for m in candidates if m in present]
 
-    def _run_single(self, stage: PipelineStage, modality: str,
-                    accumulated: dict) -> StageResult:
+    def _run_single(
+        self, stage: PipelineStage, modality: str, accumulated: dict
+    ) -> StageResult:
         """Execute a single (stage, modality) pair."""
-        config = self._configs.get((stage, modality),
-                                   StageConfig(stage_type=stage, modality=modality))
+        config = self._configs.get(
+            (stage, modality), StageConfig(stage_type=stage, modality=modality)
+        )
         processor = self._processors.get((stage, modality))
 
         if processor is None:
@@ -385,8 +409,9 @@ class MultimodalPipelineCoordinator:
             if cached is not None:
                 stats.call_count += 1
                 stats.cache_hits += 1
-                return StageResult(stage=stage, data=cached, cached=True,
-                                   duration_ms=0.0)
+                return StageResult(
+                    stage=stage, data=cached, cached=True, duration_ms=0.0
+                )
 
         t0 = time.monotonic()
         try:
@@ -406,16 +431,19 @@ class MultimodalPipelineCoordinator:
             stats.call_count += 1
             stats.error_count += 1
             stats.total_duration_ms += duration_ms
-            return StageResult(stage=stage, data=None, error=str(e),
-                               duration_ms=duration_ms)
+            return StageResult(
+                stage=stage, data=None, error=str(e), duration_ms=duration_ms
+            )
 
-    def _run_parallel(self, stage: PipelineStage, modalities: list[str],
-                      accumulated: dict) -> list[StageResult]:
+    def _run_parallel(
+        self, stage: PipelineStage, modalities: list[str], accumulated: dict
+    ) -> list[StageResult]:
         """Execute a stage across multiple modalities in parallel."""
         futures = {}
         for modality in modalities:
-            future = self._executor.submit(self._run_single, stage, modality,
-                                           accumulated)
+            future = self._executor.submit(
+                self._run_single, stage, modality, accumulated
+            )
             futures[future] = modality
 
         results = []
@@ -439,10 +467,23 @@ class ModelPreprocessorRegistry:
 
     # Known model family patterns for auto-detection
     _FAMILY_PATTERNS: dict[str, list[str]] = {
-        "qwen_vlm": ["qwen-vl", "qwen2-vl", "qwen2.5-vl", "qwen3-vl", "qwen2_5_vl", "qwen2_vl"],
+        "qwen_vlm": [
+            "qwen-vl",
+            "qwen2-vl",
+            "qwen2.5-vl",
+            "qwen3-vl",
+            "qwen2_5_vl",
+            "qwen2_vl",
+        ],
         "llava_vlm": ["llava", "llava-next", "llava-onevision"],
         "cosyvoice": ["cosyvoice", "cosy-voice"],
-        "qwen_omni": ["qwen-omni", "qwen2_omni", "qwen3_omni", "qwen2-audio", "qwen3_omni_moe"],
+        "qwen_omni": [
+            "qwen-omni",
+            "qwen2_omni",
+            "qwen3_omni",
+            "qwen2-audio",
+            "qwen3_omni_moe",
+        ],
         "qwen_audio": ["qwen-audio", "qwen2-audio"],
         "whisper": ["whisper"],
         "flux": ["flux", "flux2", "klein"],
@@ -453,8 +494,9 @@ class ModelPreprocessorRegistry:
         self._registry: dict[tuple[str, str], ProcessorFn] = {}
         self._fallback: ProcessorFn | None = None
 
-    def register(self, model_family: str, modality: str,
-                 preprocessor: ProcessorFn) -> None:
+    def register(
+        self, model_family: str, modality: str, preprocessor: ProcessorFn
+    ) -> None:
         """Register a preprocessor for a (model_family, modality) pair."""
         self._registry[(model_family.lower(), modality)] = preprocessor
 

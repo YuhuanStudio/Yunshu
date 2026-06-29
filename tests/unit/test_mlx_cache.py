@@ -4,6 +4,7 @@ import pytest
 
 try:
     import mlx.core as mx
+
     HAS_MLX = True
 except ImportError:
     HAS_MLX = False
@@ -85,14 +86,17 @@ class TestDetectCacheType:
     def test_unknown_object(self):
         class Foo:
             pass
+
         assert detect_cache_type(Foo()) == CacheType.UNKNOWN
 
     def test_heuristic_kv(self):
         """Object with keys+values but not a known class name."""
+
         class CustomKV:
             def __init__(self):
                 self.keys = None
                 self.values = None
+
         assert detect_cache_type(CustomKV()) == CacheType.KVCACHE
 
     def test_heuristic_rotating(self):
@@ -100,6 +104,7 @@ class TestDetectCacheType:
             def __init__(self):
                 self.max_size = 128
                 self._idx = 0
+
         assert detect_cache_type(CustomRotating()) == CacheType.ROTATING_KVCACHE
 
 
@@ -134,9 +139,7 @@ class TestExtractCacheState:
     def test_rotating_state(self):
         keys = mx.zeros((1, 8, 64, 64))
         values = mx.zeros((1, 8, 64, 64))
-        cache = MockRotatingKVCache(
-            keys=keys, values=values, offset=64, max_size=256
-        )
+        cache = MockRotatingKVCache(keys=keys, values=values, offset=64, max_size=256)
         state = extract_cache_state(cache)
         assert state["cache_type"] == CacheType.ROTATING_KVCACHE
         assert state["max_size"] == 256
@@ -151,8 +154,12 @@ class TestExtractCacheState:
         assert len(state["arrays"]) == 2
 
     def test_cache_list_state(self):
-        inner1 = MockKVCache(keys=mx.zeros((1, 4, 16, 32)), values=mx.zeros((1, 4, 16, 32)), offset=16)
-        inner2 = MockKVCache(keys=mx.zeros((1, 4, 16, 32)), values=mx.zeros((1, 4, 16, 32)), offset=16)
+        inner1 = MockKVCache(
+            keys=mx.zeros((1, 4, 16, 32)), values=mx.zeros((1, 4, 16, 32)), offset=16
+        )
+        inner2 = MockKVCache(
+            keys=mx.zeros((1, 4, 16, 32)), values=mx.zeros((1, 4, 16, 32)), offset=16
+        )
         cache_list = MockCacheList(caches=[inner1, inner2])
         state = extract_cache_state(cache_list)
         assert state["cache_type"] == CacheType.CACHE_LIST
@@ -238,7 +245,9 @@ class TestReconstructKVCache:
 class TestGetCacheSeqLength:
     @pytest.mark.skipif(not HAS_MLX, reason="MLX not available")
     def test_kvcache_length(self):
-        cache = MockKVCache(keys=mx.zeros((1, 4, 32, 64)), values=mx.zeros((1, 4, 32, 64)), offset=32)
+        cache = MockKVCache(
+            keys=mx.zeros((1, 4, 32, 64)), values=mx.zeros((1, 4, 32, 64)), offset=32
+        )
         assert get_cache_seq_length(cache) == 32
 
     def test_rotating_length(self):
@@ -258,4 +267,5 @@ class TestGetCacheSeqLength:
     def test_unknown_returns_zero(self):
         class Foo:
             pass
+
         assert get_cache_seq_length(Foo()) == 0

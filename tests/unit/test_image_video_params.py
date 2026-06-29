@@ -3,6 +3,7 @@
     b64_json only (the other 4 image endpoints honor url).
 (2) /v1/video/generations rejected a data-URL-prefixed base64 image that every image
     endpoint accepts (it now reuses _decode_image_b64)."""
+
 from __future__ import annotations
 
 import pathlib

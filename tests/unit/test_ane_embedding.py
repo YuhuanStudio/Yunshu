@@ -1,4 +1,5 @@
 """Tests for yunshu_engine.ane_embedding — ANE embedding co-processor."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -224,7 +225,9 @@ class TestANEEmbeddingEmbedFallback:
         """When not compiled, embed() should use MLX fallback and return vectors."""
         config = ANEEmbeddingConfig(compile_on_init=False)
         proc = ANEEmbeddingProcessor(config)
-        with patch.object(proc, "_embed_mlx_fallback", return_value=[[0.1] * 384, [0.2] * 384]):
+        with patch.object(
+            proc, "_embed_mlx_fallback", return_value=[[0.1] * 384, [0.2] * 384]
+        ):
             result = proc.embed(["hello world", "test text"])
         assert len(result) == 2
         for emb in result:
@@ -237,6 +240,7 @@ class TestANEEmbeddingEmbedFallback:
         config = ANEEmbeddingConfig(compile_on_init=False, normalize_embeddings=True)
         proc = ANEEmbeddingProcessor(config)
         import numpy as np
+
         normalized = np.random.randn(384).tolist()
         norm = sum(x * x for x in normalized) ** 0.5
         normalized = [x / norm for x in normalized]

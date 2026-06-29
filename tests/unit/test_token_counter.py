@@ -28,6 +28,7 @@ class TestCountTokens:
         class MockTokenizer:
             def encode(self, text):
                 return text.split()
+
         count = count_tokens("hello world test", MockTokenizer())
         assert count == 3
 
@@ -35,6 +36,7 @@ class TestCountTokens:
         class BrokenTokenizer:
             def encode(self, text):
                 raise RuntimeError("broken")
+
         count = count_tokens("hello world", BrokenTokenizer())
         assert count > 0
 
@@ -56,10 +58,16 @@ class TestCountMessageTokens:
 
     def test_content_list(self):
         messages = [
-            {"role": "user", "content": [
-                {"type": "text", "text": "describe this"},
-                {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
-            ]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe this"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,abc"},
+                    },
+                ],
+            },
         ]
         count = count_message_tokens(messages)
         assert count >= 85  # includes image overhead
@@ -105,9 +113,7 @@ class TestCountMessageToolCalls:
             {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [
-                    {"function": {"name": "f", "arguments": "{\"a\": 1}"}}
-                ],
+                "tool_calls": [{"function": {"name": "f", "arguments": '{"a": 1}'}}],
             }
         ]
         assert count_message_tokens(messages) > 0

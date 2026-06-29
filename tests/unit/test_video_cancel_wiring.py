@@ -9,6 +9,7 @@ diffusion/frame loop stops promptly (REAL cancellation). The NON-streaming path 
 run_with_disconnect_guard (frees the handler promptly; generate() has no mid-gen hook so
 the bounded diffusion finishes on the executor — same honest limit as OCR native).
 """
+
 from __future__ import annotations
 
 import inspect
@@ -80,7 +81,9 @@ def _client(monkeypatch):
 
 
 def test_nonstream_video_registers_and_unregisters(_client):
-    resp = _client.post("/v1/video/generations", json={"model": "vid-A", "prompt": "a cat"})
+    resp = _client.post(
+        "/v1/video/generations", json={"model": "vid-A", "prompt": "a cat"}
+    )
     assert resp.status_code == 200, resp.text
     tracker = _client._yunshu_tracker
     assert len(tracker.registered) == 1
@@ -91,6 +94,7 @@ def test_nonstream_video_registers_and_unregisters(_client):
 
 def test_source_wires_both_paths():
     from yunshu_gateway.routers import video
+
     src = inspect.getsource(video.create_video)
     # streaming → with_sse_keepalive (disconnect → aclose → internal _cancel)
     assert "with_sse_keepalive(" in src

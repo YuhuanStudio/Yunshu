@@ -2,6 +2,7 @@
 tolerate a None/str segment start (dict.get returns None when the key exists with a
 null value) instead of crashing the whole srt/vtt response with a TypeError → 500.
 The audio transcode + ASR segmentation surface was otherwise verified clean."""
+
 from __future__ import annotations
 
 from yunshu_gateway.routers.audio import (

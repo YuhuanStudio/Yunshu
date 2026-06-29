@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SpecProposal:
     """Result of a draft proposal."""
+
     token_ids: list[int]
     proposer_type: str  # "ngram", "eagle", "mtp"
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -68,6 +69,7 @@ class NgramSpecProposer(SpecProposer):
 
     def __init__(self, config: Any) -> None:
         from .ngram_proposer import NgramProposer
+
         self._proposer = NgramProposer(config)
         self._stats = {"proposals": 0, "accepted": 0, "total_draft": 0}
         # Store last context from draft() so accept() can feed verified

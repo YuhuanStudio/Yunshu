@@ -23,7 +23,9 @@ bench_app = typer.Typer(help="Run benchmarks.", no_args_is_help=True)
 def bench_roofline(
     min_size: int = typer.Option(64, "--min", help="Min matrix dimension."),
     max_size: int = typer.Option(8192, "--max", help="Max matrix dimension."),
-    dtype: str = typer.Option("float16", "--dtype", help="Data type (float16, bfloat16, float32)."),
+    dtype: str = typer.Option(
+        "float16", "--dtype", help="Data type (float16, bfloat16, float32)."
+    ),
     steps: int = typer.Option(8, "--steps", help="Number of size steps."),
 ):
     """Apple GPU roofline benchmark — measure GEMM throughput vs matrix size."""
@@ -43,9 +45,15 @@ def bench_roofline(
     ).tolist()
 
     results = []
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
         for size in sizes:
-            progress.update(progress.add_task(f"M×K×N = {size}×{size}×{size}", total=None))
+            progress.update(
+                progress.add_task(f"M×K×N = {size}×{size}×{size}", total=None)
+            )
 
             # Warmup
             a = mx.random.normal((size, size), dtype=mx_dtype)
@@ -65,11 +73,13 @@ def bench_roofline(
             flops = 2.0 * size * size * size * num_iters
             tflops = flops / elapsed / 1e12
 
-            results.append({
-                "size": size,
-                "flops_per_s": tflops,
-                "time_ms": elapsed / num_iters * 1000,
-            })
+            results.append(
+                {
+                    "size": size,
+                    "flops_per_s": tflops,
+                    "time_ms": elapsed / num_iters * 1000,
+                }
+            )
 
     # Display results
     table = Table(title="GEMM Roofline", show_lines=True)
@@ -97,7 +107,9 @@ def bench_latency(
     model: str | None = typer.Option(None, "--model", "-m", help="Model name."),
     prompt_tokens: int = typer.Option(32, "--prompt", help="Prompt length."),
     max_tokens: int = typer.Option(64, "--max-tokens", help="Max output tokens."),
-    num_requests: int = typer.Option(10, "--requests", "-n", help="Number of requests."),
+    num_requests: int = typer.Option(
+        10, "--requests", "-n", help="Number of requests."
+    ),
 ):
     """Benchmark inference latency against a running server."""
 
@@ -109,7 +121,11 @@ def bench_latency(
 
     console.print(f"[bold]Latency Benchmark[/] — {num_requests} requests to {url}")
 
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
         task = progress.add_task("Sending requests...", total=num_requests)
 
         for i in range(num_requests):
@@ -122,7 +138,9 @@ def bench_latency(
 
             t0 = time.perf_counter()
             try:
-                resp = httpx.post(f"{url}/v1/chat/completions", json=payload, timeout=120)
+                resp = httpx.post(
+                    f"{url}/v1/chat/completions", json=payload, timeout=120
+                )
                 elapsed = time.perf_counter() - t0
 
                 if resp.status_code == 200:
@@ -130,16 +148,22 @@ def bench_latency(
                     usage = data.get("usage", {})
                     comp_tokens = usage.get("completion_tokens", max_tokens)
                     latency_per_tok = elapsed / comp_tokens if comp_tokens > 0 else 0
-                    latencies.append({
-                        "total": elapsed,
-                        "per_token": latency_per_tok,
-                        "completion_tokens": comp_tokens,
-                    })
+                    latencies.append(
+                        {
+                            "total": elapsed,
+                            "per_token": latency_per_tok,
+                            "completion_tokens": comp_tokens,
+                        }
+                    )
                 else:
-                    console.print(f"  [red]Request {i+1} failed: {resp.status_code}[/]")
+                    console.print(
+                        f"  [red]Request {i + 1} failed: {resp.status_code}[/]"
+                    )
             except Exception as e:
-                logger.debug("Latency benchmark request %d failed", i + 1, exc_info=True)
-                console.print(f"  [red]Request {i+1} error: {e}[/]")
+                logger.debug(
+                    "Latency benchmark request %d failed", i + 1, exc_info=True
+                )
+                console.print(f"  [red]Request {i + 1} error: {e}[/]")
 
             progress.update(task, advance=1)
 
@@ -156,7 +180,10 @@ def bench_latency(
     table.add_column("P95", justify="right")
     table.add_column("P99", justify="right")
 
-    for label, data in [("Total Latency (s)", totals), ("Per-token (ms)", [d * 1000 for d in per_tok])]:
+    for label, data in [
+        ("Total Latency (s)", totals),
+        ("Per-token (ms)", [d * 1000 for d in per_tok]),
+    ]:
         arr = sorted(data)
         p50 = arr[len(arr) // 2]
         p95 = arr[int(len(arr) * 0.95)]
@@ -170,7 +197,9 @@ def bench_latency(
 def bench_throughput(
     url: str = typer.Option("http://localhost:8000", "--url", "-u", help="Server URL."),
     model: str | None = typer.Option(None, "--model", "-m", help="Model name."),
-    concurrency: int = typer.Option(4, "--concurrency", "-c", help="Concurrent requests."),
+    concurrency: int = typer.Option(
+        4, "--concurrency", "-c", help="Concurrent requests."
+    ),
     num_requests: int = typer.Option(20, "--requests", "-n", help="Total requests."),
     max_tokens: int = typer.Option(128, "--max-tokens", help="Max output tokens."),
 ):
@@ -179,7 +208,9 @@ def bench_throughput(
 
     import httpx
 
-    console.print(f"[bold]Throughput Benchmark[/] — {num_requests} requests, {concurrency} concurrent")
+    console.print(
+        f"[bold]Throughput Benchmark[/] — {num_requests} requests, {concurrency} concurrent"
+    )
 
     async def _run():
         connector = httpx.AsyncHTTPConnector(limit=concurrency)
@@ -193,14 +224,21 @@ def bench_throughput(
                 async with semaphore:
                     payload = {
                         "model": model or "default",
-                        "messages": [{"role": "user", "content": f"Tell me about topic {idx % 10}."}],
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": f"Tell me about topic {idx % 10}.",
+                            }
+                        ],
                         "max_tokens": max_tokens,
                         "stream": False,
                     }
                     resp = await client.post(f"{url}/v1/chat/completions", json=payload)
                     if resp.status_code == 200:
                         data = resp.json()
-                        total_tokens += data.get("usage", {}).get("completion_tokens", 0)
+                        total_tokens += data.get("usage", {}).get(
+                            "completion_tokens", 0
+                        )
                     completed += 1
 
             t0 = time.perf_counter()
@@ -234,7 +272,10 @@ def bench_memory():
     # System memory
     try:
         import subprocess
-        result = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True)
+
+        result = subprocess.run(
+            ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True
+        )
         total_mem = int(result.stdout.strip())
     except Exception:
         logger.debug("Failed to read system memory via sysctl", exc_info=True)
@@ -263,7 +304,9 @@ def bench_memory():
     try:
         result = subprocess.run(
             ["system_profiler", "SPDisplaysDataType"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         for line in result.stdout.split("\n"):
             line = line.strip()
@@ -284,11 +327,17 @@ def _fmt_bytes(b: int) -> str:
 
 @bench_app.command("inference")
 def bench_inference(
-    model_path: str = typer.Option("models/Qwen3.5-9B-MLX-4bit", "--model", "-m", help="Model path."),
-    prompt_tokens: int = typer.Option(32, "--prompt-len", help="Approximate prompt length."),
+    model_path: str = typer.Option(
+        "models/Qwen3.5-9B-MLX-4bit", "--model", "-m", help="Model path."
+    ),
+    prompt_tokens: int = typer.Option(
+        32, "--prompt-len", help="Approximate prompt length."
+    ),
     max_tokens: int = typer.Option(128, "--max-tokens", help="Max tokens to generate."),
     num_requests: int = typer.Option(5, "--requests", "-n", help="Number of requests."),
-    batch_size: int = typer.Option(1, "--batch", "-b", help="Concurrent requests in batch."),
+    batch_size: int = typer.Option(
+        1, "--batch", "-b", help="Concurrent requests in batch."
+    ),
     warmup: int = typer.Option(2, "--warmup", help="Warmup iterations."),
 ):
     """Direct model inference benchmark (no server needed)."""
@@ -300,7 +349,9 @@ def bench_inference(
 
     console.print("[bold]Inference Benchmark[/]")
     console.print(f"Model: {model_path}")
-    console.print(f"Prompt ≈{prompt_tokens} tokens, max_tokens={max_tokens}, batch={batch_size}")
+    console.print(
+        f"Prompt ≈{prompt_tokens} tokens, max_tokens={max_tokens}, batch={batch_size}"
+    )
 
     # Load model
     t0 = time.perf_counter()
@@ -320,11 +371,17 @@ def bench_inference(
     # Warmup
     for _ in range(warmup):
         bg = BatchGenerator(
-            model, max_tokens=max_tokens, sampler=sampler,
-            prefill_batch_size=4, completion_batch_size=32,
-            prefill_step_size=2048, stream=generation_stream,
+            model,
+            max_tokens=max_tokens,
+            sampler=sampler,
+            prefill_batch_size=4,
+            completion_batch_size=32,
+            prefill_step_size=2048,
+            stream=generation_stream,
         )
-        bg.insert(prompts=[prompt_tokens_actual], max_tokens=[max_tokens], samplers=[sampler])
+        bg.insert(
+            prompts=[prompt_tokens_actual], max_tokens=[max_tokens], samplers=[sampler]
+        )
         bg.next()
         for _ in range(max_tokens + 10):
             gen = bg.next_generated()
@@ -344,13 +401,21 @@ def bench_inference(
 
     for run in range(num_requests):
         bg = BatchGenerator(
-            model, max_tokens=max_tokens, sampler=sampler,
-            prefill_batch_size=4, completion_batch_size=32,
-            prefill_step_size=2048, stream=generation_stream,
+            model,
+            max_tokens=max_tokens,
+            sampler=sampler,
+            prefill_batch_size=4,
+            completion_batch_size=32,
+            prefill_step_size=2048,
+            stream=generation_stream,
         )
 
         prompts = [prompt_tokens_actual] * batch_size
-        bg.insert(prompts=prompts, max_tokens=[max_tokens] * batch_size, samplers=[sampler] * batch_size)
+        bg.insert(
+            prompts=prompts,
+            max_tokens=[max_tokens] * batch_size,
+            samplers=[sampler] * batch_size,
+        )
 
         # Prefill
         t0 = time.perf_counter()
@@ -381,9 +446,9 @@ def bench_inference(
         total_time_list.append(ttft + decode_time)
 
         console.print(
-            f"  Run {run+1}: TTFT={ttft*1000:.0f}ms, "
-            f"{total_tokens/batch_size:.0f} tok/req, "
-            f"TPOT={tpot*1000:.1f}ms, "
+            f"  Run {run + 1}: TTFT={ttft * 1000:.0f}ms, "
+            f"{total_tokens / batch_size:.0f} tok/req, "
+            f"TPOT={tpot * 1000:.1f}ms, "
             f"{throughput:.1f} tok/s"
         )
         bg.close()
@@ -404,25 +469,33 @@ def bench_inference(
     avg_ttft = np.mean(ttft_list)
     p50_ttot = np.percentile(total_time_list, 50)
     avg_tpot = np.mean(tpot_list)
-    np.mean([
-        t / max(d, 1e-9)
-        for t, d in zip(total_tokens_list, [total_time_list[i] - ttft_list[i] for i in range(num_requests)], strict=False)
-    ])
+    np.mean(
+        [
+            t / max(d, 1e-9)
+            for t, d in zip(
+                total_tokens_list,
+                [total_time_list[i] - ttft_list[i] for i in range(num_requests)],
+                strict=False,
+            )
+        ]
+    )
     aggregate_throughput = sum(total_tokens_list) / sum(
         [total_time_list[i] - ttft_list[i] for i in range(num_requests)]
     )
 
-    table.add_row("TTFT (avg)", f"{avg_ttft*1000:.0f}ms")
-    table.add_row("TPOT (avg)", f"{avg_tpot*1000:.2f}ms")
-    table.add_row("Throughput (per-req)", f"{1/avg_tpot:.1f} tok/s")
+    table.add_row("TTFT (avg)", f"{avg_ttft * 1000:.0f}ms")
+    table.add_row("TPOT (avg)", f"{avg_tpot * 1000:.2f}ms")
+    table.add_row("Throughput (per-req)", f"{1 / avg_tpot:.1f} tok/s")
     table.add_row("Aggregate Throughput", f"{aggregate_throughput:.1f} tok/s")
-    table.add_row("Total Latency P50", f"{p50_ttot*1000:.0f}ms")
+    table.add_row("Total Latency P50", f"{p50_ttot * 1000:.0f}ms")
 
     console.print(table)
 
     # oMLX comparison
     console.print("\n[bold]oMLX Comparison[/]")
-    console.print("  [dim]oMLX reference (Qwen2.5-7B-4bit, M2 Ultra): ~45-55 tok/s single request")
-    console.print(f"  Yunshu: {1/avg_tpot:.1f} tok/s single request")
-    ratio = (1/avg_tpot) / 50 * 100
+    console.print(
+        "  [dim]oMLX reference (Qwen2.5-7B-4bit, M2 Ultra): ~45-55 tok/s single request"
+    )
+    console.print(f"  Yunshu: {1 / avg_tpot:.1f} tok/s single request")
+    ratio = (1 / avg_tpot) / 50 * 100
     console.print(f"  Performance: {ratio:.0f}% of oMLX reference")

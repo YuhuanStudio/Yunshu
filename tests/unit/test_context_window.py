@@ -53,8 +53,13 @@ class TestTruncationStrategy:
         assert TruncationStrategy.SUMMARY_COMPRESSION.value == "summary_compression"
 
     def test_from_string(self):
-        assert TruncationStrategy("truncate_oldest") == TruncationStrategy.TRUNCATE_OLDEST
-        assert TruncationStrategy("importance_aware") == TruncationStrategy.IMPORTANCE_AWARE
+        assert (
+            TruncationStrategy("truncate_oldest") == TruncationStrategy.TRUNCATE_OLDEST
+        )
+        assert (
+            TruncationStrategy("importance_aware")
+            == TruncationStrategy.IMPORTANCE_AWARE
+        )
 
     def test_invalid_string_raises(self):
         with pytest.raises(ValueError):
@@ -103,6 +108,7 @@ class TestContextWindowManagerBasic:
     def test_custom_token_counter(self):
         def counter(text):
             return len(text.split())  # word-based
+
         mgr = ContextWindowManager(token_counter=counter)
         assert mgr.count_tokens("hello world") == 2
 
@@ -133,7 +139,12 @@ class TestContextWindowManagerBasic:
 class TestTruncateOldest:
     def test_removes_oldest_non_system(self):
         mgr = ContextWindowManager(default_strategy="truncate_oldest")
-        msgs = [_system_msg(50), _user_msg("Q1", 100), _user_msg("Q2", 100), _user_msg("Q3", 100)]
+        msgs = [
+            _system_msg(50),
+            _user_msg("Q1", 100),
+            _user_msg("Q2", 100),
+            _user_msg("Q3", 100),
+        ]
         # Budget = system(50+4) + one user(100+4) = 158
         result = mgr.compute_truncation(msgs, max_tokens=160)
         # Should keep system + latest user, drop Q1 and Q2
@@ -244,12 +255,12 @@ class TestSummaryCompression:
         mgr = ContextWindowManager(default_strategy="summary_compression")
         # Use small messages so the summary fits within budget
         msgs = [
-            _system_msg(5),          # ~9 tokens
-            _user_msg("Q1", 20),     # ~24 tokens
-            _assistant_msg("A1", 20), # ~24 tokens
-            _user_msg("Q2", 20),     # ~24 tokens
-            _assistant_msg("A2", 20), # ~24 tokens
-            _user_msg("Q3", 3),      # ~7 tokens
+            _system_msg(5),  # ~9 tokens
+            _user_msg("Q1", 20),  # ~24 tokens
+            _assistant_msg("A1", 20),  # ~24 tokens
+            _user_msg("Q2", 20),  # ~24 tokens
+            _assistant_msg("A2", 20),  # ~24 tokens
+            _user_msg("Q3", 3),  # ~7 tokens
             _assistant_msg("A3", 3),  # ~7 tokens
         ]
         # Budget forces summary of old messages: ~9 + summary + 7 + 7 <= 80
@@ -287,21 +298,27 @@ class TestGetStrategyForLength:
     def test_small_overflow_truncate_oldest(self):
         mgr = ContextWindowManager()
         strat = mgr.get_strategy_for_length(
-            message_count=5, estimated_tokens=1200, max_tokens=1000,
+            message_count=5,
+            estimated_tokens=1200,
+            max_tokens=1000,
         )
         assert strat == "truncate_oldest"
 
     def test_medium_overflow_importance_aware(self):
         mgr = ContextWindowManager()
         strat = mgr.get_strategy_for_length(
-            message_count=10, estimated_tokens=2000, max_tokens=1000,
+            message_count=10,
+            estimated_tokens=2000,
+            max_tokens=1000,
         )
         assert strat == "importance_aware"
 
     def test_large_overflow_summary_compression(self):
         mgr = ContextWindowManager()
         strat = mgr.get_strategy_for_length(
-            message_count=50, estimated_tokens=5000, max_tokens=1000,
+            message_count=50,
+            estimated_tokens=5000,
+            max_tokens=1000,
         )
         assert strat == "summary_compression"
 
@@ -355,10 +372,16 @@ class TestEdgeCases:
     def test_multimodal_content(self):
         mgr = ContextWindowManager()
         msgs = [
-            {"role": "user", "content": [
-                {"type": "text", "text": "Describe this image"},
-                {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}},
-            ]}
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this image"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,..."},
+                    },
+                ],
+            }
         ]
         result = mgr.compute_truncation(msgs, max_tokens=1000)
         assert result.tokens_saved == 0  # fits

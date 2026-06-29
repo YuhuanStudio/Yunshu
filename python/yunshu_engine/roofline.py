@@ -30,21 +30,21 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 CHIP_PARAMS: dict[str, dict[str, float]] = {
-    "M1":      {"bandwidth_gbps": 68,  "compute_tflops_fp16": 2.6},
-    "M1_Pro":  {"bandwidth_gbps": 200, "compute_tflops_fp16": 5.2},
-    "M1_Max":  {"bandwidth_gbps": 400, "compute_tflops_fp16": 10.4},
-    "M1_Ultra":{"bandwidth_gbps": 800, "compute_tflops_fp16": 20.8},
-    "M2":      {"bandwidth_gbps": 100, "compute_tflops_fp16": 3.6},
-    "M2_Pro":  {"bandwidth_gbps": 200, "compute_tflops_fp16": 7.8},
-    "M2_Max":  {"bandwidth_gbps": 400, "compute_tflops_fp16": 13.6},
-    "M2_Ultra":{"bandwidth_gbps": 800, "compute_tflops_fp16": 27.2},
-    "M3":      {"bandwidth_gbps": 150, "compute_tflops_fp16": 3.6},
-    "M3_Pro":  {"bandwidth_gbps": 300, "compute_tflops_fp16": 7.8},
-    "M3_Max":  {"bandwidth_gbps": 400, "compute_tflops_fp16": 14.0},
-    "M3_Ultra":{"bandwidth_gbps": 800, "compute_tflops_fp16": 27.0},
-    "M4":      {"bandwidth_gbps": 120, "compute_tflops_fp16": 5.0},
-    "M4_Pro":  {"bandwidth_gbps": 273, "compute_tflops_fp16": 10.0},
-    "M4_Max":  {"bandwidth_gbps": 546, "compute_tflops_fp16": 18.0},
+    "M1": {"bandwidth_gbps": 68, "compute_tflops_fp16": 2.6},
+    "M1_Pro": {"bandwidth_gbps": 200, "compute_tflops_fp16": 5.2},
+    "M1_Max": {"bandwidth_gbps": 400, "compute_tflops_fp16": 10.4},
+    "M1_Ultra": {"bandwidth_gbps": 800, "compute_tflops_fp16": 20.8},
+    "M2": {"bandwidth_gbps": 100, "compute_tflops_fp16": 3.6},
+    "M2_Pro": {"bandwidth_gbps": 200, "compute_tflops_fp16": 7.8},
+    "M2_Max": {"bandwidth_gbps": 400, "compute_tflops_fp16": 13.6},
+    "M2_Ultra": {"bandwidth_gbps": 800, "compute_tflops_fp16": 27.2},
+    "M3": {"bandwidth_gbps": 150, "compute_tflops_fp16": 3.6},
+    "M3_Pro": {"bandwidth_gbps": 300, "compute_tflops_fp16": 7.8},
+    "M3_Max": {"bandwidth_gbps": 400, "compute_tflops_fp16": 14.0},
+    "M3_Ultra": {"bandwidth_gbps": 800, "compute_tflops_fp16": 27.0},
+    "M4": {"bandwidth_gbps": 120, "compute_tflops_fp16": 5.0},
+    "M4_Pro": {"bandwidth_gbps": 273, "compute_tflops_fp16": 10.0},
+    "M4_Max": {"bandwidth_gbps": 546, "compute_tflops_fp16": 18.0},
 }
 
 # dtype size in bytes
@@ -60,56 +60,108 @@ DTYPE_BYTES: dict[str, int] = {
 # Well-known model architectures for estimate_max_throughput
 MODEL_CONFIGS: dict[str, dict] = {
     "Qwen2.5-0.5B": {
-        "hidden_size": 896, "num_layers": 24, "num_heads": 14,
-        "head_dim": 64, "ffn_dim": 4864, "vocab_size": 151936,
+        "hidden_size": 896,
+        "num_layers": 24,
+        "num_heads": 14,
+        "head_dim": 64,
+        "ffn_dim": 4864,
+        "vocab_size": 151936,
     },
     "Qwen2.5-1.5B": {
-        "hidden_size": 1536, "num_layers": 28, "num_heads": 12,
-        "head_dim": 128, "ffn_dim": 8960, "vocab_size": 151936,
+        "hidden_size": 1536,
+        "num_layers": 28,
+        "num_heads": 12,
+        "head_dim": 128,
+        "ffn_dim": 8960,
+        "vocab_size": 151936,
     },
     "Qwen2.5-3B": {
-        "hidden_size": 2048, "num_layers": 36, "num_heads": 16,
-        "head_dim": 128, "ffn_dim": 11008, "vocab_size": 151936,
+        "hidden_size": 2048,
+        "num_layers": 36,
+        "num_heads": 16,
+        "head_dim": 128,
+        "ffn_dim": 11008,
+        "vocab_size": 151936,
     },
     "Qwen2.5-7B": {
-        "hidden_size": 3584, "num_layers": 28, "num_heads": 28,
-        "head_dim": 128, "ffn_dim": 18944, "vocab_size": 152064,
+        "hidden_size": 3584,
+        "num_layers": 28,
+        "num_heads": 28,
+        "head_dim": 128,
+        "ffn_dim": 18944,
+        "vocab_size": 152064,
     },
     "Qwen2.5-9B": {
-        "hidden_size": 3584, "num_layers": 36, "num_heads": 28,
-        "head_dim": 128, "ffn_dim": 18944, "vocab_size": 152064,
+        "hidden_size": 3584,
+        "num_layers": 36,
+        "num_heads": 28,
+        "head_dim": 128,
+        "ffn_dim": 18944,
+        "vocab_size": 152064,
     },
     "Qwen2.5-14B": {
-        "hidden_size": 5120, "num_layers": 40, "num_heads": 40,
-        "head_dim": 128, "ffn_dim": 13824, "vocab_size": 152064,
+        "hidden_size": 5120,
+        "num_layers": 40,
+        "num_heads": 40,
+        "head_dim": 128,
+        "ffn_dim": 13824,
+        "vocab_size": 152064,
     },
     "Qwen2.5-32B": {
-        "hidden_size": 5120, "num_layers": 64, "num_heads": 40,
-        "head_dim": 128, "ffn_dim": 27648, "vocab_size": 152064,
+        "hidden_size": 5120,
+        "num_layers": 64,
+        "num_heads": 40,
+        "head_dim": 128,
+        "ffn_dim": 27648,
+        "vocab_size": 152064,
     },
     "Qwen2.5-72B": {
-        "hidden_size": 8192, "num_layers": 80, "num_heads": 64,
-        "head_dim": 128, "ffn_dim": 29568, "vocab_size": 152064,
+        "hidden_size": 8192,
+        "num_layers": 80,
+        "num_heads": 64,
+        "head_dim": 128,
+        "ffn_dim": 29568,
+        "vocab_size": 152064,
     },
     "Llama-3.1-8B": {
-        "hidden_size": 4096, "num_layers": 32, "num_heads": 32,
-        "head_dim": 128, "ffn_dim": 14336, "vocab_size": 128256,
+        "hidden_size": 4096,
+        "num_layers": 32,
+        "num_heads": 32,
+        "head_dim": 128,
+        "ffn_dim": 14336,
+        "vocab_size": 128256,
     },
     "Llama-3.1-70B": {
-        "hidden_size": 8192, "num_layers": 80, "num_heads": 64,
-        "head_dim": 128, "ffn_dim": 28672, "vocab_size": 128256,
+        "hidden_size": 8192,
+        "num_layers": 80,
+        "num_heads": 64,
+        "head_dim": 128,
+        "ffn_dim": 28672,
+        "vocab_size": 128256,
     },
     "Mistral-7B": {
-        "hidden_size": 4096, "num_layers": 32, "num_heads": 32,
-        "head_dim": 128, "ffn_dim": 14336, "vocab_size": 32000,
+        "hidden_size": 4096,
+        "num_layers": 32,
+        "num_heads": 32,
+        "head_dim": 128,
+        "ffn_dim": 14336,
+        "vocab_size": 32000,
     },
     "Phi-3.5-mini": {
-        "hidden_size": 3072, "num_layers": 32, "num_heads": 32,
-        "head_dim": 96, "ffn_dim": 8192, "vocab_size": 32064,
+        "hidden_size": 3072,
+        "num_layers": 32,
+        "num_heads": 32,
+        "head_dim": 96,
+        "ffn_dim": 8192,
+        "vocab_size": 32064,
     },
     "Gemma-2-9B": {
-        "hidden_size": 3584, "num_layers": 42, "num_heads": 16,
-        "head_dim": 256, "ffn_dim": 14336, "vocab_size": 256000,
+        "hidden_size": 3584,
+        "num_layers": 42,
+        "num_heads": 16,
+        "head_dim": 256,
+        "ffn_dim": 14336,
+        "vocab_size": 256000,
     },
 }
 
@@ -118,22 +170,25 @@ MODEL_CONFIGS: dict[str, dict] = {
 # Data classes
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class RooflineResult:
     """Result of a single roofline computation."""
+
     flops: int
     bytes_accessed: int
-    operational_intensity: float        # FLOP / byte
-    peak_gflops: float                  # compute ceiling
-    bandwidth_gbs: float                # memory ceiling
-    predicted_gflops: float             # min(bw * OI, peak)
-    bound: str                          # "memory" or "compute"
+    operational_intensity: float  # FLOP / byte
+    peak_gflops: float  # compute ceiling
+    bandwidth_gbs: float  # memory ceiling
+    predicted_gflops: float  # min(bw * OI, peak)
+    bound: str  # "memory" or "compute"
     label: str = ""
 
 
 @dataclass
 class DecodeRooflineResult:
     """Aggregate roofline result for a full decode step."""
+
     total_flops: int
     total_bytes: int
     operational_intensity: float
@@ -146,6 +201,7 @@ class DecodeRooflineResult:
 # Normalise chip name
 # ---------------------------------------------------------------------------
 
+
 def _normalise_chip(raw: str) -> str:
     """Turn 'Apple M3 Max' or 'm3_max' into 'M3_Max'."""
     s = raw.strip()
@@ -154,7 +210,11 @@ def _normalise_chip(raw: str) -> str:
     # Lowercase and replace spaces / dashes with underscore
     s = s.lower().replace(" ", "_").replace("-", "_")
     # Map common variants
-    s = re.sub(r"^(m\d+)_(pro|max|ultra)$", lambda m: f"{m.group(1).upper()}_{m.group(2).capitalize()}", s)
+    s = re.sub(
+        r"^(m\d+)_(pro|max|ultra)$",
+        lambda m: f"{m.group(1).upper()}_{m.group(2).capitalize()}",
+        s,
+    )
     # Simple chip without tier: just uppercase
     s = re.sub(r"^(m\d+)$", lambda m: m.group(1).upper(), s)
     # Try exact
@@ -174,6 +234,7 @@ def _normalise_chip(raw: str) -> str:
 # RooflineModel
 # ---------------------------------------------------------------------------
 
+
 class RooflineModel:
     """Apple Silicon roofline model for LLM inference throughput prediction."""
 
@@ -187,7 +248,8 @@ class RooflineModel:
             # Fall back to closest match
             logger.warning(
                 "Unknown chip %r (normalised: %r). Falling back to M3_Max.",
-                chip_name, self.chip_key,
+                chip_name,
+                self.chip_key,
             )
             self.chip_key = "M3_Max"
 
@@ -208,11 +270,13 @@ class RooflineModel:
             return 0  # caller must handle
         return b
 
-    def _roofline(self, flops: int, bytes_accessed: int, label: str = "") -> RooflineResult:
+    def _roofline(
+        self, flops: int, bytes_accessed: int, label: str = ""
+    ) -> RooflineResult:
         """Compute roofline from raw FLOPs and bytes."""
         oi = flops / bytes_accessed if bytes_accessed > 0 else float("inf")
         peak_gflops = self.compute_tflops * 1000.0
-        bandwidth_bound = self.bandwidth_gbs * oi   # GB/s * FLOP/byte = GFLOP/s
+        bandwidth_bound = self.bandwidth_gbs * oi  # GB/s * FLOP/byte = GFLOP/s
         predicted_gflops = min(bandwidth_bound, peak_gflops)
         bound = "memory" if bandwidth_bound <= peak_gflops else "compute"
         return RooflineResult(
@@ -333,7 +397,7 @@ class RooflineModel:
             qkv.flops *= 3
             qkv.bytes_accessed = int(
                 (B * h + h * h) * self._dtype_bytes(dtype) * 3  # 3 projections
-                + B * h * 3 * self._dtype_bytes(dtype)           # output
+                + B * h * 3 * self._dtype_bytes(dtype)  # output
             )
             qkv.label = f"L{layer_i}/QKV_proj"
             _add(qkv)
@@ -346,7 +410,9 @@ class RooflineModel:
             # Attention memory: read Q(B*nh*hd), K(attn_seq*nh*hd), V(attn_seq*nh*hd), write O(B*nh*hd)
             db = self._dtype_bytes(dtype)
             attn_bytes = int((B * nh * hd + attn_seq * nh * hd * 2 + B * nh * hd) * db)
-            attn_r = self._roofline(attn_flops, attn_bytes, label=f"L{layer_i}/attention")
+            attn_r = self._roofline(
+                attn_flops, attn_bytes, label=f"L{layer_i}/attention"
+            )
             _add(attn_r)
 
             # Output projection: (1, h) @ (h, h) -> (1, h)
@@ -403,10 +469,15 @@ class RooflineModel:
         """
         config = self._resolve_model_config(model_name)
         result = self.compute_decode_roofline(
-            config, batch_size=1, context_len=context_len, dtype=dtype,
+            config,
+            batch_size=1,
+            context_len=context_len,
+            dtype=dtype,
         )
         gflops_per_token = result.total_flops / 1e9
-        tokens_per_sec = result.predicted_gflops / gflops_per_token if gflops_per_token > 0 else 0.0
+        tokens_per_sec = (
+            result.predicted_gflops / gflops_per_token if gflops_per_token > 0 else 0.0
+        )
 
         return {
             "model": model_name,
@@ -431,7 +502,9 @@ class RooflineModel:
         # Fuzzy: strip common suffixes and prefixes
         cleaned = re.sub(
             r"[-_]?((Instruct|Chat|Base|it|4bit|8bit|GPTQ|AWQ)[-_]?)",
-            "", model_name, flags=re.IGNORECASE,
+            "",
+            model_name,
+            flags=re.IGNORECASE,
         ).strip("-_")
 
         for key, cfg in MODEL_CONFIGS.items():
@@ -455,6 +528,7 @@ class RooflineModel:
         """
         try:
             import matplotlib
+
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
         except ImportError as exc:
@@ -486,25 +560,33 @@ class RooflineModel:
             [x_min, ridge_oi],
             [0, 0],
             [bw * x_min, bw * ridge_oi],
-            alpha=0.10, color="tab:blue", label="Memory-bound region",
+            alpha=0.10,
+            color="tab:blue",
+            label="Memory-bound region",
         )
         ax.fill_between(
             [ridge_oi, x_max],
             [0, 0],
             [peak_gflops, peak_gflops],
-            alpha=0.10, color="tab:red", label="Compute-bound region",
+            alpha=0.10,
+            color="tab:red",
+            label="Compute-bound region",
         )
 
         # Roofline lines
         ax.plot(
             [x_min, ridge_oi],
             [bw * x_min, bw * ridge_oi],
-            "b-", linewidth=2, label=f"Bandwidth: {bw:.0f} GB/s",
+            "b-",
+            linewidth=2,
+            label=f"Bandwidth: {bw:.0f} GB/s",
         )
         ax.plot(
             [ridge_oi, x_max],
             [peak_gflops, peak_gflops],
-            "r-", linewidth=2, label=f"Peak FP16: {self.compute_tflops:.1f} TFLOP/s",
+            "r-",
+            linewidth=2,
+            label=f"Peak FP16: {self.compute_tflops:.1f} TFLOP/s",
         )
 
         # Mark ridge point
@@ -519,7 +601,14 @@ class RooflineModel:
 
         # Mark representative operations
         markers = self._compute_marker_points()
-        colors = ["tab:green", "tab:orange", "tab:purple", "tab:brown", "tab:cyan", "tab:pink"]
+        colors = [
+            "tab:green",
+            "tab:orange",
+            "tab:purple",
+            "tab:brown",
+            "tab:cyan",
+            "tab:pink",
+        ]
         for i, m in enumerate(markers):
             oi = m["oi"]
             perf = m["perf_gflops"]
@@ -559,49 +648,63 @@ class RooflineModel:
         bw = self.bandwidth_gbs
 
         # 1. Attention prefill (seq=1024)
-        r = self.compute_attention_roofline(seq_len=1024, num_heads=32, head_dim=128, batch_size=1)
+        r = self.compute_attention_roofline(
+            seq_len=1024, num_heads=32, head_dim=128, batch_size=1
+        )
         perf = min(bw * r.operational_intensity, peak_gflops)
-        points.append({
-            "label": "Attn prefill\nS=1024",
-            "oi": r.operational_intensity,
-            "perf_gflops": perf,
-        })
+        points.append(
+            {
+                "label": "Attn prefill\nS=1024",
+                "oi": r.operational_intensity,
+                "perf_gflops": perf,
+            }
+        )
 
         # 2. Attention decode (seq=1)
-        r = self.compute_attention_roofline(seq_len=1, num_heads=32, head_dim=128, batch_size=1)
+        r = self.compute_attention_roofline(
+            seq_len=1, num_heads=32, head_dim=128, batch_size=1
+        )
         perf = min(bw * r.operational_intensity, peak_gflops)
-        points.append({
-            "label": "Attn decode\nS=1",
-            "oi": r.operational_intensity,
-            "perf_gflops": perf,
-        })
+        points.append(
+            {
+                "label": "Attn decode\nS=1",
+                "oi": r.operational_intensity,
+                "perf_gflops": perf,
+            }
+        )
 
         # 3. Small GEMM (decode linear, 1x4096 @ 4096x4096)
         r = self.compute_gemm_roofline(M=1, N=4096, K=4096)
         perf = min(bw * r.operational_intensity, peak_gflops)
-        points.append({
-            "label": "GEMM decode\n1x4K@4Kx4K",
-            "oi": r.operational_intensity,
-            "perf_gflops": perf,
-        })
+        points.append(
+            {
+                "label": "GEMM decode\n1x4K@4Kx4K",
+                "oi": r.operational_intensity,
+                "perf_gflops": perf,
+            }
+        )
 
         # 4. Large GEMM (prefill, 1024x4096 @ 4096x4096)
         r = self.compute_gemm_roofline(M=1024, N=4096, K=4096)
         perf = min(bw * r.operational_intensity, peak_gflops)
-        points.append({
-            "label": "GEMM prefill\n1024x4K",
-            "oi": r.operational_intensity,
-            "perf_gflops": perf,
-        })
+        points.append(
+            {
+                "label": "GEMM prefill\n1024x4K",
+                "oi": r.operational_intensity,
+                "perf_gflops": perf,
+            }
+        )
 
         # 5. FFN decode (1x4096 @ 4096x14336)
         r = self.compute_gemm_roofline(M=1, N=14336, K=4096)
         perf = min(bw * r.operational_intensity, peak_gflops)
-        points.append({
-            "label": "FFN decode\n1x4K->14K",
-            "oi": r.operational_intensity,
-            "perf_gflops": perf,
-        })
+        points.append(
+            {
+                "label": "FFN decode\n1x4K->14K",
+                "oi": r.operational_intensity,
+                "perf_gflops": perf,
+            }
+        )
 
         return points
 
@@ -609,6 +712,7 @@ class RooflineModel:
 # ---------------------------------------------------------------------------
 # MLX-based measurement utilities
 # ---------------------------------------------------------------------------
+
 
 def measure_roofline(
     chip_name: str | None = None,
@@ -645,8 +749,7 @@ def measure_roofline(
         import mlx.core as mx
     except ImportError as exc:
         raise ImportError(
-            "MLX is required for measure_roofline(). "
-            "Install with: pip install mlx"
+            "MLX is required for measure_roofline(). Install with: pip install mlx"
         ) from exc
 
     import time
@@ -704,14 +807,16 @@ def measure_roofline(
         mx.synchronize()
         elapsed = time.perf_counter() - t0
 
-        flops = 2.0 * size ** 3 * iters
+        flops = 2.0 * size**3 * iters
         tflops = flops / elapsed / 1e12
-        tflops_details.append({
-            "size": size,
-            "iters": iters,
-            "elapsed_s": round(elapsed, 4),
-            "tflops": round(tflops, 2),
-        })
+        tflops_details.append(
+            {
+                "size": size,
+                "iters": iters,
+                "elapsed_s": round(elapsed, 4),
+                "tflops": round(tflops, 2),
+            }
+        )
         if tflops > peak_tflops:
             peak_tflops = tflops
 
@@ -729,7 +834,11 @@ def measure_roofline(
     measured_tflops_gflops = peak_tflops * 1000.0
     if measured_tflops_gflops > 0 and rm.bandwidth_gbs > 0:
         # If peak TFLOPS is close to theoretical peak, we're compute-bound at large sizes
-        compute_ratio = measured_tflops_gflops / peak_gflops_analytical if peak_gflops_analytical > 0 else 0
+        compute_ratio = (
+            measured_tflops_gflops / peak_gflops_analytical
+            if peak_gflops_analytical > 0
+            else 0
+        )
         # If bandwidth achieved is close to theoretical, we're bandwidth-efficient
         bw_ratio = bandwidth_gbs / rm.bandwidth_gbs if rm.bandwidth_gbs > 0 else 0
         bound_type = "compute" if compute_ratio > bw_ratio else "memory"

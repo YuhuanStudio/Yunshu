@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ThinkingSegment:
     """A cached thinking segment with its KV data."""
+
     conversation_id: str
     step_hash: str
     kv_data: Any  # Serialized KV tensors
@@ -53,6 +54,7 @@ class ThinkingSegment:
 @dataclass
 class ThinkingSegmentConfig:
     """Configuration for the thinking segment substore."""
+
     # Maximum segments per conversation
     max_segments_per_conversation: int = 10
     # Maximum total segments across all conversations
@@ -119,7 +121,9 @@ class ThinkingSegmentSubstore:
         # Thread safety (Bug 3): RLock for reentrant calls (e.g., store → _maybe_evict → _remove_segment)
         self._lock = threading.RLock()
 
-    def compute_step_hash(self, thinking_tokens: list[int], context_tokens: list[int]) -> str:
+    def compute_step_hash(
+        self, thinking_tokens: list[int], context_tokens: list[int]
+    ) -> str:
         """Compute a hash for a thinking step.
 
         Includes both the thinking tokens and the context that preceded them,
@@ -251,7 +255,9 @@ class ThinkingSegmentSubstore:
 
             # Decompress KV data if needed (lazy decompression)
             if self.config.enable_compression and segment.kv_data is not None:
-                if isinstance(segment.kv_data, dict) and segment.kv_data.get("_compressed"):
+                if isinstance(segment.kv_data, dict) and segment.kv_data.get(
+                    "_compressed"
+                ):
                     segment.kv_data = self._decompress_kv(segment.kv_data)
 
             segment.last_accessed = time.monotonic()
@@ -339,7 +345,9 @@ class ThinkingSegmentSubstore:
         # TTL cleanup
         now = time.monotonic()
         expired = [
-            s for segs in self._segments.values() for s in segs
+            s
+            for segs in self._segments.values()
+            for s in segs
             if now - s.created_at > self.config.ttl_seconds
         ]
         for seg in expired:
@@ -370,13 +378,16 @@ class ThinkingSegmentSubstore:
             return self._quantizer
         try:
             from yunshu_engine.kv_quantization import KVQuantConfig, KVQuantizer
+
             config = KVQuantConfig(
                 bits=self.config.compression_bits,
                 group_size=self.config.compression_group_size,
             )
             self._quantizer = KVQuantizer(config)
         except ImportError:
-            logger.warning("kv_quantization module not available — compression disabled")
+            logger.warning(
+                "kv_quantization module not available — compression disabled"
+            )
             self._quantizer = None
         return self._quantizer
 
@@ -394,10 +405,10 @@ class ThinkingSegmentSubstore:
             # Convert KV data to list format for quantization
             if isinstance(kv_data, list):
                 flat_data = kv_data
-            elif hasattr(kv_data, 'tolist'):
+            elif hasattr(kv_data, "tolist"):
                 flat_data = kv_data.tolist()
             else:
-                flat_data = list(kv_data) if hasattr(kv_data, '__iter__') else [kv_data]
+                flat_data = list(kv_data) if hasattr(kv_data, "__iter__") else [kv_data]
 
             packed, meta = quantizer.quantize(flat_data)
             self._stats["compressions"] += 1
@@ -455,9 +466,8 @@ class ThinkingSegmentSubstore:
             }
 
             import tempfile
-            fd, tmp_path = tempfile.mkstemp(
-                dir=str(conv_dir), suffix=".tmp"
-            )
+
+            fd, tmp_path = tempfile.mkstemp(dir=str(conv_dir), suffix=".tmp")
             try:
                 with os.fdopen(fd, "w") as f:
                     json.dump(data, f)
@@ -471,7 +481,9 @@ class ThinkingSegmentSubstore:
         except Exception as e:
             logger.debug(f"SSD save failed for segment {segment.step_hash}: {e}")
 
-    def _load_from_ssd(self, conversation_id: str, step_hash: str) -> ThinkingSegment | None:
+    def _load_from_ssd(
+        self, conversation_id: str, step_hash: str
+    ) -> ThinkingSegment | None:
         """Load a thinking segment from SSD.
 
         Returns the segment if found, None otherwise.
@@ -510,11 +522,17 @@ class ThinkingSegmentSubstore:
         if self._ssd_dir is None:
             return
         try:
-            filepath = self._ssd_dir / segment.conversation_id / f"{segment.step_hash}.json"
+            filepath = (
+                self._ssd_dir / segment.conversation_id / f"{segment.step_hash}.json"
+            )
             if filepath.exists():
                 filepath.unlink()
         except Exception:
-            logger.debug("SSD file removal failed for segment %s", segment.step_hash, exc_info=True)
+            logger.debug(
+                "SSD file removal failed for segment %s",
+                segment.step_hash,
+                exc_info=True,
+            )
 
     def _serialize_kv(self, kv_data: Any) -> Any:
         """Serialize KV data for JSON storage."""
@@ -526,7 +544,9 @@ class ThinkingSegmentSubstore:
                 packed = kv_data.get("packed", b"")
                 return {
                     "_compressed": True,
-                    "packed_hex": packed.hex() if isinstance(packed, bytes) else str(packed),
+                    "packed_hex": packed.hex()
+                    if isinstance(packed, bytes)
+                    else str(packed),
                     "metadata": kv_data.get("metadata", {}),
                 }
             return kv_data
@@ -534,7 +554,7 @@ class ThinkingSegmentSubstore:
             return {"_type": "bytes", "hex": kv_data.hex()}
         if isinstance(kv_data, list):
             return kv_data
-        if hasattr(kv_data, 'tolist'):
+        if hasattr(kv_data, "tolist"):
             return kv_data.tolist()
         return str(kv_data)
 

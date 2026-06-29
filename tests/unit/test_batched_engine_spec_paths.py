@@ -4,6 +4,7 @@ Covers the MTP, N-gram, and cross-model spec decode paths that currently
 have zero test coverage. All tests mock engine internals so no real models
 or MLX runtime are needed.
 """
+
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -254,7 +255,9 @@ async def test_generate_mtp_with_stop_tokens():
     mock_executor = MagicMock()
     # Make run_in_executor call the function immediately
     loop = asyncio.get_running_loop()
-    with patch("yunshu_engine.mlx_executor.get_mlx_executor", return_value=mock_executor):
+    with patch(
+        "yunshu_engine.mlx_executor.get_mlx_executor", return_value=mock_executor
+    ):
         # Make run_in_executor run the function synchronously
         def _run_inline(executor, fn):
             result = fn()
@@ -524,12 +527,14 @@ async def test_engine_loop_exception_puts_error_output():
     for rid in core.scheduler.fail_all_requests():
         c = core._output_collectors.get(rid)
         if c is not None:
-            c.put(RequestOutput(
-                request_id=rid,
-                finished=True,
-                finish_reason="error",
-                error=f"Scheduler step error: {error}",
-            ))
+            c.put(
+                RequestOutput(
+                    request_id=rid,
+                    finished=True,
+                    finish_reason="error",
+                    error=f"Scheduler step error: {error}",
+                )
+            )
             c.put(None)  # sentinel
         core._signal_finished(rid)
         core._finalize_request(rid)

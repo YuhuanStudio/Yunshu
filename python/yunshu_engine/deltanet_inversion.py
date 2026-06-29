@@ -62,11 +62,12 @@ logger = logging.getLogger(__name__)
 @dataclass
 class DeltaNetInversionEntry:
     """Intermediate values saved during verify for one SSM layer."""
-    gate: mx.array        # g: [B, Hv] or [B, Hv, Dk]
-    beta: mx.array        # write gate: [B, Hv]
-    key: mx.array         # k: [B, Hk, Dk]
-    value: mx.array       # v: [B, Hv, Dv]
-    state_after: mx.array # state_new: [B, Hv, Dv, Dk]
+
+    gate: mx.array  # g: [B, Hv] or [B, Hv, Dk]
+    beta: mx.array  # write gate: [B, Hv]
+    key: mx.array  # k: [B, Hk, Dk]
+    value: mx.array  # v: [B, Hv, Dv]
+    state_after: mx.array  # state_new: [B, Hv, Dv, Dk]
 
 
 class DeltaNetInverter:
@@ -98,13 +99,15 @@ class DeltaNetInverter:
     ):
         if not self._capturing:
             return
-        self._entries.append(DeltaNetInversionEntry(
-            gate=gate,
-            beta=beta,
-            key=key,
-            value=value,
-            state_after=state_after,
-        ))
+        self._entries.append(
+            DeltaNetInversionEntry(
+                gate=gate,
+                beta=beta,
+                key=key,
+                value=value,
+                state_after=state_after,
+            )
+        )
 
     def invert_state(self, entry: DeltaNetInversionEntry) -> mx.array:
         """Invert the DeltaNet recurrence for one layer.
@@ -140,7 +143,7 @@ class DeltaNetInverter:
         g_expanded = g[..., None, None] if g.ndim == 2 else g[..., None, :]
 
         beta_expanded = beta[..., None, None]  # [B, Hv, 1, 1]
-        k_expanded = k[:, :, None, :]          # [B, Hv, 1, Dk]
+        k_expanded = k[:, :, None, :]  # [B, Hv, 1, Dk]
 
         # Step 1: r_new = state_new · k (dot along Dk)
         # state_new: [B, Hv, Dv, Dk], k_expanded: [B, Hv, 1, Dk]
@@ -166,7 +169,9 @@ class DeltaNetInverter:
 
         # Step 4: state_old = (state_new - k * beta * (v - r_gw)) / g
         delta_v = v - r_gw  # [B, Hv, Dv]
-        correction = beta_expanded * delta_v[:, :, :, None] * k_expanded  # [B, Hv, Dv, Dk]
+        correction = (
+            beta_expanded * delta_v[:, :, :, None] * k_expanded
+        )  # [B, Hv, Dv, Dk]
         # Guard against near-zero gate (g ≈ 0 means heavy decay, inversion is unstable).
         g_safe = mx.where(mx.abs(g_expanded) < eps, eps, g_expanded)
         state_old = (state_new - correction) / g_safe
@@ -212,7 +217,7 @@ class DeltaNetInverter:
         # Collect target modules
         targets = []
         for idx, (_name, module) in enumerate(model.named_modules()):
-            if hasattr(module, 'state'):
+            if hasattr(module, "state"):
                 targets.append((idx, module))
 
         # Patch each unique class once
@@ -226,23 +231,31 @@ class DeltaNetInverter:
                 def make_patched_call(orig):
                     def patched_call(self_layer, *args, **kwargs):
                         result = orig(self_layer, *args, **kwargs)
-                        hook_data = getattr(self_layer, '_inverter_hook', None)
+                        hook_data = getattr(self_layer, "_inverter_hook", None)
                         if hook_data is not None:
                             inv, layer_idx = hook_data
-                            if inv._capturing and hasattr(self_layer, 'state'):
+                            if inv._capturing and hasattr(self_layer, "state"):
                                 try:
-                                    g = getattr(self_layer, '_last_gate', None)
-                                    beta = getattr(self_layer, '_last_beta', None)
-                                    k = getattr(self_layer, '_last_key', None)
-                                    v = getattr(self_layer, '_last_value', None)
+                                    g = getattr(self_layer, "_last_gate", None)
+                                    beta = getattr(self_layer, "_last_beta", None)
+                                    k = getattr(self_layer, "_last_key", None)
+                                    v = getattr(self_layer, "_last_value", None)
                                     if g is not None and beta is not None:
                                         inv.capture_layer(
-                                            gate=g, beta=beta, key=k, value=v,
+                                            gate=g,
+                                            beta=beta,
+                                            key=k,
+                                            value=v,
                                             state_after=self_layer.state,
                                         )
                                 except Exception as exc:
-                                    logger.debug("DeltaNet capture hook failed for layer %d: %s", layer_idx, exc)
+                                    logger.debug(
+                                        "DeltaNet capture hook failed for layer %d: %s",
+                                        layer_idx,
+                                        exc,
+                                    )
                         return result
+
                     return patched_call
 
                 cls.__call__ = make_patched_call(original_fn)
@@ -254,13 +267,13 @@ class DeltaNetInverter:
     def unregister_hooks(self) -> None:
         """Remove all capture hooks, restoring original class __call__ methods."""
         # Remove per-instance hook data
-        if hasattr(self, '_hooked_layers'):
+        if hasattr(self, "_hooked_layers"):
             for module in self._hooked_layers:
-                if hasattr(module, '_inverter_hook'):
+                if hasattr(module, "_inverter_hook"):
                     del module._inverter_hook
             self._hooked_layers.clear()
         # Restore original class __call__
-        if hasattr(self, '_hooked_classes'):
+        if hasattr(self, "_hooked_classes"):
             for cls, original_fn in self._hooked_classes.items():
                 cls.__call__ = original_fn
             self._hooked_classes.clear()
@@ -286,12 +299,18 @@ class DeltaNetInverter:
         is sufficient.
         """
         entry = DeltaNetInversionEntry(
-            gate=gate, beta=beta, key=key, value=value, state_after=state_after,
+            gate=gate,
+            beta=beta,
+            key=key,
+            value=value,
+            state_after=state_after,
         )
         inverter = DeltaNetInverter()
         recovered = inverter.invert_state(entry)
         if state_before.shape != recovered.shape:
-            return float('inf')
-        return float(mx.max(mx.abs(
-            state_before.astype(mx.float32) - recovered.astype(mx.float32)
-        )).item())
+            return float("inf")
+        return float(
+            mx.max(
+                mx.abs(state_before.astype(mx.float32) - recovered.astype(mx.float32))
+            ).item()
+        )

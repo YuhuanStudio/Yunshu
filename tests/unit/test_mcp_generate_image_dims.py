@@ -11,6 +11,7 @@ right). One real client-facing bug + a sibling, both schema-vs-behavior mismatch
 Fix: honor width/height (size string kept as a backward-compat fallback, default 512 to
 match the schema); align the voice advertised default to the actual "alloy".
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -33,9 +34,11 @@ def _run(args, monkeypatch):
     cap = _CapImg()
     eng.generate_image = cap.generate_image
     import types
+
     entry = types.SimpleNamespace(is_loaded=True, engine=eng)
     mgr = types.SimpleNamespace(list_entries=lambda: [entry])
     from yunshu_gateway import engine as eng_mod
+
     monkeypatch.setattr(eng_mod, "get_model_manager", lambda: mgr)
     resp = asyncio.run(mcp._tool_generate_image(args, 1))
     return cap.kw, resp

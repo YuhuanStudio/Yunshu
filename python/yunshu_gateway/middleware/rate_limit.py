@@ -22,8 +22,12 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 # Paths served by the Anthropic router — must use Anthropic error format
-_ANTHROPIC_PATHS = ("/v1/messages", "/messages",
-                     "/v1/messages/count_tokens", "/messages/count_tokens")
+_ANTHROPIC_PATHS = (
+    "/v1/messages",
+    "/messages",
+    "/v1/messages/count_tokens",
+    "/messages/count_tokens",
+)
 
 
 class _TokenBucket:
@@ -71,7 +75,9 @@ class _LRUBucketCache:
     Also supports TTL-based expiry for inactive buckets.
     """
 
-    def __init__(self, rate: float, capacity: int, max_buckets: int = 10000, ttl: float = 600.0):
+    def __init__(
+        self, rate: float, capacity: int, max_buckets: int = 10000, ttl: float = 600.0
+    ):
         self._rate = rate
         self._capacity = capacity
         self._max_buckets = max_buckets
@@ -94,10 +100,7 @@ class _LRUBucketCache:
 
     def _evict(self) -> None:
         """Evict expired buckets first, then LRU until under max."""
-        expired = [
-            k for k, b in self._buckets.items()
-            if b.is_expired(self._ttl)
-        ]
+        expired = [k for k, b in self._buckets.items() if b.is_expired(self._ttl)]
         for k in expired:
             del self._buckets[k]
 
@@ -107,10 +110,7 @@ class _LRUBucketCache:
     def cleanup_expired(self) -> int:
         """Remove all expired buckets. Returns count removed."""
         with self._lock:
-            expired = [
-                k for k, b in self._buckets.items()
-                if b.is_expired(self._ttl)
-            ]
+            expired = [k for k, b in self._buckets.items() if b.is_expired(self._ttl)]
             for k in expired:
                 del self._buckets[k]
             return len(expired)
@@ -145,9 +145,21 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
       YUNSHU_TRUSTED_PROXIES — comma-separated trusted proxy IPs (default: none)
     """
 
-    PUBLIC_PATHS = {"/health", "/health/ready", "/health/live", "/docs", "/openapi.json", "/redoc", "/metrics"}
+    PUBLIC_PATHS = {
+        "/health",
+        "/health/ready",
+        "/health/live",
+        "/docs",
+        "/openapi.json",
+        "/redoc",
+        "/metrics",
+    }
     # Prefixes that are exempt from rate limiting (monitoring, admin health)
-    PUBLIC_PREFIXES = ("/api/v1/admin/hardware", "/api/v1/admin/memory", "/api/v1/admin/metrics")
+    PUBLIC_PREFIXES = (
+        "/api/v1/admin/hardware",
+        "/api/v1/admin/memory",
+        "/api/v1/admin/metrics",
+    )
 
     def __init__(self, app, rpm: int | None = None):
         super().__init__(app)
@@ -156,8 +168,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         max_buckets = int(os.environ.get("YUNSHU_RATE_LIMIT_MAX_BUCKETS", "10000"))
         ttl = float(os.environ.get("YUNSHU_RATE_LIMIT_TTL_SECONDS", "600"))
         self._bucket_cache = _LRUBucketCache(
-            rate=rpm / 60.0, capacity=rpm,
-            max_buckets=max_buckets, ttl=ttl,
+            rate=rpm / 60.0,
+            capacity=rpm,
+            max_buckets=max_buckets,
+            ttl=ttl,
         )
         self._key_buckets: OrderedDict[str, _TokenBucket] = OrderedDict()
         self._max_key_buckets = max_buckets
@@ -166,7 +180,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         trusted_raw = os.environ.get("YUNSHU_TRUSTED_PROXIES", "").strip()
         self._trusted_proxies: set[str] = (
             {ip.strip() for ip in trusted_raw.split(",") if ip.strip()}
-            if trusted_raw else set()
+            if trusted_raw
+            else set()
         )
 
     def _get_key_bucket(self, key_name: str, rpm: int) -> _TokenBucket:
@@ -205,9 +220,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Apply rate limiting to WebSocket upgrade requests as well
-        is_websocket = (
-            request.headers.get("upgrade", "").lower() == "websocket"
-        )
+        is_websocket = request.headers.get("upgrade", "").lower() == "websocket"
 
         # Check RBAC key-level rate limit first
         rbac_key = getattr(request.state, "rbac_key", None)
@@ -220,8 +233,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     return Response(status_code=429, content="Rate limit exceeded")
                 # Path-aware envelope (OpenAI / Anthropic / JSON-RPC for /v1/mcp).
                 from ..error_envelope import format_error_response
+
                 return format_error_response(
-                    request.url.path, "API key rate limit exceeded", 429,
+                    request.url.path,
+                    "API key rate limit exceeded",
+                    429,
                     retry_after=retry_after,
                 )
             # Key-level rate limit passed — skip IP-level rate limiting.
@@ -253,8 +269,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 return Response(status_code=429, content="Rate limit exceeded")
             # Path-aware envelope (OpenAI / Anthropic / JSON-RPC for /v1/mcp).
             from ..error_envelope import format_error_response
+
             return format_error_response(
-                request.url.path, "Rate limit exceeded", 429, retry_after=retry_after,
+                request.url.path,
+                "Rate limit exceeded",
+                429,
+                retry_after=retry_after,
             )
 
         response = await call_next(request)

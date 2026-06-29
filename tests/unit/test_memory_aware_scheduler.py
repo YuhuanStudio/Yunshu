@@ -8,6 +8,7 @@ Tests cover:
 - Statistics tracking
 - Edge cases: zero budget, oversized requests, concurrent reservations
 """
+
 from __future__ import annotations
 
 from yunshu_engine.memory_aware_scheduler import (
@@ -47,7 +48,6 @@ def _per_token_bytes(
 
 
 class TestMemoryEstimation:
-
     def test_basic_prompt_estimation(self):
         """estimate_kv_memory returns non-zero for valid tokens."""
         sched = _make_scheduler()
@@ -78,7 +78,12 @@ class TestMemoryEstimation:
         # Smaller model: 16 layers instead of 32
         mem_small = sched.estimate_kv_memory(
             num_tokens=100,
-            model_config={"num_layers": 16, "num_kv_heads": 8, "head_dim": 128, "dtype_size": 2},
+            model_config={
+                "num_layers": 16,
+                "num_kv_heads": 8,
+                "head_dim": 128,
+                "dtype_size": 2,
+            },
         )
         assert mem_small == mem_default // 2
 
@@ -106,7 +111,6 @@ class TestMemoryEstimation:
 
 
 class TestAdmissionControl:
-
     def test_admit_small_request(self):
         """Small request is admitted when budget has room."""
         sched = _make_scheduler(budget_mb=1024)
@@ -170,7 +174,6 @@ class TestAdmissionControl:
 
 
 class TestReservationLifecycle:
-
     def test_reserve_increases_used(self):
         """Reserving memory increases used bytes."""
         sched = _make_scheduler(budget_mb=100)
@@ -232,7 +235,6 @@ class TestReservationLifecycle:
 
 
 class TestPressurePausing:
-
     def test_pressure_pauses_admissions(self):
         """Admissions pause when utilization crosses threshold."""
         sched = _make_scheduler(budget_mb=10, pressure_pct=50.0, hysteresis=10.0)
@@ -301,7 +303,9 @@ class TestPressurePausing:
         sched.reserve_memory("req-1", big)
         sched.can_admit_request(big)
         stats = sched.get_stats()
-        assert stats.pressure_pauses >= 0  # May or may not have paused depending on exact budget math
+        assert (
+            stats.pressure_pauses >= 0
+        )  # May or may not have paused depending on exact budget math
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -310,7 +314,6 @@ class TestPressurePausing:
 
 
 class TestMemoryBudget:
-
     def test_initial_budget(self):
         """Initial budget has full capacity available."""
         sched = _make_scheduler(budget_mb=100)
@@ -352,7 +355,6 @@ class TestMemoryBudget:
 
 
 class TestSchedulerStats:
-
     def test_initial_stats(self):
         """Initial stats are all zeros."""
         sched = _make_scheduler()
@@ -410,7 +412,6 @@ class TestSchedulerStats:
 
 
 class TestEdgeCases:
-
     def test_zero_budget(self):
         """Zero budget rejects all requests."""
         sched = MemoryAwareScheduler(total_budget_bytes=0)

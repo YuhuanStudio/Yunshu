@@ -39,6 +39,7 @@ class RequestPhase(Enum):
 @dataclass
 class RequestLifecycleState:
     """Tracks a single request through its lifecycle."""
+
     request_id: str
     phase: RequestPhase = RequestPhase.QUEUED
     # Timing
@@ -100,9 +101,22 @@ class RequestLifecycleState:
     def transition(self, new_phase: RequestPhase) -> bool:
         """Attempt a state transition. Returns True if valid."""
         valid_transitions = {
-            RequestPhase.QUEUED: {RequestPhase.PREFILLING, RequestPhase.REJECTED, RequestPhase.ABORTED, RequestPhase.FINISHED},
-            RequestPhase.PREFILLING: {RequestPhase.DECODING, RequestPhase.REJECTED, RequestPhase.ABORTED},
-            RequestPhase.DECODING: {RequestPhase.FINISHED, RequestPhase.ABORTED, RequestPhase.RETRYING},
+            RequestPhase.QUEUED: {
+                RequestPhase.PREFILLING,
+                RequestPhase.REJECTED,
+                RequestPhase.ABORTED,
+                RequestPhase.FINISHED,
+            },
+            RequestPhase.PREFILLING: {
+                RequestPhase.DECODING,
+                RequestPhase.REJECTED,
+                RequestPhase.ABORTED,
+            },
+            RequestPhase.DECODING: {
+                RequestPhase.FINISHED,
+                RequestPhase.ABORTED,
+                RequestPhase.RETRYING,
+            },
             RequestPhase.REJECTED: {RequestPhase.RETRYING, RequestPhase.FINISHED},
             RequestPhase.RETRYING: {RequestPhase.QUEUED, RequestPhase.FINISHED},
             RequestPhase.FINISHED: set(),
@@ -251,7 +265,9 @@ class RequestLifecycleOrchestrator:
         max_pending: int = 256,
         default_timeout_ms: float = 30000.0,
     ) -> None:
-        self._concurrency = concurrency_controller or AdaptiveConcurrencyController.from_env()
+        self._concurrency = (
+            concurrency_controller or AdaptiveConcurrencyController.from_env()
+        )
         self._max_pending = max_pending
         self._default_timeout = default_timeout_ms
 
@@ -265,7 +281,9 @@ class RequestLifecycleOrchestrator:
         self._total_rejected = 0
         self._total_retried = 0
         self._total_timeouts = 0
-        self._phase_transitions: dict[tuple[RequestPhase, RequestPhase], int] = defaultdict(int)
+        self._phase_transitions: dict[tuple[RequestPhase, RequestPhase], int] = (
+            defaultdict(int)
+        )
 
         # Per-model counters
         self._model_counts: dict[str, dict] = defaultdict(
@@ -338,7 +356,9 @@ class RequestLifecycleOrchestrator:
         if state is None:
             return False
         if state.transition(RequestPhase.DECODING):
-            self._phase_transitions[(RequestPhase.PREFILLING, RequestPhase.DECODING)] += 1
+            self._phase_transitions[
+                (RequestPhase.PREFILLING, RequestPhase.DECODING)
+            ] += 1
             return True
         return False
 
@@ -416,7 +436,11 @@ class RequestLifecycleOrchestrator:
         if retryable and state.retry_count < state.max_retries:
             # Go to REJECTED first (valid from any active phase)
             was_active = state.phase in (RequestPhase.PREFILLING, RequestPhase.DECODING)
-            if state.phase not in (RequestPhase.FINISHED, RequestPhase.ABORTED, RequestPhase.REJECTED):
+            if state.phase not in (
+                RequestPhase.FINISHED,
+                RequestPhase.ABORTED,
+                RequestPhase.REJECTED,
+            ):
                 state.transition(RequestPhase.REJECTED)
             state.transition(RequestPhase.RETRYING)
             state.transition(RequestPhase.QUEUED)
@@ -432,7 +456,11 @@ class RequestLifecycleOrchestrator:
 
         # Terminal failure — go to REJECTED then FINISHED
         was_active = state.phase in (RequestPhase.PREFILLING, RequestPhase.DECODING)
-        if state.phase not in (RequestPhase.FINISHED, RequestPhase.ABORTED, RequestPhase.REJECTED):
+        if state.phase not in (
+            RequestPhase.FINISHED,
+            RequestPhase.ABORTED,
+            RequestPhase.REJECTED,
+        ):
             state.transition(RequestPhase.REJECTED)
         if state.phase != RequestPhase.FINISHED:
             state.transition(RequestPhase.FINISHED)
@@ -529,10 +557,6 @@ class RequestLifecycleOrchestrator:
         return {
             "slo_ttft_ms": self._concurrency._slo_ttft,
             "slo_total_ms": self._concurrency._slo_total,
-            "slo_violation_rate": (
-                self._total_rejected / max(self._total_requests, 1)
-            ),
-            "completion_rate": (
-                self._total_completed / max(self._total_requests, 1)
-            ),
+            "slo_violation_rate": (self._total_rejected / max(self._total_requests, 1)),
+            "completion_rate": (self._total_completed / max(self._total_requests, 1)),
         }

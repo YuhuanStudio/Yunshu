@@ -6,6 +6,7 @@ Phase 4 integration tests:
 - BatchedEngine spec_decode parameter handling
 - Single-request speculative decoding path
 """
+
 from unittest.mock import MagicMock
 
 from yunshu_engine.scheduler import Scheduler, SchedulerConfig
@@ -136,7 +137,10 @@ class TestSchedulerSpecDetection:
     def test_deep_reset_clears_spec_decoder(self):
         model = MagicMock()
         model.config = MagicMock()
-        model.config.to_dict.return_value = {"model_type": "deepseek_mtp", "num_nextn_predict_layers": 1}
+        model.config.to_dict.return_value = {
+            "model_type": "deepseek_mtp",
+            "num_nextn_predict_layers": 1,
+        }
 
         config = SchedulerConfig(enable_spec_decode=True)
         scheduler = Scheduler(model=model, tokenizer=MagicMock(), config=config)
@@ -175,6 +179,7 @@ class TestBatchedEngineSpecDecode:
 
     def test_spec_decode_disabled_by_default(self):
         from yunshu_engine.batched_engine import BatchedEngine
+
         engine = BatchedEngine(model_name="test")
         assert engine._spec_decoder is None
         assert engine._spec_enabled is False
@@ -246,36 +251,44 @@ class TestAutoConfigureSpeculative:
         assert config.bonus_token is False
 
     def test_mtp_config(self):
-        config = auto_configure_speculative({
-            "model_type": "deepseek_mtp",
-            "num_nextn_predict_layers": 2,
-            "n_predict": 4,
-        })
+        config = auto_configure_speculative(
+            {
+                "model_type": "deepseek_mtp",
+                "num_nextn_predict_layers": 2,
+                "n_predict": 4,
+            }
+        )
         assert config.draft_length >= 1
         assert config.bonus_token is True
 
     def test_eagle3_config(self):
-        config = auto_configure_speculative({
-            "model_type": "eagle3",
-            "eagle3": {"num_speculative_tokens": 5},
-        })
+        config = auto_configure_speculative(
+            {
+                "model_type": "eagle3",
+                "eagle3": {"num_speculative_tokens": 5},
+            }
+        )
         assert config.draft_length >= 5
         assert config.bonus_token is True
 
     def test_medusa_config(self):
-        config = auto_configure_speculative({
-            "model_type": "medusa",
-            "medusa_num_heads": 4,
-            "num_speculative_tokens": 5,
-        })
+        config = auto_configure_speculative(
+            {
+                "model_type": "medusa",
+                "medusa_num_heads": 4,
+                "num_speculative_tokens": 5,
+            }
+        )
         assert config.draft_length >= 1
         assert config.bonus_token is True
 
     def test_mlp_speculator_config(self):
-        config = auto_configure_speculative({
-            "model_type": "mlp_speculator",
-            "num_speculative_tokens": 5,
-        })
+        config = auto_configure_speculative(
+            {
+                "model_type": "mlp_speculator",
+                "num_speculative_tokens": 5,
+            }
+        )
         assert config.draft_length >= 1
         assert config.bonus_token is True
 
@@ -296,13 +309,17 @@ class TestDetectSpecHeadsEdgeCases:
         assert info.head_type == "none"
 
     def test_eagle_with_draft_path(self):
-        info = detect_spec_heads({
-            "draft_model_path": "/models/eagle-draft-v1",
-        })
+        info = detect_spec_heads(
+            {
+                "draft_model_path": "/models/eagle-draft-v1",
+            }
+        )
         assert info.head_type == "eagle"
 
     def test_eagle_draft_path_no_match(self):
-        info = detect_spec_heads({
-            "draft_model_path": "/models/some-other-model",
-        })
+        info = detect_spec_heads(
+            {
+                "draft_model_path": "/models/some-other-model",
+            }
+        )
         assert info.head_type == "none"

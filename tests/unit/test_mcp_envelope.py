@@ -2,6 +2,7 @@
 envelopes (it used to take `req: JSONRPCRequest`, so FastAPI rejected bad bodies with
 an OpenAI-style HTTP error a JSON-RPC client can't parse). Also: an explicit
 `id: null` is a REQUEST, not a notification (only an omitted id is a notification)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -26,7 +27,9 @@ class _FakeRequest:
 
 def _call(raw, monkeypatch):
     # _check_permission is imported inside the endpoint from .models — neutralize it.
-    monkeypatch.setattr("yunshu_gateway.routers.models._check_permission", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "yunshu_gateway.routers.models._check_permission", lambda *a, **k: None
+    )
     resp = asyncio.run(M.mcp_endpoint(_FakeRequest(raw)))
     return resp
 

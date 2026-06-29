@@ -57,12 +57,16 @@ class TestMCPToolsCall:
 
     @pytest.mark.asyncio
     async def test_speech_tool_without_text_returns_error(self):
-        result = await _handle_tools_call({"name": "synthesize_speech", "arguments": {}}, 1)
+        result = await _handle_tools_call(
+            {"name": "synthesize_speech", "arguments": {}}, 1
+        )
         assert "error" in result
 
     @pytest.mark.asyncio
     async def test_image_tool_without_prompt_returns_error(self):
-        result = await _handle_tools_call({"name": "generate_image", "arguments": {}}, 1)
+        result = await _handle_tools_call(
+            {"name": "generate_image", "arguments": {}}, 1
+        )
         assert "error" in result
 
 

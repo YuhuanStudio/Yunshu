@@ -29,8 +29,10 @@ logger = logging.getLogger(__name__)
 # Data structures
 # ---------------------------------------------------------------------------
 
+
 class BottleneckType(StrEnum):
     """Identified performance bottleneck."""
+
     MEMORY = "memory"
     COMPUTE = "compute"
     IO = "io"
@@ -92,11 +94,13 @@ class TunableParams:
 
     def clamp(self) -> TunableParams:
         """Clamp all parameters to their bounds, return self."""
-        self.batch_size = max(self.batch_size_min,
-                              min(self.batch_size_max, self.batch_size))
-        self.prefill_chunk_size = max(self.prefill_chunk_size_min,
-                                     min(self.prefill_chunk_size_max,
-                                         self.prefill_chunk_size))
+        self.batch_size = max(
+            self.batch_size_min, min(self.batch_size_max, self.batch_size)
+        )
+        self.prefill_chunk_size = max(
+            self.prefill_chunk_size_min,
+            min(self.prefill_chunk_size_max, self.prefill_chunk_size),
+        )
         if self.kv_quantization_bits not in self.kv_quantization_bits_options:
             # Snap to nearest valid option
             self.kv_quantization_bits = min(
@@ -142,6 +146,7 @@ class TuningDecision:
 # ---------------------------------------------------------------------------
 # 1. PerformanceProfiler
 # ---------------------------------------------------------------------------
+
 
 class PerformanceProfiler:
     """Continuously profiles inference performance.
@@ -204,16 +209,22 @@ class PerformanceProfiler:
         if m.gpu_memory_util > self._bottleneck_memory_threshold:
             return BottleneckType.MEMORY
         # Compute-bound: low throughput relative to memory availability
-        if (m.gpu_memory_util > 0.4
-                and m.throughput_tok_s > 0
-                and m.throughput_tok_s < 30
-                and m.wall_time_ms > 0
-                and m.tokens_generated > 0):
+        if (
+            m.gpu_memory_util > 0.4
+            and m.throughput_tok_s > 0
+            and m.throughput_tok_s < 30
+            and m.wall_time_ms > 0
+            and m.tokens_generated > 0
+        ):
             return BottleneckType.COMPUTE
         # IO-bound: meaningful memory usage (>10%) but very low throughput.
         # Using a threshold > 0 to avoid misclassifying idle servers where
         # gpu_memory_util is near zero (e.g. 0.001) as IO-bound.
-        if m.gpu_memory_util > 0.1 and m.throughput_tok_s > 0 and m.throughput_tok_s < 10:
+        if (
+            m.gpu_memory_util > 0.1
+            and m.throughput_tok_s > 0
+            and m.throughput_tok_s < 10
+        ):
             return BottleneckType.IO
         return BottleneckType.NONE
 
@@ -253,45 +264,59 @@ class PerformanceProfiler:
         recs: list[dict[str, Any]] = []
 
         if bottleneck == BottleneckType.MEMORY:
-            recs.append({
-                "action": "decrease",
-                "param": "batch_size",
-                "reason": "GPU memory utilization above threshold",
-            })
-            recs.append({
-                "action": "decrease",
-                "param": "kv_quantization_bits",
-                "reason": "Reduce KV cache memory via quantization",
-            })
-            recs.append({
-                "action": "decrease",
-                "param": "num_parallel_requests",
-                "reason": "Reduce concurrent memory usage",
-            })
+            recs.append(
+                {
+                    "action": "decrease",
+                    "param": "batch_size",
+                    "reason": "GPU memory utilization above threshold",
+                }
+            )
+            recs.append(
+                {
+                    "action": "decrease",
+                    "param": "kv_quantization_bits",
+                    "reason": "Reduce KV cache memory via quantization",
+                }
+            )
+            recs.append(
+                {
+                    "action": "decrease",
+                    "param": "num_parallel_requests",
+                    "reason": "Reduce concurrent memory usage",
+                }
+            )
 
         elif bottleneck == BottleneckType.COMPUTE:
-            recs.append({
-                "action": "decrease",
-                "param": "batch_size",
-                "reason": "Compute-bound: smaller batches reduce per-step latency",
-            })
-            recs.append({
-                "action": "increase",
-                "param": "spec_draft_length",
-                "reason": "Speculative decoding can bypass compute bottleneck",
-            })
+            recs.append(
+                {
+                    "action": "decrease",
+                    "param": "batch_size",
+                    "reason": "Compute-bound: smaller batches reduce per-step latency",
+                }
+            )
+            recs.append(
+                {
+                    "action": "increase",
+                    "param": "spec_draft_length",
+                    "reason": "Speculative decoding can bypass compute bottleneck",
+                }
+            )
 
         elif bottleneck == BottleneckType.IO:
-            recs.append({
-                "action": "increase",
-                "param": "prefill_chunk_size",
-                "reason": "Larger chunks amortize IO overhead",
-            })
-            recs.append({
-                "action": "increase",
-                "param": "batch_size",
-                "reason": "Batch more requests to hide IO latency",
-            })
+            recs.append(
+                {
+                    "action": "increase",
+                    "param": "prefill_chunk_size",
+                    "reason": "Larger chunks amortize IO overhead",
+                }
+            )
+            recs.append(
+                {
+                    "action": "increase",
+                    "param": "batch_size",
+                    "reason": "Batch more requests to hide IO latency",
+                }
+            )
 
         return recs
 
@@ -345,6 +370,7 @@ class PerformanceProfiler:
 # 2. SLOMonitor
 # ---------------------------------------------------------------------------
 
+
 class SLOMonitor:
     """Monitors Service Level Objectives and triggers auto-tuning on violation."""
 
@@ -356,7 +382,9 @@ class SLOMonitor:
     def __init__(self, config: SLOConfig | None = None) -> None:
         self._config = config or SLOConfig()
         self._check_results: dict[str, deque[bool]] = {
-            "ttft": deque(maxlen=100), "itl": deque(maxlen=100), "throughput": deque(maxlen=100)
+            "ttft": deque(maxlen=100),
+            "itl": deque(maxlen=100),
+            "throughput": deque(maxlen=100),
         }
         self._recent_violations: deque[dict[str, Any]] = deque(maxlen=100)
         self._auto_tuning_triggers: int = 0
@@ -410,8 +438,10 @@ class SLOMonitor:
                     "metric": metric,
                     "value": value,
                     "threshold": (
-                        self._config.ttft_ms if metric == "ttft"
-                        else self._config.itl_ms if metric == "itl"
+                        self._config.ttft_ms
+                        if metric == "ttft"
+                        else self._config.itl_ms
+                        if metric == "itl"
                         else self._config.throughput_tok_s
                     ),
                     "timestamp": time.time(),
@@ -423,10 +453,12 @@ class SLOMonitor:
                 violations = sum(1 for r in results if not r)
                 now = time.monotonic()
                 last_fire = self._last_callback_time.get(metric, 0.0)
-                if (checks >= 5
-                        and violations / checks > 0.3
-                        and self._auto_tuning_callback is not None
-                        and (now - last_fire) >= self._CALLBACK_COOLDOWN_S):
+                if (
+                    checks >= 5
+                    and violations / checks > 0.3
+                    and self._auto_tuning_callback is not None
+                    and (now - last_fire) >= self._CALLBACK_COOLDOWN_S
+                ):
                     self._auto_tuning_triggers += 1
                     self._last_callback_time[metric] = now
                     callback_to_fire = self._auto_tuning_callback
@@ -465,8 +497,7 @@ class SLOMonitor:
         with self._lock:
             check_counts = {m: len(r) for m, r in self._check_results.items()}
             violation_counts = {
-                m: sum(1 for v in r if not v)
-                for m, r in self._check_results.items()
+                m: sum(1 for v in r if not v) for m, r in self._check_results.items()
             }
             return {
                 "config": {
@@ -494,6 +525,7 @@ class SLOMonitor:
 # ---------------------------------------------------------------------------
 # 3. AdaptiveBatchSizer
 # ---------------------------------------------------------------------------
+
 
 class AdaptiveBatchSizer:
     """Dynamically adjusts batch size based on system conditions.
@@ -553,8 +585,10 @@ class AdaptiveBatchSizer:
             batch = old_batch
 
             # Memory pressure: scale down
-            if memory_util > self._memory_threshold or (current_latency_ms > 0
-                  and current_latency_ms > slo_latency_ms * self._latency_multiplier):
+            if memory_util > self._memory_threshold or (
+                current_latency_ms > 0
+                and current_latency_ms > slo_latency_ms * self._latency_multiplier
+            ):
                 batch = max(
                     self._min_batch,
                     int(batch * self._scale_down_factor),
@@ -563,8 +597,7 @@ class AdaptiveBatchSizer:
             # Within SLO and comfortable memory: scale up
             else:
                 latency_ok = (
-                    current_latency_ms <= 0
-                    or current_latency_ms <= slo_latency_ms
+                    current_latency_ms <= 0 or current_latency_ms <= slo_latency_ms
                 )
                 memory_ok = memory_util < self._memory_threshold * 0.75
                 queue_ok = queue_depth > batch
@@ -588,15 +621,17 @@ class AdaptiveBatchSizer:
                 self._adjustment_count += 1
 
             self._current_batch = batch
-            self._history.append({
-                "timestamp": time.time(),
-                "queue_depth": queue_depth,
-                "memory_available": memory_available,
-                "slo_latency_ms": slo_latency_ms,
-                "current_latency_ms": current_latency_ms,
-                "batch_size": batch,
-                "adjusted": batch != old_batch,
-            })
+            self._history.append(
+                {
+                    "timestamp": time.time(),
+                    "queue_depth": queue_depth,
+                    "memory_available": memory_available,
+                    "slo_latency_ms": slo_latency_ms,
+                    "current_latency_ms": current_latency_ms,
+                    "batch_size": batch,
+                    "adjusted": batch != old_batch,
+                }
+            )
 
             return batch
 
@@ -606,7 +641,8 @@ class AdaptiveBatchSizer:
             if self._slo_window:
                 slo_rate = (
                     sum(1 for met in self._slo_window if met)
-                    / len(self._slo_window) * 100.0
+                    / len(self._slo_window)
+                    * 100.0
                 )
             else:
                 slo_rate = 100.0
@@ -627,6 +663,7 @@ class AdaptiveBatchSizer:
 # ---------------------------------------------------------------------------
 # 4. AutoTuner
 # ---------------------------------------------------------------------------
+
 
 class AutoTuner:
     """Automatically adjusts system configuration based on profiler recommendations.
@@ -864,13 +901,17 @@ class AutoTuner:
                 logger.debug(
                     "AutoTuner: recommendation %d/%d skipped (cooldown/reverted) "
                     "param=%s direction=%s",
-                    i + 1, len(recommendations), rec["param"], rec["action"],
+                    i + 1,
+                    len(recommendations),
+                    rec["param"],
+                    rec["action"],
                 )
 
         if len(decisions) < len(recommendations):
             logger.debug(
                 "AutoTuner: applied %d/%d profiler recommendations (remainder blocked by cooldown)",
-                len(decisions), len(recommendations),
+                len(decisions),
+                len(recommendations),
             )
 
         return decisions

@@ -1,4 +1,5 @@
 """Tests for Model Optimizations — RoPE, Attention, MoE, Warmup."""
+
 from unittest.mock import MagicMock
 
 from yunshu_engine.model_optimizations import (
@@ -252,16 +253,19 @@ class TestComputeRopeFreqs:
         scaling_factor = 4.0
 
         yarn_freqs = RoPEScalingOptimizer.compute_rope_freqs(
-            base, head_dim, 32768, RopeScalingType.YARN,
+            base,
+            head_dim,
+            32768,
+            RopeScalingType.YARN,
             scaling_factor=scaling_factor,
         )
 
         # Compute what the WRONG NTK-based freq_extra would produce:
         ntk_base_wrong = base * (scaling_factor ** (head_dim / (head_dim - 2)))
-        ntk_base_wrong ** 0  # = 1.0 for i=0
+        ntk_base_wrong**0  # = 1.0 for i=0
 
         # Compute the correct plain-base freq_extra:
-        base ** 0  # = 1.0 for i=0
+        base**0  # = 1.0 for i=0
 
         # For i=0, freq_extra[0] = base^0 = 1.0 (correct) or ntk_base^0 = 1.0 (also 1.0)
         # Check a higher dimension where the difference is visible
@@ -872,6 +876,7 @@ class TestResolveWarmPrompts:
 
 class FakeKVCacheLayer:
     """Fake KV cache layer with keys/values/offset for snapshot testing."""
+
     def __init__(self, offset=0):
         self.keys = MagicMock()
         self.values = MagicMock()
@@ -880,6 +885,7 @@ class FakeKVCacheLayer:
 
 class FakeKVPrefixCache:
     """Minimal KV prefix cache mock for warm prompt tests."""
+
     def __init__(self):
         self._entries = {}  # hash -> (tokens, cache)
         self._evict_calls = 0
@@ -901,6 +907,7 @@ class FakeKVPrefixCache:
 
 class FakeTokenizer:
     """Fake tokenizer that encodes strings to integer lists."""
+
     def __init__(self, vocab=None):
         self._vocab = vocab or {}
 
@@ -1064,7 +1071,10 @@ class TestWarmPromptPrefillWithKV:
         )
 
         fake_generate_step_called = []
-        def fake_generate_step(ids, model, max_tokens=1, sampler=None, prompt_cache=None):
+
+        def fake_generate_step(
+            ids, model, max_tokens=1, sampler=None, prompt_cache=None
+        ):
             fake_generate_step_called.append(max_tokens)
             yield None  # yield once then break
 
@@ -1078,22 +1088,34 @@ class TestWarmPromptPrefillWithKV:
 
         # Patch imports within warm_prompt_prefill
         monkeypatch.setitem(
-            __import__("sys").modules, "mlx.core", fake_mx,
+            __import__("sys").modules,
+            "mlx.core",
+            fake_mx,
         )
         monkeypatch.setitem(
-            __import__("sys").modules, "mlx", types.SimpleNamespace(core=fake_mx),
+            __import__("sys").modules,
+            "mlx",
+            types.SimpleNamespace(core=fake_mx),
         )
         monkeypatch.setitem(
-            __import__("sys").modules, "mlx_lm.models.cache", fake_cache_module,
+            __import__("sys").modules,
+            "mlx_lm.models.cache",
+            fake_cache_module,
         )
         monkeypatch.setitem(
-            __import__("sys").modules, "mlx_lm.generate", fake_generate_module,
+            __import__("sys").modules,
+            "mlx_lm.generate",
+            fake_generate_module,
         )
         monkeypatch.setitem(
-            __import__("sys").modules, "mlx_lm.sample_utils", fake_sampler_module,
+            __import__("sys").modules,
+            "mlx_lm.sample_utils",
+            fake_sampler_module,
         )
         monkeypatch.setitem(
-            __import__("sys").modules, "mlx_lm", types.SimpleNamespace(),
+            __import__("sys").modules,
+            "mlx_lm",
+            types.SimpleNamespace(),
         )
 
         result = mgr.warm_prompt_prefill(
@@ -1122,18 +1144,32 @@ class TestWarmPromptPrefillWithKV:
 
         # Mock mlx imports
         fake_mx = types.SimpleNamespace(array=lambda x: x, clear_cache=lambda: None)
-        fake_cache_module = types.SimpleNamespace(make_prompt_cache=lambda m: [FakeKVCacheLayer()])
+        fake_cache_module = types.SimpleNamespace(
+            make_prompt_cache=lambda m: [FakeKVCacheLayer()]
+        )
         fake_generate_module = types.SimpleNamespace(
-            generate_step=lambda ids, model, max_tokens=1, sampler=None, prompt_cache=None: iter([None]),
+            generate_step=lambda ids, model, max_tokens=1, sampler=None, prompt_cache=None: (
+                iter([None])
+            ),
         )
         fake_sampler_module = types.SimpleNamespace(make_sampler=lambda temp=0.0: None)
 
         monkeypatch.setitem(__import__("sys").modules, "mlx.core", fake_mx)
-        monkeypatch.setitem(__import__("sys").modules, "mlx", types.SimpleNamespace(core=fake_mx))
-        monkeypatch.setitem(__import__("sys").modules, "mlx_lm.models.cache", fake_cache_module)
-        monkeypatch.setitem(__import__("sys").modules, "mlx_lm.generate", fake_generate_module)
-        monkeypatch.setitem(__import__("sys").modules, "mlx_lm.sample_utils", fake_sampler_module)
-        monkeypatch.setitem(__import__("sys").modules, "mlx_lm", types.SimpleNamespace())
+        monkeypatch.setitem(
+            __import__("sys").modules, "mlx", types.SimpleNamespace(core=fake_mx)
+        )
+        monkeypatch.setitem(
+            __import__("sys").modules, "mlx_lm.models.cache", fake_cache_module
+        )
+        monkeypatch.setitem(
+            __import__("sys").modules, "mlx_lm.generate", fake_generate_module
+        )
+        monkeypatch.setitem(
+            __import__("sys").modules, "mlx_lm.sample_utils", fake_sampler_module
+        )
+        monkeypatch.setitem(
+            __import__("sys").modules, "mlx_lm", types.SimpleNamespace()
+        )
 
         result = mgr.warm_prompt_prefill(
             model=MagicMock(),
@@ -1153,18 +1189,32 @@ class TestWarmPromptPrefillWithKV:
         tokenizer = FakeTokenizer()
 
         fake_mx = types.SimpleNamespace(array=lambda x: x, clear_cache=lambda: None)
-        fake_cache_module = types.SimpleNamespace(make_prompt_cache=lambda m: [FakeKVCacheLayer()])
+        fake_cache_module = types.SimpleNamespace(
+            make_prompt_cache=lambda m: [FakeKVCacheLayer()]
+        )
         fake_generate_module = types.SimpleNamespace(
-            generate_step=lambda ids, model, max_tokens=1, sampler=None, prompt_cache=None: iter([None]),
+            generate_step=lambda ids, model, max_tokens=1, sampler=None, prompt_cache=None: (
+                iter([None])
+            ),
         )
         fake_sampler_module = types.SimpleNamespace(make_sampler=lambda temp=0.0: None)
 
         monkeypatch.setitem(__import__("sys").modules, "mlx.core", fake_mx)
-        monkeypatch.setitem(__import__("sys").modules, "mlx", types.SimpleNamespace(core=fake_mx))
-        monkeypatch.setitem(__import__("sys").modules, "mlx_lm.models.cache", fake_cache_module)
-        monkeypatch.setitem(__import__("sys").modules, "mlx_lm.generate", fake_generate_module)
-        monkeypatch.setitem(__import__("sys").modules, "mlx_lm.sample_utils", fake_sampler_module)
-        monkeypatch.setitem(__import__("sys").modules, "mlx_lm", types.SimpleNamespace())
+        monkeypatch.setitem(
+            __import__("sys").modules, "mlx", types.SimpleNamespace(core=fake_mx)
+        )
+        monkeypatch.setitem(
+            __import__("sys").modules, "mlx_lm.models.cache", fake_cache_module
+        )
+        monkeypatch.setitem(
+            __import__("sys").modules, "mlx_lm.generate", fake_generate_module
+        )
+        monkeypatch.setitem(
+            __import__("sys").modules, "mlx_lm.sample_utils", fake_sampler_module
+        )
+        monkeypatch.setitem(
+            __import__("sys").modules, "mlx_lm", types.SimpleNamespace()
+        )
 
         prompts = [
             "First warm prompt for testing",

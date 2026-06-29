@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class STSConfig:
     """Configuration for STS engine."""
+
     sample_rate: int = 16000
     # Enhancement
     enhance_method: str = "spectral_gating"  # spectral_gating, deep_filter, minimal
@@ -46,6 +47,7 @@ class STSConfig:
 @dataclass
 class STSOutput:
     """Result from STS processing."""
+
     audio_data: bytes = b""
     sample_rate: int = 16000
     duration_s: float = 0.0
@@ -77,7 +79,11 @@ class STSEngine(ActiveRequestMixin):
 
     @property
     def model_name(self) -> str:
-        return self._model_path.rsplit("/", 1)[-1] if "/" in self._model_path else "sts-default"
+        return (
+            self._model_path.rsplit("/", 1)[-1]
+            if "/" in self._model_path
+            else "sts-default"
+        )
 
     @property
     def is_loaded(self) -> bool:
@@ -108,7 +114,9 @@ class STSEngine(ActiveRequestMixin):
             try:
                 self._load_model()
             except Exception as e:
-                logger.warning(f"Failed to load STS model, using signal processing fallback: {e}")
+                logger.warning(
+                    f"Failed to load STS model, using signal processing fallback: {e}"
+                )
 
         self._running = True
         logger.info("STS engine started")
@@ -118,7 +126,8 @@ class STSEngine(ActiveRequestMixin):
         # Try mlx-audio's STS capabilities
         try:
             import mlx_audio
-            if hasattr(mlx_audio, 'sts'):
+
+            if hasattr(mlx_audio, "sts"):
                 logger.info("mlx-audio STS module available")
                 return
         except ImportError:
@@ -130,8 +139,11 @@ class STSEngine(ActiveRequestMixin):
             config_file = model_path / "config.json"
             if config_file.exists():
                 import json
+
                 config = json.loads(config_file.read_text())
-                self._config.enhance_method = config.get("enhance_method", self._config.enhance_method)
+                self._config.enhance_method = config.get(
+                    "enhance_method", self._config.enhance_method
+                )
                 logger.info(f"Loaded STS config: {config.get('model_type', 'unknown')}")
 
     def stop(self) -> None:
@@ -139,6 +151,7 @@ class STSEngine(ActiveRequestMixin):
         self._model = None
         self._running = False
         import gc
+
         gc.collect()
 
     @tracks_active
@@ -162,7 +175,11 @@ class STSEngine(ActiveRequestMixin):
             self.start()
 
         enhance_method = method if method is not None else self._config.enhance_method
-        noise_floor = noise_floor_db if noise_floor_db is not None else self._config.noise_floor_db
+        noise_floor = (
+            noise_floor_db
+            if noise_floor_db is not None
+            else self._config.noise_floor_db
+        )
 
         def _enhance_sync():
             audio_data, sr = self._load_audio(audio_input)
@@ -191,10 +208,14 @@ class STSEngine(ActiveRequestMixin):
                 sample_rate=sr,
                 duration_s=duration_s,
                 method=applied_method,
-                metadata={"original_samples": len(audio_data), "enhanced_samples": len(enhanced)},
+                metadata={
+                    "original_samples": len(audio_data),
+                    "enhanced_samples": len(enhanced),
+                },
             )
 
         from .mlx_executor import get_mlx_executor
+
         executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(executor, _enhance_sync)
@@ -235,10 +256,14 @@ class STSEngine(ActiveRequestMixin):
                 sample_rate=sr,
                 duration_s=duration_s,
                 method=sep_method,
-                metadata={"source_text": source_text, "original_samples": len(audio_data)},
+                metadata={
+                    "source_text": source_text,
+                    "original_samples": len(audio_data),
+                },
             )
 
         from .mlx_executor import get_mlx_executor
+
         executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(executor, _separate_sync)
@@ -263,8 +288,14 @@ class STSEngine(ActiveRequestMixin):
         if not self._running:
             self.start()
 
-        pitch = pitch_shift if pitch_shift is not None else self._config.pitch_shift_semitones
-        formant = formant_ratio if formant_ratio is not None else self._config.formant_ratio
+        pitch = (
+            pitch_shift
+            if pitch_shift is not None
+            else self._config.pitch_shift_semitones
+        )
+        formant = (
+            formant_ratio if formant_ratio is not None else self._config.formant_ratio
+        )
 
         def _transform_sync():
             audio_data, sr = self._load_audio(audio_input)
@@ -287,6 +318,7 @@ class STSEngine(ActiveRequestMixin):
             )
 
         from .mlx_executor import get_mlx_executor
+
         executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(executor, _transform_sync)
@@ -310,7 +342,7 @@ class STSEngine(ActiveRequestMixin):
             fmt_data = None
             audio_data = None
             while offset + 8 <= len(audio_input):
-                chunk_id = audio_input[offset:offset + 4]
+                chunk_id = audio_input[offset : offset + 4]
                 chunk_size = struct.unpack_from("<I", audio_input, offset + 4)[0]
                 # Clamp chunk_size to remaining buffer to prevent over-read
                 max_chunk = len(audio_input) - (offset + 8)
@@ -318,9 +350,9 @@ class STSEngine(ActiveRequestMixin):
                     chunk_size = max_chunk
                 chunk_end = offset + 8 + chunk_size
                 if chunk_id == b"fmt ":
-                    fmt_data = audio_input[offset + 8:chunk_end]
+                    fmt_data = audio_input[offset + 8 : chunk_end]
                 elif chunk_id == b"data":
-                    audio_data = audio_input[offset + 8:chunk_end]
+                    audio_data = audio_input[offset + 8 : chunk_end]
                 offset = chunk_end
                 # WAV chunks are word-aligned
                 if chunk_size % 2 != 0:
@@ -346,7 +378,11 @@ class STSEngine(ActiveRequestMixin):
                 n_samples = len(audio_data) // 3
                 arr = np.zeros(n_samples, dtype=np.float32)
                 for j in range(n_samples):
-                    b0, b1, b2 = audio_data[j*3], audio_data[j*3+1], audio_data[j*3+2]
+                    b0, b1, b2 = (
+                        audio_data[j * 3],
+                        audio_data[j * 3 + 1],
+                        audio_data[j * 3 + 2],
+                    )
                     val = b0 | (b1 << 8) | (b2 << 16)
                     if val >= 0x800000:
                         val -= 0x1000000
@@ -359,7 +395,9 @@ class STSEngine(ActiveRequestMixin):
                 _bps = max(1, bits_per_sample // 8)
                 if len(audio_data) % _bps:
                     audio_data = audio_data[: len(audio_data) // _bps * _bps]
-                arr = np.frombuffer(audio_data, dtype=f"int{bits_per_sample}").astype(np.float32)
+                arr = np.frombuffer(audio_data, dtype=f"int{bits_per_sample}").astype(
+                    np.float32
+                )
                 if bits_per_sample == 16:
                     arr = arr / 32768.0
                 elif bits_per_sample == 32:
@@ -401,7 +439,7 @@ class STSEngine(ActiveRequestMixin):
             b"WAVE",
             b"fmt ",
             16,  # chunk size
-            1,   # PCM format
+            1,  # PCM format
             num_channels,
             sample_rate,
             byte_rate,
@@ -444,7 +482,7 @@ class STSEngine(ActiveRequestMixin):
         # every long enhance, and on separate/transform). Anchor a final (zero-padded)
         # frame past the end; the overlap-add write is already clamped by end=min(...).
         for i in range(0, len(arr), hop_size):
-            frame = arr[i:i + fft_size]
+            frame = arr[i : i + fft_size]
             if len(frame) < fft_size:
                 frame = np.pad(frame, (0, fft_size - len(frame)))
             spectrum = np.fft.rfft(frame * _win)
@@ -478,7 +516,7 @@ class STSEngine(ActiveRequestMixin):
             # (the padded final frame is fft_size long but only len(arr)-start samples fit).
             end = min(start + fft_size, len(arr))
             output[start:end] += time_frame[: end - start]
-            window_sum[start:end] += (_win ** 2)[: end - start]
+            window_sum[start:end] += (_win**2)[: end - start]
 
         window_sum = np.maximum(window_sum, 1e-8)
         output = output / window_sum
@@ -488,6 +526,7 @@ class STSEngine(ActiveRequestMixin):
     def _minimal_enhance(self, samples: list[float]) -> list[float]:
         """Minimal enhancement — simple noise gate."""
         import numpy as np
+
         arr = np.array(samples, dtype=np.float32)
         # Simple noise gate: zero out samples below 1% of max
         threshold = np.max(np.abs(arr)) * 0.01
@@ -521,7 +560,7 @@ class STSEngine(ActiveRequestMixin):
         # (the old (len-fft+1) bound dropped the last ~hop samples → silence; earlier fixes
         # only fixed the exact-multiple case). The end=min(start+fft,len) write clamps it.
         for start in range(0, len(arr), hop_size):
-            frame = arr[start:start + fft_size]
+            frame = arr[start : start + fft_size]
             if len(frame) < fft_size:
                 frame = np.pad(frame, (0, fft_size - len(frame)))
             spectrum = np.fft.rfft(frame * window)
@@ -529,11 +568,13 @@ class STSEngine(ActiveRequestMixin):
             tf = np.fft.irfft(spectrum, fft_size) * window
             end = min(start + fft_size, len(arr))
             output[start:end] += tf[: end - start]
-            window_sum[start:end] += (window ** 2)[: end - start]
+            window_sum[start:end] += (window**2)[: end - start]
         window_sum = np.maximum(window_sum, 1e-8)
         return (output / window_sum).tolist()
 
-    def _pitch_shift(self, samples: list[float], sr: int, semitones: float) -> list[float]:
+    def _pitch_shift(
+        self, samples: list[float], sr: int, semitones: float
+    ) -> list[float]:
         """Pitch shift preserving duration (phase-vocoder time-stretch + resample).
 
         The old implementation resampled to ``len/factor`` and then
@@ -579,7 +620,7 @@ class STSEngine(ActiveRequestMixin):
         n_frames = 1 + (len(padded) - n_fft) // hop
         stft = np.empty((n_frames, n_fft // 2 + 1), dtype=np.complex64)
         for i in range(n_frames):
-            frame = padded[i * hop:i * hop + n_fft] * window
+            frame = padded[i * hop : i * hop + n_fft] * window
             stft[i] = np.fft.rfft(frame)
 
         # Output is `stretch`× as many frames; we traverse the source slower
@@ -606,16 +647,18 @@ class STSEngine(ActiveRequestMixin):
             phase_acc = phase_acc + omega + dphi
             frame = np.fft.irfft(mag * np.exp(1j * phase_acc), n_fft).astype(np.float32)
             pos = int(out_i * hop)
-            out[pos:pos + n_fft] += frame * window
-            win_sum[pos:pos + n_fft] += window ** 2
+            out[pos : pos + n_fft] += frame * window
+            win_sum[pos : pos + n_fft] += window**2
 
         nz = win_sum > 1e-8
         out[nz] /= win_sum[nz]
         # Trim trailing pad and scale to ~target length.
         target = int(round(len(arr) * stretch))
-        return out[:max(1, target)]
+        return out[: max(1, target)]
 
-    def _formant_shift(self, samples: list[float], sr: int, ratio: float) -> list[float]:
+    def _formant_shift(
+        self, samples: list[float], sr: int, ratio: float
+    ) -> list[float]:
         """Formant shift using spectral processing."""
         import numpy as np
 
@@ -635,7 +678,7 @@ class STSEngine(ActiveRequestMixin):
         # (the old (len-fft+1) bound dropped the last ~hop samples → silence; earlier fixes
         # only fixed the exact-multiple case). The end=min(start+fft,len) write clamps it.
         for start in range(0, len(arr), hop_size):
-            frame = arr[start:start + fft_size]
+            frame = arr[start : start + fft_size]
             if len(frame) < fft_size:
                 frame = np.pad(frame, (0, fft_size - len(frame)))
             spectrum = np.fft.rfft(frame * window)
@@ -650,6 +693,6 @@ class STSEngine(ActiveRequestMixin):
             tf = np.fft.irfft(new_magnitude * np.exp(1j * phase), fft_size) * window
             end = min(start + fft_size, len(arr))
             output[start:end] += tf[: end - start]
-            window_sum[start:end] += (window ** 2)[: end - start]
+            window_sum[start:end] += (window**2)[: end - start]
         window_sum = np.maximum(window_sum, 1e-8)
         return (output / window_sum).tolist()

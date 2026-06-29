@@ -5,6 +5,7 @@ compression/logprob failure) — silently hurting robustness on hard audio. Now 
 defaults to None (router) and a None temperature is dropped before model.generate (engine),
 so the model keeps its own (fallback) default; an explicit value is still honored.
 """
+
 from __future__ import annotations
 
 import inspect

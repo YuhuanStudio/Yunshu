@@ -33,6 +33,7 @@ THINK_END = "</think>"
 @dataclass
 class ThinkingBudgetConfig:
     """Configuration for thinking budget enforcement."""
+
     max_thinking_tokens: int = 8192
     min_thinking_tokens: int = 0
     enabled: bool = True
@@ -86,14 +87,14 @@ class ThinkingBudgetProcessor:
         """
         if not self.config.enabled:
             return {
-                'force_stop': False,
-                'budget_exceeded': False,
-                'thinking_tokens_used': 0,
-                'budget_remaining': self.config.max_thinking_tokens,
+                "force_stop": False,
+                "budget_exceeded": False,
+                "thinking_tokens_used": 0,
+                "budget_remaining": self.config.max_thinking_tokens,
             }
 
         was_thinking = self._in_thinking
-        self._in_thinking = current_state == 'reasoning'
+        self._in_thinking = current_state == "reasoning"
 
         if self._in_thinking:
             if not was_thinking:
@@ -108,17 +109,17 @@ class ThinkingBudgetProcessor:
                     f"{self.config.max_thinking_tokens}"
                 )
                 return {
-                    'force_stop': True,
-                    'budget_exceeded': True,
-                    'thinking_tokens_used': self._thinking_token_count,
-                    'budget_remaining': 0,
+                    "force_stop": True,
+                    "budget_exceeded": True,
+                    "thinking_tokens_used": self._thinking_token_count,
+                    "budget_remaining": 0,
                 }
 
         return {
-            'force_stop': False,
-            'budget_exceeded': self._budget_exceeded,
-            'thinking_tokens_used': self._thinking_token_count,
-            'budget_remaining': self.budget_remaining,
+            "force_stop": False,
+            "budget_exceeded": self._budget_exceeded,
+            "thinking_tokens_used": self._thinking_token_count,
+            "budget_remaining": self.budget_remaining,
         }
 
     def get_think_end_tokens(self, tokenizer) -> list[int] | None:
@@ -199,11 +200,11 @@ def detect_needs_think_prefix(
     Checks last few tokens for the think_start token,
     then verifies the think_end token doesn't follow immediately.
     """
-    think_start_id = _get_think_token_id(tokenizer, 'think_start_id')
+    think_start_id = _get_think_token_id(tokenizer, "think_start_id")
     if think_start_id is None:
         try:
             think_start_id = tokenizer.convert_tokens_to_ids("<think>")  # no slash
-            unk = getattr(tokenizer, 'unk_token_id', None)
+            unk = getattr(tokenizer, "unk_token_id", None)
             if think_start_id == unk:
                 return False
         except (AttributeError, KeyError, TypeError):
@@ -218,7 +219,7 @@ def detect_needs_think_prefix(
 
     # <think/> found. Check if </think/> follows it (disabled thinking).
     last_idx = len(last_tokens) - 1 - last_tokens[::-1].index(think_start_id)
-    after_start = last_tokens[last_idx + 1:]
+    after_start = last_tokens[last_idx + 1 :]
 
     if after_start:
         think_end_ids = _resolve_think_end_token_ids(tokenizer)
@@ -243,7 +244,7 @@ def resolve_think_close_pattern(
     Extracts whitespace patterns from the chat template
     surrounding the think_end tag.
     """
-    think_end_str = getattr(tokenizer, 'think_end', '</think>')  # no slash
+    think_end_str = getattr(tokenizer, "think_end", "</think>")  # no slash
 
     template_text = _get_chat_template_text(tokenizer)
     if not template_text:
@@ -251,16 +252,18 @@ def resolve_think_close_pattern(
 
     escaped = re.escape(think_end_str)
     match = re.search(
-        r'(\\n|\\r|[\n\r])*' + escaped + r'((?:\\n|\\r|[\n\r])*)',
+        r"(\\n|\\r|[\n\r])*" + escaped + r"((?:\\n|\\r|[\n\r])*)",
         template_text,
     )
     if not match:
         return None, None
 
-    raw_leading = (match.group(0).split(think_end_str)[0]
-                   .replace('\\n', '\n').replace('\\r', '\r'))
-    raw_trailing = (match.group(0).split(think_end_str)[1]
-                    .replace('\\n', '\n').replace('\\r', '\r'))
+    raw_leading = (
+        match.group(0).split(think_end_str)[0].replace("\\n", "\n").replace("\\r", "\r")
+    )
+    raw_trailing = (
+        match.group(0).split(think_end_str)[1].replace("\\n", "\n").replace("\\r", "\r")
+    )
 
     leading_ids = None
     trailing_ids = None
@@ -285,14 +288,14 @@ def resolve_think_close_pattern(
 def _get_think_token_id(tokenizer, attr_name: str) -> int | None:
     """Get a think-related token ID from tokenizer attributes or encode."""
     # Try common attribute names
-    for name in (attr_name, 'think_start_id', 'think_start_token_id'):
+    for name in (attr_name, "think_start_id", "think_start_token_id"):
         val = getattr(tokenizer, name, None)
         if val is not None and isinstance(val, int):
             return val
 
     # Try special tokens map
-    special = getattr(tokenizer, 'special_tokens_map', {}) or {}
-    for key in ('think_start', 'think'):
+    special = getattr(tokenizer, "special_tokens_map", {}) or {}
+    for key in ("think_start", "think"):
         token = special.get(key)
         if token:
             try:
@@ -305,7 +308,7 @@ def _get_think_token_id(tokenizer, attr_name: str) -> int | None:
 
 def _resolve_think_end_token_ids(tokenizer) -> list[int] | None:
     """Get token IDs for the think-end tag."""
-    for name in ('think_end_id', 'think_end_token_id'):
+    for name in ("think_end_id", "think_end_token_id"):
         val = getattr(tokenizer, name, None)
         if isinstance(val, int):
             return [val]
@@ -322,16 +325,18 @@ def _resolve_think_end_token_ids(tokenizer) -> list[int] | None:
 def _get_chat_template_text(tokenizer) -> str | None:
     """Extract the chat template text from tokenizer."""
     # Try jinja template attribute
-    for attr in ('chat_template', 'default_chat_template'):
+    for attr in ("chat_template", "default_chat_template"):
         tpl = getattr(tokenizer, attr, None)
         if tpl and isinstance(tpl, str):
             return tpl
 
     # Try tokenizer config
-    if hasattr(tokenizer, '_tokenizer') and hasattr(tokenizer._tokenizer, 'chat_template'):
+    if hasattr(tokenizer, "_tokenizer") and hasattr(
+        tokenizer._tokenizer, "chat_template"
+    ):
         ct = tokenizer._tokenizer.chat_template
         if isinstance(ct, dict):
-            return ct.get('chat_template')
+            return ct.get("chat_template")
         return ct
 
     return None

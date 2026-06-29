@@ -61,19 +61,21 @@ logger = logging.getLogger(__name__)
 
 class KVTier(enum.Enum):
     """KV cache storage tier."""
-    HOT = "hot"       # UMA-resident FP16 (fastest, limited by RAM)
-    WARM = "warm"     # In-memory 4-bit quantized (KVWarmTier)
-    SSD = "ssd"       # SSD-backed (SSDCacheStore or SSDKVCache)
-    COLD = "cold"     # Evicted / not stored (placeholder for future)
+
+    HOT = "hot"  # UMA-resident FP16 (fastest, limited by RAM)
+    WARM = "warm"  # In-memory 4-bit quantized (KVWarmTier)
+    SSD = "ssd"  # SSD-backed (SSDCacheStore or SSDKVCache)
+    COLD = "cold"  # Evicted / not stored (placeholder for future)
 
 
 class OffloadStatus(enum.Enum):
     """Status of an offload operation."""
+
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     FAILED = "failed"
-    SKIPPED = "skipped"       # Block already at destination tier
+    SKIPPED = "skipped"  # Block already at destination tier
     CANCELLED = "cancelled"
 
 
@@ -87,27 +89,28 @@ class KVOffloadConfig:
     All fields have sensible defaults. Use ``from_env()`` to enable via
     environment variables.
     """
+
     enabled: bool = False
     # Policy selection: "threshold", "lru", "priority"
     policy: str = "threshold"
     # ThresholdPolicy parameters
-    memory_threshold: float = 0.80     # Offload when active_mem/total > threshold
+    memory_threshold: float = 0.80  # Offload when active_mem/total > threshold
     target_memory_fraction: float = 0.65  # Offload until this fraction is reached
     # LRU policy parameters
     lru_max_blocks_per_cycle: int = 64  # Max blocks to offload per cycle
-    lru_min_age_seconds: float = 30.0   # Min age before eligible for offload
+    lru_min_age_seconds: float = 30.0  # Min age before eligible for offload
     # PriorityPolicy parameters
-    priority_low_watermark: int = 1     # Priority at or below this is offload-eligible
+    priority_low_watermark: int = 1  # Priority at or below this is offload-eligible
     # General parameters
-    offload_interval_steps: int = 32    # Check every N scheduler steps
-    max_concurrent_offloads: int = 4    # Max in-flight offload operations
-    async_mode: bool = True             # True = asyncio, False = sync (executor thread)
-    block_size: int = 64                # Tokens per block (for stats estimation)
-    bytes_per_block: int = 0            # Estimated bytes per block (0 = auto-detect)
+    offload_interval_steps: int = 32  # Check every N scheduler steps
+    max_concurrent_offloads: int = 4  # Max in-flight offload operations
+    async_mode: bool = True  # True = asyncio, False = sync (executor thread)
+    block_size: int = 64  # Tokens per block (for stats estimation)
+    bytes_per_block: int = 0  # Estimated bytes per block (0 = auto-detect)
     # Promotion (warm/SSD → hot)
-    promote_on_miss: bool = True        # Auto-promote on hot cache miss
+    promote_on_miss: bool = True  # Auto-promote on hot cache miss
     # SSD persistence
-    ssd_cache_dir: str = ""             # SSD cache directory (empty = no SSD tier)
+    ssd_cache_dir: str = ""  # SSD cache directory (empty = no SSD tier)
 
     @classmethod
     def from_env(cls) -> KVOffloadConfig:
@@ -143,6 +146,7 @@ class OffloadRequest:
     from a source tier to a destination tier. The request is created by the
     KVOffloadManager and tracked through completion.
     """
+
     request_id: str
     block_hashes: list[int]
     source_tier: KVTier
@@ -171,6 +175,7 @@ class OffloadResult:
     Contains statistics about what was offloaded, any failures,
     and timing information.
     """
+
     request_id: str
     status: OffloadStatus
     blocks_offloaded: int = 0
@@ -186,6 +191,7 @@ class OffloadResult:
 @dataclass
 class OffloadStats:
     """Aggregate offload statistics (thread-safe via caller-held lock)."""
+
     total_offloads: int = 0
     total_blocks_offloaded: int = 0
     total_blocks_skipped: int = 0
@@ -344,7 +350,7 @@ class ThresholdPolicy(OffloadPolicy):
         """
         blocks_to_offload: list = []
         try:
-            pool = getattr(hot_manager, 'block_pool', None)
+            pool = getattr(hot_manager, "block_pool", None)
             if pool is None:
                 return blocks_to_offload
 
@@ -407,17 +413,17 @@ class LRUPolicy(OffloadPolicy):
         now = time.monotonic()
 
         try:
-            pool = getattr(hot_manager, 'block_pool', None)
+            pool = getattr(hot_manager, "block_pool", None)
             if pool is None:
                 return blocks_to_offload
 
             candidates = []
             for block in pool.blocks:
-                if not hasattr(block, 'block_hash') or block.block_hash is None:
+                if not hasattr(block, "block_hash") or block.block_hash is None:
                     continue
                 # Update access time for referenced (in-use) blocks so they
                 # won't appear stale when later unreferenced.
-                if hasattr(block, 'ref_count') and block.ref_count > 0:
+                if hasattr(block, "ref_count") and block.ref_count > 0:
                     self._access_times[block.block_hash] = now
                     continue
                 # Unreferenced block — check age
@@ -482,16 +488,16 @@ class PriorityPolicy(OffloadPolicy):
         blocks_to_offload: list = []
 
         try:
-            pool = getattr(hot_manager, 'block_pool', None)
+            pool = getattr(hot_manager, "block_pool", None)
             if pool is None:
                 return blocks_to_offload
 
             candidates = []
             for block in pool.blocks:
                 if (
-                    hasattr(block, 'ref_count')
+                    hasattr(block, "ref_count")
                     and block.ref_count == 0
-                    and hasattr(block, 'block_hash')
+                    and hasattr(block, "block_hash")
                     and block.block_hash is not None
                 ):
                     priority = self._priorities.get(block.block_hash, 0)
@@ -602,7 +608,7 @@ class KVOffloadManager:
         # Estimate bytes per block (auto-detect from kv_manager)
         self._bytes_per_block = config.bytes_per_block
         if self._bytes_per_block == 0 and kv_manager is not None:
-            getattr(kv_manager, 'block_size', config.block_size)
+            getattr(kv_manager, "block_size", config.block_size)
             # Rough estimate: num_layers * 2 (K+V) * block_size * head_dim * num_kv_heads * 2 bytes (fp16)
             # Default conservative estimate: 2KB per block
             self._bytes_per_block = 2048
@@ -656,7 +662,9 @@ class KVOffloadManager:
 
     # ── Main API ───────────────────────────────────────────────────
 
-    async def maybe_offload(self, context: dict[str, Any] | None = None) -> OffloadResult | None:
+    async def maybe_offload(
+        self, context: dict[str, Any] | None = None
+    ) -> OffloadResult | None:
         """Check if offloading is needed and execute if so.
 
         Called periodically from the scheduler's step loop. Uses the
@@ -826,11 +834,14 @@ class KVOffloadManager:
                     self._stats.record_promotion(self._bytes_per_block, latency)
                     logger.debug(
                         "Promoted block 0x%x from warm tier (%.1f ms)",
-                        block_hash, latency * 1000,
+                        block_hash,
+                        latency * 1000,
                     )
                     return kv_data
             except Exception:
-                logger.debug("Warm tier promotion failed for 0x%x", block_hash, exc_info=True)
+                logger.debug(
+                    "Warm tier promotion failed for 0x%x", block_hash, exc_info=True
+                )
 
         # Try SSD store
         if ssd_store is not None:
@@ -841,7 +852,8 @@ class KVOffloadManager:
                     self._stats.record_promotion(self._bytes_per_block, latency)
                     logger.debug(
                         "Promoted block 0x%x from SSD (%.1f ms)",
-                        block_hash, latency * 1000,
+                        block_hash,
+                        latency * 1000,
                     )
                     return kv_data
             except Exception:
@@ -917,9 +929,7 @@ class KVOffloadManager:
             "total_blocks_promoted": self._stats.total_blocks_promoted,
             "total_bytes_promoted": self._stats.total_bytes_promoted,
             "promotion_hit_rate": round(self._stats.promotion_hit_rate, 4),
-            "avg_offload_latency_ms": round(
-                self._stats.avg_offload_latency * 1000, 2
-            ),
+            "avg_offload_latency_ms": round(self._stats.avg_offload_latency * 1000, 2),
             "avg_promotion_latency_ms": round(
                 self._stats.avg_promotion_latency * 1000, 2
             ),
@@ -940,8 +950,10 @@ class KVOffloadManager:
 
         try:
             import mlx.core as mx
+
             active_mem = mx.get_active_memory()
             from .utils.hardware import get_hardware_info
+
             hw = get_hardware_info()
             total_mem = hw.total_memory_bytes
             if total_mem > 0:
@@ -950,12 +962,10 @@ class KVOffloadManager:
             logger.debug("memory context gather failed", exc_info=True)
 
         if self._kv_manager is not None:
-            context["free_blocks"] = getattr(
-                self._kv_manager, 'num_free_blocks', 0
-            )
-            pool = getattr(self._kv_manager, 'block_pool', None)
+            context["free_blocks"] = getattr(self._kv_manager, "num_free_blocks", 0)
+            pool = getattr(self._kv_manager, "block_pool", None)
             if pool is not None:
-                context["total_blocks"] = getattr(pool, 'num_blocks', 0)
+                context["total_blocks"] = getattr(pool, "num_blocks", 0)
 
         return context
 
@@ -964,7 +974,7 @@ class KVOffloadManager:
         if self._kv_manager is None:
             return None
         # If tiered, the hot manager is self._kv_manager.hot
-        if hasattr(self._kv_manager, 'hot'):
+        if hasattr(self._kv_manager, "hot"):
             return self._kv_manager.hot
         return self._kv_manager
 
@@ -972,7 +982,7 @@ class KVOffloadManager:
         """Get the warm tier (KVWarmTier) if available."""
         if self._kv_manager is None:
             return None
-        if hasattr(self._kv_manager, 'warm'):
+        if hasattr(self._kv_manager, "warm"):
             return self._kv_manager.warm
         return None
 
@@ -980,7 +990,7 @@ class KVOffloadManager:
         """Get the SSD store if available."""
         if self._kv_manager is None:
             return None
-        if hasattr(self._kv_manager, 'ssd'):
+        if hasattr(self._kv_manager, "ssd"):
             return self._kv_manager.ssd
         return None
 
@@ -1010,7 +1020,10 @@ class KVOffloadManager:
             try:
                 offloaded = False
 
-                if request.source_tier == KVTier.HOT and request.dest_tier == KVTier.WARM:
+                if (
+                    request.source_tier == KVTier.HOT
+                    and request.dest_tier == KVTier.WARM
+                ):
                     # Hot → Warm: demote via warm tier, then free hot block
                     if warm_tier is not None:
                         kv_data = self._extract_hot_kv(hot_mgr, block_hash)
@@ -1018,30 +1031,46 @@ class KVOffloadManager:
                             # Pass num_tokens : without it the warm block
                             # defaults to -1 → invisible to prefix matching if it
                             # later flushes to SSD (matches the SSD branch below).
-                            if warm_tier.demote(block_hash, kv_data, num_tokens=self.config.block_size):
+                            if warm_tier.demote(
+                                block_hash, kv_data, num_tokens=self.config.block_size
+                            ):
                                 self._free_hot_block(hot_mgr, block_hash)
                                 offloaded = True
 
-                elif request.source_tier == KVTier.HOT and request.dest_tier == KVTier.SSD:
+                elif (
+                    request.source_tier == KVTier.HOT
+                    and request.dest_tier == KVTier.SSD
+                ):
                     # Hot → SSD: persist directly, then free hot block
                     if ssd_store is not None:
                         kv_data = self._extract_hot_kv(hot_mgr, block_hash)
                         if kv_data is not None:
-                            if ssd_store.store(block_hash, kv_data, num_tokens=self.config.block_size):
+                            if ssd_store.store(
+                                block_hash, kv_data, num_tokens=self.config.block_size
+                            ):
                                 self._free_hot_block(hot_mgr, block_hash)
                                 offloaded = True
 
-                elif request.source_tier == KVTier.WARM and request.dest_tier == KVTier.SSD:
+                elif (
+                    request.source_tier == KVTier.WARM
+                    and request.dest_tier == KVTier.SSD
+                ):
                     # Warm → SSD: promote from warm, persist to SSD, then evict warm
                     # If SSD write fails, re-insert back into warm to prevent data loss
                     if warm_tier is not None and ssd_store is not None:
                         kv_data = warm_tier.promote(block_hash)
                         if kv_data is not None:
-                            if ssd_store.store(block_hash, kv_data, num_tokens=self.config.block_size):
+                            if ssd_store.store(
+                                block_hash, kv_data, num_tokens=self.config.block_size
+                            ):
                                 offloaded = True
                             else:
                                 # SSD write failed — re-insert into warm tier
-                                re_inserted = warm_tier.demote(block_hash, kv_data, num_tokens=self.config.block_size)
+                                re_inserted = warm_tier.demote(
+                                    block_hash,
+                                    kv_data,
+                                    num_tokens=self.config.block_size,
+                                )
                                 if not re_inserted:
                                     logger.error(
                                         "KV data loss risk: block 0x%x failed SSD write "
@@ -1065,7 +1094,10 @@ class KVOffloadManager:
             request.status = OffloadStatus.COMPLETED
         elif result.blocks_offloaded > 0:
             request.status = OffloadStatus.COMPLETED
-            result.errors.insert(0, f"Partial: {result.blocks_failed} blocks failed out of {result.blocks_offloaded + result.blocks_failed + result.blocks_skipped}")
+            result.errors.insert(
+                0,
+                f"Partial: {result.blocks_failed} blocks failed out of {result.blocks_offloaded + result.blocks_failed + result.blocks_skipped}",
+            )
         elif result.blocks_failed > 0:
             request.status = OffloadStatus.FAILED
         else:
@@ -1079,7 +1111,9 @@ class KVOffloadManager:
         # Store result in history
         self._completed_results.append(result)
         if len(self._completed_results) > self._max_completed_history:
-            self._completed_results = self._completed_results[-self._max_completed_history // 2:]
+            self._completed_results = self._completed_results[
+                -self._max_completed_history // 2 :
+            ]
 
         if result.blocks_offloaded > 0:
             logger.info(
@@ -1103,31 +1137,38 @@ class KVOffloadManager:
             return None
 
         # Try TieredKVCacheManager extraction method
-        if hasattr(self._kv_manager, '_extract_kv_for_block'):
-            pool = getattr(hot_mgr, 'block_pool', None)
+        if hasattr(self._kv_manager, "_extract_kv_for_block"):
+            pool = getattr(hot_mgr, "block_pool", None)
             if pool is not None:
                 block = pool.lookup_hash(block_hash)
                 if block is not None:
                     return self._kv_manager._extract_kv_for_block(block)
 
         # Fallback: direct extraction from hot manager's KV layers
-        if hasattr(hot_mgr, '_kv_layers') and hot_mgr._kv_layers:
+        if hasattr(hot_mgr, "_kv_layers") and hot_mgr._kv_layers:
             try:
-                pool = getattr(hot_mgr, 'block_pool', None)
+                pool = getattr(hot_mgr, "block_pool", None)
                 if pool is not None:
                     block = pool.lookup_hash(block_hash)
                     if block is not None:
                         import mlx.core as mx
+
                         kv_parts = []
                         for layer_caches in hot_mgr._kv_layers:
                             if block.block_id < len(layer_caches):
                                 key_cache, val_cache = layer_caches[block.block_id]
                                 if val_cache is not None:
-                                    kv_parts.append(mx.stack([key_cache, val_cache], axis=0))
+                                    kv_parts.append(
+                                        mx.stack([key_cache, val_cache], axis=0)
+                                    )
                                 else:
                                     kv_parts.append(key_cache)
                         if kv_parts:
-                            return mx.stack(kv_parts, axis=0) if len(kv_parts) > 1 else kv_parts[0]
+                            return (
+                                mx.stack(kv_parts, axis=0)
+                                if len(kv_parts) > 1
+                                else kv_parts[0]
+                            )
             except Exception:
                 logger.debug("Direct KV extraction failed", exc_info=True)
 
@@ -1143,7 +1184,7 @@ class KVOffloadManager:
         """
         if hot_mgr is None:
             return
-        pool = getattr(hot_mgr, 'block_pool', None)
+        pool = getattr(hot_mgr, "block_pool", None)
         if pool is None:
             return
         pool.lookup_and_free(block_hash)
@@ -1205,7 +1246,9 @@ class KVOffloadManager:
         return OffloadResult(
             request_id=request.request_id,
             status=request.status,
-            blocks_offloaded=0 if request.status != OffloadStatus.COMPLETED else len(request.block_hashes),
+            blocks_offloaded=0
+            if request.status != OffloadStatus.COMPLETED
+            else len(request.block_hashes),
             source_tier=request.source_tier,
             dest_tier=request.dest_tier,
             latency_seconds=request.latency_seconds or 0.0,

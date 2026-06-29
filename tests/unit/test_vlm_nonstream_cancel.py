@@ -5,6 +5,7 @@ generation, and a client HTTP disconnect did NOT stop the GPU (it ran to max_tok
 fresh, un-propagated sibling of the cancel keystone — and the most expensive
 path to leave uncancellable. Now it registers under completion_id, threads cancel_event
 into generate, wraps the work in run_with_disconnect_guard, and unregisters in finally."""
+
 from __future__ import annotations
 
 import inspect

@@ -11,6 +11,7 @@ from yunshu_kv.compression import (
 
 try:
     import mlx.core as mx
+
     HAS_MLX = True
 except ImportError:
     HAS_MLX = False

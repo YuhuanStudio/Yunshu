@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 class ToolCallFormat(Enum):
     """Known tool call output formats."""
+
     QWEN = auto()
     DEEPSEEK = auto()
     GLM = auto()
@@ -41,6 +42,7 @@ class ToolCallFormat(Enum):
 @dataclass
 class ToolCallResult:
     """A parsed tool call extracted from model output."""
+
     id: str = ""
     name: str = ""
     arguments: str = ""  # JSON string
@@ -50,6 +52,7 @@ class ToolCallResult:
 
 
 # ── Format-specific parsers ──
+
 
 def _fix_json_arguments(raw: str) -> str:
     """Try to fix common JSON issues in tool-call arguments.
@@ -100,7 +103,7 @@ def _extract_brace_block(text: str, start: int) -> str | None:
 
     Handles braces inside JSON strings correctly.
     """
-    if start >= len(text) or text[start] != '{':
+    if start >= len(text) or text[start] != "{":
         return None
     depth = 0
     in_string = False
@@ -110,7 +113,7 @@ def _extract_brace_block(text: str, start: int) -> str | None:
         if escape_next:
             escape_next = False
             continue
-        if ch == '\\' and in_string:
+        if ch == "\\" and in_string:
             escape_next = True
             continue
         if ch == '"':
@@ -118,20 +121,20 @@ def _extract_brace_block(text: str, start: int) -> str | None:
             continue
         if in_string:
             continue
-        if ch == '{':
+        if ch == "{":
             depth += 1
-        elif ch == '}':
+        elif ch == "}":
             depth -= 1
             if depth == 0:
-                return text[start:i + 1]
+                return text[start : i + 1]
     return None
 
 
 def parse_qwen_tool_calls(text: str) -> list[ToolCallResult]:
     """Parse Qwen-style tool calls: <tool_call/>{"name": "...", "arguments": {...}}</tool_call/>"""
     results = []
-    tag_re = re.compile(r'<tool_call[^>]*>\s*', re.DOTALL)
-    close_re = re.compile(r'</tool_call')
+    tag_re = re.compile(r"<tool_call[^>]*>\s*", re.DOTALL)
+    close_re = re.compile(r"</tool_call")
     for i, m in enumerate(tag_re.finditer(text)):
         # Bound the JSON search to this tag's matching close so an empty
         # <tool_call></tool_call> doesn't swallow the NEXT call's JSON (which
@@ -139,7 +142,7 @@ def parse_qwen_tool_calls(text: str) -> list[ToolCallResult]:
         # close tag AFTER the JSON, so the bound doesn't cut it off.
         cm = close_re.search(text, m.end())
         limit = cm.start() if cm else len(text)
-        brace_start = text.find('{', m.end(), limit)
+        brace_start = text.find("{", m.end(), limit)
         if brace_start == -1:
             continue
         block = _extract_brace_block(text, brace_start)
@@ -149,16 +152,24 @@ def parse_qwen_tool_calls(text: str) -> list[ToolCallResult]:
             data = json.loads(block)
             name = data.get("name", "")
             args = data.get("arguments") or data.get("parameters") or {}
-            args_str = json.dumps(args, ensure_ascii=False) if not isinstance(args, str) else args
-            results.append(ToolCallResult(id=f"call_{i}", name=name, arguments=args_str))
+            args_str = (
+                json.dumps(args, ensure_ascii=False)
+                if not isinstance(args, str)
+                else args
+            )
+            results.append(
+                ToolCallResult(id=f"call_{i}", name=name, arguments=args_str)
+            )
         except json.JSONDecodeError:
             name_match = re.search(r'"name"\s*:\s*"([^"]+)"', block)
             if name_match:
-                results.append(ToolCallResult(
-                    id=f"call_{i}",
-                    name=name_match.group(1),
-                    arguments="{}",
-                ))
+                results.append(
+                    ToolCallResult(
+                        id=f"call_{i}",
+                        name=name_match.group(1),
+                        arguments="{}",
+                    )
+                )
     return results
 
 
@@ -186,19 +197,19 @@ def parse_deepseek_tool_calls(text: str) -> list[ToolCallResult]:
     results = []
     # Each call begins at the call-begin marker. Tolerate the half/fullwidth pipe and
     # an optional leading "<". Capture everything up to the sep marker as the "head".
-    begin_re = re.compile(r'[<]?[｜|]tool[▁_]call[▁_]begin[｜|][>]?', re.DOTALL)
-    sep_re = re.compile(r'[<]?[｜|]tool[▁_]sep[｜|][>]?', re.DOTALL)
+    begin_re = re.compile(r"[<]?[｜|]tool[▁_]call[▁_]begin[｜|][>]?", re.DOTALL)
+    sep_re = re.compile(r"[<]?[｜|]tool[▁_]sep[｜|][>]?", re.DOTALL)
     i = 0
     for bm in begin_re.finditer(text):
         sm = sep_re.search(text, bm.end())
         if sm is None:
             continue
-        head = text[bm.end():sm.start()].strip()
+        head = text[bm.end() : sm.start()].strip()
         after = sm.end()
         # R1: head is the literal "function" → the name is the token after sep,
         # before the (optional) ```json fence / opening brace. V3: head IS the name.
         if head.lower() in ("function", ""):
-            name_m = re.match(r'\s*([\w.\/\-:]+)', text[after:])
+            name_m = re.match(r"\s*([\w.\/\-:]+)", text[after:])
             if not name_m:
                 continue
             name = name_m.group(1)
@@ -206,8 +217,8 @@ def parse_deepseek_tool_calls(text: str) -> list[ToolCallResult]:
             name = head
         # DeepSeek/Kimi sometimes namespace as "functions.foo" — keep the last segment.
         if name.startswith("functions."):
-            name = name[len("functions."):]
-        brace_start = text.find('{', after)
+            name = name[len("functions.") :]
+        brace_start = text.find("{", after)
         if brace_start == -1:
             # Argument-less call: emit with empty args rather than drop it.
             results.append(ToolCallResult(id=f"call_{i}", name=name, arguments="{}"))
@@ -227,7 +238,7 @@ def parse_deepseek_tool_calls(text: str) -> list[ToolCallResult]:
 
 
 _GLM_ARG_RE = re.compile(
-    r'<arg_key>(.*?)</arg_key>\s*<arg_value>(.*?)</arg_value>', re.DOTALL
+    r"<arg_key>(.*?)</arg_key>\s*<arg_value>(.*?)</arg_value>", re.DOTALL
 )
 
 
@@ -242,10 +253,10 @@ def parse_glm_tool_calls(text: str) -> list[ToolCallResult]:
       the block form, so GLM-4.6/4.7 tool calls were silently dropped.
     """
     results = []
-    pattern = r'<\|tool_call_block_begin\|>\s*([\w.\/\-:]+)\s*```(?:json)?\s*'
+    pattern = r"<\|tool_call_block_begin\|>\s*([\w.\/\-:]+)\s*```(?:json)?\s*"
     for i, match in enumerate(re.finditer(pattern, text, re.DOTALL)):
         name = match.group(1)
-        brace_start = text.find('{', match.end())
+        brace_start = text.find("{", match.end())
         if brace_start == -1:
             continue
         block = _extract_brace_block(text, brace_start)
@@ -262,7 +273,7 @@ def parse_glm_tool_calls(text: str) -> list[ToolCallResult]:
         return results
 
     # GLM-4.6 / 4.7 <tool_call>name<arg_key>…</arg_key><arg_value>…</arg_value></tool_call>
-    block_re = re.compile(r'<tool_call>\s*([\w.\/\-:]+)(.*?)</tool_call>', re.DOTALL)
+    block_re = re.compile(r"<tool_call>\s*([\w.\/\-:]+)(.*?)</tool_call>", re.DOTALL)
     for i, m in enumerate(block_re.finditer(text)):
         name = m.group(1).strip()
         body = m.group(2)
@@ -276,20 +287,23 @@ def parse_glm_tool_calls(text: str) -> list[ToolCallResult]:
                 args[k] = json.loads(v)
             except (json.JSONDecodeError, ValueError):
                 args[k] = v
-        results.append(ToolCallResult(
-            id=f"call_{i}", name=name,
-            arguments=json.dumps(args, ensure_ascii=False),
-        ))
+        results.append(
+            ToolCallResult(
+                id=f"call_{i}",
+                name=name,
+                arguments=json.dumps(args, ensure_ascii=False),
+            )
+        )
     return results
 
 
 def parse_llama_tool_calls(text: str) -> list[ToolCallResult]:
     """Parse Llama-style: [TOOL_CALL] name arguments_json [/TOOL_CALL]"""
     results = []
-    tag_re = re.compile(r'\[TOOL_CALL\]\s*([\w.\/\-:]+)\s*', re.DOTALL)
+    tag_re = re.compile(r"\[TOOL_CALL\]\s*([\w.\/\-:]+)\s*", re.DOTALL)
     for i, match in enumerate(tag_re.finditer(text)):
         name = match.group(1)
-        brace_start = text.find('{', match.end())
+        brace_start = text.find("{", match.end())
         if brace_start == -1:
             continue
         block = _extract_brace_block(text, brace_start)
@@ -309,7 +323,7 @@ def _extract_bracket_block(text: str, start: int) -> str | None:
 
     Handles brackets inside JSON strings correctly.
     """
-    if start >= len(text) or text[start] != '[':
+    if start >= len(text) or text[start] != "[":
         return None
     depth = 0
     in_string = False
@@ -319,7 +333,7 @@ def _extract_bracket_block(text: str, start: int) -> str | None:
         if escape_next:
             escape_next = False
             continue
-        if ch == '\\' and in_string:
+        if ch == "\\" and in_string:
             escape_next = True
             continue
         if ch == '"':
@@ -327,21 +341,21 @@ def _extract_bracket_block(text: str, start: int) -> str | None:
             continue
         if in_string:
             continue
-        if ch == '[':
+        if ch == "[":
             depth += 1
-        elif ch == ']':
+        elif ch == "]":
             depth -= 1
             if depth == 0:
-                return text[start:i + 1]
+                return text[start : i + 1]
     return None
 
 
 def parse_mistral_tool_calls(text: str) -> list[ToolCallResult]:
     """Parse Mistral-style: [TOOL_CALLS] [{"name": "...", "arguments": {...}}] [/TOOL_CALLS]"""
     results = []
-    tag_re = re.compile(r'\[TOOL_CALLS\]\s*', re.DOTALL)
+    tag_re = re.compile(r"\[TOOL_CALLS\]\s*", re.DOTALL)
     for m in tag_re.finditer(text):
-        bracket_start = text.find('[', m.end())
+        bracket_start = text.find("[", m.end())
         if bracket_start == -1:
             continue
         block = _extract_bracket_block(text, bracket_start)
@@ -353,8 +367,14 @@ def parse_mistral_tool_calls(text: str) -> list[ToolCallResult]:
                 for i, call in enumerate(calls):
                     name = call.get("name", "")
                     args = call.get("arguments") or call.get("parameters") or {}
-                    args_str = json.dumps(args, ensure_ascii=False) if not isinstance(args, str) else args
-                    results.append(ToolCallResult(id=f"call_{i}", name=name, arguments=args_str))
+                    args_str = (
+                        json.dumps(args, ensure_ascii=False)
+                        if not isinstance(args, str)
+                        else args
+                    )
+                    results.append(
+                        ToolCallResult(id=f"call_{i}", name=name, arguments=args_str)
+                    )
         except json.JSONDecodeError:
             pass
     return results
@@ -380,7 +400,7 @@ def parse_generic_tool_calls(text: str) -> list[ToolCallResult]:
             if escape_next:
                 escape_next = False
                 continue
-            if ch == '\\' and in_string:
+            if ch == "\\" and in_string:
                 escape_next = True
                 continue
             if ch == '"':
@@ -388,9 +408,9 @@ def parse_generic_tool_calls(text: str) -> list[ToolCallResult]:
                 continue
             if in_string:
                 continue
-            if ch == '}':
+            if ch == "}":
                 depth += 1
-            elif ch == '{':
+            elif ch == "{":
                 if depth == 0:
                     brace_start = pos
                     break
@@ -404,9 +424,11 @@ def parse_generic_tool_calls(text: str) -> list[ToolCallResult]:
 
     results = []
     seen_starts: set[int] = set()
-    for (s, e, block) in candidates:
+    for s, e, block in candidates:
         # Skip if strictly contained within another candidate object (nested phantom).
-        if any(os <= s and e <= oe and (os, oe) != (s, e) for (os, oe, _) in candidates):
+        if any(
+            os <= s and e <= oe and (os, oe) != (s, e) for (os, oe, _) in candidates
+        ):
             continue
         if s in seen_starts:  # two "name" keys resolving to the same object — once
             continue
@@ -417,17 +439,29 @@ def parse_generic_tool_calls(text: str) -> list[ToolCallResult]:
                 continue
             name = data["name"]  # the object's OWN top-level name (authoritative)
             args = data.get("arguments") or data.get("parameters") or {}
-            args_str = json.dumps(args, ensure_ascii=False) if not isinstance(args, str) else args
-            results.append(ToolCallResult(id=f"call_{len(results)}", name=name, arguments=args_str))
+            args_str = (
+                json.dumps(args, ensure_ascii=False)
+                if not isinstance(args, str)
+                else args
+            )
+            results.append(
+                ToolCallResult(id=f"call_{len(results)}", name=name, arguments=args_str)
+            )
         except json.JSONDecodeError:
             # JSON parse failed — try to extract name + arguments with regex as a
             # last resort before giving up entirely.
             _name_match = re.search(r'"name"\s*:\s*"([^"]+)"', block)
-            _args_match = re.search(r'"arguments"\s*:\s*(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})', block)
+            _args_match = re.search(
+                r'"arguments"\s*:\s*(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})', block
+            )
             if _name_match and _args_match:
-                results.append(ToolCallResult(
-                    id=f"call_{len(results)}", name=_name_match.group(1),
-                    arguments=_args_match.group(1)))
+                results.append(
+                    ToolCallResult(
+                        id=f"call_{len(results)}",
+                        name=_name_match.group(1),
+                        arguments=_args_match.group(1),
+                    )
+                )
             else:
                 logger.debug("generic tool call JSON parse failed")
     return results

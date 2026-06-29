@@ -6,6 +6,7 @@ router accepts window up to 3600s. Asking for a window LARGER than retention the
 second understated up to ~6x, and get_percentiles silently capped its sample set. Fix: clamp
 window_seconds to _max_window in the read methods so the denominator matches the retained data.
 """
+
 from __future__ import annotations
 
 import time
@@ -17,7 +18,9 @@ from yunshu_gateway.middleware.metrics_aggregator import MetricsAggregator
 def _fill(agg, n, span_s, now):
     for i in range(n):
         with m.patch("time.time", return_value=now - span_s + i * (span_s / n)):
-            agg.record_request(method="GET", path="/x", status=200, duration_ms=10, tokens_out=5)
+            agg.record_request(
+                method="GET", path="/x", status=200, duration_ms=10, tokens_out=5
+            )
 
 
 def test_rate_not_understated_when_window_exceeds_retention():

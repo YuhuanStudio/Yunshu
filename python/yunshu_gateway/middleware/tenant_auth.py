@@ -34,17 +34,23 @@ logger = logging.getLogger(__name__)
 # Paths served by the Anthropic router — must use Anthropic error format.
 # Use exact matching, not endswith, to avoid overmatching paths like
 # /api/v1/admin/messages that merely end in '/messages'.
-_ANTHROPIC_PATHS = frozenset({
-    "/v1/messages", "/messages",
-    "/v1/messages/count_tokens", "/messages/count_tokens",
-})
+_ANTHROPIC_PATHS = frozenset(
+    {
+        "/v1/messages",
+        "/messages",
+        "/v1/messages/count_tokens",
+        "/messages/count_tokens",
+    }
+)
 
 
 class _ErrorFormatter:
     """Format errors consistently per API family (OpenAI vs Anthropic)."""
 
     @staticmethod
-    def auth_error(request: Request, message: str, status_code: int = 401) -> JSONResponse:
+    def auth_error(
+        request: Request, message: str, status_code: int = 401
+    ) -> JSONResponse:
         path = request.url.path
         # WWW-Authenticate header only valid on 401, NOT on 429
         headers = {"WWW-Authenticate": "Bearer"} if status_code == 401 else {}
@@ -88,7 +94,9 @@ class _ErrorFormatter:
             content={
                 "error": {
                     "message": message,
-                    "type": "authentication_error" if status_code == 401 else "rate_limit_error",
+                    "type": "authentication_error"
+                    if status_code == 401
+                    else "rate_limit_error",
                     "code": code,
                 }
             },
@@ -110,9 +118,15 @@ class TenantAuthMiddleware(BaseHTTPMiddleware):
     """
 
     PUBLIC_PATHS = {
-        "/health", "/health/live", "/health/ready", "/version",
-        "/docs", "/openapi.json", "/redoc",
-        "/", "/favicon.ico",
+        "/health",
+        "/health/live",
+        "/health/ready",
+        "/version",
+        "/docs",
+        "/openapi.json",
+        "/redoc",
+        "/",
+        "/favicon.ico",
     }
     # Prefixes that are always public (e.g., static assets)
     PUBLIC_PREFIXES = ("/static/", "/assets/")
@@ -145,6 +159,7 @@ class TenantAuthMiddleware(BaseHTTPMiddleware):
             request.state.role = "owner"
         with contextlib.suppress(Exception):
             from yunshu_engine.request_tracker import current_actor
+
             current_actor.set(owner)
 
         # Check if auth is enabled
@@ -155,7 +170,9 @@ class TenantAuthMiddleware(BaseHTTPMiddleware):
         auth = request.headers.get("Authorization", "")
 
         if not auth.startswith("Bearer "):
-            return _ErrorFormatter.auth_error(request, "Missing or invalid Authorization header")
+            return _ErrorFormatter.auth_error(
+                request, "Missing or invalid Authorization header"
+            )
 
         token = auth[7:]
 

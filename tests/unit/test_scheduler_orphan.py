@@ -6,6 +6,7 @@ hung until request_timeout:
   - the cache-corruption branch called deep_reset() with no error outputs;
   - the memory-guard rejection branch dropped the in-hand to_insert requests.
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock

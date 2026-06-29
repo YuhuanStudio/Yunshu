@@ -11,6 +11,7 @@ None; the route detects chunk.get("error") and emits a proper error event + [DON
 before is_final, since the error chunk carries both). The realtime consumer is unaffected
 (empty-audio + is_final → clean turn end via its finally).
 """
+
 from __future__ import annotations
 
 import inspect
@@ -33,10 +34,12 @@ def test_route_surfaces_error_chunk_with_done_before_is_final():
     err = src.index('chunk.get("error")')
     final = src.index('chunk.get("is_final")', 0)
     # the error check must come BEFORE the is_final check (the error chunk carries both)
-    assert err < final, "chunk.get('error') must be handled before chunk.get('is_final')"
+    assert err < final, (
+        "chunk.get('error') must be handled before chunk.get('is_final')"
+    )
     # and it must emit a terminal error event + [DONE] and stop (within the error handler,
     # before the next is_final-gated block — search a window large enough to clear the comment)
-    region = src[err:err + 900]
+    region = src[err : err + 900]
     assert "'type': 'error'" in region or '"type": "error"' in region
     assert "[DONE]" in region
     assert "return" in region

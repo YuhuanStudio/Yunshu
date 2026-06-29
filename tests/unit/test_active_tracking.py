@@ -3,6 +3,7 @@
 safely LRU-evict them when idle. The decrement MUST be leak-proof on every exit
 path (success, exception, generator early-break) — a leaked counter would make a
 model permanently un-evictable."""
+
 from __future__ import annotations
 
 import asyncio
@@ -97,6 +98,7 @@ def test_concurrent_requests_counted():
     async def _run():
         async def _slow():
             await e.do()
+
         # two overlapping calls → count should reach 2 then return to 0
         t1 = asyncio.create_task(e.do())
         t2 = asyncio.create_task(e.do())

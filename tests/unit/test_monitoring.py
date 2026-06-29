@@ -11,6 +11,7 @@ class TestMTPMonitoringEndpoint:
         from fastapi.testclient import TestClient
 
         from yunshu_gateway.main import create_app
+
         app = create_app()
         return TestClient(app)
 
@@ -32,6 +33,7 @@ class TestRadixTreeEndpoint:
         from fastapi.testclient import TestClient
 
         from yunshu_gateway.main import create_app
+
         app = create_app()
         return TestClient(app)
 
@@ -47,11 +49,13 @@ class TestCompletionsSpecDecode:
 
     def test_completions_request_has_spec_decode(self):
         from yunshu_gateway.routers.completions import CompletionRequest
+
         req = CompletionRequest(model="test", prompt="test", spec_decode=True)
         assert req.spec_decode is True
 
     def test_completions_request_has_logprobs(self):
         from yunshu_gateway.routers.completions import CompletionRequest
+
         req = CompletionRequest(model="test", prompt="test", logprobs=1)
         assert req.logprobs >= 1
 
@@ -61,14 +65,17 @@ class TestMTPPatchImport:
 
     def test_apply_mtp_patch_importable(self):
         from yunshu_engine.mtp_patch import apply_mtp_patch
+
         assert callable(apply_mtp_patch)
 
     def test_load_model_with_mtp_importable(self):
         from yunshu_engine.mtp_patch import load_model_with_mtp
+
         assert callable(load_model_with_mtp)
 
     def test_apply_mtp_patch_idempotent(self):
         from yunshu_engine.mtp_patch import apply_mtp_patch
+
         result1 = apply_mtp_patch()
         result2 = apply_mtp_patch()
         assert result1 == result2
@@ -79,6 +86,7 @@ class TestChatRouterMultiChoiceSpecDecode:
 
     def test_chat_request_has_spec_decode(self):
         from yunshu_gateway.routers.chat import ChatCompletionRequest
+
         req = ChatCompletionRequest(
             model="test",
             messages=[{"role": "user", "content": "test"}],
@@ -95,22 +103,26 @@ class TestMonitoringEndpointsComplete:
         from fastapi.testclient import TestClient
 
         from yunshu_gateway.main import create_app
+
         app = create_app()
         return TestClient(app)
 
-    @pytest.mark.parametrize("endpoint", [
-        "/api/v1/gw/monitoring/system",
-        "/api/v1/gw/monitoring/models",
-        "/api/v1/gw/monitoring/spec-decode",
-        "/api/v1/gw/monitoring/radix-tree",
-        "/api/v1/gw/monitoring/kv-cache",
-        "/api/v1/gw/monitoring/prefill-progress",
-        "/api/v1/gw/monitoring/memory-guard",
-        "/api/v1/gw/monitoring/ssd-cache",
-        "/api/v1/gw/monitoring/per-model",
-        "/api/v1/gw/monitoring/thinking-segments",
-        "/api/v1/gw/monitoring/prometheus",
-    ])
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "/api/v1/gw/monitoring/system",
+            "/api/v1/gw/monitoring/models",
+            "/api/v1/gw/monitoring/spec-decode",
+            "/api/v1/gw/monitoring/radix-tree",
+            "/api/v1/gw/monitoring/kv-cache",
+            "/api/v1/gw/monitoring/prefill-progress",
+            "/api/v1/gw/monitoring/memory-guard",
+            "/api/v1/gw/monitoring/ssd-cache",
+            "/api/v1/gw/monitoring/per-model",
+            "/api/v1/gw/monitoring/thinking-segments",
+            "/api/v1/gw/monitoring/prometheus",
+        ],
+    )
     def test_endpoint_200(self, client, endpoint):
         resp = client.get(endpoint)
         assert resp.status_code == 200, f"{endpoint} returned {resp.status_code}"

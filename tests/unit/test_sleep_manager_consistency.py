@@ -7,6 +7,7 @@ eviction, and in multi-model mode get_engine() would route a request to the stal
 entry. Route through manager.unload_model(model_id, force=True) so is_loaded and the memory
 accounting stay consistent.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -14,6 +15,7 @@ import inspect
 
 def test_l2_sleep_routes_through_manager_unload():
     from yunshu_gateway.routers import sleep
+
     src = inspect.getsource(sleep)
     # the L2 block uses the manager's accounting-aware unload, force=True
     assert "manager.unload_model(entry.model_id, force=True)" in src
@@ -26,6 +28,7 @@ def test_l2_sleep_routes_through_manager_unload():
 def test_unload_model_force_decrements_accounting_path_exists():
     # sanity: unload_model accepts force and the locked impl decrements _current_memory_bytes
     from yunshu_engine.model_manager import ModelManager
+
     sig = inspect.signature(ModelManager.unload_model)
     assert "force" in sig.parameters
     locked = inspect.getsource(ModelManager._unload_model_locked)

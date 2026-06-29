@@ -54,13 +54,17 @@ def detect_cache_type(cache_obj: Any) -> CacheType:
         return name_map[class_name]
 
     # Heuristic fallbacks
-    if hasattr(cache_obj, "caches") and isinstance(getattr(cache_obj, "caches", None), (list, tuple)):
+    if hasattr(cache_obj, "caches") and isinstance(
+        getattr(cache_obj, "caches", None), (list, tuple)
+    ):
         return CacheType.CACHE_LIST
     if hasattr(cache_obj, "max_size") and hasattr(cache_obj, "_idx"):
         return CacheType.ROTATING_KVCACHE
     if hasattr(cache_obj, "keys") and hasattr(cache_obj, "values"):
         return CacheType.KVCACHE
-    if hasattr(cache_obj, "cache") and isinstance(getattr(cache_obj, "cache", None), list):
+    if hasattr(cache_obj, "cache") and isinstance(
+        getattr(cache_obj, "cache", None), list
+    ):
         return CacheType.ARRAYS_CACHE
 
     return CacheType.UNKNOWN
@@ -73,8 +77,11 @@ def is_sliceable(cache_obj: Any) -> bool:
     RotatingKVCache (circular buffer) and ArraysCache (non-KV) do NOT.
     """
     ct = detect_cache_type(cache_obj)
-    return ct in (CacheType.KVCACHE, CacheType.QUANTIZED_KVCACHE,
-                  CacheType.BATCH_KVCACHE)
+    return ct in (
+        CacheType.KVCACHE,
+        CacheType.QUANTIZED_KVCACHE,
+        CacheType.BATCH_KVCACHE,
+    )
 
 
 def extract_cache_state(cache_obj: Any) -> dict:
@@ -89,7 +96,9 @@ def extract_cache_state(cache_obj: Any) -> dict:
         return {
             "keys": keys,
             "values": values,
-            "offset": getattr(cache_obj, "offset", keys.shape[2] if keys is not None else 0),
+            "offset": getattr(
+                cache_obj, "offset", keys.shape[2] if keys is not None else 0
+            ),
             "cache_type": ct,
         }
 
@@ -133,8 +142,11 @@ def extract_cache_state(cache_obj: Any) -> dict:
         if hasattr(cache_obj, "state"):
             state = cache_obj.state
             if isinstance(state, tuple) and len(state) >= 2:
-                return {"keys": state[0], "values": state[1],
-                        "cache_type": CacheType.UNKNOWN}
+                return {
+                    "keys": state[0],
+                    "values": state[1],
+                    "cache_type": CacheType.UNKNOWN,
+                }
         return {"cache_type": CacheType.UNKNOWN}
 
 

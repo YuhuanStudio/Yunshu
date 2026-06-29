@@ -10,7 +10,6 @@ Tests cover:
 - Edge cases: empty schema, complex nested schema, enum values
 """
 
-
 from yunshu_engine.json_schema import (
     ConstrainedSampler,
     JsonSchemaConstraint,
@@ -65,7 +64,7 @@ class TestJsonSchemaConstraintBasicObject:
     def test_start_expects_open_brace(self):
         c = JsonSchemaConstraint()
         chars = c._get_expected_chars()
-        assert '{' in chars
+        assert "{" in chars
 
     def test_advance_with_open_brace(self):
         c = JsonSchemaConstraint()
@@ -77,7 +76,7 @@ class TestJsonSchemaConstraintBasicObject:
         c.advance("{")
         chars = c._get_expected_chars()
         assert '"' in chars
-        assert '}' in chars
+        assert "}" in chars
 
     def test_object_open_with_close(self):
         c = JsonSchemaConstraint()
@@ -92,22 +91,19 @@ class TestJsonSchemaConstraintBasicObject:
         assert c.is_done
 
     def test_simple_key_value_string(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"}
-            }
-        })
-        c.advance('{')
+        c = JsonSchemaConstraint(
+            {"type": "object", "properties": {"name": {"type": "string"}}}
+        )
+        c.advance("{")
         assert c.state == JsonState.OBJECT_OPEN
         c.advance('"name"')
         assert c.state == JsonState.OBJECT_COLON
-        c.advance(':')
+        c.advance(":")
         assert c.state == JsonState.OBJECT_VALUE
         c.advance('"John"')
         # Should be in OBJECT_COMMA state now
         assert c.state == JsonState.OBJECT_COMMA
-        c.advance('}')
+        c.advance("}")
         assert c.is_done
 
     def test_whitespace_between_tokens(self):
@@ -125,46 +121,46 @@ class TestJsonSchemaConstraintNestedObjects:
     """Test nested JSON object state transitions."""
 
     def test_nested_object(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {
-                "user": {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string"}
+        c = JsonSchemaConstraint(
+            {
+                "type": "object",
+                "properties": {
+                    "user": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
                     }
-                }
+                },
             }
-        })
-        c.advance('{')
+        )
+        c.advance("{")
         c.advance('"user"')
-        c.advance(':')
-        c.advance('{')
+        c.advance(":")
+        c.advance("{")
         assert c.state == JsonState.OBJECT_OPEN  # nested object
         c.advance('"name"')
-        c.advance(':')
+        c.advance(":")
         c.advance('"Alice"')
         assert c.state == JsonState.OBJECT_COMMA
-        c.advance('}')
+        c.advance("}")
         assert c.state == JsonState.OBJECT_COMMA  # back to outer object
-        c.advance('}')
+        c.advance("}")
         assert c.is_done
 
     def test_deeply_nested(self):
         c = JsonSchemaConstraint()
-        c.advance('{')
+        c.advance("{")
         c.advance('"a"')
-        c.advance(':')
-        c.advance('{')
+        c.advance(":")
+        c.advance("{")
         c.advance('"b"')
-        c.advance(':')
-        c.advance('{')
+        c.advance(":")
+        c.advance("{")
         c.advance('"c"')
-        c.advance(':')
+        c.advance(":")
         c.advance('"d"')
-        c.advance('}')
-        c.advance('}')
-        c.advance('}')
+        c.advance("}")
+        c.advance("}")
+        c.advance("}")
         assert c.is_done
 
 
@@ -172,54 +168,54 @@ class TestJsonSchemaConstraintArrays:
     """Test JSON array state transitions."""
 
     def test_empty_array(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {
-                "items": {"type": "array", "items": {"type": "string"}}
+        c = JsonSchemaConstraint(
+            {
+                "type": "object",
+                "properties": {"items": {"type": "array", "items": {"type": "string"}}},
             }
-        })
-        c.advance('{')
+        )
+        c.advance("{")
         c.advance('"items"')
-        c.advance(':')
-        c.advance('[')
-        c.advance(']')
+        c.advance(":")
+        c.advance("[")
+        c.advance("]")
         assert c.state == JsonState.OBJECT_COMMA
-        c.advance('}')
+        c.advance("}")
         assert c.is_done
 
     def test_string_array(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {
-                "tags": {"type": "array", "items": {"type": "string"}}
+        c = JsonSchemaConstraint(
+            {
+                "type": "object",
+                "properties": {"tags": {"type": "array", "items": {"type": "string"}}},
             }
-        })
-        c.advance('{')
+        )
+        c.advance("{")
         c.advance('"tags"')
-        c.advance(':')
-        c.advance('[')
+        c.advance(":")
+        c.advance("[")
         c.advance('"a"')
-        c.advance(',')
+        c.advance(",")
         c.advance('"b"')
-        c.advance(',')
+        c.advance(",")
         c.advance('"c"')
-        c.advance(']')
+        c.advance("]")
         assert c.state == JsonState.OBJECT_COMMA
-        c.advance('}')
+        c.advance("}")
         assert c.is_done
 
     def test_number_array(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {
-                "nums": {"type": "array", "items": {"type": "integer"}}
+        c = JsonSchemaConstraint(
+            {
+                "type": "object",
+                "properties": {"nums": {"type": "array", "items": {"type": "integer"}}},
             }
-        })
-        c.advance('{')
+        )
+        c.advance("{")
         c.advance('"nums"')
-        c.advance(':')
-        c.advance('[')
-        c.advance('1')
+        c.advance(":")
+        c.advance("[")
+        c.advance("1")
         # Number ends when non-number char is seen
         # But we need to handle the continuation properly
 
@@ -245,18 +241,28 @@ class TestJsonSchemaConstraintArrays:
     def test_array_no_items_accepts_any_type(self):
         """an array with NO `items` means 'any type' (JSON Schema);
         defaulting to string forbade [1,2,3] etc. — masking valid output."""
-        assert self._feed_all_accepted(
-            JsonSchemaConstraint({"type": "array"}), "[1, 2, 3]") == "ACCEPT"
-        assert self._feed_all_accepted(
-            JsonSchemaConstraint({"type": "array"}), '[1, "a", true, null, 2.5]') == "ACCEPT"
+        assert (
+            self._feed_all_accepted(
+                JsonSchemaConstraint({"type": "array"}), "[1, 2, 3]"
+            )
+            == "ACCEPT"
+        )
+        assert (
+            self._feed_all_accepted(
+                JsonSchemaConstraint({"type": "array"}), '[1, "a", true, null, 2.5]'
+            )
+            == "ACCEPT"
+        )
 
     def test_prefixitems_tuple_accepted(self):
         """prefixItems tuple validation — the leading non-string
         element was rejected because only `items` was understood."""
-        c = JsonSchemaConstraint({
-            "type": "array",
-            "prefixItems": [{"type": "integer"}, {"type": "string"}],
-        })
+        c = JsonSchemaConstraint(
+            {
+                "type": "array",
+                "prefixItems": [{"type": "integer"}, {"type": "string"}],
+            }
+        )
         assert self._feed_all_accepted(c, '[1, "a"]') == "ACCEPT"
 
     def test_typed_items_still_strict(self):
@@ -272,83 +278,76 @@ class TestJsonSchemaConstraintTypedValues:
     """Test typed value states (string, number, boolean, null)."""
 
     def test_string_value(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {"name": {"type": "string"}}
-        })
-        c.advance('{')
+        c = JsonSchemaConstraint(
+            {"type": "object", "properties": {"name": {"type": "string"}}}
+        )
+        c.advance("{")
         c.advance('"name"')
-        c.advance(':')
+        c.advance(":")
         assert c.state == JsonState.OBJECT_VALUE
         chars = c._get_expected_chars()
         assert '"' in chars  # string should start with quote
 
     def test_number_value(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {"age": {"type": "integer"}}
-        })
-        c.advance('{')
+        c = JsonSchemaConstraint(
+            {"type": "object", "properties": {"age": {"type": "integer"}}}
+        )
+        c.advance("{")
         c.advance('"age"')
-        c.advance(':')
+        c.advance(":")
         chars = c._get_expected_chars()
-        assert any(c in chars for c in '0123456789-')
+        assert any(c in chars for c in "0123456789-")
 
     def test_boolean_value(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {"active": {"type": "boolean"}}
-        })
-        c.advance('{')
+        c = JsonSchemaConstraint(
+            {"type": "object", "properties": {"active": {"type": "boolean"}}}
+        )
+        c.advance("{")
         c.advance('"active"')
-        c.advance(':')
+        c.advance(":")
         chars = c._get_expected_chars()
-        assert 't' in chars
-        assert 'f' in chars
+        assert "t" in chars
+        assert "f" in chars
 
     def test_null_value(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {"data": {"type": "null"}}
-        })
-        c.advance('{')
+        c = JsonSchemaConstraint(
+            {"type": "object", "properties": {"data": {"type": "null"}}}
+        )
+        c.advance("{")
         c.advance('"data"')
-        c.advance(':')
+        c.advance(":")
         chars = c._get_expected_chars()
-        assert 'n' in chars
+        assert "n" in chars
 
     def test_boolean_true_advance(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {"flag": {"type": "boolean"}}
-        })
-        c.advance('{')
+        c = JsonSchemaConstraint(
+            {"type": "object", "properties": {"flag": {"type": "boolean"}}}
+        )
+        c.advance("{")
         c.advance('"flag"')
-        c.advance(':')
-        c.advance('true')
+        c.advance(":")
+        c.advance("true")
         # Should have transitioned to OBJECT_COMMA
         assert c.state == JsonState.OBJECT_COMMA
 
     def test_boolean_false_advance(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {"flag": {"type": "boolean"}}
-        })
-        c.advance('{')
+        c = JsonSchemaConstraint(
+            {"type": "object", "properties": {"flag": {"type": "boolean"}}}
+        )
+        c.advance("{")
         c.advance('"flag"')
-        c.advance(':')
-        c.advance('false')
+        c.advance(":")
+        c.advance("false")
         assert c.state == JsonState.OBJECT_COMMA
 
     def test_null_advance(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {"data": {"type": "null"}}
-        })
-        c.advance('{')
+        c = JsonSchemaConstraint(
+            {"type": "object", "properties": {"data": {"type": "null"}}}
+        )
+        c.advance("{")
         c.advance('"data"')
-        c.advance(':')
-        c.advance('null')
+        c.advance(":")
+        c.advance("null")
         assert c.state == JsonState.OBJECT_COMMA
 
 
@@ -361,149 +360,157 @@ class TestJsonNumberStateMachine:
 
     def _number_constraint(self):
         # 'value' typed as number permits floats and exponents
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {"value": {"type": "number"}},
-        })
-        c.advance('{')
+        c = JsonSchemaConstraint(
+            {
+                "type": "object",
+                "properties": {"value": {"type": "number"}},
+            }
+        )
+        c.advance("{")
         c.advance('"value"')
-        c.advance(':')
+        c.advance(":")
         return c
 
     def test_fraction_requires_digit_after_dot(self):
         c = self._number_constraint()
-        c.advance('3')
-        c.advance('.')
+        c.advance("3")
+        c.advance(".")
         assert c.state == JsonState.NUMBER_FRACTION
         # In NUMBER_FRACTION only digits are valid next
         chars = c._get_expected_chars()
-        assert all(ch in '0123456789' for ch in chars)
-        assert '.' not in chars
+        assert all(ch in "0123456789" for ch in chars)
+        assert "." not in chars
 
     def test_fraction_digit_returns_to_number(self):
         c = self._number_constraint()
-        c.advance('3')
-        c.advance('.')
-        c.advance('5')
+        c.advance("3")
+        c.advance(".")
+        c.advance("5")
         # after a fraction digit we transition back to NUMBER (exponent allowed)
         assert c.state == JsonState.NUMBER
         chars = c._get_expected_chars()
-        assert 'e' in chars or 'E' in chars
+        assert "e" in chars or "E" in chars
         # second dot must not be allowed once a dot was seen
-        assert '.' not in chars
+        assert "." not in chars
 
     def test_exponent_after_digit(self):
         c = self._number_constraint()
-        c.advance('1')
-        c.advance('e')
+        c.advance("1")
+        c.advance("e")
         assert c.state == JsonState.NUMBER_EXPONENT
         chars = c._get_expected_chars()
         # sign or digits valid before exponent digit
-        assert '+' in chars and '-' in chars
-        assert '5' in chars
+        assert "+" in chars and "-" in chars
+        assert "5" in chars
 
     def test_exponent_sign_then_digit(self):
         c = self._number_constraint()
-        c.advance('1')
-        c.advance('e')
-        c.advance('+')
+        c.advance("1")
+        c.advance("e")
+        c.advance("+")
         assert c.state == JsonState.NUMBER_EXPONENT_SIGN
         # only digits valid after the sign
         chars = c._get_expected_chars()
-        assert all(ch in '0123456789' for ch in chars)
-        c.advance('5')
+        assert all(ch in "0123456789" for ch in chars)
+        c.advance("5")
         assert c.state == JsonState.NUMBER_EXPONENT
 
     def test_exponent_no_second_sign(self):
         c = self._number_constraint()
-        c.advance('1')
-        c.advance('e')
-        c.advance('5')  # exponent digit seen
+        c.advance("1")
+        c.advance("e")
+        c.advance("5")  # exponent digit seen
         # after an exponent digit, '+'/'-' are no longer valid
         chars = c._get_expected_chars()
-        assert '+' not in chars
-        assert '-' not in chars
+        assert "+" not in chars
+        assert "-" not in chars
 
     def test_full_float_with_exponent_completes(self):
         c = self._number_constraint()
-        c.advance('3')
-        c.advance('.')
-        c.advance('1')
-        c.advance('4')
-        c.advance('e')
-        c.advance('-')
-        c.advance('2')
-        c.advance('}')
+        c.advance("3")
+        c.advance(".")
+        c.advance("1")
+        c.advance("4")
+        c.advance("e")
+        c.advance("-")
+        c.advance("2")
+        c.advance("}")
         assert c.is_done
 
     def test_leading_zero_then_fraction(self):
         c = self._number_constraint()
-        c.advance('0')
+        c.advance("0")
         assert c.state == JsonState.NUMBER_ZERO
         chars = c._get_expected_chars()
         # leading zero allows '.' / 'eE' / terminators but no more digits
-        assert '.' in chars
-        c.advance('.')
+        assert "." in chars
+        c.advance(".")
         assert c.state == JsonState.NUMBER_FRACTION
-        c.advance('5')
-        c.advance('}')
+        c.advance("5")
+        c.advance("}")
         assert c.is_done
 
     def test_integer_type_rejects_dot_and_exponent(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {"n": {"type": "integer"}},
-        })
-        c.advance('{')
+        c = JsonSchemaConstraint(
+            {
+                "type": "object",
+                "properties": {"n": {"type": "integer"}},
+            }
+        )
+        c.advance("{")
         c.advance('"n"')
-        c.advance(':')
-        c.advance('1')
+        c.advance(":")
+        c.advance("1")
         chars = c._get_expected_chars()
-        assert '.' not in chars
-        assert 'e' not in chars and 'E' not in chars
+        assert "." not in chars
+        assert "e" not in chars and "E" not in chars
 
 
 class TestJsonSchemaConstraintMultipleKeys:
     """Test objects with multiple keys."""
 
     def test_two_string_keys(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {
-                "first": {"type": "string"},
-                "last": {"type": "string"},
+        c = JsonSchemaConstraint(
+            {
+                "type": "object",
+                "properties": {
+                    "first": {"type": "string"},
+                    "last": {"type": "string"},
+                },
             }
-        })
-        c.advance('{')
+        )
+        c.advance("{")
         c.advance('"first"')
-        c.advance(':')
+        c.advance(":")
         c.advance('"John"')
         assert c.state == JsonState.OBJECT_COMMA
-        c.advance(',')
+        c.advance(",")
         assert c.state == JsonState.OBJECT_KEY
         c.advance('"last"')
-        c.advance(':')
+        c.advance(":")
         c.advance('"Doe"')
-        c.advance('}')
+        c.advance("}")
         assert c.is_done
 
     def test_mixed_types(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "age": {"type": "integer"},
-                "active": {"type": "boolean"},
+        c = JsonSchemaConstraint(
+            {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "age": {"type": "integer"},
+                    "active": {"type": "boolean"},
+                },
             }
-        })
-        c.advance('{')
+        )
+        c.advance("{")
         c.advance('"name"')
-        c.advance(':')
+        c.advance(":")
         c.advance('"Alice"')
-        c.advance(',')
+        c.advance(",")
         c.advance('"age"')
-        c.advance(':')
-        c.advance('30')
+        c.advance(":")
+        c.advance("30")
         # Number state transitions... need special handling
         # Let's test that the key parts work
 
@@ -513,7 +520,7 @@ class TestJsonSchemaConstraintReset:
 
     def test_reset_returns_to_start(self):
         c = JsonSchemaConstraint()
-        c.advance('{')
+        c.advance("{")
         c.advance('"key"')
         c.reset()
         assert c.state == JsonState.START
@@ -521,13 +528,13 @@ class TestJsonSchemaConstraintReset:
 
     def test_reset_allows_reuse(self):
         c = JsonSchemaConstraint()
-        c.advance('{')
-        c.advance('}')
+        c.advance("{")
+        c.advance("}")
         assert c.is_done
         c.reset()
         assert c.state == JsonState.START
-        c.advance('{')
-        c.advance('}')
+        c.advance("{")
+        c.advance("}")
         assert c.is_done
 
 
@@ -537,20 +544,20 @@ class TestJsonSchemaConstraintNoSchema:
     def test_no_schema_defaults_to_object(self):
         c = JsonSchemaConstraint()
         chars = c._get_expected_chars()
-        assert '{' in chars
+        assert "{" in chars
 
     def test_no_schema_accepts_any_value_types(self):
         c = JsonSchemaConstraint()
-        c.advance('{')
+        c.advance("{")
         c.advance('"key"')
-        c.advance(':')
+        c.advance(":")
         # Should accept any value type
         chars = c._get_expected_chars()
         assert '"' in chars
-        assert '{' in chars
-        assert '[' in chars
-        assert 't' in chars
-        assert 'n' in chars
+        assert "{" in chars
+        assert "[" in chars
+        assert "t" in chars
+        assert "n" in chars
 
 
 # ── apply_json_constraint Tests ─────────────────────────────────────────────
@@ -561,6 +568,7 @@ class TestApplyJsonConstraint:
 
     def test_masks_disallowed_tokens(self):
         import mlx.core as mx
+
         logits = mx.zeros((1, 10))
         allowed = [2, 5, 7]
         masked = apply_json_constraint(logits, allowed)
@@ -574,6 +582,7 @@ class TestApplyJsonConstraint:
 
     def test_all_allowed_returns_same(self):
         import mlx.core as mx
+
         logits = mx.array([[1.0, 2.0, 3.0]])
         allowed = [0, 1, 2]
         masked = apply_json_constraint(logits, allowed)
@@ -582,6 +591,7 @@ class TestApplyJsonConstraint:
 
     def test_empty_allowed_falls_back_to_argmax(self):
         import mlx.core as mx
+
         logits = mx.array([[1.0, 2.0, 3.0]])
         masked = apply_json_constraint(logits, [])
         # Empty allowed now falls back to argmax (token 2 = 3.0) to avoid NaN.
@@ -594,6 +604,7 @@ class TestApplyJsonConstraint:
 
     def test_single_token_allowed(self):
         import mlx.core as mx
+
         logits = mx.zeros((1, 100))
         allowed = [42]
         masked = apply_json_constraint(logits, allowed)
@@ -610,6 +621,7 @@ class TestConstrainedSampler:
     def test_make_constrained_sampler(self):
         def base_sampler(logits):
             import mlx.core as mx
+
             return mx.argmax(logits, axis=-1)
 
         tokenizer = FakeTokenizer()
@@ -629,10 +641,10 @@ class TestConstrainedSampler:
         # Simulate first token (should be `{`)
         logits = mx.zeros((1, tokenizer.vocab_size))
         # Set high logit for `{` (ASCII 123)
-        logits[0, ord('{')] = 10.0
+        logits[0, ord("{")] = 10.0
 
         token = sampler(logits)
-        assert int(token) == ord('{')
+        assert int(token) == ord("{")
 
     def test_constrained_sampler_with_schema(self):
         import mlx.core as mx
@@ -640,18 +652,15 @@ class TestConstrainedSampler:
         def base_sampler(logits):
             return mx.argmax(logits, axis=-1)
 
-        schema = {
-            "type": "object",
-            "properties": {"name": {"type": "string"}}
-        }
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}}
         tokenizer = FakeTokenizer()
         sampler = make_constrained_sampler(base_sampler, schema, tokenizer)
 
         # First token should pick `{` if it has highest logit
         logits = mx.full((1, tokenizer.vocab_size), -100.0)
-        logits[0, ord('{')] = 10.0
+        logits[0, ord("{")] = 10.0
         token = sampler(logits)
-        assert int(token) == ord('{')
+        assert int(token) == ord("{")
 
 
 # ── SamplingParams Integration Tests ────────────────────────────────────────
@@ -682,37 +691,41 @@ class TestResponseFormatParsing:
 
     def test_none_input(self):
         from yunshu_gateway.routers.chat import _parse_response_format
+
         assert _parse_response_format(None) is None
 
     def test_json_object_type(self):
         from yunshu_gateway.routers.chat import _parse_response_format
+
         result = _parse_response_format({"type": "json_object"})
         assert result == "json_object"
 
     def test_json_schema_type_with_schema(self):
         from yunshu_gateway.routers.chat import _parse_response_format
+
         schema = {"type": "object", "properties": {"x": {"type": "number"}}}
-        result = _parse_response_format({
-            "type": "json_schema",
-            "json_schema": {"name": "test", "schema": schema}
-        })
+        result = _parse_response_format(
+            {"type": "json_schema", "json_schema": {"name": "test", "schema": schema}}
+        )
         assert result == schema
 
     def test_json_schema_type_without_schema(self):
         from yunshu_gateway.routers.chat import _parse_response_format
-        result = _parse_response_format({
-            "type": "json_schema",
-            "json_schema": {"name": "test"}
-        })
+
+        result = _parse_response_format(
+            {"type": "json_schema", "json_schema": {"name": "test"}}
+        )
         assert result == "json_object"
 
     def test_unknown_type_returns_none(self):
         from yunshu_gateway.routers.chat import _parse_response_format
+
         result = _parse_response_format({"type": "text"})
         assert result is None
 
     def test_empty_dict_returns_none(self):
         from yunshu_gateway.routers.chat import _parse_response_format
+
         result = _parse_response_format({})
         assert result is None
 
@@ -728,128 +741,126 @@ class TestEdgeCases:
         c = JsonSchemaConstraint({})
         assert c.state == JsonState.START
         chars = c._get_expected_chars()
-        assert '{' in chars
+        assert "{" in chars
 
     def test_schema_with_additional_properties(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "additionalProperties": {"type": "string"}
-        })
-        c.advance('{')
+        c = JsonSchemaConstraint(
+            {"type": "object", "additionalProperties": {"type": "string"}}
+        )
+        c.advance("{")
         c.advance('"any_key"')
-        c.advance(':')
+        c.advance(":")
         chars = c._get_expected_chars()
         assert '"' in chars
 
     def test_string_with_escape(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {"msg": {"type": "string"}}
-        })
-        c.advance('{')
+        c = JsonSchemaConstraint(
+            {"type": "object", "properties": {"msg": {"type": "string"}}}
+        )
+        c.advance("{")
         c.advance('"msg"')
-        c.advance(':')
+        c.advance(":")
         c.advance('"hello\\"')
         c.advance('world"')
         assert c.state == JsonState.OBJECT_COMMA
 
     def test_multiple_comma_separated_values(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {
-                "a": {"type": "string"},
-                "b": {"type": "string"},
-                "c": {"type": "string"},
+        c = JsonSchemaConstraint(
+            {
+                "type": "object",
+                "properties": {
+                    "a": {"type": "string"},
+                    "b": {"type": "string"},
+                    "c": {"type": "string"},
+                },
             }
-        })
-        c.advance('{')
+        )
+        c.advance("{")
         c.advance('"a"')
-        c.advance(':')
+        c.advance(":")
         c.advance('"1"')
         assert c.state == JsonState.OBJECT_COMMA
-        c.advance(',')
+        c.advance(",")
         c.advance('"b"')
-        c.advance(':')
+        c.advance(":")
         c.advance('"2"')
         assert c.state == JsonState.OBJECT_COMMA
-        c.advance(',')
+        c.advance(",")
         c.advance('"c"')
-        c.advance(':')
+        c.advance(":")
         c.advance('"3"')
         assert c.state == JsonState.OBJECT_COMMA
-        c.advance('}')
+        c.advance("}")
         assert c.is_done
 
     def test_nested_array_in_object(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {"type": "string"}
-                }
+        c = JsonSchemaConstraint(
+            {
+                "type": "object",
+                "properties": {"items": {"type": "array", "items": {"type": "string"}}},
             }
-        })
-        c.advance('{')
+        )
+        c.advance("{")
         c.advance('"items"')
-        c.advance(':')
-        c.advance('[')
+        c.advance(":")
+        c.advance("[")
         c.advance('"x"')
-        c.advance(',')
+        c.advance(",")
         c.advance('"y"')
-        c.advance(']')
+        c.advance("]")
         assert c.state == JsonState.OBJECT_COMMA
-        c.advance('}')
+        c.advance("}")
         assert c.is_done
 
     def test_object_with_null_value(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {"data": {"type": "null"}}
-        })
-        c.advance('{')
+        c = JsonSchemaConstraint(
+            {"type": "object", "properties": {"data": {"type": "null"}}}
+        )
+        c.advance("{")
         c.advance('"data"')
-        c.advance(':')
-        c.advance('null')
-        c.advance('}')
+        c.advance(":")
+        c.advance("null")
+        c.advance("}")
         assert c.is_done
 
     def test_object_with_boolean_values(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {
-                "a": {"type": "boolean"},
-                "b": {"type": "boolean"},
+        c = JsonSchemaConstraint(
+            {
+                "type": "object",
+                "properties": {
+                    "a": {"type": "boolean"},
+                    "b": {"type": "boolean"},
+                },
             }
-        })
-        c.advance('{')
+        )
+        c.advance("{")
         c.advance('"a"')
-        c.advance(':')
-        c.advance('true')
-        c.advance(',')
+        c.advance(":")
+        c.advance("true")
+        c.advance(",")
         c.advance('"b"')
-        c.advance(':')
-        c.advance('false')
-        c.advance('}')
+        c.advance(":")
+        c.advance("false")
+        c.advance("}")
         assert c.is_done
 
     def test_whitespace_handling(self):
         c = JsonSchemaConstraint()
-        c.advance('{')
-        c.advance('  ')
+        c.advance("{")
+        c.advance("  ")
         c.advance('"key"')
-        c.advance(' ')
-        c.advance(':')
-        c.advance(' ')
+        c.advance(" ")
+        c.advance(":")
+        c.advance(" ")
         c.advance('"val"')
-        c.advance(' ')
-        c.advance('}')
+        c.advance(" ")
+        c.advance("}")
         assert c.is_done
 
     def test_done_state_get_allowed_returns_eos(self):
         c = JsonSchemaConstraint()
-        c.advance('{')
-        c.advance('}')
+        c.advance("{")
+        c.advance("}")
         assert c.is_done
         tok = FakeTokenizer()
         allowed = c.get_allowed_tokens(tok, [])
@@ -860,16 +871,16 @@ class TestEdgeCases:
         tok = FakeTokenizer()
         allowed = c.get_allowed_tokens(tok, [])
         # Should include token for `{` character
-        assert ord('{') in allowed
+        assert ord("{") in allowed
 
     def test_get_allowed_tokens_object_open(self):
         c = JsonSchemaConstraint()
-        c.advance('{')
+        c.advance("{")
         tok = FakeTokenizer()
         allowed = c.get_allowed_tokens(tok, [])
         # Should include tokens for `"` and `}`
         assert ord('"') in allowed
-        assert ord('}') in allowed
+        assert ord("}") in allowed
 
 
 class TestComplexNestedSchema:
@@ -883,37 +894,34 @@ class TestComplexNestedSchema:
                     "type": "object",
                     "properties": {
                         "name": {"type": "string"},
-                        "tags": {
-                            "type": "array",
-                            "items": {"type": "string"}
-                        }
-                    }
+                        "tags": {"type": "array", "items": {"type": "string"}},
+                    },
                 },
-                "active": {"type": "boolean"}
-            }
+                "active": {"type": "boolean"},
+            },
         }
         c = JsonSchemaConstraint(schema)
-        c.advance('{')
+        c.advance("{")
         c.advance('"user"')
-        c.advance(':')
-        c.advance('{')
+        c.advance(":")
+        c.advance("{")
         c.advance('"name"')
-        c.advance(':')
+        c.advance(":")
         c.advance('"Alice"')
-        c.advance(',')
+        c.advance(",")
         c.advance('"tags"')
-        c.advance(':')
-        c.advance('[')
+        c.advance(":")
+        c.advance("[")
         c.advance('"admin"')
-        c.advance(',')
+        c.advance(",")
         c.advance('"dev"')
-        c.advance(']')
-        c.advance('}')
-        c.advance(',')
+        c.advance("]")
+        c.advance("}")
+        c.advance(",")
         c.advance('"active"')
-        c.advance(':')
-        c.advance('true')
-        c.advance('}')
+        c.advance(":")
+        c.advance("true")
+        c.advance("}")
         assert c.is_done
 
 
@@ -921,19 +929,16 @@ class TestMultiTypeSchemas:
     """Test schemas with multiple types (oneOf-style)."""
 
     def test_type_as_list(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {
-                "value": {"type": ["string", "null"]}
-            }
-        })
-        c.advance('{')
+        c = JsonSchemaConstraint(
+            {"type": "object", "properties": {"value": {"type": ["string", "null"]}}}
+        )
+        c.advance("{")
         c.advance('"value"')
-        c.advance(':')
+        c.advance(":")
         chars = c._get_expected_chars()
         # Should allow both string and null
         assert '"' in chars
-        assert 'n' in chars
+        assert "n" in chars
 
 
 class TestEnumValues:
@@ -943,16 +948,13 @@ class TestEnumValues:
         schema = {
             "type": "object",
             "properties": {
-                "status": {
-                    "type": "string",
-                    "enum": ["active", "inactive"]
-                }
-            }
+                "status": {"type": "string", "enum": ["active", "inactive"]}
+            },
         }
         c = JsonSchemaConstraint(schema)
-        c.advance('{')
+        c.advance("{")
         c.advance('"status"')
-        c.advance(':')
+        c.advance(":")
         # Enum values are still strings
         chars = c._get_expected_chars()
         assert '"' in chars
@@ -968,22 +970,22 @@ class TestTopLevelArray:
         """Schema type 'array' should expect '[' at START."""
         c = JsonSchemaConstraint({"type": "array", "items": {"type": "string"}})
         chars = c._get_expected_chars()
-        assert '[' in chars
-        assert '{' not in chars
+        assert "[" in chars
+        assert "{" not in chars
 
     def test_top_level_array_empty(self):
         c = JsonSchemaConstraint({"type": "array", "items": {"type": "string"}})
-        c.advance('[')
-        c.advance(']')
+        c.advance("[")
+        c.advance("]")
         assert c.is_done
 
     def test_top_level_array_with_items(self):
         c = JsonSchemaConstraint({"type": "array", "items": {"type": "string"}})
-        c.advance('[')
+        c.advance("[")
         c.advance('"a"')
-        c.advance(',')
+        c.advance(",")
         c.advance('"b"')
-        c.advance(']')
+        c.advance("]")
         assert c.is_done
 
 
@@ -991,56 +993,57 @@ class TestBooleanNullLiteralCounter:
     """Test that boolean/null detection uses a counter, not fragile string matching."""
 
     def test_true_literal_completes(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {"flag": {"type": "boolean"}}
-        })
-        c.advance('{')
+        c = JsonSchemaConstraint(
+            {"type": "object", "properties": {"flag": {"type": "boolean"}}}
+        )
+        c.advance("{")
         c.advance('"flag"')
-        c.advance(':')
-        c.advance('true')
+        c.advance(":")
+        c.advance("true")
         assert c.state == JsonState.OBJECT_COMMA
 
     def test_false_literal_completes(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {"flag": {"type": "boolean"}}
-        })
-        c.advance('{')
+        c = JsonSchemaConstraint(
+            {"type": "object", "properties": {"flag": {"type": "boolean"}}}
+        )
+        c.advance("{")
         c.advance('"flag"')
-        c.advance(':')
-        c.advance('false')
+        c.advance(":")
+        c.advance("false")
         assert c.state == JsonState.OBJECT_COMMA
 
     def test_null_literal_completes(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {"data": {"type": "null"}}
-        })
-        c.advance('{')
+        c = JsonSchemaConstraint(
+            {"type": "object", "properties": {"data": {"type": "null"}}}
+        )
+        c.advance("{")
         c.advance('"data"')
-        c.advance(':')
-        c.advance('null')
+        c.advance(":")
+        c.advance("null")
         assert c.state == JsonState.OBJECT_COMMA
 
     def test_boolean_in_array(self):
         """Boolean values inside arrays should also transition correctly."""
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {"flags": {"type": "array", "items": {"type": "boolean"}}}
-        })
-        c.advance('{')
+        c = JsonSchemaConstraint(
+            {
+                "type": "object",
+                "properties": {
+                    "flags": {"type": "array", "items": {"type": "boolean"}}
+                },
+            }
+        )
+        c.advance("{")
         c.advance('"flags"')
-        c.advance(':')
-        c.advance('[')
-        c.advance('true')
+        c.advance(":")
+        c.advance("[")
+        c.advance("true")
         assert c.state == JsonState.ARRAY_COMMA
-        c.advance(',')
-        c.advance('false')
+        c.advance(",")
+        c.advance("false")
         assert c.state == JsonState.ARRAY_COMMA
-        c.advance(']')
+        c.advance("]")
         assert c.state == JsonState.OBJECT_COMMA
-        c.advance('}')
+        c.advance("}")
         assert c.is_done
 
 
@@ -1049,34 +1052,32 @@ class TestNumberStateNoCorruption:
 
     def test_number_followed_by_comma(self):
         """Number followed by comma should correctly transition to OBJECT_COMMA."""
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {
-                "x": {"type": "integer"},
-                "y": {"type": "string"}
+        c = JsonSchemaConstraint(
+            {
+                "type": "object",
+                "properties": {"x": {"type": "integer"}, "y": {"type": "string"}},
             }
-        })
-        c.advance('{')
+        )
+        c.advance("{")
         c.advance('"x"')
-        c.advance(':')
-        c.advance('42,')
+        c.advance(":")
+        c.advance("42,")
         # After '42,' the number 42 completes and comma transitions to OBJECT_KEY
         assert c.state == JsonState.OBJECT_KEY
         c.advance('"y"')
-        c.advance(':')
+        c.advance(":")
         c.advance('"test"')
-        c.advance('}')
+        c.advance("}")
         assert c.is_done
 
     def test_number_followed_by_close_brace(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {"count": {"type": "integer"}}
-        })
-        c.advance('{')
+        c = JsonSchemaConstraint(
+            {"type": "object", "properties": {"count": {"type": "integer"}}}
+        )
+        c.advance("{")
         c.advance('"count"')
-        c.advance(':')
-        c.advance('99}')
+        c.advance(":")
+        c.advance("99}")
         assert c.is_done
 
 
@@ -1084,16 +1085,15 @@ class TestCheckpointRollbackWithLiteralCounter:
     """Test that checkpoint/rollback preserves literal_remaining state."""
 
     def test_rollback_restores_boolean_state(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {"flag": {"type": "boolean"}}
-        })
-        c.advance('{')
+        c = JsonSchemaConstraint(
+            {"type": "object", "properties": {"flag": {"type": "boolean"}}}
+        )
+        c.advance("{")
         c.advance('"flag"')
-        c.advance(':')
+        c.advance(":")
         # In BOOLEAN_TRUE state, 't' consumed, 3 chars remaining
         c.checkpoint()
-        c.advance('ru')  # advance by 2 chars, 1 remaining
+        c.advance("ru")  # advance by 2 chars, 1 remaining
         # Rollback should restore to before 'ru'
         c.rollback()
         # The state should allow completing 'true' still
@@ -1150,9 +1150,9 @@ class TestGatewayCompletionsResponseFormat:
         assert isinstance(sampler, ConstrainedSampler)
         # Should constrain first token to '{'
         logits = mx.full((1, tokenizer.vocab_size), -100.0)
-        logits[0, ord('{')] = 10.0
+        logits[0, ord("{")] = 10.0
         token = sampler(logits)
-        assert int(token) == ord('{')
+        assert int(token) == ord("{")
 
 
 class TestConstrainedSamplerCheckpointRollback:
@@ -1183,7 +1183,7 @@ class TestConstrainedSamplerCheckpointRollback:
 
         # Generate '{'
         logits = mx.full((1, tokenizer.vocab_size), -100.0)
-        logits[0, ord('{')] = 10.0
+        logits[0, ord("{")] = 10.0
         sampler(logits)
 
         # Checkpoint after '{'
@@ -1207,7 +1207,7 @@ class TestSchemaAnyType:
         """Schema {} should allow generating objects."""
         c = JsonSchemaConstraint({})
         chars = c._get_expected_chars()
-        assert '{' in chars
+        assert "{" in chars
 
     def test_empty_schema_allows_string(self):
         """Schema {} should allow generating strings."""
@@ -1219,27 +1219,27 @@ class TestSchemaAnyType:
         """Schema {} should allow generating arrays."""
         c = JsonSchemaConstraint({})
         chars = c._get_expected_chars()
-        assert '[' in chars
+        assert "[" in chars
 
     def test_empty_schema_allows_number(self):
         """Schema {} should allow generating numbers."""
         c = JsonSchemaConstraint({})
         chars = c._get_expected_chars()
-        assert '-' in chars
-        assert '0' in chars
+        assert "-" in chars
+        assert "0" in chars
 
     def test_empty_schema_allows_boolean(self):
         """Schema {} should allow generating booleans."""
         c = JsonSchemaConstraint({})
         chars = c._get_expected_chars()
-        assert 't' in chars
-        assert 'f' in chars
+        assert "t" in chars
+        assert "f" in chars
 
     def test_empty_schema_allows_null(self):
         """Schema {} should allow generating null."""
         c = JsonSchemaConstraint({})
         chars = c._get_expected_chars()
-        assert 'n' in chars
+        assert "n" in chars
 
     def test_empty_schema_generates_string(self):
         """Schema {} should correctly track state for a top-level string."""
@@ -1254,25 +1254,25 @@ class TestSchemaAnyType:
         NUMBER until generation stops (EOS). This is expected behavior.
         """
         c = JsonSchemaConstraint({})
-        c.advance('42')
+        c.advance("42")
         assert c.state == JsonState.NUMBER  # no terminator -> stays NUMBER
 
     def test_empty_schema_generates_boolean(self):
         """Schema {} should correctly track state for a top-level boolean."""
         c = JsonSchemaConstraint({})
-        c.advance('true')
+        c.advance("true")
         assert c.state == JsonState.DONE
 
     def test_empty_schema_generates_null(self):
         """Schema {} should correctly track state for a top-level null."""
         c = JsonSchemaConstraint({})
-        c.advance('null')
+        c.advance("null")
         assert c.state == JsonState.DONE
 
     def test_empty_schema_generates_array(self):
         """Schema {} should correctly track state for a top-level array."""
         c = JsonSchemaConstraint({})
-        c.advance('[1, 2, 3]')
+        c.advance("[1, 2, 3]")
         assert c.state == JsonState.DONE
 
 
@@ -1299,8 +1299,16 @@ class TestCompositeSchemas:
         """allOf intersects object fields — both required fields must be present."""
         schema = {
             "allOf": [
-                {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]},
-                {"type": "object", "properties": {"b": {"type": "number"}}, "required": ["b"]},
+                {
+                    "type": "object",
+                    "properties": {"a": {"type": "string"}},
+                    "required": ["a"],
+                },
+                {
+                    "type": "object",
+                    "properties": {"b": {"type": "number"}},
+                    "required": ["b"],
+                },
             ]
         }
         c = JsonSchemaConstraint(schema)
@@ -1317,14 +1325,24 @@ class TestCompositeSchemas:
     def test_oneOf_number_branch(self):
         schema = {"oneOf": [{"type": "string"}, {"type": "number"}]}
         c = JsonSchemaConstraint(schema)
-        c.advance('123')
-        assert c.state in (JsonState.NUMBER, JsonState.NUMBER_ZERO, JsonState.NUMBER_EXPONENT, JsonState.NUMBER_FRACTION, JsonState.DONE)
+        c.advance("123")
+        assert c.state in (
+            JsonState.NUMBER,
+            JsonState.NUMBER_ZERO,
+            JsonState.NUMBER_EXPONENT,
+            JsonState.NUMBER_FRACTION,
+            JsonState.DONE,
+        )
 
     def test_ref_resolution(self):
         """$ref into #/$defs/foo — engine should resolve it before walking."""
         schema = {
             "$defs": {
-                "foo": {"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]}
+                "foo": {
+                    "type": "object",
+                    "properties": {"x": {"type": "string"}},
+                    "required": ["x"],
+                }
             },
             "$ref": "#/$defs/foo",
         }
@@ -1338,6 +1356,7 @@ class TestCompositeSchemas:
         resolving to type 'any' (which would drop all of the referenced model's
         structure → zero enforcement)."""
         from python.yunshu_engine.json_schema import _repair_json_schema
+
         schema = {
             "type": "object",
             "properties": {"pet": {"$ref": "#/$defs/Pet"}},
@@ -1363,7 +1382,13 @@ class TestCompositeSchemas:
             "type": "object",
             "properties": {"pet": {"$ref": "#/$defs/Pet"}},
             "required": ["pet"],
-            "$defs": {"Pet": {"type": "object", "properties": {"n": {"type": "string"}}, "required": ["n"]}},
+            "$defs": {
+                "Pet": {
+                    "type": "object",
+                    "properties": {"n": {"type": "string"}},
+                    "required": ["n"],
+                }
+            },
         }
         c = JsonSchemaConstraint(schema)
         c.advance('{"pet": {"n": "rex"}}')
@@ -1372,39 +1397,65 @@ class TestCompositeSchemas:
     def test_number_zero_terminal(self):
         """'0' is a valid number — must not be classified as malformed."""
         c = JsonSchemaConstraint({"type": "number"})
-        c.advance('0')
-        assert c.state in (JsonState.NUMBER, JsonState.NUMBER_ZERO, JsonState.NUMBER_EXPONENT, JsonState.NUMBER_FRACTION, JsonState.DONE)
+        c.advance("0")
+        assert c.state in (
+            JsonState.NUMBER,
+            JsonState.NUMBER_ZERO,
+            JsonState.NUMBER_EXPONENT,
+            JsonState.NUMBER_FRACTION,
+            JsonState.DONE,
+        )
 
     def test_number_zero_in_array(self):
         """[0] is a valid array containing a single zero."""
         c = JsonSchemaConstraint({"type": "array", "items": {"type": "number"}})
-        c.advance('[0]')
+        c.advance("[0]")
         assert c.state == JsonState.DONE
 
     def test_number_zero_in_object(self):
-        c = JsonSchemaConstraint({
-            "type": "object",
-            "properties": {"count": {"type": "number"}},
-            "required": ["count"],
-        })
+        c = JsonSchemaConstraint(
+            {
+                "type": "object",
+                "properties": {"count": {"type": "number"}},
+                "required": ["count"],
+            }
+        )
         c.advance('{"count": 0}')
         assert c.state == JsonState.DONE
 
     def test_number_negative_zero(self):
         """JSON allows -0; engine must accept."""
         c = JsonSchemaConstraint({"type": "number"})
-        c.advance('-0')
-        assert c.state in (JsonState.NUMBER, JsonState.NUMBER_ZERO, JsonState.NUMBER_EXPONENT, JsonState.NUMBER_FRACTION, JsonState.DONE)
+        c.advance("-0")
+        assert c.state in (
+            JsonState.NUMBER,
+            JsonState.NUMBER_ZERO,
+            JsonState.NUMBER_EXPONENT,
+            JsonState.NUMBER_FRACTION,
+            JsonState.DONE,
+        )
 
     def test_number_float_with_zero(self):
         c = JsonSchemaConstraint({"type": "number"})
-        c.advance('0.5')
-        assert c.state in (JsonState.NUMBER, JsonState.NUMBER_ZERO, JsonState.NUMBER_EXPONENT, JsonState.NUMBER_FRACTION, JsonState.DONE)
+        c.advance("0.5")
+        assert c.state in (
+            JsonState.NUMBER,
+            JsonState.NUMBER_ZERO,
+            JsonState.NUMBER_EXPONENT,
+            JsonState.NUMBER_FRACTION,
+            JsonState.DONE,
+        )
 
     def test_number_exponent_with_zero(self):
         c = JsonSchemaConstraint({"type": "number"})
-        c.advance('1e0')
-        assert c.state in (JsonState.NUMBER, JsonState.NUMBER_ZERO, JsonState.NUMBER_EXPONENT, JsonState.NUMBER_FRACTION, JsonState.DONE)
+        c.advance("1e0")
+        assert c.state in (
+            JsonState.NUMBER,
+            JsonState.NUMBER_ZERO,
+            JsonState.NUMBER_EXPONENT,
+            JsonState.NUMBER_FRACTION,
+            JsonState.DONE,
+        )
 
 
 class TestTextBufferCap:
@@ -1415,6 +1466,7 @@ class TestTextBufferCap:
         """A very long string value (> buffer cap) must still validate as
         a complete JSON string without the trim corrupting state."""
         from yunshu_engine.json_schema import JsonSchemaConstraint, JsonState
+
         c = JsonSchemaConstraint({"type": "string"})
         # Feed a 100KB string in chunks (exceeds the 64KB cap → trim fires)
         c.advance('"')
@@ -1426,6 +1478,7 @@ class TestTextBufferCap:
     def test_long_object_with_many_keys_parses(self):
         """Long object generation with trim active still completes."""
         from yunshu_engine.json_schema import JsonSchemaConstraint, JsonState
+
         c = JsonSchemaConstraint({})
         c.advance("{")
         for i in range(500):
@@ -1440,6 +1493,7 @@ class TestTextBufferCap:
         trims between values and stays bounded. A single contiguous giant
         string legitimately can't trim (content must be validated whole)."""
         from yunshu_engine.json_schema import JsonSchemaConstraint, JsonState
+
         c = JsonSchemaConstraint({})
         c.advance("[")
         for i in range(3000):

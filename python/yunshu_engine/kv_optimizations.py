@@ -62,6 +62,7 @@ _MIN_OBSERVATIONS = 3
 
 class QuantTier(Enum):
     """Quantization tier for a KV cache layer."""
+
     FP16 = auto()  # 16-bit float — no quantization
     INT8 = auto()  # 8-bit integer
     INT4 = auto()  # 4-bit integer (packed nibbles)
@@ -70,6 +71,7 @@ class QuantTier(Enum):
 @dataclass
 class LayerQuantConfig:
     """Per-layer quantization configuration."""
+
     layer_idx: int
     tier: QuantTier
     bits: int
@@ -81,6 +83,7 @@ class LayerQuantConfig:
 @dataclass
 class AdaptiveQuantStats:
     """Statistics from adaptive quantization."""
+
     per_layer_bits: dict[int, int] = field(default_factory=dict)
     per_layer_tier: dict[int, str] = field(default_factory=dict)
     total_bytes: int = 0
@@ -146,17 +149,31 @@ class AdaptiveKVQuantizer:
         """
         # Extract architecture info from model if not provided directly
         if model is not None:
-            config = getattr(model, 'config', None) or getattr(model, 'args', None)
+            config = getattr(model, "config", None) or getattr(model, "args", None)
             if config is not None:
-                num_layers = num_layers or getattr(config, 'num_hidden_layers', 0) \
-                    or getattr(config, 'n_layers', 0)
-                num_kv_heads = num_kv_heads or getattr(config, 'num_key_value_heads', 0) \
-                    or getattr(config, 'n_kv_heads', 0)
-                head_dim = head_dim or getattr(config, 'head_dim', 0) \
-                    or (getattr(config, 'hidden_size', 0) //
-                        (getattr(config, 'num_attention_heads', 1) or 1))
-                max_seq_len = max_seq_len or getattr(config, 'max_position_embeddings', 0) \
-                    or getattr(config, 'max_sequence_length', 2048)
+                num_layers = (
+                    num_layers
+                    or getattr(config, "num_hidden_layers", 0)
+                    or getattr(config, "n_layers", 0)
+                )
+                num_kv_heads = (
+                    num_kv_heads
+                    or getattr(config, "num_key_value_heads", 0)
+                    or getattr(config, "n_kv_heads", 0)
+                )
+                head_dim = (
+                    head_dim
+                    or getattr(config, "head_dim", 0)
+                    or (
+                        getattr(config, "hidden_size", 0)
+                        // (getattr(config, "num_attention_heads", 1) or 1)
+                    )
+                )
+                max_seq_len = (
+                    max_seq_len
+                    or getattr(config, "max_position_embeddings", 0)
+                    or getattr(config, "max_sequence_length", 2048)
+                )
 
         if num_layers <= 0:
             raise ValueError("num_layers must be > 0 (pass model or num_layers)")
@@ -202,7 +219,10 @@ class AdaptiveKVQuantizer:
         # Budget-aware adjustment
         if budget_bytes is not None:
             fp16_end, int8_end = self._adjust_for_budget(
-                num_layers, budget_bytes, fp16_end, int8_end,
+                num_layers,
+                budget_bytes,
+                fp16_end,
+                int8_end,
             )
 
         configs = []
@@ -223,13 +243,15 @@ class AdaptiveKVQuantizer:
                 bpe = _INT4_BYTES
                 group_size = 64
 
-            configs.append(LayerQuantConfig(
-                layer_idx=i,
-                tier=tier,
-                bits=bits,
-                bytes_per_element=bpe,
-                group_size=group_size,
-            ))
+            configs.append(
+                LayerQuantConfig(
+                    layer_idx=i,
+                    tier=tier,
+                    bits=bits,
+                    bytes_per_element=bpe,
+                    group_size=group_size,
+                )
+            )
 
         return configs
 
@@ -340,10 +362,14 @@ class AdaptiveKVQuantizer:
             For FP16 layers, returns raw data as-is with metadata only.
         """
         if not self._configured:
-            raise RuntimeError("AdaptiveKVQuantizer not configured — call configure() first")
+            raise RuntimeError(
+                "AdaptiveKVQuantizer not configured — call configure() first"
+            )
 
         if layer_idx < 0 or layer_idx >= len(self._layer_configs):
-            raise IndexError(f"layer_idx {layer_idx} out of range [0, {len(self._layer_configs)})")
+            raise IndexError(
+                f"layer_idx {layer_idx} out of range [0, {len(self._layer_configs)})"
+            )
 
         cfg = self._layer_configs[layer_idx]
 
@@ -395,7 +421,9 @@ class AdaptiveKVQuantizer:
             Tuple of (key, value) as nested lists of floats.
         """
         if not self._configured:
-            raise RuntimeError("AdaptiveKVQuantizer not configured — call configure() first")
+            raise RuntimeError(
+                "AdaptiveKVQuantizer not configured — call configure() first"
+            )
 
         if layer_idx < 0 or layer_idx >= len(self._layer_configs):
             raise IndexError(f"layer_idx {layer_idx} out of range")
@@ -444,6 +472,7 @@ class AdaptiveKVQuantizer:
 @dataclass
 class BlockAccessRecord:
     """Tracks access history for a single KV block."""
+
     block_id: str
     # Exponential moving average of access frequency
     ema_frequency: float = 0.0
@@ -462,6 +491,7 @@ class BlockAccessRecord:
 @dataclass
 class EvictionPrediction:
     """Prediction result for a block."""
+
     block_id: str
     predicted_access_prob: float
     should_evict: bool
@@ -541,14 +571,14 @@ class KVEvictionPredictor:
 
                     # Update EMA frequency
                     record.ema_frequency = (
-                        self._ema_decay * record.ema_frequency + (1 - self._ema_decay) * 1.0
+                        self._ema_decay * record.ema_frequency
+                        + (1 - self._ema_decay) * 1.0
                     )
 
                     # Update EMA recency (lower = more recent)
-                    record.ema_recency = (
-                        self._ema_decay * record.ema_recency
-                        + (1 - self._ema_decay) * (self._step - record.last_access_step)
-                    )
+                    record.ema_recency = self._ema_decay * record.ema_recency + (
+                        1 - self._ema_decay
+                    ) * (self._step - record.last_access_step)
 
                     record.last_access_step = self._step
                     record.total_accesses += 1
@@ -565,7 +595,11 @@ class KVEvictionPredictor:
                     record.request_weights[request_id] = max(old_weight, weight)
 
         # Decay EMA frequency for all blocks (not just accessed ones)
-        accessed_set = {bid for bids in (accessed_blocks or {}).values() for bid in bids} if accessed_blocks else set()
+        accessed_set = (
+            {bid for bids in (accessed_blocks or {}).values() for bid in bids}
+            if accessed_blocks
+            else set()
+        )
         for block_id, record in list(self._records.items()):
             if block_id not in accessed_set:
                 record.ema_frequency = self._ema_decay * record.ema_frequency
@@ -591,12 +625,14 @@ class KVEvictionPredictor:
             record = self._records.get(block_id)
             if record is None:
                 # Unknown block — low prediction confidence
-                predictions.append(EvictionPrediction(
-                    block_id=block_id,
-                    predicted_access_prob=0.0,
-                    should_evict=True,
-                    confidence=0.0,
-                ))
+                predictions.append(
+                    EvictionPrediction(
+                        block_id=block_id,
+                        predicted_access_prob=0.0,
+                        should_evict=True,
+                        confidence=0.0,
+                    )
+                )
                 continue
 
             # Compute predicted access probability from EMA signals
@@ -614,12 +650,14 @@ class KVEvictionPredictor:
             if should_evict:
                 self._total_evictions_recommended += 1
 
-            predictions.append(EvictionPrediction(
-                block_id=block_id,
-                predicted_access_prob=prob,
-                should_evict=should_evict,
-                confidence=confidence,
-            ))
+            predictions.append(
+                EvictionPrediction(
+                    block_id=block_id,
+                    predicted_access_prob=prob,
+                    should_evict=should_evict,
+                    confidence=confidence,
+                )
+            )
 
         # Sort by predicted access probability (highest first)
         predictions.sort(key=lambda p: p.predicted_access_prob, reverse=True)
@@ -696,9 +734,7 @@ class KVEvictionPredictor:
         else:
             # Evicted a block that was needed — threshold may be too aggressive
             # Nudge threshold up slightly
-            self._eviction_threshold = min(
-                0.5, self._eviction_threshold * 1.05
-            )
+            self._eviction_threshold = min(0.5, self._eviction_threshold * 1.05)
 
     def get_stats(self) -> dict:
         """Return predictor statistics."""
@@ -711,9 +747,9 @@ class KVEvictionPredictor:
             "total_evictions_recommended": self._total_evictions_recommended,
             "eviction_threshold": round(self._eviction_threshold, 4),
             "correct_predictions": self._correct_predictions,
-            "prediction_accuracy": round(
-                self._correct_predictions / total * 100, 1
-            ) if total > 0 else 0.0,
+            "prediction_accuracy": round(self._correct_predictions / total * 100, 1)
+            if total > 0
+            else 0.0,
         }
 
     def reset(self) -> None:
@@ -734,6 +770,7 @@ class KVEvictionPredictor:
 @dataclass
 class ChunkInfo:
     """Information about a computed chunk."""
+
     start_token: int
     end_token: int
     num_tokens: int
@@ -793,13 +830,15 @@ class ChunkedPrefillOptimizer:
 
         total = len(tokens)
         if total <= max_chunk_tokens:
-            return [ChunkInfo(
-                start_token=0,
-                end_token=total,
-                num_tokens=total,
-                importance=1.0,
-                chunk_index=0,
-            )]
+            return [
+                ChunkInfo(
+                    start_token=0,
+                    end_token=total,
+                    num_tokens=total,
+                    importance=1.0,
+                    chunk_index=0,
+                )
+            ]
 
         # Find semantic split points
         split_points = self._find_split_points(tokens, max_chunk_tokens, tokenizer)
@@ -811,25 +850,29 @@ class ChunkedPrefillOptimizer:
             if split > prev:
                 # Importance decays with chunk index
                 importance = max(0.1, 1.0 - idx * 0.15)
-                chunks.append(ChunkInfo(
-                    start_token=prev,
-                    end_token=split,
-                    num_tokens=split - prev,
-                    importance=importance,
-                    chunk_index=idx,
-                ))
+                chunks.append(
+                    ChunkInfo(
+                        start_token=prev,
+                        end_token=split,
+                        num_tokens=split - prev,
+                        importance=importance,
+                        chunk_index=idx,
+                    )
+                )
                 prev = split
 
         # Handle remaining tokens
         if prev < total:
             importance = max(0.1, 1.0 - len(chunks) * 0.15)
-            chunks.append(ChunkInfo(
-                start_token=prev,
-                end_token=total,
-                num_tokens=total - prev,
-                importance=importance,
-                chunk_index=len(chunks),
-            ))
+            chunks.append(
+                ChunkInfo(
+                    start_token=prev,
+                    end_token=total,
+                    num_tokens=total - prev,
+                    importance=importance,
+                    chunk_index=len(chunks),
+                )
+            )
 
         return chunks
 
@@ -909,7 +952,7 @@ class ChunkedPrefillOptimizer:
 
                 # Check for paragraph/sentence end markers
                 # Look for '. ', '.\n', '!\n', '?\n', '\n\n'
-                for marker in ['. ', '.\n', '!\n', '?\n', '\n\n', '。\n', '。 ']:
+                for marker in [". ", ".\n", "!\n", "?\n", "\n\n", "。\n", "。 "]:
                     if marker in text:
                         return True
             except Exception:
@@ -972,6 +1015,7 @@ class ChunkedPrefillOptimizer:
 @dataclass
 class KVBlock:
     """Represents a single KV cache block."""
+
     block_id: str
     request_id: str
     tokens: list[int] = field(default_factory=list)
@@ -998,6 +1042,7 @@ class KVBlock:
 @dataclass
 class CompactionResult:
     """Result of a compaction pass."""
+
     blocks_before: int = 0
     blocks_after: int = 0
     blocks_freed: int = 0
@@ -1009,6 +1054,7 @@ class CompactionResult:
 @dataclass
 class FragmentationStats:
     """Statistics about block fragmentation."""
+
     total_blocks: int = 0
     active_blocks: int = 0
     free_blocks: int = 0
@@ -1121,7 +1167,9 @@ class KVBlockCompactor:
                 continue
 
             # Sort by block_id (numeric) to get deterministic sequential ordering
-            partial_blocks.sort(key=lambda b: b.block_id if isinstance(b.block_id, int) else 0)
+            partial_blocks.sort(
+                key=lambda b: b.block_id if isinstance(b.block_id, int) else 0
+            )
 
             # Merge strategy: move tokens from later blocks to fill earlier ones
             # Walk through pairs and merge
@@ -1191,7 +1239,9 @@ class KVBlockCompactor:
         total_blocks = len(blocks)
         active_blocks = sum(1 for b in blocks.values() if b.is_active)
         partial_blocks = sum(1 for b in blocks.values() if b.is_active and b.is_partial)
-        full_blocks = sum(1 for b in blocks.values() if b.is_active and not b.is_partial)
+        full_blocks = sum(
+            1 for b in blocks.values() if b.is_active and not b.is_partial
+        )
         total_valid = sum(b.num_valid for b in blocks.values() if b.is_active)
         total_capacity = active_blocks * block_size
 

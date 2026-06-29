@@ -40,7 +40,7 @@ class TurboQuantConfig:
 
     enabled: bool = False
     total_layers: int = 0
-    fp16_end_layer: int = 4   # First N layers stay FP16
+    fp16_end_layer: int = 4  # First N layers stay FP16
     int8_end_layer: int = 16  # Next M layers use 8-bit
     int4_group_size: int = 64
 
@@ -128,7 +128,9 @@ class TurboQuantManager:
             f"(compression: {self._config.expected_compression_ratio:.1f}x)"
         )
 
-    def quantize_layer(self, layer_idx: int, kv_tensor: list) -> tuple[bytes | list, dict | None]:
+    def quantize_layer(
+        self, layer_idx: int, kv_tensor: list
+    ) -> tuple[bytes | list, dict | None]:
         """Quantize a single layer's KV tensor.
 
         Returns:
@@ -146,7 +148,9 @@ class TurboQuantManager:
         self._stats["total_quantized_bytes"] += len(packed)
         return packed, meta
 
-    def dequantize_layer(self, layer_idx: int, data: bytes | list, meta: dict | None) -> list:
+    def dequantize_layer(
+        self, layer_idx: int, data: bytes | list, meta: dict | None
+    ) -> list:
         """Dequantize a single layer's KV tensor."""
         if meta is None:
             return data if isinstance(data, list) else []

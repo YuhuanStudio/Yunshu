@@ -9,15 +9,19 @@ from yunshu_kv.model_cache_config import CacheLayerConfig, ModelCacheConfig
 class TestCacheLayerConfig:
     def test_type_name(self):
         cfg = CacheLayerConfig(
-            layer_index=0, cache_type=CacheType.KVCACHE,
-            sliceable=True, boundary_eligible=False,
+            layer_index=0,
+            cache_type=CacheType.KVCACHE,
+            sliceable=True,
+            boundary_eligible=False,
         )
         assert cfg.type_name == "KVCACHE"
 
     def test_rotating_not_sliceable(self):
         cfg = CacheLayerConfig(
-            layer_index=2, cache_type=CacheType.ROTATING_KVCACHE,
-            sliceable=False, boundary_eligible=True,
+            layer_index=2,
+            cache_type=CacheType.ROTATING_KVCACHE,
+            sliceable=False,
+            boundary_eligible=True,
         )
         assert cfg.sliceable is False
         assert cfg.boundary_eligible is True

@@ -1,6 +1,5 @@
 """Tests for RadixAttention tree-based prefix sharing."""
 
-
 from yunshu_kv.block import KVBlock
 from yunshu_kv.radix_attention import RadixNode, RadixTree
 
@@ -126,7 +125,9 @@ class TestRadixTree:
 
         # Turn 1: system + user prompt
         turn1 = list(range(100))  # 100 tokens
-        b1 = [KVBlock(block_id=i) for i in range(7)]  # 100/16 ≈ 7 blocks (block_size=16)
+        b1 = [
+            KVBlock(block_id=i) for i in range(7)
+        ]  # 100/16 ≈ 7 blocks (block_size=16)
         tree.insert(turn1, b1[:6], [100 + i for i in range(6)])
 
         # Turn 2: same prefix + response + new user prompt

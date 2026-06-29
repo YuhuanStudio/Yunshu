@@ -4,12 +4,23 @@ fields id/seek/tokens/temperature/avg_logprob/compression_ratio/no_speech_prob â
 OpenAI-SDK consumers that type-validate segments or read those fields got a partial object.
 _normalize_verbose_segments pads the full schema while preserving real values.
 """
+
 from __future__ import annotations
 
 from yunshu_gateway.routers.audio import _normalize_verbose_segments
 
-_OPENAI_FIELDS = {"id", "seek", "start", "end", "text", "tokens", "temperature",
-                  "avg_logprob", "compression_ratio", "no_speech_prob"}
+_OPENAI_FIELDS = {
+    "id",
+    "seek",
+    "start",
+    "end",
+    "text",
+    "tokens",
+    "temperature",
+    "avg_logprob",
+    "compression_ratio",
+    "no_speech_prob",
+}
 
 
 def test_pads_full_openai_schema():
@@ -18,7 +29,9 @@ def test_pads_full_openai_schema():
     # real values preserved
     assert out[0]["text"] == "hi" and out[0]["start"] == 1.0 and out[0]["end"] == 2.0
     # id is the index, defaults neutral
-    assert out[0]["id"] == 0 and out[0]["no_speech_prob"] == 0.0 and out[0]["tokens"] == []
+    assert (
+        out[0]["id"] == 0 and out[0]["no_speech_prob"] == 0.0 and out[0]["tokens"] == []
+    )
 
 
 def test_empty_and_none_safe():
@@ -27,10 +40,12 @@ def test_empty_and_none_safe():
 
 
 def test_index_increments_and_preserves_extra_keys():
-    out = _normalize_verbose_segments([
-        {"text": "a", "words": [{"word": "a"}]},
-        {"text": "b", "avg_logprob": -0.3},
-    ])
+    out = _normalize_verbose_segments(
+        [
+            {"text": "a", "words": [{"word": "a"}]},
+            {"text": "b", "avg_logprob": -0.3},
+        ]
+    )
     assert out[0]["id"] == 0 and out[1]["id"] == 1
-    assert out[0]["words"] == [{"word": "a"}]          # extra real key kept
-    assert out[1]["avg_logprob"] == -0.3                # real value not overwritten by default
+    assert out[0]["words"] == [{"word": "a"}]  # extra real key kept
+    assert out[1]["avg_logprob"] == -0.3  # real value not overwritten by default

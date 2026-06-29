@@ -9,6 +9,7 @@ hot tensors, the model would attend over garbage KV (silent corruption / wrong t
 Fix: both the warm and SSD promote paths now fail CLOSED — if _key_cache is None, re-insert
 the entry into its tier and break the chain instead of counting a bogus hit.
 """
+
 from __future__ import annotations
 
 import inspect

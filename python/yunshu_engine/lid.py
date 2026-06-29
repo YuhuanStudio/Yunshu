@@ -108,7 +108,11 @@ def detect_language(text: str) -> LIDResult:
     # Compute confidence as ratio of best to second-best
     if len(sorted_scores) > 1:
         second_score = sorted_scores[1][1]
-        confidence = best_score / (best_score + second_score) if (best_score + second_score) > 0 else 1.0
+        confidence = (
+            best_score / (best_score + second_score)
+            if (best_score + second_score) > 0
+            else 1.0
+        )
     else:
         confidence = 1.0
 
@@ -119,7 +123,9 @@ def detect_language(text: str) -> LIDResult:
     )
 
 
-def detect_language_from_audio(audio_bytes: bytes, sample_rate: int = 16000) -> LIDResult:
+def detect_language_from_audio(
+    audio_bytes: bytes, sample_rate: int = 16000
+) -> LIDResult:
     """Detect language from audio using simple spectral heuristics.
 
     Uses energy distribution across frequency bands as a rough proxy.
@@ -131,6 +137,7 @@ def detect_language_from_audio(audio_bytes: bytes, sample_rate: int = 16000) -> 
 
     try:
         import numpy as np
+
         samples = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
         if len(samples) < sample_rate // 4:
             return LIDResult(language="und", confidence=0.0, all_scores={})
@@ -184,7 +191,11 @@ def detect_language_from_audio(audio_bytes: bytes, sample_rate: int = 16000) -> 
 
         if len(sorted_scores) > 1:
             second_score = sorted_scores[1][1]
-            confidence = best_score / (best_score + second_score) if (best_score + second_score) > 0 else 1.0
+            confidence = (
+                best_score / (best_score + second_score)
+                if (best_score + second_score) > 0
+                else 1.0
+            )
         else:
             confidence = 0.5
 

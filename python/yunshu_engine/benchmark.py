@@ -185,8 +185,12 @@ class BenchmarkRunner:
             max_tokens=max_tokens,
             temperature=temperature,
         )
-        actual_prompt_tokens = getattr(gen_result, "prompt_tokens", prompt_tokens) or prompt_tokens
-        actual_completion_tokens = getattr(gen_result, "completion_tokens", max_tokens) or max_tokens
+        actual_prompt_tokens = (
+            getattr(gen_result, "prompt_tokens", prompt_tokens) or prompt_tokens
+        )
+        actual_completion_tokens = (
+            getattr(gen_result, "completion_tokens", max_tokens) or max_tokens
+        )
 
         # Phase 2: Streaming to measure TTFT / TPOT
         ttft_ms = 0.0
@@ -300,7 +304,9 @@ class BenchmarkRunner:
         total_time_s = time.perf_counter() - t0
 
         # Filter out any None (shouldn't happen but be safe)
-        valid_results: list[BenchmarkResult] = [r for r in per_request_results if r is not None]
+        valid_results: list[BenchmarkResult] = [
+            r for r in per_request_results if r is not None
+        ]
 
         total_tokens = sum(r.prompt_tokens + r.completion_tokens for r in valid_results)
         aggregate_tps = total_tokens / total_time_s if total_time_s > 0 else 0.0
@@ -387,14 +393,20 @@ class BenchmarkRunner:
         # 4. Batch: 4 x medium
         results.append(
             await self.bench_batch(
-                prompts=4, max_tokens=256, concurrency=4, prompt_tokens=1024,
+                prompts=4,
+                max_tokens=256,
+                concurrency=4,
+                prompt_tokens=1024,
             )
         )
 
         # 5. Batch: 8 x short
         results.append(
             await self.bench_batch(
-                prompts=8, max_tokens=128, concurrency=8, prompt_tokens=128,
+                prompts=8,
+                max_tokens=128,
+                concurrency=8,
+                prompt_tokens=128,
             )
         )
 
@@ -409,7 +421,9 @@ class BenchmarkRunner:
     # ── Formatting ──
 
     @staticmethod
-    def format_results(results: BenchmarkSuite | BenchmarkResult | BatchBenchmarkResult) -> str:
+    def format_results(
+        results: BenchmarkSuite | BenchmarkResult | BatchBenchmarkResult,
+    ) -> str:
         """Format benchmark results as a markdown table."""
         if isinstance(results, BenchmarkSuite):
             return BenchmarkRunner._format_suite(results)

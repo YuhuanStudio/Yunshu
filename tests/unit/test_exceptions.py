@@ -111,7 +111,7 @@ class TestExceptionAttributes:
         assert "model-a" in str(e)
 
     def test_model_too_large(self):
-        e = ModelTooLargeError("big-model", 10 * 1024 ** 3, 8 * 1024 ** 3)
+        e = ModelTooLargeError("big-model", 10 * 1024**3, 8 * 1024**3)
         assert "big-model" in str(e)
 
     def test_oom_error(self):
@@ -121,7 +121,10 @@ class TestExceptionAttributes:
 
     def test_prefill_memory_exceeded(self):
         e = PrefillMemoryExceededError(
-            "too large", request_id="req-1", estimated_bytes=100, limit_bytes=80,
+            "too large",
+            request_id="req-1",
+            estimated_bytes=100,
+            limit_bytes=80,
         )
         assert e.request_id == "req-1"
 

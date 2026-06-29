@@ -8,6 +8,7 @@ returned [233] (the codepoint) instead of the real UTF-8 [195,169]. Byte-level B
 so the branch must be gated on an affirmative byte-level detection (a ByteLevel
 component in the fast tokenizer). This test uses fakes that model both families.
 """
+
 from __future__ import annotations
 
 from yunshu_engine.text_utils import _is_byte_level_tokenizer, token_id_to_bytes
@@ -15,13 +16,16 @@ from yunshu_engine.text_utils import _is_byte_level_tokenizer, token_id_to_bytes
 
 class _FakeByteLevelTokenizer:
     """Models Qwen-style byte-level BPE: surface chars are GPT-2 byte proxies."""
+
     class _Backend:
         class _decoder:
             @staticmethod
             def __repr__():
                 return "ByteLevel(add_prefix_space=False, trim_offsets=True, use_regex=True)"
+
         decoder = _decoder()
         pre_tokenizer = None
+
     backend_tokenizer = _Backend()
 
     def __init__(self, surface):
@@ -36,13 +40,16 @@ class _FakeByteLevelTokenizer:
 
 class _FakeSentencePieceTokenizer:
     """Models Llama-2/Mistral/Gemma: Metaspace decoder, NEVER ByteLevel."""
+
     class _Backend:
         class _decoder:
             @staticmethod
             def __repr__():
                 return "Metaspace(replacement='▁', add_prefix_space=True)"
+
         decoder = _decoder()
         pre_tokenizer = None
+
     backend_tokenizer = _Backend()
 
     def __init__(self, surface, decoded):

@@ -1,6 +1,5 @@
 """Tests for AdaptiveBatchScheduler — batch size and prefill chunk computation."""
 
-
 from yunshu_engine.adaptive_batch import (
     AdaptiveBatchConfig,
     AdaptiveBatchScheduler,

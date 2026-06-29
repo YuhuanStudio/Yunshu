@@ -1,4 +1,5 @@
 """Tests for SSD-tier KV cache."""
+
 import os
 import tempfile
 
@@ -139,7 +140,9 @@ class TestSSDKVCacheRecovery:
             # Write a block
             cache1 = _make_cache(tmp)
             block_hash = b"\xab" * 16
-            cache1.save_block(block_hash, [mx.zeros((2, 4))], token_count=16, model_name="test")
+            cache1.save_block(
+                block_hash, [mx.zeros((2, 4))], token_count=16, model_name="test"
+            )
             cache1.close()
 
             # Simulate restart — create new instance pointing at same dir
@@ -168,6 +171,7 @@ class TestSSDKVCacheRecovery:
             # Corrupt the safetensors file by modifying scale_factors metadata
             import json
             import struct
+
             block_hash.hex()
             file_path = cache._block_path(block_hash)
             with open(file_path, "rb") as f:

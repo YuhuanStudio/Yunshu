@@ -4,6 +4,7 @@ clients got 405 and a stored conversation lingered until eviction (a privacy gap
 OpenAI-compatible delete handler, ownership-gated exactly like GET (cross-tenant delete
 denied as not-found, the IDOR class).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -32,7 +33,10 @@ def _body(resp):
 @pytest.fixture(autouse=True)
 def _stub(monkeypatch):
     import yunshu_control.audit_log as al
-    monkeypatch.setattr(al, "resolve_actor", lambda request: getattr(request, "_actor", ""))
+
+    monkeypatch.setattr(
+        al, "resolve_actor", lambda request: getattr(request, "_actor", "")
+    )
     monkeypatch.setattr(R, "_check_permission", lambda request, perm: None)
     monkeypatch.delenv("YUNSHU_AUTH_DISABLED", raising=False)
     R._response_store.clear()
@@ -41,7 +45,9 @@ def _stub(monkeypatch):
 
 
 def test_delete_removes_stored_response():
-    R._store_response("resp-1", {"id": "resp-1", "object": "response", "_owner": "alice"})
+    R._store_response(
+        "resp-1", {"id": "resp-1", "object": "response", "_owner": "alice"}
+    )
     resp = asyncio.run(R.delete_response("resp-1", _req(actor="alice")))
     assert resp.status_code == 200
     body = _body(resp)
@@ -57,7 +63,9 @@ def test_delete_unknown_id_404():
 
 
 def test_delete_cross_tenant_denied_and_preserves_entry():
-    R._store_response("resp-2", {"id": "resp-2", "object": "response", "_owner": "alice"})
+    R._store_response(
+        "resp-2", {"id": "resp-2", "object": "response", "_owner": "alice"}
+    )
     # bob may not delete alice's response → 404, and it must remain for alice
     resp = asyncio.run(R.delete_response("resp-2", _req(actor="bob")))
     assert resp.status_code == 404
@@ -68,7 +76,9 @@ def test_delete_cross_tenant_denied_and_preserves_entry():
 
 
 def test_delete_admin_bypass():
-    R._store_response("resp-3", {"id": "resp-3", "object": "response", "_owner": "alice"})
+    R._store_response(
+        "resp-3", {"id": "resp-3", "object": "response", "_owner": "alice"}
+    )
     resp = asyncio.run(R.delete_response("resp-3", _req(actor="bob", role="admin")))
     assert resp.status_code == 200
     assert R._get_stored_response("resp-3") is None

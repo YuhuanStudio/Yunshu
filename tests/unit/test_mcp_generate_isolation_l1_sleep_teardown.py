@@ -13,6 +13,7 @@ L1 sleep leaked the entire engine subsystem — it manually nulled
   a pure no-op that flipped _sleeping=True with every model still resident. Now L1 calls
   engine.stop() and frees manager entries.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -20,6 +21,7 @@ import inspect
 
 def test_mcp_generate_gate_regardless_of_args_shape():
     from yunshu_gateway.routers import mcp
+
     src = inspect.getsource(mcp)
     # the OLD guard required arguments to be a dict before checking access — gone
     assert 'name") == "generate" and isinstance(_p.get("arguments"), dict)' not in src
@@ -33,6 +35,7 @@ def test_mcp_generate_gate_regardless_of_args_shape():
 
 def test_l1_sleep_stops_engine_and_frees_manager():
     from yunshu_gateway.routers import sleep
+
     src = inspect.getsource(sleep)
     code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
     # contextlib is imported (the edit uses contextlib.suppress)
@@ -49,6 +52,7 @@ def test_l1_sleep_stops_engine_and_frees_manager():
 def test_engine_stop_precedes_null():
     """stop() must run BEFORE _model is nulled, else stop() can't reach the live model."""
     from yunshu_gateway.routers import sleep
+
     src = inspect.getsource(sleep)
     stop_idx = src.index("await engine.stop()")
     null_idx = src.index("engine._model = None")

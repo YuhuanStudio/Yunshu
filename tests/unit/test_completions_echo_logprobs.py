@@ -9,6 +9,7 @@ already exists) and _format_logprobs PREPENDS the prompt tokens, reconstructing 
 token's string from its own token_id (no re-tokenization → robust to a leading BOS), with
 the completion tokens continuing from the end of the echoed prompt.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -28,9 +29,11 @@ def test_echo_prepends_prompt_token_logprobs():
         # completion logprobs (one generated token "X")
         logprobs=[{"token_id": 10, "logprob": -0.3, "top_logprobs": []}],
         # vLLM-shaped prompt logprobs: [None, tok1, tok2] for prompt "abc"
-        prompt_logprobs=[None,
-                         {"token_id": 1, "logprob": -0.5},
-                         {"token_id": 2, "logprob": -1.0}],
+        prompt_logprobs=[
+            None,
+            {"token_id": 1, "logprob": -0.5},
+            {"token_id": 2, "logprob": -1.0},
+        ],
     )
     out = _format_logprobs(state, _Tok(), top_logprobs=0, echo=True, prompt="abc")
     # prompt tokens prepended, then the completion token
@@ -57,7 +60,9 @@ def test_no_echo_unchanged_completion_only():
 def test_echo_without_prompt_logprobs_falls_back_to_offset_shift():
     # if the engine didn't compute prompt_logprobs, echo still shifts completion offset
     # by len(prompt) (legacy behavior preserved, no crash)
-    state = SimpleNamespace(logprobs=[{"token_id": 10, "logprob": -0.3, "top_logprobs": []}])
+    state = SimpleNamespace(
+        logprobs=[{"token_id": 10, "logprob": -0.3, "top_logprobs": []}]
+    )
     out = _format_logprobs(state, _Tok(), top_logprobs=0, echo=True, prompt="abc")
     assert out["tokens"] == ["X"]
     assert out["text_offset"] == [3]  # shifted past the (absent-token) prompt

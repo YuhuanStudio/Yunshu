@@ -31,12 +31,14 @@ def status(
         healthy = resp.status_code == 200
         resp.json() if healthy else {}
     except httpx.ConnectError:
-        console.print(Panel(
-            f"[red]Cannot connect to {url}[/]\n\n"
-            "Start the server with: [bold]yunshu serve[/]",
-            title="Server Status",
-            border_style="red",
-        ))
+        console.print(
+            Panel(
+                f"[red]Cannot connect to {url}[/]\n\n"
+                "Start the server with: [bold]yunshu serve[/]",
+                title="Server Status",
+                border_style="red",
+            )
+        )
         raise typer.Exit(1) from None
 
     status_color = "green" if healthy else "red"
@@ -76,7 +78,9 @@ def status(
     if sys_data:
         gpu = sys_data.get("gpu", {})
         if gpu:
-            lines.append(f"GPU: {_fmt(gpu.get('active_bytes', 0))} / {_fmt(gpu.get('total_bytes', 0))} ({gpu.get('utilization_pct', 0):.0f}%)")
+            lines.append(
+                f"GPU: {_fmt(gpu.get('active_bytes', 0))} / {_fmt(gpu.get('total_bytes', 0))} ({gpu.get('utilization_pct', 0):.0f}%)"
+            )
         if sys_data.get("cpu_percent"):
             lines.append(f"CPU: {sys_data['cpu_percent']:.1f}%")
         if sys_data.get("mlx_version"):
@@ -86,7 +90,11 @@ def status(
         lines.append(f"Requests: {eng_data.get('requests_processed', 0)}")
         lines.append(f"Active: {eng_data.get('active_requests', 0)}")
 
-    console.print(Panel("\n".join(lines), title="[bold]Yunshu Server[/]", border_style=status_color))
+    console.print(
+        Panel(
+            "\n".join(lines), title="[bold]Yunshu Server[/]", border_style=status_color
+        )
+    )
 
     # Models table
     if models_data:

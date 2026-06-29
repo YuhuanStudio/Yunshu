@@ -53,9 +53,7 @@ class TelemetryConfig:
                 f"sample_rate must be between 0.0 and 1.0, got {self.sample_rate}"
             )
         if self.batch_size < 1:
-            raise ValueError(
-                f"batch_size must be >= 1, got {self.batch_size}"
-            )
+            raise ValueError(f"batch_size must be >= 1, got {self.batch_size}")
 
 
 @dataclass

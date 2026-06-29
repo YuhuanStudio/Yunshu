@@ -8,7 +8,6 @@ Supports three modes:
 The gateway routers use get_engine_for_model() which works in all modes.
 """
 
-
 import logging
 from pathlib import Path
 
@@ -33,6 +32,7 @@ def _get_engine_start_lock():
     """
     global _engine_start_lock
     import asyncio
+
     if _engine_start_lock is None:
         _engine_start_lock = asyncio.Lock()
     return _engine_start_lock
@@ -92,6 +92,7 @@ def _discover_models(models_dir: str) -> None:
     # Primary: use model_discovery module
     try:
         from yunshu_engine.model_discovery import discover_models
+
         discovered = discover_models(models_path)
         for mid, info in discovered.items():
             _model_manager.register_model(
@@ -102,11 +103,14 @@ def _discover_models(models_dir: str) -> None:
         if discovered:
             logger.info(
                 "Auto-discovered %d models from %s (via model_discovery)",
-                len(discovered), models_path,
+                len(discovered),
+                models_path,
             )
         return
     except Exception:
-        logger.debug("model_discovery failed, falling back to simple scan", exc_info=True)
+        logger.debug(
+            "model_discovery failed, falling back to simple scan", exc_info=True
+        )
 
     # Fallback: simple directory scan
     for subdir in sorted(models_path.iterdir()):
@@ -158,8 +162,8 @@ async def get_engine_for_model(model_id: str) -> Engine:
                 await _ensure_engine_started(engine)
                 return engine
             # Strip provider prefix
-            if '/' in model_id:
-                stripped = model_id.rsplit('/', 1)[-1]
+            if "/" in model_id:
+                stripped = model_id.rsplit("/", 1)[-1]
                 if entry.model_id.lower() == stripped.lower():
                     engine = await _model_manager.get_engine(entry.model_id)
                     await _ensure_engine_started(engine)
@@ -183,9 +187,14 @@ async def _ensure_engine_started(engine) -> None:
     requests arrive for the same unloaded model simultaneously.
     """
     needs_start = False
-    if hasattr(engine, 'is_loaded') and not engine.is_loaded or hasattr(engine, '_running') and not engine._running:
+    if (
+        hasattr(engine, "is_loaded")
+        and not engine.is_loaded
+        or hasattr(engine, "_running")
+        and not engine._running
+    ):
         needs_start = True
-    elif hasattr(engine, 'is_running') and callable(engine.is_running):
+    elif hasattr(engine, "is_running") and callable(engine.is_running):
         if not engine.is_running():
             needs_start = True
 
@@ -194,10 +203,15 @@ async def _ensure_engine_started(engine) -> None:
 
     async with _get_engine_start_lock():
         # Double-check after acquiring lock
-        if hasattr(engine, 'is_loaded') and not engine.is_loaded or hasattr(engine, '_running') and not engine._running:
-            if hasattr(engine, 'start'):
+        if (
+            hasattr(engine, "is_loaded")
+            and not engine.is_loaded
+            or hasattr(engine, "_running")
+            and not engine._running
+        ):
+            if hasattr(engine, "start"):
                 await engine.start()
-        elif hasattr(engine, 'is_running') and callable(engine.is_running):
+        elif hasattr(engine, "is_running") and callable(engine.is_running):
             if not engine.is_running():
                 await engine.start()
 

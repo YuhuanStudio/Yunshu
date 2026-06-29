@@ -33,38 +33,55 @@ class TestImagePartNormalization:
 
     def test_image_url_passthrough(self):
         from yunshu_gateway.routers.chat import _normalize_image_part
+
         p = {"type": "image_url", "image_url": {"url": "https://x/y.png"}}
         assert _normalize_image_part(p) == p
 
     def test_image_type_with_nested_url(self):
         from yunshu_gateway.routers.chat import _normalize_image_part
-        out = _normalize_image_part({"type": "image", "image_url": {"url": "https://x/a.jpg"}})
+
+        out = _normalize_image_part(
+            {"type": "image", "image_url": {"url": "https://x/a.jpg"}}
+        )
         assert out == {"type": "image_url", "image_url": {"url": "https://x/a.jpg"}}
 
     def test_image_data_bare_base64_wrapped(self):
         from yunshu_gateway.routers.chat import _normalize_image_part
+
         out = _normalize_image_part({"type": "image_data", "data": "QUJD"})
         assert out["type"] == "image_url"
         assert out["image_url"]["url"] == "data:image/png;base64,QUJD"
 
     def test_image_data_existing_data_url_untouched(self):
         from yunshu_gateway.routers.chat import _normalize_image_part
-        out = _normalize_image_part({"type": "image_data", "data": "data:image/jpeg;base64,QUJD"})
+
+        out = _normalize_image_part(
+            {"type": "image_data", "data": "data:image/jpeg;base64,QUJD"}
+        )
         assert out["image_url"]["url"] == "data:image/jpeg;base64,QUJD"
 
     def test_text_part_untouched(self):
         from yunshu_gateway.routers.chat import _normalize_image_part
+
         p = {"type": "text", "text": "hi"}
         assert _normalize_image_part(p) == p
 
     def test_extract_messages_normalizes_image_type(self):
-        msgs = [ChatMessage(role="user", content=[
-            {"type": "text", "text": "what is this"},
-            {"type": "image", "image_url": {"url": "https://x/a.png"}},
-        ])]
+        msgs = [
+            ChatMessage(
+                role="user",
+                content=[
+                    {"type": "text", "text": "what is this"},
+                    {"type": "image", "image_url": {"url": "https://x/a.png"}},
+                ],
+            )
+        ]
         out = _extract_messages(msgs)
         parts = out[0]["content"]
-        assert any(p.get("type") == "image_url" and p["image_url"]["url"] == "https://x/a.png" for p in parts)
+        assert any(
+            p.get("type") == "image_url" and p["image_url"]["url"] == "https://x/a.png"
+            for p in parts
+        )
         assert not any(p.get("type") == "image" for p in parts)
 
 
@@ -78,7 +95,9 @@ class TestChatRequestValidation:
 
     def test_system_only_messages_rejected(self):
         """System-only messages (no user message) should return validation error."""
-        with pytest.raises(ValidationError, match="at least one message with role 'user'"):
+        with pytest.raises(
+            ValidationError, match="at least one message with role 'user'"
+        ):
             ChatCompletionRequest(
                 model="test",
                 messages=[ChatMessage(role="system", content="You are helpful.")],
@@ -86,7 +105,9 @@ class TestChatRequestValidation:
 
     def test_developer_only_messages_rejected(self):
         """Developer-only messages (no user message) should return validation error."""
-        with pytest.raises(ValidationError, match="at least one message with role 'user'"):
+        with pytest.raises(
+            ValidationError, match="at least one message with role 'user'"
+        ):
             ChatCompletionRequest(
                 model="test",
                 messages=[ChatMessage(role="developer", content="Be precise.")],
@@ -94,7 +115,9 @@ class TestChatRequestValidation:
 
     def test_assistant_only_messages_rejected(self):
         """Assistant-only messages should return validation error."""
-        with pytest.raises(ValidationError, match="at least one message with role 'user'"):
+        with pytest.raises(
+            ValidationError, match="at least one message with role 'user'"
+        ):
             ChatCompletionRequest(
                 model="test",
                 messages=[ChatMessage(role="assistant", content="Hello")],
@@ -165,7 +188,9 @@ class TestChatRequestValidation:
 
     def test_n_gt_1_with_streaming_rejected(self):
         """n > 1 with streaming should return validation error."""
-        with pytest.raises(ValidationError, match="n > 1 is not supported when stream is True"):
+        with pytest.raises(
+            ValidationError, match="n > 1 is not supported when stream is True"
+        ):
             ChatCompletionRequest(
                 model="test",
                 messages=[ChatMessage(role="user", content="Hi")],
@@ -251,12 +276,16 @@ class TestSamplingParamsValidation:
     def test_top_p_nan_rejected(self):
         """NEW: NaN/Inf rejected even though numerically [0,1]."""
         with pytest.raises(HTTPException) as exc_info:
-            _validate_sampling_params(temperature=0.7, max_tokens=100, top_p=float('nan'))
+            _validate_sampling_params(
+                temperature=0.7, max_tokens=100, top_p=float("nan")
+            )
         assert exc_info.value.status_code == 422
 
     def test_top_p_inf_rejected(self):
         with pytest.raises(HTTPException) as exc_info:
-            _validate_sampling_params(temperature=0.7, max_tokens=100, top_p=float('inf'))
+            _validate_sampling_params(
+                temperature=0.7, max_tokens=100, top_p=float("inf")
+            )
         assert exc_info.value.status_code == 422
 
 
@@ -301,26 +330,33 @@ class TestExtractMessages:
     def test_tool_calls_preserved(self):
         """Tool call fields should be preserved in extracted messages."""
         from yunshu_gateway.routers.chat import ToolCall, ToolCallFunction
-        msgs = _extract_messages([
-            ChatMessage(
-                role="assistant",
-                content=None,
-                tool_calls=[
-                    ToolCall(
-                        id="call_123",
-                        function=ToolCallFunction(name="get_weather", arguments='{"city": "SF"}'),
-                    ),
-                ],
-            ),
-        ])
+
+        msgs = _extract_messages(
+            [
+                ChatMessage(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        ToolCall(
+                            id="call_123",
+                            function=ToolCallFunction(
+                                name="get_weather", arguments='{"city": "SF"}'
+                            ),
+                        ),
+                    ],
+                ),
+            ]
+        )
         assert len(msgs[0]["tool_calls"]) == 1
         assert msgs[0]["tool_calls"][0]["function"]["name"] == "get_weather"
 
     def test_tool_role_with_call_id(self):
         """Tool role messages should preserve tool_call_id."""
-        msgs = _extract_messages([
-            ChatMessage(role="tool", content="sunny", tool_call_id="call_123"),
-        ])
+        msgs = _extract_messages(
+            [
+                ChatMessage(role="tool", content="sunny", tool_call_id="call_123"),
+            ]
+        )
         assert msgs[0]["tool_call_id"] == "call_123"
 
 
@@ -372,12 +408,14 @@ class TestChatMaxTokensZeroEndpoint:
 
         with patch("yunshu_gateway.routers.chat.get_engine", return_value=mock_engine):
             import asyncio
+
             result = asyncio.new_event_loop().run_until_complete(
                 create_chat_completion(req, mock_request)
             )
             # Should return JSONResponse with completion_tokens=0
             assert result.status_code == 200
             import json
+
             body = json.loads(result.body)
             assert body["usage"]["completion_tokens"] == 0
             assert body["choices"][0]["finish_reason"] == "length"
@@ -391,22 +429,28 @@ class TestSamplerFeatureSchemaW735:
         r = ChatCompletionRequest(
             model="m",
             messages=[ChatMessage(role="user", content="hi")],
-            min_tokens=8, ignore_eos=True, suppress_tokens=[1, 2, 3],
+            min_tokens=8,
+            ignore_eos=True,
+            suppress_tokens=[1, 2, 3],
         )
         assert r.min_tokens == 8
         assert r.ignore_eos is True
         assert r.suppress_tokens == [1, 2, 3]
 
     def test_chat_request_defaults(self):
-        r = ChatCompletionRequest(model="m", messages=[ChatMessage(role="user", content="hi")])
+        r = ChatCompletionRequest(
+            model="m", messages=[ChatMessage(role="user", content="hi")]
+        )
         assert r.min_tokens == 0
         assert r.ignore_eos is False
         assert r.suppress_tokens is None
 
     def test_completion_request_accepts_new_fields(self):
         from yunshu_gateway.routers.completions import CompletionRequest
-        r = CompletionRequest(model="m", prompt="hi", min_tokens=4, ignore_eos=True,
-                              suppress_tokens=[5])
+
+        r = CompletionRequest(
+            model="m", prompt="hi", min_tokens=4, ignore_eos=True, suppress_tokens=[5]
+        )
         assert r.min_tokens == 4 and r.ignore_eos is True and r.suppress_tokens == [5]
 
 
@@ -427,13 +471,16 @@ class TestGuidedAliasesW736:
         assert r.grammar == {"type": "choice", "choices": ["yes", "no"]}
 
     def test_guided_grammar_maps_to_cfg(self):
-        r = self._req(guided_grammar="start: \"a\"")
-        assert r.grammar == {"type": "cfg", "grammar": "start: \"a\""}
+        r = self._req(guided_grammar='start: "a"')
+        assert r.grammar == {"type": "cfg", "grammar": 'start: "a"'}
 
     def test_guided_json_maps_to_response_format(self):
         schema = {"type": "object", "properties": {"x": {"type": "string"}}}
         r = self._req(guided_json=schema)
-        assert r.response_format == {"type": "json_schema", "json_schema": {"schema": schema}}
+        assert r.response_format == {
+            "type": "json_schema",
+            "json_schema": {"schema": schema},
+        }
 
     def test_native_grammar_takes_priority(self):
         r = self._req(grammar={"type": "regex", "pattern": "a+"}, guided_regex="b+")
@@ -441,6 +488,7 @@ class TestGuidedAliasesW736:
 
     def test_guided_regex_flows_through_parse(self):
         from yunshu_gateway.routers.chat import _parse_response_format
+
         r = self._req(guided_regex="x+")
         parsed = _parse_response_format(r.response_format, r.grammar)
         assert parsed == {"type": "regex", "pattern": "x+"}
@@ -448,9 +496,15 @@ class TestGuidedAliasesW736:
 
 class TestChatPromptLogprobsSchemaW744:
     def test_accepts_prompt_logprobs(self):
-        r = ChatCompletionRequest(model="m", messages=[ChatMessage(role="user", content="hi")], prompt_logprobs=3)
+        r = ChatCompletionRequest(
+            model="m",
+            messages=[ChatMessage(role="user", content="hi")],
+            prompt_logprobs=3,
+        )
         assert r.prompt_logprobs == 3
 
     def test_default_none(self):
-        r = ChatCompletionRequest(model="m", messages=[ChatMessage(role="user", content="hi")])
+        r = ChatCompletionRequest(
+            model="m", messages=[ChatMessage(role="user", content="hi")]
+        )
         assert r.prompt_logprobs is None

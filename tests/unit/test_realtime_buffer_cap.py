@@ -3,6 +3,7 @@ commit/clear/auto-commit, so a client that streams append forever without commit
 (legal when turn_detection is null) — or speaks continuously so server-VAD never hits
 the silence window — grew it without limit (a memory/DoS vector reachable by any
 can_infer key). Over the cap → emit an overflow error + clear the buffer."""
+
 from __future__ import annotations
 
 import asyncio
@@ -38,9 +39,11 @@ def test_buffer_overflow_emits_error_and_clears(monkeypatch):
     _append(s, 50)
     assert len(s._audio_buffer) == 50 and events == []  # under cap, accumulates
     _append(s, 80)  # now 130 > 100 → overflow
-    assert any(e.get("type") == "error"
-               and e.get("error", {}).get("code") == "input_audio_buffer_overflow"
-               for e in events)
+    assert any(
+        e.get("type") == "error"
+        and e.get("error", {}).get("code") == "input_audio_buffer_overflow"
+        for e in events
+    )
     assert len(s._audio_buffer) == 0  # cleared
     assert s._vad_speaking is False and s._vad_silence_start is None
 
@@ -58,5 +61,6 @@ def test_under_cap_no_error(monkeypatch):
 def test_default_cap_is_generous(monkeypatch):
     monkeypatch.delenv("YUNSHU_REALTIME_MAX_INPUT_AUDIO_BYTES", raising=False)
     from yunshu_gateway.routers.realtime import _max_input_audio_bytes
+
     # ~10MB default ≈ 3.5 min @ 24kHz/16-bit — a real utterance fits.
     assert _max_input_audio_bytes() >= 8 * 1024 * 1024

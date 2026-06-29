@@ -12,6 +12,7 @@ single-engine /v1/models list+retrieve skipped can_access_model (the multi-model
 branch gates it), leaking the model name to an out-of-scope key. Both single-engine
 branches now gate it.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -38,7 +39,7 @@ def test_count_tokens_fallback_coerces_list_content():
     src = inspect.getsource(A.count_tokens)
     # the fallback no longer does a raw str.join over possibly-list content
     assert 'text_parts = [m["content"] for m in messages]' not in src
-    assert "_extract_text_from_content(m[\"content\"])" in src
+    assert '_extract_text_from_content(m["content"])' in src
 
 
 def test_models_single_engine_gates_can_access_model():

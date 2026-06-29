@@ -6,6 +6,7 @@ Covers:
 - ChunkedPrefillOptimizer: chunk computation, semantic boundaries, fair interleaving
 - KVBlockCompactor: block compaction, fragmentation measurement, periodic trigger
 """
+
 from __future__ import annotations
 
 import pytest
@@ -38,9 +39,9 @@ class TestAdaptiveKVQuantizerConfiguration:
         int8_count = sum(1 for c in configs if c.tier == QuantTier.INT8)
         int4_count = sum(1 for c in configs if c.tier == QuantTier.INT4)
 
-        assert fp16_count == 4   # 12 // 3 = 4
-        assert int8_count == 4   # 8 - 4 = 4
-        assert int4_count == 4   # remaining
+        assert fp16_count == 4  # 12 // 3 = 4
+        assert int8_count == 4  # 8 - 4 = 4
+        assert int4_count == 4  # remaining
 
     def test_early_layers_fp16(self):
         """Early layers should be FP16."""
@@ -121,7 +122,9 @@ class TestAdaptiveKVQuantizerBudget:
         """Tight budget should reduce FP16 layers."""
         q = AdaptiveKVQuantizer()
         configs = q.configure(
-            num_layers=12, num_kv_heads=8, head_dim=128,
+            num_layers=12,
+            num_kv_heads=8,
+            head_dim=128,
             max_seq_len=2048,
             budget_bytes=1,  # Extremely tight — forces all INT4
         )
@@ -133,7 +136,9 @@ class TestAdaptiveKVQuantizerBudget:
         """No budget = default tier distribution."""
         q = AdaptiveKVQuantizer()
         configs = q.configure(
-            num_layers=12, num_kv_heads=8, head_dim=128,
+            num_layers=12,
+            num_kv_heads=8,
+            head_dim=128,
             budget_bytes=None,
         )
         assert sum(1 for c in configs if c.tier == QuantTier.FP16) == 4
@@ -142,7 +147,9 @@ class TestAdaptiveKVQuantizerBudget:
         """Very large budget should keep default distribution."""
         q = AdaptiveKVQuantizer()
         configs = q.configure(
-            num_layers=12, num_kv_heads=8, head_dim=128,
+            num_layers=12,
+            num_kv_heads=8,
+            head_dim=128,
             max_seq_len=2048,
             budget_bytes=10 * 1024**4,  # 10 TB — effectively unlimited
         )
@@ -536,28 +543,48 @@ class TestKVBlockCompactorBasic:
     def test_full_blocks_not_compacted(self):
         """Fully utilized blocks should not be merged."""
         c = KVBlockCompactor(block_size=4)
-        c.add_block(KVBlock(
-            block_id="b1", request_id="r1",
-            tokens=[1, 2, 3, 4], num_valid=4, block_size=4,
-        ))
-        c.add_block(KVBlock(
-            block_id="b2", request_id="r1",
-            tokens=[5, 6, 7, 8], num_valid=4, block_size=4,
-        ))
+        c.add_block(
+            KVBlock(
+                block_id="b1",
+                request_id="r1",
+                tokens=[1, 2, 3, 4],
+                num_valid=4,
+                block_size=4,
+            )
+        )
+        c.add_block(
+            KVBlock(
+                block_id="b2",
+                request_id="r1",
+                tokens=[5, 6, 7, 8],
+                num_valid=4,
+                block_size=4,
+            )
+        )
         result = c.compact()
         assert result.blocks_freed == 0
 
     def test_partial_blocks_merged(self):
         """Two partial blocks from the same request should merge."""
         c = KVBlockCompactor(block_size=4)
-        c.add_block(KVBlock(
-            block_id="b1", request_id="r1",
-            tokens=[1, 2], num_valid=2, block_size=4,
-        ))
-        c.add_block(KVBlock(
-            block_id="b2", request_id="r1",
-            tokens=[3, 4], num_valid=2, block_size=4,
-        ))
+        c.add_block(
+            KVBlock(
+                block_id="b1",
+                request_id="r1",
+                tokens=[1, 2],
+                num_valid=2,
+                block_size=4,
+            )
+        )
+        c.add_block(
+            KVBlock(
+                block_id="b2",
+                request_id="r1",
+                tokens=[3, 4],
+                num_valid=2,
+                block_size=4,
+            )
+        )
         result = c.compact()
         # b1 now has [1,2,3,4] (full), b2 is freed
         assert result.blocks_freed == 1
@@ -566,32 +593,57 @@ class TestKVBlockCompactorBasic:
     def test_different_requests_not_merged(self):
         """Blocks from different requests should NOT be merged."""
         c = KVBlockCompactor(block_size=4)
-        c.add_block(KVBlock(
-            block_id="b1", request_id="r1",
-            tokens=[1], num_valid=1, block_size=4,
-        ))
-        c.add_block(KVBlock(
-            block_id="b2", request_id="r2",
-            tokens=[2], num_valid=1, block_size=4,
-        ))
+        c.add_block(
+            KVBlock(
+                block_id="b1",
+                request_id="r1",
+                tokens=[1],
+                num_valid=1,
+                block_size=4,
+            )
+        )
+        c.add_block(
+            KVBlock(
+                block_id="b2",
+                request_id="r2",
+                tokens=[2],
+                num_valid=1,
+                block_size=4,
+            )
+        )
         result = c.compact()
         assert result.blocks_freed == 0
 
     def test_three_partial_blocks_merge(self):
         """Three partial blocks that fit in one block."""
         c = KVBlockCompactor(block_size=6)
-        c.add_block(KVBlock(
-            block_id="b1", request_id="r1",
-            tokens=[1, 2], num_valid=2, block_size=6,
-        ))
-        c.add_block(KVBlock(
-            block_id="b2", request_id="r1",
-            tokens=[3, 4], num_valid=2, block_size=6,
-        ))
-        c.add_block(KVBlock(
-            block_id="b3", request_id="r1",
-            tokens=[5, 6], num_valid=2, block_size=6,
-        ))
+        c.add_block(
+            KVBlock(
+                block_id="b1",
+                request_id="r1",
+                tokens=[1, 2],
+                num_valid=2,
+                block_size=6,
+            )
+        )
+        c.add_block(
+            KVBlock(
+                block_id="b2",
+                request_id="r1",
+                tokens=[3, 4],
+                num_valid=2,
+                block_size=6,
+            )
+        )
+        c.add_block(
+            KVBlock(
+                block_id="b3",
+                request_id="r1",
+                tokens=[5, 6],
+                num_valid=2,
+                block_size=6,
+            )
+        )
         result = c.compact()
         # b1 gets [1,2,3,4,5,6] (full), b2 and b3 freed
         assert result.blocks_freed >= 1
@@ -599,14 +651,24 @@ class TestKVBlockCompactorBasic:
     def test_blocks_that_dont_fit_fully(self):
         """Partial blocks that can't fully merge into one block."""
         c = KVBlockCompactor(block_size=4)
-        c.add_block(KVBlock(
-            block_id="b1", request_id="r1",
-            tokens=[1, 2, 3], num_valid=3, block_size=4,
-        ))
-        c.add_block(KVBlock(
-            block_id="b2", request_id="r1",
-            tokens=[4, 5, 6], num_valid=3, block_size=4,
-        ))
+        c.add_block(
+            KVBlock(
+                block_id="b1",
+                request_id="r1",
+                tokens=[1, 2, 3],
+                num_valid=3,
+                block_size=4,
+            )
+        )
+        c.add_block(
+            KVBlock(
+                block_id="b2",
+                request_id="r1",
+                tokens=[4, 5, 6],
+                num_valid=3,
+                block_size=4,
+            )
+        )
         result = c.compact()
         # b1 gets 3+1=4 tokens, b2 keeps 2 tokens
         # Only 1 token transferred, b2 is not freed
@@ -624,10 +686,15 @@ class TestKVBlockCompactorFragmentation:
 
     def test_full_utilization(self):
         c = KVBlockCompactor(block_size=4)
-        c.add_block(KVBlock(
-            block_id="b1", request_id="r1",
-            tokens=[1, 2, 3, 4], num_valid=4, block_size=4,
-        ))
+        c.add_block(
+            KVBlock(
+                block_id="b1",
+                request_id="r1",
+                tokens=[1, 2, 3, 4],
+                num_valid=4,
+                block_size=4,
+            )
+        )
         stats = c.get_fragmentation_stats()
         assert stats.overall_utilization == 1.0
         assert stats.waste_pct == 0.0
@@ -635,10 +702,15 @@ class TestKVBlockCompactorFragmentation:
 
     def test_partial_utilization(self):
         c = KVBlockCompactor(block_size=10)
-        c.add_block(KVBlock(
-            block_id="b1", request_id="r1",
-            tokens=[1, 2, 3], num_valid=3, block_size=10,
-        ))
+        c.add_block(
+            KVBlock(
+                block_id="b1",
+                request_id="r1",
+                tokens=[1, 2, 3],
+                num_valid=3,
+                block_size=10,
+            )
+        )
         stats = c.get_fragmentation_stats()
         assert stats.overall_utilization == pytest.approx(0.3)
         assert stats.waste_pct == pytest.approx(70.0)
@@ -646,14 +718,24 @@ class TestKVBlockCompactorFragmentation:
 
     def test_fragmentation_ratio(self):
         c = KVBlockCompactor(block_size=4)
-        c.add_block(KVBlock(
-            block_id="b1", request_id="r1",
-            tokens=[1, 2], num_valid=2, block_size=4,
-        ))
-        c.add_block(KVBlock(
-            block_id="b2", request_id="r1",
-            tokens=[1, 2, 3, 4], num_valid=4, block_size=4,
-        ))
+        c.add_block(
+            KVBlock(
+                block_id="b1",
+                request_id="r1",
+                tokens=[1, 2],
+                num_valid=2,
+                block_size=4,
+            )
+        )
+        c.add_block(
+            KVBlock(
+                block_id="b2",
+                request_id="r1",
+                tokens=[1, 2, 3, 4],
+                num_valid=4,
+                block_size=4,
+            )
+        )
         stats = c.get_fragmentation_stats()
         assert stats.fragmentation_ratio == 0.5  # 1 of 2 blocks is partial
 
@@ -663,14 +745,24 @@ class TestKVBlockCompactorPeriodic:
 
     def test_triggered_at_interval(self):
         c = KVBlockCompactor(block_size=4, compact_interval=50)
-        c.add_block(KVBlock(
-            block_id="b1", request_id="r1",
-            tokens=[1], num_valid=1, block_size=4,
-        ))
-        c.add_block(KVBlock(
-            block_id="b2", request_id="r1",
-            tokens=[2, 3], num_valid=2, block_size=4,
-        ))
+        c.add_block(
+            KVBlock(
+                block_id="b1",
+                request_id="r1",
+                tokens=[1],
+                num_valid=1,
+                block_size=4,
+            )
+        )
+        c.add_block(
+            KVBlock(
+                block_id="b2",
+                request_id="r1",
+                tokens=[2, 3],
+                num_valid=2,
+                block_size=4,
+            )
+        )
         result = c.maybe_compact(step=50)
         assert result is not None
         assert result.blocks_freed >= 0
@@ -691,10 +783,15 @@ class TestKVBlockCompactorStats:
 
     def test_stats_structure(self):
         c = KVBlockCompactor(block_size=64, compact_interval=50)
-        c.add_block(KVBlock(
-            block_id="b1", request_id="r1",
-            tokens=[1], num_valid=1, block_size=64,
-        ))
+        c.add_block(
+            KVBlock(
+                block_id="b1",
+                request_id="r1",
+                tokens=[1],
+                num_valid=1,
+                block_size=64,
+            )
+        )
         stats = c.get_stats()
         assert "block_size" in stats
         assert "total_compactions" in stats

@@ -2,6 +2,7 @@
 client can reassemble a multi-byte char (CJK/emoji) that byte-level BPE split across
 tokens. The old `decode([tid]).encode("utf-8")` lost the raw bytes — a lone byte-fragment
 decodes to U+FFFD (�), so its bytes became the replacement char [239,191,189]."""
+
 from __future__ import annotations
 
 from yunshu_engine.text_utils import _GPT2_BYTE_DECODER, token_id_to_bytes
@@ -11,9 +12,13 @@ class _ByteLevelBackend:
     """Minimal stand-in for a fast tokenizer's backend whose decoder is ByteLevel —
     this is what real byte-level BPE tokenizers (Qwen/Llama-3/GPT) expose and what
     _is_byte_level_tokenizer keys on to enable raw-byte recovery."""
+
     class _Decoder:
         def __repr__(self):
-            return "ByteLevel(add_prefix_space=False, trim_offsets=True, use_regex=True)"
+            return (
+                "ByteLevel(add_prefix_space=False, trim_offsets=True, use_regex=True)"
+            )
+
     decoder = _Decoder()
     pre_tokenizer = None
 
@@ -24,6 +29,7 @@ class _FakeGPT2Tokenizer:
     for an incomplete multi-byte sequence (like real HF tokenizers). It exposes a
     ByteLevel backend_tokenizer so _is_byte_level_tokenizer recognises it as
     byte-level — exactly as a real Qwen/GPT fast tokenizer does."""
+
     backend_tokenizer = _ByteLevelBackend()
 
     def __init__(self, id_to_surface):
@@ -68,13 +74,16 @@ def test_sentencepiece_byte_token():
     class _SP:
         def convert_ids_to_tokens(self, tid):
             return "<0xE8>"
+
         def decode(self, ids):
             return "�"
+
     assert token_id_to_bytes(_SP(), 5) == [0xE8]
 
 
 def test_lp_bytes_prefers_engine_provided():
     from yunshu_gateway.routers.chat import _lp_bytes
+
     # engine already put correct raw bytes on the entry → use them as-is.
     entry = {"token": "�", "token_id": 1, "bytes": [0xE8, 0x81]}
     assert _lp_bytes(entry, "�", None) == [0xE8, 0x81]

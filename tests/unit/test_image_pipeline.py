@@ -50,11 +50,14 @@ class TestRegistry:
             register_pipeline,
         )
 
-        register_pipeline("test-pipeline-x", PipelineInfo(
-            pipeline_type=PipelineType.Z_IMAGE,
-            name="Test Pipeline X",
-            description="Test",
-        ))
+        register_pipeline(
+            "test-pipeline-x",
+            PipelineInfo(
+                pipeline_type=PipelineType.Z_IMAGE,
+                name="Test Pipeline X",
+                description="Test",
+            ),
+        )
         info = get_pipeline_info("Test-Pipeline-X")
         assert info is not None
         assert info.name == "Test Pipeline X"
@@ -97,7 +100,10 @@ class TestDetectPipelineType:
     def test_zimage_path(self):
         from yunshu_engine.image_pipeline import PipelineType, detect_pipeline_type
 
-        assert detect_pipeline_type("/models/Z-Image-Turbo-MLX-4bit") == PipelineType.Z_IMAGE
+        assert (
+            detect_pipeline_type("/models/Z-Image-Turbo-MLX-4bit")
+            == PipelineType.Z_IMAGE
+        )
 
     def test_flux_path(self):
         from yunshu_engine.image_pipeline import PipelineType, detect_pipeline_type

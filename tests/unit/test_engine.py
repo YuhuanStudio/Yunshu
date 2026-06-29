@@ -73,6 +73,7 @@ class _FakeGenResponse:
         self.prompt_cache = None
         self.all_tokens = None
         import mlx.core as mx
+
         self.logprobs = mx.zeros(4)  # dummy
 
 
@@ -271,8 +272,7 @@ class TestEngineRequestLifecycle:
         gen._uid_counter += 1
         gen._pending[uid] = [
             _FakeGenResponse(uid, 0, current_state="reasoning"),
-            _FakeGenResponse(uid, 1, current_state="normal",
-                             finish_reason="stop"),
+            _FakeGenResponse(uid, 1, current_state="normal", finish_reason="stop"),
         ]
 
         state = RequestState(
@@ -299,7 +299,9 @@ class TestEngineRequestLifecycle:
             o = state.output_queue.get_nowait()
             outputs.append(o)
 
-        reasoning_outputs = [o for o in outputs if o is not None and o.current_state == "reasoning"]
+        reasoning_outputs = [
+            o for o in outputs if o is not None and o.current_state == "reasoning"
+        ]
         assert len(reasoning_outputs) >= 1
         assert reasoning_outputs[0].token_text == "Hello"
 

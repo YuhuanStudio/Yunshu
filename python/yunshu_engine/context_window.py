@@ -86,9 +86,9 @@ class ContextWindowStats:
 
     truncations_applied: int = 0
     total_tokens_saved: int = 0
-    strategy_usage: dict[str, int] = field(default_factory=lambda: {
-        s.value: 0 for s in TruncationStrategy
-    })
+    strategy_usage: dict[str, int] = field(
+        default_factory=lambda: {s.value: 0 for s in TruncationStrategy}
+    )
 
 
 class ContextWindowManager:
@@ -245,9 +245,7 @@ class ContextWindowManager:
 
     # ── Strategy implementations ──
 
-    def _truncate_oldest(
-        self, messages: list[dict], max_tokens: int
-    ) -> list[dict]:
+    def _truncate_oldest(self, messages: list[dict], max_tokens: int) -> list[dict]:
         """Drop oldest messages until under budget. Always keeps system prompt.
 
         Preserves original message order. Protected roles (system/developer)
@@ -269,14 +267,16 @@ class ContextWindowManager:
                 logger.warning(
                     "All messages are system/developer (%d tokens) but "
                     "max_tokens=%d — returning without truncation",
-                    total, max_tokens,
+                    total,
+                    max_tokens,
                 )
             return deepcopy(messages)
 
         result = deepcopy(messages)
         # Indices of removable (non-protected) messages
         removable_indices = [
-            i for i, m in enumerate(result)
+            i
+            for i, m in enumerate(result)
             if m.get("role") not in self._PROTECTED_ROLES
         ]
 
@@ -286,7 +286,11 @@ class ContextWindowManager:
             if len(removable_indices) == prev_count:
                 # Remaining messages still over budget — strip all non-protected.
                 # Always keep at least one message to prevent empty conversation.
-                protected = [m for m in deepcopy(messages) if m.get("role") in self._PROTECTED_ROLES]
+                protected = [
+                    m
+                    for m in deepcopy(messages)
+                    if m.get("role") in self._PROTECTED_ROLES
+                ]
                 return protected or deepcopy(messages[-1:])
             prev_count = len(removable_indices)
             # Find contiguous group at start of removable_indices
@@ -308,7 +312,8 @@ class ContextWindowManager:
             for idx in sorted(group, reverse=True):
                 result.pop(idx)
             removable_indices = [
-                i for i, m in enumerate(result)
+                i
+                for i, m in enumerate(result)
                 if m.get("role") not in self._PROTECTED_ROLES
             ]
 
@@ -319,9 +324,7 @@ class ContextWindowManager:
 
         return result
 
-    def _sliding_window(
-        self, messages: list[dict], max_tokens: int
-    ) -> list[dict]:
+    def _sliding_window(self, messages: list[dict], max_tokens: int) -> list[dict]:
         """Keep only the most recent messages that fit in the window.
 
         Always preserves system messages at the start.
@@ -342,7 +345,8 @@ class ContextWindowManager:
             logger.warning(
                 "System messages (%d tokens) alone exceed max_tokens (%d); "
                 "returning system messages without truncation",
-                system_token_cost, max_tokens,
+                system_token_cost,
+                max_tokens,
             )
             return deepcopy(system_msgs)
 
@@ -395,7 +399,11 @@ class ContextWindowManager:
         # orphaned (no preceding assistant with tool_calls that they could
         # belong to). Simply stripping all trailing tool messages would
         # discard valid tool responses belonging to an earlier assistant.
-        while window and window[-1].get("role") == "assistant" and window[-1].get("tool_calls"):
+        while (
+            window
+            and window[-1].get("role") == "assistant"
+            and window[-1].get("tool_calls")
+        ):
             window.pop(-1)
             # After removing the trailing assistant, remove trailing tool
             # messages ONLY if they are orphaned (no preceding assistant
@@ -420,9 +428,7 @@ class ContextWindowManager:
 
         return deepcopy(system_msgs) + deepcopy(window)
 
-    def _importance_aware(
-        self, messages: list[dict], max_tokens: int
-    ) -> list[dict]:
+    def _importance_aware(self, messages: list[dict], max_tokens: int) -> list[dict]:
         """Keep system prompt + recent turns + important middle turns.
 
         Importance scoring based on:
@@ -485,7 +491,7 @@ class ContextWindowManager:
                         break
                 if actual_tools < expected_tools:
                     # Tool group is split — extend to include all tool responses
-                    recent_count += (expected_tools - actual_tools)
+                    recent_count += expected_tools - actual_tools
                     if recent_count > len(non_system):
                         recent = list(non_system)
                         break
@@ -493,7 +499,7 @@ class ContextWindowManager:
                     continue
             break
 
-        middle = non_system[:-len(recent)] if len(non_system) > len(recent) else []
+        middle = non_system[: -len(recent)] if len(non_system) > len(recent) else []
 
         # Safety check: if even system + recent exceed the budget, fall back
         # to truncate_oldest which will trim the recent messages too.
@@ -532,7 +538,7 @@ class ContextWindowManager:
             if idx in kept_middle_indices:
                 continue
             # Calculate tokens for the entire group (assistant + tool responses)
-            group = middle[idx:idx + group_size]
+            group = middle[idx : idx + group_size]
             group_tokens = self._count_messages_tokens(group)
             if group_tokens <= budget_remaining and score >= self._importance_threshold:
                 for gi in range(group_size):
@@ -540,12 +546,12 @@ class ContextWindowManager:
                 budget_remaining -= group_tokens
 
         # Reconstruct in original order
-        kept_middle = [middle[i] for i in range(len(middle)) if i in kept_middle_indices]
+        kept_middle = [
+            middle[i] for i in range(len(middle)) if i in kept_middle_indices
+        ]
         return deepcopy(system_msgs) + deepcopy(kept_middle) + deepcopy(recent)
 
-    def _summary_compression(
-        self, messages: list[dict], max_tokens: int
-    ) -> list[dict]:
+    def _summary_compression(self, messages: list[dict], max_tokens: int) -> list[dict]:
         """Replace old messages with a summary placeholder.
 
         Keeps system messages and recent turns intact; replaces older
@@ -574,12 +580,16 @@ class ContextWindowManager:
             # Budget for summary = max_tokens - system - recent
             system_tokens = self._count_messages_tokens(system_msgs)
             recent_tokens = self._count_messages_tokens(recent)
-            summary_token_budget = max_tokens - system_tokens - recent_tokens - 4  # -4 for role overhead
+            summary_token_budget = (
+                max_tokens - system_tokens - recent_tokens - 4
+            )  # -4 for role overhead
             if summary_token_budget <= 0:
                 continue
 
             # Convert token budget to character budget (~4 chars/token)
-            summary_char_budget = max(40, summary_token_budget * 4 - 40)  # -40 for header text
+            summary_char_budget = max(
+                40, summary_token_budget * 4 - 40
+            )  # -40 for header text
 
             # Build summary message
             summary_text = self._build_summary(old, max_chars=summary_char_budget)
@@ -652,9 +662,7 @@ class ContextWindowManager:
             total += 4
         return total
 
-    def _compute_importance(
-        self, message: dict, index: int, total: int
-    ) -> float:
+    def _compute_importance(self, message: dict, index: int, total: int) -> float:
         """Compute an importance score for a message.
 
         Factors:
@@ -673,7 +681,9 @@ class ContextWindowManager:
                 if isinstance(block, dict):
                     block_type = block.get("type", "")
                     if block_type in ("image_url", "image", "video", "video_url"):
-                        content_len += self._IMAGE_TOKEN_ESTIMATE * 4  # convert back to chars
+                        content_len += (
+                            self._IMAGE_TOKEN_ESTIMATE * 4
+                        )  # convert back to chars
                     content_len += len(block.get("text", ""))
                 elif isinstance(block, str):
                     content_len += len(block)
@@ -723,9 +733,9 @@ class ContextWindowManager:
                 texts = []
                 for block in content:
                     if isinstance(block, dict) and "text" in block:
-                        texts.append(block["text"][:per_msg_chars // 2])
+                        texts.append(block["text"][: per_msg_chars // 2])
                     elif isinstance(block, str):
-                        texts.append(block[:per_msg_chars // 2])
+                        texts.append(block[: per_msg_chars // 2])
                 combined = " ".join(texts)
                 display = combined[:per_msg_chars]
                 if len(combined) > per_msg_chars:

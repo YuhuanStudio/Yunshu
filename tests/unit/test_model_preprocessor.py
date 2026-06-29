@@ -1,6 +1,5 @@
 """Tests for model_preprocessor.py — model-specific input preprocessors."""
 
-
 from yunshu_engine.model_preprocessor import (
     CohereVisionPreprocessor,
     CosyVoicePhonemePreprocessor,
@@ -409,6 +408,7 @@ class TestPreprocessorRegistry:
         class CustomPreprocessor(ModelPreprocessor):
             model_family = "custom_test"
             input_type = PreprocessorType.MULTIMODAL
+
             def preprocess(self, raw_input, **kwargs):
                 return PreprocessedInput(
                     input_type=self.input_type,
@@ -428,7 +428,9 @@ class TestPreprocessorRegistry:
         stats = reg.get_stats()
         assert "IMAGE" in stats["by_type"]
         assert "AUDIO" in stats["by_type"]
-        assert stats["by_type"]["IMAGE"] >= 5  # LLaVA + QwenVL + PhiVision + InternVL + CohereVision
+        assert (
+            stats["by_type"]["IMAGE"] >= 5
+        )  # LLaVA + QwenVL + PhiVision + InternVL + CohereVision
 
     def test_stats(self):
         reg = PreprocessorRegistry()

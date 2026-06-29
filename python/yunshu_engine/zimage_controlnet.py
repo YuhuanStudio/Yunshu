@@ -14,6 +14,7 @@ This module builds the branch + loads the 295-key safetensors with key remapping
 (checkpoint uses Sequential indices `.2-1`, `to_out.0`, `adaLN_modulation.0` that our
 flat modules don't). Forward + main-DiT injection are wired in image_engine.
 """
+
 from __future__ import annotations
 
 import mlx.core as mx
@@ -27,8 +28,14 @@ class _ControlBlock(nn.Module):
     """A main-style DiT block + after_proj (zero-init residual) and an optional
     before_proj (only the first block of each stack has one)."""
 
-    def __init__(self, dim: int, n_heads: int, eps: float = 1e-5,
-                 qk_norm: bool = True, has_before: bool = False):
+    def __init__(
+        self,
+        dim: int,
+        n_heads: int,
+        eps: float = 1e-5,
+        qk_norm: bool = True,
+        has_before: bool = False,
+    ):
         super().__init__()
         self.attention = _DiTAttention(dim, n_heads, qk_norm, eps)
         self.feed_forward = _SwiGLUFFN(dim, int(dim / 3 * 8))
@@ -49,7 +56,8 @@ class _ControlBlock(nn.Module):
         g_msa = mx.tanh(g_msa)
         g_mlp = mx.tanh(g_mlp)
         c = c + g_msa * self.attention_norm2(
-            self.attention(self.attention_norm1(c) * s_msa, attn_mask, freqs_cis))
+            self.attention(self.attention_norm1(c) * s_msa, attn_mask, freqs_cis)
+        )
         c = c + g_mlp * self.ffn_norm2(self.feed_forward(self.ffn_norm1(c) * s_mlp))
         return c
 
@@ -58,14 +66,14 @@ class _ControlBlock(nn.Module):
         c carries a stack [hint_0..hint_{i-1}, hidden] (axis 0). Block 0 seeds it with
         `before_proj(c)+x` (x = the main DiT hidden); each block appends after_proj(c)
         as its hint. Final hidden is the last stack element."""
-        if self.before_proj is not None:        # first block of the stack
+        if self.before_proj is not None:  # first block of the stack
             c = self.before_proj(c) + x
             all_c = []
         else:
             all_c = [c[i] for i in range(c.shape[0])]
-            c = all_c.pop(-1)                    # current hidden = last element
+            c = all_c.pop(-1)  # current hidden = last element
         c = self._block(c, attn_mask, freqs_cis, t_emb)
-        c_skip = self.after_proj(c)              # this block's hint
+        c_skip = self.after_proj(c)  # this block's hint
         all_c = all_c + [c_skip, c]
         return mx.stack(all_c, axis=0)
 
@@ -74,9 +82,16 @@ class ZImageControlNet(nn.Module):
     """Z-Image-Fun-Controlnet-Union branch: embeds the 132-ch control context and
     runs 2 refiner + 15 control blocks, emitting one hint per control layer."""
 
-    def __init__(self, dim: int = 3840, n_heads: int = 30,
-                 control_in_dim: int = 132, n_layers: int = 15,
-                 n_refiner_layers: int = 2, eps: float = 1e-5, qk_norm: bool = True):
+    def __init__(
+        self,
+        dim: int = 3840,
+        n_heads: int = 30,
+        control_in_dim: int = 132,
+        n_layers: int = 15,
+        n_refiner_layers: int = 2,
+        eps: float = 1e-5,
+        qk_norm: bool = True,
+    ):
         super().__init__()
         self.dim = dim
         self.control_x_embedder = nn.Linear(control_in_dim, dim, bias=True)
@@ -103,8 +118,9 @@ class ZImageControlNet(nn.Module):
         parts = [c[i] for i in range(c.shape[0])]
         return parts[:-1], parts[-1]  # (refiner_hints, control_context)
 
-    def forward_layers(self, control_context, unified_main, cap_emb,
-                       unified_freqs, unified_mask, t_emb):
+    def forward_layers(
+        self, control_context, unified_main, cap_emb, unified_freqs, unified_mask, t_emb
+    ):
         """Run the 15 control_layers over [control_context ; caption] (block 0 seeds
         via before_proj(c)+unified_main; shares the unified RoPE/mask). Returns
         n_layers hints, each shaped like the main `unified`."""

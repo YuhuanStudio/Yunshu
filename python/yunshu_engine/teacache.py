@@ -76,20 +76,25 @@ class TeaCacheConfig:
             If None, auto-selected based on model_type.
         model_type: Transformer class name for coefficient lookup.
     """
+
     rel_l1_thresh: float = 0.2
     coefficients: list[float] | None = None
     model_type: str = "ZImageTransformer"
 
     def __post_init__(self):
         if self.rel_l1_thresh <= 0:
-            raise ValueError(f"rel_l1_thresh must be positive, got {self.rel_l1_thresh}")
+            raise ValueError(
+                f"rel_l1_thresh must be positive, got {self.rel_l1_thresh}"
+            )
         if self.coefficients is None:
             if self.model_type in _MODEL_COEFFICIENTS:
                 self.coefficients = _MODEL_COEFFICIENTS[self.model_type]
             else:
                 self.coefficients = _MODEL_COEFFICIENTS["ZImageTransformer"]
         if len(self.coefficients) != 5:
-            raise ValueError(f"coefficients must have 5 elements, got {len(self.coefficients)}")
+            raise ValueError(
+                f"coefficients must have 5 elements, got {len(self.coefficients)}"
+            )
 
 
 class TeaCacheState:
@@ -194,7 +199,9 @@ class TeaCacheHook:
         if timestep.ndim == 0:
             timestep = timestep.reshape((1,))
 
-        t_emb = transformer.t_embedder(timestep.astype(mx.float32) * transformer.t_scale)
+        t_emb = transformer.t_embedder(
+            timestep.astype(mx.float32) * transformer.t_scale
+        )
         modulated_input = t_emb
 
         should_run = self.should_compute(modulated_input)

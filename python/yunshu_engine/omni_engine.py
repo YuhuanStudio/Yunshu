@@ -14,6 +14,7 @@ works correctly on the calling thread's default Metal stream).
 This is the forward differentiation: the only MLX server exposing Qwen3-Omni's
 native speech-out.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -36,9 +37,17 @@ _OMNI_SPEAKERS = {"ethan", "chelsie", "aiden"}
 # selects a real Talker speaker instead of crashing — rough gender match, else
 # the engine default. This is a convenience map, not a fidelity claim.
 _VOICE_ALIASES = {
-    "alloy": "ethan", "echo": "ethan", "onyx": "ethan", "ash": "ethan",
-    "ballad": "ethan", "sage": "ethan", "verse": "ethan", "fable": "ethan",
-    "nova": "chelsie", "shimmer": "chelsie", "coral": "chelsie",
+    "alloy": "ethan",
+    "echo": "ethan",
+    "onyx": "ethan",
+    "ash": "ethan",
+    "ballad": "ethan",
+    "sage": "ethan",
+    "verse": "ethan",
+    "fable": "ethan",
+    "nova": "chelsie",
+    "shimmer": "chelsie",
+    "coral": "chelsie",
 }
 
 
@@ -158,10 +167,14 @@ class OmniEngine:
         start = asyncio.get_running_loop().time()
         self.load()
         for _ in range(max(1, rounds)):
-            async for _chunk in self.stream("Hello, please say a short greeting out loud."):
+            async for _chunk in self.stream(
+                "Hello, please say a short greeting out loud."
+            ):
                 pass  # discard — we only want kernels compiled and the path primed
         elapsed = asyncio.get_running_loop().time() - start
-        logger.info("OmniEngine warmup done in %.1fs (first request now warm).", elapsed)
+        logger.info(
+            "OmniEngine warmup done in %.1fs (first request now warm).", elapsed
+        )
         return elapsed
 
     async def stream(
@@ -180,8 +193,17 @@ class OmniEngine:
         self.load()
         async with self._busy:  # one generation at a time
             spk = _resolve_speaker(speaker or self.speaker, self.speaker)
-            tmax = thinker_max_new_tokens if thinker_max_new_tokens is not None else self.thinker_max
-            conv = [{"role": "user", "content": _build_content(text, image_path, audio_path)}]
+            tmax = (
+                thinker_max_new_tokens
+                if thinker_max_new_tokens is not None
+                else self.thinker_max
+            )
+            conv = [
+                {
+                    "role": "user",
+                    "content": _build_content(text, image_path, audio_path),
+                }
+            ]
             mi, _ = _prepare_inputs(self.processor, conv)
 
             gen = self.model.generate_stream(
@@ -191,15 +213,19 @@ class OmniEngine:
                 talker_max_new_tokens=self.talker_max,
                 talker_temperature=self.talker_temp,
                 chunk_size=self.chunk_size,
-                **{k: v for k, v in {
-                    "input_features": mi.get("input_features"),
-                    "feature_attention_mask": mi.get("feature_attention_mask"),
-                    "audio_feature_lengths": mi.get("audio_feature_lengths"),
-                    "pixel_values": mi.get("pixel_values"),
-                    "pixel_values_videos": mi.get("pixel_values_videos"),
-                    "image_grid_thw": mi.get("image_grid_thw"),
-                    "video_grid_thw": mi.get("video_grid_thw"),
-                }.items() if v is not None},
+                **{
+                    k: v
+                    for k, v in {
+                        "input_features": mi.get("input_features"),
+                        "feature_attention_mask": mi.get("feature_attention_mask"),
+                        "audio_feature_lengths": mi.get("audio_feature_lengths"),
+                        "pixel_values": mi.get("pixel_values"),
+                        "pixel_values_videos": mi.get("pixel_values_videos"),
+                        "image_grid_thw": mi.get("image_grid_thw"),
+                        "video_grid_thw": mi.get("video_grid_thw"),
+                    }.items()
+                    if v is not None
+                },
             )
 
             self._prev_text_ids = []
@@ -218,17 +244,21 @@ class OmniEngine:
                     wav = np.asarray(payload, dtype=np.float32).reshape(-1)
                     audio_samples += len(wav)
                     yield OmniChunk("audio", wav, now)
-            yield OmniChunk("done", {
-                "first_audio_s": first_audio,
-                "audio_seconds": audio_samples / AUDIO_SAMPLE_RATE,
-                "total_s": asyncio.get_running_loop().time() - start,
-            }, asyncio.get_running_loop().time() - start)
+            yield OmniChunk(
+                "done",
+                {
+                    "first_audio_s": first_audio,
+                    "audio_seconds": audio_samples / AUDIO_SAMPLE_RATE,
+                    "total_s": asyncio.get_running_loop().time() - start,
+                },
+                asyncio.get_running_loop().time() - start,
+            )
 
     def _decode_fragment(self, payload) -> str:
         """generate_stream yields the accumulated token-id sequence on each
         'text' event; emit only the newly-added tail as decoded text."""
         ids = list(payload.tolist()) if hasattr(payload, "tolist") else list(payload)
-        new_ids = ids[len(self._prev_text_ids):]
+        new_ids = ids[len(self._prev_text_ids) :]
         self._prev_text_ids = ids
         if not new_ids:
             return ""
@@ -252,7 +282,9 @@ def _prepare_inputs(processor: Any, conv: list[dict]) -> Any:
     return prepare_omni_inputs(processor, conv)
 
 
-def _build_content(text: str, image_path: str | None, audio_path: str | None) -> list[dict]:
+def _build_content(
+    text: str, image_path: str | None, audio_path: str | None
+) -> list[dict]:
     c: list[dict] = []
     if audio_path:
         c.append({"type": "audio", "audio": audio_path})

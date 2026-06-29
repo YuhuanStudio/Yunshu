@@ -7,6 +7,7 @@ model-isolation keystone, un-propagated to audio).
 
 Fix: a shared _key_allows(model_id) gate, applied at all three engine-selection sites.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -40,14 +41,20 @@ def test_key_allows_semantics():
     assert s._key_allows("tts-x") is False
     assert s._key_allows("tts-ok") is True
     # a key whose check raises → fail closed
-    raising = SimpleNamespace(can_access_model=lambda m: (_ for _ in ()).throw(RuntimeError()))
+    raising = SimpleNamespace(
+        can_access_model=lambda m: (_ for _ in ()).throw(RuntimeError())
+    )
     assert _session(raising)._key_allows("m") is False
 
 
 def _entry(model_id):
     eng = mock.MagicMock()
-    eng.synthesize_stream = mock.MagicMock(side_effect=AssertionError("denied engine was driven"))
-    eng.synthesize = mock.MagicMock(side_effect=AssertionError("denied engine was driven"))
+    eng.synthesize_stream = mock.MagicMock(
+        side_effect=AssertionError("denied engine was driven")
+    )
+    eng.synthesize = mock.MagicMock(
+        side_effect=AssertionError("denied engine was driven")
+    )
     return SimpleNamespace(is_loaded=True, model_id=model_id, engine=eng), eng
 
 
@@ -57,11 +64,15 @@ def test_tts_loop_skips_denied_engine():
     s._g711_resample_remainder = b"carry"
     entry, eng = _entry("tts-x")
     mgr = SimpleNamespace(list_entries=lambda: [entry])
-    with mock.patch.object(realtime, "get_model_manager", create=True, return_value=mgr), \
-         mock.patch("yunshu_gateway.engine.get_model_manager", return_value=mgr):
+    with (
+        mock.patch.object(realtime, "get_model_manager", create=True, return_value=mgr),
+        mock.patch("yunshu_gateway.engine.get_model_manager", return_value=mgr),
+    ):
         # the only synth engine is denied → loop skips it, engine never driven,
         # function returns without raising the AssertionError side_effects
-        asyncio.run(s._synthesize_audio_response("hello", "resp_1", "item_1", voice="v"))
+        asyncio.run(
+            s._synthesize_audio_response("hello", "resp_1", "item_1", voice="v")
+        )
     eng.synthesize_stream.assert_not_called()
     eng.synthesize.assert_not_called()
     # the fresh-response carry reset still happened (we entered the method body)
@@ -72,7 +83,11 @@ def test_both_audio_loops_gate_on_key_allows():
     src = inspect.getsource(realtime)
     # TTS loop
     i_tts = src.index("hasattr(entry.engine, 'synthesize')")
-    assert "_key_allows" in src[i_tts:i_tts + 400], "TTS loop missing _key_allows gate"
+    assert "_key_allows" in src[i_tts : i_tts + 400], (
+        "TTS loop missing _key_allows gate"
+    )
     # ASR loop
     i_asr = src.index("hasattr(entry.engine, 'transcribe')")
-    assert "_key_allows" in src[i_asr:i_asr + 400], "ASR loop missing _key_allows gate"
+    assert "_key_allows" in src[i_asr : i_asr + 400], (
+        "ASR loop missing _key_allows gate"
+    )

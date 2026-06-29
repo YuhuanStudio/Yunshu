@@ -34,6 +34,7 @@ def _make_mask_png(width: int, height: int, fill_fraction: float = 0.5) -> bytes
 class TestVAEEncoder:
     def test_encoder_init(self):
         from yunshu_engine.image_engine import VAEEncoder
+
         enc = VAEEncoder()
         assert enc.conv_in is not None
         assert len(enc.down_blocks) == 4
@@ -187,8 +188,8 @@ class TestMaskLoading:
         """4-wide RGBA mask: left half opaque white (inpaint), right half transparent
         with the given RGB under the alpha=0."""
         arr = np.zeros((128, 128, 4), dtype=np.uint8)
-        arr[:, :64] = (255, 255, 255, 255)            # opaque white = inpaint
-        arr[:, 64:] = (*transparent_rgb, 0)           # transparent = should KEEP
+        arr[:, :64] = (255, 255, 255, 255)  # opaque white = inpaint
+        arr[:, 64:] = (*transparent_rgb, 0)  # transparent = should KEEP
         buf = io.BytesIO()
         PILImage.fromarray(arr, mode="RGBA").save(buf, format="PNG")
         return buf.getvalue()
@@ -200,9 +201,13 @@ class TestMaskLoading:
         from yunshu_engine.image_engine import ImageGenEngine
 
         engine = ImageGenEngine.__new__(ImageGenEngine)
-        mask = np.array(engine._load_mask(self._rgba_mask((255, 255, 255)), 16, 16))[0, 0]
+        mask = np.array(engine._load_mask(self._rgba_mask((255, 255, 255)), 16, 16))[
+            0, 0
+        ]
         assert np.all(mask[:, :8] == 1.0), "opaque-white half must inpaint"
-        assert np.all(mask[:, 8:] == 0.0), "transparent (white-RGB) half must be kept, not inpainted"
+        assert np.all(mask[:, 8:] == 0.0), (
+            "transparent (white-RGB) half must be kept, not inpainted"
+        )
 
     def test_load_mask_rgba_transparent_black_rgb_still_kept(self):
         # the common encoder case (black RGB under transparency) was already correct — must stay so
@@ -218,7 +223,9 @@ class TestMaskLoading:
         from yunshu_engine.image_engine import ImageGenEngine
 
         engine = ImageGenEngine.__new__(ImageGenEngine)
-        mask = np.array(engine._load_mask(_make_mask_png(256, 256, fill_fraction=0.5), 16, 16))[0, 0]
+        mask = np.array(
+            engine._load_mask(_make_mask_png(256, 256, fill_fraction=0.5), 16, 16)
+        )[0, 0]
         assert np.all(mask[:, :8] == 1.0) and np.all(mask[:, 8:] == 0.0)
 
 
@@ -277,6 +284,7 @@ class TestInpaintEndpoint:
         from fastapi.testclient import TestClient
 
         from yunshu_gateway.main import create_app
+
         app = create_app()
         return TestClient(app)
 
@@ -284,21 +292,27 @@ class TestInpaintEndpoint:
         """Inpaint should 404 when no image engine loaded."""
         img_b64 = base64.b64encode(_make_png(64, 64)).decode()
         mask_b64 = base64.b64encode(_make_mask_png(64, 64)).decode()
-        resp = client.post("/v1/images/inpaint", json={
-            "image": img_b64,
-            "prompt": "fill with blue sky",
-            "mask": mask_b64,
-            "size": "64x64",
-        })
+        resp = client.post(
+            "/v1/images/inpaint",
+            json={
+                "image": img_b64,
+                "prompt": "fill with blue sky",
+                "mask": mask_b64,
+                "size": "64x64",
+            },
+        )
         # 404 because no image engine is loaded
         assert resp.status_code in (404, 503)
 
     def test_inpaint_invalid_base64(self, client):
         """Inpaint should 400 with invalid base64."""
-        resp = client.post("/v1/images/inpaint", json={
-            "image": "not-valid-base64!!!",
-            "prompt": "test",
-        })
+        resp = client.post(
+            "/v1/images/inpaint",
+            json={
+                "image": "not-valid-base64!!!",
+                "prompt": "test",
+            },
+        )
         assert resp.status_code == 400
 
     def test_inpaint_request_model(self):

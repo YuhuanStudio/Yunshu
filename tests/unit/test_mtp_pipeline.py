@@ -1,30 +1,34 @@
 """Tests for MTP pipeline integration — n_confirmed_patch + mtp_decoder wired into BatchedEngine."""
 
 
-
 class TestNConfirmedPipelineIntegration:
     """Verify n_confirmed_patch is applied during engine startup."""
 
     def test_apply_n_confirmed_patch_importable(self):
         from yunshu_engine.n_confirmed_patch import apply_n_confirmed_patch
+
         assert callable(apply_n_confirmed_patch)
 
     def test_apply_n_confirmed_patch_idempotent(self):
         from yunshu_engine.n_confirmed_patch import apply_n_confirmed_patch
+
         result1 = apply_n_confirmed_patch()
         result2 = apply_n_confirmed_patch()
         assert result1 == result2
 
     def test_clear_rollback_importable(self):
         from yunshu_engine.n_confirmed_patch import clear_rollback
+
         assert callable(clear_rollback)
 
     def test_restore_rollback_importable(self):
         from yunshu_engine.n_confirmed_patch import restore_rollback
+
         assert callable(restore_rollback)
 
     def test_rollback_on_empty_cache(self):
         from yunshu_engine.n_confirmed_patch import clear_rollback, restore_rollback
+
         clear_rollback([])
         result = restore_rollback([])
         assert result is True
@@ -35,11 +39,13 @@ class TestMTPDecoderImport:
 
     def test_mtp_config_importable(self):
         from yunshu_engine.mtp_decoder import MTPConfig
+
         cfg = MTPConfig()
         assert cfg.use_n_confirmed is True
 
     def test_mtp_config_custom(self):
         from yunshu_engine.mtp_decoder import MTPConfig
+
         cfg = MTPConfig(
             max_tokens=512,
             cooldown_on_reject=True,
@@ -52,6 +58,7 @@ class TestMTPDecoderImport:
 
     def test_mtp_stats_importable(self):
         from yunshu_engine.mtp_decoder import MTPStats
+
         stats = MTPStats()
         assert stats.accepts == 0
         assert stats.rejects == 0
@@ -59,10 +66,12 @@ class TestMTPDecoderImport:
 
     def test_mtp_decoder_importable(self):
         from yunshu_engine.mtp_decoder import MTPDecoder
+
         assert MTPDecoder is not None
 
     def test_run_mtp_decode_importable(self):
         from yunshu_engine.mtp_decoder import run_mtp_decode
+
         assert callable(run_mtp_decode)
 
 
@@ -71,16 +80,19 @@ class TestMTPStrategyIntegration:
 
     def test_mtp_strategy_importable(self):
         from yunshu_engine.spec_interface import MTPStrategy
+
         strategy = MTPStrategy()
         assert strategy.name == "mtp"
 
     def test_mtp_strategy_with_decoder(self):
         from yunshu_engine.spec_interface import MTPStrategy
+
         strategy = MTPStrategy(decoder="fake_decoder")
         assert strategy.decoder == "fake_decoder"
 
     def test_mtp_strategy_begin_end(self):
         from yunshu_engine.spec_interface import MTPStrategy
+
         strategy = MTPStrategy()
         strategy.begin("req-1")
         proposal = strategy.draft([1, 2, 3], n=5)
@@ -92,6 +104,7 @@ class TestMTPStrategyIntegration:
 
     def test_mtp_strategy_stats_without_decoder(self):
         from yunshu_engine.spec_interface import MTPStrategy
+
         strategy = MTPStrategy()
         stats = strategy.stats()
         assert stats["total_drafts"] == 0
@@ -99,6 +112,7 @@ class TestMTPStrategyIntegration:
 
     def test_mtp_strategy_reset(self):
         from yunshu_engine.spec_interface import MTPStrategy
+
         strategy = MTPStrategy()
         strategy.begin("req-1")
         strategy.draft([1, 2, 3], n=5)
@@ -112,16 +126,20 @@ class TestSpecStrategyFactoryMTP:
 
     def test_factory_creates_mtp(self):
         from yunshu_engine.spec_interface import MTPStrategy, SpecStrategyFactory
+
         strategy = SpecStrategyFactory.create({"type": "mtp"})
         assert isinstance(strategy, MTPStrategy)
 
     def test_factory_mtp_with_decoder(self):
         from yunshu_engine.spec_interface import MTPStrategy, SpecStrategyFactory
-        strategy = SpecStrategyFactory.create({
-            "type": "mtp",
-            "decoder": "fake",
-            "decoder_config": {"max_tokens": 128},
-        })
+
+        strategy = SpecStrategyFactory.create(
+            {
+                "type": "mtp",
+                "decoder": "fake",
+                "decoder_config": {"max_tokens": 128},
+            }
+        )
         assert isinstance(strategy, MTPStrategy)
         assert strategy.decoder == "fake"
 
@@ -130,13 +148,16 @@ class TestSpecStrategyFactoryMTP:
             CompositeStrategy,
             SpecStrategyFactory,
         )
-        strategy = SpecStrategyFactory.create({
-            "type": "composite",
-            "strategies": [
-                {"type": "ngram"},
-                {"type": "mtp"},
-            ],
-        })
+
+        strategy = SpecStrategyFactory.create(
+            {
+                "type": "composite",
+                "strategies": [
+                    {"type": "ngram"},
+                    {"type": "mtp"},
+                ],
+            }
+        )
         assert isinstance(strategy, CompositeStrategy)
         assert "ngram" in strategy.name
         assert "mtp" in strategy.name
@@ -147,30 +168,35 @@ class TestBatchedEngineMTPFields:
 
     def test_engine_has_mtp_decoder_field(self):
         from yunshu_engine.batched_engine import BatchedEngine
+
         engine = BatchedEngine()
-        assert hasattr(engine, '_mtp_decoder')
+        assert hasattr(engine, "_mtp_decoder")
         assert engine._mtp_decoder is None
 
     def test_engine_has_mtp_strategy_field(self):
         from yunshu_engine.batched_engine import BatchedEngine
+
         engine = BatchedEngine()
-        assert hasattr(engine, '_mtp_strategy')
+        assert hasattr(engine, "_mtp_strategy")
         assert engine._mtp_strategy is None
 
     def test_engine_has_generate_mtp_method(self):
         from yunshu_engine.batched_engine import BatchedEngine
+
         engine = BatchedEngine()
-        assert hasattr(engine, '_generate_mtp')
+        assert hasattr(engine, "_generate_mtp")
         assert callable(engine._generate_mtp)
 
     def test_engine_has_stream_generate_mtp_method(self):
         from yunshu_engine.batched_engine import BatchedEngine
+
         engine = BatchedEngine()
-        assert hasattr(engine, '_stream_generate_mtp')
+        assert hasattr(engine, "_stream_generate_mtp")
         assert callable(engine._stream_generate_mtp)
 
     def test_engine_get_stats_no_mtp(self):
         from yunshu_engine.batched_engine import BatchedEngine
+
         engine = BatchedEngine()
         stats = engine.get_stats()
         assert "mtp" not in stats
@@ -180,6 +206,7 @@ class TestBatchedEngineMTPFields:
         import asyncio
 
         from yunshu_engine.batched_engine import BatchedEngine
+
         engine = BatchedEngine()
         engine._loaded = True
         engine._mtp_decoder = object()  # sentinel
@@ -211,6 +238,7 @@ class TestBatchedEngineMTPRouting:
         engine disables spec_decode and serves the correct fast-path result.
         """
         from yunshu_engine.batched_engine import BatchedEngine
+
         engine = BatchedEngine()
         engine._loaded = True
 
@@ -219,11 +247,13 @@ class TestBatchedEngineMTPRouting:
         async def _fake_mtp(prompt, max_tokens, temperature, **kwargs):
             called["mtp"] = True
             from yunshu_engine.batched_engine import GenerationOutput
+
             return GenerationOutput(text="mtp", finished=True, finish_reason="stop")
 
         async def _fake_fast(prompt, max_tokens=256, temperature=0.7, **kwargs):
             called["fast"] = True
             from yunshu_engine.batched_engine import GenerationOutput
+
             return GenerationOutput(text="fast", finished=True, finish_reason="stop")
 
         engine._generate_mtp = _fake_mtp
@@ -232,6 +262,7 @@ class TestBatchedEngineMTPRouting:
         engine._cache_supports_trim = lambda _m=None: True  # not the gating factor
 
         import asyncio
+
         loop = asyncio.new_event_loop()
         try:
             result = loop.run_until_complete(
@@ -246,6 +277,7 @@ class TestBatchedEngineMTPRouting:
     def test_generate_skips_mtp_without_decoder(self):
         """Without _mtp_decoder, should fall through to standard path."""
         from yunshu_engine.batched_engine import BatchedEngine
+
         engine = BatchedEngine()
         engine._loaded = True
         engine._mtp_decoder = None  # explicitly None
@@ -258,6 +290,7 @@ class TestBatchedEngineMTPRouting:
         routes through `_mtp_decoder` directly, never the SpecStrategy wrapper. The
         unified-strategy factory is research-only, not wired into generate()."""
         from yunshu_engine.batched_engine import BatchedEngine
+
         engine = BatchedEngine()
         assert not hasattr(engine, "_get_spec_strategy")
         # The real reachable MTP serving hook is the decoder field.
@@ -269,17 +302,20 @@ class TestMTPEnvConfig:
 
     def test_mtp_cooldown_env(self):
         from yunshu_engine.mtp_decoder import MTPConfig
+
         # Default: cooldown disabled
         cfg = MTPConfig()
         assert cfg.cooldown_on_reject is False
 
     def test_mtp_fastmtp_default_disabled(self):
         from yunshu_engine.mtp_decoder import MTPConfig
+
         cfg = MTPConfig()
         assert cfg.fastmtp_top_k == 0
 
     def test_n_confirmed_default_enabled(self):
         from yunshu_engine.mtp_decoder import MTPConfig
+
         cfg = MTPConfig()
         assert cfg.use_n_confirmed is True
 
@@ -292,6 +328,7 @@ class TestMTPCancelEvent:
         import inspect
 
         from yunshu_engine.mtp_decoder import MTPDecoder
+
         sig = inspect.signature(MTPDecoder.generate)
         assert "cancel_event" in sig.parameters
 
@@ -300,6 +337,7 @@ class TestMTPCancelEvent:
         from unittest.mock import MagicMock
 
         from yunshu_engine.mtp_decoder import MTPConfig, MTPDecoder
+
         # Just verify it accepts None without error (no real model needed)
         decoder = MTPDecoder.__new__(MTPDecoder)
         decoder.config = MTPConfig()
@@ -371,7 +409,9 @@ class TestMTPDecoderGenerateRouting:
 
         captured_kwargs = {}
 
-        def fake_generate(ids, max_tokens=None, cancel_event=None, sampler=None, **kwargs):
+        def fake_generate(
+            ids, max_tokens=None, cancel_event=None, sampler=None, **kwargs
+        ):
             captured_kwargs["cancel_event"] = cancel_event
             return [100, 101]  # fake tokens
 
@@ -407,7 +447,9 @@ class TestMTPDecoderGenerateRouting:
         engine._tokenizer.encode = MagicMock(return_value=[1, 2, 3])
         engine._tokenizer.eos_token_id = 2
 
-        def oom_generate(ids, max_tokens=None, cancel_event=None, sampler=None, **kwargs):
+        def oom_generate(
+            ids, max_tokens=None, cancel_event=None, sampler=None, **kwargs
+        ):
             raise MemoryError("out of GPU memory")
 
         engine._mtp_decoder.generate = oom_generate
@@ -435,7 +477,9 @@ class TestMTPDecoderGenerateRouting:
         engine._tokenizer.encode = MagicMock(return_value=[1, 2, 3])
         engine._tokenizer.eos_token_id = 2
 
-        def oom_generate(ids, max_tokens=None, cancel_event=None, sampler=None, **kwargs):
+        def oom_generate(
+            ids, max_tokens=None, cancel_event=None, sampler=None, **kwargs
+        ):
             raise RuntimeError("Out of memory allocating buffer")
 
         engine._mtp_decoder.generate = oom_generate

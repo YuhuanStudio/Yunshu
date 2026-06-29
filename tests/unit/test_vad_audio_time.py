@@ -9,6 +9,7 @@ measures the silence window in audio time. This test feeds silent chunks and ass
 speech_stopped fires once `silence_duration_ms` worth of silent BYTES has accumulated,
 regardless of how fast (in wall-clock terms) those chunks arrive.
 """
+
 from __future__ import annotations
 
 import inspect

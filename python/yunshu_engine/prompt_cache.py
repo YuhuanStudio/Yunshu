@@ -292,9 +292,7 @@ class PromptCacheManager:
         """
         pruned = 0
         with self._lock:
-            expired_keys = [
-                k for k, v in self._cache.items() if self._is_expired(v)
-            ]
+            expired_keys = [k for k, v in self._cache.items() if self._is_expired(v)]
             for key in expired_keys:
                 self._remove_entry(key)
                 pruned += 1
@@ -388,8 +386,12 @@ class PromptCacheManager:
             # Estimate from shape + dtype
             try:
                 itemsize = {
-                    "float32": 4, "float16": 2, "bfloat16": 2,
-                    "int32": 4, "int64": 8, "bool": 1,
+                    "float32": 4,
+                    "float16": 2,
+                    "bfloat16": 2,
+                    "int32": 4,
+                    "int64": 8,
+                    "bool": 1,
                 }.get(str(kv_state.dtype), 4)
                 total = 1
                 for dim in kv_state.shape:

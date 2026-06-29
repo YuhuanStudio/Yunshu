@@ -22,7 +22,9 @@ class PrefillProgressTracker:
         self._progress: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
 
-    def update(self, request_id: str, processed: int, total: int, model_id: str) -> None:
+    def update(
+        self, request_id: str, processed: int, total: int, model_id: str
+    ) -> None:
         now = time.monotonic()
         with self._lock:
             if processed >= total:
@@ -32,7 +34,9 @@ class PrefillProgressTracker:
                 if prev is not None:
                     dt = now - prev["last_time"]
                     dtok = processed - prev["processed"]
-                    speed = (dtok / dt) if dt > 0 and dtok > 0 else prev.get("speed", 0.0)
+                    speed = (
+                        (dtok / dt) if dt > 0 and dtok > 0 else prev.get("speed", 0.0)
+                    )
                 else:
                     speed = 0.0
 
@@ -58,14 +62,20 @@ class PrefillProgressTracker:
                 remaining = entry["total"] - entry["processed"]
                 speed = entry.get("speed", 0.0)
                 eta = remaining / speed if speed > 0 else None
-                results.append({
-                    "request_id": rid,
-                    "processed": entry["processed"],
-                    "total": entry["total"],
-                    "progress_pct": round(entry["processed"] / entry["total"] * 100, 1) if entry["total"] > 0 else 0,
-                    "speed_tok_s": round(speed, 0),
-                    "eta_s": round(eta, 1) if eta is not None else None,
-                })
+                results.append(
+                    {
+                        "request_id": rid,
+                        "processed": entry["processed"],
+                        "total": entry["total"],
+                        "progress_pct": round(
+                            entry["processed"] / entry["total"] * 100, 1
+                        )
+                        if entry["total"] > 0
+                        else 0,
+                        "speed_tok_s": round(speed, 0),
+                        "eta_s": round(eta, 1) if eta is not None else None,
+                    }
+                )
             return results
 
     def get_all_progress(self) -> dict[str, list[dict]]:
@@ -78,14 +88,20 @@ class PrefillProgressTracker:
                 remaining = entry["total"] - entry["processed"]
                 speed = entry.get("speed", 0.0)
                 eta = remaining / speed if speed > 0 else None
-                models[mid].append({
-                    "request_id": rid,
-                    "processed": entry["processed"],
-                    "total": entry["total"],
-                    "progress_pct": round(entry["processed"] / entry["total"] * 100, 1) if entry["total"] > 0 else 0,
-                    "speed_tok_s": round(speed, 0),
-                    "eta_s": round(eta, 1) if eta is not None else None,
-                })
+                models[mid].append(
+                    {
+                        "request_id": rid,
+                        "processed": entry["processed"],
+                        "total": entry["total"],
+                        "progress_pct": round(
+                            entry["processed"] / entry["total"] * 100, 1
+                        )
+                        if entry["total"] > 0
+                        else 0,
+                        "speed_tok_s": round(speed, 0),
+                        "eta_s": round(eta, 1) if eta is not None else None,
+                    }
+                )
             return models
 
     def clear(self) -> None:

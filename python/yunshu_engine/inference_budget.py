@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class InferenceBudget:
     """Budget allocation for a single request."""
+
     request_id: str
     # Token budgets
     max_tokens: int = 512
@@ -101,7 +102,9 @@ class InferenceBudget:
         # queued requests (the N>=96 high-concurrency collapse).
         if self.last_progress_at is None:
             return False
-        return (time.monotonic() - self.last_progress_at) * 1000 >= self.max_wall_time_ms
+        return (
+            time.monotonic() - self.last_progress_at
+        ) * 1000 >= self.max_wall_time_ms
 
     @property
     def is_cost_exhausted(self) -> bool:
@@ -118,9 +121,7 @@ class InferenceBudget:
     @property
     def is_exhausted(self) -> bool:
         return (
-            self.is_token_exhausted
-            or self.is_time_exhausted
-            or self.is_cost_exhausted
+            self.is_token_exhausted or self.is_time_exhausted or self.is_cost_exhausted
         )
 
     @property
@@ -175,8 +176,12 @@ class InferenceBudgetManager:
     def from_env(cls) -> InferenceBudgetManager:
         return cls(
             default_max_tokens=int(os.environ.get("YUNSHU_DEFAULT_MAX_TOKENS", "512")),
-            default_max_wall_time_ms=float(os.environ.get("YUNSHU_MAX_WALL_TIME_MS", "30000.0")),
-            global_token_rate_limit=int(os.environ.get("YUNSHU_GLOBAL_TOKEN_RATE", "0")),
+            default_max_wall_time_ms=float(
+                os.environ.get("YUNSHU_MAX_WALL_TIME_MS", "30000.0")
+            ),
+            global_token_rate_limit=int(
+                os.environ.get("YUNSHU_GLOBAL_TOKEN_RATE", "0")
+            ),
         )
 
     def register(
@@ -192,13 +197,17 @@ class InferenceBudgetManager:
     ) -> InferenceBudget:
         """Register a budget for a new request."""
         if self.is_rate_limited():
-            raise RuntimeError("Global token rate limit exceeded — cannot register new request")
+            raise RuntimeError(
+                "Global token rate limit exceeded — cannot register new request"
+            )
         budget = InferenceBudget(
             request_id=request_id,
             max_tokens=self._default_max_tokens if max_tokens is None else max_tokens,
             prompt_tokens=prompt_tokens,
             thinking_budget=thinking_budget,
-            max_wall_time_ms=self._default_wall_time if max_wall_time_ms is None else max_wall_time_ms,
+            max_wall_time_ms=self._default_wall_time
+            if max_wall_time_ms is None
+            else max_wall_time_ms,
             cost_per_1k_tokens=cost_per_1k_tokens,
             max_cost=max_cost,
             priority=priority,
@@ -207,7 +216,9 @@ class InferenceBudgetManager:
             self._budgets[request_id] = budget
         return budget
 
-    def consume(self, request_id: str, tokens: int = 1, is_thinking: bool = False) -> str | None:
+    def consume(
+        self, request_id: str, tokens: int = 1, is_thinking: bool = False
+    ) -> str | None:
         """Consume tokens for a request. Returns exhaustion reason or None."""
         with self._lock:
             budget = self._budgets.get(request_id)

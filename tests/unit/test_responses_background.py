@@ -2,6 +2,7 @@
 response immediately and the full generation runs asynchronously under the same
 id (pollable via GET, cancellable). Previously `background` was silently dropped
 and the request ran synchronously (blocking)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -16,11 +17,14 @@ from yunshu_gateway.routers.responses import ResponsesRequest
 def _fake_request():
     """A minimal Request stand-in — only request.state is read by the handler
     helpers (_resolve_owner/_check_permission/rbac_key)."""
-    return types.SimpleNamespace(state=types.SimpleNamespace(rbac_key=None, role="admin"))
+    return types.SimpleNamespace(
+        state=types.SimpleNamespace(rbac_key=None, role="admin")
+    )
 
 
 def _payload_json(resp):
     import json
+
     return json.loads(bytes(resp.body).decode())
 
 
@@ -39,12 +43,23 @@ def test_background_returns_queued_then_completes(monkeypatch):
         rid = request.state._forced_response_id
         assert rid is not None  # id propagated to the generation
         assert req.background is False and req.stream is False and req.store is True
-        R._store_response(rid, {
-            "id": rid, "object": "response", "status": "completed",
-            "model": req.model, "output": [{"type": "message", "role": "assistant",
-                                            "content": [{"type": "output_text", "text": "done"}]}],
-            "_owner": "",
-        })
+        R._store_response(
+            rid,
+            {
+                "id": rid,
+                "object": "response",
+                "status": "completed",
+                "model": req.model,
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "done"}],
+                    }
+                ],
+                "_owner": "",
+            },
+        )
         return None
 
     monkeypatch.setattr(R, "create_response", _fake_create_response)

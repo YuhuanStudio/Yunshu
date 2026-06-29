@@ -15,7 +15,9 @@ from typing import Literal
 
 logger = logging.getLogger(__name__)
 
-ModelType = Literal["llm", "vlm", "audio_tts", "audio_stt", "image_gen", "ocr", "sts", "video"]
+ModelType = Literal[
+    "llm", "vlm", "audio_tts", "audio_stt", "image_gen", "ocr", "sts", "video"
+]
 EngineType = Literal["batched", "vlm", "audio", "image"]
 
 IMAGE_GEN_MODEL_TYPES = {"flux", "sd3", "sdxl", "z_image"}
@@ -106,7 +108,11 @@ def discover_models(model_dir: Path) -> dict[str, DiscoveredModel]:
         elif not (subdir / "model_index.json").exists():
             # Only recurse into non-diffusion directories
             for child in sorted(subdir.iterdir()):
-                if child.is_dir() and not child.name.startswith(".") and _is_model_dir(child):
+                if (
+                    child.is_dir()
+                    and not child.name.startswith(".")
+                    and _is_model_dir(child)
+                ):
                     _register(models, child)
 
     if not models and _is_model_dir(model_dir):
@@ -156,7 +162,10 @@ def _register(models: dict[str, DiscoveredModel], model_dir: Path) -> None:
                 logger.warning(
                     "Model name collision: '%s' from %s shadows %s, "
                     "using disambiguated key '%s'",
-                    model_dir.name, existing_path, model_dir, key,
+                    model_dir.name,
+                    existing_path,
+                    model_dir,
+                    key,
                 )
 
         models[key] = DiscoveredModel(
@@ -169,7 +178,12 @@ def _register(models: dict[str, DiscoveredModel], model_dir: Path) -> None:
         )
         logger.info(
             "Discovered: %s (type=%s, engine=%s, size=%.2fGB)",
-            model_dir.name, mt, _engine_for_type(mt), size / 1024 ** 3,
+            model_dir.name,
+            mt,
+            _engine_for_type(mt),
+            size / 1024**3,
         )
     except Exception as e:
-        logger.error("Failed to discover model %s: %s", model_dir.name, e, exc_info=True)
+        logger.error(
+            "Failed to discover model %s: %s", model_dir.name, e, exc_info=True
+        )

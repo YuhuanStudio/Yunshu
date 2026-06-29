@@ -115,7 +115,9 @@ class TestVisionFeatureCacheSafetensorsWrite:
             "feature": (b"\x00\x01\x02\x03", "F16", [2]),
         }
         metadata = {"model_name": "test"}
-        size = cache._write_safetensors(str(tmp_path / "test.safetensors"), tensors, metadata)
+        size = cache._write_safetensors(
+            str(tmp_path / "test.safetensors"), tensors, metadata
+        )
         assert size > 0
         assert (tmp_path / "test.safetensors").exists()
         assert (tmp_path / "test.safetensors").stat().st_size == size

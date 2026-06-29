@@ -47,6 +47,7 @@ def _make_request(request_id: str, prompt_tokens: list[int]) -> Request:
 # 1. Fairness: Budget system
 # ───────────────────────────────────────────────────────────────────────
 
+
 class TestChunkedPrefillFairness:
     """Ensure chunked prefill doesn't starve decode requests."""
 
@@ -74,10 +75,10 @@ class TestChunkedPrefillFairness:
             req.status = RequestStatus.RUNNING
             sched.running[rid] = req
             sched._pending_prefill[rid] = {
-                'remaining_tokens': list(range(50)),
-                'chunk_size': 10,
-                'total_prompt_len': 60,
-                'offset': 10,
+                "remaining_tokens": list(range(50)),
+                "chunk_size": 10,
+                "total_prompt_len": 60,
+                "offset": 10,
             }
             sched._chunked_prefill_fairness[rid] = 0
             sched._chunked_prefill_enqueued_at[rid] = time.monotonic()
@@ -96,8 +97,7 @@ class TestChunkedPrefillFairness:
         assert sched._batch_gen.insert.call_count == 1
         # Both pending prefills should still exist (only 1 was processed)
         remaining_pending = sum(
-            1 for v in sched._pending_prefill.values()
-            if v.get('remaining_tokens')
+            1 for v in sched._pending_prefill.values() if v.get("remaining_tokens")
         )
         assert remaining_pending >= 1  # at least 1 still pending
 
@@ -116,10 +116,10 @@ class TestChunkedPrefillFairness:
         req.status = RequestStatus.RUNNING
         sched.running["req-1"] = req
         sched._pending_prefill["req-1"] = {
-            'remaining_tokens': list(range(50)),
-            'chunk_size': 10,
-            'total_prompt_len': 60,
-            'offset': 10,
+            "remaining_tokens": list(range(50)),
+            "chunk_size": 10,
+            "total_prompt_len": 60,
+            "offset": 10,
         }
         sched._chunked_prefill_fairness["req-1"] = 0
         sched._chunked_prefill_enqueued_at["req-1"] = time.monotonic()
@@ -149,10 +149,10 @@ class TestChunkedPrefillFairness:
             req.status = RequestStatus.RUNNING
             sched.running[rid] = req
             sched._pending_prefill[rid] = {
-                'remaining_tokens': list(range(30)),
-                'chunk_size': 10,
-                'total_prompt_len': 40,
-                'offset': 10,
+                "remaining_tokens": list(range(30)),
+                "chunk_size": 10,
+                "total_prompt_len": 40,
+                "offset": 10,
             }
             sched._chunked_prefill_fairness[rid] = chunks_served
             sched._chunked_prefill_enqueued_at[rid] = time.monotonic()
@@ -176,6 +176,7 @@ class TestChunkedPrefillFairness:
 # ───────────────────────────────────────────────────────────────────────
 # 2. Timeout: Per-request prefill timeout
 # ───────────────────────────────────────────────────────────────────────
+
 
 class TestChunkedPrefillTimeout:
     """Test per-request prefill timeout with abort/force-feed modes."""
@@ -207,10 +208,10 @@ class TestChunkedPrefillTimeout:
         req.batch_uid = 42
         sched.running["req-1"] = req
         sched._pending_prefill["req-1"] = {
-            'remaining_tokens': list(range(50)),
-            'chunk_size': 10,
-            'total_prompt_len': 60,
-            'offset': 10,
+            "remaining_tokens": list(range(50)),
+            "chunk_size": 10,
+            "total_prompt_len": 60,
+            "offset": 10,
         }
         sched._chunked_prefill_fairness["req-1"] = 0
         # Simulate request was enqueued long ago (past timeout)
@@ -242,10 +243,10 @@ class TestChunkedPrefillTimeout:
         req.status = RequestStatus.RUNNING
         sched.running["req-1"] = req
         sched._pending_prefill["req-1"] = {
-            'remaining_tokens': list(range(50)),
-            'chunk_size': 10,
-            'total_prompt_len': 60,
-            'offset': 10,
+            "remaining_tokens": list(range(50)),
+            "chunk_size": 10,
+            "total_prompt_len": 60,
+            "offset": 10,
         }
         sched._chunked_prefill_fairness["req-1"] = 0
         sched._chunked_prefill_enqueued_at["req-1"] = time.monotonic() - 1.0
@@ -256,7 +257,7 @@ class TestChunkedPrefillTimeout:
         assert req.status == RequestStatus.RUNNING
         # All tokens should have been force-fed in one shot
         assert sched._batch_gen.insert.call_count == 1
-        fed_tokens = sched._batch_gen.insert.call_args[1]['prompts'][0]
+        fed_tokens = sched._batch_gen.insert.call_args[1]["prompts"][0]
         assert len(fed_tokens) == 50
 
     def test_no_timeout_when_zero(self):
@@ -269,10 +270,10 @@ class TestChunkedPrefillTimeout:
         req.status = RequestStatus.RUNNING
         sched.running["req-1"] = req
         sched._pending_prefill["req-1"] = {
-            'remaining_tokens': list(range(50)),
-            'chunk_size': 10,
-            'total_prompt_len': 60,
-            'offset': 10,
+            "remaining_tokens": list(range(50)),
+            "chunk_size": 10,
+            "total_prompt_len": 60,
+            "offset": 10,
         }
         sched._chunked_prefill_fairness["req-1"] = 0
         # Even though enqueued long ago, timeout=0 means no timeout
@@ -281,7 +282,10 @@ class TestChunkedPrefillTimeout:
         sched._process_pending_prefill()
 
         # Request should NOT be timed out
-        assert req.status != RequestStatus.FINISHED_ERROR or req.finish_reason != "prefill_timeout"
+        assert (
+            req.status != RequestStatus.FINISHED_ERROR
+            or req.finish_reason != "prefill_timeout"
+        )
 
     def test_timeout_force_feed_failure_aborts(self):
         """When force-feed fails, request should be errored."""
@@ -297,10 +301,10 @@ class TestChunkedPrefillTimeout:
         req.status = RequestStatus.RUNNING
         sched.running["req-1"] = req
         sched._pending_prefill["req-1"] = {
-            'remaining_tokens': list(range(50)),
-            'chunk_size': 10,
-            'total_prompt_len': 60,
-            'offset': 10,
+            "remaining_tokens": list(range(50)),
+            "chunk_size": 10,
+            "total_prompt_len": 60,
+            "offset": 10,
         }
         sched._chunked_prefill_fairness["req-1"] = 0
         sched._chunked_prefill_enqueued_at["req-1"] = time.monotonic() - 1.0
@@ -317,6 +321,7 @@ class TestChunkedPrefillTimeout:
 # 3. Cleanup: Interrupted chunked prefills
 # ───────────────────────────────────────────────────────────────────────
 
+
 class TestChunkedPrefillCleanup:
     """Ensure interrupted chunked prefills clean up properly."""
 
@@ -329,10 +334,10 @@ class TestChunkedPrefillCleanup:
         req.status = RequestStatus.RUNNING
         sched.running["req-1"] = req
         sched._pending_prefill["req-1"] = {
-            'remaining_tokens': list(range(50)),
-            'chunk_size': 10,
-            'total_prompt_len': 60,
-            'offset': 10,
+            "remaining_tokens": list(range(50)),
+            "chunk_size": 10,
+            "total_prompt_len": 60,
+            "offset": 10,
         }
         sched._chunked_prefill_fairness["req-1"] = 2
         sched._chunked_prefill_enqueued_at["req-1"] = time.monotonic()
@@ -351,10 +356,10 @@ class TestChunkedPrefillCleanup:
         """When a pending prefill has no matching running request, clean up."""
         sched = _make_scheduler()
         sched._pending_prefill["req-1"] = {
-            'remaining_tokens': list(range(50)),
-            'chunk_size': 10,
-            'total_prompt_len': 60,
-            'offset': 10,
+            "remaining_tokens": list(range(50)),
+            "chunk_size": 10,
+            "total_prompt_len": 60,
+            "offset": 10,
         }
         sched._chunked_prefill_fairness["req-1"] = 0
         sched._chunked_prefill_enqueued_at["req-1"] = time.monotonic()
@@ -370,10 +375,10 @@ class TestChunkedPrefillCleanup:
         """When remaining_tokens is empty, entry is cleaned up."""
         sched = _make_scheduler()
         sched._pending_prefill["req-1"] = {
-            'remaining_tokens': [],
-            'chunk_size': 10,
-            'total_prompt_len': 60,
-            'offset': 60,
+            "remaining_tokens": [],
+            "chunk_size": 10,
+            "total_prompt_len": 60,
+            "offset": 60,
         }
         sched._chunked_prefill_fairness["req-1"] = 0
         sched._chunked_prefill_enqueued_at["req-1"] = time.monotonic()
@@ -390,8 +395,8 @@ class TestChunkedPrefillCleanup:
         sched.running["req-1"] = req
         sched.requests["req-1"] = req
         sched._pending_prefill["req-1"] = {
-            'remaining_tokens': list(range(50)),
-            'chunk_size': 10,
+            "remaining_tokens": list(range(50)),
+            "chunk_size": 10,
         }
 
         sched.shutdown()
@@ -403,7 +408,7 @@ class TestChunkedPrefillCleanup:
     def test_deep_reset_clears_all_chunked_state(self):
         """deep_reset should clear all chunked prefill tracking."""
         sched = _make_scheduler()
-        sched._pending_prefill["req-1"] = {'remaining_tokens': [1, 2, 3]}
+        sched._pending_prefill["req-1"] = {"remaining_tokens": [1, 2, 3]}
         sched._chunked_prefill_fairness["req-1"] = 5
         sched._chunked_prefill_enqueued_at["req-1"] = time.monotonic()
         sched._chunked_prefill_chunks_processed = 10
@@ -435,6 +440,7 @@ class TestChunkedPrefillCleanup:
 # 4. Progress tracking
 # ───────────────────────────────────────────────────────────────────────
 
+
 class TestChunkedPrefillProgress:
     """Test progress tracking via PrefillProgressTracker."""
 
@@ -451,10 +457,10 @@ class TestChunkedPrefillProgress:
         req.status = RequestStatus.RUNNING
         sched.running["req-1"] = req
         sched._pending_prefill["req-1"] = {
-            'remaining_tokens': list(range(20)),
-            'chunk_size': 10,
-            'total_prompt_len': 30,
-            'offset': 10,
+            "remaining_tokens": list(range(20)),
+            "chunk_size": 10,
+            "total_prompt_len": 30,
+            "offset": 10,
         }
         sched._chunked_prefill_fairness["req-1"] = 0
         sched._chunked_prefill_enqueued_at["req-1"] = time.monotonic()
@@ -481,10 +487,10 @@ class TestChunkedPrefillProgress:
         sched.running["req-1"] = req
         # Only 10 tokens remaining, chunk_size=10 → will complete in one chunk
         sched._pending_prefill["req-1"] = {
-            'remaining_tokens': list(range(10)),
-            'chunk_size': 10,
-            'total_prompt_len': 20,
-            'offset': 10,
+            "remaining_tokens": list(range(10)),
+            "chunk_size": 10,
+            "total_prompt_len": 20,
+            "offset": 10,
         }
         sched._chunked_prefill_fairness["req-1"] = 0
         sched._chunked_prefill_enqueued_at["req-1"] = time.monotonic()
@@ -508,10 +514,10 @@ class TestChunkedPrefillProgress:
         req.status = RequestStatus.RUNNING
         sched.running["req-1"] = req
         sched._pending_prefill["req-1"] = {
-            'remaining_tokens': list(range(15)),
-            'chunk_size': 10,
-            'total_prompt_len': 30,
-            'offset': 15,
+            "remaining_tokens": list(range(15)),
+            "chunk_size": 10,
+            "total_prompt_len": 30,
+            "offset": 15,
         }
         sched._chunked_prefill_fairness["req-1"] = 1
         sched._chunked_prefill_enqueued_at["req-1"] = time.monotonic()
@@ -522,12 +528,13 @@ class TestChunkedPrefillProgress:
         if "req-1" in sched._pending_prefill:
             # Still pending — offset should have advanced
             remaining_state = sched._pending_prefill["req-1"]
-            assert remaining_state.get('offset', 0) >= 15
+            assert remaining_state.get("offset", 0) >= 15
 
 
 # ───────────────────────────────────────────────────────────────────────
 # 5. Error handling: chunk failure aborts entire request
 # ───────────────────────────────────────────────────────────────────────
+
 
 class TestChunkedPrefillErrorHandling:
     """Test that a single chunk failure aborts the entire request."""
@@ -543,10 +550,10 @@ class TestChunkedPrefillErrorHandling:
         req.batch_uid = 42
         sched.running["req-1"] = req
         sched._pending_prefill["req-1"] = {
-            'remaining_tokens': list(range(50)),
-            'chunk_size': 10,
-            'total_prompt_len': 60,
-            'offset': 10,
+            "remaining_tokens": list(range(50)),
+            "chunk_size": 10,
+            "total_prompt_len": 60,
+            "offset": 10,
         }
         sched._chunked_prefill_fairness["req-1"] = 0
         sched._chunked_prefill_enqueued_at["req-1"] = time.monotonic()
@@ -573,10 +580,10 @@ class TestChunkedPrefillErrorHandling:
         req.status = RequestStatus.RUNNING
         sched.running["req-1"] = req
         sched._pending_prefill["req-1"] = {
-            'remaining_tokens': list(range(90)),
-            'chunk_size': 10,
-            'total_prompt_len': 100,
-            'offset': 10,
+            "remaining_tokens": list(range(90)),
+            "chunk_size": 10,
+            "total_prompt_len": 100,
+            "offset": 10,
         }
         sched._chunked_prefill_fairness["req-1"] = 1
         sched._chunked_prefill_enqueued_at["req-1"] = time.monotonic()
@@ -601,10 +608,10 @@ class TestChunkedPrefillErrorHandling:
         sched.running["req-1"] = req
         sched.requests["req-1"] = req
         sched._pending_prefill["req-1"] = {
-            'remaining_tokens': list(range(50)),
-            'chunk_size': 10,
-            'total_prompt_len': 60,
-            'offset': 10,
+            "remaining_tokens": list(range(50)),
+            "chunk_size": 10,
+            "total_prompt_len": 60,
+            "offset": 10,
         }
         sched._chunked_prefill_fairness["req-1"] = 0
         sched._chunked_prefill_enqueued_at["req-1"] = time.monotonic()
@@ -630,10 +637,10 @@ class TestChunkedPrefillErrorHandling:
         req1.status = RequestStatus.RUNNING
         sched.running["req-1"] = req1
         sched._pending_prefill["req-1"] = {
-            'remaining_tokens': list(range(20)),
-            'chunk_size': 10,
-            'total_prompt_len': 20,
-            'offset': 0,
+            "remaining_tokens": list(range(20)),
+            "chunk_size": 10,
+            "total_prompt_len": 20,
+            "offset": 0,
         }
         sched._chunked_prefill_fairness["req-1"] = 0
         sched._chunked_prefill_enqueued_at["req-1"] = time.monotonic()
@@ -643,16 +650,17 @@ class TestChunkedPrefillErrorHandling:
         req2.status = RequestStatus.RUNNING
         sched.running["req-2"] = req2
         sched._pending_prefill["req-2"] = {
-            'remaining_tokens': list(range(10)),
-            'chunk_size': 10,
-            'total_prompt_len': 10,
-            'offset': 0,
+            "remaining_tokens": list(range(10)),
+            "chunk_size": 10,
+            "total_prompt_len": 10,
+            "offset": 0,
         }
         sched._chunked_prefill_fairness["req-2"] = 0
         sched._chunked_prefill_enqueued_at["req-2"] = time.monotonic()
 
         # Mock: first call fails, second succeeds
         insert_calls = [0]
+
         def _insert_side_effect(**kwargs):
             insert_calls[0] += 1
             if insert_calls[0] == 1:
@@ -674,6 +682,7 @@ class TestChunkedPrefillErrorHandling:
 # ───────────────────────────────────────────────────────────────────────
 # 6. Stats reporting
 # ───────────────────────────────────────────────────────────────────────
+
 
 class TestChunkedPrefillStats:
     """Test that chunked prefill metrics appear in get_stats()."""

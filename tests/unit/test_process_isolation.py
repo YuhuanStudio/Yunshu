@@ -66,7 +66,11 @@ class TestIsolationMode:
         assert IsolationMode.HYBRID is not None
 
     def test_modes_are_distinct(self):
-        modes = [IsolationMode.IN_PROCESS, IsolationMode.SUBPROCESS, IsolationMode.HYBRID]
+        modes = [
+            IsolationMode.IN_PROCESS,
+            IsolationMode.SUBPROCESS,
+            IsolationMode.HYBRID,
+        ]
         assert len(set(modes)) == 3
 
 
@@ -152,8 +156,13 @@ class TestInferenceWorkerLifecycle:
         mock_process.is_alive.return_value = True
         mock_process.pid = 12345
 
-        with patch("yunshu_engine.process_isolation.multiprocessing.Process", return_value=mock_process), \
-             patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe:
+        with (
+            patch(
+                "yunshu_engine.process_isolation.multiprocessing.Process",
+                return_value=mock_process,
+            ),
+            patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe,
+        ):
             # Each Pipe() returns (parent_conn, child_conn)
             mock_conn = MagicMock()
             mock_pipe.return_value = (mock_conn, mock_conn)
@@ -169,8 +178,13 @@ class TestInferenceWorkerLifecycle:
         mock_process = MagicMock()
         mock_process.is_alive.return_value = False
 
-        with patch("yunshu_engine.process_isolation.multiprocessing.Process", return_value=mock_process), \
-             patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe:
+        with (
+            patch(
+                "yunshu_engine.process_isolation.multiprocessing.Process",
+                return_value=mock_process,
+            ),
+            patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe,
+        ):
             mock_conn = MagicMock()
             mock_pipe.return_value = (mock_conn, mock_conn)
 
@@ -191,8 +205,13 @@ class TestInferenceWorkerLifecycle:
         mock_process = MagicMock()
         mock_process.is_alive.return_value = False
 
-        with patch("yunshu_engine.process_isolation.multiprocessing.Process", return_value=mock_process), \
-             patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe:
+        with (
+            patch(
+                "yunshu_engine.process_isolation.multiprocessing.Process",
+                return_value=mock_process,
+            ),
+            patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe,
+        ):
             mock_conn = MagicMock()
             mock_pipe.return_value = (mock_conn, mock_conn)
 
@@ -210,8 +229,13 @@ class TestInferenceWorkerLifecycle:
         mock_process.is_alive.return_value = True
         mock_process.pid = 12345
 
-        with patch("yunshu_engine.process_isolation.multiprocessing.Process", return_value=mock_process), \
-             patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe:
+        with (
+            patch(
+                "yunshu_engine.process_isolation.multiprocessing.Process",
+                return_value=mock_process,
+            ),
+            patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe,
+        ):
             mock_conn = MagicMock()
             mock_pipe.return_value = (mock_conn, mock_conn)
 
@@ -248,8 +272,13 @@ class TestInferenceWorkerHealth:
         mock_process.is_alive.return_value = True
         mock_process.pid = 12345
 
-        with patch("yunshu_engine.process_isolation.multiprocessing.Process", return_value=mock_process), \
-             patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe:
+        with (
+            patch(
+                "yunshu_engine.process_isolation.multiprocessing.Process",
+                return_value=mock_process,
+            ),
+            patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe,
+        ):
             mock_conn = MagicMock()
             mock_pipe.return_value = (mock_conn, mock_conn)
 
@@ -266,8 +295,13 @@ class TestInferenceWorkerHealth:
         mock_process.is_alive.return_value = True
         mock_process.pid = 12345
 
-        with patch("yunshu_engine.process_isolation.multiprocessing.Process", return_value=mock_process), \
-             patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe:
+        with (
+            patch(
+                "yunshu_engine.process_isolation.multiprocessing.Process",
+                return_value=mock_process,
+            ),
+            patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe,
+        ):
             mock_conn = MagicMock()
             mock_pipe.return_value = (mock_conn, mock_conn)
 
@@ -290,7 +324,9 @@ class TestCircuitBreaker:
         assert not worker._is_circuit_open()
 
     def test_circuit_opens_after_max_crashes(self):
-        cfg = WorkerProcessConfig(model_id="test", max_restarts=3, restart_window_seconds=60.0)
+        cfg = WorkerProcessConfig(
+            model_id="test", max_restarts=3, restart_window_seconds=60.0
+        )
         worker = InferenceWorker(cfg)
         for _ in range(3):
             worker._record_crash()
@@ -298,14 +334,18 @@ class TestCircuitBreaker:
         assert worker.state == WorkerState.CIRCUIT_OPEN
 
     def test_circuit_stays_closed_under_limit(self):
-        cfg = WorkerProcessConfig(model_id="test", max_restarts=5, restart_window_seconds=60.0)
+        cfg = WorkerProcessConfig(
+            model_id="test", max_restarts=5, restart_window_seconds=60.0
+        )
         worker = InferenceWorker(cfg)
         for _ in range(4):
             worker._record_crash()
         assert not worker._is_circuit_open()
 
     def test_crash_times_pruned_by_window(self):
-        cfg = WorkerProcessConfig(model_id="test", max_restarts=3, restart_window_seconds=0.1)
+        cfg = WorkerProcessConfig(
+            model_id="test", max_restarts=3, restart_window_seconds=0.1
+        )
         worker = InferenceWorker(cfg)
         for _ in range(3):
             worker._record_crash()
@@ -338,8 +378,13 @@ class TestInferenceWorkerSubmit:
         mock_process.is_alive.return_value = True
         mock_process.pid = 12345
 
-        with patch("yunshu_engine.process_isolation.multiprocessing.Process", return_value=mock_process), \
-             patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe:
+        with (
+            patch(
+                "yunshu_engine.process_isolation.multiprocessing.Process",
+                return_value=mock_process,
+            ),
+            patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe,
+        ):
             mock_conn = MagicMock()
             mock_pipe.return_value = (mock_conn, mock_conn)
 
@@ -357,8 +402,13 @@ class TestInferenceWorkerSubmit:
         mock_process.is_alive.return_value = True
         mock_process.pid = 12345
 
-        with patch("yunshu_engine.process_isolation.multiprocessing.Process", return_value=mock_process), \
-             patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe:
+        with (
+            patch(
+                "yunshu_engine.process_isolation.multiprocessing.Process",
+                return_value=mock_process,
+            ),
+            patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe,
+        ):
             # Parent connection that raises on send
             parent_conn = MagicMock()
             parent_conn.send.side_effect = BrokenPipeError("broken")
@@ -384,8 +434,13 @@ class TestPendingRequestsOnStop:
         mock_process.is_alive.return_value = True
         mock_process.pid = 12345
 
-        with patch("yunshu_engine.process_isolation.multiprocessing.Process", return_value=mock_process), \
-             patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe:
+        with (
+            patch(
+                "yunshu_engine.process_isolation.multiprocessing.Process",
+                return_value=mock_process,
+            ),
+            patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe,
+        ):
             mock_conn = MagicMock()
             mock_pipe.return_value = (mock_conn, mock_conn)
 
@@ -415,8 +470,10 @@ class TestWorkerSupervisor:
     def test_register_worker_with_fallback(self):
         supervisor = WorkerSupervisor()
         worker = InferenceWorker(WorkerProcessConfig(model_id="model-a"))
+
         def fallback(req):
             return {"result": "ok"}
+
         supervisor.register_worker("model-a", worker, fallback_fn=fallback)
         assert supervisor.worker_count == 1
 
@@ -444,13 +501,20 @@ class TestWorkerSupervisor:
         mock_process.is_alive.return_value = True
         mock_process.pid = 12345
 
-        with patch("yunshu_engine.process_isolation.multiprocessing.Process", return_value=mock_process), \
-             patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe:
+        with (
+            patch(
+                "yunshu_engine.process_isolation.multiprocessing.Process",
+                return_value=mock_process,
+            ),
+            patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe,
+        ):
             mock_conn = MagicMock()
             mock_pipe.return_value = (mock_conn, mock_conn)
 
             worker = InferenceWorker(
-                WorkerProcessConfig(model_id="model-a", heartbeat_interval_seconds=100.0)
+                WorkerProcessConfig(
+                    model_id="model-a", heartbeat_interval_seconds=100.0
+                )
             )
             worker.start()
             supervisor.register_worker("model-a", worker)
@@ -493,9 +557,7 @@ class TestFallback:
     def test_fallback_to_inprocess(self):
         supervisor = WorkerSupervisor()
         worker = InferenceWorker(WorkerProcessConfig(model_id="a"))
-        supervisor.register_worker(
-            "a", worker, fallback_fn=lambda req: {"echo": req}
-        )
+        supervisor.register_worker("a", worker, fallback_fn=lambda req: {"echo": req})
         result = supervisor.fallback_to_inprocess("a", {"prompt": "hi"})
         assert result == {"echo": {"prompt": "hi"}}
 
@@ -558,8 +620,13 @@ class TestStats:
         mock_process.is_alive.return_value = True
         mock_process.pid = 12345
 
-        with patch("yunshu_engine.process_isolation.multiprocessing.Process", return_value=mock_process), \
-             patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe:
+        with (
+            patch(
+                "yunshu_engine.process_isolation.multiprocessing.Process",
+                return_value=mock_process,
+            ),
+            patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe,
+        ):
             mock_conn = MagicMock()
             mock_pipe.return_value = (mock_conn, mock_conn)
 
@@ -626,9 +693,11 @@ class TestMaybeIsolateInference:
         with patch.dict("os.environ", {}, clear=False):
             os.environ.pop("YUNSHU_PROCESS_ISOLATION", None)
             called = {"v": False}
+
             def fallback(req):
                 called["v"] = True
                 return {"result": "ok"}
+
             result = maybe_isolate_inference("model-a", {"prompt": "hi"}, fallback)
             assert called["v"]
             assert result == {"result": "ok"}
@@ -641,9 +710,16 @@ class TestMaybeIsolateInference:
             fallback_fn=lambda req: {"result": "fallback"},
         )
 
-        with patch.dict("os.environ", {"YUNSHU_PROCESS_ISOLATION": "1"}), \
-             patch("yunshu_engine.process_isolation.get_supervisor", return_value=supervisor):
-            result = maybe_isolate_inference("model-a", {"prompt": "hi"}, lambda r: None)
+        with (
+            patch.dict("os.environ", {"YUNSHU_PROCESS_ISOLATION": "1"}),
+            patch(
+                "yunshu_engine.process_isolation.get_supervisor",
+                return_value=supervisor,
+            ),
+        ):
+            result = maybe_isolate_inference(
+                "model-a", {"prompt": "hi"}, lambda r: None
+            )
             assert result == {"result": "fallback"}
 
 
@@ -657,8 +733,13 @@ class TestAutoRestart:
         mock_process.is_alive.return_value = True
         mock_process.pid = 12345
 
-        with patch("yunshu_engine.process_isolation.multiprocessing.Process", return_value=mock_process), \
-             patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe:
+        with (
+            patch(
+                "yunshu_engine.process_isolation.multiprocessing.Process",
+                return_value=mock_process,
+            ),
+            patch("yunshu_engine.process_isolation.multiprocessing.Pipe") as mock_pipe,
+        ):
             mock_conn = MagicMock()
             mock_pipe.return_value = (mock_conn, mock_conn)
 
@@ -679,7 +760,9 @@ class TestAutoRestart:
 
     def test_no_restart_when_circuit_open(self):
         supervisor = WorkerSupervisor()
-        cfg = WorkerProcessConfig(model_id="test", max_restarts=2, restart_window_seconds=60.0)
+        cfg = WorkerProcessConfig(
+            model_id="test", max_restarts=2, restart_window_seconds=60.0
+        )
         worker = InferenceWorker(cfg)
         # Trip the circuit breaker
         worker._record_crash()

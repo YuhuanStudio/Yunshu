@@ -55,14 +55,12 @@ class MemoryGuard:
         self._max_concurrent = max_concurrent_requests
         if safety_margin_pct < 0:
             logger.warning(
-                f"safety_margin_pct={safety_margin_pct} is negative, "
-                f"clamping to 0.0"
+                f"safety_margin_pct={safety_margin_pct} is negative, clamping to 0.0"
             )
             safety_margin_pct = 0.0
         elif safety_margin_pct > 1.0:
             logger.warning(
-                f"safety_margin_pct={safety_margin_pct} exceeds 1.0, "
-                f"clamping to 0.5"
+                f"safety_margin_pct={safety_margin_pct} exceeds 1.0, clamping to 0.5"
             )
             safety_margin_pct = 0.5
         self._safety_margin_pct = safety_margin_pct
@@ -242,9 +240,7 @@ class MemoryGuard:
             "max_concurrent_requests": self._max_concurrent,
             "safety_margin_pct": self._safety_margin_pct,
             "rejection_rate": (
-                total_rejections / total_checks * 100
-                if total_checks > 0
-                else 0.0
+                total_rejections / total_checks * 100 if total_checks > 0 else 0.0
             ),
             "memory": monitor_stats,
         }

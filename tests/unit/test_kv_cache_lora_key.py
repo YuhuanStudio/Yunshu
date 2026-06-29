@@ -6,6 +6,7 @@ prefix/exact hit and decode on the WRONG adapter's KV — silently serving a mod
 caller didn't ask for (the 'LoRA-fail must not silently serve base' class, reopened
 through the cache). Until the caches are adapter-keyed, both fast paths bypass cache
 whenever a LoRA adapter is active."""
+
 from __future__ import annotations
 
 import inspect

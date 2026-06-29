@@ -9,6 +9,7 @@ Tests:
 - Edge cases (empty input, too many inputs)
 - Endpoint-level integration via FastAPI TestClient
 """
+
 import base64
 import os
 import struct
@@ -63,12 +64,14 @@ class TestEmbeddingRequest:
 
     def test_empty_list_input(self):
         from pydantic import ValidationError
+
         with pytest.raises(ValidationError, match="empty list"):
             EmbeddingRequest(model="test", input=[])
 
     def test_valid_encoding_formats(self):
         """encoding_format must be 'float' or 'base64'."""
         from yunshu_gateway.routers.embeddings import _VALID_ENCODING_FORMATS
+
         assert "float" in _VALID_ENCODING_FORMATS
         assert "base64" in _VALID_ENCODING_FORMATS
         assert len(_VALID_ENCODING_FORMATS) == 2
@@ -145,11 +148,13 @@ class TestEmbeddingResponseFormat:
         embeddings = [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
         data = []
         for i, emb in enumerate(embeddings):
-            data.append({
-                "object": "embedding",
-                "index": i,
-                "embedding": emb,
-            })
+            data.append(
+                {
+                    "object": "embedding",
+                    "index": i,
+                    "embedding": emb,
+                }
+            )
         assert len(data) == 3
         assert data[0]["index"] == 0
         assert data[1]["index"] == 1
@@ -220,8 +225,12 @@ class TestEmbeddingEngineResolution:
 
     async def test_no_engine_returns_none(self):
         """Should return None when no engine is available."""
-        with patch("yunshu_gateway.routers.embeddings.get_model_manager", return_value=None):
-            with patch("yunshu_gateway.routers.embeddings.get_engine", return_value=None):
+        with patch(
+            "yunshu_gateway.routers.embeddings.get_model_manager", return_value=None
+        ):
+            with patch(
+                "yunshu_gateway.routers.embeddings.get_engine", return_value=None
+            ):
                 result = await _resolve_embedding_engine("nonexistent")
                 assert result is None
 
@@ -229,8 +238,12 @@ class TestEmbeddingEngineResolution:
         """Should return loaded single engine."""
         mock_engine = MagicMock()
         mock_engine.is_loaded = True
-        with patch("yunshu_gateway.routers.embeddings.get_model_manager", return_value=None):
-            with patch("yunshu_gateway.routers.embeddings.get_engine", return_value=mock_engine):
+        with patch(
+            "yunshu_gateway.routers.embeddings.get_model_manager", return_value=None
+        ):
+            with patch(
+                "yunshu_gateway.routers.embeddings.get_engine", return_value=mock_engine
+            ):
                 result = await _resolve_embedding_engine("any-model")
                 assert result == mock_engine
 
@@ -244,6 +257,7 @@ def _setup_engine():
     os.environ["YUNSHU_AUTH_DISABLED"] = "true"
     from yunshu_engine.engine import Engine, EngineConfig
     from yunshu_gateway.engine import set_engine
+
     engine = Engine(EngineConfig())
     engine._model = object()
     engine._model_name = "test-embedding"
@@ -257,6 +271,7 @@ def _setup_engine():
 
 def _client():
     from yunshu_gateway.main import create_app
+
     return TestClient(create_app(), raise_server_exceptions=False)
 
 
@@ -287,53 +302,69 @@ class TestEmbeddingsEndpoint:
     def test_embeddings_no_model_loaded(self, _setup_engine):
         """Should fail with 404 when embedding model is not found."""
         client = _client()
-        resp = client.post("/v1/embeddings", json={
-            "model": "nonexistent",
-            "input": "hello world",
-        })
+        resp = client.post(
+            "/v1/embeddings",
+            json={
+                "model": "nonexistent",
+                "input": "hello world",
+            },
+        )
         assert resp.status_code in (404, 500, 503)
 
     def test_embeddings_accepts_string_input(self, _setup_engine):
         """Should accept string input without schema error."""
         client = _client()
-        resp = client.post("/v1/embeddings", json={
-            "model": "test-embedding",
-            "input": "hello world",
-        })
+        resp = client.post(
+            "/v1/embeddings",
+            json={
+                "model": "test-embedding",
+                "input": "hello world",
+            },
+        )
         assert resp.status_code in (200, 404, 500, 503)
 
     def test_embeddings_accepts_list_input(self, _setup_engine):
         """Should accept list of strings input without schema error."""
         client = _client()
-        resp = client.post("/v1/embeddings", json={
-            "model": "test-embedding",
-            "input": ["hello", "world"],
-        })
+        resp = client.post(
+            "/v1/embeddings",
+            json={
+                "model": "test-embedding",
+                "input": ["hello", "world"],
+            },
+        )
         assert resp.status_code in (200, 404, 500, 503)
 
     def test_embeddings_accepts_base64_format(self, _setup_engine):
         """Should accept base64 encoding format without schema error."""
         client = _client()
-        resp = client.post("/v1/embeddings", json={
-            "model": "test-embedding",
-            "input": "hello",
-            "encoding_format": "base64",
-        })
+        resp = client.post(
+            "/v1/embeddings",
+            json={
+                "model": "test-embedding",
+                "input": "hello",
+                "encoding_format": "base64",
+            },
+        )
         assert resp.status_code in (200, 404, 500, 503)
 
     def test_embeddings_accepts_dimensions(self, _setup_engine):
         """Should accept dimensions parameter without schema error."""
         client = _client()
-        resp = client.post("/v1/embeddings", json={
-            "model": "test-embedding",
-            "input": "hello",
-            "dimensions": 256,
-        })
+        resp = client.post(
+            "/v1/embeddings",
+            json={
+                "model": "test-embedding",
+                "input": "hello",
+                "dimensions": 256,
+            },
+        )
         assert resp.status_code in (200, 404, 500, 503)
 
     def test_embeddings_rejects_empty_input(self):
         """Should reject empty input list at model validation level."""
         from pydantic import ValidationError
+
         with pytest.raises(ValidationError, match="empty list"):
             EmbeddingRequest(model="test", input=[])
 
@@ -344,6 +375,7 @@ class TestEmbeddingIndexCorrespondence:
     def test_matryoshka_truncation_renormalizes(self):
         """Truncated embeddings should be re-normalized to unit vectors."""
         import math
+
         # Simulate a 4-dim embedding
         emb = [0.5, 0.5, 0.5, 0.5]
         norm = math.sqrt(sum(x * x for x in emb))
@@ -382,6 +414,7 @@ class TestPoolingOverrideW742:
 
     def test_accepts_valid_pooling(self):
         from yunshu_gateway.routers.embeddings import EmbeddingRequest
+
         for pt in ("MEAN", "cls", "Last"):
             r = EmbeddingRequest(model="m", input="hi", pooling_type=pt)
             assert r.pooling_type == pt.upper()
@@ -391,9 +424,11 @@ class TestPoolingOverrideW742:
         from pydantic import ValidationError
 
         from yunshu_gateway.routers.embeddings import EmbeddingRequest
+
         with pytest.raises(ValidationError, match="pooling_type"):
             EmbeddingRequest(model="m", input="hi", pooling_type="SUM")
 
     def test_default_none(self):
         from yunshu_gateway.routers.embeddings import EmbeddingRequest
+
         assert EmbeddingRequest(model="m", input="hi").pooling_type is None

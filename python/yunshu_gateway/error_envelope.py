@@ -9,15 +9,20 @@ was MCP-aware but the rate-limit / concurrency / TPM / lockout denials returned 
 OpenAI envelope to MCP clients. This centralizes the branching so every middleware denial
 is consistent.
 """
+
 from __future__ import annotations
 
 from starlette.responses import JSONResponse
 
 # Paths served by the Anthropic router (exact match — don't overmatch /admin/.../messages).
-_ANTHROPIC_PATHS = frozenset({
-    "/v1/messages", "/messages",
-    "/v1/messages/count_tokens", "/messages/count_tokens",
-})
+_ANTHROPIC_PATHS = frozenset(
+    {
+        "/v1/messages",
+        "/messages",
+        "/v1/messages/count_tokens",
+        "/messages/count_tokens",
+    }
+)
 _MCP_PATH = "/v1/mcp"
 
 
@@ -48,22 +53,48 @@ def format_error_response(
     if path == _MCP_PATH:
         return JSONResponse(
             status_code=status_code,
-            content={"jsonrpc": "2.0", "error": {"code": jsonrpc_code, "message": message}, "id": None},
+            content={
+                "jsonrpc": "2.0",
+                "error": {"code": jsonrpc_code, "message": message},
+                "id": None,
+            },
             headers=headers,
         )
 
     is_429 = status_code == 429
     if path in _ANTHROPIC_PATHS:
-        a_type = "rate_limit_error" if is_429 else ("authentication_error" if status_code == 401 else "invalid_request_error")
+        a_type = (
+            "rate_limit_error"
+            if is_429
+            else (
+                "authentication_error"
+                if status_code == 401
+                else "invalid_request_error"
+            )
+        )
         return JSONResponse(
             status_code=status_code,
             content={"type": "error", "error": {"type": a_type, "message": message}},
             headers=headers,
         )
 
-    o_type = "rate_limit_error" if is_429 else ("authentication_error" if status_code == 401 else "invalid_request_error")
-    o_code = code if code is not None else ("rate_limit_exceeded" if is_429 else ("invalid_api_key" if status_code == 401 else None))
+    o_type = (
+        "rate_limit_error"
+        if is_429
+        else ("authentication_error" if status_code == 401 else "invalid_request_error")
+    )
+    o_code = (
+        code
+        if code is not None
+        else (
+            "rate_limit_exceeded"
+            if is_429
+            else ("invalid_api_key" if status_code == 401 else None)
+        )
+    )
     err: dict = {"message": message, "type": o_type}
     if o_code is not None:
         err["code"] = o_code
-    return JSONResponse(status_code=status_code, content={"error": err}, headers=headers)
+    return JSONResponse(
+        status_code=status_code, content={"error": err}, headers=headers
+    )

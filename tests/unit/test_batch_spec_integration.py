@@ -11,6 +11,7 @@ Covers:
 
 At least 25 tests covering all components.
 """
+
 from unittest.mock import MagicMock, patch
 
 from yunshu_engine.request import Request, SamplingParams
@@ -122,16 +123,24 @@ class TestBatchPathSpecPrefill:
 
     def test_should_prefill_prompt_too_short(self):
         draft = MagicMock()
-        sp = BatchPathSpecPrefill(BatchSpecPrefillConfig(
-            enabled=True, draft_model=draft, threshold=8192,
-        ))
+        sp = BatchPathSpecPrefill(
+            BatchSpecPrefillConfig(
+                enabled=True,
+                draft_model=draft,
+                threshold=8192,
+            )
+        )
         assert sp.should_prefill(100) is False
 
     def test_should_prefill_enabled_and_long(self):
         draft = MagicMock()
-        sp = BatchPathSpecPrefill(BatchSpecPrefillConfig(
-            enabled=True, draft_model=draft, threshold=8192,
-        ))
+        sp = BatchPathSpecPrefill(
+            BatchSpecPrefillConfig(
+                enabled=True,
+                draft_model=draft,
+                threshold=8192,
+            )
+        )
         assert sp.should_prefill(10000) is True
 
     def test_compute_skippable_tokens_returns_none_when_disabled(self):
@@ -142,9 +151,13 @@ class TestBatchPathSpecPrefill:
     def test_compute_skippable_tokens_failure_fallback(self):
         """When scoring fails, returns None (falls back to full prefill)."""
         draft = MagicMock()
-        sp = BatchPathSpecPrefill(BatchSpecPrefillConfig(
-            enabled=True, draft_model=draft, threshold=100,
-        ))
+        sp = BatchPathSpecPrefill(
+            BatchSpecPrefillConfig(
+                enabled=True,
+                draft_model=draft,
+                threshold=100,
+            )
+        )
         # score_tokens will fail because draft model is a mock
         result = sp.compute_skippable_tokens(list(range(200)))
         assert result is None
@@ -161,9 +174,13 @@ class TestBatchPathSpecPrefill:
 
     def test_get_stats_after_attempts(self):
         draft = MagicMock()
-        sp = BatchPathSpecPrefill(BatchSpecPrefillConfig(
-            enabled=True, draft_model=draft, threshold=100,
-        ))
+        sp = BatchPathSpecPrefill(
+            BatchSpecPrefillConfig(
+                enabled=True,
+                draft_model=draft,
+                threshold=100,
+            )
+        )
         # Force a fallback
         sp.compute_skippable_tokens(list(range(200)))
         stats = sp.get_stats()
@@ -229,8 +246,12 @@ class TestSpecAwareBatchScheduler:
 
     def test_tbo_halves_overhead(self):
         """TBO overlap reduces effective spec overhead by ~50%."""
-        s_no_tbo = SpecAwareBatchScheduler(max_num_seqs=256, spec_overhead_per_request=0.2, tbo_enabled=False)
-        s_tbo = SpecAwareBatchScheduler(max_num_seqs=256, spec_overhead_per_request=0.2, tbo_enabled=True)
+        s_no_tbo = SpecAwareBatchScheduler(
+            max_num_seqs=256, spec_overhead_per_request=0.2, tbo_enabled=False
+        )
+        s_tbo = SpecAwareBatchScheduler(
+            max_num_seqs=256, spec_overhead_per_request=0.2, tbo_enabled=True
+        )
 
         budget_no_tbo = s_no_tbo.compute_spec_budget(num_running=20)
         budget_tbo = s_tbo.compute_spec_budget(num_running=20)
@@ -413,7 +434,10 @@ class TestBatchedDraftCollection:
 
         # Create a real NgramProposer with a repeated pattern
         from yunshu_engine.ngram_proposer import NgramConfig, NgramProposer
-        proposer = NgramProposer(NgramConfig(min_n=1, max_n=5, k=5, mode="lps", max_model_len=32768))
+
+        proposer = NgramProposer(
+            NgramConfig(min_n=1, max_n=5, k=5, mode="lps", max_model_len=32768)
+        )
 
         req = _make_request()
         req.prompt_token_ids = [10, 20, 30, 10, 20]
@@ -436,7 +460,9 @@ class TestBatchedDraftCollection:
         collector = BatchedDraftCollection()
         from yunshu_engine.ngram_proposer import NgramConfig, NgramProposer
 
-        proposer = NgramProposer(NgramConfig(min_n=1, max_n=5, k=5, mode="lps", max_model_len=32768))
+        proposer = NgramProposer(
+            NgramConfig(min_n=1, max_n=5, k=5, mode="lps", max_model_len=32768)
+        )
         req = _make_request()
         # Long repeated pattern for N-gram to find
         req.prompt_token_ids = [10, 20, 30, 40] * 20
@@ -521,7 +547,9 @@ class TestSchedulerSpecAwareBudget:
         # completion_batch_size must match max_num_seqs for a genuine
         # 64-slot scenario — the spec budget total now tracks the REAL decode cap
         # min(max_num_seqs, completion_batch_size), not the looser max_num_seqs.
-        scheduler = _make_scheduler(enable_spec=True, max_num_seqs=64, completion_batch_size=64)
+        scheduler = _make_scheduler(
+            enable_spec=True, max_num_seqs=64, completion_batch_size=64
+        )
         # Set up a mock spec decoder
         mock_decoder = MagicMock(spec=SpeculativeDecoder)
         scheduler._spec_decoder = mock_decoder
@@ -543,7 +571,9 @@ class TestSchedulerSpecAwareBudget:
 
     def test_no_spec_overhead_when_spec_disabled(self):
         """When spec decode is disabled, no spec slots are reserved."""
-        scheduler = _make_scheduler(enable_spec=False, max_num_seqs=64, completion_batch_size=64)
+        scheduler = _make_scheduler(
+            enable_spec=False, max_num_seqs=64, completion_batch_size=64
+        )
         budget = scheduler._spec_aware_scheduler.compute_spec_budget(10)
         # Default overhead 0.1 still applies even without spec enabled,
         # but the scheduler only uses the budget when spec is active.
@@ -712,6 +742,7 @@ class TestStepLoopIntegration:
     def test_step_with_ngram_uses_batch_draft_collection(self):
         """Step loop should use collect_batch_drafts for N-gram."""
         from yunshu_engine.scheduler import SchedulerConfig
+
         model = MagicMock()
         tokenizer = MagicMock()
         tokenizer.eos_token_ids = [2]
@@ -768,7 +799,11 @@ class TestStepLoopIntegration:
         mock_bg.next_generated.return_value = []
         scheduler._batch_gen = mock_bg
 
-        with patch.object(scheduler, '_generate_draft_tokens', return_value=DraftResult(token_ids=[40], logprobs=[-0.1])):
+        with patch.object(
+            scheduler,
+            "_generate_draft_tokens",
+            return_value=DraftResult(token_ids=[40], logprobs=[-0.1]),
+        ):
             scheduler.step()
 
         # Both draft collector and per-request path should have been used
@@ -777,7 +812,9 @@ class TestStepLoopIntegration:
 
     def test_spec_aware_budget_used_in_scheduling(self):
         """When spec is active, _schedule_waiting uses spec-aware budget."""
-        scheduler = _make_scheduler(enable_spec=True, ngram_spec_enabled=True, max_num_seqs=16)
+        scheduler = _make_scheduler(
+            enable_spec=True, ngram_spec_enabled=True, max_num_seqs=16
+        )
         mock_decoder = MagicMock(spec=SpeculativeDecoder)
         scheduler._spec_decoder = mock_decoder
 

@@ -9,6 +9,7 @@ run_with_disconnect_guard, pass cancel_event, break the n-loop on disconnect, an
 in finally. inpaint/controlnet/depth use engine methods without a cancel_event param
 (documented follow-up — needs an engine-side change).
 """
+
 from __future__ import annotations
 
 import inspect
@@ -37,6 +38,7 @@ def test_register_helper_returns_cancel_event(monkeypatch):
 
     tracker = _Tracker()
     import yunshu_engine.request_tracker as rt
+
     monkeypatch.setattr(rt, "get_request_tracker", lambda: tracker)
 
     ev, tr, rid = I._register_image_cancel("z-image")
@@ -48,7 +50,10 @@ def test_register_helper_returns_cancel_event(monkeypatch):
 
 def test_register_helper_tracker_unavailable_is_safe(monkeypatch):
     import yunshu_engine.request_tracker as rt
-    monkeypatch.setattr(rt, "get_request_tracker", lambda: (_ for _ in ()).throw(RuntimeError()))
+
+    monkeypatch.setattr(
+        rt, "get_request_tracker", lambda: (_ for _ in ()).throw(RuntimeError())
+    )
     ev, tr, rid = I._register_image_cancel("m")
     assert ev is None and tr is None and rid.startswith("img-")
     I._unregister_image_cancel(tr, rid)  # must not raise
@@ -57,8 +62,12 @@ def test_register_helper_tracker_unavailable_is_safe(monkeypatch):
 def test_variation_and_edit_routes_wire_cancel():
     for fn in (I.create_image_variation, I.create_image_edit):
         src = inspect.getsource(fn)
-        assert "run_with_disconnect_guard(" in src, f"{fn.__name__} missing disconnect guard"
-        assert "cancel_event=_img_cancel" in src, f"{fn.__name__} missing engine cancel_event"
+        assert "run_with_disconnect_guard(" in src, (
+            f"{fn.__name__} missing disconnect guard"
+        )
+        assert "cancel_event=_img_cancel" in src, (
+            f"{fn.__name__} missing engine cancel_event"
+        )
         assert "_register_image_cancel(" in src
         assert "_unregister_image_cancel(" in src
         assert "if result is None:" in src  # n-loop breaks on disconnect

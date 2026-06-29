@@ -73,6 +73,7 @@ _DTYPE_MAP = {
 @dataclass
 class _BlockMeta:
     """Metadata for a cached block (in-memory index entry)."""
+
     block_hash: bytes
     file_path: str
     token_count: int
@@ -85,6 +86,7 @@ class _BlockMeta:
 @dataclass
 class SSDCacheStats:
     """Statistics for the SSD-tier KV cache."""
+
     hot_cache_entries: int = 0
     hot_cache_bytes: int = 0
     disk_entries: int = 0
@@ -153,8 +155,11 @@ def _extract_tensor_bytes(arr) -> tuple[bytes, str, list[int]]:
     return raw, st_dtype, shape
 
 
-def _write_safetensors(path: str, tensors: dict[str, tuple[bytes, str, list[int]]],
-                       metadata: dict[str, str] | None = None) -> int:
+def _write_safetensors(
+    path: str,
+    tensors: dict[str, tuple[bytes, str, list[int]]],
+    metadata: dict[str, str] | None = None,
+) -> int:
     """Write safetensors file without using mlx API (thread-safe).
 
     Format: [8-byte header_size LE uint64][header JSON padded to 8 bytes][tensor data]
@@ -229,7 +234,7 @@ class SSDKVCache:
     def __init__(
         self,
         cache_dir: str = "~/.cache/yunshu/kv-ssd",
-        max_size_bytes: int = 10 * 1024 ** 3,  # 10 GB default
+        max_size_bytes: int = 10 * 1024**3,  # 10 GB default
         hot_cache_size: int = 100,
         writer_queue_size: int = 64,
         backend: str | None = None,
@@ -253,11 +258,12 @@ class SSDKVCache:
 
         # Backend selection: "sqlite" (default, crash-consistent) or "json" (legacy)
         self._backend = (
-            backend
-            or os.environ.get("YUNSHU_SSD_BACKEND", "sqlite")
+            backend or os.environ.get("YUNSHU_SSD_BACKEND", "sqlite")
         ).lower()
         if self._backend not in ("sqlite", "json"):
-            logger.warning("Unknown YUNSHU_SSD_BACKEND=%r, falling back to sqlite", self._backend)
+            logger.warning(
+                "Unknown YUNSHU_SSD_BACKEND=%r, falling back to sqlite", self._backend
+            )
             self._backend = "sqlite"
 
         # SQLite metadata store for crash consistency
@@ -265,6 +271,7 @@ class SSDKVCache:
         self._db = None  # kept for backward compat alias
         if self._backend == "sqlite":
             from yunshu_kv.ssd_sqlite_store import SSDSQLiteStore
+
             db_path = self._cache_dir / "index.db"
             self._sqlite_store = SSDSQLiteStore(db_path)
             # Attempt JSON → SQLite migration for backward compat
@@ -272,7 +279,10 @@ class SSDKVCache:
             if json_index_path.exists() and db_path.exists():
                 migrated = self._sqlite_store.import_json_index(json_index_path)
                 if migrated > 0:
-                    logger.info("SSD KV cache: migrated %d entries from JSON to SQLite", migrated)
+                    logger.info(
+                        "SSD KV cache: migrated %d entries from JSON to SQLite",
+                        migrated,
+                    )
 
         # Background writer
         self._write_queue: list[tuple] = []
@@ -341,10 +351,14 @@ class SSDKVCache:
                 self._sqlite_store.recover()
                 count = self._recover_from_sqlite_store()
                 if count > 0:
-                    logger.info(f"SSD KV cache: recovered {count} blocks from SQLite store")
+                    logger.info(
+                        f"SSD KV cache: recovered {count} blocks from SQLite store"
+                    )
                     return
             except Exception:
-                logger.debug("SQLite store recovery failed, falling back to scan", exc_info=True)
+                logger.debug(
+                    "SQLite store recovery failed, falling back to scan", exc_info=True
+                )
 
         # Fallback: scan safetensors headers
         count = 0
@@ -388,7 +402,8 @@ class SSDKVCache:
                     # Populate SQLite store if available (migration from file scan)
                     if self._sqlite_store is not None:
                         self._sqlite_store.put(
-                            block_hash_hex, str(f),
+                            block_hash_hex,
+                            str(f),
                             int(meta.get("token_count", "0")),
                             f.stat().st_size,
                         )
@@ -433,16 +448,23 @@ class SSDKVCache:
             try:
                 self._sqlite_store.delete(bh_hex)
             except Exception:
-                logger.debug("stale entry deletion failed for %s", bh_hex[:16], exc_info=True)
+                logger.debug(
+                    "stale entry deletion failed for %s", bh_hex[:16], exc_info=True
+                )
         if stale:
-            logger.info("SSD recovery: pruned %d stale entries (files missing)", len(stale))
+            logger.info(
+                "SSD recovery: pruned %d stale entries (files missing)", len(stale)
+            )
         return count
 
     def _sqlite_upsert(self, hex_hash: str, meta: _BlockMeta) -> None:
         """Insert or update a block entry in the metadata store."""
         if self._sqlite_store is not None:
             self._sqlite_store.put(
-                hex_hash, meta.file_path, meta.token_count, meta.file_size,
+                hex_hash,
+                meta.file_path,
+                meta.token_count,
+                meta.file_size,
             )
 
     def _sqlite_delete(self, hex_hash: str) -> None:
@@ -481,15 +503,21 @@ class SSDKVCache:
         for i, layer_data in enumerate(cache_data):
             if isinstance(layer_data, (list, tuple)):
                 for k, tensor in enumerate(layer_data):
-                    if tensor is not None and hasattr(tensor, 'shape'):
+                    if tensor is not None and hasattr(tensor, "shape"):
                         key = f"layer_{i}_state_{k}"
                         tensors_quantized[key] = _extract_tensor_bytes_quantized(tensor)
-            elif hasattr(layer_data, 'keys') and hasattr(layer_data, 'values'):
-                tensors_quantized[f"layer_{i}_keys"] = _extract_tensor_bytes_quantized(layer_data.keys)
-                tensors_quantized[f"layer_{i}_values"] = _extract_tensor_bytes_quantized(layer_data.values)
-            elif hasattr(layer_data, 'shape'):
+            elif hasattr(layer_data, "keys") and hasattr(layer_data, "values"):
+                tensors_quantized[f"layer_{i}_keys"] = _extract_tensor_bytes_quantized(
+                    layer_data.keys
+                )
+                tensors_quantized[f"layer_{i}_values"] = (
+                    _extract_tensor_bytes_quantized(layer_data.values)
+                )
+            elif hasattr(layer_data, "shape"):
                 # Raw mx.array layer (no keys/values wrapper)
-                tensors_quantized[f"layer_{i}_state_0"] = _extract_tensor_bytes_quantized(layer_data)
+                tensors_quantized[f"layer_{i}_state_0"] = (
+                    _extract_tensor_bytes_quantized(layer_data)
+                )
 
         # Build the safetensors-compatible dict: (bytes, dtype, shape)
         # Store scale factors in metadata for dequantization on load.
@@ -540,11 +568,15 @@ class SSDKVCache:
         # the queue drains below capacity.
         with self._writer_lock:
             # Drain queue synchronously if at capacity to prevent unbounded growth
-            if self._writer_queue_size > 0 and len(self._write_queue) >= self._writer_queue_size:
+            if (
+                self._writer_queue_size > 0
+                and len(self._write_queue) >= self._writer_queue_size
+            ):
                 self._drain_pending_writes_locked()
             # Remove any existing save for this hash (replace, don't duplicate)
             self._write_queue = [
-                item for item in self._write_queue
+                item
+                for item in self._write_queue
                 if not (item[0] == "save" and item[1] == hex_hash)
             ]
             self._write_queue.append(("save", hex_hash, tensors_raw, meta, file_path))
@@ -656,6 +688,7 @@ class SSDKVCache:
                 # A shallow list() copy is insufficient because callers
                 # may mutate inner numpy/mx arrays in-place.
                 import copy
+
                 return copy.deepcopy(self._hot_cache[hex_hash][0])
 
             # Check disk index — capture meta while holding the lock
@@ -673,6 +706,7 @@ class SSDKVCache:
         try:
             import mlx.core as mx
             import numpy as np
+
             data, header = mx.load(meta.file_path, return_metadata=True)
 
             # Check if data was stored with int8 quantization
@@ -701,7 +735,8 @@ class SSDKVCache:
                             logger.warning(
                                 "SSD block %s missing scale factor for layer %d "
                                 "(keys_found=%s, vals_found=%s) — treating as corrupt",
-                                hex_hash[:16], i,
+                                hex_hash[:16],
+                                i,
                                 keys_key in scale_factors,
                                 vals_key in scale_factors,
                             )
@@ -712,12 +747,10 @@ class SSDKVCache:
                         # sinks → np.float16 silently overflows to inf → NaN attention on
                         # restore. float32 holds the full bf16 range losslessly.
                         k_data = mx.array(
-                            np.array(k_data, dtype=np.float32)
-                            * np.float32(k_scale)
+                            np.array(k_data, dtype=np.float32) * np.float32(k_scale)
                         )
                         v_data = mx.array(
-                            np.array(v_data, dtype=np.float32)
-                            * np.float32(v_scale)
+                            np.array(v_data, dtype=np.float32) * np.float32(v_scale)
                         )
                     cache_data[i] = (k_data, v_data)
                 else:
@@ -733,12 +766,12 @@ class SSDKVCache:
                                 logger.warning(
                                     "SSD block %s missing scale factor for %s "
                                     "— treating as corrupt",
-                                    hex_hash[:16], s_key,
+                                    hex_hash[:16],
+                                    s_key,
                                 )
                                 return None
                             tensor = mx.array(  # float32, not fp16 (overflow→inf)
-                                np.array(tensor, dtype=np.float32)
-                                * np.float32(s_scale)
+                                np.array(tensor, dtype=np.float32) * np.float32(s_scale)
                             )
                         states.append(tensor)
                         k += 1
@@ -784,7 +817,10 @@ class SSDKVCache:
                                 os.unlink(meta_now.file_path)
                         except OSError:
                             pass
-                    elif meta_now.created_at > 0 and (time.time() - meta_now.created_at) > 30:
+                    elif (
+                        meta_now.created_at > 0
+                        and (time.time() - meta_now.created_at) > 30
+                    ):
                         # file_size == 0 but entry is >30s old — writer failed/lost
                         self._index.pop(hex_hash, None)
                         self._hot_cache.pop(hex_hash, None)
@@ -831,7 +867,8 @@ class SSDKVCache:
             with self._writer_lock:
                 # Cancel any pending save for this hash to prevent orphaned files
                 self._write_queue = [
-                    item for item in self._write_queue
+                    item
+                    for item in self._write_queue
                     if not (item[0] == "save" and item[1] == hex_hash)
                 ]
                 self._write_queue.append(("delete", file_path_to_delete))

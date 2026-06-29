@@ -5,6 +5,7 @@ extra="ignore" silently dropped it) and every response payload hardcoded
 nothing back. Now the field is declared, bounded to 16 pairs, and echoed by all four
 payload builders (text non-stream, streaming, VLM, background).
 """
+
 from __future__ import annotations
 
 import inspect
@@ -16,17 +17,24 @@ from yunshu_gateway.routers.responses import ResponsesRequest
 
 
 def test_metadata_field_held_and_defaults_none():
-    assert ResponsesRequest(model="qwen", input="hi", metadata={"k": "v"}).metadata == {"k": "v"}
+    assert ResponsesRequest(model="qwen", input="hi", metadata={"k": "v"}).metadata == {
+        "k": "v"
+    }
     assert ResponsesRequest(model="qwen", input="hi").metadata is None
 
 
 def test_metadata_bounded_to_16_pairs():
     with pytest.raises(ValueError):
-        ResponsesRequest(model="qwen", input="hi",
-                         metadata={str(i): "x" for i in range(17)})
+        ResponsesRequest(
+            model="qwen", input="hi", metadata={str(i): "x" for i in range(17)}
+        )
     # exactly 16 is allowed
-    assert ResponsesRequest(model="qwen", input="hi",
-                            metadata={str(i): "x" for i in range(16)}).metadata is not None
+    assert (
+        ResponsesRequest(
+            model="qwen", input="hi", metadata={str(i): "x" for i in range(16)}
+        ).metadata
+        is not None
+    )
 
 
 def test_all_payload_builders_echo_client_metadata():

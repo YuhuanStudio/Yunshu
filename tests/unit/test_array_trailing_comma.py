@@ -10,6 +10,7 @@ constrained-decode mask emit `[1,]` / `[{"x":1},]` (invalid JSON). Fixed by
 subtracting `{']'}` for ARRAY_VALUE (ARRAY_OPEN keeps `]` for the empty-array
 case). Mirrors the OBJECT_KEY fix.
 """
+
 from __future__ import annotations
 
 from yunshu_engine.json_schema import JsonSchemaConstraint, JsonState
@@ -46,7 +47,12 @@ def test_close_allowed_after_value_via_array_comma():
 
 def test_object_array_trailing_comma_forbidden():
     """`[{"x":1},` must not allow `]` next."""
-    c = _at({"type": "array", "items": {"type": "object",
-                                        "properties": {"x": {"type": "integer"}}}}, '[{"x":1},')
+    c = _at(
+        {
+            "type": "array",
+            "items": {"type": "object", "properties": {"x": {"type": "integer"}}},
+        },
+        '[{"x":1},',
+    )
     assert c._state == JsonState.ARRAY_VALUE
     assert "]" not in c._get_expected_chars()

@@ -1,6 +1,5 @@
 """Priority scheduling tests."""
 
-
 from yunshu_engine.request import SamplingParams
 from yunshu_engine.scheduler import SchedulerConfig, SchedulingPolicy
 

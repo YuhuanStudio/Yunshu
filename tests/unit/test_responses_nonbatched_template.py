@@ -7,6 +7,7 @@ template (the BatchedEngine default path applies all of this). Both non-batched 
 function→tool) + normalize before the family adapter. (Assistant-prefill
 continue_final_message remains a documented gap of the deprecated path.)
 """
+
 from __future__ import annotations
 
 import inspect
@@ -20,7 +21,8 @@ from yunshu_gateway.routers import (
 def test_normalize_helper_is_reusable():
     # the engine's normalizer (used by the fix) is an importable static method
     out = BatchedEngine._normalize_messages_for_chat_template(
-        [{"role": "user", "content": "hi"}])
+        [{"role": "user", "content": "hi"}]
+    )
     assert isinstance(out, list) and out[0]["role"] == "user"
 
 

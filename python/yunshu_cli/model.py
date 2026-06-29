@@ -38,7 +38,9 @@ def _detect_model_type(config_path: Path) -> str:
         with open(config_path) as f:
             cfg = json.load(f)
     except Exception:
-        logger.debug("Failed to read or parse config.json at %s", config_path, exc_info=True)
+        logger.debug(
+            "Failed to read or parse config.json at %s", config_path, exc_info=True
+        )
         return "UNKNOWN"
 
     # Check model_index.json first (diffusion models)
@@ -77,7 +79,9 @@ def _format_size(size_bytes: int) -> str:
 
 @model_app.command("list")
 def list_models(
-    models_dir: str | None = typer.Option(None, "--dir", "-d", help="Models directory."),
+    models_dir: str | None = typer.Option(
+        None, "--dir", "-d", help="Models directory."
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed info."),
     url: str | None = typer.Option(
         None,
@@ -85,7 +89,7 @@ def list_models(
         "-u",
         envvar="YUNSHU_GATEWAY_URL",
         help="Gateway URL; when provided, list models reported by the running server "
-             "instead of scanning the local models directory.",
+        "instead of scanning the local models directory.",
     ),
 ):
     """List available models."""
@@ -135,12 +139,14 @@ def list_models(
         if config_path.exists() or has_weights:
             size = sum(f.stat().st_size for f in subdir.rglob("*") if f.is_file())
             model_type = _detect_model_type(config_path)
-            models.append({
-                "name": subdir.name,
-                "type": model_type,
-                "size": size,
-                "has_config": config_path.exists(),
-            })
+            models.append(
+                {
+                    "name": subdir.name,
+                    "type": model_type,
+                    "size": size,
+                    "has_config": config_path.exists(),
+                }
+            )
 
     if not models:
         console.print("[yellow]No models found.[/]")
@@ -176,9 +182,15 @@ def list_models(
 
 @model_app.command("download")
 def download_model(
-    model_id: str = typer.Argument(help="HuggingFace model ID (e.g. mlx-community/Qwen3.5-9B-MLX-4bit)."),
-    models_dir: str | None = typer.Option(None, "--dir", "-d", help="Download directory."),
-    revision: str | None = typer.Option(None, "--revision", "-r", help="Model revision/branch."),
+    model_id: str = typer.Argument(
+        help="HuggingFace model ID (e.g. mlx-community/Qwen3.5-9B-MLX-4bit)."
+    ),
+    models_dir: str | None = typer.Option(
+        None, "--dir", "-d", help="Download directory."
+    ),
+    revision: str | None = typer.Option(
+        None, "--revision", "-r", help="Model revision/branch."
+    ),
 ):
     """Download a model from HuggingFace."""
     from huggingface_hub import snapshot_download
@@ -204,6 +216,7 @@ def download_model(
         if not overwrite:
             return
         import shutil
+
         shutil.rmtree(target_dir)
 
     console.print(f"[bold]Downloading[/] {model_id} → {target_dir}")
@@ -275,9 +288,18 @@ def model_info(
             cfg = json.load(f)
 
         arch = tree.add("[bold]Architecture[/]")
-        for key in ("architectures", "model_type", "hidden_size", "num_hidden_layers",
-                     "num_attention_heads", "num_key_value_heads", "intermediate_size",
-                     "max_position_embeddings", "vocab_size", "quantization_config"):
+        for key in (
+            "architectures",
+            "model_type",
+            "hidden_size",
+            "num_hidden_layers",
+            "num_attention_heads",
+            "num_key_value_heads",
+            "intermediate_size",
+            "max_position_embeddings",
+            "vocab_size",
+            "quantization_config",
+        ):
             if key in cfg:
                 val = cfg[key]
                 if isinstance(val, dict):
@@ -299,7 +321,9 @@ def model_info(
 @model_app.command("benchmark")
 def benchmark_model(
     model: str = typer.Argument(help="Model name or path."),
-    prompt_tokens: int = typer.Option(128, "--prompt-tokens", help="Prompt length in tokens."),
+    prompt_tokens: int = typer.Option(
+        128, "--prompt-tokens", help="Prompt length in tokens."
+    ),
     max_tokens: int = typer.Option(256, "--max-tokens", help="Max tokens to generate."),
     num_runs: int = typer.Option(3, "--runs", "-n", help="Number of runs."),
     warmup: int = typer.Option(1, "--warmup", help="Warmup runs."),
@@ -321,6 +345,7 @@ def benchmark_model(
 
     # Load model
     from mlx_lm.utils import load as load_model
+
     with console.status("[bold]Loading model..."):
         ml_model, tokenizer = load_model(str(model_path))
 
@@ -335,6 +360,7 @@ def benchmark_model(
     # Warmup
     for _ in range(warmup):
         from mlx_lm.utils import generate_step
+
         for _ in generate_step(ml_model, tokens, max_tokens=16, temp=0.0):
             pass
         mx.synchronize()
@@ -350,7 +376,9 @@ def benchmark_model(
         elapsed = time.perf_counter() - t0
         tok_per_s = generated / elapsed if elapsed > 0 else 0
         results.append(tok_per_s)
-        console.print(f"  Run {run + 1}: {tok_per_s:.1f} tok/s ({generated} tokens in {elapsed:.2f}s)")
+        console.print(
+            f"  Run {run + 1}: {tok_per_s:.1f} tok/s ({generated} tokens in {elapsed:.2f}s)"
+        )
 
     avg = sum(results) / len(results)
     table = Table(title=f"Benchmark Results: {model_path.name}")

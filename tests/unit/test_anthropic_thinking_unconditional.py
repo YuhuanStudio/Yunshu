@@ -6,6 +6,7 @@ reasoning tokens entirely (hit neither branch). chat.py/responses.py route reaso
 unconditionally — Anthropic was the lone outlier. Now both Anthropic paths separate/route
 reasoning unconditionally (extract_thinking is a no-op without think tags).
 """
+
 from __future__ import annotations
 
 import inspect
@@ -27,10 +28,15 @@ def test_nonstream_extract_thinking_not_gated_on_enable_thinking():
     # neither non-stream extract_thinking call (one uses `text`, one `result.text`) may be
     # gated by an `if enable_thinking:` guard immediately before it.
     src = inspect.getsource(A)
-    for call in ("extract_thinking(text, req.model)", "extract_thinking(result.text, req.model)"):
+    for call in (
+        "extract_thinking(text, req.model)",
+        "extract_thinking(result.text, req.model)",
+    ):
         i = src.index(call)
-        window = src[max(0, i - 160):i]
-        assert "if enable_thinking:" not in window, f"thinking extraction still gated before {call!r}"
+        window = src[max(0, i - 160) : i]
+        assert "if enable_thinking:" not in window, (
+            f"thinking extraction still gated before {call!r}"
+        )
 
 
 def test_streaming_routes_on_is_reasoning_alone():

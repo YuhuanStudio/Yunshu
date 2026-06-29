@@ -3,6 +3,7 @@ BatchedDetokenizer, StreamingBackpressureController.
 
 Run: uv run pytest tests/unit/test_streaming_optimizer.py -v
 """
+
 from __future__ import annotations
 
 import time
@@ -193,9 +194,7 @@ class TestSamplingPlan:
         assert plan.deterministic is True
 
     def test_stochastic_plan(self):
-        plan = SamplingPlan(
-            deterministic=False, temperature=0.7, top_p=0.9, top_k=50
-        )
+        plan = SamplingPlan(deterministic=False, temperature=0.7, top_p=0.9, top_k=50)
         assert plan.deterministic is False
         assert plan.temperature == 0.7
         assert plan.top_p == 0.9
@@ -589,4 +588,4 @@ class TestSoftmax:
     def test_uniform_input(self):
         x = np.array([2.0, 2.0, 2.0])
         probs = _softmax(x)
-        np.testing.assert_allclose(probs, [1/3, 1/3, 1/3], atol=1e-6)
+        np.testing.assert_allclose(probs, [1 / 3, 1 / 3, 1 / 3], atol=1e-6)

@@ -205,7 +205,9 @@ class TestWarmTierPromotion:
         table2, match2 = mgr.allocate_for_prefill(tokens2, model_hash=42)
 
         # Block 0 was promoted from warm tier
-        assert match2.num_matched_tokens >= 4  # At least block 0 (promoted) + block 1 (still hot)
+        assert (
+            match2.num_matched_tokens >= 4
+        )  # At least block 0 (promoted) + block 1 (still hot)
         assert not mgr._warm_tier.contains(cached_hash_0)  # No longer in warm tier
 
         mgr.free_request(table2)
@@ -356,7 +358,9 @@ class TestKVWarmTierStandalone:
         assert config.flush_interval_s == 60.0
 
     def test_custom_config(self):
-        config = KVTierConfig(max_blocks=500, compression="4bit", storage_path="/tmp/kv")
+        config = KVTierConfig(
+            max_blocks=500, compression="4bit", storage_path="/tmp/kv"
+        )
         tier = KVWarmTier(config)
         assert tier.config.max_blocks == 500
         assert tier.is_full is False

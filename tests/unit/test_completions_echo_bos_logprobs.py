@@ -14,6 +14,7 @@ slot when _head=="" (tail already covers the whole prompt → position 0 has no 
 listing only real tokens and nulling the first real token's logprob — matching OpenAI and the
 no-BOS path exactly.
 """
+
 from __future__ import annotations
 
 from yunshu_gateway.routers.completions import _format_logprobs
@@ -21,6 +22,7 @@ from yunshu_gateway.routers.completions import _format_logprobs
 
 class _Tok:
     """Decodes token ids to fixed strings (no BOS text — BOS id is never decoded into output)."""
+
     _M = {1: "Hello", 2: " world", 3: "!", 9: " Hi"}
 
     def decode(self, ids):
@@ -46,12 +48,16 @@ def test_bos_model_collapses_phantom_and_nulls_first_real_token():
     # and the first real token (id 1) carrying a real logprob given BOS.
     pl = [
         None,
-        {"token_id": 1, "logprob": -1.5},   # first REAL token, logprob given BOS — must be nulled
+        {
+            "token_id": 1,
+            "logprob": -1.5,
+        },  # first REAL token, logprob given BOS — must be nulled
         {"token_id": 2, "logprob": -0.8},
         {"token_id": 3, "logprob": -0.2},
     ]
-    out = _format_logprobs(_State(pl, _COMPLETION), _Tok(), top_logprobs=0,
-                           echo=True, prompt=_PROMPT)
+    out = _format_logprobs(
+        _State(pl, _COMPLETION), _Tok(), top_logprobs=0, echo=True, prompt=_PROMPT
+    )
     assert out["tokens"] == _EXPECT_TOKENS, out["tokens"]
     assert out["token_logprobs"] == _EXPECT_LOGPROBS, out["token_logprobs"]
     assert out["text_offset"] == _EXPECT_OFFSETS, out["text_offset"]
@@ -66,8 +72,9 @@ def test_no_bos_model_unchanged_parity():
         {"token_id": 2, "logprob": -0.8},
         {"token_id": 3, "logprob": -0.2},
     ]
-    out = _format_logprobs(_State(pl, _COMPLETION), _Tok(), top_logprobs=0,
-                           echo=True, prompt=_PROMPT)
+    out = _format_logprobs(
+        _State(pl, _COMPLETION), _Tok(), top_logprobs=0, echo=True, prompt=_PROMPT
+    )
     assert out["tokens"] == _EXPECT_TOKENS
     assert out["token_logprobs"] == _EXPECT_LOGPROBS
     assert out["text_offset"] == _EXPECT_OFFSETS
@@ -78,14 +85,24 @@ def test_bos_collapse_suppresses_first_token_top_logprobs():
     # prompt token has no preceding context, so no alternatives).
     pl = [
         None,
-        {"token_id": 1, "logprob": -1.5,
-         "top_logprobs": [{"token_id": 1, "logprob": -1.5}, {"token_id": 2, "logprob": -2.0}]},
-        {"token_id": 2, "logprob": -0.8,
-         "top_logprobs": [{"token_id": 2, "logprob": -0.8}]},
+        {
+            "token_id": 1,
+            "logprob": -1.5,
+            "top_logprobs": [
+                {"token_id": 1, "logprob": -1.5},
+                {"token_id": 2, "logprob": -2.0},
+            ],
+        },
+        {
+            "token_id": 2,
+            "logprob": -0.8,
+            "top_logprobs": [{"token_id": 2, "logprob": -0.8}],
+        },
         {"token_id": 3, "logprob": -0.2},
     ]
-    out = _format_logprobs(_State(pl, _COMPLETION), _Tok(), top_logprobs=2,
-                           echo=True, prompt=_PROMPT)
+    out = _format_logprobs(
+        _State(pl, _COMPLETION), _Tok(), top_logprobs=2, echo=True, prompt=_PROMPT
+    )
     # first real token "Hello": null logprob + empty alternatives
     assert out["tokens"][0] == "Hello"
     assert out["token_logprobs"][0] is None

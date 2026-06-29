@@ -63,6 +63,7 @@ logger = logging.getLogger(__name__)
 # ── MLX optional import ──────────────────────────────────────────────
 try:
     import mlx.core as mx
+
     _HAS_MLX = True
 except ImportError:
     mx = None  # type: ignore
@@ -81,6 +82,7 @@ _CHUNK_SIZE = 64 * 1024  # 64 KB chunks for streaming
 
 class CompressionType(StrEnum):
     """Compression algorithm for KV block payload."""
+
     NONE = "none"
     ZSTD = "zstd"
     LZ4 = "lz4"
@@ -88,6 +90,7 @@ class CompressionType(StrEnum):
 
 class TransferStatus(StrEnum):
     """Status of a KV transfer operation."""
+
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
@@ -117,6 +120,7 @@ class KVTransferConfig:
         max_concurrent_transfers: Max parallel inbound transfers (server).
         block_size: Tokens per KV block (must match KVCacheManager).
     """
+
     enabled: bool = False
     listen_port: int = _DEFAULT_PORT
     remote_host: str = "127.0.0.1"
@@ -143,7 +147,9 @@ class KVTransferConfig:
             YUNSHU_KV_TRANSFER_MAX_CONCURRENT  Max concurrent transfers
             YUNSHU_KV_TRANSFER_BLOCK_SIZE      Tokens per block
         """
-        compression_str = os.environ.get("YUNSHU_KV_TRANSFER_COMPRESSION", "none").lower()
+        compression_str = os.environ.get(
+            "YUNSHU_KV_TRANSFER_COMPRESSION", "none"
+        ).lower()
         try:
             compression = CompressionType(compression_str)
         except ValueError:
@@ -151,9 +157,13 @@ class KVTransferConfig:
 
         return cls(
             enabled=os.environ.get("YUNSHU_KV_TRANSFER", "0") == "1",
-            listen_port=int(os.environ.get("YUNSHU_KV_TRANSFER_PORT", str(_DEFAULT_PORT))),
+            listen_port=int(
+                os.environ.get("YUNSHU_KV_TRANSFER_PORT", str(_DEFAULT_PORT))
+            ),
             remote_host=os.environ.get("YUNSHU_KV_TRANSFER_REMOTE_HOST", "127.0.0.1"),
-            remote_port=int(os.environ.get("YUNSHU_KV_TRANSFER_REMOTE_PORT", str(_DEFAULT_PORT))),
+            remote_port=int(
+                os.environ.get("YUNSHU_KV_TRANSFER_REMOTE_PORT", str(_DEFAULT_PORT))
+            ),
             compression=compression,
             checksum_algorithm=os.environ.get("YUNSHU_KV_TRANSFER_CHECKSUM", "sha256"),
             timeout_seconds=float(os.environ.get("YUNSHU_KV_TRANSFER_TIMEOUT", "30.0")),
@@ -174,6 +184,7 @@ class KVBlockData:
         layer_data: Per-layer KV tensors serialized as bytes.
                     Key is layer index, value is serialized (K, V) pair.
     """
+
     block_hash: int
     token_count: int
     layer_data: dict[int, bytes] = field(default_factory=dict)
@@ -190,11 +201,12 @@ class KVTransferHeader:
 
     The header is JSON-encoded and length-prefixed for streaming.
     """
+
     request_id: str
     block_count: int
     model_name: str
     compression: str  # "none"|"zstd"|"lz4"
-    checksum: str     # hex digest of payload
+    checksum: str  # hex digest of payload
     total_tokens: int
     layer_count: int
     block_size: int
@@ -203,18 +215,21 @@ class KVTransferHeader:
 
     def to_json(self) -> bytes:
         """Serialize header to JSON bytes."""
-        return json.dumps({
-            "request_id": self.request_id,
-            "block_count": self.block_count,
-            "model_name": self.model_name,
-            "compression": self.compression,
-            "checksum": self.checksum,
-            "total_tokens": self.total_tokens,
-            "layer_count": self.layer_count,
-            "block_size": self.block_size,
-            "checksum_algorithm": self.checksum_algorithm,
-            "version": self.version,
-        }, separators=(",", ":")).encode("utf-8")
+        return json.dumps(
+            {
+                "request_id": self.request_id,
+                "block_count": self.block_count,
+                "model_name": self.model_name,
+                "compression": self.compression,
+                "checksum": self.checksum,
+                "total_tokens": self.total_tokens,
+                "layer_count": self.layer_count,
+                "block_size": self.block_size,
+                "checksum_algorithm": self.checksum_algorithm,
+                "version": self.version,
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
 
     @classmethod
     def from_json(cls, data: bytes) -> KVTransferHeader:
@@ -240,6 +255,7 @@ class KVTransferMessage:
 
     This is the top-level container for both sending and receiving.
     """
+
     header: KVTransferHeader
     blocks: list[KVBlockData]
 
@@ -270,6 +286,7 @@ class KVTransferResult:
             state.  Used by cleanup_expired_transfers() to determine wall-clock
             age (not duration_seconds, which is just the transfer time).
     """
+
     request_id: str
     status: TransferStatus
     blocks_transferred: int = 0
@@ -291,6 +308,7 @@ class KVTransferResult:
 @dataclass
 class KVTransferStats:
     """Aggregate KV transfer statistics."""
+
     total_transfers: int = 0
     total_blocks_sent: int = 0
     total_blocks_received: int = 0
@@ -391,6 +409,7 @@ class KVTransferProtocol:
         if algorithm == "xxhash":
             try:
                 import xxhash
+
                 return xxhash.xxh128(data).hexdigest()
             except ImportError:
                 logger.warning(
@@ -425,6 +444,7 @@ class KVTransferProtocol:
         if method == CompressionType.ZSTD:
             try:
                 import zstandard as zstd
+
                 compressor = zstd.ZstdCompressor()
                 return compressor.compress(data), CompressionType.ZSTD
             except ImportError:
@@ -434,6 +454,7 @@ class KVTransferProtocol:
         if method == CompressionType.LZ4:
             try:
                 import lz4.frame
+
                 return lz4.frame.compress(data), CompressionType.LZ4
             except ImportError:
                 logger.warning("lz4 not available, sending uncompressed")
@@ -458,14 +479,18 @@ class KVTransferProtocol:
         if method == CompressionType.ZSTD:
             try:
                 import zstandard as zstd
+
                 decompressor = zstd.ZstdDecompressor()
                 return decompressor.decompress(data)
             except ImportError:
-                raise RuntimeError("zstandard required for zstd decompression") from None
+                raise RuntimeError(
+                    "zstandard required for zstd decompression"
+                ) from None
 
         if method == CompressionType.LZ4:
             try:
                 import lz4.frame
+
                 return lz4.frame.decompress(data)
             except ImportError:
                 raise RuntimeError("lz4 required for lz4 decompression") from None
@@ -555,11 +580,13 @@ class KVTransferProtocol:
                 layer_bytes = buf.read(data_len)
                 layer_data[layer_idx] = layer_bytes
 
-            blocks.append(KVBlockData(
-                block_hash=block_hash,
-                token_count=token_count,
-                layer_data=layer_data,
-            ))
+            blocks.append(
+                KVBlockData(
+                    block_hash=block_hash,
+                    token_count=token_count,
+                    layer_data=layer_data,
+                )
+            )
 
         return blocks
 
@@ -586,7 +613,9 @@ class KVTransferProtocol:
         # Record the EFFECTIVE method (compress() downgrades to NONE
         # when the codec is missing) so the receiver doesn't try to decompress
         # raw bytes.
-        compressed_payload, effective_compression = cls.compress(raw_payload, compression)
+        compressed_payload, effective_compression = cls.compress(
+            raw_payload, compression
+        )
 
         # Compute checksum on raw (uncompressed) payload
         checksum = cls.compute_checksum(raw_payload, checksum_algorithm)
@@ -613,11 +642,11 @@ class KVTransferProtocol:
 
         # Build frame
         frame = io.BytesIO()
-        frame.write(_MAGIC)                                      # 4 bytes magic
-        frame.write(struct.pack("!I", len(header_bytes)))         # 4 bytes header len
-        frame.write(header_bytes)                                # N bytes header
+        frame.write(_MAGIC)  # 4 bytes magic
+        frame.write(struct.pack("!I", len(header_bytes)))  # 4 bytes header len
+        frame.write(header_bytes)  # N bytes header
         frame.write(struct.pack("!Q", len(compressed_payload)))  # 8 bytes payload len
-        frame.write(compressed_payload)                          # M bytes payload
+        frame.write(compressed_payload)  # M bytes payload
 
         return frame.getvalue()
 
@@ -740,9 +769,7 @@ class KVTransferProtocol:
         payload_len = struct.unpack("!Q", payload_len_bytes)[0]
 
         if payload_len > _MAX_MESSAGE_SIZE:
-            raise ValueError(
-                f"Payload too large: {payload_len} > {_MAX_MESSAGE_SIZE}"
-            )
+            raise ValueError(f"Payload too large: {payload_len} > {_MAX_MESSAGE_SIZE}")
 
         # Read payload
         payload = await reader.readexactly(payload_len)
@@ -807,9 +834,7 @@ def extract_kv_blocks_from_cache(
         block_token_ids = token_ids[block_start:block_end]
 
         # Compute content hash from token IDs
-        hash_input = b"".join(
-            struct.pack("!i", tid) for tid in block_token_ids
-        )
+        hash_input = b"".join(struct.pack("!i", tid) for tid in block_token_ids)
         block_hash = int(hashlib.blake2b(hash_input, digest_size=8).hexdigest(), 16)
 
         # Extract layer data
@@ -818,14 +843,14 @@ def extract_kv_blocks_from_cache(
         if _HAS_MLX and mx is not None:
             try:
                 for layer_idx, layer_cache in enumerate(kv_cache):
-                    if hasattr(layer_cache, 'state'):
+                    if hasattr(layer_cache, "state"):
                         # MLX KVCache with state (keys, values, offset)
                         state = layer_cache.state
-                        if hasattr(state, '__iter__'):
+                        if hasattr(state, "__iter__"):
                             state_tuple = tuple(state)
                             if len(state_tuple) >= 2:
                                 keys, values = state_tuple[0], state_tuple[1]
-                                if hasattr(keys, 'item'):
+                                if hasattr(keys, "item"):
                                     # mx.array — extract slice for THIS block.
                                     # the SEQUENCE axis of an mlx-lm KVCache
                                     # is -2 (shape (B, n_kv_heads, seq, head_dim)), NOT 0.
@@ -839,17 +864,21 @@ def extract_kv_blocks_from_cache(
                                     k_bytes = _tensor_to_bytes(k_slice)
                                     v_bytes = _tensor_to_bytes(v_slice)
                                     layer_data[layer_idx] = k_bytes + v_bytes
-                    elif hasattr(layer_cache, 'offset'):
+                    elif hasattr(layer_cache, "offset"):
                         # Older-style cache
-                        offset = getattr(layer_cache, 'offset', 0)
+                        offset = getattr(layer_cache, "offset", 0)
                         if offset > 0:
-                            keys = getattr(layer_cache, 'keys', None)
-                            vals = getattr(layer_cache, 'values', None)
+                            keys = getattr(layer_cache, "keys", None)
+                            vals = getattr(layer_cache, "values", None)
                             if keys is not None:
                                 # Take relevant slice for THIS block on the seq axis (-2),
                                 # not axis 0.
-                                k_bytes = _tensor_to_bytes(keys[..., block_start:block_end, :])
-                                v_bytes = _tensor_to_bytes(vals[..., block_start:block_end, :])
+                                k_bytes = _tensor_to_bytes(
+                                    keys[..., block_start:block_end, :]
+                                )
+                                v_bytes = _tensor_to_bytes(
+                                    vals[..., block_start:block_end, :]
+                                )
                                 layer_data[layer_idx] = k_bytes + v_bytes
             except Exception:
                 logger.debug(
@@ -857,11 +886,13 @@ def extract_kv_blocks_from_cache(
                     exc_info=True,
                 )
 
-        blocks.append(KVBlockData(
-            block_hash=block_hash,
-            token_count=actual_tokens,
-            layer_data=layer_data,
-        ))
+        blocks.append(
+            KVBlockData(
+                block_hash=block_hash,
+                token_count=actual_tokens,
+                layer_data=layer_data,
+            )
+        )
 
     return blocks
 
@@ -872,9 +903,10 @@ def _tensor_to_bytes(tensor: Any) -> bytes:
     Uses numpy as an intermediary since MLX arrays support
     .astype() and can be converted via numpy.
     """
-    if _HAS_MLX and mx is not None and hasattr(tensor, 'nbytes'):
+    if _HAS_MLX and mx is not None and hasattr(tensor, "nbytes"):
         try:
             import numpy as _np
+
             # numpy has no bfloat16, so np.array() on a bf16 array raises —
             # cast to float32 first. We record the resulting numpy dtype so the
             # round-trip restores it EXACTLY (the old code hardcoded float16 on
@@ -892,8 +924,10 @@ def _tensor_to_bytes(tensor: Any) -> bytes:
             # weights (dtype-mismatched concat / attention) on every disaggregated handoff.
             mlxdt = str(getattr(tensor, "dtype", "")).split(".")[-1].encode("ascii")
             header = (
-                struct.pack("<I", len(dt)) + dt
-                + struct.pack("<I", len(mlxdt)) + mlxdt
+                struct.pack("<I", len(dt))
+                + dt
+                + struct.pack("<I", len(mlxdt))
+                + mlxdt
                 + struct.pack("<I", arr.ndim)
                 + b"".join(struct.pack("<q", int(d)) for d in arr.shape)
             )
@@ -901,7 +935,7 @@ def _tensor_to_bytes(tensor: Any) -> bytes:
         except Exception:
             logger.debug("tensor_to_bytes via numpy failed", exc_info=True)
     # Fallback: just the bytes from the array
-    if hasattr(tensor, 'tobytes'):
+    if hasattr(tensor, "tobytes"):
         return tensor.tobytes()
     return b""
 
@@ -914,15 +948,16 @@ def _read_tensor(data: bytes, offset: int = 0) -> tuple[Any, int]:
     exact dtype + shape. Raises on malformed input.
     """
     import numpy as _np
+
     (dlen,) = struct.unpack_from("<I", data, offset)
     offset += 4
-    dt = data[offset:offset + dlen].decode("ascii")
+    dt = data[offset : offset + dlen].decode("ascii")
     offset += dlen
     # Original mlx dtype name (paired with _tensor_to_bytes). Restores bf16 exactly
     # rather than leaving the receiver with the float32 transport dtype.
     (mlen,) = struct.unpack_from("<I", data, offset)
     offset += 4
-    mlxdt = data[offset:offset + mlen].decode("ascii")
+    mlxdt = data[offset : offset + mlen].decode("ascii")
     offset += mlen
     (ndim,) = struct.unpack_from("<I", data, offset)
     offset += 4
@@ -936,7 +971,7 @@ def _read_tensor(data: bytes, offset: int = 0) -> tuple[Any, int]:
     for d in shape:
         count *= d
     nbytes = count * npdt.itemsize
-    raw = data[offset:offset + nbytes]
+    raw = data[offset : offset + nbytes]
     offset += nbytes
     arr = _np.frombuffer(raw, dtype=npdt).reshape(shape)
     out = mx.array(arr)
@@ -1005,18 +1040,23 @@ def load_kv_blocks_into_cache(
                             if existing is None:
                                 return new
                             return mx.concatenate([existing, new], axis=-2)
+
                         if isinstance(layer_cache, list):
                             if len(layer_cache) >= 2:
                                 layer_cache[0] = _seq_append(layer_cache[0], k_tensor)
                                 layer_cache[1] = _seq_append(layer_cache[1], v_tensor)
-                        elif hasattr(layer_cache, 'keys') and hasattr(layer_cache, 'values'):
+                        elif hasattr(layer_cache, "keys") and hasattr(
+                            layer_cache, "values"
+                        ):
                             layer_cache.keys = _seq_append(layer_cache.keys, k_tensor)
-                            layer_cache.values = _seq_append(layer_cache.values, v_tensor)
+                            layer_cache.values = _seq_append(
+                                layer_cache.values, v_tensor
+                            )
                             # Keep the cache's offset consistent with the loaded length so
                             # the decode node reads/writes at the right position.
                             with contextlib.suppress(Exception):
                                 layer_cache.offset = int(layer_cache.keys.shape[-2])
-                        elif hasattr(layer_cache, 'state'):
+                        elif hasattr(layer_cache, "state"):
                             # mlx-lm's `state` is a (keys, values) tuple
                             # property whose setter does `self.keys, self.values = v`.
                             # The old code did `mx.concatenate([state, k, v])` —
@@ -1080,7 +1120,10 @@ class KVTransferClient:
         # to a different loop" → every disagg transfer after the first silently failed and
         # decode fell back to re-prefill. Reuse a cached writer ONLY within its own loop.
         self._connections: dict[
-            str, tuple[asyncio.StreamReader, asyncio.StreamWriter, asyncio.AbstractEventLoop]
+            str,
+            tuple[
+                asyncio.StreamReader, asyncio.StreamWriter, asyncio.AbstractEventLoop
+            ],
         ] = {}
         self._conn_lock = threading.Lock()
 
@@ -1237,20 +1280,27 @@ class KVTransferClient:
         if loop is not None and loop.is_running():
             # We're in an async context — schedule and wait
             import concurrent.futures
+
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 future = pool.submit(
                     asyncio.run,
                     self.send_blocks(
-                        blocks, request_id, model_name,
-                        total_tokens, layer_count,
+                        blocks,
+                        request_id,
+                        model_name,
+                        total_tokens,
+                        layer_count,
                     ),
                 )
                 return future.result(timeout=self._config.timeout_seconds)
         else:
             return asyncio.run(
                 self.send_blocks(
-                    blocks, request_id, model_name,
-                    total_tokens, layer_count,
+                    blocks,
+                    request_id,
+                    model_name,
+                    total_tokens,
+                    layer_count,
                 )
             )
 
@@ -1283,7 +1333,9 @@ class KVTransferClient:
             # Another coroutine may have opened a connection while we were
             # connecting — close the loser to avoid leaking file descriptors.
             if addr in self._connections:
-                existing_reader, existing_writer, existing_loop = self._connections[addr]
+                existing_reader, existing_writer, existing_loop = self._connections[
+                    addr
+                ]
                 if existing_loop is _cur_loop and not existing_writer.is_closing():
                     # Use the existing (first-writer-wins) and close ours
                     try:
@@ -1485,16 +1537,20 @@ class KVTransferServer:
             # would corrupt decode. Reject (NACK) when the receiver's loaded model differs
             # from the sender's. (Was missing — masked only because the load path below is
             # not yet wired; guards against corruption once it is.)
-            _local_model = (getattr(self._kv_manager, "model_name", None)
-                            or getattr(self._kv_manager, "_model_name", None))
+            _local_model = getattr(self._kv_manager, "model_name", None) or getattr(
+                self._kv_manager, "_model_name", None
+            )
             _sender_model = getattr(message.header, "model_name", None)
             if _local_model and _sender_model and _local_model != _sender_model:
                 logger.warning(
                     "KV transfer model mismatch: sender=%s receiver=%s — rejecting %s",
-                    _sender_model, _local_model, request_id,
+                    _sender_model,
+                    _local_model,
+                    request_id,
                 )
                 _fail = KVTransferResult(
-                    request_id=request_id, status=TransferStatus.FAILED,
+                    request_id=request_id,
+                    status=TransferStatus.FAILED,
                     error=f"model mismatch: sender {_sender_model} != receiver {_local_model}",
                     completed_at=time.monotonic(),
                 )
@@ -1511,9 +1567,12 @@ class KVTransferServer:
             if self._block_consumer is not None:
                 _load_attempted = True
                 try:
-                    blocks_loaded = int(self._block_consumer(
-                        message.blocks, message.header.model_name,
-                    ))
+                    blocks_loaded = int(
+                        self._block_consumer(
+                            message.blocks,
+                            message.header.model_name,
+                        )
+                    )
                 except Exception as e:
                     logger.warning("KV block consumer failed: %s", e)
             elif self._kv_manager is not None:
@@ -1521,21 +1580,23 @@ class KVTransferServer:
                 _load_attempted = True
                 try:
                     # If the manager has a load_kv_blocks method, use it
-                    if hasattr(self._kv_manager, 'load_kv_blocks'):
+                    if hasattr(self._kv_manager, "load_kv_blocks"):
                         blocks_loaded = self._kv_manager.load_kv_blocks(
                             message.blocks,
                             model_name=message.header.model_name,
                         )
                     else:
                         # Direct cache loading (limited without BatchGenerator support)
-                        kv_cache = getattr(self._kv_manager, '_kv_layers', None)
+                        kv_cache = getattr(self._kv_manager, "_kv_layers", None)
                         if kv_cache is not None:
                             blocks_loaded = load_kv_blocks_into_cache(
-                                kv_cache, message.blocks,
+                                kv_cache,
+                                message.blocks,
                             )
                 except Exception as e:
                     logger.warning(
-                        "Failed to load KV blocks into cache: %s", e,
+                        "Failed to load KV blocks into cache: %s",
+                        e,
                     )
 
             elapsed = time.monotonic() - t0
@@ -1563,7 +1624,9 @@ class KVTransferServer:
                 duration_seconds=elapsed,
                 checksum_verified=decode_result.checksum_verified,
                 completed_at=now,
-                error=None if _ok else f"loaded 0 of {_sent} blocks (no KV load path wired on receiver)",
+                error=None
+                if _ok
+                else f"loaded 0 of {_sent} blocks (no KV load path wired on receiver)",
             )
             self._stats.record_receive(result)
 
@@ -1608,13 +1671,16 @@ class KVTransferServer:
             return 0
 
         terminal_states = (
-            TransferStatus.COMPLETED, TransferStatus.FAILED,
-            TransferStatus.CHECKSUM_MISMATCH, TransferStatus.CANCELLED,
+            TransferStatus.COMPLETED,
+            TransferStatus.FAILED,
+            TransferStatus.CHECKSUM_MISMATCH,
+            TransferStatus.CANCELLED,
         )
 
         now = time.monotonic()
         expired_keys = [
-            rid for rid, result in self._active_transfers.items()
+            rid
+            for rid, result in self._active_transfers.items()
             if result.status in terminal_states
             and result.completed_at > 0
             and (now - result.completed_at) > ttl_seconds
@@ -1630,14 +1696,13 @@ class KVTransferServer:
         max_tracked = 1000
         if len(self._active_transfers) > max_tracked:
             removable = [
-                rid for rid, res in self._active_transfers.items()
+                rid
+                for rid, res in self._active_transfers.items()
                 if res.status != TransferStatus.IN_PROGRESS
             ]
             # Sort by completed_at so oldest entries are evicted first.
             # Entries without completed_at (0.0) are treated as oldest.
-            removable.sort(
-                key=lambda rid: self._active_transfers[rid].completed_at
-            )
+            removable.sort(key=lambda rid: self._active_transfers[rid].completed_at)
             to_remove = len(self._active_transfers) - max_tracked
             for rid in removable[:to_remove]:
                 del self._active_transfers[rid]
@@ -1647,11 +1712,13 @@ class KVTransferServer:
     def get_stats(self) -> dict:
         """Export server stats for monitoring."""
         stats = self._stats.to_dict()
-        stats.update({
-            "enabled": self._config.enabled,
-            "listen_port": self._config.listen_port,
-            "active_transfers": len(self._active_transfers),
-        })
+        stats.update(
+            {
+                "enabled": self._config.enabled,
+                "listen_port": self._config.listen_port,
+                "active_transfers": len(self._active_transfers),
+            }
+        )
         return stats
 
 

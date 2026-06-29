@@ -8,6 +8,7 @@ and _generate_response snapshots a per-response tool_choice (override → sessio
 tool-call parsing/emission when it is "none" (still stripping any stray markup, class).
 "auto"/"required"/named keep parsing — post-gen forcing of required/named isn't feasible here.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -43,7 +44,7 @@ def test_session_update_rejects_garbage_tool_choice():
 def test_generate_response_snapshots_and_gates_on_tool_choice():
     src = inspect.getsource(realtime.RealtimeSession._generate_response)
     # the per-response snapshot exists and falls back to the session default
-    assert "_snap_tool_choice = config.get(\"tool_choice\"" in src
+    assert '_snap_tool_choice = config.get("tool_choice"' in src
     # the tool-call parse is gated on tool_choice != "none"
     snap = src.index("_snap_tool_choice")
     gate = src.index('_snap_tool_choice != "none"', snap)

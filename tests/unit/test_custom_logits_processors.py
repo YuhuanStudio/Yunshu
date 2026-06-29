@@ -6,6 +6,7 @@ Verifies that user-provided logits processors:
   - Work in both streaming and non-streaming generation paths
   - Multiple processors are applied in order
 """
+
 import mlx.core as mx
 import pytest
 
@@ -92,6 +93,7 @@ class TestCustomProcessorCorrectness:
 
     def test_boost_specific_token(self):
         """A processor that boosts token 42 should make it dominate."""
+
         def boost_42(token_ids: list[int], logits: mx.array) -> mx.array:
             logits[42] += 50.0
             return logits
@@ -105,6 +107,7 @@ class TestCustomProcessorCorrectness:
 
     def test_zero_out_range(self):
         """A processor that zeros out a range of tokens."""
+
         def zero_range(token_ids: list[int], logits: mx.array) -> mx.array:
             logits[10:20] = -1e9
             return logits
@@ -120,6 +123,7 @@ class TestCustomProcessorCorrectness:
 
     def test_multiple_processors_applied_in_order(self):
         """Two processors applied sequentially: first boosts, second zeros."""
+
         def boost_50(token_ids: list[int], logits: mx.array) -> mx.array:
             logits[50] += 100.0
             logits[51] += 100.0
@@ -148,6 +152,7 @@ class TestProcessorOrdering:
 
     def test_custom_after_logit_bias(self):
         """Custom processor sees the effect of logit_bias, and can override it."""
+
         # Simulate built-in logit_bias processor (internal: mx.array signature)
         def logit_bias_proc(_tokens, logits):
             logits[10] += 5.0
@@ -176,6 +181,7 @@ class TestProcessorOrdering:
 
     def test_custom_after_frequency_penalty(self):
         """Custom processor can undo frequency penalty if desired."""
+
         def freq_penalty_proc(tokens, logits, fp=1.0):
             counts = {}
             for t in tokens:
@@ -218,6 +224,7 @@ class TestGenerateFastCustomProcessors:
         from unittest.mock import MagicMock
 
         from yunshu_engine.batched_engine import BatchedEngine
+
         eng = BatchedEngine.__new__(BatchedEngine)
         eng._loaded = True
         eng._model = None
@@ -253,7 +260,9 @@ class TestGenerateFastCustomProcessors:
         def custom_proc(token_ids, logits):
             return logits
 
-        with patch.object(engine, '_generate_fast', new_callable=AsyncMock) as mock_fast:
+        with patch.object(
+            engine, "_generate_fast", new_callable=AsyncMock
+        ) as mock_fast:
             mock_fast.return_value = GenerationOutput(text="ok", finished=True)
             await engine.generate(
                 prompt="test",
@@ -278,7 +287,7 @@ class TestGenerateFastCustomProcessors:
         async def _fake_stream(**kwargs):
             yield GenerationOutput(text="ok", finished=True)
 
-        with patch.object(engine, '_stream_generate_fast', side_effect=_fake_stream):
+        with patch.object(engine, "_stream_generate_fast", side_effect=_fake_stream):
             chunks = []
             async for chunk in engine.stream_generate(
                 prompt="test",

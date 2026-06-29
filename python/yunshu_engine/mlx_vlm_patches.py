@@ -95,6 +95,7 @@ def _patch_qwen3_omni_audio_mask() -> list[str]:
     # feature_attention_mask → skip, don't shadow the upstream code.
     try:
         import inspect
+
         if "feature_attention_mask" in inspect.getsource(Model.get_input_embeddings):
             Model._yunshu_audio_mask_patched = True
             return []
@@ -134,8 +135,11 @@ def _patch_formatter_audio_token() -> list[str]:
     # we don't double-insert over the upstream code.
     try:
         _probe = MF("qwen3_omni_moe")._format_list_with_image(
-            "x", "user", False, False, num_images=0, num_audios=1, image_first=True)
-        if "audio" in [c.get("type") for c in _probe.get("content", []) if isinstance(c, dict)]:
+            "x", "user", False, False, num_images=0, num_audios=1, image_first=True
+        )
+        if "audio" in [
+            c.get("type") for c in _probe.get("content", []) if isinstance(c, dict)
+        ]:
             MF._yunshu_audio_token_patched = True
             return []
     except Exception:
@@ -143,12 +147,30 @@ def _patch_formatter_audio_token() -> list[str]:
 
     orig = MF._format_list_with_image
 
-    def patched(self, prompt, role, skip_image_token, skip_audio_token,
-                num_images, num_audios, image_first=False, use_image_url=False,
-                **kwargs):
-        msg = orig(self, prompt, role, skip_image_token, skip_audio_token,
-                   num_images, num_audios, image_first=image_first,
-                   use_image_url=use_image_url, **kwargs)
+    def patched(
+        self,
+        prompt,
+        role,
+        skip_image_token,
+        skip_audio_token,
+        num_images,
+        num_audios,
+        image_first=False,
+        use_image_url=False,
+        **kwargs,
+    ):
+        msg = orig(
+            self,
+            prompt,
+            role,
+            skip_image_token,
+            skip_audio_token,
+            num_images,
+            num_audios,
+            image_first=image_first,
+            use_image_url=use_image_url,
+            **kwargs,
+        )
         if role == "user" and not skip_audio_token and num_audios > 0:
             msg["content"] = (
                 msg["content"] + [pu.MessageBuilder.audio_message()] * num_audios

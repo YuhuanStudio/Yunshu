@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ControlNetConfig:
     """Configuration for ControlNet conditioning."""
+
     # Conditioning type
     condition_type: str = "canny"  # canny, depth, pose, hed, segmentation, none
     # Control strength (0.0 = no conditioning, 1.0 = full conditioning)
@@ -49,6 +50,7 @@ class ControlNetConfig:
 @dataclass
 class ConditioningResult:
     """Result from conditioning image pre-processing."""
+
     condition_latents: object  # mx.array
     condition_type: str
     strength: float
@@ -65,7 +67,9 @@ class ConditioningPreprocessor:
     """
 
     @staticmethod
-    def canny_edges(image_np: np.ndarray, low: int = 100, high: int = 200) -> np.ndarray:
+    def canny_edges(
+        image_np: np.ndarray, low: int = 100, high: int = 200
+    ) -> np.ndarray:
         """Extract Canny edges from an RGB image.
 
         Args:
@@ -78,6 +82,7 @@ class ConditioningPreprocessor:
         """
         try:
             import cv2
+
             gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
             edges = cv2.Canny(gray, low, high)
             return np.stack([edges, edges, edges], axis=-1)
@@ -86,10 +91,13 @@ class ConditioningPreprocessor:
             return ConditioningPreprocessor._simple_edges(image_np, low, high)
 
     @staticmethod
-    def _simple_edges(image_np: np.ndarray, low: int = 100, high: int = 200) -> np.ndarray:
+    def _simple_edges(
+        image_np: np.ndarray, low: int = 100, high: int = 200
+    ) -> np.ndarray:
         """Simple edge detection fallback without cv2."""
         from PIL import Image as PILImage
         from PIL import ImageFilter
+
         pil = PILImage.fromarray(image_np)
         gray = pil.convert("L")
         edges = gray.filter(ImageFilter.FIND_EDGES)
@@ -159,7 +167,9 @@ class ConditioningPreprocessor:
 
         # Apply conditioning pre-processing
         if condition_type == "canny":
-            processed = ConditioningPreprocessor.canny_edges(image_np, canny_low, canny_high)
+            processed = ConditioningPreprocessor.canny_edges(
+                image_np, canny_low, canny_high
+            )
         elif condition_type == "depth":
             # Assume image is already a depth visualization
             processed = ConditioningPreprocessor.normalize_depth(
@@ -173,7 +183,7 @@ class ConditioningPreprocessor:
         processed_float = (processed.astype(np.float32) / 255.0 - 0.5) / 0.5  # [-1, 1]
         processed_mx = mx.array(processed_float.transpose(2, 0, 1)[np.newaxis, :, :, :])
 
-        if vae is not None and hasattr(vae, 'encoder') and vae.encoder is not None:
+        if vae is not None and hasattr(vae, "encoder") and vae.encoder is not None:
             condition_latents = vae.encode_deterministic(processed_mx)
             mx.eval(condition_latents)
         else:
@@ -236,7 +246,9 @@ class ControlNetBlock:
             Modified latents with conditioning applied.
         """
 
-        control_strength = strength if strength is not None else self._config.controlnet_strength
+        control_strength = (
+            strength if strength is not None else self._config.controlnet_strength
+        )
 
         # Check if conditioning should be active at this step
         step_frac = step / max(total_steps, 1)
@@ -260,8 +272,11 @@ class ControlNetBlock:
         # strength=0 → good image, strength=1 → mean≈2.6/255). Standardizing to
         # zero-mean/unit-std keeps the bias a gentle, strength-scaled nudge.
         import mlx.core as _mx
+
         c_mean = condition_latents.mean()
-        c_std = _mx.maximum(condition_latents.std(), _mx.array(1e-3, dtype=condition_latents.dtype))
+        c_std = _mx.maximum(
+            condition_latents.std(), _mx.array(1e-3, dtype=condition_latents.dtype)
+        )
         condition_norm = (condition_latents - c_mean) / c_std
         # Fade the conditioning out over the denoising trajectory. Spatial
         # structure is established in the EARLY steps; carrying the additive
@@ -328,7 +343,7 @@ class DepthGuider:
         depth_float = (depth_np - 0.5) / 0.5
         depth_mx = mx.array(depth_float.transpose(2, 0, 1)[np.newaxis, :, :, :])
 
-        if vae is not None and hasattr(vae, 'encoder') and vae.encoder is not None:
+        if vae is not None and hasattr(vae, "encoder") and vae.encoder is not None:
             depth_latents = vae.encode_deterministic(depth_mx)
             mx.eval(depth_latents)
         else:

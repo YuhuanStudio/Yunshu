@@ -16,6 +16,7 @@ The loop only touches self._model / self._tokenizer, so it's exercised directly 
 controllable fakes (allowed=all → apply_json_constraint is a no-op → the fake model's
 argmax drives the token sequence deterministically).
 """
+
 from __future__ import annotations
 
 import inspect
@@ -39,6 +40,7 @@ class _FakeTok:
 
 class _FakeConstraint:
     """allowed=all (no masking); records advances; scriptable forced_continuation."""
+
     def __init__(self, all_ids, forced=""):
         self._all_ids = list(all_ids)
         self._forced = forced
@@ -56,6 +58,7 @@ class _FakeConstraint:
 
 class _FakeModel:
     """Returns logits whose last-row argmax follows a scripted token sequence."""
+
     def __init__(self, seq, vocab):
         self.seq = seq
         self.vocab = vocab
@@ -109,7 +112,11 @@ def test_bug1_no_stop_runs_to_max_tokens_length():
     con = _FakeConstraint(all_ids=list(id2str), forced="")
     eng = _engine(model, tok)
     text, ids, n_fwd, stop_hit = eng._jump_forward_generate_sync(
-        [99], con, max_tokens=4, eos_ids=[], stop=["zzz"]  # never matches
+        [99],
+        con,
+        max_tokens=4,
+        eos_ids=[],
+        stop=["zzz"],  # never matches
     )
     assert stop_hit is False
     assert len(ids) == 4
@@ -128,7 +135,7 @@ def test_bug2_forced_truncation_advances_by_emitted_text_only():
     text, ids, n_fwd, stop_hit = eng._jump_forward_generate_sync(
         [99], con, max_tokens=2, eos_ids=[], stop=None
     )
-    assert ids == [0, 1]                  # a + X (truncated), capped at max_tokens
+    assert ids == [0, 1]  # a + X (truncated), capped at max_tokens
     assert text == "aX"
     # the FSM was advanced by the EMITTED text only — never the full "XYZ"
     assert con.advanced == ["a", "X"]
@@ -142,4 +149,4 @@ def test_caller_finish_reason_uses_stop_hit():
     src = inspect.getsource(BatchedEngine._generate_fast)
     code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
     assert "_jf_text, _jf_ids, _jf_nfwd, _jf_stop = await" in code
-    assert 'not _jf_stop and len(_jf_ids) >= max_tokens' in code
+    assert "not _jf_stop and len(_jf_ids) >= max_tokens" in code

@@ -4,6 +4,7 @@ LOGITS, not hidden states — so it pooled logits silently → wrong-dimensioned
 embeddings (the logits→backbone bug, never propagated to this fallback). Now it
 descends to language_model.model (the real text backbone), mirroring the engine's
 _get_backbone, and warns loudly if it ever still gets logits."""
+
 from __future__ import annotations
 
 import asyncio
@@ -31,6 +32,7 @@ class _LMOut:
 class _LangModelWrapper:
     """mlx-vlm-style: callable applies lm_head → returns LOGITS; .model is the real
     hidden-state backbone."""
+
     def __init__(self):
         self.model = _HiddenBackbone()
 
@@ -45,6 +47,7 @@ class _VLMModel:
 
 class _StdModel:
     """Standard HF text model: model.model is the backbone."""
+
     def __init__(self):
         self.model = _HiddenBackbone()
 
@@ -63,7 +66,9 @@ class _Engine:
 def test_vlm_fallback_uses_hidden_not_logits():
     out = asyncio.run(_fallback_embeddings(_Engine(_VLMModel()), ["hi"], "MEAN", False))
     # the pooled vector must be the HIDDEN dim (8), NOT the vocab/logits dim (1000)
-    assert len(out[0]) == _HIDDEN_DIM, f"pooled logits ({len(out[0])}) instead of hidden state"
+    assert len(out[0]) == _HIDDEN_DIM, (
+        f"pooled logits ({len(out[0])}) instead of hidden state"
+    )
 
 
 def test_standard_model_backbone_still_resolves():
@@ -78,5 +83,5 @@ def test_logits_branch_warns_not_silent():
     assert 'getattr(model, "language_model"' in src
     # the logits fallback warns loudly now (was silent)
     i = src.index("hasattr(out, 'logits')")
-    window = src[i:i + 400]
+    window = src[i : i + 400]
     assert "logger.warning" in window

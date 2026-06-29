@@ -24,6 +24,7 @@ current_actor: ContextVar[str | None] = ContextVar("yunshu_current_actor", defau
 @dataclass
 class ActiveGeneration:
     """Tracks a single in-progress generation."""
+
     request_id: str
     model: str
     created_at: float
@@ -42,7 +43,9 @@ class RequestTracker:
         self._active: dict[str, ActiveGeneration] = {}
         self._lock = threading.Lock()
 
-    def register(self, request_id: str, model: str = "", owner: str | None = None) -> ActiveGeneration:
+    def register(
+        self, request_id: str, model: str = "", owner: str | None = None
+    ) -> ActiveGeneration:
         """Register a new generation request. Returns ActiveGeneration with cancel_event."""
         gen = ActiveGeneration(
             request_id=request_id,

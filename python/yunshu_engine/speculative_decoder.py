@@ -49,25 +49,27 @@ import mlx.core as mx
 logger = logging.getLogger(__name__)
 
 # ── MTP model types that indicate multi-token prediction heads
-_MTP_MODEL_TYPES = frozenset({
-    "deepseek_mtp",
-    "mimo_mtp",
-    "mimo_v2_mtp",
-    "glm4_moe_mtp",
-    "glm4_moe_lite_mtp",
-    "glm_ocr_mtp",
-    "ernie_mtp",
-    "nemotron_h_mtp",
-    "exaone_moe_mtp",
-    "exaone4_5_mtp",
-    "qwen3_next_mtp",
-    "qwen3_5_mtp",
-    "longcat_flash_mtp",
-    "mtp",
-    "pangu_ultra_moe_mtp",
-    "step3p5_mtp",
-    "hy_v3_mtp",
-})
+_MTP_MODEL_TYPES = frozenset(
+    {
+        "deepseek_mtp",
+        "mimo_mtp",
+        "mimo_v2_mtp",
+        "glm4_moe_mtp",
+        "glm4_moe_lite_mtp",
+        "glm_ocr_mtp",
+        "ernie_mtp",
+        "nemotron_h_mtp",
+        "exaone_moe_mtp",
+        "exaone4_5_mtp",
+        "qwen3_next_mtp",
+        "qwen3_5_mtp",
+        "longcat_flash_mtp",
+        "mtp",
+        "pangu_ultra_moe_mtp",
+        "step3p5_mtp",
+        "hy_v3_mtp",
+    }
+)
 
 
 # ── Spec Head Detection ──
@@ -178,8 +180,7 @@ def detect_spec_heads(model_config: dict) -> SpecHeadInfo:
     is_eagle = (
         eagle_val is not None
         or model_type == "eagle"
-        or (draft_model_path is not None
-            and "eagle" in str(draft_model_path).lower())
+        or (draft_model_path is not None and "eagle" in str(draft_model_path).lower())
     )
 
     if is_eagle:
@@ -298,6 +299,7 @@ def auto_configure_speculative(model_config: dict) -> SpecDecodingConfig:
 @dataclass
 class SpecDecodingConfig:
     """Configuration for speculative decoding."""
+
     # Number of draft tokens per step (K in EAGLE-3)
     draft_length: int = 5
 
@@ -322,6 +324,7 @@ class SpecDecodingConfig:
 @dataclass
 class DraftResult:
     """Result from the draft model."""
+
     token_ids: list[int]
     logprobs: list[float]  # Draft model's log probabilities for each token
 
@@ -329,6 +332,7 @@ class DraftResult:
 @dataclass
 class VerifyResult:
     """Result from verifying draft tokens against the target model."""
+
     accepted_count: int  # Number of accepted tokens
     accepted_ids: list[int]  # The accepted token IDs
     rejected_at: int  # Index of first rejection (-1 if all accepted)
@@ -363,7 +367,7 @@ class SpeculativeDecoder:
 
         # Collect EOS token IDs from tokenizer for early termination in generate_draft
         self._eos_ids: set[int] = set()
-        if hasattr(tokenizer, 'eos_token_id'):
+        if hasattr(tokenizer, "eos_token_id"):
             eid = tokenizer.eos_token_id
             if isinstance(eid, (list, tuple)):
                 self._eos_ids.update(eid)
@@ -404,28 +408,42 @@ class SpeculativeDecoder:
         Returns:
             DraftResult with proposed token IDs and their logprobs
         """
-        K = self.lookahead.adjust_draft_k() if self.lookahead else self.config.draft_length
+        K = (
+            self.lookahead.adjust_draft_k()
+            if self.lookahead
+            else self.config.draft_length
+        )
         if max_draft_tokens is not None:
             K = min(K, max_draft_tokens)
         token_ids: list[int] = []
         logprobs = []
 
         from mlx_lm.sample_utils import make_sampler
+
         sampler = make_sampler(temp=self.config.draft_temperature)
 
         current_ids = input_ids
 
         for _ in range(K):
             output = self.draft(current_ids, cache=cache)
-            logits = output.logits[:, -1, :] if hasattr(output, 'logits') else output[:, -1, :]
+            logits = (
+                output.logits[:, -1, :]
+                if hasattr(output, "logits")
+                else output[:, -1, :]
+            )
 
             # Apply grammar constraint masking if available
             if self.constraint is not None:
                 try:
-                    allowed = self.constraint.get_allowed_tokens(self.tokenizer, token_ids)
+                    allowed = self.constraint.get_allowed_tokens(
+                        self.tokenizer, token_ids
+                    )
                     if allowed:
                         from .json_schema import apply_json_constraint
-                        logits = apply_json_constraint(logits.reshape(1, -1), allowed).reshape(logits.shape)
+
+                        logits = apply_json_constraint(
+                            logits.reshape(1, -1), allowed
+                        ).reshape(logits.shape)
                 except Exception:
                     pass
 
@@ -446,7 +464,7 @@ class SpeculativeDecoder:
             if token_id in self._eos_ids:
                 break
 
-            if self.constraint is not None and hasattr(self.constraint, 'advance'):
+            if self.constraint is not None and hasattr(self.constraint, "advance"):
                 with contextlib.suppress(Exception):
                     self.constraint.advance(self.tokenizer.decode([token_id]))
 
@@ -506,6 +524,7 @@ class SpeculativeDecoder:
         # correctly: logits[0] verifies d0, logits[K] is the bonus.
         try:
             from mlx_lm.models.cache import trim_prompt_cache
+
             trim_prompt_cache(cache, 1)
         except Exception:
             trimmed = False
@@ -514,7 +533,9 @@ class SpeculativeDecoder:
                     c.trim(1)
                     trimmed = True
             if not trimmed:
-                logger.warning("Cannot rollback KV cache — verification logits may be misaligned")
+                logger.warning(
+                    "Cannot rollback KV cache — verification logits may be misaligned"
+                )
 
         # Build aligned input: [last_token(s), d0, d1, ..., dK-1]
         last_tok = input_ids[:, -1:]  # [1, 1] — last token from previous step
@@ -523,7 +544,7 @@ class SpeculativeDecoder:
 
         # Batched forward pass: all K+1 tokens in one call
         output = self.target(aligned_input, cache=cache)
-        logits = output.logits if hasattr(output, 'logits') else output
+        logits = output.logits if hasattr(output, "logits") else output
 
         # Get target log probabilities (numerically stable: avoid log(softmax) underflow)
         target_logprobs_full = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
@@ -575,13 +596,16 @@ class SpeculativeDecoder:
         # target model's sampling distribution (not hardcoded greedy).
         bonus_pos = len(accepted_ids)
         from mlx_lm.sample_utils import make_sampler
+
         # temp>0 target sampling off mlx-lm's PRNG-trapped make_sampler
         # (shared @mx.compile categorical_sampling cache → sequential/concurrent
         # temp>0 requests collapse to identical streams). Per-request numpy RNG.
         if temperature is not None and temperature > 1e-6:
             from .batched_engine import _build_temp_sampler
-            sampler = _build_temp_sampler(temperature=temperature, top_p=1.0, top_k=0,
-                                          min_p=0.0, seed=None)
+
+            sampler = _build_temp_sampler(
+                temperature=temperature, top_p=1.0, top_k=0, min_p=0.0, seed=None
+            )
         else:
             sampler = make_sampler(temp=temperature)
 
@@ -604,32 +628,39 @@ class SpeculativeDecoder:
                 # constraints skip the single bonus-token mask (the next draft round
                 # re-validates from the correct state) rather than corrupt it.
                 _rolled_back = True
-                if hasattr(self.constraint, 'rollback'):
+                if hasattr(self.constraint, "rollback"):
                     try:
                         self.constraint.rollback()
                     except TypeError:
                         _rolled_back = False
                 if _rolled_back:
-                    if hasattr(self.constraint, 'advance'):
+                    if hasattr(self.constraint, "advance"):
                         for tid in accepted_ids:
                             if tid in self._eos_ids:
                                 break
                             self.constraint.advance(self.tokenizer.decode([tid]))
-                    allowed = self.constraint.get_allowed_tokens(self.tokenizer, accepted_ids)
+                    allowed = self.constraint.get_allowed_tokens(
+                        self.tokenizer, accepted_ids
+                    )
                     if allowed:
                         from .json_schema import apply_json_constraint
-                        bonus_logits_raw = logits[0, bonus_pos:bonus_pos + 1, :]
-                        bonus_logits_raw = apply_json_constraint(bonus_logits_raw.reshape(1, -1), allowed).reshape(1, 1, -1)
-                        logits[0, bonus_pos:bonus_pos + 1, :] = bonus_logits_raw.reshape(1, -1)
+
+                        bonus_logits_raw = logits[0, bonus_pos : bonus_pos + 1, :]
+                        bonus_logits_raw = apply_json_constraint(
+                            bonus_logits_raw.reshape(1, -1), allowed
+                        ).reshape(1, 1, -1)
+                        logits[0, bonus_pos : bonus_pos + 1, :] = (
+                            bonus_logits_raw.reshape(1, -1)
+                        )
             except Exception:
                 pass
 
         if rejected_at >= 0:
             # Rejected at bonus_pos: use logits at that position for resample
-            bonus_token = sampler(logits[0, bonus_pos:bonus_pos + 1, :])
+            bonus_token = sampler(logits[0, bonus_pos : bonus_pos + 1, :])
         else:
             # All accepted: bonus from position K (prediction after all drafts)
-            bonus_token = sampler(logits[0, K:K+1, :])
+            bonus_token = sampler(logits[0, K : K + 1, :])
         bonus_id = bonus_token.item()
 
         return VerifyResult(
@@ -676,19 +707,22 @@ class SpeculativeDecoder:
             try:
                 K = len(draft_result.token_ids)
                 if K == 0:
-                    results.append(VerifyResult(
-                        accepted_count=0,
-                        accepted_ids=[],
-                        rejected_at=-1,
-                        bonus_token_id=-1,
-                        target_logprobs=[],
-                    ))
+                    results.append(
+                        VerifyResult(
+                            accepted_count=0,
+                            accepted_ids=[],
+                            rejected_at=-1,
+                            bonus_token_id=-1,
+                            target_logprobs=[],
+                        )
+                    )
                     continue
 
                 # Roll back cache by 1 to re-include last_token in forward pass
                 _forward_ran = False
                 try:
                     from mlx_lm.models.cache import trim_prompt_cache
+
                     trim_prompt_cache(target_cache, 1)
                 except Exception:
                     for c in target_cache:
@@ -704,10 +738,12 @@ class SpeculativeDecoder:
                 _forward_ran = False
                 output = self.target(aligned_input, cache=target_cache)
                 _forward_ran = True
-                logits = output.logits if hasattr(output, 'logits') else output
+                logits = output.logits if hasattr(output, "logits") else output
 
                 # Get target log probabilities
-                target_logprobs_full = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
+                target_logprobs_full = logits - mx.logsumexp(
+                    logits, axis=-1, keepdims=True
+                )
                 target_logprobs = target_logprobs_full[0, :K, :]
 
                 # Vectorized gather: extract target logprob for each draft token
@@ -743,18 +779,25 @@ class SpeculativeDecoder:
                 # Bonus token
                 bonus_pos = len(accepted_ids)
                 from mlx_lm.sample_utils import make_sampler
+
                 # temp>0 off mlx-lm's PRNG-trapped make_sampler (see sibling).
                 if temperature is not None and temperature > 1e-6:
                     from .batched_engine import _build_temp_sampler
-                    sampler = _build_temp_sampler(temperature=temperature, top_p=1.0,
-                                                  top_k=0, min_p=0.0, seed=None)
+
+                    sampler = _build_temp_sampler(
+                        temperature=temperature,
+                        top_p=1.0,
+                        top_k=0,
+                        min_p=0.0,
+                        seed=None,
+                    )
                 else:
                     sampler = make_sampler(temp=temperature)
 
                 # Apply grammar constraint masking to bonus token logits.
                 # Roll back constraint and re-advance through accepted tokens
                 # (same fix as verify_draft).
-                bonus_logits_slice = logits[0, bonus_pos:bonus_pos + 1, :]
+                bonus_logits_slice = logits[0, bonus_pos : bonus_pos + 1, :]
                 if self.constraint is not None:
                     try:
                         # only re-mask when the rollback genuinely succeeded.
@@ -763,42 +806,55 @@ class SpeculativeDecoder:
                         # rather than compute it from a corrupted K-draft buffer (sibling
                         # of the verify_draft fix).
                         _rolled_back = True
-                        if hasattr(self.constraint, 'rollback'):
+                        if hasattr(self.constraint, "rollback"):
                             try:
                                 self.constraint.rollback()
                             except TypeError:
                                 _rolled_back = False
                         if _rolled_back:
-                            if hasattr(self.constraint, 'advance'):
+                            if hasattr(self.constraint, "advance"):
                                 for tid in accepted_ids:
                                     if tid in self._eos_ids:
                                         break
-                                    self.constraint.advance(self.tokenizer.decode([tid]))
-                            allowed = self.constraint.get_allowed_tokens(self.tokenizer, accepted_ids)
+                                    self.constraint.advance(
+                                        self.tokenizer.decode([tid])
+                                    )
+                            allowed = self.constraint.get_allowed_tokens(
+                                self.tokenizer, accepted_ids
+                            )
                             if allowed:
                                 from .json_schema import apply_json_constraint
+
                                 bonus_logits_raw = apply_json_constraint(
-                                    bonus_logits_slice.reshape(1, -1), allowed,
+                                    bonus_logits_slice.reshape(1, -1),
+                                    allowed,
                                 ).reshape(1, 1, -1)
-                                logits[0, bonus_pos:bonus_pos + 1, :] = bonus_logits_raw.reshape(1, -1)
+                                logits[0, bonus_pos : bonus_pos + 1, :] = (
+                                    bonus_logits_raw.reshape(1, -1)
+                                )
                     except Exception:
                         pass
 
                 if rejected_at >= 0:
-                    bonus_token = sampler(logits[0, bonus_pos:bonus_pos + 1, :])
+                    bonus_token = sampler(logits[0, bonus_pos : bonus_pos + 1, :])
                 else:
-                    bonus_token = sampler(logits[0, K:K + 1, :])
+                    bonus_token = sampler(logits[0, K : K + 1, :])
                 bonus_id = bonus_token.item()
 
-                results.append(VerifyResult(
-                    accepted_count=len(accepted_ids),
-                    accepted_ids=accepted_ids,
-                    rejected_at=rejected_at,
-                    bonus_token_id=bonus_id,
-                    target_logprobs=target_lps,
-                ))
+                results.append(
+                    VerifyResult(
+                        accepted_count=len(accepted_ids),
+                        accepted_ids=accepted_ids,
+                        rejected_at=rejected_at,
+                        bonus_token_id=bonus_id,
+                        target_logprobs=target_lps,
+                    )
+                )
             except Exception:
-                logger.warning("batch_verify: per-request error, rejecting all drafts", exc_info=True)
+                logger.warning(
+                    "batch_verify: per-request error, rejecting all drafts",
+                    exc_info=True,
+                )
                 # Roll back cache entries. The pre-forward trim already removed
                 # 1 entry (offset N -> N-1). If the forward pass ran, it added
                 # K+1 entries (offset N-1 -> N+K). We need to get back to N.
@@ -808,19 +864,22 @@ class SpeculativeDecoder:
                 _rollback = K if _forward_ran else 0
                 try:
                     from mlx_lm.models.cache import trim_prompt_cache
+
                     trim_prompt_cache(target_cache, _rollback)
                 except Exception:
                     for c in target_cache:
-                        if hasattr(c, 'trim'):
+                        if hasattr(c, "trim"):
                             with contextlib.suppress(Exception):
                                 c.trim(_rollback)
-                results.append(VerifyResult(
-                    accepted_count=0,
-                    accepted_ids=[],
-                    rejected_at=0,
-                    bonus_token_id=-1,
-                    target_logprobs=[],
-                ))
+                results.append(
+                    VerifyResult(
+                        accepted_count=0,
+                        accepted_ids=[],
+                        rejected_at=0,
+                        bonus_token_id=-1,
+                        target_logprobs=[],
+                    )
+                )
 
         # Batch update stats
         total_draft = sum(len(dr.token_ids) for dr, _, _ in draft_results)
@@ -852,17 +911,25 @@ class SpeculativeDecoder:
         for c in cache:
             c_type = type(c).__name__
             # CacheList: recursively snapshot each sub-cache
-            if c_type == 'CacheList' or (hasattr(c, 'caches') and isinstance(getattr(c, 'caches', None), tuple)):
+            if c_type == "CacheList" or (
+                hasattr(c, "caches") and isinstance(getattr(c, "caches", None), tuple)
+            ):
                 sub = SpeculativeDecoder._snapshot_cache(list(c.caches))
-                snapshot.append(('cache_list', sub))
-            elif hasattr(c, 'cache') and isinstance(getattr(c, 'cache', None), list):
-                snapshot.append(('arrays', list(c.cache)))
-            elif c_type == 'RotatingKVCache' or (c_type != 'MagicMock' and hasattr(c, 'max_size') and hasattr(c, '_idx')):
-                snapshot.append(('rotating_kv', (c.offset, c._idx)))
-            elif c_type == 'ChunkedKVCache' or (c_type != 'MagicMock' and hasattr(c, 'chunk_size') and hasattr(c, 'start_position')):
-                snapshot.append(('chunked_kv', (c.offset, c.start_position)))
-            elif hasattr(c, 'offset'):
-                snapshot.append(('kv', c.offset))
+                snapshot.append(("cache_list", sub))
+            elif hasattr(c, "cache") and isinstance(getattr(c, "cache", None), list):
+                snapshot.append(("arrays", list(c.cache)))
+            elif c_type == "RotatingKVCache" or (
+                c_type != "MagicMock" and hasattr(c, "max_size") and hasattr(c, "_idx")
+            ):
+                snapshot.append(("rotating_kv", (c.offset, c._idx)))
+            elif c_type == "ChunkedKVCache" or (
+                c_type != "MagicMock"
+                and hasattr(c, "chunk_size")
+                and hasattr(c, "start_position")
+            ):
+                snapshot.append(("chunked_kv", (c.offset, c.start_position)))
+            elif hasattr(c, "offset"):
+                snapshot.append(("kv", c.offset))
             else:
                 snapshot.append((None, None))
         return snapshot
@@ -879,17 +946,17 @@ class SpeculativeDecoder:
         For CacheList: recursively restores each sub-cache.
         """
         for i, (kind, state) in enumerate(snapshot):
-            if kind == 'cache_list':
+            if kind == "cache_list":
                 SpeculativeDecoder._restore_cache(list(cache[i].caches), state)
-            elif kind == 'arrays':
+            elif kind == "arrays":
                 cache[i].cache = state
-            elif kind == 'rotating_kv':
+            elif kind == "rotating_kv":
                 cache[i].offset = state[0]
                 cache[i]._idx = state[1]
-            elif kind == 'chunked_kv':
+            elif kind == "chunked_kv":
                 cache[i].offset = state[0]
                 cache[i].start_position = state[1]
-            elif kind == 'kv':
+            elif kind == "kv":
                 cache[i].offset = state
 
     def generate(
@@ -925,7 +992,7 @@ class SpeculativeDecoder:
             List of generated token IDs
         """
         eos_ids: set[int] = set()
-        if hasattr(self.tokenizer, 'eos_token_id'):
+        if hasattr(self.tokenizer, "eos_token_id"):
             eid = self.tokenizer.eos_token_id
             if isinstance(eid, (list, tuple)):
                 eos_ids.update(eid)
@@ -941,14 +1008,18 @@ class SpeculativeDecoder:
         # temp>0 off mlx-lm's PRNG-trapped make_sampler (see sibling).
         if temperature is not None and temperature > 1e-6:
             from .batched_engine import _build_temp_sampler
-            target_sampler = _build_temp_sampler(temperature=temperature, top_p=1.0,
-                                                 top_k=0, min_p=0.0, seed=None)
+
+            target_sampler = _build_temp_sampler(
+                temperature=temperature, top_p=1.0, top_k=0, min_p=0.0, seed=None
+            )
         else:
             target_sampler = None
 
         # Prefill both models
         t_out = self.target(input_ids, cache=target_cache)
-        t_logits = t_out.logits[:, -1, :] if hasattr(t_out, 'logits') else t_out[:, -1, :]
+        t_logits = (
+            t_out.logits[:, -1, :] if hasattr(t_out, "logits") else t_out[:, -1, :]
+        )
         if target_sampler:
             first_token = int(target_sampler(t_logits).item())
         else:
@@ -963,7 +1034,8 @@ class SpeculativeDecoder:
         while len(generated_tokens) < max_tokens:
             # Cooperative cancellation check (thread-safe for asyncio.Event)
             if cancel_event is not None and (
-                cancel_event.is_set() if isinstance(cancel_event, asyncio.Event)
+                cancel_event.is_set()
+                if isinstance(cancel_event, asyncio.Event)
                 else cancel_event.is_set()
             ):
                 break
@@ -977,7 +1049,7 @@ class SpeculativeDecoder:
 
             # Checkpoint grammar constraint state before drafting
             _constraint_checkpoint = None
-            if self.constraint is not None and hasattr(self.constraint, 'checkpoint'):
+            if self.constraint is not None and hasattr(self.constraint, "checkpoint"):
                 with contextlib.suppress(Exception):
                     _constraint_checkpoint = self.constraint.checkpoint()
 
@@ -989,19 +1061,29 @@ class SpeculativeDecoder:
             for _ in range(effective_K):
                 # Check cancellation inside draft loop too
                 if cancel_event is not None and (
-                    cancel_event.is_set() if isinstance(cancel_event, asyncio.Event)
+                    cancel_event.is_set()
+                    if isinstance(cancel_event, asyncio.Event)
                     else cancel_event.is_set()
                 ):
                     break
                 d_out = self.draft(d_input, cache=draft_cache)
-                d_logits = d_out.logits[:, -1, :] if hasattr(d_out, 'logits') else d_out[:, -1, :]
+                d_logits = (
+                    d_out.logits[:, -1, :]
+                    if hasattr(d_out, "logits")
+                    else d_out[:, -1, :]
+                )
                 # Apply grammar constraint masking in inline draft loop
                 if self.constraint is not None:
                     try:
-                        allowed = self.constraint.get_allowed_tokens(self.tokenizer, draft_tokens)
+                        allowed = self.constraint.get_allowed_tokens(
+                            self.tokenizer, draft_tokens
+                        )
                         if allowed:
                             from .json_schema import apply_json_constraint
-                            d_logits = apply_json_constraint(d_logits.reshape(1, -1), allowed).reshape(d_logits.shape)
+
+                            d_logits = apply_json_constraint(
+                                d_logits.reshape(1, -1), allowed
+                            ).reshape(d_logits.shape)
                     except Exception:
                         pass
                 d_logprobs = d_logits - mx.logsumexp(d_logits, axis=-1, keepdims=True)
@@ -1012,7 +1094,7 @@ class SpeculativeDecoder:
                 d_input = next_tok.reshape(1, 1)
                 if tok_id in eos_ids:
                     break
-                if self.constraint is not None and hasattr(self.constraint, 'advance'):
+                if self.constraint is not None and hasattr(self.constraint, "advance"):
                     with contextlib.suppress(Exception):
                         self.constraint.advance(self.tokenizer.decode([tok_id]))
 
@@ -1029,11 +1111,14 @@ class SpeculativeDecoder:
                 logprobs=draft_probs,
             )
             if cancel_event is not None and (
-                cancel_event.is_set() if isinstance(cancel_event, asyncio.Event)
+                cancel_event.is_set()
+                if isinstance(cancel_event, asyncio.Event)
                 else cancel_event.is_set()
             ):
                 break
-            verify_result = self.verify_draft(draft_result, last_tok_arr, target_cache, temperature=temperature)
+            verify_result = self.verify_draft(
+                draft_result, last_tok_arr, target_cache, temperature=temperature
+            )
 
             # SP-PEN: Apply penalty/bias to bonus token.
             # verify_draft already populated target_cache with K+1 entries.
@@ -1048,27 +1133,43 @@ class SpeculativeDecoder:
             )
             if _has_pen and verify_result.bonus_token_id >= 0:
                 from .batched_engine import _apply_spec_bonus_penalties
+
                 # Determine the token to feed: the last token before the bonus
                 # position (either last accepted draft or the alignment token).
-                _pen_last_tok = verify_result.accepted_ids[-1] if verify_result.accepted_ids else int(last_tok.item())
+                _pen_last_tok = (
+                    verify_result.accepted_ids[-1]
+                    if verify_result.accepted_ids
+                    else int(last_tok.item())
+                )
                 _pen_input = mx.array([[_pen_last_tok]])
                 _pen_out = self.target(_pen_input, cache=target_cache)
-                _pen_logits = _pen_out.logits[0, -1, :] if hasattr(_pen_out, 'logits') else _pen_out[0, -1, :]
+                _pen_logits = (
+                    _pen_out.logits[0, -1, :]
+                    if hasattr(_pen_out, "logits")
+                    else _pen_out[0, -1, :]
+                )
                 _token_hist = [int(t) for t in input_ids.flatten()] + generated_tokens
                 _pen_logits = _apply_spec_bonus_penalties(
-                    _pen_logits, _token_hist, int(input_ids.size),
+                    _pen_logits,
+                    _token_hist,
+                    int(input_ids.size),
                     repetition_penalty=repetition_penalty,
                     frequency_penalty=frequency_penalty,
                     presence_penalty=presence_penalty,
                     logit_bias=logit_bias,
                 )
                 # Apply grammar constraint masking to bonus logits before sampling
-                if self.constraint is not None and hasattr(self.constraint, 'get_allowed_tokens'):
+                if self.constraint is not None and hasattr(
+                    self.constraint, "get_allowed_tokens"
+                ):
                     try:
                         _all_ids = verify_result.accepted_ids
-                        _allowed = self.constraint.get_allowed_tokens(self.tokenizer, _all_ids)
+                        _allowed = self.constraint.get_allowed_tokens(
+                            self.tokenizer, _all_ids
+                        )
                         if _allowed:
                             from .json_schema import apply_json_constraint
+
                             _pen_logits = apply_json_constraint(_pen_logits, _allowed)
                     except Exception:
                         pass
@@ -1076,6 +1177,7 @@ class SpeculativeDecoder:
                 # Roll back the extra cache entry to prevent KV misalignment
                 try:
                     from mlx_lm.models.cache import trim_prompt_cache
+
                     trim_prompt_cache(target_cache, 1)
                 except Exception:
                     for c in target_cache:
@@ -1118,7 +1220,7 @@ class SpeculativeDecoder:
             # Also rollback grammar constraint on rejection.
             if accepted < len(draft_tokens):
                 # Rollback grammar constraint to pre-draft state
-                if self.constraint is not None and hasattr(self.constraint, 'rollback'):
+                if self.constraint is not None and hasattr(self.constraint, "rollback"):
                     try:
                         if _constraint_checkpoint is not None:
                             self.constraint.rollback(_constraint_checkpoint)
@@ -1127,7 +1229,7 @@ class SpeculativeDecoder:
                     except Exception:
                         pass
                 # Advance constraint with accepted tokens only (skip EOS)
-                if self.constraint is not None and hasattr(self.constraint, 'advance'):
+                if self.constraint is not None and hasattr(self.constraint, "advance"):
                     for tid in verify_result.accepted_ids:
                         if tid in eos_ids:
                             break
@@ -1138,7 +1240,9 @@ class SpeculativeDecoder:
                         correction = generated_tokens[-1]
                         if correction not in eos_ids:
                             with contextlib.suppress(Exception):
-                                self.constraint.advance(self.tokenizer.decode([correction]))
+                                self.constraint.advance(
+                                    self.tokenizer.decode([correction])
+                                )
                 # verify_draft rolled back 1 then fed [last_tok, d0..dK-1] (K+1 entries).
                 # After rollback, cache had N-1 entries. After forward K+1: N+K.
                 # Only accepted+1 are valid (last_tok + accepted drafts).
@@ -1146,6 +1250,7 @@ class SpeculativeDecoder:
                 trim_count = len(draft_tokens) - accepted
                 try:
                     from mlx_lm.models.cache import trim_prompt_cache
+
                     trim_prompt_cache(target_cache, trim_count)
                 except Exception:
                     for c in target_cache:
@@ -1154,7 +1259,7 @@ class SpeculativeDecoder:
 
                 self._restore_cache(draft_cache, draft_snap)
                 # Re-feed accepted + correction tokens to draft cache.
-                refeed = generated_tokens[-(accepted + 1):]
+                refeed = generated_tokens[-(accepted + 1) :]
                 for tok in refeed:
                     self.draft(mx.array([[tok]]), cache=draft_cache)
 
@@ -1170,7 +1275,7 @@ class SpeculativeDecoder:
                 # grows unbounded over long generations).
                 if self.constraint is not None:
                     try:
-                        if hasattr(self.constraint, 'discard_checkpoint'):
+                        if hasattr(self.constraint, "discard_checkpoint"):
                             self.constraint.discard_checkpoint()
                         # For return-value-based constraints, nothing to do --
                         # the checkpoint data is just dropped (no internal stack to pop).
@@ -1199,12 +1304,17 @@ class SpeculativeDecoder:
             "acceptance_rate": round(self.acceptance_rate, 3),
             "avg_accepted_per_step": (
                 self._stats["total_accepted_tokens"] / self._stats["total_steps"]
-                if self._stats["total_steps"] > 0 else 0.0
+                if self._stats["total_steps"] > 0
+                else 0.0
             ),
             "effective_speedup": (
-                (self._stats["total_accepted_tokens"] + self._stats["total_bonus_tokens"])
+                (
+                    self._stats["total_accepted_tokens"]
+                    + self._stats["total_bonus_tokens"]
+                )
                 / self._stats["total_steps"]
-                if self._stats["total_steps"] > 0 else 0.0
+                if self._stats["total_steps"] > 0
+                else 0.0
             ),
         }
 
@@ -1283,7 +1393,8 @@ class LookaheadReasoning:
             "current_k": self.adjust_draft_k(),
             "recent_avg_accept": (
                 sum(self._recent_accepts) / len(self._recent_accepts)
-                if self._recent_accepts else 0.0
+                if self._recent_accepts
+                else 0.0
             ),
         }
         if self.decoder is not None:

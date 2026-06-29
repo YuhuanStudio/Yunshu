@@ -10,6 +10,7 @@ Fix: snapshot the per-response format at response-create time (_snap_out_fmt, va
 SUPPORTED_AUDIO_FORMATS) and thread it through _synthesize_audio_response → _encode_output_audio,
 which now takes an explicit fmt that wins over the session default.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -56,10 +57,10 @@ def test_encode_fmt_none_falls_back_to_session():
 
 def test_generate_response_snapshots_and_threads_output_audio_format():
     src = inspect.getsource(RealtimeSession._generate_response)
-    assert '_snap_out_fmt' in src
+    assert "_snap_out_fmt" in src
     assert 'config.get("output_audio_format")' in src
-    assert 'SUPPORTED_AUDIO_FORMATS' in src  # invalid per-response value falls back
-    assert 'out_fmt=_snap_out_fmt' in src    # threaded into the synth call
+    assert "SUPPORTED_AUDIO_FORMATS" in src  # invalid per-response value falls back
+    assert "out_fmt=_snap_out_fmt" in src  # threaded into the synth call
 
 
 def test_synth_signature_accepts_out_fmt():

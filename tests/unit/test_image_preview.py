@@ -1,6 +1,5 @@
 """Tests for image generation streaming intermediate preview."""
 
-
 from python.yunshu_engine.image_engine import ImageGenEngine
 
 
@@ -108,16 +107,19 @@ class TestImageGenerateRequest:
 
     def test_default_preview_interval(self):
         from python.yunshu_gateway.routers.images import ImageGenerateRequest
+
         req = ImageGenerateRequest(prompt="test")
         assert req.preview_interval == 0
 
     def test_custom_preview_interval(self):
         from python.yunshu_gateway.routers.images import ImageGenerateRequest
+
         req = ImageGenerateRequest(prompt="test", preview_interval=2)
         assert req.preview_interval == 2
 
     def test_request_serialization(self):
         from python.yunshu_gateway.routers.images import ImageGenerateRequest
+
         req = ImageGenerateRequest(
             prompt="a cat",
             preview_interval=1,

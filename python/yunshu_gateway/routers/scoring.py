@@ -41,7 +41,7 @@ _MAX_DOCUMENT_LENGTH = 8192  # max characters per document for rerank
 # strings drives one giant uncapped forward pass (context-length / memory-pressure DoS on
 # a 36GB Mac). Apply the same caps as embeddings at the schema boundary.
 _MAX_INPUT_TEXT_LENGTH = 8192  # chars per scoring text input
-_MAX_INPUT_TEXTS = 2048        # elements per scoring list input
+_MAX_INPUT_TEXTS = 2048  # elements per scoring list input
 
 
 def _reject_overlong_texts(field: str, texts: list[str]) -> None:
@@ -57,6 +57,7 @@ def _reject_overlong_texts(field: str, texts: list[str]) -> None:
 
 # ── Request models ───────────────────────────────────────────────────────────
 
+
 class PoolingRequest(BaseModel):
     model: str
     input: str | list[str]
@@ -68,9 +69,13 @@ class PoolingRequest(BaseModel):
         if not self.model or not self.model.strip():
             raise ValueError("model: field is required and cannot be empty")
         if self.pooling_type.upper() not in _VALID_POOLING_TYPES:
-            raise ValueError(f"pooling_type: must be one of {', '.join(sorted(_VALID_POOLING_TYPES))}, got '{self.pooling_type}'")
+            raise ValueError(
+                f"pooling_type: must be one of {', '.join(sorted(_VALID_POOLING_TYPES))}, got '{self.pooling_type}'"
+            )
         if self.encoding_format not in ("float", "base64"):
-            raise ValueError(f"encoding_format: must be 'float' or 'base64', got '{self.encoding_format}'")
+            raise ValueError(
+                f"encoding_format: must be 'float' or 'base64', got '{self.encoding_format}'"
+            )
         # Validate input: string must be non-empty, list must have elements
         if isinstance(self.input, str) and not self.input.strip():
             raise ValueError("input: cannot be empty or whitespace-only")
@@ -81,8 +86,12 @@ class PoolingRequest(BaseModel):
                 raise ValueError(f"input: maximum {_MAX_INPUT_TEXTS} items per request")
             for i, t in enumerate(self.input):
                 if not isinstance(t, str) or not t.strip():
-                    raise ValueError(f"input: item at index {i} is empty or whitespace-only")
-        _reject_overlong_texts("input", self.input if isinstance(self.input, list) else [self.input])
+                    raise ValueError(
+                        f"input: item at index {i} is empty or whitespace-only"
+                    )
+        _reject_overlong_texts(
+            "input", self.input if isinstance(self.input, list) else [self.input]
+        )
         return self
 
 
@@ -97,7 +106,9 @@ class ScoreRequest(BaseModel):
         if not self.model or not self.model.strip():
             raise ValueError("model: field is required and cannot be empty")
         if self.scoring_type not in _VALID_SCORING_TYPES:
-            raise ValueError(f"scoring_type: must be one of {', '.join(sorted(_VALID_SCORING_TYPES))}, got '{self.scoring_type}'")
+            raise ValueError(
+                f"scoring_type: must be one of {', '.join(sorted(_VALID_SCORING_TYPES))}, got '{self.scoring_type}'"
+            )
         texts_a = self.text_1 if isinstance(self.text_1, list) else [self.text_1]
         texts_b = self.text_2 if isinstance(self.text_2, list) else [self.text_2]
         if not texts_a or all(not t.strip() for t in texts_a):
@@ -107,10 +118,14 @@ class ScoreRequest(BaseModel):
         # Reject individual empty items
         for i, t in enumerate(texts_a):
             if not isinstance(t, str) or not t.strip():
-                raise ValueError(f"text_1: item at index {i} is empty or whitespace-only")
+                raise ValueError(
+                    f"text_1: item at index {i} is empty or whitespace-only"
+                )
         for i, t in enumerate(texts_b):
             if not isinstance(t, str) or not t.strip():
-                raise ValueError(f"text_2: item at index {i} is empty or whitespace-only")
+                raise ValueError(
+                    f"text_2: item at index {i} is empty or whitespace-only"
+                )
         # when both inputs are LISTS of length > 1,
         # they must match. List-of-1 broadcasts to any length (existing
         # behavior tested in test_score_request_broadcast). Equal-length is
@@ -157,7 +172,9 @@ class RerankRequest(BaseModel):
         # Validate individual documents are not empty
         for i, doc in enumerate(self.documents):
             if not isinstance(doc, str) or not doc.strip():
-                raise ValueError(f"documents: item at index {i} is empty or whitespace-only")
+                raise ValueError(
+                    f"documents: item at index {i} is empty or whitespace-only"
+                )
         if len(self.documents) > 2048:
             raise ValueError("documents: maximum 2048 documents per request")
         return self
@@ -194,13 +211,16 @@ class ClassifyRequest(BaseModel):
         # Validate individual labels are not empty
         for i, label in enumerate(self.labels):
             if not isinstance(label, str) or not label.strip():
-                raise ValueError(f"labels: item at index {i} is empty or whitespace-only")
+                raise ValueError(
+                    f"labels: item at index {i} is empty or whitespace-only"
+                )
         _reject_overlong_texts("input", [self.input])
         _reject_overlong_texts("labels", self.labels)
         return self
 
 
 # ── /v1/pooling ──────────────────────────────────────────────────────────────
+
 
 @router.post("/pooling", response_model=None)
 async def create_pooling(req: PoolingRequest, request: Request):
@@ -227,7 +247,7 @@ async def create_pooling(req: PoolingRequest, request: Request):
 
     data = []
     total_tokens = 0
-    tok = getattr(engine, '_tokenizer', None)
+    tok = getattr(engine, "_tokenizer", None)
     for i, vec in enumerate(raw):
         # preserve 1:1 input↔output index alignment. The old code SKIPPED
         # empty vectors and re-indexed the survivors with a contiguous counter, so a
@@ -261,6 +281,7 @@ async def create_pooling(req: PoolingRequest, request: Request):
         if req.encoding_format == "base64":
             import base64
             import struct
+
             packed = struct.pack(f"{len(vec)}f", *vec)
             val = base64.b64encode(packed).decode("ascii")
         else:
@@ -268,15 +289,18 @@ async def create_pooling(req: PoolingRequest, request: Request):
         data.append({"object": "pooling", "index": i, "data": val})
         total_tokens += len(tok.encode(texts[i])) if tok else max(1, len(texts[i]) // 4)
 
-    return JSONResponse({
-        "object": "list",
-        "data": data,
-        "model": req.model,
-        "usage": {"prompt_tokens": total_tokens, "total_tokens": total_tokens},
-    })
+    return JSONResponse(
+        {
+            "object": "list",
+            "data": data,
+            "model": req.model,
+            "usage": {"prompt_tokens": total_tokens, "total_tokens": total_tokens},
+        }
+    )
 
 
 # ── /v1/score ────────────────────────────────────────────────────────────────
+
 
 @router.post("/score", response_model=None)
 async def create_score(req: ScoreRequest, request: Request):
@@ -319,28 +343,35 @@ async def create_score(req: ScoreRequest, request: Request):
 
     data = []
     total_tokens = 0
-    tok = getattr(engine, '_tokenizer', None)
+    tok = getattr(engine, "_tokenizer", None)
     try:
         for i, (a, b) in enumerate(zip(emb_a, emb_b, strict=False)):
             score = _compute_similarity(a, b, req.scoring_type)
             if not math.isfinite(score):  # avoid a bare NaN JSON literal (invalid)
                 score = 0.0
             data.append({"object": "score", "index": i, "score": score})
-            total_tokens += (len(tok.encode(texts_a[i])) if tok else max(1, len(texts_a[i]) // 4))
-            total_tokens += (len(tok.encode(texts_b[i])) if tok else max(1, len(texts_b[i]) // 4))
+            total_tokens += (
+                len(tok.encode(texts_a[i])) if tok else max(1, len(texts_a[i]) // 4)
+            )
+            total_tokens += (
+                len(tok.encode(texts_b[i])) if tok else max(1, len(texts_b[i]) // 4)
+            )
     except ValueError as e:
         logger.error(f"Score computation error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e)) from None
 
-    return JSONResponse({
-        "object": "list",
-        "data": data,
-        "model": req.model,
-        "usage": {"prompt_tokens": total_tokens, "total_tokens": total_tokens},
-    })
+    return JSONResponse(
+        {
+            "object": "list",
+            "data": data,
+            "model": req.model,
+            "usage": {"prompt_tokens": total_tokens, "total_tokens": total_tokens},
+        }
+    )
 
 
 # ── /v1/rerank ───────────────────────────────────────────────────────────────
+
 
 @router.post("/rerank", response_model=None)
 async def create_rerank(req: RerankRequest, request: Request):
@@ -352,7 +383,8 @@ async def create_rerank(req: RerankRequest, request: Request):
         if len(doc) > _MAX_DOCUMENT_LENGTH:
             logger.debug(
                 "Truncating document from %d to %d chars",
-                len(doc), _MAX_DOCUMENT_LENGTH,
+                len(doc),
+                _MAX_DOCUMENT_LENGTH,
             )
             truncated_docs.append(doc[:_MAX_DOCUMENT_LENGTH])
         else:
@@ -411,9 +443,9 @@ async def create_rerank(req: RerankRequest, request: Request):
 
     # Apply top_n
     if req.top_n is not None and req.top_n > 0:
-        scored = scored[:req.top_n]
+        scored = scored[: req.top_n]
 
-    tok = getattr(engine, '_tokenizer', None)
+    tok = getattr(engine, "_tokenizer", None)
     total_tokens = len(tok.encode(req.query)) if tok else max(1, len(req.query) // 4)
     for doc in truncated_docs:
         total_tokens += len(tok.encode(doc)) if tok else max(1, len(doc) // 4)
@@ -428,16 +460,19 @@ async def create_rerank(req: RerankRequest, request: Request):
             item["document"] = {"text": req.documents[idx]}
         results.append(item)
 
-    return JSONResponse({
-        "id": f"rerank-{int(time.time())}",
-        "object": "list",
-        "model": req.model,
-        "results": results,
-        "usage": {"prompt_tokens": total_tokens, "total_tokens": total_tokens},
-    })
+    return JSONResponse(
+        {
+            "id": f"rerank-{int(time.time())}",
+            "object": "list",
+            "model": req.model,
+            "results": results,
+            "usage": {"prompt_tokens": total_tokens, "total_tokens": total_tokens},
+        }
+    )
 
 
 # ── /v1/classify ─────────────────────────────────────────────────────────────
+
 
 @router.post("/classify", response_model=None)
 async def classify_input(req: ClassifyRequest, request: Request):
@@ -500,19 +535,22 @@ async def classify_input(req: ClassifyRequest, request: Request):
 
     results.sort(key=lambda x: x["score"], reverse=True)
 
-    tok = getattr(engine, '_tokenizer', None)
+    tok = getattr(engine, "_tokenizer", None)
     total_tokens = len(tok.encode(req.input)) if tok else max(1, len(req.input) // 4)
     for label in req.labels:
         total_tokens += len(tok.encode(label)) if tok else max(1, len(label) // 4)
 
-    return JSONResponse({
-        "model": req.model,
-        "results": results,
-        "usage": {"prompt_tokens": total_tokens, "total_tokens": total_tokens},
-    })
+    return JSONResponse(
+        {
+            "model": req.model,
+            "results": results,
+            "usage": {"prompt_tokens": total_tokens, "total_tokens": total_tokens},
+        }
+    )
 
 
 # ── Shared helpers ───────────────────────────────────────────────────────────
+
 
 async def _resolve_engine(model_id: str):
     from ..engine import get_engine, get_model_manager
@@ -533,7 +571,9 @@ async def _resolve_engine(model_id: str):
             # the default engine — serving pooling/score/rerank/classify from a
             # DIFFERENT model than the caller asked for is silently incorrect
             # (the wrong-model-serving class hardened in embeddings.py).
-            logger.warning("Failed to load engine for scoring model %r", model_id, exc_info=True)
+            logger.warning(
+                "Failed to load engine for scoring model %r", model_id, exc_info=True
+            )
             return None
 
     engine = get_engine()
@@ -556,11 +596,12 @@ async def _get_embeddings(
     Uses engine.embed() when available; falls back to raw hidden-state extraction
     + mean pooling.
     """
-    if hasattr(engine, 'embed'):
+    if hasattr(engine, "embed"):
         import asyncio
         import functools
 
         from yunshu_engine.mlx_executor import get_mlx_executor
+
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             get_mlx_executor(),
@@ -570,18 +611,23 @@ async def _get_embeddings(
     return await _fallback_embeddings(engine, texts, "MEAN", normalize=normalize)
 
 
-async def _get_hidden_states(engine, texts: list[str], pooling_type: str) -> list[list[float]]:
+async def _get_hidden_states(
+    engine, texts: list[str], pooling_type: str
+) -> list[list[float]]:
     """Get pooled hidden states (NOT normalized) for the pooling endpoint.
 
     Uses engine.pool() when available for proper pooling support.
     Falls back to engine.embed() only when no pooling-specific method exists.
     """
-    if hasattr(engine, 'pool'):
+    if hasattr(engine, "pool"):
         import asyncio
 
         from yunshu_engine.mlx_executor import get_mlx_executor
+
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(get_mlx_executor(), engine.pool, texts, pooling_type)
+        return await loop.run_in_executor(
+            get_mlx_executor(), engine.pool, texts, pooling_type
+        )
 
     # Fallback: raw hidden state extraction with pooling
     return await _fallback_embeddings(engine, texts, pooling_type, normalize=False)
@@ -607,8 +653,8 @@ async def _fallback_embeddings(
 
     from yunshu_engine.mlx_executor import get_mlx_executor
 
-    tokenizer = getattr(engine, '_tokenizer', None)
-    model = getattr(engine, '_model', None)
+    tokenizer = getattr(engine, "_tokenizer", None)
+    model = getattr(engine, "_model", None)
     if tokenizer is None or model is None:
         raise RuntimeError("Engine does not support embedding generation")
 
@@ -655,11 +701,11 @@ async def _fallback_embeddings(
                 hidden = out
             elif isinstance(out, (tuple, list)):
                 hidden = out[0]
-            elif hasattr(out, 'last_hidden_state'):
+            elif hasattr(out, "last_hidden_state"):
                 hidden = out.last_hidden_state
-            elif hasattr(out, 'hidden_states') and out.hidden_states:
+            elif hasattr(out, "hidden_states") and out.hidden_states:
                 hidden = out.hidden_states[-1]
-            elif hasattr(out, 'logits'):
+            elif hasattr(out, "logits"):
                 # the backbone resolution above should prevent reaching here.
                 # Pooling vocab-space logits yields a meaningless embedding — warn loudly
                 # (was SILENT) so a mis-resolved model surfaces instead of returning a
@@ -689,7 +735,8 @@ async def _fallback_embeddings(
 
             pooled_list = pooled.tolist()
             results.append(
-                pooled_list[0] if isinstance(pooled_list, list) and len(pooled_list) == 1
+                pooled_list[0]
+                if isinstance(pooled_list, list) and len(pooled_list) == 1
                 else pooled_list
             )
         return results

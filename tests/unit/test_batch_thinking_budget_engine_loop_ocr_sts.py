@@ -11,6 +11,7 @@ OCR native path omitted the "model" key the VLM-fallback path returns.
 STS spectral_gating analysis loop stop lacked +1 (keystone un-swept) → final hop
   unanalyzed → trailing audio stayed silence.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -18,6 +19,7 @@ import inspect
 
 def test_vlm_budget_finish_reason_is_length():
     from yunshu_engine import vlm_engine
+
     src = inspect.getsource(vlm_engine)
     # the budget-exhaustion terminal now reports length + closes the think tag
     assert 'finish_reason="length"' in src
@@ -26,6 +28,7 @@ def test_vlm_budget_finish_reason_is_length():
 
 def test_engine_loop_batch_bidirectional():
     from yunshu_engine import engine_core
+
     src = inspect.getsource(engine_core)
     # seeded from configured batch, clamped both directions to [1, original]
     assert "_original_completion_batch_size" in src
@@ -36,24 +39,35 @@ def test_engine_loop_batch_bidirectional():
 
 def test_sizer_seeded_to_config():
     from yunshu_engine.engine_core import EngineCore
+
     EngineCore.__new__(EngineCore)
     # the constructor seeds _current_batch from config; verify the AdaptiveBatchSizer honors it
     from yunshu_engine.auto_tuner import AdaptiveBatchSizer
+
     s = AdaptiveBatchSizer(max_batch=32)
     s._current_batch = 32
-    assert s.get_current_batch() == 32 if hasattr(s, "get_current_batch") else s._current_batch == 32
+    assert (
+        s.get_current_batch() == 32
+        if hasattr(s, "get_current_batch")
+        else s._current_batch == 32
+    )
 
 
 def test_ocr_native_returns_model_key():
     from yunshu_gateway.routers import ocr
+
     src = inspect.getsource(ocr)
     assert '"model": ocr_model_id,' in src
 
 
 def test_spectral_gating_loop_covers_the_tail():
     from yunshu_engine import sts_engine
-    src = inspect.getsource(sts_engine._SpectralGating.process) if hasattr(
-        sts_engine, "_SpectralGating") else inspect.getsource(sts_engine)
+
+    src = (
+        inspect.getsource(sts_engine._SpectralGating.process)
+        if hasattr(sts_engine, "_SpectralGating")
+        else inspect.getsource(sts_engine)
+    )
     # SUPERSEDES the `+1`: the analysis loop now iterates to len(arr) so a
     # final zero-padded frame anchors the tail (the `+1` only covered the exact-multiple
     # case → general-case tail was still silenced). Pad + clamp guards remain.

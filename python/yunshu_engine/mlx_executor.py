@@ -8,7 +8,6 @@ Studied from oMLX's engine_core.py:
 This is the foundation for safe multi-model serving.
 """
 
-
 import contextlib
 import logging
 import sys
@@ -103,7 +102,9 @@ def shutdown_mlx_executor(wait: bool = True) -> None:
                 try:
                     sync_and_clear_cache()
                 except Exception:
-                    logger.debug("sync_and_clear_cache during shutdown failed", exc_info=True)
+                    logger.debug(
+                        "sync_and_clear_cache during shutdown failed", exc_info=True
+                    )
             _executor.shutdown(wait=wait)
             _executor = None
             logger.info("MLX executor shut down")
@@ -130,6 +131,9 @@ def sync_and_clear_cache() -> None:
             if stream is not None:
                 mx.synchronize(stream)
     except RuntimeError:
-        logger.debug("generation_stream synchronize failed, falling back to global sync", exc_info=True)
+        logger.debug(
+            "generation_stream synchronize failed, falling back to global sync",
+            exc_info=True,
+        )
     mx.synchronize()
     mx.clear_cache()

@@ -12,6 +12,7 @@ class TestMCPProtocol:
     @pytest.fixture(autouse=True)
     def _setup(self):
         from yunshu_gateway.engine import set_engine
+
         self._engine = Engine(EngineConfig())
         self._engine._model = object()
         self._engine._model_name = "test-model"
@@ -24,11 +25,14 @@ class TestMCPProtocol:
         app = create_app()
         client = TestClient(app)
 
-        resp = client.post("/v1/mcp", json={
-            "jsonrpc": "2.0",
-            "method": "initialize",
-            "id": 1,
-        })
+        resp = client.post(
+            "/v1/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "initialize",
+                "id": 1,
+            },
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["result"]["protocolVersion"] == "2024-11-05"
@@ -40,11 +44,14 @@ class TestMCPProtocol:
         app = create_app()
         client = TestClient(app)
 
-        resp = client.post("/v1/mcp", json={
-            "jsonrpc": "2.0",
-            "method": "tools/list",
-            "id": 2,
-        })
+        resp = client.post(
+            "/v1/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "tools/list",
+                "id": 2,
+            },
+        )
         assert resp.status_code == 200
         tools = resp.json()["result"]["tools"]
         names = {t["name"] for t in tools}
@@ -69,11 +76,14 @@ class TestMCPProtocol:
         app = create_app()
         client = TestClient(app)
 
-        resp = client.post("/v1/mcp", json={
-            "jsonrpc": "2.0",
-            "method": "ping",
-            "id": 3,
-        })
+        resp = client.post(
+            "/v1/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "ping",
+                "id": 3,
+            },
+        )
         assert resp.status_code == 200
         assert resp.json()["result"] == {}
 
@@ -83,11 +93,14 @@ class TestMCPProtocol:
         app = create_app()
         client = TestClient(app)
 
-        resp = client.post("/v1/mcp", json={
-            "jsonrpc": "2.0",
-            "method": "nonexistent",
-            "id": 4,
-        })
+        resp = client.post(
+            "/v1/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "nonexistent",
+                "id": 4,
+            },
+        )
         assert resp.status_code == 200
         assert "error" in resp.json()
         assert resp.json()["error"]["code"] == -32601
@@ -98,11 +111,14 @@ class TestMCPProtocol:
         app = create_app()
         client = TestClient(app)
 
-        resp = client.post("/v1/mcp", json={
-            "jsonrpc": "1.0",
-            "method": "ping",
-            "id": 5,
-        })
+        resp = client.post(
+            "/v1/mcp",
+            json={
+                "jsonrpc": "1.0",
+                "method": "ping",
+                "id": 5,
+            },
+        )
         assert resp.status_code == 200
         assert "error" in resp.json()
 
@@ -112,11 +128,14 @@ class TestMCPProtocol:
         app = create_app()
         client = TestClient(app)
 
-        resp = client.post("/v1/mcp", json={
-            "jsonrpc": "2.0",
-            "method": "prompts/list",
-            "id": 6,
-        })
+        resp = client.post(
+            "/v1/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "prompts/list",
+                "id": 6,
+            },
+        )
         assert resp.status_code == 200
         prompts = resp.json()["result"]["prompts"]
         assert len(prompts) >= 2
@@ -130,15 +149,18 @@ class TestMCPProtocol:
         app = create_app()
         client = TestClient(app)
 
-        resp = client.post("/v1/mcp", json={
-            "jsonrpc": "2.0",
-            "method": "prompts/get",
-            "params": {
-                "name": "summarize",
-                "arguments": {"text": "Hello world"},
+        resp = client.post(
+            "/v1/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "prompts/get",
+                "params": {
+                    "name": "summarize",
+                    "arguments": {"text": "Hello world"},
+                },
+                "id": 7,
             },
-            "id": 7,
-        })
+        )
         assert resp.status_code == 200
         result = resp.json()["result"]
         assert "messages" in result
@@ -150,12 +172,15 @@ class TestMCPProtocol:
         app = create_app()
         client = TestClient(app)
 
-        resp = client.post("/v1/mcp", json={
-            "jsonrpc": "2.0",
-            "method": "prompts/get",
-            "params": {"name": "nonexistent"},
-            "id": 8,
-        })
+        resp = client.post(
+            "/v1/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "prompts/get",
+                "params": {"name": "nonexistent"},
+                "id": 8,
+            },
+        )
         assert resp.status_code == 200
         assert "error" in resp.json()
 
@@ -165,11 +190,14 @@ class TestMCPProtocol:
         app = create_app()
         client = TestClient(app)
 
-        resp = client.post("/v1/mcp", json={
-            "jsonrpc": "2.0",
-            "method": "resources/list",
-            "id": 9,
-        })
+        resp = client.post(
+            "/v1/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "resources/list",
+                "id": 9,
+            },
+        )
         assert resp.status_code == 200
 
     def test_tools_call_unknown_tool(self):
@@ -178,12 +206,15 @@ class TestMCPProtocol:
         app = create_app()
         client = TestClient(app)
 
-        resp = client.post("/v1/mcp", json={
-            "jsonrpc": "2.0",
-            "method": "tools/call",
-            "params": {"name": "unknown_tool", "arguments": {}},
-            "id": 10,
-        })
+        resp = client.post(
+            "/v1/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "tools/call",
+                "params": {"name": "unknown_tool", "arguments": {}},
+                "id": 10,
+            },
+        )
         assert resp.status_code == 200
         assert "error" in resp.json()
 
@@ -194,6 +225,7 @@ class TestPrometheusMetrics:
     @pytest.fixture(autouse=True)
     def _setup(self):
         from yunshu_gateway.engine import set_engine
+
         self._engine = Engine(EngineConfig())
         self._engine._model = object()
         self._engine._model_name = "test-model"

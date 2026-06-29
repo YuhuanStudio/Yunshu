@@ -7,6 +7,7 @@ response stored + polled it as "completed". The STREAMING path already checks
 cancel_event.is_set() FIRST and reports "incomplete"; that fix was never propagated
 to the non-stream path. Now the non-stream path checks _ns_cancel_event first → "incomplete".
 """
+
 from __future__ import annotations
 
 import inspect
@@ -19,15 +20,15 @@ def test_nonstream_status_checks_cancel_event_first():
     # the non-stream status derivation must consult the cancel event BEFORE falling back
     # to the finish_reason map (which never sees a cancel reason).
     i = src.index("_response_status = (")
-    window = src[max(0, i - 600):i]
+    window = src[max(0, i - 600) : i]
     assert "_ns_cancel_event" in window and ".is_set()" in window, (
         "non-stream status derivation must check _ns_cancel_event.is_set() before the "
         "finish_reason map"
     )
     # and on a set cancel event it resolves to incomplete (mirrors the streaming fix)
-    assert 'if _ns_cancel_event is not None and _ns_cancel_event.is_set():' in src
-    j = src.index('if _ns_cancel_event is not None and _ns_cancel_event.is_set():')
-    assert '"incomplete"' in src[j:j + 120]
+    assert "if _ns_cancel_event is not None and _ns_cancel_event.is_set():" in src
+    j = src.index("if _ns_cancel_event is not None and _ns_cancel_event.is_set():")
+    assert '"incomplete"' in src[j : j + 120]
 
 
 def test_streaming_path_still_has_cancel_first_check_parity():

@@ -37,8 +37,12 @@ router = APIRouter(tags=["batch"])
 # Configurable limits
 _BATCH_MAX_ITEMS = int(os.environ.get("YUNSHU_BATCH_MAX_ITEMS", "500"))
 _BATCH_DEFAULT_TIMEOUT = float(os.environ.get("YUNSHU_BATCH_TIMEOUT", "300"))
-_BATCH_MAX_CSV_SIZE = int(os.environ.get("YUNSHU_BATCH_MAX_CSV_SIZE", str(50 * 1024 * 1024)))  # 50 MB
-_BATCH_STORE_TTL = int(os.environ.get("YUNSHU_BATCH_STORE_TTL", "3600"))  # 1 hour default
+_BATCH_MAX_CSV_SIZE = int(
+    os.environ.get("YUNSHU_BATCH_MAX_CSV_SIZE", str(50 * 1024 * 1024))
+)  # 50 MB
+_BATCH_STORE_TTL = int(
+    os.environ.get("YUNSHU_BATCH_STORE_TTL", "3600")
+)  # 1 hour default
 _BATCH_STORE_MAX_SIZE = int(os.environ.get("YUNSHU_BATCH_STORE_MAX_SIZE", "1000"))
 
 # In-memory progress tracking
@@ -81,7 +85,8 @@ def _cleanup_batch_store() -> None:
     _zombie_cutoff = _BATCH_STORE_TTL * 2
     with _batch_store_lock:
         _zombies = [
-            bid for bid, info in _batch_store.items()
+            bid
+            for bid, info in _batch_store.items()
             if info.get("status") == "in_progress"
             and (now - info.get("started_at", 0)) > _zombie_cutoff
         ]
@@ -94,7 +99,8 @@ def _cleanup_batch_store() -> None:
         # writes (progress + final update) raise KeyError, silently dropping items or
         # 500-ing the whole batch after generation already succeeded.
         expired = [
-            bid for bid, info in _batch_store.items()
+            bid
+            for bid, info in _batch_store.items()
             if info.get("status") != "in_progress"
             and (now - info.get("started_at", 0)) > _BATCH_STORE_TTL
         ]
@@ -103,10 +109,14 @@ def _cleanup_batch_store() -> None:
 
         # Enforce max size — evict oldest FINISHED batch first (never an in-progress one)
         while len(_batch_store) > _BATCH_STORE_MAX_SIZE:
-            _evictable = [k for k, v in _batch_store.items() if v.get("status") != "in_progress"]
+            _evictable = [
+                k for k, v in _batch_store.items() if v.get("status") != "in_progress"
+            ]
             if not _evictable:
                 break  # all in-flight — let the store grow rather than corrupt a live batch
-            oldest_id = min(_evictable, key=lambda k: _batch_store[k].get("started_at", 0))
+            oldest_id = min(
+                _evictable, key=lambda k: _batch_store[k].get("started_at", 0)
+            )
             del _batch_store[oldest_id]
 
 
@@ -163,6 +173,7 @@ async def create_batch(req: BatchRequest, request: Request):
         raise HTTPException(status_code=400, detail="Batch cannot be empty")
 
     from .models import _check_model_access, _check_permission
+
     _check_permission(request, "can_infer")
     # Enforce per-key model isolation on EVERY model the
     # batch touches. create_batch only checked can_infer, so a key scoped to model A
@@ -193,7 +204,7 @@ async def create_batch(req: BatchRequest, request: Request):
             "total": total,
             "started_at": started_at,
             "results": [None] * total,
-            "owner": actor,   # per-key ownership for status/results/csv IDOR
+            "owner": actor,  # per-key ownership for status/results/csv IDOR
         }
 
     semaphore = asyncio.Semaphore(req.max_concurrent)
@@ -258,7 +269,9 @@ async def create_batch(req: BatchRequest, request: Request):
         for task in task_handles:
             task.cancel()
         await asyncio.gather(*task_handles, return_exceptions=True)
-        raise HTTPException(status_code=500, detail=f"Batch execution failed: {exc}") from None
+        raise HTTPException(
+            status_code=500, detail=f"Batch execution failed: {exc}"
+        ) from None
 
     # Cancel pending (timed-out) tasks
     for task in pending:
@@ -285,7 +298,9 @@ async def create_batch(req: BatchRequest, request: Request):
 
     succeeded = sum(1 for p in processed if p.get("status") == "success")
     failed = sum(1 for p in processed if p.get("status") == "error")
-    final_status = "completed" if failed == 0 else ("partial" if failed < total else "failed")
+    final_status = (
+        "completed" if failed == 0 else ("partial" if failed < total else "failed")
+    )
 
     finished_at = time.time()
     # Normalize to the OpenAI Batch status enum (: "partial"/"timeout"/"error"
@@ -346,24 +361,31 @@ async def create_batch(req: BatchRequest, request: Request):
         if _final is None:
             _final = {"id": batch_id, "started_at": started_at, "owner": actor}
             _batch_store[batch_id] = _final
-        _final.update({
-            # store the OpenAI-normalized status (was the raw final_status), so a
-            # later GET /batch/{id}/status returns the SAME status this POST returned —
-            # previously POST said "completed" but the store kept "partial", so a poll
-            # surfaced a non-OpenAI status the client never saw on create.
-            "status": _oai_status,
-            "detail_status": final_status,  # Yunshu-specific (partial/timeout/error) detail
-            "timed_out": timed_out,
-            "results": processed,
-            "finished_at": time.time(),
-        })
+        _final.update(
+            {
+                # store the OpenAI-normalized status (was the raw final_status), so a
+                # later GET /batch/{id}/status returns the SAME status this POST returned —
+                # previously POST said "completed" but the store kept "partial", so a poll
+                # surfaced a non-OpenAI status the client never saw on create.
+                "status": _oai_status,
+                "detail_status": final_status,  # Yunshu-specific (partial/timeout/error) detail
+                "timed_out": timed_out,
+                "results": processed,
+                "finished_at": time.time(),
+            }
+        )
 
     # Evict expired/oversized batch entries to prevent memory leak
     _cleanup_batch_store()
 
     log_operation(
-        "batch_complete", batch_id, "success" if final_status != "failed" else "failure",
-        actor=actor, status=final_status, succeeded=succeeded, failed=failed,
+        "batch_complete",
+        batch_id,
+        "success" if final_status != "failed" else "failure",
+        actor=actor,
+        status=final_status,
+        succeeded=succeeded,
+        failed=failed,
     )
     return JSONResponse(response_data)
 
@@ -383,6 +405,7 @@ def _owns_batch(info: dict, request: Request) -> bool:
 async def get_batch_status(batch_id: str, request: Request):
     """Get progress/status of a previously submitted batch."""
     from .models import _check_permission
+
     _check_permission(request, "can_infer")
     with _batch_store_lock:
         info = _batch_store.get(batch_id)
@@ -397,7 +420,9 @@ async def get_batch_status(batch_id: str, request: Request):
         finished_at = info.get("finished_at")
     # Derive counters from per-item results to avoid race conditions
     completed = sum(1 for r in results if r is not None)
-    succeeded = sum(1 for r in results if r is not None and r.get("status") == "success")
+    succeeded = sum(
+        1 for r in results if r is not None and r.get("status") == "success"
+    )
     failed = sum(1 for r in results if r is not None and r.get("status") == "error")
     summary = {
         "id": batch_id_snap,
@@ -418,6 +443,7 @@ async def get_batch_status(batch_id: str, request: Request):
 async def get_batch_results(batch_id: str, request: Request):
     """Get full results of a completed batch."""
     from .models import _check_permission
+
     _check_permission(request, "can_infer")
     with _batch_store_lock:
         info = _batch_store.get(batch_id)
@@ -431,22 +457,27 @@ async def get_batch_results(batch_id: str, request: Request):
         status = info["status"]
         total = info["total"]
     # Derive counters from per-item results
-    succeeded = sum(1 for r in results if r is not None and r.get("status") == "success")
+    succeeded = sum(
+        1 for r in results if r is not None and r.get("status") == "success"
+    )
     failed = sum(1 for r in results if r is not None and r.get("status") == "error")
-    return JSONResponse({
-        "id": batch_id_snap,
-        "status": status,
-        "total": total,
-        "succeeded": succeeded,
-        "failed": failed,
-        "results": results,
-    })
+    return JSONResponse(
+        {
+            "id": batch_id_snap,
+            "status": status,
+            "total": total,
+            "succeeded": succeeded,
+            "failed": failed,
+            "results": results,
+        }
+    )
 
 
 @router.get("/batch/{batch_id}/results.csv")
 async def download_batch_csv(batch_id: str, request: Request):
     """Download batch results as CSV file."""
     from .models import _check_permission
+
     _check_permission(request, "can_infer")
     with _batch_store_lock:
         info = _batch_store.get(batch_id)
@@ -459,8 +490,18 @@ async def download_batch_csv(batch_id: str, request: Request):
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["custom_id", "status", "finish_reason", "content", "error",
-                      "prompt_tokens", "completion_tokens", "total_tokens"])
+    writer.writerow(
+        [
+            "custom_id",
+            "status",
+            "finish_reason",
+            "content",
+            "error",
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+        ]
+    )
 
     for r in results:
         if r is None:
@@ -478,11 +519,13 @@ async def download_batch_csv(batch_id: str, request: Request):
             # Header order: ..., content, error, prompt_tokens, completion_tokens, total_tokens
             row.append("")  # no error
             usage = resp.get("usage", {})
-            row.extend([
-                usage.get("prompt_tokens", ""),
-                usage.get("completion_tokens", ""),
-                usage.get("total_tokens", ""),
-            ])
+            row.extend(
+                [
+                    usage.get("prompt_tokens", ""),
+                    usage.get("completion_tokens", ""),
+                    usage.get("total_tokens", ""),
+                ]
+            )
         else:
             row.extend(["", ""])  # finish_reason, content
             row.append(r.get("error", ""))
@@ -519,12 +562,17 @@ async def upload_batch_csv(
     Optional columns: max_tokens, temperature, system_prompt
     """
     from .models import _check_permission
+
     _check_permission(request, "can_infer")
     if not model or not model.strip():
-        raise HTTPException(status_code=400, detail="model parameter is required and cannot be empty")
+        raise HTTPException(
+            status_code=400, detail="model parameter is required and cannot be empty"
+        )
 
     if not isinstance(max_tokens, int) or max_tokens < 1:
-        raise HTTPException(status_code=400, detail="max_tokens must be a positive integer")
+        raise HTTPException(
+            status_code=400, detail="max_tokens must be a positive integer"
+        )
     max_tokens = min(max_tokens, 131072)
 
     # enforce the SAME upper bound the BatchRequest schema does (le=64). Without
@@ -532,7 +580,9 @@ async def upload_batch_csv(
     # ValidationError later inside create_batch (past the FastAPI boundary → uncaught → 500
     # instead of a clean 400).
     if not isinstance(max_concurrent, int) or max_concurrent < 1 or max_concurrent > 64:
-        raise HTTPException(status_code=400, detail="max_concurrent must be an integer in [1, 64]")
+        raise HTTPException(
+            status_code=400, detail="max_concurrent must be an integer in [1, 64]"
+        )
 
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV files are accepted")
@@ -548,7 +598,9 @@ async def upload_batch_csv(
     try:
         text_content = content.decode("utf-8-sig")
     except UnicodeDecodeError:
-        raise HTTPException(status_code=400, detail="CSV file must be UTF-8 encoded") from None
+        raise HTTPException(
+            status_code=400, detail="CSV file must be UTF-8 encoded"
+        ) from None
     # restval="" — a RAGGED/short row (fewer fields than the header) makes
     # DictReader fill the missing columns with None (its default restval), and the code
     # below does row.get(col, "").strip() → None.strip() → AttributeError, which the
@@ -569,7 +621,9 @@ async def upload_batch_csv(
         system_prompt = row.get("system_prompt", "")
         row_max_tokens_raw = row.get("max_tokens", "")
         try:
-            row_max_tokens = int(row_max_tokens_raw) if row_max_tokens_raw.strip() else max_tokens
+            row_max_tokens = (
+                int(row_max_tokens_raw) if row_max_tokens_raw.strip() else max_tokens
+            )
         except (ValueError, TypeError):
             row_max_tokens = max_tokens
         if row_max_tokens < 1:
@@ -585,6 +639,7 @@ async def upload_batch_csv(
 
         if messages_json:
             import json
+
             try:
                 messages = json.loads(messages_json)
             except json.JSONDecodeError:
@@ -597,16 +652,18 @@ async def upload_batch_csv(
         else:
             continue
 
-        items.append(BatchItem(
-            custom_id=custom_id,
-            url="/v1/chat/completions",
-            body={
-                "model": model,
-                "messages": messages,
-                "max_tokens": row_max_tokens,
-                "temperature": row_temp,
-            },
-        ))
+        items.append(
+            BatchItem(
+                custom_id=custom_id,
+                url="/v1/chat/completions",
+                body={
+                    "model": model,
+                    "messages": messages,
+                    "max_tokens": row_max_tokens,
+                    "temperature": row_temp,
+                },
+            )
+        )
 
     if not items:
         raise HTTPException(status_code=400, detail="CSV contained no valid prompts")
@@ -640,10 +697,16 @@ def _validate_logit_bias(body: dict) -> None:
     if not lb:
         return
     import math
+
     if not isinstance(lb, dict):
         raise ValueError("logit_bias: must be an object mapping token ids to biases")
     for k, v in lb.items():
-        if isinstance(v, bool) or not isinstance(v, (int, float)) or math.isnan(v) or math.isinf(v):
+        if (
+            isinstance(v, bool)
+            or not isinstance(v, (int, float))
+            or math.isnan(v)
+            or math.isinf(v)
+        ):
             raise ValueError(f"logit_bias[{k}]: must be a finite number")
         if v < -100.0 or v > 100.0:
             raise ValueError(f"logit_bias[{k}]={v}: must be between -100 and 100")
@@ -661,7 +724,12 @@ def _validate_batch_sampling(body: dict) -> None:
 
     def _rng(name: str, lo: float, hi: float, default: float) -> None:
         v = body.get(name, default)
-        if not isinstance(v, (int, float)) or isinstance(v, bool) or math.isnan(v) or math.isinf(v):
+        if (
+            not isinstance(v, (int, float))
+            or isinstance(v, bool)
+            or math.isnan(v)
+            or math.isinf(v)
+        ):
             raise ValueError(f"{name}: must be a finite number")
         if v < lo or v > hi:
             raise ValueError(f"{name}: must be in [{lo}, {hi}], got {v}")
@@ -681,8 +749,12 @@ def _validate_batch_sampling(body: dict) -> None:
     if not isinstance(_n, int) or isinstance(_n, bool) or _n < 1:
         raise ValueError("n: must be a positive integer")
     _seed = body.get("seed")
-    if _seed is not None and (not isinstance(_seed, int) or isinstance(_seed, bool)
-                              or _seed < -(2**63) or _seed >= 2**63):
+    if _seed is not None and (
+        not isinstance(_seed, int)
+        or isinstance(_seed, bool)
+        or _seed < -(2**63)
+        or _seed >= 2**63
+    ):
         raise ValueError("seed: must be within the 64-bit signed integer range")
 
 
@@ -756,16 +828,16 @@ async def _execute_chat_completion(body: dict) -> dict:
     else:
         # Non-batched engine: apply chat template to convert messages to string
         if isinstance(messages, list) and messages:
-            tokenizer = getattr(engine, '_tokenizer', None)
-            if tokenizer and hasattr(tokenizer, 'apply_chat_template'):
+            tokenizer = getattr(engine, "_tokenizer", None)
+            if tokenizer and hasattr(tokenizer, "apply_chat_template"):
                 prompt_text = tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True,
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
                 )
             else:
                 # Last resort: concatenate message content
-                prompt_text = "\n".join(
-                    m.get("content", str(m)) for m in messages
-                )
+                prompt_text = "\n".join(m.get("content", str(m)) for m in messages)
         else:
             prompt_text = str(messages)
         state = await engine.generate(
@@ -804,21 +876,28 @@ async def _execute_chat_completion(body: dict) -> dict:
             # non-existent generated_text/prompt_token_count/
             # completion_token_count → AttributeError on every batch item.
             text = getattr(state, "text", None) or getattr(state, "generated_text", "")
-            prompt_tokens = getattr(state, "prompt_tokens", None) or getattr(state, "prompt_token_count", 0)
-            completion_tokens = getattr(state, "completion_tokens", None) or getattr(state, "completion_token_count", 0)
+            prompt_tokens = getattr(state, "prompt_tokens", None) or getattr(
+                state, "prompt_token_count", 0
+            )
+            completion_tokens = getattr(state, "completion_tokens", None) or getattr(
+                state, "completion_token_count", 0
+            )
             finish_reason = getattr(state, "finish_reason", None) or "stop"
 
     import time as _time
+
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
         "object": "chat.completion",
         "created": int(_time.time()),
         "model": model,
-        "choices": [{
-            "index": 0,
-            "message": {"role": "assistant", "content": text},
-            "finish_reason": finish_reason,
-        }],
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": text},
+                "finish_reason": finish_reason,
+            }
+        ],
         "usage": {
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
@@ -864,8 +943,13 @@ async def _execute_completion(body: dict) -> dict:
     # executor passed body["prompt"] straight to engine.generate(). A token-id array
     # then hit _generate_fast's `else: text = str(prompt)` and was tokenized as the
     # LITERAL string "[785, 3489]" → silent garbage output. Decode token-id forms here.
-    if isinstance(prompt, list) and prompt and not all(isinstance(p, str) for p in prompt):
+    if (
+        isinstance(prompt, list)
+        and prompt
+        and not all(isinstance(p, str) for p in prompt)
+    ):
         from .completions import _normalize_prompts
+
         _tok = getattr(engine, "_tokenizer", None)
         _norm = _normalize_prompts(prompt, _tok)
         prompt = _norm[0] if len(_norm) == 1 else "\n".join(_norm)
@@ -938,11 +1022,16 @@ async def _execute_completion(body: dict) -> dict:
             # non-existent generated_text/prompt_token_count/
             # completion_token_count → AttributeError on every batch item.
             text = getattr(state, "text", None) or getattr(state, "generated_text", "")
-            prompt_tokens = getattr(state, "prompt_tokens", None) or getattr(state, "prompt_token_count", 0)
-            completion_tokens = getattr(state, "completion_tokens", None) or getattr(state, "completion_token_count", 0)
+            prompt_tokens = getattr(state, "prompt_tokens", None) or getattr(
+                state, "prompt_token_count", 0
+            )
+            completion_tokens = getattr(state, "completion_tokens", None) or getattr(
+                state, "completion_token_count", 0
+            )
             finish_reason = getattr(state, "finish_reason", None) or "stop"
 
     import time as _time
+
     return {
         "id": f"cmpl-{uuid.uuid4().hex[:24]}",
         "object": "text_completion",

@@ -13,6 +13,7 @@ the handle in later chat/messages requests via `"cached_content": "<name>"`.
 On create we run one max_tokens=1 prefill of the content so the underlying
 KVPrefixCache is already hot for the first read.
 """
+
 from __future__ import annotations
 
 import logging
@@ -35,6 +36,7 @@ def _owns(entry, request: Request) -> bool:
     allow. Prevents one tenant from reading/deleting/extending another tenant's
     cached content by guessing its name."""
     from yunshu_control.audit_log import resolve_actor
+
     owner = getattr(entry, "owner", None)
     if not owner or owner == "anonymous":
         return True
@@ -74,7 +76,10 @@ async def create_cached_content(req: CreateCachedContentRequest, request: Reques
     _check_model_access(request, req.model)
     messages = _normalise_messages(req)
     if not messages:
-        raise HTTPException(status_code=400, detail="cached content requires messages / contents / system_instruction")
+        raise HTTPException(
+            status_code=400,
+            detail="cached content requires messages / contents / system_instruction",
+        )
     try:
         engine = await get_engine_for_model(req.model)
     except Exception as e:
@@ -85,17 +90,27 @@ async def create_cached_content(req: CreateCachedContentRequest, request: Reques
     # WARM: one prefill so the KVPrefixCache is hot; also gives the token count.
     token_count = 0
     try:
-        out = await engine.chat(messages=messages, max_tokens=1, temperature=0.0,
-                                enable_thinking=False)
-        token_count = int(getattr(out, "prompt_tokens", 0)
-                          or (out.get("prompt_tokens", 0) if isinstance(out, dict) else 0))
+        out = await engine.chat(
+            messages=messages, max_tokens=1, temperature=0.0, enable_thinking=False
+        )
+        token_count = int(
+            getattr(out, "prompt_tokens", 0)
+            or (out.get("prompt_tokens", 0) if isinstance(out, dict) else 0)
+        )
     except Exception:
-        logger.warning("cached content warm prefill failed (handle still created)", exc_info=True)
+        logger.warning(
+            "cached content warm prefill failed (handle still created)", exc_info=True
+        )
     from yunshu_control.audit_log import resolve_actor
+
     entry = get_store().create(
-        model=req.model, messages=messages, token_count=token_count,
-        ttl_seconds=req.ttl_seconds, display_name=req.display_name,
-        owner=resolve_actor(request))
+        model=req.model,
+        messages=messages,
+        token_count=token_count,
+        ttl_seconds=req.ttl_seconds,
+        display_name=req.display_name,
+        owner=resolve_actor(request),
+    )
     return entry.to_api()
 
 
@@ -104,7 +119,9 @@ async def list_cached_contents(request: Request):
     _check_permission(request, "can_infer")
     # Only the caller's own handles — otherwise this leaks every
     # tenant's handle names/models/token counts.
-    return {"cachedContents": [e.to_api() for e in get_store().list() if _owns(e, request)]}
+    return {
+        "cachedContents": [e.to_api() for e in get_store().list() if _owns(e, request)]
+    }
 
 
 def _full_name(cid: str) -> str:
@@ -117,7 +134,9 @@ async def get_cached_content(cid: str, request: Request):
     e = get_store().get(_full_name(cid))
     if e is None or not _owns(e, request):
         # 404 (not 403) so a non-owner can't even confirm the handle exists.
-        raise HTTPException(status_code=404, detail="cached content not found or expired")
+        raise HTTPException(
+            status_code=404, detail="cached content not found or expired"
+        )
     return e.to_api()
 
 
@@ -131,10 +150,14 @@ async def update_cached_content(cid: str, body: UpdateTTLRequest, request: Reque
     # Ownership check BEFORE mutating TTL.
     _existing = get_store().get(_full_name(cid))
     if _existing is None or not _owns(_existing, request):
-        raise HTTPException(status_code=404, detail="cached content not found or expired")
+        raise HTTPException(
+            status_code=404, detail="cached content not found or expired"
+        )
     e = get_store().update_ttl(_full_name(cid), body.ttl_seconds)
     if e is None:
-        raise HTTPException(status_code=404, detail="cached content not found or expired")
+        raise HTTPException(
+            status_code=404, detail="cached content not found or expired"
+        )
     return e.to_api()
 
 

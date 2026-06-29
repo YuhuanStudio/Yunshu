@@ -65,6 +65,7 @@ class VisionEncodingStrategy(StrEnum):
             with anyres cropping for high-resolution images.
     CUSTOM: User-provided encoder function registered via the factory.
     """
+
     MLX_VLM = "mlx_vlm"
     QWEN_VL = "qwen_vl"
     LLAVA = "llava"
@@ -197,7 +198,10 @@ class MLXVLMEncoder(VisionEncoder):
         if isinstance(module, str) and module.startswith("mlx_vlm.models."):
             return True
         # Check for vision_tower attribute with explicit None check
-        return bool(hasattr(model, "vision_tower") and getattr(model, "vision_tower", None) is not None)
+        return bool(
+            hasattr(model, "vision_tower")
+            and getattr(model, "vision_tower", None) is not None
+        )
 
 
 # ── QwenVLEncoder ──
@@ -214,14 +218,16 @@ class QwenVLEncoder(VisionEncoder):
     """
 
     # Model types that are Qwen-VL compatible
-    _SUPPORTED_TYPES = frozenset({
-        "qwen2_vl",
-        "qwen2_5_vl",
-        "qwen3_vl",
-        "qwen3_omni_moe",
-        "qwen2_omni_moe",
-        "qwen_vl",
-    })
+    _SUPPORTED_TYPES = frozenset(
+        {
+            "qwen2_vl",
+            "qwen2_5_vl",
+            "qwen3_vl",
+            "qwen3_omni_moe",
+            "qwen2_omni_moe",
+            "qwen_vl",
+        }
+    )
 
     def __init__(self) -> None:
         self._fallback = MLXVLMEncoder()
@@ -274,6 +280,7 @@ class QwenVLEncoder(VisionEncoder):
         if isinstance(image, str):
             try:
                 from mlx_vlm.utils import load_image
+
                 pil_image = load_image(image)
                 if isinstance(pil_image, list):
                     pil_image = pil_image[0]
@@ -340,7 +347,10 @@ class QwenVLEncoder(VisionEncoder):
 
         # Check for Qwen-VL specific attributes — both must exist
         # but use explicit type checks to avoid MagicMock false positives
-        has_vision_tower = hasattr(model, "vision_tower") and getattr(model, "vision_tower", None) is not None
+        has_vision_tower = (
+            hasattr(model, "vision_tower")
+            and getattr(model, "vision_tower", None) is not None
+        )
         has_rope = hasattr(model, "rope") and getattr(model, "rope", None) is not None
         return bool(has_vision_tower and has_rope)
 
@@ -359,17 +369,19 @@ class LLaVAEncoder(VisionEncoder):
     """
 
     # Model types that use LLaVA-style encoding
-    _SUPPORTED_TYPES = frozenset({
-        "llava",
-        "llava_next",
-        "llava_next_video",
-        "llava_onevision",
-        "llava_llama3",
-        "mistral_small_3_1",
-        "phi3_v",
-        "phi3.5_v",
-        "paligemma",
-    })
+    _SUPPORTED_TYPES = frozenset(
+        {
+            "llava",
+            "llava_next",
+            "llava_next_video",
+            "llava_onevision",
+            "llava_llama3",
+            "mistral_small_3_1",
+            "phi3_v",
+            "phi3.5_v",
+            "paligemma",
+        }
+    )
 
     def __init__(
         self,
@@ -438,6 +450,7 @@ class LLaVAEncoder(VisionEncoder):
         if isinstance(image, str):
             try:
                 from mlx_vlm.utils import load_image
+
                 pil_image = load_image(image)
                 if isinstance(pil_image, list):
                     pil_image = pil_image[0]
@@ -461,7 +474,9 @@ class LLaVAEncoder(VisionEncoder):
         else:
             return None
 
-        if pixel_values is None or (hasattr(pixel_values, 'size') and pixel_values.size == 0):
+        if pixel_values is None or (
+            hasattr(pixel_values, "size") and pixel_values.size == 0
+        ):
             return None
 
         # CLIP vision tower forward pass
@@ -532,10 +547,16 @@ class LLaVAEncoder(VisionEncoder):
                 return True
 
         # Check for LLaVA-specific attributes — use explicit type checks
-        has_vision_tower = hasattr(model, "vision_tower") and getattr(model, "vision_tower", None) is not None
+        has_vision_tower = (
+            hasattr(model, "vision_tower")
+            and getattr(model, "vision_tower", None) is not None
+        )
         has_projector = (
-            (hasattr(model, "multi_modal_projector") and getattr(model, "multi_modal_projector", None) is not None)
-            or (hasattr(model, "projector") and getattr(model, "projector", None) is not None)
+            hasattr(model, "multi_modal_projector")
+            and getattr(model, "multi_modal_projector", None) is not None
+        ) or (
+            hasattr(model, "projector")
+            and getattr(model, "projector", None) is not None
         )
         if has_vision_tower and has_projector:
             return True
@@ -703,8 +724,11 @@ class VisionEncoderFactory:
             encoder_class: Encoder class to use for this model family.
         """
         cls._registry[model_family] = encoder_class
-        logger.info("Registered vision encoder %s for model family %s",
-                     encoder_class.__name__, model_family)
+        logger.info(
+            "Registered vision encoder %s for model family %s",
+            encoder_class.__name__,
+            model_family,
+        )
 
     @classmethod
     def register_custom_encoder(

@@ -2,6 +2,7 @@
 every serving route enforces. GET /v1/models/{id} only checked can_infer (a scoped key
 could read an out-of-scope model's metadata); GET /v1/models listed every model. Also
 the admin discover dir-containment check used str.startswith (sibling-prefix bug)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -41,16 +42,21 @@ class _Manager:
 
 class _Key:
     """Scoped to model ids starting with 'public-'."""
+
     def can_access_model(self, mid):
         return mid.startswith("public-")
 
 
 def _req(rbac_key):
-    return types.SimpleNamespace(state=types.SimpleNamespace(rbac_key=rbac_key, tenant=None))
+    return types.SimpleNamespace(
+        state=types.SimpleNamespace(rbac_key=rbac_key, tenant=None)
+    )
 
 
 def test_list_filters_out_of_scope(monkeypatch):
-    monkeypatch.setattr(M, "get_model_manager", lambda: _Manager(["public-a", "secret-b"]))
+    monkeypatch.setattr(
+        M, "get_model_manager", lambda: _Manager(["public-a", "secret-b"])
+    )
     monkeypatch.setattr(M, "_check_permission", lambda *a, **k: None)
     out = asyncio.run(M.list_models(_req(_Key())))
     ids = {m["id"] for m in out["data"]}
@@ -59,14 +65,18 @@ def test_list_filters_out_of_scope(monkeypatch):
 
 
 def test_list_unscoped_sees_all(monkeypatch):
-    monkeypatch.setattr(M, "get_model_manager", lambda: _Manager(["public-a", "secret-b"]))
+    monkeypatch.setattr(
+        M, "get_model_manager", lambda: _Manager(["public-a", "secret-b"])
+    )
     monkeypatch.setattr(M, "_check_permission", lambda *a, **k: None)
     out = asyncio.run(M.list_models(_req(None)))  # no rbac key (static-token/disabled)
     assert {m["id"] for m in out["data"]} == {"public-a", "secret-b"}
 
 
 def test_get_model_out_of_scope_is_404(monkeypatch):
-    monkeypatch.setattr(M, "get_model_manager", lambda: _Manager(["public-a", "secret-b"]))
+    monkeypatch.setattr(
+        M, "get_model_manager", lambda: _Manager(["public-a", "secret-b"])
+    )
     monkeypatch.setattr(M, "_check_permission", lambda *a, **k: None)
     # accessible model → ok
     ok = asyncio.run(M.get_model("public-a", _req(_Key())))
@@ -90,4 +100,6 @@ def test_discover_dir_containment_uses_relative_to(monkeypatch):
             return False
 
     assert _within(Path("/Users/yuhuan/models"), Path("/Users/yuhuan")) is True
-    assert _within(Path("/Users/yuhuan-secret"), Path("/Users/yuhuan")) is False  # was True under startswith
+    assert (
+        _within(Path("/Users/yuhuan-secret"), Path("/Users/yuhuan")) is False
+    )  # was True under startswith

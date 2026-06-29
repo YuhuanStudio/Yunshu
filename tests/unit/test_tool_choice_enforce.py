@@ -5,6 +5,7 @@ tool_choice="none", emit a different tool than a forced named choice, or emit mu
 calls under parallel_tool_calls=false. `_enforce_tool_choice` now applies the hard
 deterministic guarantees post-extraction across all 3 non-streaming response paths, and
 the streamer is gated off under tool_choice="none"."""
+
 from __future__ import annotations
 
 from yunshu_gateway.routers.chat import ToolChoiceFunction, _enforce_tool_choice
@@ -65,16 +66,23 @@ def test_all_three_nonstream_paths_call_enforce():
     import inspect
 
     from yunshu_gateway.routers import chat
+
     src = inspect.getsource(chat)
     # the enforcement helper is invoked right after every model-aware extraction.
     # renamed the extraction var to _raw_calls (cleanup now gates on the raw
     # parse, not the enforced result) but enforcement is still called on all 3 paths.
-    assert src.count("_enforce_tool_choice(_raw_calls, req.tool_choice, req.parallel_tool_calls)") >= 3
+    assert (
+        src.count(
+            "_enforce_tool_choice(_raw_calls, req.tool_choice, req.parallel_tool_calls)"
+        )
+        >= 3
+    )
 
 
 def test_streamer_gated_on_not_none():
     import inspect
 
     from yunshu_gateway.routers import chat
+
     src = inspect.getsource(chat)
     assert src.count('len(req.tools) > 0 and req.tool_choice != "none"') >= 2

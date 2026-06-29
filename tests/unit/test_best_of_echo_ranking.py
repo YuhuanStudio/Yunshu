@@ -8,6 +8,7 @@ constant prompt-logprob sum over each candidate's (prompt+completion) length dil
 for longer completions — flipping the ranking so a worse, longer completion can win. The
 fix ranks on the COMPLETION only (entries whose text_offset >= the prompt's char length).
 """
+
 from __future__ import annotations
 
 import inspect
@@ -30,8 +31,10 @@ def test_completion_only_ranking_picks_the_better_short_completion():
     # prompt "ab" (char len 2): prompt tokens at text_offset 0,1; completion at offset>=2.
     # Candidate A: one strong completion token (-0.1). Candidate B: six weak ones (-3 each).
     lp_a = {"token_logprobs": [None, -8.0, -0.1], "text_offset": [0, 1, 2]}
-    lp_b = {"token_logprobs": [None, -8.0, -3.0, -3.0, -3.0, -3.0, -3.0, -3.0],
-            "text_offset": [0, 1, 2, 3, 4, 5, 6, 7]}
+    lp_b = {
+        "token_logprobs": [None, -8.0, -3.0, -3.0, -3.0, -3.0, -3.0, -3.0],
+        "text_offset": [0, 1, 2, 3, 4, 5, 6, 7],
+    }
     a = _avg_completion_only(lp_a, 2, echo=True)
     b = _avg_completion_only(lp_b, 2, echo=True)
     assert a > b, "A (completion avg -0.1) must beat B (completion avg -3.0)"
@@ -41,8 +44,8 @@ def test_old_polluted_ranking_would_have_picked_the_worse_candidate():
     # Demonstrates the bug the fix removes: averaging prompt+completion flips the winner.
     lp_a = [None, -8.0, -0.1]
     lp_b = [None, -8.0, -3.0, -3.0, -3.0, -3.0, -3.0, -3.0]
-    old_a = sum(x for x in lp_a if x is not None) / 2   # (-8 - 0.1)/2  = -4.05
-    old_b = sum(x for x in lp_b if x is not None) / 7   # (-8 - 18)/7  ≈ -3.71
+    old_a = sum(x for x in lp_a if x is not None) / 2  # (-8 - 0.1)/2  = -4.05
+    old_b = sum(x for x in lp_b if x is not None) / 7  # (-8 - 18)/7  ≈ -3.71
     assert old_b > old_a  # the WORSE completion (B) wrongly wins under the old logic
 
 

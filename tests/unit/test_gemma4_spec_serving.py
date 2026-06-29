@@ -13,9 +13,17 @@ from types import SimpleNamespace
 from python.yunshu_engine.batched_engine import BatchedEngine
 
 _DEFAULTS = dict(
-    logprobs=False, json_schema=None, logits_processors=None, logit_bias=None,
-    top_p=1.0, top_k=0, min_p=0.0, repetition_penalty=1.0,
-    frequency_penalty=0.0, presence_penalty=0.0, xtc_probability=0.0,
+    logprobs=False,
+    json_schema=None,
+    logits_processors=None,
+    logit_bias=None,
+    top_p=1.0,
+    top_k=0,
+    min_p=0.0,
+    repetition_penalty=1.0,
+    frequency_penalty=0.0,
+    presence_penalty=0.0,
+    xtc_probability=0.0,
 )
 
 

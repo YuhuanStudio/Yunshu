@@ -10,6 +10,7 @@ Fix: _effective_max_seqs = min(max_num_seqs, completion_batch_size) governs admi
 the surplus stays in OUR waiting queue (policy/aging apply). The max_num_seqs config field
 is unchanged (still a configurable knob); only the *effective* admission cap is corrected.
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock

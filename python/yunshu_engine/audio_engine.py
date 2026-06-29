@@ -86,7 +86,9 @@ def _materialize_ref_audio(ref_audio: str | None) -> tuple[str | None, str | Non
     return tmp_path, tmp_path
 
 
-def _audio_to_wav_bytes(audio: np.ndarray, sample_rate: int = DEFAULT_SAMPLE_RATE) -> bytes:
+def _audio_to_wav_bytes(
+    audio: np.ndarray, sample_rate: int = DEFAULT_SAMPLE_RATE
+) -> bytes:
     """Convert float audio array to WAV bytes (16-bit mono PCM)."""
     audio = np.array(audio).flatten()
     # Guard NaN/Inf before clip — np.clip passes NaN through and NaN.astype(
@@ -118,7 +120,9 @@ def _wav_chunk_size(data_size: int) -> int:
     return riff_size
 
 
-def _pcm_to_wav(pcm: np.ndarray, sample_rate: int = DEFAULT_SAMPLE_RATE, num_channels: int = 1) -> bytes:
+def _pcm_to_wav(
+    pcm: np.ndarray, sample_rate: int = DEFAULT_SAMPLE_RATE, num_channels: int = 1
+) -> bytes:
     """Encode 16-bit PCM samples into a WAV byte string."""
     buf = io.BytesIO()
     sample_width = 2
@@ -126,21 +130,21 @@ def _pcm_to_wav(pcm: np.ndarray, sample_rate: int = DEFAULT_SAMPLE_RATE, num_cha
     data_size = num_frames * num_channels * sample_width
 
     # RIFF header
-    buf.write(b'RIFF')
-    buf.write(struct.pack('<I', _wav_chunk_size(data_size)))
-    buf.write(b'WAVE')
+    buf.write(b"RIFF")
+    buf.write(struct.pack("<I", _wav_chunk_size(data_size)))
+    buf.write(b"WAVE")
     # fmt chunk
-    buf.write(b'fmt ')
-    buf.write(struct.pack('<I', 16))  # chunk size
-    buf.write(struct.pack('<H', 1))   # PCM format
-    buf.write(struct.pack('<H', num_channels))
-    buf.write(struct.pack('<I', sample_rate))
-    buf.write(struct.pack('<I', sample_rate * num_channels * sample_width))
-    buf.write(struct.pack('<H', num_channels * sample_width))
-    buf.write(struct.pack('<H', sample_width * 8))
+    buf.write(b"fmt ")
+    buf.write(struct.pack("<I", 16))  # chunk size
+    buf.write(struct.pack("<H", 1))  # PCM format
+    buf.write(struct.pack("<H", num_channels))
+    buf.write(struct.pack("<I", sample_rate))
+    buf.write(struct.pack("<I", sample_rate * num_channels * sample_width))
+    buf.write(struct.pack("<H", num_channels * sample_width))
+    buf.write(struct.pack("<H", sample_width * 8))
     # data chunk
-    buf.write(b'data')
-    buf.write(struct.pack('<I', data_size))
+    buf.write(b"data")
+    buf.write(struct.pack("<I", data_size))
     buf.write(pcm.tobytes())
 
     return buf.getvalue()
@@ -175,19 +179,19 @@ def make_wav_header(
     effective_data_size = 0 if streaming else data_size
 
     buf = io.BytesIO()
-    buf.write(b'RIFF')
-    buf.write(struct.pack('<I', _wav_chunk_size(effective_data_size)))
-    buf.write(b'WAVE')
-    buf.write(b'fmt ')
-    buf.write(struct.pack('<I', 16))
-    buf.write(struct.pack('<H', 1))  # PCM
-    buf.write(struct.pack('<H', num_channels))
-    buf.write(struct.pack('<I', sample_rate))
-    buf.write(struct.pack('<I', sample_rate * num_channels * sample_width))
-    buf.write(struct.pack('<H', num_channels * sample_width))
-    buf.write(struct.pack('<H', sample_width * 8))
-    buf.write(b'data')
-    buf.write(struct.pack('<I', effective_data_size))
+    buf.write(b"RIFF")
+    buf.write(struct.pack("<I", _wav_chunk_size(effective_data_size)))
+    buf.write(b"WAVE")
+    buf.write(b"fmt ")
+    buf.write(struct.pack("<I", 16))
+    buf.write(struct.pack("<H", 1))  # PCM
+    buf.write(struct.pack("<H", num_channels))
+    buf.write(struct.pack("<I", sample_rate))
+    buf.write(struct.pack("<I", sample_rate * num_channels * sample_width))
+    buf.write(struct.pack("<H", num_channels * sample_width))
+    buf.write(struct.pack("<H", sample_width * 8))
+    buf.write(b"data")
+    buf.write(struct.pack("<I", effective_data_size))
     return buf.getvalue()
 
 
@@ -215,12 +219,12 @@ def _wav_audio_duration_s(audio_path: str) -> float | None:
     # earlier than that; but to get sr we usually only need the fmt chunk
     # which is small (16 bytes typical).
     while off + 8 <= len(head):
-        chunk_id = head[off:off+4]
-        chunk_sz = int.from_bytes(head[off+4:off+8], "little")
+        chunk_id = head[off : off + 4]
+        chunk_sz = int.from_bytes(head[off + 4 : off + 8], "little")
         if chunk_id == b"fmt " and chunk_sz >= 16 and off + 8 + 16 <= len(head):
-            channels = int.from_bytes(head[off+10:off+12], "little") or 1
-            sr = int.from_bytes(head[off+12:off+16], "little")
-            bits_per_sample = int.from_bytes(head[off+22:off+24], "little") or 16
+            channels = int.from_bytes(head[off + 10 : off + 12], "little") or 1
+            sr = int.from_bytes(head[off + 12 : off + 16], "little")
+            bits_per_sample = int.from_bytes(head[off + 22 : off + 24], "little") or 16
         elif chunk_id == b"data":
             data_size = chunk_sz
             if sr and sr > 0:
@@ -233,6 +237,7 @@ def _wav_audio_duration_s(audio_path: str) -> float | None:
         return None
     try:
         import os
+
         total = os.path.getsize(audio_path)
         # Approximate: subtract typical header overhead (~46-100 bytes); for
         # int16 mono this gives a close-enough estimate.
@@ -254,6 +259,7 @@ def _decoded_audio_duration_s(audio_path: str) -> float | None:
     """
     try:
         import soundfile as sf
+
         info = sf.info(audio_path)
         if info.samplerate > 0:
             return info.frames / float(info.samplerate)
@@ -310,6 +316,7 @@ class TTSEngine(ActiveRequestMixin):
         self._model = None
         self._running = False
         from .mlx_executor import get_mlx_executor
+
         self._executor = get_mlx_executor()
         # Metrics (protected by _stats_lock for thread safety)
         self._stats_lock = threading.Lock()
@@ -320,7 +327,11 @@ class TTSEngine(ActiveRequestMixin):
 
     @property
     def model_name(self) -> str:
-        return self._model_path.rsplit("/", 1)[-1] if "/" in self._model_path else self._model_path
+        return (
+            self._model_path.rsplit("/", 1)[-1]
+            if "/" in self._model_path
+            else self._model_path
+        )
 
     @property
     def is_loaded(self) -> bool:
@@ -349,7 +360,9 @@ class TTSEngine(ActiveRequestMixin):
         try:
             self._model = load_model(self._model_path, strict=True)
         except ValueError:
-            logger.warning(f"Strict loading failed for {self._model_path}, retrying with strict=False")
+            logger.warning(
+                f"Strict loading failed for {self._model_path}, retrying with strict=False"
+            )
             self._model = load_model(self._model_path, strict=False)
 
         logger.info(f"TTS engine loaded: {self._model_path}")
@@ -376,6 +389,7 @@ class TTSEngine(ActiveRequestMixin):
         gc.collect()
         loop = asyncio.get_running_loop()
         from .mlx_executor import sync_and_clear_cache
+
         await loop.run_in_executor(self._executor, sync_and_clear_cache)
 
     @tracks_active
@@ -444,6 +458,7 @@ class TTSEngine(ActiveRequestMixin):
         def _synthesize_sync() -> bytes:
             if _seed is not None:
                 import mlx.core as _mx
+
                 _mx.random.seed(int(_seed))
             results = model.generate(**gen_kwargs)
             sample_rate = getattr(model, "sample_rate", DEFAULT_SAMPLE_RATE)
@@ -532,6 +547,7 @@ class TTSEngine(ActiveRequestMixin):
             gen_kwargs["ref_audio"] = resolved
 
         import queue as _queue_mod
+
         _thread_queue: _queue_mod.Queue[dict | None] = _queue_mod.Queue(maxsize=64)
         sample_rate = getattr(model, "sample_rate", DEFAULT_SAMPLE_RATE)
         # Thread-safe cancel flag — asyncio.Event.is_set() reads a bool but
@@ -546,10 +562,12 @@ class TTSEngine(ActiveRequestMixin):
             try:
                 if _seed is not None:
                     import mlx.core as _mx
+
                     _mx.random.seed(int(_seed))
                 gen_fn = (
                     model.stream_generate
-                    if hasattr(model, 'stream_generate') and callable(model.stream_generate)
+                    if hasattr(model, "stream_generate")
+                    and callable(model.stream_generate)
                     else model.generate
                 )
                 _first_chunk = True
@@ -578,31 +596,42 @@ class TTSEngine(ActiveRequestMixin):
                             num_channels=1,
                             streaming=True,
                         )
-                        _thread_queue.put_nowait({
-                            "audio": wav_header + raw_bytes,
-                            "text": getattr(result, "text", ""),
-                            "is_final": False,
-                        })
+                        _thread_queue.put_nowait(
+                            {
+                                "audio": wav_header + raw_bytes,
+                                "text": getattr(result, "text", ""),
+                                "is_final": False,
+                            }
+                        )
                         _first_chunk = False
                     else:
                         try:
-                            _thread_queue.put({
-                                "audio": raw_bytes,
-                                "text": getattr(result, "text", ""),
-                                "is_final": False,
-                            }, timeout=5.0)
+                            _thread_queue.put(
+                                {
+                                    "audio": raw_bytes,
+                                    "text": getattr(result, "text", ""),
+                                    "is_final": False,
+                                },
+                                timeout=5.0,
+                            )
                         except _queue_mod.Full:
-                            logger.warning("TTS stream queue full after timeout -- consumer likely gone")
+                            logger.warning(
+                                "TTS stream queue full after timeout -- consumer likely gone"
+                            )
                             break
                 # Send is_final sentinel — drain one item if full so the client
                 # always receives the completion marker and doesn't hang.
                 try:
-                    _thread_queue.put_nowait({"audio": b"", "text": "", "is_final": True})
+                    _thread_queue.put_nowait(
+                        {"audio": b"", "text": "", "is_final": True}
+                    )
                 except _queue_mod.Full:
                     with contextlib.suppress(_queue_mod.Empty):
                         _thread_queue.get_nowait()
                     with contextlib.suppress(_queue_mod.Full):
-                        _thread_queue.put_nowait({"audio": b"", "text": "", "is_final": True})
+                        _thread_queue.put_nowait(
+                            {"audio": b"", "text": "", "is_final": True}
+                        )
             except Exception as e:
                 logger.error(f"TTS stream error: {e}", exc_info=True)
                 # Enqueue an ERROR-tagged terminal chunk, NOT a bare None. A bare
@@ -692,8 +721,12 @@ class TTSEngine(ActiveRequestMixin):
             "stream_count": stream_count,
             "total_synth_ms": round(total_synth_ms, 1),
             "total_stream_ms": round(total_stream_ms, 1),
-            "avg_synth_ms": round(total_synth_ms / synth_count, 1) if synth_count > 0 else 0.0,
-            "avg_stream_ms": round(total_stream_ms / stream_count, 1) if stream_count > 0 else 0.0,
+            "avg_synth_ms": round(total_synth_ms / synth_count, 1)
+            if synth_count > 0
+            else 0.0,
+            "avg_stream_ms": round(total_stream_ms / stream_count, 1)
+            if stream_count > 0
+            else 0.0,
         }
 
 
@@ -711,9 +744,11 @@ class ASREngine(ActiveRequestMixin):
         self._model = None
         self._running = False
         from .mlx_executor import get_mlx_executor
+
         self._executor = get_mlx_executor()
         # VAD for voice activity detection
         from .vad import create_vad
+
         self._vad = create_vad()
         # Metrics (protected by _stats_lock for thread safety)
         self._stats_lock = threading.Lock()
@@ -722,7 +757,11 @@ class ASREngine(ActiveRequestMixin):
 
     @property
     def model_name(self) -> str:
-        return self._model_path.rsplit("/", 1)[-1] if "/" in self._model_path else self._model_path
+        return (
+            self._model_path.rsplit("/", 1)[-1]
+            if "/" in self._model_path
+            else self._model_path
+        )
 
     @property
     def is_loaded(self) -> bool:
@@ -761,6 +800,7 @@ class ASREngine(ActiveRequestMixin):
         gc.collect()
         loop = asyncio.get_running_loop()
         from .mlx_executor import sync_and_clear_cache
+
         await loop.run_in_executor(self._executor, sync_and_clear_cache)
 
     @tracks_active
@@ -788,6 +828,7 @@ class ASREngine(ActiveRequestMixin):
         if self._vad is not None:
             try:
                 import numpy as np
+
                 with open(audio_path, "rb") as f:
                     _audio_raw = f.read()
                 # Try to detect WAV header and extract raw PCM + sample rate.
@@ -795,7 +836,7 @@ class ASREngine(ActiveRequestMixin):
                 # the fmt and data chunks — walk chunks instead of assuming
                 # fixed offsets.
                 file_sr: int | None = None
-                num_channels = 1   # parse from fmt, don't assume mono/16-bit
+                num_channels = 1  # parse from fmt, don't assume mono/16-bit
                 bits_per_sample = 16
                 is_wav = _audio_raw[:4] == b"RIFF" and _audio_raw[8:12] == b"WAVE"
                 pcm = None
@@ -803,21 +844,33 @@ class ASREngine(ActiveRequestMixin):
                     _off = 12  # skip RIFF<size>WAVE
                     data_size = 0
                     while _off + 8 <= len(_audio_raw):
-                        chunk_id = _audio_raw[_off:_off+4]
-                        chunk_sz = int.from_bytes(_audio_raw[_off+4:_off+8], "little")
+                        chunk_id = _audio_raw[_off : _off + 4]
+                        chunk_sz = int.from_bytes(
+                            _audio_raw[_off + 4 : _off + 8], "little"
+                        )
                         if chunk_id == b"fmt " and chunk_sz >= 16:
                             # PCM fmt: AudioFormat(2) NumChannels(2) SampleRate(4) ByteRate(4) BlockAlign(2) BitsPerSample(2)
-                            num_channels = struct.unpack_from("<H", _audio_raw, _off + 8 + 2)[0] or 1
-                            file_sr = struct.unpack_from("<I", _audio_raw, _off + 8 + 4)[0]
-                            bits_per_sample = struct.unpack_from("<H", _audio_raw, _off + 8 + 14)[0] or 16
+                            num_channels = (
+                                struct.unpack_from("<H", _audio_raw, _off + 8 + 2)[0]
+                                or 1
+                            )
+                            file_sr = struct.unpack_from(
+                                "<I", _audio_raw, _off + 8 + 4
+                            )[0]
+                            bits_per_sample = (
+                                struct.unpack_from("<H", _audio_raw, _off + 8 + 14)[0]
+                                or 16
+                            )
                         elif chunk_id == b"data":
                             data_size = chunk_sz
-                            pcm = _audio_raw[_off+8:_off+8+chunk_sz]
+                            pcm = _audio_raw[_off + 8 : _off + 8 + chunk_sz]
                             if file_sr and file_sr > 0:
                                 # bytes-per-frame = bytes/sample × channels (was
                                 # hardcoded /2 mono → stereo/24-bit were off by an
                                 # integer factor).
-                                _bpf = max(1, (bits_per_sample // 8) * max(1, num_channels))
+                                _bpf = max(
+                                    1, (bits_per_sample // 8) * max(1, num_channels)
+                                )
                                 _audio_duration_s = data_size / _bpf / file_sr
                             break
                         _off += 8 + chunk_sz + (chunk_sz & 1)  # word-align
@@ -831,7 +884,10 @@ class ASREngine(ActiveRequestMixin):
                 # hardcoded int16 mono → stereo/24-/32-bit decoded to garbage).
                 if pcm is not None and len(pcm) > 0:
                     if bits_per_sample == 32:
-                        samples = np.frombuffer(pcm, dtype=np.int32).astype(np.float32) / 2147483648.0
+                        samples = (
+                            np.frombuffer(pcm, dtype=np.int32).astype(np.float32)
+                            / 2147483648.0
+                        )
                     elif bits_per_sample == 24:
                         # 24-bit was decoded as misaligned int16 → garbage waveform
                         # fed to the VAD gate, which could false-negative and SILENTLY return
@@ -839,16 +895,28 @@ class ASREngine(ActiveRequestMixin):
                         # sign-extended int32, scaled by 2^23.
                         _n24 = len(pcm) // 3
                         if _n24 > 0:
-                            _b = np.frombuffer(pcm[: _n24 * 3], dtype=np.uint8).reshape(_n24, 3).astype(np.int32)
+                            _b = (
+                                np.frombuffer(pcm[: _n24 * 3], dtype=np.uint8)
+                                .reshape(_n24, 3)
+                                .astype(np.int32)
+                            )
                             _i24 = _b[:, 0] | (_b[:, 1] << 8) | (_b[:, 2] << 16)
                             _i24 = np.where(_i24 >= (1 << 23), _i24 - (1 << 24), _i24)
                             samples = _i24.astype(np.float32) / 8388608.0
                         else:
                             samples = np.array([], dtype=np.float32)
                     elif bits_per_sample == 8:
-                        samples = (np.frombuffer(pcm, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+                        samples = (
+                            np.frombuffer(pcm, dtype=np.uint8).astype(np.float32)
+                            - 128.0
+                        ) / 128.0
                     else:  # 16-bit
-                        samples = np.frombuffer(pcm[: len(pcm) // 2 * 2], dtype=np.int16).astype(np.float32) / 32768.0
+                        samples = (
+                            np.frombuffer(
+                                pcm[: len(pcm) // 2 * 2], dtype=np.int16
+                            ).astype(np.float32)
+                            / 32768.0
+                        )
                     if num_channels > 1 and len(samples) >= num_channels:
                         _n = len(samples) // num_channels * num_channels
                         samples = samples[:_n].reshape(-1, num_channels).mean(axis=1)
@@ -858,9 +926,14 @@ class ASREngine(ActiveRequestMixin):
                 # (VAD models typically expect 16kHz)
                 vad_sr = self._vad.sample_rate
                 effective_file_sr = file_sr if file_sr is not None else 16000
-                if effective_file_sr != vad_sr and effective_file_sr > 0 and len(samples) > 0:
+                if (
+                    effective_file_sr != vad_sr
+                    and effective_file_sr > 0
+                    and len(samples) > 0
+                ):
                     try:
                         import scipy.signal
+
                         num_samples = int(len(samples) * vad_sr / effective_file_sr)
                         samples = scipy.signal.resample(samples, num_samples)
                     except ImportError:
@@ -875,18 +948,26 @@ class ASREngine(ActiveRequestMixin):
                     # left-over speaking latch could flip a silent file to "speech". Each
                     # upload is an independent stream, so state must not carry over.
                     self._vad.reset()
-                    frame_samples = int(self._vad.sample_rate * self._vad.frame_duration_ms / 1000)
+                    frame_samples = int(
+                        self._vad.sample_rate * self._vad.frame_duration_ms / 1000
+                    )
                     speech_detected = False
                     offset = 0
                     while offset + frame_samples <= len(samples):
-                        frame_data = samples[offset:offset + frame_samples]
+                        frame_data = samples[offset : offset + frame_samples]
                         # EnergyVAD.process_frame expects raw int16 bytes.
                         # *32767 not *32768 — a full-scale +1.0 sample * 32768 = 32768
                         # overflows int16 and wraps to -32768 (every other conversion in
                         # this file uses 32767). Benign for the energy VAD but a latent
                         # footgun; match the rest.
-                        frame_bytes = (np.clip(frame_data, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
-                        vad_result = self._vad.process_frame(frame_bytes, sample_rate=self._vad.sample_rate)
+                        frame_bytes = (
+                            (np.clip(frame_data, -1.0, 1.0) * 32767.0)
+                            .astype(np.int16)
+                            .tobytes()
+                        )
+                        vad_result = self._vad.process_frame(
+                            frame_bytes, sample_rate=self._vad.sample_rate
+                        )
                         if vad_result.is_speech:
                             speech_detected = True
                             break
@@ -901,9 +982,16 @@ class ASREngine(ActiveRequestMixin):
                         offset += frame_samples
                     if not speech_detected:
                         logger.debug("VAD: no speech detected, skipping transcription")
-                        return {"text": "", "language": language or "und", "segments": [], "duration": 0.0}
+                        return {
+                            "text": "",
+                            "language": language or "und",
+                            "segments": [],
+                            "duration": 0.0,
+                        }
             except Exception:
-                logger.debug("VAD pre-check failed, continuing with transcription", exc_info=True)
+                logger.debug(
+                    "VAD pre-check failed, continuing with transcription", exc_info=True
+                )
 
         # LID: the spectral-heuristic LID in lid.py is unreliable and was
         # feeding the raw WAV file (including header bytes) to the FFT,
@@ -955,17 +1043,21 @@ class ASREngine(ActiveRequestMixin):
                     raw_segs = []
                     for _s in result.sentences:
                         _toks = getattr(_s, "tokens", None) or []
-                        raw_segs.append({
-                            "text": getattr(_s, "text", ""),
-                            "start": getattr(_s, "start", None),
-                            "end": getattr(_s, "end", None),
-                            "words": [
-                                {"word": getattr(_t, "text", ""),
-                                 "start": getattr(_t, "start", None),
-                                 "end": getattr(_t, "end", None)}
-                                for _t in _toks
-                            ],
-                        })
+                        raw_segs.append(
+                            {
+                                "text": getattr(_s, "text", ""),
+                                "start": getattr(_s, "start", None),
+                                "end": getattr(_s, "end", None),
+                                "words": [
+                                    {
+                                        "word": getattr(_t, "text", ""),
+                                        "start": getattr(_t, "start", None),
+                                        "end": getattr(_t, "end", None),
+                                    }
+                                    for _t in _toks
+                                ],
+                            }
+                        )
                 segments = []
                 if raw_segs:
                     for s in raw_segs:
@@ -1003,8 +1095,11 @@ class ASREngine(ActiveRequestMixin):
                 if duration is None and segments:
                     # Derive from the last segment's end timestamp if the model emitted one.
                     try:
-                        _ends = [float(s.get("end", s.get("end_time", 0.0)))
-                                 for s in segments if isinstance(s, dict)]
+                        _ends = [
+                            float(s.get("end", s.get("end_time", 0.0)))
+                            for s in segments
+                            if isinstance(s, dict)
+                        ]
                         _max_end = max(_ends) if _ends else 0.0
                         if _max_end > 0:
                             duration = _max_end
@@ -1044,7 +1139,7 @@ class ASREngine(ActiveRequestMixin):
                     words = [w for w in (_norm_word(x) for x in _raw_words) if w]
                 else:
                     for seg in segments:
-                        for x in (seg.get("words") or seg.get("word") or []):
+                        for x in seg.get("words") or seg.get("word") or []:
                             nw = _norm_word(x)
                             if nw:
                                 words.append(nw)
@@ -1059,7 +1154,12 @@ class ASREngine(ActiveRequestMixin):
                     out["words"] = words
                 return out
 
-            return {"text": str(result), "language": language or "und", "segments": [], "duration": 0.0}
+            return {
+                "text": str(result),
+                "language": language or "und",
+                "segments": [],
+                "duration": 0.0,
+            }
 
         t0 = time.monotonic()
         loop = asyncio.get_running_loop()
@@ -1075,12 +1175,17 @@ class ASREngine(ActiveRequestMixin):
         # caller passed an explicit non-Chinese language hint.
         try:
             text = result.get("text", "") if isinstance(result, dict) else ""
-            current_lang = (result.get("language") or "") if isinstance(result, dict) else ""
-            caller_hint_is_zh = (language or "").lower().startswith("zh") or not language
+            current_lang = (
+                (result.get("language") or "") if isinstance(result, dict) else ""
+            )
+            caller_hint_is_zh = (language or "").lower().startswith(
+                "zh"
+            ) or not language
             if text and caller_hint_is_zh and not current_lang.lower().startswith("zh"):
                 # Count CJK Unified Ideographs + extensions (excl. punctuation/digits)
                 cjk_chars = sum(
-                    1 for c in text
+                    1
+                    for c in text
                     if "一" <= c <= "鿿"  # CJK Unified Ideographs
                     or "㐀" <= c <= "䶿"  # Extension A
                     or "豈" <= c <= "﫿"  # Compatibility Ideographs
@@ -1092,7 +1197,11 @@ class ASREngine(ActiveRequestMixin):
                     segs = result.get("segments")
                     if isinstance(segs, list):
                         for seg in segs:
-                            if isinstance(seg, dict) and seg.get("language") and not str(seg["language"]).lower().startswith("zh"):
+                            if (
+                                isinstance(seg, dict)
+                                and seg.get("language")
+                                and not str(seg["language"]).lower().startswith("zh")
+                            ):
                                 seg["language"] = "zh"
         except Exception:
             # Never let language post-processing break a successful transcription
@@ -1110,7 +1219,9 @@ class ASREngine(ActiveRequestMixin):
             "running": self._running,
             "transcribe_count": transcribe_count,
             "total_transcribe_ms": round(total_transcribe_ms, 1),
-            "avg_transcribe_ms": round(total_transcribe_ms / transcribe_count, 1) if transcribe_count > 0 else 0.0,
+            "avg_transcribe_ms": round(total_transcribe_ms / transcribe_count, 1)
+            if transcribe_count > 0
+            else 0.0,
         }
 
 
@@ -1136,6 +1247,7 @@ def _resolve_gateway_engine_module():
     preferring one that actually has registered entries.
     """
     import sys
+
     fallback = None
     for name in ("python.yunshu_gateway.engine", "yunshu_gateway.engine"):
         mod = sys.modules.get(name)
@@ -1144,12 +1256,15 @@ def _resolve_gateway_engine_module():
         mgr = getattr(mod, "_model_manager", None)
         if mgr is not None and getattr(mgr, "_entries", None):
             return mod
-        if fallback is None and (mgr is not None or getattr(mod, "_engine", None) is not None):
+        if fallback is None and (
+            mgr is not None or getattr(mod, "_engine", None) is not None
+        ):
             fallback = mod
     if fallback is not None:
         return fallback
     try:
         import importlib
+
         return importlib.import_module("yunshu_gateway.engine")
     except Exception:
         return None
@@ -1272,8 +1387,11 @@ async def transcribe(audio_path: str, language: str | None = None) -> dict[str, 
             # Actual audio duration: WAV header → decode (mp3/flac/ogg) → wall-clock
             # last resort (total_time is inference latency, not audio length, so it
             # was wrong for every non-WAV upload here too).
-            duration: float = (_wav_audio_duration_s(audio_path)
-                               or _decoded_audio_duration_s(audio_path) or 0.0)
+            duration: float = (
+                _wav_audio_duration_s(audio_path)
+                or _decoded_audio_duration_s(audio_path)
+                or 0.0
+            )
             if duration == 0.0:
                 duration = getattr(result, "total_time", 0.0)
             return {
@@ -1285,6 +1403,7 @@ async def transcribe(audio_path: str, language: str | None = None) -> dict[str, 
 
         loop = asyncio.get_running_loop()
         from .mlx_executor import get_mlx_executor
+
         return await loop.run_in_executor(get_mlx_executor(), _sync_transcribe)
     except ImportError:
         logger.debug("mlx-audio not available for transcription fallback")
@@ -1371,6 +1490,7 @@ async def synthesize(
 
         loop = asyncio.get_running_loop()
         from .mlx_executor import get_mlx_executor
+
         return await loop.run_in_executor(get_mlx_executor(), _sync_synth)
     except ImportError:
         logger.debug("mlx-audio not available for synthesis fallback")

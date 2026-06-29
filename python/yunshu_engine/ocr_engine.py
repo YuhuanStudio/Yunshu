@@ -66,6 +66,7 @@ class OCREngine(ActiveRequestMixin):
             with contextlib.suppress(Exception):
                 import mlx_vlm.models.glm_ocr.processing  # noqa: F401
             from mlx_vlm import load as vlm_load
+
             self._model, self._processor = vlm_load(self._model_path)
             self._tokenizer = (
                 self._processor.tokenizer
@@ -109,10 +110,13 @@ class OCREngine(ActiveRequestMixin):
         if executor is not None:
             try:
                 from .mlx_executor import sync_and_clear_cache
+
                 loop = asyncio.get_running_loop()
                 await loop.run_in_executor(executor, sync_and_clear_cache)
             except Exception:
-                logger.debug("OCR sync_and_clear_cache during stop failed", exc_info=True)
+                logger.debug(
+                    "OCR sync_and_clear_cache during stop failed", exc_info=True
+                )
 
     def _get_vision_config(self) -> dict[str, Any]:
         """Return the model's vision_config dict (or empty when missing)."""
@@ -129,7 +133,8 @@ class OCREngine(ActiveRequestMixin):
         if hasattr(vision_cfg, "__dict__") and not isinstance(vision_cfg, dict):
             try:
                 return {
-                    k: v for k, v in vision_cfg.__dict__.items()
+                    k: v
+                    for k, v in vision_cfg.__dict__.items()
                     if not k.startswith("_")
                 }
             except Exception:
@@ -148,6 +153,7 @@ class OCREngine(ActiveRequestMixin):
         """
         try:
             from PIL import Image
+
             with Image.open(image_path) as im:
                 width, height = im.size
         except Exception:
@@ -167,7 +173,9 @@ class OCREngine(ActiveRequestMixin):
         tokens = (h_patches * w_patches) // (merge_size * merge_size)
         return max(1, tokens)
 
-    def _extract_sync(self, image_path: str, task: str, language: str | None = None) -> dict[str, Any]:
+    def _extract_sync(
+        self, image_path: str, task: str, language: str | None = None
+    ) -> dict[str, Any]:
         """Synchronous OCR extraction — runs on the MLX executor thread.
 
         Uses mlx_vlm's CANONICAL generate() + prompt_utils.apply_chat_template,
@@ -193,8 +201,12 @@ class OCREngine(ActiveRequestMixin):
             self._processor, self._model.config, messages, num_images=1
         )
         result = _vlm_generate(
-            self._model, self._processor, formatted, [image_path],
-            max_tokens=4096, verbose=False,
+            self._model,
+            self._processor,
+            formatted,
+            [image_path],
+            max_tokens=4096,
+            verbose=False,
         )
         text = result.text if hasattr(result, "text") else str(result)
         prompt_tokens = int(getattr(result, "prompt_tokens", 0) or 0)

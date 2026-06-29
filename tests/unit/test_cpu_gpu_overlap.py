@@ -1,4 +1,5 @@
 """Tests for C18: CPU/GPU Overlap scheduling."""
+
 import pytest
 
 from yunshu_engine.cpu_gpu_overlap import (
@@ -61,7 +62,12 @@ class TestOverlapMetrics:
 
     def test_record_step(self):
         m = OverlapMetrics()
-        m.record_step(gpu_time_ms=10.0, cpu_overlap_time_ms=5.0, cpu_only_time_ms=2.0, had_overlap=True)
+        m.record_step(
+            gpu_time_ms=10.0,
+            cpu_overlap_time_ms=5.0,
+            cpu_only_time_ms=2.0,
+            had_overlap=True,
+        )
         assert m.total_steps == 1
         assert m.steps_with_overlap == 1
         assert m.overlap_rate == 1.0
@@ -224,8 +230,10 @@ class TestOverlapScheduler:
 
         class FakeOutput:
             outputs = []
+
             def _detokenizer():
                 return None
+
             _last_token_id = 42
 
         work = scheduler._extract_cpu_work(FakeOutput())
@@ -239,11 +247,15 @@ class TestOverlapScheduler:
                 tokens.append(tid)
 
         scheduler = OverlapScheduler(OverlapConfig(enabled=True))
-        scheduler._run_cpu_postprocess([{
-            "kind": "detokenize",
-            "detokenizer": FakeDetokenizer(),
-            "token_id": 99,
-        }])
+        scheduler._run_cpu_postprocess(
+            [
+                {
+                    "kind": "detokenize",
+                    "detokenizer": FakeDetokenizer(),
+                    "token_id": 99,
+                }
+            ]
+        )
         assert tokens == [99]
 
     def test_run_cpu_postprocess_grammar(self):
@@ -254,11 +266,15 @@ class TestOverlapScheduler:
                 checks.append(text)
 
         scheduler = OverlapScheduler(OverlapConfig(enabled=True))
-        scheduler._run_cpu_postprocess([{
-            "kind": "grammar",
-            "checker": FakeChecker(),
-            "text": "hello",
-        }])
+        scheduler._run_cpu_postprocess(
+            [
+                {
+                    "kind": "grammar",
+                    "checker": FakeChecker(),
+                    "text": "hello",
+                }
+            ]
+        )
         assert checks == ["hello"]
 
     def test_collect_arrays(self):
@@ -276,7 +292,9 @@ class TestOverlapScheduler:
 
     def test_collect_arrays_depth_limit(self):
         """Deep nesting should be truncated."""
-        result = OverlapScheduler._collect_arrays({"a": {"b": {"c": {"d": {"e": "deep"}}}}}, depth=5)
+        result = OverlapScheduler._collect_arrays(
+            {"a": {"b": {"c": {"d": {"e": "deep"}}}}}, depth=5
+        )
         assert result == []
 
     def test_synchronize_gpu(self):
@@ -313,6 +331,7 @@ class TestOverlapIntegration:
 
     def test_engine_core_config_has_overlap(self):
         from yunshu_engine.engine_core import EngineCoreConfig
+
         cfg = EngineCoreConfig()
         assert hasattr(cfg, "enable_cpu_gpu_overlap")
         assert not cfg.enable_cpu_gpu_overlap

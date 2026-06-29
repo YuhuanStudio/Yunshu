@@ -3,6 +3,7 @@ event loops. send_blocks_sync runs every transfer under a fresh throwaway asynci
 loop, so a writer cached by a prior call is bound to a dead loop — reusing it raised
 'got Future attached to a different loop' and every disagg transfer after the first
 silently failed (decode fell back to re-prefill). Reuse only within the same loop."""
+
 from __future__ import annotations
 
 import asyncio
@@ -29,6 +30,7 @@ def _make_open_counter(counter):
     async def _open(host, port):
         counter["n"] += 1
         return (object(), _FakeWriter())  # (reader, writer)
+
     return _open
 
 

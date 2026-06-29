@@ -45,7 +45,9 @@ class TestTeaCacheConfig:
 
         config = TeaCacheConfig(model_type="FluxTransformer2DModel")
         assert config.coefficients is not None
-        assert config.coefficients != TeaCacheConfig().coefficients  # Different from default
+        assert (
+            config.coefficients != TeaCacheConfig().coefficients
+        )  # Different from default
 
 
 class TestTeaCacheState:
@@ -137,7 +139,7 @@ class TestTeaCacheHook:
             def __call__(self, x, timestep, sigmas, cap_feats):
                 return mx.zeros((1, 4))
 
-        hook = self._make_hook(thresh=1e9)   # huge threshold → always a hit after step 0
+        hook = self._make_hook(thresh=1e9)  # huge threshold → always a hit after step 0
         tf = _FakeTransformer()
         x = mx.zeros((1, 4))
         ts = mx.ones((1,))
@@ -187,8 +189,9 @@ class TestTeaCachePolynomial:
         # Small input distance should produce small rescaled distance
         result_small = abs(float(poly(0.01)))
         result_large = abs(float(poly(0.5)))
-        assert result_small < result_large or result_small > 0, \
+        assert result_small < result_large or result_small > 0, (
             "Polynomial should differentiate between small and large inputs"
+        )
 
 
 class TestTeaCacheIntegration:

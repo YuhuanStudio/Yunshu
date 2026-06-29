@@ -48,6 +48,7 @@ def _canonical_block_hash(
     Now both use the same hash chain.
     """
     from yunshu_kv.hash import compute_block_hash
+
     return compute_block_hash(parent_hash, token_ids)
 
 
@@ -61,6 +62,7 @@ def get_prefix_length(prompt: mx.array, cached_prompt: mx.array) -> int:
     faster and sync-free. argmin of the equality mask gives the first mismatch index =
     prefix length (or n when fully equal)."""
     import numpy as np
+
     a = np.asarray(prompt)
     b = np.asarray(cached_prompt)
     n = min(a.shape[0], b.shape[0])
@@ -108,6 +110,7 @@ def _token_hash(tokens: mx.array) -> str:
 def np_array(arr: mx.array):
     """Convert mx.array to numpy without extra imports at module level."""
     import numpy as np
+
     return np.array(arr)
 
 
@@ -169,7 +172,9 @@ class EvictionStrategy:
 class LRUStrategy(EvictionStrategy):
     """Evict the least-recently-used entry (default)."""
 
-    def select_victim(self, entries, last_used, access_counter, priorities, exclude=None):
+    def select_victim(
+        self, entries, last_used, access_counter, priorities, exclude=None
+    ):
         # Among same-priority entries, evict least recently used
         idxs = _evictable_indices(len(entries), exclude)
         min_priority = min((priorities[i] for i in idxs), default=0)
@@ -185,7 +190,9 @@ class MRUStrategy(EvictionStrategy):
     Keeps older entries that might be reused in multi-turn conversations.
     """
 
-    def select_victim(self, entries, last_used, access_counter, priorities, exclude=None):
+    def select_victim(
+        self, entries, last_used, access_counter, priorities, exclude=None
+    ):
         idxs = _evictable_indices(len(entries), exclude)
         min_priority = min((priorities[i] for i in idxs), default=0)
         candidates = [i for i in idxs if priorities[i] == min_priority] or idxs
@@ -200,7 +207,9 @@ class FILOStrategy(EvictionStrategy):
     be reused (e.g., one-shot generations).
     """
 
-    def select_victim(self, entries, last_used, access_counter, priorities, exclude=None):
+    def select_victim(
+        self, entries, last_used, access_counter, priorities, exclude=None
+    ):
         idxs = _evictable_indices(len(entries), exclude)
         min_priority = min((priorities[i] for i in idxs), default=0)
         candidates = [i for i in idxs if priorities[i] == min_priority] or idxs
@@ -226,18 +235,14 @@ class SLRUStrategy(EvictionStrategy):
     def update_access_counts(self, access_counts: list[int]) -> None:
         self._access_counts = access_counts
 
-    def select_victim(self, entries, last_used, access_counter, priorities, exclude=None):
+    def select_victim(
+        self, entries, last_used, access_counter, priorities, exclude=None
+    ):
         idxs = _evictable_indices(len(entries), exclude)
         protected_cap = max(1, int(len(entries) * self._protected_ratio))
         # Separate into probationary and protected (over non-excluded entries)
-        probationary = [
-            i for i in idxs
-            if self._access_counts[i] < self._promote_after
-        ]
-        protected = [
-            i for i in idxs
-            if self._access_counts[i] >= self._promote_after
-        ]
+        probationary = [i for i in idxs if self._access_counts[i] < self._promote_after]
+        protected = [i for i in idxs if self._access_counts[i] >= self._promote_after]
 
         # Evict from probationary first (LRU within segment)
         if probationary and len(protected) >= protected_cap:
@@ -253,7 +258,9 @@ class PriorityStrategy(EvictionStrategy):
     Priority is assigned per-entry via set_priority().
     """
 
-    def select_victim(self, entries, last_used, access_counter, priorities, exclude=None):
+    def select_victim(
+        self, entries, last_used, access_counter, priorities, exclude=None
+    ):
         # Evict lowest priority first, then LRU within that tier
         idxs = _evictable_indices(len(entries), exclude)
         min_priority = min((priorities[i] for i in idxs), default=0)
@@ -340,8 +347,11 @@ class KVPrefixCache:
         # many tokens. Default 0 = always restore (preserves prior behaviour);
         # operators on fast-prefill models can raise it (e.g. 512).
         import os as _os_kvp
+
         try:
-            self._ssd_restore_min_tokens = int(_os_kvp.environ.get("YUNSHU_SSD_RESTORE_MIN_TOKENS", "0"))
+            self._ssd_restore_min_tokens = int(
+                _os_kvp.environ.get("YUNSHU_SSD_RESTORE_MIN_TOKENS", "0")
+            )
         except (TypeError, ValueError):
             self._ssd_restore_min_tokens = 0
         # SSD prefill-speed auto-gate: for fast-prefill models, reading
@@ -353,7 +363,9 @@ class KVPrefixCache:
         # _prefill_tps is fed by the engine via note_prefill_tps(); None = unknown
         # (no gate, preserves prior behaviour).
         try:
-            self._ssd_prefill_tps_ceil = float(_os_kvp.environ.get("YUNSHU_SSD_PREFILL_TPS_CEIL", "4000"))
+            self._ssd_prefill_tps_ceil = float(
+                _os_kvp.environ.get("YUNSHU_SSD_PREFILL_TPS_CEIL", "4000")
+            )
         except (TypeError, ValueError):
             self._ssd_prefill_tps_ceil = 4000.0
         self._prefill_tps: float | None = None
@@ -385,9 +397,13 @@ class KVPrefixCache:
         if self._hot_limit >= self._max_entries:
             return
         while True:
-            cand = [i for i in range(len(self._warm_flags))
-                    if not self._warm_flags[i] and i < len(self._last_used)
-                    and i < len(self._caches)]
+            cand = [
+                i
+                for i in range(len(self._warm_flags))
+                if not self._warm_flags[i]
+                and i < len(self._last_used)
+                and i < len(self._caches)
+            ]
             if len(cand) <= self._hot_limit:
                 break
             victim = min(cand, key=lambda i: self._last_used[i])
@@ -431,7 +447,9 @@ class KVPrefixCache:
         trim_amount = max(0, cache_len - prompt_len)
         logger.info(
             "KV prefix cache add: prompt_len=%d cache_len=%d trim=%d",
-            prompt_len, cache_len, trim_amount,
+            prompt_len,
+            cache_len,
+            trim_amount,
         )
 
         with self._lock:
@@ -446,8 +464,9 @@ class KVPrefixCache:
                 old_idx = self._hash_index.pop(h)
                 # Consult block evict checker before removing — same path as
                 # normal eviction, so shared-block safety checks aren't bypassed.
-                if (self._block_evict_checker is not None
-                        and old_idx < len(self._block_hashes)):
+                if self._block_evict_checker is not None and old_idx < len(
+                    self._block_hashes
+                ):
                     for bh in self._block_hashes[old_idx]:
                         if not self._block_evict_checker(bh):
                             logger.debug(
@@ -549,8 +568,12 @@ class KVPrefixCache:
                 # matched-1 without actually trimming would itself be off-by-one. (Real
                 # mlx-lm caches reaching here all support trim; sliding-window caches are
                 # bypassed upstream.)
-                if (exact_refeed_trim and _remaining == 0 and _matched > 0
-                        and all(hasattr(_c, "trim") for _c in _cached)):
+                if (
+                    exact_refeed_trim
+                    and _remaining == 0
+                    and _matched > 0
+                    and all(hasattr(_c, "trim") for _c in _cached)
+                ):
                     try:
                         for _c in _cached:
                             _c.trim(1)
@@ -616,10 +639,14 @@ class KVPrefixCache:
                         if self._hybrid_ssd.has(key):
                             cache_list, tok = self._hybrid_ssd.load(key)
                             if cache_list is not None and tok >= self._min_prefix:
-                                logger.info("hybrid SSD snapshot hit: %d/%d tokens", tok, n)
+                                logger.info(
+                                    "hybrid SSD snapshot hit: %d/%d tokens", tok, n
+                                )
                                 return cache_list, n - tok, tok
                     except Exception:
-                        logger.debug("hybrid SSD probe failed at c=%d", c, exc_info=True)
+                        logger.debug(
+                            "hybrid SSD probe failed at c=%d", c, exc_info=True
+                        )
             return None, len(prompt_tokens), 0
         # Decline a FULL-EXACT match (the whole query is cached, remaining
         # would be 0). The no_trim path is for hybrid/recurrent caches that CANNOT be
@@ -638,7 +665,9 @@ class KVPrefixCache:
         if cached_len != best_length:
             logger.debug(
                 "no_trim: entry %d cache_len=%d != matched=%d — skipping (would trim)",
-                best_index, cached_len, best_length,
+                best_index,
+                cached_len,
+                best_length,
             )
             return None, len(prompt_tokens), 0
         try:
@@ -647,8 +676,9 @@ class KVPrefixCache:
             logger.warning("no_trim snapshot failed — full prefill", exc_info=True)
             return None, len(prompt_tokens), 0
         self._touch(best_index)
-        logger.info("KV prefix cache no_trim hit: %d/%d tokens",
-                    best_length, len(prompt_tokens))
+        logger.info(
+            "KV prefix cache no_trim hit: %d/%d tokens", best_length, len(prompt_tokens)
+        )
         return result, len(prompt_tokens) - best_length, best_length
 
     def _get_unlocked(
@@ -708,7 +738,8 @@ class KVPrefixCache:
                         logger.warning(
                             "KV prefix cache snapshot failed during exact match "
                             "(%d tokens) — falling back to full prefill",
-                            matched, exc_info=True,
+                            matched,
+                            exc_info=True,
                         )
                         return None, len(prompt_tokens), 0
                     self._touch(idx)
@@ -732,16 +763,16 @@ class KVPrefixCache:
             # system-prompt hit. The snapshot trims to ANY length, so block
             # alignment was never required. Use the exact prefix, capped by what
             # the cache actually holds and the query length.
-            actual_prefix = get_prefix_length(
-                prompt_tokens, self._prompts[best_index]
-            )
+            actual_prefix = get_prefix_length(prompt_tokens, self._prompts[best_index])
             best_length = min(actual_prefix, cached_len, len(prompt_tokens))
 
             if best_length >= self._min_prefix:
                 # Hash collision guard: if the "prefix" covers the entire
                 # cached prompt but the query diverges after that, this is a
                 # collision not a prefix match — skip it.
-                if best_length == len(self._prompts[best_index]) and best_length < len(prompt_tokens):
+                if best_length == len(self._prompts[best_index]) and best_length < len(
+                    prompt_tokens
+                ):
                     # Verify the tokens actually match at the boundary. NOTE: a raw
                     # `mx.array != mx.array` inside an `if` raises "Only length-1
                     # arrays can be converted to Python scalars" for best_length>1 —
@@ -754,10 +785,13 @@ class KVPrefixCache:
                     # get() path (consistent with get_prefix_length). Tiny int
                     # arrays; the sync isn't worth stalling the pipeline for.
                     import numpy as _np
-                    if not bool(_np.array_equal(
-                        _np.asarray(prompt_tokens[:best_length]),
-                        _np.asarray(self._prompts[best_index][:best_length]),
-                    )):
+
+                    if not bool(
+                        _np.array_equal(
+                            _np.asarray(prompt_tokens[:best_length]),
+                            _np.asarray(self._prompts[best_index][:best_length]),
+                        )
+                    ):
                         best_length = 0  # collision — invalidate
 
             if best_length >= self._min_prefix:
@@ -769,7 +803,9 @@ class KVPrefixCache:
                     logger.warning(
                         "KV prefix cache snapshot failed during hash-chain match "
                         "(%d tokens, trim=%d) — falling back to full prefill",
-                        best_length, tokens_to_trim, exc_info=True,
+                        best_length,
+                        tokens_to_trim,
+                        exc_info=True,
                     )
                     return None, len(prompt_tokens), 0
                 self._touch(best_index)
@@ -798,18 +834,24 @@ class KVPrefixCache:
             # SSD-resident prefix blocks into a usable contiguous cache.
             # Net-negative guard: skip the disk read when even the best-case
             # restore (all query blocks) is too small to beat a re-prefill.
-            _ssd_skip = (self._ssd_restore_min_tokens > 0
-                         and len(query_blocks) * _BLOCK_SIZE < self._ssd_restore_min_tokens)
+            _ssd_skip = (
+                self._ssd_restore_min_tokens > 0
+                and len(query_blocks) * _BLOCK_SIZE < self._ssd_restore_min_tokens
+            )
             # Prefill-speed auto-gate: for fast-prefill models the disk
             # restore is slower than re-prefilling (GLM-OCR ~6300 t/s → F-SSD 0.93×).
             # Skip when observed prefill throughput exceeds the ceiling.
-            if (not _ssd_skip and self._prefill_tps is not None
-                    and self._prefill_tps > self._ssd_prefill_tps_ceil):
+            if (
+                not _ssd_skip
+                and self._prefill_tps is not None
+                and self._prefill_tps > self._ssd_prefill_tps_ceil
+            ):
                 _ssd_skip = True
                 logger.info(
                     "KV prefix cache SSD restore gated by prefill speed: "
                     "%.0f t/s > ceil %.0f — re-prefill instead",
-                    self._prefill_tps, self._ssd_prefill_tps_ceil,
+                    self._prefill_tps,
+                    self._ssd_prefill_tps_ceil,
                 )
             if self._ssd_cache is not None and query_blocks and not _ssd_skip:
                 try:
@@ -838,7 +880,9 @@ class KVPrefixCache:
             logger.warning(
                 "KV prefix cache snapshot failed during scan match "
                 "(%d tokens, trim=%d) — falling back to full prefill",
-                best_length, tokens_to_trim, exc_info=True,
+                best_length,
+                tokens_to_trim,
+                exc_info=True,
             )
             return None, len(prompt_tokens), 0
         self._touch(best_index)
@@ -850,9 +894,7 @@ class KVPrefixCache:
         )
         return result, remaining, best_length
 
-    def _find_prefix_via_hash_chain(
-        self, query_blocks: list[int]
-    ) -> tuple[int, int]:
+    def _find_prefix_via_hash_chain(self, query_blocks: list[int]) -> tuple[int, int]:
         """Find longest prefix match using hash-chain index.
 
         Optimised to avoid O(n*k) full-chain verification on every block.
@@ -980,6 +1022,7 @@ class KVPrefixCache:
         from types import SimpleNamespace
 
         import mlx.core as mx
+
         bs = _BLOCK_SIZE
         result = []
         for c in cache:
@@ -992,18 +1035,19 @@ class KVPrefixCache:
             c = self._maybe_dequantize(c)
             k = getattr(c, "keys", None)
             v = getattr(c, "values", None)
-            if (k is not None and v is not None
-                    and hasattr(k, "ndim") and k.ndim >= 2):
+            if k is not None and v is not None and hasattr(k, "ndim") and k.ndim >= 2:
                 seq_len = k.shape[-2]  # [.., S, D] → seq is the second-to-last axis
                 start = block_index * bs
                 if start >= seq_len:
                     result.append(SimpleNamespace(keys=None, values=None))
                     continue
                 end = min(start + bs, seq_len)
-                result.append(SimpleNamespace(
-                    keys=mx.array(k[..., start:end, :]),
-                    values=mx.array(v[..., start:end, :]),
-                ))
+                result.append(
+                    SimpleNamespace(
+                        keys=mx.array(k[..., start:end, :]),
+                        values=mx.array(v[..., start:end, :]),
+                    )
+                )
             else:
                 # Quantized/recurrent (tuple) layers — pass through as-is.
                 result.append(c)
@@ -1022,10 +1066,15 @@ class KVPrefixCache:
         """
         k = getattr(c, "keys", None)
         v = getattr(c, "values", None)
-        if (isinstance(k, (tuple, list)) and isinstance(v, (tuple, list))
-                and hasattr(c, "group_size") and hasattr(c, "bits")):
+        if (
+            isinstance(k, (tuple, list))
+            and isinstance(v, (tuple, list))
+            and hasattr(c, "group_size")
+            and hasattr(c, "bits")
+        ):
             try:
                 from mlx_lm.models.cache import KVCache
+
                 dk = mx.dequantize(*k, group_size=c.group_size, bits=c.bits)
                 dv = mx.dequantize(*v, group_size=c.group_size, bits=c.bits)
                 off = int(getattr(c, "offset", dk.shape[-2]))
@@ -1049,9 +1098,14 @@ class KVPrefixCache:
         result = []
         for c in cache:
             c = self._maybe_dequantize(c)
-            if not (hasattr(c, "keys") and c.keys is not None
-                    and hasattr(c, "values") and c.values is not None):
+            if not (
+                hasattr(c, "keys")
+                and c.keys is not None
+                and hasattr(c, "values")
+                and c.values is not None
+            ):
                 from copy import deepcopy
+
                 result.append(deepcopy(c))
                 continue
 
@@ -1071,9 +1125,11 @@ class KVPrefixCache:
                 # cache stores keys/values as a (packed, scales, biases) tuple
                 # with no .ndim — skip the extra slice there (snap.trim already
                 # adjusted the offset; quantized blocks aren't tensor-sliceable).
-                if (isinstance(snap.keys, mx.array)
-                        and snap.keys.ndim >= 3
-                        and new_offset < snap.keys.shape[-2]):
+                if (
+                    isinstance(snap.keys, mx.array)
+                    and snap.keys.ndim >= 3
+                    and new_offset < snap.keys.shape[-2]
+                ):
                     snap.keys = _detached_copy(snap.keys[..., :new_offset, :])
                     snap.values = _detached_copy(snap.values[..., :new_offset, :])
             elif trim > 0 and hasattr(snap, "offset"):
@@ -1091,9 +1147,11 @@ class KVPrefixCache:
                 # branch above. (Latent today — every mlx-lm cache type has
                 # .trim, so this offset-only branch is reached only by an exotic
                 # custom cache — but keep it correct.)
-                if (isinstance(snap.keys, mx.array)
-                        and snap.keys.ndim >= 3
-                        and 0 < new_offset < snap.keys.shape[-2]):
+                if (
+                    isinstance(snap.keys, mx.array)
+                    and snap.keys.ndim >= 3
+                    and 0 < new_offset < snap.keys.shape[-2]
+                ):
                     snap.keys = _detached_copy(snap.keys[..., :new_offset, :])
                     snap.values = _detached_copy(snap.values[..., :new_offset, :])
                 elif new_offset > 0:
@@ -1131,7 +1189,8 @@ class KVPrefixCache:
         if self._pre_evict_callback is not None:
             try:
                 self._pre_evict_callback(
-                    self._prompts[index], self._caches[index],
+                    self._prompts[index],
+                    self._caches[index],
                 )
             except Exception:
                 logger.debug("pre-evict callback failed", exc_info=True)
@@ -1146,8 +1205,11 @@ class KVPrefixCache:
         # also (correctly) skips them → no SSD write at all. The in-RAM no_trim
         # reuse (HOT/WARM) still serves them losslessly (3.5x).
         _ec_for_spill = self._caches[index] if index < len(self._caches) else None
-        if (self._no_trim_mode and self._hybrid_ssd is not None
-                and self._has_recurrent_layer(_ec_for_spill)):
+        if (
+            self._no_trim_mode
+            and self._hybrid_ssd is not None
+            and self._has_recurrent_layer(_ec_for_spill)
+        ):
             try:
                 ep = self._prompts[index] if index < len(self._prompts) else None
                 ec = _ec_for_spill
@@ -1160,24 +1222,41 @@ class KVPrefixCache:
             # Skip the per-block SSD path below for hybrid (can't serialize it).
         elif self._ssd_cache is not None:
             try:
-                evicted_hashes = self._block_hashes[index] if index < len(self._block_hashes) else []
-                evicted_cache = self._caches[index] if index < len(self._caches) else None
-                evicted_prompt = self._prompts[index] if index < len(self._prompts) else None
+                evicted_hashes = (
+                    self._block_hashes[index] if index < len(self._block_hashes) else []
+                )
+                evicted_cache = (
+                    self._caches[index] if index < len(self._caches) else None
+                )
+                evicted_prompt = (
+                    self._prompts[index] if index < len(self._prompts) else None
+                )
                 # Sliding-window (RotatingKVCache) backbones aren't block-
                 # decomposable — spilling them wastes disk and the restore always
                 # fails. Skip the per-block path (see _is_block_decomposable).
-                if evicted_cache is not None and not self._is_block_decomposable(evicted_cache):
+                if evicted_cache is not None and not self._is_block_decomposable(
+                    evicted_cache
+                ):
                     evicted_hashes = []
-                if evicted_hashes and evicted_cache is not None and evicted_prompt is not None:
+                if (
+                    evicted_hashes
+                    and evicted_cache is not None
+                    and evicted_prompt is not None
+                ):
                     for bi, bh in enumerate(evicted_hashes):
-                        bh_bytes = bh.to_bytes(8, "little") if isinstance(bh, int) else bh
+                        bh_bytes = (
+                            bh.to_bytes(8, "little") if isinstance(bh, int) else bh
+                        )
                         if not self._ssd_cache.has_block(bh_bytes):
                             try:
                                 import numpy as np
+
                                 tokens = np.array(evicted_prompt)
                                 start = bi * _BLOCK_SIZE
                                 end = min(start + _BLOCK_SIZE, len(tokens))
-                                block_cache = self._extract_block_cache_data(evicted_cache, bi)
+                                block_cache = self._extract_block_cache_data(
+                                    evicted_cache, bi
+                                )
                                 self._ssd_cache.save_block(
                                     block_hash=bh_bytes,
                                     cache_data=block_cache,
@@ -1185,10 +1264,15 @@ class KVPrefixCache:
                                     model_name=self._ssd_model_name,
                                 )
                             except Exception:
-                                bh_hex = f"{bh:016x}" if isinstance(bh, int) else bh.hex()[:16]
+                                bh_hex = (
+                                    f"{bh:016x}"
+                                    if isinstance(bh, int)
+                                    else bh.hex()[:16]
+                                )
                                 logger.debug(
                                     "SSD spill save failed for block %s",
-                                    bh_hex[:16], exc_info=True,
+                                    bh_hex[:16],
+                                    exc_info=True,
                                 )
             except Exception:
                 logger.debug("SSD spill failed during eviction", exc_info=True)
@@ -1199,7 +1283,10 @@ class KVPrefixCache:
             # Update hash index for the swapped entry before moving it
             swapped_prompt = self._prompts[last]
             swapped_hash = _token_hash(swapped_prompt)
-            if swapped_hash in self._hash_index and self._hash_index[swapped_hash] == last:
+            if (
+                swapped_hash in self._hash_index
+                and self._hash_index[swapped_hash] == last
+            ):
                 self._hash_index[swapped_hash] = index
             self._prompts[index] = self._prompts[last]
             self._caches[index] = self._caches[last]
@@ -1238,12 +1325,17 @@ class KVPrefixCache:
         """Evict entries using the configured strategy when at capacity."""
         _skipped_indices: set[int] = set()
         _evicted_any = False
-        while len(self._prompts) >= self._max_entries and len(_skipped_indices) < len(self._prompts):
+        while len(self._prompts) >= self._max_entries and len(_skipped_indices) < len(
+            self._prompts
+        ):
             if isinstance(self._eviction_strategy, SLRUStrategy):
                 self._eviction_strategy.update_access_counts(self._access_counts)
             victim = self._eviction_strategy.select_victim(
-                self._prompts, self._last_used, self._access_counter,
-                self._priorities, exclude=_skipped_indices,
+                self._prompts,
+                self._last_used,
+                self._access_counter,
+                self._priorities,
+                exclude=_skipped_indices,
             )
             if victim in _skipped_indices:
                 # Defensive: a correct strategy never returns an excluded index, but
@@ -1289,7 +1381,11 @@ class KVPrefixCache:
         """
         try:
             info = mx.device_info()
-            max_ws = info.get("max_recommended_working_set_size") if isinstance(info, dict) else None
+            max_ws = (
+                info.get("max_recommended_working_set_size")
+                if isinstance(info, dict)
+                else None
+            )
             if max_ws is None or max_ws <= 0:
                 return 0
             active = mx.get_active_memory()
@@ -1305,13 +1401,19 @@ class KVPrefixCache:
                 max_evict = max(1, len(self._prompts) // 4)
                 _skipped_indices: set[int] = set()
 
-                while self._prompts and evicted < max_evict and len(_skipped_indices) < len(self._prompts):
+                while (
+                    self._prompts
+                    and evicted < max_evict
+                    and len(_skipped_indices) < len(self._prompts)
+                ):
                     active = mx.get_active_memory()
                     if (active / max_ws) * 100 < threshold_pct - 5.0:
                         break
 
                     if isinstance(self._eviction_strategy, SLRUStrategy):
-                        self._eviction_strategy.update_access_counts(self._access_counts)
+                        self._eviction_strategy.update_access_counts(
+                            self._access_counts
+                        )
                     # pass exclude=_skipped_indices (same as _evict_if_full).
                     # Without it, a pinned victim is re-selected every iteration and the
                     # `victim in _skipped_indices: break` below aborts ALL pressure eviction
@@ -1319,12 +1421,18 @@ class KVPrefixCache:
                     # pressure unrelieved (OOM risk under the engine loop's active-request
                     # pinning). With exclude, select_victim skips past pinned entries.
                     victim = self._eviction_strategy.select_victim(
-                        self._prompts, self._last_used, self._access_counter,
-                        self._priorities, exclude=_skipped_indices,
+                        self._prompts,
+                        self._last_used,
+                        self._access_counter,
+                        self._priorities,
+                        exclude=_skipped_indices,
                     )
                     if victim is None or victim in _skipped_indices:
                         break
-                    if self._block_evict_checker is not None and self._block_hashes[victim]:
+                    if (
+                        self._block_evict_checker is not None
+                        and self._block_hashes[victim]
+                    ):
                         skip = False
                         for bh in self._block_hashes[victim]:
                             if not self._block_evict_checker(bh):
@@ -1421,7 +1529,7 @@ class KVPrefixCache:
     def enable_ssd_cache(
         self,
         cache_dir: str = "~/.cache/yunshu/kv-ssd",
-        max_size_bytes: int = 10 * 1024 ** 3,
+        max_size_bytes: int = 10 * 1024**3,
         model_name: str = "",
     ) -> None:
         """Enable SSD-tier KV cache persistence.
@@ -1430,6 +1538,7 @@ class KVPrefixCache:
         to disk. On restart, previously cached blocks are recovered.
         """
         from .ssd_kv_cache import SSDKVCache
+
         # CRITICAL (cross-model KV corruption): the per-block SSD store
         # is keyed purely by the content block-hash (_canonical_block_hash omits
         # model identity for cross-subsystem yunshu_kv compatibility), and
@@ -1451,11 +1560,14 @@ class KVPrefixCache:
         # per-block SSD path can't serialize ArraysCache recurrent state).
         try:
             from .hybrid_ssd_snapshot import HybridSnapshotStore
+
             self._hybrid_ssd = HybridSnapshotStore(scoped_dir)
         except Exception:
             self._hybrid_ssd = None
             logger.debug("hybrid SSD snapshot store init failed", exc_info=True)
-        logger.info(f"SSD KV cache enabled: dir={scoped_dir}, max={max_size_bytes / 1024**3:.0f}GB")
+        logger.info(
+            f"SSD KV cache enabled: dir={scoped_dir}, max={max_size_bytes / 1024**3:.0f}GB"
+        )
 
     @staticmethod
     def _scoped_ssd_dir(cache_dir: str, model_name: str) -> str:
@@ -1464,6 +1576,7 @@ class KVPrefixCache:
         base dir unchanged (back-compat / single-model deployments)."""
         import os
         import re
+
         base = os.path.expanduser(cache_dir)
         if not model_name:
             return base
@@ -1488,13 +1601,14 @@ class KVPrefixCache:
             # the snapshot holds references to live GPU tensors that may be
             # reclaimed between the lock release and the SSD write loop.
             snapshot_caches = [
-                self._snapshot_cache(c) if c is not None else None
-                for c in self._caches
+                self._snapshot_cache(c) if c is not None else None for c in self._caches
             ]
             snapshot_hashes = list(self._block_hashes)
 
         count = 0
-        for i, (prompt, cache) in enumerate(zip(snapshot_prompts, snapshot_caches, strict=False)):
+        for i, (prompt, cache) in enumerate(
+            zip(snapshot_prompts, snapshot_caches, strict=False)
+        ):
             # Skip non-block-decomposable backbones (sliding-window / recurrent):
             # spilling them wastes disk and the restore always fails.
             if cache is not None and not self._is_block_decomposable(cache):
@@ -1561,6 +1675,7 @@ class KVPrefixCache:
                 return None, 0
         try:
             from mlx_lm.models.cache import KVCache
+
             num_layers = len(loaded[0])
             cache_list = []
             total = 0
@@ -1608,7 +1723,12 @@ class KVPrefixCache:
         if self._ssd_cache is None:
             return None
         import os
-        if os.environ.get("YUNSHU_SSD_KV_RESTORE", "").strip() not in ("1", "true", "yes"):
+
+        if os.environ.get("YUNSHU_SSD_KV_RESTORE", "").strip() not in (
+            "1",
+            "true",
+            "yes",
+        ):
             return None
         return self._ssd_cache.load_block(block_hash)
 

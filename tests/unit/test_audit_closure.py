@@ -1,4 +1,5 @@
 """the endpoint audit-closure tracker stays honest (no drift)."""
+
 from __future__ import annotations
 
 import importlib.util
@@ -6,7 +7,9 @@ import pathlib
 
 _SPEC = importlib.util.spec_from_file_location(
     "audit_closure",
-    pathlib.Path(__file__).resolve().parent.parent.parent / "scripts" / "audit_closure.py",
+    pathlib.Path(__file__).resolve().parent.parent.parent
+    / "scripts"
+    / "audit_closure.py",
 )
 audit_closure = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(audit_closure)

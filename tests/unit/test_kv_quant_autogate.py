@@ -1,6 +1,7 @@
 """/747: KV-quant auto-gate. corrected the gate from token-count
 to estimated KV BYTES after a real-model benchmark showed token-count was
 net-negative for small models (small KV doesn't dominate bandwidth)."""
+
 from __future__ import annotations
 
 import types

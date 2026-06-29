@@ -15,6 +15,7 @@ Layer serialization:
 On load the same object types are rebuilt (KVCache keys/values/offset, ArraysCache
 .cache list), giving a cache identical to the in-RAM boundary snapshot.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -107,7 +108,11 @@ class HybridSnapshotStore:
     def save(self, key: bytes, cache_list: list, token_count: int) -> None:
         """Serialize a whole boundary snapshot (all layers) to one file."""
         tensors: dict[str, mx.array] = {}
-        meta: dict[str, str] = {"n": str(len(cache_list)), "tok": str(token_count), "q": "i8"}
+        meta: dict[str, str] = {
+            "n": str(len(cache_list)),
+            "tok": str(token_count),
+            "q": "i8",
+        }
 
         def _put(name: str, arr) -> None:
             """int8-quantize one tensor (per-tensor symmetric scale) into the
@@ -184,7 +189,12 @@ class HybridSnapshotStore:
             return None, 0
         try:
             from mlx_lm.models.cache import ArraysCache, KVCache
-            _DT = {"bfloat16": mx.bfloat16, "float16": mx.float16, "float32": mx.float32}
+
+            _DT = {
+                "bfloat16": mx.bfloat16,
+                "float16": mx.float16,
+                "float32": mx.float32,
+            }
             arrays, meta = mx.load(str(path), return_metadata=True)
             quant = meta.get("q") == "i8"
 
@@ -209,7 +219,9 @@ class HybridSnapshotStore:
                     out.append(c)
                 else:
                     size = int(meta.get(f"l{i}n", "0"))
-                    nonnull = [int(x) for x in meta.get(f"l{i}m", "").split(",") if x != ""]
+                    nonnull = [
+                        int(x) for x in meta.get(f"l{i}m", "").split(",") if x != ""
+                    ]
                     state: list[Any] = [None] * size
                     for j in nonnull:
                         state[j] = _get(f"l{i}_a{j}")

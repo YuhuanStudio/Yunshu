@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class CacheLayerConfig:
     """Per-layer cache configuration ."""
+
     layer_index: int
     cache_type: CacheType
     sliceable: bool
@@ -87,12 +88,14 @@ class ModelCacheConfig:
         for i, cache_obj in enumerate(cache_list):
             ct = detect_cache_type(cache_obj)
             slice = is_sliceable(cache_obj)
-            layers.append(CacheLayerConfig(
-                layer_index=i,
-                cache_type=ct,
-                sliceable=slice,
-                boundary_eligible=not slice,
-            ))
+            layers.append(
+                CacheLayerConfig(
+                    layer_index=i,
+                    cache_type=ct,
+                    sliceable=slice,
+                    boundary_eligible=not slice,
+                )
+            )
         return ModelCacheConfig(layers)
 
     @staticmethod
@@ -107,6 +110,7 @@ class ModelCacheConfig:
         """Build config by creating a temporary cache and inspecting types."""
         try:
             from mlx_lm.models.cache import make_prompt_cache
+
             cache_list = make_prompt_cache(model)
             return ModelCacheConfig.build_from_cache_list(cache_list)
         except Exception as e:
@@ -116,15 +120,17 @@ class ModelCacheConfig:
             config = getattr(model, "config", None) or getattr(model, "args", None)
             if config is not None:
                 num_layers = getattr(config, "num_hidden_layers", 0)
-            return ModelCacheConfig([
-                CacheLayerConfig(
-                    layer_index=i,
-                    cache_type=CacheType.KVCACHE,
-                    sliceable=True,
-                    boundary_eligible=False,
-                )
-                for i in range(max(num_layers, 1))
-            ])
+            return ModelCacheConfig(
+                [
+                    CacheLayerConfig(
+                        layer_index=i,
+                        cache_type=CacheType.KVCACHE,
+                        sliceable=True,
+                        boundary_eligible=False,
+                    )
+                    for i in range(max(num_layers, 1))
+                ]
+            )
 
     def summary(self) -> dict:
         type_counts: dict[str, int] = {}

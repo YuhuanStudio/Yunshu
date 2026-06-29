@@ -9,6 +9,7 @@ Tests:
 - min_prefix_length threshold
 - get_stats / size / clear
 """
+
 from unittest.mock import MagicMock
 
 import mlx.core as mx
@@ -145,14 +146,18 @@ class TestKVPrefixCachePartialHit:
         # query the same 100 + 50 more (150). Before the fix this returned
         # matched=64 (36 valid tokens silently re-prefilled); now it must be 100.
         cache = KVPrefixCache(min_prefix_length=4)
-        cached_tokens = mx.array(list(range(1, 101)))           # 100 tokens
-        new_tokens = mx.array(list(range(1, 101)) + list(range(500, 550)))  # 100 shared + 50
+        cached_tokens = mx.array(list(range(1, 101)))  # 100 tokens
+        new_tokens = mx.array(
+            list(range(1, 101)) + list(range(500, 550))
+        )  # 100 shared + 50
 
         cache.add(cached_tokens, [_fake_cache(100)])
         result, remaining, matched = cache.get(new_tokens)
 
         assert result is not None
-        assert matched == 100, f"expected full 100-token reuse, got {matched} (block-floored?)"
+        assert matched == 100, (
+            f"expected full 100-token reuse, got {matched} (block-floored?)"
+        )
         assert remaining == 50
 
     def test_below_min_prefix_no_hit(self):

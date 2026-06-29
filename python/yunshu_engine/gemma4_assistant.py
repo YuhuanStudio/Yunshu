@@ -545,8 +545,7 @@ class Gemma4AssistantProposer:
 
     def _embed(self, token_id: int, dtype: mx.Dtype) -> mx.array:
         return (
-            self._target_embed_weight[token_id].astype(dtype)
-            * self._target_embed_scale
+            self._target_embed_weight[token_id].astype(dtype) * self._target_embed_scale
         )[None, :]  # (1, backbone)
 
     def propose_chain(
@@ -620,9 +619,9 @@ class Gemma4AssistantProposer:
         else:
             offset = 0
             last = target_hidden if target_hidden.ndim == 2 else target_hidden[None]
-        return self.propose_chain(
-            last_token_id, last, kv_by_target_layer, offset, k=1
-        )[0]
+        return self.propose_chain(last_token_id, last, kv_by_target_layer, offset, k=1)[
+            0
+        ]
 
     def spec_decode_generate(
         self,
@@ -680,8 +679,11 @@ class Gemma4AssistantProposer:
         while len(out) < max_tokens:
             offset = cache[fl].offset - 1
             t1_logits = lm_head(hidden_last[None])[0, -1]
-            t1 = (int(mx.argmax(t1_logits)) if greedy
-                  else int(mx.random.categorical(t1_logits / temperature).item()))
+            t1 = (
+                int(mx.argmax(t1_logits))
+                if greedy
+                else int(mx.random.categorical(t1_logits / temperature).item())
+            )
             # Sliding-window safety: the verify forward advances every
             # layer by 1+k. If that pushes the sliding RotatingKVCache (gemma window
             # = 512) past max_size it rotates, and a later trim of rejected positions
@@ -690,8 +692,10 @@ class Gemma4AssistantProposer:
             # nears the window, fall back to a plain single-token step (advance by 1,
             # accept it, no over-advance, no trim) for the rest of the generation.
             _sl_cache = cache[sl]
-            if (hasattr(_sl_cache, "max_size")
-                    and (_sl_cache.offset + 1 + k) >= _sl_cache.max_size):
+            if (
+                hasattr(_sl_cache, "max_size")
+                and (_sl_cache.offset + 1 + k) >= _sl_cache.max_size
+            ):
                 out.append(t1)
                 if t1 in eos:
                     break

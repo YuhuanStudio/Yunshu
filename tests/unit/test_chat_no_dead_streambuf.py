@@ -3,6 +3,7 @@ wrote every chunk into it, but the buffer was never read or flushed (the bytes a
 sent are `encoded`). Once the 64KB ring filled it logged a truncation WARNING on every
 subsequent chunk — dead work + log spam on the hot path. Removed from chat.py.
 """
+
 from __future__ import annotations
 
 import inspect

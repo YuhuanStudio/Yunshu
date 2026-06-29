@@ -1,4 +1,5 @@
 """Tests for Thinking Segment KV Substore integration in fast path."""
+
 import os
 from unittest.mock import patch
 
@@ -8,6 +9,7 @@ class TestThinkingSegmentSubstoreInit:
 
     def test_not_created_by_default(self):
         from yunshu_engine.batched_engine import BatchedEngine
+
         eng = BatchedEngine.__new__(BatchedEngine)
         eng._thinking_store = None
         assert eng._thinking_store is None
@@ -15,18 +17,21 @@ class TestThinkingSegmentSubstoreInit:
     @patch.dict(os.environ, {"YUNSHU_THINKING_CACHE": "1"})
     def test_created_when_env_set(self):
         from yunshu_engine.batched_engine import BatchedEngine
+
         # Simulate __init__ thinking store creation
         eng = BatchedEngine.__new__(BatchedEngine)
         from yunshu_kv.thinking_segment import (
             ThinkingSegmentConfig,
             ThinkingSegmentSubstore,
         )
+
         eng._thinking_store = ThinkingSegmentSubstore(ThinkingSegmentConfig())
         assert eng._thinking_store is not None
         assert isinstance(eng._thinking_store, ThinkingSegmentSubstore)
 
     def test_stats_includes_thinking_store_when_active(self):
         from yunshu_engine.batched_engine import BatchedEngine
+
         eng = BatchedEngine.__new__(BatchedEngine)
         eng._engine_core = None
         eng.model_name = "test"
@@ -40,6 +45,7 @@ class TestThinkingSegmentSubstoreInit:
         assert "thinking_segment_store" not in stats
 
         from yunshu_kv.thinking_segment import ThinkingSegmentSubstore
+
         eng._thinking_store = ThinkingSegmentSubstore()
         stats = eng.get_stats()
         assert "thinking_segment_store" in stats
@@ -54,6 +60,7 @@ class TestThinkingSegmentSubstore:
             ThinkingSegmentConfig,
             ThinkingSegmentSubstore,
         )
+
         store = ThinkingSegmentSubstore(ThinkingSegmentConfig(min_tokens_to_cache=4))
         # Store a segment with 10 thinking tokens
         thinking = list(range(10))
@@ -73,6 +80,7 @@ class TestThinkingSegmentSubstore:
             ThinkingSegmentConfig,
             ThinkingSegmentSubstore,
         )
+
         store = ThinkingSegmentSubstore(ThinkingSegmentConfig(min_tokens_to_cache=32))
         # Only 5 tokens — below threshold
         step_hash = store.store("conv1", list(range(5)), list(range(10)), kv_data="kv")
@@ -83,6 +91,7 @@ class TestThinkingSegmentSubstore:
             ThinkingSegmentConfig,
             ThinkingSegmentSubstore,
         )
+
         store = ThinkingSegmentSubstore(ThinkingSegmentConfig(min_tokens_to_cache=4))
         thinking = list(range(10))
         context = list(range(20, 30))
@@ -97,6 +106,7 @@ class TestThinkingSegmentSubstore:
             ThinkingSegmentConfig,
             ThinkingSegmentSubstore,
         )
+
         store = ThinkingSegmentSubstore(ThinkingSegmentConfig(min_tokens_to_cache=4))
         store.store("conv1", list(range(10)), list(range(5)), kv_data="kv1")
         store.store("conv1", list(range(20, 30)), list(range(5)), kv_data="kv2")
@@ -109,6 +119,7 @@ class TestThinkingSegmentSubstore:
             ThinkingSegmentConfig,
             ThinkingSegmentSubstore,
         )
+
         store = ThinkingSegmentSubstore(ThinkingSegmentConfig(min_tokens_to_cache=4))
         store.store("conv1", list(range(10)), list(range(5)), kv_data="kv")
         count = store.clear_conversation("conv1")
@@ -120,6 +131,7 @@ class TestThinkingSegmentSubstore:
             ThinkingSegmentConfig,
             ThinkingSegmentSubstore,
         )
+
         store = ThinkingSegmentSubstore(ThinkingSegmentConfig(min_tokens_to_cache=4))
         store.store("conv1", list(range(10)), list(range(5)), kv_data="kv")
         store.lookup_by_context("conv1", list(range(5)), list(range(10)))
@@ -136,10 +148,13 @@ class TestThinkingSegmentSubstore:
             ThinkingSegmentConfig,
             ThinkingSegmentSubstore,
         )
-        store = ThinkingSegmentSubstore(ThinkingSegmentConfig(
-            min_tokens_to_cache=4,
-            ttl_seconds=0.01,  # 10ms TTL
-        ))
+
+        store = ThinkingSegmentSubstore(
+            ThinkingSegmentConfig(
+                min_tokens_to_cache=4,
+                ttl_seconds=0.01,  # 10ms TTL
+            )
+        )
         step_hash = store.store("conv1", list(range(10)), list(range(5)), kv_data="kv")
         assert step_hash is not None
 
@@ -152,10 +167,13 @@ class TestThinkingSegmentSubstore:
             ThinkingSegmentConfig,
             ThinkingSegmentSubstore,
         )
-        store = ThinkingSegmentSubstore(ThinkingSegmentConfig(
-            min_tokens_to_cache=4,
-            max_segments_per_conversation=2,
-        ))
+
+        store = ThinkingSegmentSubstore(
+            ThinkingSegmentConfig(
+                min_tokens_to_cache=4,
+                max_segments_per_conversation=2,
+            )
+        )
         store.store("conv1", list(range(10)), list(range(5)), kv_data="kv1")
         store.store("conv1", list(range(20, 30)), list(range(5)), kv_data="kv2")
         # Third store should trigger eviction of oldest

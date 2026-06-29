@@ -24,9 +24,16 @@ class FakeOutput:
 
 
 class FakeReqOutput:
-    def __init__(self, request_id="r1", finished=False, completion_tokens=1,
-                 prompt_tokens=10, spec_accepted=None, spec_proposer="ngram",
-                 replica_id=0):
+    def __init__(
+        self,
+        request_id="r1",
+        finished=False,
+        completion_tokens=1,
+        prompt_tokens=10,
+        spec_accepted=None,
+        spec_proposer="ngram",
+        replica_id=0,
+    ):
         self.request_id = request_id
         self.finished = finished
         self.completion_tokens = completion_tokens
@@ -70,6 +77,7 @@ class FakeScheduler:
 
 # ── SchedulerMixin base ──
 
+
 class TestSchedulerMixin:
     def test_base_class_requires_pre_step(self):
         with pytest.raises(TypeError):
@@ -77,8 +85,12 @@ class TestSchedulerMixin:
 
     def test_concrete_mixin_lifecycle(self):
         class SimpleMixin(SchedulerMixin):
-            def pre_step(self, scheduler): pass
-            def post_step(self, scheduler, output): pass
+            def pre_step(self, scheduler):
+                pass
+
+            def post_step(self, scheduler, output):
+                pass
+
         m = SimpleMixin()
         m.pre_step(None)
         m.post_step(None, None)
@@ -86,6 +98,7 @@ class TestSchedulerMixin:
 
 
 # ── MetricsMixin ──
+
 
 class TestMetricsMixin:
     def test_empty_stats(self):
@@ -97,10 +110,12 @@ class TestMetricsMixin:
     def test_records_step_metrics(self):
         m = MetricsMixin()
         m.pre_step(None)
-        output = FakeOutput([
-            FakeReqOutput(completion_tokens=5, finished=False),
-            FakeReqOutput(completion_tokens=3, finished=True),
-        ])
+        output = FakeOutput(
+            [
+                FakeReqOutput(completion_tokens=5, finished=False),
+                FakeReqOutput(completion_tokens=3, finished=True),
+            ]
+        )
         m.post_step(None, output)
         stats = m.get_stats()
         assert stats["step_count"] == 1
@@ -146,6 +161,7 @@ class TestMetricsMixin:
 
 
 # ── ProfilingMixin ──
+
 
 class TestProfilingMixin:
     def test_captures_samples(self):
@@ -218,19 +234,30 @@ class TestProfilingMixin:
 
 # ── DisaggregationMixin ──
 
+
 class TestDisaggregationMixin:
     def test_routes_long_prompts_to_prefill(self):
         d = DisaggregationMixin(prefill_threshold=100, prefill_nodes=["node1"])
-        d.post_step(None, FakeOutput([
-            FakeReqOutput(finished=True, prompt_tokens=500),
-        ]))
+        d.post_step(
+            None,
+            FakeOutput(
+                [
+                    FakeReqOutput(finished=True, prompt_tokens=500),
+                ]
+            ),
+        )
         assert d._prefill_count == 1
 
     def test_short_prompts_go_to_decode(self):
         d = DisaggregationMixin(prefill_threshold=4096)
-        d.post_step(None, FakeOutput([
-            FakeReqOutput(finished=True, prompt_tokens=100),
-        ]))
+        d.post_step(
+            None,
+            FakeOutput(
+                [
+                    FakeReqOutput(finished=True, prompt_tokens=100),
+                ]
+            ),
+        )
         assert d._decode_count == 1
 
     def test_on_add_request_logs_long_prompt(self):
@@ -239,7 +266,9 @@ class TestDisaggregationMixin:
         d.on_add_request(None, req)
 
     def test_get_stats(self):
-        d = DisaggregationMixin(prefill_threshold=100, prefill_nodes=["p1"], decode_nodes=["d1"])
+        d = DisaggregationMixin(
+            prefill_threshold=100, prefill_nodes=["p1"], decode_nodes=["d1"]
+        )
         stats = d.get_stats()
         assert stats["prefill_threshold"] == 100
         assert stats["prefill_nodes"] == 1
@@ -247,6 +276,7 @@ class TestDisaggregationMixin:
 
 
 # ── DataParallelMixin ──
+
 
 class TestDataParallelMixin:
     def test_least_loaded_routing(self):
@@ -277,10 +307,15 @@ class TestDataParallelMixin:
         dp = DataParallelMixin(num_replicas=2)
         dp._replica_loads = {0: 3, 1: 2}
         # Only finished requests on replica 0 and 1 should decrement
-        dp.post_step(None, FakeOutput([
-            FakeReqOutput(finished=True, replica_id=0),
-            FakeReqOutput(finished=True, replica_id=1),
-        ]))
+        dp.post_step(
+            None,
+            FakeOutput(
+                [
+                    FakeReqOutput(finished=True, replica_id=0),
+                    FakeReqOutput(finished=True, replica_id=1),
+                ]
+            ),
+        )
         assert dp._replica_loads[0] == 2
         assert dp._replica_loads[1] == 1
 
@@ -297,6 +332,7 @@ class TestDataParallelMixin:
 
 
 # ── PipelineParallelMixin ──
+
 
 class TestPipelineParallelMixin:
     def test_tracks_bubbles(self):
@@ -326,13 +362,19 @@ class TestPipelineParallelMixin:
 
 # ── SpecDecodeMixin ──
 
+
 class TestSpecDecodeMixin:
     def test_tracks_acceptance(self):
         sd = SpecDecodeMixin()
-        sd.post_step(None, FakeOutput([
-            FakeReqOutput(spec_accepted=True, spec_proposer="ngram"),
-            FakeReqOutput(spec_accepted=False, spec_proposer="eagle"),
-        ]))
+        sd.post_step(
+            None,
+            FakeOutput(
+                [
+                    FakeReqOutput(spec_accepted=True, spec_proposer="ngram"),
+                    FakeReqOutput(spec_accepted=False, spec_proposer="eagle"),
+                ]
+            ),
+        )
         stats = sd.get_stats()
         assert stats["total_drafts"] == 2
         assert stats["total_accepted"] == 1
@@ -340,11 +382,16 @@ class TestSpecDecodeMixin:
 
     def test_per_proposer_stats(self):
         sd = SpecDecodeMixin()
-        sd.post_step(None, FakeOutput([
-            FakeReqOutput(spec_accepted=True, spec_proposer="ngram"),
-            FakeReqOutput(spec_accepted=True, spec_proposer="ngram"),
-            FakeReqOutput(spec_accepted=False, spec_proposer="eagle"),
-        ]))
+        sd.post_step(
+            None,
+            FakeOutput(
+                [
+                    FakeReqOutput(spec_accepted=True, spec_proposer="ngram"),
+                    FakeReqOutput(spec_accepted=True, spec_proposer="ngram"),
+                    FakeReqOutput(spec_accepted=False, spec_proposer="eagle"),
+                ]
+            ),
+        )
         stats = sd.get_stats()
         assert stats["per_proposer"]["ngram"]["accepted"] == 2
         assert stats["per_proposer"]["eagle"]["rejected"] == 1
@@ -353,22 +400,34 @@ class TestSpecDecodeMixin:
         sd = SpecDecodeMixin(initial_draft_length=3, max_draft_length=8)
         # Simulate high acceptance rate
         for _ in range(15):
-            sd.post_step(None, FakeOutput([
-                FakeReqOutput(spec_accepted=True),
-            ]))
+            sd.post_step(
+                None,
+                FakeOutput(
+                    [
+                        FakeReqOutput(spec_accepted=True),
+                    ]
+                ),
+            )
         assert sd.current_draft_length > 3
 
     def test_adaptive_draft_length_decrease(self):
         sd = SpecDecodeMixin(initial_draft_length=5, min_draft_length=1)
         # Simulate low acceptance rate
         for _ in range(15):
-            sd.post_step(None, FakeOutput([
-                FakeReqOutput(spec_accepted=False),
-            ]))
+            sd.post_step(
+                None,
+                FakeOutput(
+                    [
+                        FakeReqOutput(spec_accepted=False),
+                    ]
+                ),
+            )
         assert sd.current_draft_length < 5
 
     def test_draft_length_bounds(self):
-        sd = SpecDecodeMixin(initial_draft_length=5, max_draft_length=5, min_draft_length=5)
+        sd = SpecDecodeMixin(
+            initial_draft_length=5, max_draft_length=5, min_draft_length=5
+        )
         for _ in range(20):
             sd.post_step(None, FakeOutput([FakeReqOutput(spec_accepted=True)]))
         assert sd.current_draft_length == 5
@@ -381,6 +440,7 @@ class TestSpecDecodeMixin:
 
 
 # ── MemoryPressureMixin ──
+
 
 class TestMemoryPressureMixin:
     def test_normal_state(self):
@@ -410,13 +470,16 @@ class TestMemoryPressureMixin:
         assert mp.is_admission_paused
 
     def test_from_env(self):
-        with patch.dict("os.environ", {
-            "YUNSHU_MEM_WARNING": "0.7",
-            "YUNSHU_MEM_CRITICAL": "0.9",
-            "YUNSHU_BATCH_NORMAL": "64",
-            "YUNSHU_BATCH_WARNING": "32",
-            "YUNSHU_BATCH_CRITICAL": "8",
-        }):
+        with patch.dict(
+            "os.environ",
+            {
+                "YUNSHU_MEM_WARNING": "0.7",
+                "YUNSHU_MEM_CRITICAL": "0.9",
+                "YUNSHU_BATCH_NORMAL": "64",
+                "YUNSHU_BATCH_WARNING": "32",
+                "YUNSHU_BATCH_CRITICAL": "8",
+            },
+        ):
             mp = MemoryPressureMixin.from_env()
             assert mp._warning_threshold == 0.7
             assert mp._critical_threshold == 0.9
@@ -441,6 +504,7 @@ class TestMemoryPressureMixin:
 
 
 # ── CompositionScheduler ──
+
 
 class TestCompositionScheduler:
     def test_wraps_core_scheduler(self):

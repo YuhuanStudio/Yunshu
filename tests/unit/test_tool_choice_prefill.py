@@ -12,6 +12,7 @@ These tests exercise the helpers in isolation plus the prefill→parse pipeline 
 stubbed model output (no real model), mirroring the existing test_tool_choice_enforce
 pattern.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -40,7 +41,10 @@ def test_required_prefills_opening_marker():
 
 def test_named_function_prefills_name_and_args_open():
     tc = ToolChoiceFunction(type="function", function={"name": "get_weather"})
-    assert _tool_choice_prefill(tc) == '<tool_call>\n{"name": "get_weather", "arguments": {'
+    assert (
+        _tool_choice_prefill(tc)
+        == '<tool_call>\n{"name": "get_weather", "arguments": {'
+    )
 
 
 def test_named_function_json_escapes_exotic_name():
@@ -117,6 +121,7 @@ def test_named_function_parses_forced_name_from_args_only_completion():
     assert calls[0]["name"] == "get_weather"
     # arguments come back as a JSON string (or dict, depending on parser) — normalize.
     import json as _json
+
     args = calls[0]["arguments"]
     if isinstance(args, str):
         args = _json.loads(args)

@@ -11,6 +11,7 @@ miss — was not. A fresh hunt found 3 issues:
 Fix: add a temperature>0&&seed-None skip guard (mirroring the middleware) + add the missing
 output-affecting params to the cache key.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -22,7 +23,7 @@ def test_lora_adapter_differentiates_key():
     base = ResponseCache.hash_request("m", "p", temperature=0.0)
     kx = ResponseCache.hash_request("m", "p", temperature=0.0, lora_adapter="X")
     ky = ResponseCache.hash_request("m", "p", temperature=0.0, lora_adapter="Y")
-    assert kx != ky                 # different adapters → different cache entries
+    assert kx != ky  # different adapters → different cache entries
     assert kx != base and ky != base
 
 
@@ -35,6 +36,7 @@ def test_missing_sampling_params_differentiate_key():
 
 def test_engine_cache_has_determinism_guard_and_lora_in_key():
     from yunshu_engine import batched_engine
+
     src = inspect.getsource(batched_engine.BatchedEngine.generate)
     code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
     # determinism guard mirrors the middleware (skip temp>0 && seed is None)

@@ -7,6 +7,7 @@ i.e. exactly when self._prompts is empty — so every SSD restore on a cold cach
 silent miss (proven: blocks written, 0 read back). Fix: skip the early-exit when an SSD
 tier exists so the empty-cache fall-through reaches the SSD restore.
 """
+
 from __future__ import annotations
 
 import mlx.core as mx
@@ -30,7 +31,7 @@ def _cache():
 
 def test_get_unlocked_consults_ssd_on_empty_ram_cache():
     c = _cache()
-    c._ssd_cache = object()                      # an SSD tier is configured
+    c._ssd_cache = object()  # an SSD tier is configured
     c._find_prefix_via_hash_chain = lambda qb: (-1, 0)
     c.restore_prefix_from_ssd = lambda qb: (["RESTORED"], 64)
     prompt = mx.arange(128, dtype=mx.int32)
@@ -42,7 +43,7 @@ def test_get_unlocked_consults_ssd_on_empty_ram_cache():
 
 
 def test_get_unlocked_still_fast_exits_with_no_ssd():
-    c = _cache()                                 # no SSD tier
+    c = _cache()  # no SSD tier
     c._find_prefix_via_hash_chain = lambda qb: (-1, 0)
     prompt = mx.arange(128, dtype=mx.int32)
     result, remaining, matched = c._get_unlocked(prompt)
@@ -53,7 +54,7 @@ def test_get_no_trim_consults_hybrid_ssd_on_empty_ram_cache():
     c = _cache()
 
     class _HybridSSD:
-        def candidate_token_counts(self):     # probe iterates exact stored counts
+        def candidate_token_counts(self):  # probe iterates exact stored counts
             return [128]
 
         def has(self, key):

@@ -36,7 +36,9 @@ def diagnose_system():
 
     # CPU
     try:
-        result = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True)
+        result = subprocess.run(
+            ["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True
+        )
         hw.add(f"CPU: {result.stdout.strip()}")
     except Exception:
         logger.debug("failed to query CPU info", exc_info=True)
@@ -44,8 +46,10 @@ def diagnose_system():
 
     # Memory
     try:
-        result = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True)
-        total_gb = int(result.stdout.strip()) / (1024 ** 3)
+        result = subprocess.run(
+            ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True
+        )
+        total_gb = int(result.stdout.strip()) / (1024**3)
         hw.add(f"Unified Memory: {total_gb:.0f} GB")
     except Exception:
         logger.debug("failed to query memory info", exc_info=True)
@@ -54,7 +58,12 @@ def diagnose_system():
     # GPU
     gpu = tree.add("[bold cyan]GPU[/]")
     try:
-        result = subprocess.run(["system_profiler", "SPDisplaysDataType"], capture_output=True, text=True, timeout=5)
+        result = subprocess.run(
+            ["system_profiler", "SPDisplaysDataType"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
         for line in result.stdout.split("\n"):
             line = line.strip()
             if "Chipset Model" in line:
@@ -71,6 +80,7 @@ def diagnose_system():
     mlx_node = tree.add("[bold cyan]MLX[/]")
     try:
         import mlx.core as mx
+
         mlx_node.add(f"Version: {mx.__version__}")
         mlx_node.add(f"Default device: {mx.default_device()}")
         active = mx.get_active_memory()
@@ -93,6 +103,7 @@ def diagnose_system():
     mlm = tree.add("[bold cyan]mlx-lm[/]")
     try:
         import mlx_lm
+
         mlm.add(f"Version: {mlx_lm.__version__}")
         mlm.add("[green]✓ Installed[/]")
     except ImportError:
@@ -102,6 +113,7 @@ def diagnose_system():
     vlm = tree.add("[bold cyan]mlx-vlm[/]")
     try:
         import mlx_vlm
+
         vlm.add(f"Version: {mlx_vlm.__version__}")
         vlm.add("[green]✓ Installed[/]")
     except ImportError:
@@ -111,8 +123,10 @@ def diagnose_system():
     audio = tree.add("[bold cyan]mlx-audio[/]")
     try:
         import mlx_audio
+
         try:
             from importlib.metadata import version as _pkg_version
+
             _audio_ver = _pkg_version("mlx-audio")
         except Exception:
             _audio_ver = getattr(mlx_audio, "__version__", "unknown")
@@ -128,25 +142,34 @@ def diagnose_system():
     checks = []
     try:
         import mlx.core as mx
+
         checks.append(("MLX", True))
     except ImportError:
         checks.append(("MLX", False))
 
     try:
         import mlx_lm
+
         checks.append(("mlx-lm", True))
     except ImportError:
         checks.append(("mlx-lm", False))
 
     try:
         import fastapi  # noqa: F401  # availability probe only
+
         checks.append(("FastAPI", True))
     except ImportError:
         checks.append(("FastAPI", False))
 
     all_ok = all(ok for _, ok in checks)
     status = "[green]✓ Compatible[/]" if all_ok else "[red]✗ Issues found[/]"
-    console.print(Panel(status, title="Yunshu Compatibility", border_style="green" if all_ok else "red"))
+    console.print(
+        Panel(
+            status,
+            title="Yunshu Compatibility",
+            border_style="green" if all_ok else "red",
+        )
+    )
 
 
 @diagnose_app.command("gpu")
@@ -168,6 +191,7 @@ def diagnose_gpu():
     # Quick benchmark
     console.print("\n[bold]Quick GEMM Benchmark[/]")
     import time
+
     for size in [256, 512, 1024, 2048, 4096]:
         a = mx.random.normal((size, size))
         b = mx.random.normal((size, size))
@@ -180,7 +204,7 @@ def diagnose_gpu():
             a @ b
         mx.synchronize()
         elapsed = time.perf_counter() - t0
-        tflops = 2.0 * size ** 3 * iters / elapsed / 1e12
+        tflops = 2.0 * size**3 * iters / elapsed / 1e12
         console.print(f"  {size:5d}×{size:5d}: {tflops:.2f} TFLOPS")
 
     console.print()

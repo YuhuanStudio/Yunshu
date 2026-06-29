@@ -9,6 +9,7 @@ generate_with_kv. The serialize→reconstruct→reuse round-trip is verified los
 reference greedy in scripts/realmodel/smoke_disagg_kv_roundtrip.py. These fast unit tests
 cover the wire FRAMING (no model needed).
 """
+
 from __future__ import annotations
 
 from yunshu_engine.external_prefill import (
@@ -25,7 +26,9 @@ def test_kv_blocks_framing_round_trip():
     blocks = [
         KVBlockData(block_hash=123, token_count=5, layer_data={0: b"abc", 1: b"defgh"}),
         # a real blake2b 8-byte hash is unsigned 64-bit — must NOT overflow the framing
-        KVBlockData(block_hash=0xFFFFFFFFFFFFFFFF, token_count=3, layer_data={0: b"xy"}),
+        KVBlockData(
+            block_hash=0xFFFFFFFFFFFFFFFF, token_count=3, layer_data={0: b"xy"}
+        ),
     ]
     back = _deserialize_kv_blocks(_serialize_kv_blocks(blocks))
     assert len(back) == 2
@@ -46,7 +49,9 @@ def test_prefill_wire_carries_kv_blocks():
     # simulate what _serialize would attach by going through the public wire with a
     # pre-extracted blocks payload embedded via a fake cache marker is overkill; instead
     # assert the no-KV path is clean and the framing the wire uses is the one tested above.
-    pr = PrefillResult(token_ids=[10, 20, 30, 40], num_tokens=4, cached_tokens=1, duration_s=0.2)
+    pr = PrefillResult(
+        token_ids=[10, 20, 30, 40], num_tokens=4, cached_tokens=1, duration_s=0.2
+    )
     got = _deserialize_prefill_result(_serialize_prefill_result(pr))
     assert got.token_ids == [10, 20, 30, 40]
     assert got.num_tokens == 4 and got.cached_tokens == 1

@@ -6,6 +6,7 @@ Phase 4 tests:
 - TTL expiry cleanup with memory reclamation
 - Compression round-trip accuracy
 """
+
 import json
 import time
 from unittest.mock import patch

@@ -24,7 +24,17 @@ class TestCLIRegistration:
 
     def test_subcommands_registered(self):
         result = runner.invoke(app, ["--help"])
-        expected = ["serve", "chat", "model", "status", "config", "launch", "eval", "bench", "diagnose"]
+        expected = [
+            "serve",
+            "chat",
+            "model",
+            "status",
+            "config",
+            "launch",
+            "eval",
+            "bench",
+            "diagnose",
+        ]
         for cmd in expected:
             assert cmd in _plain(result.output), f"Missing: {cmd}"
 
@@ -32,6 +42,7 @@ class TestCLIRegistration:
         import inspect
 
         from yunshu_cli.serve import serve
+
         sig = inspect.signature(serve)
         param_names = list(sig.parameters.keys())
         assert "model" in param_names
@@ -40,6 +51,7 @@ class TestCLIRegistration:
 
     def test_model_command_options(self):
         from yunshu_cli.model import model_app
+
         commands = [cmd.name for cmd in model_app.registered_commands]
         assert "list" in commands
         assert "download" in commands
@@ -48,6 +60,7 @@ class TestCLIRegistration:
 
     def test_bench_command_options(self):
         from yunshu_cli.benchmark import bench_app
+
         commands = [cmd.name for cmd in bench_app.registered_commands]
         assert "roofline" in commands
         assert "latency" in commands
@@ -56,6 +69,7 @@ class TestCLIRegistration:
 
     def test_diagnose_command_options(self):
         from yunshu_cli.diagnose import diagnose_app
+
         commands = [cmd.name for cmd in diagnose_app.registered_commands]
         assert "system" in commands
         assert "gpu" in commands

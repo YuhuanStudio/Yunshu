@@ -11,6 +11,7 @@ special-cases strength<=0 → start_step=num_steps BEFORE the clamp, so the loop
 is empty and the blend reads sigma_start=sigmas[num_steps]=0.0 → pure source. Applied
 to BOTH img2img and inpaint (consistent siblings).
 """
+
 from __future__ import annotations
 
 import inspect
@@ -55,7 +56,7 @@ def test_img2img_pipeline_special_cases_strength_zero():
     src = inspect.getsource(ImageGenEngine._run_img2img_pipeline)
     i = src.index("if denoise_strength <= 0.0:")
     # the special-case sets start_step=num_steps and comes BEFORE the min-clamp
-    assert "start_step = num_steps" in src[i:i + 120]
+    assert "start_step = num_steps" in src[i : i + 120]
     clamp = src.index("min(start_step, num_steps - 1)")
     assert i < clamp, "strength<=0 special-case must precede the min-clamp"
 
@@ -63,6 +64,6 @@ def test_img2img_pipeline_special_cases_strength_zero():
 def test_inpaint_pipeline_special_cases_strength_zero():
     src = inspect.getsource(ImageGenEngine._run_inpaint_pipeline)
     i = src.index("if denoise_strength <= 0.0:")
-    assert "start_step = num_steps" in src[i:i + 120]
+    assert "start_step = num_steps" in src[i : i + 120]
     clamp = src.index("min(start_step, num_steps - 1)")
     assert i < clamp

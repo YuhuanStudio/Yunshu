@@ -55,6 +55,7 @@ def _mx_to_numpy(arr) -> np.ndarray:
     # 'bfloat16' by _arr_dtype_str so deserialize restores it.
     try:
         import mlx.core as mx
+
         if getattr(arr, "dtype", None) == mx.bfloat16:
             arr = arr.astype(mx.float32)
     except Exception:
@@ -69,7 +70,11 @@ def _arr_dtype_str(orig, np_arr: np.ndarray) -> str:
     the original dtype; everything else uses the numpy dtype string."""
     try:
         import mlx.core as mx
-        if not isinstance(orig, np.ndarray) and getattr(orig, "dtype", None) == mx.bfloat16:
+
+        if (
+            not isinstance(orig, np.ndarray)
+            and getattr(orig, "dtype", None) == mx.bfloat16
+        ):
             return "bfloat16"
     except Exception:
         pass
@@ -83,6 +88,7 @@ def _numpy_to_mx(np_arr: np.ndarray, dtype_str: str | None = None):
     no bf16) — cast back to bfloat16 to faithfully restore the original cache."""
     try:
         import mlx.core as mx
+
         a = mx.array(np_arr)
         if dtype_str == "bfloat16":
             a = a.astype(mx.bfloat16)
@@ -165,6 +171,7 @@ _DECOMPRESS = {
 @dataclass
 class SerializedBlock:
     """Holds deserialized block metadata + tensor data."""
+
     block: KVBlock
     key_data: np.ndarray
     value_data: np.ndarray
@@ -212,7 +219,15 @@ class KVCacheSerializer:
         # Build metadata
         parts = []
         # Fixed prefix
-        parts.append(struct.pack(_BLOCK_META_PREFIX, block.block_id, block_hash, block.ref_count, block.block_size if hasattr(block, 'block_size') else 0))
+        parts.append(
+            struct.pack(
+                _BLOCK_META_PREFIX,
+                block.block_id,
+                block_hash,
+                block.ref_count,
+                block.block_size if hasattr(block, "block_size") else 0,
+            )
+        )
         # Hash presence flag
         parts.append(struct.pack(">B", block_hash_flag))
         # Key array info
@@ -386,7 +401,9 @@ class KVCacheSerializer:
         magic, version = struct.unpack_from(_FILE_HEADER_FMT, data, offset)
         offset += _FILE_HEADER_SIZE
         if magic != MAGIC:
-            raise ValueError(f"Invalid magic number: 0x{magic:08X}, expected 0x{MAGIC:08X}")
+            raise ValueError(
+                f"Invalid magic number: 0x{magic:08X}, expected 0x{MAGIC:08X}"
+            )
         if version != VERSION:
             raise ValueError(f"Unsupported version: {version}, expected {VERSION}")
 
@@ -474,7 +491,9 @@ class KVCacheSerializer:
 
     # ── File I/O ──────────────────────────────────────────────────
 
-    def save_to_file(self, path: str, table: BlockTable, key_cache, value_cache) -> None:
+    def save_to_file(
+        self, path: str, table: BlockTable, key_cache, value_cache
+    ) -> None:
         """Write serialized table to disk."""
         data = self.serialize_table(table, key_cache, value_cache)
         with open(path, "wb") as f:

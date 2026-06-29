@@ -30,7 +30,8 @@ logger = logging.getLogger(__name__)
 
 class StreamFormat(Enum):
     """Detected tool-call output format."""
-    XML = auto()            # <tool_call...>...</tool_call...>
+
+    XML = auto()  # <tool_call...>...</tool_call...>
     DEEPSEEK_FUNCTION = auto()  # ✿FUNCTION✿ format
     # formats the incremental state machine does NOT understand (Mistral
     # [TOOL_CALLS], Qwen <function=name>, etc.). The non-streaming parse_tool_calls handles
@@ -42,10 +43,11 @@ class StreamFormat(Enum):
 
 class StreamState(Enum):
     """States for the tool call stream parser."""
-    TEXT = auto()        # Normal text output
-    TAG_START = auto()   # Potentially inside opening <tool_call...> tag
-    TOOL_JSON = auto()   # Inside tool call JSON body
-    TAG_END = auto()     # Potentially inside closing </tool_call...> tag
+
+    TEXT = auto()  # Normal text output
+    TAG_START = auto()  # Potentially inside opening <tool_call...> tag
+    TOOL_JSON = auto()  # Inside tool call JSON body
+    TAG_END = auto()  # Potentially inside closing </tool_call...> tag
 
 
 # We need to detect these opening tag variants:
@@ -76,6 +78,7 @@ _BUFFER_ALL_MARKERS = (
 @dataclass
 class ToolCallResult:
     """A parsed tool call extracted from the stream."""
+
     id: str
     name: str
     arguments: str  # JSON string
@@ -91,6 +94,7 @@ class StreamOutput:
     - 'tool_call_start': beginning of a tool call (carries id + name)
     - 'tool_call_args_delta': incremental argument fragment for streaming
     """
+
     text: str = ""
     tool_call: ToolCallResult | None = None
     state: StreamState = StreamState.TEXT
@@ -158,22 +162,30 @@ class ToolCallStreamer:
         # pass-through, so there is zero behaviour change for normal requests.
         self._forced_tool_name = forced_tool_name
         self._allow_parallel = allow_parallel
-        self._tc_accepted = 0          # number of tool calls surfaced so far
-        self._tc_suppressing = False   # is the in-flight call being dropped?
-        self._tc_in_call = False       # have we seen a start not yet completed?
+        self._tc_accepted = 0  # number of tool calls surfaced so far
+        self._tc_suppressing = False  # is the in-flight call being dropped?
+        self._tc_in_call = False  # have we seen a start not yet completed?
 
         self._state = StreamState.TEXT
         self._format: StreamFormat = StreamFormat.XML
         self._buffer = ""
         self._json_buffer = ""  # Accumulated JSON inside tool call
-        self._pending_json_text = ""  # Saved JSON when closing tag is split across tokens
+        self._pending_json_text = (
+            ""  # Saved JSON when closing tag is split across tokens
+        )
         # Incremental streaming state
-        self._current_tc_id: str = ""      # ID of the tool call being streamed
-        self._current_tc_name: str = ""    # Name of the tool call being streamed
-        self._current_tc_start_emitted: bool = False  # Whether we emitted tool_call_start
-        self._json_name_parsed: bool = False  # Whether we extracted name from partial JSON
-        self._args_emit_offset: int = 0    # Buffer offset where args portion begins
-        self._args_emitted_up_to: int = 0  # Buffer offset up to which args have been emitted
+        self._current_tc_id: str = ""  # ID of the tool call being streamed
+        self._current_tc_name: str = ""  # Name of the tool call being streamed
+        self._current_tc_start_emitted: bool = (
+            False  # Whether we emitted tool_call_start
+        )
+        self._json_name_parsed: bool = (
+            False  # Whether we extracted name from partial JSON
+        )
+        self._args_emit_offset: int = 0  # Buffer offset where args portion begins
+        self._args_emitted_up_to: int = (
+            0  # Buffer offset up to which args have been emitted
+        )
 
     @property
     def state(self) -> StreamState:
@@ -348,7 +360,7 @@ class ToolCallStreamer:
                 if escape_next:
                     escape_next = False
                     continue
-                if ch == '\\' and in_string:
+                if ch == "\\" and in_string:
                     escape_next = True
                     continue
                 if ch == '"':
@@ -395,14 +407,20 @@ class ToolCallStreamer:
                     # [TOOL_CALLS], Qwen <function=>, …). Emit any legit text BEFORE the
                     # marker, then buffer from the marker on and parse at flush.
                     _ba_idx = min(
-                        (_combined.find(_m) for _m in _BUFFER_ALL_MARKERS if _m in _combined),
+                        (
+                            _combined.find(_m)
+                            for _m in _BUFFER_ALL_MARKERS
+                            if _m in _combined
+                        ),
                         default=-1,
                     )
                     if _ba_idx != -1:
                         self._format = StreamFormat.BUFFER_ALL
                         _pre = _combined[:_ba_idx]
                         self._buffer = _combined[_ba_idx:]
-                        _pre_out = [StreamOutput(text=_pre, state=self._state)] if _pre else []
+                        _pre_out = (
+                            [StreamOutput(text=_pre, state=self._state)] if _pre else []
+                        )
                         return self._apply_tool_choice(_pre_out)
 
         results: list[StreamOutput] = []
@@ -439,7 +457,7 @@ class ToolCallStreamer:
         idx = self._buffer.find(TOOL_CALL_OPEN)
         if idx != -1:
             # Check if there's a complete opening tag (ends with > or />)
-            after = self._buffer[idx + len(TOOL_CALL_OPEN):]
+            after = self._buffer[idx + len(TOOL_CALL_OPEN) :]
             close_idx = after.find(">")
             if close_idx != -1:
                 # Validate: char after <tool_call must be a valid delimiter
@@ -460,10 +478,12 @@ class ToolCallStreamer:
                         closing_text = self._buffer[idx:]
                         self._state = StreamState.TEXT
                         self._buffer = ""
-                        results.append(StreamOutput(
-                            text=closing_text,
-                            state=self._state,
-                        ))
+                        results.append(
+                            StreamOutput(
+                                text=closing_text,
+                                state=self._state,
+                            )
+                        )
                         return results
 
                     # Move to JSON mode
@@ -473,7 +493,7 @@ class ToolCallStreamer:
                     self._reset_tool_call_state()
 
                     # If there's content after the closing >, process it in TOOL_JSON
-                    remaining = after[close_idx + 1:]
+                    remaining = after[close_idx + 1 :]
                     if remaining:
                         results.extend(self._handle_tool_json_state(remaining))
 
@@ -482,7 +502,9 @@ class ToolCallStreamer:
                 # Partial tag — might be building up <tool_call...>
                 # Check if what we have so far could still become a tag
                 partial = self._buffer[idx:]
-                if TOOL_CALL_OPEN.startswith(partial) or partial.startswith(TOOL_CALL_OPEN):
+                if TOOL_CALL_OPEN.startswith(partial) or partial.startswith(
+                    TOOL_CALL_OPEN
+                ):
                     # Could still become a tag. But if buffer before the
                     # partial is large, we should flush it.
                     before = self._buffer[:idx]
@@ -491,7 +513,9 @@ class ToolCallStreamer:
                         # Switch to TAG_START to wait for >
                         self._state = StreamState.TAG_START
                         if before:
-                            results.append(StreamOutput(text=before, state=StreamState.TEXT))
+                            results.append(
+                                StreamOutput(text=before, state=StreamState.TEXT)
+                            )
                         self._buffer = partial
                         return results
                     elif len(before) >= self._flush_threshold:
@@ -509,7 +533,11 @@ class ToolCallStreamer:
         if len(self._buffer) >= self._flush_threshold:
             # Check if buffer tail could still become a tag
             safe_len = len(self._buffer)
-            for i in range(len(self._buffer) - 1, max(-1, len(self._buffer) - len(TOOL_CALL_OPEN) - 1), -1):
+            for i in range(
+                len(self._buffer) - 1,
+                max(-1, len(self._buffer) - len(TOOL_CALL_OPEN) - 1),
+                -1,
+            ):
                 tail = self._buffer[i:]
                 if TOOL_CALL_OPEN.startswith(tail):
                     safe_len = i
@@ -540,7 +568,8 @@ class ToolCallStreamer:
             # at len(TOOL_CALL_OPEN).
             first_after = (
                 self._buffer[len(TOOL_CALL_OPEN)]
-                if len(self._buffer) > len(TOOL_CALL_OPEN) else ">"
+                if len(self._buffer) > len(TOOL_CALL_OPEN)
+                else ">"
             )
             if first_after not in (">", " ", "/", "\\"):
                 # Not a tool_call tag — revert to TEXT and re-scan via the unified text
@@ -556,8 +585,8 @@ class ToolCallStreamer:
 
         # If buffer gets too long without >, it's not a valid tag
         if len(self._buffer) > self._flush_threshold:
-            text = self._buffer[:self._flush_threshold]
-            self._buffer = self._buffer[self._flush_threshold:]
+            text = self._buffer[: self._flush_threshold]
+            self._buffer = self._buffer[self._flush_threshold :]
             self._state = StreamState.TEXT
             results.append(StreamOutput(text=text, state=self._state))
             # Re-process remaining buffer in TEXT state
@@ -594,21 +623,23 @@ class ToolCallStreamer:
         if close_idx != -1:
             # ── Closing tag found ──
             json_text = combined[:close_idx].strip()
-            after_close = combined[close_idx + len(TOOL_CALL_CLOSE):]
+            after_close = combined[close_idx + len(TOOL_CALL_CLOSE) :]
 
             # If we haven't emitted start yet, do so now
             if not self._current_tc_start_emitted:
                 self._try_parse_name(json_text)
                 if self._current_tc_name:
                     self._current_tc_id = self._next_call_id()
-                    results.append(StreamOutput(
-                        tool_call_start=ToolCallResult(
-                            id=self._current_tc_id,
-                            name=self._current_tc_name,
-                            arguments="",
-                        ),
-                        state=StreamState.TOOL_JSON,
-                    ))
+                    results.append(
+                        StreamOutput(
+                            tool_call_start=ToolCallResult(
+                                id=self._current_tc_id,
+                                name=self._current_tc_name,
+                                arguments="",
+                            ),
+                            state=StreamState.TOOL_JSON,
+                        )
+                    )
                     self._current_tc_start_emitted = True
 
             # Emit any remaining args text that hasn't been emitted yet
@@ -622,15 +653,17 @@ class ToolCallStreamer:
                 _end = close_idx if _val_end < 0 else min(close_idx, _val_end)
                 remaining_args = combined[unemitted_start:_end]
                 if remaining_args:
-                    results.append(StreamOutput(
-                        tool_call_args_delta=remaining_args,
-                        state=StreamState.TOOL_JSON,
-                    ))
+                    results.append(
+                        StreamOutput(
+                            tool_call_args_delta=remaining_args,
+                            state=StreamState.TOOL_JSON,
+                        )
+                    )
 
             # Find the > of the closing tag
             gt_idx = after_close.find(">")
             if gt_idx != -1:
-                remaining = after_close[gt_idx + 1:]
+                remaining = after_close[gt_idx + 1 :]
 
                 # Parse the complete JSON for the full tool_call output
                 tool_call = self._parse_tool_json(json_text)
@@ -644,6 +677,7 @@ class ToolCallStreamer:
                     # GLM parser on the reconstructed markup.
                     try:
                         from .tool_call_parser import parse_tool_calls
+
                         _glm = parse_tool_calls(
                             f"{TOOL_CALL_OPEN}>{json_text}{TOOL_CALL_CLOSE}>",
                             model_name=self._model_name or "glm",
@@ -653,7 +687,9 @@ class ToolCallStreamer:
                     if _glm:
                         _c = _glm[0]
                         tool_call = ToolCallResult(
-                            id=self._current_tc_id if self._current_tc_start_emitted else self._next_call_id(),
+                            id=self._current_tc_id
+                            if self._current_tc_start_emitted
+                            else self._next_call_id(),
                             name=getattr(_c, "name", "") or "",
                             arguments=getattr(_c, "arguments", "") or "{}",
                         )
@@ -661,10 +697,12 @@ class ToolCallStreamer:
                     # Use the id/name we already assigned during streaming
                     if self._current_tc_start_emitted:
                         tool_call.id = self._current_tc_id
-                    results.append(StreamOutput(
-                        tool_call=tool_call,
-                        state=StreamState.TOOL_JSON,
-                    ))
+                    results.append(
+                        StreamOutput(
+                            tool_call=tool_call,
+                            state=StreamState.TOOL_JSON,
+                        )
+                    )
 
                 self._reset_tool_call_state()
                 self._state = StreamState.TEXT
@@ -703,14 +741,16 @@ class ToolCallStreamer:
                 self._current_tc_id = self._next_call_id()
                 # Emit tool_call_start so the gateway can send the initial
                 # SSE chunk with id + name (arguments="").
-                results.append(StreamOutput(
-                    tool_call_start=ToolCallResult(
-                        id=self._current_tc_id,
-                        name=self._current_tc_name,
-                        arguments="",
-                    ),
-                    state=StreamState.TOOL_JSON,
-                ))
+                results.append(
+                    StreamOutput(
+                        tool_call_start=ToolCallResult(
+                            id=self._current_tc_id,
+                            name=self._current_tc_name,
+                            arguments="",
+                        ),
+                        state=StreamState.TOOL_JSON,
+                    )
+                )
                 self._current_tc_start_emitted = True
 
         # Phase 2: Look for "arguments": boundary to set emit offset
@@ -719,7 +759,7 @@ class ToolCallStreamer:
             # We want the offset of the value *after* "arguments": (or "parameters":)
             for key in ('"arguments"', '"parameters"'):
                 args_match = re.search(
-                    key + r'\s*:\s*',
+                    key + r"\s*:\s*",
                     self._json_buffer,
                 )
                 if args_match:
@@ -738,22 +778,28 @@ class ToolCallStreamer:
                 # Find the safe prefix: everything before a potential
                 # partial TOOL_CALL_CLOSE at the tail.
                 safe_end = len(raw)
-                for si in range(len(raw) - 1, max(-1, len(raw) - len(TOOL_CALL_CLOSE) - 1), -1):
+                for si in range(
+                    len(raw) - 1, max(-1, len(raw) - len(TOOL_CALL_CLOSE) - 1), -1
+                ):
                     tail = raw[si:]
                     if TOOL_CALL_CLOSE.startswith(tail):
                         safe_end = si
                         break
                 # Never emit past the balanced end of the arguments value — the
                 # trailing outer '}' belongs to the wrapper object, not the args.
-                _val_end = self._args_value_end(self._json_buffer, self._args_emit_offset)
+                _val_end = self._args_value_end(
+                    self._json_buffer, self._args_emit_offset
+                )
                 if _val_end >= 0:
                     safe_end = min(safe_end, max(0, _val_end - emit_start))
                 if safe_end > 0:
                     delta = raw[:safe_end]
-                    results.append(StreamOutput(
-                        tool_call_args_delta=delta,
-                        state=StreamState.TOOL_JSON,
-                    ))
+                    results.append(
+                        StreamOutput(
+                            tool_call_args_delta=delta,
+                            state=StreamState.TOOL_JSON,
+                        )
+                    )
                     self._args_emitted_up_to = emit_start + safe_end
 
         return results
@@ -770,23 +816,25 @@ class ToolCallStreamer:
 
         close_idx = self._buffer.find(">")
         if close_idx != -1:
-            remaining = self._buffer[close_idx + 1:]
+            remaining = self._buffer[close_idx + 1 :]
             self._buffer = ""
 
             # Parse the saved JSON text now that we have the complete closing tag
-            json_text = getattr(self, '_pending_json_text', '')
-            self._pending_json_text = ''
-            self._json_buffer = ''
+            json_text = getattr(self, "_pending_json_text", "")
+            self._pending_json_text = ""
+            self._json_buffer = ""
 
             tool_call = self._parse_tool_json(json_text) if json_text else None
             if tool_call:
                 # Use the id/name we already assigned during streaming
                 if self._current_tc_start_emitted:
                     tool_call.id = self._current_tc_id
-                results.append(StreamOutput(
-                    tool_call=tool_call,
-                    state=StreamState.TAG_END,
-                ))
+                results.append(
+                    StreamOutput(
+                        tool_call=tool_call,
+                        state=StreamState.TAG_END,
+                    )
+                )
 
             self._reset_tool_call_state()
             self._state = StreamState.TEXT
@@ -794,8 +842,10 @@ class ToolCallStreamer:
                 results.extend(self._handle_text_state(remaining))
         elif len(self._buffer) > self._flush_threshold:
             # Not a valid closing tag — emit saved JSON + partial tag as text
-            text = getattr(self, '_pending_json_text', '') + TOOL_CALL_CLOSE + self._buffer
-            self._pending_json_text = ''
+            text = (
+                getattr(self, "_pending_json_text", "") + TOOL_CALL_CLOSE + self._buffer
+            )
+            self._pending_json_text = ""
             self._buffer = ""
             self._state = StreamState.TEXT
             self._reset_tool_call_state()
@@ -836,7 +886,9 @@ class ToolCallStreamer:
             return results
 
         # Extract function name from between marker and ```json
-        marker_end = self._buffer.find(DEEPSEEK_FUNCTION_MARKER) + len(DEEPSEEK_FUNCTION_MARKER)
+        marker_end = self._buffer.find(DEEPSEEK_FUNCTION_MARKER) + len(
+            DEEPSEEK_FUNCTION_MARKER
+        )
         header = self._buffer[marker_end:json_fence_start].strip()
         # Header is like ": function_name" or just "function_name"
         name = header.lstrip(": \n\r\t")
@@ -855,8 +907,10 @@ class ToolCallStreamer:
             # JSON body still accumulating — enforce buffer limit to prevent
             # unbounded growth when the model hallucinates an opening fence.
             if len(self._buffer) > self._json_buffer_limit:
-                logger.warning("DeepSeek handler buffer exceeded limit (%d bytes), flushing",
-                               self._json_buffer_limit)
+                logger.warning(
+                    "DeepSeek handler buffer exceeded limit (%d bytes), flushing",
+                    self._json_buffer_limit,
+                )
                 text = self._buffer
                 self._buffer = ""
                 results.append(StreamOutput(text=text, state=self._state))
@@ -881,17 +935,19 @@ class ToolCallStreamer:
                 args_str = "{}"
 
         if name:
-            results.append(StreamOutput(
-                tool_call=ToolCallResult(
-                    id=self._next_call_id(),
-                    name=name,
-                    arguments=args_str,
-                ),
-                state=self._state,
-            ))
+            results.append(
+                StreamOutput(
+                    tool_call=ToolCallResult(
+                        id=self._next_call_id(),
+                        name=name,
+                        arguments=args_str,
+                    ),
+                    state=self._state,
+                )
+            )
 
         # Consume processed portion; keep any remaining text
-        remaining = self._buffer[close_fence + 3:]
+        remaining = self._buffer[close_fence + 3 :]
         self._buffer = ""
 
         # Re-process remaining text in TEXT state for subsequent calls
@@ -955,7 +1011,7 @@ class ToolCallStreamer:
                         if escape_next:
                             escape_next = False
                             continue
-                        if ch == '\\' and in_string:
+                        if ch == "\\" and in_string:
                             escape_next = True
                             continue
                         if ch == '"':
@@ -963,12 +1019,12 @@ class ToolCallStreamer:
                             continue
                         if in_string:
                             continue
-                        if ch == '{':
+                        if ch == "{":
                             depth += 1
-                        elif ch == '}':
+                        elif ch == "}":
                             depth -= 1
                             if depth == 0:
-                                args_str = json_text[brace_start:ci + 1]
+                                args_str = json_text[brace_start : ci + 1]
                                 break
                 else:
                     args_str = "{}"
@@ -994,6 +1050,7 @@ class ToolCallStreamer:
             self._buffer = ""
             try:
                 from .tool_call_parser import parse_tool_calls
+
                 _calls = parse_tool_calls(_buf, model_name=self._model_name)
             except Exception:
                 _calls = []
@@ -1004,11 +1061,16 @@ class ToolCallStreamer:
                 for _c in _calls:
                     _name = getattr(_c, "name", None)
                     _args = getattr(_c, "arguments", None)  # already a JSON string
-                    results.append(StreamOutput(
-                        tool_call=ToolCallResult(
-                            id=self._next_call_id(), name=_name or "", arguments=_args or "{}"),
-                        state=StreamState.TEXT,
-                    ))
+                    results.append(
+                        StreamOutput(
+                            tool_call=ToolCallResult(
+                                id=self._next_call_id(),
+                                name=_name or "",
+                                arguments=_args or "{}",
+                            ),
+                            state=StreamState.TEXT,
+                        )
+                    )
             else:
                 # No parseable calls — the marker was a false positive; emit as text.
                 results.append(StreamOutput(text=_buf, state=StreamState.TEXT))
@@ -1025,16 +1087,20 @@ class ToolCallStreamer:
                 # Use the id/name we already assigned during streaming
                 if self._current_tc_start_emitted:
                     tool_call.id = self._current_tc_id
-                results.append(StreamOutput(
-                    tool_call=tool_call,
-                    state=self._state,
-                ))
+                results.append(
+                    StreamOutput(
+                        tool_call=tool_call,
+                        state=self._state,
+                    )
+                )
             else:
                 # Can't parse — emit as text
-                results.append(StreamOutput(
-                    text=self._json_buffer,
-                    state=self._state,
-                ))
+                results.append(
+                    StreamOutput(
+                        text=self._json_buffer,
+                        state=self._state,
+                    )
+                )
             self._json_buffer = ""
         elif self._state == StreamState.TAG_START:
             # Was waiting for > but stream ended — buffer already contains the partial tag
@@ -1046,17 +1112,19 @@ class ToolCallStreamer:
             # Try to parse the pending JSON as a complete tool call before
             # falling back to emitting as text — the closing '>' is cosmetic
             # and the JSON body is likely complete.
-            json_text = getattr(self, '_pending_json_text', '')
-            self._pending_json_text = ''
+            json_text = getattr(self, "_pending_json_text", "")
+            self._pending_json_text = ""
             if json_text.strip():
                 tool_call = self._parse_tool_json(json_text.strip())
                 if tool_call:
                     if self._current_tc_start_emitted:
                         tool_call.id = self._current_tc_id
-                    results.append(StreamOutput(
-                        tool_call=tool_call,
-                        state=self._state,
-                    ))
+                    results.append(
+                        StreamOutput(
+                            tool_call=tool_call,
+                            state=self._state,
+                        )
+                    )
                     self._buffer = ""
                 else:
                     # Can't parse — emit accumulated content as text
@@ -1078,7 +1146,8 @@ class ToolCallStreamer:
         # early BUFFER_ALL detection missed it), recover the calls now so the agent loop
         # isn't broken by a silently-dropped tool call.
         _net_emitted = self._emitted_tool_call or any(
-            o.tool_call is not None or o.tool_call_start is not None for o in results)
+            o.tool_call is not None or o.tool_call_start is not None for o in results
+        )
         # Only recover when a STRUCTURAL marker is present — never via parse_tool_calls'
         # loose direct-JSON fallback, which would turn plain content like {"name": "Alice"}
         # into a bogus tool call.
@@ -1089,17 +1158,23 @@ class ToolCallStreamer:
         if not _net_emitted and _has_marker and self._seen_text:
             try:
                 from .tool_call_parser import parse_tool_calls
-                _recovered = parse_tool_calls(self._seen_text, model_name=self._model_name)
+
+                _recovered = parse_tool_calls(
+                    self._seen_text, model_name=self._model_name
+                )
             except Exception:
                 _recovered = []
             for _c in _recovered:
-                results.append(StreamOutput(
-                    tool_call=ToolCallResult(
-                        id=self._next_call_id(),
-                        name=getattr(_c, "name", "") or "",
-                        arguments=getattr(_c, "arguments", "{}") or "{}"),
-                    state=StreamState.TEXT,
-                ))
+                results.append(
+                    StreamOutput(
+                        tool_call=ToolCallResult(
+                            id=self._next_call_id(),
+                            name=getattr(_c, "name", "") or "",
+                            arguments=getattr(_c, "arguments", "{}") or "{}",
+                        ),
+                        state=StreamState.TEXT,
+                    )
+                )
 
         self._reset_tool_call_state()
         self._state = StreamState.TEXT

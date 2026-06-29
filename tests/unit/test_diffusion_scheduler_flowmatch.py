@@ -10,6 +10,7 @@ s/(1-s), Karras is sigma_k, so s = sigma_k/(1+sigma_k) maps [0,inf)->[0,1) prese
 relative spacing. This test exercises _resolve_sigmas directly (no model load) and asserts
 the resulting schedule is flow-matching-valid.
 """
+
 from __future__ import annotations
 
 import mlx.core as mx
@@ -34,7 +35,9 @@ def test_opt_in_sigmas_are_flow_matching_valid():
         # every sigma strictly inside (0, 1) — NOT the raw [0.03, 14.6] Karras range
         assert all(0.0 < s < 1.0 for s in body), f"{st}: sigma out of [0,1]: {body}"
         # monotonically descending (Euler dt = s[i+1]-s[i] must stay negative)
-        assert all(body[i] > body[i + 1] for i in range(len(body) - 1)), f"{st}: not descending"
+        assert all(body[i] > body[i + 1] for i in range(len(body) - 1)), (
+            f"{st}: not descending"
+        )
         # timestep = 1 - sigma must never go negative (the original bug)
         assert all((1.0 - s) >= 0.0 for s in body)
 

@@ -36,18 +36,23 @@ def _make_mock_tokenizer():
 def _patch_engine():
     """Patch EngineCore's heavy dependencies for all tests."""
     from concurrent.futures import ThreadPoolExecutor
+
     real_executor = ThreadPoolExecutor(max_workers=1)
 
     with ExitStack() as stack:
         stack.enter_context(
-            patch('yunshu_engine.mlx_executor.get_mlx_executor', return_value=real_executor)
+            patch(
+                "yunshu_engine.mlx_executor.get_mlx_executor",
+                return_value=real_executor,
+            )
         )
-        stack.enter_context(patch('yunshu_engine.scheduler.Scheduler'))
+        stack.enter_context(patch("yunshu_engine.scheduler.Scheduler"))
         yield
 
 
 def _make_core(**env_overrides):
     from yunshu_engine.engine_core import EngineCore, EngineCoreConfig
+
     patches = []
     for k, v in env_overrides.items():
         p = patch.dict(os.environ, {k: v})
@@ -55,7 +60,8 @@ def _make_core(**env_overrides):
         patches.append(p)
     try:
         core = EngineCore(
-            _make_mock_model(), _make_mock_tokenizer(),
+            _make_mock_model(),
+            _make_mock_tokenizer(),
             config=EngineCoreConfig(),
         )
     finally:
@@ -102,7 +108,7 @@ class TestEngineCoreWiring:
 
     def test_composition_scheduler_field_exists(self):
         core = _make_core()
-        assert hasattr(core, '_composition_scheduler')
+        assert hasattr(core, "_composition_scheduler")
 
 
 class TestEngineCoreStatsWiring:
@@ -113,8 +119,14 @@ class TestEngineCoreStatsWiring:
         core._start_time = None
         stats = core.get_stats()
         expected_keys = [
-            "lifecycle", "budget", "kv_lifecycle", "token_scheduler",
-            "auto_tuner", "fairness", "profiler", "slo",
+            "lifecycle",
+            "budget",
+            "kv_lifecycle",
+            "token_scheduler",
+            "auto_tuner",
+            "fairness",
+            "profiler",
+            "slo",
         ]
         for key in expected_keys:
             assert key in stats, f"Missing stats key: {key}"
@@ -150,6 +162,7 @@ class TestLifecycleWiringInAddRequest:
         state = core._lifecycle_orchestrator.get_state(req_id)
         assert state is not None
         from yunshu_engine.request_lifecycle import RequestPhase
+
         assert state.phase in (RequestPhase.QUEUED, RequestPhase.PREFILLING)
 
 
@@ -171,11 +184,13 @@ class TestBatchedEngineWiring:
 
     def test_preprocessor_registry_created(self):
         from yunshu_engine.batched_engine import BatchedEngine
+
         engine = BatchedEngine(model_name="test-model")
         assert engine._preprocessor_registry is not None
 
     def test_stats_include_preprocessor(self):
         from yunshu_engine.batched_engine import BatchedEngine
+
         engine = BatchedEngine(model_name="test-model")
         engine._loaded = False
         stats = engine.get_stats()

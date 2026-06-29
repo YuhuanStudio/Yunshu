@@ -7,6 +7,7 @@ NOTE: generate_step/make_sampler are lazy-imported inside function bodies,
 so we patch at the source module. We use a real ThreadPoolExecutor so
 run_in_executor works correctly.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -20,9 +21,11 @@ pytest.importorskip("mlx_vlm")
 
 # ── Helpers ──
 
+
 def _make_vlm_engine():
     """Create a VLMEngine with mocked internals for finish_reason testing."""
     from yunshu_engine.vlm_engine import VLMEngine
+
     engine = object.__new__(VLMEngine)
     engine._model_path = "/models/test-model"
     engine._model = MagicMock()
@@ -74,9 +77,11 @@ class TestVLMNonStreamingFinishReason:
         engine._extract_video_frames = AsyncMock(return_value=[])
         engine._tokenize_with_cache = MagicMock(return_value=[1, 2, 3])
 
-        with patch.object(engine, '_format_prompt', return_value="test prompt"):
-            with patch('mlx_lm.generate.generate_step') as mock_step, \
-                 patch('mlx_lm.sample_utils.make_sampler'):
+        with patch.object(engine, "_format_prompt", return_value="test prompt"):
+            with (
+                patch("mlx_lm.generate.generate_step") as mock_step,
+                patch("mlx_lm.sample_utils.make_sampler"),
+            ):
                 mock_step.return_value = iter([(100, None), (101, None), (102, None)])
                 engine._get_eos_ids = MagicMock(return_value=[2])
 
@@ -101,9 +106,11 @@ class TestVLMNonStreamingFinishReason:
         engine._extract_video_frames = AsyncMock(return_value=[])
         engine._tokenize_with_cache = MagicMock(return_value=[1, 2, 3])
 
-        with patch.object(engine, '_format_prompt', return_value="test prompt"):
-            with patch('mlx_lm.generate.generate_step') as mock_step, \
-                 patch('mlx_lm.sample_utils.make_sampler'):
+        with patch.object(engine, "_format_prompt", return_value="test prompt"):
+            with (
+                patch("mlx_lm.generate.generate_step") as mock_step,
+                patch("mlx_lm.sample_utils.make_sampler"),
+            ):
                 mock_step.return_value = iter([(100, None), (2, None)])
                 engine._get_eos_ids = MagicMock(return_value=[2])
 
@@ -131,11 +138,14 @@ class TestVLMNonStreamingFinishReason:
             if text == "STOP":
                 return [999]
             return [1, 2, 3]
+
         engine._tokenizer.encode.side_effect = mock_encode
 
-        with patch.object(engine, '_format_prompt', return_value="test prompt"):
-            with patch('mlx_lm.generate.generate_step') as mock_step, \
-                 patch('mlx_lm.sample_utils.make_sampler'):
+        with patch.object(engine, "_format_prompt", return_value="test prompt"):
+            with (
+                patch("mlx_lm.generate.generate_step") as mock_step,
+                patch("mlx_lm.sample_utils.make_sampler"),
+            ):
                 mock_step.return_value = iter([(100, None), (999, None)])
                 engine._get_eos_ids = MagicMock(return_value=[2])
 
@@ -171,16 +181,24 @@ class TestVLMNonStreamingFinishReason:
             if text == "</think":
                 return [think_end_id]
             return [1, 2, 3]
+
         engine._tokenizer.encode.side_effect = mock_encode
 
-        with patch.object(engine, '_format_prompt', return_value="test prompt"):
-            with patch('mlx_lm.generate.generate_step') as mock_step, \
-                 patch('mlx_lm.sample_utils.make_sampler'):
-                mock_step.return_value = iter([
-                    (think_start_id, None),
-                    (200, None), (201, None), (202, None),
-                    (203, None), (204, None),
-                ])
+        with patch.object(engine, "_format_prompt", return_value="test prompt"):
+            with (
+                patch("mlx_lm.generate.generate_step") as mock_step,
+                patch("mlx_lm.sample_utils.make_sampler"),
+            ):
+                mock_step.return_value = iter(
+                    [
+                        (think_start_id, None),
+                        (200, None),
+                        (201, None),
+                        (202, None),
+                        (203, None),
+                        (204, None),
+                    ]
+                )
                 engine._get_eos_ids = MagicMock(return_value=[2])
 
                 result = await engine.generate(
@@ -199,8 +217,10 @@ class TestVLMNonStreamingFinishReason:
         engine._extract_audio = AsyncMock(return_value=[])
         engine._extract_video_frames = AsyncMock(return_value=[])
 
-        with patch.object(engine, '_format_prompt', return_value="test prompt"):
-            with patch('mlx_lm.generate.generate_step', side_effect=RuntimeError("GPU error")):
+        with patch.object(engine, "_format_prompt", return_value="test prompt"):
+            with patch(
+                "mlx_lm.generate.generate_step", side_effect=RuntimeError("GPU error")
+            ):
                 engine._tokenize_with_cache = MagicMock(return_value=[1, 2, 3])
                 engine._get_eos_ids = MagicMock(return_value=[2])
                 engine._tokenizer.decode.return_value = "test"
@@ -237,8 +257,10 @@ class TestVLMStreamingFinishReason:
         engine._extract_audio = AsyncMock(return_value=[])
         engine._extract_video_frames = AsyncMock(return_value=[])
 
-        with patch('mlx_lm.generate.generate_step') as mock_step, \
-             patch('mlx_lm.sample_utils.make_sampler'):
+        with (
+            patch("mlx_lm.generate.generate_step") as mock_step,
+            patch("mlx_lm.sample_utils.make_sampler"),
+        ):
             mock_step.return_value = iter([(100, None), (101, None), (102, None)])
             engine._get_eos_ids = MagicMock(return_value=[2])
             engine._tokenize_with_cache = MagicMock(return_value=[1, 2, 3])
@@ -272,8 +294,10 @@ class TestVLMStreamingFinishReason:
         engine._extract_audio = AsyncMock(return_value=[])
         engine._extract_video_frames = AsyncMock(return_value=[])
 
-        with patch('mlx_lm.generate.generate_step') as mock_step, \
-             patch('mlx_lm.sample_utils.make_sampler'):
+        with (
+            patch("mlx_lm.generate.generate_step") as mock_step,
+            patch("mlx_lm.sample_utils.make_sampler"),
+        ):
             mock_step.return_value = iter([(100, None), (2, None)])
             engine._get_eos_ids = MagicMock(return_value=[2])
             engine._tokenize_with_cache = MagicMock(return_value=[1, 2, 3])
@@ -302,7 +326,9 @@ class TestVLMStreamingFinishReason:
         engine._extract_audio = AsyncMock(return_value=[])
         engine._extract_video_frames = AsyncMock(return_value=[])
 
-        with patch('mlx_lm.generate.generate_step', side_effect=RuntimeError("CUDA OOM")):
+        with patch(
+            "mlx_lm.generate.generate_step", side_effect=RuntimeError("CUDA OOM")
+        ):
             engine._get_eos_ids = MagicMock(return_value=[2])
             engine._tokenize_with_cache = MagicMock(return_value=[1, 2, 3])
 
@@ -344,7 +370,7 @@ class TestVLMStreamingFinishReason:
             cancel_event.set()
             return token_iter
 
-        with patch('mlx_lm.generate.generate_step', side_effect=_step_fn):
+        with patch("mlx_lm.generate.generate_step", side_effect=_step_fn):
             engine._get_eos_ids = MagicMock(return_value=[2])
             engine._tokenize_with_cache = MagicMock(return_value=[1, 2, 3])
 
@@ -390,14 +416,21 @@ class TestVLMStreamingFinishReason:
             if text == "</think":
                 return [think_end_id]
             return [1, 2, 3]
+
         engine._tokenizer.encode.side_effect = mock_encode
 
-        with patch('mlx_lm.generate.generate_step') as mock_step, \
-             patch('mlx_lm.sample_utils.make_sampler'):
-            mock_step.return_value = iter([
-                (think_start_id, None),
-                (200, None), (201, None), (202, None),
-            ])
+        with (
+            patch("mlx_lm.generate.generate_step") as mock_step,
+            patch("mlx_lm.sample_utils.make_sampler"),
+        ):
+            mock_step.return_value = iter(
+                [
+                    (think_start_id, None),
+                    (200, None),
+                    (201, None),
+                    (202, None),
+                ]
+            )
             engine._get_eos_ids = MagicMock(return_value=[2])
             engine._tokenize_with_cache = MagicMock(return_value=[1, 2, 3])
 
@@ -431,8 +464,10 @@ class TestVLMStreamingFinishReason:
         engine._extract_audio = AsyncMock(return_value=[])
         engine._extract_video_frames = AsyncMock(return_value=[])
 
-        with patch('mlx_lm.generate.generate_step') as mock_step, \
-             patch('mlx_lm.sample_utils.make_sampler'):
+        with (
+            patch("mlx_lm.generate.generate_step") as mock_step,
+            patch("mlx_lm.sample_utils.make_sampler"),
+        ):
             mock_step.return_value = iter([(100, None), (101, None)])
             engine._get_eos_ids = MagicMock(return_value=[2])
             engine._tokenize_with_cache = MagicMock(return_value=[1, 2, 3])
@@ -481,16 +516,22 @@ class TestVLMVisionFinishReason:
         engine._tokenizer.encode.return_value = [1, 2, 3]
         engine._tokenizer.decode.return_value = "Hello world STOP more text"
 
-        with patch('mlx_vlm.generate.generate', return_value=mock_result):
-            with patch('yunshu_engine.mrope.detect_mrope') as mock_mrope:
+        with patch("mlx_vlm.generate.generate", return_value=mock_result):
+            with patch("yunshu_engine.mrope.detect_mrope") as mock_mrope:
                 mock_mrope.return_value = MagicMock(enabled=False)
 
                 result = await engine.generate(
                     messages=[
-                        {"role": "user", "content": [
-                            {"type": "text", "text": "describe"},
-                            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
-                        ]},
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "describe"},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": "data:image/png;base64,abc"},
+                                },
+                            ],
+                        },
                     ],
                     max_tokens=100,
                     stop=["STOP"],
@@ -523,16 +564,22 @@ class TestVLMVisionFinishReason:
         engine._tokenizer.encode.return_value = [1, 2, 3]
         engine._tokenizer.decode.return_value = "Hello world"
 
-        with patch('mlx_vlm.generate.generate', return_value=mock_result):
-            with patch('yunshu_engine.mrope.detect_mrope') as mock_mrope:
+        with patch("mlx_vlm.generate.generate", return_value=mock_result):
+            with patch("yunshu_engine.mrope.detect_mrope") as mock_mrope:
                 mock_mrope.return_value = MagicMock(enabled=False)
 
                 result = await engine.generate(
                     messages=[
-                        {"role": "user", "content": [
-                            {"type": "text", "text": "describe"},
-                            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
-                        ]},
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "describe"},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": "data:image/png;base64,abc"},
+                                },
+                            ],
+                        },
                     ],
                     max_tokens=100,
                 )
@@ -583,15 +630,21 @@ class TestVLMVisionStreamingContentLoss:
             self._make_stream_result("STOP"),
         ]
 
-        with patch('mlx_vlm.generate.stream_generate', return_value=iter(results)):
-            with patch('mlx_lm.sample_utils.make_sampler'):
+        with patch("mlx_vlm.generate.stream_generate", return_value=iter(results)):
+            with patch("mlx_lm.sample_utils.make_sampler"):
                 outputs = []
                 async for output in vlm_engine.generate_stream(
                     messages=[
-                        {"role": "user", "content": [
-                            {"type": "text", "text": "describe"},
-                            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
-                        ]},
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "describe"},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": "data:image/png;base64,abc"},
+                                },
+                            ],
+                        },
                     ],
                     max_tokens=10,
                     stop=["STOP"],
@@ -601,7 +654,9 @@ class TestVLMVisionStreamingContentLoss:
         # Collect all emitted text
         all_text = "".join(o.new_text for o in outputs)
         # The text "hello world" should have been emitted (STOP trimmed)
-        assert "hello world" in all_text, f"Expected 'hello world' in emitted text, got: '{all_text}'"
+        assert "hello world" in all_text, (
+            f"Expected 'hello world' in emitted text, got: '{all_text}'"
+        )
 
         # Verify finish_reason
         finished = [o for o in outputs if o.finished]
@@ -630,15 +685,21 @@ class TestVLMVisionStreamingContentLoss:
             self._make_stream_result("ST"),
         ]
 
-        with patch('mlx_vlm.generate.stream_generate', return_value=iter(results)):
-            with patch('mlx_lm.sample_utils.make_sampler'):
+        with patch("mlx_vlm.generate.stream_generate", return_value=iter(results)):
+            with patch("mlx_lm.sample_utils.make_sampler"):
                 outputs = []
                 async for output in vlm_engine.generate_stream(
                     messages=[
-                        {"role": "user", "content": [
-                            {"type": "text", "text": "describe"},
-                            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
-                        ]},
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "describe"},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": "data:image/png;base64,abc"},
+                                },
+                            ],
+                        },
                     ],
                     max_tokens=10,
                     stop=["STOP"],
@@ -647,7 +708,9 @@ class TestVLMVisionStreamingContentLoss:
 
         all_text = "".join(o.new_text for o in outputs)
         # "hello " should definitely be emitted; "ST" should be flushed on exhaustion
-        assert "hello " in all_text, f"Expected 'hello ' in emitted text, got: '{all_text}'"
+        assert "hello " in all_text, (
+            f"Expected 'hello ' in emitted text, got: '{all_text}'"
+        )
 
         finished = [o for o in outputs if o.finished]
         assert len(finished) >= 1
@@ -669,15 +732,21 @@ class TestVLMVisionStreamingContentLoss:
             self._make_stream_result("hello"),
         ]
 
-        with patch('mlx_vlm.generate.stream_generate', return_value=iter(results)):
-            with patch('mlx_lm.sample_utils.make_sampler'):
+        with patch("mlx_vlm.generate.stream_generate", return_value=iter(results)):
+            with patch("mlx_lm.sample_utils.make_sampler"):
                 outputs = []
                 async for output in vlm_engine.generate_stream(
                     messages=[
-                        {"role": "user", "content": [
-                            {"type": "text", "text": "describe"},
-                            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
-                        ]},
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "describe"},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": "data:image/png;base64,abc"},
+                                },
+                            ],
+                        },
                     ],
                     max_tokens=10,
                 ):
@@ -686,7 +755,7 @@ class TestVLMVisionStreamingContentLoss:
         finished = [o for o in outputs if o.finished]
         assert len(finished) >= 1
         # current_state should be present on the terminal output
-        assert hasattr(finished[-1], 'current_state')
+        assert hasattr(finished[-1], "current_state")
         assert finished[-1].current_state in ("normal", "reasoning")
 
     @pytest.mark.asyncio
@@ -711,15 +780,21 @@ class TestVLMVisionStreamingContentLoss:
             self._make_stream_result("answer"),
         ]
 
-        with patch('mlx_vlm.generate.stream_generate', return_value=iter(results)):
-            with patch('mlx_lm.sample_utils.make_sampler'):
+        with patch("mlx_vlm.generate.stream_generate", return_value=iter(results)):
+            with patch("mlx_lm.sample_utils.make_sampler"):
                 outputs = []
                 async for output in vlm_engine.generate_stream(
                     messages=[
-                        {"role": "user", "content": [
-                            {"type": "text", "text": "describe"},
-                            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
-                        ]},
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "describe"},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": "data:image/png;base64,abc"},
+                                },
+                            ],
+                        },
                     ],
                     max_tokens=10,
                 ):
@@ -728,13 +803,15 @@ class TestVLMVisionStreamingContentLoss:
         finished = [o for o in outputs if o.finished]
         assert len(finished) >= 1
         # reasoning_tokens should be > 0 (we had thinking tokens)
-        assert finished[-1].reasoning_tokens > 0, \
+        assert finished[-1].reasoning_tokens > 0, (
             f"Expected reasoning_tokens > 0, got {finished[-1].reasoning_tokens}"
+        )
 
         # The current_state should have transitioned through reasoning
         states_seen = [o.current_state for o in outputs if o.current_state]
-        assert "reasoning" in states_seen, \
+        assert "reasoning" in states_seen, (
             f"Expected 'reasoning' in states, got: {states_seen}"
+        )
 
     @pytest.mark.asyncio
     async def test_vision_stream_error_includes_current_state(self, vlm_engine):
@@ -749,15 +826,23 @@ class TestVLMVisionStreamingContentLoss:
         vlm_engine._encoder_cache = MagicMock()
         vlm_engine._encoder_cache.get.return_value = None
 
-        with patch('mlx_vlm.generate.stream_generate', side_effect=RuntimeError("VLM crash")):
-            with patch('mlx_lm.sample_utils.make_sampler'):
+        with patch(
+            "mlx_vlm.generate.stream_generate", side_effect=RuntimeError("VLM crash")
+        ):
+            with patch("mlx_lm.sample_utils.make_sampler"):
                 outputs = []
                 async for output in vlm_engine.generate_stream(
                     messages=[
-                        {"role": "user", "content": [
-                            {"type": "text", "text": "describe"},
-                            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
-                        ]},
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "describe"},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": "data:image/png;base64,abc"},
+                                },
+                            ],
+                        },
                     ],
                     max_tokens=10,
                 ):
@@ -765,7 +850,7 @@ class TestVLMVisionStreamingContentLoss:
 
         error_outputs = [o for o in outputs if o.finish_reason == "error"]
         assert len(error_outputs) >= 1
-        assert hasattr(error_outputs[0], 'current_state')
+        assert hasattr(error_outputs[0], "current_state")
         assert error_outputs[0].current_state in ("normal", "reasoning")
 
     @pytest.mark.asyncio
@@ -791,15 +876,21 @@ class TestVLMVisionStreamingContentLoss:
             self._make_stream_result("END"),
         ]
 
-        with patch('mlx_vlm.generate.stream_generate', return_value=iter(results)):
-            with patch('mlx_lm.sample_utils.make_sampler'):
+        with patch("mlx_vlm.generate.stream_generate", return_value=iter(results)):
+            with patch("mlx_lm.sample_utils.make_sampler"):
                 outputs = []
                 async for output in vlm_engine.generate_stream(
                     messages=[
-                        {"role": "user", "content": [
-                            {"type": "text", "text": "describe"},
-                            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
-                        ]},
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "describe"},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": "data:image/png;base64,abc"},
+                                },
+                            ],
+                        },
                     ],
                     max_tokens=10,
                     stop=["END"],

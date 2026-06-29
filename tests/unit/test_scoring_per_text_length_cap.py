@@ -7,6 +7,7 @@ string (under the global 10MB body limit) or a 2048-list of multi-KB strings dri
 giant uncapped forward pass (context-length / memory-pressure DoS). Now capped at the
 schema boundary, matching embeddings.
 """
+
 from __future__ import annotations
 
 import pydantic
@@ -58,4 +59,7 @@ def test_classify_rejects_overlong_input_and_label():
         ClassifyRequest(model="m", input="hi", labels=["a", _LONG])
     with pytest.raises(pydantic.ValidationError):
         ClassifyRequest(model="m", input="hi", labels=["x"] * (_MAX_INPUT_TEXTS + 1))
-    assert ClassifyRequest(model="m", input="hi", labels=["a", "b"]).labels == ["a", "b"]
+    assert ClassifyRequest(model="m", input="hi", labels=["a", "b"]).labels == [
+        "a",
+        "b",
+    ]

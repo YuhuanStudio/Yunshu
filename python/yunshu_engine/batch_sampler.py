@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 # BatchSampler
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class SamplingPlan:
     """Prepared sampling plan for a batch (avoids redundant work during sample).
@@ -43,6 +44,7 @@ class SamplingPlan:
     Created by BatchSampler.prepare_batch(), consumed by sample_batch().
     Contains pre-processed temperature arrays, top-k masks, etc.
     """
+
     batch_size: int
     vocab_size: int
     # Per-request temperatures (shape: [batch, 1])
@@ -62,6 +64,7 @@ class SamplingPlan:
 @dataclass
 class BatchSampleResult:
     """Result of batch sampling."""
+
     token_ids: mx.array  # shape: [batch]
     logprobs: mx.array | None = None  # shape: [batch, vocab] if requested
 
@@ -69,6 +72,7 @@ class BatchSampleResult:
 @dataclass
 class BatchSamplerStats:
     """Performance statistics for BatchSampler."""
+
     total_batches: int = 0
     total_tokens_sampled: int = 0
     total_prepare_time_ms: float = 0.0
@@ -251,9 +255,7 @@ class BatchSampler:
 
         return BatchSampleResult(token_ids=token_ids)
 
-    def _apply_batch_top_k(
-        self, logits: mx.array, top_k_values: list[int]
-    ) -> mx.array:
+    def _apply_batch_top_k(self, logits: mx.array, top_k_values: list[int]) -> mx.array:
         """Apply per-request top-k filtering across the batch.
 
         For each request with top_k > 0, masks all tokens outside the top-k
@@ -381,9 +383,11 @@ class BatchSampler:
 # LogitsProcessorBatch
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class LogitsProcessorConfig:
     """Per-request logits processor configuration."""
+
     repetition_penalty: float = 1.0
     presence_penalty: float = 0.0
     frequency_penalty: float = 0.0
@@ -575,6 +579,7 @@ class LogitsProcessorBatch:
 
         # Count frequency of each token
         from collections import Counter
+
         token_counts = Counter(tokens)
 
         for token_id, count in token_counts.items():
@@ -665,9 +670,11 @@ class LogitsProcessorBatch:
 # BatchStopChecker
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class StopConfig:
     """Per-request stop condition configuration."""
+
     request_id: str = ""
     max_tokens: int = 256
     generated_count: int = 0  # tokens generated so far
@@ -685,6 +692,7 @@ class StopConfig:
 @dataclass
 class StopResult:
     """Per-request stop check result."""
+
     request_id: str
     should_stop: bool
     reason: str | None = None  # "stop", "length", "eos", "stop_token_id"
@@ -751,7 +759,10 @@ class _AhoCorasickTrie:
     for efficient multi-pattern matching in a single pass.
     """
 
-    def __init__(self, patterns: list[tuple[tuple[int, ...], int] | tuple[tuple[int, ...], int, str]]) -> None:
+    def __init__(
+        self,
+        patterns: list[tuple[tuple[int, ...], int] | tuple[tuple[int, ...], int, str]],
+    ) -> None:
         """Build AC automaton from patterns.
 
         Args:
@@ -799,7 +810,9 @@ class _AhoCorasickTrie:
                 fail = current.fail
                 while fail is not None and token_id not in fail.children:
                     fail = fail.fail
-                child.fail = fail.children.get(token_id, self._root) if fail else self._root
+                child.fail = (
+                    fail.children.get(token_id, self._root) if fail else self._root
+                )
                 # Merge output from failure node
                 if child.fail is not None:
                     child.output = child.output + child.fail.output
@@ -894,9 +907,13 @@ class BatchStopChecker:
         """
         batch_size = token_ids.shape[0]
         if len(generated_counts) != batch_size:
-            raise ValueError(f"generated_counts length ({len(generated_counts)}) must match batch_size ({batch_size})")
+            raise ValueError(
+                f"generated_counts length ({len(generated_counts)}) must match batch_size ({batch_size})"
+            )
         if len(stop_configs) != batch_size:
-            raise ValueError(f"stop_configs length ({len(stop_configs)}) must match batch_size ({batch_size})")
+            raise ValueError(
+                f"stop_configs length ({len(stop_configs)}) must match batch_size ({batch_size})"
+            )
 
         self._stats["total_checks"] += 1
         results: list[StopResult] = []
@@ -911,33 +928,39 @@ class BatchStopChecker:
 
             # Check 1: Max tokens
             if count >= config.max_tokens:
-                results.append(StopResult(
-                    request_id=config.request_id,
-                    should_stop=True,
-                    reason="length",
-                ))
+                results.append(
+                    StopResult(
+                        request_id=config.request_id,
+                        should_stop=True,
+                        reason="length",
+                    )
+                )
                 self._stats["total_stops"] += 1
                 continue
 
             # Check 2: EOS token IDs
             if config.eos_token_ids and tid in config.eos_token_ids:
-                results.append(StopResult(
-                    request_id=config.request_id,
-                    should_stop=True,
-                    reason="eos",
-                    matched_token_id=tid,
-                ))
+                results.append(
+                    StopResult(
+                        request_id=config.request_id,
+                        should_stop=True,
+                        reason="eos",
+                        matched_token_id=tid,
+                    )
+                )
                 self._stats["total_stops"] += 1
                 continue
 
             # Check 3: Stop token IDs
             if config.stop_token_ids and tid in config.stop_token_ids:
-                results.append(StopResult(
-                    request_id=config.request_id,
-                    should_stop=True,
-                    reason="stop_token_id",
-                    matched_token_id=tid,
-                ))
+                results.append(
+                    StopResult(
+                        request_id=config.request_id,
+                        should_stop=True,
+                        reason="stop_token_id",
+                        matched_token_id=tid,
+                    )
+                )
                 self._stats["total_stops"] += 1
                 continue
 
@@ -946,32 +969,46 @@ class BatchStopChecker:
                 # Maintain a rolling window of recent tokens for multi-token
                 # stop sequence matching. The window size matches the longest
                 # stop string pattern length.
-                if config._max_window == 0 and config.stop_string_trie._max_pattern_len > 0:
+                if (
+                    config._max_window == 0
+                    and config.stop_string_trie._max_pattern_len > 0
+                ):
                     config._max_window = config.stop_string_trie._max_pattern_len
                 config._token_window.append(tid)
-                if config._max_window > 0 and len(config._token_window) > config._max_window:
-                    config._token_window = config._token_window[-config._max_window:]
+                if (
+                    config._max_window > 0
+                    and len(config._token_window) > config._max_window
+                ):
+                    config._token_window = config._token_window[-config._max_window :]
                 matches = config.stop_string_trie.search(config._token_window)
                 if matches:
                     # Find which pattern matched
                     matched_idx = matches[0]
-                    matched_str = config.stop_string_trie.get_pattern_string(matched_idx)
-                    matched_toks = config.stop_string_trie.get_pattern_token_count(matched_idx)
-                    results.append(StopResult(
-                        request_id=config.request_id,
-                        should_stop=True,
-                        reason="stop",
-                        matched_string=matched_str,
-                        matched_token_count=matched_toks,
-                    ))
+                    matched_str = config.stop_string_trie.get_pattern_string(
+                        matched_idx
+                    )
+                    matched_toks = config.stop_string_trie.get_pattern_token_count(
+                        matched_idx
+                    )
+                    results.append(
+                        StopResult(
+                            request_id=config.request_id,
+                            should_stop=True,
+                            reason="stop",
+                            matched_string=matched_str,
+                            matched_token_count=matched_toks,
+                        )
+                    )
                     self._stats["total_stops"] += 1
                     continue
 
             # No stop condition triggered
-            results.append(StopResult(
-                request_id=config.request_id,
-                should_stop=False,
-            ))
+            results.append(
+                StopResult(
+                    request_id=config.request_id,
+                    should_stop=False,
+                )
+            )
 
         return results
 

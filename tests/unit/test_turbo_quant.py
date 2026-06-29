@@ -49,6 +49,7 @@ class TestTurboQuantConfig:
     def test_from_model_settings_disabled(self):
         class FakeSettings:
             kv_cache_quant_bits = None
+
         cfg = TurboQuantManager.from_model_settings(FakeSettings())
         assert not cfg.enabled
 
@@ -58,6 +59,7 @@ class TestTurboQuantConfig:
             total_layers = 28
             kv_cache_quant_start_layer = 4
             kv_cache_quant_group_size = 64
+
         cfg = TurboQuantManager.from_model_settings(FakeSettings())
         assert cfg.enabled
         assert cfg.total_layers == 28
@@ -73,7 +75,9 @@ class TestTurboQuantManager:
         assert meta is None
 
     def test_enabled_quantizes(self):
-        cfg = TurboQuantConfig(enabled=True, total_layers=8, fp16_end_layer=1, int8_end_layer=3)
+        cfg = TurboQuantConfig(
+            enabled=True, total_layers=8, fp16_end_layer=1, int8_end_layer=3
+        )
         mgr = TurboQuantManager(cfg)
         # Layer 0 => FP16 (no quantization)
         data = [[1.0, 2.0, 3.0]]
@@ -94,7 +98,9 @@ class TestTurboQuantManager:
         assert result == data
 
     def test_dequantize_roundtrip(self):
-        cfg = TurboQuantConfig(enabled=True, total_layers=8, fp16_end_layer=0, int8_end_layer=2)
+        cfg = TurboQuantConfig(
+            enabled=True, total_layers=8, fp16_end_layer=0, int8_end_layer=2
+        )
         mgr = TurboQuantManager(cfg)
         # Layer 5 => INT4, use a larger tensor for meaningful quantization
         data = [[1.0] * 64, [2.0] * 64]
@@ -107,7 +113,9 @@ class TestTurboQuantManager:
                 assert abs(reconstructed[i][j] - data[i][j]) < 0.5
 
     def test_stats(self):
-        cfg = TurboQuantConfig(enabled=True, total_layers=8, fp16_end_layer=1, int8_end_layer=3)
+        cfg = TurboQuantConfig(
+            enabled=True, total_layers=8, fp16_end_layer=1, int8_end_layer=3
+        )
         mgr = TurboQuantManager(cfg)
         stats = mgr.get_stats()
         assert stats["layers_fp16"] == 2  # 0, 1

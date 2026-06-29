@@ -5,6 +5,7 @@ sources are guarded against non-finite values, so this is defense-in-depth at th
 exposition layer. _fmt_value now emits the canonical tokens, applied at the gauge / counter
 / histogram-sum format sites.
 """
+
 from __future__ import annotations
 
 from yunshu_gateway.middleware.prometheus_exporter import _fmt_value, _Gauge, _Histogram

@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class VoicePipelineConfig:
     """Configuration for the VoicePipeline."""
+
     llm_model: str = ""
     tts_voice: str | None = None
     tts_speed: float = 1.0
@@ -35,6 +36,7 @@ class VoicePipelineConfig:
 @dataclass
 class VoicePipelineEvent:
     """Event emitted during pipeline execution."""
+
     stage: str  # "transcription", "llm_token", "llm_complete", "audio_chunk", "done"
     data: Any = None
 
@@ -60,10 +62,12 @@ class VoicePipeline:
 
     def _find_asr_engine(self):
         from yunshu_engine.audio_engine import _find_asr_engine
+
         return _find_asr_engine()
 
     def _find_tts_engine(self):
         from yunshu_engine.audio_engine import _find_tts_engine
+
         return _find_tts_engine()
 
     def _find_llm_engine(self, model_id: str | None = None):
@@ -72,9 +76,14 @@ class VoicePipeline:
         # `from yunshu_gateway.engine import ...` may bind a duplicate, empty
         # singleton when the app runs under the `python.` package prefix.
         from yunshu_engine.audio_engine import _resolve_gateway_engine_module
+
         _mod = _resolve_gateway_engine_module()
-        get_engine = getattr(_mod, "get_engine", lambda: None) if _mod else (lambda: None)
-        get_model_manager = getattr(_mod, "get_model_manager", lambda: None) if _mod else (lambda: None)
+        get_engine = (
+            getattr(_mod, "get_engine", lambda: None) if _mod else (lambda: None)
+        )
+        get_model_manager = (
+            getattr(_mod, "get_model_manager", lambda: None) if _mod else (lambda: None)
+        )
         engine = get_engine()
         if engine and engine.is_loaded:
             return engine
@@ -92,7 +101,9 @@ class VoicePipeline:
             # Any loaded LLM-style engine
             for entry in manager.list_entries():
                 if entry.is_loaded and entry.engine is not None:
-                    if hasattr(entry.engine, "chat") or hasattr(entry.engine, "generate"):
+                    if hasattr(entry.engine, "chat") or hasattr(
+                        entry.engine, "generate"
+                    ):
                         return entry.engine
         return None
 
@@ -108,7 +119,12 @@ class VoicePipeline:
         if isinstance(result, str):
             return result
         if isinstance(result, dict):
-            return result.get("text") or result.get("generated_text") or result.get("content") or ""
+            return (
+                result.get("text")
+                or result.get("generated_text")
+                or result.get("content")
+                or ""
+            )
         for attr in ("text", "generated_text", "content"):
             val = getattr(result, attr, None)
             if val:
@@ -121,10 +137,12 @@ class VoicePipeline:
 
         Tries apply_chat_template first, falls back to simple concatenation.
         """
-        tokenizer = getattr(engine, '_tokenizer', None)
-        if tokenizer and hasattr(tokenizer, 'apply_chat_template'):
+        tokenizer = getattr(engine, "_tokenizer", None)
+        if tokenizer and hasattr(tokenizer, "apply_chat_template"):
             return tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True,
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
             )
         # Fallback: concatenate message content
         return "\n".join(m.get("content", str(m)) for m in messages)
@@ -245,7 +263,7 @@ class VoicePipeline:
                 max_tokens=cfg.llm_max_tokens,
                 temperature=cfg.llm_temperature,
             ):
-                token_text = getattr(output, 'token_text', '')
+                token_text = getattr(output, "token_text", "")
                 if token_text:
                     full_response.append(token_text)
                     yield VoicePipelineEvent(stage="llm_token", data=token_text)

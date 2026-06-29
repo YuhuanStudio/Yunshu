@@ -1,6 +1,5 @@
 """Batch API endpoint tests."""
 
-
 from yunshu_gateway.routers.batch_inference import BatchItem, BatchRequest
 
 
@@ -21,8 +20,7 @@ class TestBatchRequest:
     def test_batch_request(self):
         req = BatchRequest(
             requests=[
-                BatchItem(custom_id=f"r{i}", body={"model": "test"})
-                for i in range(3)
+                BatchItem(custom_id=f"r{i}", body={"model": "test"}) for i in range(3)
             ]
         )
         assert len(req.requests) == 3

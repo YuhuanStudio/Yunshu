@@ -1,6 +1,5 @@
 """Tests for Auto-Tuning Engine — profiler, tuner, batch sizer, SLO monitor."""
 
-
 import pytest
 
 from yunshu_engine.auto_tuner import (
@@ -17,6 +16,7 @@ from yunshu_engine.auto_tuner import (
 # ===================================================================
 # Helpers
 # ===================================================================
+
 
 def _metrics(
     throughput: float = 50.0,
@@ -42,6 +42,7 @@ def _metrics(
 # ===================================================================
 # PerformanceProfiler
 # ===================================================================
+
 
 class TestPerformanceProfilerBasic:
     """Basic lifecycle and recording tests."""
@@ -97,7 +98,9 @@ class TestBottleneckDetection:
     def test_memory_bottleneck(self):
         p = PerformanceProfiler(bottleneck_memory_threshold=0.8)
         for _ in range(10):
-            p.record_step(_metrics(gpu_util=0.92, throughput=40.0, tokens=10, wall=200.0))
+            p.record_step(
+                _metrics(gpu_util=0.92, throughput=40.0, tokens=10, wall=200.0)
+            )
         assert p.get_bottleneck() == BottleneckType.MEMORY
 
     def test_compute_bottleneck(self):
@@ -118,7 +121,9 @@ class TestBottleneckDetection:
         """Good throughput, moderate memory = no bottleneck."""
         p = PerformanceProfiler()
         for _ in range(10):
-            p.record_step(_metrics(gpu_util=0.5, throughput=80.0, tokens=20, wall=250.0))
+            p.record_step(
+                _metrics(gpu_util=0.5, throughput=80.0, tokens=20, wall=250.0)
+            )
         assert p.get_bottleneck() == BottleneckType.NONE
 
     def test_bottleneck_distribution_in_stats(self):
@@ -171,6 +176,7 @@ class TestProfilerRecommendations:
 # ===================================================================
 # SLOMonitor
 # ===================================================================
+
 
 class TestSLOMonitorCompliance:
     """Test SLO compliance checking."""
@@ -297,6 +303,7 @@ class TestSLOViolations:
 # AdaptiveBatchSizer
 # ===================================================================
 
+
 class TestAdaptiveBatchSizer:
     """Test dynamic batch size computation."""
 
@@ -409,6 +416,7 @@ class TestAdaptiveBatchSizer:
 # TunableParams
 # ===================================================================
 
+
 class TestTunableParams:
     """Test parameter clamping and validation."""
 
@@ -448,6 +456,7 @@ class TestTunableParams:
 # AutoTuner
 # ===================================================================
 
+
 class TestAutoTunerTuning:
     """Test tuning decisions."""
 
@@ -463,16 +472,12 @@ class TestAutoTunerTuning:
         assert d.new_value == 8
 
     def test_clamped_increase(self):
-        t = AutoTuner(params=TunableParams(
-            batch_size=63, batch_size_max=64
-        ))
+        t = AutoTuner(params=TunableParams(batch_size=63, batch_size_max=64))
         d = t.apply_tuning("batch_size", "increase", "test")
         assert d.new_value == 64  # clamped to max
 
     def test_clamped_decrease(self):
-        t = AutoTuner(params=TunableParams(
-            batch_size=1, batch_size_min=1
-        ))
+        t = AutoTuner(params=TunableParams(batch_size=1, batch_size_min=1))
         d = t.apply_tuning("batch_size", "decrease", "test")
         assert d.new_value == 1  # clamped to min
 
@@ -563,6 +568,7 @@ class TestAutoTunerHistory:
 # Integration: SLO -> AutoTuner
 # ===================================================================
 
+
 class TestSLOAutoTunerIntegration:
     """Test SLO monitor triggering auto-tuner."""
 
@@ -589,7 +595,7 @@ class TestProfilerDeadHistory:
     def test_no_all_history_attribute(self):
         """_all_history was a dead deque that accumulated data but was never read."""
         p = PerformanceProfiler()
-        assert not hasattr(p, '_all_history')
+        assert not hasattr(p, "_all_history")
 
     def test_history_is_bounded(self):
         """Ensure the history deque is bounded by window_size."""

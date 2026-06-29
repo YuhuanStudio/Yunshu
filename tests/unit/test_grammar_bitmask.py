@@ -118,7 +118,9 @@ class TestBitmaskApplicator:
         # Token 9 should keep its value, all others should be -inf.
         assert float(result[9]) == pytest.approx(10.0, rel=1e-4)
         for i in range(9):
-            assert float(result[i]) < -1e10, f"token {i} should be -inf but got {float(result[i])}"
+            assert float(result[i]) < -1e10, (
+                f"token {i} should be -inf but got {float(result[i])}"
+            )
 
     def test_apply_partial_mask(self):
         import mlx.core as mx

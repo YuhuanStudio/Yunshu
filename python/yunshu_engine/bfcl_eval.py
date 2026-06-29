@@ -64,8 +64,7 @@ class BFCLEvalConfig:
         for cat in self.test_categories:
             if cat not in VALID_CATEGORIES:
                 raise ValueError(
-                    f"Invalid BFCL category '{cat}'. "
-                    f"Valid: {VALID_CATEGORIES}"
+                    f"Invalid BFCL category '{cat}'. Valid: {VALID_CATEGORIES}"
                 )
 
 
@@ -130,20 +129,20 @@ def parse_function_call_json(text: str) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     i = 0
     while i < len(text):
-        if text[i] == '{':
+        if text[i] == "{":
             # Find matching closing brace
             depth = 0
             start = i
             while i < len(text):
-                if text[i] == '{':
+                if text[i] == "{":
                     depth += 1
-                elif text[i] == '}':
+                elif text[i] == "}":
                     depth -= 1
                     if depth == 0:
                         break
                 i += 1
             if depth == 0:
-                candidate = text[start:i + 1]
+                candidate = text[start : i + 1]
                 try:
                     data = json.loads(candidate)
                     if isinstance(data, dict) and "name" in data:
@@ -214,7 +213,7 @@ def parse_function_call_python(text: str) -> list[dict[str, Any]]:
 
     # Match: name(args) potentially multiple separated by newlines/semicolons
     call_pattern = re.compile(
-        r'(\w+)\s*\(([^)]*)\)',
+        r"(\w+)\s*\(([^)]*)\)",
     )
     for match in call_pattern.finditer(text):
         name = match.group(1)
@@ -224,13 +223,13 @@ def parse_function_call_python(text: str) -> list[dict[str, Any]]:
         if args_str:
             # Parse key=value pairs
             arg_pattern = re.compile(
-                r'(\w+)\s*=\s*('
-                r'"[^"]*"'        # double-quoted string
-                r"|'[^']*'"       # single-quoted string
-                r"|True|False"    # booleans
-                r"|None"          # None
-                r"|[\d.eE+-]+"    # numbers
-                r')',
+                r"(\w+)\s*=\s*("
+                r'"[^"]*"'  # double-quoted string
+                r"|'[^']*'"  # single-quoted string
+                r"|True|False"  # booleans
+                r"|None"  # None
+                r"|[\d.eE+-]+"  # numbers
+                r")",
             )
             for arg_match in arg_pattern.finditer(args_str):
                 key = arg_match.group(1)
@@ -347,7 +346,10 @@ def _calls_match(actual: list[dict], expected: list[dict]) -> bool:
 
         found = False
         for i, act in enumerate(remaining):
-            if act["name"] == exp_name and _normalize_value(act["arguments"]) == exp_args:
+            if (
+                act["name"] == exp_name
+                and _normalize_value(act["arguments"]) == exp_args
+            ):
                 remaining.pop(i)
                 found = True
                 break
@@ -460,7 +462,10 @@ def _generate_stub_cases(category: str) -> list[dict[str, Any]]:
                         "description": "The file operation to perform",
                     },
                     "path": {"type": "string", "description": "File or directory path"},
-                    "content": {"type": "string", "description": "Content for write operations"},
+                    "content": {
+                        "type": "string",
+                        "description": "Content for write operations",
+                    },
                 },
                 "required": ["operation", "path"],
             },
@@ -502,7 +507,10 @@ def _generate_stub_cases(category: str) -> list[dict[str, Any]]:
                 "prompt": "What's the weather like in Tokyo in Celsius?",
                 "tools": [weather_tool],
                 "expected_calls": [
-                    {"name": "get_weather", "arguments": {"city": "Tokyo", "unit": "celsius"}},
+                    {
+                        "name": "get_weather",
+                        "arguments": {"city": "Tokyo", "unit": "celsius"},
+                    },
                 ],
             },
             {
@@ -523,64 +531,99 @@ def _generate_stub_cases(category: str) -> list[dict[str, Any]]:
                 "prompt": "Search the web for 'MLX framework Apple'",
                 "tools": [search_tool],
                 "expected_calls": [
-                    {"name": "search_web", "arguments": {"query": "MLX framework Apple"}},
+                    {
+                        "name": "search_web",
+                        "arguments": {"query": "MLX framework Apple"},
+                    },
                 ],
             },
             {
                 "prompt": "Search for 'Python async tutorial' and return 5 results",
                 "tools": [search_tool],
                 "expected_calls": [
-                    {"name": "search_web", "arguments": {"query": "Python async tutorial", "num_results": 5}},
+                    {
+                        "name": "search_web",
+                        "arguments": {
+                            "query": "Python async tutorial",
+                            "num_results": 5,
+                        },
+                    },
                 ],
             },
             {
                 "prompt": "Send an email to alice@example.com with subject 'Meeting Tomorrow' and body 'Hi Alice, our meeting is at 3pm.'",
                 "tools": [email_tool],
                 "expected_calls": [
-                    {"name": "send_email", "arguments": {
-                        "to": "alice@example.com",
-                        "subject": "Meeting Tomorrow",
-                        "body": "Hi Alice, our meeting is at 3pm.",
-                    }},
+                    {
+                        "name": "send_email",
+                        "arguments": {
+                            "to": "alice@example.com",
+                            "subject": "Meeting Tomorrow",
+                            "body": "Hi Alice, our meeting is at 3pm.",
+                        },
+                    },
                 ],
             },
             {
                 "prompt": "Read the file at /tmp/data.json",
                 "tools": [file_tool],
                 "expected_calls": [
-                    {"name": "file_operations", "arguments": {"operation": "read", "path": "/tmp/data.json"}},
+                    {
+                        "name": "file_operations",
+                        "arguments": {"operation": "read", "path": "/tmp/data.json"},
+                    },
                 ],
             },
             {
                 "prompt": "List all files in the /var/log directory",
                 "tools": [file_tool],
                 "expected_calls": [
-                    {"name": "file_operations", "arguments": {"operation": "list", "path": "/var/log"}},
+                    {
+                        "name": "file_operations",
+                        "arguments": {"operation": "list", "path": "/var/log"},
+                    },
                 ],
             },
             {
                 "prompt": "Run a SQL query: SELECT * FROM users WHERE active = true",
                 "tools": [db_tool],
                 "expected_calls": [
-                    {"name": "database_query", "arguments": {"query": "SELECT * FROM users WHERE active = true"}},
+                    {
+                        "name": "database_query",
+                        "arguments": {
+                            "query": "SELECT * FROM users WHERE active = true"
+                        },
+                    },
                 ],
             },
             {
                 "prompt": "Query the analytics database for SELECT COUNT(*) FROM events",
                 "tools": [db_tool],
                 "expected_calls": [
-                    {"name": "database_query", "arguments": {"query": "SELECT COUNT(*) FROM events", "database": "analytics"}},
+                    {
+                        "name": "database_query",
+                        "arguments": {
+                            "query": "SELECT COUNT(*) FROM events",
+                            "database": "analytics",
+                        },
+                    },
                 ],
             },
             {
                 "prompt": "Write 'Hello World' to the file /tmp/hello.txt",
                 "tools": [file_tool],
                 "expected_calls": [
-                    {"name": "file_operations", "arguments": {"operation": "write", "path": "/tmp/hello.txt", "content": "Hello World"}},
+                    {
+                        "name": "file_operations",
+                        "arguments": {
+                            "operation": "write",
+                            "path": "/tmp/hello.txt",
+                            "content": "Hello World",
+                        },
+                    },
                 ],
             },
         ],
-
         # ── parallel: multiple calls to the SAME function ──
         "parallel": [
             {
@@ -612,32 +655,70 @@ def _generate_stub_cases(category: str) -> list[dict[str, Any]]:
                 "prompt": "Search for 'machine learning basics' and 'deep learning tutorial'",
                 "tools": [search_tool],
                 "expected_calls": [
-                    {"name": "search_web", "arguments": {"query": "machine learning basics"}},
-                    {"name": "search_web", "arguments": {"query": "deep learning tutorial"}},
+                    {
+                        "name": "search_web",
+                        "arguments": {"query": "machine learning basics"},
+                    },
+                    {
+                        "name": "search_web",
+                        "arguments": {"query": "deep learning tutorial"},
+                    },
                 ],
             },
             {
                 "prompt": "Send an email to bob@test.com about 'Report Ready' saying 'The report is done.' and also send to carol@test.com about 'Update' saying 'Project is on track.'",
                 "tools": [email_tool],
                 "expected_calls": [
-                    {"name": "send_email", "arguments": {"to": "bob@test.com", "subject": "Report Ready", "body": "The report is done."}},
-                    {"name": "send_email", "arguments": {"to": "carol@test.com", "subject": "Update", "body": "Project is on track."}},
+                    {
+                        "name": "send_email",
+                        "arguments": {
+                            "to": "bob@test.com",
+                            "subject": "Report Ready",
+                            "body": "The report is done.",
+                        },
+                    },
+                    {
+                        "name": "send_email",
+                        "arguments": {
+                            "to": "carol@test.com",
+                            "subject": "Update",
+                            "body": "Project is on track.",
+                        },
+                    },
                 ],
             },
             {
                 "prompt": "Delete /tmp/old_cache.dat and /tmp/old_logs.dat",
                 "tools": [file_tool],
                 "expected_calls": [
-                    {"name": "file_operations", "arguments": {"operation": "delete", "path": "/tmp/old_cache.dat"}},
-                    {"name": "file_operations", "arguments": {"operation": "delete", "path": "/tmp/old_logs.dat"}},
+                    {
+                        "name": "file_operations",
+                        "arguments": {
+                            "operation": "delete",
+                            "path": "/tmp/old_cache.dat",
+                        },
+                    },
+                    {
+                        "name": "file_operations",
+                        "arguments": {
+                            "operation": "delete",
+                            "path": "/tmp/old_logs.dat",
+                        },
+                    },
                 ],
             },
             {
                 "prompt": "Query SELECT * FROM orders and SELECT COUNT(*) FROM products",
                 "tools": [db_tool],
                 "expected_calls": [
-                    {"name": "database_query", "arguments": {"query": "SELECT * FROM orders"}},
-                    {"name": "database_query", "arguments": {"query": "SELECT COUNT(*) FROM products"}},
+                    {
+                        "name": "database_query",
+                        "arguments": {"query": "SELECT * FROM orders"},
+                    },
+                    {
+                        "name": "database_query",
+                        "arguments": {"query": "SELECT COUNT(*) FROM products"},
+                    },
                 ],
             },
             {
@@ -652,28 +733,45 @@ def _generate_stub_cases(category: str) -> list[dict[str, Any]]:
                 "prompt": "Get the weather for both Seattle and Portland in Fahrenheit",
                 "tools": [weather_tool],
                 "expected_calls": [
-                    {"name": "get_weather", "arguments": {"city": "Seattle", "unit": "fahrenheit"}},
-                    {"name": "get_weather", "arguments": {"city": "Portland", "unit": "fahrenheit"}},
+                    {
+                        "name": "get_weather",
+                        "arguments": {"city": "Seattle", "unit": "fahrenheit"},
+                    },
+                    {
+                        "name": "get_weather",
+                        "arguments": {"city": "Portland", "unit": "fahrenheit"},
+                    },
                 ],
             },
             {
                 "prompt": "Search for 'Rust programming' and 'Go programming' with 3 results each",
                 "tools": [search_tool],
                 "expected_calls": [
-                    {"name": "search_web", "arguments": {"query": "Rust programming", "num_results": 3}},
-                    {"name": "search_web", "arguments": {"query": "Go programming", "num_results": 3}},
+                    {
+                        "name": "search_web",
+                        "arguments": {"query": "Rust programming", "num_results": 3},
+                    },
+                    {
+                        "name": "search_web",
+                        "arguments": {"query": "Go programming", "num_results": 3},
+                    },
                 ],
             },
             {
                 "prompt": "Read both /etc/hosts and /etc/resolv.conf",
                 "tools": [file_tool],
                 "expected_calls": [
-                    {"name": "file_operations", "arguments": {"operation": "read", "path": "/etc/hosts"}},
-                    {"name": "file_operations", "arguments": {"operation": "read", "path": "/etc/resolv.conf"}},
+                    {
+                        "name": "file_operations",
+                        "arguments": {"operation": "read", "path": "/etc/hosts"},
+                    },
+                    {
+                        "name": "file_operations",
+                        "arguments": {"operation": "read", "path": "/etc/resolv.conf"},
+                    },
                 ],
             },
         ],
-
         # ── multiple: single function from a list, single call ──
         "multiple": [
             {
@@ -701,28 +799,47 @@ def _generate_stub_cases(category: str) -> list[dict[str, Any]]:
                 "prompt": "Send an email to dev@team.io about 'Sprint Review' saying 'Please review the PRs.'",
                 "tools": [weather_tool, calculator_tool, email_tool],
                 "expected_calls": [
-                    {"name": "send_email", "arguments": {"to": "dev@team.io", "subject": "Sprint Review", "body": "Please review the PRs."}},
+                    {
+                        "name": "send_email",
+                        "arguments": {
+                            "to": "dev@team.io",
+                            "subject": "Sprint Review",
+                            "body": "Please review the PRs.",
+                        },
+                    },
                 ],
             },
             {
                 "prompt": "Read the file /home/user/.bashrc",
                 "tools": [db_tool, email_tool, file_tool],
                 "expected_calls": [
-                    {"name": "file_operations", "arguments": {"operation": "read", "path": "/home/user/.bashrc"}},
+                    {
+                        "name": "file_operations",
+                        "arguments": {
+                            "operation": "read",
+                            "path": "/home/user/.bashrc",
+                        },
+                    },
                 ],
             },
             {
                 "prompt": "Run SELECT version();",
                 "tools": [search_tool, calculator_tool, db_tool],
                 "expected_calls": [
-                    {"name": "database_query", "arguments": {"query": "SELECT version();"}},
+                    {
+                        "name": "database_query",
+                        "arguments": {"query": "SELECT version();"},
+                    },
                 ],
             },
             {
                 "prompt": "Search for 'Apple Silicon MLX benchmark'",
                 "tools": [weather_tool, email_tool, db_tool, search_tool],
                 "expected_calls": [
-                    {"name": "search_web", "arguments": {"query": "Apple Silicon MLX benchmark"}},
+                    {
+                        "name": "search_web",
+                        "arguments": {"query": "Apple Silicon MLX benchmark"},
+                    },
                 ],
             },
             {
@@ -741,20 +858,44 @@ def _generate_stub_cases(category: str) -> list[dict[str, Any]]:
             },
             {
                 "prompt": "Delete the temporary file /tmp/session_8273.cache",
-                "tools": [weather_tool, search_tool, calculator_tool, file_tool, email_tool],
+                "tools": [
+                    weather_tool,
+                    search_tool,
+                    calculator_tool,
+                    file_tool,
+                    email_tool,
+                ],
                 "expected_calls": [
-                    {"name": "file_operations", "arguments": {"operation": "delete", "path": "/tmp/session_8273.cache"}},
+                    {
+                        "name": "file_operations",
+                        "arguments": {
+                            "operation": "delete",
+                            "path": "/tmp/session_8273.cache",
+                        },
+                    },
                 ],
             },
             {
                 "prompt": "Send an email to support@company.com about 'Bug Report' saying 'Found a null pointer exception in module X.'",
-                "tools": [weather_tool, db_tool, calculator_tool, file_tool, email_tool],
+                "tools": [
+                    weather_tool,
+                    db_tool,
+                    calculator_tool,
+                    file_tool,
+                    email_tool,
+                ],
                 "expected_calls": [
-                    {"name": "send_email", "arguments": {"to": "support@company.com", "subject": "Bug Report", "body": "Found a null pointer exception in module X."}},
+                    {
+                        "name": "send_email",
+                        "arguments": {
+                            "to": "support@company.com",
+                            "subject": "Bug Report",
+                            "body": "Found a null pointer exception in module X.",
+                        },
+                    },
                 ],
             },
         ],
-
         # ── parallel_multiple: multiple functions, multiple parallel calls ──
         "parallel_multiple": [
             {
@@ -777,25 +918,54 @@ def _generate_stub_cases(category: str) -> list[dict[str, Any]]:
                 "prompt": "Search for 'Apple M4 benchmarks', get weather in Cupertino, and send an email to john@apple.com about 'Benchmark Results' saying 'M4 shows 40% improvement.'",
                 "tools": [search_tool, weather_tool, email_tool],
                 "expected_calls": [
-                    {"name": "search_web", "arguments": {"query": "Apple M4 benchmarks"}},
+                    {
+                        "name": "search_web",
+                        "arguments": {"query": "Apple M4 benchmarks"},
+                    },
                     {"name": "get_weather", "arguments": {"city": "Cupertino"}},
-                    {"name": "send_email", "arguments": {"to": "john@apple.com", "subject": "Benchmark Results", "body": "M4 shows 40% improvement."}},
+                    {
+                        "name": "send_email",
+                        "arguments": {
+                            "to": "john@apple.com",
+                            "subject": "Benchmark Results",
+                            "body": "M4 shows 40% improvement.",
+                        },
+                    },
                 ],
             },
             {
                 "prompt": "Read the file /var/log/app.log and query the database for SELECT * FROM errors LIMIT 10",
                 "tools": [file_tool, db_tool, search_tool],
                 "expected_calls": [
-                    {"name": "file_operations", "arguments": {"operation": "read", "path": "/var/log/app.log"}},
-                    {"name": "database_query", "arguments": {"query": "SELECT * FROM errors LIMIT 10"}},
+                    {
+                        "name": "file_operations",
+                        "arguments": {"operation": "read", "path": "/var/log/app.log"},
+                    },
+                    {
+                        "name": "database_query",
+                        "arguments": {"query": "SELECT * FROM errors LIMIT 10"},
+                    },
                 ],
             },
             {
                 "prompt": "Write 'backup complete' to /tmp/status.txt and delete /tmp/old_backup.tar",
                 "tools": [file_tool, weather_tool, search_tool],
                 "expected_calls": [
-                    {"name": "file_operations", "arguments": {"operation": "write", "path": "/tmp/status.txt", "content": "backup complete"}},
-                    {"name": "file_operations", "arguments": {"operation": "delete", "path": "/tmp/old_backup.tar"}},
+                    {
+                        "name": "file_operations",
+                        "arguments": {
+                            "operation": "write",
+                            "path": "/tmp/status.txt",
+                            "content": "backup complete",
+                        },
+                    },
+                    {
+                        "name": "file_operations",
+                        "arguments": {
+                            "operation": "delete",
+                            "path": "/tmp/old_backup.tar",
+                        },
+                    },
                 ],
             },
             {
@@ -803,22 +973,38 @@ def _generate_stub_cases(category: str) -> list[dict[str, Any]]:
                 "tools": [calculator_tool, db_tool, email_tool],
                 "expected_calls": [
                     {"name": "calculate", "arguments": {"expression": "100 / 3"}},
-                    {"name": "database_query", "arguments": {"query": "SELECT AVG(price) FROM products"}},
+                    {
+                        "name": "database_query",
+                        "arguments": {"query": "SELECT AVG(price) FROM products"},
+                    },
                 ],
             },
             {
                 "prompt": "Search for 'Python 3.13 features' and send an email to team@dev.io about 'New Release' saying 'Python 3.13 is out with JIT compiler.'",
                 "tools": [search_tool, email_tool, weather_tool],
                 "expected_calls": [
-                    {"name": "search_web", "arguments": {"query": "Python 3.13 features"}},
-                    {"name": "send_email", "arguments": {"to": "team@dev.io", "subject": "New Release", "body": "Python 3.13 is out with JIT compiler."}},
+                    {
+                        "name": "search_web",
+                        "arguments": {"query": "Python 3.13 features"},
+                    },
+                    {
+                        "name": "send_email",
+                        "arguments": {
+                            "to": "team@dev.io",
+                            "subject": "New Release",
+                            "body": "Python 3.13 is out with JIT compiler.",
+                        },
+                    },
                 ],
             },
             {
                 "prompt": "Get weather for Denver in Fahrenheit and calculate 2^10",
                 "tools": [weather_tool, calculator_tool, file_tool],
                 "expected_calls": [
-                    {"name": "get_weather", "arguments": {"city": "Denver", "unit": "fahrenheit"}},
+                    {
+                        "name": "get_weather",
+                        "arguments": {"city": "Denver", "unit": "fahrenheit"},
+                    },
                     {"name": "calculate", "arguments": {"expression": "2^10"}},
                 ],
             },
@@ -826,15 +1012,31 @@ def _generate_stub_cases(category: str) -> list[dict[str, Any]]:
                 "prompt": "List files in /home/user/documents and search for 'quarterly report template'",
                 "tools": [file_tool, search_tool, calculator_tool],
                 "expected_calls": [
-                    {"name": "file_operations", "arguments": {"operation": "list", "path": "/home/user/documents"}},
-                    {"name": "search_web", "arguments": {"query": "quarterly report template"}},
+                    {
+                        "name": "file_operations",
+                        "arguments": {
+                            "operation": "list",
+                            "path": "/home/user/documents",
+                        },
+                    },
+                    {
+                        "name": "search_web",
+                        "arguments": {"query": "quarterly report template"},
+                    },
                 ],
             },
             {
                 "prompt": "Send a quick email to hr@corp.com saying 'I will be late today' with subject 'Late Arrival' and get the weather in Austin",
                 "tools": [email_tool, weather_tool, search_tool, db_tool],
                 "expected_calls": [
-                    {"name": "send_email", "arguments": {"to": "hr@corp.com", "subject": "Late Arrival", "body": "I will be late today"}},
+                    {
+                        "name": "send_email",
+                        "arguments": {
+                            "to": "hr@corp.com",
+                            "subject": "Late Arrival",
+                            "body": "I will be late today",
+                        },
+                    },
                     {"name": "get_weather", "arguments": {"city": "Austin"}},
                 ],
             },
@@ -842,8 +1044,17 @@ def _generate_stub_cases(category: str) -> list[dict[str, Any]]:
                 "prompt": "Query the inventory database for SELECT * FROM stock WHERE quantity < 5 and search for 'restock supplier contacts'",
                 "tools": [db_tool, search_tool, email_tool],
                 "expected_calls": [
-                    {"name": "database_query", "arguments": {"query": "SELECT * FROM stock WHERE quantity < 5", "database": "inventory"}},
-                    {"name": "search_web", "arguments": {"query": "restock supplier contacts"}},
+                    {
+                        "name": "database_query",
+                        "arguments": {
+                            "query": "SELECT * FROM stock WHERE quantity < 5",
+                            "database": "inventory",
+                        },
+                    },
+                    {
+                        "name": "search_web",
+                        "arguments": {"query": "restock supplier contacts"},
+                    },
                 ],
             },
         ],
@@ -906,7 +1117,9 @@ class BFCLEvaluator:
                     cases = json.load(f)
                 if isinstance(cases, list) and cases:
                     logger.info(
-                        "Loaded %d test cases from %s", len(cases), data_path,
+                        "Loaded %d test cases from %s",
+                        len(cases),
+                        data_path,
                     )
                     return cases
             except (json.JSONDecodeError, OSError) as exc:
@@ -915,7 +1128,9 @@ class BFCLEvaluator:
         # Fall back to stubs
         cases = _generate_stub_cases(category)
         logger.info(
-            "Generated %d stub test cases for '%s'", len(cases), category,
+            "Generated %d stub test cases for '%s'",
+            len(cases),
+            category,
         )
         return cases
 
@@ -1070,8 +1285,7 @@ class BFCLEvaluator:
         lines.append("-" * 72)
         overall_acc = correct_all / total_all if total_all > 0 else 0.0
         lines.append(
-            f"{'OVERALL':<22} {total_all:>6} {correct_all:>8} "
-            f"{overall_acc:>9.1%}"
+            f"{'OVERALL':<22} {total_all:>6} {correct_all:>8} {overall_acc:>9.1%}"
         )
         lines.append("=" * 72)
 

@@ -24,7 +24,9 @@ def apply_model_patches(model: Any, tokenizer: Any, model_name: str) -> list[str
 
     if "deepseek" in name_lower:
         patches.extend(_apply_deepseek_patches(model, tokenizer))
-    elif "qwen" in name_lower and ("3.5" in name_lower or "3-5" in name_lower or "3_5" in name_lower):
+    elif "qwen" in name_lower and (
+        "3.5" in name_lower or "3-5" in name_lower or "3_5" in name_lower
+    ):
         patches.extend(_apply_qwen35_patches(model, tokenizer))
     elif "gemma" in name_lower:
         patches.extend(_apply_gemma_patches(model, tokenizer))
@@ -101,7 +103,9 @@ def _apply_qwen35_patches(model: Any, tokenizer: Any) -> list[str]:
     # Patch 3: MTP (Multi-Token Prediction) head detection
     # Qwen 3.5 models may have MTP heads for speculative decoding
     if hasattr(model, "model") and hasattr(model.model, "layers"):
-        num_layers = len(model.model.layers) if hasattr(model.model.layers, "__len__") else 0
+        num_layers = (
+            len(model.model.layers) if hasattr(model.model.layers, "__len__") else 0
+        )
         expected = getattr(config, "num_hidden_layers", 0)
         if num_layers > expected:
             model._yunshu_mtp_heads = num_layers - expected

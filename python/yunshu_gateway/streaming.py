@@ -16,7 +16,6 @@ Key design decisions:
 5. Tool call extraction from model output (XML-based parsing for function calls)
 """
 
-
 import asyncio
 import contextlib
 import json
@@ -101,11 +100,16 @@ async def with_sse_keepalive(
                             if cancel_event is not None:
                                 cancel_event.set()
                             task.cancel()
-                            with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration):
+                            with contextlib.suppress(
+                                asyncio.CancelledError, StopAsyncIteration
+                            ):
                                 await task
                             return
                     except Exception:
-                        logger.debug("is_disconnected() failed (scope may be closed)", exc_info=True)
+                        logger.debug(
+                            "is_disconnected() failed (scope may be closed)",
+                            exc_info=True,
+                        )
                 # Send keepalive at the configured interval
                 keepalive_elapsed += wait_time
                 if keepalive_elapsed >= interval:
@@ -144,7 +148,7 @@ async def with_sse_keepalive(
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration):
                 await task
-        if hasattr(ait, 'aclose'):
+        if hasattr(ait, "aclose"):
             await ait.aclose()
 
 
@@ -180,7 +184,9 @@ async def run_with_disconnect_guard(
                     try:
                         cancel_event.set()
                     except Exception:
-                        logger.debug("cancel_event.set() failed on disconnect", exc_info=True)
+                        logger.debug(
+                            "cancel_event.set() failed on disconnect", exc_info=True
+                        )
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
@@ -298,9 +304,9 @@ class ThinkingParser:
         self.buffer += chunk
         # Truncate unbounded accumulators to prevent memory growth
         if len(self.thinking_text) > self._MAX_ACCUMULATOR_SIZE:
-            self.thinking_text = self.thinking_text[-self._MAX_ACCUMULATOR_SIZE // 2:]
+            self.thinking_text = self.thinking_text[-self._MAX_ACCUMULATOR_SIZE // 2 :]
         if len(self.visible_text) > self._MAX_ACCUMULATOR_SIZE:
-            self.visible_text = self.visible_text[-self._MAX_ACCUMULATOR_SIZE // 2:]
+            self.visible_text = self.visible_text[-self._MAX_ACCUMULATOR_SIZE // 2 :]
         visible_parts = []
         thinking_parts = []
 
@@ -310,7 +316,7 @@ class ThinkingParser:
                 if end_idx != -1:
                     thinking_parts.append(self.buffer[:end_idx])
                     self.thinking_text += self.buffer[:end_idx]
-                    self.buffer = self.buffer[end_idx + end_len:]
+                    self.buffer = self.buffer[end_idx + end_len :]
                     self.in_thinking = False
                 else:
                     emit, retain = self._retain_tail(self.buffer)
@@ -325,7 +331,7 @@ class ThinkingParser:
                     if start_idx > 0:
                         visible_parts.append(self.buffer[:start_idx])
                         self.visible_text += self.buffer[:start_idx]
-                    self.buffer = self.buffer[start_idx + start_len:]
+                    self.buffer = self.buffer[start_idx + start_len :]
                     self.in_thinking = True
                 else:
                     emit, retain = self._retain_tail(self.buffer)
@@ -357,17 +363,23 @@ class ThinkingParser:
                     self.visible_text += full_emit
                     result = full_emit
                 self.buffer = ""
-        return {"visible": result if not self.in_thinking else "",
-                "thinking": result if self.in_thinking else "",
-                "in_thinking": self.in_thinking}
+        return {
+            "visible": result if not self.in_thinking else "",
+            "thinking": result if self.in_thinking else "",
+            "in_thinking": self.in_thinking,
+        }
 
 
 # ── Static Thinking Extraction (for complete outputs) ──
 
 _THINKING_PATTERN = re.compile(r"<think\s*/?\s*>(.*?)</think\s*/?\s*>", re.DOTALL)
 _THINKING_TAIL_PATTERN = re.compile(r"^(.*?)</think\s*/?\s*>", re.DOTALL)
-_GEMMA_THINK_PATTERN = re.compile(r"<start_think\s*/?\s*>(.*?)</end_think\s*/?\s*>(.*)", re.DOTALL)
-_HARMONY_PATTERN = re.compile(r"\[REASONING\](.*?)\[/REASONING\](.*)", re.DOTALL | re.IGNORECASE)
+_GEMMA_THINK_PATTERN = re.compile(
+    r"<start_think\s*/?\s*>(.*?)</end_think\s*/?\s*>(.*)", re.DOTALL
+)
+_HARMONY_PATTERN = re.compile(
+    r"\[REASONING\](.*?)\[/REASONING\](.*)", re.DOTALL | re.IGNORECASE
+)
 
 
 def extract_thinking(text: str, model_name: str | None = None) -> tuple[str, str]:
@@ -392,6 +404,7 @@ def extract_thinking(text: str, model_name: str | None = None) -> tuple[str, str
     if model_name:
         try:
             from yunshu_engine.reasoning_parser import get_reasoning_parser
+
             parser = get_reasoning_parser(model_name)
             if parser.family_name() != "generic":
                 out = parser.parse(text)
@@ -418,7 +431,7 @@ def extract_thinking(text: str, model_name: str | None = None) -> tuple[str, str
         if not match:
             break
         thinking_parts.append(match.group(1))
-        remaining = remaining[:match.start()] + remaining[match.end():]
+        remaining = remaining[: match.start()] + remaining[match.end() :]
 
     if thinking_parts:
         thinking = "\n".join(thinking_parts).strip()
@@ -431,7 +444,7 @@ def extract_thinking(text: str, model_name: str | None = None) -> tuple[str, str
         match = _THINKING_TAIL_PATTERN.match(text)
         if match:
             thinking = match.group(1).strip()
-            remaining = text[match.end():].strip()
+            remaining = text[match.end() :].strip()
             return (thinking, remaining)
 
     return ("", text)
@@ -441,7 +454,7 @@ def extract_thinking(text: str, model_name: str | None = None) -> tuple[str, str
 
 # Alternative pattern: function call in markdown code blocks
 _FUNC_CALL_PATTERN = re.compile(
-    r'```(?:python|json|tool)\s*\n(.*?)\n```',
+    r"```(?:python|json|tool)\s*\n(.*?)\n```",
     re.DOTALL,
 )
 
@@ -505,17 +518,25 @@ def extract_tool_calls(text: str) -> list[dict]:
         # ARRAY of parallel calls (mirrors Pattern 3) which the old `"name" in
         # data` on a list silently dropped.
         if isinstance(data, dict) and "name" in data:
-            tool_calls.append({
-                "name": data["name"],
-                "arguments": _sanitize_arguments(data.get("arguments") or data.get("parameters") or {}),
-            })
+            tool_calls.append(
+                {
+                    "name": data["name"],
+                    "arguments": _sanitize_arguments(
+                        data.get("arguments") or data.get("parameters") or {}
+                    ),
+                }
+            )
         elif isinstance(data, list):
             for item in data:
                 if isinstance(item, dict) and "name" in item:
-                    tool_calls.append({
-                        "name": item["name"],
-                        "arguments": _sanitize_arguments(item.get("arguments") or item.get("parameters") or {}),
-                    })
+                    tool_calls.append(
+                        {
+                            "name": item["name"],
+                            "arguments": _sanitize_arguments(
+                                item.get("arguments") or item.get("parameters") or {}
+                            ),
+                        }
+                    )
 
     # Pattern 2: Qwen/Llama XML format <function=name>...</function>
     if not tool_calls:
@@ -528,21 +549,27 @@ def extract_tool_calls(text: str) -> list[dict]:
             body = match.group(2).strip()
             try:
                 data = json.loads(body)
-                tool_calls.append({
-                    "name": name,
-                    "arguments": _sanitize_arguments(data),
-                })
+                tool_calls.append(
+                    {
+                        "name": name,
+                        "arguments": _sanitize_arguments(data),
+                    }
+                )
             except json.JSONDecodeError:
                 # Try parameter extraction
                 params = {}
-                param_pattern = re.compile(r"<parameter\s*=\s*(\w+)>(.*?)</parameter>", re.DOTALL)
+                param_pattern = re.compile(
+                    r"<parameter\s*=\s*(\w+)>(.*?)</parameter>", re.DOTALL
+                )
                 for pm in param_pattern.finditer(body):
                     params[pm.group(1)] = pm.group(2).strip()
                 if params:
-                    tool_calls.append({
-                        "name": name,
-                        "arguments": json.dumps(params, ensure_ascii=False),
-                    })
+                    tool_calls.append(
+                        {
+                            "name": name,
+                            "arguments": json.dumps(params, ensure_ascii=False),
+                        }
+                    )
 
     # Pattern 3: Direct JSON with name field
     if not tool_calls:
@@ -551,17 +578,27 @@ def extract_tool_calls(text: str) -> list[dict]:
             try:
                 data = json.loads(content)
                 if isinstance(data, dict) and "name" in data:
-                    tool_calls.append({
-                        "name": data["name"],
-                        "arguments": _sanitize_arguments(data.get("arguments") or data.get("parameters") or {}),
-                    })
+                    tool_calls.append(
+                        {
+                            "name": data["name"],
+                            "arguments": _sanitize_arguments(
+                                data.get("arguments") or data.get("parameters") or {}
+                            ),
+                        }
+                    )
                 elif isinstance(data, list):
                     for item in data:
                         if isinstance(item, dict) and "name" in item:
-                            tool_calls.append({
-                                "name": item["name"],
-                                "arguments": _sanitize_arguments(item.get("arguments") or item.get("parameters") or {}),
-                            })
+                            tool_calls.append(
+                                {
+                                    "name": item["name"],
+                                    "arguments": _sanitize_arguments(
+                                        item.get("arguments")
+                                        or item.get("parameters")
+                                        or {}
+                                    ),
+                                }
+                            )
             except json.JSONDecodeError:
                 continue
 
@@ -576,11 +613,11 @@ _MISTRAL_TOOL_RE = re.compile(
 )
 # Pattern 6: ChatML [TOOL_CALLS] [{...}]
 _CHATML_TOOL_RE = re.compile(
-    r'\[TOOL_CALLS\]\s*\[',
+    r"\[TOOL_CALLS\]\s*\[",
 )
 # Pattern 7: DeepSeek-style ✿FUNCTION✿ markers
 _DEEPSEEK_TOOL_RE = re.compile(
-    r'✿FUNCTION✿\s*\{',
+    r"✿FUNCTION✿\s*\{",
 )
 
 
@@ -594,7 +631,7 @@ def _extract_balanced(text: str, start: int, open_ch: str, close_ch: str) -> str
             escape_next = False
             continue
         if in_string:
-            if text[i] == '\\':
+            if text[i] == "\\":
                 escape_next = True
                 continue
             if text[i] == '"':
@@ -608,7 +645,7 @@ def _extract_balanced(text: str, start: int, open_ch: str, close_ch: str) -> str
         elif text[i] == close_ch:
             depth -= 1
             if depth == 0:
-                return text[start:i + 1]
+                return text[start : i + 1]
     return None
 
 
@@ -639,7 +676,7 @@ def extract_tool_calls_v2(text: str) -> list[dict]:
         if _escape_next:
             _escape_next = False
             continue
-        if ch == '\\' and _in_string:
+        if ch == "\\" and _in_string:
             _escape_next = True
             continue
         if ch == '"':
@@ -647,16 +684,16 @@ def extract_tool_calls_v2(text: str) -> list[dict]:
             continue
         if _in_string:
             continue
-        if ch == '{':
+        if ch == "{":
             if _brace_depth <= 0:
                 _json_start = i
                 _brace_depth = 1
             else:
                 _brace_depth += 1
-        elif ch == '}':
+        elif ch == "}":
             _brace_depth -= 1
             if _brace_depth == 0 and _json_start >= 0:
-                candidate = text[_json_start:i + 1]
+                candidate = text[_json_start : i + 1]
                 try:
                     data = json.loads(candidate)
                     # Pattern A: {"function": {"name": ..., "arguments": ...}}
@@ -672,7 +709,11 @@ def extract_tool_calls_v2(text: str) -> list[dict]:
                             if name:
                                 func = tc
                     # Pattern C: {"name": ..., "arguments": ...}
-                    if not name and "name" in data and isinstance(data.get("name"), str):
+                    if (
+                        not name
+                        and "name" in data
+                        and isinstance(data.get("name"), str)
+                    ):
                         name = data["name"]
                         func = data
                     if name:
@@ -685,7 +726,12 @@ def extract_tool_calls_v2(text: str) -> list[dict]:
                             args = func.get("parameters", {})
                         if isinstance(args, str):
                             args = json.loads(args)
-                        calls.append({"name": name, "arguments": json.dumps(args, ensure_ascii=False)})
+                        calls.append(
+                            {
+                                "name": name,
+                                "arguments": json.dumps(args, ensure_ascii=False),
+                            }
+                        )
                 except (json.JSONDecodeError, KeyError):
                     pass
                 _json_start = -1
@@ -698,20 +744,36 @@ def extract_tool_calls_v2(text: str) -> list[dict]:
     # Pattern 6: ChatML [TOOL_CALLS] [{...}]
     for match in _CHATML_TOOL_RE.finditer(text):
         bracket_start = match.end() - 1  # position of '['
-        block = _extract_balanced(text, bracket_start, '[', ']')
+        block = _extract_balanced(text, bracket_start, "[", "]")
         if block:
             try:
                 arr = json.loads(block)
                 for item in arr:
                     if isinstance(item, dict):
-                        name = item.get("name", item.get("function", {}).get("name", ""))
-                        _ifunc = item.get("function", {}) if isinstance(item.get("function"), dict) else {}
-                        args = (item.get("arguments") or item.get("parameters")
-                                or _ifunc.get("arguments") or _ifunc.get("parameters") or {})
+                        name = item.get(
+                            "name", item.get("function", {}).get("name", "")
+                        )
+                        _ifunc = (
+                            item.get("function", {})
+                            if isinstance(item.get("function"), dict)
+                            else {}
+                        )
+                        args = (
+                            item.get("arguments")
+                            or item.get("parameters")
+                            or _ifunc.get("arguments")
+                            or _ifunc.get("parameters")
+                            or {}
+                        )
                         if name:
                             if isinstance(args, str):
                                 args = json.loads(args)
-                            calls.append({"name": name, "arguments": json.dumps(args, ensure_ascii=False)})
+                            calls.append(
+                                {
+                                    "name": name,
+                                    "arguments": json.dumps(args, ensure_ascii=False),
+                                }
+                            )
             except (json.JSONDecodeError, KeyError):
                 continue
     if calls:
@@ -720,7 +782,7 @@ def extract_tool_calls_v2(text: str) -> list[dict]:
     # Pattern 7: DeepSeek ✿FUNCTION✿ markers
     for match in _DEEPSEEK_TOOL_RE.finditer(text):
         brace_start = match.end() - 1  # position of '{'
-        block = _extract_balanced(text, brace_start, '{', '}')
+        block = _extract_balanced(text, brace_start, "{", "}")
         if block:
             try:
                 data = json.loads(block)
@@ -729,14 +791,21 @@ def extract_tool_calls_v2(text: str) -> list[dict]:
                     args = data.get("arguments") or data.get("parameters") or {}
                     if isinstance(args, str):
                         args = json.loads(args)
-                    calls.append({"name": name, "arguments": json.dumps(args, ensure_ascii=False)})
+                    calls.append(
+                        {
+                            "name": name,
+                            "arguments": json.dumps(args, ensure_ascii=False),
+                        }
+                    )
             except (json.JSONDecodeError, KeyError):
                 continue
 
     return calls
 
 
-def _strip_marker_and_balanced(text: str, marker_re: str, open_ch: str, close_ch: str) -> str:
+def _strip_marker_and_balanced(
+    text: str, marker_re: str, open_ch: str, close_ch: str
+) -> str:
     """Remove a tool-call marker and the balanced bracket group that follows it.
 
     Regex can't balance nested brackets and a string-containing-bracket
@@ -752,7 +821,7 @@ def _strip_marker_and_balanced(text: str, marker_re: str, open_ch: str, close_ch
     i = text.find(open_ch, m.end())
     if i == -1:
         # Marker with no following block (e.g. a bare <|python_tag|>) — drop the marker.
-        return (text[:m.start()] + text[m.end():])
+        return text[: m.start()] + text[m.end() :]
     depth = 0
     in_str = False
     esc = False
@@ -771,10 +840,10 @@ def _strip_marker_and_balanced(text: str, marker_re: str, open_ch: str, close_ch
             elif c == close_ch:
                 depth -= 1
                 if depth == 0:
-                    return text[:m.start()] + text[j + 1:]
+                    return text[: m.start()] + text[j + 1 :]
         j += 1
     # Unbalanced (truncated) — strip from the marker to end-of-text.
-    return text[:m.start()]
+    return text[: m.start()]
 
 
 def clean_tool_call_markup(text: str) -> str:
@@ -788,7 +857,9 @@ def clean_tool_call_markup(text: str) -> str:
     text = _strip_marker_and_balanced(text, r"\[TOOL_CALL\]", "{", "}")
     text = _strip_marker_and_balanced(text, r"<\|python_tag\|>", "{", "}")
     # Remove <tool_call/>...</tool_call/> blocks (well-formed)
-    text = re.sub(r"<tool_call\s*/?\s*>.*?</tool_call\s*/?\s*>", "", text, flags=re.DOTALL)
+    text = re.sub(
+        r"<tool_call\s*/?\s*>.*?</tool_call\s*/?\s*>", "", text, flags=re.DOTALL
+    )
     # Remove <function=name>...</function> blocks
     text = re.sub(r"<function\s*=\s*[\w.\-]+>.*?</function>", "", text, flags=re.DOTALL)
     # Remove DeepSeek-V3/R1 and GLM block-form tool-call markers left in the
@@ -796,13 +867,22 @@ def clean_tool_call_markup(text: str) -> str:
     # CLEAN-side siblings were never propagated, so the raw special tokens leaked
     # into the text content block. Tolerate half/fullwidth pipe and ▁/_ like the
     # parser regexes do.
-    text = re.sub(r'[<]?[｜|]tool[▁_]call[▁_]begin[｜|][>]?.*?[<]?[｜|]tool[▁_]call[▁_]end[｜|][>]?',
-                  "", text, flags=re.DOTALL)
-    text = re.sub(r'<\|tool_call_block_begin\|>.*?<\|tool_call_block_end\|>', "", text, flags=re.DOTALL)
+    text = re.sub(
+        r"[<]?[｜|]tool[▁_]call[▁_]begin[｜|][>]?.*?[<]?[｜|]tool[▁_]call[▁_]end[｜|][>]?",
+        "",
+        text,
+        flags=re.DOTALL,
+    )
+    text = re.sub(
+        r"<\|tool_call_block_begin\|>.*?<\|tool_call_block_end\|>",
+        "",
+        text,
+        flags=re.DOTALL,
+    )
     # Strip any dangling/standalone DeepSeek & GLM markers (wrapper begin/end, sep).
-    text = re.sub(r'[<]?[｜|]tool[▁_]calls?[▁_](?:begin|end)[｜|][>]?', "", text)
-    text = re.sub(r'[<]?[｜|]tool[▁_]sep[｜|][>]?', "", text)
-    text = re.sub(r'<\|tool_call_block_(?:begin|end)\|>', "", text)
+    text = re.sub(r"[<]?[｜|]tool[▁_]calls?[▁_](?:begin|end)[｜|][>]?", "", text)
+    text = re.sub(r"[<]?[｜|]tool[▁_]sep[｜|][>]?", "", text)
+    text = re.sub(r"<\|tool_call_block_(?:begin|end)\|>", "", text)
     # Truncated tool_call: model emitted `<tool_call>{...}` but ran out of
     # tokens before the closing tag. Strip from `<tool_call>` to end-of-text
     # so the residual JSON/markup doesn't leak into the text content block
@@ -821,11 +901,20 @@ def clean_tool_call_markup(text: str) -> str:
     text = _bare_re.sub("", text)
     # If the text is JUST a tool-call JSON (no other prose), drop it entirely
     _stripped = text.strip()
-    if _stripped.startswith("{") and '"name"' in _stripped and '"arguments"' in _stripped:
+    if (
+        _stripped.startswith("{")
+        and '"name"' in _stripped
+        and '"arguments"' in _stripped
+    ):
         try:
             import json as _json
+
             data = _json.loads(_stripped)
-            if isinstance(data, dict) and ("name" in data or "tool_call" in data) and ("arguments" in data or "parameters" in data):
+            if (
+                isinstance(data, dict)
+                and ("name" in data or "tool_call" in data)
+                and ("arguments" in data or "parameters" in data)
+            ):
                 text = ""
         except (_json.JSONDecodeError, ValueError):
             pass
@@ -851,6 +940,7 @@ def extract_tool_calls_model_aware(text: str, model_name: str = "") -> list[dict
     parser = _tool_call_parsers.get(model_name)
     if parser is None:
         from yunshu_engine.tool_call_parsers import ToolCallParser
+
         parser = ToolCallParser(model_name=model_name)
         _tool_call_parsers[model_name] = parser
 
@@ -876,8 +966,17 @@ def extract_tool_calls_model_aware(text: str, model_name: str = "") -> list[dict
     # the DISTINCTIVE-marker parsers are swept (NOT the generic bare-JSON parser,
     # which would phantom-match ordinary JSON in a normal completion). This does
     # NOT alter detection precedence, so correctly-routed names are unaffected.
-    if any(mark in text for mark in ("<tool_call", "tool▁call", "tool_call_begin",
-                                     "tool_sep", "tool▁sep", "[TOOL_CALL")):
+    if any(
+        mark in text
+        for mark in (
+            "<tool_call",
+            "tool▁call",
+            "tool_call_begin",
+            "tool_sep",
+            "tool▁sep",
+            "[TOOL_CALL",
+        )
+    ):
         from yunshu_engine.tool_call_parsers import (
             ToolCallFormat,
             parse_deepseek_tool_calls,
@@ -886,6 +985,7 @@ def extract_tool_calls_model_aware(text: str, model_name: str = "") -> list[dict
             parse_mistral_tool_calls,
             parse_qwen_tool_calls,
         )
+
         _marker_sweep = (
             (ToolCallFormat.QWEN, parse_qwen_tool_calls),
             (ToolCallFormat.DEEPSEEK, parse_deepseek_tool_calls),
@@ -926,16 +1026,21 @@ def get_max_context_window(model_id: str | None = None, engine=None) -> int | No
     # letting over-long prompts past the guard into RoPE-extrapolated garbage. The
     # model's own value MUST win over the tokenizer fallback. Mirror the correct
     # resolver in routers/tokenize.py (_resolve_context_limit).
-    model = getattr(engine, '_model', None)
+    model = getattr(engine, "_model", None)
     if model is not None:
-        for attr in ('max_seq_len', 'max_position_embeddings'):
+        for attr in ("max_seq_len", "max_position_embeddings"):
             v = getattr(model, attr, None)
             if isinstance(v, int) and v > 0:
                 return v
-        for sub in ('config', 'args'):
+        for sub in ("config", "args"):
             s = getattr(model, sub, None)
             if s is not None:
-                for key in ('max_position_embeddings', 'max_seq_len', 'n_positions', 'context_length'):
+                for key in (
+                    "max_position_embeddings",
+                    "max_seq_len",
+                    "n_positions",
+                    "context_length",
+                ):
                     val = getattr(s, key, None)
                     if val is None and isinstance(s, dict):
                         val = s.get(key)
@@ -943,24 +1048,26 @@ def get_max_context_window(model_id: str | None = None, engine=None) -> int | No
                         return int(val)
 
     # Engine-level config dict (VLM path)
-    for cfg_attr in ('_config', 'config'):
+    for cfg_attr in ("_config", "config"):
         cfg = getattr(engine, cfg_attr, None)
         if isinstance(cfg, dict):
-            for k in ('max_position_embeddings', 'context_length', 'max_seq_len'):
+            for k in ("max_position_embeddings", "context_length", "max_seq_len"):
                 v = cfg.get(k)
                 if isinstance(v, int) and v > 0:
                     return int(v)
-            tc = cfg.get("text_config") or (cfg.get("thinker_config") or {}).get("text_config")
+            tc = cfg.get("text_config") or (cfg.get("thinker_config") or {}).get(
+                "text_config"
+            )
             if isinstance(tc, dict):
-                for k in ('max_position_embeddings', 'context_length', 'max_seq_len'):
+                for k in ("max_position_embeddings", "context_length", "max_seq_len"):
                     v = tc.get(k)
                     if isinstance(v, int) and v > 0:
                         return int(v)
 
     # Tokenizer fallback (least trustworthy — only when the model exposed nothing)
-    tokenizer = getattr(engine, '_tokenizer', None)
+    tokenizer = getattr(engine, "_tokenizer", None)
     if tokenizer is not None:
-        model_max = getattr(tokenizer, 'model_max_length', None)
+        model_max = getattr(tokenizer, "model_max_length", None)
         if model_max is not None and model_max < 1_000_000:
             return int(model_max)
 
@@ -1005,6 +1112,7 @@ def get_max_prefill_tokens() -> int:
     YUNSHU_MAX_PREFILL_TOKENS to a positive value to enforce a cap.
     """
     import os
+
     try:
         v = int(os.environ.get("YUNSHU_MAX_PREFILL_TOKENS", "0"))
     except (TypeError, ValueError):
@@ -1304,7 +1412,9 @@ def format_responses_in_progress(
         "response": _responses_base_response(response_id, model, status="in_progress"),
         "sequence_number": seq,
     }
-    return f"event: response.in_progress\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    return (
+        f"event: response.in_progress\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    )
 
 
 def format_responses_output_item_added(
@@ -1497,7 +1607,8 @@ def format_responses_completed(
         usage["input_tokens_details"] = {"cached_tokens": cached_tokens}
     completed_at = int(time.time())
     resp = _responses_base_response(
-        response_id, model,
+        response_id,
+        model,
         status="completed",
         output=output,
         usage=usage,
@@ -1508,7 +1619,9 @@ def format_responses_completed(
         "response": resp,
         "sequence_number": seq,
     }
-    return f"event: response.completed\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    return (
+        f"event: response.completed\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    )
 
 
 def format_responses_failed(
@@ -1568,7 +1681,8 @@ def format_responses_incomplete(
         usage["input_tokens_details"] = {"cached_tokens": cached_tokens}
     incomplete_at = int(time.time())
     resp = _responses_base_response(
-        response_id, model,
+        response_id,
+        model,
         status="incomplete",
         output=output or [],
         usage=usage,
@@ -1580,7 +1694,9 @@ def format_responses_incomplete(
         "response": resp,
         "sequence_number": seq,
     }
-    return f"event: response.incomplete\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    return (
+        f"event: response.incomplete\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    )
 
 
 # ── Anthropic SSE Formatter ──
@@ -1631,6 +1747,3 @@ def format_anthropic_chunk(
         data = {"type": "ping"}
 
     return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-
-
-

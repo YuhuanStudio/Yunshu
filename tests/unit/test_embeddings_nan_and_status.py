@@ -8,6 +8,7 @@ before-base64, batch indexing, usage, isolation all verified). Two robustness ga
 2. token-id input + missing model returned 400 "tokenizer unavailable" where string input
    correctly returns 404 "model not found". Now both return 404.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -72,7 +73,7 @@ def test_base64_path_also_sanitized(monkeypatch):
     req = EmbeddingRequest(model="m", input="hi", encoding_format="base64")
     out = asyncio.run(_embed_and_format(req))
     raw = base64.b64decode(out["data"][0]["embedding"])
-    vals = list(struct.unpack(f"{len(raw)//4}f", raw))
+    vals = list(struct.unpack(f"{len(raw) // 4}f", raw))
     assert vals == [0.0, 1.0]  # NaN packed as 0.0, not a garbage float
 
 
@@ -85,7 +86,9 @@ def test_nan_with_dimensions_still_renormalizes_to_unit(monkeypatch):
     import math
 
     async def _fake_gen(engine, texts, **kw):
-        return [[3.0, 4.0, float("nan"), 9.0, 9.0]]   # native dim 5, NaN inside the kept slice
+        return [
+            [3.0, 4.0, float("nan"), 9.0, 9.0]
+        ]  # native dim 5, NaN inside the kept slice
 
     monkeypatch.setattr(E, "_generate_embeddings", _fake_gen)
 

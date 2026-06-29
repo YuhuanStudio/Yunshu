@@ -51,6 +51,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class VideoGenConfig:
     """Configuration for video generation."""
+
     width: int = 1280
     height: int = 704
     num_frames: int = 81  # Must be 4n+1 for Wan2.2
@@ -64,6 +65,7 @@ class VideoGenConfig:
 @dataclass
 class VideoGenOutput:
     """Result from video generation."""
+
     video_data: bytes = b""  # MP4 bytes
     frames: list[bytes] = field(default_factory=list)  # PNG bytes per frame
     width: int = 0
@@ -78,7 +80,8 @@ class VideoGenOutput:
 @dataclass
 class FrameBatch:
     """A batch of processed video frames for efficient GPU processing."""
-    frames: list[bytes] = field(default_factory=list)   # PNG bytes per frame
+
+    frames: list[bytes] = field(default_factory=list)  # PNG bytes per frame
     frame_indices: list[int] = field(default_factory=list)  # Original frame indices
     width: int = 0
     height: int = 0
@@ -88,6 +91,7 @@ class FrameBatch:
 @dataclass
 class VideoStats:
     """Runtime statistics for video engine."""
+
     frames_processed: int = 0
     frames_streamed: int = 0
     batches_processed: int = 0
@@ -130,13 +134,16 @@ class VideoEngine(ActiveRequestMixin):
     Falls back gracefully when mlx-video is not installed.
     """
 
-    def __init__(self, model_path: str = "", config: VideoGenConfig | None = None) -> None:
+    def __init__(
+        self, model_path: str = "", config: VideoGenConfig | None = None
+    ) -> None:
         self._model_path = model_path
         self._config = config or VideoGenConfig()
         self._model = None
         self._model_type = self._detect_model_type()
         self._running = False
         from .mlx_executor import get_mlx_executor
+
         self._executor = get_mlx_executor()
 
         # Stats tracking
@@ -168,12 +175,14 @@ class VideoEngine(ActiveRequestMixin):
         teacache_env = os.environ.get("YUNSHU_VIDEO_TEACACHE", "").strip()
         if teacache_env in ("1", "true", "yes"):
             from .teacache import TeaCacheConfig
+
             self._teacache_config = TeaCacheConfig(rel_l1_thresh=0.2)
             logger.info("Video TeaCache enabled (threshold=0.2)")
         elif teacache_env and teacache_env not in ("0", "false", "no"):
             try:
                 thresh = float(teacache_env)
                 from .teacache import TeaCacheConfig
+
                 self._teacache_config = TeaCacheConfig(rel_l1_thresh=thresh)
                 logger.info(f"Video TeaCache enabled (threshold={thresh})")
             except ValueError:
@@ -181,7 +190,11 @@ class VideoEngine(ActiveRequestMixin):
 
     @property
     def model_name(self) -> str:
-        return self._model_path.rsplit("/", 1)[-1] if "/" in self._model_path else "video-default"
+        return (
+            self._model_path.rsplit("/", 1)[-1]
+            if "/" in self._model_path
+            else "video-default"
+        )
 
     @property
     def is_loaded(self) -> bool:
@@ -241,7 +254,9 @@ class VideoEngine(ActiveRequestMixin):
         """Initialize the video engine."""
         if self._running:
             return
-        logger.info(f"Starting video engine: {self._model_path or 'default'} (type={self._model_type})")
+        logger.info(
+            f"Starting video engine: {self._model_path or 'default'} (type={self._model_type})"
+        )
         # Model loading happens lazily during first generation
         self._running = True
 
@@ -276,6 +291,7 @@ class VideoEngine(ActiveRequestMixin):
             import concurrent.futures
 
             import mlx.core as mx
+
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 pool.submit(lambda: (mx.synchronize(), mx.clear_cache())).result()
         except Exception:
@@ -300,6 +316,7 @@ class VideoEngine(ActiveRequestMixin):
             import asyncio
 
             from .mlx_executor import sync_and_clear_cache
+
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(self._executor, sync_and_clear_cache)
         except Exception:
@@ -392,10 +409,15 @@ class VideoEngine(ActiveRequestMixin):
                 prompt=prompt,
                 negative_prompt=negative_prompt,
                 image=image,
-                width=w, height=h,
-                num_frames=nf, num_steps=ns,
-                guide_scale=gs, fps=f, seed=s,
-                scheduler=sched, output_format=output_format,
+                width=w,
+                height=h,
+                num_frames=nf,
+                num_steps=ns,
+                guide_scale=gs,
+                fps=f,
+                seed=s,
+                scheduler=sched,
+                output_format=output_format,
             )
 
         t0 = time.monotonic()
@@ -410,7 +432,9 @@ class VideoEngine(ActiveRequestMixin):
             self._stats.total_generate_ms += elapsed * 1000.0
             self._stats.frames_processed += result.num_frames
 
-        logger.info(f"Video gen: {elapsed:.2f}s, {nf} frames, prompt='{prompt[:50]}...'")
+        logger.info(
+            f"Video gen: {elapsed:.2f}s, {nf} frames, prompt='{prompt[:50]}...'"
+        )
         return result
 
     # ═══════════════════════════════════════════════════════════════════════
@@ -486,6 +510,7 @@ class VideoEngine(ActiveRequestMixin):
 
         # Thread-safe queue + cancellation for executor -> async bridge
         import queue as _queue_mod
+
         _thread_queue: _queue_mod.Queue[dict | None] = _queue_mod.Queue(maxsize=128)
         _cancel = threading.Event()
 
@@ -509,9 +534,13 @@ class VideoEngine(ActiveRequestMixin):
                         prompt=prompt,
                         negative_prompt=negative_prompt,
                         image=image,
-                        width=w, height=h,
-                        num_frames=nf, num_steps=ns,
-                        guide_scale=gs, seed=s, scheduler=sched,
+                        width=w,
+                        height=h,
+                        num_frames=nf,
+                        num_steps=ns,
+                        guide_scale=gs,
+                        seed=s,
+                        scheduler=sched,
                         model_dir=model_dir,
                         thread_queue=_thread_queue,
                         cancel=_cancel,
@@ -523,9 +552,13 @@ class VideoEngine(ActiveRequestMixin):
                         prompt=prompt,
                         negative_prompt=negative_prompt,
                         image=image,
-                        width=w, height=h,
-                        num_frames=nf, num_steps=ns,
-                        guide_scale=gs, seed=s, scheduler=sched,
+                        width=w,
+                        height=h,
+                        num_frames=nf,
+                        num_steps=ns,
+                        guide_scale=gs,
+                        seed=s,
+                        scheduler=sched,
                         model_dir=model_dir,
                         fps=f,
                         thread_queue=_thread_queue,
@@ -534,7 +567,9 @@ class VideoEngine(ActiveRequestMixin):
                 else:
                     # Fallback: yield placeholder frames one by one
                     frames_emitted = self._stream_fallback(
-                        prompt=prompt, width=w, height=h,
+                        prompt=prompt,
+                        width=w,
+                        height=h,
                         num_frames=nf,
                         thread_queue=_thread_queue,
                         cancel=_cancel,
@@ -622,12 +657,18 @@ class VideoEngine(ActiveRequestMixin):
         # pipeline left set by a prior NON-streaming request can't be reused to stream
         # placeholder garbage.
         if not callable(getattr(self._native_pipeline, "_model", None)):
-            logger.warning("Native pipeline has no callable transformer for stream; "
-                           "falling back instead of streaming placeholder frames")
+            logger.warning(
+                "Native pipeline has no callable transformer for stream; "
+                "falling back instead of streaming placeholder frames"
+            )
             self._native_pipeline = None
             return self._stream_fallback(
-                prompt, width, height, num_frames,
-                thread_queue, cancel,
+                prompt,
+                width,
+                height,
+                num_frames,
+                thread_queue,
+                cancel,
             )
 
         request = VideoGenRequest(
@@ -645,6 +686,7 @@ class VideoEngine(ActiveRequestMixin):
         # Wire TeaCache — create per-request instance
         if self._teacache_config is not None:
             from .teacache import TeaCacheHook
+
             _local_tc = TeaCacheHook(self._teacache_config)
             _local_tc.reset()
             self._native_pipeline._teacache_hook = _local_tc
@@ -658,6 +700,7 @@ class VideoEngine(ActiveRequestMixin):
                 import mlx.core as mx
                 import numpy as np
                 from PIL import Image as PILImage
+
                 pil_img = PILImage.open(io.BytesIO(image)).convert("RGB")
                 img_np = np.array(pil_img, dtype=np.float32) / 255.0
                 image_mx = mx.array(img_np)
@@ -671,7 +714,8 @@ class VideoEngine(ActiveRequestMixin):
             if not self._running:
                 return 0
             frame_iter = self._native_pipeline.generate_frames_iter(
-                request, image=image_mx,
+                request,
+                image=image_mx,
             )
             pending_data: dict | None = None
             frames_emitted = 0
@@ -727,7 +771,9 @@ class VideoEngine(ActiveRequestMixin):
             return frames_emitted
 
         finally:
-            if _local_tc is not None and hasattr(self._native_pipeline, '_teacache_hook'):
+            if _local_tc is not None and hasattr(
+                self._native_pipeline, "_teacache_hook"
+            ):
                 self._native_pipeline._teacache_hook = None
 
     def _stream_mlx_video(
@@ -761,6 +807,7 @@ class VideoEngine(ActiveRequestMixin):
         image_path = None
         if image is not None:
             import tempfile
+
             fd, image_path = tempfile.mkstemp(suffix=".png")
             os.close(fd)
             with open(image_path, "wb") as f:
@@ -786,16 +833,28 @@ class VideoEngine(ActiveRequestMixin):
             if not output_path or not os.path.exists(output_path):
                 # Fallback to placeholder streaming
                 return self._stream_fallback(
-                    prompt, width, height, num_frames,
-                    thread_queue, cancel,
+                    prompt,
+                    width,
+                    height,
+                    num_frames,
+                    thread_queue,
+                    cancel,
                 )
 
             # Stream-decode the MP4 via ffmpeg rawvideo pipe
             ffmpeg_cmd = [
-                "ffmpeg", "-i", output_path,
-                "-vf", f"scale={width}:{height}",
-                "-f", "rawvideo", "-pix_fmt", "rgb24",
-                "-v", "quiet", "-",
+                "ffmpeg",
+                "-i",
+                output_path,
+                "-vf",
+                f"scale={width}:{height}",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "-v",
+                "quiet",
+                "-",
             ]
             proc = subprocess.Popen(
                 ffmpeg_cmd,
@@ -816,6 +875,7 @@ class VideoEngine(ActiveRequestMixin):
                 # video data — cancel.is_set() only helps on the next
                 # iteration, but a blocked read() never reaches it.
                 import select as _select_mod
+
                 ready, _, _ = _select_mod.select([proc.stdout], [], [], 5.0)
                 if not ready:
                     logger.warning("ffmpeg read timeout after 5s in _stream_mlx_video")
@@ -825,9 +885,7 @@ class VideoEngine(ActiveRequestMixin):
                 if len(raw) < frame_size:
                     break
 
-                arr = np.frombuffer(raw, dtype=np.uint8).reshape(
-                    (height, width, 3)
-                )
+                arr = np.frombuffer(raw, dtype=np.uint8).reshape((height, width, 3))
                 pil = PILImage.fromarray(arr)
                 buf = io.BytesIO()
                 pil.save(buf, format="PNG")
@@ -886,8 +944,12 @@ class VideoEngine(ActiveRequestMixin):
                     proc.stdout.close()
             logger.error(f"mlx-video stream failed: {e}", exc_info=True)
             return self._stream_fallback(
-                prompt, width, height, num_frames,
-                thread_queue, cancel,
+                prompt,
+                width,
+                height,
+                num_frames,
+                thread_queue,
+                cancel,
             )
         finally:
             if image_path and os.path.exists(image_path):
@@ -924,11 +986,11 @@ class VideoEngine(ActiveRequestMixin):
                 break
 
             arr = np.full((height, width, 3), [30, 30, 50], dtype=np.uint8)
-            text = f"Frame {i+1}/{num_frames}"
+            text = f"Frame {i + 1}/{num_frames}"
             for j, _ch in enumerate(text):
                 x = 10 + j * 12
                 if x < width - 10:
-                    arr[10:25, x:x+10] = 200
+                    arr[10:25, x : x + 10] = 200
             pil = PILImage.fromarray(arr)
             buf = io.BytesIO()
             pil.save(buf, format="PNG")
@@ -972,7 +1034,12 @@ class VideoEngine(ActiveRequestMixin):
         if not model_dir or not os.path.isdir(model_dir):
             logger.warning("No video model directory found, using fallback")
             return self._fallback_generation(
-                prompt, width, height, num_frames, fps, output_format,
+                prompt,
+                width,
+                height,
+                num_frames,
+                fps,
+                output_format,
             )
 
         # Try native MLX pipeline first (YUNSHU_VIDEO_PIPELINE=native)
@@ -996,7 +1063,10 @@ class VideoEngine(ActiveRequestMixin):
                 # frames-format response (base64 each frame) works and MP4 encoding
                 # doesn't silently drop them.
                 frames = [
-                    _f for _f in (self._frame_to_png_bytes(f) for f in (result.frames or []))
+                    _f
+                    for _f in (
+                        self._frame_to_png_bytes(f) for f in (result.frames or [])
+                    )
                     if _f is not None
                 ]
                 video_data = b""
@@ -1035,6 +1105,7 @@ class VideoEngine(ActiveRequestMixin):
         image_path = None
         if image is not None:
             import tempfile
+
             fd, image_path = tempfile.mkstemp(suffix=".png")
             os.close(fd)
             with open(image_path, "wb") as f:
@@ -1091,7 +1162,12 @@ class VideoEngine(ActiveRequestMixin):
                 os.unlink(output_path)
 
         return self._fallback_generation(
-            prompt, width, height, num_frames, fps, output_format,
+            prompt,
+            width,
+            height,
+            num_frames,
+            fps,
+            output_format,
         )
 
     def _generate_with_mlx_video(
@@ -1112,12 +1188,14 @@ class VideoEngine(ActiveRequestMixin):
         output_path = None
         try:
             import tempfile
+
             fd, output_path = tempfile.mkstemp(suffix=".mp4")
             os.close(fd)
 
             if self._model_type == "wan_2_2":
                 from mlx_video.models.wan_2 import generate as _wan_gen
                 from mlx_video.models.wan_2.generate import generate_video
+
                 # Memory optimization: the stock T5 loader upcasts to fp32
                 # (~22GB for umt5-xxl). T5 only encodes the prompt once, so bf16
                 # is plenty and frees ~11GB — the headroom that lets near-native
@@ -1129,10 +1207,14 @@ class VideoEngine(ActiveRequestMixin):
 
                     def _load_t5_bf16(model_path, config):
                         enc = T5Encoder(
-                            vocab_size=config.t5_vocab_size, dim=config.t5_dim,
-                            dim_attn=config.t5_dim_attn, dim_ffn=config.t5_dim_ffn,
-                            num_heads=config.t5_num_heads, num_layers=config.t5_num_layers,
-                            num_buckets=config.t5_num_buckets, shared_pos=False,
+                            vocab_size=config.t5_vocab_size,
+                            dim=config.t5_dim,
+                            dim_attn=config.t5_dim_attn,
+                            dim_ffn=config.t5_dim_ffn,
+                            num_heads=config.t5_num_heads,
+                            num_layers=config.t5_num_layers,
+                            num_buckets=config.t5_num_buckets,
+                            shared_pos=False,
                         )
                         w = _mx.load(str(model_path))
                         w = {k: v.astype(_mx.bfloat16) for k, v in w.items()}
@@ -1160,6 +1242,7 @@ class VideoEngine(ActiveRequestMixin):
                 import os as _os
 
                 from mlx_video.models.ltx_2.generate import generate_video
+
                 # The real LTX-2 generate_video requires model_repo +
                 # text_encoder_repo and uses num_inference_steps / cfg_scale. The old
                 # call passed model_dir= / steps= → TypeError on EVERY LTX request →
@@ -1249,7 +1332,7 @@ class VideoEngine(ActiveRequestMixin):
                 loaded = self._native_pipeline.load_weights(model_dir)
                 if not loaded:
                     logger.warning("Native pipeline weight loading failed")
-                    if hasattr(self._native_pipeline, 'cleanup'):
+                    if hasattr(self._native_pipeline, "cleanup"):
                         self._native_pipeline.cleanup()
                     del self._native_pipeline
                     self._native_pipeline = None
@@ -1264,9 +1347,11 @@ class VideoEngine(ActiveRequestMixin):
             # creation) so a pipeline left set by a prior call can't be reused to
             # emit garbage. Also null it so a later streaming request re-evaluates.
             if not callable(getattr(self._native_pipeline, "_model", None)):
-                logger.warning("Native pipeline has no callable transformer; refusing "
-                               "placeholder generation (honest fallback)")
-                if hasattr(self._native_pipeline, 'cleanup'):
+                logger.warning(
+                    "Native pipeline has no callable transformer; refusing "
+                    "placeholder generation (honest fallback)"
+                )
+                if hasattr(self._native_pipeline, "cleanup"):
                     self._native_pipeline.cleanup()
                 self._native_pipeline = None
                 return None
@@ -1288,6 +1373,7 @@ class VideoEngine(ActiveRequestMixin):
             _local_tc = None
             if self._teacache_config is not None:
                 from .teacache import TeaCacheHook
+
                 _local_tc = TeaCacheHook(self._teacache_config)
                 _local_tc.reset()
                 self._native_pipeline._teacache_hook = _local_tc
@@ -1299,6 +1385,7 @@ class VideoEngine(ActiveRequestMixin):
                     import mlx.core as mx
                     import numpy as np
                     from PIL import Image as PILImage
+
                     pil_img = PILImage.open(io.BytesIO(image)).convert("RGB")
                     img_np = np.array(pil_img, dtype=np.float32) / 255.0
                     img_mx = mx.array(img_np)
@@ -1317,7 +1404,9 @@ class VideoEngine(ActiveRequestMixin):
                     return result
                 return None
             finally:
-                if _local_tc is not None and hasattr(self._native_pipeline, '_teacache_hook'):
+                if _local_tc is not None and hasattr(
+                    self._native_pipeline, "_teacache_hook"
+                ):
                     self._native_pipeline._teacache_hook = None
         except Exception as e:
             logger.error(f"Native pipeline generation failed: {e}", exc_info=True)
@@ -1333,6 +1422,7 @@ class VideoEngine(ActiveRequestMixin):
 
         import numpy as _np
         from PIL import Image as _Image
+
         try:
             if isinstance(frame, (bytes, bytearray)):
                 return bytes(frame)
@@ -1379,7 +1469,7 @@ class VideoEngine(ActiveRequestMixin):
                     img = Image.fromarray(frame)
                 elif isinstance(frame, (bytes, bytearray)):
                     img = Image.open(_io.BytesIO(bytes(frame)))
-                elif hasattr(frame, 'save'):
+                elif hasattr(frame, "save"):
                     img = frame
                 else:
                     # mx.array or other — normalize via the shared helper.
@@ -1389,12 +1479,23 @@ class VideoEngine(ActiveRequestMixin):
                     img = Image.open(_io.BytesIO(_png))
                 img.save(os.path.join(frame_dir, f"{i:04d}.png"))
 
-            subprocess.run([
-                "ffmpeg", "-y", "-framerate", str(fps),
-                "-i", os.path.join(frame_dir, "%04d.png"),
-                "-c:v", "libx264", "-pix_fmt", "yuv420p",
-                tmp_path,
-            ], capture_output=True, check=True)
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-framerate",
+                    str(fps),
+                    "-i",
+                    os.path.join(frame_dir, "%04d.png"),
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    tmp_path,
+                ],
+                capture_output=True,
+                check=True,
+            )
 
             return Path(tmp_path).read_bytes()
 
@@ -1425,12 +1526,13 @@ class VideoEngine(ActiveRequestMixin):
         for i in range(min(num_frames, 4)):  # Generate just 4 placeholder frames
             arr = np.full((height, width, 3), [30, 30, 50], dtype=np.uint8)
             # Add frame number as text
-            text = f"Frame {i+1}/{num_frames}"
+            text = f"Frame {i + 1}/{num_frames}"
             for j, _ch in enumerate(text):
                 x = 10 + j * 12
                 if x < width - 10:
-                    arr[10:25, x:x+10] = 200
+                    arr[10:25, x : x + 10] = 200
             from PIL import Image as PILImage
+
             pil = PILImage.fromarray(arr)
             buf = io.BytesIO()
             pil.save(buf, format="PNG")
@@ -1443,7 +1545,10 @@ class VideoEngine(ActiveRequestMixin):
             num_frames=len(frames),
             fps=fps,
             method="fallback",
-            metadata={"prompt": prompt, "note": "Placeholder frames, no video model loaded"},
+            metadata={
+                "prompt": prompt,
+                "note": "Placeholder frames, no video model loaded",
+            },
         )
 
     def _probe_mp4_fps(self, path: str) -> float | None:
@@ -1455,14 +1560,26 @@ class VideoEngine(ActiveRequestMixin):
         """
         import shutil
         import subprocess
+
         if shutil.which("ffprobe") is None:
             return None
         try:
             out = subprocess.run(
-                ["ffprobe", "-v", "error", "-select_streams", "v:0",
-                 "-show_entries", "stream=r_frame_rate", "-of",
-                 "default=noprint_wrappers=1:nokey=1", path],
-                capture_output=True, text=True, timeout=15,
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-show_entries",
+                    "stream=r_frame_rate",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
             val = (out.stdout or "").strip()
             if "/" in val:
@@ -1489,8 +1606,17 @@ class VideoEngine(ActiveRequestMixin):
 
             frame_dir = tempfile.mkdtemp()
             subprocess.run(
-                ["ffmpeg", "-i", tmp_path, "-f", "image2", f"{frame_dir}/frame_%04d.png", "-y"],
-                capture_output=True, check=True,
+                [
+                    "ffmpeg",
+                    "-i",
+                    tmp_path,
+                    "-f",
+                    "image2",
+                    f"{frame_dir}/frame_%04d.png",
+                    "-y",
+                ],
+                capture_output=True,
+                check=True,
             )
 
             frames = []
@@ -1526,7 +1652,8 @@ class VideoEngine(ActiveRequestMixin):
             "model": self._model_path,
             "model_type": self._model_type,
             "loaded": self.is_loaded,
-            "model_loaded": self._model is not None or self._native_pipeline is not None,
+            "model_loaded": self._model is not None
+            or self._native_pipeline is not None,
             "running": self._running,
             "frames_processed": frames_processed,
             "frames_streamed": frames_streamed,
@@ -1590,6 +1717,7 @@ class VideoEngine(ActiveRequestMixin):
         # Use a thread-safe queue for the executor → async bridge.
         # asyncio.Queue.put_nowait() from a non-event-loop thread is unsafe.
         import queue as _queue_mod
+
         _thread_queue: _queue_mod.Queue[dict | None] = _queue_mod.Queue(maxsize=128)
         _consumer_cancel = threading.Event()
 
@@ -1605,6 +1733,7 @@ class VideoEngine(ActiveRequestMixin):
 
                 # Write video data to temp file for ffmpeg
                 import tempfile
+
                 fd, tmp_path = tempfile.mkstemp(suffix=".mp4")
                 os.close(fd)
                 with open(tmp_path, "wb") as f:
@@ -1620,14 +1749,25 @@ class VideoEngine(ActiveRequestMixin):
 
                     # Probe video info
                     probe = subprocess.run(
-                        ["ffprobe", "-v", "quiet", "-print_format", "json",
-                         "-show_streams", "-select_streams", "v:0", tmp_path],
-                        capture_output=True, text=True,
+                        [
+                            "ffprobe",
+                            "-v",
+                            "quiet",
+                            "-print_format",
+                            "json",
+                            "-show_streams",
+                            "-select_streams",
+                            "v:0",
+                            tmp_path,
+                        ],
+                        capture_output=True,
+                        text=True,
                     )
 
                     video_w, video_h = 0, 0
                     try:
                         import json
+
                         probe_data = json.loads(probe.stdout)
                         stream = probe_data.get("streams", [{}])[0]
                         video_w = int(stream.get("width", 0))
@@ -1652,10 +1792,18 @@ class VideoEngine(ActiveRequestMixin):
 
                     # Decode frames via ffmpeg pipe (streaming, no temp PNG files)
                     ffmpeg_cmd = [
-                        "ffmpeg", "-i", tmp_path,
-                        "-vf", vf_filter,
-                        "-f", "rawvideo", "-pix_fmt", "rgb24",
-                        "-v", "quiet", "-"
+                        "ffmpeg",
+                        "-i",
+                        tmp_path,
+                        "-vf",
+                        vf_filter,
+                        "-f",
+                        "rawvideo",
+                        "-pix_fmt",
+                        "rgb24",
+                        "-v",
+                        "quiet",
+                        "-",
                     ]
 
                     proc = subprocess.Popen(
@@ -1672,9 +1820,12 @@ class VideoEngine(ActiveRequestMixin):
                         # select-based timeout (5s) to prevent hangs on
                         # corrupted video data that never produces bytes.
                         import select as _select_mod
+
                         ready, _, _ = _select_mod.select([proc.stdout], [], [], 5.0)
                         if not ready:
-                            logger.warning("ffmpeg read timeout after 5s in stream_frames")
+                            logger.warning(
+                                "ffmpeg read timeout after 5s in stream_frames"
+                            )
                             break
                         raw = proc.stdout.read(frame_size)
                         if len(raw) < frame_size:
@@ -1700,12 +1851,15 @@ class VideoEngine(ActiveRequestMixin):
 
                         frame_output: Any
                         if output_format == "numpy":
-                            frame_output = np.frombuffer(raw, dtype=np.uint8).reshape(
-                                (target_h, target_w, 3)
-                            ).copy()
+                            frame_output = (
+                                np.frombuffer(raw, dtype=np.uint8)
+                                .reshape((target_h, target_w, 3))
+                                .copy()
+                            )
                         else:
                             # Convert to PNG
                             from PIL import Image as PILImage
+
                             arr = np.frombuffer(raw, dtype=np.uint8).reshape(
                                 (target_h, target_w, 3)
                             )
@@ -1729,7 +1883,9 @@ class VideoEngine(ActiveRequestMixin):
                         try:
                             _thread_queue.put_nowait(frame_data)
                         except _queue_mod.Full:
-                            logger.warning("Video stream queue full — consumer likely gone, stopping decode")
+                            logger.warning(
+                                "Video stream queue full — consumer likely gone, stopping decode"
+                            )
                             _queue_full = True
                             proc.terminate()
                             break
@@ -1822,13 +1978,15 @@ class VideoEngine(ActiveRequestMixin):
         """
         results = []
         for idx, frame_bytes in zip(batch.frame_indices, batch.frames, strict=False):
-            results.append({
-                "frame_index": idx,
-                "width": batch.width,
-                "height": batch.height,
-                "frame_size_bytes": len(frame_bytes),
-                "processed": self._model is not None,
-            })
+            results.append(
+                {
+                    "frame_index": idx,
+                    "width": batch.width,
+                    "height": batch.height,
+                    "frame_size_bytes": len(frame_bytes),
+                    "processed": self._model is not None,
+                }
+            )
         return results
 
     # ═══════════════════════════════════════════════════════════════════════
@@ -1883,6 +2041,7 @@ class VideoEngine(ActiveRequestMixin):
                 try:
                     import mlx.core as mx
                     from mlx.utils import tree_map
+
                     self._base_model_weights = tree_map(
                         lambda x: mx.array(x), self._model.parameters()
                     )
@@ -1936,6 +2095,7 @@ class VideoEngine(ActiveRequestMixin):
             try:
                 if self._model is not None and self._base_model_weights is not None:
                     import mlx.core as mx
+
                     self._model.update(self._base_model_weights)
                     mx.eval(self._model.parameters())
                     self._base_model_weights = None
@@ -2021,7 +2181,10 @@ class VideoEngine(ActiveRequestMixin):
             if len(applied_layers) >= num_layers:
                 break
             # Apply LoRA to attention Q/V projections
-            if any(k in name for k in ("q_proj", "v_proj", "query", "value", "to_q", "to_v")):
+            if any(
+                k in name
+                for k in ("q_proj", "v_proj", "query", "value", "to_q", "to_v")
+            ):
                 # MLX's nn.Linear has NO PyTorch in_features/out_features (it
                 # exposes .weight of shape [out,in]); LoRALinear(module.in_features, ...)
                 # raised AttributeError on every module. AND named_modules() yields list-
@@ -2029,14 +2192,20 @@ class VideoEngine(ActiveRequestMixin):
                 # so getattr(parent, "0") raised AttributeError → the whole video LoRA apply
                 # crashed. Identical to the image_engine bug. Use from_base + an
                 # index-aware parent walk.
-                lora_layer = LoRALinear.from_base(module, r=self._lora_rank, scale=self._lora_scale)
+                lora_layer = LoRALinear.from_base(
+                    module, r=self._lora_rank, scale=self._lora_scale
+                )
                 # Set on parent module
                 parts = name.rsplit(".", 1)
                 if len(parts) == 2:
                     parent = self._model
                     for part in parts[0].split("."):
                         try:
-                            parent = parent[int(part)] if part.isdigit() else getattr(parent, part)
+                            parent = (
+                                parent[int(part)]
+                                if part.isdigit()
+                                else getattr(parent, part)
+                            )
                         except (AttributeError, IndexError, KeyError, TypeError):
                             parent = None
                             break

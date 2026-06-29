@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SuffixConfig:
     """Configuration for suffix-based speculative decoding."""
+
     # Minimum suffix length to match
     min_suffix_length: int = 3
     # Maximum rolling window size per request
@@ -162,6 +163,7 @@ class SuffixTrie:
 
     def get_stats(self) -> dict:
         """Return trie statistics."""
+
         def _count_nodes(node: SuffixTrieNode) -> int:
             count = 1
             for child in node.children.values():
@@ -282,7 +284,9 @@ class SuffixProposer:
             for suffix_len in range(min(max_search, total), min_suffix - 1, -1):
                 suffix = context_tokens[-suffix_len:]
                 cont = self._find_suffix_in_history(
-                    suffix, context_tokens, max_draft,
+                    suffix,
+                    context_tokens,
+                    max_draft,
                 )
                 if cont:
                     best_continuation = cont
@@ -335,8 +339,12 @@ class SuffixProposer:
 
         return []
 
-    def accept(self, draft_tokens: list[int], verified_up_to: int,
-               bonus_token: int | None = None) -> None:
+    def accept(
+        self,
+        draft_tokens: list[int],
+        verified_up_to: int,
+        bonus_token: int | None = None,
+    ) -> None:
         """Record accepted draft tokens for future matching.
 
         Args:
@@ -377,7 +385,9 @@ class SuffixProposer:
         self._windows.pop(request_id, None)
         self._generated.pop(request_id, None)
         if self._last_active_request == request_id:
-            self._last_active_request = next(reversed(self._tries)) if self._tries else None
+            self._last_active_request = (
+                next(reversed(self._tries)) if self._tries else None
+            )
 
     def _find_active_request(self) -> str | None:
         """Find the most recently active request ID."""

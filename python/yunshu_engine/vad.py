@@ -29,12 +29,12 @@ class VADResult:
 
 class VADBase(ABC):
     @abstractmethod
-    def process_frame(self, audio_bytes: bytes, sample_rate: int = 16000) -> VADResult:
-        ...
+    def process_frame(
+        self, audio_bytes: bytes, sample_rate: int = 16000
+    ) -> VADResult: ...
 
     @abstractmethod
-    def reset(self) -> None:
-        ...
+    def reset(self) -> None: ...
 
 
 class EnergyVAD(VADBase):
@@ -84,7 +84,11 @@ class EnergyVAD(VADBase):
             if self._silence_count >= self.silence_frames_needed:
                 self._is_speaking = False
 
-        confidence = min(1.0, energy / (adaptive_threshold * 2)) if adaptive_threshold > 0 else 0.0
+        confidence = (
+            min(1.0, energy / (adaptive_threshold * 2))
+            if adaptive_threshold > 0
+            else 0.0
+        )
         return VADResult(
             is_speech=self._is_speaking,
             energy=energy,
@@ -102,11 +106,11 @@ class EnergyVAD(VADBase):
         if len(audio_bytes) < 2:
             return 0.0
         n_samples = len(audio_bytes) // 2
-        samples = struct.unpack(f"<{n_samples}h", audio_bytes[:n_samples * 2])
+        samples = struct.unpack(f"<{n_samples}h", audio_bytes[: n_samples * 2])
         if not samples:
             return 0.0
         rms = sum(s * s for s in samples) / n_samples
-        return (rms ** 0.5) / 32768.0
+        return (rms**0.5) / 32768.0
 
 
 class WebRTCVAD(VADBase):
@@ -120,6 +124,7 @@ class WebRTCVAD(VADBase):
         self._vad = None
         try:
             import webrtcvad
+
             self._vad = webrtcvad.Vad(aggressiveness)
         except ImportError:
             logger.warning("webrtcvad not installed, falling back to EnergyVAD")
@@ -139,7 +144,9 @@ class WebRTCVAD(VADBase):
             logger.warning(
                 "WebRTC VAD requires frame duration of 10/20/30 ms, got %.1f ms "
                 "(%d samples at %d Hz). Falling back to energy-based.",
-                frame_duration_ms, n_samples, sample_rate,
+                frame_duration_ms,
+                n_samples,
+                sample_rate,
             )
             energy = EnergyVAD._compute_energy(audio_bytes)
             return VADResult(is_speech=energy > 0.01, energy=energy)
@@ -149,7 +156,9 @@ class WebRTCVAD(VADBase):
             energy = EnergyVAD._compute_energy(audio_bytes)
             return VADResult(is_speech=is_speech, energy=energy)
         except Exception:
-            logger.debug("WebRTC VAD failed, falling back to energy-based", exc_info=True)
+            logger.debug(
+                "WebRTC VAD failed, falling back to energy-based", exc_info=True
+            )
             energy = EnergyVAD._compute_energy(audio_bytes)
             return VADResult(is_speech=energy > 0.01, energy=energy)
 

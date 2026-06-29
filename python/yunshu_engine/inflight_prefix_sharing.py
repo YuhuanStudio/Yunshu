@@ -74,8 +74,13 @@ class InflightPrefixTracker:
             "evictions": 0,
         }
 
-    def register(self, request_id: str, token_ids: list[int],
-                 kv_cache: object, model_name: str = "") -> None:
+    def register(
+        self,
+        request_id: str,
+        token_ids: list[int],
+        kv_cache: object,
+        model_name: str = "",
+    ) -> None:
         """Register a new in-flight prefill."""
         with self._lock:
             self._evict_expired()
@@ -94,7 +99,9 @@ class InflightPrefixTracker:
             self._stats["registrations"] += 1
             logger.debug(
                 "inflight prefix registered: req=%s, tokens=%d, model=%s",
-                request_id[:12], len(token_ids), model_name,
+                request_id[:12],
+                len(token_ids),
+                model_name,
             )
 
     def update(self, request_id: str, new_token_ids: list[int]) -> None:
@@ -114,9 +121,11 @@ class InflightPrefixTracker:
             self._index_checkpoints(entry, start_offset=old_len)
 
     # Checkpoint lengths used for prefix indexing — power-of-2 for dense coverage
-    _CHECKPOINTS = sorted(set(2 ** i for i in range(0, 14)))
+    _CHECKPOINTS = sorted(set(2**i for i in range(0, 14)))
 
-    def find_prefix(self, token_ids: list[int], model_name: str = "") -> InflightEntry | None:
+    def find_prefix(
+        self, token_ids: list[int], model_name: str = ""
+    ) -> InflightEntry | None:
         """Find the longest matching in-flight prefix.
 
         Searches the tracker for the in-flight request with the longest
@@ -149,14 +158,21 @@ class InflightPrefixTracker:
                         if entry is None:
                             continue
                         # Model isolation: only share within same model
-                        if model_name and entry.model_name and model_name != entry.model_name:
+                        if (
+                            model_name
+                            and entry.model_name
+                            and model_name != entry.model_name
+                        ):
                             continue
                         # Skip entries without a KV cache ref (not yet prefilled)
                         if entry.kv_cache_ref is None:
                             continue
                         # Verify full prefix match
                         entry_prefix = entry.token_ids[:check_len]
-                        if entry_prefix == token_ids[:check_len] and check_len > best_len:
+                        if (
+                            entry_prefix == token_ids[:check_len]
+                            and check_len > best_len
+                        ):
                             best_entry = entry
                             best_len = check_len
                             break  # Found at this length, no need to check others
@@ -167,7 +183,8 @@ class InflightPrefixTracker:
                 self._stats["prefix_hits"] += 1
                 logger.debug(
                     "inflight prefix hit: shared=%d tokens from req=%s",
-                    best_len, best_entry.request_id[:12],
+                    best_len,
+                    best_entry.request_id[:12],
                 )
             else:
                 self._stats["prefix_misses"] += 1
@@ -220,7 +237,7 @@ class InflightPrefixTracker:
             return
         tids = token_ids if token_ids is not None else entry.token_ids
         rid = entry.request_id
-        checkpoints = set(2 ** i for i in range(0, 14))
+        checkpoints = set(2**i for i in range(0, 14))
         for cp in sorted(checkpoints):
             if cp <= len(tids) and cp > start_offset:
                 prefix = tuple(tids[:cp])
@@ -245,7 +262,8 @@ class InflightPrefixTracker:
     def _evict_expired(self) -> None:
         now = time.monotonic()
         expired = [
-            rid for rid, entry in self._entries.items()
+            rid
+            for rid, entry in self._entries.items()
             if now - entry.last_updated_at > self._ttl_seconds
         ]
         for rid in expired:

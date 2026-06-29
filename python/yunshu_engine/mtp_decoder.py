@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MTPConfig:
     """Configuration for MTP speculative decoding."""
+
     max_tokens: int = 256
     cooldown_on_reject: bool = False
     fastmtp_top_k: int = 0  # 0 = disabled, 32768 = typical default
@@ -51,6 +52,7 @@ class MTPConfig:
 @dataclass
 class MTPStats:
     """Runtime statistics for MTP decoding."""
+
     accepts: int = 0
     rejects: int = 0
     cooldowns: int = 0
@@ -64,7 +66,7 @@ def _greedy(logits: mx.array) -> int:
 
 def _get_eos_ids(tokenizer) -> set:
     eos_ids: set[int] = set()
-    if hasattr(tokenizer, 'eos_token_id'):
+    if hasattr(tokenizer, "eos_token_id"):
         eid = tokenizer.eos_token_id
         if isinstance(eid, (list, tuple)):
             eos_ids.update(eid)
@@ -77,10 +79,10 @@ def _snapshot_cache(cache: list) -> list:
     """Snapshot cache state via reference (MLX functional semantics)."""
     snap = []
     for c in cache:
-        if hasattr(c, 'cache') and isinstance(getattr(c, 'cache', None), list):
-            snap.append(('arrays', list(c.cache)))
-        elif hasattr(c, 'offset'):
-            snap.append(('kv', c.offset))
+        if hasattr(c, "cache") and isinstance(getattr(c, "cache", None), list):
+            snap.append(("arrays", list(c.cache)))
+        elif hasattr(c, "offset"):
+            snap.append(("kv", c.offset))
         else:
             snap.append((None, None))
     return snap
@@ -89,9 +91,9 @@ def _snapshot_cache(cache: list) -> list:
 def _restore_cache(cache: list, snapshot: list) -> None:
     """Restore cache state from a reference-based snapshot."""
     for i, (kind, state) in enumerate(snapshot):
-        if kind == 'arrays':
+        if kind == "arrays":
             cache[i].cache = state
-        elif kind == 'kv':
+        elif kind == "kv":
             cache[i].offset = state
 
 
@@ -140,7 +142,9 @@ class MTPDecoder:
             Draft token ID (greedy after optional grammar masking).
         """
         mtp_logits = self.model.mtp_forward(
-            hidden, mx.array([[primary]]), None,
+            hidden,
+            mx.array([[primary]]),
+            None,
         )
         logits = mtp_logits[0, -1, :]
 
@@ -151,8 +155,10 @@ class MTPDecoder:
                 allowed = constraint.get_allowed_tokens(self.tokenizer, ctx_ids)
                 if allowed:
                     from .json_schema import apply_json_constraint
+
                     logits = apply_json_constraint(
-                        logits.reshape(1, -1), allowed,
+                        logits.reshape(1, -1),
+                        allowed,
                     ).reshape(logits.shape)
             except Exception:
                 logger.debug(
@@ -196,6 +202,7 @@ class MTPDecoder:
         eos_ids = _get_eos_ids(self.tokenizer)
 
         from mlx_lm.models.cache import make_prompt_cache
+
         cache = make_prompt_cache(self.model)
 
         # Prefill
@@ -235,7 +242,9 @@ class MTPDecoder:
                 in_cooldown = False
                 stats.cooldowns += 1
                 out2, hid2 = self.model(
-                    mx.array([[primary]]), cache=cache, return_hidden=True,
+                    mx.array([[primary]]),
+                    cache=cache,
+                    return_hidden=True,
                 )
                 mx.synchronize()
                 if sampler is not None:
@@ -254,7 +263,7 @@ class MTPDecoder:
                 snap = _snapshot_cache(cache)
 
             # Checkpoint grammar constraint before draft
-            if constraint is not None and hasattr(constraint, 'checkpoint'):
+            if constraint is not None and hasattr(constraint, "checkpoint"):
                 try:
                     constraint.checkpoint()
                 except Exception:
@@ -263,8 +272,10 @@ class MTPDecoder:
             # MTP draft — always greedy (spec decode requires deterministic draft)
             # Apply grammar constraint masking to draft logits if available
             draft = self._mtp_draft(
-                primary_h, primary,
-                constraint=constraint, generated_ids=generated,
+                primary_h,
+                primary,
+                constraint=constraint,
+                generated_ids=generated,
             )
 
             # Verify: backbone forward [primary, draft]
@@ -274,8 +285,10 @@ class MTPDecoder:
                 verify_kwargs["n_confirmed"] = 1
 
             verify_out, verify_h = self.model(
-                mx.array([[primary, draft]]), cache=cache,
-                return_hidden=True, **verify_kwargs,
+                mx.array([[primary, draft]]),
+                cache=cache,
+                return_hidden=True,
+                **verify_kwargs,
             )
             mx.synchronize()
             # v0 MUST be greedy for spec decode acceptance check
@@ -289,9 +302,12 @@ class MTPDecoder:
             )
             if _has_mtp_pen:
                 from .batched_engine import _apply_spec_bonus_penalties
+
                 _mtp_token_hist = list(ids) + generated
                 _bonus_logits = _apply_spec_bonus_penalties(
-                    verify_out[0, 1, :], _mtp_token_hist, len(ids),
+                    verify_out[0, 1, :],
+                    _mtp_token_hist,
+                    len(ids),
                     repetition_penalty=repetition_penalty,
                     frequency_penalty=frequency_penalty,
                     presence_penalty=presence_penalty,
@@ -315,32 +331,46 @@ class MTPDecoder:
                 # Discard grammar constraint checkpoint (all accepted)
                 if constraint is not None:
                     try:
-                        if hasattr(constraint, 'discard_checkpoint'):
+                        if hasattr(constraint, "discard_checkpoint"):
                             constraint.discard_checkpoint()
                     except Exception:
-                        logger.debug("MTP constraint discard_checkpoint failed", exc_info=True)
+                        logger.debug(
+                            "MTP constraint discard_checkpoint failed", exc_info=True
+                        )
 
                 generated.append(draft)
                 if draft in eos_ids or len(generated) >= max_tokens:
                     break
 
                 # Advance constraint with accepted draft token
-                if constraint is not None and hasattr(constraint, 'advance') and draft not in eos_ids:
+                if (
+                    constraint is not None
+                    and hasattr(constraint, "advance")
+                    and draft not in eos_ids
+                ):
                     try:
                         constraint.advance(self.tokenizer.decode([draft]))
                     except Exception:
-                        logger.debug("MTP constraint advance for draft failed", exc_info=True)
+                        logger.debug(
+                            "MTP constraint advance for draft failed", exc_info=True
+                        )
 
                 # Bonus token (v1) becomes next primary
                 generated.append(v1)
                 if v1 in eos_ids or len(generated) >= max_tokens:
                     break
                 # Advance constraint with bonus token
-                if constraint is not None and hasattr(constraint, 'advance') and v1 not in eos_ids:
+                if (
+                    constraint is not None
+                    and hasattr(constraint, "advance")
+                    and v1 not in eos_ids
+                ):
                     try:
                         constraint.advance(self.tokenizer.decode([v1]))
                     except Exception:
-                        logger.debug("MTP constraint advance for bonus failed", exc_info=True)
+                        logger.debug(
+                            "MTP constraint advance for bonus failed", exc_info=True
+                        )
                 primary = v1
                 primary_h = verify_h[:, -1:, :]
             else:
@@ -349,8 +379,11 @@ class MTPDecoder:
                 # MTP-PEN: Apply penalty/bias to rejection correction logits
                 if _has_mtp_pen:
                     from .batched_engine import _apply_spec_bonus_penalties
+
                     _corr_logits = _apply_spec_bonus_penalties(
-                        verify_out[0, 0, :], list(ids) + generated, len(ids),
+                        verify_out[0, 0, :],
+                        list(ids) + generated,
+                        len(ids),
                         repetition_penalty=repetition_penalty,
                         frequency_penalty=frequency_penalty,
                         presence_penalty=presence_penalty,
@@ -364,7 +397,7 @@ class MTPDecoder:
                 stats.rejects += 1
 
                 # Rollback grammar constraint to pre-draft state
-                if constraint is not None and hasattr(constraint, 'rollback'):
+                if constraint is not None and hasattr(constraint, "rollback"):
                     try:
                         constraint.rollback()
                     except Exception:
@@ -384,7 +417,9 @@ class MTPDecoder:
                     # extracting the hidden state.
                     _pre_corr_snap = _snapshot_cache(cache)
                     _out_corr, hid_corr = self.model(
-                        mx.array([[correction]]), cache=cache, return_hidden=True,
+                        mx.array([[correction]]),
+                        cache=cache,
+                        return_hidden=True,
                     )
                     mx.synchronize()
                     primary_h = hid_corr[:, -1:, :]
@@ -393,7 +428,9 @@ class MTPDecoder:
                     # Old path: restore cache + refeed correction (expensive)
                     _restore_cache(cache, snap)
                     out2, hid2 = self.model(
-                        mx.array([[correction]]), cache=cache, return_hidden=True,
+                        mx.array([[correction]]),
+                        cache=cache,
+                        return_hidden=True,
                     )
                     mx.synchronize()
                     primary_h = hid2[:, -1:, :]
@@ -402,11 +439,18 @@ class MTPDecoder:
                 if correction in eos_ids or len(generated) >= max_tokens:
                     break
                 # Advance constraint with correction token
-                if constraint is not None and hasattr(constraint, 'advance') and correction not in eos_ids:
+                if (
+                    constraint is not None
+                    and hasattr(constraint, "advance")
+                    and correction not in eos_ids
+                ):
                     try:
                         constraint.advance(self.tokenizer.decode([correction]))
                     except Exception:
-                        logger.debug("MTP constraint advance for correction failed", exc_info=True)
+                        logger.debug(
+                            "MTP constraint advance for correction failed",
+                            exc_info=True,
+                        )
                 primary = correction
 
                 if self.config.cooldown_on_reject:
@@ -417,7 +461,9 @@ class MTPDecoder:
 
 
 def run_mtp_decode(
-    model, tokenizer, prompt: str,
+    model,
+    tokenizer,
+    prompt: str,
     max_tokens: int = 128,
     cooldown: bool = False,
     use_n_confirmed: bool = True,
@@ -428,11 +474,15 @@ def run_mtp_decode(
     """
     import time
 
-    decoder = MTPDecoder(model, tokenizer, MTPConfig(
-        max_tokens=max_tokens,
-        cooldown_on_reject=cooldown,
-        use_n_confirmed=use_n_confirmed,
-    ))
+    decoder = MTPDecoder(
+        model,
+        tokenizer,
+        MTPConfig(
+            max_tokens=max_tokens,
+            cooldown_on_reject=cooldown,
+            use_n_confirmed=use_n_confirmed,
+        ),
+    )
 
     t0 = time.perf_counter()
     tokens = decoder.generate(prompt, max_tokens=max_tokens)

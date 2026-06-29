@@ -8,6 +8,7 @@ logit_bias finite/range validation raised 422 on the Responses + Anthropic route
   400 on chat — OpenAI returns 400 for invalid params (SDKs treat 422 as a distinct
   UnprocessableEntityError). Unified to 400.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -15,6 +16,7 @@ import inspect
 
 def test_anthropic_error_type_map():
     from yunshu_gateway.middleware import tenant_auth
+
     src = inspect.getsource(tenant_auth._ErrorFormatter.auth_error)
     assert '429: "rate_limit_error"' in src
     assert '403: "permission_error"' in src
@@ -23,6 +25,7 @@ def test_anthropic_error_type_map():
 
 def test_logit_bias_uses_400_not_422():
     from yunshu_gateway.routers import anthropic, responses
+
     for mod in (responses, anthropic):
         src = inspect.getsource(mod)
         # no logit_bias validation still raises 422

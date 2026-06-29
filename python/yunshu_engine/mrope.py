@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MRoPEInfo:
     """Detected mRoPE configuration from model config."""
+
     enabled: bool = False
     # Section sizes for the 3 dimensions (temporal, height, width)
     # Sum of sections = head_dim // 2
@@ -117,7 +118,9 @@ def build_decode_positions(
     import mlx.core as mx
 
     batch_size = len(offsets)
-    positions_1d = mx.array([o + d for o, d in zip(offsets, deltas, strict=False)]).reshape(1, batch_size, 1)
+    positions_1d = mx.array(
+        [o + d for o, d in zip(offsets, deltas, strict=False)]
+    ).reshape(1, batch_size, 1)
 
     # Broadcast across all dimensions (T, H, W all get same position for decode)
     return mx.broadcast_to(positions_1d, (num_dims, batch_size, 1))
@@ -161,8 +164,8 @@ def capture_rope_deltas(model: Any) -> float | None:
         The rope_deltas float, or None if not applicable.
     """
     # Check language_model wrapper first (VLM models)
-    lang_model = getattr(model, 'language_model', model)
-    delta = getattr(lang_model, '_rope_deltas', None)
+    lang_model = getattr(model, "language_model", model)
+    delta = getattr(lang_model, "_rope_deltas", None)
     if delta is not None:
         try:
             return float(delta)
@@ -170,7 +173,7 @@ def capture_rope_deltas(model: Any) -> float | None:
             pass
 
     # Check top-level model
-    delta = getattr(model, '_rope_deltas', None)
+    delta = getattr(model, "_rope_deltas", None)
     if delta is not None:
         try:
             return float(delta)
@@ -186,8 +189,8 @@ def clear_rope_state(model: Any) -> None:
     Prevents text-only requests from being contaminated by
     previous VLM request's position state.
     """
-    lang_model = getattr(model, 'language_model', model)
-    for attr in ('_position_ids', '_rope_deltas', '_batch_rope_deltas'):
+    lang_model = getattr(model, "language_model", model)
+    for attr in ("_position_ids", "_rope_deltas", "_batch_rope_deltas"):
         if hasattr(lang_model, attr):
             setattr(lang_model, attr, None)
         if hasattr(model, attr):
@@ -209,6 +212,7 @@ class BatchRopeDeltaManager:
     def __init__(self) -> None:
         self._deltas: dict[int, float] = {}
         import threading
+
         self._lock = threading.Lock()
 
     def register(self, uid: int, delta: float) -> None:

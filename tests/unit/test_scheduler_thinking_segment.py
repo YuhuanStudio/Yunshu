@@ -16,6 +16,7 @@ from yunshu_kv.thinking_segment import ThinkingSegmentConfig, ThinkingSegmentSub
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_scheduler(**config_overrides) -> Scheduler:
     """Create a Scheduler with mock model/tokenizer (no real GPU needed)."""
     model = MagicMock()
@@ -31,8 +32,8 @@ def _make_scheduler(**config_overrides) -> Scheduler:
 # 1. __init__ creates ThinkingSegmentSubstore
 # ===========================================================================
 
-class TestInitThinkingStore:
 
+class TestInitThinkingStore:
     def test_init_creates_thinking_store_instance(self):
         """Scheduler.__init__ must create a ThinkingSegmentSubstore."""
         sched = _make_scheduler()
@@ -58,8 +59,8 @@ class TestInitThinkingStore:
 # 2. get_thinking_store() returns the substore
 # ===========================================================================
 
-class TestGetThinkingStore:
 
+class TestGetThinkingStore:
     def test_returns_thinking_store(self):
         """get_thinking_store() must return the internal substore."""
         sched = _make_scheduler()
@@ -89,8 +90,8 @@ class TestGetThinkingStore:
 # 3. get_stats() includes thinking_segment_store stats
 # ===========================================================================
 
-class TestGetStatsThinkingSegment:
 
+class TestGetStatsThinkingSegment:
     def test_stats_includes_thinking_segment_store_key(self):
         """get_stats() must contain a 'thinking_segment_store' key."""
         sched = _make_scheduler()
@@ -108,8 +109,16 @@ class TestGetStatsThinkingSegment:
         sched = _make_scheduler()
         stats = sched.get_stats()
         ts_stats = stats["thinking_segment_store"]
-        for key in ("total_segments", "conversations_tracked", "stored",
-                     "hits", "misses", "evictions", "tokens_saved", "hit_rate"):
+        for key in (
+            "total_segments",
+            "conversations_tracked",
+            "stored",
+            "hits",
+            "misses",
+            "evictions",
+            "tokens_saved",
+            "hit_rate",
+        ):
             assert key in ts_stats, f"Missing key: {key}"
 
     def test_thinking_segment_store_stats_reflects_real_state(self):
@@ -120,7 +129,9 @@ class TestGetStatsThinkingSegment:
         # Store a segment with enough tokens to exceed min_tokens_to_cache (32)
         thinking_tokens = list(range(64))
         context_tokens = list(range(10))
-        result = store.store("conv-1", thinking_tokens, context_tokens, kv_data="fake-kv")
+        result = store.store(
+            "conv-1", thinking_tokens, context_tokens, kv_data="fake-kv"
+        )
         assert result is not None
 
         stats = sched.get_stats()
@@ -133,9 +144,16 @@ class TestGetStatsThinkingSegment:
         """get_stats() must still include the basic scheduler fields."""
         sched = _make_scheduler()
         stats = sched.get_stats()
-        for key in ("waiting", "running", "total_requests", "finished",
-                     "step_counter", "total_prompt_tokens",
-                     "total_completion_tokens", "num_requests_processed"):
+        for key in (
+            "waiting",
+            "running",
+            "total_requests",
+            "finished",
+            "step_counter",
+            "total_prompt_tokens",
+            "total_completion_tokens",
+            "num_requests_processed",
+        ):
             assert key in stats, f"Missing key: {key}"
 
 
@@ -143,8 +161,8 @@ class TestGetStatsThinkingSegment:
 # 4. _thinking_state initialized and cleared on deep_reset
 # ===========================================================================
 
-class TestThinkingStateLifecycle:
 
+class TestThinkingStateLifecycle:
     def test_thinking_state_starts_empty(self):
         """_thinking_state must be empty right after construction."""
         sched = _make_scheduler()
@@ -184,14 +202,22 @@ class TestThinkingStateLifecycle:
         """deep_reset() clears _thinking_state even when _batch_gen is None."""
         sched = _make_scheduler()
         assert sched._batch_gen is None
-        sched._thinking_state["req-x"] = {"in_thinking": False, "thinking_start_idx": None, "was_in_thinking": False}
+        sched._thinking_state["req-x"] = {
+            "in_thinking": False,
+            "thinking_start_idx": None,
+            "was_in_thinking": False,
+        }
         sched.deep_reset()
         assert sched._thinking_state == {}
 
     def test_deep_reset_clears_all_other_state(self):
         """deep_reset() clears all related internal state."""
         sched = _make_scheduler()
-        sched._thinking_state["r1"] = {"in_thinking": True, "thinking_start_idx": 0, "was_in_thinking": False}
+        sched._thinking_state["r1"] = {
+            "in_thinking": True,
+            "thinking_start_idx": 0,
+            "was_in_thinking": False,
+        }
         sched._thinking_processors["r1"] = MagicMock()
         sched._detokenizers["r1"] = MagicMock()
         sched._pending_abort_ids.add("r1")
@@ -208,14 +234,22 @@ class TestThinkingStateLifecycle:
     def test_shutdown_calls_deep_reset(self):
         """shutdown() delegates to deep_reset(), so it also clears _thinking_state."""
         sched = _make_scheduler()
-        sched._thinking_state["r1"] = {"in_thinking": True, "thinking_start_idx": 0, "was_in_thinking": False}
+        sched._thinking_state["r1"] = {
+            "in_thinking": True,
+            "thinking_start_idx": 0,
+            "was_in_thinking": False,
+        }
         sched.shutdown()
         assert sched._thinking_state == {}
 
     def test_thinking_state_not_cleared_by_get_stats(self):
         """get_stats() must not clear _thinking_state as a side-effect."""
         sched = _make_scheduler()
-        sched._thinking_state["r1"] = {"in_thinking": True, "thinking_start_idx": 0, "was_in_thinking": False}
+        sched._thinking_state["r1"] = {
+            "in_thinking": True,
+            "thinking_start_idx": 0,
+            "was_in_thinking": False,
+        }
         sched.get_stats()
         assert "r1" in sched._thinking_state
 

@@ -1,4 +1,5 @@
 """Shared fixtures for unit tests."""
+
 import os
 from unittest.mock import MagicMock
 

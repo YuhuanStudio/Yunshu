@@ -11,6 +11,7 @@ template raise / plaintext fallback / model answering a call it never saw. The f
 keeps assistant/tool turns and strips only system. (Assistant INPUT turns are distinct from
 this response's generated `output`, replayed separately, so no double-count.)
 """
+
 from __future__ import annotations
 
 import inspect
@@ -27,11 +28,20 @@ def _snapshot(messages):
 
 
 def test_tool_loop_input_keeps_assistant_toolcall_anchor():
-    req = ResponsesRequest(model="m", instructions="be terse", input=[
-        {"role": "user", "content": "weather in SF?"},
-        {"type": "function_call", "call_id": "c1", "name": "get_weather", "arguments": "{}"},
-        {"type": "function_call_output", "call_id": "c1", "output": "sunny"},
-    ])
+    req = ResponsesRequest(
+        model="m",
+        instructions="be terse",
+        input=[
+            {"role": "user", "content": "weather in SF?"},
+            {
+                "type": "function_call",
+                "call_id": "c1",
+                "name": "get_weather",
+                "arguments": "{}",
+            },
+            {"type": "function_call_output", "call_id": "c1", "output": "sunny"},
+        ],
+    )
     messages = _convert_to_messages(req)
     snap = _snapshot(messages)
     roles = [m["role"] for m in snap]
@@ -40,7 +50,10 @@ def test_tool_loop_input_keeps_assistant_toolcall_anchor():
     # the assistant tool_call ANCHOR is preserved immediately before its tool result
     assert roles == ["user", "assistant", "tool"]
     asst = snap[1]
-    assert asst.get("tool_calls") and asst["tool_calls"][0]["function"]["name"] == "get_weather"
+    assert (
+        asst.get("tool_calls")
+        and asst["tool_calls"][0]["function"]["name"] == "get_weather"
+    )
     tool = snap[2]
     assert tool["role"] == "tool" and tool["tool_call_id"] == "c1"
     # the tool result is anchored: the message right before it carries the matching call id
@@ -48,11 +61,14 @@ def test_tool_loop_input_keeps_assistant_toolcall_anchor():
 
 
 def test_plain_multiturn_assistant_text_preserved():
-    req = ResponsesRequest(model="m", input=[
-        {"role": "user", "content": "hi"},
-        {"role": "assistant", "content": "hello"},
-        {"role": "user", "content": "how are you"},
-    ])
+    req = ResponsesRequest(
+        model="m",
+        input=[
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            {"role": "user", "content": "how are you"},
+        ],
+    )
     snap = _snapshot(_convert_to_messages(req))
     assert [m["role"] for m in snap] == ["user", "assistant", "user"]
     assert snap[1]["content"] == "hello"  # the assistant turn is NOT dropped

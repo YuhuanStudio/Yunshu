@@ -146,6 +146,7 @@ class TestMultimodalPipelineCoordinator:
     def test_register_processor(self):
         coord = self._make_coordinator(enable_cache=False)
         called = []
+
         def processor(inputs, config):
             called.append(config.stage_type)
             return inputs
@@ -157,6 +158,7 @@ class TestMultimodalPipelineCoordinator:
 
     def test_text_only_pipeline(self):
         coord = self._make_coordinator(enable_cache=False)
+
         def text_proc(inputs, config):
             return {"tokens": [1, 2, 3]}
 
@@ -218,8 +220,10 @@ class TestMultimodalPipelineCoordinator:
 
     def test_clear_cache(self):
         coord = self._make_coordinator(enable_cache=True)
+
         def processor(inputs, config):
             return "result"
+
         coord.register_processor(PipelineStage.TEXT_PREPROCESS, "text", processor)
         coord.process(self._make_text_request())
         coord.clear_cache()
@@ -229,8 +233,10 @@ class TestMultimodalPipelineCoordinator:
 
     def test_process_stage_single(self):
         coord = self._make_coordinator(enable_cache=False)
+
         def processor(inputs, config):
             return {"processed": True}
+
         coord.register_processor(PipelineStage.PREFILL, "text", processor)
 
         result = coord.process_stage(PipelineStage.PREFILL, {"some": "input"}, "text")
@@ -240,6 +246,7 @@ class TestMultimodalPipelineCoordinator:
 
     def test_process_stage_error_handling(self):
         coord = self._make_coordinator(enable_cache=False)
+
         def failing_processor(inputs, config):
             raise RuntimeError("boom")
 
@@ -289,8 +296,9 @@ class TestStats:
         assert text_stats["avg_duration_ms"] > 0
 
     def test_stage_stats_properties(self):
-        stats = StageStats(call_count=10, cache_hits=7, cache_misses=3,
-                           total_duration_ms=50.0)
+        stats = StageStats(
+            call_count=10, cache_hits=7, cache_misses=3, total_duration_ms=50.0
+        )
         assert stats.avg_duration_ms == 5.0
         assert stats.cache_hit_rate == pytest.approx(0.7)
 
@@ -302,8 +310,10 @@ class TestModelPreprocessorRegistry:
     def test_register_and_get(self):
         """Register a custom preprocessor for a known family, then retrieve it."""
         reg = ModelPreprocessorRegistry()
+
         def proc(inputs, config):
             return {"result": True}
+
         # Register with "qwen_vlm" family (has built-in detection pattern)
         reg.register("qwen_vlm", "image", proc)
         # Use a model_id that auto-detects as "qwen_vlm"
@@ -313,10 +323,13 @@ class TestModelPreprocessorRegistry:
     def test_register_custom_family_no_detection(self):
         """A custom family registered without a detection pattern falls to fallback."""
         reg = ModelPreprocessorRegistry()
+
         def custom_proc(inputs, config):
             return {"custom": True}
+
         def fallback_proc(inputs, config):
             return {"fallback": True}
+
         reg.register("my_custom_family", "text", custom_proc)
         reg.set_fallback(fallback_proc)
         # "random-model" won't match "my_custom_family" detection pattern
@@ -325,8 +338,10 @@ class TestModelPreprocessorRegistry:
 
     def test_fallback(self):
         reg = ModelPreprocessorRegistry()
+
         def fallback(inputs, config):
             return {"fallback": True}
+
         reg.set_fallback(fallback)
         result = reg.get_preprocessor("unknown-model", "text")
         assert result is fallback
@@ -337,7 +352,10 @@ class TestModelPreprocessorRegistry:
         assert result is None
 
     def test_detect_family_qwen_vl(self):
-        assert ModelPreprocessorRegistry.detect_family("Qwen2.5-VL-7B-Instruct") == "qwen_vlm"
+        assert (
+            ModelPreprocessorRegistry.detect_family("Qwen2.5-VL-7B-Instruct")
+            == "qwen_vlm"
+        )
         assert ModelPreprocessorRegistry.detect_family("qwen2-vl-2b") == "qwen_vlm"
 
     def test_detect_family_llava(self):
@@ -368,53 +386,79 @@ class TestModelPreprocessorRegistry:
 
 class TestBuiltinPreprocessors:
     def test_qwen_vlm_preprocessor(self):
-        inputs = {"request": PipelineRequest(
-            request_id="r1", model_id="qwen2.5-vl",
-            text="hi", images=["img.png"])}
-        result = _qwen_vlm_preprocessor(inputs, StageConfig(
-            stage_type=PipelineStage.IMAGE_PREPROCESS, modality="image"))
+        inputs = {
+            "request": PipelineRequest(
+                request_id="r1", model_id="qwen2.5-vl", text="hi", images=["img.png"]
+            )
+        }
+        result = _qwen_vlm_preprocessor(
+            inputs,
+            StageConfig(stage_type=PipelineStage.IMAGE_PREPROCESS, modality="image"),
+        )
         assert result["model_family"] == "qwen_vlm"
         assert result["image_count"] == 1
 
     def test_llava_vlm_preprocessor(self):
-        inputs = {"request": PipelineRequest(
-            request_id="r1", model_id="llava-7b",
-            text="hi", images=["img1", "img2"])}
-        result = _llava_vlm_preprocessor(inputs, StageConfig(
-            stage_type=PipelineStage.IMAGE_PREPROCESS, modality="image"))
+        inputs = {
+            "request": PipelineRequest(
+                request_id="r1", model_id="llava-7b", text="hi", images=["img1", "img2"]
+            )
+        }
+        result = _llava_vlm_preprocessor(
+            inputs,
+            StageConfig(stage_type=PipelineStage.IMAGE_PREPROCESS, modality="image"),
+        )
         assert result["model_family"] == "llava_vlm"
         assert result["image_count"] == 2
 
     def test_cosyvoice_preprocessor(self):
-        inputs = {"request": PipelineRequest(
-            request_id="r1", model_id="cosyvoice",
-            text="hi", audio=["a1.wav"])}
-        result = _cosyvoice_preprocessor(inputs, StageConfig(
-            stage_type=PipelineStage.AUDIO_PREPROCESS, modality="audio"))
+        inputs = {
+            "request": PipelineRequest(
+                request_id="r1", model_id="cosyvoice", text="hi", audio=["a1.wav"]
+            )
+        }
+        result = _cosyvoice_preprocessor(
+            inputs,
+            StageConfig(stage_type=PipelineStage.AUDIO_PREPROCESS, modality="audio"),
+        )
         assert result["model_family"] == "cosyvoice"
         assert result["audio_count"] == 1
 
     def test_qwen_omni_preprocessor(self):
-        inputs = {"request": PipelineRequest(
-            request_id="r1", model_id="qwen3_omni",
-            text="hi", images=["img.png"], audio=["a.wav"])}
-        result = _qwen_omni_preprocessor(inputs, StageConfig(
-            stage_type=PipelineStage.IMAGE_PREPROCESS, modality="image"))
+        inputs = {
+            "request": PipelineRequest(
+                request_id="r1",
+                model_id="qwen3_omni",
+                text="hi",
+                images=["img.png"],
+                audio=["a.wav"],
+            )
+        }
+        result = _qwen_omni_preprocessor(
+            inputs,
+            StageConfig(stage_type=PipelineStage.IMAGE_PREPROCESS, modality="image"),
+        )
         assert result["model_family"] == "qwen_omni"
         assert result["image_count"] == 1
         assert result["audio_count"] == 1
 
     def test_generic_preprocessor(self):
         result = _generic_preprocessor(
-            {}, StageConfig(stage_type=PipelineStage.DECODE, modality="video"))
+            {}, StageConfig(stage_type=PipelineStage.DECODE, modality="video")
+        )
         assert result["model_family"] == "generic"
         assert result["modality"] == "video"
 
     def test_no_images_no_audio(self):
-        inputs = {"request": PipelineRequest(
-            request_id="r1", model_id="qwen2.5-vl", text="hi")}
-        result = _qwen_vlm_preprocessor(inputs, StageConfig(
-            stage_type=PipelineStage.IMAGE_PREPROCESS, modality="image"))
+        inputs = {
+            "request": PipelineRequest(
+                request_id="r1", model_id="qwen2.5-vl", text="hi"
+            )
+        }
+        result = _qwen_vlm_preprocessor(
+            inputs,
+            StageConfig(stage_type=PipelineStage.IMAGE_PREPROCESS, modality="image"),
+        )
         assert result["image_count"] == 0
 
 

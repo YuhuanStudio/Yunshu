@@ -60,7 +60,11 @@ class TestRequestOutput:
 
     def test_usage(self):
         out = RequestOutput(request_id="test", prompt_tokens=10, completion_tokens=20)
-        assert out.usage == {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}
+        assert out.usage == {
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "total_tokens": 30,
+        }
 
     def test_backward_compat_aliases(self):
         out = RequestOutput(

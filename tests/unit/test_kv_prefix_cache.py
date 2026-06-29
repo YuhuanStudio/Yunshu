@@ -478,8 +478,12 @@ class TestComputeNumBlocks:
             head_dim=128,
             dtype_bytes=2,
         )
-        n_low = compute_num_blocks(config, 192 * 2**30, 40 * 2**30, activation_reserve_ratio=0.1)
-        n_high = compute_num_blocks(config, 192 * 2**30, 40 * 2**30, activation_reserve_ratio=0.5)
+        n_low = compute_num_blocks(
+            config, 192 * 2**30, 40 * 2**30, activation_reserve_ratio=0.1
+        )
+        n_high = compute_num_blocks(
+            config, 192 * 2**30, 40 * 2**30, activation_reserve_ratio=0.5
+        )
         assert n_low > n_high
 
     def test_large_weights_reduce_blocks(self):
@@ -722,6 +726,7 @@ class TestBatchedEngineArchExtraction:
 def _fake_executor():
     """Create a fake executor that runs sync functions immediately."""
     from concurrent.futures import ThreadPoolExecutor
+
     return ThreadPoolExecutor(max_workers=1)
 
 
@@ -734,6 +739,7 @@ class TestMemoryPressureEviction:
     def test_evict_under_pressure_no_entries(self):
         """evict_under_pressure returns 0 when cache is empty."""
         from yunshu_engine.kv_prefix_cache import KVPrefixCache
+
         cache = KVPrefixCache(max_entries=64)
         evicted = cache.evict_under_pressure(threshold_pct=50.0)
         assert evicted == 0
@@ -746,6 +752,7 @@ class TestMemoryPressureEviction:
         monkeypatch.setattr(mx, "get_active_memory", lambda: 0)
 
         from yunshu_engine.kv_prefix_cache import KVPrefixCache
+
         cache = KVPrefixCache(max_entries=64)
 
         # Add a dummy entry
@@ -759,12 +766,17 @@ class TestMemoryPressureEviction:
         """evict_under_pressure does not evict when utilization is below threshold."""
         import mlx.core as mx
 
-        monkeypatch.setattr(mx, "device_info", lambda: {
-            "max_recommended_working_set_size": 100_000_000,
-        })
+        monkeypatch.setattr(
+            mx,
+            "device_info",
+            lambda: {
+                "max_recommended_working_set_size": 100_000_000,
+            },
+        )
         monkeypatch.setattr(mx, "get_active_memory", lambda: 50_000_000)  # 50% util
 
         from yunshu_engine.kv_prefix_cache import KVPrefixCache
+
         cache = KVPrefixCache(max_entries=64)
         tokens = mx.array([1, 2, 3, 4, 5] * 32)
         cache.add(tokens, [])
@@ -786,13 +798,18 @@ class TestMemoryPressureEviction:
                 return 90_000_000  # 90% utilization
             return 70_000_000  # 70% — below threshold-5
 
-        monkeypatch.setattr(mx, "device_info", lambda: {
-            "max_recommended_working_set_size": 100_000_000,
-        })
+        monkeypatch.setattr(
+            mx,
+            "device_info",
+            lambda: {
+                "max_recommended_working_set_size": 100_000_000,
+            },
+        )
         monkeypatch.setattr(mx, "get_active_memory", mock_get_active)
         monkeypatch.setattr(mx, "clear_cache", lambda: None)
 
         from yunshu_engine.kv_prefix_cache import KVPrefixCache
+
         cache = KVPrefixCache(max_entries=64)
 
         # Add multiple entries
@@ -809,13 +826,18 @@ class TestMemoryPressureEviction:
         """evict_under_pressure caps eviction at 25% of entries per call."""
         import mlx.core as mx
 
-        monkeypatch.setattr(mx, "device_info", lambda: {
-            "max_recommended_working_set_size": 100_000_000,
-        })
+        monkeypatch.setattr(
+            mx,
+            "device_info",
+            lambda: {
+                "max_recommended_working_set_size": 100_000_000,
+            },
+        )
         monkeypatch.setattr(mx, "get_active_memory", lambda: 90_000_000)
         monkeypatch.setattr(mx, "clear_cache", lambda: None)
 
         from yunshu_engine.kv_prefix_cache import KVPrefixCache
+
         cache = KVPrefixCache(max_entries=64)
 
         # Add 20 entries
@@ -836,6 +858,7 @@ class TestWarmTierClearAndHybridNoTrim:
     def _mk_cache(n, layers=2):
         import mlx.core as mx
         from mlx_lm.models.cache import KVCache
+
         out = []
         for _ in range(layers):
             c = KVCache()
@@ -850,6 +873,7 @@ class TestWarmTierClearAndHybridNoTrim:
         import mlx.core as mx
 
         from yunshu_engine.kv_prefix_cache import KVPrefixCache
+
         cache = KVPrefixCache(max_entries=8, hot_limit=1, min_prefix_length=32)
         for i in range(4):
             cache.add(mx.array([i + 1] * 64), self._mk_cache(64))
@@ -867,6 +891,7 @@ class TestWarmTierClearAndHybridNoTrim:
         import mlx.core as mx
 
         from yunshu_engine.kv_prefix_cache import KVPrefixCache
+
         cache = KVPrefixCache(max_entries=16, min_prefix_length=32)
         cache._no_trim_mode = True
         base = list(range(1, 257))  # 256-token boundary prefix
@@ -894,6 +919,7 @@ class TestWarmTierClearAndHybridNoTrim:
         import mlx.core as mx
 
         from yunshu_engine.kv_prefix_cache import KVPrefixCache
+
         cache = KVPrefixCache(max_entries=16, min_prefix_length=32)
         base = list(range(1, 129))  # 128 tokens = 2 full blocks (turn-1 context)
         cache.add(mx.array(base), self._mk_cache(128))
@@ -917,6 +943,7 @@ class TestSlidingWindowSSDBypass:
     def _kvcache(n=64, layers=2):
         import mlx.core as mx
         from mlx_lm.models.cache import KVCache
+
         out = []
         for _ in range(layers):
             c = KVCache()
@@ -940,18 +967,22 @@ class TestSlidingWindowSSDBypass:
                 self.max_size = 32
                 self.keep = 0
                 self._idx = n
+
         return [_Rot() for _ in range(layers)]
 
     @staticmethod
     def _recurrent(layers=2):
         """An ArraysCache-like recurrent layer: no per-token .keys tensor."""
+
         class _Arr:
             keys = None
             values = None
+
         return [_Arr() for _ in range(layers)]
 
     def test_classifiers(self):
         from yunshu_engine.kv_prefix_cache import KVPrefixCache as K
+
         # plain KVCache: block-decomposable, NOT recurrent
         kv = self._kvcache()
         assert K._is_block_decomposable(kv) is True
@@ -970,11 +1001,19 @@ class TestSlidingWindowSSDBypass:
         saved_blocks, saved_snaps = [], []
 
         class _SSD:
-            def has_block(self, h): return False
-            def save_block(self, **kw): saved_blocks.append(kw)
+            def has_block(self, h):
+                return False
+
+            def save_block(self, **kw):
+                saved_blocks.append(kw)
+
         class _Hybrid:
-            def has(self, k): return False
-            def save(self, k, c, n): saved_snaps.append((k, n))
+            def has(self, k):
+                return False
+
+            def save(self, k, c, n):
+                saved_snaps.append((k, n))
+
         return _SSD(), _Hybrid(), saved_blocks, saved_snaps
 
     def test_rotating_spills_nothing(self):
@@ -982,6 +1021,7 @@ class TestSlidingWindowSSDBypass:
         import mlx.core as mx
 
         from yunshu_engine.kv_prefix_cache import KVPrefixCache
+
         c = KVPrefixCache(max_entries=16, min_prefix_length=1)
         ssd, hyb, blocks, snaps = self._spy_caches()
         c._ssd_cache, c._hybrid_ssd, c._no_trim_mode = ssd, hyb, True
@@ -995,6 +1035,7 @@ class TestSlidingWindowSSDBypass:
         import mlx.core as mx
 
         from yunshu_engine.kv_prefix_cache import KVPrefixCache
+
         c = KVPrefixCache(max_entries=16, min_prefix_length=1)
         ssd, hyb, blocks, snaps = self._spy_caches()
         c._ssd_cache, c._hybrid_ssd, c._no_trim_mode = ssd, hyb, True
@@ -1008,6 +1049,7 @@ class TestSlidingWindowSSDBypass:
         import mlx.core as mx
 
         from yunshu_engine.kv_prefix_cache import KVPrefixCache
+
         c = KVPrefixCache(max_entries=16, min_prefix_length=1)
         ssd, hyb, blocks, snaps = self._spy_caches()
         c._ssd_cache, c._hybrid_ssd = ssd, hyb  # no_trim_mode False (trimmable)
@@ -1024,6 +1066,7 @@ class TestScopedSSDDir:
 
     def _scoped(self, cache_dir, model):
         from yunshu_engine.kv_prefix_cache import KVPrefixCache
+
         return KVPrefixCache._scoped_ssd_dir(cache_dir, model)
 
     def test_different_models_get_different_dirs(self):
@@ -1032,13 +1075,17 @@ class TestScopedSSDDir:
         assert a != b
         # Both live under the same base.
         import os
+
         assert os.path.dirname(a) == os.path.dirname(b) == os.path.expanduser("/tmp/kv")
 
     def test_same_model_is_stable(self):
-        assert self._scoped("/tmp/kv", "Qwen2.5-0.5B") == self._scoped("/tmp/kv", "Qwen2.5-0.5B")
+        assert self._scoped("/tmp/kv", "Qwen2.5-0.5B") == self._scoped(
+            "/tmp/kv", "Qwen2.5-0.5B"
+        )
 
     def test_empty_model_uses_base(self):
         import os
+
         assert self._scoped("/tmp/kv", "") == os.path.expanduser("/tmp/kv")
 
     def test_names_sanitizing_identically_still_disambiguated(self):
@@ -1051,5 +1098,6 @@ class TestScopedSSDDir:
         d = self._scoped("/tmp/kv", "/Volumes/P5/models/Qwen2.5-0.5B-4bit")
         # No stray path separators from the model id leak into the leaf name.
         import os
+
         leaf = os.path.basename(d)
         assert "/" not in leaf and leaf

@@ -12,6 +12,7 @@ overhead measured in is NOT the batch window (proven: YUNSHU_BATCH_WAIT_MS=0 gav
 69ms) — it's inherent scheduler machinery, the separate unification target. Burst batching is
 unchanged (verify_engine_loop gate 6/6).
 """
+
 from __future__ import annotations
 
 import inspect

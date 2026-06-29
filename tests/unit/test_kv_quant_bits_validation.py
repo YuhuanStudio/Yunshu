@@ -7,6 +7,7 @@ but _apply_settings assigned s.kv_cache_quant_bits directly, so a settings file 
 request that hits the quant threshold (500). _apply_settings now validates first,
 mirroring the env path.
 """
+
 from __future__ import annotations
 
 import types
@@ -18,7 +19,7 @@ def _settings(bits):
     return types.SimpleNamespace(
         kv_cache_quant_bits=bits,
         kv_cache_quant_group_size=64,
-        prefix_cache_enabled=True,     # True → no-op (only False clears the cache)
+        prefix_cache_enabled=True,  # True → no-op (only False clears the cache)
         spec_decode_enabled=False,
         spec_prefill_enabled=False,
         ssd_cache_enabled=False,
@@ -40,9 +41,9 @@ def _engine():
 
 def test_invalid_bits_from_settings_rejected():
     eng = _engine()
-    eng._settings = _settings(5)        # invalid — MLX supports only 2/3/4/8
+    eng._settings = _settings(5)  # invalid — MLX supports only 2/3/4/8
     eng._apply_settings()
-    assert eng._kv_quant_bits is None   # ignored, not assigned → no to_quantized crash
+    assert eng._kv_quant_bits is None  # ignored, not assigned → no to_quantized crash
 
 
 def test_valid_bits_from_settings_applied():
@@ -55,7 +56,7 @@ def test_valid_bits_from_settings_applied():
 
 def test_none_bits_leaves_unchanged():
     eng = _engine()
-    eng._kv_quant_bits = 4              # e.g. a validated env value already set
+    eng._kv_quant_bits = 4  # e.g. a validated env value already set
     eng._settings = _settings(None)
     eng._apply_settings()
-    assert eng._kv_quant_bits == 4      # None settings doesn't clobber
+    assert eng._kv_quant_bits == 4  # None settings doesn't clobber

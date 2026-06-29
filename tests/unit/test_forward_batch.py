@@ -13,7 +13,9 @@ from yunshu_engine.forward_batch import (
 
 class TestRequestSlot:
     def test_total_tokens(self):
-        slot = RequestSlot(request_id="r1", prompt_tokens=[1, 2, 3], num_prompt_tokens=3)
+        slot = RequestSlot(
+            request_id="r1", prompt_tokens=[1, 2, 3], num_prompt_tokens=3
+        )
         assert slot.total_tokens == 3
         slot.generated_tokens = [4, 5]
         assert slot.total_tokens == 5
@@ -29,12 +31,16 @@ class TestRequestSlot:
         assert slot.is_finished
 
     def test_is_finished_by_eos(self):
-        slot = RequestSlot(request_id="r1", prompt_tokens=[], max_tokens=100, eos_token_ids=[2, 0])
+        slot = RequestSlot(
+            request_id="r1", prompt_tokens=[], max_tokens=100, eos_token_ids=[2, 0]
+        )
         slot.generated_tokens = [1, 2, 0]
         assert slot.is_finished
 
     def test_is_not_finished(self):
-        slot = RequestSlot(request_id="r1", prompt_tokens=[], max_tokens=100, eos_token_ids=[999])
+        slot = RequestSlot(
+            request_id="r1", prompt_tokens=[], max_tokens=100, eos_token_ids=[999]
+        )
         slot.generated_tokens = [1, 2, 3]
         assert not slot.is_finished
 
@@ -67,7 +73,9 @@ class TestScheduleBatch:
 
     def test_add_and_get_slot(self):
         batch = ScheduleBatch()
-        slot = RequestSlot(request_id="r1", prompt_tokens=[1, 2, 3], num_prompt_tokens=3)
+        slot = RequestSlot(
+            request_id="r1", prompt_tokens=[1, 2, 3], num_prompt_tokens=3
+        )
         batch.add_slot(slot)
         assert batch.num_slots == 1
         assert batch.get_slot("r1") is slot
@@ -95,8 +103,15 @@ class TestScheduleBatch:
 
     def test_total_tokens_aggregation(self):
         batch = ScheduleBatch()
-        batch.add_slot(RequestSlot(request_id="r1", prompt_tokens=[1, 2], num_prompt_tokens=2))
-        slot2 = RequestSlot(request_id="r2", prompt_tokens=[3, 4, 5], num_prompt_tokens=3, is_prefill=False)
+        batch.add_slot(
+            RequestSlot(request_id="r1", prompt_tokens=[1, 2], num_prompt_tokens=2)
+        )
+        slot2 = RequestSlot(
+            request_id="r2",
+            prompt_tokens=[3, 4, 5],
+            num_prompt_tokens=3,
+            is_prefill=False,
+        )
         slot2.generated_tokens = [6]
         batch.add_slot(slot2)
         assert batch.total_prompt_tokens == 5
@@ -114,9 +129,13 @@ class TestScheduleBatch:
     def test_split_prefill_decode(self):
         batch = ScheduleBatch(max_prefill_batch=2, max_decode_batch=3)
         for i in range(3):
-            batch.add_slot(RequestSlot(request_id=f"p{i}", prompt_tokens=[], is_prefill=True))
+            batch.add_slot(
+                RequestSlot(request_id=f"p{i}", prompt_tokens=[], is_prefill=True)
+            )
         for i in range(4):
-            batch.add_slot(RequestSlot(request_id=f"d{i}", prompt_tokens=[], is_prefill=False))
+            batch.add_slot(
+                RequestSlot(request_id=f"d{i}", prompt_tokens=[], is_prefill=False)
+            )
         prefill, decode = batch.split_prefill_decode()
         assert prefill.num_slots == 2  # limited by max_prefill_batch
         assert decode.num_slots == 3  # limited by max_decode_batch
@@ -142,10 +161,15 @@ class TestScheduleBatch:
 
     def test_get_stats(self):
         batch = ScheduleBatch()
-        batch.add_slot(RequestSlot(
-            request_id="r1", prompt_tokens=[1, 2], num_prompt_tokens=2, priority=5,
-            arrival_time=time.monotonic() - 1.0,
-        ))
+        batch.add_slot(
+            RequestSlot(
+                request_id="r1",
+                prompt_tokens=[1, 2],
+                num_prompt_tokens=2,
+                priority=5,
+                arrival_time=time.monotonic() - 1.0,
+            )
+        )
         stats = batch.get_stats()
         assert stats["num_slots"] == 1
         assert stats["num_prefill"] == 1
@@ -155,13 +179,23 @@ class TestScheduleBatch:
 class TestForwardBatch:
     def test_from_schedule_batch(self):
         batch = ScheduleBatch()
-        batch.add_slot(RequestSlot(
-            request_id="r1", prompt_tokens=[1, 2, 3], num_prompt_tokens=3, is_prefill=True,
-        ))
-        batch.add_slot(RequestSlot(
-            request_id="r2", prompt_tokens=[4, 5], num_prompt_tokens=2,
-            is_prefill=False, spec_draft_tokens=[6, 7],
-        ))
+        batch.add_slot(
+            RequestSlot(
+                request_id="r1",
+                prompt_tokens=[1, 2, 3],
+                num_prompt_tokens=3,
+                is_prefill=True,
+            )
+        )
+        batch.add_slot(
+            RequestSlot(
+                request_id="r2",
+                prompt_tokens=[4, 5],
+                num_prompt_tokens=2,
+                is_prefill=False,
+                spec_draft_tokens=[6, 7],
+            )
+        )
 
         # Second slot is decode — only last token used
         slot2 = batch.slots[1]
@@ -251,14 +285,24 @@ class TestBatchComposer:
     def test_compose_with_active_decode(self):
         composer = BatchComposer(max_batch_size=4, max_prefill_slots=2)
         active = [
-            RequestSlot(request_id="d1", prompt_tokens=[], is_prefill=False, max_tokens=100),
-            RequestSlot(request_id="d2", prompt_tokens=[], is_prefill=False, max_tokens=100),
+            RequestSlot(
+                request_id="d1", prompt_tokens=[], is_prefill=False, max_tokens=100
+            ),
+            RequestSlot(
+                request_id="d2", prompt_tokens=[], is_prefill=False, max_tokens=100
+            ),
         ]
         # Decode slots need generated_tokens to not be "finished"
         active[0].generated_tokens = [1]
         active[1].generated_tokens = [1]
         pending = [
-            RequestSlot(request_id="p1", prompt_tokens=[1] * 100, num_prompt_tokens=100, is_prefill=True, priority=1),
+            RequestSlot(
+                request_id="p1",
+                prompt_tokens=[1] * 100,
+                num_prompt_tokens=100,
+                is_prefill=True,
+                priority=1,
+            ),
         ]
         batch = composer.compose(pending, active)
         # 2 decode + 1 prefill
@@ -268,9 +312,27 @@ class TestBatchComposer:
     def test_priority_ordering(self):
         composer = BatchComposer(max_batch_size=4, max_prefill_slots=4)
         pending = [
-            RequestSlot(request_id="p1", prompt_tokens=[1], num_prompt_tokens=1, is_prefill=True, priority=1),
-            RequestSlot(request_id="p2", prompt_tokens=[1], num_prompt_tokens=1, is_prefill=True, priority=5),
-            RequestSlot(request_id="p3", prompt_tokens=[1], num_prompt_tokens=1, is_prefill=True, priority=3),
+            RequestSlot(
+                request_id="p1",
+                prompt_tokens=[1],
+                num_prompt_tokens=1,
+                is_prefill=True,
+                priority=1,
+            ),
+            RequestSlot(
+                request_id="p2",
+                prompt_tokens=[1],
+                num_prompt_tokens=1,
+                is_prefill=True,
+                priority=5,
+            ),
+            RequestSlot(
+                request_id="p3",
+                prompt_tokens=[1],
+                num_prompt_tokens=1,
+                is_prefill=True,
+                priority=3,
+            ),
         ]
         batch = composer.compose(pending)
         assert batch.slots[0].request_id == "p2"  # highest priority first
@@ -278,8 +340,18 @@ class TestBatchComposer:
     def test_memory_budget_constraint(self):
         composer = BatchComposer(max_batch_size=10, max_prefill_slots=10)
         pending = [
-            RequestSlot(request_id="p1", prompt_tokens=[1] * 100, num_prompt_tokens=100, is_prefill=True),
-            RequestSlot(request_id="p2", prompt_tokens=[1] * 200, num_prompt_tokens=200, is_prefill=True),
+            RequestSlot(
+                request_id="p1",
+                prompt_tokens=[1] * 100,
+                num_prompt_tokens=100,
+                is_prefill=True,
+            ),
+            RequestSlot(
+                request_id="p2",
+                prompt_tokens=[1] * 200,
+                num_prompt_tokens=200,
+                is_prefill=True,
+            ),
         ]
         batch = composer.compose(pending, memory_budget_tokens=150)
         assert batch.num_slots == 1  # only first fits
@@ -287,7 +359,12 @@ class TestBatchComposer:
     def test_batch_size_limit(self):
         composer = BatchComposer(max_batch_size=2, max_prefill_slots=2)
         pending = [
-            RequestSlot(request_id=f"p{i}", prompt_tokens=[1], num_prompt_tokens=1, is_prefill=True)
+            RequestSlot(
+                request_id=f"p{i}",
+                prompt_tokens=[1],
+                num_prompt_tokens=1,
+                is_prefill=True,
+            )
             for i in range(5)
         ]
         batch = composer.compose(pending)
@@ -295,9 +372,16 @@ class TestBatchComposer:
 
     def test_stats(self):
         composer = BatchComposer()
-        composer.compose([
-            RequestSlot(request_id="p1", prompt_tokens=[1], num_prompt_tokens=1, is_prefill=True),
-        ])
+        composer.compose(
+            [
+                RequestSlot(
+                    request_id="p1",
+                    prompt_tokens=[1],
+                    num_prompt_tokens=1,
+                    is_prefill=True,
+                ),
+            ]
+        )
         stats = composer.get_stats()
         assert stats["total_batches_composed"] == 1
         assert stats["total_requests_scheduled"] == 1
@@ -310,12 +394,18 @@ class TestBatchComposer:
     def test_age_bonus_scheduling(self):
         composer = BatchComposer(ttft_weight=10.0, priority_weight=0.0)
         old = RequestSlot(
-            request_id="old", prompt_tokens=[1], num_prompt_tokens=1,
-            is_prefill=True, arrival_time=time.monotonic() - 5.0,
+            request_id="old",
+            prompt_tokens=[1],
+            num_prompt_tokens=1,
+            is_prefill=True,
+            arrival_time=time.monotonic() - 5.0,
         )
         new = RequestSlot(
-            request_id="new", prompt_tokens=[1], num_prompt_tokens=1,
-            is_prefill=True, arrival_time=time.monotonic(),
+            request_id="new",
+            prompt_tokens=[1],
+            num_prompt_tokens=1,
+            is_prefill=True,
+            arrival_time=time.monotonic(),
         )
         batch = composer.compose([new, old])
         assert batch.slots[0].request_id == "old"  # older gets priority

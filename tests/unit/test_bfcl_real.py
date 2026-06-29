@@ -61,7 +61,9 @@ class TestTestCaseStructure:
         for i, case in enumerate(cases):
             assert "prompt" in case, f"Case {i} in '{category}' missing 'prompt'"
             assert "tools" in case, f"Case {i} in '{category}' missing 'tools'"
-            assert "expected_calls" in case, f"Case {i} in '{category}' missing 'expected_calls'"
+            assert "expected_calls" in case, (
+                f"Case {i} in '{category}' missing 'expected_calls'"
+            )
 
     @pytest.mark.parametrize("category", VALID_CATEGORIES)
     def test_prompt_is_nonempty_string(self, category):
@@ -78,19 +80,25 @@ class TestTestCaseStructure:
             assert len(case["tools"]) > 0, f"Case {i}: tools must not be empty"
             for tool in case["tools"]:
                 assert isinstance(tool, dict), f"Case {i}: each tool must be dict"
-                assert tool.get("type") == "function", f"Case {i}: tool type must be 'function'"
+                assert tool.get("type") == "function", (
+                    f"Case {i}: tool type must be 'function'"
+                )
                 assert "function" in tool, f"Case {i}: tool must have 'function' key"
 
     @pytest.mark.parametrize("category", VALID_CATEGORIES)
     def test_expected_calls_is_list_of_dicts(self, category):
         cases = _generate_stub_cases(category)
         for i, case in enumerate(cases):
-            assert isinstance(case["expected_calls"], list), f"Case {i}: expected_calls must be list"
+            assert isinstance(case["expected_calls"], list), (
+                f"Case {i}: expected_calls must be list"
+            )
             for call in case["expected_calls"]:
                 assert isinstance(call, dict), f"Case {i}: each call must be dict"
                 assert "name" in call, f"Case {i}: each call must have 'name'"
                 assert "arguments" in call, f"Case {i}: each call must have 'arguments'"
-                assert isinstance(call["arguments"], dict), f"Case {i}: arguments must be dict"
+                assert isinstance(call["arguments"], dict), (
+                    f"Case {i}: arguments must be dict"
+                )
 
 
 # ── Tool definition validation ──
@@ -117,8 +125,12 @@ class TestToolDefinitions:
         """Tool names should come from the expected set of realistic tools."""
         self._collect_tools()
         expected_tools = {
-            "get_weather", "calculate", "search_web",
-            "send_email", "file_operations", "database_query",
+            "get_weather",
+            "calculate",
+            "search_web",
+            "send_email",
+            "file_operations",
+            "database_query",
         }
         assert expected_tools == self.ALL_TOOL_NAMES, (
             f"Unexpected tool names: {self.ALL_TOOL_NAMES - expected_tools}"
@@ -137,7 +149,9 @@ class TestToolDefinitions:
                         continue
                     seen.add(name)
                     assert "description" in func, f"Tool '{name}' missing description"
-                    assert len(func["description"]) > 0, f"Tool '{name}' has empty description"
+                    assert len(func["description"]) > 0, (
+                        f"Tool '{name}' has empty description"
+                    )
 
     def test_tools_have_parameters(self):
         """Every tool should have a parameters object."""
@@ -153,7 +167,9 @@ class TestToolDefinitions:
                     seen.add(name)
                     assert "parameters" in func, f"Tool '{name}' missing parameters"
                     params = func["parameters"]
-                    assert params.get("type") == "object", f"Tool '{name}' params type must be 'object'"
+                    assert params.get("type") == "object", (
+                        f"Tool '{name}' params type must be 'object'"
+                    )
                     assert "properties" in params, f"Tool '{name}' missing properties"
 
     def test_tools_have_required_fields(self):
@@ -228,8 +244,12 @@ class TestCategoryConstraints:
         """Simple category: each case should have 1 tool and 1 expected call."""
         cases = _generate_stub_cases("simple")
         for i, case in enumerate(cases):
-            assert len(case["tools"]) == 1, f"Simple case {i}: should have exactly 1 tool"
-            assert len(case["expected_calls"]) == 1, f"Simple case {i}: should have exactly 1 call"
+            assert len(case["tools"]) == 1, (
+                f"Simple case {i}: should have exactly 1 tool"
+            )
+            assert len(case["expected_calls"]) == 1, (
+                f"Simple case {i}: should have exactly 1 call"
+            )
 
     def test_parallel_single_tool_multiple_calls(self):
         """Parallel category: same tool, multiple calls."""
@@ -244,14 +264,18 @@ class TestCategoryConstraints:
         cases = _generate_stub_cases("multiple")
         for i, case in enumerate(cases):
             assert len(case["tools"]) >= 2, f"Multiple case {i}: should have >= 2 tools"
-            assert len(case["expected_calls"]) == 1, f"Multiple case {i}: should have exactly 1 call"
+            assert len(case["expected_calls"]) == 1, (
+                f"Multiple case {i}: should have exactly 1 call"
+            )
 
     def test_parallel_multiple_multiple_tools_multiple_calls(self):
         """Parallel-multiple category: multiple tools, multiple parallel calls."""
         cases = _generate_stub_cases("parallel_multiple")
         for i, case in enumerate(cases):
             assert len(case["tools"]) >= 2, f"PM case {i}: should have >= 2 tools"
-            assert len(case["expected_calls"]) >= 2, f"PM case {i}: should have >= 2 calls"
+            assert len(case["expected_calls"]) >= 2, (
+                f"PM case {i}: should have >= 2 calls"
+            )
 
     def test_expected_call_names_exist_in_tools(self):
         """Every expected call should reference a tool that is available."""
@@ -270,7 +294,9 @@ class TestCategoryConstraints:
         for cat in VALID_CATEGORIES:
             cases = _generate_stub_cases(cat)
             for i, case in enumerate(cases):
-                tools_by_name = {t["function"]["name"]: t["function"] for t in case["tools"]}
+                tools_by_name = {
+                    t["function"]["name"]: t["function"] for t in case["tools"]
+                }
                 for call in case["expected_calls"]:
                     tool = tools_by_name.get(call["name"])
                     if tool is None:
@@ -294,7 +320,9 @@ class TestRealCasesWithEvaluator:
         evaluator = BFCLEvaluator(config)
         for cat in VALID_CATEGORIES:
             cases = evaluator.load_test_cases(cat)
-            assert len(cases) >= 10, f"'{cat}' should have >= 10 cases, got {len(cases)}"
+            assert len(cases) >= 10, (
+                f"'{cat}' should have >= 10 cases, got {len(cases)}"
+            )
 
     def test_evaluate_category_without_engine(self):
         """Without an engine, all test cases should fail gracefully."""

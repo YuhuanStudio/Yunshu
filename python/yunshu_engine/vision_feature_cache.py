@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class _SSDEntry:
     """Metadata for a cached vision feature stored on SSD."""
+
     key_hash: str
     model_name: str
     image_hash: str
@@ -95,8 +96,11 @@ class VisionFeatureCache:
 
         # Stats
         self._stats: dict[str, int] = {
-            "hits": 0, "misses": 0, "saves": 0,
-            "ssd_loads": 0, "errors": 0,
+            "hits": 0,
+            "misses": 0,
+            "saves": 0,
+            "ssd_loads": 0,
+            "errors": 0,
         }
 
         if self._cache_dir is not None:
@@ -104,7 +108,9 @@ class VisionFeatureCache:
             self._scan_existing_files()
 
         self._writer_thread = threading.Thread(
-            target=self._writer_loop, daemon=True, name="vision-cache-writer",
+            target=self._writer_loop,
+            daemon=True,
+            name="vision-cache-writer",
         )
         self._writer_thread.start()
 
@@ -161,7 +167,9 @@ class VisionFeatureCache:
             self._memory_cache.move_to_end(key)
             self._memory_cache[key] = features
             return
-        while self._memory_cache and len(self._memory_cache) >= self._max_memory_entries:
+        while (
+            self._memory_cache and len(self._memory_cache) >= self._max_memory_entries
+        ):
             self._memory_cache.popitem(last=False)
         self._memory_cache[key] = features
 
@@ -172,7 +180,11 @@ class VisionFeatureCache:
         return subdir / f"{h}.safetensors"
 
     def _enqueue_ssd_write(
-        self, key: str, image_hash: str, model_name: str, features: Any,
+        self,
+        key: str,
+        image_hash: str,
+        model_name: str,
+        features: Any,
     ) -> None:
         with self._pending_lock:
             if key in self._pending_write_keys:
@@ -189,6 +201,7 @@ class VisionFeatureCache:
 
         try:
             import numpy as np
+
             tensors_raw: dict[str, tuple[bytes, str, list[int]]] = {}
             num_tensors = 1
 
@@ -197,12 +210,16 @@ class VisionFeatureCache:
                 for i, feat in enumerate(features):
                     arr = np.array(feat).astype(np.float16)
                     tensors_raw[f"feature_{i}"] = (
-                        arr.tobytes(), "F16", list(arr.shape),
+                        arr.tobytes(),
+                        "F16",
+                        list(arr.shape),
                     )
             else:
                 arr = np.array(features).astype(np.float16)
                 tensors_raw["feature"] = (
-                    arr.tobytes(), "F16", list(arr.shape),
+                    arr.tobytes(),
+                    "F16",
+                    list(arr.shape),
                 )
 
             metadata = {
@@ -344,7 +361,11 @@ class VisionFeatureCache:
                     self._ssd_total_size += stat.st_size
                     indexed += 1
                 except Exception:
-                    logger.debug("vision cache SSD file scan failed for %s", file_path, exc_info=True)
+                    logger.debug(
+                        "vision cache SSD file scan failed for %s",
+                        file_path,
+                        exc_info=True,
+                    )
                     errors += 1
 
         if scanned > 0:
@@ -375,7 +396,9 @@ class VisionFeatureCache:
 
                 # Write safetensors file manually (avoids mx.save on non-MLX thread)
                 actual_size = self._write_safetensors(
-                    str(temp_path), tensors_raw, metadata,
+                    str(temp_path),
+                    tensors_raw,
+                    metadata,
                 )
                 os.rename(str(temp_path), str(file_path))
 

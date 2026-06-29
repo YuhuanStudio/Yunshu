@@ -11,6 +11,7 @@ well-hardened, with two cross-layer/cross-endpoint inconsistencies fixed here:
 (The /batch raw-dict path HIGH and image-cancel MEDIUM from the same hunt round are
 separate passes.)
 """
+
 from __future__ import annotations
 
 import pydantic
@@ -25,19 +26,28 @@ from yunshu_gateway.routers.responses import ResponsesRequest
 def test_xtc_threshold_rejected_above_half_all_endpoints():
     # > 0.5 must now be a validation error (was accepted → engine 500)
     with pytest.raises(pydantic.ValidationError):
-        ChatCompletionRequest(model="m", messages=[{"role": "user", "content": "hi"}], xtc_threshold=0.8)
+        ChatCompletionRequest(
+            model="m", messages=[{"role": "user", "content": "hi"}], xtc_threshold=0.8
+        )
     with pytest.raises(pydantic.ValidationError):
         CompletionRequest(model="m", prompt="hi", xtc_threshold=0.8)
     with pytest.raises(pydantic.ValidationError):
         ResponsesRequest(model="m", input="hi", xtc_threshold=0.8)
     with pytest.raises(pydantic.ValidationError):
-        AnthropicMessagesRequest(model="m", messages=[{"role": "user", "content": "hi"}],
-                                 max_tokens=16, xtc_threshold=0.8)
+        AnthropicMessagesRequest(
+            model="m",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=16,
+            xtc_threshold=0.8,
+        )
 
 
 def test_xtc_threshold_half_still_allowed():
     # exactly 0.5 is the engine's upper bound — must remain valid
-    assert CompletionRequest(model="m", prompt="hi", xtc_threshold=0.5).xtc_threshold == 0.5
+    assert (
+        CompletionRequest(model="m", prompt="hi", xtc_threshold=0.5).xtc_threshold
+        == 0.5
+    )
 
 
 def test_completions_seed_64bit_bound():

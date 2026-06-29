@@ -28,7 +28,9 @@ class VideoGenerateRequest(BaseModel):
     model: str = "wan-2.2-t2v"
     prompt: str = Field(description="Text description of the video to generate")
     negative_prompt: str = ""
-    image: str | None = Field(default=None, description="Base64-encoded source image for I2V mode")
+    image: str | None = Field(
+        default=None, description="Base64-encoded source image for I2V mode"
+    )
     width: int = Field(default=1280, ge=64, le=2048)
     height: int = Field(default=704, ge=64, le=2048)
     num_frames: int = Field(default=81, ge=1, le=257)
@@ -49,6 +51,7 @@ async def create_video(req: VideoGenerateRequest, request: Request):
     When stream=true, delivers frames via SSE as they're generated.
     """
     from .models import _check_model_access, _check_permission
+
     _check_permission(request, "can_infer")
     _check_model_access(request, req.model)
     from yunshu_engine.video_engine import VideoEngine
@@ -61,17 +64,22 @@ async def create_video(req: VideoGenerateRequest, request: Request):
             # (data:image/png;base64,...) — accepted by every /v1/images endpoint —
             # also works for video I2V. The old inline b64decode rejected the prefix.
             from .images import _decode_image_b64
+
             image_bytes = _decode_image_b64(req.image)
         except Exception:
             logger.debug("invalid base64 image data in video request", exc_info=True)
-            raise HTTPException(status_code=400, detail="Invalid base64 image data") from None
+            raise HTTPException(
+                status_code=400, detail="Invalid base64 image data"
+            ) from None
 
     # Try to find a registered video engine
     video_engine = None
     manager = get_model_manager()
     if manager is not None:
         for entry in manager.list_entries():
-            if entry.is_loaded and isinstance(getattr(entry, 'engine', None), VideoEngine):
+            if entry.is_loaded and isinstance(
+                getattr(entry, "engine", None), VideoEngine
+            ):
                 if req.model in {entry.model_id, entry.model_id.lower()}:
                     video_engine = entry.engine
                     break
@@ -82,7 +90,9 @@ async def create_video(req: VideoGenerateRequest, request: Request):
                 if isinstance(engine, VideoEngine):
                     video_engine = engine
             except (KeyError, Exception):
-                logger.debug(f"Failed to load video engine for {req.model}", exc_info=True)
+                logger.debug(
+                    f"Failed to load video engine for {req.model}", exc_info=True
+                )
 
         if video_engine is None:
             # the wrong-model keystone, unswept for video. The
@@ -92,8 +102,9 @@ async def create_video(req: VideoGenerateRequest, request: Request):
             # matching, the requested model is unavailable → 404; do NOT silently serve a
             # different one.
             _loaded_video = [
-                e.engine for e in manager.list_entries()
-                if e.is_loaded and isinstance(getattr(e, 'engine', None), VideoEngine)
+                e.engine
+                for e in manager.list_entries()
+                if e.is_loaded and isinstance(getattr(e, "engine", None), VideoEngine)
             ]
             if len(_loaded_video) == 1:
                 # single-model deployments are unambiguous — req.model defaults to
@@ -119,6 +130,7 @@ async def create_video(req: VideoGenerateRequest, request: Request):
     _vid_cancel = None
     try:
         from yunshu_engine.request_tracker import get_request_tracker
+
         _vid_tracker = get_request_tracker()
         _vid_cancel = _vid_tracker.register(_vid_id, req.model or "video").cancel_event
     except Exception:
@@ -153,6 +165,7 @@ async def create_video(req: VideoGenerateRequest, request: Request):
 
     try:
         from ..streaming import run_with_disconnect_guard
+
         # Non-streaming generate() has no mid-gen cancel hook, so the bounded diffusion
         # runs to completion on the executor; the guard still frees the handler promptly on
         # disconnect (no event-loop head-of-line block) and None → client gone, discarded.
@@ -208,35 +221,46 @@ async def create_video(req: VideoGenerateRequest, request: Request):
         # would otherwise crash b64encode into a 500 instead of returning what we have.
         frames_b64 = [
             base64.b64encode(f).decode("ascii")
-            for f in (result.frames or []) if isinstance(f, (bytes, bytearray))
+            for f in (result.frames or [])
+            if isinstance(f, (bytes, bytearray))
         ]
-        return JSONResponse({
-            "created": int(time.time()),
-            "data": [{
-                "frames": frames_b64,
-                "num_frames": result.num_frames,
-                "fps": result.fps,
-                "width": result.width,
-                "height": result.height,
-                "method": result.method,
-            }],
-        })
+        return JSONResponse(
+            {
+                "created": int(time.time()),
+                "data": [
+                    {
+                        "frames": frames_b64,
+                        "num_frames": result.num_frames,
+                        "fps": result.fps,
+                        "width": result.width,
+                        "height": result.height,
+                        "method": result.method,
+                    }
+                ],
+            }
+        )
     else:
         video_b64 = base64.b64encode(result.video_data).decode("ascii")
-        return JSONResponse({
-            "created": int(time.time()),
-            "data": [{
-                "video": video_b64,
-                "num_frames": result.num_frames,
-                "fps": result.fps,
-                "width": result.width,
-                "height": result.height,
-                "method": result.method,
-            }],
-        })
+        return JSONResponse(
+            {
+                "created": int(time.time()),
+                "data": [
+                    {
+                        "video": video_b64,
+                        "num_frames": result.num_frames,
+                        "fps": result.fps,
+                        "width": result.width,
+                        "height": result.height,
+                        "method": result.method,
+                    }
+                ],
+            }
+        )
 
 
-async def _stream_video_frames(video_engine, req: VideoGenerateRequest, image_bytes: bytes | None):
+async def _stream_video_frames(
+    video_engine, req: VideoGenerateRequest, image_bytes: bytes | None
+):
     """SSE generator that streams frames as they are generated and decoded.
 
     Uses generate_stream() which yields frames progressively instead of
@@ -278,14 +302,16 @@ async def _stream_video_frames(video_engine, req: VideoGenerateRequest, image_by
             is_final = frame_data.get("is_final", False)
             chunk = {
                 "created": int(time.time()),
-                "data": [{
-                    "frame": frame_b64,
-                    "index": frame_data.get("index", frame_count),
-                    "width": frame_data.get("width", 0),
-                    "height": frame_data.get("height", 0),
-                    "method": frame_data.get("method", ""),
-                    "type": "frame",
-                }],
+                "data": [
+                    {
+                        "frame": frame_b64,
+                        "index": frame_data.get("index", frame_count),
+                        "width": frame_data.get("width", 0),
+                        "height": frame_data.get("height", 0),
+                        "method": frame_data.get("method", ""),
+                        "type": "frame",
+                    }
+                ],
             }
             frame_count += 1
             yield f"data: {json.dumps(chunk)}\n\n"
@@ -296,10 +322,12 @@ async def _stream_video_frames(video_engine, req: VideoGenerateRequest, image_by
         # Send done event with frame count
         done_chunk = {
             "created": int(time.time()),
-            "data": [{
-                "type": "done",
-                "frames_delivered": frame_count,
-            }],
+            "data": [
+                {
+                    "type": "done",
+                    "frames_delivered": frame_count,
+                }
+            ],
         }
         yield f"data: {json.dumps(done_chunk)}\n\n"
         yield "data: [DONE]\n\n"

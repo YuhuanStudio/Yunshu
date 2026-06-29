@@ -128,13 +128,17 @@ class TestDFlashEngine:
     def test_is_compatible_flux(self):
         class FakeConfig:
             model_type = "flux"
+
         class FakeModel:
             config = FakeConfig()
+
         assert DFlashEngine.is_compatible(FakeModel())
 
     def test_is_compatible_incompatible(self):
         class FakeConfig:
             model_type = "llama"
+
         class FakeModel:
             config = FakeConfig()
+
         assert not DFlashEngine.is_compatible(FakeModel())

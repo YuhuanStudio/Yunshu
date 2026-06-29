@@ -1,4 +1,5 @@
 """Tests for yunshu_engine.telemetry — TelemetryConfig and TelemetryCollector."""
+
 from __future__ import annotations
 
 import pytest
@@ -129,17 +130,13 @@ class TestSampling:
     """Test sample_rate behavior."""
 
     def test_sample_rate_one_collects_all(self):
-        tc = TelemetryCollector(
-            TelemetryConfig(enabled=True, sample_rate=1.0)
-        )
+        tc = TelemetryCollector(TelemetryConfig(enabled=True, sample_rate=1.0))
         for i in range(50):
             tc.collect("metric", float(i))
         assert tc.get_pending_count() == 50
 
     def test_sample_rate_zero_collects_none(self):
-        tc = TelemetryCollector(
-            TelemetryConfig(enabled=True, sample_rate=0.0)
-        )
+        tc = TelemetryCollector(TelemetryConfig(enabled=True, sample_rate=0.0))
         for i in range(50):
             tc.collect("metric", float(i))
         assert tc.get_pending_count() == 0

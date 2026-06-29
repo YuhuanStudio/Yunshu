@@ -8,6 +8,7 @@ max_seq_length (and stay equal to each other — the traced-shape invariant).
 load → silent MLX fallback → measured MLX-vs-MLX (bogus speedup≈1.0). Now points at the
 .mlpackage that compile_model stores and serving loads.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -30,4 +31,4 @@ def test_benchmark_uses_mlpackage_not_mlmodelc():
     code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
     # the benchmark resolves the loadable .mlpackage (not the unloadable .mlmodelc)
     assert 'f"{model_name_safe}.mlpackage"' in code
-    assert 'mlmodelc_path = cache_dir' not in code  # the old .mlmodelc target is gone
+    assert "mlmodelc_path = cache_dir" not in code  # the old .mlmodelc target is gone

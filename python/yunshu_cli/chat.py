@@ -23,9 +23,13 @@ def chat(
     model: str | None = typer.Option(None, "--model", "-m", help="Model name."),
     url: str = typer.Option("http://localhost:8000", "--url", "-u", help="Server URL."),
     system: str | None = typer.Option(None, "--system", "-s", help="System prompt."),
-    temperature: float = typer.Option(0.7, "--temperature", "-t", help="Sampling temperature."),
+    temperature: float = typer.Option(
+        0.7, "--temperature", "-t", help="Sampling temperature."
+    ),
     max_tokens: int = typer.Option(2048, "--max-tokens", help="Max output tokens."),
-    thinking: bool = typer.Option(False, "--thinking", help="Enable thinking/reasoning mode."),
+    thinking: bool = typer.Option(
+        False, "--thinking", help="Enable thinking/reasoning mode."
+    ),
     no_stream: bool = typer.Option(False, "--no-stream", help="Disable streaming."),
 ):
     """Interactive chat with a Yunshu model."""
@@ -41,17 +45,31 @@ def chat(
                 # Prefer LLM models
                 for m in models:
                     mid = m.get("id", "")
-                    if any(k in mid.lower() for k in ("qwen", "llama", "gemma", "mistral", "phi", "deepseek")):
+                    if any(
+                        k in mid.lower()
+                        for k in (
+                            "qwen",
+                            "llama",
+                            "gemma",
+                            "mistral",
+                            "phi",
+                            "deepseek",
+                        )
+                    ):
                         resolved_model = mid
                         break
                 if not resolved_model and models:
                     resolved_model = models[0].get("id")
         except httpx.ConnectError:
-            console.print("[red]Cannot connect to server.[/] Start with: [bold]yunshu serve[/]")
+            console.print(
+                "[red]Cannot connect to server.[/] Start with: [bold]yunshu serve[/]"
+            )
             raise typer.Exit(1) from None
 
     if not resolved_model:
-        console.print("[red]No model available.[/] Specify with --model or start a server with a loaded model.")
+        console.print(
+            "[red]No model available.[/] Specify with --model or start a server with a loaded model."
+        )
         raise typer.Exit(1)
 
     if system:
@@ -63,17 +81,19 @@ def chat(
 
 def _print_welcome(model: str, url: str, thinking: bool) -> None:
     console.print()
-    console.print(Panel(
-        Text.from_markup(
-            f"Model: [bold cyan]{model}[/]\n"
-            f"Server: [dim]{url}[/]\n"
-            f"Thinking: {'[green]on[/]' if thinking else '[dim]off[/]'}\n\n"
-            "[dim]Type your message and press Enter. Ctrl+C or /quit to exit.[/]\n"
-            "[dim]Commands: /clear, /thinking, /model, /help[/]"
-        ),
-        title="[bold]Yunshu Chat[/]",
-        border_style="bright_blue",
-    ))
+    console.print(
+        Panel(
+            Text.from_markup(
+                f"Model: [bold cyan]{model}[/]\n"
+                f"Server: [dim]{url}[/]\n"
+                f"Thinking: {'[green]on[/]' if thinking else '[dim]off[/]'}\n\n"
+                "[dim]Type your message and press Enter. Ctrl+C or /quit to exit.[/]\n"
+                "[dim]Commands: /clear, /thinking, /model, /help[/]"
+            ),
+            title="[bold]Yunshu Chat[/]",
+            border_style="bright_blue",
+        )
+    )
     console.print()
 
 
@@ -109,7 +129,9 @@ def _repl(
                 continue
             elif cmd == "/thinking":
                 thinking = not thinking
-                console.print(f"Thinking: {'[green]on[/]' if thinking else '[dim]off[/]'}")
+                console.print(
+                    f"Thinking: {'[green]on[/]' if thinking else '[dim]off[/]'}"
+                )
                 continue
             elif cmd == "/model":
                 parts = user_input.split(maxsplit=1)
@@ -179,11 +201,13 @@ def _send_non_stream(url: str, payload: dict) -> None:
     content = msg.get("content", "")
 
     if reasoning:
-        console.print(Panel(
-            reasoning,
-            title="[bold]Thinking[/]",
-            border_style="dim",
-        ))
+        console.print(
+            Panel(
+                reasoning,
+                title="[bold]Thinking[/]",
+                border_style="dim",
+            )
+        )
 
     if content:
         console.print(Markdown(content))
@@ -206,7 +230,9 @@ def _send_stream(url: str, payload: dict) -> None:
 
     import httpx
 
-    with httpx.stream("POST", f"{url}/v1/chat/completions", json=payload, timeout=120) as resp:
+    with httpx.stream(
+        "POST", f"{url}/v1/chat/completions", json=payload, timeout=120
+    ) as resp:
         if resp.status_code != 200:
             error_body = "".join(resp.iter_text())
             console.print(f"[red]Error {resp.status_code}:[/] {error_body[:200]}")
@@ -250,11 +276,13 @@ def _send_stream(url: str, payload: dict) -> None:
                     # End thinking, show reasoning panel
                     console.print()
                     if reasoning_buf:
-                        console.print(Panel(
-                            reasoning_buf,
-                            title="[bold]Thinking[/]",
-                            border_style="dim",
-                        ))
+                        console.print(
+                            Panel(
+                                reasoning_buf,
+                                title="[bold]Thinking[/]",
+                                border_style="dim",
+                            )
+                        )
                     in_thinking = False
                 content_buf += c
 
@@ -265,8 +293,10 @@ def _send_stream(url: str, payload: dict) -> None:
             HISTORY.append({"role": "assistant", "content": content_buf})
         elif reasoning_buf and not content_buf:
             console.print()
-            console.print(Panel(
-                reasoning_buf,
-                title="[bold]Thinking[/]",
-                border_style="dim",
-            ))
+            console.print(
+                Panel(
+                    reasoning_buf,
+                    title="[bold]Thinking[/]",
+                    border_style="dim",
+                )
+            )

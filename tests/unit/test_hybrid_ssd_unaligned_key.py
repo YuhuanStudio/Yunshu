@@ -6,6 +6,7 @@ class "wrote N MB / restored 0". Fix: probe the EXACT stored token-counts via a
 new candidate_token_counts(), which resolves disk-discovered (post-restart) counts from a
 cheap safetensors-header read.
 """
+
 from __future__ import annotations
 
 import mlx.core as mx
@@ -22,7 +23,7 @@ class _FakeKV:
 
 
 def test_store_roundtrip_resolves_count_across_restart(tmp_path):
-    prompt = mx.arange(100, dtype=mx.int32)        # UNALIGNED length (100 % 64 != 0)
+    prompt = mx.arange(100, dtype=mx.int32)  # UNALIGNED length (100 % 64 != 0)
     key = _token_hash(prompt).encode("utf-8")[:32]
 
     store = HybridSnapshotStore(str(tmp_path))
@@ -76,7 +77,7 @@ def test_get_no_trim_no_false_hit_when_prefix_differs(tmp_path):
             return [100]
 
         def has(self, key):
-            return key == other_key   # the stored snapshot is for a DIFFERENT prompt
+            return key == other_key  # the stored snapshot is for a DIFFERENT prompt
 
         def load(self, key):
             return (["WRONG"], 100)

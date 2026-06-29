@@ -10,7 +10,6 @@ Covers:
 - BFCLEvaluator with no engine (stub path)
 """
 
-
 import pytest
 
 from yunshu_engine.bfcl_eval import (
@@ -173,7 +172,9 @@ class TestParseFunctionCallJSON:
         assert calls[0]["name"] == "fn"
 
     def test_embedded_json(self):
-        text = 'Some text before {"name": "search", "arguments": {"q": "test"}} and after'
+        text = (
+            'Some text before {"name": "search", "arguments": {"q": "test"}} and after'
+        )
         calls = parse_function_call_json(text)
         assert len(calls) == 1
         assert calls[0]["name"] == "search"
@@ -247,7 +248,7 @@ class TestParseFunctionCallPython:
         assert calls[0]["arguments"]["num_results"] == 5
 
     def test_boolean_arg(self):
-        text = 'set_flag(verbose=True)'
+        text = "set_flag(verbose=True)"
         calls = parse_function_call_python(text)
         assert calls[0]["arguments"]["verbose"] is True
 
@@ -259,7 +260,7 @@ class TestParseFunctionCallPython:
         assert calls[0]["arguments"] == {}
 
     def test_multiple_calls(self):
-        text = 'fn1(a=1) fn2(b=2)'
+        text = "fn1(a=1) fn2(b=2)"
         calls = parse_function_call_python(text)
         assert len(calls) == 2
 

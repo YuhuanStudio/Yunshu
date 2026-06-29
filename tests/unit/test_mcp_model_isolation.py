@@ -3,6 +3,7 @@ never silently fall back to the default engine. The old
 `except (KeyError, Exception): engine = get_engine()` served the default model on
 any resolution failure — returning a different model's output with no error AND
 bypassing the per-key model-isolation gate (which checks the REQUESTED model)."""
+
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -25,14 +26,18 @@ async def test_unknown_model_errors_without_default_fallback():
     async def _get_engine_for_model(model):
         raise KeyError(model)
 
-    with patch("yunshu_gateway.engine.get_engine_for_model", _get_engine_for_model), \
-         patch("yunshu_gateway.engine.get_engine", _get_engine):
+    with (
+        patch("yunshu_gateway.engine.get_engine_for_model", _get_engine_for_model),
+        patch("yunshu_gateway.engine.get_engine", _get_engine),
+    ):
         result = await _tool_generate(
             {"model": "model-b", "messages": [{"role": "user", "content": "hi"}]}, 1
         )
 
     assert "error" in result, result
-    assert result["error"]["code"] == -32602  # INVALID_PARAMS, not a default-served answer
+    assert (
+        result["error"]["code"] == -32602
+    )  # INVALID_PARAMS, not a default-served answer
     assert default_called["hit"] is False  # no silent cross-model fallback
 
 
@@ -49,8 +54,10 @@ async def test_load_failure_does_not_fall_back_to_default():
     async def _get_engine_for_model(model):
         raise RuntimeError("OOM loading model-b")
 
-    with patch("yunshu_gateway.engine.get_engine_for_model", _get_engine_for_model), \
-         patch("yunshu_gateway.engine.get_engine", _get_engine):
+    with (
+        patch("yunshu_gateway.engine.get_engine_for_model", _get_engine_for_model),
+        patch("yunshu_gateway.engine.get_engine", _get_engine),
+    ):
         result = await _tool_generate(
             {"model": "model-b", "messages": [{"role": "user", "content": "hi"}]}, 2
         )

@@ -8,6 +8,7 @@ The in-loop RePaint composite re-noises the kept region to sigma_{t+1} but only 
 the Euler step — i.e. for every step except the first. extends it to step 0 by noising
 the kept-region init to sigma_start too: known_init = (1-sigma_start)*known + sigma_start*noise.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -17,14 +18,20 @@ import mlx.core as mx
 
 def test_inpaint_init_noises_kept_region_to_sigma_start():
     from yunshu_engine import image_engine
+
     # find the inpaint method source
     src = inspect.getsource(image_engine)
     code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
     # the kept-region init is now the noised flow-matching value, NOT the clean encoding
-    assert "known_init = (1.0 - sigma_start) * known_latents_4d + sigma_start * noise" in code
+    assert (
+        "known_init = (1.0 - sigma_start) * known_latents_4d + sigma_start * noise"
+        in code
+    )
     assert "latents = (1 - mask_4d) * known_init + mask_4d * masked_init" in code
     # the old clean-kept init is gone
-    assert "latents = (1 - mask_4d) * known_latents_4d + mask_4d * masked_init" not in code
+    assert (
+        "latents = (1 - mask_4d) * known_latents_4d + mask_4d * masked_init" not in code
+    )
 
 
 def test_init_is_on_manifold_flow_matching():

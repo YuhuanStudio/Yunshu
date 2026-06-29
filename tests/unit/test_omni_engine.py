@@ -1,4 +1,5 @@
 """OmniEngine helpers — no model needed."""
+
 from __future__ import annotations
 
 from yunshu_engine.omni_engine import _resolve_speaker
@@ -10,7 +11,7 @@ def test_valid_omni_speaker_passes_through():
 
 
 def test_openai_voice_aliased_to_talker_speaker():
-    assert _resolve_speaker("alloy", "Ethan") == "Ethan"   # default OpenAI voice
+    assert _resolve_speaker("alloy", "Ethan") == "Ethan"  # default OpenAI voice
     assert _resolve_speaker("nova", "Ethan") == "Chelsie"  # female alias
 
 

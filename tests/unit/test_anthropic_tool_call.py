@@ -27,6 +27,7 @@ class TestToolCallDetection:
         assert result is not None
         assert result[0]["name"] == "search"
         import json
+
         args = json.loads(result[0]["arguments"])
         assert "query" in args
         assert "bool" in args["query"]

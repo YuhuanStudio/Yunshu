@@ -4,6 +4,7 @@
 class TestTTSRequestExtended:
     def test_default_params(self):
         from yunshu_gateway.routers.audio import TTSRequest
+
         req = TTSRequest(model="test", input="hello")
         assert req.top_k == 50
         assert req.top_p == 0.95
@@ -15,6 +16,7 @@ class TestTTSRequestExtended:
 
     def test_voice_cloning_params(self):
         from yunshu_gateway.routers.audio import TTSRequest
+
         # SECURITY: ref_audio is a relative path under the media dir;
         # absolute host paths are rejected (arbitrary-file-read defense).
         req = TTSRequest(
@@ -33,11 +35,13 @@ class TestTTSRequestExtended:
         import pytest
 
         from yunshu_gateway.routers.audio import TTSRequest
+
         with pytest.raises((pydantic.ValidationError, ValueError)):
             TTSRequest(model="test", input="hello", ref_audio="/etc/passwd")
 
     def test_custom_sampling_params(self):
         from yunshu_gateway.routers.audio import TTSRequest
+
         req = TTSRequest(
             model="test",
             input="hello",

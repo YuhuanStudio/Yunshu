@@ -8,6 +8,7 @@ connect() jumped straight to tools/list with no `initialize` handshake, so a
   spec-conformant server rejected it → tools never discovered → call_tool silently failed.
   Send initialize + notifications/initialized first.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -66,6 +67,7 @@ def test_concurrent_calls_get_their_own_responses():
             # parse any pending requests from stdin into queued responses (reversed)
             if not self._queued and self._stdin.writes:
                 import json
+
                 ids = []
                 for w in self._stdin.writes:
                     with contextlib.suppress(Exception):
@@ -73,8 +75,13 @@ def test_concurrent_calls_get_their_own_responses():
                 self._stdin.writes.clear()
                 for rid in reversed(ids):
                     self._queued.append(
-                        (json.dumps({"jsonrpc": "2.0", "id": rid,
-                                     "result": {"echo": rid}}) + "\n").encode())
+                        (
+                            json.dumps(
+                                {"jsonrpc": "2.0", "id": rid, "result": {"echo": rid}}
+                            )
+                            + "\n"
+                        ).encode()
+                    )
             if self._queued:
                 return self._queued.pop(0)
             await asyncio.sleep(0.001)
@@ -87,11 +94,14 @@ def test_concurrent_calls_get_their_own_responses():
 
     async def _run():
         from yunshu_engine.mcp_client import MCPServerConfig
-        conn = MCPServerConnection(MCPServerConfig(server_id="s", transport="stdio",
-                                                   command="x", args=[]))
+
+        conn = MCPServerConnection(
+            MCPServerConfig(server_id="s", transport="stdio", command="x", args=[])
+        )
         conn._process = _FakeProc()
         r1, r2 = await asyncio.gather(
-            conn._send_stdio("m1", {}), conn._send_stdio("m2", {}))
+            conn._send_stdio("m1", {}), conn._send_stdio("m2", {})
+        )
         # each call gets the result whose echoed id matches its own request — never swapped
         return r1, r2
 

@@ -10,6 +10,7 @@
   call was surfaced and a structural marker is present) for markers split across an emit
   boundary.
 """
+
 from __future__ import annotations
 
 from yunshu_engine.tool_call_streamer import ToolCallStreamer
@@ -40,8 +41,9 @@ def test_deepseek_transition_text_not_doubled():
 
 def test_mistral_streaming_recovers_call_no_leak():
     text, calls = _stream(
-        'Let me check the weather for you right now. '
-        '[TOOL_CALLS][{"name": "get_weather", "arguments": {"city": "SF"}}]')
+        "Let me check the weather for you right now. "
+        '[TOOL_CALLS][{"name": "get_weather", "arguments": {"city": "SF"}}]'
+    )
     assert [c[0] for c in calls] == ["get_weather"]
     assert "[TOOL_CALLS]" not in text  # markup not leaked as content
 

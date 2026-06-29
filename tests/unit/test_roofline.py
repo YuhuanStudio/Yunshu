@@ -1,4 +1,5 @@
 """Tests for yunshu_engine.roofline — Apple Silicon roofline model."""
+
 from __future__ import annotations
 
 import os
@@ -17,13 +18,16 @@ from yunshu_engine.roofline import (
 # Chip parameter lookups
 # ---------------------------------------------------------------------------
 
+
 class TestChipParams:
     """Verify the chip parameter database is self-consistent."""
 
     def test_all_chips_have_required_keys(self):
         for name, params in CHIP_PARAMS.items():
             assert "bandwidth_gbps" in params, f"{name} missing bandwidth_gbps"
-            assert "compute_tflops_fp16" in params, f"{name} missing compute_tflops_fp16"
+            assert "compute_tflops_fp16" in params, (
+                f"{name} missing compute_tflops_fp16"
+            )
             assert params["bandwidth_gbps"] > 0, f"{name} bandwidth must be > 0"
             assert params["compute_tflops_fp16"] > 0, f"{name} compute must be > 0"
 
@@ -43,12 +47,15 @@ class TestChipParams:
             for i in range(len(tiers) - 1):
                 bw_a = CHIP_PARAMS[tiers[i]]["bandwidth_gbps"]
                 bw_b = CHIP_PARAMS[tiers[i + 1]]["bandwidth_gbps"]
-                assert bw_a <= bw_b, f"{tiers[i]} BW ({bw_a}) > {tiers[i+1]} BW ({bw_b})"
+                assert bw_a <= bw_b, (
+                    f"{tiers[i]} BW ({bw_a}) > {tiers[i + 1]} BW ({bw_b})"
+                )
 
 
 # ---------------------------------------------------------------------------
 # Chip name normalisation
 # ---------------------------------------------------------------------------
+
 
 class TestNormaliseChip:
     @pytest.mark.parametrize(
@@ -76,6 +83,7 @@ class TestNormaliseChip:
 # ---------------------------------------------------------------------------
 # RooflineModel construction
 # ---------------------------------------------------------------------------
+
 
 class TestRooflineModelConstruction:
     def test_explicit_chip(self):
@@ -106,6 +114,7 @@ class TestRooflineModelConstruction:
 # ---------------------------------------------------------------------------
 # GEMM roofline math
 # ---------------------------------------------------------------------------
+
 
 class TestGemmRoofline:
     def test_basic_gemm_math(self):
@@ -157,11 +166,16 @@ class TestGemmRoofline:
 # Attention roofline math
 # ---------------------------------------------------------------------------
 
+
 class TestAttentionRoofline:
     def test_basic_attention_math(self):
         rm = RooflineModel("M3_Max")
         r = rm.compute_attention_roofline(
-            seq_len=128, num_heads=32, head_dim=128, batch_size=1, dtype="fp16",
+            seq_len=128,
+            num_heads=32,
+            head_dim=128,
+            batch_size=1,
+            dtype="fp16",
         )
 
         # FLOPs = 4 * B * S^2 * H * D = 4 * 1 * 128^2 * 32 * 128
@@ -186,8 +200,12 @@ class TestAttentionRoofline:
 
     def test_batch_scales_linearly(self):
         rm = RooflineModel("M3_Max")
-        r1 = rm.compute_attention_roofline(seq_len=64, num_heads=16, head_dim=64, batch_size=1)
-        r4 = rm.compute_attention_roofline(seq_len=64, num_heads=16, head_dim=64, batch_size=4)
+        r1 = rm.compute_attention_roofline(
+            seq_len=64, num_heads=16, head_dim=64, batch_size=1
+        )
+        r4 = rm.compute_attention_roofline(
+            seq_len=64, num_heads=16, head_dim=64, batch_size=4
+        )
         assert r4.flops == r1.flops * 4
         assert r4.bytes_accessed == r1.bytes_accessed * 4
 
@@ -195,6 +213,7 @@ class TestAttentionRoofline:
 # ---------------------------------------------------------------------------
 # Decode roofline (full transformer step)
 # ---------------------------------------------------------------------------
+
 
 class TestDecodeRoofline:
     @pytest.fixture
@@ -238,6 +257,7 @@ class TestDecodeRoofline:
 # estimate_max_throughput
 # ---------------------------------------------------------------------------
 
+
 class TestEstimateMaxThroughput:
     def test_qwen_7b_on_m3_max(self):
         rm = RooflineModel("M3_Max")
@@ -278,6 +298,7 @@ class TestEstimateMaxThroughput:
 # Plotting (optional — only if matplotlib is installed)
 # ---------------------------------------------------------------------------
 
+
 class TestPlot:
     @pytest.mark.skipif(
         os.environ.get("CI") == "true",
@@ -317,6 +338,7 @@ class TestPlot:
 # ---------------------------------------------------------------------------
 # RooflineResult invariants
 # ---------------------------------------------------------------------------
+
 
 class TestRooflineResultInvariants:
     def test_predicted_gflops_non_negative(self):

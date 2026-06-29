@@ -1,4 +1,5 @@
 """Tests for yunshu_engine.vlm_engine — VLM Engine."""
+
 from __future__ import annotations
 
 import os
@@ -73,11 +74,13 @@ class TestFormatPrompt:
     def test_fallback_without_tokenizer(self):
         engine = VLMEngine("/models/test")
         engine._tokenizer = None
-        result = engine._format_prompt([
-            {"role": "user", "content": "Hello"},
-            {"role": "assistant", "content": "Hi"},
-            {"role": "user", "content": [{"type": "text", "text": "How are you?"}]},
-        ])
+        result = engine._format_prompt(
+            [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi"},
+                {"role": "user", "content": [{"type": "text", "text": "How are you?"}]},
+            ]
+        )
         assert "User: Hello" in result
         assert "Assistant: Hi" in result
         assert "User: How are you?" in result
@@ -86,7 +89,9 @@ class TestFormatPrompt:
     def test_with_chat_template(self):
         engine = VLMEngine("/models/test")
         mock_tokenizer = MagicMock()
-        mock_tokenizer.apply_chat_template.return_value = "<|im_start|>user\nHi<|im_end|>"
+        mock_tokenizer.apply_chat_template.return_value = (
+            "<|im_start|>user\nHi<|im_end|>"
+        )
         engine._tokenizer = mock_tokenizer
         result = engine._format_prompt([{"role": "user", "content": "Hi"}])
         assert "<|im_start|>" in result
@@ -119,13 +124,18 @@ class TestExtractImages:
     @pytest.mark.asyncio
     async def test_base64_image(self):
         engine = VLMEngine("/models/test")
-        messages = [{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "describe"},
-                {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}},
-            ],
-        }]
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,aGVsbG8="},
+                    },
+                ],
+            }
+        ]
         result = await engine._extract_images(messages)
         assert len(result) == 1
         assert os.path.exists(result[0])
@@ -138,12 +148,17 @@ class TestExtractImages:
         # LOUD, not be silently dropped (silent drop → the model hallucinates about an
         # image it never saw + shifts placeholder positions). Was: silently skipped.
         engine = VLMEngine("/models/test")
-        messages = [{
-            "role": "user",
-            "content": [
-                {"type": "image_url", "image_url": {"url": "/nonexistent/path.png"}},
-            ],
-        }]
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "/nonexistent/path.png"},
+                    },
+                ],
+            }
+        ]
         with pytest.raises(ValueError):
             await engine._extract_images(messages)
 
@@ -151,9 +166,14 @@ class TestExtractImages:
     async def test_empty_and_nonimage_data_uri_raise(self):
         engine = VLMEngine("/models/test")
         for bad in ("", "data:application/octet-stream;base64,QUJD", "ftp://x/y.png"):
-            messages = [{"role": "user", "content": [
-                {"type": "image_url", "image_url": {"url": bad}},
-            ]}]
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": bad}},
+                    ],
+                }
+            ]
             with pytest.raises(ValueError):
                 await engine._extract_images(messages)
 
@@ -166,20 +186,25 @@ class TestExtractImages:
         engine = VLMEngine("/models/test")
         img = tmp_path / "test.png"
         img.write_bytes(b"\x89PNG\r\n")
-        messages = [{
-            "role": "user",
-            "content": [
-                {"type": "image_url", "image_url": {"url": str(img)}},
-            ],
-        }]
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": str(img)}},
+                ],
+            }
+        ]
         result = await engine._extract_images(messages)
         assert len(result) == 1
         # Path may be resolved (symlinks/realpath); compare resolved forms
         from pathlib import Path
+
         assert Path(result[0]).resolve() == Path(str(img)).resolve()
 
     @pytest.mark.asyncio
-    async def test_file_path_image_blocked_outside_media_dir(self, tmp_path, monkeypatch):
+    async def test_file_path_image_blocked_outside_media_dir(
+        self, tmp_path, monkeypatch
+    ):
         """SECURITY: bare paths outside YUNSHU_MEDIA_DIR must be rejected."""
         # Point YUNSHU_MEDIA_DIR at a DIFFERENT directory
         media_dir = tmp_path / "media"
@@ -189,17 +214,20 @@ class TestExtractImages:
         # Try to access a file OUTSIDE the media dir
         img = tmp_path / "outside.png"
         img.write_bytes(b"\x89PNG\r\n")
-        messages = [{
-            "role": "user",
-            "content": [
-                {"type": "image_url", "image_url": {"url": str(img)}},
-            ],
-        }]
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": str(img)}},
+                ],
+            }
+        ]
         # a blocked image now RAISES rather than being silently skipped.
         # The security goal (the path is NOT accessed) is still met — but failing
         # loudly avoids the VLM confidently answering about an image it never saw
         # (silent skip → hallucination).
         import pytest as _pytest
+
         with _pytest.raises(ValueError, match="YUNSHU_MEDIA_DIR"):
             await engine._extract_images(messages)
 
@@ -278,6 +306,7 @@ class TestMlxVlmVisionCacheAdapter:
 
         # Pre-populate the cache
         from yunshu_engine.vision_feature_cache import compute_image_hash
+
         with open(str(img), "rb") as f:
             img_hash = compute_image_hash(f.read())
         features = MagicMock()
@@ -507,7 +536,7 @@ class TestVLMTextPromptCache:
         # Cache is full (3 entries). Adding a 4th should evict "a" (LRU).
         cache.put_token_ids("d", [4])
         assert cache.get_token_ids("a") is None  # evicted
-        assert cache.get_token_ids("b") == [2]   # still present
+        assert cache.get_token_ids("b") == [2]  # still present
         assert cache.get_token_ids("c") == [3]
         assert cache.get_token_ids("d") == [4]
         assert cache.stats["evictions"] == 1
@@ -750,17 +779,23 @@ class TestSSRFValidation:
                 _VALIDATE_URL("http://internal.corp/img.jpg")
 
     def test_blocks_private_172(self):
-        with patch("socket.getaddrinfo", return_value=self._make_addrinfo("172.16.0.5")):
+        with patch(
+            "socket.getaddrinfo", return_value=self._make_addrinfo("172.16.0.5")
+        ):
             with pytest.raises(ValueError, match="SSRF blocked"):
                 _VALIDATE_URL("https://10.172.16.5/img.jpg")
 
     def test_blocks_private_192_168(self):
-        with patch("socket.getaddrinfo", return_value=self._make_addrinfo("192.168.1.1")):
+        with patch(
+            "socket.getaddrinfo", return_value=self._make_addrinfo("192.168.1.1")
+        ):
             with pytest.raises(ValueError, match="SSRF blocked"):
                 _VALIDATE_URL("http://router.local/img.png")
 
     def test_blocks_link_local(self):
-        with patch("socket.getaddrinfo", return_value=self._make_addrinfo("169.254.169.254")):
+        with patch(
+            "socket.getaddrinfo", return_value=self._make_addrinfo("169.254.169.254")
+        ):
             with pytest.raises(ValueError, match="SSRF blocked"):
                 _VALIDATE_URL("http://metadata.aws.internal/img.png")
 
@@ -778,11 +813,15 @@ class TestSSRFValidation:
             _VALIDATE_URL("ftp://example.com/img.png")
 
     def test_allows_public_ip(self):
-        with patch("socket.getaddrinfo", return_value=self._make_addrinfo("203.0.113.1")):
+        with patch(
+            "socket.getaddrinfo", return_value=self._make_addrinfo("203.0.113.1")
+        ):
             _VALIDATE_URL("https://example.com/image.jpg")  # must not raise
 
     def test_allows_public_ipv6(self):
-        with patch("socket.getaddrinfo", return_value=self._make_addrinfo("2001:db8::1")):
+        with patch(
+            "socket.getaddrinfo", return_value=self._make_addrinfo("2001:db8::1")
+        ):
             _VALIDATE_URL("https://example.com/image.jpg")  # must not raise
 
     def test_unresolvable_hostname_raises(self):
@@ -803,7 +842,9 @@ class TestFinishVLMLoad:
         mock_processor = MagicMock()
         with patch("yunshu_engine.mrope.detect_mrope") as mock_mrope:
             mock_mrope.return_value = MagicMock(enabled=False)
-            with patch("mlx_vlm.utils.load_processor", return_value=mock_processor) as mock_load:
+            with patch(
+                "mlx_vlm.utils.load_processor", return_value=mock_processor
+            ) as mock_load:
                 engine._finish_vlm_load("/models/qwen3-omni")
                 # Must be called with a Path, not a bare string
                 call_arg = mock_load.call_args[0][0]

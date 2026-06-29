@@ -7,6 +7,7 @@ routes streamed tokens through a ToolCallStreamer; the Responses streaming gener
 does the same — emitting only the clean-text chunks as deltas and surfacing tool calls as
 function_call items at end-of-stream.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -16,6 +17,7 @@ from yunshu_engine.tool_call_streamer import ToolCallStreamer
 
 def test_responses_streaming_routes_text_through_tool_streamer():
     from yunshu_gateway.routers import responses
+
     src = inspect.getsource(responses)
     # the streaming generator builds a ToolCallStreamer when tools are active
     assert "_resp_tool_streamer = ToolCallStreamer(" in src
@@ -28,7 +30,9 @@ def test_responses_streaming_routes_text_through_tool_streamer():
 def test_tool_streamer_holds_back_markup_from_text():
     """Mechanism check: feeding tool-call markup yields NO markup in the .text chunks."""
     streamer = ToolCallStreamer()
-    markup = '<tool_call>{"name": "get_weather", "arguments": {"city": "SF"}}</tool_call>'
+    markup = (
+        '<tool_call>{"name": "get_weather", "arguments": {"city": "SF"}}</tool_call>'
+    )
     emitted_text = []
     saw_tool = False
     # feed char-by-char to simulate token streaming

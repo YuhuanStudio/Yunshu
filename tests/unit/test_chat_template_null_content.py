@@ -8,6 +8,7 @@ every GLM/Llama/Qwen tool-calling turn with prior history; a `{{ "x"+content }}`
 instead raises TypeError → plaintext fallback. The Gemma adapter and VLMEngine._format_prompt
 already coerce None→"" (_extract_text); this was the un-swept BatchedEngine text sibling.
 """
+
 from __future__ import annotations
 
 from jinja2 import Environment
@@ -18,6 +19,7 @@ from yunshu_engine.batched_engine import BatchedEngine
 class _JinjaTok:
     """Faithfully renders each message's content via `{{ content }}` — exactly the construct
     that turns Python None into the literal 'None' in real GLM/Llama/Qwen templates."""
+
     bos_token = None
 
     def apply_chat_template(self, messages, **kwargs):
@@ -45,29 +47,42 @@ def _engine(tok):
 
 _AGENT_LOOP = [
     {"role": "user", "content": "weather?"},
-    {"role": "assistant", "content": None,
-     "tool_calls": [{"id": "c1", "type": "function",
-                     "function": {"name": "get_weather", "arguments": "{}"}}]},
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "c1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": "{}"},
+            }
+        ],
+    },
     {"role": "tool", "tool_call_id": "c1", "content": "sunny"},
 ]
 
 
 def test_null_content_not_rendered_as_None_literal_via_template():
     out = _engine(_JinjaTok())._apply_chat_template(_AGENT_LOOP)
-    assert "None" not in out, out  # the assistant turn must render EMPTY content, not "None"
+    assert "None" not in out, (
+        out
+    )  # the assistant turn must render EMPTY content, not "None"
     assert "<|assistant|>\n" in out  # role marker present, content blank
 
 
 def test_null_content_not_rendered_as_None_literal_via_fallback():
     out = _engine(_RaiseTok())._apply_chat_template(_AGENT_LOOP)
     assert "None" not in out, out
-    assert "Assistant: " in out  # plaintext fallback, blank content (not "Assistant: None")
+    assert (
+        "Assistant: " in out
+    )  # plaintext fallback, blank content (not "Assistant: None")
 
 
 def test_string_content_still_rendered():
     # regression: a normal string content must pass through unchanged.
     out = _engine(_JinjaTok())._apply_chat_template(
-        [{"role": "user", "content": "hello world"}])
+        [{"role": "user", "content": "hello world"}]
+    )
     assert "hello world" in out
 
 

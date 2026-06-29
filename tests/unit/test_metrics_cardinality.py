@@ -2,6 +2,7 @@
 request path is attacker-controlled. _normalize_endpoint passes short unknown paths
 through raw, so an unauthenticated attacker looping GET /a, /b, … would grow the
 per-endpoint metrics dicts without bound (OOM). Cap the distinct-endpoint count."""
+
 from __future__ import annotations
 
 from yunshu_gateway.middleware.metrics import _MAX_DISTINCT_ENDPOINTS, _Metrics
@@ -11,7 +12,9 @@ def test_distinct_endpoint_cardinality_is_bounded():
     m = _Metrics()
     # Simulate an attacker hammering thousands of distinct short paths.
     for i in range(_MAX_DISTINCT_ENDPOINTS * 4):
-        m.record_request(endpoint=f"/attack-{i}", method="GET", status=404, latency=0.001)
+        m.record_request(
+            endpoint=f"/attack-{i}", method="GET", status=404, latency=0.001
+        )
     # The per-endpoint dicts must not have grown unbounded — overflow paths collapse
     # into a single bucket once the cap is hit.
     assert len(m.latency_total_count) <= _MAX_DISTINCT_ENDPOINTS + 1

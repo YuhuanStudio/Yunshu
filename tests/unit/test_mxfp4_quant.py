@@ -1,4 +1,5 @@
 """on-the-fly weight quantization at load (YUNSHU_QUANT_MODE)."""
+
 from __future__ import annotations
 
 import mlx.nn as nn
@@ -49,6 +50,7 @@ def test_non_group_aligned_skipped():
         def __init__(self):
             super().__init__()
             self.fc = nn.Linear(48, 48, bias=False)  # 48 % 32 != 0 → skipped for mxfp4
+
     m = _Odd()
     _eng(m)._quantize_on_load("mxfp4")
     assert isinstance(m.fc, nn.Linear) and not isinstance(m.fc, nn.QuantizedLinear)

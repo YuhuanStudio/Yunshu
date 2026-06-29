@@ -6,6 +6,7 @@ import pytest
 class TestImageVariationsRequest:
     def test_defaults(self):
         from yunshu_gateway.routers.images import ImageVariationsRequest
+
         req = ImageVariationsRequest(image="dGVzdA==")
         assert req.model == "Z-Image-Turbo-MLX-4bit"
         assert req.n == 1
@@ -13,6 +14,7 @@ class TestImageVariationsRequest:
 
     def test_with_params(self):
         from yunshu_gateway.routers.images import ImageVariationsRequest
+
         req = ImageVariationsRequest(
             image="dGVzdA==",
             n=3,
@@ -26,11 +28,13 @@ class TestImageVariationsRequest:
 class TestImageEditsRequest:
     def test_requires_prompt(self):
         from yunshu_gateway.routers.images import ImageEditsRequest
+
         req = ImageEditsRequest(image="dGVzdA==", prompt="make it blue")
         assert req.prompt == "make it blue"
 
     def test_defaults(self):
         from yunshu_gateway.routers.images import ImageEditsRequest
+
         req = ImageEditsRequest(image="dGVzdA==", prompt="edit")
         assert req.model == "Z-Image-Turbo-MLX-4bit"
         assert req.n == 1
@@ -38,6 +42,7 @@ class TestImageEditsRequest:
 
     def test_denoise_strength_custom(self):
         from yunshu_gateway.routers.images import ImageEditsRequest
+
         req = ImageEditsRequest(image="dGVzdA==", prompt="edit", denoise_strength=0.3)
         assert req.denoise_strength == 0.3
 
@@ -45,21 +50,25 @@ class TestImageEditsRequest:
 class TestImageSizeValidation:
     def test_valid_size_1024x1024(self):
         from yunshu_gateway.routers.images import ImageGenerateRequest
+
         req = ImageGenerateRequest(prompt="test", size="1024x1024")
         assert req.size == "1024x1024"
 
     def test_valid_size_512x512(self):
         from yunshu_gateway.routers.images import ImageGenerateRequest
+
         req = ImageGenerateRequest(prompt="test", size="512x512")
         assert req.size == "512x512"
 
     def test_valid_size_256x256(self):
         from yunshu_gateway.routers.images import ImageGenerateRequest
+
         req = ImageGenerateRequest(prompt="test", size="256x256")
         assert req.size == "256x256"
 
     def test_valid_size_64x64(self):
         from yunshu_gateway.routers.images import ImageGenerateRequest
+
         req = ImageGenerateRequest(prompt="test", size="64x64")
         assert req.size == "64x64"
 
@@ -92,4 +101,3 @@ class TestImageSizeValidation:
         """Non-numeric size format."""
         with pytest.raises(ValueError):
             width, height = map(int, ["abc", "def"])
-
