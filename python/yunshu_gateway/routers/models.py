@@ -27,11 +27,18 @@ def _check_permission(request: Request, permission: str) -> None:
 
     1. If YUNSHU_AUTH_DISABLED=true, allow (dev opt-in, logged at startup)
     2. If YUNSHU_AUTH_TOKEN is set, verify request actually presents it
-    3. If no auth configured and not disabled — DENY access (secure default)
+       (applies to EVERY permission — setting a token locks the whole server)
+    3. If no auth configured and not disabled:
+       - ``can_infer`` (inference endpoints) → ALLOW. A local drop-in OpenAI
+         server must serve inference out of the box, like Ollama/LM Studio;
+         the startup banner promises exactly this. Bind to localhost (default)
+         or set a token to lock it down.
+       - anything else (model load/unload + admin ops) → DENY (secure default).
     """
     if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
         return
-    # Static token auth — must verify the request actually provides it
+    # Static token auth — must verify the request actually provides it.
+    # When a token IS configured it gates everything, inference included.
     auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
     if auth_token is not None and auth_token:
         auth = request.headers.get("Authorization", "")
@@ -46,10 +53,15 @@ def _check_permission(request: Request, permission: str) -> None:
             detail="Invalid or missing Authorization header",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    # No auth configured and not explicitly disabled — deny by default
+    # No auth configured and not explicitly disabled. Inference stays open
+    # (matches the startup banner + the drop-in-local-server contract);
+    # privileged ops fall through to deny-by-default.
+    if permission == "can_infer":
+        return
     logger.warning(
-        "Admin endpoint access denied: no auth configured. "
-        "Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true to control access."
+        "Privileged endpoint (%s) access denied: no auth configured. "
+        "Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true to control access.",
+        permission,
     )
     raise HTTPException(
         status_code=401,
