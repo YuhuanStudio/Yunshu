@@ -70,18 +70,45 @@ see [examples/realtime_voice.py](examples/realtime_voice.py) — it runs one nat
 turn against the OpenAI-Realtime `WS /v1/realtime` endpoint (set `YUNSHU_REALTIME_OMNI=1` on the
 server).
 
+### Point your existing OpenAI client at it
+
+Text, vision, embeddings, and rerank all speak the standard API — no client changes:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="local")  # any key works
+
+# Chat. In single-model mode the model name is a placeholder — the server serves
+# whatever you loaded (like Ollama / LM Studio), so "local" is fine.
+print(
+    client.chat.completions.create(
+        model="local",
+        messages=[{"role": "user", "content": "Explain MLX in one sentence."}],
+    ).choices[0].message.content
+)
+
+# Embeddings — text, or multimodal (image / cross-modal) with a Qwen3-VL-Embedding model.
+client.embeddings.create(model="local", input=["hello", "world"])
+```
+
+Runnable scripts in **[examples/](examples/)**: `quickstart.py` (every endpoint), `realtime_voice.py`
+(WebSocket speech-to-speech), `multimodal_embeddings.py` (image / cross-modal retrieval + reranking).
+
 > **Dev checkout**: `just setup` then `YUNSHU_MODEL=<model> just dev`.
+> **All tunables**: see the [configuration reference](docs/CONFIGURATION.md).
 
 ---
 
 ## What this is
 
-Yunshu is the **local sensory body** for a digital being — a single OpenAI-compatible process that handles
-every modality: LLM brain, eyes (VLM/OCR), ears (ASR), voice (TTS + native Talker), and imagination (image gen).
-Built on Apple's MLX stack, runs fully on-device.
+A single OpenAI/Anthropic-compatible process that serves **every modality on-device** — LLM (brain),
+VLM/OCR (eyes), ASR (ears), TTS + native Talker (voice), embeddings/rerank (retrieval), and image
+generation (imagination) — built on Apple's MLX stack. Point any OpenAI/Anthropic SDK at it.
 
-It exists primarily to serve **[Yunmo](../Yunmo)** — a local digital-being framework — so Yunmo can run with
-zero cloud dependency. It is also usable standalone as a drop-in local OpenAI/Anthropic endpoint.
+It's a **general-purpose** local inference engine, usable standalone. One notable consumer is Yunmo, a
+local digital-being framework that uses Yunshu as its sensory body — but that's an example of what it
+can power, not the definition of what it is.
 
 ## What this is NOT
 

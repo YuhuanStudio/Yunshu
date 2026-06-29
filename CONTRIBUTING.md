@@ -11,10 +11,9 @@ dead, what's being refactored).
 - [uv](https://github.com/astral-sh/uv) package manager
 - [just](https://github.com/casey/just) command runner (`brew install just`)
 
-Optional, only if you touch those surfaces:
+Optional, only if you touch the dashboard:
 
 - [pnpm](https://pnpm.io/) for the WebUI
-- Xcode Command Line Tools for Metal shader compilation
 
 ## Setup
 
@@ -27,10 +26,11 @@ just setup
 This runs `uv sync` (core + dev deps). The heavy modality backends are **opt-in extras**:
 
 ```bash
+uv sync --extra omni          # mlx-vlm fork — native Qwen3-Omni speech-to-speech (the flagship)
 uv sync --extra vision        # mlx-vlm (VLM / OCR)
-uv sync --extra audio         # mlx-audio (ASR / TTS / Realtime voice)
+uv sync --extra audio         # mlx-audio (ASR / TTS / Realtime voice cascade)
 uv sync --extra generation    # diffusers + torch (image / video generation)
-uv sync --extra embeddings    # mlx-embeddings (/v1/embeddings)
+uv sync --extra embeddings    # mlx-embeddings (/v1/embeddings, /v1/rerank)
 uv sync --all-extras          # everything — what most contributors want
 ```
 
@@ -60,10 +60,10 @@ Yunshu is a flat monorepo (no `yunshu/` subdir):
 | CLI | `python/yunshu_cli/` | `yunshu serve / chat / model / ...` |
 
 > **Note:** `python/yunshu_engine/` is being actively refactored by the owner. If your change is
-> engine-side, coordinate before opening a large PR. The dead `yunshu_mesh/` and `yunshu_api/` trees
-> are not shipped and should not be edited.
+> engine-side, coordinate before opening a large PR.
 
-Metal GPU kernels live in `metal/` (built via `just build-metal`). The Next.js dashboard is in `webui/`.
+The Next.js dashboard is in `webui/`. Yunshu has **no custom Metal kernels** — it wraps MLX
+(hand-written kernels benchmarked slower on a single decode stream), so there's nothing to build there.
 
 ## Commit & PR conventions
 
@@ -84,7 +84,6 @@ Open a PR against `main`. Include:
 ## Code style
 
 - **Python:** ruff-formatted, 88-char line, Python 3.13+. `just lint` is authoritative.
-- **Metal:** C++14, `[[function_constant]]` for compile-time tile specialization.
 - **TypeScript/React:** Next.js 16 App Router, strict mode.
 - Comments explain the **why** (hidden constraint, subtle invariant, workaround), not the what.
 
