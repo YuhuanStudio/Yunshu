@@ -34,14 +34,18 @@ You (audio) ──► Qwen3-Omni Thinker (reason) ──► Talker (stream audio
 
 ## Quickstart
 
+> **Requires [uv](https://docs.astral.sh/uv/).** The `[omni]` extra pins `mlx-vlm` to a fork that
+> carries a Qwen3-Omni multi-turn fix not yet in upstream. `pip` ignores the fork pin and silently
+> installs broken upstream. Use `uv` — it respects the `[tool.uv.sources]` pin.
+
 ```bash
-# 1. Install
-pip install "yunshu[omni]"         # native Qwen3-Omni voice (speech-in/out)
-pip install "yunshu[all]"          # everything: text + vision + audio + omni + image + embeddings
+# 1. Install (uv required)
+uv pip install "yunshu[omni]"      # native Qwen3-Omni voice (speech-in/out)
+uv pip install "yunshu[all]"       # everything: text + vision + audio + omni + image + embeddings
 
 # 2. Start the server
 yunshu serve -m /path/to/Qwen3-Omni-7B-Instruct-4bit --port 8000
-# Or any 4-bit Qwen3-Omni variant from mlx-community
+# Any 4-bit Qwen3-Omni variant from mlx-community works
 
 # 3. Send audio, receive audio
 curl -s -X POST http://localhost:8000/v1/omni/speech/stream \
