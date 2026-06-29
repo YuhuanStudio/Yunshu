@@ -4897,6 +4897,10 @@ class VLMEngine:
         fe = getattr(self._processor, "feature_extractor", None)
         if fe is not None and getattr(fe, "sampling_rate", None):
             sr = int(fe.sampling_rate)
+        elif getattr(self._processor, "audio_sampling_rate", None):
+            # Some omni-input processors (e.g. NVIDIA nemotron_h_nano_omni) store
+            # the audio rate directly on the processor, not under feature_extractor.
+            sr = int(self._processor.audio_sampling_rate)
         arrays = [load_audio(p, sr) for p in audio_paths]
         return arrays if len(arrays) > 1 else arrays[0]
 
