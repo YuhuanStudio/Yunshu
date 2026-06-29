@@ -4,7 +4,7 @@
 
 **Native streaming speech-to-speech on Apple Silicon — powered by Qwen3-Omni.**
 
-One process. One endpoint. Audio in → audio out in ~1 second, fully on-device.
+One process. One endpoint. Speech in → speech out, first audio in ~1.3 s, fully on-device.
 No cloud. No cascade. No ASR + LLM + TTS pipeline. The model speaks with its own voice.
 
 [![PyPI](https://img.shields.io/pypi/v/yunshu.svg?label=PyPI)](https://pypi.org/project/yunshu/)
@@ -87,7 +87,7 @@ If you need production multi-tenant serving or multi-node sharding, look at
 
 | Modality | Endpoint | Backend | Extra |
 |---|---|---|---|
-| **Native speech-to-speech** (Qwen3-Omni, streaming, ~1s first-audio) | `POST /v1/omni/speech/stream` | `mlx-vlm` Thinker+Talker | `omni` |
+| **Native speech-to-speech** (Qwen3-Omni, streaming; ~1.3s first-audio speech-in, ~1.1s text-in) | `POST /v1/omni/speech/stream` | `mlx-vlm` Thinker+Talker | `omni` |
 | Text (tool-calling, JSON-schema, streaming, logprobs) | `/v1/chat/completions`, `/v1/messages` | `mlx-lm` | _(core)_ |
 | Vision / OCR | `/v1/chat/completions` (image content) | `mlx-vlm` | `vision` |
 | ASR | `/v1/audio/transcriptions` | `mlx-audio` / Whisper | `audio` |

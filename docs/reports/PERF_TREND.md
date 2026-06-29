@@ -280,3 +280,18 @@ _thinker_max=8 (minimal-reasoning voice default)._
 
 Dropping chunk_size 300→10 halves first-audio latency (1.8s→1.1s) and enables true incremental
 playback. Total audio duration is unaffected; the Talker emits the same samples.
+
+### omni speech-IN → speech-out (the flagship round-trip)
+
+_Measured 2026-06-29, M3 Max 36 GB, Qwen3-Omni-30B-A3B-Instruct-4bit, chunk_size=10,
+thinker_max=8. Input = a 2.48 s spoken clip fed as `audio_path` (native speech-in, no ASR)._
+
+| path | TTFT (s) | first_audio (s) | total (s) |
+|---|---|---|---|
+| text-in → speech (baseline) | 0.45 | 1.09 | ~2.7 |
+| **speech-in → speech-out** | 0.62 | **1.29** (steady) | ~3.0 |
+
+Audio-in adds ~0.2 s over text-in (the input speech-encoder forward). The very first
+speech turn used to cost **1.82 s** because `warmup()` only primed the text path —
+the encoder kernels JIT-compiled on the first real audio request. `warmup()` now runs
+one audio-in pass too, so the first speech-to-speech turn lands at steady state (1.29 s).
