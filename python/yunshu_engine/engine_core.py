@@ -353,17 +353,6 @@ class EngineCore:
         telemetry_enabled = os.environ.get("YUNSHU_TELEMETRY", "0") == "1"
         self._telemetry = TelemetryCollector(TelemetryConfig(enabled=telemetry_enabled))
 
-        # KV offload manager (async tier-to-tier block migration)
-        from .kv_offload import KVOffloadConfig, KVOffloadManager
-
-        kv_offload_cfg = KVOffloadConfig.from_env()
-        self._kv_offload_manager = KVOffloadManager(
-            kv_offload_cfg, kv_manager=self._kv_manager
-        )
-
-        # Pass offload manager to scheduler for periodic sync offload checks
-        self.scheduler.set_kv_offload_manager(self._kv_offload_manager)
-
         # ── 實現-整合 wiring ──
 
         # Request lifecycle orchestrator (QUEUED→PREFILLING→DECODING→FINISHED)
@@ -945,12 +934,6 @@ class EngineCore:
                 self._profiler_started = True
             except Exception:
                 logger.debug("profiler start failed", exc_info=True)
-        # Start KV offload manager (async tier migration)
-        if self._kv_offload_manager is not None:
-            try:
-                await self._kv_offload_manager.start()
-            except Exception:
-                logger.debug("KV offload manager start failed", exc_info=True)
         self._loop_task = asyncio.get_running_loop().create_task(self._engine_loop())
 
         # Surface a dead engine-loop task instead of letting requests hang
@@ -1036,13 +1019,6 @@ class EngineCore:
                 self._profiler_started = False
             except Exception:
                 logger.debug("profiler stop failed", exc_info=True)
-
-        # Stop KV offload manager
-        if self._kv_offload_manager is not None:
-            try:
-                await self._kv_offload_manager.stop()
-            except Exception:
-                logger.debug("KV offload manager stop failed", exc_info=True)
 
         # Flush KV prefix cache to SSD for persistence across restarts
         _prefix_cache = getattr(self.scheduler, "_prefix_cache", None)
@@ -4160,9 +4136,6 @@ class EngineCore:
             "adaptive_batch": self._adaptive_batch.get_stats(),
             **{f"scheduler_{k}": v for k, v in scheduler_stats.items()},
         }
-        # KV offload stats
-        if self._kv_offload_manager is not None:
-            stats["kv_offload"] = self._kv_offload_manager.get_stats()
         # encoder-decoder cache stats
         if hasattr(self.scheduler, "_encoder_cache"):
             stats["encoder_cache"] = self.scheduler._encoder_cache.get_stats()
@@ -4233,9 +4206,6 @@ class EngineCore:
             "total_hits": mgr._total_hits,
             "active_block_tables": len(getattr(self.scheduler, "_block_tables", {})),
         }
-        # Append KV offload stats
-        if self._kv_offload_manager is not None:
-            result["offload"] = self._kv_offload_manager.get_stats()
         return result
 
 

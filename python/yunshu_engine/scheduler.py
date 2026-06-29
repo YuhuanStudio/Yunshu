@@ -763,10 +763,6 @@ class Scheduler:
         # Thinking-segment KV substore for reasoning cache reuse
         self._thinking_store = ThinkingSegmentSubstore(ThinkingSegmentConfig())
 
-        # KV offload manager (async tier-to-tier block migration)
-        # Set by EngineCore after initialization.
-        self._kv_offload_manager: Any | None = None
-
         # Memory guard consecutive deferral counter — prevents spin-loop
         # where the scheduler repeatedly defers all waiting requests but
         # no progress is made (e.g., memory pressure from stale KV cache
@@ -1144,14 +1140,6 @@ class Scheduler:
         except Exception:
             logger.debug("prefix save failed for uid %s", uid, exc_info=True)
             self._saved_prefix_uids.add(uid)
-
-    def set_kv_offload_manager(self, manager: Any) -> None:
-        """Set KV offload manager for periodic tier migration.
-
-        Called by EngineCore after creating the KVOffloadManager.
-        The scheduler calls manager.maybe_offload() periodically from step().
-        """
-        self._kv_offload_manager = manager
 
     def set_hybrid_kv_cache(self, hybrid_kv: Any) -> None:
         """Set HybridKVCache for layer-type-aware KV management.
@@ -1535,13 +1523,6 @@ class Scheduler:
         # 7b. Periodic memory pressure eviction (C12)
         if self._step_counter % 64 == 0 and self._memory_monitor is not None:
             self._maybe_evict_kv_cache()
-
-        # 7c. Periodic KV offload check
-        # When KVOffloadManager is configured, periodically check if blocks
-        # should be migrated from hot → warm → SSD. Uses sync mode since
-        # step() runs on the MLX executor thread.
-        if self._kv_offload_manager is not None and self._step_counter % 128 == 0:
-            self._maybe_kv_offload()
 
         # 7d. Periodic encoder-decoder cache eviction
         # Evict expired encoder hidden-state entries to reclaim memory.
@@ -4004,66 +3985,6 @@ class Scheduler:
                     self._prefix_cache._block_evict_checker = _original_checker
         except Exception:
             logger.debug("failed", exc_info=True)
-
-    def _maybe_kv_offload(self) -> None:
-        """Periodic KV offload check via KVOffloadManager.
-
-        Called from step() every 128 steps. Uses the manager's sync
-        offload path since step() runs on the MLX executor thread.
-        The manager's policy decides whether offloading is needed and
-        which blocks to migrate (hot → warm → SSD).
-        """
-        if self._kv_offload_manager is None:
-            return
-        try:
-            # Use sync offload since we're on the executor thread
-            mgr = self._kv_offload_manager
-            if not mgr.config.enabled:
-                return
-
-            # Gather context for the policy
-            context: dict[str, Any] = {
-                "step_counter": self._step_counter,
-                "memory_usage": 0.0,
-                "free_blocks": 0,
-            }
-            try:
-                import mlx.core as mx
-
-                active_mem = mx.get_active_memory()
-                from .utils.hardware import get_hardware_info
-
-                hw = get_hardware_info()
-                total_mem = hw.total_memory_bytes
-                if total_mem > 0:
-                    context["memory_usage"] = active_mem / total_mem
-            except Exception:
-                logger.debug("memory context gather in offload failed", exc_info=True)
-
-            # Let the policy decide
-            if not mgr._policy.should_offload(context):
-                return
-
-            hot_mgr = mgr._get_hot_manager()
-            if hot_mgr is None:
-                return
-
-            max_blocks = context.get("max_blocks", mgr.config.lru_max_blocks_per_cycle)
-            block_hashes = mgr._policy.select_blocks(hot_mgr, max_blocks, context)
-            if not block_hashes:
-                return
-
-            # Execute sync offload
-            result = mgr.offload_blocks_sync(block_hashes)
-            if result.blocks_offloaded > 0:
-                logger.info(
-                    "KV offload: %d blocks migrated (%s → %s)",
-                    result.blocks_offloaded,
-                    result.source_tier.value,
-                    result.dest_tier.value,
-                )
-        except Exception:
-            logger.debug("KV offload check failed", exc_info=True)
 
     def _cleanup_finished(self) -> None:
         """Remove finished requests from running dict."""
