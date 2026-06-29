@@ -92,6 +92,20 @@ async def omni_speech_stream(req: OmniSpeechRequest) -> StreamingResponse:
     """
     eng = _get_omni_engine()
 
+    # Validate the requested voice up front (before the stream opens) so an
+    # unknown speaker returns a clean 400 with the valid set — not a silent
+    # wrong-voice fallback, and not a 500 buried in the SSE error event.
+    if req.speaker is not None and eng.resolve_speaker(req.speaker) is None:
+        from yunshu_engine.omni_engine import _VOICE_ALIASES
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unknown speaker '{req.speaker}'. Valid speakers: "
+                f"{sorted(eng.valid_speakers)}; aliases: {sorted(_VOICE_ALIASES)}"
+            ),
+        )
+
     async def sse():
         try:
             async for ch in eng.stream(

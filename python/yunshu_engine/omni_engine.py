@@ -125,6 +125,29 @@ class OmniEngine:
     def is_loaded(self) -> bool:
         return self.model is not None
 
+    @property
+    def valid_speakers(self) -> set[str]:
+        """The loaded model's speaker set (lowercased). Until load(), the
+        Qwen3-Omni default set."""
+        return set(self._valid_speakers)
+
+    def resolve_speaker(self, requested: str | None) -> str | None:
+        """Resolve a requested voice to a canonical Talker speaker.
+
+        Returns the default speaker when ``requested`` is empty, the canonical
+        capitalized name when it's a valid speaker or a known alias, and ``None``
+        when a non-empty ``requested`` is unrecognized — letting the API layer
+        return a 400 (vs _normalize_speaker, which silently falls back so
+        generation can't crash on a stray name)."""
+        if not requested:
+            return self.speaker
+        key = requested.strip().lower()
+        if key in self._valid_speakers:
+            return key.capitalize()
+        if key in _VOICE_ALIASES and _VOICE_ALIASES[key] in self._valid_speakers:
+            return _VOICE_ALIASES[key].capitalize()
+        return None
+
     def load(self) -> None:
         """Load on the calling thread (owns the default Metal stream). Idempotent."""
         if self.model is not None:
