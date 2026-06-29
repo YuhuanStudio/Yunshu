@@ -2,10 +2,11 @@
 
 # Yunshu
 
-**Native streaming speech-to-speech on Apple Silicon — powered by Qwen3-Omni.**
+**A fast, local, multimodal inference engine for Apple Silicon.**
 
-One process. One endpoint. Speech in → speech out, first audio in ~1.3 s, fully on-device.
-No cloud. No cascade. No ASR + LLM + TTS pipeline. The model speaks with its own voice.
+OpenAI/Anthropic-compatible — text, vision, OCR, audio, images, and a Realtime voice socket — multi-model,
+all on-device via MLX. Its standout: **native streaming speech-to-speech** (Qwen3-Omni Talker), first audio
+in ~1.3 s — no cloud, no ASR + LLM + TTS cascade, the model speaks with its own voice.
 
 [![PyPI](https://img.shields.io/pypi/v/yunshu.svg?label=PyPI)](https://pypi.org/project/yunshu/)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
@@ -18,12 +19,17 @@ No cloud. No cascade. No ASR + LLM + TTS pipeline. The model speaks with its own
 
 ## Why this exists
 
+Yunshu is a general drop-in local AI server — point any OpenAI/Anthropic client at it for text, vision, OCR,
+audio, or images, on-device. What sets it apart from other local servers is **native streaming
+speech-to-speech**.
+
 Most local speech pipelines are **cascades**: ASR transcribes your speech → LLM generates text → TTS reads it aloud.
 Each hop adds latency, loses prosody, and can't reason about tone or sound.
 
 Qwen3-Omni's **Talker** architecture is different: one model ingests raw audio, reasons, and decodes speech tokens
-directly — no intermediate text. Yunshu is built to expose that natively on Apple Silicon via `mlx-vlm`, with a
-streaming SSE endpoint that starts emitting audio chunks within ~1 s of your utterance.
+directly — no intermediate text. Yunshu exposes that natively on Apple Silicon via `mlx-vlm`, with a
+streaming SSE endpoint that starts emitting audio chunks within ~1 s of your utterance. (Other models run too —
+any `mlx-lm`/`mlx-vlm`/`mlx-audio` model; non-omni models get the standard endpoints.)
 
 ```
 You (audio) ──► Qwen3-Omni Thinker (reason) ──► Talker (stream audio out) ──► You

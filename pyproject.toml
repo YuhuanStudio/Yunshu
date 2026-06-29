@@ -8,7 +8,7 @@ packages = ["python/yunshu_gateway", "python/yunshu_control", "python/yunshu_eng
 [project]
 name = "yunshu"
 version = "0.0.1"
-description = "Native streaming speech-to-speech on Apple Silicon — Qwen3-Omni Thinker+Talker, OpenAI-compatible"
+description = "Fast local multimodal (omni) inference engine for Apple Silicon — OpenAI/Anthropic-compatible, with native streaming speech-to-speech"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.13"
