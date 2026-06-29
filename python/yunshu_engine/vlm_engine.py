@@ -1085,6 +1085,7 @@ class VLMEngine:
                 cache_tokenizer_vocab(
                     self._tokenizer
                 )  # avoid ~98ms/req get_vocab rebuild
+                self._resolve_reasoning_channel_ids()
                 self._is_vlm = _is_mlx_vlm_model(self._model)
                 logger.info(f"Loaded vision model via mlx_vlm: _is_vlm={self._is_vlm}")
                 self._finish_vlm_load(model_path)
@@ -1129,6 +1130,7 @@ class VLMEngine:
         from .text_utils import cache_tokenizer_vocab
 
         cache_tokenizer_vocab(self._tokenizer)  # avoid ~98ms/req get_vocab rebuild
+        self._resolve_reasoning_channel_ids()
 
         # Adapter: when an mlx_vlm model class was loaded via mlx_lm's loader,
         # mlx_vlm's __call__ returns a LanguageModelOutput dataclass (not raw
@@ -1761,7 +1763,7 @@ class VLMEngine:
 
                 # Return (text, thinking, tokens, stop_hit, budget_hit, cached_tokens).
                 # total_token_count includes the stop token if present.
-                _decoded = self._tokenizer.decode(tokens, skip_special_tokens=True)
+                _decoded = self._decode_with_reasoning_channels(tokens)
                 return (
                     _decoded,
                     _thinking_tokens,
@@ -3427,7 +3429,7 @@ class VLMEngine:
                     _stop_hit = True
                     break
 
-        text = self._tokenizer.decode(tokens, skip_special_tokens=True)
+        text = self._decode_with_reasoning_channels(tokens)
         # Handle multi-token stop sequences: check if decoded text ends with any suffix
         if stop_suffixes and not _stop_hit:
             for s in stop_suffixes:
@@ -5363,6 +5365,75 @@ class VLMEngine:
         return tmp.name
 
     # ── Helpers ──
+
+    def _resolve_reasoning_channel_ids(self) -> None:
+        """Resolve the single-token ids for Gemma-style reasoning channels.
+
+        Gemma 4 emits reasoning as ``<|channel>thought\\n … <channel|>`` where
+        ``<|channel>`` / ``<channel|>`` are SINGLE special tokens that decode to
+        '' under skip_special_tokens — so the markers vanish before the string-
+        based ``<think>`` reasoning machinery (and reasoning_parser) ever see
+        them, and the channel text leaks into content. Capture the ids here so
+        the decode path can segment on them at the TOKEN level instead.
+        Returns (None, None) for models without these tokens (the common case)."""
+        self._reasoning_channel_ids: tuple[int | None, int | None] = (None, None)
+        tok = getattr(self, "_tokenizer", None)
+        if tok is None:
+            return
+
+        def _single(s: str) -> int | None:
+            try:
+                ids = tok.encode(s, add_special_tokens=False)
+            except TypeError:
+                ids = tok.encode(s)
+            except Exception:
+                return None
+            return ids[0] if ids and len(ids) == 1 else None
+
+        open_id, close_id = _single("<|channel>"), _single("<channel|>")
+        if open_id is not None and close_id is not None:
+            self._reasoning_channel_ids = (open_id, close_id)
+            logger.info(
+                "Reasoning channel tokens resolved: open=%d close=%d (Gemma-style)",
+                open_id,
+                close_id,
+            )
+
+    def _decode_with_reasoning_channels(self, tokens: list[int]) -> str:
+        """Decode, normalizing Gemma channel reasoning into standard
+        ``<think>…</think>`` so the existing reasoning split handles it.
+
+        Order-agnostic token-level segmentation: text inside ``<|channel>…
+        <channel|>`` blocks is reasoning, everything else is content. No-op
+        (plain decode) for models without channel tokens, so it's safe to call
+        on every decode site."""
+        open_id, close_id = getattr(self, "_reasoning_channel_ids", (None, None))
+        if open_id is None or open_id not in tokens:
+            return self._tokenizer.decode(tokens, skip_special_tokens=True)
+        content_ids: list[int] = []
+        reason_ids: list[int] = []
+        in_channel = False
+        for t in tokens:
+            if t == open_id:
+                in_channel = True
+            elif t == close_id:
+                in_channel = False
+            elif in_channel:
+                reason_ids.append(t)
+            else:
+                content_ids.append(t)
+        content = self._tokenizer.decode(content_ids, skip_special_tokens=True)
+        reasoning = self._tokenizer.decode(reason_ids, skip_special_tokens=True)
+        # Drop the leading channel-name line ("thought\n") — it labels the
+        # channel, it isn't reasoning content.
+        _r = reasoning.lstrip()
+        if _r.startswith("thought"):
+            _r = _r[len("thought") :].lstrip("\n").lstrip()
+        if not _r:
+            return content
+        # Normalize to the canonical reasoning-then-answer <think> form the
+        # downstream reasoning parser already splits correctly.
+        return f"<think>{_r}</think>{content}"
 
     @staticmethod
     def _find_think_tag(text: str, tag: str, search_start: int = 0) -> int:
