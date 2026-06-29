@@ -105,7 +105,8 @@ If you need production multi-tenant serving or multi-node sharding, look at
 | TTS | `/v1/audio/speech` | `mlx-audio` | `audio` |
 | Realtime voice WS | `WS /v1/realtime` | ASR + TTS | `audio` |
 | Image generation | `/v1/images/generations` | diffusion | `generation` |
-| Embeddings | `/v1/embeddings` | `mlx-embeddings` | `embeddings` |
+| Embeddings (text + **multimodal**: image / cross-modal via Qwen3-VL-Embedding) | `/v1/embeddings` | `mlx-embeddings` | `embeddings` |
+| Rerank (bi-encoder cosine, or **true cross-encoder** via Qwen3-VL-Reranker) | `/v1/rerank` | `mlx-embeddings` | `embeddings` |
 
 Also: single-node KV prefix cache (+ optional SSD persistence + per-request KV quant), MCP server/client,
 Anthropic-compatible `/v1/messages` surface.
