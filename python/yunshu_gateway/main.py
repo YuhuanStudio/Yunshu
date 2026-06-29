@@ -296,12 +296,36 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _startup_time = time.monotonic()
 
     if DEFAULT_MODEL:
-        # Single-model mode: use BatchedEngine directly
-        from yunshu_engine.batched_engine import BatchedEngine
-
+        # Single-model mode. Pick the engine by model type: BatchedEngine can only
+        # load text models via mlx_lm, so a VLM/omni checkpoint (e.g. gemma-4-e4b
+        # vision, NVIDIA Nemotron-Omni) hard-fails "model type not supported" —
+        # those need VLMEngine (mlx_vlm loader). The chat/completions routers
+        # already handle a non-BatchedEngine global (is_batched=False → the
+        # VLM-compatible path), so this just removes the "VLM needs multi-model
+        # mode" caveat. Native-speech realtime keeps its own OmniEngine (omni.py).
         from .engine import set_engine
 
-        engine = BatchedEngine(model_name=DEFAULT_MODEL)
+        _engine_mt = None
+        try:
+            from yunshu_engine.model_manager import _detect_model_type
+
+            _engine_mt = _detect_model_type(DEFAULT_MODEL)
+        except Exception:
+            logger.debug(
+                "model-type detection failed; defaulting to LLM", exc_info=True
+            )
+
+        if _engine_mt is not None and _engine_mt.name == "VLM":
+            from yunshu_engine.vlm_engine import VLMEngine
+
+            engine = VLMEngine(DEFAULT_MODEL)
+            logger.info(
+                "Single-model mode: %s detected as VLM → VLMEngine", DEFAULT_MODEL
+            )
+        else:
+            from yunshu_engine.batched_engine import BatchedEngine
+
+            engine = BatchedEngine(model_name=DEFAULT_MODEL)
         set_engine(engine)
         try:
             await asyncio.wait_for(engine.start(), timeout=startup_timeout)

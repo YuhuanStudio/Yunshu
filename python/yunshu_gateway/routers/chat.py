@@ -1681,6 +1681,16 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                 req, messages, request, json_schema=json_schema
             )
 
+    # Single-model mode (no manager): a globally-set VLMEngine — e.g. a VLM/omni
+    # served via YUNSHU_MODEL — also routes through the VLM handler, even for a
+    # text-only request (the standard LLM path's legacy non-batched branch expects
+    # a state object, not VLMEngine's dict). _handle_vlm_chat resolves the global.
+    from yunshu_engine.vlm_engine import VLMEngine as _VLMEngine
+
+    if isinstance(get_engine(), _VLMEngine):
+        json_schema = _parse_response_format(req.response_format, req.grammar)
+        return await _handle_vlm_chat(req, messages, request, json_schema=json_schema)
+
     # Standard LLM chat
     engine = get_engine()
 
@@ -2152,6 +2162,13 @@ async def _handle_vlm_chat(
                 ):
                     vlm_engine = entry.engine
                     break
+
+    # Single-model mode (YUNSHU_MODEL): no manager — the global engine IS the
+    # VLMEngine. This is what lets a VLM/omni model be served without multi-model.
+    if vlm_engine is None:
+        _global = get_engine()
+        if isinstance(_global, VLMEngine):
+            vlm_engine = _global
 
     if vlm_engine is None:
         if load_error is not None:
