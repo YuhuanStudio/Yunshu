@@ -148,13 +148,44 @@ def _omni_realtime_active() -> bool:
     return _omni_realtime_enabled() and _omni_speech_ready()
 
 
+# Bound multi-turn omni context so the Thinker's prefill (and thus TTFT, the one
+# latency axis that matters for the flagship) stays low even in long conversations.
+_OMNI_HISTORY_MAX_CHARS = 1500
+
+
+def _omni_history_transcript(messages: list[dict], *, exclude_last_user: bool) -> str:
+    """Compact transcript of PRIOR user/assistant turns for multi-turn omni
+    context. Bounded to the most recent ``_OMNI_HISTORY_MAX_CHARS`` (kept from the
+    tail) so growing history can't inflate TTFT without limit.
+
+    ``exclude_last_user`` drops the trailing user turn (the text-in path emits it
+    separately as the live query); the speech-in path keeps all text turns since
+    its live query is the raw audio, not text in ``messages``."""
+    turns = [
+        m
+        for m in messages
+        if m.get("role") in ("user", "assistant") and m.get("content")
+    ]
+    if exclude_last_user and turns and turns[-1].get("role") == "user":
+        turns = turns[:-1]
+    lines = [
+        f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}"
+        for m in turns
+    ]
+    text = "\n".join(lines)
+    if len(text) > _OMNI_HISTORY_MAX_CHARS:
+        # keep the most recent context; mark the elision so the model knows it's mid-convo
+        text = "…\n" + text[-_OMNI_HISTORY_MAX_CHARS:]
+    return text
+
+
 def _messages_to_omni_prompt(messages: list[dict]) -> str:
     """Flatten the chat-message list into a single prompt for the omni model.
 
-    OmniEngine.stream takes one user turn (+ optional media), so we prepend any
-    system instruction (the being's persona) to the latest user text. Full
-    multi-turn omni context is a follow-up — this preserves persona + last turn,
-    which is what a voice reply needs most."""
+    OmniEngine.stream takes one text turn (+ optional media), so we build:
+    persona (system) + a bounded transcript of prior turns + the latest user text.
+    Single-turn conversations collapse to just the user text (unchanged), so this
+    only adds context when there IS prior history."""
     sys_parts = [
         m["content"] for m in messages if m.get("role") == "system" and m.get("content")
     ]
@@ -164,9 +195,11 @@ def _messages_to_omni_prompt(messages: list[dict]) -> str:
     if not user_parts:
         return ""
     last_user = user_parts[-1]
+    history = _omni_history_transcript(messages, exclude_last_user=True)
+    body = f"{history}\nUser: {last_user}" if history else last_user
     if sys_parts:
-        return f"{' '.join(sys_parts)}\n\n{last_user}".strip()
-    return last_user
+        return f"{' '.join(sys_parts)}\n\n{body}".strip()
+    return body
 
 
 def _f32_to_pcm16_bytes(wav_f32) -> bytes:
@@ -178,11 +211,17 @@ def _f32_to_pcm16_bytes(wav_f32) -> bytes:
 
 
 def _omni_system_text(messages: list[dict]) -> str:
-    """The system instruction (persona) only — used as the text turn when the
-    user's RAW audio is the actual query (native speech-in)."""
-    return " ".join(
+    """Persona + bounded prior-turn transcript — the text turn used when the
+    user's RAW audio is the actual query (native speech-in). The audio isn't in
+    ``messages`` as text, so all prior text turns are kept as conversation context
+    (multi-turn continuity); single-turn collapses to persona only (unchanged)."""
+    persona = " ".join(
         m["content"] for m in messages if m.get("role") == "system" and m.get("content")
     ).strip()
+    history = _omni_history_transcript(messages, exclude_last_user=False)
+    if history:
+        return f"{persona}\n\n{history}".strip() if persona else history
+    return persona
 
 
 def _write_pcm16_wav(pcm: bytes, rate: int) -> str:

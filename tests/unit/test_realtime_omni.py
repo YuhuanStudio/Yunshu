@@ -97,7 +97,21 @@ def test_messages_to_omni_prompt_prepends_system():
         {"role": "user", "content": "latest"},
     ]
     p = rt._messages_to_omni_prompt(msgs)
-    assert p == "You are Yun.\n\nlatest"  # persona + last user turn
+    # persona + prior-turn context ("first") + the latest user turn last —
+    # multi-turn continuity (prior turns are no longer dropped).
+    assert p.startswith("You are Yun.\n\n")
+    assert "first" in p
+    assert p.rstrip().endswith("User: latest")
+    # single-turn still collapses to persona + the lone user text (unchanged)
+    assert (
+        rt._messages_to_omni_prompt(
+            [
+                {"role": "system", "content": "You are Yun."},
+                {"role": "user", "content": "only"},
+            ]
+        )
+        == "You are Yun.\n\nonly"
+    )
     assert rt._messages_to_omni_prompt([]) == ""
 
 
