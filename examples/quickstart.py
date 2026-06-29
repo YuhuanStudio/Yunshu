@@ -2,7 +2,7 @@
 
 Prereq: a Yunshu server running locally.
     uv pip install "yunshu[all]"
-    yunshu serve -m /path/to/Qwen3-Omni-7B-Instruct-4bit --port 8000
+    yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --port 8000
     # Set YUNSHU_OMNI_MODEL= same path for the native speech-to-speech section.
 
 Then:

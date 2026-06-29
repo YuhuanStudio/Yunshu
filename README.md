@@ -44,7 +44,7 @@ uv pip install "yunshu[omni]"      # native Qwen3-Omni voice (speech-in/out)
 uv pip install "yunshu[all]"       # everything: text + vision + audio + omni + image + embeddings
 
 # 2. Start the server
-yunshu serve -m /path/to/Qwen3-Omni-7B-Instruct-4bit --port 8000
+yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --port 8000
 # Any 4-bit Qwen3-Omni variant from mlx-community works
 
 # 3. Send audio, receive audio
