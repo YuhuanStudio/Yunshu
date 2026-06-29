@@ -847,6 +847,9 @@ class BatchedEngine:
 
         # N-gram proposer for model-free speculative decoding
         self._ngram_proposer = None  # NgramProposer, created on demand
+        # Route greedy requests through the (lossless) n-gram spec path by default,
+        # not only when spec_decode=true. Set in _init_spec_decode from env.
+        self._ngram_greedy_default = False
         self._ngram_stats = {"proposals": 0, "accepted": 0, "total_draft": 0}
 
         # Response cache hit/miss counters (YUNSHU_RESPONSE_CACHE=1)
@@ -2972,10 +2975,18 @@ class BatchedEngine:
         # target's ARGMAX but samples the bonus at the request temperature, so for
         # temperature>0 accepted tokens are forced to the greedy sequence (biased,
         # not lossless). Restrict to GREEDY requests; temp>0 → normal decode.
+        #
+        # Default-on for greedy: measured byte-identical to the plain fast path
+        # across diverse prompts (it's lossless at temp<=0) and never slower
+        # (1.00–1.07x on Qwen2.5-3B; larger wins on copy-heavy / agentic output),
+        # so a greedy request takes this path WITHOUT needing spec_decode=true.
+        # The proposer is free when idle and the adaptive controller backs off,
+        # so there's no penalty when acceptance is low. Opt out with
+        # YUNSHU_NGRAM_DEFAULT=0 (or YUNSHU_NGRAM_SPEC=0 to drop the proposer).
         if (
-            spec_decode
+            self._ngram_proposer is not None
+            and (spec_decode or self._ngram_greedy_default)
             and not logprobs
-            and self._ngram_proposer is not None
             and not _use_engine_loop
             and temperature <= 0.0
         ):
@@ -7117,8 +7128,17 @@ class BatchedEngine:
             self._ngram_proposer = NgramProposer(
                 NgramConfig(max_n=max_n, k=k, mode=mode)
             )
+            # Default-on for greedy requests (lossless, never slower — see the
+            # routing gate in generate()). Opt out with YUNSHU_NGRAM_DEFAULT=0.
+            self._ngram_greedy_default = os.environ.get(
+                "YUNSHU_NGRAM_DEFAULT", "1"
+            ).strip().lower() not in ("0", "false", "no")
             logger.info(
-                f"N-gram proposer initialized: max_n={max_n}, k={k}, mode={mode}"
+                "N-gram proposer initialized: max_n=%d, k=%d, mode=%s, greedy_default=%s",
+                max_n,
+                k,
+                mode,
+                self._ngram_greedy_default,
             )
 
         # Adaptive spec controller (requires N-gram proposer active)
