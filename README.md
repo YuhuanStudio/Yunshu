@@ -123,10 +123,11 @@ Anthropic-compatible `/v1/messages` surface.
 
 ## Status
 
-This repo is being **refocused** from an over-scoped "inference platform" down to an honest single-node omni
-engine. Dead subsystems (multi-node mesh, speculative-decode strategies, tiered-KV offload, multi-tenant
-control plane) are being removed. Run `just test` for the test suite; benchmark trends live in
-`docs/reports/PERF_TREND.md`.
+**Refocused** from an over-scoped "inference platform" down to an honest single-node omni engine: the
+multi-node mesh / distributed paths (sharded-load, disaggregated prefill/decode), the multi-tenant control
+plane, and tiered-KV offload have been removed. All single-node decoding/optimization tech stays current —
+MTP, speculative decode, jump-forward, n-gram, GPU sampler, MXFP4 / KV quant, constrained decoding. Run
+`just test` for the test suite; benchmark trends live in `docs/reports/PERF_TREND.md`.
 
 ## Built on
 

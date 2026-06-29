@@ -295,13 +295,13 @@ explicitly (OpenAI auto / Anthropic cache_control / Gemini cachedContents).
 
 ## Cache-subsystem audit
 
-A 6-point audit of `kv_prefix_cache.py`, `ssd_kv_cache.py`,
-`hybrid_ssd_snapshot.py`, `kv_migration.py`. Verdicts:
+An audit of the cache subsystem — `kv_prefix_cache.py`, `ssd_kv_cache.py`,
+`hybrid_ssd_snapshot.py`. Verdicts:
 
 | # | Area | Verdict |
 |---|------|---------|
 | 1 | **"slowness"** (the reported regression) | **FIXED metric, no real regression.** The bench's `decode_tps` was prefill-contaminated; pure decode matches mlx-lm. |
-| 2 | Migration stats (`kv_migration.py`) | **COSMETIC but documented** — counts are LOGICAL tier/temperature transitions (~1e-5 s), not physical I/O; real KV bytes move in `SSDKVCache`/`hybrid_ssd_snapshot`. The code comment says so. |
+| 2 | Migration stats (`kv_migration.py`) | **REMOVED in the refocus** — the counts were cosmetic LOGICAL tier/temperature transitions (~1e-5 s), not physical I/O. Real KV bytes move in `SSDKVCache`/`hybrid_ssd_snapshot`, which remain; the tiered-migration manager was dead capacity-scaling code and was deleted. |
 | 3 | WARM 4-bit quantization | **OK** — `to_quantized(bits=4)` for KVCache layers; sliding-window/recurrent layers pass through unquantized (→ gemma WARMram 1.0×, honest). |
 | 4 | SSD net-negative for fast-prefill models | **INHERENT TRADEOFF** — e.g. GLM-OCR prefills at 6489 tok/s, so reading the prefix back from disk (~0.96×) is ~break-even; SSD wins for slow-prefill / capacity-bound cases. No guard skips it (would risk regressing the capacity case it exists for). |
 | 5 | Hybrid SSD snapshot size (0.8B ≈ 549 MB) | **OK / inherent** — int8-quantized WHOLE multi-layer recurrent state per boundary (ArraysCache isn't block-decomposable); bounded by the SSD cap. |
