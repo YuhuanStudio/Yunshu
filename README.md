@@ -59,6 +59,11 @@ The endpoint streams SSE events, not a WAV file. For a ready-made client that co
 stream and writes `omni_out.wav`, see [examples/quickstart.py](examples/quickstart.py) — which
 also shows the text/vision/ASR/TTS endpoints.
 
+For the **bidirectional voice-agent** path (speak in over a WebSocket, hear the model speak back),
+see [examples/realtime_voice.py](examples/realtime_voice.py) — it runs one native speech-to-speech
+turn against the OpenAI-Realtime `WS /v1/realtime` endpoint (set `YUNSHU_REALTIME_OMNI=1` on the
+server).
+
 > **Dev checkout**: `just setup` then `YUNSHU_MODEL=<model> just dev`.
 
 ---
