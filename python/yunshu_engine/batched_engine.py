@@ -1144,8 +1144,15 @@ class BatchedEngine:
                 model_name=model_name,
             )
 
-        # KV cache quantization config (mlx-lm pattern: to_quantized)
-        # Enable via YUNSHU_KV_QUANT_BITS=4 or 8 (MLX only supports these values)
+        # KV cache quantization config (mlx-lm pattern: to_quantized — group-wise
+        # affine along head_dim for BOTH keys and values). Enable via
+        # YUNSHU_KV_QUANT_BITS=2, 3, 4, or 8. NOTE: this is mlx-lm's group quant,
+        # NOT KIVI's per-channel-key / per-token-value scheme — mx.quantize is
+        # last-axis only, so KIVI's per-channel key quant would need a forked
+        # quantized-attention path (out of scope: this engine wraps MLX). 2-bit
+        # is usable (verified quality-preserving) but only pays off at very long
+        # context where the KV cache dominates bandwidth; it is a no-op otherwise,
+        # which is why it auto-engages only above ~2GB est. KV (_effective_kv_quant_bits).
         _qbits = os.environ.get("YUNSHU_KV_QUANT_BITS")
         if _qbits:
             _qbits_int = int(_qbits)
