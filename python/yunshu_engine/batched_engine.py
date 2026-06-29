@@ -7301,11 +7301,18 @@ class BatchedEngine:
             self._ngram_proposer = NgramProposer(
                 NgramConfig(max_n=max_n, k=k, mode=mode)
             )
-            # Default-on for greedy requests (lossless, never slower — see the
-            # routing gate in generate()). Opt out with YUNSHU_NGRAM_DEFAULT=0.
+            # OPT-IN ONLY (default OFF). The n-gram spec path is NOT lossless: the
+            # verify/KV-trim cycle (spec_draft_verifier.verify_with_last_token +
+            # _trim_cache) diverges from plain greedy on real models — verified
+            # same-process on gemma-4-e4b, where it duplicated a token ("…the
+            # average average" vs greedy "…the average speed"). The earlier
+            # "lossless, byte-identical" claim came from ONE Qwen2.5-3B counting
+            # task that didn't exercise the bug. Until the cache-state divergence
+            # is fixed, do NOT default this on. Enable with YUNSHU_NGRAM_DEFAULT=1
+            # (or per-request spec_decode=true) for experimentation.
             self._ngram_greedy_default = os.environ.get(
-                "YUNSHU_NGRAM_DEFAULT", "1"
-            ).strip().lower() not in ("0", "false", "no")
+                "YUNSHU_NGRAM_DEFAULT", "0"
+            ).strip().lower() in ("1", "true", "yes")
             logger.info(
                 "N-gram proposer initialized: max_n=%d, k=%d, mode=%s, greedy_default=%s",
                 max_n,

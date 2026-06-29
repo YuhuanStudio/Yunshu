@@ -1,7 +1,8 @@
-"""N-gram spec is wired onto the DEFAULT greedy path: a greedy request routes
-through the (lossless) n-gram path even without spec_decode=true, unless
-YUNSHU_NGRAM_DEFAULT is off. Guards the wiring so it can't silently revert to
-"present but never invoked" (the failure mode the wiring audit found)."""
+"""N-gram spec routing gate. The path is OPT-IN (YUNSHU_NGRAM_DEFAULT=1 or
+per-request spec_decode=true) — it is NOT lossless (verify/KV-trim diverges from
+greedy, e.g. duplicated a token on gemma-4-e4b), so it must not default on. These
+tests exercise the routing GATE given the flag, independent of the env default:
+greedy + flag-on → n-gram; flag-off / no-proposer / temp>0 → fast path."""
 
 from unittest.mock import AsyncMock, MagicMock
 
