@@ -793,6 +793,10 @@ class TestEngineLoopErrorDelivery:
         core._memory_aware_scheduler = MagicMock()
         core._kv_lifecycle = MagicMock()
         core._composition_scheduler = None
+        core._tbo_scheduler = MagicMock()
+        core._tbo_scheduler.config = MagicMock(enabled=False)
+        core._overlap_scheduler = MagicMock()
+        core._overlap_scheduler.config = MagicMock(enabled=False)
 
         core._adaptive_batch_sizer = MagicMock()
         core._adaptive_batch = MagicMock()

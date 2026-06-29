@@ -781,6 +781,273 @@ def compile_embedding_model(model_path: str, output_path: str = "") -> dict[str,
     }
 
 
+# ---------------------------------------------------------------------------
+# ANE Drafter Path B — CoreML-based speculative decoding draft model
+# ---------------------------------------------------------------------------
+
+
+def compile_drafter_model(model_path: str, output_path: str = "") -> dict[str, Any]:
+    """Compile a small draft model to CoreML for ANE-based speculative decoding.
+
+    Takes a small LLM (draft model) and compiles it into a CoreML model
+    that can execute on the Apple Neural Engine. This is Path B for the
+    risky Delta-2 (ANE-as-Drafter) architecture.
+
+    The compiled model takes token IDs as input and outputs logits that
+    can be used to propose K draft tokens for speculative decoding.
+
+    Args:
+        model_path: Path to the draft model (HuggingFace format or local directory).
+        output_path: Optional output directory for compiled model.
+                     Defaults to ~/.yunshu/ane_cache/drafter/.
+
+    Returns:
+        dict with keys:
+            compiled_path (str): Path to the compiled .mlmodelc directory.
+            model_size (int): Approximate model size in bytes.
+            compile_time_s (float): Total compilation time in seconds.
+            target (str): "ane" if compiled for ANE, "gpu" if fallback.
+
+    Raises:
+        RuntimeError: If compilation fails and no fallback is available.
+    """
+    # Resolve output directory
+    if output_path:
+        out_dir = Path(output_path).expanduser().resolve()
+    else:
+        out_dir = Path.home() / ".yunshu" / "ane_cache" / "drafter"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    model_name = Path(model_path).name
+    mlpackage_path = out_dir / f"{model_name}_drafter.mlpackage"
+    mlmodelc_path = out_dir / f"{model_name}_drafter.mlmodelc"
+
+    # Check if already compiled
+    if mlmodelc_path.exists():
+        model_size = sum(
+            f.stat().st_size for f in mlmodelc_path.rglob("*") if f.is_file()
+        )
+        logger.info("Drafter model already compiled: %s", mlmodelc_path)
+        return {
+            "compiled_path": str(mlmodelc_path),
+            "model_size": model_size,
+            "compile_time_s": 0.0,
+            "target": "ane",
+        }
+
+    t_start = time.monotonic()
+
+    # Try CoreML/ANE compilation
+    if _HAS_COREMLTOOLS and is_ane_available():
+        try:
+            import numpy as np
+
+            # Draft model: input is token IDs, output is logits for next-token prediction
+            # Use a small sequence length (draft models typically predict 1-10 tokens)
+            sample_seq_len = 32
+            sample_input = np.zeros((1, sample_seq_len), dtype=np.int32)
+
+            # Convert to CoreML targeting ANE
+            coreml_model = ct.convert(
+                model_path,
+                inputs=[
+                    ct.TensorType(
+                        name="input_ids",
+                        shape=sample_input.shape,
+                        dtype=np.int32,
+                    )
+                ],
+                convert_to="mlprogram",
+                compute_units=ct.ComputeUnit.ALL,
+            )
+            coreml_model.save(str(mlpackage_path))
+
+            # Compile to .mlmodelc
+            compile_result = subprocess.run(
+                [
+                    "xcrun",
+                    "coremlcompiler",
+                    "compile",
+                    str(mlpackage_path),
+                    str(out_dir),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+            if compile_result.returncode != 0:
+                raise RuntimeError(
+                    f"coremlcompiler failed (exit {compile_result.returncode}): "
+                    f"{compile_result.stderr}"
+                )
+
+            if not mlmodelc_path.exists():
+                raise RuntimeError(f"Compiled .mlmodelc not found at: {mlmodelc_path}")
+
+            compile_time = time.monotonic() - t_start
+            model_size = sum(
+                f.stat().st_size for f in mlmodelc_path.rglob("*") if f.is_file()
+            )
+
+            logger.info(
+                "Compiled drafter model for ANE: %s -> %s (%d bytes, %.2fs)",
+                model_path,
+                mlmodelc_path,
+                model_size,
+                compile_time,
+            )
+
+            return {
+                "compiled_path": str(mlmodelc_path),
+                "model_size": model_size,
+                "compile_time_s": round(compile_time, 3),
+                "target": "ane",
+            }
+
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                "xcrun not found — Xcode CLI tools required. "
+                "Install with: xcode-select --install"
+            ) from exc
+        except Exception as exc:
+            logger.warning(
+                "CoreML compilation failed for drafter model, GPU fallback: %s", exc
+            )
+
+    # Fallback: store model path for GPU-based draft inference
+    compile_time = time.monotonic() - t_start
+    logger.info("Drafter model will use GPU fallback: %s", model_path)
+
+    return {
+        "compiled_path": str(Path(model_path).resolve()),
+        "model_size": 0,
+        "compile_time_s": round(compile_time, 3),
+        "target": "gpu",
+    }
+
+
+def draft_token(
+    drafter_path: str, context_tokens: list[int], num_draft: int = 5
+) -> list[int]:
+    """Run draft model to propose K tokens using ANE or GPU fallback.
+
+    Uses a compiled CoreML model on the ANE if available, otherwise
+    falls back to MLX GPU inference.
+
+    Args:
+        drafter_path: Path to the compiled .mlmodelc (ANE) or model directory (GPU).
+        context_tokens: Current context token IDs.
+        num_draft: Number of draft tokens to propose (K).
+
+    Returns:
+        List of proposed token IDs (length num_draft or fewer on EOS).
+    """
+    if not context_tokens:
+        return []
+
+    if num_draft <= 0:
+        return []
+
+    # Try ANE/CoreML path first
+    compiled_path = Path(drafter_path)
+    if (
+        compiled_path.suffix == ".mlmodelc"
+        and compiled_path.exists()
+        and _HAS_COREMLTOOLS
+    ):
+        try:
+            return _draft_token_coreml(str(compiled_path), context_tokens, num_draft)
+        except Exception as exc:
+            logger.warning("CoreML drafter failed, falling back to GPU: %s", exc)
+
+    # GPU fallback via MLX
+    return _draft_token_gpu(drafter_path, context_tokens, num_draft)
+
+
+def _draft_token_coreml(
+    compiled_path: str,
+    context_tokens: list[int],
+    num_draft: int,
+) -> list[int]:
+    """Draft tokens via CoreML model on ANE."""
+    model = ct.models.MLModel(compiled_path)
+    import numpy as np
+
+    draft_tokens = []
+    current_tokens = list(context_tokens)
+
+    for _ in range(num_draft):
+        # Prepare input
+        input_ids = np.array([current_tokens], dtype=np.int32)
+
+        # Pad or truncate to model's expected input size
+        spec = model.get_spec()
+        input_desc = spec.description.input[0]
+        shape = input_desc.type.multiArrayType.shape
+        expected_len = shape[1] if len(shape) > 1 else len(current_tokens)
+
+        if input_ids.shape[1] < expected_len:
+            pad_width = expected_len - input_ids.shape[1]
+            input_ids = np.pad(input_ids, ((0, 0), (0, pad_width)), constant_values=0)
+        elif input_ids.shape[1] > expected_len:
+            input_ids = input_ids[:, :expected_len]
+
+        pred = model.predict({"input_ids": input_ids})
+        output = pred.get("output") or pred.get("logits") or list(pred.values())[0]
+
+        if isinstance(output, np.ndarray):
+            # Get logits for last position, sample greedily
+            logits = output[0, -1] if output.ndim > 1 else output
+            token_id = int(np.argmax(logits))
+        else:
+            token_id = 0
+
+        draft_tokens.append(token_id)
+        current_tokens.append(token_id)
+
+    return draft_tokens
+
+
+def _draft_token_gpu(
+    model_path: str,
+    context_tokens: list[int],
+    num_draft: int,
+) -> list[int]:
+    """Draft tokens via MLX GPU fallback using a real draft model."""
+    if not _HAS_MLX:
+        raise RuntimeError("MLX not available for draft token generation")
+
+    try:
+        from mlx_lm.utils import load_model, load_tokenizer
+
+        model_path_resolved = Path(model_path)
+        if not model_path_resolved.exists():
+            raise FileNotFoundError(f"Draft model not found: {model_path}")
+
+        model, _ = load_model(model_path_resolved)
+        load_tokenizer(model_path_resolved)
+
+        from mlx_lm.generate import generate_step
+        from mlx_lm.sample_utils import make_sampler
+
+        sampler = make_sampler(temp=0.0)
+        input_ids = mx.array(context_tokens)
+
+        draft_tokens = []
+        for token_id, _ in generate_step(
+            input_ids, model, max_tokens=num_draft, sampler=sampler
+        ):
+            draft_tokens.append(token_id)
+            if len(draft_tokens) >= num_draft:
+                break
+
+        return draft_tokens
+
+    except Exception as exc:
+        logger.error("GPU draft model inference failed: %s", exc)
+        raise RuntimeError(f"Draft model inference failed: {exc}") from exc
+
+
 def benchmark_ane_vs_gpu(
     texts: list[str],
     model_name: str = "intfloat/e5-small-v2",
