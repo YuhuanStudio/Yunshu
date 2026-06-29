@@ -31,14 +31,15 @@ RERANK_MODEL = "Qwen3-VL-Reranker-2B-8bit"
 
 
 def cosine(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
     return dot / (na * nb) if na and nb else 0.0
 
 
 def data_uri(path: str) -> str:
-    b64 = base64.b64encode(open(path, "rb").read()).decode()
+    with open(path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
     return f"data:image/png;base64,{b64}"
 
 
