@@ -43,11 +43,39 @@ def apply_mlx_vlm_patches() -> list[str]:
     applied += _patch_qwen3_omni_audio_mask()
     applied += _patch_formatter_audio_token()
     applied += _patch_qwen3_5_empty_chunk()
+    applied += _patch_nemotron_omni_model_type_remap()
     _APPLIED = True
 
     if applied:
         logger.info("Applied mlx-vlm Omni audio patches: %s", ", ".join(applied))
     return applied
+
+
+def _patch_nemotron_omni_model_type_remap() -> list[str]:
+    """Map NVIDIA's newer Nemotron omni variants onto mlx_vlm's base
+    ``nemotron_h_nano_omni`` model class.
+
+    mlx_vlm 0.6.x ships the ``nemotron_h_nano_omni`` class but only registers the
+    bare ``nemotron_h_nano_omni`` model_type. Newer published checkpoints (e.g.
+    ``Nemotron-3-Nano-Omni-30B-A3B-Reasoning``) declare model_type
+    ``NemotronH_Nano_Omni_Reasoning_V3``, which isn't in MODEL_REMAPPING → load
+    fails "Model type … not supported" even though the architecture is the same.
+    Verified: with this remap the 4-bit Reasoning checkpoint loads + runs.
+    Add the alias so these models route to the existing class."""
+    try:
+        from mlx_vlm import utils as _vu
+    except Exception:
+        return []
+    aliases = {
+        "NemotronH_Nano_Omni_Reasoning_V3": "nemotron_h_nano_omni",
+        "nemotron_h_nano_omni_reasoning_v3": "nemotron_h_nano_omni",
+    }
+    added = False
+    for k, v in aliases.items():
+        if _vu.MODEL_REMAPPING.get(k) != v:
+            _vu.MODEL_REMAPPING[k] = v
+            added = True
+    return ["nemotron omni Reasoning_V3 model_type remap"] if added else []
 
 
 def _patch_qwen3_5_empty_chunk() -> list[str]:

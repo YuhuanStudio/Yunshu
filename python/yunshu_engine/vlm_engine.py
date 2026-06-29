@@ -1152,6 +1152,17 @@ class VLMEngine:
 
     def _load_vision_model(self, model_path):
         """Load a vision model using mlx_vlm with proper nested config handling."""
+        # Apply mlx-vlm patches BEFORE load: the nemotron model_type remap must be
+        # in MODEL_REMAPPING before get_model_and_args() reads the config, else
+        # newer Nemotron omni variants fail "model type … not supported".
+        # Idempotent — _finish_vlm_load's later call becomes a no-op.
+        try:
+            from .mlx_vlm_patches import apply_mlx_vlm_patches
+
+            apply_mlx_vlm_patches()
+        except Exception as e:
+            logger.warning(f"Could not apply mlx-vlm patches pre-load: {e}")
+
         import glob
 
         import mlx.core as mx
@@ -4736,10 +4747,34 @@ class VLMEngine:
         if num_audios > 0:
             tpl_kwargs["num_audios"] = num_audios
 
-        template_text = self._processor.apply_chat_template(
-            vlm_messages,
-            **tpl_kwargs,
-        )
+        try:
+            template_text = self._processor.apply_chat_template(
+                vlm_messages,
+                **tpl_kwargs,
+            )
+        except (ValueError, AttributeError) as e:
+            # Some omni processors (e.g. NVIDIA Nemotron-Omni) ship no chat
+            # template on the PROCESSOR — it lives on the tokenizer instead. The
+            # text path already uses the tokenizer template successfully; reuse it
+            # here so the vision/audio path doesn't hard-fail. num_audios/num_images
+            # kwargs may be processor-only, so drop them for the tokenizer call.
+            if not (
+                hasattr(self, "_tokenizer")
+                and getattr(self._tokenizer, "chat_template", None)
+            ):
+                raise
+            logger.info(
+                "Processor lacks a chat template (%s); falling back to the "
+                "tokenizer chat template for the VLM multimodal path.",
+                str(e)[:80],
+            )
+            tok_kwargs = {"tokenize": False, "add_generation_prompt": True}
+            if enable_thinking is not None:
+                tok_kwargs["enable_thinking"] = enable_thinking
+            template_text = self._tokenizer.apply_chat_template(
+                vlm_messages,
+                **tok_kwargs,
+            )
 
         self._text_prompt_cache.put_template_text(cache_key, template_text)
         logger.debug(
@@ -4890,8 +4925,15 @@ class VLMEngine:
         Qwen3-Omni (and other audio VLMs) try to treat the path as samples →
         "could not convert string to float: '/…/tmp.wav'". We must pre-load the
         path into an ndarray via mlx_vlm.load_audio at the model's sample rate.
-        (2nd-pass live fix.) Returns a single array when there is
-        one audio, else a list.
+        (2nd-pass live fix.)
+
+        Always returns a LIST of arrays — even for a single audio. mlx_vlm's
+        stream_generate does ``audio = audio or None``, which raises "truth value
+        of an array is ambiguous" on a bare multi-element ndarray (hit on NVIDIA
+        Nemotron-Omni). A list is truthy regardless of contents, and the
+        multi-audio path already returned a list, so single-element-list is the
+        uniform, processor-friendly form (verified: Nemotron-Omni then perceives
+        the audio instead of reporting "no auditory input").
         """
         from mlx_vlm.utils import load_audio
 
@@ -4903,8 +4945,7 @@ class VLMEngine:
             # Some omni-input processors (e.g. NVIDIA nemotron_h_nano_omni) store
             # the audio rate directly on the processor, not under feature_extractor.
             sr = int(self._processor.audio_sampling_rate)
-        arrays = [load_audio(p, sr) for p in audio_paths]
-        return arrays if len(arrays) > 1 else arrays[0]
+        return [load_audio(p, sr) for p in audio_paths]
 
     async def _extract_audio(self, messages: list[dict]) -> list[str]:
         """Extract audio file paths from OpenAI-format message content parts.
