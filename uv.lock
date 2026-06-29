@@ -3581,6 +3581,9 @@ dev = [
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "pytest-httpx" },
+    { name = "pytest-timeout" },
+    { name = "ruff" },
 ]
 
 [package.metadata]
@@ -3652,6 +3655,9 @@ dev = [
     { name = "mypy", specifier = ">=2.0.0" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", specifier = ">=1.3.0" },
+    { name = "pytest-httpx", specifier = ">=0.30.0" },
+    { name = "pytest-timeout", specifier = ">=2.3.0" },
+    { name = "ruff", specifier = ">=0.11.0" },
 ]
 
 [[package]]

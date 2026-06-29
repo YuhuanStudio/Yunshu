@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import re
+
 from typer.testing import CliRunner
 
 from yunshu_cli import app
 
-runner = CliRunner(env={"NO_COLOR": "1"})
+runner = CliRunner()
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(s: str) -> str:
+    """Strip ANSI escape codes — rich may colour option names on CI."""
+    return _ANSI.sub("", s)
 
 
 class TestCLIRegistration:
@@ -17,7 +26,7 @@ class TestCLIRegistration:
         result = runner.invoke(app, ["--help"])
         expected = ["serve", "chat", "model", "status", "config", "launch", "eval", "bench", "diagnose"]
         for cmd in expected:
-            assert cmd in result.output, f"Missing: {cmd}"
+            assert cmd in _plain(result.output), f"Missing: {cmd}"
 
     def test_serve_command_options(self):
         import inspect
@@ -57,24 +66,24 @@ class TestCLIChat:
     def test_chat_help(self):
         result = runner.invoke(app, ["chat", "--help"])
         assert result.exit_code == 0
-        assert "--model" in result.output
-        assert "--temperature" in result.output
-        assert "--thinking" in result.output
-        assert "--system" in result.output
+        assert "--model" in _plain(result.output)
+        assert "--temperature" in _plain(result.output)
+        assert "--thinking" in _plain(result.output)
+        assert "--system" in _plain(result.output)
 
 
 class TestCLIStatus:
     def test_status_help(self):
         result = runner.invoke(app, ["status", "--help"])
         assert result.exit_code == 0
-        assert "--url" in result.output
+        assert "--url" in _plain(result.output)
 
 
 class TestCLIConfig:
     def test_config_help(self):
         result = runner.invoke(app, ["config", "--help"])
         assert result.exit_code == 0
-        assert "--url" in result.output
+        assert "--url" in _plain(result.output)
 
     def test_config_set_help(self):
         result = runner.invoke(app, ["config", "set", "--help"])
@@ -85,9 +94,9 @@ class TestCLILaunch:
     def test_launch_list(self):
         result = runner.invoke(app, ["launch", "list"])
         assert result.exit_code == 0
-        assert "Codex" in result.output
-        assert "OpenCode" in result.output
-        assert "Pi" in result.output
+        assert "Codex" in _plain(result.output)
+        assert "OpenCode" in _plain(result.output)
+        assert "Pi" in _plain(result.output)
 
     def test_launch_unknown_tool(self):
         result = runner.invoke(app, ["launch", "nonexistent"])
@@ -98,17 +107,17 @@ class TestCLIEval:
     def test_eval_list(self):
         result = runner.invoke(app, ["eval", "list"])
         assert result.exit_code == 0
-        assert "mmlu" in result.output.lower()
-        assert "gsm8k" in result.output.lower()
-        assert "humaneval" in result.output.lower()
-        assert "truthfulqa" in result.output.lower()
-        assert "hellaswag" in result.output.lower()
+        assert "mmlu" in _plain(result.output).lower()
+        assert "gsm8k" in _plain(result.output).lower()
+        assert "humaneval" in _plain(result.output).lower()
+        assert "truthfulqa" in _plain(result.output).lower()
+        assert "hellaswag" in _plain(result.output).lower()
 
     def test_eval_all_help(self):
         result = runner.invoke(app, ["eval", "all", "--help"])
         assert result.exit_code == 0
-        assert "--model" in result.output
-        assert "--sample" in result.output
+        assert "--model" in _plain(result.output)
+        assert "--sample" in _plain(result.output)
 
 
 class TestCLIModel:
