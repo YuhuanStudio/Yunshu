@@ -252,10 +252,6 @@ class Engine:
         if self._use_engine_core:
             from .engine_core import EngineCore, EngineCoreConfig
 
-            # External prefill (opt-in via YUNSHU_EXTERNAL_PREFILL=1)
-            _external_prefill = os.environ.get(
-                "YUNSHU_EXTERNAL_PREFILL", ""
-            ).strip() in ("1", "true", "yes")
             _prefill_chunk_size = int(
                 os.environ.get("YUNSHU_PREFILL_CHUNK_SIZE", "2048")
             )
@@ -270,7 +266,6 @@ class Engine:
                     deferred_clear_delay=self.config.deferred_clear_delay,
                     cache_cleanup_interval=self.config.cache_cleanup_interval,
                     step_interval=self.config.step_interval_ms / 1000.0,
-                    use_external_prefill=_external_prefill,
                     prefill_chunk_size=_prefill_chunk_size,
                 ),
                 executor=self._executor,

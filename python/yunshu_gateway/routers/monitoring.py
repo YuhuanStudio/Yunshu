@@ -1186,24 +1186,6 @@ async def ane_embedding_stats(request: Request) -> dict[str, Any]:
         return {"enabled": False, "error": "ane_embedding module not available"}
 
 
-@router.get("/external-prefill")
-async def external_prefill_stats(request: Request) -> dict[str, Any]:
-    """External prefill server/client statistics.
-
-    Reports disaggregated prefill status when YUNSHU_EXTERNAL_PREFILL=1 is set.
-    Includes server stats (requests served, avg prefill time, bytes transferred)
-    and client stats (requests sent, avg latency, success rate).
-    """
-    _check_permission(request)
-    try:
-        from yunshu_engine.external_prefill import get_external_prefill_stats
-
-        return get_external_prefill_stats()
-    except Exception:
-        logger.debug("external_prefill module unavailable", exc_info=True)
-        return {"enabled": False, "error": "external_prefill module not available"}
-
-
 @router.get("/health-dashboard")
 async def health_dashboard(request: Request) -> dict[str, Any]:
     """Aggregated health dashboard with 0-100 scoring.
@@ -1570,7 +1552,6 @@ def _register_endpoints() -> None:
         "per_model": per_model_stats,
         "thinking_segments": thinking_segment_stats,
         "ane_embeddings": ane_embedding_stats,
-        "external_prefill": external_prefill_stats,
         "health_dashboard": health_dashboard,
         "reasoning_tokens": reasoning_tokens_stats,
         "response_cache": response_cache_stats,

@@ -150,7 +150,6 @@ class TestBatchedEngineFastPathPromptTokens:
         engine._deltanet_inversion_enabled = False
         engine._deltanet_inversion_stats = {}
         engine._response_cache = MagicMock()
-        engine._kv_transfer_client = None
         engine._inflight_prefix_tracker = None
         engine._gpu_rejection_enabled = False
         engine._deltanet_inverter = None

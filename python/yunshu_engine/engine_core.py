@@ -85,8 +85,6 @@ class EngineCoreConfig:
     # aging were unreachable. Set via YUNSHU_SCHEDULER_POLICY.
     scheduler_policy: str = "fcfs"
     aging_weight: float = 0.1  # priority bonus per second waiting (anti-starvation)
-    # External prefill (memory preflight, chunked progress, mid-prefill abort)
-    use_external_prefill: bool = False
     prefill_chunk_size: int = 2048
     # Sarathi-style hybrid chunked prefill (interleave prefill chunks with decode)
     enable_hybrid_prefill: bool = False
@@ -165,7 +163,6 @@ class EngineCore:
             ngram_spec_mode=self.config.ngram_spec_mode,
             enable_hybrid_prefill=self.config.enable_hybrid_prefill,
             hybrid_chunk_size=self.config.hybrid_chunk_size,
-            use_external_prefill=self.config.use_external_prefill,
             prefill_chunk_size=self.config.prefill_chunk_size,
             request_timeout_seconds=self.config.request_timeout_seconds,
             chunked_prefill_budget=self.config.chunked_prefill_budget,
@@ -384,55 +381,6 @@ class EngineCore:
 
         # Pass offload manager to scheduler for periodic sync offload checks
         self.scheduler.set_kv_offload_manager(self._kv_offload_manager)
-
-        # External prefill server/client (disaggregated prefill)
-        from .external_prefill import (
-            ExternalPrefillClient,
-            ExternalPrefillConfig,
-            ExternalPrefillServer,
-            get_prefill_role,
-        )
-
-        self._prefill_server: ExternalPrefillServer | None = None
-        self._prefill_client: ExternalPrefillClient | None = None
-        self._prefill_task: asyncio.Task | None = None
-        self._prefill_role: str | None = None
-        prefill_role = get_prefill_role()
-        self._prefill_role = prefill_role
-        if prefill_role == "server":
-            prefill_config = ExternalPrefillConfig.from_env()
-            self._prefill_server = ExternalPrefillServer(
-                model,
-                tokenizer,
-                prefill_config,
-            )
-            logger.info("ExternalPrefillServer configured (disaggregated prefill)")
-        elif prefill_role == "client":
-            prefill_config = ExternalPrefillConfig.from_env()
-            self._prefill_client = ExternalPrefillClient(prefill_config)
-            logger.info("ExternalPrefillClient configured (remote prefill)")
-
-        # KV transfer server (receives KV blocks on decode nodes)
-        self._kv_transfer_server: Any | None = None
-        try:
-            from .kv_transfer import (
-                KVTransferConfig,
-                KVTransferServer,
-                is_kv_transfer_enabled,
-            )
-
-            if is_kv_transfer_enabled():
-                kv_xfer_config = KVTransferConfig.from_env()
-                self._kv_transfer_server = KVTransferServer(
-                    kv_xfer_config,
-                    kv_cache_manager=self._kv_manager,
-                )
-                logger.info(
-                    "KVTransferServer configured on port %d",
-                    kv_xfer_config.listen_port,
-                )
-        except Exception:
-            logger.debug("KV transfer server setup skipped", exc_info=True)
 
         # ── 實現-整合 wiring ──
 
@@ -1043,23 +991,6 @@ class EngineCore:
         except Exception:
             logger.debug("KV migration start failed", exc_info=True)
 
-        # Start external prefill server if configured
-        # NOTE: task is fire-and-forget but will be stopped cleanly via
-        # _prefill_server.stop() in our stop() method.
-        if self._prefill_server is not None:
-            self._prefill_task = asyncio.get_running_loop().create_task(
-                self._prefill_server.serve()
-            )
-            logger.info("ExternalPrefillServer started")
-
-        # Start KV transfer server if configured (decode node receives KV blocks)
-        if self._kv_transfer_server is not None:
-            try:
-                await self._kv_transfer_server.start()
-                logger.info("KVTransferServer started")
-            except Exception:
-                logger.debug("KV transfer server start failed", exc_info=True)
-
         logger.info("EngineCore started")
 
         # Checkpoint recovery: restore in-flight requests from previous crash
@@ -1173,25 +1104,6 @@ class EngineCore:
                 self._composition_scheduler.shutdown()
             except Exception:
                 logger.debug("composition scheduler shutdown failed", exc_info=True)
-
-        # Stop external prefill server and its background task
-        if self._prefill_server is not None:
-            try:
-                await self._prefill_server.stop()
-            except Exception:
-                logger.debug("prefill server stop failed", exc_info=True)
-        if self._prefill_task is not None and not self._prefill_task.done():
-            self._prefill_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._prefill_task
-            self._prefill_task = None
-
-        # Stop KV transfer server
-        if self._kv_transfer_server is not None:
-            try:
-                await self._kv_transfer_server.stop()
-            except Exception:
-                logger.debug("kv transfer server stop failed", exc_info=True)
 
         # Mark stopped BEFORE clearing collectors so concurrent add_request()
         # sees _stopped=True and rejects immediately instead of creating a
@@ -4327,14 +4239,6 @@ class EngineCore:
         # encoder-decoder cache stats
         if hasattr(self.scheduler, "_encoder_cache"):
             stats["encoder_cache"] = self.scheduler._encoder_cache.get_stats()
-        # external prefill server/client stats
-        if self._prefill_server is not None:
-            stats["external_prefill_server"] = self._prefill_server.get_stats()
-        if self._prefill_client is not None:
-            stats["external_prefill_client"] = self._prefill_client.get_stats()
-        # KV transfer server stats (decode node)
-        if self._kv_transfer_server is not None:
-            stats["kv_transfer_server"] = self._kv_transfer_server.get_stats()
         # ── Wired module stats ──
         stats["lifecycle"] = self._lifecycle_orchestrator.get_stats()
         stats["budget"] = self._budget_manager.get_stats()

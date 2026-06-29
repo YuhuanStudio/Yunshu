@@ -75,12 +75,6 @@ def _make_batched_engine(**overrides):
     engine._kv_quant_bits = None
     engine._kv_quant_group_size = 64
     engine._kv_quant_start = 0
-    engine._kv_transfer_client = None
-    engine._kv_transfer_stats = {
-        "blocks_transferred": 0,
-        "bytes_transferred": 0,
-        "transfer_failures": 0,
-    }
     engine._deltanet_inverter = None
     engine._deltanet_inversion_enabled = False
     engine._deltanet_inversion_stats = {
