@@ -135,24 +135,54 @@ def _recover_channel_reasoning(tokens, tokenizer, output_text):
     if _survives:
         # Marker survives decode → canonical <think> model, already handled.
         return output_text, []
+    # Segment the raw tokens into ORDERED runs (gemma-4 can interleave several
+    # channel blocks with plain content: thought₁ → content₁ → thought₂ → …).
+    # Each reasoning block is decoded + label-stripped INDEPENDENTLY — joining
+    # all reason ids first (the old approach) stripped the "thought" label only
+    # once, so blocks 2+ left an embedded "thought" in the reasoning, and the
+    # interleaved structure was lost.
     content_ids: list[int] = []
     reason_ids: list[int] = []
+    reason_parts: list[str] = []
     depth = 0
+    run: list[int] = []
+    run_is_reason = False
+
+    def _flush_run(ids: list[int], is_reason: bool) -> None:
+        if not ids:
+            return
+        if is_reason:
+            reason_ids.extend(ids)
+            txt = _clean_special_tokens(tokenizer.decode(ids)).strip()
+            if txt.startswith("thought"):  # drop this block's channel label
+                txt = txt[len("thought") :].lstrip(" \n")
+            if txt:
+                reason_parts.append(txt)
+        else:
+            content_ids.extend(ids)
+
     for t in tokens:
         if t == tk_start:
+            _flush_run(run, run_is_reason)
+            run = []
             depth += 1
+            run_is_reason = depth > 0
             continue
         if tk_end is not None and t == tk_end and depth > 0:
+            _flush_run(run, run_is_reason)
+            run = []
             depth -= 1
+            run_is_reason = depth > 0
             continue
-        (reason_ids if depth > 0 else content_ids).append(t)
+        run.append(t)
+    _flush_run(run, run_is_reason)
+
     if not reason_ids:
         return output_text, []
+    # content fragments were separated by channel blocks in the stream — join as
+    # emitted (no synthetic spacing); reasoning blocks join on newlines.
     content = _clean_special_tokens(tokenizer.decode(content_ids)).strip()
-    reason = _clean_special_tokens(tokenizer.decode(reason_ids)).strip()
-    # Drop the channel's leading "thought" label if present.
-    if reason.startswith("thought"):
-        reason = reason[len("thought") :].lstrip(" \n")
+    reason = "\n".join(reason_parts)
     new_text = f"<think>{reason}</think>{content}" if reason else content
     return new_text, (reason_ids if reason else [])
 

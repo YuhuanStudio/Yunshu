@@ -65,6 +65,24 @@ def test_recover_channel_reasoning_content_first():
     assert reason_ids
 
 
+def test_recover_interleaved_blocks_strip_each_label():
+    tok = _Tok()
+    # thought₁ → content → thought₂ : two channel blocks interleaved with content.
+    # Each block opens with the "thought" label (id 50), which must be stripped
+    # PER block — the old single-strip left "thought" embedded in block 2.
+    tokens = [
+        100, 50, 51, 52, 53, 54, 101,  # <|channel>thought\nLet me think.<channel|>
+        1, 2,                          # "The sea"
+        100, 50, 51, 3, 4, 101,        # <|channel>thought\n is blue.<channel|>
+    ]  # fmt: skip
+    out, reason_ids = _recover_channel_reasoning(tokens, tok, "ignored")
+    # both reasoning blocks recovered + label-stripped, joined on newline; content
+    # ("The sea") clean — and crucially no stray "thought" survives anywhere.
+    assert out == "<think>Let me think.\nis blue.</think>The sea"
+    assert "thought" not in out
+    assert reason_ids
+
+
 def test_recover_no_channel_is_noop():
     tok = _Tok()
     tokens = [1, 2, 3, 4]
