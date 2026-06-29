@@ -6,7 +6,7 @@
 
 OpenAI/Anthropic-compatible — text, vision, OCR, audio, images, and a Realtime voice socket — multi-model,
 all on-device via MLX. Its standout: **native streaming speech-to-speech** (Qwen3-Omni Talker), first audio
-in ~1.3 s — no cloud, no ASR + LLM + TTS cascade, the model speaks with its own voice.
+in ~1.4 s — no cloud, no ASR + LLM + TTS cascade, the model speaks with its own voice.
 
 [![PyPI](https://img.shields.io/pypi/v/yunshu.svg?label=PyPI)](https://pypi.org/project/yunshu/)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
@@ -98,7 +98,7 @@ If you need production multi-tenant serving or multi-node sharding, look at
 
 | Modality | Endpoint | Backend | Extra |
 |---|---|---|---|
-| **Native speech-to-speech** (Qwen3-Omni, streaming; ~1.3s first-audio speech-in, ~1.2s text-in, warm) | `POST /v1/omni/speech/stream` | `mlx-vlm` Thinker+Talker | `omni` |
+| **Native speech-to-speech** (Qwen3-Omni, streaming; ~1.4s first-audio speech-in, ~1.2s text-in, warm) | `POST /v1/omni/speech/stream` | `mlx-vlm` Thinker+Talker | `omni` |
 | Text (tool-calling, JSON-schema, streaming, logprobs) | `/v1/chat/completions`, `/v1/messages` | `mlx-lm` | _(core)_ |
 | Vision / OCR | `/v1/chat/completions` (image content) | `mlx-vlm` | `vision` |
 | ASR | `/v1/audio/transcriptions` | `mlx-audio` / Whisper | `audio` |
