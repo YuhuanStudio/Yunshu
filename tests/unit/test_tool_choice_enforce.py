@@ -71,12 +71,9 @@ def test_all_three_nonstream_paths_call_enforce():
     # the enforcement helper is invoked right after every model-aware extraction.
     # renamed the extraction var to _raw_calls (cleanup now gates on the raw
     # parse, not the enforced result) but enforcement is still called on all 3 paths.
-    assert (
-        src.count(
-            "_enforce_tool_choice(_raw_calls, req.tool_choice, req.parallel_tool_calls)"
-        )
-        >= 3
-    )
+    # ruff may split the call across lines; count the helper invocations on _raw_calls.
+    assert src.count("_enforce_tool_choice(") >= 3
+    assert src.count("_raw_calls, req.tool_choice, req.parallel_tool_calls") >= 3
 
 
 def test_streamer_gated_on_not_none():

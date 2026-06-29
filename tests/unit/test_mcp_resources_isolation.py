@@ -60,5 +60,6 @@ def test_resources_read_gated_in_endpoint_source():
         '_handle_resources_list(\n                req.params, req.id, getattr(request.state, "rbac_key", None)\n            )'
         in src
         or "_handle_resources_list(req.params, req.id, getattr(request.state" in src
-        or '_handle_resources_list(' in src and 'getattr(request.state, "rbac_key", None)' in src
+        or "_handle_resources_list(" in src
+        and 'getattr(request.state, "rbac_key", None)' in src
     )

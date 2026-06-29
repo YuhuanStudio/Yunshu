@@ -22,5 +22,7 @@ def test_ngram_spec_bypasses_prefix_cache_under_lora():
     assert "if lora_adapter is not None:" in window
     assert "prefix_cache = None" in window
     # and every prefix_cache use is guarded on `is not None`, so the None disables get+add
-    assert "prefix_cache.get(ids)\n                    if prefix_cache is not None" in src
+    assert (
+        "prefix_cache.get(ids)\n                    if prefix_cache is not None" in src
+    )
     assert "if prefix_cache is not None:" in src  # the add-site guard

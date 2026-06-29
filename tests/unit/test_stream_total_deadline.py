@@ -16,14 +16,19 @@ def _src():
 
 def test_streaming_total_deadline_computed():
     s = _src()
-    assert "_stream_timeout_deadline = _stream_gen_t0 + timeout_seconds" in s
+    # ruff may wrap the RHS in parens across lines; check the variable name and
+    # the expression components separately (the conditional form is verified by
+    # test_deadline_disabled_when_no_timeout).
+    assert "_stream_timeout_deadline = " in s
+    assert "_stream_gen_t0 + timeout_seconds" in s
 
 
 def test_streaming_gpu_loop_checks_total_deadline():
     s = _src()
     # The GPU-loop timeout branch must fire on EITHER the consumer inactivity cancel OR
-    # the total deadline.
-    i = s.index("_stream_timeout_deadline = _stream_gen_t0")
+    # the total deadline.  ruff may wrap the assignment RHS in parens; anchor on the
+    # variable name alone.
+    i = s.index("_stream_timeout_deadline = ")
     # find the loop check after the deadline is set
     check = s.index("_timeout_cancel.is_set() or (", i)
     region = s[check : check + 200]

@@ -24,7 +24,8 @@ def test_video_subtype_split_is_defensive():
     code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
     # the comma separator is guarded (clean ValueError, not an IndexError)
     assert 'if "," not in url:' in code
-    assert 'raise ValueError("malformed data:video URL' in code
+    # ruff may split raise ValueError( across lines; check the message text itself
+    assert '"malformed data:video URL' in code
     # the subtype split is defensive (split("/", 1) + default), not header.split("/")[1]
     assert 'header.split("/", 1)' in code
     assert 'header.split("/")[1]' not in code

@@ -50,9 +50,10 @@ def test_session_update_coerces_and_rejects():
 
 def test_response_create_reads_correct_key_and_validates_temp():
     src = inspect.getsource(RT.RealtimeSession._generate_response)
-    # correct key (not the old max_output_tokens)
-    assert 'config.get("max_response_output_tokens"' in src
-    assert 'config.get("max_output_tokens"' not in src
+    # correct key (not the old max_output_tokens); ruff may split config.get(
+    # across lines, so check the key string itself and confirm the wrong key is absent.
+    assert '"max_response_output_tokens"' in src
+    assert '"max_output_tokens"' not in src
     # routed through the shared coercion helper
     assert "_coerce_max_response_tokens(" in src
     # temperature validated with a float() guard + session fallback

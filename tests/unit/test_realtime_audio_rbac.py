@@ -81,13 +81,13 @@ def test_tts_loop_skips_denied_engine():
 
 def test_both_audio_loops_gate_on_key_allows():
     src = inspect.getsource(realtime)
-    # TTS loop
-    i_tts = src.index("hasattr(entry.engine, 'synthesize')")
+    # TTS loop (ruff normalises string quotes to double)
+    i_tts = src.index('hasattr(entry.engine, "synthesize")')
     assert "_key_allows" in src[i_tts : i_tts + 400], (
         "TTS loop missing _key_allows gate"
     )
     # ASR loop
-    i_asr = src.index("hasattr(entry.engine, 'transcribe')")
+    i_asr = src.index('hasattr(entry.engine, "transcribe")')
     assert "_key_allows" in src[i_asr : i_asr + 400], (
         "ASR loop missing _key_allows gate"
     )

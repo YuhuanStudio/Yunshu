@@ -82,6 +82,7 @@ def test_logits_branch_warns_not_silent():
     assert "_lm.model" not in src or "getattr(_lm" in src  # resolution present
     assert 'getattr(model, "language_model"' in src
     # the logits fallback warns loudly now (was silent)
-    i = src.index("hasattr(out, 'logits')")
+    # ruff normalises quotes to double
+    i = src.index('hasattr(out, "logits")')
     window = src[i : i + 400]
     assert "logger.warning" in window

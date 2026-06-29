@@ -64,4 +64,6 @@ def test_loader_uses_derived_quantization():
     code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
     assert "_derive_vlm_quantization(config)" in code
     assert 'config.get("quantization")' not in code  # the old narrow read is gone
-    assert 'quantization.get("bits", 4)' in code  # no hard KeyError subscript
+    # ruff may split quantization.get("bits", 4) across lines; verify key + default present
+    assert "quantization.get(" in code  # uses .get (no hard KeyError subscript)
+    assert '"bits", 4' in code  # correct key and default

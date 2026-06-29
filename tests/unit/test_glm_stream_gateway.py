@@ -38,10 +38,7 @@ def test_both_streaming_blocks_fixed():
     src = inspect.getsource(chat)
     # the start-synthesis appears in BOTH blocks (replace_all applied)
     assert src.count("tc_id=out.tool_call.id") == 2
-    assert (
-        src.count("# next index needs its own start")
-        == 2
-    )
+    assert src.count("# next index needs its own start") == 2
 
 
 def test_start_synthesis_precedes_args_in_source_order():

@@ -27,4 +27,6 @@ def test_responses_n_loop_uses_per_choice_seed():
     root = pathlib.Path(__file__).resolve().parents[2]
     src = (root / "python/yunshu_gateway/routers/responses.py").read_text()
     # The 2 sites inside `for choice_idx in range(req.n)` use the helper.
-    assert src.count("_per_choice_seed(req.seed, choice_idx)") == 2
+    # ruff may split _per_choice_seed(req.seed, choice_idx) across lines,
+    # so count all calls to the helper (must be exactly 2).
+    assert src.count("_per_choice_seed(") == 2

@@ -20,15 +20,17 @@ def test_timeout_reads_timeout_seconds_key():
     s = _src()
     # The streaming consumer must read the gateway's 'timeout_seconds' key (with the old
     # 'timeout' as a fallback), not 'timeout' alone.
-    assert "kwargs.get('timeout_seconds') or kwargs.get('timeout') or 300" in s
+    # ruff normalises string quotes to double quotes.
+    assert 'kwargs.get("timeout_seconds") or kwargs.get("timeout") or 300' in s
     # the old wrong-key-only read is gone
-    assert "_timeout_seconds = kwargs.get('timeout', 300)" not in s
+    assert '_timeout_seconds = kwargs.get("timeout", 300)' not in s
 
 
 def test_timeout_branch_sets_cancel_event():
     s = _src()
     # In the VLM stream timeout branch, cancel_event must be set so the GPU loop stops.
-    to = s.index('logger.warning(f"VLM stream timeout')
+    # ruff may split logger.warning( across lines; anchor on the warning message text.
+    to = s.index("VLM stream timeout: no token")
     region = s[to : to + 1400]
     assert "cancel_event.set()" in region
     assert "if cancel_event is not None" in region

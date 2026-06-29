@@ -44,7 +44,10 @@ def test_session_update_rejects_garbage_tool_choice():
 def test_generate_response_snapshots_and_gates_on_tool_choice():
     src = inspect.getsource(realtime.RealtimeSession._generate_response)
     # the per-response snapshot exists and falls back to the session default
-    assert '_snap_tool_choice = config.get("tool_choice"' in src
+    # (ruff may split the config.get( call across lines, so check the variable
+    # assignment and the key independently)
+    assert "_snap_tool_choice = config.get(" in src
+    assert '"tool_choice"' in src
     # the tool-call parse is gated on tool_choice != "none"
     snap = src.index("_snap_tool_choice")
     gate = src.index('_snap_tool_choice != "none"', snap)
