@@ -158,6 +158,12 @@ dev = [
     "pytest-httpx>=0.30.0",
     "pytest-timeout>=2.3.0",
     "ruff>=0.11.0",
+    # torch + einops: PyTorch-reference parity test for the Wan2.2 VAE MLX port
+    # (tests/unit/test_wan_vae.py::test_numerical_parity_vs_torch_reference). torch
+    # is also an [omni]/[all] runtime extra; pinning it in dev keeps `just test`
+    # skip-free. CPU torch is sufficient — the test only runs reference modules.
+    "torch>=2.1.0",
+    "einops>=0.7.0",
 ]
 
 # Source mlx-vlm from our fork's branch, which is latest upstream main plus the
