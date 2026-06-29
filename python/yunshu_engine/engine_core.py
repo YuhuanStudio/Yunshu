@@ -67,10 +67,6 @@ class EngineCoreConfig:
     num_kv_heads: int = 0
     head_dim: int = 0
     kv_num_blocks: int = 0  # pre-computed block count (0 = auto-compute)
-    # C18: CPU/GPU overlap scheduling
-    enable_cpu_gpu_overlap: bool = (
-        False  # Disabled by default; enable via YUNSHU_CPU_GPU_OVERLAP=1
-    )
     # N-gram speculative decoding in batch path (model-free, zero GPU overhead)
     ngram_spec_enabled: bool = False
     ngram_spec_min_n: int = 1
@@ -345,20 +341,6 @@ class EngineCore:
 
         # Memory guard (created after model info is available)
         self._memory_guard: Any = None
-
-        # C18: CPU/GPU overlap scheduler
-        from .cpu_gpu_overlap import OverlapConfig, OverlapScheduler
-
-        overlap_cfg = OverlapConfig.from_env()
-        if self.config.enable_cpu_gpu_overlap:
-            overlap_cfg.enabled = True
-        self._overlap_scheduler = OverlapScheduler(overlap_cfg)
-
-        # Two-Batch Overlap scheduler (TBO)
-        from .two_batch_overlap import TBOConfig, TwoBatchOverlapScheduler
-
-        tbo_cfg = TBOConfig.from_env()
-        self._tbo_scheduler = TwoBatchOverlapScheduler(tbo_cfg)
 
         # Adaptive batch scheduler (load-aware batch sizing)
         from .adaptive_batch import AdaptiveBatchConfig, AdaptiveBatchScheduler
@@ -2874,25 +2856,13 @@ class EngineCore:
                         logger.debug("token-level scheduling failed", exc_info=True)
 
                 # Run scheduler step on MLX executor thread
-                # TBO takes priority when enabled; else C18 overlap; else plain
                 # _gpu_step_start isolates GPU kernel time from pre-step hooks
                 # (composition scheduler, priority inversion guard, token scheduling)
                 # so _last_step_wall_ms and ITL/TTFT estimates are accurate.
                 _gpu_step_start = time.monotonic()
-                if self._tbo_scheduler.config.enabled:
-                    scheduler_output = await loop.run_in_executor(
-                        self._executor,
-                        self._tbo_step,
-                    )
-                elif self._overlap_scheduler.config.enabled:
-                    scheduler_output = await loop.run_in_executor(
-                        self._executor,
-                        self._overlap_step,
-                    )
-                else:
-                    scheduler_output = await loop.run_in_executor(
-                        self._executor, self.scheduler.step
-                    )
+                scheduler_output = await loop.run_in_executor(
+                    self._executor, self.scheduler.step
+                )
                 _gpu_step_ms = (time.monotonic() - _gpu_step_start) * 1000
 
                 # CompositionScheduler post_step hooks
@@ -4228,8 +4198,6 @@ class EngineCore:
             "uptime_seconds": round(uptime, 1),
             "compute_utilization_pct": round(self.get_compute_utilization(), 2),
             "last_step_duration_ms": round(self._last_step_wall_ms, 2),
-            "cpu_gpu_overlap": self._overlap_scheduler.get_stats(),
-            "tbo": self._tbo_scheduler.get_stats(),
             "adaptive_batch": self._adaptive_batch.get_stats(),
             **{f"scheduler_{k}": v for k, v in scheduler_stats.items()},
         }
@@ -4287,24 +4255,6 @@ class EngineCore:
             logger.debug("inflight prefix stats unavailable", exc_info=True)
             stats["inflight_prefix_sharing"] = {"enabled": False}
         return stats
-
-    def _overlap_step(self) -> Any:
-        """Run one scheduler step with CPU/GPU overlap (C18).
-
-        Called on the MLX executor thread. Overlaps CPU post-processing
-        from the previous step with GPU forward of the current step.
-        """
-        self._overlap_scheduler.step_async(self.scheduler)
-        # CPU can do other work here while GPU is computing
-        return self._overlap_scheduler.step_sync()
-
-    def _tbo_step(self) -> Any:
-        """Run one scheduler step with Two-Batch Overlap.
-
-        Called on the MLX executor thread. Uses double-buffering: while GPU
-        processes the active batch, CPU prepares the pending batch.
-        """
-        return self._tbo_scheduler.step(self.scheduler)
 
     def get_kv_cache_stats(self) -> dict:
         """Return KV prefix cache statistics (for admin endpoint)."""
