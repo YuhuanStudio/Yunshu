@@ -37,14 +37,6 @@ def _check_permission(request: Request) -> None:
     """
     if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
         return
-    rbac_key = getattr(request.state, "rbac_key", None)
-    if rbac_key is not None:
-        if not rbac_key.has_permission("can_admin"):
-            raise HTTPException(
-                status_code=403,
-                detail="Insufficient permissions for profiling endpoints",
-            )
-        return
     auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
     if auth_token:
         # Verify the request actually provides a valid Bearer token

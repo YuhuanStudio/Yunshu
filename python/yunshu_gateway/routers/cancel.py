@@ -26,9 +26,7 @@ def _check_auth(request: Request) -> None:
     """Verify auth token when YUNSHU_AUTH_TOKEN is configured.
 
     Single-consumer model: the simplified TenantAuthMiddleware stamps
-    ``request.state.role = "owner"`` on every request it admits. Honor that
-    (plus the legacy ``rbac_key`` / ``tenant`` attributes, kept for backward
-    compat with tests that set them directly).
+    ``request.state.role = "owner"`` on every request it admits. Honor that.
 
     Raises HTTPException 401 if auth is required but missing/invalid.
     """
@@ -36,11 +34,6 @@ def _check_auth(request: Request) -> None:
     # stamped request.state.role — trust that.
     if hasattr(request, "state"):
         if getattr(request.state, "role", None):
-            return
-        # Legacy compat: tests / older shims may set rbac_key or tenant directly.
-        if getattr(request.state, "rbac_key", None) is not None:
-            return
-        if getattr(request.state, "tenant", None) is not None:
             return
 
     auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")

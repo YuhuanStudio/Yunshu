@@ -47,9 +47,7 @@ def _select_image_engine(manager, model):
 
      the img2img-family routes (variation/edit/inpaint/
     controlnet/depth) and the t2i fallbacks grabbed the FIRST loaded image engine, ignoring
-    req.model. With ≥2 image models loaded that served the WRONG model — and because every
-    image route gates can_access_model(req.model) at the top but then served first-of-type,
-    a key authorized for model B could be served model A (which it may not access at all).
+    req.model. With ≥2 image models loaded that served the WRONG model.
     Match by model_id. Fall back to the lone loaded engine when (a) `model` is empty, or
     (b) `model` was given but unmatched AND exactly one image engine is loaded.
 
@@ -58,8 +56,7 @@ def _select_image_engine(manager, model):
     model under any other id (a custom alias, or a different model) and a client that omits
     `model` would 404 under the strict match even though exactly one image model is
     loaded and unambiguous. The wrong-model protection only matters when ≥2 are loaded
-    (where a sole-fallback can't apply); the per-route can_access_model(req.model) gate still
-    runs first, so scoped keys are unaffected.
+    (where a sole-fallback can't apply).
     """
     from yunshu_engine.image_engine import ImageGenEngine
 
@@ -144,12 +141,6 @@ async def create_image(req: ImageGenerateRequest, request: Request) -> JSONRespo
     from .models import _check_permission
 
     _check_permission(request, "can_infer")
-    _rbac_key = getattr(request.state, "rbac_key", None)
-    if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
-        raise HTTPException(
-            status_code=403,
-            detail=f"Model '{req.model}' not accessible with this API key",
-        )
     manager = get_model_manager()
     if manager is None:
         raise HTTPException(status_code=503, detail="Model manager not initialized")
@@ -157,8 +148,7 @@ async def create_image(req: ImageGenerateRequest, request: Request) -> JSONRespo
     from yunshu_engine.image_engine import ImageGenEngine
 
     # Find image gen engine — match by model_id. Was: primary model_id match
-    # then a first-of-type fallback that served the WRONG model (and one the key's
-    # can_access_model(req.model) check above never authorized). Dropped that fallback.
+    # then a first-of-type fallback that served the WRONG model. Dropped that fallback.
     img_engine = _select_image_engine(manager, req.model)
 
     if img_engine is None:
@@ -299,12 +289,6 @@ async def stream_image_generation(req: ImageGenerateRequest, request: Request):
     from .models import _check_permission
 
     _check_permission(request, "can_infer")
-    _rbac_key = getattr(request.state, "rbac_key", None)
-    if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
-        raise HTTPException(
-            status_code=403,
-            detail=f"Model '{req.model}' not accessible with this API key",
-        )
     manager = get_model_manager()
     if manager is None:
         raise HTTPException(status_code=503, detail="Model manager not initialized")
@@ -469,12 +453,6 @@ async def create_image_variation(
     from .models import _check_permission
 
     _check_permission(request, "can_infer")
-    _rbac_key = getattr(request.state, "rbac_key", None)
-    if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
-        raise HTTPException(
-            status_code=403,
-            detail=f"Model '{req.model}' not accessible with this API key",
-        )
     import base64
 
     try:
@@ -494,8 +472,7 @@ async def create_image_variation(
     if manager is None:
         raise HTTPException(status_code=503, detail="Model manager not initialized")
 
-    # match by model_id (was first-of-type, ignoring req.model — wrong-model
-    # serving + isolation hole vs the can_access_model(req.model) check above).
+    # match by model_id (was first-of-type, ignoring req.model — wrong-model serving).
     img_engine = _select_image_engine(manager, req.model)
 
     if img_engine is None:
@@ -625,12 +602,6 @@ async def create_image_edit(req: ImageEditsRequest, request: Request) -> JSONRes
     from .models import _check_permission
 
     _check_permission(request, "can_infer")
-    _rbac_key = getattr(request.state, "rbac_key", None)
-    if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
-        raise HTTPException(
-            status_code=403,
-            detail=f"Model '{req.model}' not accessible with this API key",
-        )
     import base64
 
     try:
@@ -650,8 +621,7 @@ async def create_image_edit(req: ImageEditsRequest, request: Request) -> JSONRes
     if manager is None:
         raise HTTPException(status_code=503, detail="Model manager not initialized")
 
-    # match by model_id (was first-of-type, ignoring req.model — wrong-model
-    # serving + isolation hole vs the can_access_model(req.model) check above).
+    # match by model_id (was first-of-type, ignoring req.model — wrong-model serving).
     img_engine = _select_image_engine(manager, req.model)
 
     if img_engine is None:
@@ -791,12 +761,6 @@ async def create_image_inpaint(
     from .models import _check_permission
 
     _check_permission(request, "can_infer")
-    _rbac_key = getattr(request.state, "rbac_key", None)
-    if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
-        raise HTTPException(
-            status_code=403,
-            detail=f"Model '{req.model}' not accessible with this API key",
-        )
     try:
         image_bytes = _decode_image_b64(req.image)
         if len(image_bytes) > MAX_IMAGE_UPLOAD_BYTES:
@@ -831,8 +795,7 @@ async def create_image_inpaint(
     if manager is None:
         raise HTTPException(status_code=503, detail="Model manager not initialized")
 
-    # match by model_id (was first-of-type, ignoring req.model — wrong-model
-    # serving + isolation hole vs the can_access_model(req.model) check above).
+    # match by model_id (was first-of-type, ignoring req.model — wrong-model serving).
     img_engine = _select_image_engine(manager, req.model)
 
     if img_engine is None:
@@ -961,12 +924,6 @@ async def create_image_controlnet(
     from .models import _check_permission
 
     _check_permission(request, "can_infer")
-    _rbac_key = getattr(request.state, "rbac_key", None)
-    if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
-        raise HTTPException(
-            status_code=403,
-            detail=f"Model '{req.model}' not accessible with this API key",
-        )
     try:
         image_bytes = _decode_image_b64(req.image)
         if len(image_bytes) > MAX_IMAGE_UPLOAD_BYTES:
@@ -984,8 +941,7 @@ async def create_image_controlnet(
     if manager is None:
         raise HTTPException(status_code=503, detail="Model manager not initialized")
 
-    # match by model_id (was first-of-type, ignoring req.model — wrong-model
-    # serving + isolation hole vs the can_access_model(req.model) check above).
+    # match by model_id (was first-of-type, ignoring req.model — wrong-model serving).
     img_engine = _select_image_engine(manager, req.model)
 
     if img_engine is None:
@@ -1103,12 +1059,6 @@ async def create_image_depth_guided(
     from .models import _check_permission
 
     _check_permission(request, "can_infer")
-    _rbac_key = getattr(request.state, "rbac_key", None)
-    if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
-        raise HTTPException(
-            status_code=403,
-            detail=f"Model '{req.model}' not accessible with this API key",
-        )
     try:
         depth_bytes = _decode_image_b64(req.depth_image)
         if len(depth_bytes) > MAX_IMAGE_UPLOAD_BYTES:
@@ -1127,8 +1077,7 @@ async def create_image_depth_guided(
     if manager is None:
         raise HTTPException(status_code=503, detail="Model manager not initialized")
 
-    # match by model_id (was first-of-type, ignoring req.model — wrong-model
-    # serving + isolation hole vs the can_access_model(req.model) check above).
+    # match by model_id (was first-of-type, ignoring req.model — wrong-model serving).
     img_engine = _select_image_engine(manager, req.model)
 
     if img_engine is None:

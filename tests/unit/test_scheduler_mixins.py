@@ -7,11 +7,8 @@ import pytest
 
 from yunshu_engine.scheduler_mixins import (
     CompositionScheduler,
-    DataParallelMixin,
-    DisaggregationMixin,
     MemoryPressureMixin,
     MetricsMixin,
-    PipelineParallelMixin,
     ProfilingMixin,
     SchedulerMixin,
     SpecDecodeMixin,
@@ -232,134 +229,6 @@ class TestProfilingMixin:
         assert len(p._samples) == 0
 
 
-# ── DisaggregationMixin ──
-
-
-class TestDisaggregationMixin:
-    def test_routes_long_prompts_to_prefill(self):
-        d = DisaggregationMixin(prefill_threshold=100, prefill_nodes=["node1"])
-        d.post_step(
-            None,
-            FakeOutput(
-                [
-                    FakeReqOutput(finished=True, prompt_tokens=500),
-                ]
-            ),
-        )
-        assert d._prefill_count == 1
-
-    def test_short_prompts_go_to_decode(self):
-        d = DisaggregationMixin(prefill_threshold=4096)
-        d.post_step(
-            None,
-            FakeOutput(
-                [
-                    FakeReqOutput(finished=True, prompt_tokens=100),
-                ]
-            ),
-        )
-        assert d._decode_count == 1
-
-    def test_on_add_request_logs_long_prompt(self):
-        d = DisaggregationMixin(prefill_threshold=100, prefill_nodes=["node1"])
-        req = MagicMock(num_prompt_tokens=500)
-        d.on_add_request(None, req)
-
-    def test_get_stats(self):
-        d = DisaggregationMixin(
-            prefill_threshold=100, prefill_nodes=["p1"], decode_nodes=["d1"]
-        )
-        stats = d.get_stats()
-        assert stats["prefill_threshold"] == 100
-        assert stats["prefill_nodes"] == 1
-        assert stats["decode_nodes"] == 1
-
-
-# ── DataParallelMixin ──
-
-
-class TestDataParallelMixin:
-    def test_least_loaded_routing(self):
-        dp = DataParallelMixin(num_replicas=3, strategy="least_loaded")
-        dp._replica_loads = {0: 5, 1: 2, 2: 3}
-        target = dp._select_replica()
-        assert target == 1
-
-    def test_round_robin_routing(self):
-        dp = DataParallelMixin(num_replicas=3, strategy="round_robin")
-        [dp._select_replica() for _ in range(6)]
-        # _total_routed stays 0 because we're calling _select_replica directly
-        # All targets = 0 % 3 = 0
-        # Test round_robin via on_add_request which increments _total_routed
-        dp2 = DataParallelMixin(num_replicas=3, strategy="round_robin")
-        routed = []
-        for _ in range(6):
-            routed.append(dp2._select_replica())
-            dp2._total_routed += 1
-        assert routed == [0, 1, 2, 0, 1, 2]
-
-    def test_on_add_request_increments_load(self):
-        dp = DataParallelMixin(num_replicas=2)
-        dp.on_add_request(None, MagicMock())
-        assert sum(dp._replica_loads.values()) == 1
-
-    def test_post_step_decrements_load(self):
-        dp = DataParallelMixin(num_replicas=2)
-        dp._replica_loads = {0: 3, 1: 2}
-        # Only finished requests on replica 0 and 1 should decrement
-        dp.post_step(
-            None,
-            FakeOutput(
-                [
-                    FakeReqOutput(finished=True, replica_id=0),
-                    FakeReqOutput(finished=True, replica_id=1),
-                ]
-            ),
-        )
-        assert dp._replica_loads[0] == 2
-        assert dp._replica_loads[1] == 1
-
-    def test_single_replica_no_routing(self):
-        dp = DataParallelMixin(num_replicas=1)
-        dp.on_add_request(None, MagicMock())
-        assert dp._total_routed == 0
-
-    def test_get_stats(self):
-        dp = DataParallelMixin(num_replicas=3, strategy="least_loaded")
-        stats = dp.get_stats()
-        assert stats["num_replicas"] == 3
-        assert stats["strategy"] == "least_loaded"
-
-
-# ── PipelineParallelMixin ──
-
-
-class TestPipelineParallelMixin:
-    def test_tracks_bubbles(self):
-        pp = PipelineParallelMixin(num_stages=4, stage_id=0)
-        for i in range(10):
-            pp.pre_step(None)
-            if i > 4:
-                pp.post_step(None, FakeOutput())  # no outputs = bubble
-            else:
-                pp.post_step(None, FakeOutput([FakeReqOutput()]))
-        stats = pp.get_stats()
-        assert stats["pipeline_bubbles"] > 0
-
-    def test_no_bubble_with_work(self):
-        pp = PipelineParallelMixin(num_stages=2)
-        pp.pre_step(None)
-        pp.post_step(None, FakeOutput([FakeReqOutput()]))
-        assert pp._pipeline_bubbles == 0
-
-    def test_get_stats(self):
-        pp = PipelineParallelMixin(num_stages=4, stage_id=1, micro_batch_size=2)
-        stats = pp.get_stats()
-        assert stats["num_stages"] == 4
-        assert stats["stage_id"] == 1
-        assert stats["bubble_rate"] == 0.0
-
-
 # ── SpecDecodeMixin ──
 
 
@@ -524,14 +393,6 @@ class TestCompositionScheduler:
         comp.add_mixin(metrics)
         comp.step()
         assert metrics._step_count == 1
-
-    def test_add_request_notifies_mixins(self):
-        core = FakeScheduler()
-        comp = CompositionScheduler(core)
-        dp = DataParallelMixin(num_replicas=2)
-        comp.add_mixin(dp)
-        comp.add_request({"id": "r1", "prompt": "hello"})
-        assert dp._total_routed == 1
 
     def test_finished_triggers_on_finish(self):
         core = FakeScheduler()

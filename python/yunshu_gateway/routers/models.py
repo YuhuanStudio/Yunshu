@@ -19,54 +19,18 @@ from ..engine import get_engine, get_model_manager
 router = APIRouter(tags=["models"])
 
 
-# Admin-class permissions a legacy (pre-RBAC) tenant must NOT inherit via the
-# "authenticated tenant → allow" branch. Inference-class permissions (can_infer) stay
-# available so legacy tenants can still run inference.
-_TENANT_DENIED_PERMISSIONS = frozenset(
-    {
-        "can_load_models",
-        "can_unload_models",
-        "can_admin",
-        "can_benchmark",
-        "can_manage_tokens",
-        "can_manage_tenants",
-    }
-)
-
-
 def _check_permission(request: Request, permission: str) -> None:
-    """Check RBAC permission on gateway endpoints.
+    """Check auth on gateway endpoints (deny-by-default).
 
-    Security (deny-by-default):
+    Single-consumer model: the multi-tenant RBAC machinery is gone, so this
+    enforces the static-token contract.
+
     1. If YUNSHU_AUTH_DISABLED=true, allow (dev opt-in, logged at startup)
-    2. If rbac_key is set (from TenantAuthMiddleware), check has_permission()
-    3. If tenant is set (legacy tenant auth), allow only NON-privileged permissions;
-       admin-class ops require a real admin role
-    4. If YUNSHU_AUTH_TOKEN is set, verify request actually presents it
-    5. If no auth configured and not disabled — DENY access (secure default)
+    2. If YUNSHU_AUTH_TOKEN is set, verify request actually presents it
+    3. If no auth configured and not disabled — DENY access (secure default)
     """
     if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
         return
-    rbac_key = getattr(request.state, "rbac_key", None)
-    if rbac_key is not None:
-        if not rbac_key.has_permission(permission):
-            raise HTTPException(status_code=403, detail="Insufficient permissions")
-        return
-    # Tenant set by TenantAuthMiddleware (legacy tenant auth)
-    tenant = getattr(request.state, "tenant", None)
-    if tenant is not None:
-        # The tenant branch must NOT return unconditionally for EVERY permission:
-        # a low-privilege legacy tenant could then load/unload models, outranking even
-        # a USER RBAC key (which IS correctly 403'd above). Legacy tenants keep
-        # inference-class access; admin-class permissions require a real admin role.
-        if permission not in _TENANT_DENIED_PERMISSIONS:
-            return  # non-privileged (e.g. can_infer) — allow
-        _role = str(getattr(request.state, "role", "") or "")
-        if _role.lower() in ("admin", "system", "owner") or _role.upper().endswith(
-            "ADMIN"
-        ):
-            return
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
     # Static token auth — must verify the request actually provides it
     auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
     if auth_token is not None and auth_token:
@@ -94,17 +58,13 @@ def _check_permission(request: Request, permission: str) -> None:
 
 
 def _check_model_access(request: Request, model: str | None) -> None:
-    """403 if the request's RBAC key isn't scoped to access ``model``.
+    """No-op model-access gate (retained as a stable call seam).
 
-    Enforces tenant model-isolation on every model-serving endpoint.
-    No-op when RBAC isn't active or no model is named.
+    The per-key model-isolation it once enforced was part of the multi-tenant
+    RBAC machinery, which has been removed (single-consumer model). Kept so the
+    many model-serving routes that call it stay unchanged.
     """
-    _rbac_key = getattr(request.state, "rbac_key", None)
-    if _rbac_key is not None and model and not _rbac_key.can_access_model(model):
-        raise HTTPException(
-            status_code=403,
-            detail=f"Model '{model}' not accessible with this API key",
-        )
+    return None
 
 
 # Guard against concurrent load/unload of the same model
@@ -138,27 +98,15 @@ async def list_models(request: Request) -> dict:
     status) is only included for authenticated requests.
     """
     models = []
-    # A static-token holder authenticates with role="admin" but no rbac_key/tenant
-    # (likewise YUNSHU_AUTH_DISABLED dev mode sets neither); a predicate that treats
-    # admins as anonymous would omit loaded/type/size_gb/stats from the listing. Count an
-    # admin role as authenticated too.
-    _authenticated = (
-        getattr(request.state, "rbac_key", None) is not None
-        or getattr(request.state, "tenant", None) is not None
-        or getattr(request.state, "role", None) == "admin"
-    )
+    # A static-token holder authenticates with role="admin"; an authenticated
+    # request gets the detailed listing (loaded/type/size_gb/stats), the public
+    # OpenAI-compat list stays minimal.
+    _authenticated = getattr(request.state, "role", None) == "admin"
 
     # Multi-model mode
     manager = get_model_manager()
-    # SECURITY: a model-scoped RBAC key must not see (id/type/size/stats of)
-    # models it can't use — mirror the per-route can_access_model isolation on the list.
-    _rbac_key = getattr(request.state, "rbac_key", None)
-    _filtered = False
     if manager is not None:
         for entry in manager.list_entries():
-            if _rbac_key is not None and not _rbac_key.can_access_model(entry.model_id):
-                _filtered = True
-                continue
             model_info = {
                 "id": entry.model_id,
                 "object": "model",
@@ -185,13 +133,10 @@ async def list_models(request: Request) -> dict:
                     )
             models.append(model_info)
         result = {"object": "list", "data": models}
-        # Include model registry stats for debugging/monitoring — but NOT for a scoped
-        # key (leaks global model counts of inaccessible models) and NOT for an
+        # Include model registry stats for debugging/monitoring — but NOT for an
         # unauthenticated caller (the public OpenAI-compat list must not leak
-        # global total_entries/active_owners — _filtered is only set when a SCOPED key
-        # drops a model, so an anonymous request would otherwise slip through with full
-        # registry stats).
-        if _authenticated and not _filtered:
+        # global total_entries/active_owners).
+        if _authenticated:
             try:
                 from yunshu_engine.model_registry import get_registry
 
@@ -203,23 +148,17 @@ async def list_models(request: Request) -> dict:
     # Single-engine mode
     engine = get_engine()
     if engine and engine.is_loaded:
-        # Gate the lone engine's model by can_access_model too — the multi-model
-        # branch (above) filters per key, but the single-engine branch must not list the
-        # model name unconditionally, else a key that can't access it (and is correctly
-        # 403'd at inference) would still see its id here (cross-scope name leak).
-        _rbac_key = getattr(request.state, "rbac_key", None)
-        if _rbac_key is None or _rbac_key.can_access_model(engine.model_name):
-            _load_time = getattr(engine, "_load_time", None) or getattr(
-                engine, "load_time", None
-            )
-            models.append(
-                {
-                    "id": engine.model_name,
-                    "object": "model",
-                    "created": int(_load_time) if _load_time else int(time.time()),
-                    "owned_by": "yunshu",
-                }
-            )
+        _load_time = getattr(engine, "_load_time", None) or getattr(
+            engine, "load_time", None
+        )
+        models.append(
+            {
+                "id": engine.model_name,
+                "object": "model",
+                "created": int(_load_time) if _load_time else int(time.time()),
+                "owned_by": "yunshu",
+            }
+        )
     return {"object": "list", "data": models}
 
 
@@ -234,13 +173,6 @@ async def get_model(model_id: str, request: Request) -> dict:
         _resolved = manager.resolve_model_id(model_id) or model_id
         entry = manager.get_entry(_resolved)
         if entry is None:
-            raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
-        # SECURITY: every serving route gates the model via can_access_model;
-        # this retrieve endpoint checking only can_infer would let a model-scoped key
-        # read loaded/type/size_gb of a model it cannot use (cross-scope info leak). Deny
-        # as 404 (not 403) so the id space isn't enumerable, matching the filtered list.
-        _rbac_key = getattr(request.state, "rbac_key", None)
-        if _rbac_key is not None and not _rbac_key.can_access_model(entry.model_id):
             raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
         return {
             "id": entry.model_id,
@@ -258,11 +190,6 @@ async def get_model(model_id: str, request: Request) -> dict:
 
     engine = get_engine()
     if not engine or not engine.resolve_model_id(model_id):
-        raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
-    # Same per-key gate as the multi-model retrieve branch — deny as 404 so the
-    # id space isn't enumerable by an out-of-scope key.
-    _rbac_key = getattr(request.state, "rbac_key", None)
-    if _rbac_key is not None and not _rbac_key.can_access_model(engine.model_name):
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
     return {
         "id": model_id,

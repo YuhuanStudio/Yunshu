@@ -22,8 +22,6 @@ Predefined metrics
 - lora_load_errors_total  (counter)   — LoRA adapter load errors
 - model_warmup_total      (counter)   — model warmup operations
 - model_warmup_duration_seconds (histogram) — warmup latency
-- kv_migrations_total     (counter)   — KV block migration operations
-- kv_migration_errors_total (counter) — KV migration errors
 - response_cache_hits_total (counter) — response cache hits
 - response_cache_misses_total (counter) — response cache misses
 """
@@ -646,29 +644,6 @@ class PrometheusMetrics:
         self._counters["model_warmup_prompts_prefilled"] = _Counter(
             "yunshu_model_warmup_prompts_prefilled_total",
             "Total warm prompts prefilled into KV cache during warmup",
-        )
-
-        # KV migration metrics (multi-tier block management)
-        self._counters["kv_migrations_total"] = _Counter(
-            "yunshu_kv_migrations_total",
-            "Total KV block migration operations",
-        )
-        self._counters["kv_migration_errors_total"] = _Counter(
-            "yunshu_kv_migration_errors_total",
-            "Total KV block migration errors",
-        )
-        self._gauges["kv_migration_pending_queue"] = _Gauge(
-            "yunshu_kv_migration_pending_queue",
-            "Number of pending KV block migrations in queue",
-        )
-        self._gauges["kv_migration_tracked_blocks"] = _Gauge(
-            "yunshu_kv_migration_tracked_blocks",
-            "Number of KV blocks tracked by the migration manager",
-        )
-        self._histograms["kv_migration_duration_seconds"] = _Histogram(
-            "yunshu_kv_migration_duration_seconds",
-            "Duration of individual KV block migrations in seconds",
-            buckets=_Histogram.INFERENCE_BUCKETS,
         )
 
         # Gateway active requests gauge (wired from main.py track_active_requests)

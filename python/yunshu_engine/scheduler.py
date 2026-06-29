@@ -579,8 +579,6 @@ class SchedulerConfig:
     step_interval: float = 0.001
     policy: SchedulingPolicy = SchedulingPolicy.FCFS
     max_num_seqs: int = 256
-    # External prefill (memory preflight, chunked progress, mid-prefill abort)
-    use_external_prefill: bool = False
     prefill_chunk_size: int = 2048
     request_timeout_seconds: float = 300  # 5 min timeout for waiting requests
     max_waiting_requests: int = (
@@ -760,16 +758,10 @@ class Scheduler:
         self._server_metrics: Any | None = None
         self._prefill_tracker: Any | None = None
 
-        # External prefill (lazy init)
-        self._external_prefiller: Any | None = None
         self._memory_monitor: Any | None = None
 
         # Thinking-segment KV substore for reasoning cache reuse
         self._thinking_store = ThinkingSegmentSubstore(ThinkingSegmentConfig())
-
-        # KV offload manager (async tier-to-tier block migration)
-        # Set by EngineCore after initialization.
-        self._kv_offload_manager: Any | None = None
 
         # Memory guard consecutive deferral counter — prevents spin-loop
         # where the scheduler repeatedly defers all waiting requests but
@@ -1149,14 +1141,6 @@ class Scheduler:
             logger.debug("prefix save failed for uid %s", uid, exc_info=True)
             self._saved_prefix_uids.add(uid)
 
-    def set_kv_offload_manager(self, manager: Any) -> None:
-        """Set KV offload manager for periodic tier migration.
-
-        Called by EngineCore after creating the KVOffloadManager.
-        The scheduler calls manager.maybe_offload() periodically from step().
-        """
-        self._kv_offload_manager = manager
-
     def set_hybrid_kv_cache(self, hybrid_kv: Any) -> None:
         """Set HybridKVCache for layer-type-aware KV management.
 
@@ -1254,17 +1238,6 @@ class Scheduler:
                 result.extend(prefix_groups[h])
 
         return result
-
-    def _get_external_prefiller(self) -> Any:
-        """Lazy-initialize the ExternalPrefiller."""
-        if self._external_prefiller is None:
-            from .external_prefill import ExternalPrefiller
-
-            self._external_prefiller = ExternalPrefiller(
-                model=self.model,
-                tokenizer=self.tokenizer,
-            )
-        return self._external_prefiller
 
     def add_request(self, request: Request) -> None:
         """Add request to waiting queue (called from event loop thread)."""
@@ -1551,13 +1524,6 @@ class Scheduler:
         if self._step_counter % 64 == 0 and self._memory_monitor is not None:
             self._maybe_evict_kv_cache()
 
-        # 7c. Periodic KV offload check
-        # When KVOffloadManager is configured, periodically check if blocks
-        # should be migrated from hot → warm → SSD. Uses sync mode since
-        # step() runs on the MLX executor thread.
-        if self._kv_offload_manager is not None and self._step_counter % 128 == 0:
-            self._maybe_kv_offload()
-
         # 7d. Periodic encoder-decoder cache eviction
         # Evict expired encoder hidden-state entries to reclaim memory.
         if self._step_counter % 64 == 0:
@@ -1586,10 +1552,6 @@ class Scheduler:
         requests, inserts only hybrid_chunk_size tokens per step
         (Sarathi-style chunked prefill), interleaving prefill chunks
         with decode steps for better tail latency.
-
-        When use_external_prefill is True, runs external prefill before
-        BatchGenerator.insert() for memory preflight, progress tracking,
-        and mid-prefill abort support.
         """
         # First, process any pending partial prefills from previous steps
         self._process_pending_prefill()
@@ -1974,16 +1936,6 @@ class Scheduler:
                     req.set_finished(RequestStatus.FINISHED_ABORTED, reason="abort")
                     self._failed_insert_ids.append(req.request_id)
                     continue
-
-                # ── External prefill path ──
-                if self.config.use_external_prefill:
-                    prefill_ok = self._run_external_prefill(req)
-                    if not prefill_ok:
-                        # Bug 6 fix: add to _failed_insert_ids so the engine loop
-                        # generates a synthetic error output and calls _finalize_request.
-                        # Without this, budget/lifecycle/memory registrations leak.
-                        self._failed_insert_ids.append(req.request_id)
-                        continue  # request was aborted or errored
 
                 sp = req.sampling_params
 
@@ -2474,74 +2426,6 @@ class Scheduler:
                     self._active_partial_prefills = max(
                         0, self._active_partial_prefills - 1
                     )
-
-    def _run_external_prefill(self, req: Request) -> bool:
-        """Run external prefill for a request.
-
-        Returns True if prefill completed successfully, False if aborted/errored.
-        Sets request status to PREFILLING during prefill, then transitions to
-        RUNNING or FINISHED_ABORTED/FINISHED_ERROR on completion/failure.
-
-        The external prefill provides:
-        1. Memory preflight check (raises PrefillMemoryExceededError if OOM)
-        2. Chunked progress tracking via PrefillProgressTracker
-        3. Mid-prefill abort via pending_abort_ids
-        """
-        from .external_prefill import PrefillAbortedError
-
-        prefiller = self._get_external_prefiller()
-        req.status = RequestStatus.PREFILLING
-        req.prefill_start = time.monotonic()
-
-        # Progress callback for PrefillProgressTracker
-        def _on_progress(completed: int, total: int) -> None:
-            if self._prefill_tracker is not None:
-                self._prefill_tracker.update(
-                    req.request_id,
-                    completed,
-                    total,
-                    self.model_id,
-                )
-
-        try:
-            result = prefiller.prefill_chunked(
-                token_ids=req.prompt_token_ids,
-                chunk_size=self.config.prefill_chunk_size,
-                on_progress=_on_progress,
-                request_id=req.request_id,
-                pending_aborts=self._pending_abort_ids,
-                memory_monitor=self._memory_monitor,
-            )
-
-            # Record prefill metrics
-            req.cached_tokens = result.cached_tokens
-            req.prefill_end = time.monotonic()
-            logger.debug(
-                f"External prefill completed for {req.request_id}: "
-                f"{result.num_tokens} tokens in {result.duration_s:.3f}s "
-                f"({result.cached_tokens} cached)"
-            )
-            return True
-
-        except PrefillAbortedError:
-            logger.info(f"External prefill aborted for {req.request_id}")
-            req.set_finished(RequestStatus.FINISHED_ABORTED, reason="abort")
-            self.finished_ids.add(req.request_id)
-            return False
-
-        except Exception as e:
-            from .exceptions import PrefillMemoryExceededError
-
-            if isinstance(e, PrefillMemoryExceededError):
-                logger.warning(f"Prefill memory exceeded for {req.request_id}: {e}")
-            else:
-                logger.error(
-                    f"External prefill failed for {req.request_id}: {e}",
-                    exc_info=True,
-                )
-            req.set_finished(RequestStatus.FINISHED_ERROR, reason="error")
-            self.finished_ids.add(req.request_id)
-            return False
 
     _MAX_PREEMPTIONS_PER_REQUEST = 3
     _MAX_PREEMPTIONS_PER_STEP = 8  # Cap per-step preemptions to prevent cascade
@@ -4101,66 +3985,6 @@ class Scheduler:
                     self._prefix_cache._block_evict_checker = _original_checker
         except Exception:
             logger.debug("failed", exc_info=True)
-
-    def _maybe_kv_offload(self) -> None:
-        """Periodic KV offload check via KVOffloadManager.
-
-        Called from step() every 128 steps. Uses the manager's sync
-        offload path since step() runs on the MLX executor thread.
-        The manager's policy decides whether offloading is needed and
-        which blocks to migrate (hot → warm → SSD).
-        """
-        if self._kv_offload_manager is None:
-            return
-        try:
-            # Use sync offload since we're on the executor thread
-            mgr = self._kv_offload_manager
-            if not mgr.config.enabled:
-                return
-
-            # Gather context for the policy
-            context: dict[str, Any] = {
-                "step_counter": self._step_counter,
-                "memory_usage": 0.0,
-                "free_blocks": 0,
-            }
-            try:
-                import mlx.core as mx
-
-                active_mem = mx.get_active_memory()
-                from .utils.hardware import get_hardware_info
-
-                hw = get_hardware_info()
-                total_mem = hw.total_memory_bytes
-                if total_mem > 0:
-                    context["memory_usage"] = active_mem / total_mem
-            except Exception:
-                logger.debug("memory context gather in offload failed", exc_info=True)
-
-            # Let the policy decide
-            if not mgr._policy.should_offload(context):
-                return
-
-            hot_mgr = mgr._get_hot_manager()
-            if hot_mgr is None:
-                return
-
-            max_blocks = context.get("max_blocks", mgr.config.lru_max_blocks_per_cycle)
-            block_hashes = mgr._policy.select_blocks(hot_mgr, max_blocks, context)
-            if not block_hashes:
-                return
-
-            # Execute sync offload
-            result = mgr.offload_blocks_sync(block_hashes)
-            if result.blocks_offloaded > 0:
-                logger.info(
-                    "KV offload: %d blocks migrated (%s → %s)",
-                    result.blocks_offloaded,
-                    result.source_tier.value,
-                    result.dest_tier.value,
-                )
-        except Exception:
-            logger.debug("KV offload check failed", exc_info=True)
 
     def _cleanup_finished(self) -> None:
         """Remove finished requests from running dict."""

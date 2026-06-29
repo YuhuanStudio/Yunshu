@@ -61,7 +61,6 @@ def _global_options(
         os.environ["YUNSHU_GATEWAY_URL"] = url
 
 
-from .admin import admin_app
 from .benchmark import bench_app
 from .chat import chat_app
 from .config import config_app
@@ -81,4 +80,3 @@ app.add_typer(launch_app, name="launch")
 app.add_typer(eval_app, name="eval")
 app.add_typer(bench_app, name="bench")
 app.add_typer(diagnose_app, name="diagnose")
-app.add_typer(admin_app, name="admin")

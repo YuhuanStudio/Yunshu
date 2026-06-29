@@ -75,12 +75,6 @@ def _make_batched_engine(**overrides):
     engine._kv_quant_bits = None
     engine._kv_quant_group_size = 64
     engine._kv_quant_start = 0
-    engine._kv_transfer_client = None
-    engine._kv_transfer_stats = {
-        "blocks_transferred": 0,
-        "bytes_transferred": 0,
-        "transfer_failures": 0,
-    }
     engine._deltanet_inverter = None
     engine._deltanet_inversion_enabled = False
     engine._deltanet_inversion_stats = {
@@ -140,7 +134,6 @@ def _make_engine_core():
     core._budget_manager = MagicMock()
     core._memory_aware_scheduler = MagicMock()
     core._kv_lifecycle = MagicMock()
-    core._kv_migration = MagicMock()
     core._request_lora_adapters = {}
     core._request_timestamps = {}
     core._kv_prefix_hashes = {}

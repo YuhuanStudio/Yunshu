@@ -107,43 +107,13 @@ def log_operation(
 
 
 def resolve_actor(request: object) -> str:
-    """Extract actor identity from a FastAPI ``Request`` object.
+    """Resolve the actor identity for an audit line.
 
-    Single-consumer default: when no per-request identity has been attached by
-    the auth middleware (auth disabled, or static-token auth), returns the
-    constant ``"owner"`` — the single digital being (Yunmo) this engine serves.
-    A ``request.state.rbac_key`` / ``request.state.tenant`` attribute, if
-    present (e.g. set by a test stub or a future auth shim), is still honored
-    so existing call sites and tests keep working.
-
-    Resolution order:
-    1. RBAC API key name (``request.state.rbac_key.name``) — kept for compat
-    2. RBAC key prefix (``request.state.rbac_key.key_prefix``) — kept for compat
-    3. Static auth token indicator (``request.state.tenant``) — kept for compat
-    4. Single-consumer default (``"owner"``)
+    Single-consumer model: the multi-tenant RBAC machinery is gone, so every
+    request maps to the constant single-owner identity (``"owner"``, overridable
+    via ``YUNSHU_ACTOR_IDENTITY``) — the single digital being (Yunmo) this engine
+    serves. ``request`` is accepted for call-site compatibility.
     """
-    state = getattr(request, "state", None)
-    if state is None:
-        return _default_actor()
-
-    rbac_key = getattr(state, "rbac_key", None)
-    if rbac_key is not None:
-        name = getattr(rbac_key, "name", None)
-        if name:
-            return name
-        prefix = getattr(rbac_key, "key_prefix", None)
-        if prefix:
-            return f"key:{prefix}"
-        return "rbac_user"
-
-    tenant = getattr(state, "tenant", None)
-    if tenant is not None:
-        tenant_name = getattr(tenant, "name", None) or getattr(
-            tenant, "tenant_id", None
-        )
-        if tenant_name:
-            return f"tenant:{tenant_name}"
-
     return _default_actor()
 
 

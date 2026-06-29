@@ -37,29 +37,6 @@ def _check_permission(request: Request) -> None:
         return
     if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
         return
-    # RBAC key set by TenantAuthMiddleware (ys_-prefixed API keys).
-    rbac_key = getattr(request.state, "rbac_key", None)
-    if rbac_key is not None:
-        if not rbac_key.has_permission("can_view_system"):
-            raise HTTPException(
-                status_code=403,
-                detail="Insufficient permissions for monitoring endpoints",
-            )
-        return
-    # Tenant set by TenantAuthMiddleware for static tokens.
-    tenant = getattr(request.state, "tenant", None)
-    if tenant is not None:
-        # The Tenant dataclass has NO `role` field (only `tier`), so the old
-        # getattr(tenant,'role') was always None → legacy tenants ALWAYS got 403 (dead,
-        # misleading branch). Use request.state.role — the canonical role set by the
-        # auth middleware (e.g. "admin" for static tokens) — as the source of truth.
-        tenant_role = str(getattr(request.state, "role", "") or "").lower()
-        if tenant_role not in ("admin", "system", "owner"):
-            raise HTTPException(
-                status_code=403,
-                detail="Insufficient permissions for monitoring endpoints",
-            )
-        return
     auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
     if not auth_token:
         # No auth configured — deny access.
@@ -679,37 +656,6 @@ async def prometheus_export(request: Request) -> str:
                         "response cache gauge population failed", exc_info=True
                     )
 
-                # KV migration Prometheus gauges
-                try:
-                    core = getattr(entry.engine, "_engine_core", None)
-                    if (
-                        core is not None
-                        and hasattr(core, "_kv_migration")
-                        and core._kv_migration is not None
-                    ):
-                        mig_stats = core._kv_migration.get_stats()
-                        pm.set_counter(
-                            "kv_migrations_total",
-                            mig_stats.get("total_migrations", 0),
-                            labels=ml,
-                        )
-                        pm.set_counter(
-                            "kv_migration_errors_total",
-                            mig_stats.get("failed_migrations", 0),
-                            labels=ml,
-                        )
-                        pm.set_gauge(
-                            "kv_migration_pending_queue",
-                            float(mig_stats.get("pending_queue_size", 0)),
-                            labels=ml,
-                        )
-                        pm.set_gauge(
-                            "kv_migration_tracked_blocks",
-                            float(mig_stats.get("tracked_blocks", 0)),
-                            labels=ml,
-                        )
-                except Exception:
-                    logger.debug("KV migration gauge population failed", exc_info=True)
     else:
         # Single-model mode: refresh gauges from the default engine
         engine = get_engine()
@@ -1186,24 +1132,6 @@ async def ane_embedding_stats(request: Request) -> dict[str, Any]:
         return {"enabled": False, "error": "ane_embedding module not available"}
 
 
-@router.get("/external-prefill")
-async def external_prefill_stats(request: Request) -> dict[str, Any]:
-    """External prefill server/client statistics.
-
-    Reports disaggregated prefill status when YUNSHU_EXTERNAL_PREFILL=1 is set.
-    Includes server stats (requests served, avg prefill time, bytes transferred)
-    and client stats (requests sent, avg latency, success rate).
-    """
-    _check_permission(request)
-    try:
-        from yunshu_engine.external_prefill import get_external_prefill_stats
-
-        return get_external_prefill_stats()
-    except Exception:
-        logger.debug("external_prefill module unavailable", exc_info=True)
-        return {"enabled": False, "error": "external_prefill module not available"}
-
-
 @router.get("/health-dashboard")
 async def health_dashboard(request: Request) -> dict[str, Any]:
     """Aggregated health dashboard with 0-100 scoring.
@@ -1388,32 +1316,6 @@ async def token_scheduler_stats(request: Request) -> dict[str, Any]:
         return {"enabled": False}
 
 
-@router.get("/kv-migration")
-async def kv_migration_stats(request: Request) -> dict[str, Any]:
-    """KV migration statistics (multi-tier GPU/CPU/SSD block management).
-
-    Shows how many KV blocks have been migrated between tiers,
-    per-tier capacity usage, and temperature distribution.
-    """
-    _check_permission(request)
-    try:
-        engine = None
-        try:
-            from ..engine import get_engine
-
-            engine = get_engine()
-        except Exception:
-            pass
-        if engine is not None and hasattr(engine, "_engine_core"):
-            core = engine._engine_core
-            if core is not None and hasattr(core, "_kv_migration"):
-                return core._kv_migration.get_stats()
-        return {"enabled": False, "reason": "engine_core not active"}
-    except Exception:
-        logger.debug("operation failed", exc_info=True)
-        return {"enabled": False}
-
-
 @router.get("/attention-eviction")
 async def attention_eviction_stats(request: Request) -> dict[str, Any]:
     """H2O-style attention-score-based KV eviction statistics.
@@ -1570,14 +1472,12 @@ def _register_endpoints() -> None:
         "per_model": per_model_stats,
         "thinking_segments": thinking_segment_stats,
         "ane_embeddings": ane_embedding_stats,
-        "external_prefill": external_prefill_stats,
         "health_dashboard": health_dashboard,
         "reasoning_tokens": reasoning_tokens_stats,
         "response_cache": response_cache_stats,
         "inflight_prefix_sharing": inflight_prefix_sharing_stats,
         "request_coalescer": request_coalescer_stats,
         "token_scheduler": token_scheduler_stats,
-        "kv_migration": kv_migration_stats,
         "attention_eviction": attention_eviction_stats,
         "batch_size": batch_size_stats,
         "auto_tuner": auto_tuner_stats,

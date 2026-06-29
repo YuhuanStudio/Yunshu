@@ -22,7 +22,6 @@ This module provides:
 Integration points:
 - Scheduler: ``cache_type`` field in SchedulerConfig, wired into get_stats().
 - kv_prefix_cache: per-layer cache type lookup.
-- kv_offload: Mamba state offloading (different from KV offloading).
 """
 
 import enum

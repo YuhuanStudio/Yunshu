@@ -1000,26 +1000,6 @@ class BatchedEngine:
         )
         self._kv_quant_start: int = int(os.environ.get("YUNSHU_KV_QUANT_START", "0"))
 
-        # KV Transfer client — distributed KV cache transfer between nodes.
-        # In single-node mode, used for KV serialization/persistence.
-        # Enable via YUNSHU_KV_TRANSFER=1 for distributed prefill/decode.
-        self._kv_transfer_client = None
-        self._kv_transfer_stats = {
-            "blocks_transferred": 0,
-            "bytes_transferred": 0,
-            "transfer_failures": 0,
-        }
-        if os.environ.get("YUNSHU_KV_TRANSFER", "").strip() in ("1", "true", "yes"):
-            from .kv_transfer import KVTransferClient, KVTransferConfig
-
-            _kv_transfer_cfg = KVTransferConfig.from_env()
-            self._kv_transfer_client = KVTransferClient(_kv_transfer_cfg)
-            logger.info(
-                "KV transfer client initialized (remote=%s:%d)",
-                _kv_transfer_cfg.remote_host,
-                _kv_transfer_cfg.remote_port,
-            )
-
         # Memory pressure eviction config (vllm-mlx pattern)
         # Stored as a percentage (0-100) for consistency with
         # KVPrefixCache.evict_under_pressure(). Converted to a 0-1
@@ -1231,70 +1211,6 @@ class BatchedEngine:
                         "YUNSHU_QUANT_CONFIG=%r not parseable as JSON or bits[,group_size]; ignored",
                         qconfig,
                     )
-            # Distributed model load
-            # via mlx-lm's NATIVE sharded_load — the single biggest missing piece
-            # was that every engine loaded single-node (load(name)) with no group.
-            # YUNSHU_TENSOR_PARALLEL=1 shards a model across the mx.distributed
-            # group (model.shard(group); the sharded o_proj/down_proj do the
-            # implicit all-reduce inside the forward, so generate "just works").
-            # YUNSHU_PIPELINE_PARALLEL=1 uses native model.model.pipeline(group)
-            # (MoE models). sharded_load downloads only the local shard's weights.
-            # Single-process (world_size=1) → trivial size-1 shard = full model,
-            # so the path is verifiable on one Mac. Falls back to single-node load
-            # on any failure (e.g. model class lacks .shard / .pipeline).
-            _tp = os.environ.get("YUNSHU_TENSOR_PARALLEL", "").strip().lower() in (
-                "1",
-                "true",
-                "yes",
-            )
-            _pp = os.environ.get("YUNSHU_PIPELINE_PARALLEL", "").strip().lower() in (
-                "1",
-                "true",
-                "yes",
-            )
-            if _tp and _pp:
-                # Combined TP+PP needs a 2D device mesh: a tensor sub-group and a
-                # pipeline sub-group whose sizes multiply to world_size. Passing the
-                # SAME full-world group to both tensor_group and pipeline_group makes
-                # mlx-lm shard AND pipeline over all N ranks → wrong weight/layer
-                # assignment and broken logits with no error. Refuse it (→ safe
-                # single-node fallback) rather than silently serve garbage.
-                logger.error(
-                    "YUNSHU_TENSOR_PARALLEL and YUNSHU_PIPELINE_PARALLEL are BOTH set, "
-                    "but combined TP+PP requires a 2D mesh (distinct sub-groups); a "
-                    "single world group double-shards the model. Enable only ONE. "
-                    "Falling back to single-node load."
-                )
-                _tp = _pp = False
-            if _tp or _pp:
-                try:
-                    import mlx.core as _mx
-                    from mlx_lm.utils import sharded_load
-
-                    _group = _mx.distributed.init()
-                    _sl_kwargs = {}
-                    if _tp:
-                        _sl_kwargs["tensor_group"] = _group
-                    if _pp:
-                        _sl_kwargs["pipeline_group"] = _group
-                    logger.info(
-                        "Distributed model load: TP=%s PP=%s world_size=%d rank=%d (%s)",
-                        _tp,
-                        _pp,
-                        _group.size(),
-                        _group.rank(),
-                        self.model_name,
-                    )
-                    return sharded_load(self.model_name, **_sl_kwargs)
-                except Exception as _sl_err:
-                    logger.error(
-                        "Distributed sharded_load failed (%s); falling back to "
-                        "single-node load. Note: the model class must expose "
-                        ".shard (TP) or model.model.pipeline (PP).",
-                        _sl_err,
-                        exc_info=True,
-                    )
-                    # fall through to the normal single-node load below.
             try:
                 return load_model(self.model_name, **kwargs)
             except TypeError as e:
@@ -2083,14 +1999,6 @@ class BatchedEngine:
         )
         hybrid_chunk = int(os.environ.get("YUNSHU_HYBRID_CHUNK_SIZE", "512"))
 
-        # External prefill (opt-in via YUNSHU_EXTERNAL_PREFILL=1)
-        # Enables memory preflight checks, chunked progress tracking,
-        # and mid-prefill abort before BatchGenerator.insert().
-        external_prefill = os.environ.get("YUNSHU_EXTERNAL_PREFILL", "").strip() in (
-            "1",
-            "true",
-            "yes",
-        )
         prefill_chunk_size = int(os.environ.get("YUNSHU_PREFILL_CHUNK_SIZE", "2048"))
 
         self._engine_core = EngineCore(
@@ -2100,7 +2008,6 @@ class BatchedEngine:
                 stream_interval=self.stream_interval,
                 enable_hybrid_prefill=hybrid_prefill,
                 hybrid_chunk_size=hybrid_chunk,
-                use_external_prefill=external_prefill,
                 prefill_chunk_size=prefill_chunk_size,
                 # Decode-batch width is env-tunable, but the
                 # default of 32 is near-optimal on Apple-Silicon UMA and should
@@ -2304,16 +2211,6 @@ class BatchedEngine:
         if self._deltanet_inverter is not None:
             self._deltanet_inverter.unregister_hooks()
             self._deltanet_inverter = None
-
-        # Stop KV transfer client (close network connections)
-        # NOTE: must await directly, not run_until_complete (we are already
-        # inside an async context so run_until_complete would crash).
-        if self._kv_transfer_client is not None:
-            try:
-                await self._kv_transfer_client.stop()
-            except Exception:
-                logger.debug("KV transfer client stop failed", exc_info=True)
-            self._kv_transfer_client = None
 
         # Stop LoRA adapter manager (unload all adapters, release weights)
         if self._lora_manager is not None:
@@ -2526,203 +2423,6 @@ class BatchedEngine:
                 ]
             result.append(entry)
         return result
-
-    async def generate_with_kv(
-        self,
-        kv_cache,
-        token_ids: list[int],
-        first_logits=None,
-        max_tokens: int = 256,
-        temperature: float = 0.0,
-        top_p: float = 1.0,
-        top_k: int = 0,
-        min_p: float = 0.0,
-        seed: int | None = None,
-        stop_token_ids: list[int] | None = None,
-        stop: list[str] | None = None,
-        **kwargs,
-    ) -> GenerationOutput:
-        """Disaggregated DECODE that REUSES a prefilled KV cache.
-
-        The disaggregate /v1/decode path checked `hasattr(engine,
-        'generate_with_kv')` but the method DIDN'T EXIST, so decode always fell
-        back to engine.generate() → re-prefilled the whole prompt, defeating the
-        entire prefill/decode split. This implements it: the cache from prefill
-        is already populated (offset == len(token_ids)) and `first_logits` are the
-        logits predicting the first generated token, so we decode forward WITHOUT
-        re-running the prompt. If either is missing (e.g. a remote prefill that
-        nulled the KV), fall back to a correct full generate from token_ids.
-        """
-        import asyncio as _asyncio
-
-        from .mlx_executor import get_mlx_executor
-
-        if kv_cache is None or first_logits is None:
-            text = self._tokenizer.decode(token_ids) if self._tokenizer else ""
-            return await self.generate(
-                prompt=text,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                top_k=top_k,
-                min_p=min_p,
-                seed=seed,
-                stop=stop,
-                stop_token_ids=stop_token_ids,
-                **kwargs,
-            )
-
-        # Forward penalties + logit_bias (advertised DecodeRequest
-        # fields) into the reuse path instead of dropping them in **kwargs.
-        _rep = kwargs.get("repetition_penalty", 1.0)
-        _freq = kwargs.get("frequency_penalty", 0.0)
-        _pres = kwargs.get("presence_penalty", 0.0)
-        _lb = kwargs.get("logit_bias")
-        loop = _asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            get_mlx_executor(),
-            lambda: self._decode_from_kv_sync(
-                kv_cache,
-                token_ids,
-                first_logits,
-                max_tokens,
-                temperature,
-                top_p,
-                top_k,
-                min_p,
-                seed,
-                stop_token_ids,
-                stop,
-                repetition_penalty=_rep,
-                frequency_penalty=_freq,
-                presence_penalty=_pres,
-                logit_bias=_lb,
-            ),
-        )
-
-    def _decode_from_kv_sync(
-        self,
-        kv_cache,
-        token_ids,
-        first_logits,
-        max_tokens,
-        temperature,
-        top_p,
-        top_k,
-        min_p,
-        seed,
-        stop_token_ids,
-        stop,
-        repetition_penalty=1.0,
-        frequency_penalty=0.0,
-        presence_penalty=0.0,
-        logit_bias=None,
-    ) -> GenerationOutput:
-        """Synchronous decode loop reusing a prefilled cache (runs on the MLX
-        executor). Greedy or sampled; stops on eos / stop_token_ids / stop str.
-
-        Applies repetition/frequency/presence penalties + logit_bias
-        (user-facing DecodeRequest fields that were previously DROPPED on this
-        reuse path → output diverged from the re-prefill fallback) and detects
-        stop strings INCREMENTALLY (was running the full max_tokens then
-        truncating, wasting compute and overcounting completion_tokens)."""
-        import time as _time
-
-        import mlx.core as mx
-        from mlx_lm.sample_utils import make_logits_processors, make_sampler
-
-        model = self._model
-        tokenizer = self._tokenizer
-        eos_ids: set[int] = set()
-        _eid = getattr(tokenizer, "eos_token_id", None)
-        if _eid is not None:
-            eos_ids.update(_eid if isinstance(_eid, (list, tuple, set)) else (_eid,))
-        _eids = getattr(tokenizer, "eos_token_ids", None)
-        if _eids is not None:
-            eos_ids.update(_eids if isinstance(_eids, (list, tuple, set)) else (_eids,))
-        stop_ids = set(eos_ids) | set(stop_token_ids or [])
-
-        if temperature is not None and temperature > 1e-6:
-            sampler = _build_temp_sampler(
-                temperature=temperature,
-                top_p=top_p,
-                top_k=top_k if top_k and top_k > 0 else 0,
-                min_p=min_p if min_p else 0.0,
-                seed=seed,
-            )
-        else:
-            sampler = make_sampler(temp=0.0)
-
-        # Penalty / logit_bias processors (applied to raw logits BEFORE sampling),
-        # matching the normal generate path so the reuse path doesn't silently
-        # ignore these validated request fields.
-        _procs = (
-            make_logits_processors(
-                repetition_penalty=repetition_penalty
-                if (repetition_penalty and repetition_penalty != 1.0)
-                else None,
-                frequency_penalty=frequency_penalty if frequency_penalty else None,
-                presence_penalty=presence_penalty if presence_penalty else None,
-                logit_bias=logit_bias or None,
-            )
-            or []
-        )
-
-        # Clamp max_tokens to the model's context window. The normal/streaming
-        # generate paths clamp, but this KV-reuse decode path bypassed it — a
-        # near-context-length prefilled prompt + a large max_tokens would decode past
-        # max_position_embeddings into RoPE-extrapolation garbage. The prompt is already
-        # at offset len(token_ids); cap the remaining budget. 0 = undeterminable → no clamp.
-        _max_ctx = _resolve_model_max_ctx(model)
-        if _max_ctx > 0:
-            max_tokens = max(0, min(int(max_tokens), _max_ctx - len(token_ids)))
-
-        logits = first_logits
-        generated: list[int] = []
-        _hist = list(
-            token_ids
-        )  # penalty history = prompt + generated (matches generate_step)
-        _stop_list = [s for s in (stop or []) if s]
-        finish_reason = "length"
-        t0 = _time.perf_counter()
-        for _ in range(int(max_tokens)):
-            _in = logits if logits.ndim == 2 else logits[None]
-            if _procs:
-                _htok = mx.array(_hist)
-                for _p in _procs:
-                    _in = _p(_htok, _in)
-            tok = int(sampler(_in))
-            if tok in stop_ids:
-                finish_reason = "stop"
-                break
-            generated.append(tok)
-            _hist.append(tok)
-            # Incremental stop-string detection: stop the moment a stop string
-            # appears instead of running the full budget then truncating.
-            if _stop_list and tokenizer:
-                _txt = tokenizer.decode(generated)
-                if any(s in _txt for s in _stop_list):
-                    finish_reason = "stop"
-                    break
-            out = model(mx.array([[tok]]), cache=kv_cache)
-            logits = out[:, -1, :]
-            mx.eval(logits)
-        text = tokenizer.decode(generated) if (tokenizer and generated) else ""
-        if _stop_list:
-            for s in _stop_list:
-                if s in text:
-                    text = text[: text.find(s)]
-                    finish_reason = "stop"
-                    break
-        return GenerationOutput(
-            text=text,
-            new_text=text,
-            prompt_tokens=len(token_ids),
-            completion_tokens=len(generated),
-            finished=True,
-            finish_reason=finish_reason,
-            ttft_ms=(_time.perf_counter() - t0) * 1000.0,
-        )
 
     async def _compute_prompt_logprobs_for(
         self,
@@ -4696,35 +4396,6 @@ class BatchedEngine:
                                 bp_pos,
                                 exc_info=True,
                             )
-
-            # KV Transfer: serialize and send KV blocks to remote decode node.
-            # In single-node mode, this is a no-op (client is None).
-            if self._kv_transfer_client is not None:
-                try:
-                    from .kv_transfer import extract_kv_blocks_from_cache
-
-                    blocks = extract_kv_blocks_from_cache(
-                        cache,
-                        [int(t) for t in ids],
-                    )
-                    if blocks:
-                        result = self._kv_transfer_client.send_blocks_sync(
-                            blocks=blocks,
-                            model_name=self.model_name,
-                            total_tokens=len(ids),
-                            layer_count=len(cache),
-                        )
-                        if result.status.value == "completed":
-                            self._kv_transfer_stats["blocks_transferred"] += (
-                                result.blocks_transferred
-                            )
-                            self._kv_transfer_stats["bytes_transferred"] += (
-                                result.bytes_transferred
-                            )
-                        else:
-                            self._kv_transfer_stats["transfer_failures"] += 1
-                except Exception:
-                    logger.debug("KV transfer send failed", exc_info=True)
 
             # Prompt cache: store KV state for exact-match reuse.
             # CRITICAL: store the cache trimmed to prompt-length and report
@@ -12364,19 +12035,6 @@ class BatchedEngine:
         stats["response_cache"] = {
             "hits": getattr(self, "_response_cache_hits", 0),
             "misses": getattr(self, "_response_cache_misses", 0),
-        }
-        # KV Transfer stats (distributed prefill/decode wire protocol)
-        stats["kv_transfer"] = {
-            "enabled": getattr(self, "_kv_transfer_client", None) is not None,
-            **getattr(
-                self,
-                "_kv_transfer_stats",
-                {
-                    "blocks_transferred": 0,
-                    "bytes_transferred": 0,
-                    "transfer_failures": 0,
-                },
-            ),
         }
         # Prompt cache stats (exact-match KV state reuse)
         if hasattr(self, "_prompt_cache") and self._prompt_cache is not None:

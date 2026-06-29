@@ -85,8 +85,6 @@ class EngineCoreConfig:
     # aging were unreachable. Set via YUNSHU_SCHEDULER_POLICY.
     scheduler_policy: str = "fcfs"
     aging_weight: float = 0.1  # priority bonus per second waiting (anti-starvation)
-    # External prefill (memory preflight, chunked progress, mid-prefill abort)
-    use_external_prefill: bool = False
     prefill_chunk_size: int = 2048
     # Sarathi-style hybrid chunked prefill (interleave prefill chunks with decode)
     enable_hybrid_prefill: bool = False
@@ -165,7 +163,6 @@ class EngineCore:
             ngram_spec_mode=self.config.ngram_spec_mode,
             enable_hybrid_prefill=self.config.enable_hybrid_prefill,
             hybrid_chunk_size=self.config.hybrid_chunk_size,
-            use_external_prefill=self.config.use_external_prefill,
             prefill_chunk_size=self.config.prefill_chunk_size,
             request_timeout_seconds=self.config.request_timeout_seconds,
             chunked_prefill_budget=self.config.chunked_prefill_budget,
@@ -374,66 +371,6 @@ class EngineCore:
         telemetry_enabled = os.environ.get("YUNSHU_TELEMETRY", "0") == "1"
         self._telemetry = TelemetryCollector(TelemetryConfig(enabled=telemetry_enabled))
 
-        # KV offload manager (async tier-to-tier block migration)
-        from .kv_offload import KVOffloadConfig, KVOffloadManager
-
-        kv_offload_cfg = KVOffloadConfig.from_env()
-        self._kv_offload_manager = KVOffloadManager(
-            kv_offload_cfg, kv_manager=self._kv_manager
-        )
-
-        # Pass offload manager to scheduler for periodic sync offload checks
-        self.scheduler.set_kv_offload_manager(self._kv_offload_manager)
-
-        # External prefill server/client (disaggregated prefill)
-        from .external_prefill import (
-            ExternalPrefillClient,
-            ExternalPrefillConfig,
-            ExternalPrefillServer,
-            get_prefill_role,
-        )
-
-        self._prefill_server: ExternalPrefillServer | None = None
-        self._prefill_client: ExternalPrefillClient | None = None
-        self._prefill_task: asyncio.Task | None = None
-        self._prefill_role: str | None = None
-        prefill_role = get_prefill_role()
-        self._prefill_role = prefill_role
-        if prefill_role == "server":
-            prefill_config = ExternalPrefillConfig.from_env()
-            self._prefill_server = ExternalPrefillServer(
-                model,
-                tokenizer,
-                prefill_config,
-            )
-            logger.info("ExternalPrefillServer configured (disaggregated prefill)")
-        elif prefill_role == "client":
-            prefill_config = ExternalPrefillConfig.from_env()
-            self._prefill_client = ExternalPrefillClient(prefill_config)
-            logger.info("ExternalPrefillClient configured (remote prefill)")
-
-        # KV transfer server (receives KV blocks on decode nodes)
-        self._kv_transfer_server: Any | None = None
-        try:
-            from .kv_transfer import (
-                KVTransferConfig,
-                KVTransferServer,
-                is_kv_transfer_enabled,
-            )
-
-            if is_kv_transfer_enabled():
-                kv_xfer_config = KVTransferConfig.from_env()
-                self._kv_transfer_server = KVTransferServer(
-                    kv_xfer_config,
-                    kv_cache_manager=self._kv_manager,
-                )
-                logger.info(
-                    "KVTransferServer configured on port %d",
-                    kv_xfer_config.listen_port,
-                )
-        except Exception:
-            logger.debug("KV transfer server setup skipped", exc_info=True)
-
         # ── 實現-整合 wiring ──
 
         # Request lifecycle orchestrator (QUEUED→PREFILLING→DECODING→FINISHED)
@@ -529,11 +466,8 @@ class EngineCore:
         # Composition scheduler mixins
         from .scheduler_mixins import (
             CompositionScheduler,
-            DataParallelMixin,
-            DisaggregationMixin,
             MemoryPressureMixin,
             MetricsMixin,
-            PipelineParallelMixin,
             ProfilingMixin,
             SpecDecodeMixin,
         )
@@ -546,47 +480,6 @@ class EngineCore:
             # ProfilingMixin — YUNSHU_SCHEDULER_PROFILING=1
             if os.environ.get("YUNSHU_SCHEDULER_PROFILING", "").strip() == "1":
                 self._composition_scheduler.add_mixin(ProfilingMixin())
-
-            # DisaggregationMixin — YUNSHU_DISAGGREGATED=1 with node lists
-            if os.environ.get("YUNSHU_DISAGGREGATED", "").strip() == "1":
-                prefill_nodes = (
-                    os.environ.get("YUNSHU_PREFILL_NODES", "").split(",")
-                    if os.environ.get("YUNSHU_PREFILL_NODES")
-                    else []
-                )
-                decode_nodes = (
-                    os.environ.get("YUNSHU_DECODE_NODES", "").split(",")
-                    if os.environ.get("YUNSHU_DECODE_NODES")
-                    else []
-                )
-                self._composition_scheduler.add_mixin(
-                    DisaggregationMixin(
-                        prefill_nodes=[n.strip() for n in prefill_nodes if n.strip()],
-                        decode_nodes=[n.strip() for n in decode_nodes if n.strip()],
-                    )
-                )
-
-            # DataParallelMixin — YUNSHU_DATA_PARALLEL=1 with replica count
-            dp_replicas = int(os.environ.get("YUNSHU_DP_REPLICAS", "1"))
-            if dp_replicas > 1:
-                self._composition_scheduler.add_mixin(
-                    DataParallelMixin(
-                        num_replicas=dp_replicas,
-                        strategy=os.environ.get("YUNSHU_DP_STRATEGY", "least_loaded"),
-                    )
-                )
-
-            # PipelineParallelMixin — YUNSHU_PIPELINE_PARALLEL=1
-            if os.environ.get("YUNSHU_PIPELINE_PARALLEL", "").strip() == "1":
-                self._composition_scheduler.add_mixin(
-                    PipelineParallelMixin(
-                        num_stages=int(os.environ.get("YUNSHU_PP_STAGES", "1")),
-                        stage_id=int(os.environ.get("YUNSHU_PP_STAGE_ID", "0")),
-                        micro_batch_size=int(
-                            os.environ.get("YUNSHU_PP_MICRO_BATCH", "1")
-                        ),
-                    )
-                )
 
             # SpecDecodeMixin — YUNSHU_SPEC_DECODE_TRACKING=1
             if os.environ.get("YUNSHU_SPEC_DECODE_TRACKING", "").strip() == "1":
@@ -658,11 +551,6 @@ class EngineCore:
                     logger.info(f"SlidingWindowKVManager enabled: window={sw}")
         except Exception:
             logger.debug("sliding window detection skipped", exc_info=True)
-
-        # KV migration manager (multi-tier migration with temperature tracking)
-        from .kv_migration import KVMigrationManager
-
-        self._kv_migration = KVMigrationManager()
 
         # Mamba/Hybrid KV cache (SSM state management)
         from .mamba_cache import HybridKVCache
@@ -1064,12 +952,6 @@ class EngineCore:
                 self._profiler_started = True
             except Exception:
                 logger.debug("profiler start failed", exc_info=True)
-        # Start KV offload manager (async tier migration)
-        if self._kv_offload_manager is not None:
-            try:
-                await self._kv_offload_manager.start()
-            except Exception:
-                logger.debug("KV offload manager start failed", exc_info=True)
         self._loop_task = asyncio.get_running_loop().create_task(self._engine_loop())
 
         # Surface a dead engine-loop task instead of letting requests hang
@@ -1080,29 +962,6 @@ class EngineCore:
                 logger.error("engine_core loop task DIED", exc_info=t.exception())
 
         self._loop_task.add_done_callback(_loop_done)
-
-        # Start KV migration background thread
-        try:
-            self._kv_migration.start()
-        except Exception:
-            logger.debug("KV migration start failed", exc_info=True)
-
-        # Start external prefill server if configured
-        # NOTE: task is fire-and-forget but will be stopped cleanly via
-        # _prefill_server.stop() in our stop() method.
-        if self._prefill_server is not None:
-            self._prefill_task = asyncio.get_running_loop().create_task(
-                self._prefill_server.serve()
-            )
-            logger.info("ExternalPrefillServer started")
-
-        # Start KV transfer server if configured (decode node receives KV blocks)
-        if self._kv_transfer_server is not None:
-            try:
-                await self._kv_transfer_server.start()
-                logger.info("KVTransferServer started")
-            except Exception:
-                logger.debug("KV transfer server start failed", exc_info=True)
 
         logger.info("EngineCore started")
 
@@ -1171,12 +1030,6 @@ class EngineCore:
         self._start_time = None  # Reset so get_stats() uptime is 0 after stop
         self._wake_event = None  # Clear stale event; recreated by start()
 
-        # Stop KV migration background thread
-        try:
-            self._kv_migration.stop()
-        except Exception:
-            logger.debug("KV migration stop failed", exc_info=True)
-
         # Stop performance profiler
         if self._profiler_started:
             try:
@@ -1184,13 +1037,6 @@ class EngineCore:
                 self._profiler_started = False
             except Exception:
                 logger.debug("profiler stop failed", exc_info=True)
-
-        # Stop KV offload manager
-        if self._kv_offload_manager is not None:
-            try:
-                await self._kv_offload_manager.stop()
-            except Exception:
-                logger.debug("KV offload manager stop failed", exc_info=True)
 
         # Flush KV prefix cache to SSD for persistence across restarts
         _prefix_cache = getattr(self.scheduler, "_prefix_cache", None)
@@ -1217,25 +1063,6 @@ class EngineCore:
                 self._composition_scheduler.shutdown()
             except Exception:
                 logger.debug("composition scheduler shutdown failed", exc_info=True)
-
-        # Stop external prefill server and its background task
-        if self._prefill_server is not None:
-            try:
-                await self._prefill_server.stop()
-            except Exception:
-                logger.debug("prefill server stop failed", exc_info=True)
-        if self._prefill_task is not None and not self._prefill_task.done():
-            self._prefill_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._prefill_task
-            self._prefill_task = None
-
-        # Stop KV transfer server
-        if self._kv_transfer_server is not None:
-            try:
-                await self._kv_transfer_server.stop()
-            except Exception:
-                logger.debug("kv transfer server stop failed", exc_info=True)
 
         # Mark stopped BEFORE clearing collectors so concurrent add_request()
         # sees _stopped=True and rejects immediately instead of creating a
@@ -1940,12 +1767,6 @@ class EngineCore:
                 size_bytes=estimated_kv_bytes,
                 prefix_hash="",
             )
-            # Register block in migration manager for temperature-based tier management
-            from .kv_migration import KVTier
-
-            self._kv_migration.register_block(
-                _block_id, tier=KVTier.HOT, byte_size=estimated_kv_bytes
-            )
         except Exception:
             logger.debug("kv_lifecycle admit failed", exc_info=True)
 
@@ -2014,13 +1835,6 @@ class EngineCore:
                     except Exception:
                         logger.debug(
                             f"kv_lifecycle release failed in mem-aware rejection for {req_id}",
-                            exc_info=True,
-                        )
-                    try:
-                        self._kv_migration.unregister_block(_block_id)
-                    except Exception:
-                        logger.debug(
-                            f"kv_migration unregister failed in mem-aware rejection for {req_id}",
                             exc_info=True,
                         )
                     if self._sliding_window_mgr is not None:
@@ -2118,13 +1932,6 @@ class EngineCore:
                 except Exception:
                     logger.debug(
                         f"kv_lifecycle release failed in memguard rejection for {req_id}",
-                        exc_info=True,
-                    )
-                try:
-                    self._kv_migration.unregister_block(_block_id)
-                except Exception:
-                    logger.debug(
-                        f"kv_migration unregister failed in memguard rejection for {req_id}",
                         exc_info=True,
                     )
                 if self._sliding_window_mgr is not None:
@@ -4101,10 +3908,6 @@ class EngineCore:
                 self._kv_lifecycle.release(_block_id)
             except Exception:
                 logger.debug("kv_lifecycle release failed", exc_info=True)
-            try:
-                self._kv_migration.unregister_block(_block_id)
-            except Exception:
-                logger.debug("kv_migration unregister failed", exc_info=True)
         # Dedup: only the primary request calls complete(). Shadows
         # are fanned-out by the engine loop before reaching here, so
         # calling complete() again would be redundant (and the entry
@@ -4365,20 +4168,9 @@ class EngineCore:
             "adaptive_batch": self._adaptive_batch.get_stats(),
             **{f"scheduler_{k}": v for k, v in scheduler_stats.items()},
         }
-        # KV offload stats
-        if self._kv_offload_manager is not None:
-            stats["kv_offload"] = self._kv_offload_manager.get_stats()
         # encoder-decoder cache stats
         if hasattr(self.scheduler, "_encoder_cache"):
             stats["encoder_cache"] = self.scheduler._encoder_cache.get_stats()
-        # external prefill server/client stats
-        if self._prefill_server is not None:
-            stats["external_prefill_server"] = self._prefill_server.get_stats()
-        if self._prefill_client is not None:
-            stats["external_prefill_client"] = self._prefill_client.get_stats()
-        # KV transfer server stats (decode node)
-        if self._kv_transfer_server is not None:
-            stats["kv_transfer_server"] = self._kv_transfer_server.get_stats()
         # ── Wired module stats ──
         stats["lifecycle"] = self._lifecycle_orchestrator.get_stats()
         stats["budget"] = self._budget_manager.get_stats()
@@ -4403,7 +4195,6 @@ class EngineCore:
             stats["checkpoint"] = self._checkpoint_mgr.get_stats()
         if self._sliding_window_mgr is not None:
             stats["sliding_window"] = self._sliding_window_mgr.get_stats()
-        stats["kv_migration"] = self._kv_migration.get_stats()
         stats["hybrid_kv"] = self._hybrid_kv.get_stats()
         stats["batch_sampler"] = self._batch_sampler.get_stats()
         stats["model_optimizations"] = {
@@ -4465,9 +4256,6 @@ class EngineCore:
             "total_hits": mgr._total_hits,
             "active_block_tables": len(getattr(self.scheduler, "_block_tables", {})),
         }
-        # Append KV offload stats
-        if self._kv_offload_manager is not None:
-            result["offload"] = self._kv_offload_manager.get_stats()
         return result
 
 

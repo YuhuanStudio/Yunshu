@@ -612,7 +612,6 @@ class TestFinalizeRequestIdempotency:
         core._budget_manager = MagicMock()
         core._memory_aware_scheduler = MagicMock()
         core._kv_lifecycle = MagicMock()
-        core._kv_migration = MagicMock()
 
         # Mock the scheduler
         core.scheduler = MagicMock()
@@ -703,7 +702,6 @@ class TestAbortRequestRemovesState:
         core._budget_manager = MagicMock()
         core._memory_aware_scheduler = MagicMock()
         core._kv_lifecycle = MagicMock()
-        core._kv_migration = MagicMock()
 
         core.scheduler = MagicMock()
         core._executor = MagicMock()
@@ -794,7 +792,6 @@ class TestEngineLoopErrorDelivery:
         core._budget_manager = MagicMock()
         core._memory_aware_scheduler = MagicMock()
         core._kv_lifecycle = MagicMock()
-        core._kv_migration = MagicMock()
         core._composition_scheduler = None
         core._tbo_scheduler = MagicMock()
         core._tbo_scheduler.config = MagicMock(enabled=False)
