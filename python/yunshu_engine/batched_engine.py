@@ -86,9 +86,115 @@ def _resolve_think_token_ids(tokenizer):
         _te = _enc("</think>")
         if _ts and _te and len(_ts) == 1 and len(_te) == 1:
             return _ts[0], _te[0]
+        # Gemma-4 reasoning uses channel SPECIAL TOKENS instead of <think>:
+        # <|channel>thought…<channel|> are SINGLE ids (100/101) that decode to ''
+        # under skip_special_tokens — so they vanish from the text before any
+        # string-based <think> logic sees them, and the whole chain-of-thought
+        # leaks into content with reasoning_tokens=0 (observed on gemma-4 via the
+        # chat() path). The streaming reasoning machine is TOKEN-ID based, so
+        # mapping <|channel>→start and <channel|>→end makes it segment the channel
+        # reasoning correctly (content stays clean, reasoning → reasoning_content).
+        # Only reached when <think>/</think> are NOT single tokens, so canonical
+        # thinking models are unaffected.
+        _co = _enc("<|channel>")
+        _cc = _enc("<channel|>")
+        if _co and _cc and len(_co) == 1 and len(_cc) == 1:
+            return _co[0], _cc[0]
     except Exception:
         logger.debug("thinking token resolve failed", exc_info=True)
     return None, None
+
+
+def _recover_channel_reasoning(tokens, tokenizer, output_text):
+    """Recover Gemma-4-style channel reasoning that the detokenizer stripped.
+
+    Gemma-4 emits reasoning inside <|channel>thought…<channel|> blocks whose
+    delimiters are SINGLE special tokens that decode to '' under
+    skip_special_tokens — so they vanish from ``output_text`` before any
+    <think>-based splitter (the engine reasoning_parser AND the gateway's
+    extract_thinking) can see them, and the whole chain-of-thought leaks into
+    content. _resolve_think_token_ids already maps these channel ids onto the
+    think-start/end slots, so re-segment the RAW token list by those ids and
+    rebuild output_text in canonical <think>…</think> form, which the gateway's
+    extract_thinking strips (gemma's ENGINE parser leaves it) → content ends
+    clean + reasoning_content populated.
+
+    Gated on the marker decoding to '' under skip_special_tokens, so canonical
+    <think> models (whose markers survive in output_text and are already handled)
+    are untouched. Returns (output_text, reason_token_ids); reason ids empty when
+    no recovery happened.
+    """
+    tk_start, tk_end = _resolve_think_token_ids(tokenizer)
+    if tk_start is None or tk_start not in tokens:
+        return output_text, []
+    try:
+        _survives = tokenizer.decode([tk_start], skip_special_tokens=True).strip()
+    except TypeError:
+        _survives = tokenizer.decode([tk_start]).strip()
+    if _survives:
+        # Marker survives decode → canonical <think> model, already handled.
+        return output_text, []
+    content_ids: list[int] = []
+    reason_ids: list[int] = []
+    depth = 0
+    for t in tokens:
+        if t == tk_start:
+            depth += 1
+            continue
+        if tk_end is not None and t == tk_end and depth > 0:
+            depth -= 1
+            continue
+        (reason_ids if depth > 0 else content_ids).append(t)
+    if not reason_ids:
+        return output_text, []
+    content = _clean_special_tokens(tokenizer.decode(content_ids)).strip()
+    reason = _clean_special_tokens(tokenizer.decode(reason_ids)).strip()
+    # Drop the channel's leading "thought" label if present.
+    if reason.startswith("thought"):
+        reason = reason[len("thought") :].lstrip(" \n")
+    new_text = f"<think>{reason}</think>{content}" if reason else content
+    return new_text, (reason_ids if reason else [])
+
+
+_CONFIG_EOS_CACHE: dict[str, frozenset] = {}
+
+
+def _read_config_eos_ids(model_path: str) -> frozenset:
+    """Read eos_token_id from a model's generation_config.json / config.json.
+
+    Models like Gemma-4 declare MULTIPLE eos ids there (e.g. [1, 106, 50] — the
+    <eos>, the turn-end <turn|>, and a channel token) but the tokenizer often
+    exposes only the single primary eos (1). The model then ends its turn with
+    106, generation doesn't stop, and it rambles (repeated answers + channel
+    reasoning). Merging the config eos ids into the engine stop set fixes that.
+    generation_config wins over config; empty for HF ids / unreadable configs."""
+    if model_path in _CONFIG_EOS_CACHE:
+        return _CONFIG_EOS_CACHE[model_path]
+    import json as _json
+    from pathlib import Path as _P
+
+    ids: set[int] = set()
+    try:
+        d = _P(model_path)
+        if d.is_dir():
+            for fn in ("generation_config.json", "config.json"):
+                fp = d / fn
+                if not fp.exists():
+                    continue
+                e = _json.loads(fp.read_text()).get("eos_token_id")
+                if isinstance(e, bool):
+                    continue
+                if isinstance(e, int):
+                    ids.add(e)
+                elif isinstance(e, (list, tuple)):
+                    ids.update(int(x) for x in e if isinstance(x, int))
+                if ids:
+                    break  # generation_config.json wins
+    except Exception:
+        logger.debug("config eos_token_id read failed", exc_info=True)
+    result = frozenset(ids)
+    _CONFIG_EOS_CACHE[model_path] = result
+    return result
 
 
 @contextmanager
@@ -3479,6 +3585,9 @@ class BatchedEngine:
             _eos_ids.update(
                 _eids if isinstance(_eids, (list, tuple, set)) else (_eids,)
             )
+        # Multi-eos from the model's (generation_)config — e.g. Gemma-4's turn-end
+        # token 106, which the tokenizer omits, so the model would never stop.
+        _eos_ids.update(_read_config_eos_ids(self.model_name))
         if not ignore_eos:
             stop_ids.update(_eos_ids)
 
@@ -4874,6 +4983,13 @@ class BatchedEngine:
 
             self._total_reasoning_tokens += len(_thinking_tokens)
 
+            # Channel-style reasoning recovery (Gemma-4 <|channel>…<channel|>).
+            output_text, _ch_reason = _recover_channel_reasoning(
+                tokens, tokenizer, output_text
+            )
+            if _ch_reason:
+                _thinking_tokens = _ch_reason
+
             # Reasoning parser: supplement token-level tracking with model-specific
             # reasoning extraction when thinking tokens were not explicitly tracked
             _reasoning_tok = len(_thinking_tokens)
@@ -5558,6 +5674,7 @@ class BatchedEngine:
             _eos_ids.update(
                 _eids if isinstance(_eids, (list, tuple, set)) else (_eids,)
             )
+        _eos_ids.update(_read_config_eos_ids(self.model_name))
         if not ignore_eos:
             stop_ids.update(_eos_ids)
 
@@ -8885,6 +9002,9 @@ class BatchedEngine:
             stop_ids.update(
                 _eids if isinstance(_eids, (list, tuple, set)) else (_eids,)
             )
+        # Model (generation_)config multi-eos — e.g. Gemma-4 turn-end 106 the
+        # tokenizer omits, so the model never stops and rambles.
+        stop_ids.update(_read_config_eos_ids(self.model_name))
         if stop_token_ids:
             stop_ids.update(stop_token_ids)
         if stop:
@@ -9543,10 +9663,17 @@ class BatchedEngine:
                     exc_info=True,
                 )
 
+        # Channel-style reasoning recovery (Gemma-4 <|channel>…<channel|>): the
+        # greedy default routes here (n-gram spec), so the same recovery the fast
+        # path does must run here too, else gemma reasoning leaks into content.
+        output_text, _ch_reason = _recover_channel_reasoning(
+            tokens, tokenizer, output_text
+        )
+
         # Reasoning parser: extract thinking tokens from n-gram spec output.
         # N-gram spec decode does not track thinking tokens internally,
         # so we parse the output text for reasoning content.
-        _ng_reasoning_tok = 0
+        _ng_reasoning_tok = len(_ch_reason)
         if output_text:
             try:
                 from .reasoning_parser import get_reasoning_parser
@@ -9723,6 +9850,9 @@ class BatchedEngine:
             stop_ids.update(
                 _eids if isinstance(_eids, (list, tuple, set)) else (_eids,)
             )
+        # Model (generation_)config multi-eos — e.g. Gemma-4 turn-end 106 the
+        # tokenizer omits, so the model never stops and rambles.
+        stop_ids.update(_read_config_eos_ids(self.model_name))
         if stop_token_ids:
             stop_ids.update(stop_token_ids)
         if stop:
@@ -10683,6 +10813,8 @@ class BatchedEngine:
                 eos_ids.update(eid)
             elif eid is not None:
                 eos_ids.add(eid)
+        # Model (generation_)config multi-eos — e.g. Gemma-4 turn-end 106.
+        eos_ids.update(_read_config_eos_ids(self.model_name))
         if stop_token_ids:
             eos_ids.update(stop_token_ids)
         stop_suffixes = []
@@ -11127,6 +11259,8 @@ class BatchedEngine:
         _eids = getattr(tokenizer, "eos_token_ids", None)
         if _eids is not None:  # may be a bare int (Qwen3.6-27B), not iterable
             eos_ids.update(_eids if isinstance(_eids, (list, tuple, set)) else (_eids,))
+        # Model (generation_)config multi-eos — e.g. Gemma-4 turn-end 106.
+        eos_ids.update(_read_config_eos_ids(self.model_name))
         if stop_token_ids:
             eos_ids.update(stop_token_ids)
         if stop:
