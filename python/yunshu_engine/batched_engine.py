@@ -7141,9 +7141,10 @@ class BatchedEngine:
             self._spec_prefill_keep_rate = float(
                 os.environ.get("YUNSHU_SPEC_PREFILL_KEEP_RATE", "0.20")
             )
-            sp_draft_path = os.environ.get(
-                "YUNSHU_SPEC_PREFILL_DRAFT_MODEL", ""
-            ).strip() or os.environ.get("YUNSHU_DRAFT_MODEL", "").strip()
+            sp_draft_path = (
+                os.environ.get("YUNSHU_SPEC_PREFILL_DRAFT_MODEL", "").strip()
+                or os.environ.get("YUNSHU_DRAFT_MODEL", "").strip()
+            )
             if sp_draft_path:
                 try:
                     from mlx_lm.utils import load as load_model
