@@ -148,10 +148,34 @@ class ScoreRequest(BaseModel):
         return self
 
 
+def _validate_rerank_item(field: str, i: int, item) -> None:
+    """A rerank query/document is a non-empty string OR a {text?, image?} object.
+
+    The object form (multimodal) is only meaningful for a cross-encoder reranker
+    (Qwen3-VL-Reranker); the bi-encoder cosine fallback rejects it at serve time.
+    """
+    if isinstance(item, str):
+        if not item.strip():
+            raise ValueError(f"{field}: item at index {i} is empty or whitespace-only")
+        _reject_overlong_texts(field, [item])
+    elif isinstance(item, dict):
+        if not (item.get("text") or item.get("image")):
+            raise ValueError(
+                f"{field}: object at index {i} must have a 'text' or 'image' key"
+            )
+        if item.get("text"):
+            _reject_overlong_texts(field, [item["text"]])
+    else:
+        raise ValueError(
+            f"{field}: item at index {i} must be a string or a {{text, image}} object"
+        )
+
+
 class RerankRequest(BaseModel):
     model: str
-    query: str
-    documents: list[str]
+    # str (text) or a {text?, image?} object (multimodal, cross-encoder only).
+    query: str | dict
+    documents: list[str | dict]
     top_n: int | None = None
     return_documents: bool = True
     # Optional retrieval instruction — used by a true cross-encoder reranker
@@ -162,9 +186,7 @@ class RerankRequest(BaseModel):
     def validate_request(self):
         if not self.model or not self.model.strip():
             raise ValueError("model: field is required and cannot be empty")
-        if not self.query or not self.query.strip():
-            raise ValueError("query: field is required and cannot be empty")
-        _reject_overlong_texts("query", [self.query])
+        _validate_rerank_item("query", 0, self.query)
         if not self.documents:
             raise ValueError("documents: field is required and cannot be empty")
         if self.top_n is not None:
@@ -172,15 +194,17 @@ class RerankRequest(BaseModel):
                 raise ValueError("top_n: must be a positive integer")
             if self.top_n > 2048:
                 raise ValueError("top_n: maximum 2048")
-        # Validate individual documents are not empty
         for i, doc in enumerate(self.documents):
-            if not isinstance(doc, str) or not doc.strip():
-                raise ValueError(
-                    f"documents: item at index {i} is empty or whitespace-only"
-                )
+            _validate_rerank_item("documents", i, doc)
         if len(self.documents) > 2048:
             raise ValueError("documents: maximum 2048 documents per request")
         return self
+
+    @property
+    def is_multimodal(self) -> bool:
+        return isinstance(self.query, dict) or any(
+            isinstance(d, dict) for d in self.documents
+        )
 
 
 class ClassifyRequest(BaseModel):
@@ -410,7 +434,10 @@ async def _rerank_cross_encoder(
     for idx, score in scored:
         item: dict[str, Any] = {"index": idx, "relevance_score": round(score, 6)}
         if req.return_documents:
-            item["document"] = {"text": req.documents[idx]}
+            doc = req.documents[idx]
+            # echo the original doc: a {text/image} object passes through, a bare
+            # string is wrapped as {"text": ...} (Cohere-compatible shape)
+            item["document"] = doc if isinstance(doc, dict) else {"text": doc}
         results.append(item)
 
     # Token counting isn't meaningful for a cross-encoder pass; report item count.
@@ -430,10 +457,10 @@ async def _rerank_cross_encoder(
 async def create_rerank(req: RerankRequest, request: Request):
     _check_permission(request, "can_infer")
     _check_model_access(request, req.model)
-    # Truncate long documents
+    # Truncate long text documents; {text/image} objects pass through untouched.
     truncated_docs = []
     for doc in req.documents:
-        if len(doc) > _MAX_DOCUMENT_LENGTH:
+        if isinstance(doc, str) and len(doc) > _MAX_DOCUMENT_LENGTH:
             logger.debug(
                 "Truncating document from %d to %d chars",
                 len(doc),
@@ -456,6 +483,18 @@ async def create_rerank(req: RerankRequest, request: Request):
 
     if isinstance(engine, VLEmbeddingEngine):
         return await _rerank_cross_encoder(req, engine, truncated_docs)
+
+    # Multimodal (image) query/documents only make sense for a cross-encoder
+    # reranker — the bi-encoder cosine fallback embeds text and can't ingest images.
+    if req.is_multimodal:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "multimodal rerank (image query/documents) requires a cross-encoder "
+                "reranker model such as Qwen3-VL-Reranker; the loaded model "
+                f"'{req.model}' only supports text bi-encoder rerank"
+            ),
+        )
 
     try:
         # Compute normalized embeddings for query and documents

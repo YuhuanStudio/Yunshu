@@ -156,3 +156,80 @@ async def test_rerank_cross_encoder_sorts_and_top_n():
     assert (
         body["results"][0]["relevance_score"] >= body["results"][1]["relevance_score"]
     )
+
+
+# ── multimodal rerank schema + fallback guard ──────────────────────
+
+
+def test_rerank_request_multimodal_parses():
+    from yunshu_gateway.routers.scoring import RerankRequest
+
+    r = RerankRequest(
+        model="m", query={"text": "q"}, documents=[{"image": "a.png"}, "plain text"]
+    )
+    assert r.is_multimodal is True
+
+
+def test_rerank_request_text_only_not_multimodal():
+    from yunshu_gateway.routers.scoring import RerankRequest
+
+    r = RerankRequest(model="m", query="q", documents=["a", "b"])
+    assert r.is_multimodal is False
+
+
+def test_rerank_request_rejects_objectless_doc():
+    from pydantic import ValidationError
+
+    from yunshu_gateway.routers.scoring import RerankRequest
+
+    with pytest.raises(ValidationError):
+        RerankRequest(model="m", query="q", documents=[{"foo": "bar"}])
+
+
+@pytest.mark.asyncio
+async def test_rerank_cross_encoder_echoes_image_doc():
+    import json as _json
+
+    from yunshu_gateway.routers.scoring import RerankRequest, _rerank_cross_encoder
+
+    docs = [{"image": "a.png"}, "plain text"]
+    req = RerankRequest(
+        model="vl-rr", query={"text": "q"}, documents=docs, return_documents=True
+    )
+    resp = await _rerank_cross_encoder(req, _StubRerank(), docs)
+    body = _json.loads(resp.body)
+    by_idx = {r["index"]: r["document"] for r in body["results"]}
+    # image doc echoed as the object; string doc wrapped as {"text": ...}
+    assert by_idx[0] == {"image": "a.png"}
+    assert by_idx[1] == {"text": "plain text"}
+
+
+@pytest.mark.asyncio
+async def test_rerank_multimodal_rejected_on_cosine_fallback(monkeypatch):
+    # a non-VL (text bi-encoder) engine must reject image inputs with 400
+    from fastapi import HTTPException
+
+    from yunshu_gateway.routers import scoring
+
+    class _PlainEngine:
+        is_loaded = True
+
+    async def _fake_resolve(_model):
+        return _PlainEngine()
+
+    monkeypatch.setattr(scoring, "_resolve_engine", _fake_resolve)
+    req = scoring.RerankRequest(
+        model="text-embedder", query="q", documents=[{"image": "a.png"}]
+    )
+
+    class _Req:
+        # minimal stand-in for fastapi Request used by the permission checks
+        headers: dict = {}
+        state = type("S", (), {})()
+
+    monkeypatch.setattr(scoring, "_check_permission", lambda *a, **k: None)
+    monkeypatch.setattr(scoring, "_check_model_access", lambda *a, **k: None)
+    with pytest.raises(HTTPException) as ei:
+        await scoring.create_rerank(req, _Req())
+    assert ei.value.status_code == 400
+    assert "cross-encoder" in ei.value.detail
