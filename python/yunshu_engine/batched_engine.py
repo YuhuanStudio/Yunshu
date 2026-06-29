@@ -19,6 +19,7 @@ This is the engine that ModelManager and the gateway routers use.
 """
 
 import asyncio
+import contextvars
 import logging
 import os
 import platform
@@ -733,6 +734,14 @@ def _build_gpu_sampler_text(
     return _sampler
 
 
+# Per-request top-nσ, set by generate()/stream_generate() and read by
+# _build_temp_sampler() within the same event-loop task. Default None → fall back
+# to the YUNSHU_TOP_N_SIGMA server-wide default.
+_REQUEST_TOP_N_SIGMA: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "yunshu_request_top_n_sigma", default=None
+)
+
+
 def _build_temp_sampler(
     temperature,
     top_p,
@@ -748,15 +757,21 @@ def _build_temp_sampler(
     GPU→CPU sync, preserves mlx-lm's async pipeline; same distribution)."""
     import os as _os
 
-    # Server-wide top-nσ default: a request that doesn't set it (every path that
-    # hasn't been wired for the per-request param) still picks up YUNSHU_TOP_N_SIGMA.
-    # This is the single chokepoint all 3 fast-path sampler sites pass through, so
-    # the env default fires everywhere without threading it through every router.
+    # top-nσ resolution order: explicit call arg → per-request value (set on the
+    # ContextVar by generate()/stream_generate()) → server-wide YUNSHU_TOP_N_SIGMA.
+    # The sampler is built on the request's event-loop task BEFORE the executor
+    # decode, so the ContextVar set in the entrypoint is visible here and gets
+    # baked into the returned closure — no need to thread the value through the
+    # deep fast-path call chain.
     if not top_n_sigma or float(top_n_sigma) <= 0:
-        try:
-            top_n_sigma = float(_os.environ.get("YUNSHU_TOP_N_SIGMA", "0") or 0)
-        except ValueError:
-            top_n_sigma = 0.0
+        _req_nsig = _REQUEST_TOP_N_SIGMA.get()
+        if _req_nsig and _req_nsig > 0:
+            top_n_sigma = _req_nsig
+        else:
+            try:
+                top_n_sigma = float(_os.environ.get("YUNSHU_TOP_N_SIGMA", "0") or 0)
+            except ValueError:
+                top_n_sigma = 0.0
 
     if _os.environ.get("YUNSHU_GPU_SAMPLER", "").strip().lower() in (
         "1",
@@ -2818,6 +2833,7 @@ class BatchedEngine:
         reasoning_effort: str | None = None,
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
+        top_n_sigma: float = 0.0,
         cancel_event: asyncio.Event | None = None,
         priority: int = 0,
         logits_processors: list | None = None,
@@ -2874,6 +2890,10 @@ class BatchedEngine:
                 finish_reason="length",
             )
 
+        # publish per-request top-nσ for _build_temp_sampler (same event-loop task)
+        _REQUEST_TOP_N_SIGMA.set(
+            top_n_sigma if top_n_sigma and top_n_sigma > 0 else None
+        )
         _use_engine_loop = self._should_use_engine_loop(use_engine_loop)
 
         # spec_decode is re-enabled ONLY for the one route proven
@@ -5067,6 +5087,7 @@ class BatchedEngine:
         reasoning_effort: str | None = None,
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
+        top_n_sigma: float = 0.0,
         priority: int = 0,
         logprobs: bool | int = False,
         top_logprobs: int | None = None,
@@ -5093,6 +5114,10 @@ class BatchedEngine:
         if not self._loaded:
             await self.start()
 
+        # publish per-request top-nσ for _build_temp_sampler (same event-loop task)
+        _REQUEST_TOP_N_SIGMA.set(
+            top_n_sigma if top_n_sigma and top_n_sigma > 0 else None
+        )
         _use_engine_loop = self._should_use_engine_loop(use_engine_loop)
         # : spec_decode falls back to the fast path — see the non-streaming
         # path for the full rationale (fast-path spec routes are not currently

@@ -387,6 +387,10 @@ class ChatCompletionRequest(BaseModel):
     xtc_threshold: float = Field(
         default=0.0, ge=0.0, le=0.5
     )  # engine requires [0,0.5]; le=1.0 made out-of-range 500 not 422
+    # top-nσ (ACL 2025): keep only tokens whose raw logit is within n·σ of the max
+    # logit (a temperature-invariant quality filter; 0 = off). Server-wide default
+    # via YUNSHU_TOP_N_SIGMA; this per-request value overrides it when > 0.
+    top_n_sigma: float = Field(default=0.0, ge=0.0, le=10.0)
     # Serving parity:
     min_tokens: int = Field(
         default=0, ge=0
@@ -1292,6 +1296,7 @@ async def _build_multi_choice(
                 reasoning_effort=req.reasoning_effort,
                 xtc_probability=req.xtc_probability,
                 xtc_threshold=req.xtc_threshold,
+                top_n_sigma=req.top_n_sigma,
                 priority=req.priority,
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
@@ -1334,6 +1339,7 @@ async def _build_multi_choice(
                 reasoning_effort=req.reasoning_effort,
                 xtc_probability=req.xtc_probability,
                 xtc_threshold=req.xtc_threshold,
+                top_n_sigma=req.top_n_sigma,
                 spec_decode=req.spec_decode,
                 json_schema=json_schema,
                 priority=req.priority,
@@ -1890,6 +1896,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                         reasoning_effort=req.reasoning_effort,
                         xtc_probability=req.xtc_probability,
                         xtc_threshold=req.xtc_threshold,
+                        top_n_sigma=req.top_n_sigma,
                         priority=req.priority,
                         logits_processors=req.logits_processors,
                         cancel_event=_ns_cancel_event,
@@ -1932,6 +1939,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                         reasoning_effort=req.reasoning_effort,
                         xtc_probability=req.xtc_probability,
                         xtc_threshold=req.xtc_threshold,
+                        top_n_sigma=req.top_n_sigma,
                         spec_decode=req.spec_decode,
                         json_schema=json_schema,
                         logprobs=req.logprobs,
@@ -2947,6 +2955,7 @@ async def _stream_response_multi(
                     reasoning_effort=req.reasoning_effort,
                     xtc_probability=req.xtc_probability,
                     xtc_threshold=req.xtc_threshold,
+                    top_n_sigma=req.top_n_sigma,
                     spec_decode=req.spec_decode,
                     priority=req.priority,
                     logprobs=req.logprobs,
@@ -3712,6 +3721,7 @@ async def _stream_response(
                 reasoning_effort=req.reasoning_effort,
                 xtc_probability=req.xtc_probability,
                 xtc_threshold=req.xtc_threshold,
+                top_n_sigma=req.top_n_sigma,
                 priority=req.priority,
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
