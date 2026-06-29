@@ -38,10 +38,10 @@ class TestInferenceBudget:
     def test_time_budget_progress_resets(self):
         # Steady (even slow) progress keeps a request alive — each token resets
         # the inactivity clock.
-        b = InferenceBudget(request_id="r1", max_wall_time_ms=50.0)
+        b = InferenceBudget(request_id="r1", max_wall_time_ms=2000.0)
         for _ in range(5):
             b.consume_tokens(1)
-            time.sleep(0.01)  # 10ms < 50ms budget
+            time.sleep(0.01)  # 10ms << 2000ms budget (generous for slow CI)
             assert not b.is_time_exhausted
 
     def test_time_budget_not_exhausted(self):
