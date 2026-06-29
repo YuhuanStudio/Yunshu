@@ -23,7 +23,7 @@ def test_realtime_stores_cleaned_text():
     assert "_visible_text = clean_tool_call_markup(_visible_text).strip()" in src
     # the assistant content/transcript/synth use _visible_text, not raw full_text
     assert 'content_parts = [{"type": "text", "text": _visible_text}]' in src
-    assert "self._synthesize_audio_response(_visible_text" in src
+    assert "await self._synthesize_audio_response(\n                    _visible_text," in src
 
 
 def test_realtime_strips_think():

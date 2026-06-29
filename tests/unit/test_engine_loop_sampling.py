@@ -21,9 +21,9 @@ def test_add_request_forwards_min_tokens_ignore_eos_suppress():
 
     src = inspect.getsource(engine_core.EngineCore.add_request)
     # the three params are forwarded into SamplingParams from kwargs
-    assert "min_tokens=int(kwargs.get('min_tokens'" in src
-    assert "ignore_eos=bool(kwargs.get('ignore_eos'" in src
-    assert "suppress_tokens=kwargs.get('suppress_tokens'" in src
+    assert 'min_tokens=int(kwargs.get("min_tokens"' in src
+    assert 'ignore_eos=bool(kwargs.get("ignore_eos"' in src
+    assert 'suppress_tokens=kwargs.get("suppress_tokens"' in src
 
 
 def test_batched_engine_loop_passes_the_three_params():

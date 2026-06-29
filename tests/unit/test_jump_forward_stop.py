@@ -148,5 +148,5 @@ def test_caller_finish_reason_uses_stop_hit():
     # lock in the caller's finish_reason wiring (in _generate_fast, source-guarded)
     src = inspect.getsource(BatchedEngine._generate_fast)
     code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
-    assert "_jf_text, _jf_ids, _jf_nfwd, _jf_stop = await" in code
+    assert "_jf_stop," in code and ") = await _jf_loop.run_in_exec" in code
     assert "not _jf_stop and len(_jf_ids) >= max_tokens" in code

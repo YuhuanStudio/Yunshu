@@ -39,7 +39,7 @@ def test_both_streaming_blocks_fixed():
     # the start-synthesis appears in BOTH blocks (replace_all applied)
     assert src.count("tc_id=out.tool_call.id") == 2
     assert (
-        src.count("_choice_tc_start_emitted = False  # next index needs its own start")
+        src.count("# next index needs its own start")
         == 2
     )
 

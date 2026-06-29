@@ -16,7 +16,7 @@ from yunshu_engine import engine_core
 def test_acquire_gated_on_not_running():
     src = inspect.getsource(engine_core.EngineCore.add_request)
     # the acquire is now guarded so it never runs in engine-loop mode
-    assert "if lora_adapter and not getattr(self, '_running', False):" in src
+    assert 'if lora_adapter and not getattr(self, "_running", False):' in src
     # the SPECIFIC racy "acquire anyway, then release when _running" block is gone
     # (the legitimate fast-path release-after-generation calls stay)
     assert "if loaded_lora and getattr(self, '_running', False):" not in src

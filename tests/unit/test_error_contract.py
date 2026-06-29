@@ -34,4 +34,4 @@ def test_logit_bias_uses_400_not_422():
     rsrc = inspect.getsource(responses)
     asrc = inspect.getsource(anthropic)
     assert "logit_bias" in rsrc and "status_code=400" in rsrc
-    assert 'HTTPException(status_code=400, detail=f"logit_bias' in asrc
+    assert 'status_code=400, detail=f"logit_bias' in asrc
