@@ -211,6 +211,83 @@ class SuffixProposer:
         self._total_tokens_proposed: int = 0
         self._total_tokens_accepted: int = 0
 
+    def propose(self, token_ids: list[int]) -> list[int]:
+        """Drop-in for NgramProposer.propose — stateless longest-suffix lookup.
+
+        Finds the LONGEST suffix of ``token_ids`` that occurred earlier in the
+        sequence and returns the tokens that followed that earlier occurrence.
+        Self-contained (no begin/draft/accept lifecycle): the spec path can call
+        this exactly like the n-gram proposer, once per decode step, with the
+        full context. Unlike fixed-length n-gram lookup this prefers the longest
+        match, so on repetitive output (code/JSON/agentic loops) it proposes
+        longer, higher-confidence drafts.
+
+        Losslessness does NOT depend on this proposer: every draft is checked by
+        the shared verify_with_last_token, which only accepts tokens equal to the
+        model's own argmax — a bad suffix proposal is simply rejected and the
+        base loop generates the true token. The proposer affects acceptance rate
+        (speed) only.
+
+        The search is bounded to the last ``max_window`` tokens so cost stays at
+        O(max_window · max_trie_depth) per step — cheap relative to a model
+        forward on M3. Suffix decoding targets recent repetition anyway.
+        """
+        total = len(token_ids)
+        min_suffix = self.config.min_suffix_length
+        if total < min_suffix + 1:
+            return []
+        max_draft = min(self.config.max_draft, self.config.max_model_len - total)
+        if max_draft <= 0:
+            return []
+
+        window = (
+            token_ids[-self.config.max_window :]
+            if total > self.config.max_window
+            else token_ids
+        )
+        wlen = len(window)
+        cap = self.config.max_trie_depth
+        last = window[-1]
+        self._total_proposals += 1
+
+        # Single backward pass to find the LONGEST suffix that recurs earlier.
+        # Only positions holding the final token can end a match, so we extend
+        # backward from each such candidate and keep the longest (ties → the most
+        # recent, i.e. closest to the end). This is O(window + matched) instead of
+        # the O(trie_depth · window) "try every suffix length" scan, so the
+        # proposer cost stays well under a model forward — the difference between
+        # suffix decode being a net win vs a net loss on M3.
+        best_len = 0
+        best_cont_pos = -1
+        for i in range(wlen - 2, -1, -1):
+            if window[i] != last:
+                continue
+            m = 1
+            while m < cap and i - m >= 0 and window[i - m] == window[wlen - 1 - m]:
+                m += 1
+            if m > best_len:
+                best_len = m
+                best_cont_pos = i + 1
+                if best_len >= cap:
+                    break  # cannot extend further — take this match
+
+        if best_len < min_suffix or not (0 <= best_cont_pos < wlen):
+            return []
+        cont = window[best_cont_pos : best_cont_pos + max_draft]
+        if cont:
+            self._total_hits += 1
+            self._total_tokens_proposed += len(cont)
+        return cont
+
+    def update(self, token_ids: list[int]) -> None:
+        """No-op. propose() scans the passed context directly (stateless), so
+        there is no incremental pool to maintain — present for NgramProposer
+        interface parity (the spec path may call it after accept())."""
+
+    def reset(self) -> None:
+        """No-op. No cross-request pool state to clear (propose is stateless) —
+        present for NgramProposer interface parity."""
+
     def begin(self, request_id: str) -> None:
         """Initialize per-request state.
 

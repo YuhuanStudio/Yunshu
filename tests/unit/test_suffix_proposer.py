@@ -15,6 +15,51 @@ from yunshu_engine.suffix_proposer import (
     SuffixTrieNode,
 )
 
+
+# ── propose(): the NgramProposer-compatible drop-in used by the spec path ──
+# This is the entry point the BatchedEngine spec loop calls when
+# YUNSHU_SPEC_PROPOSER=suffix. It is stateless (no begin/accept lifecycle) and
+# finds the LONGEST recurring suffix. Correctness of GENERATED text never depends
+# on it — the shared verifier accepts only the model's own argmax — but it must
+# propose sane continuations to be a speed win.
+class TestProposeDropIn:
+    def test_propose_longest_recurring_suffix(self):
+        p = SuffixProposer(SuffixConfig(min_suffix_length=2, max_draft=5))
+        # suffix [1,2,3] recurs; its earlier occurrence is followed by 4.
+        ctx = [1, 2, 3, 4, 9, 9, 1, 2, 3]
+        assert p.propose(ctx)[:1] == [4]
+
+    def test_propose_prefers_longer_match(self):
+        p = SuffixProposer(SuffixConfig(min_suffix_length=1, max_draft=3))
+        # last token 3 follows both [2,3] and [7,3]; the longer match [1,2,3]
+        # wins → continuation from that site (token 50).
+        ctx = [1, 2, 3, 50, 60, 7, 3, 99, 1, 2, 3]
+        assert p.propose(ctx)[:1] == [50]
+
+    def test_propose_no_match_returns_empty(self):
+        p = SuffixProposer(SuffixConfig(min_suffix_length=3, max_draft=5))
+        assert p.propose([1, 2, 3, 4, 5]) == []  # last token 5 never recurs
+
+    def test_propose_respects_max_draft(self):
+        p = SuffixProposer(SuffixConfig(min_suffix_length=1, max_draft=2))
+        ctx = [5, 1, 2, 3, 4, 9, 5, 1, 2, 3, 4]
+        assert len(p.propose(ctx)) <= 2
+
+    def test_propose_too_short_context(self):
+        p = SuffixProposer(SuffixConfig(min_suffix_length=3))
+        assert p.propose([1, 2]) == []
+
+    def test_update_and_reset_are_noops(self):
+        # interface parity with NgramProposer — must not raise, must not change
+        # the stateless propose() result.
+        p = SuffixProposer(SuffixConfig(min_suffix_length=2, max_draft=5))
+        ctx = [1, 2, 3, 4, 1, 2, 3]
+        before = p.propose(ctx)
+        p.update(ctx)
+        p.reset()
+        assert p.propose(ctx) == before
+
+
 # ── SuffixTrie ─────────────────────────────────────────────────────
 
 

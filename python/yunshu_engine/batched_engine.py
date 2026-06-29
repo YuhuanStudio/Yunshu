@@ -2320,8 +2320,15 @@ class BatchedEngine:
 
         # Path 3: Propagate N-gram proposer to scheduler if needed
         # (BatchedEngine creates its own N-gram proposer, but the scheduler
-        # may not have one if ngram_spec_enabled was False in EngineCoreConfig)
-        if self._ngram_proposer is not None and scheduler._ngram_proposer is None:
+        # may not have one if ngram_spec_enabled was False in EngineCoreConfig).
+        # Only the n-gram family has min_n/max_n config; the suffix proposer is
+        # driven solely on the single-request fast path, so skip the batch-loop
+        # sync for it (the legacy BatchGenerator loop has no suffix support).
+        if (
+            self._ngram_proposer is not None
+            and scheduler._ngram_proposer is None
+            and hasattr(self._ngram_proposer.config, "min_n")
+        ):
             scheduler.enable_ngram_spec(
                 min_n=self._ngram_proposer.config.min_n,
                 max_n=self._ngram_proposer.config.max_n,
@@ -7298,9 +7305,27 @@ class BatchedEngine:
             max_n = int(os.environ.get("YUNSHU_NGRAM_MAX_N", "5"))
             k = int(os.environ.get("YUNSHU_NGRAM_K", "5"))
             mode = os.environ.get("YUNSHU_NGRAM_MODE", "lps").strip()
-            self._ngram_proposer = NgramProposer(
-                NgramConfig(max_n=max_n, k=k, mode=mode)
+            # Spec proposer family (shares the lossless verify path + base loop):
+            #   "ngram"  (default) — fixed-length n-gram suffix→continuation, O(1)
+            #   "suffix" — Suffix Decoding (arXiv 2411.04975): LONGEST-suffix match,
+            #              stronger on repetitive output (code/JSON/agentic loops).
+            # Both are lossless by construction — verify_with_last_token only
+            # accepts the model's own argmax, so the proposer affects speed, not
+            # output. The slot below is the single "spec proposer" the routing
+            # gates and per-request construction read.
+            _proposer_kind = (
+                os.environ.get("YUNSHU_SPEC_PROPOSER", "ngram").strip().lower()
             )
+            if _proposer_kind == "suffix":
+                from .suffix_proposer import SuffixConfig, SuffixProposer
+
+                self._ngram_proposer = SuffixProposer(
+                    SuffixConfig(max_draft=k, max_trie_depth=max(max_n, 16) * 4)
+                )
+            else:
+                self._ngram_proposer = NgramProposer(
+                    NgramConfig(max_n=max_n, k=k, mode=mode)
+                )
             # DEFAULT ON for greedy. The earlier gross corruption (dropped/
             # duplicated tokens — "2, 4, 6"→"246", "…the average speed"→"…the
             # average average") was NOT the verifier: it was the prefill+base loop
@@ -7323,7 +7348,8 @@ class BatchedEngine:
                 "YUNSHU_NGRAM_DEFAULT", "1"
             ).strip().lower() in ("1", "true", "yes")
             logger.info(
-                "N-gram proposer initialized: max_n=%d, k=%d, mode=%s, greedy_default=%s",
+                "Spec proposer initialized: kind=%s, max_n=%d, k=%d, mode=%s, greedy_default=%s",
+                _proposer_kind,
                 max_n,
                 k,
                 mode,
@@ -8883,6 +8909,36 @@ class BatchedEngine:
                         exc_info=True,
                     )
 
+    def _new_request_proposer(self):
+        """Fresh per-request spec proposer mirroring the configured global one.
+
+        A per-request instance avoids reset()/propose() races on a shared object
+        under concurrency. Branches on the proposer family (n-gram vs suffix)
+        selected in _init_spec_decode; both expose the same propose(token_ids)
+        contract and feed the same lossless verifier.
+        """
+        from .suffix_proposer import SuffixProposer
+
+        g = self._ngram_proposer
+        if isinstance(g, SuffixProposer):
+            from .suffix_proposer import SuffixConfig
+
+            c = g.config
+            return SuffixProposer(
+                SuffixConfig(
+                    min_suffix_length=c.min_suffix_length,
+                    max_window=c.max_window,
+                    max_draft=c.max_draft,
+                    max_model_len=c.max_model_len,
+                    max_trie_depth=c.max_trie_depth,
+                )
+            )
+        from .ngram_proposer import NgramConfig, NgramProposer
+
+        return NgramProposer(
+            NgramConfig(max_n=g.config.max_n, k=g.config.k, mode=g.config.mode)
+        )
+
     async def _generate_ngram_spec(
         self,
         prompt: str | list[dict],
@@ -8975,18 +9031,9 @@ class BatchedEngine:
                 timeout_seconds=timeout_seconds,
                 lora_adapter=lora_adapter,
             )
-        # Create a per-request NgramProposer to avoid race conditions
-        # when concurrent requests call reset()/propose() on a shared instance.
-        from .ngram_proposer import NgramConfig as _NgramConfig
-        from .ngram_proposer import NgramProposer as _NgramProposer
-
-        proposer = _NgramProposer(
-            _NgramConfig(
-                max_n=self._ngram_proposer.config.max_n,
-                k=self._ngram_proposer.config.k,
-                mode=self._ngram_proposer.config.mode,
-            )
-        )
+        # Fresh per-request proposer (n-gram or suffix) — avoids reset()/propose()
+        # races on a shared instance under concurrency.
+        proposer = self._new_request_proposer()
 
         # Handle messages-format prompts (list of dicts) — apply chat template.
         # route through _apply_chat_template + _encode_prompt (NOT raw tokenizer
@@ -9808,18 +9855,9 @@ class BatchedEngine:
             ):
                 yield _chunk
             return
-        # Create a per-request NgramProposer to avoid race conditions
-        # when concurrent requests call reset()/propose() on a shared instance.
-        from .ngram_proposer import NgramConfig as _NgramConfig
-        from .ngram_proposer import NgramProposer as _NgramProposer
-
-        proposer = _NgramProposer(
-            _NgramConfig(
-                max_n=self._ngram_proposer.config.max_n,
-                k=self._ngram_proposer.config.k,
-                mode=self._ngram_proposer.config.mode,
-            )
-        )
+        # Fresh per-request proposer (n-gram or suffix) — avoids reset()/propose()
+        # races on a shared instance under concurrency.
+        proposer = self._new_request_proposer()
 
         # Handle messages-format prompts (list of dicts) — apply chat template.
         # route through _apply_chat_template + _encode_prompt (NOT raw tokenizer
