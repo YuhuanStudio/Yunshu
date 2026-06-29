@@ -163,7 +163,13 @@ class OmniEngine:
         default: pass 1 pays load+JIT, pass 2 pays the first-generation tax —
         leaving the real first request genuinely at steady state. This is just
         priming a resident model (the standard thing every model server does),
-        not benchmarking sleight-of-hand."""
+        not benchmarking sleight-of-hand.
+
+        The text passes do NOT compile the audio-ENCODER kernels (those only run
+        when speech is fed in). For a speech-to-speech server that leaves the very
+        first audio-in turn paying a ~0.5s JIT tax (measured: 1.8s vs 1.3s steady
+        on M3 Max). So warmup also runs ONE audio-in pass with a short throwaway
+        clip, priming the encoder path too."""
         start = asyncio.get_running_loop().time()
         self.load()
         for _ in range(max(1, rounds)):
@@ -171,11 +177,54 @@ class OmniEngine:
                 "Hello, please say a short greeting out loud."
             ):
                 pass  # discard — we only want kernels compiled and the path primed
+        # One audio-in pass to compile the speech-encoder kernels (best-effort).
+        audio_path = self._make_warmup_audio()
+        if audio_path is not None:
+            try:
+                async for _chunk in self.stream(
+                    "Respond to the user.", audio_path=audio_path
+                ):
+                    pass
+            except Exception:  # noqa: BLE001 — encoder priming is best-effort
+                logger.warning(
+                    "OmniEngine audio-in warmup failed; first speech turn may be cold",
+                    exc_info=True,
+                )
+            finally:
+                import contextlib
+                import os
+
+                with contextlib.suppress(OSError):
+                    os.unlink(audio_path)
         elapsed = asyncio.get_running_loop().time() - start
         logger.info(
             "OmniEngine warmup done in %.1fs (first request now warm).", elapsed
         )
         return elapsed
+
+    def _make_warmup_audio(self) -> str | None:
+        """Write a short, near-silent throwaway WAV for audio-encoder priming.
+        Content is irrelevant — only the encoder kernels (shape-dependent) need
+        to compile. Returns the temp path, or None if writing fails."""
+        import tempfile
+        import wave
+
+        try:
+            rate = 16000
+            samples = np.zeros(rate // 2, dtype="<i2")  # 0.5s silence
+            fd, path = tempfile.mkstemp(suffix=".wav")
+            import os
+
+            os.close(fd)
+            with wave.open(path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(rate)
+                wf.writeframes(samples.tobytes())
+            return path
+        except Exception:  # noqa: BLE001
+            logger.debug("warmup audio synthesis failed", exc_info=True)
+            return None
 
     async def stream(
         self,
