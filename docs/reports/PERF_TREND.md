@@ -256,3 +256,27 @@ Snapshots: `20260531T160528Z`(0e23d31), `20260531T163718Z`(d6ecf3d), `20260601T0
 | Qwen3.5-2B-MLX-bf16/yunshu/sys8 | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | 163.6 | · | · | 164 | · | · | · | · | 🟢↑ +0.4 (+0%) |
 | Qwen3.5-2B-MLX-bf16/yunshu/ttft_ms | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | 203.4 | · | · | 195.5 | · | · | · | · | 🟢↓ -7.9 (-4%) |
 
+
+---
+
+## omni (native Qwen3-Omni Thinker+Talker speech-to-speech)
+
+_Measured 2026-06-29, M3 Max 36 GB, Qwen3-Omni-30B-A3B-Instruct-4bit, chunk_size=10._
+_first_audio = time from request to first audio chunk emitted. RTF = audio_seconds / total_s._
+_thinker_max=8 (minimal-reasoning voice default)._
+
+| prompt | TTFT (s) | first_audio (s) | total (s) | audio (s) | RTF |
+|---|---|---|---|---|---|
+| "Hi! How are you today?" | 0.40 | 1.07 | 3.00 | 2.88 | 1.08 |
+| "Tell me a fun fact about the ocean." | 0.43 | 1.07 | 3.00 | 2.00 | 0.99 |
+| "What's the weather like on Mars?" | 0.43 | 1.07 | 2.82 | 3.04 | 1.08 |
+
+**chunk_size sweep** (same model, prompt="Tell me a fun fact about the ocean."):
+
+| chunk_size | first_audio (s) | audio chunks | audio (s) |
+|---|---|---|---|
+| 300 (old default) | 1.80 | 1 (batch) | 1.76 |
+| 10 (new default) | 1.07 | 25 (streaming) | 2.64 |
+
+Dropping chunk_size 300→10 halves first-audio latency (1.8s→1.1s) and enables true incremental
+playback. Total audio duration is unaffected; the Talker emits the same samples.
