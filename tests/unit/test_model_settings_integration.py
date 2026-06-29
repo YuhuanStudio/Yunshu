@@ -5,7 +5,7 @@ import os
 class TestModelSettingsLoadApply:
     def test_load_model_settings_defaults(self, tmp_path):
         from yunshu_engine.model_settings import load_model_settings
-        settings = load_model_settings(str(tmp_path), "test-model")
+        settings = load_model_settings(str(tmp_path), "test-model", use_adaptive=False)
         assert settings.max_tokens == 4096
         assert settings.temperature == 0.7
         assert settings.kv_cache_quant_bits is None

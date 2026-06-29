@@ -9,6 +9,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+pytest.importorskip("mlx_vlm")
+
 from yunshu_engine.vlm_engine import (
     _VALIDATE_URL,
     VLMEngine,

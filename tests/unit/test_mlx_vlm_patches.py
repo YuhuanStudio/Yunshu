@@ -5,6 +5,9 @@ against mlx-vlm 0.5.0 (upstream fix submitted, not yet released). No model load
 required — pure patch logic.
 """
 
+import pytest
+
+pytest.importorskip("mlx_vlm")
 
 from python.yunshu_engine.mlx_vlm_patches import apply_mlx_vlm_patches
 

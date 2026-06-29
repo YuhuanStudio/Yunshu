@@ -16,6 +16,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+pytest.importorskip("mlx_vlm")
+
 # ── Helpers ──
 
 def _make_vlm_engine():
