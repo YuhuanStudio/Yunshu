@@ -2,7 +2,7 @@
 
 Thank you for your interest in contributing to Yunshu! This guide covers the minimum you need to get a
 working dev loop. Read the repo's `CLAUDE.md` for the full architectural picture (what's live, what's
-dead, what's being refactored).
+dead, what's being refactored). By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Prerequisites
 

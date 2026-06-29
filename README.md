@@ -96,7 +96,7 @@ Runnable scripts in **[examples/](examples/)**: `quickstart.py` (every endpoint)
 (WebSocket speech-to-speech), `multimodal_embeddings.py` (image / cross-modal retrieval + reranking).
 
 > **Dev checkout**: `just setup` then `YUNSHU_MODEL=<model> just dev`.
-> **All tunables**: see the [configuration reference](docs/CONFIGURATION.md).
+> **Docs**: [API reference](docs/API.md) · [configuration reference](docs/CONFIGURATION.md).
 
 ---
 
