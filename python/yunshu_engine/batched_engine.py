@@ -772,6 +772,24 @@ _REQUEST_TOP_N_SIGMA: contextvars.ContextVar[float | None] = contextvars.Context
 )
 
 
+# Per-request OpenAI tool schemas for NATIVE chat-template rendering. Set by the router
+# (in the request's event-loop task) when it chose native tools over prompt-injection;
+# read by _apply_chat_template in the SAME task (prompt build is task-side, not on the
+# MLX executor — same propagation guarantee as _REQUEST_TOP_N_SIGMA). Per-task → no
+# cross-request leak.
+_REQUEST_TOOLS: contextvars.ContextVar[list | None] = contextvars.ContextVar(
+    "yunshu_request_tools", default=None
+)
+
+
+def _template_supports_tools(tokenizer) -> bool:
+    """True if the tokenizer's chat template natively renders a ``tools`` variable
+    (Qwen3, Llama-3.1, Hermes, Mistral, GLM, …). When False, callers fall back to the
+    generic injected tool system-prompt. Cheap string check on the Jinja template."""
+    tmpl = getattr(tokenizer, "chat_template", None)
+    return isinstance(tmpl, str) and "tools" in tmpl
+
+
 def _build_temp_sampler(
     temperature,
     top_p,
@@ -12172,8 +12190,16 @@ class BatchedEngine:
         self,
         messages: list[dict],
         enable_thinking: bool | None = None,
+        tools: list | None = None,
     ) -> str:
-        """Apply chat template to convert messages to text."""
+        """Apply chat template to convert messages to text.
+
+        ``tools`` (OpenAI function schemas), when the model's chat template natively
+        supports a ``tools`` variable, are rendered in the model's OWN tool format +
+        special tokens (better adherence/parse rates than a generic injected system
+        prompt). Callers pass tools ONLY when they've skipped the prompt-injection
+        fallback (see _engine_supports_native_tools); otherwise None keeps the old path.
+        """
         thinking = (
             enable_thinking if enable_thinking is not None else self.enable_thinking
         )
@@ -12272,11 +12298,29 @@ class BatchedEngine:
                     kwargs["add_generation_prompt"] = True
                 if thinking is not None:
                     kwargs["enable_thinking"] = thinking
+                # Native tool rendering: explicit param wins, else the per-request
+                # contextvar the router set (task-side). Only pass when the template
+                # actually references a `tools` variable.
+                _tools = tools if tools is not None else _REQUEST_TOOLS.get()
+                if _tools and _template_supports_tools(tokenizer):
+                    kwargs["tools"] = _tools
                 try:
                     text = tokenizer.apply_chat_template(clean, **kwargs)
                 except (TypeError, ValueError) as e:
                     _es = str(e)
-                    if "continue_final_message" in _es:
+                    if "tools" in kwargs and (
+                        "tool" in _es.lower() or isinstance(e, TypeError)
+                    ):
+                        # Some templates declare a `tools` var but choke on the schema
+                        # shape / lack the kwarg. Drop tools and retry — the request still
+                        # generates (tool-calling just isn't natively templated this turn).
+                        logger.warning(
+                            f"Model {self.model_name} rejected native tools ({_es[:80]}); "
+                            "retrying without"
+                        )
+                        kwargs.pop("tools", None)
+                        text = tokenizer.apply_chat_template(clean, **kwargs)
+                    elif "continue_final_message" in _es:
                         # TypeError = tokenizer too old for the kwarg; ValueError
                         # = template rejects continue_final_message (e.g. "no content to
                         # continue"). Either way, retry without it — don't open a NEW turn

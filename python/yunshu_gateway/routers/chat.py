@@ -921,11 +921,19 @@ def _inject_tool_system_prompt(
     tools: list[ToolDefinition],
     tool_choice: str | ToolChoiceFunction | None = None,
     parallel_tool_calls: bool = True,
+    engine=None,
 ) -> list[dict]:
     """Inject tool definitions into the system prompt.
 
     For models without native tool calling, we inject tool descriptions
     into the system message so the model can generate tool calls.
+
+    When ``engine`` is a BatchedEngine whose chat template natively supports a ``tools``
+    variable AND tool_choice is auto/None, the tools are instead handed to the engine for
+    NATIVE rendering (model's own format/special tokens → better adherence + parse rates)
+    via a per-request contextvar, and the generic injection is skipped. Forced tool_choice
+    (none/required/named) and non-BatchedEngine paths keep the injection (which handles
+    those modes).
 
     Supports tool_choice:
     - "auto" (default): model decides whether to call tools
@@ -934,6 +942,27 @@ def _inject_tool_system_prompt(
     """
     if not tools:
         return messages
+
+    # Native tool rendering (auto/None only — the inject path handles forced choices).
+    try:
+        from yunshu_engine.batched_engine import (
+            _REQUEST_TOOLS,
+            BatchedEngine,
+            _template_supports_tools,
+        )
+
+        if (
+            tool_choice in (None, "auto")
+            and isinstance(engine, BatchedEngine)
+            and _template_supports_tools(getattr(engine, "_tokenizer", None))
+        ):
+            _REQUEST_TOOLS.set([t.model_dump() for t in tools])
+            return messages
+        _REQUEST_TOOLS.set(None)  # ensure no stale native tools leak in
+    except Exception:
+        logger.debug(
+            "native-tool decision failed; using prompt injection", exc_info=True
+        )
 
     # tool_choice="none": inject minimal info so model knows tools exist
     # but is instructed NOT to call them
@@ -1725,7 +1754,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
     # Inject tool definitions if provided
     if req.tools:
         messages = _inject_tool_system_prompt(
-            messages, req.tools, req.tool_choice, req.parallel_tool_calls
+            messages, req.tools, req.tool_choice, req.parallel_tool_calls, engine=engine
         )
 
     # Parse response_format for structured output (JSON schema)
