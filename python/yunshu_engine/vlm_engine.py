@@ -1608,6 +1608,15 @@ class VLMEngine:
                 if (image_paths and self._has_vision and self._is_vlm) or (
                     audio_paths and self._is_vlm
                 ):
+                    # The image/audio generation path can't yet apply grammar/JSON-schema
+                    # constraints (the constrained sampler is wired only on the text
+                    # paths). Reject loudly instead of silently returning free text that
+                    # ignores response_format.
+                    if kwargs.get("json_schema"):
+                        raise ValueError(
+                            "response_format / json_schema (structured output) is not "
+                            "supported together with image or audio inputs"
+                        )
                     return self._generate_vlm_vision(
                         messages,
                         image_paths,

@@ -2143,6 +2143,25 @@ async def _handle_vlm_chat(
     """Handle chat completion via VLM engine (streaming + non-streaming)."""
     from yunshu_engine.vlm_engine import VLMEngine
 
+    # The image generation path can't apply grammar/JSON-schema constraints (the
+    # constrained sampler is wired only on the text paths), so structured output on an
+    # image request would be silently ignored. Reject it with a clean 400 — but only
+    # when an image is actually present (text-only VLM requests DO honor json_schema).
+    if json_schema and any(
+        isinstance(m.get("content"), list)
+        and any(
+            isinstance(p, dict)
+            and p.get("type") in ("image_url", "image", "input_image")
+            for p in m["content"]
+        )
+        for m in messages
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="response_format / json_schema (structured output) is not supported "
+            "together with image inputs",
+        )
+
     manager = get_model_manager()
     vlm_engine = None
     load_error: str | None = None
