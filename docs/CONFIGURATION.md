@@ -26,6 +26,10 @@ Booleans accept `1`/`true`/`yes` (case-insensitive); anything else (or unset) is
 | `YUNSHU_OMNI_PERSONA` | _(built-in)_ | System persona used on the realtime voice path **only when the request carries no system message** — defaults to a concise, spoken-style assistant (voice wants short replies). A request's own system message always overrides it. Set to a custom string to change it, or empty to disable. |
 | `YUNSHU_DEFAULT_MAX_TOKENS` | `512` | Default completion length when a request omits `max_tokens`. |
 | `YUNSHU_CORS_ORIGINS` | `*` | Comma-separated allowed CORS origins. |
+| `YUNSHU_REALTIME_SILENCE_MS` | `500` | Realtime server-VAD: how long the user must pause before the model responds. Lower = snappier (but risks cutting off mid-sentence pauses). A client's `session.update` overrides per-session. |
+| `YUNSHU_REALTIME_BARGE_IN_MS` | `120` | Realtime: sustained speech needed to interrupt the model mid-reply (barge-in). Lower = easier to interrupt; too low lets a cough/blip kill a reply. |
+| `YUNSHU_REALTIME_VAD_THRESHOLD` | `0.5` | Realtime server-VAD speech-detection threshold. |
+| `YUNSHU_REALTIME_PREFIX_PADDING_MS` | `300` | Realtime server-VAD: audio lead-in kept before detected speech. |
 
 `yunshu serve` flags: `-m/--model <path>` (= `YUNSHU_MODEL`), `--port <n>`, `--host <addr>`.
 

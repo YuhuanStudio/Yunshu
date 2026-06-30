@@ -41,6 +41,34 @@ def _max_input_audio_bytes() -> int:
         return 10485760
 
 
+def _default_turn_detection() -> dict:
+    """Server-wide default server-VAD turn detection — env-tunable so a deployment
+    can dial in the conversation feel without every client sending session.update.
+    A client's session.update still overrides per-session.
+
+    - silence_duration_ms: how long the user must pause before the model responds
+      (lower = snappier, but risks cutting off mid-sentence pauses).
+    - barge_in_min_ms: sustained speech needed to interrupt the model mid-reply
+      (lower = easier to interrupt, but a cough/blip can kill a reply).
+    - threshold / prefix_padding_ms: VAD sensitivity / lead-in kept before speech.
+    """
+    import os
+
+    def _num(name: str, default, cast):
+        try:
+            return cast(os.environ.get(name, default))
+        except (TypeError, ValueError):
+            return cast(default)
+
+    return {
+        "type": "server_vad",
+        "threshold": _num("YUNSHU_REALTIME_VAD_THRESHOLD", 0.5, float),
+        "prefix_padding_ms": _num("YUNSHU_REALTIME_PREFIX_PADDING_MS", 300, int),
+        "silence_duration_ms": _num("YUNSHU_REALTIME_SILENCE_MS", 500, int),
+        "barge_in_min_ms": _num("YUNSHU_REALTIME_BARGE_IN_MS", 120, int),
+    }
+
+
 def _max_conversation_items() -> int:
     # cap conversation history. The input-audio buffer was bounded for exactly
     # this DoS class but left conversation.items unbounded — every turn appends user +
@@ -374,12 +402,7 @@ class SessionConfig:
         self.voice = Voice.ALLOY
         self.input_audio_format = "pcm16"
         self.output_audio_format = "pcm16"
-        self.turn_detection = {
-            "type": "server_vad",
-            "threshold": 0.5,
-            "prefix_padding_ms": 300,
-            "silence_duration_ms": 500,
-        }
+        self.turn_detection = _default_turn_detection()
         self.max_response_output_tokens = 4096
         self.temperature = 0.7
         self.tools: list[dict] = []
