@@ -931,10 +931,13 @@ class ImageControlNetRequest(BaseModel):
 async def create_image_controlnet(
     req: ImageControlNetRequest, request: Request
 ) -> JSONResponse:
-    """Generate an image with ControlNet spatial conditioning.
+    """Generate an image with **approximate** structural conditioning.
 
-    Accepts a conditioning image (edge map, depth map, etc.) and a text prompt.
-    The conditioning image guides the spatial structure of the generated output.
+    Accepts a conditioning image (edge map, depth map, etc.) + a text prompt. NOTE:
+    this endpoint applies a lightweight latent-guidance heuristic, NOT a trained
+    ControlNet. For the real trained Z-Image Fun-Controlnet-Union, call
+    `POST /v1/images/generations` with a `control_image` field (a `*controlnet*`
+    weights file must be present in the models dir).
     """
     from .models import _check_permission
 
@@ -1066,10 +1069,11 @@ class ImageDepthGuidedRequest(BaseModel):
 async def create_image_depth_guided(
     req: ImageDepthGuidedRequest, request: Request
 ) -> JSONResponse:
-    """Generate a depth-guided image using a depth map for spatial control.
+    """Generate a depth-guided image — **approximate** structural conditioning.
 
-    The depth map provides structural guidance — areas with similar depth values
-    will maintain spatial coherence in the generated image.
+    The depth map biases the latents toward spatial coherence. NOTE: this is a
+    lightweight heuristic, NOT a trained depth-ControlNet. For the real trained
+    Z-Image controlnet, use `POST /v1/images/generations` with a `control_image`.
     """
     from .models import _check_permission
 

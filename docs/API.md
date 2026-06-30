@@ -20,7 +20,7 @@ shapes match the upstream spec. This page documents the **full surface** and the
 | GET | `/v1/models`, `/v1/models/{id}` | List / describe loaded models. |
 | POST | `/v1/audio/transcriptions`, `/v1/audio/translations` | ASR (Whisper / mlx-audio). |
 | POST | `/v1/audio/speech` | TTS → audio. |
-| POST | `/v1/images/generations` | Diffusion image gen (+ `edits`, `variations`, `inpaint`, `controlnet`, `depth-guided`, `generations/stream`). |
+| POST | `/v1/images/generations` | Diffusion image gen (+ `edits`, `variations`, `inpaint`, `controlnet`, `depth-guided`, `generations/stream`). The **trained** Z-Image Fun-Controlnet-Union runs via `generations` + a `control_image` field; the dedicated `controlnet`/`depth-guided` routes apply an approximate latent-guidance heuristic. |
 | POST | `/v1/tokenize`, `/v1/detokenize`, `/v1/token_count` | Tokenizer utilities. |
 | POST | `/v1/batch` | Batch inference (+ `/v1/batch/{id}/status`, `/results`, `/results.csv`, `/v1/batch/upload/csv`). |
 
