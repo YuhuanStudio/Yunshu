@@ -1,31 +1,54 @@
 # Examples
 
-Runnable, copy-paste scripts against a local Yunshu server. Each is self-contained
-and prints what it's doing. Start a server first (see the [main README](../README.md)),
-then run a script.
+Three small, self-contained scripts. Start a Yunshu server first (see the
+[main README](../README.md)), then run one.
 
-| Script | What it shows | Needs |
-|---|---|---|
-| [`quickstart.py`](quickstart.py) | Every endpoint at a glance — native omni speech-out (writes `omni_out.wav`), chat, streaming chat, plus the text/vision/ASR/TTS surface | `requests`, `openai`; omni section needs `YUNSHU_OMNI_MODEL` |
-| [`realtime_voice.py`](realtime_voice.py) | Bidirectional **speech-to-speech** over the OpenAI-Realtime WebSocket — streams a spoken WAV in, assembles the model's spoken reply into `reply.wav` | `websockets`; server with `YUNSHU_OMNI_MODEL` + `YUNSHU_REALTIME_OMNI=1` |
-| [`multimodal_embeddings.py`](multimodal_embeddings.py) | Text / image / **cross-modal** embeddings in one shared space, plus true **cross-encoder reranking** (including image documents) | `requests`; a `Qwen3-VL-Embedding` + `Qwen3-VL-Reranker` model, multi-model mode |
+## 🗣️ `talk.py` — actually talk to it
 
-## Running them
+A real spoken conversation: **speak into your mic, hear the model speak back**,
+live, in a loop. This is the flagship — native speech-to-speech (Qwen3-Omni),
+your voice in as raw audio, the model's voice out, no text step in between.
 
 ```bash
-pip install openai requests websockets
+# server needs the native-omni realtime path on:
+YUNSHU_OMNI_MODEL=/path/to/Qwen3-Omni-30B-A3B-Instruct-4bit \
+YUNSHU_REALTIME_OMNI=1 \
+yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --port 8000
 
-# 1) all-endpoints tour (omni section needs an omni model on the server)
+pip install sounddevice numpy websockets    # sounddevice bundles PortAudio on macOS
+python examples/talk.py
+```
+
+Each turn: **press Enter, speak, press Enter again** to send. The model replies
+out loud and the conversation remembers what was said. Ctrl-C to quit.
+
+## ⚡ `quickstart.py` — does my server work?
+
+No microphone. A 30-second HTTP tour: streams a spoken reply to `omni_out.wav`,
+then a text chat and a streaming chat. Run this first to confirm the server is up.
+
+```bash
+pip install openai requests
 python examples/quickstart.py
+```
 
-# 2) speak in, hear the model speak back (one native S2S turn)
-python examples/realtime_voice.py question.wav            # ws://localhost:8000
-python examples/realtime_voice.py question.wav ws://host:8000
+The speech-to-speech section needs `YUNSHU_OMNI_MODEL` set on the server; the
+text sections work against any `mlx-lm` model.
 
-# 3) multimodal embeddings + reranking (pass an image to run the cross-modal parts)
+## 🔎 `multimodal_embeddings.py` — search across text and images
+
+Embeds text, images, and cross-modal (text↔image) into one shared vector space,
+and reranks documents (including image documents) with a true cross-encoder.
+
+```bash
+# server in multi-model mode with both retrieval models available:
+#   $MODELS/Qwen3-VL-Embedding-2B-8bit
+#   $MODELS/Qwen3-VL-Reranker-2B-8bit
+YUNSHU_MULTI_MODEL=1 YUNSHU_MODELS_DIR=$MODELS yunshu serve --port 8000
+
+pip install requests
 python examples/multimodal_embeddings.py path/to/an_image.png
 ```
 
-Each script has a header comment with the exact server command it expects. The
-flagship speech-to-speech paths (`quickstart.py` omni section, `realtime_voice.py`)
-need a `Qwen3-Omni` model; the rest run against any `mlx-lm` / `mlx-vlm` model.
+Pass an image path to run the cross-modal and image-reranking sections; without
+one, it runs the text-only embedding part.

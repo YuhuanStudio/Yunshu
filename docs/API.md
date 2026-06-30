@@ -56,7 +56,7 @@ SSE events: `{"type":"text","delta":"…"}`, `{"type":"audio","delta":"<base64 p
 Bidirectional voice agent over WebSocket (OpenAI-Realtime event protocol). With
 `YUNSHU_REALTIME_OMNI=1` it runs the native Thinker→Talker path (speech-in → speech-out);
 otherwise an ASR→LLM→TTS cascade. Multi-turn conversation context is preserved.
-See [examples/realtime_voice.py](../examples/realtime_voice.py).
+See [examples/talk.py](../examples/talk.py) for a live mic↔speaker client.
 
 ### POST `/v1/rerank` — reranking
 
