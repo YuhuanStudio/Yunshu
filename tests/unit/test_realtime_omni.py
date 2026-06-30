@@ -218,3 +218,152 @@ async def test_omni_response_text_only_skips_audio(monkeypatch):
     assert "response.audio.delta" not in types  # text-only modality
     assert "response.audio.done" not in types
     assert types.count("response.done") == 1
+
+
+class _FakeOmniToolEngine:
+    """Yields a Thinker turn that emits <tool_call> markup, like a real omni model
+    deciding to call a tool. Records the prompt it was given so the test can assert
+    the tool definitions were injected."""
+
+    model_path = "/models/qwen3-omni"
+
+    def __init__(self):
+        self.calls = []
+
+    async def stream(
+        self,
+        text,
+        image_path=None,
+        audio_path=None,
+        speaker=None,
+        thinker_max_new_tokens=None,
+    ):
+        self.calls.append({"text": text, "audio_path": audio_path, "speaker": speaker})
+        yield _Chunk("text", "Let me check. ")
+        yield _Chunk(
+            "text",
+            '<tool_call>{"name": "get_weather", "arguments": {"city": "SF"}}</tool_call>',
+        )
+        yield _Chunk(
+            "done", {"first_audio_s": 0.0, "audio_seconds": 0.0, "total_s": 0.1}
+        )
+
+
+_WEATHER_TOOL = {
+    "type": "function",
+    "name": "get_weather",
+    "description": "Get the weather for a city.",
+    "parameters": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+    },
+}
+
+
+@pytest.mark.asyncio
+async def test_omni_injects_tools_and_emits_function_call(monkeypatch):
+    fake = _FakeOmniToolEngine()
+    monkeypatch.setattr(omni, "_get_omni_engine", lambda: fake)
+    session, ws = _session_with_user_turn()
+    session.session.tools = [_WEATHER_TOOL]
+
+    await session._generate_response_omni("resp_1", "item_1", ["text"], {})
+
+    # 1) tool definitions were injected into the omni prompt (so the Thinker can call)
+    prompt = fake.calls[0]["text"]
+    assert "Available tools:" in prompt
+    assert "get_weather" in prompt
+
+    # 2) the function_call is emitted as its OWN output item with arguments + a fresh call_id
+    events = [c[0][0] for c in ws.send_json.call_args_list]
+    types = [e["type"] for e in events]
+    added = [
+        e
+        for e in events
+        if e["type"] == "response.output_item.added"
+        and e.get("item", {}).get("type") == "function_call"
+    ]
+    assert len(added) == 1
+    assert added[0]["item"]["name"] == "get_weather"
+    assert added[0]["item"]["call_id"].startswith("call_")
+    assert "response.function_call_arguments.done" in types
+    assert types.count("response.done") == 1
+
+    # 3) function_call output is included in response.done and stored in history
+    done = [e for e in events if e["type"] == "response.done"][0]
+    fc_out = [o for o in done["response"]["output"] if o.get("type") == "function_call"]
+    assert len(fc_out) == 1
+    history_fc = [
+        i for i in session.conversation.items if i.item_type == "function_call"
+    ]
+    assert len(history_fc) == 1
+    assert history_fc[0].name == "get_weather"
+
+    # 4) the markup is stripped from the stored transcript so it isn't re-fed/spoken
+    assistant_msg = [i for i in session.conversation.items if i.role == "assistant"][0]
+    assert "<tool_call>" not in assistant_msg.content[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_omni_tool_choice_none_suppresses_call(monkeypatch):
+    """tool_choice='none' must NOT emit function_call items even if the Thinker
+    emits markup — and the markup is still stripped from the transcript."""
+    fake = _FakeOmniToolEngine()
+    monkeypatch.setattr(omni, "_get_omni_engine", lambda: fake)
+    session, ws = _session_with_user_turn()
+    session.session.tools = [_WEATHER_TOOL]
+    session.session.tool_choice = "none"
+
+    await session._generate_response_omni("resp_1", "item_1", ["text"], {})
+
+    # prompt tells the model NOT to call tools
+    assert "must NOT call" in fake.calls[0]["text"]
+    events = [c[0][0] for c in ws.send_json.call_args_list]
+    fc_added = [
+        e
+        for e in events
+        if e["type"] == "response.output_item.added"
+        and e.get("item", {}).get("type") == "function_call"
+    ]
+    assert fc_added == []  # no function call emitted
+    history_fc = [
+        i for i in session.conversation.items if i.item_type == "function_call"
+    ]
+    assert history_fc == []
+    # stray markup still stripped from the stored transcript
+    assistant_msg = [i for i in session.conversation.items if i.role == "assistant"][0]
+    assert "<tool_call>" not in assistant_msg.content[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_omni_no_tools_leaves_prompt_untouched(monkeypatch):
+    """The common no-tools voice path must not gain any tool-instruction text."""
+    fake = _FakeOmniEngine()
+    monkeypatch.setattr(omni, "_get_omni_engine", lambda: fake)
+    session, _ = _session_with_user_turn()
+    assert session.session.tools == []
+
+    await session._generate_response_omni("resp_1", "item_1", ["text", "audio"], {})
+
+    assert "Available tools" not in fake.calls[0]["text"]
+
+
+def test_omni_tools_prompt_honors_tool_choice():
+    # auto: advisory, includes the markup format + tool name
+    p = rt._omni_tools_prompt([_WEATHER_TOOL], "auto")
+    assert "get_weather" in p and "<tool_call>" in p and "Decide whether" in p
+    # required: must call at least one
+    assert "MUST call at least one" in rt._omni_tools_prompt(
+        [_WEATHER_TOOL], "required"
+    )
+    # named dict: force a specific tool
+    forced = rt._omni_tools_prompt(
+        [_WEATHER_TOOL], {"type": "function", "function": {"name": "get_weather"}}
+    )
+    assert "MUST call the tool 'get_weather'" in forced
+    # none: forbid, no format guidance
+    none_p = rt._omni_tools_prompt([_WEATHER_TOOL], "none")
+    assert "must NOT call" in none_p and "<tool_call>" not in none_p
+    # empty tools → empty string (no injection)
+    assert rt._omni_tools_prompt([], "auto") == ""

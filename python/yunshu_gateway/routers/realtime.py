@@ -289,6 +289,70 @@ def _messages_to_omni_prompt(messages: list[dict]) -> str:
     return body
 
 
+def _omni_tools_prompt(tools: list[dict], tool_choice: str | dict = "auto") -> str:
+    """Build the system-instruction text that tells the omni Thinker which tools
+    are available and to emit ``<tool_call>{…}</tool_call>`` markup, mirroring the
+    cascade/chat tool-injection text (the same markup ``parse_tool_calls`` expects).
+
+    The native-omni path feeds OmniEngine.stream a single prompt string rather than
+    a chat-message list, so the tool description is prepended to that prompt instead
+    of injected as a system message. Honors ``tool_choice``: "none" forbids calls,
+    a named/dict choice forces a specific tool, "required" demands at least one,
+    "auto" (default) lets the model decide. Returns "" when there are no tools.
+
+    Tolerates both the flat Realtime tool shape ({"type","name","description",
+    "parameters"}) and the nested chat shape ({"type","function":{…}})."""
+    if not tools:
+        return ""
+    if tool_choice == "none":
+        # tools exist but the model must NOT call them this turn.
+        return (
+            "You have access to tools, but you must NOT call any tools in this "
+            "response. Respond to the user directly using your own knowledge."
+        )
+    fmt_example = (
+        'Format: <tool_call>{"name": "<tool_name>", "arguments": '
+        "{<args_json>}}</tool_call>"
+    )
+    lines = [
+        "You have access to the following tools. When you need to call a tool, "
+        'output a tool call as: <tool_call>{"name": "function_name", '
+        '"arguments": {...}}</tool_call>',
+        "Available tools:",
+    ]
+    for t in tools:
+        fn = t.get("function") if isinstance(t.get("function"), dict) else t
+        name = fn.get("name", "")
+        if not name:
+            continue
+        lines.append(f"- {name}: {fn.get('description', '') or ''}")
+        params = fn.get("parameters")
+        if params:
+            lines.append(f"  Parameters: {params}")
+    forced_name = None
+    if isinstance(tool_choice, dict):
+        _fn = tool_choice.get("function")
+        forced_name = (
+            (_fn or {}).get("name") if isinstance(_fn, dict) else None
+        ) or tool_choice.get("name")
+    if forced_name:
+        lines.append(
+            f"You MUST call the tool '{forced_name}'. Do not respond with text — "
+            f"only output a tool call. {fmt_example}"
+        )
+    elif tool_choice == "required":
+        lines.append(
+            "You MUST call at least one of the provided tools. Do NOT respond with "
+            f"only text — use a tool. {fmt_example}"
+        )
+    else:  # "auto" / None
+        lines.append(
+            "Decide whether to call a tool based on the user's request. If you can "
+            f"answer directly, do so. If you need a tool, use it. {fmt_example}"
+        )
+    return "\n".join(lines)
+
+
 def _f32_to_pcm16_bytes(wav_f32) -> bytes:
     """float32 [-1,1] mono ndarray → int16 little-endian PCM bytes (24 kHz)."""
     import numpy as np
@@ -1246,6 +1310,155 @@ class RealtimeSession:
         self._active_response._item_id = item_id
         self._active_modalities = modalities
 
+    def _extract_visible_and_tool_calls(
+        self,
+        full_text: str,
+        snap_tools: list[dict],
+        snap_tool_choice: str | dict,
+        snap_model: str | None,
+        oob: bool,
+    ) -> tuple[list[ConversationItem], str]:
+        """Strip reasoning/tool markup from a completed generation and build the
+        function_call items for any tool calls it contains. Returns
+        ``(fc_items, visible_text)``.
+
+        Shared by the cascade (``_generate_response``) and the native-omni
+        (``_generate_response_omni``) paths so both emit tool calls identically.
+        ``visible_text`` is what gets stored as the transcript / spoken / fed into
+        the next turn's prompt — with ``<think>`` chains and ``<tool_call>`` markup
+        removed so neither leaks. Each function_call item gets a fresh call_id and
+        is persisted to history unless ``oob`` (conversation="none")."""
+        tool_calls = None
+        visible_text = full_text
+        # the streaming path never separates reasoning, so an enable_thinking turn
+        # would otherwise replay the whole <think>…</think> chain into the next
+        # prompt (and TTS it). Strip it from the stored transcript (no-op without
+        # markup).
+        if "<think" in full_text:
+            from ..streaming import extract_thinking
+
+            try:
+                _, visible_text = extract_thinking(full_text, snap_model)
+            except Exception:
+                visible_text = full_text
+        # honor tool_choice="none" — the client explicitly wants a plain-text turn,
+        # so do NOT parse/emit tool calls even when tools are present.
+        # "auto"/"required"/a named-function dict keep parsing (post-gen
+        # "required"/named forcing isn't feasible here — it stays prompt-advised).
+        if snap_tools and snap_tool_choice != "none":
+            from yunshu_engine.tool_call_parser import parse_tool_calls
+
+            tool_calls = parse_tool_calls(full_text, model_name=snap_model)
+            if tool_calls:
+                # full_text still holds the raw <tool_call>… markup. Storing it as
+                # the assistant message text leaked the markup back into the NEXT
+                # turn's prompt AND duplicated the call. Strip it; when nothing
+                # visible remains, the turn is represented ONCE by the function_call
+                # item. Also don't TTS the markup.
+                from ..streaming import clean_tool_call_markup
+
+                try:
+                    visible_text = clean_tool_call_markup(visible_text).strip()
+                    # Qwen3-Omni emits the call as BARE JSON ({"name":…,"arguments":…}),
+                    # not <tool_call> markup, so clean_tool_call_markup leaves it intact.
+                    # The call is already captured as a function_call item, so drop any
+                    # residual leading-JSON tool payload (don't store/speak/replay it).
+                    if visible_text[:1] in ("{", "["):
+                        visible_text = ""
+                except Exception:
+                    visible_text = ""
+        elif snap_tools and snap_tool_choice == "none" and "<tool_call" in full_text:
+            # tool_choice="none" forbids EMITTING tool calls, but if the model
+            # emitted <tool_call> markup anyway, still strip it from the visible
+            # transcript so it doesn't leak into the next prompt / get TTS'd. No
+            # function_call items are produced (tool_calls stays None).
+            from ..streaming import clean_tool_call_markup
+
+            with contextlib.suppress(Exception):
+                visible_text = clean_tool_call_markup(visible_text).strip()
+
+        # persist each tool call as a function_call item so it's in history WITH its
+        # call_id. The client returns a function_call_output carrying the same
+        # call_id; _build_messages then pairs the assistant tool_call with the tool
+        # result for the next turn.
+        fc_items: list[ConversationItem] = []
+        if tool_calls:
+            for tc in tool_calls:
+                fc_item = ConversationItem(
+                    item_id=f"item_{uuid.uuid4().hex[:24]}",
+                    item_type="function_call",
+                    call_id=f"call_{uuid.uuid4().hex[:8]}",
+                    name=tc.name,
+                    arguments=tc.arguments,
+                )
+                fc_item.status = "completed"
+                # out-of-band (conversation="none") tool calls are still streamed to
+                # the client (via the output_item events) but NOT persisted.
+                if not oob:
+                    self.conversation.add_item(fc_item)
+                fc_items.append(fc_item)
+        return fc_items, visible_text
+
+    async def _emit_tool_call_items(
+        self,
+        response_id: str,
+        fc_items: list[ConversationItem],
+        start_output_index: int = 1,
+    ) -> None:
+        """Stream each function_call as its OWN output item (output_item.added +
+        arguments delta/done + output_item.done), AFTER the assistant message
+        item's done so output order is monotonic. Each carries its own item id (so
+        clients correlate the deltas) and call_id. Shared by the cascade and
+        native-omni paths."""
+        for _fc_i, _fc_item in enumerate(fc_items):
+            _fc_oidx = start_output_index + _fc_i
+            await self.send_event(
+                _event(
+                    "response.output_item.added",
+                    response_id=response_id,
+                    output_index=_fc_oidx,
+                    item={
+                        "id": _fc_item.item_id,
+                        "object": "realtime.item",
+                        "type": "function_call",
+                        "status": "in_progress",
+                        "name": _fc_item.name,
+                        "call_id": _fc_item.call_id,
+                        "arguments": "",
+                    },
+                )
+            )
+            await self.send_event(
+                _event(
+                    RealtimeEvent.RESPONSE_FUNCTION_CALL_ARGUMENTS_DELTA,
+                    response_id=response_id,
+                    item_id=_fc_item.item_id,
+                    output_index=_fc_oidx,
+                    call_id=_fc_item.call_id,
+                    name=_fc_item.name,
+                    delta=_fc_item.arguments,
+                )
+            )
+            await self.send_event(
+                _event(
+                    RealtimeEvent.RESPONSE_FUNCTION_CALL_ARGUMENTS_DONE,
+                    response_id=response_id,
+                    item_id=_fc_item.item_id,
+                    output_index=_fc_oidx,
+                    call_id=_fc_item.call_id,
+                    name=_fc_item.name,
+                    arguments=_fc_item.arguments,
+                )
+            )
+            await self.send_event(
+                _event(
+                    "response.output_item.done",
+                    response_id=response_id,
+                    output_index=_fc_oidx,
+                    item=_fc_item.to_dict(),
+                )
+            )
+
     async def _generate_response(
         self,
         response_id: str,
@@ -1988,6 +2201,24 @@ class RealtimeSession:
             if _snap_out_fmt not in self.session.SUPPORTED_AUDIO_FORMATS:
                 _snap_out_fmt = self.session.output_audio_format
             _oob = config.get("conversation") == "none"
+            # SNAPSHOT the tool set / choice for this response (mirrors the cascade's
+            # _snap_tools rationale — a concurrent session.update must not change the
+            # tools a response was created with). An explicit empty list in config
+            # disables tools for the turn. Tool injection + parsing run ONLY when
+            # tools are present, so the common no-tools voice path is unchanged.
+            _snap_tools = config.get("tools", self.session.tools)
+            _snap_tool_choice = config.get(
+                "tool_choice", getattr(self.session, "tool_choice", "auto")
+            )
+            # Inject tool definitions into the omni prompt as a system instruction so
+            # the Thinker emits <tool_call>… markup (OmniEngine.stream takes one prompt
+            # string, not a chat-message list, so we PREPEND rather than add a system
+            # message). Persona/history already live in `prompt`; prepending keeps them
+            # intact. tool_choice is honored inside _omni_tools_prompt.
+            if _snap_tools:
+                _tools_sys = _omni_tools_prompt(_snap_tools, _snap_tool_choice)
+                if _tools_sys:
+                    prompt = f"{_tools_sys}\n\n{prompt}" if prompt else _tools_sys
 
             from .omni import _get_omni_engine
 
@@ -2025,6 +2256,12 @@ class RealtimeSession:
             self._pcm16_lin_state = None
             self._g711_lin_state = None
             self._g711_resample_remainder = b""
+            # Once the Thinker starts emitting tool-call markup, stop streaming the
+            # text-transcript AND Talker audio for it — the call is delivered as a
+            # function_call item, not spoken aloud or shown as transcript. Without this the
+            # Talker would VOCALIZE the <tool_call>{…} JSON. Only fires for tool sessions
+            # (gated on _snap_tools); the cleaned transcript still ships in transcript.done.
+            _suppress_stream = False
             async for ch in eng.stream(
                 prompt,
                 audio_path=_audio_path,
@@ -2035,7 +2272,15 @@ class RealtimeSession:
                     if not ch.data:
                         continue
                     full_text += ch.data
-                    if "text" in modalities:
+                    # Trip suppression as soon as the turn looks like a tool call —
+                    # either <tool_call> markup OR (Qwen3-Omni) a bare-JSON payload that
+                    # starts the turn with `{`/`[`. Catching the leading brace keeps the
+                    # Talker from vocalizing the JSON (only the first token can leak).
+                    if _snap_tools and not _suppress_stream:
+                        _ft = full_text.lstrip()
+                        if "<tool_call" in full_text or _ft[:1] in ("{", "["):
+                            _suppress_stream = True
+                    if "text" in modalities and not _suppress_stream:
                         await self.send_event(
                             _event(
                                 RealtimeEvent.RESPONSE_TEXT_DELTA,
@@ -2046,7 +2291,7 @@ class RealtimeSession:
                                 delta=ch.data,
                             )
                         )
-                    if "audio" in modalities:
+                    if "audio" in modalities and not _suppress_stream:
                         await self.send_event(
                             _event(
                                 RealtimeEvent.RESPONSE_AUDIO_TRANSCRIPT_DELTA,
@@ -2057,7 +2302,11 @@ class RealtimeSession:
                                 delta=ch.data,
                             )
                         )
-                elif ch.kind == "audio" and "audio" in modalities:
+                elif (
+                    ch.kind == "audio"
+                    and "audio" in modalities
+                    and not _suppress_stream
+                ):
                     pcm = _f32_to_pcm16_bytes(ch.data)  # Talker f32 @ eng.sample_rate
                     _omni_sr = getattr(eng, "sample_rate", 24000)
                     out, _csz = self._encode_output_audio(
@@ -2078,6 +2327,19 @@ class RealtimeSession:
                         )
                         offset += _csz
 
+            # Parse tool calls from the Thinker text and strip their markup (+ any
+            # reasoning) from the visible transcript so it isn't spoken or leaked
+            # into the next turn's prompt. Gated on tools → without them
+            # _visible_text IS full_text and the no-tools voice path is byte-for-byte
+            # unchanged. Use the omni model id for the parser dialect hint.
+            _fc_items: list[ConversationItem] = []
+            _visible_text = full_text
+            if _snap_tools:
+                _snap_model = getattr(eng, "model_path", None) or self.session.model
+                _fc_items, _visible_text = self._extract_visible_and_tool_calls(
+                    full_text, _snap_tools, _snap_tool_choice, _snap_model, _oob
+                )
+
             if "audio" in modalities:
                 await self.send_event(
                     _event(
@@ -2086,7 +2348,7 @@ class RealtimeSession:
                         item_id=item_id,
                         output_index=0,
                         content_index=0,
-                        transcript=full_text,
+                        transcript=_visible_text,
                     )
                 )
                 await self.send_event(
@@ -2105,23 +2367,32 @@ class RealtimeSession:
                     item_id=item_id,
                     output_index=0,
                     content_index=0,
-                    part={"type": "text", "text": full_text},
+                    part={"type": "text", "text": _visible_text},
                 )
             )
 
             # Store the reply as an audio part (transcript + duration estimate) when
             # audio was produced, so conversation.item.truncate can trim it on barge-in
             # — same rationale as the cascade path.
-            if "audio" in modalities and full_text:
+            if "audio" in modalities and _visible_text:
                 content_parts: list[dict] = [
                     {
                         "type": "audio",
-                        "transcript": full_text,
-                        "duration_ms": max(1, len(full_text) * 70),
+                        "transcript": _visible_text,
+                        "duration_ms": max(1, len(_visible_text) * 70),
                     }
                 ]
             else:
-                content_parts = [{"type": "text", "text": full_text}]
+                content_parts = [{"type": "text", "text": _visible_text}]
+            if _fc_items:
+                for _fc in _fc_items:
+                    content_parts.append(
+                        {
+                            "type": "function_call",
+                            "name": _fc.name,
+                            "arguments": _fc.arguments,
+                        }
+                    )
             assistant_item = ConversationItem(
                 item_id=item_id,
                 item_type="message",
@@ -2146,6 +2417,11 @@ class RealtimeSession:
                 )
             )
             self._response_item_open = False
+            # Stream each function_call as its own output item AFTER the message
+            # item's done (shared with the cascade path).
+            await self._emit_tool_call_items(
+                response_id, _fc_items, start_output_index=1
+            )
             await self.send_event(
                 _event(
                     RealtimeEvent.RESPONSE_DONE,
@@ -2153,7 +2429,8 @@ class RealtimeSession:
                         "id": response_id,
                         "object": "realtime.response",
                         "status": "completed",
-                        "output": [assistant_item.to_dict()],
+                        "output": [assistant_item.to_dict()]
+                        + [fi.to_dict() for fi in _fc_items],
                         "usage": {
                             "total_tokens": 0,
                             "input_tokens": 0,
