@@ -387,22 +387,9 @@ class OmniEngine:
         return self._executor
 
     def _make_gen(self, conv: list[dict], spk: str, tmax: int):
-        """Build the mlx_vlm Thinker→Talker generator for one turn.
-
-        Default = the stock generate_stream (Thinker writes the whole reply, then the
-        Talker speaks it). YUNSHU_OMNI_STREAM_CHUNKED=1 selects the pipelined path
-        (Talker speaks WHILE the Thinker writes — first audio after the first words),
-        when the loaded model build provides it. Experimental; falls back silently."""
+        """Build the mlx_vlm Thinker→Talker generator for one turn."""
         mi, _ = _prepare_inputs(self.processor, conv)
-        gen_fn = self.model.generate_stream
-        if os.environ.get("YUNSHU_OMNI_STREAM_CHUNKED", "").strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        ) and hasattr(self.model, "generate_stream_pipelined"):
-            gen_fn = self.model.generate_stream_pipelined
-        return gen_fn(
+        return self.model.generate_stream(
             mi["input_ids"],
             speaker=spk,
             thinker_max_new_tokens=tmax,
