@@ -48,3 +48,19 @@ uv run --with requests python examples/multimodal_embeddings.py path/to/an_image
 
 Pass an image path to run the cross-modal and image-reranking sections; without
 one, it runs the text-only embedding part.
+
+## 🎬 `video.py` — generate a video from a prompt
+
+Wan 2.x / LTX-2 text-to-video (and image-to-video) on-device. Returns an MP4.
+
+```bash
+# needs the video extra; a model named *wan*/*ltx*/*video* routes to the video engine:
+uv sync --extra video
+uv run yunshu serve -m /path/to/Wan2.2-TI2V-5B-mlx --port 8000
+
+uv run --with requests python examples/video.py "a fluffy cat in a sunny garden"
+```
+
+Writes `video_out.mp4`. Video diffusion is heavy — pass fewer `--frames` / `--steps`
+(or a smaller `--width`/`--height`) to iterate faster, and `--image photo.jpg` to
+animate a still (I2V).

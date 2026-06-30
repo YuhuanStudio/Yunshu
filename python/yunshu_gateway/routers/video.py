@@ -72,10 +72,21 @@ async def create_video(req: VideoGenerateRequest, request: Request):
                 status_code=400, detail="Invalid base64 image data"
             ) from None
 
-    # Try to find a registered video engine
+    # Single-model mode: the served model is the global engine (no model_manager
+    # entry exists), so check it first — mirrors how chat/omni resolve the engine.
     video_engine = None
+    try:
+        from ..engine import get_engine
+
+        _global = get_engine()
+        if isinstance(_global, VideoEngine):
+            video_engine = _global
+    except Exception:
+        logger.debug("global-engine video lookup failed", exc_info=True)
+
+    # Multi-model mode: find the registered video engine for req.model.
     manager = get_model_manager()
-    if manager is not None:
+    if video_engine is None and manager is not None:
         for entry in manager.list_entries():
             if entry.is_loaded and isinstance(
                 getattr(entry, "engine", None), VideoEngine

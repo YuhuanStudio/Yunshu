@@ -315,12 +315,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 "model-type detection failed; defaulting to LLM", exc_info=True
             )
 
-        if _engine_mt is not None and _engine_mt.name == "VLM":
+        _engine_name = _engine_mt.name if _engine_mt is not None else "LLM"
+        if _engine_name == "VLM":
             from yunshu_engine.vlm_engine import VLMEngine
 
             engine = VLMEngine(DEFAULT_MODEL)
             logger.info(
                 "Single-model mode: %s detected as VLM → VLMEngine", DEFAULT_MODEL
+            )
+        elif _engine_name == "VIDEO":
+            # Wan 2.x / LTX-2 video diffusion. BatchedEngine (mlx_lm) would hard-fail
+            # "model type ti2v not supported" — these need VideoEngine (mlx-video).
+            from yunshu_engine.video_engine import VideoEngine
+
+            engine = VideoEngine(DEFAULT_MODEL)
+            logger.info(
+                "Single-model mode: %s detected as VIDEO → VideoEngine", DEFAULT_MODEL
             )
         else:
             from yunshu_engine.batched_engine import BatchedEngine
@@ -328,7 +338,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             engine = BatchedEngine(model_name=DEFAULT_MODEL)
         set_engine(engine)
         try:
-            await asyncio.wait_for(engine.start(), timeout=startup_timeout)
+            # VideoEngine.start() is synchronous (lightweight — mlx-video loads the
+            # weights lazily on first generation), unlike the async VLM/LLM start().
+            if _engine_name == "VIDEO":
+                engine.start()
+            else:
+                await asyncio.wait_for(engine.start(), timeout=startup_timeout)
             logger.info(
                 "Startup complete: model '%s' loaded (%.1fs)",
                 DEFAULT_MODEL,

@@ -201,7 +201,15 @@ def _detect_model_type(model_path: str) -> ModelType:
         )
     ):
         return ModelType.STS
-    if any(k in model_type for k in ("video", "text_to_video", "image_to_video")):
+    if any(
+        k in model_type for k in ("video", "text_to_video", "image_to_video")
+    ) or model_type in ("ti2v", "t2v", "i2v", "wan", "ltx", "ltxv"):
+        # Wan / LTX video diffusion: config model_type is the TASK (ti2v/t2v/i2v),
+        # not an engine name, and the dir name (Wan2.2-TI2V-5B) lacks the literal
+        # "video" — so match the task codes too. VideoEngine._detect_model_type
+        # then maps them to its wan_2_2 / ltx_2 dispatch.
+        return ModelType.VIDEO
+    if any(k in name_lower for k in ("wan2.", "-wan-", "ltx-video", "ltxvideo")):
         return ModelType.VIDEO
 
     # OCR models (e.g. GLM-OCR) carry a vision_config, so they MUST be detected
@@ -265,7 +273,10 @@ def _detect_model_type(model_path: str) -> ModelType:
             return ModelType.OCR
         if "sts" in name_lower or "speech_to_speech" in name_lower:
             return ModelType.STS
-        if any(k in name_lower for k in ("video", "text_to_video", "image_to_video")):
+        if any(
+            k in name_lower
+            for k in ("video", "text_to_video", "image_to_video", "wan2.", "ltx")
+        ):
             return ModelType.VIDEO
         return ModelType.LLM
 
