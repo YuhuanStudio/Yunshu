@@ -623,7 +623,13 @@ class TestAnthropicEndpoint:
     """Test the /v1/messages endpoint via FastAPI TestClient."""
 
     def test_messages_endpoint_404_missing_model(self, _setup_engine):
-        """Should return 404 when model is not found."""
+        """A genuinely missing model 404s in MULTI-model mode. (Single-model mode serves
+        the loaded model under ANY requested name — like /chat/completions and
+        /v1/responses — so a real Claude SDK model id resolves to the one loaded model
+        instead of 404-ing. The 404 path is therefore the no-global-engine case.)"""
+        from yunshu_gateway.engine import set_engine
+
+        set_engine(None)  # simulate multi-model: no single-model global engine
         client = _client()
         resp = client.post(
             "/v1/messages",

@@ -1261,6 +1261,27 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
             headers={"Cache-Control": "no-cache"},
         )
 
+    # Structurally FORCE a required/named tool_choice via an assistant prefill (non-stream
+    # only — the stream path keeps its ToolCallStreamer forced-name). Anthropic's forced
+    # enforcement here is otherwise PROMPT-ONLY (advisory: the regex/DFA grammar was
+    # reverted for premature-EOS), so the model could still answer with prose. The prefill
+    # commits the assistant turn to a tool call (continue_final_message); it's prepended
+    # back before parsing in the non-stream handlers.
+    req._tool_prefill = ""
+    if not getattr(req, "_suppress_tools", False) and req.tools:
+        _tc = req.tool_choice
+        _tc_type = _tc.get("type") if isinstance(_tc, dict) else _tc
+        # Force only the OPENING marker — the model then emits a complete, parseable
+        # <tool_call>{…}</tool_call>. (A deeper prefill into the arguments left the markup
+        # unclosed/unparseable.) The tool name is steered by the system prompt above and,
+        # for the named case, _enforce_anthropic_tool_choice drops any wrong-named call.
+        if _tc_type in ("any", "tool"):
+            req._tool_prefill = "<tool_call>\n"
+        if req._tool_prefill:
+            from .chat import _append_tool_prefill
+
+            messages = _append_tool_prefill(messages, req._tool_prefill)
+
     # Non-streaming: register with request tracker for cancellation support
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
     _ns_tracker = None
@@ -1316,7 +1337,11 @@ async def _resolve_engine(model_id: str):
 
     engine = get_engine()
 
-    if engine is not None and engine.is_loaded and engine.resolve_model_id(model_id):
+    # Single-model mode serves the loaded model under ANY requested name (placeholder),
+    # like /chat/completions and /v1/responses — accept the global engine when it's up
+    # instead of 404-ing on a model-id mismatch (e.g. the default "local"). Only fall
+    # through to the model manager (multi-model mode, where get_engine() is None).
+    if engine is not None and engine.is_loaded:
         return engine, isinstance(engine, BatchedEngine)
 
     # Multi-model mode
@@ -1529,14 +1554,17 @@ async def _non_stream_batched(
     if req.tools and not _suppress_tool_extraction:
         from ..streaming import clean_tool_call_markup, extract_tool_calls_model_aware
 
-        tool_calls = extract_tool_calls_model_aware(visible_text, req.model)
+        # Prepend the forced-tool prefill (if any) so the markup is complete for the
+        # parser — the model only generated the continuation after it.
+        _parse_text = getattr(req, "_tool_prefill", "") + visible_text
+        tool_calls = extract_tool_calls_model_aware(_parse_text, req.model)
         # enforce a forced/none-parallel tool_choice post-generation (parity with
         # chat's _enforce_tool_choice) — drop wrong-named / surplus calls.
         tool_calls = _enforce_anthropic_tool_choice(tool_calls, req.tool_choice)
         if tool_calls:
             has_tool_calls = True
             # Remove the text block and replace with cleaned version
-            cleaned = clean_tool_call_markup(visible_text)
+            cleaned = clean_tool_call_markup(_parse_text)
             text_block["text"] = cleaned
             # Per Anthropic spec: omit empty text blocks when tool_use is present
             if not cleaned.strip():
@@ -1785,14 +1813,17 @@ async def _non_stream_legacy(
     if req.tools and not _suppress_tool_extraction:
         from ..streaming import clean_tool_call_markup, extract_tool_calls_model_aware
 
-        tool_calls = extract_tool_calls_model_aware(visible_text, req.model)
+        # Prepend the forced-tool prefill (if any) so the markup is complete for the
+        # parser — the model only generated the continuation after it.
+        _parse_text = getattr(req, "_tool_prefill", "") + visible_text
+        tool_calls = extract_tool_calls_model_aware(_parse_text, req.model)
         # enforce a forced/none-parallel tool_choice post-generation (parity with
         # chat's _enforce_tool_choice) — drop wrong-named / surplus calls.
         tool_calls = _enforce_anthropic_tool_choice(tool_calls, req.tool_choice)
         if tool_calls:
             has_tool_calls = True
             # Remove the text block and replace with cleaned version
-            cleaned = clean_tool_call_markup(visible_text)
+            cleaned = clean_tool_call_markup(_parse_text)
             text_block["text"] = cleaned
             # Per Anthropic spec: omit empty text blocks when tool_use is present
             if not cleaned.strip():
