@@ -13,7 +13,7 @@ The conversation keeps its history, so you can refer back to earlier turns
 1. Start a server with a Qwen3-Omni model — native voice is on automatically
    (the same loaded model serves both text and speech, no extra memory):
 
-       yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --port 8000
+       uv run yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --port 8000
 
 2. Install this client's deps and run it (sounddevice bundles PortAudio on macOS):
 
@@ -114,7 +114,7 @@ async def take_turn(ws, pcm: bytes) -> None:
                     "\n✗ The server isn't running the native voice path — it tried to "
                     "transcribe your audio and has no ASR model.\n\n"
                     "  Serve a Qwen3-Omni model (native voice is automatic):\n\n"
-                    "      yunshu serve -m <your-omni-model> --port 8000\n\n"
+                    "      uv run yunshu serve -m <your-omni-model> --port 8000\n\n"
                     "  (if you set YUNSHU_REALTIME_OMNI=0, drop it.)"
                 )
             print(f"\n    server error: {err}")

@@ -6,15 +6,14 @@ query↔document relevance (including image documents).
 
 Prereq: a Yunshu server in multi-model mode with both models available.
 
-    uv pip install "yunshu[embeddings]"
+    uv sync --extra embeddings           # from a source checkout (see README)
     # put the two models under one dir (folder name = model id), e.g.:
     #   $MODELS/Qwen3-VL-Embedding-2B-8bit
     #   $MODELS/Qwen3-VL-Reranker-2B-8bit
-    YUNSHU_MULTI_MODEL=1 YUNSHU_MODELS_DIR=$MODELS yunshu serve --port 8000
+    YUNSHU_MULTI_MODEL=1 YUNSHU_MODELS_DIR=$MODELS uv run yunshu serve --port 8000
 
 Then:
-    pip install requests
-    python examples/multimodal_embeddings.py path/to/an_image.png
+    uv run --with requests python examples/multimodal_embeddings.py path/to/an_image.png
 """
 
 from __future__ import annotations

@@ -9,7 +9,6 @@ embeddings, and a realtime voice socket. Its standout is **native streaming spee
 you talk, the model talks back in ~1.4 s, in its own voice, with no cloud and no
 speech-to-text → LLM → text-to-speech cascade.
 
-[![PyPI](https://img.shields.io/pypi/v/yunshu.svg?label=PyPI)](https://pypi.org/project/yunshu/)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
 [![CI](https://github.com/YuhuanStudio/Yunshu/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/YuhuanStudio/Yunshu/actions/workflows/ci.yml)
@@ -41,25 +40,27 @@ Everything else runs too: any `mlx-lm` / `mlx-vlm` / `mlx-audio` model gets the 
 
 ## Quickstart
 
-> **Requires [uv](https://docs.astral.sh/uv/).** The `[omni]` extra pins `mlx-vlm` to a fork that
-> carries a Qwen3-Omni multi-turn fix not yet upstream. `pip` ignores the pin and installs the broken
-> upstream — use `uv`, which respects `[tool.uv.sources]`.
+> **Requires [uv](https://docs.astral.sh/uv/).** Not on PyPI yet — install from source.
+> `uv sync` honors `[tool.uv.sources]`, so it pulls the `mlx-vlm` fork Yunshu needs for Qwen3-Omni
+> (latest upstream + a Thinker early-exit optimization and omni fixes). A plain `pip install` would
+> pull unpinned upstream `mlx-vlm` instead, so use `uv sync`.
 
 ```bash
-# 1. Install
-uv pip install "yunshu[omni]"      # native Qwen3-Omni voice (speech in/out)
-uv pip install "yunshu[all]"       # everything: text + vision + audio + omni + image + embeddings
+# 1. Install from source
+git clone https://github.com/YuhuanStudio/Yunshu.git
+cd Yunshu
+uv sync --extra omni        # native Qwen3-Omni voice (speech in/out)
+# or: uv sync --all-extras  # everything: text + vision + audio + omni + image + embeddings
 
 # 2. Serve a model. Any 4-bit Qwen3-Omni variant from mlx-community works — native voice
 #    is on automatically (the same loaded model serves text and speech, no extra memory).
-yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --port 8000
+uv run yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --port 8000
 ```
 
 ### Talk to it
 
 ```bash
-pip install sounddevice numpy websockets
-python examples/talk.py
+uv run --with sounddevice --with numpy --with websockets python examples/talk.py
 ```
 
 [`examples/talk.py`](examples/talk.py) is a real spoken conversation: press Enter, speak, press Enter

@@ -3,13 +3,11 @@
 No microphone needed. This hits the server over plain HTTP: it streams a
 spoken reply to a WAV file, then does a text chat and a streaming chat.
 
-    # 1. start a server (omni model enables the spoken-reply section)
-    YUNSHU_OMNI_MODEL=/path/to/Qwen3-Omni-30B-A3B-Instruct-4bit \
-    yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --port 8000
+    # 1. start a server (serving an omni model enables the spoken-reply section)
+    uv run yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --port 8000
 
     # 2. run this
-    pip install openai requests
-    python examples/quickstart.py
+    uv run --with openai --with requests python examples/quickstart.py
 
 To actually *talk* to it (mic in, speech out, live), see talk.py instead.
 """

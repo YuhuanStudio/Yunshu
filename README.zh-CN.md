@@ -8,7 +8,6 @@
 嵌入,以及一个实时语音 WebSocket。它的与众不同之处是**原生流式语音到语音** —— 你说话,模型约
 1.4 秒后用它自己的声音回话,无云端、也没有语音转文字 → LLM → 文字转语音的级联。
 
-[![PyPI](https://img.shields.io/pypi/v/yunshu.svg?label=PyPI)](https://pypi.org/project/yunshu/)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
 [![CI](https://github.com/YuhuanStudio/Yunshu/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/YuhuanStudio/Yunshu/actions/workflows/ci.yml)
@@ -39,25 +38,26 @@ Qwen3-Omni 的 **Talker** 架构是单个模型:它摄入原始音频、进行�
 
 ## 快速开始
 
-> **需要 [uv](https://docs.astral.sh/uv/)。** `[omni]` 这个 extra 把 `mlx-vlm` 固定到一个 fork,
-> 该 fork 带有尚未合入上游的 Qwen3-Omni 多轮修复。`pip` 会忽略此固定并安装有问题的上游版本 ——
-> 请用 `uv`,它会遵守 `[tool.uv.sources]`。
+> **需要 [uv](https://docs.astral.sh/uv/)。** 还没上 PyPI —— 从源码安装。`uv sync` 会遵守
+> `[tool.uv.sources]`,所以会拉取 Yunshu 为 Qwen3-Omni 准备的 `mlx-vlm` fork(最新上游 +
+> Thinker 早退优化和 omni 修复)。纯 `pip install` 会装到未固定的上游 `mlx-vlm`,所以请用 `uv sync`。
 
 ```bash
-# 1. 安装
-uv pip install "yunshu[omni]"      # 原生 Qwen3-Omni 语音（语音输入/输出）
-uv pip install "yunshu[all]"       # 全部:文本 + 视觉 + 音频 + omni + 图像 + 嵌入
+# 1. 从源码安装
+git clone https://github.com/YuhuanStudio/Yunshu.git
+cd Yunshu
+uv sync --extra omni        # 原生 Qwen3-Omni 语音（语音输入/输出）
+# 或: uv sync --all-extras  # 全部:文本 + 视觉 + 音频 + omni + 图像 + 嵌入
 
 # 2. 启动模型。来自 mlx-community 的任意 4-bit Qwen3-Omni 变体都可以 —— 原生语音会自动开启
 #    （同一份已载入的模型同时服务文本和语音,不额外占内存）。
-yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --port 8000
+uv run yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --port 8000
 ```
 
 ### 跟它对话
 
 ```bash
-pip install sounddevice numpy websockets
-python examples/talk.py
+uv run --with sounddevice --with numpy --with websockets python examples/talk.py
 ```
 
 [`examples/talk.py`](examples/talk.py) 是一段真正的语音对话:按 Enter、说话、再按一次 Enter ——
