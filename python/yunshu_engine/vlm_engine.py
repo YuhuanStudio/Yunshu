@@ -1620,6 +1620,7 @@ class VLMEngine:
                         enable_thinking=_enable_thinking,
                         thinking_budget=thinking_budget,
                         seed=seed,
+                        min_p=min_p,
                     )
 
                 if image_paths or audio_paths:
@@ -2596,6 +2597,7 @@ class VLMEngine:
         enable_thinking: bool | None = None,
         thinking_budget: int | None = None,
         seed: int | None = None,
+        min_p: float = 0.0,
     ) -> str:
         """Vision + text generation using mlx_vlm.generate().
 
@@ -2648,12 +2650,14 @@ class VLMEngine:
             with mx.stream(generation_stream):
                 mx.random.seed(int(seed) & ((1 << 63) - 1))
 
+        # Build the full sampler (temperature + top_p/top_k/min_p + seed) so the
+        # non-stream vision path honors the same sampling controls as the streaming
+        # path (stream_vlm_vision) — previously only `temperature` was passed, so
+        # top_p/top_k/min_p were silently ignored on non-streaming vision requests.
+        sampler = _build_noncached_sampler(temperature, top_p, top_k, min_p, seed)
         gen_kwargs: dict = {
             "max_tokens": max_tokens,
-            # mlx_vlm's generate/generate_step take `temperature`, not `temp`;
-            # `temp` falls through **kwargs unread → greedy regardless of the
-            # requested temperature.
-            "temperature": temperature,
+            "sampler": sampler,
             "verbose": False,
         }
         if image_paths:
