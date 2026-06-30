@@ -70,18 +70,27 @@ async def extract_text_from_image(
         from ..engine import get_model_manager
 
         manager = get_model_manager()
-        if manager is None:
-            raise HTTPException(status_code=503, detail="Model manager not initialized")
+
+        # Single-model mode: the served model is the global engine (no manager entry).
+        ocr_engine = None
+        ocr_model_id = None
+        try:
+            from ..engine import get_engine
+
+            _global = get_engine()
+            if isinstance(_global, OCREngine):
+                ocr_engine, ocr_model_id = _global, model or "ocr"
+        except Exception:
+            pass
 
         # select by model_id (was: first loaded OCREngine, ignoring `model` —
         # the wrong-model keystone, unswept for OCR). Fall back to first-of-type
         # only when `model` is empty (legacy default).
-        ocr_engine = None
-        ocr_model_id = None
         _first_ocr = None
         _first_ocr_id = None
         _model_lower = model.lower() if model else ""
-        for entry in manager.list_entries():
+        _entries = manager.list_entries() if manager is not None else ()
+        for entry in _entries:
             if not (
                 entry.is_loaded
                 and isinstance(getattr(entry, "engine", None), OCREngine)
