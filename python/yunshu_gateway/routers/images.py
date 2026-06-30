@@ -60,6 +60,21 @@ def _select_image_engine(manager, model):
     """
     from yunshu_engine.image_engine import ImageGenEngine
 
+    # Single-model mode: the served model is the global engine (no model_manager
+    # entry exists), so check it first — mirrors the video/chat/omni resolution.
+    # get_engine() is None in multi-model mode, so this only fires for `serve -m`.
+    try:
+        from ..engine import get_engine
+
+        _global = get_engine()
+        if isinstance(_global, ImageGenEngine):
+            return _global
+    except Exception:
+        pass
+
+    if manager is None:
+        return None
+
     first = None
     n_loaded = 0
     ml = model.lower() if model else ""
@@ -142,8 +157,8 @@ async def create_image(req: ImageGenerateRequest, request: Request) -> JSONRespo
 
     _check_permission(request, "can_infer")
     manager = get_model_manager()
-    if manager is None:
-        raise HTTPException(status_code=503, detail="Model manager not initialized")
+    # No early manager-None guard: single-model mode has no manager and resolves via
+    # the served global engine in _select_image_engine; a missing image model 404s below.
 
     from yunshu_engine.image_engine import ImageGenEngine
 
@@ -290,8 +305,8 @@ async def stream_image_generation(req: ImageGenerateRequest, request: Request):
 
     _check_permission(request, "can_infer")
     manager = get_model_manager()
-    if manager is None:
-        raise HTTPException(status_code=503, detail="Model manager not initialized")
+    # No early manager-None guard: single-model mode has no manager and resolves via
+    # the served global engine in _select_image_engine; a missing image model 404s below.
 
     from yunshu_engine.image_engine import ImageGenEngine
 
@@ -469,8 +484,8 @@ async def create_image_variation(
         ) from None
 
     manager = get_model_manager()
-    if manager is None:
-        raise HTTPException(status_code=503, detail="Model manager not initialized")
+    # No early manager-None guard: single-model mode has no manager and resolves via
+    # the served global engine in _select_image_engine; a missing image model 404s below.
 
     # match by model_id (was first-of-type, ignoring req.model — wrong-model serving).
     img_engine = _select_image_engine(manager, req.model)
@@ -618,8 +633,8 @@ async def create_image_edit(req: ImageEditsRequest, request: Request) -> JSONRes
         ) from None
 
     manager = get_model_manager()
-    if manager is None:
-        raise HTTPException(status_code=503, detail="Model manager not initialized")
+    # No early manager-None guard: single-model mode has no manager and resolves via
+    # the served global engine in _select_image_engine; a missing image model 404s below.
 
     # match by model_id (was first-of-type, ignoring req.model — wrong-model serving).
     img_engine = _select_image_engine(manager, req.model)
@@ -792,8 +807,8 @@ async def create_image_inpaint(
             ) from None
 
     manager = get_model_manager()
-    if manager is None:
-        raise HTTPException(status_code=503, detail="Model manager not initialized")
+    # No early manager-None guard: single-model mode has no manager and resolves via
+    # the served global engine in _select_image_engine; a missing image model 404s below.
 
     # match by model_id (was first-of-type, ignoring req.model — wrong-model serving).
     img_engine = _select_image_engine(manager, req.model)
@@ -938,8 +953,8 @@ async def create_image_controlnet(
         ) from None
 
     manager = get_model_manager()
-    if manager is None:
-        raise HTTPException(status_code=503, detail="Model manager not initialized")
+    # No early manager-None guard: single-model mode has no manager and resolves via
+    # the served global engine in _select_image_engine; a missing image model 404s below.
 
     # match by model_id (was first-of-type, ignoring req.model — wrong-model serving).
     img_engine = _select_image_engine(manager, req.model)
@@ -1074,8 +1089,8 @@ async def create_image_depth_guided(
         ) from None
 
     manager = get_model_manager()
-    if manager is None:
-        raise HTTPException(status_code=503, detail="Model manager not initialized")
+    # No early manager-None guard: single-model mode has no manager and resolves via
+    # the served global engine in _select_image_engine; a missing image model 404s below.
 
     # match by model_id (was first-of-type, ignoring req.model — wrong-model serving).
     img_engine = _select_image_engine(manager, req.model)

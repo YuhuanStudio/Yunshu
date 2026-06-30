@@ -332,6 +332,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.info(
                 "Single-model mode: %s detected as VIDEO → VideoEngine", DEFAULT_MODEL
             )
+        elif _engine_name == "IMAGE_GEN":
+            # Diffusion image models (Z-Image, FLUX, SD…). Also not an mlx_lm model —
+            # needs ImageGenEngine, else BatchedEngine hard-fails on the model type.
+            from yunshu_engine.image_engine import ImageGenEngine
+
+            engine = ImageGenEngine(DEFAULT_MODEL)
+            logger.info(
+                "Single-model mode: %s detected as IMAGE_GEN → ImageGenEngine",
+                DEFAULT_MODEL,
+            )
         else:
             from yunshu_engine.batched_engine import BatchedEngine
 
