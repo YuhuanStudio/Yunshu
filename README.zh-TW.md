@@ -101,6 +101,7 @@ print(
 | TTS | `/v1/audio/speech` | `mlx-audio` | `audio` |
 | 即時語音 WS | `WS /v1/realtime` | omni 或 ASR + TTS | `audio` |
 | 影像生成 | `/v1/images/generations` | 擴散 | `generation` |
+| 影片生成（Wan 2.x / LTX-2,文字→影片 + 影像→影片） | `/v1/video/generations` | `mlx-video` | `video` |
 | 嵌入（文字 + **多模態**：經由 Qwen3-VL-Embedding 的影像 / 跨模態） | `/v1/embeddings` | `mlx-lm` (text) / `mlx-embeddings` (multimodal) | `embeddings` |
 | 重排序（雙編碼器餘弦，或經由 Qwen3-VL-Reranker 的**真正交叉編碼器**） | `/v1/rerank` | `mlx-lm` (text) / `mlx-embeddings` (multimodal) | `embeddings` |
 
