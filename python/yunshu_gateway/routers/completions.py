@@ -422,7 +422,11 @@ async def create_completion(req: CompletionRequest, request: Request):
             req.stop = None
     engine = get_engine()
 
-    if engine is None or not engine.is_loaded or not engine.resolve_model_id(req.model):
+    # Single-model mode serves the loaded model under ANY requested name (placeholder),
+    # like /chat/completions — accept the global engine when it's up instead of 404-ing on
+    # a model-id mismatch (e.g. the default "local"). Only fall through to the model
+    # manager (multi-model mode, where get_engine() is None).
+    if engine is None or not engine.is_loaded:
         try:
             engine = await get_engine_for_model(req.model)
         except (KeyError, Exception):
