@@ -127,6 +127,17 @@ class _Metrics:
             get_metrics_aggregator().record_tokens(prompt, completion)
         except Exception:
             pass
+        # Feed the Prometheus exporter's completion-token counter. It was declared
+        # (yunshu_tokens_generated_total) but never incremented → always emitted 0.
+        if completion:
+            try:
+                from .prometheus_exporter import get_prometheus_metrics
+
+                get_prometheus_metrics().inc_counter(
+                    "tokens_generated_total", None, completion
+                )
+            except Exception:
+                pass
 
     def record_inference(self) -> None:
         with self._lock:

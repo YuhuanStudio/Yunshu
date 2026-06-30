@@ -748,6 +748,12 @@ def _validate_batch_sampling(body: dict) -> None:
     _n = body.get("n", 1)
     if not isinstance(_n, int) or isinstance(_n, bool) or _n < 1:
         raise ValueError("n: must be a positive integer")
+    if _n > 1:
+        # Batch produces exactly one completion per item; n>1 was accepted then
+        # silently dropped (always one choice). Reject it clearly instead.
+        raise ValueError(
+            "n > 1 is not supported in batch mode — one completion per item"
+        )
     _seed = body.get("seed")
     if _seed is not None and (
         not isinstance(_seed, int)

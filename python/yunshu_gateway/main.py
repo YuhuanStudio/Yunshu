@@ -1133,10 +1133,22 @@ def create_app() -> FastAPI:
         # reconnaissance for any anonymous probe. Reduce to a minimal liveness payload
         # (status + engine-loaded bool + server_state + uptime). The rich detail is
         # available, properly gated, via the authenticated /api/v1/monitoring/* router.
-        from .engine import get_engine
+        from .engine import get_engine, get_model_manager
 
         engine = get_engine()
         _loaded = bool(getattr(engine, "is_loaded", False)) if engine else False
+        if not _loaded:
+            # Multi-model mode has no global engine — report loaded when the model
+            # manager holds any loaded model (mirrors /health/ready), else /health
+            # reported loaded=false despite serving models.
+            try:
+                _mgr = get_model_manager()
+                if _mgr is not None and any(
+                    getattr(e, "is_loaded", False) for e in _mgr.list_entries()
+                ):
+                    _loaded = True
+            except Exception:
+                pass
         try:
             from .routers.sleep import get_sleep_state, is_sleeping
 
