@@ -10,10 +10,10 @@ The conversation keeps its history, so you can refer back to earlier turns
 ("what did I just say?").
 
 ─────────────────────────────────────────────────────────────────────────────
-1. Start a server with --omni (it loads a second copy of the model for the
-   Talker, so expect roughly double the memory):
+1. Start a server with a Qwen3-Omni model — native voice is on automatically
+   (the same loaded model serves both text and speech, no extra memory):
 
-       yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --omni --port 8000
+       yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --port 8000
 
 2. Install this client's deps and run it (sounddevice bundles PortAudio on macOS):
 
@@ -113,8 +113,9 @@ async def take_turn(ws, pcm: bytes) -> None:
                 raise SystemExit(
                     "\n✗ The server isn't running the native voice path — it tried to "
                     "transcribe your audio and has no ASR model.\n\n"
-                    "  Restart it with --omni:\n\n"
-                    "      yunshu serve -m <your-omni-model> --omni --port 8000"
+                    "  Serve a Qwen3-Omni model (native voice is automatic):\n\n"
+                    "      yunshu serve -m <your-omni-model> --port 8000\n\n"
+                    "  (if you set YUNSHU_REALTIME_OMNI=0, drop it.)"
                 )
             print(f"\n    server error: {err}")
             break

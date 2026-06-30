@@ -64,20 +64,31 @@ def _session_with_user_turn():
     return session, ws
 
 
-def test_gate_off_by_default(monkeypatch):
+def test_gate_default_policy(monkeypatch):
+    # No env and no speakable served model → cascade (off): non-omni models unaffected.
     monkeypatch.delenv("YUNSHU_OMNI_MODEL", raising=False)
     monkeypatch.delenv("YUNSHU_REALTIME_OMNI", raising=False)
+    monkeypatch.setattr(omni, "_shared_speakable_model", lambda: None)
     assert rt._omni_realtime_enabled() is False
-    # model set but flag off → still off (never change cascade silently)
+    # A configured omni model → native voice ON by default (no second flag needed).
     monkeypatch.setenv("YUNSHU_OMNI_MODEL", "/x")
+    assert rt._omni_realtime_enabled() is True
+    # Explicit opt-out forces the cascade even with a model configured.
+    monkeypatch.setenv("YUNSHU_REALTIME_OMNI", "0")
     assert rt._omni_realtime_enabled() is False
+    # Explicit opt-in forces it on even without a model path.
+    monkeypatch.delenv("YUNSHU_OMNI_MODEL", raising=False)
     monkeypatch.setenv("YUNSHU_REALTIME_OMNI", "1")
+    assert rt._omni_realtime_enabled() is True
+    # Reuse: the served model itself can speak (no env) → on by default.
+    monkeypatch.delenv("YUNSHU_REALTIME_OMNI", raising=False)
+    monkeypatch.setattr(omni, "_shared_speakable_model", lambda: (object(), object()))
     assert rt._omni_realtime_enabled() is True
 
 
 def test_realtime_active_requires_loadable_talker(monkeypatch):
-    """_omni_realtime_active() = env enabled AND a Talker model actually loadable.
-    Env-on but the probe failing (no Talker / load error) → inactive, so the path
+    """_omni_realtime_active() = enabled AND a Talker model actually loadable.
+    Enabled but the probe failing (no Talker / load error) → inactive, so the path
     falls back to the ASR→LLM→TTS cascade instead of erroring (B1)."""
     monkeypatch.setenv("YUNSHU_OMNI_MODEL", "/x")
     monkeypatch.setenv("YUNSHU_REALTIME_OMNI", "1")
@@ -85,8 +96,8 @@ def test_realtime_active_requires_loadable_talker(monkeypatch):
     assert rt._omni_realtime_active() is False
     monkeypatch.setattr(rt, "_omni_speech_ready", lambda: True)
     assert rt._omni_realtime_active() is True
-    # env gate short-circuits before the probe: flag off → inactive even if ready
-    monkeypatch.delenv("YUNSHU_REALTIME_OMNI", raising=False)
+    # explicit opt-out (=0) short-circuits before the probe → inactive even if ready
+    monkeypatch.setenv("YUNSHU_REALTIME_OMNI", "0")
     assert rt._omni_realtime_active() is False
 
 

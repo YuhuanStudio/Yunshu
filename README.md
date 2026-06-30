@@ -50,9 +50,9 @@ Everything else runs too: any `mlx-lm` / `mlx-vlm` / `mlx-audio` model gets the 
 uv pip install "yunshu[omni]"      # native Qwen3-Omni voice (speech in/out)
 uv pip install "yunshu[all]"       # everything: text + vision + audio + omni + image + embeddings
 
-# 2. Serve a model. Any 4-bit Qwen3-Omni variant from mlx-community works; add --omni to
-#    enable native voice (it loads a second copy of the model for the Talker, ~2× memory).
-yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --omni --port 8000
+# 2. Serve a model. Any 4-bit Qwen3-Omni variant from mlx-community works — native voice
+#    is on automatically (the same loaded model serves text and speech, no extra memory).
+yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --port 8000
 ```
 
 ### Talk to it

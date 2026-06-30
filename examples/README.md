@@ -10,8 +10,8 @@ live, in a loop. This is the flagship — native speech-to-speech (Qwen3-Omni),
 your voice in as raw audio, the model's voice out, no text step in between.
 
 ```bash
-# serve with --omni (loads a second copy of the model for the Talker — ~2× memory):
-yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --omni --port 8000
+# serve a Qwen3-Omni model — native voice is automatic (same model, no extra memory):
+yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --port 8000
 
 pip install sounddevice numpy websockets    # sounddevice bundles PortAudio on macOS
 python examples/talk.py

@@ -90,19 +90,26 @@ def _event(event_type: str, **kwargs) -> dict:
 
 
 def _omni_realtime_enabled() -> bool:
-    """True iff the native-omni realtime path is opted in. Requires a configured
-    omni model (YUNSHU_OMNI_MODEL) AND an explicit YUNSHU_REALTIME_OMNI flag, so
-    the default realtime behaviour (ASR→LLM→TTS cascade) is never changed silently."""
+    """Native-omni on the realtime socket. On by default whenever a speakable model
+    is available — the served model has a Talker (reused, no second copy), or
+    YUNSHU_OMNI_MODEL points at a dedicated one. ``YUNSHU_REALTIME_OMNI=0`` forces
+    the ASR→LLM→TTS cascade; ``=1`` forces native on. A non-omni model has no Talker,
+    so this is False for it → cascade, unchanged."""
     import os
 
-    if not os.environ.get("YUNSHU_OMNI_MODEL"):
+    flag = os.environ.get("YUNSHU_REALTIME_OMNI", "").strip().lower()
+    if flag in ("0", "false", "no", "off"):
         return False
-    return os.environ.get("YUNSHU_REALTIME_OMNI", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
+    if flag in ("1", "true", "yes", "on"):
+        return True
+    if os.environ.get("YUNSHU_OMNI_MODEL"):
+        return True
+    try:
+        from .omni import _shared_speakable_model
+
+        return _shared_speakable_model() is not None
+    except Exception:  # noqa: BLE001 - no engine yet → cascade
+        return False
 
 
 # Cached native-omni speech capability. None = not yet probed.

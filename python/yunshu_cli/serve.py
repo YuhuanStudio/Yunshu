@@ -56,13 +56,6 @@ def serve(
         "-d",
         help="Directory to scan for models (multi-model mode).",
     ),
-    omni: bool = typer.Option(
-        False,
-        "--omni",
-        help="Enable native speech-to-speech (Thinker+Talker) for the realtime voice "
-        "path (examples/talk.py). NOTE: this loads a SECOND copy of the model for the "
-        "Talker (separate from the text engine) — expect roughly double the memory.",
-    ),
     host: str = typer.Option("0.0.0.0", "--host", "-h", help="Bind host."),
     port: int = typer.Option(8000, "--port", "-p", help="Bind port."),
     workers: int = typer.Option(1, "--workers", "-w", help="Number of workers."),
@@ -220,21 +213,18 @@ def serve(
         os.environ.get("YUNSHU_MULTI_MODEL", "").strip().lower() in ("1", "true", "yes")
     )
 
-    # Native speech-to-speech (omni). Opt-in via --omni: it loads the model a
-    # SECOND time as Thinker+Talker (the text engine can't speak), so we never do
-    # it automatically — doubling memory on a 30B model is not a silent default.
-    # We still detect omni models to print a tip below. Pre-set env vars win.
-    if omni and effective_model:
-        env.setdefault("YUNSHU_OMNI_MODEL", effective_model)
-        env.setdefault("YUNSHU_REALTIME_OMNI", "1")
-    elif omni and not (effective_model or os.environ.get("YUNSHU_OMNI_MODEL")):
-        console.print(
-            "[yellow]Warning:[/] --omni needs a model — pass -m <omni-model> "
-            "(or set YUNSHU_OMNI_MODEL). Voice not enabled."
-        )
-    voice_on = bool(env.get("YUNSHU_OMNI_MODEL")) and env.get(
-        "YUNSHU_REALTIME_OMNI", ""
-    ).strip().lower() in ("1", "true", "yes", "on")
+    # Native speech-to-speech is automatic: serving an omni model (one that has a
+    # Talker) lights up the voice path by REUSING that same loaded model — no flag,
+    # no second copy. Voice is off only for non-omni models or YUNSHU_REALTIME_OMNI=0.
+    _omni_off = env.get("YUNSHU_REALTIME_OMNI", "").strip().lower() in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+    voice_on = not _omni_off and (
+        bool(env.get("YUNSHU_OMNI_MODEL")) or _is_omni_model(effective_model)
+    )
 
     # Display startup info
     _print_startup_banner(
@@ -252,12 +242,10 @@ def serve(
         voice_on=voice_on,
     )
 
-    if not voice_on and _is_omni_model(effective_model):
-        # An omni model is being served text-only — point the way, with the cost.
+    if voice_on:
         console.print(
-            "[yellow]Tip:[/] this is an omni model — add [bold]--omni[/] to enable native "
-            "voice (then [bold]python examples/talk.py[/]). It loads a second copy of the "
-            "model for the Talker, so expect roughly double the memory."
+            "[dim]Native voice is on (same model serves text + speech). "
+            "Run [bold]python examples/talk.py[/] to talk to it.[/]"
         )
 
     # Override os.environ for the child process

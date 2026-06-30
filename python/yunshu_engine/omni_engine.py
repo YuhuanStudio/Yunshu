@@ -94,7 +94,7 @@ class OmniEngine:
 
     def __init__(
         self,
-        model_path: str,
+        model_path: str | None = None,
         speaker: SpeakerName = "Ethan",
         # Minimal-thinker default: casual voice needs ~no reasoning.
         # Validated first-audio: thinker=1→1.4s, =8→2.5s, =32→3.0s (M3 Max/36GB).
@@ -103,7 +103,13 @@ class OmniEngine:
         talker_temperature: float = 0.9,
         chunk_size: int = 10,
         sample_rate: int = AUDIO_SAMPLE_RATE,
+        *,
+        model: Any = None,
+        processor: Any = None,
     ) -> None:
+        # Either load from ``model_path`` OR adopt an already-loaded
+        # ``(model, processor)`` — the latter lets the voice path reuse the model
+        # the gateway already serves (one omni model, two endpoints, no 2nd copy).
         self.model_path = model_path
         self.speaker = speaker
         self.thinker_max = thinker_max_new_tokens
@@ -114,8 +120,10 @@ class OmniEngine:
         # and the realtime resampler) read instead of hardcoding 24000. Derived
         # from the model at load() when possible; 24 kHz is the Qwen3-Omni rate.
         self.sample_rate = sample_rate
-        self.model: Any = None  # mlx-vlm omni model (dynamic)
-        self.processor: Any = None
+        self.model: Any = model  # mlx-vlm omni model (dynamic; may be injected)
+        self.processor: Any = processor
+        self._shared = model is not None  # reusing a model we don't own
+        self._setup_done = False  # talker check + speakers + kernel prime ran
         self._prev_text_ids: list[int] = []
         # Valid Talker speakers — defaults to the Qwen3-Omni set, replaced at
         # load() with the loaded model's own speaker map (model-agnostic).
@@ -149,13 +157,26 @@ class OmniEngine:
         return None
 
     def load(self) -> None:
-        """Load on the calling thread (owns the default Metal stream). Idempotent."""
-        if self.model is not None:
-            return
-        from mlx_vlm import load as vlmload
+        """Load on the calling thread (owns the default Metal stream). Idempotent.
 
-        logger.info("OmniEngine loading %s …", self.model_path)
-        self.model, self.processor = vlmload(self.model_path, trust_remote_code=True)
+        When a model was injected (reuse of the already-served model) we skip the
+        load and just run the one-time setup (talker check, speaker map, kernel
+        prime) on it — no second copy of the weights."""
+        if self._setup_done:
+            return
+        if self.model is None:
+            if not self.model_path:
+                raise ValueError(
+                    "OmniEngine needs a model_path or an injected model+processor."
+                )
+            from mlx_vlm import load as vlmload
+
+            logger.info("OmniEngine loading %s …", self.model_path)
+            self.model, self.processor = vlmload(
+                self.model_path, trust_remote_code=True
+            )
+        else:
+            logger.info("OmniEngine reusing the already-loaded served model (no copy).")
         if not getattr(self.model, "has_talker", False):
             raise ValueError(
                 f"{self.model_path} has no Talker — not a unified-omni model. "
@@ -170,6 +191,7 @@ class OmniEngine:
             self._valid_speakers = {str(s).lower() for s in speaker_map}
             logger.info("OmniEngine speakers: %s", sorted(self._valid_speakers))
         self._compile_kernels()
+        self._setup_done = True
         logger.info("OmniEngine ready (talker present).")
 
     def _compile_kernels(self) -> None:

@@ -48,9 +48,9 @@ Qwen3-Omni 的 **Talker** 架構是單一模型:它攝入原始音訊、進行�
 uv pip install "yunshu[omni]"      # 原生 Qwen3-Omni 語音（語音輸入/輸出）
 uv pip install "yunshu[all]"       # 全部:文字 + 視覺 + 音訊 + omni + 影像 + 嵌入
 
-# 2. 啟動模型。來自 mlx-community 的任意 4-bit Qwen3-Omni 變體都可以；加 --omni 開啟原生語音
-#    （它會為 Talker 再載入一份模型,記憶體約翻倍）。
-yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --omni --port 8000
+# 2. 啟動模型。來自 mlx-community 的任意 4-bit Qwen3-Omni 變體都可以 —— 原生語音會自動開啟
+#    （同一份已載入的模型同時服務文字和語音,不額外佔記憶體）。
+yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --port 8000
 ```
 
 ### 跟它對話

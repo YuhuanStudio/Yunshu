@@ -8,9 +8,10 @@ This is the forward differentiation: native speech-in/speech-out from ONE
 unified omni model, not an ASR→LLM→TTS cascade. No other MLX server exposes
 Qwen3-Omni's Talker audio-out.
 
-Config: set YUNSHU_OMNI_MODEL to a local Thinker+Talker model path
-(e.g. mlx-community/Qwen3-Omni-30B-A3B-Instruct-4bit). Without it the endpoint
-returns 503 (no honest placeholder audio).
+Config: when the served model is itself an omni model (has a Talker), the voice
+path reuses it — no extra config, no second copy in memory. To point the voice
+path at a *different* model than the one served for text, set YUNSHU_OMNI_MODEL.
+With no speakable model available the endpoint returns 503 (no placeholder audio).
 """
 
 from __future__ import annotations
@@ -34,29 +35,66 @@ AUDIO_SAMPLE_RATE = 24000  # Qwen3-Omni Talker output
 _omni_engine = None
 
 
+def _shared_speakable_model():
+    """If the gateway's served model is loaded AND has a Talker, return its
+    ``(model, processor)`` so the voice path can reuse it — one omni model, two
+    endpoints, no second copy in memory. Returns None otherwise.
+
+    For an omni model the served engine is a VLMEngine that loaded the full model
+    (Talker included) via the same ``mlx_vlm.load`` OmniEngine would use, so the
+    object is directly reusable."""
+    try:
+        from ..engine import get_engine
+
+        eng = get_engine()
+    except Exception:  # noqa: BLE001 - no/By-name engine → no reuse, fall through
+        return None
+    if eng is None:
+        return None
+    model = getattr(eng, "_model", None)
+    processor = getattr(eng, "_processor", None)
+    if (
+        model is not None
+        and processor is not None
+        and getattr(model, "has_talker", False)
+    ):
+        return model, processor
+    return None
+
+
 def _get_omni_engine():
     global _omni_engine
     if _omni_engine is None:
-        path = os.environ.get("YUNSHU_OMNI_MODEL")
-        if not path:
-            raise HTTPException(
-                status_code=503,
-                detail="No omni model configured. Set YUNSHU_OMNI_MODEL to a "
-                "Thinker+Talker model (e.g. mlx-community/Qwen3-Omni-30B-A3B-Instruct-4bit).",
-            )
         from yunshu_engine.omni_engine import OmniEngine
 
-        _omni_engine = OmniEngine(path)
+        # Prefer reusing the already-served model (no second copy). Fall back to a
+        # separately-configured YUNSHU_OMNI_MODEL only when the served model can't
+        # speak (e.g. a text-only main model + a dedicated omni model).
+        shared = _shared_speakable_model()
+        path = os.environ.get("YUNSHU_OMNI_MODEL")
+        if shared is not None:
+            model, processor = shared
+            _omni_engine = OmniEngine(model=model, processor=processor)
+        elif path:
+            _omni_engine = OmniEngine(path)
+        else:
+            raise HTTPException(
+                status_code=503,
+                detail="No omni model available. Serve a Thinker+Talker model "
+                "(e.g. mlx-community/Qwen3-Omni-30B-A3B-Instruct-4bit), or set "
+                "YUNSHU_OMNI_MODEL to a separate one.",
+            )
     return _omni_engine
 
 
 async def preload_and_warmup() -> None:
-    """Boot-time hook: if YUNSHU_OMNI_MODEL is set (and YUNSHU_OMNI_PRELOAD != "0"),
-    load the omni model and compile its kernels now so the first request is warm
-    (~4s) instead of cold (~30s). Best-effort — failures are logged, not fatal."""
-    if not os.environ.get("YUNSHU_OMNI_MODEL"):
-        return
+    """Boot-time hook: compile the Talker kernels now so the first voice request is
+    warm (~4s) instead of cold (~30s). Runs whenever a speakable model is available
+    — the served model itself (reuse) or a separate YUNSHU_OMNI_MODEL. Opt out with
+    YUNSHU_OMNI_PRELOAD=0. Best-effort — failures are logged, not fatal."""
     if os.environ.get("YUNSHU_OMNI_PRELOAD", "1") == "0":
+        return
+    if not (os.environ.get("YUNSHU_OMNI_MODEL") or _shared_speakable_model()):
         return
     try:
         eng = _get_omni_engine()
