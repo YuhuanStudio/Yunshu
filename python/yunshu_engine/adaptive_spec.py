@@ -27,17 +27,26 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class AdaptiveSpecConfig:
-    """Configuration for the adaptive speculative decode controller."""
+    """Configuration for the adaptive speculative decode controller.
 
-    min_draft_length: int = 1
+    Defaults are tuned so spec is **never slower** than plain decode: it starts
+    small, and on low acceptance backs off all the way to K=0 (no draft → plain
+    single-token decode, zero spec overhead), periodically probing to recover if
+    the output turns repetitive. Spec only ever costs extra when it's actually
+    winning.
+    """
+
+    min_draft_length: int = 0  # 0 = back off to plain decode (no draft) entirely
     max_draft_length: int = 8
-    initial_draft_length: int = 4
+    initial_draft_length: int = 2  # pessimistic start — climbs only if accepted
     ema_alpha: float = 0.3
     increase_threshold: float = 0.8
     decrease_threshold: float = 0.5
     increase_step: int = 1
     decrease_step: int = 1
-    cooldown_steps: int = 5
+    cooldown_steps: int = 3
+    probe_interval: int = 16  # while idle (K=0), probe every N steps to re-measure
+    probe_length: int = 2  # draft length used for a probe
 
 
 class AdaptiveSpecController:
@@ -52,22 +61,24 @@ class AdaptiveSpecController:
 
     def __init__(
         self,
-        min_draft_length: int = 1,
+        min_draft_length: int = 0,
         max_draft_length: int = 8,
-        initial_draft_length: int = 4,
+        initial_draft_length: int = 2,
         ema_alpha: float = 0.3,
         increase_threshold: float = 0.8,
         decrease_threshold: float = 0.5,
         increase_step: int = 1,
         decrease_step: int = 1,
-        cooldown_steps: int = 5,
+        cooldown_steps: int = 3,
+        probe_interval: int = 16,
+        probe_length: int = 2,
     ) -> None:
-        if min_draft_length < 1:
-            raise ValueError(f"min_draft_length must be >= 1, got {min_draft_length}")
-        if max_draft_length < min_draft_length:
+        if min_draft_length < 0:
+            raise ValueError(f"min_draft_length must be >= 0, got {min_draft_length}")
+        if max_draft_length < max(min_draft_length, 1):
             raise ValueError(
                 f"max_draft_length ({max_draft_length}) must be >= "
-                f"min_draft_length ({min_draft_length})"
+                f"max(min_draft_length, 1)"
             )
         if not (0.0 < ema_alpha <= 1.0):
             raise ValueError(f"ema_alpha must be in (0, 1], got {ema_alpha}")
@@ -78,6 +89,8 @@ class AdaptiveSpecController:
             )
         if cooldown_steps < 0:
             raise ValueError(f"cooldown_steps must be >= 0, got {cooldown_steps}")
+        if probe_interval < 1:
+            raise ValueError(f"probe_interval must be >= 1, got {probe_interval}")
 
         self._min_k = min_draft_length
         self._max_k = max_draft_length
@@ -90,10 +103,13 @@ class AdaptiveSpecController:
         self._increase_step = increase_step
         self._decrease_step = decrease_step
         self._cooldown_steps = cooldown_steps
+        self._probe_interval = probe_interval
+        self._probe_length = min(probe_length, max_draft_length)
 
         # Internal tracking state
         self._ema_rate: float | None = None  # None until first observation
         self._steps_since_adjust: int = 0
+        self._idle_streak: int = 0  # steps spent at K=0 since the last probe
         self._total_steps: int = 0
         self._total_draft: int = 0
         self._total_accepted: int = 0
@@ -126,14 +142,23 @@ class AdaptiveSpecController:
                 + (1.0 - self._ema_alpha) * self._ema_rate
             )
 
-        # Increment cooldown counter
-        self._steps_since_adjust += 1
+        # Idle recovery: K==0 means we're backed off to plain decode and this call
+        # is a periodic PROBE. If the probe was well accepted, the output turned
+        # predictable again — leave idle immediately (bypass cooldown). Otherwise
+        # stay idle; get_draft_length keeps probing every probe_interval steps.
+        if self._current_k == 0:
+            if current_rate >= self._increase_threshold:
+                self._current_k = max(1, self._increase_step)
+                self._adjustments += 1
+                self._steps_since_adjust = 0
+            return
 
-        # Only consider adjustment after cooldown
+        # Active mode (K>=1): EMA-driven adjust with cooldown hysteresis. Can back
+        # off all the way to 0 (min_k) → plain decode with zero spec overhead.
+        self._steps_since_adjust += 1
         if self._steps_since_adjust < self._cooldown_steps:
             return
 
-        # Adjust K based on smoothed acceptance rate
         if self._ema_rate > self._increase_threshold:
             new_k = min(self._current_k + self._increase_step, self._max_k)
         elif self._ema_rate < self._decrease_threshold:
@@ -148,8 +173,21 @@ class AdaptiveSpecController:
             self._steps_since_adjust = 0
 
     def get_draft_length(self) -> int:
-        """Get the recommended draft length for the next step."""
-        return self._current_k
+        """Recommended draft length for the next step.
+
+        Returns 0 when backed off to plain decode (low acceptance) — the caller
+        skips the draft+verify and does a plain single-token step (zero spec
+        overhead). While idle it returns a small probe length every
+        ``probe_interval`` steps so acceptance can be re-measured and K recover.
+        """
+        if self._current_k > 0:
+            self._idle_streak = 0
+            return self._current_k
+        self._idle_streak += 1
+        if self._idle_streak >= self._probe_interval:
+            self._idle_streak = 0
+            return self._probe_length
+        return 0
 
     def get_stats(self) -> dict:
         """Return controller statistics for monitoring."""
@@ -186,10 +224,10 @@ class AdaptiveSpecController:
             return None
 
         config = AdaptiveSpecConfig(
-            min_draft_length=int(os.environ.get("YUNSHU_ADAPTIVE_SPEC_MIN_K", "1")),
+            min_draft_length=int(os.environ.get("YUNSHU_ADAPTIVE_SPEC_MIN_K", "0")),
             max_draft_length=int(os.environ.get("YUNSHU_ADAPTIVE_SPEC_MAX_K", "8")),
             initial_draft_length=int(
-                os.environ.get("YUNSHU_ADAPTIVE_SPEC_INITIAL_K", "4")
+                os.environ.get("YUNSHU_ADAPTIVE_SPEC_INITIAL_K", "2")
             ),
             ema_alpha=float(os.environ.get("YUNSHU_ADAPTIVE_SPEC_EMA_ALPHA", "0.3")),
             increase_threshold=float(
@@ -204,7 +242,11 @@ class AdaptiveSpecController:
             decrease_step=int(
                 os.environ.get("YUNSHU_ADAPTIVE_SPEC_DECREASE_STEP", "1")
             ),
-            cooldown_steps=int(os.environ.get("YUNSHU_ADAPTIVE_SPEC_COOLDOWN", "5")),
+            cooldown_steps=int(os.environ.get("YUNSHU_ADAPTIVE_SPEC_COOLDOWN", "3")),
+            probe_interval=int(
+                os.environ.get("YUNSHU_ADAPTIVE_SPEC_PROBE_INTERVAL", "16")
+            ),
+            probe_length=int(os.environ.get("YUNSHU_ADAPTIVE_SPEC_PROBE_K", "2")),
         )
 
         controller = cls(
@@ -217,6 +259,8 @@ class AdaptiveSpecController:
             increase_step=config.increase_step,
             decrease_step=config.decrease_step,
             cooldown_steps=config.cooldown_steps,
+            probe_interval=config.probe_interval,
+            probe_length=config.probe_length,
         )
 
         logger.info(

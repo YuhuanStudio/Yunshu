@@ -12,10 +12,10 @@ from yunshu_engine.adaptive_spec import AdaptiveSpecConfig, AdaptiveSpecControll
 class TestInitialization:
     def test_defaults(self):
         ctrl = AdaptiveSpecController()
-        assert ctrl.get_draft_length() == 4  # initial_draft_length
+        assert ctrl.get_draft_length() == 2  # initial_draft_length (pessimistic start)
         stats = ctrl.get_stats()
-        assert stats["current_k"] == 4
-        assert stats["min_k"] == 1
+        assert stats["current_k"] == 2
+        assert stats["min_k"] == 0  # can back off to plain decode
         assert stats["max_k"] == 8
         assert stats["ema_rate"] is None
         assert stats["total_steps"] == 0
@@ -51,8 +51,10 @@ class TestInitialization:
         assert ctrl.get_draft_length() == 4
 
     def test_validation_min_draft_length(self):
-        with pytest.raises(ValueError, match="min_draft_length must be >= 1"):
-            AdaptiveSpecController(min_draft_length=0)
+        # min_draft_length=0 is now VALID (back off to plain decode); only <0 raises
+        AdaptiveSpecController(min_draft_length=0)
+        with pytest.raises(ValueError, match="min_draft_length must be >= 0"):
+            AdaptiveSpecController(min_draft_length=-1)
 
     def test_validation_max_lt_min(self):
         with pytest.raises(ValueError, match="max_draft_length"):
@@ -465,12 +467,45 @@ class TestHysteresis:
 class TestAdaptiveSpecConfig:
     def test_defaults(self):
         config = AdaptiveSpecConfig()
-        assert config.min_draft_length == 1
+        assert config.min_draft_length == 0  # back off to plain decode
         assert config.max_draft_length == 8
-        assert config.initial_draft_length == 4
+        assert config.initial_draft_length == 2  # pessimistic start
         assert config.ema_alpha == 0.3
         assert config.increase_threshold == 0.8
         assert config.decrease_threshold == 0.5
         assert config.increase_step == 1
         assert config.decrease_step == 1
-        assert config.cooldown_steps == 5
+        assert config.cooldown_steps == 3
+        assert config.probe_interval == 16
+        assert config.probe_length == 2
+
+
+class TestIdleBackoffAndProbe:
+    """K=0 idle backoff (→ plain decode) with periodic probing to recover."""
+
+    def test_backs_off_to_zero_on_sustained_low_acceptance(self):
+        c = AdaptiveSpecController(
+            initial_draft_length=2, decrease_threshold=0.5, cooldown_steps=1
+        )
+        for _ in range(30):
+            k = c.get_draft_length()
+            if k > 0:
+                c.record_step(draft_length=k, accepted=0)  # nothing accepted
+        assert c.get_stats()["current_k"] == 0  # fully backed off to plain decode
+
+    def test_probes_periodically_while_idle(self):
+        c = AdaptiveSpecController(probe_interval=4, probe_length=2)
+        c._current_k = 0  # force idle
+        assert [c.get_draft_length() for _ in range(4)] == [0, 0, 0, 2]
+
+    def test_recovers_from_idle_on_well_accepted_probe(self):
+        c = AdaptiveSpecController(increase_threshold=0.8)
+        c._current_k = 0
+        c.record_step(draft_length=2, accepted=2)  # probe rate 1.0 >= 0.8
+        assert c.get_stats()["current_k"] >= 1  # left idle, will spec again
+
+    def test_stays_idle_on_poorly_accepted_probe(self):
+        c = AdaptiveSpecController(increase_threshold=0.8)
+        c._current_k = 0
+        c.record_step(draft_length=2, accepted=0)  # probe rate 0 < 0.8
+        assert c.get_stats()["current_k"] == 0  # stays in plain-decode mode

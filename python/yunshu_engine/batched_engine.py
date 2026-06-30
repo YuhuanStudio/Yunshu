@@ -7427,11 +7427,30 @@ class BatchedEngine:
                 self._ngram_greedy_default,
             )
 
-        # Adaptive spec controller (requires N-gram proposer active)
+        # Adaptive spec controller (requires N-gram proposer active). ON by default
+        # whenever spec runs: it sets the draft length K from acceptance feedback and
+        # backs off to K=0 on low acceptance, which BOUNDS spec's downside. Measured
+        # 2026-06-30 (Qwen2.5-3B-4bit, greedy): without it, default-on spec was ~2.5×
+        # SLOWER on low-acceptance output (normal prose / code); with it, that becomes
+        # ~1.15× while the ~1.7× win on repetitive/agentic output is kept.
+        #
+        # It does NOT make spec strictly never-slower, so YUNSHU_NGRAM_DEFAULT stays 0
+        # (opt-in): even the controller's K=0 step runs the spec loop's own plain branch
+        # (a direct model() forward), which is ~15% slower than _generate_fast's
+        # generate_step — a structural cost of being inside _generate_ngram_spec at all.
+        # Eliminating it would mean routing idle steps back through generate_step (major
+        # surgery, deferred). So this just makes the OPT-IN spec path safe + self-tuning.
+        # YUNSHU_ADAPTIVE_SPEC=0 disables it (fixed proposer K, old behavior); =1 tunes via env.
         if self._ngram_proposer is not None:
             from .adaptive_spec import AdaptiveSpecController
 
-            self._adaptive_spec = AdaptiveSpecController.from_env()
+            _adaptive_flag = os.environ.get("YUNSHU_ADAPTIVE_SPEC", "").strip().lower()
+            if _adaptive_flag in ("0", "false", "no"):
+                self._adaptive_spec = None
+            else:
+                self._adaptive_spec = (
+                    AdaptiveSpecController.from_env() or AdaptiveSpecController()
+                )
 
         # SpecPrefill: sparse (lossy) prefill for long prompts — keeps only the
         # most "important" prompt tokens (scored by a small draft model) to cut
@@ -9390,16 +9409,22 @@ class BatchedEngine:
                                     f"{timeout_seconds}s ({len(tokens)} tokens)"
                                 )
                                 break
-                        # Propose K draft tokens via N-gram
-                        # Use adaptive K if controller is active, else use proposer default
-                        _adaptive_k = (
-                            self._adaptive_spec.get_draft_length()
-                            if self._adaptive_spec
-                            else None
-                        )
-                        draft_ids = proposer.propose(all_token_ids)[
-                            : (_adaptive_k or len(all_token_ids))
-                        ]
+                        # Propose K draft tokens via N-gram. When the adaptive
+                        # controller is active it sets K — and K==0 means "back off to
+                        # plain decode this step" (→ n_draft==0 path below, zero spec
+                        # overhead). MUST special-case 0: `_k or len(...)` would wrongly
+                        # fall through to a full-length draft on the backoff.
+                        if self._adaptive_spec is not None:
+                            _adaptive_k = self._adaptive_spec.get_draft_length()
+                            draft_ids = (
+                                proposer.propose(all_token_ids)[:_adaptive_k]
+                                if _adaptive_k > 0
+                                else []
+                            )
+                        else:
+                            draft_ids = proposer.propose(all_token_ids)[
+                                : len(all_token_ids)
+                            ]
                         # Grammar-aware draft filtering: reject drafts that violate constraints
                         draft_ids = _grammar_filter_drafts(draft_ids, all_token_ids)
                         n_draft = min(len(draft_ids), remaining)
