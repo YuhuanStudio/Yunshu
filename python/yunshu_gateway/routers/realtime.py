@@ -41,6 +41,37 @@ def _max_input_audio_bytes() -> int:
         return 10485760
 
 
+_OPENAI_STD_VOICES = {
+    "alloy",
+    "echo",
+    "shimmer",
+    "ash",
+    "ballad",
+    "coral",
+    "sage",
+    "verse",
+}
+
+
+def _is_valid_realtime_voice(value: object) -> bool:
+    """Accept any voice valid on the realtime socket: the OpenAI standard set
+    (cascade TTS) PLUS the native omni Talker speakers and their aliases. The old
+    hardcoded {alloy,echo,shimmer} rejected the omni speakers (e.g. aiden) at the
+    session level even though the per-response voice accepted them — this unifies it.
+    """
+    if not isinstance(value, str):
+        return False
+    v = value.strip().lower()
+    if v in _OPENAI_STD_VOICES:
+        return True
+    try:
+        from yunshu_engine.omni_engine import _OMNI_SPEAKERS, _VOICE_ALIASES
+
+        return v in _OMNI_SPEAKERS or v in _VOICE_ALIASES
+    except Exception:
+        return False
+
+
 def _default_turn_detection() -> dict:
     """Server-wide default server-VAD turn detection — env-tunable so a deployment
     can dial in the conversation feel without every client sending session.update.
@@ -433,8 +464,7 @@ class SessionConfig:
                     if value not in self.SUPPORTED_AUDIO_FORMATS:
                         continue
                 if key == "voice":
-                    valid_voices = {"alloy", "echo", "shimmer"}
-                    if value not in valid_voices:
+                    if not _is_valid_realtime_voice(value):
                         continue
                 if key == "tool_choice":
                     # a string mode or a named-function dict; reject other types
@@ -1852,6 +1882,29 @@ class RealtimeSession:
                 self._active_modalities = []
                 self._cancel_event = None
 
+    def _latest_user_image_ref(self) -> str | None:
+        """Return an image reference (url / data-URI / path) from the most recent
+        user turn, if any — so native-omni vision-in works over the realtime socket.
+        Scans the raw conversation items (content parts keep the image, unlike the
+        flattened text prompt)."""
+        for item in reversed(self.conversation.items):
+            if getattr(item, "role", None) != "user":
+                continue
+            content = getattr(item, "content", None)
+            if not isinstance(content, list):
+                return None
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") in ("input_image", "image_url", "image"):
+                    iu = part.get("image_url") or part.get("image")
+                    if isinstance(iu, dict):
+                        iu = iu.get("url")
+                    if isinstance(iu, str) and iu:
+                        return iu
+            return None  # most recent user turn had no image
+        return None
+
     async def _generate_response_omni(
         self,
         response_id: str,
@@ -1880,10 +1933,21 @@ class RealtimeSession:
         _audio_in = self._last_user_audio
         self._last_user_audio = None
         _tmp_audio_path: str | None = None
+        _img_tmp: list[str] = []
         try:
             _instr_override = config.get("instructions")
             _messages = self._build_messages(instructions_override=_instr_override)
             _audio_path: str | None = None
+            # Native vision-in: an image on the latest user turn is fed to the omni
+            # model too (OmniEngine.stream supports image_path) — the realtime socket
+            # previously dropped it. Resolve a data-URI / URL / path → temp file.
+            _image_path: str | None = None
+            _img_ref = self._latest_user_image_ref()
+            if _img_ref:
+                from .omni import _resolve_media
+
+                with contextlib.suppress(Exception):
+                    _image_path = await _resolve_media(_img_ref, "image", _img_tmp)
             if _audio_in and _audio_in[0]:
                 pcm_bytes, in_rate = _audio_in
                 _tmp_audio_path = _write_pcm16_wav(pcm_bytes, in_rate)
@@ -1962,7 +2026,10 @@ class RealtimeSession:
             self._g711_lin_state = None
             self._g711_resample_remainder = b""
             async for ch in eng.stream(
-                prompt, audio_path=_audio_path, speaker=_snap_voice or None
+                prompt,
+                audio_path=_audio_path,
+                image_path=_image_path,
+                speaker=_snap_voice or None,
             ):
                 if ch.kind == "text":
                     if not ch.data:
@@ -2126,6 +2193,11 @@ class RealtimeSession:
 
                 with contextlib.suppress(OSError):
                     os.unlink(_tmp_audio_path)
+            for _p in _img_tmp:
+                import os
+
+                with contextlib.suppress(OSError):
+                    os.unlink(_p)
             if self._active_response is asyncio.current_task():
                 self._active_response = None
                 self._active_modalities = []
@@ -2837,7 +2909,17 @@ class RealtimeSession:
         created = await self._handle_input_audio_buffer_commit(
             {"type": "input_audio_buffer.commit"}, vad_trim=True
         )
-        if created:
+        # Native speech-to-speech produces NO conversation item — the raw PCM is fed
+        # straight to the omni model (no ASR transcript), so `created` is False even
+        # though a real spoken turn just happened. Without firing on the stashed audio,
+        # an omni-only server (the flagship config, no separate ASR) would never
+        # auto-respond under server_vad — the user speaks, VAD ends the turn, silence.
+        _has_omni_audio = (
+            _omni_realtime_active()
+            and self._last_user_audio is not None
+            and len(self._last_user_audio[0]) > 0
+        )
+        if created or _has_omni_audio:
             await self._handle_response_create(
                 {"type": "response.create", "response": {}}
             )
