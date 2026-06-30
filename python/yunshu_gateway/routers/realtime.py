@@ -159,6 +159,26 @@ def _omni_realtime_active() -> bool:
 # latency axis that matters for the flagship) stays low even in long conversations.
 _OMNI_HISTORY_MAX_CHARS = 1500
 
+# Default voice persona — used only when the request carries no system message.
+# Voice wants SHORT, spoken-style replies: a long monologue is poor voice UX, and on
+# native omni the Talker can't outpace playback for long replies anyway, so a concise
+# reply keeps the round-trip snappy. A user/Yunmo system message overrides this
+# entirely; YUNSHU_OMNI_PERSONA overrides the default text (set it empty to disable).
+_OMNI_DEFAULT_PERSONA = (
+    "You are a warm, natural voice assistant. Speak the way people talk in "
+    "conversation: concise — usually a sentence or two. Get to the point, skip "
+    "lists and boilerplate, and don't recite your capabilities unless asked. "
+    "Reply in the same language the user spoke."
+)
+
+
+def _omni_persona() -> str:
+    """The default voice persona; YUNSHU_OMNI_PERSONA overrides it (empty = none)."""
+    import os
+
+    val = os.environ.get("YUNSHU_OMNI_PERSONA")
+    return _OMNI_DEFAULT_PERSONA if val is None else val.strip()
+
 
 def _omni_history_transcript(messages: list[dict], *, exclude_last_user: bool) -> str:
     """Compact transcript of PRIOR user/assistant turns for multi-turn omni
@@ -204,8 +224,9 @@ def _messages_to_omni_prompt(messages: list[dict]) -> str:
     last_user = user_parts[-1]
     history = _omni_history_transcript(messages, exclude_last_user=True)
     body = f"{history}\nUser: {last_user}" if history else last_user
-    if sys_parts:
-        return f"{' '.join(sys_parts)}\n\n{body}".strip()
+    persona = " ".join(sys_parts).strip() if sys_parts else _omni_persona()
+    if persona:
+        return f"{persona}\n\n{body}".strip()
     return body
 
 
@@ -222,9 +243,14 @@ def _omni_system_text(messages: list[dict]) -> str:
     user's RAW audio is the actual query (native speech-in). The audio isn't in
     ``messages`` as text, so all prior text turns are kept as conversation context
     (multi-turn continuity); single-turn collapses to persona only (unchanged)."""
-    persona = " ".join(
-        m["content"] for m in messages if m.get("role") == "system" and m.get("content")
-    ).strip()
+    persona = (
+        " ".join(
+            m["content"]
+            for m in messages
+            if m.get("role") == "system" and m.get("content")
+        ).strip()
+        or _omni_persona()
+    )
     history = _omni_history_transcript(messages, exclude_last_user=False)
     if history:
         return f"{persona}\n\n{history}".strip() if persona else history

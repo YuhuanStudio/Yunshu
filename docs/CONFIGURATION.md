@@ -23,6 +23,7 @@ Booleans accept `1`/`true`/`yes` (case-insensitive); anything else (or unset) is
 | `YUNSHU_REALTIME_OMNI` | auto | Native Qwen3-Omni Thinker→Talker on the `WS /v1/realtime` socket. **Auto**: on when a speakable model is available (the served omni model, or `YUNSHU_OMNI_MODEL`). `0` forces the ASR→LLM→TTS cascade; `1` forces native on. Non-omni models have no Talker → cascade. |
 | `YUNSHU_OMNI_PRELOAD` | on | Warm the omni model at boot (compiles Talker kernels so the first request isn't cold). Set `0` to defer loading to first use. |
 | `YUNSHU_OMNI_THINKER_MAX` | `256` | Max tokens the omni Thinker writes per voice turn = the spoken reply's max length (the Talker speaks what the Thinker writes). A short reply still stops at its natural end; this only caps long ones. Lower = snappier/shorter; higher = room for longer answers (e.g. a story). |
+| `YUNSHU_OMNI_PERSONA` | _(built-in)_ | System persona used on the realtime voice path **only when the request carries no system message** — defaults to a concise, spoken-style assistant (voice wants short replies). A request's own system message always overrides it. Set to a custom string to change it, or empty to disable. |
 | `YUNSHU_DEFAULT_MAX_TOKENS` | `512` | Default completion length when a request omits `max_tokens`. |
 | `YUNSHU_CORS_ORIGINS` | `*` | Comma-separated allowed CORS origins. |
 

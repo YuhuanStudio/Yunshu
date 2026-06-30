@@ -11,8 +11,10 @@ single-turn prompts stay unchanged.
 """
 
 from yunshu_gateway.routers.realtime import (
+    _OMNI_DEFAULT_PERSONA,
     _OMNI_HISTORY_MAX_CHARS,
     _messages_to_omni_prompt,
+    _omni_persona,
     _omni_system_text,
 )
 
@@ -68,3 +70,34 @@ def test_history_is_bounded_for_ttft():
     assert out.rstrip().endswith("User: final")
     assert "question number 499" in out  # recent kept
     assert "question number 0" not in out  # oldest elided
+
+
+# ── default conversational persona (no system message) ──────────────────────
+def test_text_in_no_system_prepends_default_persona():
+    out = _messages_to_omni_prompt([{"role": "user", "content": "hi there"}])
+    assert out.startswith(_OMNI_DEFAULT_PERSONA)
+    assert out.rstrip().endswith("hi there")
+
+
+def test_speech_in_no_system_uses_default_persona():
+    # native speech-in, no system, no prior turns → the default voice persona
+    assert _omni_system_text([]) == _OMNI_DEFAULT_PERSONA
+
+
+def test_user_system_message_overrides_default_persona():
+    msgs = [
+        {"role": "system", "content": "You are Yun."},
+        {"role": "user", "content": "hi"},
+    ]
+    out = _messages_to_omni_prompt(msgs)
+    assert out.startswith("You are Yun.")
+    assert _OMNI_DEFAULT_PERSONA not in out  # user's persona wins, default not added
+
+
+def test_persona_env_override(monkeypatch):
+    monkeypatch.setenv("YUNSHU_OMNI_PERSONA", "Be terse.")
+    assert _omni_persona() == "Be terse."
+    monkeypatch.setenv("YUNSHU_OMNI_PERSONA", "")  # explicit empty disables it
+    assert _omni_persona() == ""
+    monkeypatch.delenv("YUNSHU_OMNI_PERSONA", raising=False)
+    assert _omni_persona() == _OMNI_DEFAULT_PERSONA
