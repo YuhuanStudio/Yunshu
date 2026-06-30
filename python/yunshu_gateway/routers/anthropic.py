@@ -1620,7 +1620,6 @@ async def _non_stream_batched(
         "stop_reason": stop_reason,
         "stop_sequence": _public_stop_sequence(matched_stop),
         "usage": usage,
-        **({"metadata": req.metadata} if req.metadata else {}),
     }
     return JSONResponse(resp)
 
@@ -1856,7 +1855,6 @@ async def _non_stream_legacy(
             "stop_reason": stop_reason,
             "stop_sequence": _public_stop_sequence(matched_stop),
             "usage": _legacy_usage,
-            **({"metadata": req.metadata} if req.metadata else {}),
         }
     )
 
