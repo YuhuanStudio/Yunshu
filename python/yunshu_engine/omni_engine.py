@@ -262,11 +262,16 @@ class OmniEngine:
         first audio-in turn paying a ~0.5s JIT tax (measured: 1.8s vs 1.3s steady
         on M3 Max). So warmup also runs ONE audio-in pass with a short throwaway
         clip, priming the encoder path too."""
+        # Kernels compile on FIRST use regardless of reply length, so warmup caps
+        # the Thinker hard: priming a full ~256-token reply just to JIT the kernels
+        # made boot needlessly slow (a 256-token reply is ~1000 Talker steps).
+        warmup_thinker_max = 8
         start = asyncio.get_running_loop().time()
         self.load()
         for _ in range(max(1, rounds)):
             async for _chunk in self.stream(
-                "Hello, please say a short greeting out loud."
+                "Hello, please say a short greeting out loud.",
+                thinker_max_new_tokens=warmup_thinker_max,
             ):
                 pass  # discard — we only want kernels compiled and the path primed
         # One audio-in pass to compile the speech-encoder kernels (best-effort).
@@ -274,7 +279,9 @@ class OmniEngine:
         if audio_path is not None:
             try:
                 async for _chunk in self.stream(
-                    "Respond to the user.", audio_path=audio_path
+                    "Respond to the user.",
+                    audio_path=audio_path,
+                    thinker_max_new_tokens=warmup_thinker_max,
                 ):
                     pass
             except Exception:  # noqa: BLE001 — encoder priming is best-effort
