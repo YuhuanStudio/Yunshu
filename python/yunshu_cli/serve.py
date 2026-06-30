@@ -18,6 +18,30 @@ console = Console()
 serve_app = typer.Typer(help="Start inference server.", no_args_is_help=True)
 
 
+def _is_omni_model(model: str | None) -> bool:
+    """Best-effort: does this model have a Talker (native speech-to-speech)?
+
+    Reads a local ``config.json`` when present (a Qwen3-Omni model carries a
+    ``talker_config``); otherwise falls back to the model name. Used only to
+    decide whether to auto-enable the voice path — never fatal.
+    """
+    if not model:
+        return False
+    cfg = os.path.join(model, "config.json")
+    if os.path.isfile(cfg):
+        try:
+            import json
+
+            with open(cfg) as f:
+                c = json.load(f)
+            if "talker_config" in c:
+                return True
+            return "omni" in str(c.get("model_type", "")).lower()
+        except Exception:  # noqa: BLE001 - detection is best-effort
+            pass
+    return "omni" in model.lower()
+
+
 @serve_app.callback(invoke_without_command=True)
 def serve(
     model: str | None = typer.Option(
@@ -31,6 +55,13 @@ def serve(
         "--models-dir",
         "-d",
         help="Directory to scan for models (multi-model mode).",
+    ),
+    omni: bool = typer.Option(
+        False,
+        "--omni",
+        help="Enable native speech-to-speech (Thinker+Talker) for the realtime voice "
+        "path (examples/talk.py). NOTE: this loads a SECOND copy of the model for the "
+        "Talker (separate from the text engine) — expect roughly double the memory.",
     ),
     host: str = typer.Option("0.0.0.0", "--host", "-h", help="Bind host."),
     port: int = typer.Option(8000, "--port", "-p", help="Bind port."),
@@ -189,6 +220,22 @@ def serve(
         os.environ.get("YUNSHU_MULTI_MODEL", "").strip().lower() in ("1", "true", "yes")
     )
 
+    # Native speech-to-speech (omni). Opt-in via --omni: it loads the model a
+    # SECOND time as Thinker+Talker (the text engine can't speak), so we never do
+    # it automatically — doubling memory on a 30B model is not a silent default.
+    # We still detect omni models to print a tip below. Pre-set env vars win.
+    if omni and effective_model:
+        env.setdefault("YUNSHU_OMNI_MODEL", effective_model)
+        env.setdefault("YUNSHU_REALTIME_OMNI", "1")
+    elif omni and not (effective_model or os.environ.get("YUNSHU_OMNI_MODEL")):
+        console.print(
+            "[yellow]Warning:[/] --omni needs a model — pass -m <omni-model> "
+            "(or set YUNSHU_OMNI_MODEL). Voice not enabled."
+        )
+    voice_on = bool(env.get("YUNSHU_OMNI_MODEL")) and env.get(
+        "YUNSHU_REALTIME_OMNI", ""
+    ).strip().lower() in ("1", "true", "yes", "on")
+
     # Display startup info
     _print_startup_banner(
         model=effective_model,
@@ -202,7 +249,16 @@ def serve(
         mcp_config=mcp_config,
         hf_endpoint=hf_endpoint,
         has_proxy=bool(http_proxy or https_proxy),
+        voice_on=voice_on,
     )
+
+    if not voice_on and _is_omni_model(effective_model):
+        # An omni model is being served text-only — point the way, with the cost.
+        console.print(
+            "[yellow]Tip:[/] this is an omni model — add [bold]--omni[/] to enable native "
+            "voice (then [bold]python examples/talk.py[/]). It loads a second copy of the "
+            "model for the Talker, so expect roughly double the memory."
+        )
 
     # Override os.environ for the child process
     os.environ.update(env)
@@ -241,6 +297,7 @@ def _print_startup_banner(
     mcp_config: str | None = None,
     hf_endpoint: str | None = None,
     has_proxy: bool = False,
+    voice_on: bool = False,
 ):
     """Print a rich startup banner."""
     console.print()
@@ -259,6 +316,8 @@ def _print_startup_banner(
     table.add_row("Prefill Batch", str(prefill_batch))
     table.add_row("Completion Batch", str(completion_batch))
     table.add_row("Cache Size", f"{cache_size_mb} MB")
+    if voice_on:
+        table.add_row("Voice", "[bold green]native speech-to-speech (omni) ON[/]")
 
     if mcp_config:
         table.add_row("MCP Config", mcp_config)

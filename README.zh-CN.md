@@ -48,8 +48,9 @@ Qwen3-Omni 的 **Talker** 架构是单个模型:它摄入原始音频、进行�
 uv pip install "yunshu[omni]"      # 原生 Qwen3-Omni 语音（语音输入/输出）
 uv pip install "yunshu[all]"       # 全部:文本 + 视觉 + 音频 + omni + 图像 + 嵌入
 
-# 2. 启动模型（来自 mlx-community 的任意 4-bit Qwen3-Omni 变体都可以）
-yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --port 8000
+# 2. 启动模型。来自 mlx-community 的任意 4-bit Qwen3-Omni 变体都可以；加 --omni 开启原生语音
+#    （它会为 Talker 再载入一份模型,内存约翻倍）。
+yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --omni --port 8000
 ```
 
 ### 跟它对话
@@ -60,8 +61,7 @@ python examples/talk.py
 ```
 
 [`examples/talk.py`](examples/talk.py) 是一段真正的语音对话:按 Enter、说话、再按一次 Enter ——
-模型出声回答,并记得整段对话。（先在服务器上设置 `YUNSHU_OMNI_MODEL` 和
-`YUNSHU_REALTIME_OMNI=1`;见 [examples/](examples/)。）
+模型出声回答,并记得整段对话。
 
 不想接麦克风?[`examples/quickstart.py`](examples/quickstart.py) 会把一段语音回复流式写入 WAV
 文件,并演示文本端点 —— 不需要任何音频硬件。

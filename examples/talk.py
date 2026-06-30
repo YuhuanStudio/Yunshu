@@ -10,11 +10,10 @@ The conversation keeps its history, so you can refer back to earlier turns
 ("what did I just say?").
 
 ─────────────────────────────────────────────────────────────────────────────
-1. Start a server with the native-omni realtime path turned on:
+1. Start a server with --omni (it loads a second copy of the model for the
+   Talker, so expect roughly double the memory):
 
-       YUNSHU_OMNI_MODEL=/path/to/Qwen3-Omni-30B-A3B-Instruct-4bit \
-       YUNSHU_REALTIME_OMNI=1 \
-       yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --port 8000
+       yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --omni --port 8000
 
 2. Install this client's deps and run it (sounddevice bundles PortAudio on macOS):
 
@@ -109,7 +108,15 @@ async def take_turn(ws, pcm: bytes) -> None:
             transcript += delta
             print(delta, end="", flush=True)
         elif kind == "error":
-            print(f"\n    server error: {ev.get('error')}")
+            err = ev.get("error") or {}
+            if err.get("code") == "no_asr_engine":
+                raise SystemExit(
+                    "\n✗ The server isn't running the native voice path — it tried to "
+                    "transcribe your audio and has no ASR model.\n\n"
+                    "  Restart it with --omni:\n\n"
+                    "      yunshu serve -m <your-omni-model> --omni --port 8000"
+                )
+            print(f"\n    server error: {err}")
             break
         elif kind == "response.done":
             break
