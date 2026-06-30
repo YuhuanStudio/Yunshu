@@ -967,7 +967,11 @@ async def create_response(req: ResponsesRequest, request: Request):
     )
 
     engine = get_engine()
-    if engine is None or not engine.is_loaded or not engine.resolve_model_id(req.model):
+    # Single-model mode serves the loaded model under ANY requested name (placeholder),
+    # exactly like /chat/completions — so accept the global engine when it's up instead
+    # of 404-ing on a model-id mismatch (e.g. the default "local"). Only fall through to
+    # the model manager (multi-model mode, where get_engine() is None).
+    if engine is None or not engine.is_loaded:
         try:
             engine = await get_engine_for_model(req.model)
         except (KeyError, Exception) as e:
@@ -1043,6 +1047,7 @@ async def create_response(req: ResponsesRequest, request: Request):
         )
 
     # Inject tool definitions
+    _resp_tool_prefill = ""  # prepended back onto the output before tool extraction
     if req.tools:
         from .chat import ToolDefinition, ToolFunction, _inject_tool_system_prompt
 
@@ -1059,6 +1064,25 @@ async def create_response(req: ResponsesRequest, request: Request):
         messages = _inject_tool_system_prompt(
             messages, tools, tool_choice=req.tool_choice
         )
+        # Structurally FORCE a required/named tool_choice via an assistant prefill — the
+        # advisory injection alone lets the model emit plain text (so "required"/named
+        # couldn't be honored). Non-stream only: the streaming path uses
+        # ToolCallStreamer(forced_tool_name), and a shared prefill would leave its parser
+        # without the opening marker. The prefill is prepended back before extraction.
+        if not req.stream:
+            _tc = req.tool_choice
+            if _tc == "required":
+                _resp_tool_prefill = "<tool_call>\n"
+            elif isinstance(_tc, dict) and _tc.get("name"):
+                _resp_tool_prefill = (
+                    '<tool_call>\n{"name": '
+                    + json.dumps(_tc["name"])
+                    + ', "arguments": {'
+                )
+            if _resp_tool_prefill:
+                from .chat import _append_tool_prefill
+
+                messages = _append_tool_prefill(messages, _resp_tool_prefill)
 
     # Background mode pre-allocates the id (so the queued response returned to the
     # client and the polled/cancellable generation share one id). Consume it once.
@@ -1397,9 +1421,14 @@ async def create_response(req: ResponsesRequest, request: Request):
             if req.tools:
                 from .chat import clean_tool_call_markup, extract_tool_calls_model_aware
 
-                tool_calls = extract_tool_calls_model_aware(text, req.model)
+                # Prepend the forced-tool prefill (if any) so the markup is complete for
+                # the parser — the model only generated the continuation after it.
+                _parse_text = (
+                    (_resp_tool_prefill + text) if _resp_tool_prefill else text
+                )
+                tool_calls = extract_tool_calls_model_aware(_parse_text, req.model)
                 if tool_calls:
-                    text = clean_tool_call_markup(text)
+                    text = clean_tool_call_markup(_parse_text)
                     finish_reason = "tool_calls"
 
             # Build output item for this choice
