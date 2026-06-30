@@ -304,6 +304,71 @@ class ModelEntry:
     )
 
 
+async def instantiate_engine(
+    model_type: ModelType | None, model_path: str, config: Any = None
+) -> Any:
+    """Create AND start the engine matching ``model_type``. Shared by multi-model
+    loading and single-model serving so every modality (TTS / ASR / VLM / IMAGE_GEN /
+    EMBEDDING / RERANKER / STS / VIDEO / OCR / LLM) is built with the right engine
+    class — not just the few the single-model startup used to special-case."""
+    if model_type == ModelType.TTS:
+        from .audio_engine import TTSEngine
+
+        engine = TTSEngine(model_path, config)
+        await engine.start()
+        return engine
+    if model_type == ModelType.ASR:
+        from .audio_engine import ASREngine
+
+        engine = ASREngine(model_path, config)
+        await engine.start()
+        return engine
+    if model_type == ModelType.VLM:
+        from .vlm_engine import VLMEngine
+
+        engine = VLMEngine(model_path, config)
+        await engine.start()
+        return engine
+    if model_type == ModelType.IMAGE_GEN:
+        from .image_engine import ImageGenEngine
+
+        engine = ImageGenEngine(model_path, config)
+        await engine.start()
+        return engine
+    if model_type in (ModelType.EMBEDDING, ModelType.RERANKER):
+        from .vl_embedding_engine import VLEmbeddingEngine
+
+        engine = VLEmbeddingEngine(model_path, config)
+        await engine.start()
+        return engine
+    if model_type == ModelType.STS:
+        from .sts_engine import STSEngine
+
+        engine = STSEngine(model_path, config)
+        engine.start()
+        return engine
+    if model_type == ModelType.VIDEO:
+        from .video_engine import VideoEngine
+
+        engine = VideoEngine(model_path, config)
+        engine.start()
+        return engine
+    if model_type == ModelType.OCR:
+        from .ocr_engine import OCREngine
+
+        engine = OCREngine(model_path)
+        await engine.start()
+        return engine
+    from .batched_engine import BatchedEngine
+
+    engine = BatchedEngine(
+        model_name=model_path,
+        stream_interval=getattr(config, "stream_interval", 1) if config else 1,
+    )
+    await engine.start()
+    return engine
+
+
 class ModelManager:
     """Manages multiple inference engines with memory-aware loading.
 
@@ -601,78 +666,7 @@ class ModelManager:
     ) -> Any:
         """Create the right engine type and load it."""
         asyncio.get_running_loop()
-
-        if entry.model_type == ModelType.TTS:
-            from .audio_engine import TTSEngine
-
-            engine = TTSEngine(entry.model_path, config)
-            await engine.start()
-            return engine
-
-        elif entry.model_type == ModelType.ASR:
-            from .audio_engine import ASREngine
-
-            engine = ASREngine(entry.model_path, config)
-            await engine.start()
-            return engine
-
-        elif entry.model_type == ModelType.VLM:
-            from .vlm_engine import VLMEngine
-
-            engine = VLMEngine(entry.model_path, config)
-            await engine.start()
-            return engine
-
-        elif entry.model_type == ModelType.IMAGE_GEN:
-            from .image_engine import ImageGenEngine
-
-            engine = ImageGenEngine(entry.model_path, config)
-            await engine.start()
-            return engine
-
-        elif entry.model_type in (ModelType.EMBEDDING, ModelType.RERANKER):
-            # Qwen3-VL multimodal embedder / cross-encoder reranker.
-            from .vl_embedding_engine import VLEmbeddingEngine
-
-            engine = VLEmbeddingEngine(entry.model_path, config)
-            await engine.start()
-            return engine
-
-        elif entry.model_type == ModelType.STS:
-            from .sts_engine import STSEngine
-
-            engine = STSEngine(entry.model_path, config)
-            engine.start()
-            return engine
-
-        elif entry.model_type == ModelType.VIDEO:
-            from .video_engine import VideoEngine
-
-            engine = VideoEngine(entry.model_path, config)
-            engine.start()
-            return engine
-
-        elif entry.model_type == ModelType.OCR:
-            # OCR models (GLM-OCR) load via mlx-vlm (with the GlmOcrProcessor
-            # patch), NOT mlx-lm — the LLM default raises "model type glm_ocr not
-            # supported". OCREngine installs the processor patch so pixel_values
-            # reach the model.
-            from .ocr_engine import OCREngine
-
-            engine = OCREngine(entry.model_path)
-            await engine.start()
-            return engine
-
-        else:
-            # Default: LLM engine (BatchedEngine with EngineCore backend)
-            from .batched_engine import BatchedEngine
-
-            engine = BatchedEngine(
-                model_name=entry.model_path,
-                stream_interval=getattr(config, "stream_interval", 1) if config else 1,
-            )
-            await engine.start()
-            return engine
+        return await instantiate_engine(entry.model_type, entry.model_path, config)
 
     async def unload_model(self, model_id: str, force: bool = False) -> bool:
         """Unload a model and reclaim memory.

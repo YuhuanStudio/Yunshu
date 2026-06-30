@@ -149,7 +149,7 @@ def _resolve_loaded_model_id(manager, requested: str) -> str | None:
     returns the canonical id only if the entry is currently loaded.
     Returns None if no loaded entry matches.
     """
-    if not requested:
+    if not requested or manager is None:
         return None
     requested_lower = requested.lower()
     for entry in manager.list_entries():
@@ -171,6 +171,20 @@ def _select_audio_engine(manager, model: str, engine_cls):
     already does. When `model` is empty (legacy "any loaded engine" default), fall back
     to the first of type to preserve that behavior.
     """
+    # Single-model mode: the served model is the global engine (no manager entry),
+    # so check it first — `serve -m <tts/asr-model>` otherwise 503'd. get_engine() is
+    # None in multi-model mode, so this only fires for single-model serving.
+    try:
+        from ..engine import get_engine
+
+        _global = get_engine()
+        if isinstance(_global, engine_cls):
+            return _global
+    except Exception:
+        pass
+
+    if manager is None:
+        return None
     first_of_type = None
     model_lower = model.lower() if model else ""
     for entry in manager.list_entries():
@@ -192,6 +206,10 @@ def _enforce_no_auto_load(manager, model: str) -> None:
 
     Bypassed when YUNSHU_ALLOW_AUTO_LOAD env var is truthy (1/true/yes).
     """
+    if manager is None:
+        # Single-model mode: the served model is the global engine, always "loaded";
+        # there is nothing to auto-load and no manager to consult.
+        return
     allow = os.environ.get("YUNSHU_ALLOW_AUTO_LOAD", "").strip().lower()
     if allow in ("1", "true", "yes", "on"):
         return
@@ -499,30 +517,19 @@ async def create_speech(request: Request) -> Response:
     _check_permission(request, "can_infer")
     _check_model_access(request, req.model)
     manager = get_model_manager()
-    if manager is None:
-        raise HTTPException(status_code=503, detail="Model manager not initialized")
+    # single-model mode has no manager; _select_audio_engine resolves the global
+    # engine, and a missing audio model 404s below.
 
     # Reject if requested model is not already loaded (unless auto-load enabled)
     _enforce_no_auto_load(manager, req.model)
 
-    # Find the TTS engine
-    tts_engine = None
-    for entry in manager.list_entries():
-        if entry.is_loaded and hasattr(entry, "_engine") and entry.engine:
-            # Check if it's a TTS engine
-            engine_type = type(entry.engine).__name__
-            if engine_type == "TTSEngine" and (
-                req.model
-                in {
-                    entry.model_id,
-                    entry.model_id.lower(),
-                }
-                or entry.model_id.lower() == req.model.lower()
-            ):
-                tts_engine = entry.engine
-                break
+    # Find the TTS engine — the single-model global engine, or the loaded one whose
+    # model_id matches (handles manager=None in single-model mode).
+    from yunshu_engine.audio_engine import TTSEngine
 
-    if tts_engine is None:
+    tts_engine = _select_audio_engine(manager, req.model, TTSEngine)
+
+    if tts_engine is None and manager is not None:
         # Try loading by model name
         try:
             tts_engine = await manager.get_engine(req.model)
@@ -615,8 +622,8 @@ async def stream_speech(req: TTSRequest, request: Request):
     _check_permission(request, "can_infer")
     _check_model_access(request, req.model)
     manager = get_model_manager()
-    if manager is None:
-        raise HTTPException(status_code=503, detail="Model manager not initialized")
+    # single-model mode has no manager; _select_audio_engine resolves the global
+    # engine, and a missing audio model 404s below.
 
     _enforce_no_auto_load(manager, req.model)
 
@@ -814,8 +821,8 @@ async def create_transcription(
     _check_model_access(request, model)
 
     manager = get_model_manager()
-    if manager is None:
-        raise HTTPException(status_code=503, detail="Model manager not initialized")
+    # single-model mode has no manager; _select_audio_engine resolves the global
+    # engine, and a missing audio model 404s below.
 
     _enforce_no_auto_load(manager, model)
 

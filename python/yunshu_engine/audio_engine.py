@@ -468,6 +468,13 @@ class TTSEngine(ActiveRequestMixin):
             if not audio_chunks:
                 raise RuntimeError("TTS model produced no audio output")
             audio = np.concatenate(audio_chunks, axis=0)
+            # OpenAI guarantees `speed`. When the model has no native speed control
+            # (so it wasn't forwarded to generate), resample the output to change the
+            # playback rate (speed>1 → fewer samples = faster) instead of ignoring it.
+            if speed != 1.0 and "speed" not in gen_kwargs:
+                import scipy.signal
+
+                audio = scipy.signal.resample(audio, max(1, round(len(audio) / speed)))
             return _audio_to_wav_bytes(audio, int(sample_rate))
 
         t0 = time.monotonic()
