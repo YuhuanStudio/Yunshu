@@ -737,6 +737,62 @@ class TTSEngine(ActiveRequestMixin):
         }
 
 
+def _ensure_whisper_processor(model_path: str) -> None:
+    """If `model_path` is a LOCAL Whisper model dir missing the HuggingFace processor,
+    fetch it from the matching `openai/whisper-*` repo.
+
+    Some mlx-community Whisper repos ship only ``weights.npz`` + ``config.json`` (no
+    tokenizer / feature-extractor), so mlx-audio's ``WhisperProcessor.from_pretrained``
+    can't load and ASR fails with "Processor not found". We fetch just the small processor
+    files (inferring the base repo by stripping mlx/quant suffixes from the dir name).
+    Best-effort + offline-safe: any failure is logged and load proceeds so mlx-audio's own
+    error still surfaces if the model is genuinely unusable."""
+    import os
+
+    # Only LOCAL dirs — an HF repo id resolves its own processor on download.
+    if not os.path.isdir(model_path):
+        return
+    base = os.path.basename(model_path.rstrip("/"))
+    if "whisper" not in base.lower():
+        return
+    if os.path.exists(os.path.join(model_path, "preprocessor_config.json")):
+        return  # processor already present
+    repo_name = base
+    for suf in ("-mlx", "-bf16", "-fp16", "-4bit", "-8bit", "-q4", "-q8"):
+        if repo_name.lower().endswith(suf):
+            repo_name = repo_name[: -len(suf)]
+    repo = f"openai/{repo_name}"
+    try:
+        from huggingface_hub import snapshot_download
+
+        logger.info(
+            "Whisper processor missing in %s — auto-fetching from %s", model_path, repo
+        )
+        snapshot_download(
+            repo,
+            local_dir=model_path,
+            allow_patterns=[
+                "preprocessor_config.json",
+                "tokenizer.json",
+                "tokenizer_config.json",
+                "vocab.json",
+                "merges.txt",
+                "special_tokens_map.json",
+                "added_tokens.json",
+                "normalizer.json",
+                "generation_config.json",
+            ],
+        )
+    except Exception as e:
+        logger.warning(
+            "Could not auto-fetch the Whisper processor from %s (%s); ASR may fail to "
+            "load. Place the processor files in %s manually.",
+            repo,
+            e,
+            model_path,
+        )
+
+
 class ASREngine(ActiveRequestMixin):
     """MLX-native Speech-to-Text engine using mlx-audio.
 
@@ -783,6 +839,8 @@ class ASREngine(ActiveRequestMixin):
                 "mlx-audio is required for ASR. Install with: pip install mlx-audio"
             ) from e
 
+        # Whisper repos that ship only weights lack the HF processor → fetch it first.
+        _ensure_whisper_processor(self._model_path)
         self._model = load_model(self._model_path)
         logger.info(f"ASR engine loaded: {self._model_path}")
 
