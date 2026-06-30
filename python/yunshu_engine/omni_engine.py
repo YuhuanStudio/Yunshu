@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -98,9 +99,13 @@ class OmniEngine:
         self,
         model_path: str | None = None,
         speaker: SpeakerName = "Ethan",
-        # Minimal-thinker default: casual voice needs ~no reasoning.
-        # Validated first-audio: thinker=1→1.4s, =8→2.5s, =32→3.0s (M3 Max/36GB).
-        thinker_max_new_tokens: int = 8,
+        # Thinker budget = the spoken reply's max length (the Talker speaks what the
+        # Thinker writes). 8 was a latency micro-opt but truncated real answers mid-
+        # sentence ("讲个故事" → it never tells the story) and pushed the model into
+        # generic canned replies. Default to a conversational budget; a short reply
+        # still stops at its natural EOS, so this only *allows* longer answers. Tune
+        # with YUNSHU_OMNI_THINKER_MAX (lower = snappier/shorter, higher = longer).
+        thinker_max_new_tokens: int | None = None,
         talker_max_new_tokens: int = 1024,
         talker_temperature: float = 0.9,
         chunk_size: int = 10,
@@ -114,7 +119,11 @@ class OmniEngine:
         # the gateway already serves (one omni model, two endpoints, no 2nd copy).
         self.model_path = model_path
         self.speaker = speaker
-        self.thinker_max = thinker_max_new_tokens
+        self.thinker_max = (
+            thinker_max_new_tokens
+            if thinker_max_new_tokens is not None
+            else int(os.environ.get("YUNSHU_OMNI_THINKER_MAX", "256"))
+        )
         self.talker_max = talker_max_new_tokens
         self.talker_temp = talker_temperature
         self.chunk_size = chunk_size
