@@ -29,6 +29,7 @@ from yunshu_gateway.routers.batch_inference import _validate_batch_sampling
         {"repetition_penalty": 9.0},
         {"top_k": -1},
         {"n": 0},
+        {"n": 2},  # batch is one completion per item; n>1 rejected
         {"seed": 2**63},
         {"temperature": float("nan")},
         {"min_p": float("inf")},
@@ -54,7 +55,7 @@ def test_valid_params_and_defaults_pass():
             "presence_penalty": -0.5,
             "xtc_probability": 0.3,
             "xtc_threshold": 0.4,
-            "n": 2,
+            "n": 1,
             "seed": 12345,
         }
     )
