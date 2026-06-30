@@ -481,7 +481,12 @@ async def create_rerank(req: RerankRequest, request: Request):
     # bi-encoder cosine path below.
     from yunshu_engine.vl_embedding_engine import VLEmbeddingEngine
 
-    if isinstance(engine, VLEmbeddingEngine):
+    # Only a true CROSS-ENCODER (Qwen3-VL-Reranker) scores (query, doc) jointly via
+    # the yes/no logit gap. A VL *embedding* model reuses the same class but was never
+    # trained on the reranker prompt format — running it through the cross path yields
+    # plausible-but-meaningless scores. Gate on is_reranker; a multimodal request still
+    # needs a real reranker (the bi-encoder cosine path can't ingest images).
+    if isinstance(engine, VLEmbeddingEngine) and getattr(engine, "is_reranker", False):
         return await _rerank_cross_encoder(req, engine, truncated_docs)
 
     # Multimodal (image) query/documents only make sense for a cross-encoder
@@ -698,6 +703,17 @@ async def _get_embeddings(
     Uses engine.embed() when available; falls back to raw hidden-state extraction
     + mean pooling.
     """
+    from yunshu_engine.vl_embedding_engine import VLEmbeddingEngine
+
+    if isinstance(engine, VLEmbeddingEngine):
+        # Multimodal VL embedder: embed() is async and takes no `normalize` kwarg
+        # (it runs on its own executor). The generic run_in_executor(partial(...))
+        # path would hand back an un-awaited coroutine / TypeError → 500.
+        vecs = await engine.embed(list(texts))
+        if normalize:
+            vecs = [_l2_normalize(v) for v in vecs]
+        return vecs
+
     if hasattr(engine, "embed"):
         import asyncio
         import functools
@@ -713,6 +729,11 @@ async def _get_embeddings(
     return await _fallback_embeddings(engine, texts, "MEAN", normalize=normalize)
 
 
+def _l2_normalize(v: list[float]) -> list[float]:
+    n = math.sqrt(sum(x * x for x in v)) or 1.0
+    return [x / n for x in v]
+
+
 async def _get_hidden_states(
     engine, texts: list[str], pooling_type: str
 ) -> list[list[float]]:
@@ -721,6 +742,18 @@ async def _get_hidden_states(
     Uses engine.pool() when available for proper pooling support.
     Falls back to engine.embed() only when no pooling-specific method exists.
     """
+    from yunshu_engine.vl_embedding_engine import VLEmbeddingEngine
+
+    if isinstance(engine, VLEmbeddingEngine):
+        # VL embedder has no pool() and no _tokenizer (only _processor), so the
+        # _fallback_embeddings path below would crash. Pooling-type semantics don't
+        # map onto the VL embedder's fixed pooled vector — reject clearly.
+        raise HTTPException(
+            status_code=400,
+            detail="/v1/pooling is not supported for multimodal VL embedding "
+            "models; use /v1/embeddings for pooled vectors.",
+        )
+
     if hasattr(engine, "pool"):
         import asyncio
 
