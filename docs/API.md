@@ -43,8 +43,8 @@ Streams Qwen3-Omni Thinker text + Talker audio as Server-Sent Events. Requires
 {
   "text": "Say hello in one sentence.",  // text turn / system instruction
   "speaker": "Ethan",                     // optional; unknown speaker → 400 with the valid list
-  "image_path": "scene.png",              // optional multimodal input (local path)
-  "audio_path": "question.wav"            // optional: native speech-IN (the spoken turn)
+  "image_path": "scene.png",              // optional image input: local path, data: URI, or http(s) URL
+  "audio_path": "question.wav"            // optional native speech-IN: local path, data: URI, or http(s) URL
 }
 ```
 

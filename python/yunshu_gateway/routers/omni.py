@@ -16,10 +16,16 @@ With no speakable model available the endpoint returns 503 (no placeholder audio
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import binascii
 import json
 import logging
 import os
+import tempfile
+import urllib.request
+from contextlib import suppress
+from urllib.parse import urlparse
 
 import numpy as np
 from fastapi import APIRouter, HTTPException
@@ -28,6 +34,95 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["omni"])
+
+# Multimodal-input media (image/audio) for the omni endpoint may arrive as a local
+# path, a data: URI, or an http(s) URL. URL/base64 media is decoded to a temp file
+# (cleaned up after the stream). Cap the size to bound memory / abuse.
+_MEDIA_MAX_BYTES = 64 * 1024 * 1024  # 64 MiB
+_MEDIA_EXT = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "audio/wav": ".wav",
+    "audio/x-wav": ".wav",
+    "audio/wave": ".wav",
+    "audio/mpeg": ".mp3",
+    "audio/mp3": ".mp3",
+    "audio/ogg": ".ogg",
+    "audio/flac": ".flac",
+    "audio/webm": ".webm",
+}
+
+
+def _media_ext(mime: str, kind: str) -> str:
+    return _MEDIA_EXT.get((mime or "").lower(), ".png" if kind == "image" else ".wav")
+
+
+def _write_temp_media(raw: bytes, ext: str, tmp: list[str]) -> str:
+    if len(raw) > _MEDIA_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="media exceeds 64 MiB limit")
+    fd, path = tempfile.mkstemp(suffix=ext, prefix="yunshu_omni_")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(raw)
+    except Exception:
+        with suppress(OSError):
+            os.unlink(path)
+        raise
+    tmp.append(path)
+    return path
+
+
+def _download_media(url: str) -> tuple[bytes, str]:
+    """Fetch http(s) media (size-capped). Returns (bytes, content-type)."""
+    req = urllib.request.Request(url, headers={"User-Agent": "Yunshu/omni"})
+    with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310 — scheme checked
+        mime = (resp.headers.get_content_type() or "").lower()
+        raw = resp.read(_MEDIA_MAX_BYTES + 1)
+    if len(raw) > _MEDIA_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="remote media exceeds 64 MiB limit")
+    return raw, mime
+
+
+async def _resolve_media(value: str | None, kind: str, tmp: list[str]) -> str | None:
+    """Resolve an image/audio reference to a local file path.
+
+    Accepts a local path (unchanged), a ``data:`` URI, or an ``http(s)`` URL.
+    Decoded/downloaded bytes are written to a temp file (recorded in ``tmp`` for
+    cleanup after the stream). Bad input raises a clean HTTP 4xx before streaming.
+    """
+    if not value:
+        return value
+    v = value.strip()
+    if v.startswith("data:"):
+        # data:[<mime>][;base64],<payload>
+        header, _, payload = v[5:].partition(",")
+        if not payload or "base64" not in header:
+            raise HTTPException(
+                status_code=400, detail=f"{kind} data URI must be base64-encoded"
+            )
+        try:
+            raw = base64.b64decode(payload, validate=True)
+        except (binascii.Error, ValueError) as e:
+            raise HTTPException(
+                status_code=400, detail=f"invalid base64 in {kind} data URI"
+            ) from e
+        return _write_temp_media(raw, _media_ext(header.split(";")[0], kind), tmp)
+    if urlparse(v).scheme in ("http", "https"):
+        raw, mime = await asyncio.to_thread(_download_media, v)
+        return _write_temp_media(raw, _media_ext(mime, kind), tmp)
+    # Plain base64 (no data: prefix) is ambiguous vs a path — require the data: URI
+    # form for inline media. Otherwise treat as a local filesystem path (unchanged).
+    return v
+
+
+def _cleanup_media(tmp: list[str]) -> None:
+    for p in tmp:
+        with suppress(OSError):
+            os.unlink(p)
+
 
 AUDIO_SAMPLE_RATE = 24000  # Qwen3-Omni Talker output
 
@@ -110,7 +205,7 @@ class OmniSpeechRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=8000)
     speaker: str | None = None  # Ethan | Chelsie | Aiden | ...
     thinker_max_new_tokens: int | None = Field(default=None, ge=0, le=512)
-    # Local file paths for multimodal INPUT (base64/URL decoding is a TODO).
+    # Multimodal INPUT: a local file path, a data: URI (base64), or an http(s) URL.
     image_path: str | None = None
     audio_path: str | None = None
 
@@ -144,12 +239,28 @@ async def omni_speech_stream(req: OmniSpeechRequest) -> StreamingResponse:
             ),
         )
 
+    # Resolve multimodal inputs (data:/URL → temp file) BEFORE the stream opens so
+    # bad media returns a clean HTTP 4xx, not a buried SSE error. Temp files are
+    # cleaned after the stream completes.
+    _tmp: list[str] = []
+    try:
+        image_path = await _resolve_media(req.image_path, "image", _tmp)
+        audio_path = await _resolve_media(req.audio_path, "audio", _tmp)
+    except HTTPException:
+        _cleanup_media(_tmp)
+        raise
+    except Exception as e:  # noqa: BLE001 — network/decoding failure → clean 400
+        _cleanup_media(_tmp)
+        raise HTTPException(
+            status_code=400, detail=f"could not load input media: {e}"
+        ) from e
+
     async def sse():
         try:
             async for ch in eng.stream(
                 req.text,
-                image_path=req.image_path,
-                audio_path=req.audio_path,
+                image_path=image_path,
+                audio_path=audio_path,
                 speaker=req.speaker,
                 thinker_max_new_tokens=req.thinker_max_new_tokens,
             ):
@@ -169,6 +280,8 @@ async def omni_speech_stream(req: OmniSpeechRequest) -> StreamingResponse:
         except Exception as e:  # noqa: BLE001
             logger.exception("omni speech stream failed")
             yield _sse({"type": "error", "message": str(e)})
+        finally:
+            _cleanup_media(_tmp)
 
     return StreamingResponse(sse(), media_type="text/event-stream")
 
