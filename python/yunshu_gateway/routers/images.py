@@ -931,13 +931,14 @@ class ImageControlNetRequest(BaseModel):
 async def create_image_controlnet(
     req: ImageControlNetRequest, request: Request
 ) -> JSONResponse:
-    """Generate an image with **approximate** structural conditioning.
+    """Generate an image with structural conditioning.
 
-    Accepts a conditioning image (edge map, depth map, etc.) + a text prompt. NOTE:
-    this endpoint applies a lightweight latent-guidance heuristic, NOT a trained
-    ControlNet. For the real trained Z-Image Fun-Controlnet-Union, call
-    `POST /v1/images/generations` with a `control_image` field (a `*controlnet*`
-    weights file must be present in the models dir).
+    Accepts a conditioning image (edge map, depth map, etc.) + a text prompt. When a
+    `*controlnet*` weights file is present in the models dir this routes through the REAL
+    trained Z-Image Fun-Controlnet-Union (the raw image is preprocessed into the control
+    map per `condition_type` — Canny for canny, depth normalization for depth). If those
+    weights are absent it falls back to a lightweight latent-guidance heuristic
+    (**approximate**, logged as such).
     """
     from .models import _check_permission
 
@@ -1069,11 +1070,12 @@ class ImageDepthGuidedRequest(BaseModel):
 async def create_image_depth_guided(
     req: ImageDepthGuidedRequest, request: Request
 ) -> JSONResponse:
-    """Generate a depth-guided image — **approximate** structural conditioning.
+    """Generate a depth-guided image with structural conditioning.
 
-    The depth map biases the latents toward spatial coherence. NOTE: this is a
-    lightweight heuristic, NOT a trained depth-ControlNet. For the real trained
-    Z-Image controlnet, use `POST /v1/images/generations` with a `control_image`.
+    When a `*controlnet*` weights file is present in the models dir this routes through the
+    REAL trained Z-Image Fun-Controlnet-Union (the depth image is preprocessed as the depth
+    control map). If those weights are absent it falls back to a lightweight latent-bias
+    heuristic (**approximate**, logged as such).
     """
     from .models import _check_permission
 

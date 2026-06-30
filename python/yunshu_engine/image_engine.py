@@ -1957,6 +1957,12 @@ class ImageGenEngine(ActiveRequestMixin):
         else:
             gen_prompt = "A variation of the provided image, high quality, detailed"
 
+        # Inline <lora:NAME:WEIGHT> tags were silently dropped on /variations: the
+        # img2img pipeline's _encode_prompt only STRIPS them, never loads the adapter.
+        # Parse → apply on the executor thread → unload in finally, mirroring
+        # generate_image, so inline LoRA actually applies here too.
+        _clean_prompt, _lora_tags = _parse_lora_tags(gen_prompt)
+
         # Mirror the asyncio cancel_event into a thread-safe flag the executor
         # thread can poll (asyncio.Event.is_set() is not safe off the loop), like the
         # streaming path does.
@@ -1969,16 +1975,21 @@ class ImageGenEngine(ActiveRequestMixin):
             _cancel.set()
 
         def _variation_sync() -> bytes:
-            return self._run_img2img_pipeline(
-                prompt=gen_prompt,
-                image_data=source_image,
-                width=width,
-                height=height,
-                num_steps=num_inference_steps,
-                seed=seed if seed is not None else 42,
-                denoise_strength=denoise_strength,
-                cancel_flag=_cancel,
-            )
+            _applied = self._apply_inline_loras(_lora_tags)
+            try:
+                return self._run_img2img_pipeline(
+                    prompt=_clean_prompt,
+                    image_data=source_image,
+                    width=width,
+                    height=height,
+                    num_steps=num_inference_steps,
+                    seed=seed if seed is not None else 42,
+                    denoise_strength=denoise_strength,
+                    cancel_flag=_cancel,
+                )
+            finally:
+                if _applied:
+                    self.unload_diffusion_lora()
 
         async def _watch_cancel():
             # Propagate a late disconnect into the thread flag while the executor runs.
@@ -2063,22 +2074,17 @@ class ImageGenEngine(ActiveRequestMixin):
 
         def _make(cancel_flag):  # honor cancel_event mid-diffusion
             def _sync() -> bytes:
-                cn = self._get_zimage_controlnet(controlnet_path)
-                if cn is None:
-                    raise RuntimeError("Z-Image ControlNet weights not found")
-                ctrl_tensor, _, _ = self._load_image_to_tensor(
-                    control_image, target_wh=(width, height)
-                )
-                ctx = self._build_control_context(ctrl_tensor)
-                return self._run_pipeline(
-                    prompt,
-                    width,
-                    height,
-                    num_inference_steps,
-                    seed if seed is not None else 42,
-                    controlnet=cn,
-                    control_context=ctx,
+                # control_image here is already a preprocessed control map (the caller
+                # supplies the canny/depth/edge map directly on /generations).
+                return self._run_real_controlnet(
+                    prompt=prompt,
+                    control_map_bytes=control_image,
                     control_scale=control_scale,
+                    width=width,
+                    height=height,
+                    num_steps=num_inference_steps,
+                    seed=seed if seed is not None else 42,
+                    controlnet_path=controlnet_path,
                     cancel_flag=cancel_flag,
                 )
 
@@ -3109,20 +3115,30 @@ class ImageGenEngine(ActiveRequestMixin):
         if self._transformer is None:
             raise RuntimeError("Engine not started")
 
+        # Inline <lora:NAME:WEIGHT> tags were silently dropped on /edits + inpaint:
+        # _run_inpaint_pipeline's _encode_prompt only STRIPS them. Apply + unload on the
+        # executor thread (mirroring generate_image) so inline LoRA applies here too.
+        _clean_prompt, _lora_tags = _parse_lora_tags(prompt)
+
         def _make(cancel_flag):  # honor cancel_event mid-diffusion
             def _inpaint_sync() -> bytes:
-                return self._run_inpaint_pipeline(
-                    prompt=prompt,
-                    image_data=image,
-                    mask_data=mask,
-                    mask_base64=mask_base64,
-                    width=width,
-                    height=height,
-                    num_steps=num_inference_steps,
-                    seed=seed if seed is not None else 42,
-                    denoise_strength=denoise_strength,
-                    cancel_flag=cancel_flag,
-                )
+                _applied = self._apply_inline_loras(_lora_tags)
+                try:
+                    return self._run_inpaint_pipeline(
+                        prompt=_clean_prompt,
+                        image_data=image,
+                        mask_data=mask,
+                        mask_base64=mask_base64,
+                        width=width,
+                        height=height,
+                        num_steps=num_inference_steps,
+                        seed=seed if seed is not None else 42,
+                        denoise_strength=denoise_strength,
+                        cancel_flag=cancel_flag,
+                    )
+                finally:
+                    if _applied:
+                        self.unload_diffusion_lora()
 
             return _inpaint_sync
 
@@ -3300,21 +3316,60 @@ class ImageGenEngine(ActiveRequestMixin):
         if self._transformer is None:
             raise RuntimeError("Engine not started")
 
+        # Inline <lora:NAME:WEIGHT> tags: apply + unload on the executor thread (both the
+        # real-ControlNet and heuristic branches use the same Z-Image transformer).
+        _clean_prompt, _lora_tags = _parse_lora_tags(prompt)
+
         def _make(cancel_flag):  # honor cancel_event mid-diffusion
             def _controlled_sync() -> bytes:
-                return self._run_controlled_pipeline(
-                    prompt=prompt,
-                    condition_image_data=condition_image,
-                    condition_type=condition_type,
-                    width=width,
-                    height=height,
-                    num_steps=num_inference_steps,
-                    seed=seed if seed is not None else 42,
-                    controlnet_strength=controlnet_strength,
-                    canny_low=canny_low,
-                    canny_high=canny_high,
-                    cancel_flag=cancel_flag,
-                )
+                _applied = self._apply_inline_loras(_lora_tags)
+                try:
+                    # Prefer the REAL trained Z-Image Fun-Controlnet-Union when its weights
+                    # are present: preprocess the raw condition image into the control map per
+                    # condition_type, then run the genuine controlnet pipeline. Fall back to the
+                    # approximate latent-nudge heuristic only when weights are absent.
+                    cn = self._get_zimage_controlnet()
+                    if cn is not None:
+                        control_map = self._preprocess_control_map(
+                            condition_image,
+                            condition_type,
+                            width,
+                            height,
+                            canny_low,
+                            canny_high,
+                        )
+                        return self._run_real_controlnet(
+                            prompt=_clean_prompt,
+                            control_map_bytes=control_map,
+                            control_scale=controlnet_strength,
+                            width=width,
+                            height=height,
+                            num_steps=num_inference_steps,
+                            seed=seed if seed is not None else 42,
+                            controlnet_path=None,
+                            cancel_flag=cancel_flag,
+                        )
+                    logger.warning(
+                        "ControlNet weights absent in models/ — using the approximate "
+                        "latent-nudge heuristic (add a *controlnet*.safetensors for the "
+                        "trained Z-Image Fun-Controlnet-Union)."
+                    )
+                    return self._run_controlled_pipeline(
+                        prompt=_clean_prompt,
+                        condition_image_data=condition_image,
+                        condition_type=condition_type,
+                        width=width,
+                        height=height,
+                        num_steps=num_inference_steps,
+                        seed=seed if seed is not None else 42,
+                        controlnet_strength=controlnet_strength,
+                        canny_low=canny_low,
+                        canny_high=canny_high,
+                        cancel_flag=cancel_flag,
+                    )
+                finally:
+                    if _applied:
+                        self.unload_diffusion_lora()
 
             return _controlled_sync
 
@@ -3451,18 +3506,54 @@ class ImageGenEngine(ActiveRequestMixin):
         if self._transformer is None:
             raise RuntimeError("Engine not started")
 
+        # Inline <lora:NAME:WEIGHT> tags: apply + unload on the executor thread.
+        _clean_prompt, _lora_tags = _parse_lora_tags(prompt)
+
         def _make(cancel_flag):  # honor cancel_event mid-diffusion
             def _depth_sync() -> bytes:
-                return self._run_depth_guided_pipeline(
-                    prompt=prompt,
-                    depth_image_data=depth_image,
-                    width=width,
-                    height=height,
-                    num_steps=num_inference_steps,
-                    seed=seed if seed is not None else 42,
-                    depth_strength=depth_strength,
-                    cancel_flag=cancel_flag,
-                )
+                _applied = self._apply_inline_loras(_lora_tags)
+                try:
+                    # The Z-Image Fun-Controlnet-Union is a UNION model that handles depth as a
+                    # condition_type. Prefer it when its weights are present (treat the depth
+                    # image as the depth control map); fall back to the approximate heuristic
+                    # otherwise.
+                    cn = self._get_zimage_controlnet()
+                    if cn is not None:
+                        control_map = self._preprocess_control_map(
+                            depth_image,
+                            "depth",
+                            width,
+                            height,
+                        )
+                        return self._run_real_controlnet(
+                            prompt=_clean_prompt,
+                            control_map_bytes=control_map,
+                            control_scale=depth_strength,
+                            width=width,
+                            height=height,
+                            num_steps=num_inference_steps,
+                            seed=seed if seed is not None else 42,
+                            controlnet_path=None,
+                            cancel_flag=cancel_flag,
+                        )
+                    logger.warning(
+                        "ControlNet weights absent in models/ — using the approximate "
+                        "depth latent-bias heuristic (add a *controlnet*.safetensors for the "
+                        "trained Z-Image Fun-Controlnet-Union)."
+                    )
+                    return self._run_depth_guided_pipeline(
+                        prompt=_clean_prompt,
+                        depth_image_data=depth_image,
+                        width=width,
+                        height=height,
+                        num_steps=num_inference_steps,
+                        seed=seed if seed is not None else 42,
+                        depth_strength=depth_strength,
+                        cancel_flag=cancel_flag,
+                    )
+                finally:
+                    if _applied:
+                        self.unload_diffusion_lora()
 
             return _depth_sync
 
@@ -3750,6 +3841,82 @@ class ImageGenEngine(ActiveRequestMixin):
         mask = mx.zeros((1, f, h, w), dtype=control_latent.dtype)
         inpaint = mx.zeros((16, f, h, w), dtype=control_latent.dtype)
         return mx.concatenate([control_latent, mask, inpaint], axis=0)  # [33,1,h,w]
+
+    def _preprocess_control_map(
+        self,
+        image_data: bytes,
+        condition_type: str,
+        width: int,
+        height: int,
+        canny_low: int = 100,
+        canny_high: int = 200,
+    ) -> bytes:
+        """Turn a RAW conditioning image into the control-map bytes the trained Z-Image
+        ControlNet expects: Canny edge detection for condition_type='canny', depth
+        normalization for 'depth', else passthrough. Reuses ConditioningPreprocessor
+        (shared with the heuristic path) so the edge/depth maths stay in one place.
+        Returns PNG bytes (consumed by _load_image_to_tensor)."""
+        from PIL import Image as PILImage
+
+        from .controlnet_engine import ConditioningPreprocessor
+
+        pil = (
+            PILImage.open(io.BytesIO(image_data))
+            .convert("RGB")
+            .resize((width, height), PILImage.LANCZOS)
+        )
+        image_np = np.array(pil, dtype=np.uint8)
+        if condition_type == "canny":
+            processed = ConditioningPreprocessor.canny_edges(
+                image_np, canny_low, canny_high
+            )
+        elif condition_type == "depth":
+            processed = ConditioningPreprocessor.normalize_depth(
+                np.array(pil, dtype=np.float32)
+            )
+            processed = (processed * 255).astype(np.uint8)
+        else:
+            processed = image_np
+        out = PILImage.fromarray(processed.astype(np.uint8), mode="RGB")
+        buf = io.BytesIO()
+        out.save(buf, format="PNG")
+        return buf.getvalue()
+
+    def _run_real_controlnet(
+        self,
+        prompt: str,
+        control_map_bytes: bytes,
+        control_scale: float,
+        width: int,
+        height: int,
+        num_steps: int,
+        seed: int,
+        controlnet_path: str | None = None,
+        cancel_flag=None,
+    ) -> bytes:
+        """Run the trained Z-Image Fun-Controlnet-Union pipeline. `control_map_bytes` is
+        an ALREADY-PREPROCESSED control map (canny/depth/edge image bytes). Raises if the
+        controlnet weights are unavailable. Must run on the MLX executor thread (loads the
+        controlnet on first use). Single source of truth shared by generate_controlled_image
+        (/generations control_image) and the dedicated /controlnet + /depth-guided routes."""
+        cn = self._get_zimage_controlnet(controlnet_path)
+        if cn is None:
+            raise RuntimeError("Z-Image ControlNet weights not found")
+        ctrl_tensor, _, _ = self._load_image_to_tensor(
+            control_map_bytes, target_wh=(width, height)
+        )
+        ctx = self._build_control_context(ctrl_tensor)
+        return self._run_pipeline(
+            prompt,
+            width,
+            height,
+            num_steps,
+            seed,
+            controlnet=cn,
+            control_context=ctx,
+            control_scale=control_scale,
+            cancel_flag=cancel_flag,
+        )
 
     def _apply_inline_loras(self, tags) -> bool:
         """Load each (name, weight) inline-LoRA tag, stacking them. Returns True if
