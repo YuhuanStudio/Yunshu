@@ -254,15 +254,49 @@ class MCPServerConnection:
             "method": method,
             "params": params,
         }
+        # The streamable-HTTP spec requires the client to accept both JSON and the
+        # event-stream content type; without it some servers refuse or always stream.
+        _headers = {
+            "Accept": "application/json, text/event-stream",
+            **(self.config.headers or {}),
+        }
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     url,
                     json=request,
-                    headers=self.config.headers,
+                    headers=_headers,
                 ) as resp:
                     if resp.status == 200:
-                        data = await resp.json()
+                        # Streamable-HTTP / SSE MCP servers answer a POST with a
+                        # `text/event-stream` body (not plain JSON). `resp.json()` then
+                        # fails and the tool list silently stayed empty. Parse the
+                        # JSON-RPC response out of the event-stream `data:` lines.
+                        ctype = (resp.headers.get("Content-Type") or "").lower()
+                        if "text/event-stream" in ctype:
+                            import json as _json
+
+                            data = None
+                            for line in (await resp.text()).splitlines():
+                                line = line.strip()
+                                if not line.startswith("data:"):
+                                    continue
+                                try:
+                                    _msg = _json.loads(line[5:].strip())
+                                except Exception:
+                                    continue
+                                if isinstance(_msg, dict) and (
+                                    "result" in _msg or "error" in _msg
+                                ):
+                                    data = _msg
+                                    break
+                            if data is None:
+                                logger.error(
+                                    "MCP HTTP: no JSON-RPC response in event-stream reply"
+                                )
+                                return None
+                        else:
+                            data = await resp.json()
                         if "error" in data:
                             err = data["error"]
                             logger.error(
