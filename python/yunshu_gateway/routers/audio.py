@@ -945,50 +945,115 @@ async def create_translation(
     model: str = Form(...),
     response_format: str = Form("json"),
     prompt: str | None = Form(None),
-    temperature: float = Form(0.0, ge=0.0, le=1.0),
+    temperature: float | None = Form(None, ge=0.0, le=1.0),
 ):
-    """Translate audio file to English (OpenAI /v1/audio/translations compatible).
+    """Translate audio into English (OpenAI /v1/audio/translations compatible).
 
-    OpenAI semantics: transcribe non-English speech and emit the text in English.
-    This requires a translate-capable ASR model (Whisper-style). Yunshu's current
-    ASR backends (e.g. Qwen3-ASR) do **not** support cross-lingual translation —
-    setting ``language="en"`` only changes the output hint, not the actual decode.
-
-    Rather than silently mis-translating, we return HTTP 501. To use this endpoint,
-    load a translate-capable ASR model (Whisper variants) once supported.
+    OpenAI semantics: decode non-English speech and emit the text in English. This is
+    a Whisper-family capability (task="translate"); source-language-only backends like
+    Qwen3-ASR can't do it, so for those we return an honest 501 rather than
+    mis-"translating" (which would just transcribe in the source language).
     """
-    from .models import _check_permission
+    from .models import _check_model_access, _check_permission
 
     _check_permission(request, "can_infer")
+    if not model or not model.strip():
+        raise HTTPException(
+            status_code=400, detail="model: field is required and cannot be empty"
+        )
+    _VALID_ASR_FORMATS = {"json", "text", "srt", "vtt", "verbose_json"}
+    if response_format not in _VALID_ASR_FORMATS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"response_format must be one of {sorted(_VALID_ASR_FORMATS)}, got '{response_format}'",
+        )
+    _check_model_access(request, model)
 
-    # Discover the currently loaded ASR engine (if any) to give a precise error.
     manager = get_model_manager()
-    asr_loaded_id: str | None = None
-    if manager is not None:
-        try:
-            from yunshu_engine.audio_engine import (
-                ASREngine,  # local import to avoid cycles
-            )
+    _enforce_no_auto_load(manager, model)
 
-            for entry in manager.list_entries():
-                if entry.is_loaded and isinstance(
-                    getattr(entry, "engine", None), ASREngine
-                ):
-                    asr_loaded_id = entry.model_id
-                    break
-        except Exception:
-            asr_loaded_id = None
+    from yunshu_engine.audio_engine import ASREngine
 
-    raise HTTPException(
-        status_code=501,
-        detail=(
-            "Translation not supported by loaded ASR model"
-            + (f" ('{asr_loaded_id}')" if asr_loaded_id else "")
-            + ". Yunshu ASR engines (Qwen3-ASR) transcribe in the source language only. "
-            "Load a translate-capable ASR model (Whisper) to enable /v1/audio/translations, "
-            "or use /v1/audio/transcriptions followed by an LLM translation step."
-        ),
+    asr_engine = _select_audio_engine(manager, model, ASREngine)
+    if asr_engine is None and manager is not None:
+        with contextlib.suppress(Exception):
+            asr_engine = await manager.get_engine(model)
+    if not isinstance(asr_engine, ASREngine):
+        raise HTTPException(status_code=404, detail=f"ASR model '{model}' not found.")
+
+    # Gate on a translate-capable (Whisper-family) model — task="translate" is a Whisper
+    # feature. Detect via the loaded model path / requested id.
+    _mname = (getattr(asr_engine, "_model_path", "") or "").lower()
+    if "whisper" not in _mname and "whisper" not in (model or "").lower():
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "The loaded ASR model does not support translation (Whisper-only). "
+                "Load a Whisper model for /v1/audio/translations, or use "
+                "/v1/audio/transcriptions followed by an LLM translation step."
+            ),
+        )
+
+    content = await file.read()
+    if len(content) > MAX_AUDIO_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Audio file too large: {len(content)} bytes (max {MAX_AUDIO_UPLOAD_BYTES})",
+        )
+    _SAFE_AUDIO = {".wav", ".mp3", ".ogg", ".flac", ".m4a", ".webm", ".aac"}
+    _VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".ts", ".mts"}
+    raw_suffix = os.path.splitext(file.filename or "audio.wav")[1].lower()
+    fd, tmp_path = tempfile.mkstemp(
+        suffix=raw_suffix if raw_suffix in _SAFE_AUDIO | _VIDEO_EXTENSIONS else ".wav"
     )
+    asr_path = tmp_path
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(content)
+        if raw_suffix in _VIDEO_EXTENSIONS:
+            asr_path = await _extract_audio_from_video(tmp_path)
+        # task="translate" → Whisper decodes into English regardless of source language.
+        result = await asr_engine.transcribe(
+            audio_path=asr_path,
+            prompt=prompt,
+            temperature=temperature,
+            task="translate",
+        )
+    except HTTPException:
+        raise
+    except MemoryError:
+        raise HTTPException(status_code=507, detail="Out of GPU memory") from None
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    except Exception as e:
+        logger.error(f"ASR translation error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail="Audio translation failed"
+        ) from None
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        if asr_path != tmp_path:
+            with contextlib.suppress(OSError):
+                os.unlink(asr_path)
+
+    if response_format == "text":
+        return Response(content=result.get("text", ""), media_type="text/plain")
+    if response_format == "srt":
+        return Response(
+            content=_format_srt(result.get("segments", [])), media_type="text/plain"
+        )
+    if response_format == "vtt":
+        return Response(
+            content=_format_vtt(result.get("segments", [])), media_type="text/plain"
+        )
+    resp: dict = {"text": result.get("text", "")}
+    if response_format == "verbose_json":
+        resp["task"] = "translate"
+        resp["language"] = "english"
+        resp["duration"] = result.get("duration", 0.0)
+        resp["segments"] = _normalize_verbose_segments(result.get("segments", []))
+    return resp
 
 
 @router.get("/audio/voices")
