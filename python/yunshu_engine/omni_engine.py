@@ -8,8 +8,10 @@ then ``("audio", wav_chunk @24kHz)`` incrementally.
 
 This engine exposes that as an async stream with a minimal-thinker default
 (validated: ~1.4s first-audio on M3 Max / 36GB) and single-flight generation
-(one turn at a time — correct for a single-consumer voice server, and the GPU
-works correctly on the calling thread's default Metal stream).
+(one turn at a time — correct for a single-consumer voice server). A self-loaded
+model runs on the calling thread's default Metal stream; a model *reused* from the
+gateway (one omni model, two endpoints, no second copy) runs on the shared MLX
+executor thread that owns it, inside generation_stream.
 
 This is the forward differentiation: the only MLX server exposing Qwen3-Omni's
 native speech-out.
@@ -125,6 +127,10 @@ class OmniEngine:
         self._shared = model is not None  # reusing a model we don't own
         self._setup_done = False  # talker check + speakers + kernel prime ran
         self._prev_text_ids: list[int] = []
+        # When reusing the gateway's model, its weights live on the shared MLX
+        # executor thread (which owns generation_stream / Stream(gpu,1)); all GPU
+        # work on it MUST run there. Lazily resolved (kept None for self-loaded).
+        self._executor = None
         # Valid Talker speakers — defaults to the Qwen3-Omni set, replaced at
         # load() with the loaded model's own speaker map (model-agnostic).
         self._valid_speakers: set[str] = set(_OMNI_SPEAKERS)
@@ -190,9 +196,16 @@ class OmniEngine:
         if speaker_map:
             self._valid_speakers = {str(s).lower() for s in speaker_map}
             logger.info("OmniEngine speakers: %s", sorted(self._valid_speakers))
-        self._compile_kernels()
+        # Self-loaded: prime the Thinker MoE kernels here (cold-start hang guard).
+        # Shared: the gateway already warmed the Thinker for text, and this would
+        # touch the GPU off the executor thread that owns the model — so skip it;
+        # the Talker primes on the first stream (which runs on the executor).
+        if not self._shared:
+            self._compile_kernels()
         self._setup_done = True
-        logger.info("OmniEngine ready (talker present).")
+        logger.info(
+            "OmniEngine ready (talker present%s).", ", reused" if self._shared else ""
+        )
 
     def _compile_kernels(self) -> None:
         """Pre-compile the Thinker's MoE kernels with a throwaway forward BEFORE
@@ -309,7 +322,13 @@ class OmniEngine:
         Yields OmniChunks: text fragments, then audio chunks, then a final
         ``done`` chunk with latency stats.
         """
-        self.load()
+        # Load on the thread that owns the model: the shared executor for a reused
+        # model, the calling thread for a self-loaded one.
+        loop = asyncio.get_running_loop()
+        if self._shared:
+            await loop.run_in_executor(self._get_executor(), self.load)
+        else:
+            self.load()
         async with self._busy:  # one generation at a time
             spk = _resolve_speaker(
                 speaker or self.speaker, self.speaker, self._valid_speakers
@@ -325,55 +344,107 @@ class OmniEngine:
                     "content": _build_content(text, image_path, audio_path),
                 }
             ]
-            mi, _ = _prepare_inputs(self.processor, conv)
-
-            gen = self.model.generate_stream(
-                mi["input_ids"],
-                speaker=spk,
-                thinker_max_new_tokens=tmax,
-                talker_max_new_tokens=self.talker_max,
-                talker_temperature=self.talker_temp,
-                chunk_size=self.chunk_size,
-                **{
-                    k: v
-                    for k, v in {
-                        "input_features": mi.get("input_features"),
-                        "feature_attention_mask": mi.get("feature_attention_mask"),
-                        "audio_feature_lengths": mi.get("audio_feature_lengths"),
-                        "pixel_values": mi.get("pixel_values"),
-                        "pixel_values_videos": mi.get("pixel_values_videos"),
-                        "image_grid_thw": mi.get("image_grid_thw"),
-                        "video_grid_thw": mi.get("video_grid_thw"),
-                    }.items()
-                    if v is not None
-                },
-            )
-
             self._prev_text_ids = []
-            start = asyncio.get_running_loop().time()
+            start = loop.time()
             first_audio: float | None = None
             audio_samples = 0
-            for kind, payload in gen:
-                now = asyncio.get_running_loop().time() - start
+            async for kind, data in self._iter_materialized(conv, spk, tmax):
+                now = loop.time() - start
                 if kind == "text":
-                    frag = self._decode_fragment(payload)
-                    if frag:
-                        yield OmniChunk("text", frag, now)
+                    if data:
+                        yield OmniChunk("text", data, now)
                 elif kind == "audio":
                     if first_audio is None:
                         first_audio = now
-                    wav = np.asarray(payload, dtype=np.float32).reshape(-1)
-                    audio_samples += len(wav)
-                    yield OmniChunk("audio", wav, now)
+                    audio_samples += len(data)
+                    yield OmniChunk("audio", data, now)
             yield OmniChunk(
                 "done",
                 {
                     "first_audio_s": first_audio,
                     "audio_seconds": audio_samples / self.sample_rate,
-                    "total_s": asyncio.get_running_loop().time() - start,
+                    "total_s": loop.time() - start,
                 },
-                asyncio.get_running_loop().time() - start,
+                loop.time() - start,
             )
+
+    def _get_executor(self):
+        """The shared single-thread MLX executor (owns generation_stream). Lazily
+        resolved so OmniEngine construction stays side-effect-free."""
+        if self._executor is None:
+            from .mlx_executor import get_mlx_executor
+
+            self._executor = get_mlx_executor()
+        return self._executor
+
+    def _make_gen(self, conv: list[dict], spk: str, tmax: int):
+        """Build the mlx_vlm Thinker→Talker generator for one turn."""
+        mi, _ = _prepare_inputs(self.processor, conv)
+        return self.model.generate_stream(
+            mi["input_ids"],
+            speaker=spk,
+            thinker_max_new_tokens=tmax,
+            talker_max_new_tokens=self.talker_max,
+            talker_temperature=self.talker_temp,
+            chunk_size=self.chunk_size,
+            **{
+                k: v
+                for k, v in {
+                    "input_features": mi.get("input_features"),
+                    "feature_attention_mask": mi.get("feature_attention_mask"),
+                    "audio_feature_lengths": mi.get("audio_feature_lengths"),
+                    "pixel_values": mi.get("pixel_values"),
+                    "pixel_values_videos": mi.get("pixel_values_videos"),
+                    "image_grid_thw": mi.get("image_grid_thw"),
+                    "video_grid_thw": mi.get("video_grid_thw"),
+                }.items()
+                if v is not None
+            },
+        )
+
+    async def _iter_materialized(self, conv: list[dict], spk: str, tmax: int):
+        """Yield (kind, cpu_data) with mx arrays materialized to CPU (str for text,
+        numpy for audio). A reused model lives on the shared executor thread (which
+        owns generation_stream / Stream(gpu,1)), so its generation AND its
+        materialization run there; a self-loaded model runs inline on this thread."""
+        if not self._shared:
+            for kind, payload in self._make_gen(conv, spk, tmax):
+                if kind == "text":
+                    yield ("text", self._decode_fragment(payload))
+                elif kind == "audio":
+                    yield ("audio", np.asarray(payload, dtype=np.float32).reshape(-1))
+            return
+
+        import mlx.core as mx
+        from mlx_lm.generate import generation_stream
+
+        loop = asyncio.get_running_loop()
+        ex = self._get_executor()
+
+        def _start():
+            with mx.stream(generation_stream):
+                return self._make_gen(conv, spk, tmax)
+
+        gen = await loop.run_in_executor(ex, _start)
+        _DONE = object()
+
+        def _step():
+            with mx.stream(generation_stream):
+                try:
+                    kind, payload = next(gen)
+                except StopIteration:
+                    return _DONE
+                if kind == "text":
+                    return ("text", self._decode_fragment(payload))
+                if kind == "audio":
+                    return ("audio", np.asarray(payload, dtype=np.float32).reshape(-1))
+                return (kind, None)
+
+        while True:
+            item = await loop.run_in_executor(ex, _step)
+            if item is _DONE:
+                return
+            yield item
 
     def _decode_fragment(self, payload) -> str:
         """generate_stream yields the accumulated token-id sequence on each
