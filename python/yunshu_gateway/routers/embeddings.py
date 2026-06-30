@@ -49,7 +49,11 @@ class EmbeddingRequest(BaseModel):
     # embedded into the SAME space as text (cross-modal retrieval).
     input: str | list[str] | list[int] | list[list[int]] | list[dict]
     encoding_format: str = "float"  # float, base64
+    # Matryoshka truncation. ASSUMES the model is MRL-trained — for a non-MRL embedder
+    # this returns a degraded (but unit-norm) prefix; over-requesting native dim → 400.
     dimensions: int | None = None
+    # OpenAI tracking field — accepted and ignored (no per-user behavior here).
+    user: str | None = None
     # explicit pooling override (MEAN / CLS / LAST). When unset, the
     # engine auto-detects from the model's 1_Pooling/config.json.
     pooling_type: str | None = None
