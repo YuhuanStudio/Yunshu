@@ -211,6 +211,9 @@ class ClassifyRequest(BaseModel):
     model: str
     input: str
     labels: list[str] = Field(default_factory=list)
+    # Softmax temperature over label cosine similarities (lower = sharper). This is
+    # embedding-similarity zero-shot classification, not a trained classifier head.
+    temperature: float = Field(default=0.07, gt=0.0, le=10.0)
 
     @model_validator(mode="before")
     @classmethod
@@ -607,9 +610,9 @@ async def classify_input(req: ClassifyRequest, request: Request):
         raise HTTPException(status_code=500, detail="Classification failed") from None
 
     # Compute cosine similarity between input and each label embedding.
-    # Temperature scaling (0.07) sharpens the distribution so the top label
-    # gets a meaningful probability rather than a near-uniform spread.
-    temperature = 0.07
+    # Temperature scaling sharpens the distribution so the top label gets a
+    # meaningful probability rather than a near-uniform spread (request-tunable).
+    temperature = req.temperature
     scores = []
     try:
         for label_emb in label_embs:

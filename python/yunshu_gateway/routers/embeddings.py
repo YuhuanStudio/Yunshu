@@ -262,6 +262,12 @@ async def _embed_and_format(req: EmbeddingRequest) -> dict:
             detail=f"Embedding model '{req.model}' not found",
         )
 
+    # Retrieval instruction: E5 / BGE / Nomic-style text embedders expect a task
+    # prefix inline (e.g. "query: …") to steer the vector. The multimodal path already
+    # honors `instruction`; the text path silently dropped it. Prepend it so it counts.
+    if req.instruction:
+        texts = [f"{req.instruction}\n{t}" for t in texts]
+
     try:
         embeddings = await _generate_embeddings(
             engine,
