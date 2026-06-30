@@ -258,6 +258,10 @@ class TextContent(BaseModel):
 
 class ImageURL(BaseModel):
     url: str
+    # OpenAI resolution hint (low/high/auto). Accepted for compatibility; the actual
+    # pixel budget follows the VLM processor's own config (mlx-vlm max_pixels), so this
+    # is advisory — not silently rejected, but not a hard resolution override.
+    detail: str | None = None
 
 
 class ImageContent(BaseModel):
