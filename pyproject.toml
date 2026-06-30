@@ -110,11 +110,17 @@ generation = [
     "torchvision>=0.16.0",
     "Pillow>=10.0.0",
 ]
-# Native video generation backend (yunshu_engine.video_engine). NOTE: the PyPI
-# `mlx-video` package is preprocessing-only; full t2v/i2v requires the native
-# MLX pipeline weights.
+# Native video generation (yunshu_engine.video_engine) — Wan 2.x / LTX-2 text-to-video
+# and image-to-video via mlx-video. Pinned to git below: the PyPI 0.1.0 release is
+# preprocessing-only (just _io/_transforms), while the full Wan/LTX generate pipeline
+# lives on main. The integration is verified live on Wan2.2-TI2V-5B.
 video = [
-    "mlx-video>=0.1.0",
+    "mlx-video",
+    # mlx-video pulls librosa (LTX audio) → numba → llvmlite. Without these floors
+    # uv backtracks to llvmlite 0.36 (supports Python <=3.9 only) and the build hard-
+    # fails on 3.13. Pin to the py3.13-compatible line.
+    "numba>=0.60.0",
+    "llvmlite>=0.43.0",
 ]
 # KV-transfer wire compression (yunshu_engine.kv_transfer). Absent → transfers
 # fall back to uncompressed (the codec is now honestly recorded in the header).
@@ -172,6 +178,7 @@ dev = [
 # keeps pulling the latest. Revert to a plain release pin once the PR merges upstream.
 [tool.uv.sources]
 mlx-vlm = { git = "https://github.com/yuhuanowo/mlx-vlm.git", branch = "feat/qwen3-omni-thinker-early-exit" }
+mlx-video = { git = "https://github.com/Blaizzy/mlx-video.git" }
 
 [tool.ruff]
 line-length = 88
