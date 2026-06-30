@@ -22,8 +22,9 @@ async def extract_text_from_image(
 ):
     """Extract text from an uploaded image using OCR.
 
-    Accepts PNG, JPG, JPEG, WEBP, TIFF image formats.
-    Returns extracted text with optional language detection.
+    Accepts PNG, JPG, JPEG, WEBP, TIFF image formats. The `language` field is a hint
+    passed to the model (it steers output language); the response's `language`/
+    `confidence` are echoed/None — no language detection is performed.
     """
     from .models import _check_model_access, _check_permission
 

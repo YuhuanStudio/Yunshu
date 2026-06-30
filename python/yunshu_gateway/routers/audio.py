@@ -616,7 +616,13 @@ async def create_speech(request: Request) -> Response:
 
 @router.post("/audio/speech/stream")
 async def stream_speech(req: TTSRequest, request: Request):
-    """Stream TTS synthesis as SSE events with audio chunks."""
+    """Stream TTS synthesis as SSE events with audio chunks.
+
+    Streamed chunks are always raw PCM16 (the `X-Audio-Format: pcm-s16le` header
+    reports it) — `response_format` (mp3/opus/…) applies only to the non-streaming
+    /audio/speech route, since per-chunk transcoding isn't supported. Clients that
+    need a compressed container should use the non-streaming endpoint.
+    """
     from .models import _check_model_access, _check_permission
 
     _check_permission(request, "can_infer")
