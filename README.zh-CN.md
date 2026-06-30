@@ -1,6 +1,6 @@
 <div align="center">
 
-# Yunshu（云述）
+# Yunshu
 
 **一个快速、本地、面向 Apple Silicon 的多模态推理引擎。**
 
