@@ -27,8 +27,8 @@ from mlx_lm.utils import load_model, load_tokenizer
 
 from yunshu_engine.gemma4_assistant import Gemma4AssistantProposer
 
-TARGET = Path("/Volumes/P5Plus/models/gemma-4-e4b-it-bf16")
-DRAFTER = "/Volumes/P5Plus/models/gemma-4-E4B-it-assistant-bf16"
+TARGET = Path("models/gemma-4-e4b-it-bf16")
+DRAFTER = "models/gemma-4-E4B-it-assistant-bf16"
 
 
 def _greedy(tm, lm, prompt_ids, n):

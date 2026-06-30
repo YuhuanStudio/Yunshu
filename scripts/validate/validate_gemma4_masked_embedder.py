@@ -23,7 +23,7 @@ import mlx.core as mx
 
 from yunshu_engine.gemma4_assistant import Gemma4MTPMaskedEmbedder
 
-MODEL = Path("/Volumes/P5Plus/models/gemma-4-E4B-it-assistant-bf16")
+MODEL = Path("models/gemma-4-E4B-it-assistant-bf16")
 
 
 def main() -> int:

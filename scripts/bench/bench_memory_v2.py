@@ -2,7 +2,7 @@
 import json
 import subprocess
 
-MODEL = "/Users/yuhuan/Documents/Yunshu/models/Qwen3.5-4B-MLX-bf16"
+MODEL = "./models/Qwen3.5-4B-MLX-bf16"
 
 SCRIPTS = {
     "mlx-lm": f"""
@@ -56,7 +56,7 @@ asyncio.run(main())
 """,
     "vllm-mlx": f"""
 import asyncio, time, json, sys, psutil
-sys.path.insert(0, "/Users/yuhuan/Documents/Yunshu/reference/vllm-mlx")
+sys.path.insert(0, "./reference/vllm-mlx")
 def rss(): return psutil.Process().memory_info().rss / 1048576
 
 async def main():
@@ -79,7 +79,7 @@ asyncio.run(main())
 """,
     "omlx": f"""
 import asyncio, time, json, sys, psutil
-sys.path.insert(0, "/Users/yuhuan/Documents/Yunshu/reference/omlx")
+sys.path.insert(0, "./reference/omlx")
 def rss(): return psutil.Process().memory_info().rss / 1048576
 
 async def main():
@@ -111,7 +111,7 @@ for name, script in SCRIPTS.items():
     proc = subprocess.run(
         ["uv", "run", "python", "-c", script],
         capture_output=True, text=True, timeout=300,
-        cwd="/Users/yuhuan/Documents/Yunshu",
+        cwd=".",
     )
     try:
         output = proc.stdout.strip().split("\n")[-1]  # was literal \n

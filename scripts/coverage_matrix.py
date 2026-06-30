@@ -37,7 +37,7 @@ def _live_gate_sections() -> list[str]:
     return re.findall(r'\(\s*"([^"]+)",\s*"(?:smoke|standard|full)",\s*(?:True|False)', txt)
 
 
-# ── Models physically present, grouped by modality (≈25 on /Volumes/P5Plus) ──
+# ── Models physically present, grouped by modality (in the models/ dir) ──
 MODELS = {
     "LLM (text)": [
         "Qwen2.5-3B-Instruct-4bit", "Qwen2.5-3B-Instruct-bf16",

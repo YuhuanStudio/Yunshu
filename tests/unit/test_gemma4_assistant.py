@@ -23,8 +23,8 @@ from yunshu_engine.gemma4_assistant import (
     load_assistant_drafter,
 )
 
-_REAL_DRAFTER = Path("/Volumes/P5Plus/models/gemma-4-E4B-it-assistant-bf16")
-_REAL_TARGET = Path("/Volumes/P5Plus/models/gemma-4-e4b-it-bf16")
+_REAL_DRAFTER = Path("models/gemma-4-E4B-it-assistant-bf16")
+_REAL_TARGET = Path("models/gemma-4-e4b-it-bf16")
 
 H = 16  # hidden_size
 V = 64  # vocab_size
@@ -405,7 +405,7 @@ def test_real_assistant_proposer_acceptance():
 
     from yunshu_engine.gemma4_assistant import Gemma4AssistantProposer
 
-    target_dir = "/Volumes/P5Plus/models/gemma-4-e4b-it-bf16"
+    target_dir = "models/gemma-4-e4b-it-bf16"
     if not __import__("pathlib").Path(target_dir).exists():
         pytest.skip("target not mounted")
     ret = load_model(__import__("pathlib").Path(target_dir), strict=False)
@@ -543,7 +543,7 @@ def test_spec_decode_sampling_is_stochastic_and_valid():
     assert s1 != s2  # sampling genuinely stochastic across seeds
 
 
-_DRAFTER_DIR = Path("/Volumes/P5Plus/models/gemma-4-E4B-it-assistant-bf16")
+_DRAFTER_DIR = Path("models/gemma-4-E4B-it-assistant-bf16")
 DRAFTER_DIR_FOR_TEST = _DRAFTER_DIR
 
 

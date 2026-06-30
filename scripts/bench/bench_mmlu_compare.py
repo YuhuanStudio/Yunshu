@@ -12,7 +12,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-ROOT = Path("/Users/yuhuan/Documents/Yunshu")
+ROOT = Path(".")
 REF_DIR = ROOT / "reference"  # fix: was ROOT.parent (wrong dir)
 MODEL_PATH = str(ROOT / "models" / "Qwen3.5-9B-MLX-bf16")
 LOG = ROOT / "bench" / "results" / "framework_compare.log"

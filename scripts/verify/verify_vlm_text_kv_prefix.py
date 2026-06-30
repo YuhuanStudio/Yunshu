@@ -13,7 +13,7 @@ This script checks BOTH contracts on whatever VLMs are available:
 
 Usage:
     PYTHONPATH=reference/mlx-vlm:. uv run python scripts/verify_vlm_text_kv_prefix.py \
-        /Volumes/P5Plus/models/GLM-OCR-bf16 /Volumes/P5Plus/models/gemma-4-e4b-it-bf16
+        models/GLM-OCR-bf16 models/gemma-4-e4b-it-bf16
 """
 import asyncio
 import os
@@ -86,9 +86,9 @@ async def check(model_path):
 
 
 DEFAULT_PATHS = [
-    "/Volumes/P5Plus/models/GLM-OCR-bf16",          # mRoPE full-attn (lossless reuse)
-    "/Volumes/P5Plus/models/gemma-4-e4b-it-bf16",   # sliding-window (bypassed safely)
-    "/Volumes/P5Plus/models/Qwen3.5-0.8B-MLX-bf16",  # HYBRID GatedDeltaNet (A2 boundary-snapshot)
+    "models/GLM-OCR-bf16",          # mRoPE full-attn (lossless reuse)
+    "models/gemma-4-e4b-it-bf16",   # sliding-window (bypassed safely)
+    "models/Qwen3.5-0.8B-MLX-bf16",  # HYBRID GatedDeltaNet (A2 boundary-snapshot)
 ]
 
 

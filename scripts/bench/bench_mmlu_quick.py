@@ -8,7 +8,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-# was hardcoded /Users/yuhuan/Documents/Yunshu (missing YuhuanStudio/),
+# was hardcoded . (missing YuhuanStudio/),
 # so the model path didn't exist and mlx_lm tried to fetch it as an HF repo id →
 # HFValidationError → the MMLU gate could never pass. Derive from the script path.
 ROOT = Path(__file__).resolve().parent.parent.parent

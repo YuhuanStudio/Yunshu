@@ -224,7 +224,7 @@ def test_unpatchify_chw_inverse_shape():
     assert unpatchify_chw(x, 1).shape == (1, 1, 2, 2, 12)  # patch_size 1 = identity
 
 
-_VAE = "/Volumes/P5Plus/models/Wan2.2-VAE-Lance-bf16/vae.safetensors"
+_VAE = "models/Wan2.2-VAE-Lance-bf16/vae.safetensors"
 
 
 @pytest.mark.skipif(not os.path.exists(_VAE), reason="Wan VAE weights not mounted")

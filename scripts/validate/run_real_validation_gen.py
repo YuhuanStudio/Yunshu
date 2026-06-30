@@ -27,7 +27,7 @@ from pathlib import Path
 
 import numpy as np
 
-LANCE = Path("/Volumes/P5Plus/models/Lance-3B-bf16")
+LANCE = Path("models/Lance-3B-bf16")
 
 
 def _remap_key(k: str) -> str | None:

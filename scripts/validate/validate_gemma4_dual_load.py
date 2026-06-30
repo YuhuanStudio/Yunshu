@@ -35,8 +35,8 @@ from mlx_lm.utils import load_model, load_tokenizer
 
 from yunshu_engine.gemma4_assistant import load_assistant_drafter
 
-TARGET = Path("/Volumes/P5Plus/models/gemma-4-e4b-it-bf16")
-DRAFTER = Path("/Volumes/P5Plus/models/gemma-4-E4B-it-assistant-bf16")
+TARGET = Path("models/gemma-4-e4b-it-bf16")
+DRAFTER = Path("models/gemma-4-E4B-it-assistant-bf16")
 
 # Target non-shared layer of each type that the drafter shares KV from
 # (last non-shared layer per type; verified from config: sliding=22, full=23).
