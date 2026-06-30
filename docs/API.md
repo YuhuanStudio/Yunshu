@@ -20,7 +20,7 @@ shapes match the upstream spec. This page documents the **full surface** and the
 | GET | `/v1/models`, `/v1/models/{id}` | List / describe loaded models. |
 | POST | `/v1/audio/transcriptions`, `/v1/audio/translations` | ASR (Whisper / mlx-audio). |
 | POST | `/v1/audio/speech` | TTS → audio. |
-| POST | `/v1/images/generations` | Diffusion image gen (+ `edits`, `variations`, `inpaint`, `controlnet`, `depth-guided`, `generations/stream`). The **trained** Z-Image Fun-Controlnet-Union runs via `generations` + a `control_image` field; the dedicated `controlnet`/`depth-guided` routes apply an approximate latent-guidance heuristic. |
+| POST | `/v1/images/generations` | Diffusion image gen (+ `edits`, `variations`, `inpaint`, `controlnet`, `depth-guided`, `generations/stream`). The dedicated `controlnet`/`depth-guided` routes run the **trained** Z-Image Fun-Controlnet-Union when a `*controlnet*` weights file is present (preprocessing the input per `condition_type`), falling back to an approximate latent-guidance heuristic when it's absent. The trained ControlNet is also reachable via `generations` + a `control_image` field. Inline `<lora:name:weight>` applies on every image route. |
 | POST | `/v1/tokenize`, `/v1/detokenize`, `/v1/token_count` | Tokenizer utilities. |
 | POST | `/v1/batch` | Batch inference (+ `/v1/batch/{id}/status`, `/results`, `/results.csv`, `/v1/batch/upload/csv`). |
 
@@ -56,6 +56,8 @@ SSE events: `{"type":"text","delta":"…"}`, `{"type":"audio","delta":"<base64 p
 Bidirectional voice agent over WebSocket (OpenAI-Realtime event protocol). With
 `YUNSHU_REALTIME_OMNI=1` it runs the native Thinker→Talker path (speech-in → speech-out);
 otherwise an ASR→LLM→TTS cascade. Multi-turn conversation context is preserved.
+Tool-calling works on **both** paths — a tool turn emits `function_call` items and the
+spoken JSON is suppressed (the voice doesn't read the tool call aloud).
 See [examples/talk.py](../examples/talk.py) for a live mic↔speaker client.
 
 ### POST `/v1/rerank` — reranking
@@ -101,5 +103,6 @@ not part of the inference contract.
 
 ---
 
-Health: `GET /health`. Prometheus metrics: `GET /v1/prometheus`. Endpoint shapes are
-verified against the routers in `python/yunshu_gateway/routers/`.
+Health: `GET /health`. Prometheus metrics: `GET /api/v1/prometheus` (token-gated like the
+other admin endpoints). Endpoint shapes are verified against the routers in
+`python/yunshu_gateway/routers/`.
