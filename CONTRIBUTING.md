@@ -23,7 +23,9 @@ cd Yunshu
 just setup
 ```
 
-This runs `uv sync` (core + dev deps). The heavy modality backends are **opt-in extras**:
+This runs `uv sync --all-extras --dev` (Python only — the WebUI dashboard's Node/pnpm deps are
+**not** installed here; run `just setup-webui` separately if you touch `webui/`). For a lighter
+checkout, pick just the extras you need instead of `--all-extras`:
 
 ```bash
 uv sync --extra omni          # mlx-vlm fork — native Qwen3-Omni speech-to-speech (the flagship)
@@ -40,7 +42,7 @@ uv sync --all-extras          # everything — what most contributors want
 just lint              # ruff check
 just format            # ruff format
 just test-unit         # unit tests only (fast — no models needed)
-just test              # full suite (unit + integration)
+just test              # unit suite (integration tests are opt-in, ignored by default)
 just test-single tests/unit/test_foo.py   # one file
 ```
 

@@ -8,8 +8,13 @@ default:
 
 # ── Setup ──
 
+# Python deps only — what you need to run/develop the server. The WebUI dashboard
+# (Node/pnpm) is optional; run `just setup-webui` separately if you touch it.
 setup:
     uv sync --all-extras --dev
+
+# Optional: WebUI dashboard deps (needs Node + corepack/pnpm).
+setup-webui:
     cd webui && corepack enable && pnpm install
 
 # ── Build ──

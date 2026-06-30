@@ -101,8 +101,8 @@ print(
 | TTS | `/v1/audio/speech` | `mlx-audio` | `audio` |
 | 即時語音 WS | `WS /v1/realtime` | omni 或 ASR + TTS | `audio` |
 | 影像生成 | `/v1/images/generations` | 擴散 | `generation` |
-| 嵌入（文字 + **多模態**：經由 Qwen3-VL-Embedding 的影像 / 跨模態） | `/v1/embeddings` | `mlx-embeddings` | `embeddings` |
-| 重排序（雙編碼器餘弦，或經由 Qwen3-VL-Reranker 的**真正交叉編碼器**） | `/v1/rerank` | `mlx-embeddings` | `embeddings` |
+| 嵌入（文字 + **多模態**：經由 Qwen3-VL-Embedding 的影像 / 跨模態） | `/v1/embeddings` | `mlx-lm` (text) / `mlx-embeddings` (multimodal) | `embeddings` |
+| 重排序（雙編碼器餘弦，或經由 Qwen3-VL-Reranker 的**真正交叉編碼器**） | `/v1/rerank` | `mlx-lm` (text) / `mlx-embeddings` (multimodal) | `embeddings` |
 
 此外還有:單節點 KV 前綴快取（+ 選用的 SSD 持久化 + 按請求 KV 量化）、MCP 伺服端/客戶端,以及
 相容 Anthropic 的 `/v1/messages` 介面。

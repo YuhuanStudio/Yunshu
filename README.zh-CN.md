@@ -101,8 +101,8 @@ print(
 | TTS | `/v1/audio/speech` | `mlx-audio` | `audio` |
 | 实时语音 WS | `WS /v1/realtime` | omni 或 ASR + TTS | `audio` |
 | 图像生成 | `/v1/images/generations` | 扩散 | `generation` |
-| 嵌入（文本 + **多模态**：经由 Qwen3-VL-Embedding 的图像 / 跨模态） | `/v1/embeddings` | `mlx-embeddings` | `embeddings` |
-| 重排序（双编码器余弦，或经由 Qwen3-VL-Reranker 的**真正交叉编码器**） | `/v1/rerank` | `mlx-embeddings` | `embeddings` |
+| 嵌入（文本 + **多模态**：经由 Qwen3-VL-Embedding 的图像 / 跨模态） | `/v1/embeddings` | `mlx-lm` (text) / `mlx-embeddings` (multimodal) | `embeddings` |
+| 重排序（双编码器余弦，或经由 Qwen3-VL-Reranker 的**真正交叉编码器**） | `/v1/rerank` | `mlx-lm` (text) / `mlx-embeddings` (multimodal) | `embeddings` |
 
 此外还有:单节点 KV 前缀缓存（+ 可选 SSD 持久化 + 按请求 KV 量化）、MCP 服务端/客户端,以及
 兼容 Anthropic 的 `/v1/messages` 接口。

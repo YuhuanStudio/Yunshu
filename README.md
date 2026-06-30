@@ -104,8 +104,8 @@ print(
 | TTS | `/v1/audio/speech` | `mlx-audio` | `audio` |
 | Realtime voice WS | `WS /v1/realtime` | omni or ASR + TTS | `audio` |
 | Image generation | `/v1/images/generations` | diffusion | `generation` |
-| Embeddings (text + **multimodal**: image / cross-modal via Qwen3-VL-Embedding) | `/v1/embeddings` | `mlx-embeddings` | `embeddings` |
-| Rerank (bi-encoder cosine, or **true cross-encoder** via Qwen3-VL-Reranker) | `/v1/rerank` | `mlx-embeddings` | `embeddings` |
+| Embeddings (text + **multimodal**: image / cross-modal via Qwen3-VL-Embedding) | `/v1/embeddings` | `mlx-lm` (text) / `mlx-embeddings` (multimodal) | `embeddings` |
+| Rerank (bi-encoder cosine, or **true cross-encoder** via Qwen3-VL-Reranker) | `/v1/rerank` | `mlx-lm` (text) / `mlx-embeddings` (multimodal) | `embeddings` |
 
 Also: single-node KV prefix cache (+ optional SSD persistence + per-request KV quant), MCP
 server/client, and an Anthropic-compatible `/v1/messages` surface.

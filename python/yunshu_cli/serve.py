@@ -294,7 +294,13 @@ def _print_startup_banner(
     table.add_column(style="bold cyan", width=20)
     table.add_column()
 
-    table.add_row("Yunshu", "[bold green]v0.1.0-dev[/]")
+    try:
+        from importlib.metadata import version as _pkg_version
+
+        _ver = _pkg_version("yunshu")
+    except Exception:
+        _ver = "0.0.1"
+    table.add_row("Yunshu", f"[bold green]v{_ver}[/]")
     table.add_row("Mode", "Multi-model" if is_multi else "Single-model")
     if model:
         table.add_row("Model", model)

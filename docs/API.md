@@ -87,9 +87,9 @@ cross-modal vectors land in one shared space. Optional top-level `instruction`. 
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/v1/score`, `/v1/pooling`, `/v1/classify` | Similarity / pooled embeddings / zero-shot classification. |
+| POST | `/v1/score`, `/v1/pooling`, `/v1/classify` | Similarity / pooled embeddings / zero-shot classification (`classify` is embedding-cosine + softmax, not a trained classifier). |
 | POST | `/v1/ocr` | OCR (GLM-OCR via mlx-vlm). |
-| POST | `/v1/video/generations` | Video generation. |
+| POST | `/v1/video/generations` | **Not implemented** — no native Wan backend yet; returns 503 (never fabricates frames). Listed for API completeness only. |
 | POST/GET | `/v1/mcp`, `/v1/mcp/sse`, `/v1/mcp/tools` | Model Context Protocol server + client surface. |
 
 ## Admin (token-gated)
