@@ -15,13 +15,20 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..engine import get_model_manager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["video"])
+
+# VAE-decode tiling modes accepted by the mlx-video generate_video backends
+# (both wan_2 and ltx_2 share this set; an unknown mode silently falls back to
+# "auto" in the library, so we reject it up front for a clear 422 instead).
+_VIDEO_TILING_MODES = frozenset(
+    {"auto", "none", "default", "aggressive", "conservative", "spatial", "temporal"}
+)
 
 
 class VideoGenerateRequest(BaseModel):
@@ -39,8 +46,26 @@ class VideoGenerateRequest(BaseModel):
     fps: int = Field(default=16, ge=1, le=60)
     seed: int | None = None
     scheduler: str = "unipc"
+    tiling: str = Field(
+        default="auto",
+        description=(
+            "VAE-decode tiling mode (trades VRAM for speed): one of "
+            "auto, none, default, aggressive, conservative, spatial, temporal. "
+            "Applied by the Wan/LTX mlx-video backends; ignored by the native pipeline."
+        ),
+    )
     response_format: str = "mp4"  # mp4 or frames
     stream: bool = False  # SSE streaming — delivers frames as they're generated
+
+    @field_validator("tiling")
+    @classmethod
+    def _validate_tiling(cls, v: str) -> str:
+        norm = (v or "auto").strip().lower()
+        if norm not in _VIDEO_TILING_MODES:
+            raise ValueError(
+                f"tiling must be one of {sorted(_VIDEO_TILING_MODES)}, got {v!r}"
+            )
+        return norm
 
 
 @router.post("/video/generations")
@@ -194,6 +219,7 @@ async def create_video(req: VideoGenerateRequest, request: Request):
                 fps=req.fps,
                 seed=req.seed,
                 scheduler=req.scheduler,
+                tiling=req.tiling,
                 output_format=req.response_format,
             ),
             cancel_event=_vid_cancel,
@@ -294,6 +320,7 @@ async def _stream_video_frames(
             fps=req.fps,
             seed=req.seed,
             scheduler=req.scheduler,
+            tiling=req.tiling,
         ):
             if not isinstance(frame_data, dict):
                 continue

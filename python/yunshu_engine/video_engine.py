@@ -33,6 +33,7 @@ Env vars:
 import asyncio
 import contextlib
 import gc
+import inspect
 import io
 import json
 import logging
@@ -59,6 +60,7 @@ class VideoGenConfig:
     guide_scale: float = 5.0
     fps: int = 16
     scheduler: str = "unipc"  # unipc, euler, dpm++
+    tiling: str = "auto"  # VAE-decode tiling: auto/none/default/aggressive/...
     seed: int = -1  # -1 = random
 
 
@@ -350,6 +352,7 @@ class VideoEngine(ActiveRequestMixin):
         fps: int | None = None,
         seed: int | None = None,
         scheduler: str | None = None,
+        tiling: str | None = None,
         output_format: str = "mp4",
     ) -> VideoGenOutput:
         """Generate video from text prompt (and optionally an image).
@@ -366,6 +369,8 @@ class VideoEngine(ActiveRequestMixin):
             fps: Output FPS (default: 16).
             seed: Random seed.
             scheduler: Scheduler type (unipc, euler, dpm++).
+            tiling: VAE-decode tiling mode for the mlx-video backends
+                (auto/none/default/aggressive/conservative/spatial/temporal).
             output_format: "mp4" or "frames" (list of PNGs).
 
         Returns:
@@ -387,6 +392,7 @@ class VideoEngine(ActiveRequestMixin):
         if s < 0:
             s = int(time.time_ns()) % (2**31)
         sched = scheduler or cfg.scheduler
+        tl = tiling or cfg.tiling
 
         # Validate num_frames for Wan2.2 (must be 4n+1)
         if self._model_type == "wan_2_2" and (nf - 1) % 4 != 0:
@@ -417,6 +423,7 @@ class VideoEngine(ActiveRequestMixin):
                 fps=f,
                 seed=s,
                 scheduler=sched,
+                tiling=tl,
                 output_format=output_format,
             )
 
@@ -455,6 +462,7 @@ class VideoEngine(ActiveRequestMixin):
         fps: int | None = None,
         seed: int | None = None,
         scheduler: str | None = None,
+        tiling: str | None = None,
     ) -> AsyncIterator[dict]:
         """Stream frames progressively as they are generated and decoded.
 
@@ -492,6 +500,7 @@ class VideoEngine(ActiveRequestMixin):
         if s < 0:
             s = int(time.time_ns()) % (2**31)
         sched = scheduler or cfg.scheduler
+        tl = tiling or cfg.tiling
 
         # Validate num_frames for Wan2.2 (must be 4n+1)
         if self._model_type == "wan_2_2" and (nf - 1) % 4 != 0:
@@ -561,6 +570,7 @@ class VideoEngine(ActiveRequestMixin):
                         scheduler=sched,
                         model_dir=model_dir,
                         fps=f,
+                        tiling=tl,
                         thread_queue=_thread_queue,
                         cancel=_cancel,
                     )
@@ -792,6 +802,7 @@ class VideoEngine(ActiveRequestMixin):
         fps: int,
         thread_queue: queue.Queue[dict | None],
         cancel: threading.Event,
+        tiling: str = "auto",
     ) -> int:
         """Generate video via mlx-video, then stream decoded frames via ffmpeg pipe.
 
@@ -828,6 +839,8 @@ class VideoEngine(ActiveRequestMixin):
                 guide_scale=guide_scale,
                 seed=seed,
                 scheduler=scheduler,
+                tiling=tiling,
+                fps=fps,
             )
 
             if not output_path or not os.path.exists(output_path):
@@ -1027,6 +1040,7 @@ class VideoEngine(ActiveRequestMixin):
         seed: int,
         scheduler: str,
         output_format: str,
+        tiling: str = "auto",
     ) -> VideoGenOutput:
         """Synchronous generation — tries native pipeline, then mlx-video."""
         model_dir = self._get_model_dir()
@@ -1125,6 +1139,8 @@ class VideoEngine(ActiveRequestMixin):
                 guide_scale=guide_scale,
                 seed=seed,
                 scheduler=scheduler,
+                tiling=tiling,
+                fps=fps,
             )
 
             if output_path and os.path.exists(output_path):
@@ -1183,8 +1199,15 @@ class VideoEngine(ActiveRequestMixin):
         guide_scale: float,
         seed: int,
         scheduler: str,
+        tiling: str = "auto",
+        fps: int | None = None,
     ) -> str | None:
-        """Run video generation via mlx-video library."""
+        """Run video generation via mlx-video library.
+
+        New backend options (tiling, fps) are gated on each backend's actual
+        signature via introspection — we never pass a kwarg the installed
+        generate_video doesn't accept (that would TypeError every request).
+        """
         output_path = None
         try:
             import tempfile
@@ -1224,7 +1247,7 @@ class VideoEngine(ActiveRequestMixin):
 
                     _wan_gen.load_t5_encoder = _load_t5_bf16
                     _wan_gen._yunshu_t5_bf16 = True
-                generate_video(
+                wan_kwargs = dict(
                     model_dir=model_dir,
                     prompt=prompt,
                     negative_prompt=negative_prompt,
@@ -1238,6 +1261,14 @@ class VideoEngine(ActiveRequestMixin):
                     output_path=output_path,
                     scheduler=scheduler,
                 )
+                # Wan has no fps parameter (the file is baked at the model's
+                # config.sample_fps), so fps is intentionally NOT forwarded here.
+                # tiling IS supported — gate it so an older mlx-video without the
+                # arg still works.
+                _wan_params = inspect.signature(generate_video).parameters
+                if "tiling" in _wan_params:
+                    wan_kwargs["tiling"] = tiling
+                generate_video(**wan_kwargs)
             elif self._model_type == "ltx_2":
                 import os as _os
 
@@ -1251,7 +1282,7 @@ class VideoEngine(ActiveRequestMixin):
                 # SEPARATE text-encoder repo from an env override (else assume the
                 # model repo bundles it).
                 _te_repo = _os.environ.get("YUNSHU_LTX_TEXT_ENCODER_REPO") or model_dir
-                generate_video(
+                ltx_kwargs = dict(
                     model_repo=model_dir,
                     text_encoder_repo=_te_repo,
                     prompt=prompt,
@@ -1265,6 +1296,16 @@ class VideoEngine(ActiveRequestMixin):
                     output_path=output_path,
                     image=image_path,
                 )
+                # LTX uses its OWN signature: it accepts fps + tiling but has NO
+                # scheduler param (don't pass scheduler — it would TypeError).
+                # Gate each option on the introspected signature so we only pass
+                # what the installed backend actually takes.
+                _ltx_params = inspect.signature(generate_video).parameters
+                if fps is not None and "fps" in _ltx_params:
+                    ltx_kwargs["fps"] = fps
+                if "tiling" in _ltx_params:
+                    ltx_kwargs["tiling"] = tiling
+                generate_video(**ltx_kwargs)
             else:
                 # Dynamic model import: try mlx_video.models.{type}.generate
                 try:
