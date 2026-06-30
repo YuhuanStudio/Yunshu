@@ -153,6 +153,7 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
         top_p=req.top_p,
         top_k=req.top_k,
         min_p=req.min_p,
+        top_n_sigma=req.top_n_sigma,
         repetition_penalty=req.repetition_penalty,
         frequency_penalty=req.frequency_penalty,
         presence_penalty=req.presence_penalty,
@@ -494,6 +495,7 @@ class ResponsesRequest(BaseModel):
     n: int = Field(default=1, ge=1, le=128)
     tools: list[ResponseTool] | None = None
     tool_choice: str | dict | None = None
+    parallel_tool_calls: bool = True
     response_format: dict | None = None
     seed: int | None = None
     enable_thinking: bool | None = None
@@ -509,6 +511,7 @@ class ResponsesRequest(BaseModel):
     presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
     logit_bias: dict[str, float] | None = None
     min_p: float = Field(default=0.0, ge=0.0, le=1.0)
+    top_n_sigma: float = Field(default=0.0, ge=0.0, le=10.0)
     stop: list[str] | None = None
     stop_token_ids: list[int] | None = None
     logprobs: bool = False
@@ -1240,6 +1243,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                             suppress_tokens=req.suppress_tokens,
                             logit_bias=_logit_bias,
                             min_p=req.min_p,
+                            top_n_sigma=req.top_n_sigma,
                             json_schema=json_schema,
                             stop=req.stop,
                             stop_token_ids=req.stop_token_ids,
@@ -1298,6 +1302,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                             suppress_tokens=req.suppress_tokens,
                             logit_bias=_logit_bias,
                             min_p=req.min_p,
+                            top_n_sigma=req.top_n_sigma,
                             json_schema=json_schema,
                             stop=req.stop,
                             stop_token_ids=req.stop_token_ids,
@@ -1766,7 +1771,9 @@ async def _stream_response(
             req.tool_choice.get("name") if isinstance(req.tool_choice, dict) else None
         )
         _resp_tool_streamer = ToolCallStreamer(
-            forced_tool_name=_tc_forced, model_name=req.model
+            forced_tool_name=_tc_forced,
+            model_name=req.model,
+            allow_parallel=req.parallel_tool_calls,
         )
 
     def _next_seq():
@@ -2001,6 +2008,7 @@ async def _stream_response(
                     suppress_tokens=req.suppress_tokens,
                     logit_bias=_logit_bias,
                     min_p=req.min_p,
+                    top_n_sigma=req.top_n_sigma,
                     json_schema=json_schema,
                     stop=req.stop,
                     stop_token_ids=req.stop_token_ids,
@@ -2081,6 +2089,7 @@ async def _stream_response(
                     suppress_tokens=req.suppress_tokens,
                     logit_bias=_logit_bias,
                     min_p=req.min_p,
+                    top_n_sigma=req.top_n_sigma,
                     json_schema=json_schema,
                     stop=req.stop,
                     stop_token_ids=req.stop_token_ids,

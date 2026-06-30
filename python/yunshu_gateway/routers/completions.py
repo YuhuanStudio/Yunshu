@@ -161,6 +161,7 @@ class CompletionRequest(BaseModel):
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
     top_k: int = Field(default=0, ge=0)
     min_p: float = Field(default=0.0, ge=0.0, le=1.0)
+    top_n_sigma: float = Field(default=0.0, ge=0.0, le=10.0)
     repetition_penalty: float = Field(default=1.0, ge=0.0, le=2.0)
     frequency_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
     presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
@@ -542,6 +543,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                     top_p=req.top_p,
                     top_k=req.top_k,
                     min_p=req.min_p,
+                    top_n_sigma=req.top_n_sigma,
                     repetition_penalty=req.repetition_penalty,
                     frequency_penalty=req.frequency_penalty,
                     presence_penalty=req.presence_penalty,
@@ -617,6 +619,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                     top_p=req.top_p,
                     top_k=req.top_k,
                     min_p=req.min_p,
+                    top_n_sigma=req.top_n_sigma,
                     repetition_penalty=req.repetition_penalty,
                     frequency_penalty=req.frequency_penalty,
                     presence_penalty=req.presence_penalty,
@@ -1052,6 +1055,7 @@ async def _stream_completion(
                 top_p=req.top_p,
                 top_k=req.top_k,
                 min_p=req.min_p,
+                top_n_sigma=req.top_n_sigma,
                 repetition_penalty=req.repetition_penalty,
                 frequency_penalty=req.frequency_penalty,
                 presence_penalty=req.presence_penalty,
@@ -1174,6 +1178,7 @@ async def _stream_completion(
                 top_p=req.top_p,
                 top_k=req.top_k,
                 min_p=req.min_p,
+                top_n_sigma=req.top_n_sigma,
                 repetition_penalty=req.repetition_penalty,
                 frequency_penalty=req.frequency_penalty,
                 presence_penalty=req.presence_penalty,
