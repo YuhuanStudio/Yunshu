@@ -127,10 +127,10 @@ print(
 ## 效能
 
 Yunshu 為**低延遲**而非吞吐而優化 —— 它一次服務一個請求、走快速路徑,這正是本地單一使用者
-伺服器該有的形狀。一個請求經過 mlx-lm 的 `generate_step`,帶 KV 前綴 + prompt 快取,以及在貪婪
-請求上無損的 n-gram 推測解碼,全部預設開啟;單串流解碼與 `mlx-lm` 持平。較重或較依情境的旋鈕
-—— 替代取樣器、記憶體內權重量化、jump-forward —— 都是按需開啟、絕不靜默生效;見
-[設定參考](docs/CONFIGURATION.md)。誠實的基準趨勢見
+伺服器該有的形狀。一個請求經過 mlx-lm 的 `generate_step`,帶 KV 前綴 + prompt 快取,預設開啟;
+單串流解碼與 `mlx-lm` 持平。依情境的旋鈕 —— 無損 n-gram 推測解碼(在重複性/agentic 輸出上加速,
+但在普通文字上更慢,所以按需開啟)、替代取樣器、記憶體內權重量化、jump-forward —— 都是按需開啟、
+絕不靜默生效;見 [設定參考](docs/CONFIGURATION.md)。誠實的基準趨勢見
 [docs/reports/PERF_TREND.md](docs/reports/PERF_TREND.md)。
 
 ## 建構於

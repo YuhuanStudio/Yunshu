@@ -127,10 +127,10 @@ print(
 ## 性能
 
 Yunshu 为**低延迟**而非吞吐而优化 —— 它一次服务一个请求、走快速路径,这正是本地单用户服务器
-该有的形状。一个请求经过 mlx-lm 的 `generate_step`,带 KV 前缀 + prompt 缓存,以及在贪心请求上
-无损的 n-gram 推测解码,全部默认开启;单流解码与 `mlx-lm` 持平。更重或更依场景的旋钮 —— 替代
-采样器、内存内权重量化、jump-forward —— 都是按需开启、绝不静默生效;见
-[配置参考](docs/CONFIGURATION.md)。诚实的基准趋势见
+该有的形状。一个请求经过 mlx-lm 的 `generate_step`,带 KV 前缀 + prompt 缓存,默认开启;单流
+解码与 `mlx-lm` 持平。依场景的旋钮 —— 无损 n-gram 推测解码(在重复性/agentic 输出上加速,但在
+普通文本上更慢,所以按需开启)、替代采样器、内存内权重量化、jump-forward —— 都是按需开启、绝不
+静默生效;见 [配置参考](docs/CONFIGURATION.md)。诚实的基准趋势见
 [docs/reports/PERF_TREND.md](docs/reports/PERF_TREND.md)。
 
 ## 构建于

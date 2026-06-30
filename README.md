@@ -131,11 +131,11 @@ server/client, and an Anthropic-compatible `/v1/messages` surface.
 
 Yunshu optimizes for **low latency**, not throughput — it serves one request at a time on a fast
 path, which is the right shape for a local, single-user server. A request goes through mlx-lm's
-`generate_step` with KV prefix + prompt caching and lossless n-gram speculative decode on greedy
-requests, all on by default; single-stream decode is at parity with `mlx-lm`. Heavier or more
-situational knobs — alternative samplers, in-memory weight quant, jump-forward — are opt-in, never
-silently on; see the [configuration reference](docs/CONFIGURATION.md). Honest benchmark trends live
-in [docs/reports/PERF_TREND.md](docs/reports/PERF_TREND.md).
+`generate_step` with KV prefix + prompt caching on by default; single-stream decode is at parity
+with `mlx-lm`. Situational knobs — lossless n-gram speculative decode (wins on repetitive/agentic
+output, slower on normal prose, so it's opt-in), alternative samplers, in-memory weight quant,
+jump-forward — are opt-in, never silently on; see the [configuration reference](docs/CONFIGURATION.md).
+Honest benchmark trends live in [docs/reports/PERF_TREND.md](docs/reports/PERF_TREND.md).
 
 ## Built on
 

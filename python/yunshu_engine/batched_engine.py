@@ -3202,13 +3202,13 @@ class BatchedEngine:
         # temperature>0 accepted tokens are forced to the greedy sequence (biased,
         # not lossless). Restrict to GREEDY requests; temp>0 → normal decode.
         #
-        # Default-on for greedy: measured byte-identical to the plain fast path
-        # across diverse prompts (it's lossless at temp<=0) and never slower
-        # (1.00–1.07x on Qwen2.5-3B; larger wins on copy-heavy / agentic output),
-        # so a greedy request takes this path WITHOUT needing spec_decode=true.
-        # The proposer is free when idle and the adaptive controller backs off,
-        # so there's no penalty when acceptance is low. Opt out with
-        # YUNSHU_NGRAM_DEFAULT=0 (or YUNSHU_NGRAM_SPEC=0 to drop the proposer).
+        # Lossless at temp<=0 (verifier accepts only the model's own argmax), so output
+        # is byte-identical to the plain fast path. But NOT free: OPT-IN, not default —
+        # measured 2026-06-30, batch-verify costs K× compute per step, so on low-acceptance
+        # output (normal prose / code) it's ~2.5× SLOWER on Qwen2.5-3B-4bit; it only wins on
+        # repetitive/copy-heavy/agentic output. Reach it via per-request spec_decode=true or
+        # YUNSHU_NGRAM_DEFAULT=1 (the adaptive controller does NOT yet back off enough to make
+        # default-on safe). Engages only for greedy (temp<=0).
         if (
             self._ngram_proposer is not None
             and (spec_decode or self._ngram_greedy_default)
@@ -7405,9 +7405,18 @@ class BatchedEngine:
             # the fast loop (generate_step + numpy sampler) break a near-tie argmax
             # differently. It is FP-level path difference — both are valid greedy
             # decodes, same class as the cross-process non-determinism this engine
-            # already has — NOT corruption. Set YUNSHU_NGRAM_DEFAULT=0 to opt out.
+            # already has — NOT corruption.
+            #
+            # DEFAULT OFF (measured 2026-06-30): n-gram spec is lossless but NOT free —
+            # it batch-verifies K draft tokens per step, so when acceptance is low (normal
+            # prose, code — the common case) it pays K× compute for ~1 token and is SLOWER.
+            # Measured on Qwen2.5-3B-4bit greedy: ~2.5× slower on normal/code, ~1.2× faster
+            # only on highly repetitive output; on Qwen3.5-2B-bf16 ~3% slower everywhere.
+            # So it's opt-in (YUNSHU_NGRAM_DEFAULT=1) for repetitive/agentic workloads where
+            # it wins, not a safe global default. (Re-enabling default-on needs the adaptive
+            # controller below to actually back off on low acceptance — it currently doesn't.)
             self._ngram_greedy_default = os.environ.get(
-                "YUNSHU_NGRAM_DEFAULT", "1"
+                "YUNSHU_NGRAM_DEFAULT", "0"
             ).strip().lower() in ("1", "true", "yes")
             logger.info(
                 "Spec proposer initialized: kind=%s, max_n=%d, k=%d, mode=%s, greedy_default=%s",

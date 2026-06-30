@@ -52,7 +52,7 @@ caching is always on.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `YUNSHU_NGRAM_DEFAULT` | on (`1`) | n-gram speculative decode on greedy requests. **Lossless** — the verifier accepts only the model's own argmax. Set `0` to opt out. |
+| `YUNSHU_NGRAM_DEFAULT` | off | n-gram speculative decode on greedy requests. **Lossless** (the verifier accepts only the model's own argmax) but **opt-in**: it batch-verifies draft tokens, so it speeds up **repetitive / agentic** output yet is *slower* on normal prose and code (measured ~2.5× slower on Qwen2.5-3B-4bit). Set `1` to enable globally; per-request `spec_decode: true` also turns it on. |
 | `YUNSHU_SPEC_PROPOSER` | `ngram` | Speculative proposer family: `ngram` (default, fastest on M-series) or `suffix` (SuffixDecoding; lossless but slower here). |
 | `YUNSHU_TOP_N_SIGMA` | `0` (off) | Server-wide top-nσ sampler (ACL 2025) — keep only logits within n·σ of the max. Per-request `"top_n_sigma"` on `/v1/chat/completions` overrides this. |
 | `YUNSHU_QUANT_MODE` | off | In-memory weight quant at load: `mxfp4` / `nvfp4` / `mxfp8` / `affine` (via mlx-lm `nn.quantize`). |

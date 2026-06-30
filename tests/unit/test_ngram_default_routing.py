@@ -1,10 +1,10 @@
-"""N-gram spec routing gate. The path is DEFAULT-ON for greedy
-(YUNSHU_NGRAM_DEFAULT=1, the default; 0 opts out) now that the prefill/base loop
-drives the KV cache with direct model() forwards — speculation is exact
-(full-spec == no-spec output) and byte-identical to the fast path on short/medium
-greedy gen across gemma-4-e4b / Qwen2.5-3B / Qwen3.5-2B. These tests exercise the
-routing GATE given the flag, independent of the env default: greedy + flag-on →
-n-gram; flag-off / no-proposer / temp>0 → fast path."""
+"""N-gram spec routing gate. The path is OPT-IN (YUNSHU_NGRAM_DEFAULT=1 or per-request
+spec_decode; default OFF as of 2026-06-30 — it's lossless but batch-verify makes it
+~2.5× slower on low-acceptance output, so it's only a win on repetitive/agentic gen).
+Speculation is exact (full-spec == no-spec output) and byte-identical to the fast path
+on short/medium greedy gen across gemma-4-e4b / Qwen2.5-3B / Qwen3.5-2B. These tests
+exercise the routing GATE given the flag, independent of the env default: greedy +
+flag-on → n-gram; flag-off / no-proposer / temp>0 → fast path."""
 
 from unittest.mock import AsyncMock, MagicMock
 
