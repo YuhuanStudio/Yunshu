@@ -3,8 +3,26 @@ name: CI
 on:
   push:
     branches: [main]
+    # Docs-only changes don't affect lint/tests/build — skip CI entirely.
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "LICENSE"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/PULL_REQUEST_TEMPLATE.md"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "LICENSE"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/PULL_REQUEST_TEMPLATE.md"
+  # The macOS test job runs on these (see its `if:` below): cutting a release, or a
+  # manual run from the Actions tab.
+  release:
+    types: [published]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -12,34 +30,64 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.13"
+  # Keep in sync with the ruff pin in pyproject's dev group / uv.lock so Linux CI
+  # matches `just lint` / `just format` locally on macOS.
+  RUFF_VERSION: "0.15.15"
 
 jobs:
+  # Runs on every push/PR — Linux (1× minutes). ruff only parses source (never
+  # imports the package), so the macOS-only MLX core dep isn't needed. A pinned
+  # `uvx ruff` runs in an ephemeral env — no `uv sync`, no project install.
   lint:
     name: Lint
-    runs-on: macos-14
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
-        with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
-
-      - name: Set up Python
-        run: uv python install ${{ env.PYTHON_VERSION }}
-
-      - name: Install dependencies (core + dev only — fast, no modality extras)
-        run: uv sync --dev
 
       - name: Ruff lint
-        run: uv run ruff check python/ tests/
+        run: uvx ruff@${{ env.RUFF_VERSION }} check python/ tests/
 
       - name: Ruff format check
-        run: uv run ruff format --check python/ tests/
+        run: uvx ruff@${{ env.RUFF_VERSION }} format --check python/ tests/
 
+  # Runs on every push/PR — Linux (1× minutes). `uv build` needs only the build
+  # backend (hatchling), not the runtime deps, so it doesn't install MLX either.
+  build:
+    name: Build Wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Build sdist + wheel
+        run: uv build
+
+      - name: Verify console script is present
+        run: |
+          unzip -p dist/yunshu-*.whl "*/entry_points.txt" | grep -q "yunshu = yunshu_cli:app"
+          echo "console_scripts entrypoint OK"
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yunshu-wheel
+          path: dist/yunshu-*.whl
+          retention-days: 7
+
+  # The only macOS job (10× minutes). MLX is a core dep and ~58 unit files import
+  # it, and a Linux runner has no Metal (CPU-only MLX), so the suite needs Apple
+  # Silicon. To save the quota, it does NOT run on ordinary pushes — only when you
+  # publish a release or trigger it manually from the Actions tab. Day-to-day,
+  # verify locally with `just test`.
   test-unit:
-    name: Unit Tests
+    name: Unit Tests (macOS)
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    needs: lint
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -58,33 +106,3 @@ jobs:
 
       - name: Run unit tests
         run: uv run pytest tests/unit -q --tb=short
-
-  build:
-    name: Build Wheel
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-        with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
-
-      - name: Set up Python
-        run: uv python install ${{ env.PYTHON_VERSION }}
-
-      - name: Build sdist + wheel
-        run: uv build
-
-      - name: Verify console script is present
-        run: |
-          unzip -p dist/yunshu-*.whl "*/entry_points.txt" | grep -q "yunshu = yunshu_cli:app"
-          echo "console_scripts entrypoint OK"
-
-      - name: Upload wheel artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: yunshu-wheel
-          path: dist/yunshu-*.whl
-          retention-days: 7
