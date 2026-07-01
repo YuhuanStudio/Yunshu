@@ -24,7 +24,7 @@
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
     "tailwindcss": "^4.3.0",
-    "yunui": "github:YuhuanStudio/YunUI#a363bb1"
+    "yunui": "github:YuhuanStudio/YunUI#98f831f"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",

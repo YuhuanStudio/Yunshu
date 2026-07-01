@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Button,
   Input,
@@ -15,7 +15,7 @@ import {
   cn,
   toast,
 } from "yunui";
-import { AudioPlayer } from "yunui/patterns";
+import { MediaGallery, type MediaResult } from "yunui/patterns";
 import { Mic, Volume2, Copy, Check, FileAudio, X } from "lucide-react";
 import { ModelPicker } from "@/components/model-picker";
 import { api, ApiError } from "@/lib/api";
@@ -40,8 +40,12 @@ export default function AudioPage() {
   const [text, setText] = useState("");
   const [voice, setVoice] = useState("");
   const [instruct, setInstruct] = useState("");
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [speech, setSpeech] = useState<MediaResult[]>([]);
+  const [speechView, setSpeechView] = useState<"grid" | "list">("list");
   const [generating, setGenerating] = useState(false);
+  // Track object URLs so they can be revoked on unmount.
+  const speechRef = useRef<MediaResult[]>([]);
+  speechRef.current = speech;
 
   // ASR state
   const [file, setFile] = useState<File | null>(null);
@@ -61,12 +65,12 @@ export default function AudioPage() {
     return () => controller.abort();
   }, []);
 
-  // Revoke the previous object URL whenever it changes or on unmount.
+  // Revoke every generated object URL on unmount.
   useEffect(() => {
     return () => {
-      if (audioUrl) URL.revokeObjectURL(audioUrl);
+      speechRef.current.forEach((r) => r.url && URL.revokeObjectURL(r.url));
     };
-  }, [audioUrl]);
+  }, []);
 
   const describe = (e: unknown) =>
     e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Something went wrong.";
@@ -83,8 +87,18 @@ export default function AudioPage() {
         instruct: instruct.trim() || undefined,
         response_format: "wav",
       });
-      // The old URL is revoked by the cleanup effect when this state updates.
-      setAudioUrl(URL.createObjectURL(blob));
+      setSpeech((r) => [
+        {
+          id: crypto.randomUUID(),
+          url: URL.createObjectURL(blob),
+          kind: "audio",
+          prompt: text,
+          model,
+          meta: voice.trim() || undefined,
+          status: "completed",
+        },
+        ...r,
+      ]);
     } catch (e) {
       const msg = describe(e);
       setError(msg);
@@ -92,6 +106,18 @@ export default function AudioPage() {
     } finally {
       setGenerating(false);
     }
+  };
+
+  const downloadSpeech = (item: MediaResult) => {
+    const a = document.createElement("a");
+    a.href = item.url;
+    a.download = `speech-${item.id}.wav`;
+    a.click();
+  };
+
+  const removeSpeech = (item: MediaResult) => {
+    if (item.url) URL.revokeObjectURL(item.url);
+    setSpeech((r) => r.filter((x) => x.id !== item.id));
   };
 
   const transcribe = async () => {
@@ -199,8 +225,14 @@ export default function AudioPage() {
               </Button>
             </div>
 
-            {audioUrl && (
-              <AudioPlayer src={audioUrl} title="Generated speech" downloadName="speech.wav" />
+            {speech.length > 0 && (
+              <MediaGallery
+                items={speech}
+                viewMode={speechView}
+                onViewModeChange={setSpeechView}
+                onDownload={downloadSpeech}
+                onDelete={removeSpeech}
+              />
             )}
           </Card>
         ) : (
