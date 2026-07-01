@@ -218,7 +218,8 @@ export default function RealtimePage() {
           <Card className="p-0">
             <div
               ref={logRef}
-              className="max-h-[28rem] min-h-[16rem] overflow-y-auto p-2 font-mono text-xs"
+              className="overflow-y-auto p-2 font-mono text-xs"
+              style={{ maxHeight: "28rem", minHeight: "16rem" }}
             >
               {messages.length === 0 ? (
                 <div className="py-10">

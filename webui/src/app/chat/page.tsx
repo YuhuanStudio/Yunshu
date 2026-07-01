@@ -282,16 +282,15 @@ export default function ChatPage() {
             >
               <MessageSquare className="h-4 w-4 shrink-0" />
               <span className="min-w-0 flex-1 truncate">{c.title}</span>
-              <button
+              <IconButton
+                icon={<Trash2 className="h-3.5 w-3.5" />}
+                label="Delete conversation"
                 onClick={(e) => {
                   e.stopPropagation();
                   deleteChat(c.id);
                 }}
-                className="opacity-0 transition-opacity hover:text-error group-hover:opacity-100"
-                aria-label="Delete conversation"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
+                className="-mr-1 shrink-0 p-1 opacity-0 transition-opacity group-hover:opacity-100"
+              />
             </div>
           ))}
           {conversations.length === 0 && (
@@ -430,7 +429,7 @@ function MessageBubble({ message: m }: { message: ChatMessage }) {
         )}
 
         {!m.streaming && (m.tokens || m.latencyMs) ? (
-          <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+          <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
             {m.tokens ? <Badge variant="default">{fmtNumber(m.tokens)} tok</Badge> : null}
             {m.latencyMs ? <span>{(m.latencyMs / 1000).toFixed(1)}s</span> : null}
           </div>

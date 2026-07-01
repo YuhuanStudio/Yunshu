@@ -8,6 +8,7 @@ import {
   Card,
   Badge,
   Alert,
+  IconButton,
   Spinner,
   SegmentedSelect,
   FileDropzone,
@@ -144,14 +145,12 @@ export default function AudioPage() {
             variant="error"
             title="Request failed"
             icon={
-              <button
-                type="button"
-                aria-label="Dismiss"
+              <IconButton
+                icon={<X className="h-4 w-4" />}
+                label="Dismiss"
                 onClick={() => setError(null)}
-                className="text-current opacity-70 transition-opacity hover:opacity-100"
-              >
-                <X className="h-4 w-4" />
-              </button>
+                className="p-0 text-current opacity-70 transition-opacity hover:bg-transparent hover:opacity-100"
+              />
             }
           >
             {error}
