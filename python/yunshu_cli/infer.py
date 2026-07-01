@@ -112,6 +112,37 @@ def _get(url: str, path: str, *, timeout=30):
     return resp
 
 
+def _b64file(p: Path) -> str:
+    """Base64-encode a file's bytes for JSON transport."""
+    return base64.b64encode(p.read_bytes()).decode()
+
+
+def _img_result(url: str, path: str, body: dict, out: Path) -> None:
+    """POST an image op returning b64 image data; write it to `out` and emit JSON."""
+    resp = _post(url, path, json=body, timeout=600)
+    d = _body(resp)
+    b64 = _pick(lambda: d["data"][0]["b64_json"])
+    _write(out, _pick(lambda: base64.b64decode(b64)))
+    emit(
+        {"file": str(out), "bytes": out.stat().st_size},
+        human=lambda: console.print(
+            f"wrote [bold]{out}[/] ({out.stat().st_size} bytes)"
+        ),
+    )
+
+
+def _audio_result(url: str, path: str, body: dict, out: Path) -> None:
+    """POST an audio op returning raw audio bytes (response_format=wav); write to `out`."""
+    resp = _post(url, path, json=body, timeout=600)
+    _write(out, _binary(resp, "audio"))
+    emit(
+        {"file": str(out), "bytes": out.stat().st_size},
+        human=lambda: console.print(
+            f"wrote [bold]{out}[/] ({out.stat().st_size} bytes)"
+        ),
+    )
+
+
 # ── text ──────────────────────────────────────────────────────────────────────
 
 
@@ -460,6 +491,172 @@ def video(
     )
 
 
+def image_variations(
+    image_file: Path = typer.Argument(..., exists=True, help="Source image."),
+    out: Path = typer.Option(..., "--out", "-o", help="Output image file."),
+    url: str = _URL,
+    model: str = typer.Option("Z-Image-Turbo-MLX-4bit", "--model", "-m"),
+    steps: int = typer.Option(4, "--steps"),
+):
+    """Generate variations of an image, no prompt (POST /v1/images/variations)."""
+    _img_result(
+        url,
+        "/v1/images/variations",
+        {
+            "image": _b64file(image_file),
+            "model": model,
+            "num_inference_steps": steps,
+            "response_format": "b64_json",
+        },
+        out,
+    )
+
+
+def image_inpaint(
+    image_file: Path = typer.Argument(..., exists=True, help="Source image."),
+    prompt: str = typer.Argument(..., help="What to fill the masked region with."),
+    out: Path = typer.Option(..., "--out", "-o", help="Output image file."),
+    mask: Path = typer.Option(
+        None, "--mask", help="Mask image (white=fill, black=keep)."
+    ),
+    url: str = _URL,
+    model: str = typer.Option("Z-Image-Turbo-MLX-4bit", "--model", "-m"),
+):
+    """Inpaint a masked region (POST /v1/images/inpaint)."""
+    body = {
+        "image": _b64file(image_file),
+        "prompt": prompt,
+        "model": model,
+        "response_format": "b64_json",
+    }
+    if mask:
+        body["mask"] = _b64file(mask)
+    _img_result(url, "/v1/images/inpaint", body, out)
+
+
+def image_controlnet(
+    image_file: Path = typer.Argument(..., exists=True, help="Control image."),
+    condition_type: str = typer.Argument(..., help="Condition, e.g. canny/depth/pose."),
+    prompt: str = typer.Argument(..., help="Generation prompt."),
+    out: Path = typer.Option(..., "--out", "-o", help="Output image file."),
+    url: str = _URL,
+    model: str = typer.Option("Z-Image-Turbo-MLX-4bit", "--model", "-m"),
+):
+    """ControlNet-guided generation (POST /v1/images/controlnet)."""
+    _img_result(
+        url,
+        "/v1/images/controlnet",
+        {
+            "prompt": prompt,
+            "image": _b64file(image_file),
+            "condition_type": condition_type,
+            "model": model,
+            "response_format": "b64_json",
+        },
+        out,
+    )
+
+
+def image_depth(
+    depth_file: Path = typer.Argument(..., exists=True, help="Depth-map image."),
+    prompt: str = typer.Argument(..., help="Generation prompt."),
+    out: Path = typer.Option(..., "--out", "-o", help="Output image file."),
+    url: str = _URL,
+    model: str = typer.Option("Z-Image-Turbo-MLX-4bit", "--model", "-m"),
+):
+    """Depth-guided generation (POST /v1/images/depth-guided)."""
+    _img_result(
+        url,
+        "/v1/images/depth-guided",
+        {
+            "prompt": prompt,
+            "depth_image": _b64file(depth_file),
+            "model": model,
+            "response_format": "b64_json",
+        },
+        out,
+    )
+
+
+def audio_enhance(
+    audio_file: Path = typer.Argument(..., exists=True, help="Input audio."),
+    out: Path = typer.Option(..., "--out", "-o", help="Output audio (.wav)."),
+    url: str = _URL,
+    method: str = typer.Option(
+        None, "--method", help="spectral_gating / deep_filter / minimal."
+    ),
+):
+    """Enhance audio — denoise / dereverb (POST /v1/audio/speech-to-speech/enhance)."""
+    body = {"audio": _b64file(audio_file), "response_format": "wav"}
+    if method:
+        body["method"] = method
+    _audio_result(url, "/v1/audio/speech-to-speech/enhance", body, out)
+
+
+def audio_separate(
+    audio_file: Path = typer.Argument(..., exists=True, help="Input audio."),
+    out: Path = typer.Option(..., "--out", "-o", help="Output audio (.wav)."),
+    url: str = _URL,
+    source: str = typer.Option(None, "--source", help="Text of the source to isolate."),
+):
+    """Isolate a source from audio (POST /v1/audio/speech-to-speech/separate)."""
+    body = {"audio": _b64file(audio_file), "response_format": "wav"}
+    if source:
+        body["source_text"] = source
+    _audio_result(url, "/v1/audio/speech-to-speech/separate", body, out)
+
+
+def audio_transform(
+    audio_file: Path = typer.Argument(..., exists=True, help="Input audio."),
+    out: Path = typer.Option(..., "--out", "-o", help="Output audio (.wav)."),
+    url: str = _URL,
+    pitch: float = typer.Option(0.0, "--pitch", help="Pitch shift (semitones)."),
+    formant: float = typer.Option(1.0, "--formant", help="Formant ratio."),
+):
+    """Transform a voice — pitch/formant (POST /v1/audio/speech-to-speech/transform)."""
+    _audio_result(
+        url,
+        "/v1/audio/speech-to-speech/transform",
+        {
+            "audio": _b64file(audio_file),
+            "response_format": "wav",
+            "pitch_shift": pitch,
+            "formant_ratio": formant,
+        },
+        out,
+    )
+
+
+def voice_pipeline(
+    audio_file: Path = typer.Argument(..., exists=True, help="Input speech."),
+    out: Path = typer.Option(..., "--out", "-o", help="Output speech file (.wav)."),
+    url: str = _URL,
+    model: str = typer.Option(
+        ..., "--model", "-m", help="LLM model for the middle step (required)."
+    ),
+    voice: str = typer.Option(None, "--voice", help="Reply voice."),
+):
+    """Speech-to-speech via LLM: transcribe → LLM → TTS (POST /v1/audio/voice-pipeline)."""
+    data = {"llm_model": model}
+    if voice:
+        data["voice"] = voice
+    with open(audio_file, "rb") as f:
+        resp = _post(
+            url,
+            "/v1/audio/voice-pipeline",
+            files={"file": (audio_file.name, f, "application/octet-stream")},
+            data=data,
+            timeout=600,
+        )
+    _write(out, _binary(resp, "audio"))
+    emit(
+        {"file": str(out), "bytes": out.stat().st_size},
+        human=lambda: console.print(
+            f"wrote [bold]{out}[/] ({out.stat().st_size} bytes)"
+        ),
+    )
+
+
 def voices(url: str = _URL):
     """List available TTS voices for `speak` (GET /v1/audio/voices)."""
     resp = _get(url, "/v1/audio/voices")
@@ -483,7 +680,15 @@ def register(app: typer.Typer) -> None:
         (ocr, "ocr"),
         (image, "image"),
         (image_edit, "image-edit"),
+        (image_variations, "image-variations"),
+        (image_inpaint, "image-inpaint"),
+        (image_controlnet, "image-controlnet"),
+        (image_depth, "image-depth"),
         (video, "video"),
+        (audio_enhance, "audio-enhance"),
+        (audio_separate, "audio-separate"),
+        (audio_transform, "audio-transform"),
+        (voice_pipeline, "voice-pipeline"),
         (voices, "voices"),
         (cancel, "cancel"),
     ):
