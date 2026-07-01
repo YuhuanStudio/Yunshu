@@ -39,7 +39,7 @@ def _post(url: str, path: str, *, json=None, files=None, data=None, timeout=300)
             headers=auth_headers(),
             timeout=timeout,
         )
-    except httpx.ConnectError:
+    except (httpx.ConnectError, httpx.ConnectTimeout):
         fail(f"Cannot connect to {url} — start the server with `yunshu serve`.", code=2)
     except Exception as e:  # noqa: BLE001
         fail(f"Request failed: {e}", code=1)
@@ -54,6 +54,43 @@ def _post(url: str, path: str, *, json=None, files=None, data=None, timeout=300)
             status=resp.status_code,
         )
     return resp
+
+
+def _body(resp) -> dict:
+    """Parse a JSON response body; fail() cleanly if it isn't JSON (empty/HTML/etc.)."""
+    try:
+        return resp.json()
+    except Exception:  # noqa: BLE001
+        fail(f"Server returned a non-JSON response: {resp.text[:200]!r}", code=1)
+
+
+def _pick(fn):
+    """Extract a value from a parsed body via `fn`; fail() cleanly on an unexpected shape
+    (missing key / empty list / wrong type) instead of crashing with a traceback."""
+    try:
+        return fn()
+    except (KeyError, IndexError, TypeError, ValueError) as e:
+        fail(f"Unexpected response shape ({e}).", code=1)
+
+
+def _binary(resp, kind: str) -> bytes:
+    """Return response bytes for a file-producing command; fail() if the server actually
+    sent JSON/text (i.e. an error body) rather than the expected media."""
+    ct = resp.headers.get("content-type", "")
+    if ct.startswith(("application/json", "text/")):
+        fail(
+            f"Expected {kind} bytes but the server returned {ct}: {resp.text[:300]}",
+            code=1,
+        )
+    return resp.content
+
+
+def _write(out: Path, content: bytes) -> None:
+    """Write bytes to `out`; fail() cleanly on an unwritable path instead of a traceback."""
+    try:
+        out.write_bytes(content)
+    except OSError as e:
+        fail(f"Cannot write {out}: {e}", code=1)
 
 
 # ── text ──────────────────────────────────────────────────────────────────────
@@ -81,9 +118,9 @@ def complete(
             "temperature": temperature,
         },
     )
-    d = resp.json()
-    choice = d["choices"][0]
-    text = choice["message"].get("content") or ""
+    d = _body(resp)
+    choice = _pick(lambda: d["choices"][0])
+    text = choice.get("message", {}).get("content") or ""
     emit(
         {
             "text": text,
@@ -102,7 +139,7 @@ def tokenize(
 ):
     """Count tokens (POST /v1/token_count)."""
     resp = _post(url, "/v1/token_count", json={"model": model, "prompt": text})
-    d = resp.json()
+    d = _body(resp)
     count = d.get("token_count", d.get("count"))
     emit(d, human=lambda: console.print(f"tokens: [bold]{count}[/]"))
 
@@ -114,8 +151,8 @@ def embed(
 ):
     """Embed text (POST /v1/embeddings)."""
     resp = _post(url, "/v1/embeddings", json={"model": model, "input": text})
-    d = resp.json()
-    vec = d["data"][0]["embedding"]
+    d = _body(resp)
+    vec = _pick(lambda: d["data"][0]["embedding"])
     emit(
         {
             "embedding": vec,
@@ -141,7 +178,7 @@ def rerank(
     if top_n:
         body["top_n"] = top_n
     resp = _post(url, "/v1/rerank", json=body)
-    d = resp.json()
+    d = _body(resp)
 
     def _human():
         for r in d.get("results", []):
@@ -174,7 +211,7 @@ def transcribe(
             files={"file": (file.name, f, "application/octet-stream")},
             data=data,
         )
-    d = resp.json()
+    d = _body(resp)
     emit(d, human=lambda: console.print(d.get("text", "")))
 
 
@@ -192,9 +229,9 @@ def speak(
         "/v1/audio/speech",
         json={"model": model, "input": text, "voice": voice, "response_format": fmt},
     )
-    out.write_bytes(resp.content)
+    _write(out, _binary(resp, "audio"))
     emit(
-        {"file": str(out), "bytes": len(resp.content), "format": fmt},
+        {"file": str(out), "bytes": out.stat().st_size, "format": fmt},
         human=lambda: console.print(
             f"wrote [bold]{out}[/] ({len(resp.content)} bytes)"
         ),
@@ -214,7 +251,7 @@ def ocr(
             files={"file": (file.name, f, "image/png")},
             data={"model": model},
         )
-    d = resp.json()
+    d = _body(resp)
     emit(d, human=lambda: console.print(d.get("text", "")))
 
 
@@ -238,9 +275,9 @@ def image(
             "response_format": "b64_json",
         },
     )
-    d = resp.json()
-    b64 = d["data"][0]["b64_json"]
-    out.write_bytes(base64.b64decode(b64))
+    d = _body(resp)
+    b64 = _pick(lambda: d["data"][0]["b64_json"])
+    _write(out, _pick(lambda: base64.b64decode(b64)))
     emit(
         {"file": str(out), "bytes": out.stat().st_size, "size": size},
         human=lambda: console.print(

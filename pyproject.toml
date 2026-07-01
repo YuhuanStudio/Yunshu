@@ -153,7 +153,7 @@ bench = [
 ]
 
 [project.scripts]
-yunshu = "yunshu_cli:app"
+yunshu = "yunshu_cli:main"
 
 [dependency-groups]
 dev = [

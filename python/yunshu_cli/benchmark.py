@@ -15,6 +15,8 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
+from ._output import auth_headers, fail
+
 console = Console()
 bench_app = typer.Typer(help="Run benchmarks.", no_args_is_help=True)
 
@@ -35,8 +37,7 @@ def bench_roofline(
     dtype_map = {"float16": mx.float16, "bfloat16": mx.bfloat16, "float32": mx.float32}
     mx_dtype = dtype_map.get(dtype)
     if mx_dtype is None:
-        console.print(f"[red]Unknown dtype: {dtype}[/]")
-        raise typer.Exit(1)
+        fail(f"Unknown dtype: {dtype}", code=1)
 
     console.print(f"[bold]Roofline Benchmark[/] dtype={dtype}")
 
@@ -50,10 +51,9 @@ def bench_roofline(
         TextColumn("[progress.description]{task.description}"),
         console=console,
     ) as progress:
+        task = progress.add_task("GEMM roofline", total=None)
         for size in sizes:
-            progress.update(
-                progress.add_task(f"M×K×N = {size}×{size}×{size}", total=None)
-            )
+            progress.update(task, description=f"M×K×N = {size}×{size}×{size}")
 
             # Warmup
             a = mx.random.normal((size, size), dtype=mx_dtype)
@@ -115,7 +115,13 @@ def bench_roofline(
 
 @bench_app.command("latency")
 def bench_latency(
-    url: str = typer.Option("http://localhost:8000", "--url", "-u", help="Server URL."),
+    url: str = typer.Option(
+        "http://localhost:8000",
+        "--url",
+        "-u",
+        envvar="YUNSHU_GATEWAY_URL",
+        help="Server URL.",
+    ),
     model: str | None = typer.Option(None, "--model", "-m", help="Model name."),
     prompt_tokens: int = typer.Option(32, "--prompt", help="Prompt length."),
     max_tokens: int = typer.Option(64, "--max-tokens", help="Max output tokens."),
@@ -151,7 +157,10 @@ def bench_latency(
             t0 = time.perf_counter()
             try:
                 resp = httpx.post(
-                    f"{url}/v1/chat/completions", json=payload, timeout=120
+                    f"{url}/v1/chat/completions",
+                    json=payload,
+                    headers=auth_headers(),
+                    timeout=120,
                 )
                 elapsed = time.perf_counter() - t0
 
@@ -180,8 +189,7 @@ def bench_latency(
             progress.update(task, advance=1)
 
     if not latencies:
-        console.print("[red]No successful requests.[/]")
-        return
+        fail("No successful requests.", code=1)
 
     totals = [l["total"] for l in latencies]
     per_tok = [l["per_token"] for l in latencies]
@@ -227,7 +235,13 @@ def bench_latency(
 
 @bench_app.command("throughput")
 def bench_throughput(
-    url: str = typer.Option("http://localhost:8000", "--url", "-u", help="Server URL."),
+    url: str = typer.Option(
+        "http://localhost:8000",
+        "--url",
+        "-u",
+        envvar="YUNSHU_GATEWAY_URL",
+        help="Server URL.",
+    ),
     model: str | None = typer.Option(None, "--model", "-m", help="Model name."),
     concurrency: int = typer.Option(
         4, "--concurrency", "-c", help="Concurrent requests."
@@ -265,13 +279,20 @@ def bench_throughput(
                         "max_tokens": max_tokens,
                         "stream": False,
                     }
-                    resp = await client.post(f"{url}/v1/chat/completions", json=payload)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        total_tokens += data.get("usage", {}).get(
-                            "completion_tokens", 0
+                    try:
+                        resp = await client.post(
+                            f"{url}/v1/chat/completions",
+                            json=payload,
+                            headers=auth_headers(),
                         )
-                    completed += 1
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            total_tokens += data.get("usage", {}).get(
+                                "completion_tokens", 0
+                            )
+                        completed += 1
+                    except Exception:
+                        logger.debug("throughput request %d failed", idx, exc_info=True)
 
             t0 = time.perf_counter()
             await asyncio.gather(*[_single_req(i) for i in range(num_requests)])
@@ -280,6 +301,8 @@ def bench_throughput(
         return elapsed, total_tokens, completed
 
     elapsed, total_tokens, completed = asyncio.run(_run())
+    if completed == 0:
+        fail("No successful requests (server unreachable?).", code=1)
     throughput = total_tokens / elapsed if elapsed > 0 else 0
     rps = completed / elapsed if elapsed > 0 else 0
 
@@ -414,11 +437,12 @@ def bench_inference(
 
     # Load model
     t0 = time.perf_counter()
-    model, tokenizer = load(model_path)
+    try:
+        model, tokenizer = load(model_path)
+    except Exception as e:  # noqa: BLE001
+        fail(f"Failed to load model {model_path}: {e}", code=1)
     load_time = time.perf_counter() - t0
     console.print(f"Model loaded in {load_time:.1f}s")
-
-    mx.get_active_memory()
 
     # Prepare prompts
     base_prompt = "Write a short story. " * (prompt_tokens // 6 + 1)
@@ -528,18 +552,9 @@ def bench_inference(
     avg_ttft = np.mean(ttft_list)
     p50_ttot = np.percentile(total_time_list, 50)
     avg_tpot = np.mean(tpot_list)
-    np.mean(
-        [
-            t / max(d, 1e-9)
-            for t, d in zip(
-                total_tokens_list,
-                [total_time_list[i] - ttft_list[i] for i in range(num_requests)],
-                strict=False,
-            )
-        ]
-    )
-    aggregate_throughput = sum(total_tokens_list) / sum(
-        [total_time_list[i] - ttft_list[i] for i in range(num_requests)]
+    _decode_total = sum(total_time_list[i] - ttft_list[i] for i in range(num_requests))
+    aggregate_throughput = (
+        sum(total_tokens_list) / _decode_total if _decode_total > 0 else 0.0
     )
 
     from ._output import emit, is_json
@@ -562,17 +577,10 @@ def bench_inference(
 
     table.add_row("TTFT (avg)", f"{avg_ttft * 1000:.0f}ms")
     table.add_row("TPOT (avg)", f"{avg_tpot * 1000:.2f}ms")
-    table.add_row("Throughput (per-req)", f"{1 / avg_tpot:.1f} tok/s")
+    table.add_row(
+        "Throughput (per-req)", f"{1 / avg_tpot:.1f} tok/s" if avg_tpot else "n/a"
+    )
     table.add_row("Aggregate Throughput", f"{aggregate_throughput:.1f} tok/s")
     table.add_row("Total Latency P50", f"{p50_ttot * 1000:.0f}ms")
 
     console.print(table)
-
-    # oMLX comparison
-    console.print("\n[bold]oMLX Comparison[/]")
-    console.print(
-        "  [dim]oMLX reference (Qwen2.5-7B-4bit, M2 Ultra): ~45-55 tok/s single request"
-    )
-    console.print(f"  Yunshu: {1 / avg_tpot:.1f} tok/s single request")
-    ratio = (1 / avg_tpot) / 50 * 100
-    console.print(f"  Performance: {ratio:.0f}% of oMLX reference")

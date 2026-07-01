@@ -1,8 +1,12 @@
-"""Tests for Yunshu CLI — all 9 subcommands."""
+"""Tests for the Yunshu CLI — subcommand groups, the agent-facing inference commands,
+and the global --json contract (machine-readable stdout + exit codes)."""
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
+import sys
 
 from typer.testing import CliRunner
 
@@ -37,6 +41,22 @@ class TestCLIRegistration:
         for cmd in expected:
             assert cmd in _plain(result.output), f"Missing: {cmd}"
 
+    def test_inference_commands_registered(self):
+        """The agent-facing single-shot inference commands must be top-level."""
+        result = runner.invoke(app, ["--help"])
+        out = _plain(result.output)
+        for cmd in (
+            "complete",
+            "embed",
+            "tokenize",
+            "rerank",
+            "transcribe",
+            "speak",
+            "ocr",
+            "image",
+        ):
+            assert cmd in out, f"Missing inference command: {cmd}"
+
     def test_serve_command_options(self):
         import inspect
 
@@ -65,6 +85,7 @@ class TestCLIRegistration:
         assert "latency" in commands
         assert "throughput" in commands
         assert "memory" in commands
+        assert "inference" in commands
 
     def test_diagnose_command_options(self):
         from yunshu_cli.diagnose import diagnose_app
@@ -130,3 +151,41 @@ class TestCLIModel:
     def test_model_info_not_found(self):
         result = runner.invoke(app, ["model", "info", "nonexistent-model-xyz"])
         assert result.exit_code == 1
+
+
+class TestCLIJson:
+    """The global --json contract: pure JSON on stdout + meaningful exit codes.
+
+    Run as a subprocess (real `main()` entry point) because --json globally swaps
+    sys.stdout, which would leak across in-process CliRunner tests.
+    """
+
+    def _run(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, "-m", "yunshu_cli", "--json", *args],
+            capture_output=True,
+            text=True,
+        )
+
+    def test_json_success_is_pure_json(self):
+        # A no-server command with an empty result still emits parseable JSON, exit 0.
+        r = self._run("model", "list", "--dir", "/nonexistent/xyz")
+        assert r.returncode == 0
+        assert json.loads(r.stdout)["models"] == []
+
+    def test_json_missing_arg_is_json_error(self):
+        # Click usage errors (missing required arg) become a JSON error, exit 2.
+        r = self._run("complete")
+        assert r.returncode == 2
+        assert "error" in json.loads(r.stdout)
+
+    def test_json_connect_error_exits_2(self):
+        # Connection failures are exit 2 (distinct from server errors = 1).
+        r = self._run("status", "--url", "http://localhost:9/x")
+        assert r.returncode == 2
+        assert "error" in json.loads(r.stdout)
+
+    def test_json_bad_dtype_is_error_exit_1(self):
+        r = self._run("bench", "roofline", "--dtype", "bogus", "--steps", "1")
+        assert r.returncode == 1
+        assert "error" in json.loads(r.stdout)

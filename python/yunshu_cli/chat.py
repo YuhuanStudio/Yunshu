@@ -21,7 +21,13 @@ HISTORY: list[dict[str, str]] = []
 @chat_app.callback(invoke_without_command=True)
 def chat(
     model: str | None = typer.Option(None, "--model", "-m", help="Model name."),
-    url: str = typer.Option("http://localhost:8000", "--url", "-u", help="Server URL."),
+    url: str = typer.Option(
+        "http://localhost:8000",
+        "--url",
+        "-u",
+        envvar="YUNSHU_GATEWAY_URL",
+        help="Server URL.",
+    ),
     system: str | None = typer.Option(None, "--system", "-s", help="System prompt."),
     temperature: float = typer.Option(
         0.7, "--temperature", "-t", help="Sampling temperature."

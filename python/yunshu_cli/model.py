@@ -1,7 +1,6 @@
 """Yunshu CLI — model subcommand.
 
 Model management: list, download, info, benchmark.
-Follows oMLX's model management with HF Hub integration.
 """
 
 from __future__ import annotations
@@ -16,6 +15,8 @@ import typer
 from rich.console import Console
 from rich.table import Table
 from rich.tree import Tree
+
+from ._output import auth_headers, fail
 
 console = Console()
 model_app = typer.Typer(help="Model management.", no_args_is_help=True)
@@ -101,11 +102,12 @@ def list_models(
         import httpx
 
         try:
-            resp = httpx.get(f"{url.rstrip('/')}/v1/models", timeout=5)
+            resp = httpx.get(
+                f"{url.rstrip('/')}/v1/models", headers=auth_headers(), timeout=5
+            )
             data = resp.json()
         except Exception as e:
-            console.print(f"[red]Error querying {url}: {e}[/]")
-            raise typer.Exit(1) from e
+            fail(f"Error querying {url}: {e}", code=1)
         models = data.get("data", []) if isinstance(data, dict) else (data or [])
         from ._output import emit, is_json
 
@@ -132,6 +134,11 @@ def list_models(
     base = Path(models_dir) if models_dir else _get_models_dir()
 
     if not base.exists():
+        from ._output import emit, is_json
+
+        if is_json():
+            emit({"models": [], "source": str(base)})
+            return
         console.print(f"[yellow]Models directory not found: {base}[/]")
         console.print("[dim]Download models with: yunshu model download <model-id>[/]")
         return
@@ -268,7 +275,7 @@ def model_info(
     model_path = Path(model)
     if not model_path.exists():
         model_path = base / model
-    if not model_path.exists():
+    if not model_path.exists() and base.exists():
         # Try to find by partial match
         for subdir in base.iterdir():
             if subdir.is_dir() and model.lower() in subdir.name.lower():
@@ -288,8 +295,11 @@ def model_info(
 
     cfg = {}
     if config_path.exists():
-        with open(config_path) as f:
-            cfg = json.load(f)
+        try:
+            with open(config_path) as f:
+                cfg = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            logger.debug("failed to parse config.json", exc_info=True)
 
     if is_json():
         emit(
@@ -367,16 +377,18 @@ def benchmark_model(
     if not model_path.exists():
         model_path = base / model
     if not model_path.exists():
-        console.print(f"[red]Model not found: {model}[/]")
-        raise typer.Exit(1)
+        fail(f"Model not found: {model}", code=1)
 
     console.print(f"[bold]Benchmarking[/] {model_path.name}")
 
     # Load model
     from mlx_lm.utils import load as load_model
 
-    with console.status("[bold]Loading model..."):
-        ml_model, tokenizer = load_model(str(model_path))
+    try:
+        with console.status("[bold]Loading model..."):
+            ml_model, tokenizer = load_model(str(model_path))
+    except Exception as e:  # noqa: BLE001
+        fail(f"Failed to load model {model_path}: {e}", code=1)
 
     console.print("[green]✓ Model loaded[/]")
 

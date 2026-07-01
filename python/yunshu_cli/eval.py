@@ -28,6 +28,8 @@ from rich.progress import (
 )
 from rich.table import Table
 
+from ._output import auth_headers, fail
+
 console = Console()
 # No subcommands (list/all are handled by the callback's positional to avoid the
 # callback-positional-vs-subcommand shadowing); bare `eval` lists.
@@ -110,7 +112,6 @@ class BaseBenchmark(ABC):
         url: str,
         model: str,
         items: list[dict],
-        sample_size: int = 0,
     ) -> BenchmarkResult:
         import httpx
 
@@ -143,7 +144,9 @@ class BaseBenchmark(ABC):
                 try:
                     async with httpx.AsyncClient(timeout=120) as client:
                         resp = await client.post(
-                            f"{url}/v1/chat/completions", json=payload
+                            f"{url}/v1/chat/completions",
+                            json=payload,
+                            headers=auth_headers(),
                         )
                     if resp.status_code != 200:
                         predicted = ""
@@ -501,7 +504,13 @@ def list_benchmarks():
 @eval_app.callback(invoke_without_command=True)
 def run_eval(
     benchmark: str = typer.Argument("list", help="Benchmark name or 'list'."),
-    url: str = typer.Option("http://localhost:8000", "--url", "-u", help="Server URL."),
+    url: str = typer.Option(
+        "http://localhost:8000",
+        "--url",
+        "-u",
+        envvar="YUNSHU_GATEWAY_URL",
+        help="Server URL.",
+    ),
     model: str | None = typer.Option(None, "--model", "-m", help="Model to evaluate."),
     sample: int = typer.Option(
         0, "--sample", "-n", help="Sample size (0 = full dataset)."
@@ -523,28 +532,28 @@ def run_eval(
 
     bench = BENCHMARKS.get(benchmark)
     if not bench:
-        console.print(f"[red]Unknown benchmark: {benchmark}[/]")
-        console.print(f"Available: {', '.join(BENCHMARKS.keys())}")
-        raise typer.Exit(1)
+        fail(
+            f"Unknown benchmark: {benchmark}. Available: {', '.join(BENCHMARKS.keys())}",
+            code=1,
+        )
 
     # Resolve model
     if not model:
         model = _resolve_model(url)
     if not model:
-        console.print("[red]No model available.[/]")
-        raise typer.Exit(1)
+        fail("No model available.", code=1)
 
     # Load dataset
     sample_size = 50 if quick else sample
     items = bench.load_dataset(sample_size)
     if not items:
-        raise typer.Exit(1)
+        fail(f"No data for {bench.name} — dataset missing?", code=1)
 
     console.print(
         f"[bold]Running[/] {bench.name} ({len(items)} questions, model={model})"
     )
 
-    result = asyncio.run(bench.run(url, model, items, sample_size))
+    result = asyncio.run(bench.run(url, model, items))
 
     # Display results
     _print_results(result)
@@ -554,8 +563,7 @@ def run_all(url: str, model: str | None, sample: int = 50):
     """Run all available benchmarks (invoked via `eval all`)."""
     resolved = model or _resolve_model(url)
     if not resolved:
-        console.print("[red]No model available.[/]")
-        raise typer.Exit(1)
+        fail("No model available.", code=1)
 
     all_results: list[BenchmarkResult] = []
 
@@ -565,12 +573,10 @@ def run_all(url: str, model: str | None, sample: int = 50):
             continue
 
         console.print(f"\n[bold]Running[/] {bench.name} ({len(items)} questions)")
-        result = asyncio.run(bench.run(url, resolved, items, sample))
+        result = asyncio.run(bench.run(url, resolved, items))
         all_results.append(result)
 
     if not all_results:
-        from ._output import fail
-
         fail("No benchmarks ran.", code=1)
 
     from ._output import emit, is_json
@@ -623,7 +629,7 @@ def _resolve_model(url: str) -> str | None:
     import httpx
 
     try:
-        resp = httpx.get(f"{url}/v1/models", timeout=5)
+        resp = httpx.get(f"{url}/v1/models", headers=auth_headers(), timeout=5)
         if resp.status_code == 200:
             models = resp.json().get("data", [])
             for m in models:

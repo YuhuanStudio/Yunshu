@@ -22,7 +22,13 @@ logger = logging.getLogger(__name__)
 
 @status_app.callback(invoke_without_command=True)
 def status(
-    url: str = typer.Option("http://localhost:8000", "--url", "-u", help="Server URL."),
+    url: str = typer.Option(
+        "http://localhost:8000",
+        "--url",
+        "-u",
+        envvar="YUNSHU_GATEWAY_URL",
+        help="Server URL.",
+    ),
 ):
     """Show Yunshu server status."""
     import httpx
@@ -36,7 +42,7 @@ def status(
         resp = httpx.get(f"{url}/health", timeout=5)
         healthy = resp.status_code == 200
     except httpx.ConnectError:
-        fail(f"Cannot connect to {url} — start the server with `yunshu serve`.", code=1)
+        fail(f"Cannot connect to {url} — start the server with `yunshu serve`.", code=2)
 
     status_color = "green" if healthy else "red"
     status_text = "Healthy" if healthy else "Unhealthy"
@@ -62,7 +68,7 @@ def status(
     # Models
     models_data = []
     try:
-        resp = httpx.get(f"{url}/v1/models", timeout=5)
+        resp = httpx.get(f"{url}/v1/models", headers=_hdr, timeout=5)
         if resp.status_code == 200:
             models_data = resp.json().get("data", [])
     except Exception:

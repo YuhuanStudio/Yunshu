@@ -1,12 +1,8 @@
-"""Yunshu CLI — Production command-line interface for Apple Silicon inference.
+"""Yunshu CLI — command-line interface for the Yunshu inference engine.
 
-Subcommands:
-  serve    — Start inference server (single or multi-model)
-  chat     — Interactive terminal chat with streaming
-  model    — Model management (list, download, info, benchmark)
-  status   — Quick server health and stats overview
-  bench    — Run benchmarks (roofline, latency, throughput, inference)
-  diagnose — System diagnostics (GPU, memory, MLX, models)
+Inference commands (talk to a running server): complete, embed, tokenize, rerank,
+transcribe, speak, ocr, image. Management: serve, chat, model, status, launch, eval,
+bench, diagnose. Every command honors the global ``--json`` flag for agent use.
 """
 
 from __future__ import annotations
@@ -93,3 +89,32 @@ app.add_typer(diagnose_app, name="diagnose")
 from .infer import register as register_infer
 
 register_infer(app)
+
+
+def main() -> None:
+    """Console-script entry point. In --json mode, wrap the Typer app so Click usage errors
+    (missing/invalid arguments, unknown options) are reported as a JSON error object on the
+    real stdout with a non-zero exit — an agent parsing stdout always gets JSON, never an
+    empty stream. The normal (non-JSON) path runs the app unchanged."""
+    import sys
+
+    if "--json" not in sys.argv:
+        app()
+        return
+
+    import json as _json
+
+    import click
+
+    try:
+        rv = app(standalone_mode=False)
+    except click.exceptions.ClickException as e:
+        # sys.__stdout__ (not sys.stdout, which --json has swapped to stderr) is the real
+        # stdout — the group callback that swaps it runs before subcommand arg validation.
+        print(_json.dumps({"error": e.format_message()}), file=sys.__stdout__)
+        raise SystemExit(e.exit_code or 2) from None
+    except click.exceptions.Abort:
+        raise SystemExit(1) from None
+    # typer.Exit(code) from a command surfaces as the return value under standalone_mode=False
+    if isinstance(rv, int) and rv != 0:
+        raise SystemExit(rv)

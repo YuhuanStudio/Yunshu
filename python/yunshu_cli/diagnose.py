@@ -207,9 +207,12 @@ def diagnose_gpu():
     """Detailed GPU information and Metal capabilities."""
     import time
 
-    import mlx.core as mx
+    from ._output import emit, fail, is_json
 
-    from ._output import emit, is_json
+    try:
+        import mlx.core as mx
+    except ImportError:
+        fail("MLX is not installed.", code=1)
 
     memory = {
         "active_bytes": mx.get_active_memory(),
@@ -250,7 +253,13 @@ def diagnose_gpu():
 
 @diagnose_app.command("server")
 def diagnose_server(
-    url: str = typer.Option("http://localhost:8000", "--url", "-u", help="Server URL."),
+    url: str = typer.Option(
+        "http://localhost:8000",
+        "--url",
+        "-u",
+        envvar="YUNSHU_GATEWAY_URL",
+        help="Server URL.",
+    ),
 ):
     """Check a running Yunshu server's health and stats."""
     import httpx

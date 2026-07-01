@@ -1,7 +1,6 @@
 """Yunshu CLI — serve subcommand.
 
 Starts the inference server in single-model or multi-model mode.
-Matches oMLX's serve command options for seamless migration.
 """
 
 from __future__ import annotations

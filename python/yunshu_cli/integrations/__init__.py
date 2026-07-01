@@ -3,7 +3,7 @@ from __future__ import annotations
 """Yunshu CLI — launch subcommand.
 
 Launch external coding tools (Codex, OpenCode, Pi) configured
-to use a running Yunshu server. Follows oMLX's integration architecture.
+to use a running Yunshu server.
 """
 
 
@@ -19,6 +19,8 @@ from pathlib import Path
 import typer
 from rich.console import Console
 from rich.table import Table
+
+from .._output import auth_headers
 
 console = Console()
 launch_app = typer.Typer(help="Launch external tools.", no_args_is_help=True)
@@ -97,7 +99,7 @@ class CodexIntegration(Integration):
 
         lines = existing.splitlines()
         new_lines = []
-        in_omlx_section = False
+        in_yunshu_section = False
 
         top_overrides = {
             "model": f'"{model or "default"}"',
@@ -111,7 +113,7 @@ class CodexIntegration(Integration):
             stripped = line.strip()
             if stripped.startswith("[") and stripped.endswith("]"):
                 in_section = True
-                in_omlx_section = stripped == "[model_providers.yunshu]"
+                in_yunshu_section = stripped == "[model_providers.yunshu]"
 
             if not in_section and "=" in stripped:
                 key = stripped.split("=")[0].strip()
@@ -120,7 +122,7 @@ class CodexIntegration(Integration):
                     seen.add(key)
                     continue
 
-            if in_omlx_section:
+            if in_yunshu_section:
                 continue
 
             new_lines.append(line)
@@ -272,7 +274,7 @@ def _resolve_model(url: str) -> str | None:
     import httpx
 
     try:
-        resp = httpx.get(f"{url}/v1/models", timeout=5)
+        resp = httpx.get(f"{url}/v1/models", headers=auth_headers(), timeout=5)
         if resp.status_code == 200:
             models = resp.json().get("data", [])
             for m in models:
@@ -334,7 +336,13 @@ def launch_tool(
         "list", help="Tool to launch: codex, opencode, pi, or 'list'."
     ),
     model: str | None = typer.Option(None, "--model", "-m", help="Model to use."),
-    url: str = typer.Option("http://localhost:8000", "--url", "-u", help="Server URL."),
+    url: str = typer.Option(
+        "http://localhost:8000",
+        "--url",
+        "-u",
+        envvar="YUNSHU_GATEWAY_URL",
+        help="Server URL.",
+    ),
     api_key: str | None = typer.Option(None, "--api-key", "-k", help="API key."),
 ):
     """Launch an external coding tool configured for Yunshu."""
