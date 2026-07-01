@@ -59,27 +59,53 @@ function deriveRadixHitRate(radix: RadixTreeStats | null): number | null {
   return null;
 }
 
-function renderValue(v: unknown): ReactNode {
+/** True for a plain (non-array) object we can recurse into. */
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return v != null && typeof v === "object" && !Array.isArray(v);
+}
+
+function renderScalar(v: unknown): ReactNode {
   if (v == null) return "—";
   if (typeof v === "boolean") return <Badge variant={v ? "success" : "default"}>{v ? "on" : "off"}</Badge>;
   if (typeof v === "number") return Number.isInteger(v) ? fmtNumber(v) : v.toFixed(2);
-  if (typeof v === "string") return v;
-  if (Array.isArray(v)) return `[${v.length}]`;
-  return <span className="text-muted-foreground">{"{…}"}</span>;
+  if (typeof v === "string") return v || "—";
+  // Array of scalars → inline; array of objects → count.
+  if (Array.isArray(v)) {
+    if (v.length === 0) return <span className="text-muted-foreground">[]</span>;
+    if (v.every((x) => x == null || typeof x !== "object")) return v.map((x) => String(x)).join(", ");
+    return <span className="text-muted-foreground">{`[${v.length}]`}</span>;
+  }
+  return <span className="text-muted-foreground">—</span>;
 }
 
-/** Render a flat object as a label/value grid. */
-function MetricGroup({ data }: { data: Record<string, unknown> }) {
+/**
+ * Render an object as a label/value grid; nested objects recurse into an
+ * indented sub-group (up to `depth` levels) so no subsystem field is dropped.
+ */
+function MetricGroup({ data, depth = 0 }: { data: Record<string, unknown>; depth?: number }) {
   const entries = Object.entries(data ?? {});
   if (entries.length === 0) return <p className="text-sm text-muted-foreground">No data.</p>;
+  const scalars = entries.filter(([, v]) => !isRecord(v));
+  const nested = entries.filter(([, v]) => isRecord(v)) as [string, Record<string, unknown>][];
   return (
-    <div className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-3">
-      {entries.map(([k, v]) => (
-        <div key={k} className="min-w-0">
-          <div className="truncate text-xs uppercase tracking-wide text-muted-foreground">{k.replace(/_/g, " ")}</div>
-          <div className="truncate text-sm font-medium tabular-nums">{renderValue(v)}</div>
+    <div className="space-y-3">
+      {scalars.length > 0 && (
+        <div className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-3">
+          {scalars.map(([k, v]) => (
+            <div key={k} className="min-w-0">
+              <div className="truncate text-xs uppercase tracking-wide text-muted-foreground">{k.replace(/_/g, " ")}</div>
+              <div className="truncate text-sm font-medium tabular-nums">{renderScalar(v)}</div>
+            </div>
+          ))}
         </div>
-      ))}
+      )}
+      {depth < 3 &&
+        nested.map(([k, v]) => (
+          <div key={k} className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
+            <div className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">{k.replace(/_/g, " ")}</div>
+            <MetricGroup data={v} depth={depth + 1} />
+          </div>
+        ))}
     </div>
   );
 }
@@ -229,16 +255,31 @@ export default function MonitoringPage() {
           </Section>
         )}
 
-        {/* Aggregated engine subsystems — generic render so nothing is dropped */}
+        {/* Aggregated engine subsystems (from /all) — recursive generic render
+            so every subsystem field is surfaced, nothing collapsed to "{…}". */}
         {all.error && <Alert variant="warning">Aggregated metrics unavailable.</Alert>}
         {all.data &&
-          Object.entries(all.data)
-            .filter(([, v]) => v && typeof v === "object" && !Array.isArray(v))
-            .map(([key, v]) => (
-              <Section key={key} title={key.replace(/_/g, " ")} icon={<Activity className="h-4 w-4 text-muted-foreground" />}>
-                <MetricGroup data={v as Record<string, unknown>} />
-              </Section>
-            ))}
+          (() => {
+            const topScalars = Object.fromEntries(Object.entries(all.data).filter(([, v]) => !isRecord(v)));
+            const subsystems = Object.entries(all.data).filter(([, v]) => isRecord(v)) as [
+              string,
+              Record<string, unknown>,
+            ][];
+            return (
+              <>
+                {Object.keys(topScalars).length > 0 && (
+                  <Card className="p-5">
+                    <MetricGroup data={topScalars} />
+                  </Card>
+                )}
+                {subsystems.map(([key, v]) => (
+                  <Section key={key} title={key.replace(/_/g, " ")} icon={<Activity className="h-4 w-4 text-muted-foreground" />}>
+                    <MetricGroup data={v} />
+                  </Section>
+                ))}
+              </>
+            );
+          })()}
       </div>
     </div>
   );
