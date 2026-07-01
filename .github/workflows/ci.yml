@@ -69,7 +69,7 @@ jobs:
 
       - name: Verify console script is present
         run: |
-          unzip -p dist/yunshu-*.whl "*/entry_points.txt" | grep -q "yunshu = yunshu_cli:app"
+          unzip -p dist/yunshu-*.whl "*/entry_points.txt" | grep -q "yunshu = yunshu_cli:main"
           echo "console_scripts entrypoint OK"
 
       - name: Upload wheel artifact
