@@ -16,13 +16,14 @@ import { Activity, Cpu, Clock, Download, RefreshCw, Zap } from "lucide-react";
 import { api, usePolling } from "@/lib/api";
 import { fmtBytes, fmtNumber, fmtDuration, fmtPct } from "@/lib/format";
 import { ModelTypeChip, guessModelType } from "@/lib/model-type";
-import type { EngineStats, SystemStats, Model } from "@/lib/types";
+import type { EngineStats, SystemStats, HealthStatus, Model } from "@/lib/types";
 
 const HISTORY_LEN = 30;
 
 export default function DashboardPage() {
-  const engine = usePolling<EngineStats>((s) => api.get("/api/v1/monitoring/engine", s), 5000);
-  const system = usePolling<SystemStats>((s) => api.get("/api/v1/monitoring/system", s), 5000);
+  const engine = usePolling<EngineStats>((s) => api.get("/api/v1/gw/monitoring/engine", s), 5000);
+  const system = usePolling<SystemStats>((s) => api.get("/api/v1/gw/monitoring/system", s), 5000);
+  const health = usePolling<HealthStatus>((s) => api.get("/health", s), 5000);
   const models = usePolling<{ data: Model[] }>((s) => api.get("/v1/models", s), 5000);
 
   const [reqHistory, setReqHistory] = useState<number[]>([]);
@@ -32,19 +33,21 @@ export default function DashboardPage() {
 
   const eng = engine.data;
   const sys = system.data;
+  const gpu = sys?.gpu ?? null;
 
   useEffect(() => {
     if (eng) setReqHistory((h) => [...h.slice(-(HISTORY_LEN - 1)), eng.active_requests ?? 0]);
   }, [eng]);
   useEffect(() => {
-    if (sys) setGpuHistory((h) => [...h.slice(-(HISTORY_LEN - 1)), sys.gpu?.utilization_pct ?? 0]);
-  }, [sys]);
+    if (gpu) setGpuHistory((h) => [...h.slice(-(HISTORY_LEN - 1)), gpu.utilization_pct ?? 0]);
+  }, [gpu]);
 
   const refreshAll = useCallback(() => {
     engine.refresh();
     system.refresh();
+    health.refresh();
     models.refresh();
-  }, [engine, system, models]);
+  }, [engine, system, health, models]);
 
   const loadModel = async (id: string) => {
     if (!id) return;
@@ -70,7 +73,7 @@ export default function DashboardPage() {
     }
   };
 
-  const gpu = sys?.gpu ?? eng?.gpu_memory ?? null;
+  const gpuFree = gpu ? Math.max(0, gpu.total_uma_bytes - gpu.active_bytes - gpu.cache_bytes) : 0;
   const modelList = models.data?.data ?? [];
 
   return (
@@ -111,8 +114,8 @@ export default function DashboardPage() {
           <StatCard
             icon={Clock}
             label="Uptime"
-            value={eng ? fmtDuration(eng.uptime_seconds) : "—"}
-            subtext={sys ? `MLX ${sys.mlx_version}` : undefined}
+            value={health.data ? fmtDuration(health.data.uptime_seconds) : "—"}
+            subtext={gpu ? `MLX ${gpu.mlx_version}` : undefined}
             tone="purple"
           />
         </div>
@@ -140,13 +143,13 @@ export default function DashboardPage() {
           <Card className="mt-4 p-5">
             <div className="mb-3 text-sm font-medium">GPU memory</div>
             <SegmentedBar
-              total={gpu.total_bytes}
+              total={gpu.total_uma_bytes}
               legend
               formatValue={(v) => fmtBytes(v)}
               segments={[
                 { value: gpu.active_bytes, tone: "accent", label: "Active" },
                 { value: gpu.cache_bytes, tone: "info", label: "Cache" },
-                { value: Math.max(0, gpu.available_bytes), tone: "neutral", label: "Free" },
+                { value: gpuFree, tone: "neutral", label: "Free" },
               ]}
             />
           </Card>

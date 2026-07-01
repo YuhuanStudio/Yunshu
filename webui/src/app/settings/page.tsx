@@ -1,62 +1,25 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback, type ReactNode, type ElementType } from "react";
+import { useEffect, useState, type ReactNode, type ElementType } from "react";
 import {
   Button,
-  Input,
+  PasswordInput,
   Card,
-  Alert,
   Spinner,
   Separator,
   StatusIndicator,
+  Badge,
   toast,
 } from "yunui";
-import { SettingRow, CodeBlock, StatCard } from "yunui/patterns";
-import {
-  SlidersHorizontal,
-  Plug,
-  Terminal,
-  Info,
-  Save,
-  Cpu,
-  MemoryStick,
-  Boxes,
-} from "lucide-react";
+import { CodeBlock, StatCard } from "yunui/patterns";
+import { Plug, Terminal, Info, Cpu, MemoryStick, Boxes, KeyRound, Save } from "lucide-react";
 import { PageShell } from "@/components/page-shell";
-import { api, ApiError } from "@/lib/api";
-import { fmtBytes, fmtPct } from "@/lib/format";
-import type { SystemStats } from "@/lib/types";
+import { api } from "@/lib/api";
+import { getToken, setToken, onTokenChange } from "@/lib/auth";
+import { fmtBytes, fmtPct, fmtDuration } from "@/lib/format";
+import type { SystemStats, HealthStatus, VersionInfo } from "@/lib/types";
 
-type EngineConfig = Record<string, unknown>;
-
-const ENGINE_PATH = "/api/v1/admin/config/engine";
-const SYSTEM_PATH = "/api/v1/monitoring/system";
-
-/** Stringify a config value for editing in a text input. */
-function toInput(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
-}
-
-/** Coerce an edited string back to the type of the original value. */
-function fromInput(original: unknown, next: string): unknown {
-  if (typeof original === "number") {
-    const n = Number(next);
-    return Number.isFinite(n) ? n : next;
-  }
-  if (typeof original === "boolean") {
-    return next.trim().toLowerCase() === "true";
-  }
-  if (typeof original === "object" && original !== null) {
-    try {
-      return JSON.parse(next);
-    } catch {
-      return next;
-    }
-  }
-  return next;
-}
+const SYSTEM_PATH = "/api/v1/gw/monitoring/system";
 
 function SectionCard({
   icon: Icon,
@@ -84,79 +47,64 @@ function SectionCard({
 }
 
 export default function SettingsPage() {
-  // --- Engine configuration -------------------------------------------------
-  const [config, setConfig] = useState<EngineConfig | null>(null);
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [loadingConfig, setLoadingConfig] = useState(true);
-  const [saving, setSaving] = useState(false);
-
-  const loadConfig = useCallback(async (signal?: AbortSignal) => {
-    setLoadingConfig(true);
-    try {
-      const data = await api.get<EngineConfig>(ENGINE_PATH, signal);
-      if (signal?.aborted) return;
-      setConfig(data);
-      setDrafts(Object.fromEntries(Object.entries(data).map(([k, v]) => [k, toInput(v)])));
-      setLoadError(null);
-    } catch (e) {
-      if (signal?.aborted) return;
-      setLoadError(e instanceof ApiError ? e.message : "Failed to load engine configuration.");
-    } finally {
-      if (!signal?.aborted) setLoadingConfig(false);
-    }
-  }, []);
+  // --- Backend authentication ----------------------------------------------
+  const [draft, setDraft] = useState("");
+  const [saved, setSaved] = useState("");
 
   useEffect(() => {
-    const controller = new AbortController();
-    loadConfig(controller.signal);
-    return () => controller.abort();
-  }, [loadConfig]);
+    const sync = () => {
+      const t = getToken();
+      setSaved(t);
+      setDraft(t);
+    };
+    sync();
+    return onTokenChange(sync);
+  }, []);
 
-  const changedKeys = useMemo(() => {
-    if (!config) return [] as string[];
-    return Object.keys(config).filter((k) => drafts[k] !== toInput(config[k]));
-  }, [config, drafts]);
-
-  const saveConfig = async () => {
-    if (!config || changedKeys.length === 0) return;
-    setSaving(true);
-    try {
-      const body: EngineConfig = {};
-      for (const k of changedKeys) body[k] = fromInput(config[k], drafts[k]);
-      const updated = await api.patch<EngineConfig>(ENGINE_PATH, body);
-      // Prefer the server echo; fall back to a local merge.
-      const merged = updated && typeof updated === "object" ? updated : { ...config, ...body };
-      setConfig(merged);
-      setDrafts(Object.fromEntries(Object.entries(merged).map(([k, v]) => [k, toInput(v)])));
-      toast.success("Engine configuration saved");
-    } catch (e) {
-      toast.error("Save failed", e instanceof ApiError ? e.message : undefined);
-    } finally {
-      setSaving(false);
-    }
+  const saveToken = () => {
+    setToken(draft.trim());
+    toast.success(draft.trim() ? "Token saved" : "Token cleared");
   };
+  const clearToken = () => {
+    setDraft("");
+    setToken("");
+    toast.success("Token cleared");
+  };
+  const dirty = draft.trim() !== saved;
 
-  // --- Connection -----------------------------------------------------------
-  const endpoints: { label: string; path: string }[] = [
-    { label: "Base URL", path: "/v1" },
-    { label: "Admin", path: "/api/v1" },
-    { label: "Health", path: "/health" },
-  ];
+  // --- Health / version -----------------------------------------------------
+  const [health, setHealth] = useState<HealthStatus | null>(null);
+  const [version, setVersion] = useState<VersionInfo | null>(null);
   const [conn, setConn] = useState<"online" | "offline" | null>(null);
   const [testing, setTesting] = useState(false);
 
-  const testConnection = async () => {
+  const probe = async (signal?: AbortSignal) => {
     setTesting(true);
     try {
-      const ok = await api.health();
-      setConn(ok ? "online" : "offline");
-      if (ok) toast.success("Connected", "The engine is reachable.");
-      else toast.error("Offline", "The engine did not respond.");
+      const [h, v] = await Promise.allSettled([
+        api.get<HealthStatus>("/health", signal),
+        api.get<VersionInfo>("/version", signal),
+      ]);
+      if (signal?.aborted) return;
+      if (h.status === "fulfilled") {
+        setHealth(h.value);
+        setConn("online");
+      } else {
+        setHealth(null);
+        setConn("offline");
+      }
+      setVersion(v.status === "fulfilled" ? v.value : null);
     } finally {
-      setTesting(false);
+      if (!signal?.aborted) setTesting(false);
     }
   };
+
+  useEffect(() => {
+    const controller = new AbortController();
+    probe(controller.signal);
+    return () => controller.abort();
+    // re-probe whenever the saved token changes
+  }, [saved]);
 
   // --- About / system info --------------------------------------------------
   const [system, setSystem] = useState<SystemStats | null>(null);
@@ -172,11 +120,17 @@ export default function SettingsPage() {
         /* non-fatal: about section simply shows placeholders */
       });
     return () => controller.abort();
-  }, []);
+  }, [saved]);
+
+  const endpoints: { label: string; path: string }[] = [
+    { label: "Base URL", path: "/v1" },
+    { label: "Gateway", path: "/api/v1/gw" },
+    { label: "Health", path: "/health" },
+  ];
 
   const curlSnippet = `curl http://localhost:8000/v1/chat/completions \\
   -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer no-key" \\
+  -H "Authorization: Bearer $YUNSHU_AUTH_TOKEN" \\
   -d '{
     "model": "your-model-id",
     "messages": [
@@ -188,7 +142,7 @@ export default function SettingsPage() {
 
 client = OpenAI(
     base_url="http://localhost:8000/v1",
-    api_key="no-key",  # any string; the local engine ignores it
+    api_key="YUNSHU_AUTH_TOKEN",  # the server's static bearer token
 )
 
 resp = client.chat.completions.create(
@@ -200,50 +154,76 @@ print(resp.choices[0].message.content)`;
   return (
     <PageShell
       title="Settings"
-      description="Tune the inference engine, verify connectivity and get started."
+      description="Authenticate to the backend, verify connectivity and get started."
       width="narrow"
     >
       <div className="space-y-4">
-        {/* 1. Engine configuration */}
+        {/* 1. Backend authentication */}
         <SectionCard
-          icon={SlidersHorizontal}
-          title="Engine configuration"
+          icon={KeyRound}
+          title="Backend authentication"
           action={
-            <Button size="sm" onClick={saveConfig} disabled={saving || changedKeys.length === 0}>
-              {saving ? <Spinner size="sm" /> : <Save className="h-4 w-4" />}
-              Save{changedKeys.length > 0 ? ` (${changedKeys.length})` : ""}
-            </Button>
+            conn && (
+              <StatusIndicator status={conn}>
+                <span className={conn === "online" ? "text-success" : "text-error"}>
+                  {conn === "online" ? "Online" : "Offline"}
+                </span>
+              </StatusIndicator>
+            )
           }
         >
-          {loadingConfig ? (
-            <div className="flex justify-center py-8">
-              <Spinner />
+          <p className="mb-3 text-sm text-muted-foreground">
+            When the server runs with <code className="font-mono">YUNSHU_AUTH_TOKEN</code> set, every
+            request must carry it as a bearer token. Authenticated surfaces — model details,
+            monitoring and load/unload — need this. Stored locally in your browser.
+          </p>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <PasswordInput
+              className="sm:flex-1 font-mono text-sm"
+              placeholder="Paste YUNSHU_AUTH_TOKEN…"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && saveToken()}
+            />
+            <div className="flex items-center gap-2">
+              <Button size="sm" onClick={saveToken} disabled={!dirty}>
+                <Save className="h-4 w-4" /> Save
+              </Button>
+              <Button variant="secondary" size="sm" onClick={clearToken} disabled={!saved && !draft}>
+                Clear
+              </Button>
             </div>
-          ) : loadError ? (
-            <Alert variant="error" title="Could not load configuration">
-              {loadError}
-            </Alert>
-          ) : config && Object.keys(config).length > 0 ? (
-            <div className="divide-y divide-border">
-              {Object.keys(config).map((key) => (
-                <SettingRow
-                  key={key}
-                  title={<span className="font-mono text-sm">{key}</span>}
-                  control={
-                    <Input
-                      className="w-56 font-mono text-sm"
-                      value={drafts[key] ?? ""}
-                      onChange={(e) => setDrafts((d) => ({ ...d, [key]: e.target.value }))}
-                    />
-                  }
-                />
-              ))}
-            </div>
-          ) : (
-            <p className="py-6 text-center text-sm text-muted-foreground">
-              No engine configuration keys exposed.
-            </p>
-          )}
+          </div>
+          <Separator className="my-4" />
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <StatCard
+              icon={Plug}
+              label="Server state"
+              value={health?.server_state ?? "—"}
+              compact
+            />
+            <StatCard
+              icon={Boxes}
+              label="Engine"
+              value={health ? (health.engine.loaded ? "Loaded" : "Idle") : "—"}
+              compact
+              tone="blue"
+            />
+            <StatCard
+              icon={Info}
+              label={version?.service ?? "Service"}
+              value={version?.version ?? "—"}
+              compact
+              tone="emerald"
+            />
+            <StatCard
+              icon={Info}
+              label="Uptime"
+              value={health ? fmtDuration(health.uptime_seconds) : "—"}
+              compact
+              tone="purple"
+            />
+          </div>
         </SectionCard>
 
         {/* 2. Connection */}
@@ -251,19 +231,10 @@ print(resp.choices[0].message.content)`;
           icon={Plug}
           title="Connection"
           action={
-            <div className="flex items-center gap-3">
-              {conn && (
-                <StatusIndicator status={conn}>
-                  <span className={conn === "online" ? "text-success" : "text-error"}>
-                    {conn === "online" ? "Online" : "Offline"}
-                  </span>
-                </StatusIndicator>
-              )}
-              <Button variant="secondary" size="sm" onClick={testConnection} disabled={testing}>
-                {testing ? <Spinner size="sm" /> : null}
-                Test connection
-              </Button>
-            </div>
+            <Button variant="secondary" size="sm" onClick={() => probe()} disabled={testing}>
+              {testing ? <Spinner size="sm" /> : null}
+              Test connection
+            </Button>
           }
         >
           <div className="divide-y divide-border">
@@ -274,6 +245,11 @@ print(resp.choices[0].message.content)`;
               </div>
             ))}
           </div>
+          {saved && (
+            <div className="mt-3">
+              <Badge variant="success">Token attached</Badge>
+            </div>
+          )}
         </SectionCard>
 
         {/* 3. Quick start */}
@@ -287,7 +263,12 @@ print(resp.choices[0].message.content)`;
         {/* 4. About / system info */}
         <SectionCard icon={Info} title="About">
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-            <StatCard icon={Boxes} label="MLX version" value={system?.mlx_version ?? "—"} compact />
+            <StatCard
+              icon={Boxes}
+              label="MLX version"
+              value={system?.gpu.mlx_version ?? "—"}
+              compact
+            />
             <StatCard
               icon={Boxes}
               label="Python"
@@ -298,23 +279,23 @@ print(resp.choices[0].message.content)`;
             <StatCard
               icon={Cpu}
               label="CPU"
-              value={system ? fmtPct(system.cpu_percent) : "—"}
+              value={system ? fmtPct(system.cpu.percent) : "—"}
               compact
               tone="purple"
             />
             <StatCard
               icon={MemoryStick}
               label="RAM used"
-              value={system ? fmtBytes(system.memory_used_bytes) : "—"}
-              subtext={system ? `of ${fmtBytes(system.memory_total_bytes)}` : undefined}
+              value={system ? fmtBytes(system.memory.used_bytes) : "—"}
+              subtext={system ? `of ${fmtBytes(system.memory.total_bytes)}` : undefined}
               compact
               tone="emerald"
             />
           </div>
           <Separator className="my-4" />
           <p className="text-sm text-muted-foreground">
-            Yunshu is an OpenAI-compatible MLX inference server. Point any OpenAI client at the base
-            URL above to start generating.
+            {version?.description ??
+              "Yunshu is an OpenAI-compatible MLX inference server. Point any OpenAI client at the base URL above to start generating."}
           </p>
         </SectionCard>
       </div>

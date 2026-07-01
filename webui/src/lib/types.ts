@@ -6,88 +6,98 @@
  * The backend is fixed; keep these in sync with it.
  */
 
-// ---- GPU / memory ---------------------------------------------------------
-export interface GpuMemory {
-  total_bytes: number;
+// ---- monitoring: GPU (nested under system.gpu) ---------------------------
+// Apple-silicon UMA: there is one unified pool (`total_uma_bytes`); "free" is
+// derived as total − active − cache. There is no separate `total_bytes` /
+// `available_bytes` any more.
+export interface GpuStats {
   active_bytes: number;
   peak_bytes: number;
   cache_bytes: number;
-  available_bytes: number;
+  total_uma_bytes: number;
   utilization_pct: number;
+  mlx_version: string;
 }
 
-// ---- monitoring: engine + system -----------------------------------------
+// ---- monitoring: system  (GET /api/v1/gw/monitoring/system) --------------
+export interface SystemStats {
+  cpu: { percent: number; physical_cores: number; logical_cores: number };
+  memory: { total_bytes: number; used_bytes: number; available_bytes: number; percent: number };
+  gpu: GpuStats;
+  platform: string;
+  python_version: string;
+  pid: number;
+  hostname: string;
+  compute_utilization_pct?: number;
+}
+
+// ---- monitoring: engine  (GET /api/v1/gw/monitoring/engine) --------------
+// NB: no uptime and no GPU here — uptime comes from /health, GPU from /system.
 export interface EngineStats {
-  model: string | null;
   loaded: boolean;
-  running: boolean;
+  model: string | null;
+  engines: { model_id: string; stats?: Record<string, unknown> }[];
   active_requests: number;
   waiting_requests: number;
   step_counter: number;
   requests_processed: number;
   total_prompt_tokens: number;
   total_completion_tokens: number;
-  uptime_seconds: number;
-  gpu_memory: GpuMemory | null;
 }
 
-export interface SystemStats {
-  cpu_percent: number;
-  memory_total_bytes: number;
-  memory_used_bytes: number;
-  memory_available_bytes: number;
-  gpu: GpuMemory;
-  python_version: string;
-  mlx_version: string;
+// ---- monitoring: models  (GET /api/v1/gw/monitoring/models) --------------
+export interface MonitoringModel {
+  model_id: string;
+  loaded: boolean;
+  pinned: boolean;
+  size_bytes: number;
+  stats?: Record<string, unknown>;
 }
 
+// ---- monitoring: requests  (GET /api/v1/gw/monitoring/requests) ----------
+export interface RequestsStats {
+  active: number;
+  waiting: number;
+  total_processed: number;
+  last_minute: number;
+  latency_percentiles?: Record<string, number>;
+  token_percentiles?: Record<string, number>;
+  endpoint_breakdown?: Record<string, unknown>;
+  itl?: Record<string, unknown>;
+}
+
+// ---- monitoring: radix tree  (GET /api/v1/gw/monitoring/radix-tree) ------
 export interface RadixTreeStats {
-  enabled: boolean;
-  match_hits: number;
-  match_total: number;
-  total_nodes: number;
-  total_blocks: number;
-  total_tokens: number;
-  total_ref_count: number;
-  leaf_count: number;
-  max_depth: number;
-  eviction_strategy: string;
-  eviction_stats?: { total_freed_blocks?: number };
+  models: { model_id: string; [k: string]: unknown }[];
 }
 
-export interface HardwareProfile {
-  chip_name: string;
-  chip_generation: string;
-  chip_tier: string;
-  total_memory_gb: number;
-  working_set_gb: number;
-  gpu_cores: string;
-  mlx_version: string;
-  mlx_lm_version: string;
-  adaptive_defaults?: Record<string, unknown>;
-  error?: boolean;
+// ---- health / version (no prefix) ----------------------------------------
+export interface HealthStatus {
+  status: string;
+  engine: { loaded: boolean };
+  server_state: string;
+  uptime_seconds: number;
+  sleep?: unknown;
 }
 
-// ---- models ---------------------------------------------------------------
+export interface VersionInfo {
+  version: string;
+  service: string;
+  description: string;
+}
+
+// ---- models  (GET /v1/models) ---------------------------------------------
+// `type` / `size_gb` / `loaded` / `stats` only appear WITH a valid token; an
+// anonymous caller sees only `id` (+ the OpenAI envelope fields).
 export interface Model {
   id: string;
+  object?: string;
+  created?: number;
+  owned_by?: string;
   loaded?: boolean;
   size_gb?: number;
   type?: string;
   stats?: Record<string, unknown>;
-}
-
-export interface DiscoveredModel {
-  model_type: string;
-  engine_type: string;
-  estimated_size_gb: number;
-}
-
-export interface LoRAAdapter {
-  adapter_id: string;
-  loaded: boolean;
-  merged: boolean;
-  path?: string;
 }
 
 // ---- chat / completions ---------------------------------------------------

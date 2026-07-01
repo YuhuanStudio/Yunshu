@@ -46,7 +46,7 @@ bench/**/*.csv
 *.log
 
 # Models (too large for git)
-models/
+/models/
 
 # Internal / development
 .claude/
@@ -55,7 +55,6 @@ PROGRESS_GUIDE.md
 CLAUDE.md
 reports/
 
-models
 .build/
 testresource/
 # Auxiliary tool venvs (oMLX comparison env, etc.) — large, never committed

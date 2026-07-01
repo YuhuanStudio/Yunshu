@@ -15,10 +15,10 @@ import {
   cn,
 } from "yunui";
 import { StatCard } from "yunui/patterns";
-import { Cpu, MemoryStick, Activity, Clock, ChevronDown, Layers, Server } from "lucide-react";
+import { Cpu, MemoryStick, Activity, Clock, ChevronDown, Server } from "lucide-react";
 import { api, usePolling } from "@/lib/api";
 import { fmtBytes, fmtNumber, fmtPct, fmtDuration } from "@/lib/format";
-import type { EngineStats, SystemStats, RadixTreeStats, HardwareProfile } from "@/lib/types";
+import type { EngineStats, SystemStats, RadixTreeStats, HealthStatus } from "@/lib/types";
 
 const HISTORY_LEN = 40;
 
@@ -27,6 +27,36 @@ function pctTone(pct: number): "success" | "warning" | "error" {
   if (pct >= 90) return "error";
   if (pct >= 70) return "warning";
   return "success";
+}
+
+/**
+ * Best-effort RadixTree hit-rate from `/radix-tree` (shape `{models:[...]}`).
+ * Each model row carries opaque stats; we look for a numeric `hit_rate` or a
+ * `match_hits` / `match_total` pair and aggregate. Returns null when nothing
+ * derivable is present (so the caller can drop the gauge).
+ */
+function deriveRadixHitRate(radix: RadixTreeStats | null): number | null {
+  if (!radix?.models?.length) return null;
+  let hits = 0;
+  let total = 0;
+  let sawRate = false;
+  let rateSum = 0;
+  let rateCount = 0;
+  for (const m of radix.models) {
+    const rec = m as Record<string, unknown>;
+    if (typeof rec.hit_rate === "number") {
+      sawRate = true;
+      rateSum += rec.hit_rate <= 1 ? rec.hit_rate * 100 : rec.hit_rate;
+      rateCount += 1;
+    }
+    if (typeof rec.match_hits === "number" && typeof rec.match_total === "number") {
+      hits += rec.match_hits;
+      total += rec.match_total;
+    }
+  }
+  if (total > 0) return (hits / total) * 100;
+  if (sawRate && rateCount > 0) return rateSum / rateCount;
+  return null;
 }
 
 function renderValue(v: unknown): ReactNode {
@@ -82,16 +112,16 @@ function Info({ label, value }: { label: string; value: ReactNode }) {
 }
 
 export default function MonitoringPage() {
-  const engine = usePolling<EngineStats>((s) => api.get("/api/v1/monitoring/engine", s), 5000);
-  const system = usePolling<SystemStats>((s) => api.get("/api/v1/monitoring/system", s), 5000);
-  const radix = usePolling<RadixTreeStats>((s) => api.get("/api/v1/admin/radix-tree", s), 5000);
-  const hw = usePolling<HardwareProfile>((s) => api.get("/api/v1/admin/hardware-profile", s), 5000);
+  const engine = usePolling<EngineStats>((s) => api.get("/api/v1/gw/monitoring/engine", s), 5000);
+  const system = usePolling<SystemStats>((s) => api.get("/api/v1/gw/monitoring/system", s), 5000);
+  const radix = usePolling<RadixTreeStats>((s) => api.get("/api/v1/gw/monitoring/radix-tree", s), 5000);
+  const health = usePolling<HealthStatus>((s) => api.get("/health", s), 5000);
   const all = usePolling<Record<string, unknown>>((s) => api.get("/api/v1/gw/monitoring/all", s), 5000);
 
   const [gpuHist, setGpuHist] = useState<number[]>([]);
   const sys = system.data;
   const eng = engine.data;
-  const gpu = sys?.gpu ?? eng?.gpu_memory ?? null;
+  const gpu = sys?.gpu ?? null;
 
   useEffect(() => {
     if (gpu) setGpuHist((h) => [...h.slice(-(HISTORY_LEN - 1)), gpu.utilization_pct ?? 0]);
@@ -105,19 +135,20 @@ export default function MonitoringPage() {
     );
   }
 
-  const memUsedPct = sys ? (sys.memory_used_bytes / sys.memory_total_bytes) * 100 : 0;
-  const hitRate = radix.data && radix.data.match_total > 0 ? (radix.data.match_hits / radix.data.match_total) * 100 : 0;
+  const memPct = sys?.memory.percent ?? 0;
+  const hitRate = deriveRadixHitRate(radix.data);
+  const gpuFree = gpu ? Math.max(0, gpu.total_uma_bytes - gpu.active_bytes - gpu.cache_bytes) : 0;
 
   return (
     <div className="page-enter px-6 py-6 sm:px-8">
       <div className="mx-auto max-w-7xl space-y-4">
         <div>
           <h1 className="heading-xl">Monitoring</h1>
-          <p className="text-body mt-1">Engine, GPU, cache and hardware telemetry — refreshed every 5s.</p>
+          <p className="text-body mt-1">Engine, GPU, cache and system telemetry — refreshed every 5s.</p>
         </div>
 
         {/* Top gauges */}
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className={cn("grid grid-cols-1 gap-4", hitRate != null ? "lg:grid-cols-3" : "lg:grid-cols-2")}>
           <Card className="flex items-center gap-5 p-5">
             <Gauge value={gpu?.utilization_pct ?? 0} tone={pctTone(gpu?.utilization_pct ?? 0)} size={96} thickness={8} />
             <div className="min-w-0">
@@ -130,26 +161,27 @@ export default function MonitoringPage() {
           </Card>
 
           <Card className="flex items-center gap-5 p-5">
-            <Gauge value={memUsedPct} tone={pctTone(memUsedPct)} size={96} thickness={8} />
+            <Gauge value={memPct} tone={pctTone(memPct)} size={96} thickness={8} />
             <div className="min-w-0">
               <div className="text-sm font-medium">System memory</div>
               <div className="mt-1 text-xs text-muted-foreground">
-                {sys ? `${fmtBytes(sys.memory_used_bytes)} / ${fmtBytes(sys.memory_total_bytes)}` : "—"}
+                {sys ? `${fmtBytes(sys.memory.used_bytes)} / ${fmtBytes(sys.memory.total_bytes)}` : "—"}
               </div>
-              <div className="mt-1 text-xs text-muted-foreground">CPU {sys ? fmtPct(sys.cpu_percent) : "—"}</div>
+              <div className="mt-1 text-xs text-muted-foreground">CPU {sys ? fmtPct(sys.cpu.percent) : "—"}</div>
             </div>
           </Card>
 
-          <Card className="flex items-center gap-5 p-5">
-            <Gauge value={hitRate} tone={hitRate >= 50 ? "success" : "warning"} size={96} thickness={8} />
-            <div className="min-w-0">
-              <div className="text-sm font-medium">RadixTree hit rate</div>
-              <div className="mt-1 text-xs text-muted-foreground">
-                {radix.data ? `${fmtNumber(radix.data.match_hits)} / ${fmtNumber(radix.data.match_total)}` : "—"}
+          {hitRate != null && (
+            <Card className="flex items-center gap-5 p-5">
+              <Gauge value={hitRate} tone={hitRate >= 50 ? "success" : "warning"} size={96} thickness={8} />
+              <div className="min-w-0">
+                <div className="text-sm font-medium">RadixTree hit rate</div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {radix.data ? `${fmtNumber(radix.data.models.length)} model(s)` : "—"}
+                </div>
               </div>
-              {radix.data && <div className="mt-1 text-xs text-muted-foreground">{fmtNumber(radix.data.total_nodes)} nodes</div>}
-            </div>
-          </Card>
+            </Card>
+          )}
         </div>
 
         {/* Engine stat grid */}
@@ -157,7 +189,7 @@ export default function MonitoringPage() {
           <StatCard icon={Activity} label="Active" value={eng ? fmtNumber(eng.active_requests) : "—"} subtext={eng ? `${fmtNumber(eng.waiting_requests)} waiting` : undefined} />
           <StatCard icon={Server} label="Processed" value={eng ? fmtNumber(eng.requests_processed) : "—"} tone="emerald" />
           <StatCard icon={Cpu} label="Out tokens" value={eng ? fmtNumber(eng.total_completion_tokens) : "—"} tone="blue" />
-          <StatCard icon={Clock} label="Uptime" value={eng ? fmtDuration(eng.uptime_seconds) : "—"} tone="purple" />
+          <StatCard icon={Clock} label="Uptime" value={health.data ? fmtDuration(health.data.uptime_seconds) : "—"} tone="purple" />
         </div>
 
         {/* GPU memory breakdown */}
@@ -167,39 +199,33 @@ export default function MonitoringPage() {
               <MemoryStick className="h-4 w-4 text-muted-foreground" /> GPU memory
             </div>
             <SegmentedBar
-              total={gpu.total_bytes}
+              total={gpu.total_uma_bytes}
               legend
               formatValue={(v) => fmtBytes(v)}
               segments={[
                 { value: gpu.active_bytes, tone: "accent", label: "Active" },
                 { value: gpu.cache_bytes, tone: "info", label: "Cache" },
-                { value: Math.max(0, gpu.available_bytes), tone: "neutral", label: "Free" },
+                { value: gpuFree, tone: "neutral", label: "Free" },
               ]}
             />
             <div className="mt-3 text-xs text-muted-foreground">Peak {fmtBytes(gpu.peak_bytes)}</div>
           </Card>
         )}
 
-        {/* Hardware profile */}
-        {hw.data && !hw.data.error && (
-          <Section title="Hardware profile" icon={<Cpu className="h-4 w-4 text-muted-foreground" />} defaultOpen>
+        {/* System / hardware info (from /system) */}
+        {sys && (
+          <Section title="System" icon={<Cpu className="h-4 w-4 text-muted-foreground" />} defaultOpen>
             <div className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4">
-              <Info label="Chip" value={hw.data.chip_name} />
-              <Info label="Generation" value={hw.data.chip_generation} />
-              <Info label="Tier" value={hw.data.chip_tier} />
-              <Info label="GPU cores" value={hw.data.gpu_cores} />
-              <Info label="Total memory" value={`${hw.data.total_memory_gb} GB`} />
-              <Info label="Working set" value={`${hw.data.working_set_gb} GB`} />
-              <Info label="MLX" value={hw.data.mlx_version} />
-              <Info label="mlx-lm" value={hw.data.mlx_lm_version} />
+              <Info label="Platform" value={sys.platform} />
+              <Info label="Hostname" value={sys.hostname} />
+              <Info label="CPU cores" value={`${sys.cpu.physical_cores}P / ${sys.cpu.logical_cores}L`} />
+              <Info label="MLX" value={sys.gpu.mlx_version} />
+              <Info label="Python" value={sys.python_version} />
+              <Info label="PID" value={sys.pid} />
+              {sys.compute_utilization_pct != null && (
+                <Info label="Compute util" value={fmtPct(sys.compute_utilization_pct)} />
+              )}
             </div>
-          </Section>
-        )}
-
-        {/* RadixTree detail */}
-        {radix.data && (
-          <Section title="RadixTree cache" icon={<Layers className="h-4 w-4 text-muted-foreground" />}>
-            <MetricGroup data={radix.data as unknown as Record<string, unknown>} />
           </Section>
         )}
 

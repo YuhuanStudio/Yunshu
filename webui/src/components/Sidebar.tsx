@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { Sidebar as YunUISidebar, type SidebarSection } from "yunui/patterns";
 import { StatusIndicator } from "yunui";
+import { api } from "@/lib/api";
+import type { SystemStats } from "@/lib/types";
 import {
   LayoutDashboard,
   MessageSquare,
@@ -78,10 +80,16 @@ export default function Sidebar({ isOpen, onClose, collapsed, onToggleCollapse }
   }, []);
 
   useEffect(() => {
-    fetch("/api/v1/monitoring/system")
-      .then((r) => r.json())
-      .then((d) => setMlx(d.mlx_version))
-      .catch(() => {});
+    const controller = new AbortController();
+    // Monitoring requires the auth token; use the api client (attaches Bearer)
+    // and read the MLX version off the nested gpu object (real /gw/ shape).
+    api
+      .get<SystemStats>("/api/v1/gw/monitoring/system", controller.signal)
+      .then((d) => setMlx(d.gpu?.mlx_version))
+      .catch(() => {
+        /* no token / not authed — MLX version is optional chrome */
+      });
+    return () => controller.abort();
   }, []);
 
   const footer = (
