@@ -91,8 +91,18 @@ def _select_image_engine(manager, model):
             return entry.engine
     if not ml:
         return first  # no model requested → first-of-type (legacy default)
-    # model requested but unmatched: serve the lone engine only when unambiguous.
-    return first if n_loaded == 1 else None
+    # model requested but unmatched. Serve the lone loaded engine ONLY when the requested id
+    # is NOT itself a registered model — i.e. the "operator loaded their image model under a
+    # custom alias and the client sent the hardcoded default" case. When the client names a
+    # REAL registered model, return None so the caller loads THAT one; never silently serve a
+    # different, already-loaded image engine (e.g. one a mis-routed request left resident) in
+    # its place, which would generate from the WRONG model.
+    if n_loaded == 1 and not any(
+        e.model_id == model or e.model_id.lower() == ml
+        for e in manager.list_entries()
+    ):
+        return first
+    return None
 
 
 def _register_image_cancel(model):

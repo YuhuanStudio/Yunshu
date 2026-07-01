@@ -68,6 +68,25 @@ def test_empty_model_first_of_type(monkeypatch):
     assert _select_image_engine(mgr, "") is a
 
 
+def test_registered_but_unloaded_not_served_by_sole_fallback(monkeypatch):
+    # Poison regression: one image engine (DA3) is loaded; the client requests a DIFFERENT
+    # but REGISTERED image model that simply isn't loaded yet. The sole-fallback must NOT
+    # serve DA3 — return None so the caller loads the model actually asked for. (Real bug:
+    # a mis-routed request left DA3NESTED resident and every Z-Image request served DA3.)
+    da3 = _ImgEngine("DA3")
+    mgr = _mgr(
+        [
+            _entry("DA3NESTED", da3, loaded=True),
+            _entry("Z-Image-Turbo-MLX-4bit", None, loaded=False),
+        ],
+        monkeypatch,
+    )
+    assert _select_image_engine(mgr, "Z-Image-Turbo-MLX-4bit") is None
+    # sanity: the sole-fallback still serves for a genuinely UNREGISTERED id (custom alias)
+    mgr2 = _mgr([_entry("my-custom-flux", da3, loaded=True)], monkeypatch)
+    assert _select_image_engine(mgr2, "some-unregistered-id") is da3
+
+
 def test_all_image_routes_use_selector():
     src = inspect.getsource(IMG)
     # no route still grabs the first-of-type engine
