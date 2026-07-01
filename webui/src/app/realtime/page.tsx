@@ -2,388 +2,351 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Radio,
-  Mic,
-  MicOff,
-  Send,
-  Loader2,
-  X,
-  Volume2,
-  Settings2,
-} from "lucide-react";
+  Button,
+  Input,
+  Textarea,
+  Card,
+  Badge,
+  Alert,
+  EmptyState,
+  StatusIndicator,
+  Checkbox,
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+  cn,
+  toast,
+} from "yunui";
+import { PageShell } from "@/components/page-shell";
+import type { WsMessage } from "@/lib/types";
 
-interface WsMessage {
-  id: string;
-  direction: "send" | "recv";
-  type: string;
-  data: unknown;
-  timestamp: number;
+type ConnState = "closed" | "connecting" | "open";
+
+const TEMPLATES: { label: string; body: string }[] = [
+  {
+    label: "session.update",
+    body: JSON.stringify({ type: "session.update", session: { model: "" } }, null, 2),
+  },
+  {
+    label: "response.create",
+    body: JSON.stringify(
+      { type: "response.create", response: { modalities: ["text"], input: [] } },
+      null,
+      2,
+    ),
+  },
+  {
+    label: "response.cancel",
+    body: JSON.stringify({ type: "response.cancel" }, null, 2),
+  },
+];
+
+function defaultWsUrl(): string {
+  if (typeof window === "undefined") return "ws://localhost/realtime";
+  const proto = window.location.protocol === "https:" ? "wss" : "ws";
+  return `${proto}://${window.location.host}/realtime`;
+}
+
+let msgSeq = 0;
+function nextId(): string {
+  msgSeq += 1;
+  return `ws-${Date.now()}-${msgSeq}`;
+}
+
+function typeOf(parsed: unknown): string {
+  if (parsed && typeof parsed === "object" && "type" in parsed) {
+    return String((parsed as { type: unknown }).type ?? "message");
+  }
+  return "message";
 }
 
 export default function RealtimePage() {
-  // WebSocket must connect to the backend directly (Next.js rewrites don't proxy WS).
-  // Use NEXT_PUBLIC_BACKEND_URL if set, otherwise derive from current location
-  // (works when WebUI is served by the backend itself, not Next.js dev server).
-  const backendHost = typeof window !== "undefined"
-    ? (process.env.NEXT_PUBLIC_BACKEND_URL
-        ? new URL(process.env.NEXT_PUBLIC_BACKEND_URL).host
-        : window.location.port === "3000"
-          ? `${window.location.hostname}:8000`  // Next.js dev server → backend
-          : window.location.host)               // Production (WebUI served by backend)
-    : "localhost:8000";
-  const defaultWsUrl = `ws://${backendHost}/realtime`;
-  const [url, setUrl] = useState(defaultWsUrl);
-  const [connected, setConnected] = useState(false);
-  const [connecting, setConnecting] = useState(false);
+  const [url, setUrl] = useState("");
+  const [state, setState] = useState<ConnState>("closed");
   const [messages, setMessages] = useState<WsMessage[]>([]);
-  const [inputJson, setInputJson] = useState('{\n  "type": "session.update",\n  "session": {\n    "model": "default"\n  }\n}');
+  const [draft, setDraft] = useState("");
   const [autoScroll, setAutoScroll] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const msgIdRef = useRef(0);
+  const logRef = useRef<HTMLDivElement | null>(null);
 
+  // Seed the URL from the current origin once mounted (window is client-only).
   useEffect(() => {
-    if (autoScroll) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [messages, autoScroll]);
-
-  // Close the WebSocket on unmount so navigating away does not leak the
-  // connection or fire setMessages on an unmounted component (Wave 431 fix).
-  useEffect(() => {
-    return () => {
-      if (wsRef.current) {
-        try { wsRef.current.close(); } catch { /* ignore */ }
-        wsRef.current = null;
-      }
-    };
+    setUrl(defaultWsUrl());
   }, []);
 
-  const addMsg = useCallback((direction: WsMessage["direction"], type: string, data: unknown) => {
-    const msg: WsMessage = {
-      id: `ws-${++msgIdRef.current}`,
-      direction,
-      type,
-      data,
-      timestamp: Date.now(),
-    };
+  const push = useCallback((msg: WsMessage) => {
     setMessages((prev) => [...prev, msg]);
   }, []);
 
+  const connected = state === "open";
+
   const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
-
-    setConnecting(true);
-    setError(null);
-    const ws = new WebSocket(url);
-
-    ws.onopen = () => {
-      setConnected(true);
-      setConnecting(false);
-      addMsg("recv", "system", { event: "connected" });
-    };
-
-    ws.onclose = (e) => {
-      setConnected(false);
-      setConnecting(false);
-      addMsg("recv", "system", { event: "disconnected", code: e.code, reason: e.reason });
-      wsRef.current = null;
-    };
-
-    ws.onerror = () => {
-      setError("WebSocket connection failed");
-      setConnecting(false);
-    };
-
-    ws.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        addMsg("recv", data.type || "message", data);
-      } catch {
-        addMsg("recv", "raw", e.data);
-      }
-    };
-
+    if (wsRef.current) return;
+    setState("connecting");
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(url);
+    } catch {
+      setState("closed");
+      toast.error("Invalid WebSocket URL");
+      return;
+    }
     wsRef.current = ws;
-  }, [url, addMsg]);
+
+    ws.onopen = () => setState("open");
+    ws.onerror = () => {
+      setState("closed");
+      toast.error("WebSocket error");
+    };
+    ws.onclose = () => {
+      wsRef.current = null;
+      setState("closed");
+    };
+    ws.onmessage = (ev) => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(ev.data as string);
+      } catch {
+        parsed = { type: "message", raw: ev.data };
+      }
+      push({
+        id: nextId(),
+        direction: "recv",
+        type: typeOf(parsed),
+        data: parsed,
+        timestamp: Date.now(),
+      });
+    };
+  }, [url, push]);
 
   const disconnect = useCallback(() => {
     wsRef.current?.close();
+    wsRef.current = null;
+    setState("closed");
   }, []);
 
-  const sendJson = useCallback(() => {
+  // Tear the socket down on unmount.
+  useEffect(() => {
+    return () => {
+      wsRef.current?.close();
+      wsRef.current = null;
+    };
+  }, []);
+
+  // Auto-scroll to the newest message.
+  useEffect(() => {
+    if (autoScroll && logRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [messages, autoScroll]);
+
+  const send = useCallback(() => {
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      setError("Not connected");
+    if (!ws || state !== "open") return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(draft);
+    } catch {
+      toast.error("Message is not valid JSON");
       return;
     }
+    ws.send(JSON.stringify(parsed));
+    push({
+      id: nextId(),
+      direction: "send",
+      type: typeOf(parsed),
+      data: parsed,
+      timestamp: Date.now(),
+    });
+  }, [draft, state, push]);
 
+  const draftIsValid = (() => {
+    if (!draft.trim()) return false;
     try {
-      const parsed = JSON.parse(inputJson);
-      const type = parsed.type || "message";
-      ws.send(inputJson);
-      addMsg("send", type, parsed);
-      setError(null);
-    } catch (err) {
-      setError(`Invalid JSON: ${err instanceof Error ? err.message : String(err)}`);
+      JSON.parse(draft);
+      return true;
+    } catch {
+      return false;
     }
-  }, [inputJson, addMsg]);
+  })();
 
-  const clearMessages = useCallback(() => {
-    setMessages([]);
-    msgIdRef.current = 0;
-  }, []);
+  const sentCount = messages.filter((m) => m.direction === "send").length;
+  const recvCount = messages.filter((m) => m.direction === "recv").length;
 
-  return (
-    <div className="flex h-full">
-      {/* Main area */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Header */}
-        <div className="border-b border-[var(--color-border)] px-4 py-3 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3">
-            <Radio className="w-5 h-5 text-[var(--color-accent)]" />
-            <h2 className="text-lg font-bold">Realtime</h2>
-            <span
-              className={`text-xs px-2 py-0.5 rounded-full ${
-                connected
-                  ? "bg-[var(--color-success)]/15 text-[var(--color-success)]"
-                  : connecting
-                    ? "bg-[var(--color-warning)]/15 text-[var(--color-warning)]"
-                    : "bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)]"
-              }`}
-            >
-              {connected ? "Connected" : connecting ? "Connecting..." : "Disconnected"}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            {connected ? (
-              <button
-                onClick={disconnect}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm bg-[var(--color-danger)]/15 text-[var(--color-danger)] hover:bg-[var(--color-danger)]/25 transition-colors"
-              >
-                <MicOff className="w-3.5 h-3.5" />
-                Disconnect
-              </button>
-            ) : (
-              <button
-                onClick={connect}
-                disabled={connecting}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-hover)] disabled:opacity-50 transition-colors"
-              >
-                {connecting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Mic className="w-3.5 h-3.5" />}
-                Connect
-              </button>
-            )}
-            <button
-              onClick={clearMessages}
-              className="p-1.5 rounded-lg text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)] transition-colors"
-              title="Clear messages"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-
-        {/* Messages log */}
-        <div className="flex-1 overflow-auto font-mono text-xs">
-          {messages.length === 0 ? (
-            <div className="flex items-center justify-center h-full text-[var(--color-text-secondary)]">
-              <div className="text-center max-w-sm">
-                <Volume2 className="w-10 h-10 mx-auto mb-3 opacity-30" />
-                <p>Connect to a Realtime WebSocket endpoint to send and receive messages.</p>
-              </div>
-            </div>
-          ) : (
-            <div className="p-4 space-y-2">
-              {messages.map((msg) => (
-                <WsMessageRow key={msg.id} msg={msg} />
-              ))}
-              <div ref={messagesEndRef} />
-            </div>
-          )}
-        </div>
-
-        {/* Input */}
-        <div className="border-t border-[var(--color-border)] p-4 shrink-0">
-          {error && (
-            <div className="mb-2 text-xs text-[var(--color-danger)] bg-[var(--color-danger)]/10 rounded-lg px-3 py-2 flex items-center gap-2">
-              <X className="w-3 h-3 shrink-0" />
-              {error}
-              <button onClick={() => setError(null)} className="ml-auto opacity-60 hover:opacity-100">
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-          )}
-          <div className="flex gap-2">
-            <textarea
-              value={inputJson}
-              onChange={(e) => setInputJson(e.target.value)}
-              rows={4}
-              spellCheck={false}
-              className="flex-1 bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-xl px-4 py-3 text-xs font-mono resize-none focus:outline-none focus:border-[var(--color-accent)]"
-              placeholder="JSON message to send..."
-              disabled={!connected}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                  e.preventDefault();
-                  sendJson();
-                }
-              }}
-            />
-            <button
-              onClick={sendJson}
-              disabled={!connected}
-              className="self-end p-2.5 rounded-lg bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-hover)] disabled:opacity-30 transition-colors"
-              title="Send (Cmd+Enter)"
-            >
-              <Send className="w-4 h-4" />
-            </button>
-          </div>
-          <div className="mt-1 text-[10px] text-[var(--color-text-secondary)]">
-            Cmd+Enter to send
-          </div>
-        </div>
-      </div>
-
-      {/* Config sidebar */}
-      <div className="w-72 border-l border-[var(--color-border)] p-4 space-y-5 shrink-0 overflow-auto">
-        <h3 className="font-semibold text-sm flex items-center gap-2">
-          <Settings2 className="w-4 h-4" />
-          Connection
-        </h3>
-
-        <div>
-          <label className="text-xs text-[var(--color-text-secondary)] uppercase tracking-wide block mb-1">
-            WebSocket URL
-          </label>
-          <input
-            type="text"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            disabled={connected}
-            className="w-full bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-[var(--color-accent)] disabled:opacity-50"
-          />
-        </div>
-
-        <div className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            id="autoScroll"
-            checked={autoScroll}
-            onChange={(e) => setAutoScroll(e.target.checked)}
-          />
-          <label htmlFor="autoScroll" className="text-sm">Auto-scroll</label>
-        </div>
-
-        <div className="pt-4 border-t border-[var(--color-border)]">
-          <h4 className="text-xs font-medium text-[var(--color-text-secondary)] mb-2">
-            Message Templates
-          </h4>
-          <div className="space-y-1.5">
-            <TemplateButton
-              label="Session Update"
-              onClick={() =>
-                setInputJson(
-                  JSON.stringify(
-                    { type: "session.update", session: { model: "default" } },
-                    null,
-                    2
-                  )
-                )
-              }
-            />
-            <TemplateButton
-              label="Create Response"
-              onClick={() =>
-                setInputJson(
-                  JSON.stringify(
-                    {
-                      type: "response.create",
-                      response: {
-                        modalities: ["text"],
-                        input: [{ type: "input_text", text: "Hello!" }],
-                      },
-                    },
-                    null,
-                    2
-                  )
-                )
-              }
-            />
-            <TemplateButton
-              label="Cancel Response"
-              onClick={() =>
-                setInputJson(JSON.stringify({ type: "response.cancel" }, null, 2))
-              }
-            />
-          </div>
-        </div>
-
-        <div className="pt-4 border-t border-[var(--color-border)]">
-          <h4 className="text-xs font-medium text-[var(--color-text-secondary)] mb-2">
-            Stats
-          </h4>
-          <div className="grid grid-cols-2 gap-2 text-sm">
-            <div>
-              <div className="text-xs text-[var(--color-text-secondary)]">Sent</div>
-              <div className="font-medium tabular-nums">
-                {messages.filter((m) => m.direction === "send").length}
-              </div>
-            </div>
-            <div>
-              <div className="text-xs text-[var(--color-text-secondary)]">Received</div>
-              <div className="font-medium tabular-nums">
-                {messages.filter((m) => m.direction === "recv").length}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function WsMessageRow({ msg }: { msg: WsMessage }) {
-  const [expanded, setExpanded] = useState(false);
-  const isSend = msg.direction === "send";
-  const time = new Date(msg.timestamp).toLocaleTimeString();
+  const statusFor: Record<ConnState, "online" | "away" | "offline"> = {
+    open: "online",
+    connecting: "away",
+    closed: "offline",
+  };
+  const statusLabel: Record<ConnState, string> = {
+    open: "Connected",
+    connecting: "Connecting…",
+    closed: "Disconnected",
+  };
 
   return (
-    <div className={`rounded-lg border ${
-      isSend
-        ? "border-[var(--color-accent)]/30 bg-[var(--color-accent)]/5"
-        : "border-[var(--color-border)] bg-[var(--color-bg-secondary)]"
-    }`}>
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-left"
-      >
-        <span className={`text-[10px] font-bold uppercase ${isSend ? "text-[var(--color-accent)]" : "text-[var(--color-success)]"}`}>
-          {isSend ? "→" : "←"}
-        </span>
-        <span className="text-[var(--color-accent)]">{msg.type}</span>
-        <span className="ml-auto text-[10px] text-[var(--color-text-secondary)]">{time}</span>
-      </button>
-      {expanded && (
-        <div className="px-3 pb-2 border-t border-[var(--color-border)]">
-          <pre className="mt-2 whitespace-pre-wrap break-all text-[var(--color-text-secondary)]">
-            {typeof msg.data === "string" ? msg.data : JSON.stringify(msg.data, null, 2)}
-          </pre>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TemplateButton({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className="w-full text-left text-xs px-3 py-1.5 rounded-lg bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-secondary)] transition-colors"
+    <PageShell
+      title="Realtime"
+      description="WebSocket playground for the realtime API."
+      width="wide"
     >
-      {label}
-    </button>
+      <div className="flex flex-col gap-6 lg:flex-row">
+        {/* Message log */}
+        <div className="flex min-w-0 flex-1 flex-col gap-4">
+          <div className="flex items-center gap-3">
+            <StatusIndicator status={statusFor[state]} pulse={connected}>
+              <span className="text-sm">{statusLabel[state]}</span>
+            </StatusIndicator>
+            <div className="ml-auto flex items-center gap-2">
+              {connected ? (
+                <Button variant="secondary" size="sm" onClick={disconnect}>
+                  Disconnect
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  onClick={connect}
+                  disabled={state === "connecting" || !url.trim()}
+                >
+                  Connect
+                </Button>
+              )}
+            </div>
+          </div>
+
+          <Card className="p-0">
+            <div
+              ref={logRef}
+              className="max-h-[28rem] min-h-[16rem] overflow-y-auto p-2 font-mono text-xs"
+            >
+              {messages.length === 0 ? (
+                <div className="py-10">
+                  <EmptyState
+                    title="No messages yet"
+                    description="Connect and send a frame to see traffic here."
+                  />
+                </div>
+              ) : (
+                <ul className="flex flex-col gap-1">
+                  {messages.map((m) => {
+                    const isSend = m.direction === "send";
+                    return (
+                      <li key={m.id}>
+                        <Collapsible>
+                          <CollapsibleTrigger
+                            className={cn(
+                              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left",
+                              "hover:bg-muted/60",
+                            )}
+                          >
+                            <span
+                              className={cn(
+                                "font-semibold",
+                                isSend ? "text-accent" : "text-success",
+                              )}
+                              aria-hidden
+                            >
+                              {isSend ? "→" : "←"}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate">{m.type}</span>
+                            <span className="shrink-0 text-muted-foreground">
+                              {new Date(m.timestamp).toLocaleTimeString()}
+                            </span>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent>
+                            <pre className="mt-1 overflow-x-auto rounded-md bg-muted/50 p-2 text-muted-foreground">
+                              {JSON.stringify(m.data, null, 2)}
+                            </pre>
+                          </CollapsibleContent>
+                        </Collapsible>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </Card>
+
+          {/* Send area */}
+          <Card className="flex flex-col gap-3 p-4">
+            <Textarea
+              className="font-mono text-xs"
+              rows={6}
+              placeholder='{"type":"response.create"}'
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+            />
+            {draft.trim() && !draftIsValid && (
+              <Alert variant="error" title="Invalid JSON">
+                Fix the payload before sending.
+              </Alert>
+            )}
+            <div className="flex items-center justify-end">
+              <Button size="sm" onClick={send} disabled={!connected || !draftIsValid}>
+                Send
+              </Button>
+            </div>
+          </Card>
+        </div>
+
+        {/* Config panel */}
+        <div className="flex w-full shrink-0 flex-col gap-4 lg:w-72">
+          <Card className="flex flex-col gap-4 p-4">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-muted-foreground">
+                WebSocket URL
+              </label>
+              <Input
+                className="font-mono text-xs"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                disabled={connected || state === "connecting"}
+                placeholder="ws://host/realtime"
+              />
+            </div>
+
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox checked={autoScroll} onCheckedChange={setAutoScroll} />
+              <span>Auto-scroll</span>
+            </label>
+          </Card>
+
+          <Card className="flex flex-col gap-2 p-4">
+            <span className="text-xs font-medium text-muted-foreground">Templates</span>
+            {TEMPLATES.map((t) => (
+              <Button
+                key={t.label}
+                variant="secondary"
+                size="sm"
+                className="justify-start font-mono text-xs"
+                onClick={() => setDraft(t.body)}
+              >
+                {t.label}
+              </Button>
+            ))}
+          </Card>
+
+          <Card className="p-4">
+            <span className="text-xs font-medium text-muted-foreground">Stats</span>
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1">
+                <span className="text-2xl font-semibold text-accent">{sentCount}</span>
+                <span className="text-xs text-muted-foreground">Sent</span>
+              </div>
+              <div className="flex flex-col gap-1">
+                <span className="text-2xl font-semibold text-success">{recvCount}</span>
+                <span className="text-xs text-muted-foreground">Received</span>
+              </div>
+            </div>
+            <div className="mt-3">
+              <Badge variant={connected ? "success" : "default"}>
+                {connected ? "Live" : "Idle"}
+              </Badge>
+            </div>
+          </Card>
+        </div>
+      </div>
+    </PageShell>
   );
 }

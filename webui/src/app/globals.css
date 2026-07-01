@@ -1,136 +1,56 @@
 @import "tailwindcss";
-/* YunUI design system — the single source of truth for UI. Pinned via git in package.json
-   (`yunui: github:YuhuanStudio/YunUI#<commit>`); to change it, bump the pin + pnpm install.
-   Mirrors Yunxin's integration. */
+/* YunUI design system — the single source of truth for UI. Pinned via git in
+   package.json (`yunui: github:YuhuanStudio/YunUI#<commit>`); to change it, bump
+   the pin + pnpm install. */
 @import "yunui/css";
-/* Tailwind v4 must scan YunUI's compiled components so their inline utility classes get
-   generated (git-installed dist is real files, so this path is followed). */
+/* Tailwind v4 must scan YunUI's compiled components so their inline utility
+   classes get generated (the git-installed dist is real files). */
 @source "../../node_modules/yunui/dist";
 
-/* THEMING BRIDGE — the webui's legacy `--color-*` names now alias YunUI's semantic tokens,
-   so every existing page renders in YunUI's palette immediately. YunUI switches light/dark
-   itself (via `.dark` / `data-theme` on <html>), so no separate light block is needed.
-   `--color-border` and `--color-accent` already exist in YunUI and are intentionally NOT
-   redefined here (YunUI's win). As pages migrate to YunUI components/utilities, these
-   aliases can be dropped. */
-:root {
-  --color-bg-primary: var(--color-background);
-  --color-bg-secondary: var(--color-card);
-  --color-bg-tertiary: var(--color-muted);
-  --color-text-primary: var(--color-foreground);
-  --color-text-secondary: var(--color-muted-foreground);
-  --color-accent-hover: var(--color-accent);
-  --color-accent-muted: var(--accent-alpha-weak, rgba(59, 130, 246, 0.15));
-  --color-success: var(--color-success-solid-strong, #22c55e);
-  --color-warning: var(--color-warning-solid-strong, #eab308);
-  --color-danger: var(--color-destructive, #ef4444);
-}
-
+/* Every page renders in YunUI's palette via its semantic tokens
+   (bg-background, text-foreground, bg-card, text-muted-foreground, text-accent,
+   border-border, text-success/warning/error, …). next-themes owns the
+   light / dark / true-black class on <html>. No legacy color bridge. */
 body {
-  background: var(--color-bg-primary);
-  color: var(--color-text-primary);
+  background: var(--color-background);
+  color: var(--color-foreground);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
-/* Animations */
-@keyframes fadeIn {
+/* Page enter transition */
+@keyframes yunshu-fade-in {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
 }
-
-@keyframes slideInLeft {
-  from { opacity: 0; transform: translateX(-8px); }
-  to { opacity: 1; transform: translateX(0); }
-}
-
-@keyframes pulse-dot {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-
-@keyframes shimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-.message-fade-in {
-  animation: fadeIn 0.3s ease-out;
-}
-
-.page-enter {
-  animation: fadeIn 0.25s ease-out;
-}
-
-/* Skeleton loading */
-.skeleton {
-  background: linear-gradient(90deg,
-    var(--color-bg-tertiary) 25%,
-    var(--color-border) 50%,
-    var(--color-bg-tertiary) 75%
-  );
-  background-size: 200% 100%;
-  animation: shimmer 1.5s ease-in-out infinite;
-  border-radius: 6px;
-}
+.page-enter { animation: yunshu-fade-in 0.25s ease-out; }
+.message-fade-in { animation: yunshu-fade-in 0.3s ease-out; }
 
 /* Scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
   background: var(--color-border);
   border-radius: 3px;
 }
-::-webkit-scrollbar-thumb:hover {
-  background: #3a3a3a;
-}
+::-webkit-scrollbar-thumb:hover { background: var(--color-muted-foreground); }
 
-/* Code blocks */
+/* Monospace for code */
 pre, code {
   font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
   font-size: 0.875rem;
 }
 
-/* Selection */
-::selection {
-  background: rgba(59, 130, 246, 0.3);
-}
-
-/* Smooth transitions for interactive elements */
-button, a, input, select, textarea {
-  transition: all 0.15s ease;
-}
-
-/* Drop zone */
-.drop-zone-active {
-  border-color: var(--color-accent) !important;
-  background: var(--color-accent-muted) !important;
-}
-
-/* Sparkline */
-.sparkline-path {
-  fill: none;
-  stroke: var(--color-accent);
-  stroke-width: 1.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-/* Prose overrides for light mode */
-[data-theme="light"] .prose-invert {
-  --tw-prose-body: var(--color-text-primary);
-  --tw-prose-headings: var(--color-text-primary);
+/* Markdown prose (chat / completions) mapped onto YunUI tokens so it restyles
+   with the theme. Tailwind Typography's `prose` variables are overridden here. */
+.prose {
+  --tw-prose-body: var(--color-foreground);
+  --tw-prose-headings: var(--color-foreground);
   --tw-prose-links: var(--color-accent);
-  --tw-prose-code: var(--color-text-primary);
-  --tw-prose-pre-bg: var(--color-bg-tertiary);
-  --tw-prose-pre-code: var(--color-text-primary);
+  --tw-prose-bold: var(--color-foreground);
+  --tw-prose-code: var(--color-foreground);
+  --tw-prose-quotes: var(--color-muted-foreground);
+  --tw-prose-pre-bg: var(--color-muted);
+  --tw-prose-pre-code: var(--color-foreground);
+  --tw-prose-bullets: var(--color-muted-foreground);
+  --tw-prose-hr: var(--color-border);
 }

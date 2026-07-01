@@ -1,563 +1,420 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  Send,
-  Copy,
-  Trash2,
-  Settings,
-  ChevronDown,
-  ChevronUp,
-  FileText,
-} from "lucide-react";
+  Button,
+  NumberInput,
+  Textarea,
+  Slider,
+  Switch,
+  Card,
+  Badge,
+  Alert,
+  Spinner,
+  InlineStatus,
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+  Separator,
+  cn,
+  toast,
+} from "yunui";
+import { SettingRow } from "yunui/patterns";
+import { Play, Square, Copy, ChevronDown, RefreshCw } from "lucide-react";
+import { PageShell } from "@/components/page-shell";
+import { ModelPicker } from "@/components/model-picker";
+import { api, streamSSE, ApiError } from "@/lib/api";
+import { fmtNumber } from "@/lib/format";
+import type { Model, CompletionResult } from "@/lib/types";
 
-const API_BASE =
-  typeof window !== "undefined"
-    ? window.location.origin
-    : "http://localhost:8000";
-
-interface CompletionResult {
-  id: string;
-  choices: {
-    text: string;
-    index: number;
-    finish_reason: string | null;
-    logprobs: Record<string, unknown> | null;
-  }[];
-  usage: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-  };
-}
-
-export default function CompletionsPage() {
-  const [prompt, setPrompt] = useState("");
-  const [model, setModel] = useState("");
-  const [maxTokens, setMaxTokens] = useState(128);
-  const [temperature, setTemperature] = useState(0.7);
-  const [topP, setTopP] = useState(1.0);
-  const [topK, setTopK] = useState(0);
-  const [minP, setMinP] = useState(0.0);
-  const [repetitionPenalty, setRepetitionPenalty] = useState(1.0);
-  const [frequencyPenalty, setFrequencyPenalty] = useState(0.0);
-  const [presencePenalty, setPresencePenalty] = useState(0.0);
-  const [seed, setSeed] = useState<string>("");
-  const [stop, setStop] = useState<string>("");
-  const [specDecode, setSpecDecode] = useState(false);
-  const [enableThinking, setEnableThinking] = useState(false);
-  const [thinkingBudget, setThinkingBudget] = useState<string>("");
-  const [echo, setEcho] = useState(false);
-  const [streaming, setStreaming] = useState(true);
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [results, setResults] = useState<CompletionResult[]>([]);
-  const [streamingText, setStreamingText] = useState("");
-  const [isGenerating, setIsGenerating] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
-  const [models, setModels] = useState<string[]>([]);
-
-  // Abort in-flight SSE stream on unmount so navigation doesn't keep the
-  // gateway generating against a discarded request (Wave 431 fix).
-  useEffect(() => {
-    return () => { abortRef.current?.abort(); };
-  }, []);
-
-  const loadModels = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE}/v1/models`);
-      const data = await res.json();
-      const ids = (data.data || []).map((m: { id: string }) => m.id);
-      setModels(ids);
-      if (ids.length > 0) setModel((prev) => prev || ids[0]);
-    } catch {}
-  }, []);
-
-  useEffect(() => { loadModels(); }, [loadModels]);
-
-  const handleGenerate = async () => {
-    if (!prompt.trim() || isGenerating) return;
-    setIsGenerating(true);
-    setStreamingText("");
-
-    const stopArr = stop
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-    const body: Record<string, unknown> = {
-      model: model || "default",
-      prompt,
-      max_tokens: maxTokens,
-      temperature,
-      top_p: topP,
-      top_k: topK,
-      min_p: minP,
-      repetition_penalty: repetitionPenalty,
-      frequency_penalty: frequencyPenalty,
-      presence_penalty: presencePenalty,
-      stream: streaming,
-      echo,
-      spec_decode: specDecode,
-      enable_thinking: enableThinking,
-    };
-    if (seed) body.seed = parseInt(seed);
-    if (stopArr.length > 0) body.stop = stopArr;
-    if (thinkingBudget) body.thinking_budget = parseInt(thinkingBudget);
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    try {
-      const res = await fetch(`${API_BASE}/v1/completions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-
-      if (!res.ok) {
-        const err = await res.text();
-        setStreamingText(`Error: ${err}`);
-        setIsGenerating(false);
-        return;
-      }
-
-      if (streaming && res.body) {
-        let accumulated = "";
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let resultId = "";
-        let usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-        let buffer = "";
-
-        const processSSELine = (line: string) => {
-          if (!line.startsWith("data: ")) return;
-          const data = line.slice(6).trim();
-          if (data === "[DONE]") return;
-          try {
-            const parsed = JSON.parse(data);
-            resultId = parsed.id || resultId;
-            if (parsed.usage) usage = parsed.usage;
-            const text = parsed.choices?.[0]?.text || "";
-            accumulated += text;
-            setStreamingText(accumulated);
-          } catch {}
-        };
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-
-          for (const line of lines) {
-            processSSELine(line);
-          }
-        }
-
-        // Process any remaining data in the buffer after stream closes
-        if (buffer.trim()) {
-          processSSELine(buffer.trim());
-        }
-
-        setResults((prev) => [
-          {
-            id: resultId || `cmpl-${Date.now()}`,
-            choices: [
-              { text: accumulated, index: 0, finish_reason: "stop", logprobs: null },
-            ],
-            usage,
-          },
-          ...prev,
-        ]);
-        setStreamingText("");
-      } else {
-        const data: CompletionResult = await res.json();
-        setResults((prev) => [data, ...prev]);
-      }
-    } catch (e: unknown) {
-      if (e instanceof DOMException && e.name === "AbortError") {
-        // User cancelled — do nothing
-      } else if (e instanceof Error) {
-        setStreamingText(`Error: ${e.message}`);
-      } else {
-        setStreamingText(`Error: ${String(e)}`);
-      }
-    } finally {
-      setIsGenerating(false);
-      abortRef.current = null;
-    }
-  };
-
-  const handleStop = () => {
-    abortRef.current?.abort();
-    // Save partial streaming text as a result before clearing
-    setStreamingText((current) => {
-      if (current) {
-        setResults((prev) => [
-          {
-            id: `cmpl-${Date.now()}`,
-            choices: [
-              { text: current, index: 0, finish_reason: "abort", logprobs: null },
-            ],
-            usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-          },
-          ...prev,
-        ]);
-      }
-      return "";
-    });
-    setIsGenerating(false);
-  };
-
-  return (
-    <div className="h-full flex flex-col">
-      <div className="px-6 py-4 border-b border-[var(--color-border)]">
-        <h1 className="text-xl font-semibold flex items-center gap-2">
-          <FileText className="w-5 h-5 text-[var(--color-accent)]" />
-          Completions
-        </h1>
-        <p className="text-sm text-[var(--color-text-secondary)] mt-1">
-          OpenAI-compatible text completion endpoint
-        </p>
-      </div>
-
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left: Prompt & Results */}
-        <div className="flex-1 flex flex-col overflow-hidden p-4 gap-4">
-          {/* Prompt input */}
-          <div className="border border-[var(--color-border)] rounded-xl overflow-hidden">
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Enter your prompt here..."
-              className="w-full h-40 p-4 bg-[var(--color-bg-primary)] text-[var(--color-text-primary)] resize-none outline-none text-sm font-mono"
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                  handleGenerate();
-                }
-              }}
-            />
-            <div className="flex items-center justify-between px-3 py-2 bg-[var(--color-bg-secondary)] border-t border-[var(--color-border)]">
-              <span className="text-xs text-[var(--color-text-secondary)]">
-                {prompt.length} chars
-              </span>
-              <div className="flex gap-2">
-                {isGenerating ? (
-                  <button
-                    onClick={handleStop}
-                    className="px-4 py-1.5 text-sm rounded-lg bg-[var(--color-danger)] text-white hover:opacity-90"
-                  >
-                    Stop
-                  </button>
-                ) : (
-                  <button
-                    onClick={handleGenerate}
-                    disabled={!prompt.trim()}
-                    className="px-4 py-1.5 text-sm rounded-lg bg-[var(--color-accent)] text-white hover:opacity-90 disabled:opacity-40 flex items-center gap-1.5"
-                  >
-                    <Send className="w-3.5 h-3.5" />
-                    Generate
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Streaming output */}
-          {streamingText && (
-            <div className="border border-[var(--color-accent-muted)] rounded-xl p-4 bg-[var(--color-bg-primary)]">
-              <div className="flex items-center gap-2 mb-2">
-                <div className="w-2 h-2 rounded-full bg-[var(--color-accent)] animate-pulse" />
-                <span className="text-xs text-[var(--color-accent)] font-medium">
-                  Streaming...
-                </span>
-              </div>
-              <pre className="text-sm font-mono whitespace-pre-wrap break-words text-[var(--color-text-primary)]">
-                {streamingText}
-              </pre>
-            </div>
-          )}
-
-          {/* Results */}
-          {results.length > 0 && (
-            <div className="flex-1 overflow-auto space-y-3">
-              {results.map((result, i) => (
-                <div
-                  key={result.id + i}
-                  className="border border-[var(--color-border)] rounded-xl p-4 bg-[var(--color-bg-primary)]"
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-3">
-                      <span className="text-xs font-mono text-[var(--color-text-secondary)]">
-                        {result.id}
-                      </span>
-                      <span className="text-xs px-2 py-0.5 rounded bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)]">
-                        {result.usage?.prompt_tokens || 0}p +{" "}
-                        {result.usage?.completion_tokens || 0}c tokens
-                      </span>
-                    </div>
-                    <button
-                      onClick={() =>
-                        navigator.clipboard.writeText(
-                          result.choices[0]?.text || ""
-                        )
-                      }
-                      className="p-1.5 rounded hover:bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)]"
-                    >
-                      <Copy className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                  <pre className="text-sm font-mono whitespace-pre-wrap break-words text-[var(--color-text-primary)]">
-                    {result.choices[0]?.text}
-                  </pre>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Right: Settings Panel */}
-        <div className="w-72 border-l border-[var(--color-border)] bg-[var(--color-bg-secondary)] overflow-auto p-4 space-y-4">
-          {/* Model Selection */}
-          <div>
-            <label className="text-xs font-medium text-[var(--color-text-secondary)] uppercase tracking-wider">
-              Model
-            </label>
-            <select
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              onClick={loadModels}
-              className="mt-1 w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] text-sm text-[var(--color-text-primary)] outline-none"
-            >
-              {models.length === 0 && (
-                <option value="">Loading...</option>
-              )}
-              {models.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Core Parameters */}
-          <div className="space-y-3">
-            <ParamSlider
-              label="Temperature"
-              value={temperature}
-              min={0}
-              max={2}
-              step={0.1}
-              onChange={setTemperature}
-            />
-            <ParamSlider
-              label="Max Tokens"
-              value={maxTokens}
-              min={1}
-              max={131072}
-              step={1}
-              onChange={setMaxTokens}
-            />
-            <ParamSlider
-              label="Top P"
-              value={topP}
-              min={0}
-              max={1}
-              step={0.05}
-              onChange={setTopP}
-            />
-          </div>
-
-          {/* Toggles */}
-          <div className="space-y-2">
-            <Toggle label="Streaming" value={streaming} onChange={setStreaming} />
-            <Toggle label="Echo" value={echo} onChange={setEcho} />
-            <Toggle label="Spec Decode" value={specDecode} onChange={setSpecDecode} />
-            <Toggle label="Thinking" value={enableThinking} onChange={setEnableThinking} />
-          </div>
-
-          {/* Advanced */}
-          <button
-            onClick={() => setShowAdvanced(!showAdvanced)}
-            className="flex items-center gap-1.5 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] w-full"
-          >
-            <Settings className="w-3.5 h-3.5" />
-            Advanced
-            {showAdvanced ? (
-              <ChevronUp className="w-3.5 h-3.5 ml-auto" />
-            ) : (
-              <ChevronDown className="w-3.5 h-3.5 ml-auto" />
-            )}
-          </button>
-
-          {showAdvanced && (
-            <div className="space-y-3">
-              <ParamSlider
-                label="Top K"
-                value={topK}
-                min={0}
-                max={200}
-                step={1}
-                onChange={setTopK}
-              />
-              <ParamSlider
-                label="Min P"
-                value={minP}
-                min={0}
-                max={1}
-                step={0.01}
-                onChange={setMinP}
-              />
-              <ParamSlider
-                label="Repetition Penalty"
-                value={repetitionPenalty}
-                min={1}
-                max={2}
-                step={0.05}
-                onChange={setRepetitionPenalty}
-              />
-              <ParamSlider
-                label="Frequency Penalty"
-                value={frequencyPenalty}
-                min={-2}
-                max={2}
-                step={0.1}
-                onChange={setFrequencyPenalty}
-              />
-              <ParamSlider
-                label="Presence Penalty"
-                value={presencePenalty}
-                min={-2}
-                max={2}
-                step={0.1}
-                onChange={setPresencePenalty}
-              />
-              <div>
-                <label className="text-xs text-[var(--color-text-secondary)]">
-                  Seed
-                </label>
-                <input
-                  type="number"
-                  value={seed}
-                  onChange={(e) => setSeed(e.target.value)}
-                  placeholder="Random"
-                  className="mt-1 w-full px-3 py-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] text-sm text-[var(--color-text-primary)] outline-none"
-                />
-              </div>
-              <div>
-                <label className="text-xs text-[var(--color-text-secondary)]">
-                  Stop (comma-separated)
-                </label>
-                <input
-                  type="text"
-                  value={stop}
-                  onChange={(e) => setStop(e.target.value)}
-                  placeholder="e.g. \n, ###"
-                  className="mt-1 w-full px-3 py-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] text-sm text-[var(--color-text-primary)] outline-none"
-                />
-              </div>
-              {enableThinking && (
-                <div>
-                  <label className="text-xs text-[var(--color-text-secondary)]">
-                    Thinking Budget
-                  </label>
-                  <input
-                    type="number"
-                    value={thinkingBudget}
-                    onChange={(e) => setThinkingBudget(e.target.value)}
-                    placeholder="Unlimited"
-                    className="mt-1 w-full px-3 py-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] text-sm text-[var(--color-text-primary)] outline-none"
-                  />
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Clear results */}
-          {results.length > 0 && (
-            <button
-              onClick={() => setResults([])}
-              className="w-full px-3 py-2 text-sm rounded-lg border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)] flex items-center justify-center gap-1.5"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              Clear Results
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ParamSlider({
+/** A labeled slider row with a live numeric readout, for the settings panel. */
+function SliderRow({
   label,
   value,
+  onChange,
   min,
   max,
   step,
-  onChange,
 }: {
   label: string;
   value: number;
+  onChange: (v: number) => void;
   min: number;
   max: number;
   step: number;
-  onChange: (v: number) => void;
 }) {
   return (
-    <div>
-      <div className="flex items-center justify-between">
-        <label className="text-xs text-[var(--color-text-secondary)]">
-          {label}
-        </label>
-        <span className="text-xs font-mono text-[var(--color-text-primary)]">
-          {value}
-        </span>
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between text-sm">
+        <span className="text-muted-foreground">{label}</span>
+        <span className="font-mono tabular-nums">{value}</span>
       </div>
-      <input
-        type="range"
+      <Slider
+        value={[value]}
         min={min}
         max={max}
         step={step}
-        value={value}
-        onChange={(e) => onChange(parseFloat(e.target.value))}
-        className="w-full h-1.5 mt-1 rounded-full appearance-none bg-[var(--color-bg-tertiary)] accent-[var(--color-accent)]"
+        onValueChange={(v) => onChange(v[0] ?? value)}
       />
     </div>
   );
 }
 
-function Toggle({
+/** A labeled numeric field row for the settings panel. */
+function NumberRow({
   label,
   value,
   onChange,
+  min,
+  max,
+  step,
 }: {
   label: string;
-  value: boolean;
-  onChange: (v: boolean) => void;
+  value: number;
+  onChange: (v: number) => void;
+  min?: number;
+  max?: number;
+  step?: number;
 }) {
   return (
-    <label className="flex items-center justify-between cursor-pointer">
-      <span className="text-xs text-[var(--color-text-secondary)]">
-        {label}
-      </span>
-      <div
-        onClick={() => onChange(!value)}
-        className={`w-9 h-5 rounded-full relative transition-colors ${
-          value
-            ? "bg-[var(--color-accent)]"
-            : "bg-[var(--color-bg-tertiary)]"
-        }`}
-      >
-        <div
-          className={`w-3.5 h-3.5 rounded-full bg-white absolute top-0.5 transition-transform ${
-            value ? "translate-x-[18px]" : "translate-x-0.5"
-          }`}
-        />
+    <div className="flex items-center justify-between gap-3 text-sm">
+      <span className="text-muted-foreground">{label}</span>
+      <div className="w-28 shrink-0">
+        <NumberInput value={value} onChange={onChange} min={min} max={max} step={step} />
       </div>
-    </label>
+    </div>
+  );
+}
+
+export default function CompletionsPage() {
+  const [models, setModels] = useState<Model[]>([]);
+  const [model, setModel] = useState<string>("");
+  const [prompt, setPrompt] = useState("");
+
+  // Generation params.
+  const [temperature, setTemperature] = useState(0.7);
+  const [maxTokens, setMaxTokens] = useState(128);
+  const [topP, setTopP] = useState(1);
+  const [topK, setTopK] = useState(0);
+  const [repetitionPenalty, setRepetitionPenalty] = useState(1);
+  const [frequencyPenalty, setFrequencyPenalty] = useState(0);
+  const [presencePenalty, setPresencePenalty] = useState(0);
+  const [seed, setSeed] = useState<number | null>(null);
+
+  // Toggles.
+  const [stream, setStream] = useState(true);
+  const [echo, setEcho] = useState(false);
+  const [specDecode, setSpecDecode] = useState(false);
+  const [enableThinking, setEnableThinking] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+
+  // Run state.
+  const [output, setOutput] = useState("");
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [finishReason, setFinishReason] = useState<string | null>(null);
+  const [completionTokens, setCompletionTokens] = useState<number | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const loadModels = () =>
+    api
+      .get<{ data: Model[] }>("/v1/models")
+      .then((r) => {
+        setModels(r.data);
+        setModel((m) => m || r.data[0]?.id || "");
+      });
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .get<{ data: Model[] }>("/v1/models")
+      .then((r) => {
+        if (cancelled) return;
+        setModels(r.data);
+        setModel((m) => m || r.data[0]?.id || "");
+      })
+      .catch((e) => !cancelled && setError(e instanceof Error ? e.message : String(e)));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const stop = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setRunning(false);
+  };
+
+  const generate = async () => {
+    if (!model || !prompt.trim() || running) return;
+
+    setRunning(true);
+    setError(null);
+    setOutput("");
+    setFinishReason(null);
+    setCompletionTokens(null);
+
+    const body: Record<string, unknown> = {
+      model,
+      prompt,
+      max_tokens: maxTokens,
+      temperature,
+      top_p: topP,
+      top_k: topK,
+      repetition_penalty: repetitionPenalty,
+      frequency_penalty: frequencyPenalty,
+      presence_penalty: presencePenalty,
+      stream,
+      echo,
+      spec_decode: specDecode,
+      enable_thinking: enableThinking,
+    };
+    if (seed !== null) body.seed = seed;
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    try {
+      if (stream) {
+        await streamSSE(
+          "/v1/completions",
+          body,
+          (data) => {
+            const choices = data.choices as
+              | { text?: string; finish_reason?: string | null }[]
+              | undefined;
+            const choice = choices?.[0];
+            if (choice?.text) setOutput((o) => o + choice.text);
+            if (choice?.finish_reason) setFinishReason(choice.finish_reason);
+            const usage = data.usage as { completion_tokens?: number } | undefined;
+            if (typeof usage?.completion_tokens === "number") {
+              setCompletionTokens(usage.completion_tokens);
+            }
+          },
+          controller.signal,
+        );
+      } else {
+        const res = await api.post<CompletionResult>("/v1/completions", body, controller.signal);
+        setOutput(res.choices[0]?.text ?? "");
+        setFinishReason(res.choices[0]?.finish_reason ?? null);
+        setCompletionTokens(res.usage?.completion_tokens ?? null);
+      }
+    } catch (e) {
+      if (!(e instanceof DOMException && e.name === "AbortError")) {
+        setError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null;
+      setRunning(false);
+    }
+  };
+
+  const copyOutput = async () => {
+    if (!output) return;
+    try {
+      await navigator.clipboard.writeText(output);
+      toast.success("Copied to clipboard");
+    } catch {
+      toast.success("Copy failed");
+    }
+  };
+
+  return (
+    <PageShell
+      title="Completions"
+      description="OpenAI-compatible text completion against the loaded model."
+      width="wide"
+    >
+      <div className="flex flex-col gap-4 lg:flex-row">
+        {/* Main: prompt + output */}
+        <div className="min-w-0 flex-1 space-y-4">
+          {error && (
+            <Alert variant="error" title="Request failed">
+              {error}
+            </Alert>
+          )}
+
+          <Card className="p-5">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <span className="text-sm font-medium">Prompt</span>
+              <span className="text-xs text-muted-foreground tabular-nums">
+                {fmtNumber(prompt.length)} chars
+              </span>
+            </div>
+            <Textarea
+              rows={8}
+              placeholder="Write a haiku about tensors…"
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              className="font-mono text-sm"
+            />
+            <div className="mt-3 flex items-center gap-3">
+              {running ? (
+                <Button variant="destructive" onClick={stop}>
+                  <Square className="h-4 w-4" /> Stop
+                </Button>
+              ) : (
+                <Button onClick={generate} disabled={!model || !prompt.trim()}>
+                  <Play className="h-4 w-4" /> Generate
+                </Button>
+              )}
+              {running && stream && <InlineStatus status="processing" label="Streaming…" />}
+            </div>
+          </Card>
+
+          <Card className="p-5">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-sm font-medium">Output</span>
+              <div className="flex items-center gap-2">
+                {finishReason && (
+                  <Badge variant={finishReason === "stop" ? "success" : "warning"}>
+                    {finishReason}
+                  </Badge>
+                )}
+                {completionTokens !== null && (
+                  <Badge variant="info">{fmtNumber(completionTokens)} tokens</Badge>
+                )}
+                <Button
+                  aria-label="Copy output"
+                  variant="ghost"
+                  size="icon"
+                  onClick={copyOutput}
+                  disabled={!output}
+                >
+                  <Copy className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+            {output ? (
+              <pre className="whitespace-pre-wrap break-words rounded-lg bg-muted/40 p-4 font-mono text-sm">
+                {output}
+              </pre>
+            ) : running ? (
+              <div className="flex justify-center py-10">
+                <Spinner />
+              </div>
+            ) : (
+              <p className="py-10 text-center text-sm text-muted-foreground">
+                Generated text will appear here.
+              </p>
+            )}
+          </Card>
+        </div>
+
+        {/* Right: settings panel */}
+        <aside className="w-full shrink-0 space-y-4 lg:w-72">
+          <Card className="p-5">
+            <div className="mb-3 flex items-center justify-between">
+              <span className="text-sm font-medium">Model</span>
+              <Button
+                aria-label="Refresh models"
+                variant="ghost"
+                size="icon"
+                onClick={() => loadModels().catch(() => {})}
+              >
+                <RefreshCw className="h-4 w-4" />
+              </Button>
+            </div>
+            <ModelPicker models={models} value={model} onChange={setModel} />
+          </Card>
+
+          <Card className="space-y-4 p-5">
+            <span className="text-sm font-medium">Parameters</span>
+            <SliderRow
+              label="Temperature"
+              value={temperature}
+              onChange={setTemperature}
+              min={0}
+              max={2}
+              step={0.05}
+            />
+            <NumberRow
+              label="Max tokens"
+              value={maxTokens}
+              onChange={setMaxTokens}
+              min={1}
+              max={8192}
+              step={1}
+            />
+            <SliderRow label="Top P" value={topP} onChange={setTopP} min={0} max={1} step={0.01} />
+
+            <Separator />
+
+            <SettingRow
+              title="Stream"
+              description="Server-sent token deltas"
+              control={<Switch checked={stream} onCheckedChange={setStream} />}
+            />
+            <SettingRow
+              title="Enable thinking"
+              description="Reasoning traces"
+              control={<Switch checked={enableThinking} onCheckedChange={setEnableThinking} />}
+            />
+
+            <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+              <CollapsibleTrigger className="flex w-full items-center justify-between text-sm font-medium">
+                <span>Advanced</span>
+                <ChevronDown
+                  className={cn("h-4 w-4 transition-transform", advancedOpen && "rotate-180")}
+                />
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <div className="space-y-4 pt-4">
+                  <NumberRow label="Top K" value={topK} onChange={setTopK} min={0} step={1} />
+                  <SliderRow
+                    label="Repetition penalty"
+                    value={repetitionPenalty}
+                    onChange={setRepetitionPenalty}
+                    min={0}
+                    max={2}
+                    step={0.01}
+                  />
+                  <SliderRow
+                    label="Frequency penalty"
+                    value={frequencyPenalty}
+                    onChange={setFrequencyPenalty}
+                    min={-2}
+                    max={2}
+                    step={0.01}
+                  />
+                  <SliderRow
+                    label="Presence penalty"
+                    value={presencePenalty}
+                    onChange={setPresencePenalty}
+                    min={-2}
+                    max={2}
+                    step={0.01}
+                  />
+                  <NumberRow label="Seed" value={seed ?? 0} onChange={(v) => setSeed(v)} step={1} />
+                  <div className="flex justify-end">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setSeed(null)}
+                      disabled={seed === null}
+                    >
+                      Clear seed
+                    </Button>
+                  </div>
+
+                  <Separator />
+
+                  <SettingRow
+                    title="Echo"
+                    description="Include the prompt in output"
+                    control={<Switch checked={echo} onCheckedChange={setEcho} />}
+                  />
+                  <SettingRow
+                    title="Speculative decoding"
+                    description="Draft-model acceleration"
+                    control={<Switch checked={specDecode} onCheckedChange={setSpecDecode} />}
+                  />
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
+          </Card>
+        </aside>
+      </div>
+    </PageShell>
   );
 }

@@ -1,188 +1,215 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
-  Gauge,
-  Timer,
-  BarChart3,
-  Play,
-  Loader2,
-  CheckCircle2,
-  AlertCircle,
-} from "lucide-react";
+  Button,
+  Card,
+  Badge,
+  Alert,
+  Spinner,
+  Sparkline,
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+  cn,
+  toast,
+} from "yunui";
+import { StatCard } from "yunui/patterns";
+import { Gauge, Timer, Zap, type LucideIcon } from "lucide-react";
+import { PageShell } from "@/components/page-shell";
+import { api, ApiError } from "@/lib/api";
+import { fmtNumber } from "@/lib/format";
 
-const benchmarks = [
+type BenchType = "roofline" | "latency" | "throughput";
+
+interface RooflineResult {
+  sizes: number[];
+  gflops: number[];
+  bandwidth_gb_s?: number[];
+}
+
+interface TableResult {
+  results: Array<Record<string, unknown>>;
+}
+
+type BenchResult = RooflineResult | TableResult;
+
+interface BenchMeta {
+  type: BenchType;
+  title: string;
+  description: string;
+  icon: LucideIcon;
+}
+
+const BENCHMARKS: BenchMeta[] = [
   {
-    id: "roofline",
+    type: "roofline",
     title: "Roofline",
-    description: "GEMM throughput vs matrix size on Apple GPU",
+    description: "Sweep problem sizes to chart compute throughput against memory bandwidth.",
     icon: Gauge,
-    color: "text-blue-400",
-    bg: "bg-blue-500/15",
   },
   {
-    id: "latency",
+    type: "latency",
     title: "Latency",
-    description: "End-to-end request latency P50/P95/P99",
+    description: "Measure per-request response times across the serving path.",
     icon: Timer,
-    color: "text-amber-400",
-    bg: "bg-amber-500/15",
   },
   {
-    id: "throughput",
+    type: "throughput",
     title: "Throughput",
-    description: "Concurrent request tokens/s at varying load",
-    icon: BarChart3,
-    color: "text-emerald-400",
-    bg: "bg-emerald-500/15",
+    description: "Push concurrent load and record sustained tokens per second.",
+    icon: Zap,
   },
 ];
 
-interface BenchResult {
-  [key: string]: string | number | boolean | null;
+function isRoofline(r: BenchResult): r is RooflineResult {
+  return Array.isArray((r as RooflineResult).gflops);
+}
+
+function fmtCell(value: unknown): string {
+  if (value == null) return "—";
+  if (typeof value === "number") return fmtNumber(value);
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  return String(value);
 }
 
 export default function BenchmarksPage() {
-  const [running, setRunning] = useState<string | null>(null);
-  const [results, setResults] = useState<BenchResult[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [benchType, setBenchType] = useState<string | null>(null);
+  const [results, setResults] = useState<Partial<Record<BenchType, BenchResult>>>({});
+  const [loading, setLoading] = useState<Partial<Record<BenchType, boolean>>>({});
+  const [errors, setErrors] = useState<Partial<Record<BenchType, string>>>({});
 
-  const runBenchmark = async (type: string) => {
-    setRunning(type);
-    setBenchType(type);
-    setResults(null);
-    setError(null);
-
+  const run = async (type: BenchType) => {
+    setLoading((s) => ({ ...s, [type]: true }));
+    setErrors((s) => ({ ...s, [type]: undefined }));
     try {
-      const res = await fetch(`/api/v1/bench/${type}`, { method: "POST" });
-      if (!res.ok) {
-        if (res.status === 404) {
-          setError("Benchmark endpoint not available — start the server first.");
-        } else {
-          setError(`Benchmark failed: ${res.status} ${await res.text()}`);
-        }
-        return;
-      }
-      const data = await res.json();
-
-      // Normalize results to array of flat key-value pairs
-      if (Array.isArray(data.results)) {
-        setResults(data.results);
-      } else if (data.sizes && data.gflops) {
-        // Roofline format
-        setResults(
-          data.sizes.map((s: number, i: number) => ({
-            MatrixSize: `${s}x${s}`,
-            GFLOPS: typeof data.gflops[i] === "number" ? data.gflops[i].toFixed(1) : data.gflops[i],
-            Bandwidth_GB: data.bandwidth_gb_s?.[i] != null ? data.bandwidth_gb_s[i].toFixed(1) : "—",
-          }))
-        );
-      } else if (data.results && Array.isArray(data.results)) {
-        setResults(data.results);
-      } else {
-        // Flat object → single row
-        setResults([data]);
-      }
-    } catch (err) {
-      setError(`Connection error: ${err instanceof Error ? err.message : String(err)}`);
+      const data = await api.post<BenchResult>(`/api/v1/bench/${type}`);
+      setResults((s) => ({ ...s, [type]: data }));
+      toast.success(`${type} benchmark complete`);
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : "Benchmark failed";
+      setErrors((s) => ({ ...s, [type]: msg }));
+      toast.error(`${type} benchmark failed`, msg);
     } finally {
-      setRunning(null);
+      setLoading((s) => ({ ...s, [type]: false }));
     }
   };
 
   return (
-    <div className="p-6 space-y-6 page-enter">
-      <h2 className="text-2xl font-bold">Benchmarks</h2>
-
-      {/* Benchmark Cards */}
-      <div className="grid grid-cols-3 gap-4">
-        {benchmarks.map((b) => {
-          const Icon = b.icon;
-          const isRunning = running === b.id;
-          const isDone = benchType === b.id && results && !running;
+    <PageShell
+      title="Benchmarks"
+      description="Run performance benchmarks and inspect the results."
+      width="wide"
+    >
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {BENCHMARKS.map(({ type, title, description, icon: Icon }) => {
+          const busy = loading[type] ?? false;
+          const result = results[type];
+          const error = errors[type];
+          const hasRun = result !== undefined || error !== undefined;
 
           return (
-            <div
-              key={b.id}
-              className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4"
-            >
-              <div className="flex items-center gap-3 mb-2">
-                <div className={`w-10 h-10 rounded-lg ${b.bg} flex items-center justify-center`}>
-                  <Icon className={`w-5 h-5 ${b.color}`} />
-                </div>
-                <div>
-                  <h3 className="font-semibold text-sm">{b.title}</h3>
-                  <p className="text-xs text-[var(--color-text-secondary)]">{b.description}</p>
+            <Card key={type} className="flex flex-col gap-4 p-5">
+              <div className="flex items-start gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
+                  <Icon className="h-5 w-5" />
+                </span>
+                <div className="min-w-0">
+                  <h2 className="text-sm font-semibold">{title}</h2>
+                  <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>
                 </div>
               </div>
-              <button
-                onClick={() => runBenchmark(b.id)}
-                disabled={running !== null}
-                className={`mt-3 flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                  isRunning
-                    ? "bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)]"
-                    : "bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white disabled:opacity-50"
-                }`}
+
+              <Button
+                variant={hasRun ? "secondary" : "primary"}
+                size="sm"
+                onClick={() => run(type)}
+                disabled={busy}
+                className="w-full"
               >
-                {isRunning ? (
-                  <><Loader2 className="w-4 h-4 animate-spin" /> Running...</>
-                ) : isDone ? (
-                  <><CheckCircle2 className="w-4 h-4 text-[var(--color-success)]" /> Run Again</>
+                {busy ? (
+                  <>
+                    <Spinner className="h-4 w-4" /> Running…
+                  </>
+                ) : hasRun ? (
+                  "Run again"
                 ) : (
-                  <><Play className="w-4 h-4" /> Run</>
+                  "Run"
                 )}
-              </button>
-            </div>
+              </Button>
+
+              {error && (
+                <Alert variant="error" title="Benchmark failed">
+                  {error}
+                </Alert>
+              )}
+
+              {result && !error && <BenchOutput type={type} result={result} />}
+            </Card>
           );
         })}
       </div>
+    </PageShell>
+  );
+}
 
-      {/* Error */}
-      {error && (
-        <div className="bg-[var(--color-danger)]/10 border border-[var(--color-danger)]/30 rounded-xl px-4 py-3 text-sm text-[var(--color-danger)] flex items-center gap-2">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          {error}
+function BenchOutput({ type, result }: { type: BenchType; result: BenchResult }): ReactNode {
+  if (type === "roofline" && isRoofline(result)) {
+    const { sizes, gflops, bandwidth_gb_s } = result;
+    const peakGflops = gflops.length ? Math.max(...gflops) : 0;
+    const peakBw = bandwidth_gb_s?.length ? Math.max(...bandwidth_gb_s) : undefined;
+    return (
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-medium text-muted-foreground">GFLOP/s</span>
+          <Badge variant="info">{sizes.length} sizes</Badge>
         </div>
-      )}
+        <Sparkline area data={gflops} className="h-16 w-full" />
+        <div className="grid grid-cols-2 gap-3">
+          <StatCard label="Peak GFLOP/s" value={fmtNumber(peakGflops)} tone="blue" compact />
+          <StatCard
+            label="Peak GB/s"
+            value={peakBw !== undefined ? fmtNumber(peakBw) : "—"}
+            tone="emerald"
+            compact
+          />
+        </div>
+      </div>
+    );
+  }
 
-      {/* Results */}
-      {results && results.length > 0 && (
-        <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)]">
-          <div className="px-4 py-3 border-b border-[var(--color-border)]">
-            <h3 className="font-semibold text-sm">
-              {benchmarks.find((b) => b.id === benchType)?.title ?? "Benchmark"} Results
-            </h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-[var(--color-border)]">
-                  {Object.keys(results[0]).map((key) => (
-                    <th
-                      key={key}
-                      className="px-4 py-2 text-left text-xs text-[var(--color-text-secondary)] font-medium uppercase tracking-wide"
-                    >
-                      {key.replace(/_/g, " ")}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {results.map((row, i) => (
-                  <tr key={i} className="border-b border-[var(--color-border)] last:border-0">
-                    {Object.values(row).map((val, j) => (
-                      <td key={j} className="px-4 py-2 tabular-nums">
-                        {typeof val === "number" ? val.toLocaleString() : String(val ?? "—")}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-    </div>
+  const rows = (result as TableResult).results ?? [];
+  if (rows.length === 0) {
+    return <p className="text-sm text-muted-foreground">No results returned.</p>;
+  }
+  const columns = Object.keys(rows[0]);
+
+  return (
+    <Table containerClassName="rounded-md border border-border">
+      <TableHeader>
+        <TableRow>
+          {columns.map((col) => (
+            <TableHead key={col}>{col}</TableHead>
+          ))}
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((row, i) => (
+          <TableRow key={i}>
+            {columns.map((col) => (
+              <TableCell
+                key={col}
+                label={col}
+                className={cn(typeof row[col] === "number" && "tabular-nums")}
+              >
+                {fmtCell(row[col])}
+              </TableCell>
+            ))}
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   );
 }

@@ -2,342 +2,302 @@
 
 import { useEffect, useState, useCallback } from "react";
 import {
+  Button,
+  Textarea,
+  NumberInput,
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+  Slider,
+  Card,
+  Badge,
+  Alert,
+  Spinner,
+  FileDropzone,
+  EmptyState,
+  cn,
+} from "yunui";
+import {
   ImageIcon,
   Download,
-  Loader2,
   RefreshCw,
   Sparkles,
+  Upload,
   X,
 } from "lucide-react";
+import { PageShell } from "@/components/page-shell";
+import { ModelPicker } from "@/components/model-picker";
+import { api, ApiError } from "@/lib/api";
+import type { Model } from "@/lib/types";
 
-interface Model {
-  id: string;
+const SIZES = ["512x512", "768x768", "1024x1024"] as const;
+
+interface ImageGenResponse {
+  data: { b64_json?: string; url?: string }[];
 }
 
 export default function ImagesPage() {
   const [models, setModels] = useState<Model[]>([]);
-  const [selectedModel, setSelectedModel] = useState("");
-  const [prompt, setPrompt] = useState(
-    "A majestic mountain landscape at golden hour with dramatic clouds"
-  );
-  const [size, setSize] = useState("1024x1024");
-  const [steps, setSteps] = useState(4);
-  const [seed, setSeed] = useState<string>("");
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [genTime, setGenTime] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [progress, setProgress] = useState<string | null>(null);
-  const [controlImage, setControlImage] = useState<string | null>(null);
-  const [controlScale, setControlScale] = useState(0.8);
+  const [model, setModel] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const [size, setSize] = useState<string>("1024x1024");
+  const [steps, setSteps] = useState(20);
+  const [seed, setSeed] = useState<number | undefined>(undefined);
 
-  const onControlFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const [controlImage, setControlImage] = useState<string | null>(null);
+  const [controlScale, setControlScale] = useState(0.5);
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [imageSrc, setImageSrc] = useState<string | null>(null);
+  const [genTime, setGenTime] = useState<number | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    api
+      .get<{ data: Model[] }>("/v1/models", controller.signal)
+      .then((res) => {
+        const list = res.data ?? [];
+        setModels(list);
+        setModel((cur) => cur || list[0]?.id || "");
+      })
+      .catch((e) => {
+        if (!controller.signal.aborted) setError((e as Error).message);
+      });
+    return () => controller.abort();
+  }, []);
+
+  const onControlFiles = useCallback((files: File[]) => {
+    const file = files[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => setControlImage(reader.result as string);
     reader.readAsDataURL(file);
   }, []);
 
-  useEffect(() => {
-    fetch("/v1/models")
-      .then((r) => r.json())
-      .then((data) => {
-        const all = data.data || [];
-        setModels(all);
-        const img = all.find((m: Model) =>
-          /image|z-image|turbo|flux|diffus/i.test(m.id)
-        );
-        if (img) setSelectedModel(img.id);
-      })
-      .catch(() => {});
-  }, []);
-
   const generate = useCallback(async () => {
-    if (!prompt.trim() || !selectedModel) return;
+    if (!model || !prompt.trim()) return;
     setLoading(true);
     setError(null);
-    setImageUrl(null);
-    setProgress("Starting generation...");
+    setImageSrc(null);
+    setGenTime(null);
     const start = performance.now();
-
     try {
-      const resp = await fetch("/v1/images/generations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: selectedModel,
-          prompt,
-          n: 1,
-          size,
-          num_inference_steps: steps,
-          seed: seed ? parseInt(seed) : undefined,
-          // ControlNet: send the raw base64 (strip the data: URL prefix). LoRA and
-          // (word:weight) emphasis need no field — they're written inline in `prompt`.
-          control_image: controlImage
-            ? controlImage.replace(/^data:[^,]+,/, "")
-            : undefined,
-          control_scale: controlImage ? controlScale : undefined,
-        }),
+      const res = await api.post<ImageGenResponse>("/v1/images/generations", {
+        model,
+        prompt,
+        n: 1,
+        size,
+        num_inference_steps: steps,
+        seed,
+        // ControlNet: send the raw base64 (strip the `data:` URL prefix).
+        control_image: controlImage
+          ? controlImage.replace(/^data:[^,]+,/, "")
+          : undefined,
+        control_scale: controlImage ? controlScale : undefined,
       });
-
-      if (resp.ok) {
-        const data = await resp.json();
-        const img = data.data?.[0];
-        if (img?.b64_json) {
-          setImageUrl(`data:image/png;base64,${img.b64_json}`);
-          setGenTime((performance.now() - start) / 1000);
-          setProgress(`Completed in ${((performance.now() - start) / 1000).toFixed(1)}s`);
-        } else if (img?.url) {
-          setImageUrl(img.url);
-          setGenTime((performance.now() - start) / 1000);
-          setProgress(`Completed in ${((performance.now() - start) / 1000).toFixed(1)}s`);
-        }
+      const img = res.data?.[0];
+      if (img?.b64_json) {
+        setImageSrc(`data:image/png;base64,${img.b64_json}`);
+      } else if (img?.url) {
+        setImageSrc(img.url);
       } else {
-        setError(`Generation failed: ${resp.status} ${await resp.text()}`);
+        setError("The response contained no image data.");
       }
-    } catch (err) {
-      setError(`Error: ${err}`);
+      setGenTime((performance.now() - start) / 1000);
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : (e as Error).message;
+      setError(msg);
     } finally {
       setLoading(false);
     }
-  }, [prompt, selectedModel, size, steps, seed, controlImage, controlScale]);
+  }, [model, prompt, size, steps, seed, controlImage, controlScale]);
 
   const download = useCallback(() => {
-    if (!imageUrl) return;
+    if (!imageSrc) return;
     const a = document.createElement("a");
-    a.href = imageUrl;
+    a.href = imageSrc;
     a.download = `yunshu-${Date.now()}.png`;
     a.click();
-  }, [imageUrl]);
-
-  const imgModels = models.filter((m) =>
-    /image|z-image|turbo|flux|diffus/i.test(m.id)
-  );
+  }, [imageSrc]);
 
   return (
-    <div className="p-6 space-y-6 max-w-4xl page-enter">
-      <div className="flex items-center gap-3">
-        <ImageIcon className="w-6 h-6 text-rose-400" />
-        <h2 className="text-2xl font-bold">Image Generation</h2>
-      </div>
+    <PageShell
+      title="Images"
+      description="Generate images from a text prompt, with optional ControlNet guidance."
+      width="wide"
+    >
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        {/* Controls */}
+        <div className="space-y-6">
+          <Card className="space-y-4 p-5">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Model</label>
+              <ModelPicker models={models} value={model} onChange={setModel} />
+            </div>
 
-      {/* Error */}
-      {error && (
-        <div className="bg-[var(--color-danger)]/10 border border-[var(--color-danger)]/30 rounded-lg px-4 py-3 text-sm text-[var(--color-danger)] flex items-center gap-2">
-          <X className="w-4 h-4 shrink-0" />
-          {error}
-          <button
-            onClick={() => setError(null)}
-            className="ml-auto opacity-60 hover:opacity-100"
-          >
-            <X className="w-3 h-3" />
-          </button>
-        </div>
-      )}
-
-      {/* Controls */}
-      <div className="space-y-4">
-        {/* Prompt */}
-        <div>
-          <label className="text-sm text-[var(--color-text-secondary)] block mb-1.5">
-            Prompt
-          </label>
-          <textarea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            rows={3}
-            className="w-full bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-xl px-4 py-3 text-sm resize-none focus:outline-none focus:border-[var(--color-accent)]"
-            placeholder="Describe the image you want to generate..."
-          />
-          <p className="text-xs text-[var(--color-text-secondary)] mt-1">
-            Tip: inline <code>&lt;lora:name:0.7&gt;</code> and{" "}
-            <code>(word:1.3)</code> emphasis work directly in the prompt.
-          </p>
-        </div>
-
-        {/* ControlNet */}
-        <div className="border border-[var(--color-border)] rounded-xl p-3 space-y-2">
-          <div className="flex items-center justify-between">
-            <label className="text-sm text-[var(--color-text-secondary)]">
-              ControlNet (optional) — control map: canny / depth / pose / edges
-            </label>
-            {controlImage && (
-              <button
-                onClick={() => setControlImage(null)}
-                className="text-xs text-[var(--color-danger)]"
-              >
-                Clear
-              </button>
-            )}
-          </div>
-          <div className="flex items-center gap-3">
-            <input
-              type="file"
-              accept="image/*"
-              onChange={onControlFile}
-              className="text-xs"
-            />
-            {controlImage && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={controlImage}
-                alt="control"
-                className="w-12 h-12 object-cover rounded border border-[var(--color-border)]"
-              />
-            )}
-          </div>
-          {controlImage && (
-            <div>
-              <label className="text-xs text-[var(--color-text-secondary)] block mb-1">
-                Control strength: {controlScale.toFixed(2)}
-              </label>
-              <input
-                type="range"
-                min={0}
-                max={1.5}
-                step={0.05}
-                value={controlScale}
-                onChange={(e) => setControlScale(parseFloat(e.target.value))}
-                className="w-full"
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Prompt</label>
+              <Textarea
+                rows={4}
+                placeholder="Describe the image you want to generate…"
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
               />
             </div>
-          )}
-        </div>
 
-        {/* Parameters row */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          {/* Model */}
-          <div>
-            <label className="text-sm text-[var(--color-text-secondary)] block mb-1.5">
-              Model
-            </label>
-            <select
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-              className="w-full bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] rounded-lg px-3 py-2 text-sm"
-            >
-              {imgModels.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.id}
-                </option>
-              ))}
-              {imgModels.length === 0 && (
-                <option value="">No image models</option>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Size</label>
+                <Select value={size} onValueChange={setSize}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SIZES.map((s) => (
+                      <SelectItem key={s} value={s}>
+                        {s}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Steps</label>
+                <NumberInput value={steps} onChange={setSteps} min={1} max={100} step={1} />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Seed</label>
+                <NumberInput
+                  value={seed ?? 0}
+                  onChange={setSeed}
+                  min={0}
+                  step={1}
+                  placeholder="Random"
+                />
+              </div>
+            </div>
+          </Card>
+
+          {/* ControlNet */}
+          <Card className="space-y-4 p-5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="space-y-0.5">
+                <span className="text-sm font-medium">ControlNet</span>
+                <p className="text-xs text-muted-foreground">
+                  Optional control map (canny / depth / pose) to guide the layout.
+                </p>
+              </div>
+              {controlImage && (
+                <Button variant="ghost" size="sm" onClick={() => setControlImage(null)}>
+                  <X className="h-4 w-4" /> Clear
+                </Button>
               )}
-            </select>
-          </div>
-
-          {/* Size */}
-          <div>
-            <label className="text-sm text-[var(--color-text-secondary)] block mb-1.5">
-              Size
-            </label>
-            <select
-              value={size}
-              onChange={(e) => setSize(e.target.value)}
-              className="w-full bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] rounded-lg px-3 py-2 text-sm"
-            >
-              <option value="512x512">512 x 512</option>
-              <option value="768x768">768 x 768</option>
-              <option value="1024x1024">1024 x 1024</option>
-              <option value="1024x768">1024 x 768</option>
-              <option value="768x1024">768 x 1024</option>
-            </select>
-          </div>
-
-          {/* Steps */}
-          <div>
-            <label className="text-sm text-[var(--color-text-secondary)] block mb-1.5">
-              Steps
-            </label>
-            <input
-              type="number"
-              value={steps}
-              onChange={(e) => setSteps(parseInt(e.target.value) || 4)}
-              min={1}
-              max={50}
-              className="w-full bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] rounded-lg px-3 py-2 text-sm"
-            />
-          </div>
-
-          {/* Seed */}
-          <div>
-            <label className="text-sm text-[var(--color-text-secondary)] block mb-1.5">
-              Seed
-            </label>
-            <input
-              type="text"
-              value={seed}
-              onChange={(e) => setSeed(e.target.value)}
-              placeholder="Random"
-              className="w-full bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] rounded-lg px-3 py-2 text-sm"
-            />
-          </div>
-        </div>
-
-        {/* Generate button */}
-        <button
-          onClick={generate}
-          disabled={loading || !prompt.trim() || !selectedModel}
-          className="w-full flex items-center justify-center gap-2 bg-[var(--color-accent)] text-white rounded-xl px-4 py-3 font-medium hover:bg-[var(--color-accent-hover)] disabled:opacity-40 transition-colors"
-        >
-          {loading ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Generating...
-            </>
-          ) : (
-            <>
-              <Sparkles className="w-4 h-4" />
-              Generate Image
-            </>
-          )}
-        </button>
-        {progress && !imageUrl && (
-          <div className="text-xs text-[var(--color-text-secondary)] mt-2 animate-pulse">
-            {progress}
-          </div>
-        )}
-      </div>
-
-      {/* Result */}
-      {imageUrl && (
-        <div className="space-y-3">
-          <div className="relative rounded-xl overflow-hidden border border-[var(--color-border)] bg-[var(--color-bg-tertiary)]">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={imageUrl}
-              alt="Generated"
-              className="w-full max-h-[600px] object-contain"
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            {genTime != null && (
-              <span className="text-sm text-[var(--color-text-secondary)]">
-                Generated in {genTime.toFixed(1)}s
-              </span>
-            )}
-            <div className="flex gap-2 ml-auto">
-              <button
-                onClick={generate}
-                disabled={loading}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-secondary)] transition-colors"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                Regenerate
-              </button>
-              <button
-                onClick={download}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-secondary)] transition-colors"
-              >
-                <Download className="w-3.5 h-3.5" />
-                Download
-              </button>
             </div>
-          </div>
+
+            {controlImage ? (
+              <div className="flex items-center gap-4">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={controlImage}
+                  alt="Control reference"
+                  className="h-20 w-20 shrink-0 rounded-lg border border-border object-cover"
+                />
+                <div className="min-w-0 flex-1 space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <label className="font-medium">Control strength</label>
+                    <Badge variant="info">{controlScale.toFixed(2)}</Badge>
+                  </div>
+                  <Slider
+                    value={[controlScale]}
+                    onValueChange={(v) => setControlScale(v[0] ?? 0)}
+                    min={0}
+                    max={1}
+                    step={0.05}
+                  />
+                </div>
+              </div>
+            ) : (
+              <FileDropzone
+                accept="image/*"
+                onFiles={onControlFiles}
+                icon={<Upload className="h-6 w-6" />}
+                label="Drop a control image"
+                hint="PNG or JPG"
+              />
+            )}
+          </Card>
+
+          <Button className="w-full" onClick={generate} disabled={loading || !model || !prompt.trim()}>
+            {loading ? <Spinner size="sm" /> : <Sparkles className="h-4 w-4" />}
+            {loading ? "Generating…" : "Generate"}
+          </Button>
+
+          {loading && (
+            <p className="animate-pulse text-center text-sm text-muted-foreground">
+              Rendering your image — this can take a moment…
+            </p>
+          )}
+
+          {error && (
+            <Alert variant="error" title="Generation failed">
+              {error}
+            </Alert>
+          )}
         </div>
-      )}
-    </div>
+
+        {/* Preview */}
+        <div className="space-y-4">
+          <Card className="overflow-hidden p-0">
+            <div
+              className={cn(
+                "flex aspect-square w-full items-center justify-center bg-muted",
+              )}
+            >
+              {imageSrc ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={imageSrc}
+                  alt="Generated"
+                  className="h-full w-full object-contain"
+                />
+              ) : loading ? (
+                <Spinner />
+              ) : (
+                <EmptyState
+                  icon={<ImageIcon className="h-8 w-8" />}
+                  title="No image yet"
+                  description="Enter a prompt and generate to see your result here."
+                />
+              )}
+            </div>
+          </Card>
+
+          {imageSrc && (
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              {genTime != null && (
+                <span className="text-sm text-muted-foreground">
+                  Generated in {genTime.toFixed(1)}s
+                </span>
+              )}
+              <div className="ml-auto flex gap-2">
+                <Button variant="secondary" size="sm" onClick={generate} disabled={loading}>
+                  <RefreshCw className="h-4 w-4" /> Regenerate
+                </Button>
+                <a href={imageSrc} download={`yunshu-${Date.now()}.png`} onClick={download}>
+                  <Button variant="secondary" size="sm">
+                    <Download className="h-4 w-4" /> Download
+                  </Button>
+                </a>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </PageShell>
   );
 }

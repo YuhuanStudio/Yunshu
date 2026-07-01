@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
+import { useYunUI } from "yunui/adapters";
+import { StatusIndicator, ThemeToggle, cn } from "yunui";
 import {
   LayoutDashboard,
   MessageSquare,
@@ -12,12 +14,7 @@ import {
   Zap,
   Radio,
   Settings2,
-  Shield,
   Cpu,
-  Wifi,
-  WifiOff,
-  Sun,
-  Moon,
   VectorSquare,
   FileText,
   Hash,
@@ -36,48 +33,17 @@ const navItems = [
   { href: "/models", label: "Models", icon: Box },
   { href: "/monitoring", label: "Monitoring", icon: Activity },
   { href: "/realtime", label: "Realtime", icon: Radio },
-  { href: "/admin", label: "Admin", icon: Shield },
   { href: "/mcp", label: "MCP", icon: Wrench },
   { href: "/batch", label: "Batch", icon: Layers },
   { href: "/benchmarks", label: "Benchmarks", icon: Zap },
   { href: "/settings", label: "Settings", icon: Settings2 },
 ];
 
-function useTheme() {
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
-
-  useEffect(() => {
-    const saved = localStorage.getItem("yunshu_theme") as "dark" | "light" | null;
-    const initial = saved || "dark";
-    setTheme(initial);
-    document.documentElement.setAttribute("data-theme", initial);
-    if (initial === "dark") {
-      document.documentElement.classList.add("dark");
-    } else {
-      document.documentElement.classList.remove("dark");
-    }
-  }, []);
-
-  const toggle = () => {
-    const next = theme === "dark" ? "light" : "dark";
-    setTheme(next);
-    localStorage.setItem("yunshu_theme", next);
-    document.documentElement.setAttribute("data-theme", next);
-    if (next === "dark") {
-      document.documentElement.classList.add("dark");
-    } else {
-      document.documentElement.classList.remove("dark");
-    }
-  };
-
-  return { theme, toggle };
-}
-
 export default function Sidebar() {
   const pathname = usePathname();
+  const { Link } = useYunUI();
   const [connected, setConnected] = useState(false);
-  const [info, setInfo] = useState<{ mlx?: string; python?: string }>({});
-  const { theme, toggle } = useTheme();
+  const [info, setInfo] = useState<{ mlx?: string }>({});
 
   useEffect(() => {
     const check = async () => {
@@ -96,68 +62,56 @@ export default function Sidebar() {
   useEffect(() => {
     fetch("/api/v1/monitoring/system")
       .then((r) => r.json())
-      .then((d) => setInfo({ mlx: d.mlx_version, python: d.python_version }))
+      .then((d) => setInfo({ mlx: d.mlx_version }))
       .catch(() => {});
   }, []);
 
   return (
-    <aside className="w-60 border-r border-[var(--color-border)] bg-[var(--color-bg-secondary)] flex flex-col shrink-0">
+    <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-card">
       {/* Logo */}
-      <div className="px-4 py-4 border-b border-[var(--color-border)]">
-        <h1 className="text-lg font-bold tracking-tight">
-          <span className="text-[var(--color-accent)]">Yunshu</span>
-        </h1>
-        <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5">
-          MLX Inference Platform
-        </p>
+      <div className="border-b border-border px-4 py-4">
+        <h1 className="text-lg font-bold tracking-tight text-accent">Yunshu</h1>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">MLX Inference Platform</p>
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 p-2 space-y-0.5 overflow-auto">
+      <nav className="flex-1 space-y-0.5 overflow-auto p-2">
         {navItems.map(({ href, label, icon: Icon }) => {
           const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
           return (
-            <a
+            <Link
               key={href}
               href={href}
-              className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors relative ${
+              className={cn(
+                "relative flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors",
                 active
-                  ? "bg-[var(--color-accent-muted)] text-[var(--color-accent)] font-medium"
-                  : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text-primary)]"
-              }`}
+                  ? "bg-accent/10 font-medium text-accent"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
             >
               {active && (
-                <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4 bg-[var(--color-accent)] rounded-r" />
+                <span className="absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-r bg-accent" />
               )}
-              <Icon className="w-4 h-4 shrink-0" />
+              <Icon className="h-4 w-4 shrink-0" strokeWidth={1.75} />
               {label}
-            </a>
+            </Link>
           );
         })}
       </nav>
 
       {/* Status footer */}
-      <div className="p-3 border-t border-[var(--color-border)] space-y-1.5">
-        <div className="flex items-center gap-2 text-xs">
-          {connected ? (
-            <Wifi className="w-3 h-3 text-[var(--color-success)]" />
-          ) : (
-            <WifiOff className="w-3 h-3 text-[var(--color-danger)]" />
-          )}
-          <span className={connected ? "text-[var(--color-success)]" : "text-[var(--color-danger)]"}>
-            {connected ? "Connected" : "Disconnected"}
-          </span>
-          <button
-            onClick={toggle}
-            className="ml-auto p-1 rounded hover:bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)] transition-colors"
-            title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-          >
-            {theme === "dark" ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
-          </button>
+      <div className="space-y-1.5 border-t border-border p-3">
+        <div className="flex items-center gap-2">
+          <StatusIndicator status={connected ? "online" : "offline"}>
+            <span className={connected ? "text-success" : "text-muted-foreground"}>
+              {connected ? "Connected" : "Disconnected"}
+            </span>
+          </StatusIndicator>
+          <ThemeToggle className="ml-auto" />
         </div>
         {info.mlx && (
-          <div className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-secondary)]">
-            <Cpu className="w-3 h-3" />
+          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <Cpu className="h-3 w-3" />
             MLX {info.mlx}
           </div>
         )}

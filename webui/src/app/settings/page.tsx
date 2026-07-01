@@ -1,279 +1,323 @@
 "use client";
 
-import { fmtBytes } from "@/lib/utils";
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useMemo, useState, useCallback, type ReactNode, type ElementType } from "react";
 import {
-  Settings2,
-  Wifi,
-  WifiOff,
+  Button,
+  Input,
+  Card,
+  Alert,
+  Spinner,
+  Separator,
+  StatusIndicator,
+  toast,
+} from "yunui";
+import { SettingRow, CodeBlock, StatCard } from "yunui/patterns";
+import {
+  SlidersHorizontal,
+  Plug,
   Terminal,
   Info,
-  Check,
-  Copy,
   Save,
-  Loader2,
-  ExternalLink,
-  AlertTriangle,
+  Cpu,
+  MemoryStick,
+  Boxes,
 } from "lucide-react";
-import { Button } from "yunui";
+import { PageShell } from "@/components/page-shell";
+import { api, ApiError } from "@/lib/api";
+import { fmtBytes, fmtPct } from "@/lib/format";
+import type { SystemStats } from "@/lib/types";
+
+type EngineConfig = Record<string, unknown>;
+
+const ENGINE_PATH = "/api/v1/admin/config/engine";
+const SYSTEM_PATH = "/api/v1/monitoring/system";
+
+/** Stringify a config value for editing in a text input. */
+function toInput(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+/** Coerce an edited string back to the type of the original value. */
+function fromInput(original: unknown, next: string): unknown {
+  if (typeof original === "number") {
+    const n = Number(next);
+    return Number.isFinite(n) ? n : next;
+  }
+  if (typeof original === "boolean") {
+    return next.trim().toLowerCase() === "true";
+  }
+  if (typeof original === "object" && original !== null) {
+    try {
+      return JSON.parse(next);
+    } catch {
+      return next;
+    }
+  }
+  return next;
+}
+
+function SectionCard({
+  icon: Icon,
+  title,
+  action,
+  children,
+}: {
+  icon: ElementType;
+  title: string;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <Card className="p-5">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Icon className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm font-medium">{title}</span>
+        </div>
+        {action}
+      </div>
+      {children}
+    </Card>
+  );
+}
 
 export default function SettingsPage() {
-  const [config, setConfig] = useState<Record<string, unknown> | null>(null);
-  const [editing, setEditing] = useState<Record<string, string>>({});
-  const [saved, setSaved] = useState(false);
+  // --- Engine configuration -------------------------------------------------
+  const [config, setConfig] = useState<EngineConfig | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadingConfig, setLoadingConfig] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [connStatus, setConnStatus] = useState<"idle" | "checking" | "ok" | "fail">("idle");
-  const [systemInfo, setSystemInfo] = useState<Record<string, string>>({});
-  const [configError, setConfigError] = useState<string | null>(null);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
-  // Clean up timers on unmount
-  useEffect(() => {
-    const timers = timersRef.current;
-    return () => { timers.forEach(clearTimeout); };
+  const loadConfig = useCallback(async (signal?: AbortSignal) => {
+    setLoadingConfig(true);
+    try {
+      const data = await api.get<EngineConfig>(ENGINE_PATH, signal);
+      if (signal?.aborted) return;
+      setConfig(data);
+      setDrafts(Object.fromEntries(Object.entries(data).map(([k, v]) => [k, toInput(v)])));
+      setLoadError(null);
+    } catch (e) {
+      if (signal?.aborted) return;
+      setLoadError(e instanceof ApiError ? e.message : "Failed to load engine configuration.");
+    } finally {
+      if (!signal?.aborted) setLoadingConfig(false);
+    }
   }, []);
 
   useEffect(() => {
-    fetch("/api/v1/admin/config/engine")
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then((data) => {
-        setConfig(data);
-        setEditing(Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v)])));
-      })
-      .catch((err) => { setConfigError(String(err.message || err)); });
+    const controller = new AbortController();
+    loadConfig(controller.signal);
+    return () => controller.abort();
+  }, [loadConfig]);
 
-    fetch("/api/v1/monitoring/system")
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then((d) =>
-        setSystemInfo({
-          MLX: d.mlx_version ?? "—",
-          Python: d.python_version ?? "—",
-          CPU: `${d.cpu_percent?.toFixed(1) ?? "—"}%`,
-          RAM: fmtBytes(d.memory_total_bytes ?? 0),
-        })
-      )
-      .catch(() => {});
-  }, []);
+  const changedKeys = useMemo(() => {
+    if (!config) return [] as string[];
+    return Object.keys(config).filter((k) => drafts[k] !== toInput(config[k]));
+  }, [config, drafts]);
 
   const saveConfig = async () => {
+    if (!config || changedKeys.length === 0) return;
     setSaving(true);
-    setSaveError(null);
-    const updates: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(editing)) {
-      const numVal = Number(value);
-      updates[key] = isNaN(numVal) ? value : numVal;
-    }
     try {
-      const res = await fetch("/api/v1/admin/config/engine", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updates),
-      });
-      if (res.ok) {
-        setSaved(true);
-        const id = setTimeout(() => setSaved(false), 2000);
-        timersRef.current.push(id);
-      } else {
-        const text = await res.text();
-        setSaveError(`Save failed: ${res.status} ${text}`);
-      }
-    } catch (err) {
-      setSaveError(`Save error: ${err instanceof Error ? err.message : String(err)}`);
+      const body: EngineConfig = {};
+      for (const k of changedKeys) body[k] = fromInput(config[k], drafts[k]);
+      const updated = await api.patch<EngineConfig>(ENGINE_PATH, body);
+      // Prefer the server echo; fall back to a local merge.
+      const merged = updated && typeof updated === "object" ? updated : { ...config, ...body };
+      setConfig(merged);
+      setDrafts(Object.fromEntries(Object.entries(merged).map(([k, v]) => [k, toInput(v)])));
+      toast.success("Engine configuration saved");
+    } catch (e) {
+      toast.error("Save failed", e instanceof ApiError ? e.message : undefined);
     } finally {
       setSaving(false);
     }
   };
 
-  const testConnection = useCallback(async () => {
-    setConnStatus("checking");
-    try {
-      const res = await fetch("/health");
-      setConnStatus(res.ok ? "ok" : "fail");
-    } catch {
-      setConnStatus("fail");
-    }
-    const id = setTimeout(() => setConnStatus("idle"), 3000);
-    timersRef.current.push(id);
-  }, []);
+  // --- Connection -----------------------------------------------------------
+  const endpoints: { label: string; path: string }[] = [
+    { label: "Base URL", path: "/v1" },
+    { label: "Admin", path: "/api/v1" },
+    { label: "Health", path: "/health" },
+  ];
+  const [conn, setConn] = useState<"online" | "offline" | null>(null);
+  const [testing, setTesting] = useState(false);
 
-  const [copiedIdx, setCopiedIdx] = useState(-1);
-  const copyCode = (idx: number, text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedIdx(idx);
-    const id = setTimeout(() => setCopiedIdx(-1), 2000);
-    timersRef.current.push(id);
+  const testConnection = async () => {
+    setTesting(true);
+    try {
+      const ok = await api.health();
+      setConn(ok ? "online" : "offline");
+      if (ok) toast.success("Connected", "The engine is reachable.");
+      else toast.error("Offline", "The engine did not respond.");
+    } finally {
+      setTesting(false);
+    }
   };
 
-  const baseUrl = typeof window !== "undefined" ? window.location.origin : "http://localhost:8000";
+  // --- About / system info --------------------------------------------------
+  const [system, setSystem] = useState<SystemStats | null>(null);
 
-  const codeBlocks = [
-    {
-      label: "Start server",
-      lang: "bash",
-      code: "yunshu serve --model Qwen3.5-9B-MLX-4bit",
-    },
-    {
-      label: "OpenAI SDK",
-      lang: "python",
-      code: `from openai import OpenAI\nclient = OpenAI(base_url="${baseUrl}/v1", api_key="unused")\nresp = client.chat.completions.create(\n    model="Qwen3.5-9B-MLX-4bit",\n    messages=[{"role": "user", "content": "Hello!"}]\n)`,
-    },
-    {
-      label: "Yunshu SDK",
-      lang: "python",
-      code: `from yunshu_sdk import YunshuClient\nclient = YunshuClient("${baseUrl}")\nresp = client.chat.completions.create(\n    model="Qwen3.5-9B-MLX-4bit",\n    messages=[{"role": "user", "content": "Hello!"}]\n)`,
-    },
-  ];
+  useEffect(() => {
+    const controller = new AbortController();
+    api
+      .get<SystemStats>(SYSTEM_PATH, controller.signal)
+      .then((s) => {
+        if (!controller.signal.aborted) setSystem(s);
+      })
+      .catch(() => {
+        /* non-fatal: about section simply shows placeholders */
+      });
+    return () => controller.abort();
+  }, []);
 
-  const endpoints = [
-    { label: "Gateway", url: baseUrl },
-    { label: "OpenAI API", url: `${baseUrl}/v1` },
-    { label: "Health", url: `${baseUrl}/health` },
-    { label: "Admin API", url: `${baseUrl}/api/v1` },
-  ];
+  const curlSnippet = `curl http://localhost:8000/v1/chat/completions \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer no-key" \\
+  -d '{
+    "model": "your-model-id",
+    "messages": [
+      { "role": "user", "content": "Hello!" }
+    ]
+  }'`;
+
+  const pythonSnippet = `from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="no-key",  # any string; the local engine ignores it
+)
+
+resp = client.chat.completions.create(
+    model="your-model-id",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+print(resp.choices[0].message.content)`;
 
   return (
-    <div className="p-6 space-y-6 max-w-4xl page-enter">
-      <h2 className="text-2xl font-bold flex items-center gap-2">
-        <Settings2 className="w-6 h-6 text-[var(--color-accent)]" />
-        Settings
-      </h2>
-
-      {/* Engine Config */}
-      <Section icon={Settings2} title="Engine Configuration">
-        {saveError && (
-          <div className="mb-3 flex items-center gap-2 text-xs text-[var(--color-danger)] bg-[var(--color-danger)]/10 px-3 py-2 rounded-lg">
-            <AlertTriangle className="w-3 h-3 shrink-0" />
-            {saveError}
-            <button onClick={() => setSaveError(null)} className="ml-auto opacity-60 hover:opacity-100">&times;</button>
-          </div>
-        )}
-        {config ? (
-          <div className="space-y-3">
-            {Object.entries(editing).map(([key, value]) => (
-              <div key={key} className="flex items-center gap-3">
-                <label className="text-sm text-[var(--color-text-secondary)] min-w-[200px]">
-                  {key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
-                </label>
-                <input
-                  type="text"
-                  value={value}
-                  onChange={(e) => setEditing((p) => ({ ...p, [key]: e.target.value }))}
-                  className="flex-1 bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[var(--color-accent)]"
+    <PageShell
+      title="Settings"
+      description="Tune the inference engine, verify connectivity and get started."
+      width="narrow"
+    >
+      <div className="space-y-4">
+        {/* 1. Engine configuration */}
+        <SectionCard
+          icon={SlidersHorizontal}
+          title="Engine configuration"
+          action={
+            <Button size="sm" onClick={saveConfig} disabled={saving || changedKeys.length === 0}>
+              {saving ? <Spinner size="sm" /> : <Save className="h-4 w-4" />}
+              Save{changedKeys.length > 0 ? ` (${changedKeys.length})` : ""}
+            </Button>
+          }
+        >
+          {loadingConfig ? (
+            <div className="flex justify-center py-8">
+              <Spinner />
+            </div>
+          ) : loadError ? (
+            <Alert variant="error" title="Could not load configuration">
+              {loadError}
+            </Alert>
+          ) : config && Object.keys(config).length > 0 ? (
+            <div className="divide-y divide-border">
+              {Object.keys(config).map((key) => (
+                <SettingRow
+                  key={key}
+                  title={<span className="font-mono text-sm">{key}</span>}
+                  control={
+                    <Input
+                      className="w-56 font-mono text-sm"
+                      value={drafts[key] ?? ""}
+                      onChange={(e) => setDrafts((d) => ({ ...d, [key]: e.target.value }))}
+                    />
+                  }
                 />
-              </div>
-            ))}
-            <button
-              onClick={saveConfig}
-              disabled={saving}
-              className="flex items-center gap-2 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-            >
-              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-              {saved ? "Saved!" : "Save Changes"}
-            </button>
-          </div>
-        ) : (
-          <p className="text-sm text-[var(--color-text-secondary)]">
-            Could not load configuration. Make sure the server is running.
-          </p>
-        )}
-      </Section>
-
-      {/* Connection */}
-      <Section icon={Wifi} title="Connection">
-        <div className="space-y-3">
-          {endpoints.map((ep) => (
-            <div key={ep.label} className="flex items-center gap-3 text-sm">
-              <span className="text-[var(--color-text-secondary)] min-w-[120px]">{ep.label}</span>
-              <code className="bg-[var(--color-bg-tertiary)] px-2 py-0.5 rounded text-xs flex-1">
-                {ep.url}
-              </code>
+              ))}
             </div>
-          ))}
-          <Button variant="outline" size="sm" onClick={testConnection}>
-            {connStatus === "checking" ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : connStatus === "ok" ? (
-              <Check className="w-4 h-4 text-[var(--color-success)]" />
-            ) : connStatus === "fail" ? (
-              <WifiOff className="w-4 h-4 text-[var(--color-danger)]" />
-            ) : (
-              <Wifi className="w-4 h-4" />
-            )}
-            Test Connection
-          </Button>
-        </div>
-      </Section>
+          ) : (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+              No engine configuration keys exposed.
+            </p>
+          )}
+        </SectionCard>
 
-      {/* Quick Start */}
-      <Section icon={Terminal} title="Quick Start">
-        <div className="space-y-4">
-          {codeBlocks.map((block, i) => (
-            <div key={i}>
-              <div className="text-xs text-[var(--color-text-secondary)] mb-1.5">{block.label}</div>
-              <div className="relative group">
-                <pre className="bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] rounded-lg p-3 text-sm overflow-x-auto">
-                  <code>{block.code}</code>
-                </pre>
-                <button
-                  onClick={() => copyCode(i, block.code)}
-                  className="absolute top-2 right-2 p-1 rounded bg-[var(--color-bg-secondary)] border border-[var(--color-border)] opacity-0 group-hover:opacity-100 transition-opacity"
-                >
-                  {copiedIdx === i ? (
-                    <Check className="w-3 h-3 text-[var(--color-success)]" />
-                  ) : (
-                    <Copy className="w-3 h-3 text-[var(--color-text-secondary)]" />
-                  )}
-                </button>
-              </div>
+        {/* 2. Connection */}
+        <SectionCard
+          icon={Plug}
+          title="Connection"
+          action={
+            <div className="flex items-center gap-3">
+              {conn && (
+                <StatusIndicator status={conn}>
+                  <span className={conn === "online" ? "text-success" : "text-error"}>
+                    {conn === "online" ? "Online" : "Offline"}
+                  </span>
+                </StatusIndicator>
+              )}
+              <Button variant="secondary" size="sm" onClick={testConnection} disabled={testing}>
+                {testing ? <Spinner size="sm" /> : null}
+                Test connection
+              </Button>
             </div>
-          ))}
-        </div>
-      </Section>
-
-      {/* About */}
-      <Section icon={Info} title="About">
-        <div className="space-y-2 text-sm">
-          <p className="text-[var(--color-text-secondary)] leading-relaxed">
-            Yunshu is a production-grade MLX inference platform for Apple Silicon clusters.
-            Based on mlx-lm with continuous batching, oMLX-pattern streaming, and deep Metal integration.
-          </p>
-          <div className="grid grid-cols-2 gap-3 mt-3">
-            {Object.entries(systemInfo).map(([k, v]) => (
-              <div key={k} className="flex items-center gap-2">
-                <span className="text-[var(--color-text-secondary)] min-w-[80px]">{k}</span>
-                <span className="font-mono text-xs">{v}</span>
+          }
+        >
+          <div className="divide-y divide-border">
+            {endpoints.map((ep) => (
+              <div key={ep.label} className="flex items-center justify-between gap-3 py-2.5">
+                <span className="text-sm text-muted-foreground">{ep.label}</span>
+                <code className="font-mono text-sm">{ep.path}</code>
               </div>
             ))}
           </div>
-        </div>
-      </Section>
-    </div>
-  );
-}
+        </SectionCard>
 
-function Section({
-  icon: Icon,
-  title,
-  children,
-}: {
-  icon: typeof Settings2;
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)]">
-      <div className="px-4 py-3 border-b border-[var(--color-border)] flex items-center gap-2">
-        <Icon className="w-4 h-4 text-[var(--color-accent)]" />
-        <h3 className="font-semibold text-sm">{title}</h3>
+        {/* 3. Quick start */}
+        <SectionCard icon={Terminal} title="Quick start">
+          <div className="space-y-4">
+            <CodeBlock code={curlSnippet} language="bash" filename="chat.sh" />
+            <CodeBlock code={pythonSnippet} language="python" filename="chat.py" />
+          </div>
+        </SectionCard>
+
+        {/* 4. About / system info */}
+        <SectionCard icon={Info} title="About">
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <StatCard icon={Boxes} label="MLX version" value={system?.mlx_version ?? "—"} compact />
+            <StatCard
+              icon={Boxes}
+              label="Python"
+              value={system?.python_version ?? "—"}
+              compact
+              tone="blue"
+            />
+            <StatCard
+              icon={Cpu}
+              label="CPU"
+              value={system ? fmtPct(system.cpu_percent) : "—"}
+              compact
+              tone="purple"
+            />
+            <StatCard
+              icon={MemoryStick}
+              label="RAM used"
+              value={system ? fmtBytes(system.memory_used_bytes) : "—"}
+              subtext={system ? `of ${fmtBytes(system.memory_total_bytes)}` : undefined}
+              compact
+              tone="emerald"
+            />
+          </div>
+          <Separator className="my-4" />
+          <p className="text-sm text-muted-foreground">
+            Yunshu is an OpenAI-compatible MLX inference server. Point any OpenAI client at the base
+            URL above to start generating.
+          </p>
+        </SectionCard>
       </div>
-      <div className="p-4">{children}</div>
-    </div>
+    </PageShell>
   );
 }
