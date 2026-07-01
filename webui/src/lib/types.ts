@@ -114,6 +114,8 @@ export interface ChatMessage {
   role: MessageRole;
   content: string;
   imageUrl?: string;
+  /** Attached images as data-URIs (vision / VLM messages). Sent as image_url parts. */
+  images?: string[];
   reasoning?: string;
   thinking?: boolean;
   tokens?: number;

@@ -9,6 +9,8 @@ import type { SystemStats } from "@/lib/types";
 import {
   LayoutDashboard,
   MessageSquare,
+  MessagesSquare,
+  AudioLines,
   Mic,
   ImageIcon,
   Video,
@@ -34,8 +36,10 @@ const SECTIONS: SidebarSection[] = [
     title: "Playground",
     items: [
       { href: "/chat", label: "Chat", icon: MessageSquare },
+      { href: "/responses", label: "Responses", icon: MessagesSquare },
       { href: "/completions", label: "Completions", icon: FileText },
       { href: "/realtime", label: "Realtime", icon: Radio },
+      { href: "/omni", label: "Omni", icon: AudioLines },
     ],
   },
   {
