@@ -93,6 +93,25 @@ def _write(out: Path, content: bytes) -> None:
         fail(f"Cannot write {out}: {e}", code=1)
 
 
+def _get(url: str, path: str, *, timeout=30):
+    """GET from the server; fail() cleanly on connection error / non-2xx."""
+    import httpx
+
+    try:
+        resp = httpx.get(f"{url}{path}", headers=auth_headers(), timeout=timeout)
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        fail(f"Cannot connect to {url} — start the server with `yunshu serve`.", code=2)
+    except Exception as e:  # noqa: BLE001
+        fail(f"Request failed: {e}", code=1)
+    if resp.status_code >= 300:
+        fail(
+            f"Server error {resp.status_code}: {resp.text[:300]}",
+            code=1,
+            status=resp.status_code,
+        )
+    return resp
+
+
 # ── text ──────────────────────────────────────────────────────────────────────
 
 
@@ -286,6 +305,14 @@ def image(
     )
 
 
+def voices(url: str = _URL):
+    """List available TTS voices for `speak` (GET /v1/audio/voices)."""
+    resp = _get(url, "/v1/audio/voices")
+    d = _body(resp)
+    ids = [v.get("id") for v in d.get("data", [])]
+    emit({"voices": ids}, human=lambda: console.print(", ".join(ids) or "(none)"))
+
+
 def register(app: typer.Typer) -> None:
     """Attach the inference commands as top-level `yunshu` commands."""
     for fn, name in (
@@ -297,5 +324,6 @@ def register(app: typer.Typer) -> None:
         (speak, "speak"),
         (ocr, "ocr"),
         (image, "image"),
+        (voices, "voices"),
     ):
         app.command(name)(fn)

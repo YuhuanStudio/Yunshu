@@ -54,6 +54,7 @@ class TestCLIRegistration:
             "speak",
             "ocr",
             "image",
+            "voices",
         ):
             assert cmd in out, f"Missing inference command: {cmd}"
 
@@ -76,6 +77,8 @@ class TestCLIRegistration:
         assert "download" in commands
         assert "info" in commands
         assert "benchmark" in commands
+        assert "load" in commands
+        assert "unload" in commands
 
     def test_bench_command_options(self):
         from yunshu_cli.benchmark import bench_app

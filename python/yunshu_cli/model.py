@@ -357,6 +357,41 @@ def model_info(
     console.print(tree)
 
 
+_SRV_URL = typer.Option(
+    "http://localhost:8000",
+    "--url",
+    "-u",
+    envvar="YUNSHU_GATEWAY_URL",
+    help="Server URL.",
+)
+
+
+@model_app.command("load")
+def load_model_cmd(
+    model: str = typer.Argument(help="Model id/path to load on the running server."),
+    url: str = _SRV_URL,
+):
+    """Load a model on the running server (POST /v1/models/load)."""
+    from ._output import emit
+    from .infer import _body, _post
+
+    resp = _post(url, "/v1/models/load", json={"model": model}, timeout=600)
+    emit(_body(resp), human=lambda: console.print(f"[green]✓ Loaded[/] {model}"))
+
+
+@model_app.command("unload")
+def unload_model_cmd(
+    model: str = typer.Argument(help="Model id to unload from the running server."),
+    url: str = _SRV_URL,
+):
+    """Unload a model from the running server (POST /v1/models/unload/{id})."""
+    from ._output import emit
+    from .infer import _body, _post
+
+    resp = _post(url, f"/v1/models/unload/{model}", json={})
+    emit(_body(resp), human=lambda: console.print(f"[green]✓ Unloaded[/] {model}"))
+
+
 @model_app.command("benchmark")
 def benchmark_model(
     model: str = typer.Argument(help="Model name or path."),
