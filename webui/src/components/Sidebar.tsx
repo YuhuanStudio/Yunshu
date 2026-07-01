@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
-import { useYunUI } from "yunui/adapters";
-import { StatusIndicator, ThemeToggle, cn } from "yunui";
+import { Sidebar as YunUISidebar, type SidebarSection } from "yunui/patterns";
+import { StatusIndicator } from "yunui";
 import {
   LayoutDashboard,
   MessageSquare,
@@ -22,28 +22,46 @@ import {
   Layers,
 } from "lucide-react";
 
-const navItems = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/chat", label: "Chat", icon: MessageSquare },
-  { href: "/completions", label: "Completions", icon: FileText },
-  { href: "/embeddings", label: "Embeddings", icon: VectorSquare },
-  { href: "/tokenize", label: "Tokenize", icon: Hash },
-  { href: "/audio", label: "Audio", icon: Mic },
-  { href: "/images", label: "Images", icon: ImageIcon },
-  { href: "/models", label: "Models", icon: Box },
-  { href: "/monitoring", label: "Monitoring", icon: Activity },
-  { href: "/realtime", label: "Realtime", icon: Radio },
-  { href: "/mcp", label: "MCP", icon: Wrench },
-  { href: "/batch", label: "Batch", icon: Layers },
-  { href: "/benchmarks", label: "Benchmarks", icon: Zap },
-  { href: "/settings", label: "Settings", icon: Settings2 },
+// Grouped nav sections — mirrors the YunUI / Yunxin sidebar structure (a lead
+// item, then titled groups) instead of one flat list.
+const SECTIONS: SidebarSection[] = [
+  { items: [{ href: "/", label: "Dashboard", icon: LayoutDashboard }] },
+  {
+    title: "Inference",
+    items: [
+      { href: "/chat", label: "Chat", icon: MessageSquare },
+      { href: "/completions", label: "Completions", icon: FileText },
+      { href: "/embeddings", label: "Embeddings", icon: VectorSquare },
+      { href: "/tokenize", label: "Tokenize", icon: Hash },
+      { href: "/audio", label: "Audio", icon: Mic },
+      { href: "/images", label: "Images", icon: ImageIcon },
+      { href: "/realtime", label: "Realtime", icon: Radio },
+    ],
+  },
+  {
+    title: "Manage",
+    items: [
+      { href: "/models", label: "Models", icon: Box },
+      { href: "/monitoring", label: "Monitoring", icon: Activity },
+      { href: "/mcp", label: "MCP", icon: Wrench },
+      { href: "/batch", label: "Batch", icon: Layers },
+      { href: "/benchmarks", label: "Benchmarks", icon: Zap },
+      { href: "/settings", label: "Settings", icon: Settings2 },
+    ],
+  },
 ];
 
-export default function Sidebar() {
+interface SidebarProps {
+  isOpen: boolean;
+  onClose: () => void;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+}
+
+export default function Sidebar({ isOpen, onClose, collapsed, onToggleCollapse }: SidebarProps) {
   const pathname = usePathname();
-  const { Link } = useYunUI();
   const [connected, setConnected] = useState(false);
-  const [info, setInfo] = useState<{ mlx?: string }>({});
+  const [mlx, setMlx] = useState<string | undefined>();
 
   useEffect(() => {
     const check = async () => {
@@ -62,60 +80,37 @@ export default function Sidebar() {
   useEffect(() => {
     fetch("/api/v1/monitoring/system")
       .then((r) => r.json())
-      .then((d) => setInfo({ mlx: d.mlx_version }))
+      .then((d) => setMlx(d.mlx_version))
       .catch(() => {});
   }, []);
 
-  return (
-    <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-card">
-      {/* Logo */}
-      <div className="border-b border-border px-4 py-4">
-        <h1 className="text-lg font-bold tracking-tight text-accent">Yunshu</h1>
-        <p className="mt-0.5 text-[11px] text-muted-foreground">MLX Inference Platform</p>
-      </div>
-
-      {/* Navigation */}
-      <nav className="flex-1 space-y-0.5 overflow-auto p-2">
-        {navItems.map(({ href, label, icon: Icon }) => {
-          const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
-          return (
-            <Link
-              key={href}
-              href={href}
-              className={cn(
-                "relative flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors",
-                active
-                  ? "bg-accent/10 font-medium text-accent"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
-              )}
-            >
-              {active && (
-                <span className="absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-r bg-accent" />
-              )}
-              <Icon className="h-4 w-4 shrink-0" strokeWidth={1.75} />
-              {label}
-            </Link>
-          );
-        })}
-      </nav>
-
-      {/* Status footer */}
-      <div className="space-y-1.5 border-t border-border p-3">
-        <div className="flex items-center gap-2">
-          <StatusIndicator status={connected ? "online" : "offline"}>
-            <span className={connected ? "text-success" : "text-muted-foreground"}>
-              {connected ? "Connected" : "Disconnected"}
-            </span>
-          </StatusIndicator>
-          <ThemeToggle className="ml-auto" />
+  const footer = (
+    <div className="card space-y-1.5 px-3 py-2.5">
+      <StatusIndicator status={connected ? "online" : "offline"}>
+        <span className={connected ? "text-success" : "text-muted-foreground"}>
+          {connected ? "Connected" : "Disconnected"}
+        </span>
+      </StatusIndicator>
+      {mlx && (
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Cpu className="h-3 w-3" /> MLX {mlx}
         </div>
-        {info.mlx && (
-          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <Cpu className="h-3 w-3" />
-            MLX {info.mlx}
-          </div>
-        )}
-      </div>
-    </aside>
+      )}
+    </div>
+  );
+
+  return (
+    <YunUISidebar
+      appName="Yunshu"
+      homeHref="/"
+      sections={SECTIONS}
+      currentPath={pathname}
+      isOpen={isOpen}
+      onClose={onClose}
+      collapsed={collapsed}
+      onToggleCollapse={onToggleCollapse}
+      closeLabel="Close menu"
+      footer={footer}
+    />
   );
 }
