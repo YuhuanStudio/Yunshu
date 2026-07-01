@@ -251,7 +251,7 @@ function RerankTab({ models }: { models: Model[] }) {
             onChange={(e) => setDocsText(e.target.value)}
           />
         </div>
-        <div className="space-y-2 sm:max-w-[12rem]">
+        <div className="space-y-2 sm:max-w-48">
           <label className="text-sm font-medium">Top N</label>
           <NumberInput
             min={1}
@@ -364,7 +364,7 @@ function ScoreTab({ models }: { models: Model[] }) {
             />
           </div>
         </div>
-        <div className="space-y-2 sm:max-w-[16rem]">
+        <div className="space-y-2 sm:max-w-64">
           <label className="text-sm font-medium">Scoring type</label>
           <CustomSelect options={SCORING_OPTIONS} value={scoringType} onChange={setScoringType} />
         </div>
@@ -494,7 +494,7 @@ function ClassifyTab({ models }: { models: Model[] }) {
             </div>
           )}
         </div>
-        <div className="space-y-2 sm:max-w-[12rem]">
+        <div className="space-y-2 sm:max-w-48">
           <label className="text-sm font-medium">Temperature</label>
           <NumberInput
             min={0.01}
@@ -598,7 +598,7 @@ function PoolingTab({ models }: { models: Model[] }) {
             onChange={(e) => setInputText(e.target.value)}
           />
         </div>
-        <div className="space-y-2 sm:max-w-[16rem]">
+        <div className="space-y-2 sm:max-w-64">
           <label className="text-sm font-medium">Pooling type</label>
           <CustomSelect options={POOLING_TYPE_OPTIONS} value={poolingType} onChange={setPoolingType} />
         </div>

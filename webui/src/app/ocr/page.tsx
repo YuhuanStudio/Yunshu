@@ -238,7 +238,7 @@ export default function OcrPage() {
 
             <pre
               className={cn(
-                "max-h-[28rem] select-text overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted/40 p-3 font-mono text-sm",
+                "max-h-112 select-text overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted/40 p-3 font-mono text-sm",
                 result.text ? "" : "text-muted-foreground",
               )}
             >

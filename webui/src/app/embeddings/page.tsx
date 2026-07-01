@@ -409,7 +409,7 @@ function SimilarityMatrix({ rows, labels }: { rows: EmbeddingRow[]; labels: stri
             {matrix.map((rowVals, i) => (
               <tr key={i}>
                 <th
-                  className="max-w-[10rem] truncate p-1 text-right font-medium text-muted-foreground"
+                  className="max-w-40 truncate p-1 text-right font-medium text-muted-foreground"
                   title={labels[rows[i].index]}
                 >
                   #{rows[i].index}

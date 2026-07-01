@@ -10,6 +10,7 @@ import {
   StatusIndicator,
   NumberInput,
   Input,
+  Checkbox,
   cn,
 } from "yunui";
 import { Play, Square, Camera, Cpu, RefreshCw } from "lucide-react";
@@ -252,12 +253,7 @@ export default function ProfilerPage() {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label className="mb-2 flex items-center gap-2 text-sm font-medium">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 accent-current"
-                  checked={useDuration}
-                  onChange={(e) => setUseDuration(e.target.checked)}
-                />
+                <Checkbox checked={useDuration} onCheckedChange={setUseDuration} />
                 Auto-stop after (seconds)
               </label>
               <NumberInput

@@ -9,6 +9,7 @@ import {
   Spinner,
   SegmentedSelect,
   Input,
+  Textarea,
   NumberInput,
   Table,
   TableHeader,
@@ -737,11 +738,11 @@ function RooflineModelPanel({ busy, running, run }: PanelBase) {
         <Input value={chip} onChange={(e) => setChip(e.target.value)} />
       </Field>
       <Field label="GEMM sizes" hint="One `M, N, K` triple per line.">
-        <textarea
+        <Textarea
           value={gemms}
           onChange={(e) => setGemms(e.target.value)}
           rows={4}
-          className="w-full rounded-md border border-border bg-transparent px-3 py-2 font-mono text-xs outline-none focus:border-accent"
+          className="font-mono text-xs"
         />
       </Field>
       <RunButton
