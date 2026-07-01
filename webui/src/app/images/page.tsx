@@ -13,20 +13,12 @@ import {
   Slider,
   Card,
   Badge,
-  Alert,
   Spinner,
   FileDropzone,
   EmptyState,
-  cn,
 } from "yunui";
-import {
-  ImageIcon,
-  Download,
-  RefreshCw,
-  Sparkles,
-  Upload,
-  X,
-} from "lucide-react";
+import { MediaGallery, type MediaResult } from "yunui/patterns";
+import { ImageIcon, Sparkles, Upload, X } from "lucide-react";
 import { PageShell } from "@/components/page-shell";
 import { ModelPicker } from "@/components/model-picker";
 import { api, ApiError } from "@/lib/api";
@@ -50,9 +42,7 @@ export default function ImagesPage() {
   const [controlScale, setControlScale] = useState(0.5);
 
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [imageSrc, setImageSrc] = useState<string | null>(null);
-  const [genTime, setGenTime] = useState<number | null>(null);
+  const [results, setResults] = useState<MediaResult[]>([]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -63,8 +53,8 @@ export default function ImagesPage() {
         setModels(list);
         setModel((cur) => cur || list[0]?.id || "");
       })
-      .catch((e) => {
-        if (!controller.signal.aborted) setError((e as Error).message);
+      .catch(() => {
+        /* model list unavailable — surfaced via the global connection status */
       });
     return () => controller.abort();
   }, []);
@@ -79,10 +69,13 @@ export default function ImagesPage() {
 
   const generate = useCallback(async () => {
     if (!model || !prompt.trim()) return;
+    const id = crypto.randomUUID();
+    // Prepend a processing placeholder so the gallery shows a spinner card.
+    setResults((r) => [
+      { id, url: "", kind: "image", prompt, model, meta: size, status: "processing" },
+      ...r,
+    ]);
     setLoading(true);
-    setError(null);
-    setImageSrc(null);
-    setGenTime(null);
     const start = performance.now();
     try {
       const res = await api.post<ImageGenResponse>("/v1/images/generations", {
@@ -99,29 +92,32 @@ export default function ImagesPage() {
         control_scale: controlImage ? controlScale : undefined,
       });
       const img = res.data?.[0];
-      if (img?.b64_json) {
-        setImageSrc(`data:image/png;base64,${img.b64_json}`);
-      } else if (img?.url) {
-        setImageSrc(img.url);
-      } else {
-        setError("The response contained no image data.");
-      }
-      setGenTime((performance.now() - start) / 1000);
+      const url = img?.b64_json ? `data:image/png;base64,${img.b64_json}` : img?.url;
+      if (!url) throw new Error("The response contained no image data.");
+      const secs = ((performance.now() - start) / 1000).toFixed(1);
+      setResults((r) =>
+        r.map((x) =>
+          x.id === id ? { ...x, url, status: "completed", meta: `${size} · ${secs}s` } : x,
+        ),
+      );
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : (e as Error).message;
-      setError(msg);
+      setResults((r) => r.map((x) => (x.id === id ? { ...x, status: "failed", error: msg } : x)));
     } finally {
       setLoading(false);
     }
   }, [model, prompt, size, steps, seed, controlImage, controlScale]);
 
-  const download = useCallback(() => {
-    if (!imageSrc) return;
+  const download = useCallback((item: MediaResult) => {
     const a = document.createElement("a");
-    a.href = imageSrc;
-    a.download = `yunshu-${Date.now()}.png`;
+    a.href = item.url;
+    a.download = `yunshu-${item.id}.png`;
     a.click();
-  }, [imageSrc]);
+  }, []);
+
+  const remove = useCallback((item: MediaResult) => {
+    setResults((r) => r.filter((x) => x.id !== item.id));
+  }, []);
 
   return (
     <PageShell
@@ -242,61 +238,24 @@ export default function ImagesPage() {
               Rendering your image — this can take a moment…
             </p>
           )}
-
-          {error && (
-            <Alert variant="error" title="Generation failed">
-              {error}
-            </Alert>
-          )}
         </div>
 
-        {/* Preview */}
-        <div className="space-y-4">
-          <Card className="overflow-hidden p-0">
-            <div
-              className={cn(
-                "flex aspect-square w-full items-center justify-center bg-muted",
-              )}
-            >
-              {imageSrc ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={imageSrc}
-                  alt="Generated"
-                  className="h-full w-full object-contain"
-                />
-              ) : loading ? (
-                <Spinner />
-              ) : (
-                <EmptyState
-                  icon={<ImageIcon className="h-8 w-8" />}
-                  title="No image yet"
-                  description="Enter a prompt and generate to see your result here."
-                />
-              )}
-            </div>
-          </Card>
-
-          {imageSrc && (
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              {genTime != null && (
-                <span className="text-sm text-muted-foreground">
-                  Generated in {genTime.toFixed(1)}s
-                </span>
-              )}
-              <div className="ml-auto flex gap-2">
-                <Button variant="secondary" size="sm" onClick={generate} disabled={loading}>
-                  <RefreshCw className="h-4 w-4" /> Regenerate
-                </Button>
-                <a href={imageSrc} download={`yunshu-${Date.now()}.png`} onClick={download}>
-                  <Button variant="secondary" size="sm">
-                    <Download className="h-4 w-4" /> Download
-                  </Button>
-                </a>
-              </div>
-            </div>
-          )}
-        </div>
+        {/* Results */}
+        <MediaGallery
+          items={results}
+          title="Results"
+          onDownload={download}
+          onDelete={remove}
+          empty={
+            <Card className="flex aspect-square w-full items-center justify-center overflow-hidden bg-muted p-0">
+              <EmptyState
+                icon={<ImageIcon className="h-8 w-8" />}
+                title="No images yet"
+                description="Enter a prompt and generate to see your results here."
+              />
+            </Card>
+          }
+        />
       </div>
     </PageShell>
   );
