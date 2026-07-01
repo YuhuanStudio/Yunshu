@@ -136,7 +136,6 @@ export default function MonitoringPage() {
   const [prefillProgress, setPrefillProgress] = useState<Record<string, unknown> | null>(null);
   const [radixTree, setRadixTree] = useState<Record<string, unknown> | null>(null);
   const [hwProfile, setHwProfile] = useState<Record<string, unknown> | null>(null);
-  const [meshStatus, setMeshStatus] = useState<Record<string, unknown> | null>(null);
   const [engineTuning, setEngineTuning] = useState<Record<string, unknown> | null>(null);
   const [modelStats, setModelStats] = useState<Record<string, unknown> | null>(null);
   const [dataParallel, setDataParallel] = useState<Record<string, unknown> | null>(null);
@@ -167,14 +166,13 @@ export default function MonitoringPage() {
     const fetchData = async () => {
       try {
         // Use aggregated endpoint to reduce 31 fetches to 4
-        const [sysRes, engRes, gwSysRes, allRes, radixRes, hwRes, meshRes, modelsRes] = await Promise.all([
+        const [sysRes, engRes, gwSysRes, allRes, radixRes, hwRes, modelsRes] = await Promise.all([
           fetch("/api/v1/monitoring/system").catch(() => null),
           fetch("/api/v1/monitoring/engine").catch(() => null),
           fetch("/api/v1/gw/monitoring/system").catch(() => null),
           fetch("/api/v1/gw/monitoring/all").catch(() => null),
           fetch("/api/v1/admin/radix-tree").catch(() => null),
           fetch("/api/v1/admin/hardware-profile").catch(() => null),
-          fetch("/api/v1/mesh/status").catch(() => null),
           fetch("/v1/models").catch(() => null),
         ]);
         let sysData: SystemStats | null = null;
@@ -247,10 +245,6 @@ export default function MonitoringPage() {
         if (hwRes && hwRes.ok) {
           const hwData = await hwRes.json();
           if (mounted.current) setHwProfile(hwData);
-        }
-        if (meshRes && meshRes.ok) {
-          const meshData = await meshRes.json();
-          if (mounted.current) setMeshStatus(meshData);
         }
         if (modelsRes && modelsRes.ok) {
           const modelsData = await modelsRes.json();
@@ -746,30 +740,6 @@ export default function MonitoringPage() {
                   </div>
                 </div>
               )}
-            </div>
-          )}
-
-          {/* Mesh Topology */}
-          {meshStatus && meshStatus.topology_type && (
-            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
-              <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
-                <Cpu className="w-4 h-4 text-[var(--color-accent)]" />
-                Mesh Topology
-              </h3>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
-                <div>
-                  <div className="text-xs text-[var(--color-text-secondary)]">Topology</div>
-                  <div className="font-medium">{String(meshStatus.topology_type || "—").toUpperCase()}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-[var(--color-text-secondary)]">Node Count</div>
-                  <div className="font-medium tabular-nums">{Number(meshStatus.node_count || 0)}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-[var(--color-text-secondary)]">Backend</div>
-                  <div className="font-medium">{String(meshStatus.backend || "—")}</div>
-                </div>
-              </div>
             </div>
           )}
 
