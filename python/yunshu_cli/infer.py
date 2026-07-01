@@ -152,15 +152,34 @@ def complete(
 
 
 def tokenize(
-    text: str = typer.Argument(..., help="Text to count tokens for."),
+    text: str = typer.Argument(..., help="Text to tokenize."),
     url: str = _URL,
     model: str = _MODEL,
+    ids: bool = typer.Option(
+        False, "--ids", help="Return token IDs (/v1/tokenize) instead of just a count."
+    ),
 ):
-    """Count tokens (POST /v1/token_count)."""
+    """Count tokens, or with --ids return token IDs (POST /v1/token_count | /v1/tokenize)."""
+    if ids:
+        resp = _post(url, "/v1/tokenize", json={"model": model, "text": text})
+        d = _body(resp)
+        emit(d, human=lambda: console.print(str(d.get("tokens"))))
+        return
     resp = _post(url, "/v1/token_count", json={"model": model, "prompt": text})
     d = _body(resp)
     count = d.get("token_count", d.get("count"))
     emit(d, human=lambda: console.print(f"tokens: [bold]{count}[/]"))
+
+
+def detokenize(
+    tokens: list[int] = typer.Argument(..., help="Token IDs to decode back to text."),
+    url: str = _URL,
+    model: str = _MODEL,
+):
+    """Decode token IDs back to text (POST /v1/detokenize)."""
+    resp = _post(url, "/v1/detokenize", json={"model": model, "tokens": list(tokens)})
+    d = _body(resp)
+    emit(d, human=lambda: console.print(d.get("text", "")))
 
 
 def embed(
@@ -305,6 +324,142 @@ def image(
     )
 
 
+def classify(
+    text: str = typer.Argument(..., help="Text to classify."),
+    labels: list[str] = typer.Argument(..., help="Candidate labels."),
+    url: str = _URL,
+    model: str = _MODEL,
+):
+    """Zero-shot classify text into one of the labels (POST /v1/classify)."""
+    resp = _post(
+        url,
+        "/v1/classify",
+        json={"model": model, "input": text, "labels": list(labels)},
+    )
+    d = _body(resp)
+    results = d.get("results") or d.get("data") or []
+
+    def _human():
+        for r in sorted(results, key=lambda x: -x.get("score", 0)):
+            console.print(f"  {r.get('score', 0):.4f}  {r.get('label')}")
+
+    emit(d, human=_human)
+
+
+def score(
+    text1: str = typer.Argument(..., help="First text."),
+    text2: str = typer.Argument(..., help="Second text."),
+    url: str = _URL,
+    model: str = _MODEL,
+    scoring_type: str = typer.Option(
+        "cosine", "--type", help="Similarity: cosine, dot, or euclidean."
+    ),
+):
+    """Similarity score between two texts (POST /v1/score)."""
+    resp = _post(
+        url,
+        "/v1/score",
+        json={
+            "model": model,
+            "text_1": text1,
+            "text_2": text2,
+            "scoring_type": scoring_type,
+        },
+    )
+    d = _body(resp)
+    data = d.get("data", [])
+    emit(
+        d,
+        human=lambda: console.print(
+            ", ".join(f"{r.get('score', 0):.4f}" for r in data) or "(no score)"
+        ),
+    )
+
+
+def cancel(
+    request_id: str = typer.Argument(
+        None, help="Generation request id to cancel (omit when using --all)."
+    ),
+    all_: bool = typer.Option(False, "--all", help="Cancel all active generations."),
+    url: str = _URL,
+):
+    """Cancel an in-flight generation (POST /v1/cancel)."""
+    if not request_id and not all_:
+        fail("Provide a request id, or --all to cancel everything.", code=1)
+    resp = _post(url, "/v1/cancel", json={"request_id": request_id, "cancel_all": all_})
+    d = _body(resp)
+    emit(d, human=lambda: console.print(str(d)))
+
+
+def image_edit(
+    image_file: Path = typer.Argument(..., exists=True, help="Source image to edit."),
+    prompt: str = typer.Argument(..., help="Edit instruction."),
+    out: Path = typer.Option(..., "--out", "-o", help="Output image file (.png)."),
+    url: str = _URL,
+    model: str = typer.Option("Z-Image-Turbo-MLX-4bit", "--model", "-m"),
+    steps: int = typer.Option(4, "--steps", help="Inference steps."),
+    strength: float = typer.Option(
+        0.8, "--strength", help="Re-denoise strength (1.0=full, 0.0=keep source)."
+    ),
+):
+    """Edit an image with a text prompt (POST /v1/images/edits)."""
+    b64src = base64.b64encode(image_file.read_bytes()).decode()
+    resp = _post(
+        url,
+        "/v1/images/edits",
+        json={
+            "image": b64src,
+            "prompt": prompt,
+            "model": model,
+            "num_inference_steps": steps,
+            "denoise_strength": strength,
+            "response_format": "b64_json",
+        },
+        timeout=600,
+    )
+    d = _body(resp)
+    b64 = _pick(lambda: d["data"][0]["b64_json"])
+    _write(out, _pick(lambda: base64.b64decode(b64)))
+    emit(
+        {"file": str(out), "bytes": out.stat().st_size},
+        human=lambda: console.print(
+            f"wrote [bold]{out}[/] ({out.stat().st_size} bytes)"
+        ),
+    )
+
+
+def video(
+    prompt: str = typer.Argument(..., help="Video prompt."),
+    out: Path = typer.Option(..., "--out", "-o", help="Output video file (.mp4)."),
+    url: str = _URL,
+    model: str = typer.Option("wan-2.2-t2v", "--model", "-m"),
+    frames: int = typer.Option(81, "--frames", help="Number of frames."),
+    steps: int = typer.Option(20, "--steps", help="Inference steps."),
+):
+    """Generate a video to a file (POST /v1/video/generations)."""
+    resp = _post(
+        url,
+        "/v1/video/generations",
+        json={
+            "model": model,
+            "prompt": prompt,
+            "num_frames": frames,
+            "num_inference_steps": steps,
+            "response_format": "mp4",
+        },
+        timeout=1800,
+    )
+    d = _body(resp)
+    b64 = _pick(lambda: d["data"][0]["b64_json"])
+    _write(out, _pick(lambda: base64.b64decode(b64)))
+    emit(
+        {"file": str(out), "bytes": out.stat().st_size},
+        human=lambda: console.print(
+            f"wrote [bold]{out}[/] ({out.stat().st_size} bytes)"
+        ),
+    )
+
+
 def voices(url: str = _URL):
     """List available TTS voices for `speak` (GET /v1/audio/voices)."""
     resp = _get(url, "/v1/audio/voices")
@@ -320,10 +475,16 @@ def register(app: typer.Typer) -> None:
         (embed, "embed"),
         (tokenize, "tokenize"),
         (rerank, "rerank"),
+        (detokenize, "detokenize"),
+        (classify, "classify"),
+        (score, "score"),
         (transcribe, "transcribe"),
         (speak, "speak"),
         (ocr, "ocr"),
         (image, "image"),
+        (image_edit, "image-edit"),
+        (video, "video"),
         (voices, "voices"),
+        (cancel, "cancel"),
     ):
         app.command(name)(fn)

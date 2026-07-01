@@ -49,12 +49,18 @@ class TestCLIRegistration:
             "complete",
             "embed",
             "tokenize",
+            "detokenize",
             "rerank",
+            "classify",
+            "score",
             "transcribe",
             "speak",
             "ocr",
             "image",
+            "image-edit",
+            "video",
             "voices",
+            "cancel",
         ):
             assert cmd in out, f"Missing inference command: {cmd}"
 
