@@ -345,6 +345,7 @@ export default function BenchmarksPage() {
           name={active}
           busy={anyBusy}
           running={runningLocal === active}
+          hasRun={done.has(active) || results[active] !== undefined}
           models={models}
           model={model}
           setModel={setModel}
@@ -399,6 +400,7 @@ function BenchPanel({
   name,
   busy,
   running,
+  hasRun,
   models,
   model,
   setModel,
@@ -407,6 +409,7 @@ function BenchPanel({
   name: BenchName;
   busy: boolean;
   running: boolean;
+  hasRun: boolean;
   models: Model[];
   model: string;
   setModel: (id: string) => void;
@@ -414,12 +417,13 @@ function BenchPanel({
 }) {
   switch (name) {
     case "roofline":
-      return <RooflinePanel busy={busy} running={running} run={run} />;
+      return <RooflinePanel busy={busy} running={running} hasRun={hasRun} run={run} />;
     case "latency":
       return (
         <LatencyPanel
           busy={busy}
           running={running}
+          hasRun={hasRun}
           models={models}
           model={model}
           setModel={setModel}
@@ -431,6 +435,7 @@ function BenchPanel({
         <ThroughputPanel
           busy={busy}
           running={running}
+          hasRun={hasRun}
           models={models}
           model={model}
           setModel={setModel}
@@ -442,6 +447,7 @@ function BenchPanel({
         <ModelBenchPanel
           busy={busy}
           running={running}
+          hasRun={hasRun}
           models={models}
           model={model}
           setModel={setModel}
@@ -449,11 +455,11 @@ function BenchPanel({
         />
       );
     case "batch":
-      return <BatchPanel busy={busy} running={running} run={run} />;
+      return <BatchPanel busy={busy} running={running} hasRun={hasRun} run={run} />;
     case "roofline-model":
-      return <RooflineModelPanel busy={busy} running={running} run={run} />;
+      return <RooflineModelPanel busy={busy} running={running} hasRun={hasRun} run={run} />;
     case "bfcl-eval":
-      return <BfclPanel busy={busy} running={running} run={run} />;
+      return <BfclPanel busy={busy} running={running} hasRun={hasRun} run={run} />;
   }
 }
 
@@ -461,6 +467,7 @@ type RunFn = (name: BenchName, path: string, body?: unknown) => void;
 interface PanelBase {
   busy: boolean;
   running: boolean;
+  hasRun: boolean;
   run: RunFn;
 }
 interface ModelPanelBase extends PanelBase {
@@ -475,7 +482,7 @@ const DTYPES = [
   { value: "float32", label: "float32" },
 ];
 
-function RooflinePanel({ busy, running, run }: PanelBase) {
+function RooflinePanel({ busy, running, hasRun, run }: PanelBase) {
   const [sizes, setSizes] = useState("512, 1024, 2048, 4096");
   const [numWarmup, setNumWarmup] = useState(5);
   const [numIters, setNumIters] = useState(20);
@@ -499,7 +506,7 @@ function RooflinePanel({ busy, running, run }: PanelBase) {
       <RunButton
         busy={busy}
         running={running}
-        hasRun={false}
+        hasRun={hasRun}
         onClick={() =>
           run("roofline", "/roofline", {
             sizes: parseNums(sizes),
@@ -533,7 +540,7 @@ function ModelRow({
   );
 }
 
-function LatencyPanel({ busy, running, models, model, setModel, run }: ModelPanelBase) {
+function LatencyPanel({ busy, running, hasRun, models, model, setModel, run }: ModelPanelBase) {
   const [promptLengths, setPromptLengths] = useState("128, 512");
   const [maxTokensList, setMaxTokensList] = useState("64, 256");
   const [numRequests, setNumRequests] = useState(20);
@@ -563,7 +570,7 @@ function LatencyPanel({ busy, running, models, model, setModel, run }: ModelPane
       <RunButton
         busy={busy}
         running={running}
-        hasRun={false}
+        hasRun={hasRun}
         onClick={() =>
           run("latency", "/latency", {
             base_url: "http://localhost:8000",
@@ -578,7 +585,7 @@ function LatencyPanel({ busy, running, models, model, setModel, run }: ModelPane
   );
 }
 
-function ThroughputPanel({ busy, running, models, model, setModel, run }: ModelPanelBase) {
+function ThroughputPanel({ busy, running, hasRun, models, model, setModel, run }: ModelPanelBase) {
   const [concurrency, setConcurrency] = useState("1, 4, 8, 16");
   const [promptTokens, setPromptTokens] = useState(256);
   const [maxTokens, setMaxTokens] = useState(128);
@@ -608,7 +615,7 @@ function ThroughputPanel({ busy, running, models, model, setModel, run }: ModelP
       <RunButton
         busy={busy}
         running={running}
-        hasRun={false}
+        hasRun={hasRun}
         onClick={() =>
           run("throughput", "/throughput", {
             base_url: "http://localhost:8000",
@@ -624,7 +631,7 @@ function ThroughputPanel({ busy, running, models, model, setModel, run }: ModelP
   );
 }
 
-function ModelBenchPanel({ busy, running, models, model, setModel, run }: ModelPanelBase) {
+function ModelBenchPanel({ busy, running, hasRun, models, model, setModel, run }: ModelPanelBase) {
   const [promptLengths, setPromptLengths] = useState("128, 512");
   const [maxTokensList, setMaxTokensList] = useState("64, 256");
   const [numRequests, setNumRequests] = useState(20);
@@ -675,7 +682,7 @@ function ModelBenchPanel({ busy, running, models, model, setModel, run }: ModelP
       <RunButton
         busy={busy}
         running={running}
-        hasRun={false}
+        hasRun={hasRun}
         onClick={() =>
           run("model", "/model", {
             model: model || undefined,
@@ -690,7 +697,7 @@ function ModelBenchPanel({ busy, running, models, model, setModel, run }: ModelP
   );
 }
 
-function BatchPanel({ busy, running, run }: PanelBase) {
+function BatchPanel({ busy, running, hasRun, run }: PanelBase) {
   const [concurrency, setConcurrency] = useState(8);
   const [numRequests, setNumRequests] = useState(50);
   const [promptTokens, setPromptTokens] = useState(256);
@@ -714,7 +721,7 @@ function BatchPanel({ busy, running, run }: PanelBase) {
       <RunButton
         busy={busy}
         running={running}
-        hasRun={false}
+        hasRun={hasRun}
         onClick={() => {
           const qs = new URLSearchParams({
             concurrency: String(concurrency),
@@ -729,7 +736,7 @@ function BatchPanel({ busy, running, run }: PanelBase) {
   );
 }
 
-function RooflineModelPanel({ busy, running, run }: PanelBase) {
+function RooflineModelPanel({ busy, running, hasRun, run }: PanelBase) {
   const [chip, setChip] = useState("H100");
   const [gemms, setGemms] = useState("4096, 4096, 4096\n8192, 8192, 8192\n2048, 8192, 2048");
   return (
@@ -748,7 +755,7 @@ function RooflineModelPanel({ busy, running, run }: PanelBase) {
       <RunButton
         busy={busy}
         running={running}
-        hasRun={false}
+        hasRun={hasRun}
         onClick={() =>
           run("roofline-model", "/roofline-model", {
             chip,
@@ -760,7 +767,7 @@ function RooflineModelPanel({ busy, running, run }: PanelBase) {
   );
 }
 
-function BfclPanel({ busy, running, run }: PanelBase) {
+function BfclPanel({ busy, running, hasRun, run }: PanelBase) {
   const [categories, setCategories] = useState("simple, parallel, multiple");
   const [maxSamples, setMaxSamples] = useState(50);
   return (
@@ -778,7 +785,7 @@ function BfclPanel({ busy, running, run }: PanelBase) {
       <RunButton
         busy={busy}
         running={running}
-        hasRun={false}
+        hasRun={hasRun}
         onClick={() =>
           run("bfcl-eval", "/bfcl-eval", {
             categories: parseStrs(categories),
