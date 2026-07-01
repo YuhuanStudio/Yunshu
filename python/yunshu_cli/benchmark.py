@@ -81,6 +81,18 @@ def bench_roofline(
                 }
             )
 
+    from ._output import emit, is_json
+
+    if is_json():
+        emit(
+            {
+                "dtype": str(dtype),
+                "peak_tflops": max(r["flops_per_s"] for r in results),
+                "results": results,
+            }
+        )
+        return
+
     # Display results
     table = Table(title="GEMM Roofline", show_lines=True)
     table.add_column("M=K=N", justify="right")
@@ -174,6 +186,26 @@ def bench_latency(
     totals = [l["total"] for l in latencies]
     per_tok = [l["per_token"] for l in latencies]
 
+    def _pct(data):
+        arr = sorted(data)
+        return {
+            "p50": arr[len(arr) // 2],
+            "p95": arr[int(len(arr) * 0.95)],
+            "p99": arr[min(int(len(arr) * 0.99), len(arr) - 1)],
+        }
+
+    from ._output import emit, is_json
+
+    if is_json():
+        emit(
+            {
+                "requests": len(latencies),
+                "total_latency_s": _pct(totals),
+                "per_token_ms": _pct([d * 1000 for d in per_tok]),
+            }
+        )
+        return
+
     table = Table(title="Latency Results")
     table.add_column("Metric", style="bold")
     table.add_column("P50", justify="right")
@@ -251,6 +283,20 @@ def bench_throughput(
     throughput = total_tokens / elapsed if elapsed > 0 else 0
     rps = completed / elapsed if elapsed > 0 else 0
 
+    from ._output import emit, is_json
+
+    if is_json():
+        emit(
+            {
+                "total_time_s": elapsed,
+                "completed": completed,
+                "tokens_per_sec": throughput,
+                "requests_per_sec": rps,
+                "concurrency": concurrency,
+            }
+        )
+        return
+
     table = Table(title="Throughput Results")
     table.add_column("Metric", style="bold")
     table.add_column("Value", justify="right")
@@ -284,6 +330,19 @@ def bench_memory():
     active_mem = mx.get_active_memory()
     peak_mem = mx.get_peak_memory()
     cache_mem = mx.get_cache_memory()
+
+    from ._output import emit, is_json
+
+    if is_json():
+        emit(
+            {
+                "total_unified_bytes": total_mem,
+                "mlx_active_bytes": active_mem,
+                "mlx_peak_bytes": peak_mem,
+                "mlx_cache_bytes": cache_mem,
+            }
+        )
+        return
 
     table = Table(show_lines=True)
     table.add_column("Category", style="bold")
@@ -482,6 +541,24 @@ def bench_inference(
     aggregate_throughput = sum(total_tokens_list) / sum(
         [total_time_list[i] - ttft_list[i] for i in range(num_requests)]
     )
+
+    from ._output import emit, is_json
+
+    if is_json():
+        emit(
+            {
+                "model_load_time_s": float(load_time),
+                "memory_used_bytes": int(mem_final),
+                "prompt_tokens": len(prompt_tokens_actual),
+                "batch_size": batch_size,
+                "ttft_avg_ms": float(avg_ttft * 1000),
+                "tpot_avg_ms": float(avg_tpot * 1000),
+                "throughput_per_req_tok_s": float(1 / avg_tpot) if avg_tpot else 0.0,
+                "aggregate_throughput_tok_s": float(aggregate_throughput),
+                "total_latency_p50_ms": float(p50_ttot * 1000),
+            }
+        )
+        return
 
     table.add_row("TTFT (avg)", f"{avg_ttft * 1000:.0f}ms")
     table.add_row("TPOT (avg)", f"{avg_tpot * 1000:.2f}ms")

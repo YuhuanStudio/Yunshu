@@ -415,6 +415,23 @@ def benchmark_model(
         )
 
     avg = sum(results) / len(results)
+
+    from ._output import emit, is_json
+
+    if is_json():
+        emit(
+            {
+                "model": model_path.name,
+                "avg_tok_s": avg,
+                "min_tok_s": min(results),
+                "max_tok_s": max(results),
+                "runs": num_runs,
+                "prompt_tokens": prompt_tokens,
+                "output_tokens": max_tokens,
+            }
+        )
+        return
+
     table = Table(title=f"Benchmark Results: {model_path.name}")
     table.add_column("Metric", style="bold")
     table.add_column("Value", justify="right")

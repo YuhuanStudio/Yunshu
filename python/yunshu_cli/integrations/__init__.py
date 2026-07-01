@@ -295,6 +295,23 @@ def _resolve_model(url: str) -> str | None:
 @launch_app.command("list")
 def list_tools():
     """List available tool integrations."""
+    from .._output import emit, is_json
+
+    if is_json():
+        emit(
+            {
+                "integrations": [
+                    {
+                        "name": integ.display_name,
+                        "installed": integ.is_installed(),
+                        "install_hint": integ.install_hint,
+                    }
+                    for integ in INTEGRATIONS.values()
+                ]
+            }
+        )
+        return
+
     table = Table(title="Available Integrations")
     table.add_column("Tool", style="bold cyan")
     table.add_column("Status")

@@ -465,6 +465,23 @@ def _load_jsonl(filename: str, sample_size: int = 0) -> list[dict]:
 
 def list_benchmarks():
     """List available benchmarks (invoked via `eval list`)."""
+    from ._output import emit, is_json
+
+    if is_json():
+        emit(
+            {
+                "benchmarks": [
+                    {
+                        "name": name,
+                        "description": bench.description,
+                        "data_available": (DATA_DIR / f"{name}.jsonl").exists(),
+                    }
+                    for name, bench in BENCHMARKS.items()
+                ]
+            }
+        )
+        return
+
     table = Table(title="Available Benchmarks")
     table.add_column("Name", style="bold cyan")
     table.add_column("Description")
@@ -552,8 +569,31 @@ def run_all(url: str, model: str | None, sample: int = 50):
         all_results.append(result)
 
     if not all_results:
-        console.print("[red]No benchmarks ran.[/]")
-        raise typer.Exit(1)
+        from ._output import fail
+
+        fail("No benchmarks ran.", code=1)
+
+    from ._output import emit, is_json
+
+    if is_json():
+        emit(
+            {
+                "model": resolved,
+                "results": [
+                    {
+                        "benchmark": r.benchmark_name,
+                        "accuracy": r.accuracy,
+                        "correct": r.correct_count,
+                        "total": r.total_questions,
+                        "time_seconds": r.time_seconds,
+                    }
+                    for r in all_results
+                ],
+                "average_accuracy": sum(r.accuracy for r in all_results)
+                / len(all_results),
+            }
+        )
+        return
 
     # Summary table
     console.print()
@@ -601,6 +641,21 @@ def _resolve_model(url: str) -> str | None:
 
 
 def _print_results(result: BenchmarkResult) -> None:
+    from ._output import emit, is_json
+
+    if is_json():
+        emit(
+            {
+                "benchmark": result.benchmark_name,
+                "accuracy": result.accuracy,
+                "correct": result.correct_count,
+                "total": result.total_questions,
+                "time_seconds": result.time_seconds,
+                "category_scores": result.category_scores,
+            }
+        )
+        return
+
     console.print()
     table = Table(title=f"{result.benchmark_name} Results", show_lines=True)
     table.add_column("Metric", style="bold")

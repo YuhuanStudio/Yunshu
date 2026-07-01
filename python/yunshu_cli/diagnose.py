@@ -6,6 +6,7 @@ for Apple Silicon validation.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import platform
 import subprocess
@@ -26,6 +27,35 @@ logger = logging.getLogger(__name__)
 @diagnose_app.command("system")
 def diagnose_system():
     """Full system diagnostic for Yunshu compatibility."""
+    from ._output import emit, is_json
+
+    if is_json():
+        facts: dict = {
+            "macos": platform.mac_ver()[0],
+            "arch": platform.machine(),
+            "python": sys.version.split()[0],
+            "packages": {},
+        }
+        with contextlib.suppress(Exception):
+            r = subprocess.run(
+                ["sysctl", "-n", "machdep.cpu.brand_string"],
+                capture_output=True,
+                text=True,
+            )
+            facts["cpu"] = r.stdout.strip()
+        with contextlib.suppress(Exception):
+            r = subprocess.run(
+                ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True
+            )
+            facts["unified_memory_bytes"] = int(r.stdout.strip())
+        for pkg in ("mlx", "mlx_lm", "mlx_vlm", "mlx_audio"):
+            with contextlib.suppress(Exception):
+                facts["packages"][pkg] = getattr(
+                    __import__(pkg), "__version__", "installed"
+                )
+        emit(facts)
+        return
+
     tree = Tree("[bold]Yunshu System Diagnostic[/]")
 
     # OS & Hardware
@@ -175,38 +205,46 @@ def diagnose_system():
 @diagnose_app.command("gpu")
 def diagnose_gpu():
     """Detailed GPU information and Metal capabilities."""
-    import mlx.core as mx
-
-    console.print("[bold]Apple GPU Diagnostics[/]\n")
-
-    # Memory
-    table = Table(title="GPU Memory")
-    table.add_column("Metric", style="bold")
-    table.add_column("Value", justify="right")
-    table.add_row("Active", _fmt(mx.get_active_memory()))
-    table.add_row("Peak", _fmt(mx.get_peak_memory()))
-    table.add_row("Cache", _fmt(mx.get_cache_memory()))
-    console.print(table)
-
-    # Quick benchmark
-    console.print("\n[bold]Quick GEMM Benchmark[/]")
     import time
 
+    import mlx.core as mx
+
+    from ._output import emit, is_json
+
+    memory = {
+        "active_bytes": mx.get_active_memory(),
+        "peak_bytes": mx.get_peak_memory(),
+        "cache_bytes": mx.get_cache_memory(),
+    }
+    gemm = []
     for size in [256, 512, 1024, 2048, 4096]:
         a = mx.random.normal((size, size))
         b = mx.random.normal((size, size))
         _ = a @ b
         mx.synchronize()
-
         iters = max(1, 2**24 // (size * size))
         t0 = time.perf_counter()
         for _ in range(iters):
             a @ b
         mx.synchronize()
         elapsed = time.perf_counter() - t0
-        tflops = 2.0 * size**3 * iters / elapsed / 1e12
-        console.print(f"  {size:5d}×{size:5d}: {tflops:.2f} TFLOPS")
+        gemm.append({"size": size, "tflops": 2.0 * size**3 * iters / elapsed / 1e12})
 
+    if is_json():
+        emit({"memory": memory, "gemm": gemm})
+        return
+
+    console.print("[bold]Apple GPU Diagnostics[/]\n")
+    table = Table(title="GPU Memory")
+    table.add_column("Metric", style="bold")
+    table.add_column("Value", justify="right")
+    table.add_row("Active", _fmt(memory["active_bytes"]))
+    table.add_row("Peak", _fmt(memory["peak_bytes"]))
+    table.add_row("Cache", _fmt(memory["cache_bytes"]))
+    console.print(table)
+    console.print("\n[bold]Quick GEMM Benchmark[/]")
+    for g in gemm:
+        console.print(f"  {g['size']:5d}×{g['size']:5d}: {g['tflops']:.2f} TFLOPS")
     console.print()
 
 
@@ -217,42 +255,49 @@ def diagnose_server(
     """Check a running Yunshu server's health and stats."""
     import httpx
 
-    console.print(f"[bold]Server Diagnostics[/] — {url}\n")
+    from ._output import auth_headers, emit, fail, is_json
 
-    # Health check
+    info: dict = {"url": url, "healthy": False, "engine": {}, "models": []}
     try:
         resp = httpx.get(f"{url}/health", timeout=5)
         if resp.status_code == 200:
             data = resp.json()
-            console.print(f"[green]✓ Server healthy[/] — status: {data.get('status')}")
-
-            engine = data.get("engine", {})
-            if engine:
-                table = Table(title="Engine Stats")
-                table.add_column("Metric", style="bold")
-                table.add_column("Value")
-                for k, v in engine.items():
-                    table.add_row(str(k), str(v))
-                console.print(table)
-        else:
-            console.print(f"[red]✗ Server returned {resp.status_code}[/]")
+            info["healthy"] = True
+            info["status"] = data.get("status")
+            info["engine"] = data.get("engine", {})
     except httpx.ConnectError:
-        console.print(f"[red]✗ Cannot connect to {url}[/]")
-        console.print("[dim]Is the server running? Try: yunshu serve[/]")
-    except Exception as e:
-        console.print(f"[red]✗ Error: {e}[/]")
+        fail(
+            f"Cannot connect to {url} — is the server running? Try `yunshu serve`.",
+            code=2,
+        )
+    except Exception as e:  # noqa: BLE001
+        fail(f"Error: {e}", code=1)
 
-    # Models
-    try:
-        resp = httpx.get(f"{url}/v1/models", timeout=5)
+    with contextlib.suppress(Exception):
+        resp = httpx.get(f"{url}/v1/models", headers=auth_headers(), timeout=5)
         if resp.status_code == 200:
-            data = resp.json()
-            models = data.get("data", [])
-            console.print(f"\n[bold]Loaded Models:[/] {len(models)}")
-            for m in models:
-                console.print(f"  • {m.get('id', 'unknown')}")
-    except Exception:
-        logger.debug("failed to fetch models from server", exc_info=True)
+            info["models"] = [m.get("id") for m in resp.json().get("data", [])]
+
+    if is_json():
+        emit(info)
+        return
+
+    console.print(f"[bold]Server Diagnostics[/] — {url}\n")
+    if info["healthy"]:
+        console.print(f"[green]✓ Server healthy[/] — status: {info.get('status')}")
+        if info["engine"]:
+            table = Table(title="Engine Stats")
+            table.add_column("Metric", style="bold")
+            table.add_column("Value")
+            for k, v in info["engine"].items():
+                table.add_row(str(k), str(v))
+            console.print(table)
+    else:
+        console.print("[red]✗ Server unhealthy[/]")
+    if info["models"]:
+        console.print(f"\n[bold]Loaded Models:[/] {len(info['models'])}")
+        for mid in info["models"]:
+            console.print(f"  • {mid}")
 
 
 def _fmt(b: int) -> str:

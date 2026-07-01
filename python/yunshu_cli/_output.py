@@ -8,6 +8,7 @@ parse stdout, and branch on the process exit code (0 = ok, non-zero = failure).
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Callable
 from typing import Any
 
@@ -16,11 +17,20 @@ from rich.console import Console
 console = Console()
 
 _json_mode = False
+_real_stdout = (
+    sys.stdout
+)  # the true stdout; the ONLY thing that emits JSON in --json mode
 
 
 def set_json_mode(enabled: bool) -> None:
-    global _json_mode
+    """Enable machine-readable mode. In --json mode ALL human/progress output (Rich tables,
+    spinners, prints) is routed to stderr by swapping sys.stdout, so stdout carries nothing
+    but the final JSON that emit()/fail() write to the saved real stdout."""
+    global _json_mode, _real_stdout
     _json_mode = enabled
+    if enabled:
+        _real_stdout = sys.stdout
+        sys.stdout = sys.stderr
 
 
 def auth_headers() -> dict[str, str]:
@@ -44,7 +54,10 @@ def emit(data: Any, human: Callable[[], None] | None = None) -> None:
     back to ``str``.
     """
     if _json_mode:
-        print(json.dumps(data, indent=2, ensure_ascii=False, default=str))
+        print(
+            json.dumps(data, indent=2, ensure_ascii=False, default=str),
+            file=_real_stdout,
+        )
     elif human is not None:
         human()
 
@@ -57,7 +70,10 @@ def fail(message: str, code: int = 1, **extra: Any) -> None:
     import typer
 
     if _json_mode:
-        print(json.dumps({"error": message, **extra}, ensure_ascii=False, default=str))
+        print(
+            json.dumps({"error": message, **extra}, ensure_ascii=False, default=str),
+            file=_real_stdout,
+        )
     else:
         console.print(f"[red]{message}[/]")
     raise typer.Exit(code)
