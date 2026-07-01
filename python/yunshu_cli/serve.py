@@ -299,7 +299,7 @@ def _print_startup_banner(
 
         _ver = _pkg_version("yunshu")
     except Exception:
-        _ver = "0.0.1"
+        _ver = "0.1.0"
     table.add_row("Yunshu", f"[bold green]v{_ver}[/]")
     table.add_row("Mode", "Multi-model" if is_multi else "Single-model")
     if model:

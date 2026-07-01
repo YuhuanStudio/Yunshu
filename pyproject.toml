@@ -7,7 +7,7 @@ packages = ["python/yunshu_gateway", "python/yunshu_control", "python/yunshu_eng
 
 [project]
 name = "yunshu"
-version = "0.0.1"
+version = "0.1.0"
 description = "Fast local multimodal (omni) inference engine for Apple Silicon — OpenAI/Anthropic-compatible, with native streaming speech-to-speech"
 readme = "README.md"
 license = "Apache-2.0"

@@ -6,7 +6,10 @@ signals new capability, a patch bump signals fixes.
 
 ## [Unreleased]
 
-The current `main` — the capability surface for the first public release.
+## [0.1.0] - 2026-07-01
+
+First public release — the full capability surface below, each endpoint smoke-verified
+against a real model on Apple Silicon.
 
 ### Added
 
@@ -14,11 +17,20 @@ The current `main` — the capability surface for the first public release.
   on Apple MLX via `mlx-vlm` — `POST /v1/omni/speech/stream` (SSE) and the
   OpenAI-Realtime `WS /v1/realtime` socket. Speech-in (raw audio, no ASR) and
   speech-out, ~1.2 s first-audio text-in / ~1.4 s speech-in (warm). Multi-turn
-  conversation context preserved (bounded to protect TTFT).
+  conversation context preserved (bounded to protect TTFT). Tool-calling works on the
+  voice path too — a tool turn emits `function_call` items and the spoken JSON is
+  suppressed (the voice doesn't read the call aloud).
 - **OpenAI-compatible API**: chat/completions (tool-calling, JSON-schema/grammar,
   streaming, logprobs), completions, responses, embeddings, audio
   (transcriptions/translations/speech), images (generation + edits/variations/
   inpaint/controlnet), tokenizer utilities, batch inference.
+- **Tool-calling**: tools are rendered via the model's own chat template when it supports
+  them natively (better adherence), and a forced `tool_choice` (required / named) is
+  structurally enforced with an assistant prefill — consistently across
+  `/chat/completions`, `/v1/responses`, and Anthropic `/v1/messages`.
+- **Trained image ControlNet**: the `/images/controlnet` + `/depth-guided` routes run the
+  real Z-Image Fun-Controlnet-Union when weights are present (canny/depth preprocessing),
+  and inline `<lora:name:weight>` applies on every image route.
 - **Anthropic-compatible** `/v1/messages` (+ `count_tokens`).
 - **Multimodal retrieval**: `Qwen3-VL-Embedding` (text / image / cross-modal in one
   shared space) on `/v1/embeddings`, and `Qwen3-VL-Reranker` true cross-encoder on
