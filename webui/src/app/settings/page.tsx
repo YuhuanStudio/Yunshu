@@ -15,6 +15,7 @@ import {
   ExternalLink,
   AlertTriangle,
 } from "lucide-react";
+import { Button } from "yunui";
 
 export default function SettingsPage() {
   const [config, setConfig] = useState<Record<string, unknown> | null>(null);
@@ -195,10 +196,7 @@ export default function SettingsPage() {
               </code>
             </div>
           ))}
-          <button
-            onClick={testConnection}
-            className="flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg border border-[var(--color-border)] hover:bg-[var(--color-bg-tertiary)] transition-colors"
-          >
+          <Button variant="outline" size="sm" onClick={testConnection}>
             {connStatus === "checking" ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : connStatus === "ok" ? (
@@ -209,7 +207,7 @@ export default function SettingsPage() {
               <Wifi className="w-4 h-4" />
             )}
             Test Connection
-          </button>
+          </Button>
         </div>
       </Section>
 

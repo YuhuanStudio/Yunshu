@@ -22,7 +22,8 @@
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
-    "tailwindcss": "^4.3.0"
+    "tailwindcss": "^4.3.0",
+    "yunui": "github:YuhuanStudio/YunUI#33bad93"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",

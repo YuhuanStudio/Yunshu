@@ -1,4 +1,11 @@
 @import "tailwindcss";
+/* YunUI design system — the single source of truth for UI. Pinned via git in package.json
+   (`yunui: github:YuhuanStudio/YunUI#<commit>`); to change it, bump the pin + pnpm install.
+   Mirrors Yunxin's integration. */
+@import "yunui/css";
+/* Tailwind v4 must scan YunUI's compiled components so their inline utility classes get
+   generated (git-installed dist is real files, so this path is followed). */
+@source "../../node_modules/yunui/dist";
 
 :root {
   --color-bg-primary: #0a0a0a;
