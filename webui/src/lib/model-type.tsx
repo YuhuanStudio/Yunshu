@@ -1,13 +1,37 @@
-import { Brain, Eye, Volume2, Mic, ImageIcon, Bot, type LucideIcon } from "lucide-react";
+import {
+  Brain,
+  Eye,
+  Volume2,
+  Mic,
+  ImageIcon,
+  Video,
+  ScanText,
+  AudioLines,
+  Boxes,
+  ListOrdered,
+  Bot,
+  type LucideIcon,
+} from "lucide-react";
 import { cn } from "yunui";
 
 /**
- * Yunshu's model taxonomy. The glyph color uses core Tailwind palette hues
- * (mirroring YunUI's own ModelTypeIcon convention) — a fixed categorical
- * palette, distinct from the semantic tokens used for chrome. The chip chrome
- * stays neutral (muted) so it reads the same in every theme.
+ * Yunshu's model taxonomy — the full 10-member `ModelType` enum the backend
+ * exposes (via the `type` field on `/v1/models`, which is the enum NAME in
+ * upper-case). The glyph color uses core Tailwind palette hues (a fixed
+ * categorical palette, distinct from the semantic tokens used for chrome); the
+ * chip chrome stays neutral (muted) so it reads the same in every theme.
  */
-export type ModelType = "LLM" | "VLM" | "TTS" | "ASR" | "IMAGE_GEN";
+export type ModelType =
+  | "LLM"
+  | "VLM"
+  | "TTS"
+  | "ASR"
+  | "IMAGE_GEN"
+  | "OCR"
+  | "STS"
+  | "VIDEO"
+  | "EMBEDDING"
+  | "RERANKER";
 
 export const MODEL_TYPES: Record<ModelType, { label: string; icon: LucideIcon; color: string }> = {
   LLM: { label: "LLM", icon: Brain, color: "text-blue-500" },
@@ -15,17 +39,30 @@ export const MODEL_TYPES: Record<ModelType, { label: string; icon: LucideIcon; c
   TTS: { label: "TTS", icon: Volume2, color: "text-emerald-500" },
   ASR: { label: "ASR", icon: Mic, color: "text-amber-500" },
   IMAGE_GEN: { label: "Image", icon: ImageIcon, color: "text-rose-500" },
+  OCR: { label: "OCR", icon: ScanText, color: "text-cyan-500" },
+  STS: { label: "Speech", icon: AudioLines, color: "text-teal-500" },
+  VIDEO: { label: "Video", icon: Video, color: "text-fuchsia-500" },
+  EMBEDDING: { label: "Embed", icon: Boxes, color: "text-indigo-500" },
+  RERANKER: { label: "Rerank", icon: ListOrdered, color: "text-orange-500" },
 };
 
-/** Best-effort model-type inference from a model id. */
+/** Best-effort model-type inference from a model id (fallback when the backend
+ *  doesn't return an authenticated `type` field). */
 export function guessModelType(id: string): ModelType {
   const l = id.toLowerCase();
-  if (l.includes("tts") || l.includes("voice") || l.includes("cosyvoice")) return "TTS";
-  if (l.includes("asr") || l.includes("whisper")) return "ASR";
-  if (l.includes("vlm") || l.includes("omni") || l.includes("vision") || l.includes("qwen2-vl")) return "VLM";
+  if (l.includes("rerank")) return "RERANKER";
+  if (l.includes("embed")) return "EMBEDDING";
+  if (l.includes("ocr")) return "OCR";
+  if (l.includes("video") || l.includes("wan") || l.includes("ltx") || l.includes("t2v") || l.includes("i2v"))
+    return "VIDEO";
+  if (l.includes("tts") || l.includes("voice") || l.includes("cosyvoice") || l.includes("speech"))
+    return "TTS";
+  if (l.includes("asr") || l.includes("whisper") || l.includes("transcri")) return "ASR";
+  if (l.includes("vlm") || l.includes("omni") || l.includes("vision") || l.includes("-vl") || l.includes("qwen2-vl"))
+    return "VLM";
   if (
     l.includes("image") || l.includes("turbo") || l.includes("flux") ||
-    l.includes("sd-") || l.includes("diffusion") || l.includes("dalle")
+    l.includes("sd-") || l.includes("diffusion") || l.includes("dalle") || l.includes("z-image")
   )
     return "IMAGE_GEN";
   return "LLM";
