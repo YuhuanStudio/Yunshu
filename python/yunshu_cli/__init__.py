@@ -38,10 +38,20 @@ def _global_options(
         envvar="YUNSHU_GATEWAY_URL",
         help="Gateway URL (forwarded to all subcommands that talk to the server).",
     ),
+    json_out: bool = typer.Option(
+        False,
+        "--json",
+        help="Machine-readable JSON on stdout (for agents/scripts). Exit code signals "
+        "success (0) or failure (non-zero).",
+    ),
 ) -> None:
     """Top-level options shared by every subcommand."""
+    from ._output import set_json_mode
+
     ctx.ensure_object(dict)
     ctx.obj["url"] = url
+    ctx.obj["json"] = json_out
+    set_json_mode(json_out)
     # Only propagate to the env var when the URL was EXPLICITLY supplied
     # (via --url or YUNSHU_GATEWAY_URL); the option default
     # `DEFAULT_GATEWAY_URL` would otherwise force every leaf subcommand
@@ -77,3 +87,9 @@ app.add_typer(launch_app, name="launch")
 app.add_typer(eval_app, name="eval")
 app.add_typer(bench_app, name="bench")
 app.add_typer(diagnose_app, name="diagnose")
+
+# Top-level single-shot inference commands (complete/embed/tokenize/rerank/transcribe/
+# speak/ocr/image) — the agent-facing surface, all JSON-capable + non-interactive.
+from .infer import register as register_infer
+
+register_infer(app)

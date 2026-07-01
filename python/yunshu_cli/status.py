@@ -27,21 +27,14 @@ def status(
     """Show Yunshu server status."""
     import httpx
 
+    from ._output import emit, fail, is_json
+
     # Health
     try:
         resp = httpx.get(f"{url}/health", timeout=5)
         healthy = resp.status_code == 200
-        resp.json() if healthy else {}
     except httpx.ConnectError:
-        console.print(
-            Panel(
-                f"[red]Cannot connect to {url}[/]\n\n"
-                "Start the server with: [bold]yunshu serve[/]",
-                title="Server Status",
-                border_style="red",
-            )
-        )
-        raise typer.Exit(1) from None
+        fail(f"Cannot connect to {url} — start the server with `yunshu serve`.", code=1)
 
     status_color = "green" if healthy else "red"
     status_text = "Healthy" if healthy else "Unhealthy"
@@ -72,6 +65,18 @@ def status(
             models_data = resp.json().get("data", [])
     except Exception:
         logger.debug("failed to fetch models", exc_info=True)
+
+    if is_json():
+        emit(
+            {
+                "healthy": healthy,
+                "url": url,
+                "system": sys_data,
+                "engine": eng_data,
+                "models": [m.get("id") for m in models_data],
+            }
+        )
+        return
 
     # Summary panel
     lines = [f"Status: [{status_color}]{status_text}[/]"]

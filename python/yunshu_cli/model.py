@@ -107,6 +107,11 @@ def list_models(
             console.print(f"[red]Error querying {url}: {e}[/]")
             raise typer.Exit(1) from e
         models = data.get("data", []) if isinstance(data, dict) else (data or [])
+        from ._output import emit, is_json
+
+        if is_json():
+            emit({"models": models, "source": url})
+            return
         if not models:
             console.print("[dim]No models reported by the server.[/]")
             return
@@ -150,6 +155,11 @@ def list_models(
                 }
             )
 
+    from ._output import emit, is_json
+
+    if is_json():
+        emit({"models": models, "source": str(base)})
+        return
     if not models:
         console.print("[yellow]No models found.[/]")
         return
@@ -265,15 +275,35 @@ def model_info(
                 model_path = subdir
                 break
 
+    from ._output import emit, fail, is_json
+
     if not model_path.exists():
-        console.print(f"[red]Model not found: {model}[/]")
-        raise typer.Exit(1)
+        fail(f"Model not found: {model}", code=1)
 
     config_path = model_path / "config.json"
     model_type = _detect_model_type(config_path)
     total_size = sum(f.stat().st_size for f in model_path.rglob("*") if f.is_file())
     num_files = sum(1 for f in model_path.rglob("*") if f.is_file())
     safetensors_files = list(model_path.rglob("*.safetensors"))
+
+    cfg = {}
+    if config_path.exists():
+        with open(config_path) as f:
+            cfg = json.load(f)
+
+    if is_json():
+        emit(
+            {
+                "name": model_path.name,
+                "type": model_type,
+                "path": str(model_path),
+                "total_size": total_size,
+                "num_files": num_files,
+                "safetensors": len(safetensors_files),
+                "config": cfg,
+            }
+        )
+        return
 
     # Build info tree
     tree = Tree(f"[bold cyan]{model_path.name}[/]")
@@ -285,10 +315,7 @@ def model_info(
     info.add(f"Files: {num_files}")
     info.add(f"Safetensors: {len(safetensors_files)}")
 
-    if config_path.exists():
-        with open(config_path) as f:
-            cfg = json.load(f)
-
+    if cfg:
         arch = tree.add("[bold]Architecture[/]")
         for key in (
             "architectures",
