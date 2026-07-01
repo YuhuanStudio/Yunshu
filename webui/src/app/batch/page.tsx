@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Button,
   NumberInput,
@@ -8,221 +8,249 @@ import {
   Card,
   Badge,
   Alert,
-  Progress,
+  Spinner,
+  FileDropzone,
   Tabs,
   TabsList,
   TabsTrigger,
   TabsContent,
-  InlineStatus,
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
   cn,
   toast,
 } from "yunui";
 import { StatCard } from "yunui/patterns";
-import { Play, Square, Download, Trash2, ListChecks } from "lucide-react";
-import { api, ApiError } from "@/lib/api";
-import { fmtNumber } from "@/lib/format";
+import { Play, Download, ListChecks, Upload, FileText } from "lucide-react";
+import { api, ApiError, usePolling } from "@/lib/api";
+import { authHeaders } from "@/lib/auth";
+import { fmtNumber, fmtDuration } from "@/lib/format";
 import { PageShell } from "@/components/page-shell";
 import { ModelPicker } from "@/components/model-picker";
-import type { Model, CompletionResult, BatchItem } from "@/lib/types";
+import type { Model } from "@/lib/types";
 
-type InlineKind = "pending" | "processing" | "completed" | "failed";
+/**
+ * Page-local mirror of the backend Batch contract (OpenAI-batch shaped). Kept
+ * here rather than in lib/types so this page owns its own shapes.
+ *
+ *   POST /v1/batch { requests:[{custom_id, url?, body}], max_concurrent, timeout, model? }
+ *        → BatchObject  (BLOCKING — runs synchronously and returns the result)
+ *   POST /v1/batch/upload/csv (multipart: file + model + max_tokens + max_concurrent)
+ *        → BatchObject
+ *   GET  /v1/batch/{id}/results.csv → CSV download
+ */
+interface BatchRequestResult {
+  custom_id: string;
+  status: "success" | "error";
+  response?: unknown;
+  error?: unknown;
+}
+interface BatchObject {
+  id: string;
+  object: "batch";
+  status: string;
+  request_counts: { total: number; completed: number; failed: number };
+  results: BatchRequestResult[];
+  total: number;
+  succeeded: number;
+  failed: number;
+  elapsed_s: number;
+}
 
-const STATUS_MAP: Record<BatchItem["status"], InlineKind> = {
-  pending: "pending",
-  running: "processing",
-  completed: "completed",
-  error: "failed",
-};
+interface BatchRequest {
+  custom_id: string;
+  url: "/v1/chat/completions" | "/v1/completions";
+  body: Record<string, unknown>;
+}
 
-const STATUS_LABEL: Record<InlineKind, string> = {
-  pending: "Pending",
-  processing: "Running",
-  completed: "Done",
-  failed: "Failed",
-};
+function errMessage(e: unknown): string {
+  if (e instanceof ApiError) return e.message;
+  if (e instanceof Error) return e.message;
+  return "Request failed";
+}
 
-function csvEscape(value: string): string {
-  return `"${value.replace(/"/g, '""')}"`;
+/** Pull the assistant text out of a chat/completions response envelope. */
+function extractText(response: unknown): string {
+  if (!response || typeof response !== "object") return "";
+  const r = response as Record<string, unknown>;
+  const body = (r.body && typeof r.body === "object" ? r.body : r) as Record<string, unknown>;
+  const choices = body.choices as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(choices) && choices.length > 0) {
+    const c = choices[0];
+    const message = c.message as Record<string, unknown> | undefined;
+    if (message && typeof message.content === "string") return message.content;
+    if (typeof c.text === "string") return c.text;
+  }
+  return "";
+}
+
+/** Render an error field (string or `{ message }`-ish object) as text. */
+function extractError(error: unknown): string {
+  if (!error) return "";
+  if (typeof error === "string") return error;
+  if (typeof error === "object") {
+    const e = error as Record<string, unknown>;
+    if (typeof e.message === "string") return e.message;
+    return JSON.stringify(error);
+  }
+  return String(error);
 }
 
 export default function BatchPage() {
-  const [models, setModels] = useState<Model[]>([]);
+  const models = usePolling<{ data: Model[] }>((s) => api.get("/v1/models", s), 15000);
+  const modelList = useMemo(() => models.data?.data ?? [], [models.data]);
+
   const [model, setModel] = useState("");
+  const activeModel = model || modelList.find((m) => m.loaded)?.id || modelList[0]?.id || "";
+
   const [maxTokens, setMaxTokens] = useState(128);
-  const [temperature, setTemperature] = useState(0.7);
+  const [maxConcurrent, setMaxConcurrent] = useState(4);
+  const [timeout, setTimeoutS] = useState(300);
   const [prompts, setPrompts] = useState("");
+  const [mode, setMode] = useState("builder");
 
-  const [items, setItems] = useState<BatchItem[]>([]);
   const [running, setRunning] = useState(false);
-  const [tab, setTab] = useState("submit");
-  const abortRef = useRef<AbortController | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<BatchObject | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .get<{ data: Model[] }>("/v1/models")
-      .then((res) => {
-        if (cancelled) return;
-        const list = res.data ?? [];
-        setModels(list);
-        setModel((prev) => prev || list[0]?.id || "");
-      })
-      .catch(() => {
-        /* surfaced via connection status */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const total = items.length;
-  const completed = items.filter((i) => i.status === "completed" || i.status === "error").length;
-  const errored = items.filter((i) => i.status === "error").length;
-  const totalTokens = items.reduce((sum, i) => sum + (i.tokens ?? 0), 0);
-  const progressPct = total === 0 ? 0 : Math.round((completed / total) * 100);
   const queuedCount = prompts.split("\n").filter((l) => l.trim()).length;
 
-  const patchItem = (id: string, patch: Partial<BatchItem>) => {
-    setItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)));
+  const submit = async (fn: () => Promise<BatchObject>) => {
+    setRunning(true);
+    setError(null);
+    try {
+      const res = await fn();
+      setResult(res);
+    } catch (e) {
+      setError(errMessage(e));
+      setResult(null);
+    } finally {
+      setRunning(false);
+    }
   };
 
-  const runBatch = async () => {
-    const lines = prompts
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0);
-
-    if (!model) {
+  const runBuilder = () => {
+    if (!activeModel) {
       toast.error("Select a model first");
       return;
     }
+    const lines = prompts
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
     if (lines.length === 0) {
       toast.error("Enter at least one prompt");
       return;
     }
-
-    const batch: BatchItem[] = lines.map((input, i) => ({
-      id: `${Date.now()}-${i}`,
-      input,
-      status: "pending",
+    const requests: BatchRequest[] = lines.map((prompt, i) => ({
+      custom_id: `req-${i + 1}`,
+      url: "/v1/chat/completions",
+      body: {
+        model: activeModel,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: maxTokens,
+      },
     }));
-    setItems(batch);
-    setRunning(true);
-    setTab("results");
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    for (const item of batch) {
-      if (controller.signal.aborted) break;
-      patchItem(item.id, { status: "running" });
-      try {
-        const res = await api.post<CompletionResult>(
-          "/v1/completions",
-          { model, prompt: item.input, max_tokens: maxTokens, temperature },
-          controller.signal,
-        );
-        patchItem(item.id, {
-          status: "completed",
-          output: res.choices[0]?.text ?? "",
-          tokens: res.usage?.completion_tokens ?? 0,
-        });
-      } catch (e) {
-        if (controller.signal.aborted) break;
-        const msg =
-          e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Request failed";
-        patchItem(item.id, { status: "error", error: msg });
-      }
-    }
-
-    if (controller.signal.aborted) {
-      setItems((prev) =>
-        prev.map((it) =>
-          it.status === "pending" || it.status === "running"
-            ? { ...it, status: "error", error: "Aborted" }
-            : it,
-        ),
-      );
-    }
-
-    abortRef.current = null;
-    setRunning(false);
-  };
-
-  const stop = () => {
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setRunning(false);
-  };
-
-  const clearAll = () => {
-    if (running) stop();
-    setItems([]);
-  };
-
-  const exportCsv = () => {
-    if (items.length === 0) return;
-    const header = ["input", "output", "tokens", "status"];
-    const rows = items.map((it) =>
-      [
-        csvEscape(it.input),
-        csvEscape(it.output ?? it.error ?? ""),
-        String(it.tokens ?? ""),
-        it.status,
-      ].join(","),
+    void submit(() =>
+      api.post<BatchObject>("/v1/batch", {
+        requests,
+        max_concurrent: maxConcurrent,
+        timeout,
+        model: activeModel,
+      }),
     );
-    const csv = [header.join(","), ...rows].join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `batch-${Date.now()}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+  };
+
+  const runCsv = (files: File[]) => {
+    const file = files[0];
+    if (!file) return;
+    if (!activeModel) {
+      toast.error("Select a model first");
+      return;
+    }
+    const form = new FormData();
+    form.append("file", file);
+    form.append("model", activeModel);
+    form.append("max_tokens", String(maxTokens));
+    form.append("max_concurrent", String(maxConcurrent));
+    void submit(() => api.postForm<BatchObject>("/v1/batch/upload/csv", form));
+  };
+
+  const downloadCsv = async () => {
+    if (!result) return;
+    try {
+      const res = await fetch(`/v1/batch/${result.id}/results.csv`, { headers: authHeaders() });
+      if (res.status === 409) {
+        toast.error("Batch still in progress — results not ready yet");
+        return;
+      }
+      if (!res.ok) {
+        toast.error(`Download failed (${res.status})`);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `batch-${result.id}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      toast.error(errMessage(e));
+    }
   };
 
   return (
     <PageShell
       title="Batch"
-      description="Run many prompts through a model and collect the completions."
+      description="Run many requests through a model in one blocking call and collect the results."
       width="wide"
     >
-      <Tabs value={tab} onValueChange={setTab}>
+      {/* ---- Config (shared) ---- */}
+      <Card className="p-5">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <label className="space-y-1.5">
+            <span className="text-sm font-medium">Model</span>
+            <ModelPicker models={modelList} value={activeModel} onChange={setModel} />
+          </label>
+          <label className="space-y-1.5">
+            <span className="text-sm font-medium">Max tokens</span>
+            <NumberInput value={maxTokens} onChange={setMaxTokens} min={1} max={8192} step={16} />
+          </label>
+          <label className="space-y-1.5">
+            <span className="text-sm font-medium">Max concurrent</span>
+            <NumberInput value={maxConcurrent} onChange={setMaxConcurrent} min={1} max={64} step={1} />
+          </label>
+          <label className="space-y-1.5">
+            <span className="text-sm font-medium">Timeout (s)</span>
+            <NumberInput value={timeout} onChange={setTimeoutS} min={1} max={3600} step={30} />
+          </label>
+        </div>
+        {models.error && (
+          <p className="mt-2 text-xs text-error">
+            Could not load models: {errMessage(models.error)}
+          </p>
+        )}
+      </Card>
+
+      {/* ---- Input modes ---- */}
+      <Tabs value={mode} onValueChange={setMode} className="mt-4">
         <TabsList>
-          <TabsTrigger value="submit">Submit</TabsTrigger>
-          <TabsTrigger value="results">
-            Results{total > 0 ? ` (${completed}/${total})` : ""}
+          <TabsTrigger value="builder">
+            <ListChecks className="h-4 w-4" /> Prompt builder
+          </TabsTrigger>
+          <TabsTrigger value="csv">
+            <Upload className="h-4 w-4" /> CSV upload
           </TabsTrigger>
         </TabsList>
 
-        {/* ---- Submit ---- */}
-        <TabsContent value="submit" className="mt-4">
-          <Card className="space-y-5 p-5">
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <label className="space-y-1.5">
-                <span className="text-sm font-medium">Model</span>
-                <ModelPicker models={models} value={model} onChange={setModel} />
-              </label>
-
-              <label className="space-y-1.5">
-                <span className="text-sm font-medium">Max tokens</span>
-                <NumberInput value={maxTokens} onChange={setMaxTokens} min={1} max={8192} step={16} />
-              </label>
-
-              <label className="space-y-1.5">
-                <span className="text-sm font-medium">Temperature</span>
-                <NumberInput
-                  value={temperature}
-                  onChange={setTemperature}
-                  min={0}
-                  max={2}
-                  step={0.1}
-                />
-              </label>
-            </div>
-
+        <TabsContent value="builder" className="mt-4">
+          <Card className="space-y-4 p-5">
             <label className="block space-y-1.5">
               <span className="text-sm font-medium">Prompts (one per line)</span>
               <Textarea
@@ -234,112 +262,131 @@ export default function BatchPage() {
                 onChange={(e) => setPrompts(e.target.value)}
               />
             </label>
-
             <div className="flex items-center justify-between gap-3">
-              <span className="text-sm text-muted-foreground">{queuedCount} prompt(s) queued</span>
-              {running ? (
-                <Button variant="secondary" onClick={stop}>
-                  <Square className="h-4 w-4" /> Stop
-                </Button>
-              ) : (
-                <Button onClick={runBatch} disabled={!model || queuedCount === 0}>
-                  <Play className="h-4 w-4" /> Run batch
-                </Button>
-              )}
+              <span className="text-sm text-muted-foreground">
+                {fmtNumber(queuedCount)} request(s) → /v1/chat/completions
+              </span>
+              <Button onClick={runBuilder} disabled={running || !activeModel || queuedCount === 0}>
+                {running ? <Spinner size="sm" /> : <Play className="h-4 w-4" />} Run batch
+              </Button>
             </div>
           </Card>
         </TabsContent>
 
-        {/* ---- Results ---- */}
-        <TabsContent value="results" className="mt-4 space-y-4">
-          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-            <StatCard icon={ListChecks} label="Total" value={fmtNumber(total)} />
-            <StatCard label="Completed" value={fmtNumber(completed)} tone="emerald" />
-            <StatCard
-              label="Errors"
-              value={fmtNumber(errored)}
-              tone={errored > 0 ? "red" : undefined}
+        <TabsContent value="csv" className="mt-4">
+          <Card className="space-y-4 p-5">
+            <FileDropzone
+              accept=".csv,text/csv"
+              disabled={running}
+              onFiles={runCsv}
+              icon={<FileText className="h-6 w-6" />}
+              label="Drop a CSV or click to choose"
+              hint="Columns: custom_id, prompt | messages_json, system_prompt, max_tokens, temperature"
             />
-            <StatCard label="Output tokens" value={fmtNumber(totalTokens)} tone="blue" />
+            <p className="text-xs text-muted-foreground">
+              The selected model, max tokens and max concurrent above are applied to the upload.
+            </p>
+          </Card>
+        </TabsContent>
+      </Tabs>
+
+      {/* ---- Running state ---- */}
+      {running && (
+        <Card className="mt-4 flex items-center justify-center gap-3 p-8">
+          <Spinner />
+          <span className="text-sm text-muted-foreground">
+            Running batch synchronously — this blocks until every request finishes…
+          </span>
+        </Card>
+      )}
+
+      {error && !running && (
+        <Alert variant="error" className="mt-4" title="Batch failed">
+          {error}
+        </Alert>
+      )}
+
+      {/* ---- Results ---- */}
+      {result && !running && (
+        <div className="mt-4 space-y-4">
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+            <StatCard icon={ListChecks} label="Total" value={fmtNumber(result.request_counts.total)} />
+            <StatCard
+              label="Succeeded"
+              value={fmtNumber(result.succeeded ?? result.request_counts.completed)}
+              tone="emerald"
+            />
+            <StatCard
+              label="Failed"
+              value={fmtNumber(result.failed ?? result.request_counts.failed)}
+              tone={(result.failed ?? result.request_counts.failed) > 0 ? "red" : undefined}
+            />
+            <StatCard label="Elapsed" value={fmtDuration(result.elapsed_s)} tone="blue" />
           </div>
 
           <Card className="space-y-4 p-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="mb-2 flex items-center justify-between text-sm">
-                  <span className="font-medium">Progress</span>
-                  <span className="text-muted-foreground">
-                    {completed}/{total} · {progressPct}%
-                  </span>
-                </div>
-                <Progress value={progressPct} />
+              <div className="flex items-center gap-2 text-sm">
+                <span className="font-medium">Results</span>
+                <Badge variant="default">{result.status}</Badge>
+                <span className="text-xs text-muted-foreground">batch {result.id}</span>
               </div>
-              <div className="flex items-center gap-2">
-                {running && (
-                  <Button variant="secondary" size="sm" onClick={stop}>
-                    <Square className="h-4 w-4" /> Stop
-                  </Button>
-                )}
-                <Button variant="secondary" size="sm" onClick={exportCsv} disabled={total === 0}>
-                  <Download className="h-4 w-4" /> Export CSV
-                </Button>
-                <Button variant="ghost" size="sm" onClick={clearAll} disabled={total === 0}>
-                  <Trash2 className="h-4 w-4" /> Clear
-                </Button>
-              </div>
+              <Button variant="secondary" size="sm" onClick={downloadCsv}>
+                <Download className="h-4 w-4" /> Download results.csv
+              </Button>
             </div>
 
-            {errored > 0 && (
+            {(result.failed ?? result.request_counts.failed) > 0 && (
               <Alert variant="warning">
-                {fmtNumber(errored)} of {fmtNumber(total)} prompts failed.
+                {fmtNumber(result.failed ?? result.request_counts.failed)} of{" "}
+                {fmtNumber(result.request_counts.total)} requests failed.
               </Alert>
             )}
 
-            {total === 0 ? (
+            {result.results.length === 0 ? (
               <p className="py-8 text-center text-sm text-muted-foreground">
-                No batch yet. Submit prompts to see results here.
+                No results returned.
               </p>
             ) : (
-              <div className="divide-y divide-border">
-                {items.map((it, idx) => {
-                  const kind = STATUS_MAP[it.status];
-                  return (
-                    <div key={it.id} className="space-y-2 py-3">
-                      <div className="flex items-center gap-3">
-                        <span className="w-8 shrink-0 text-xs tabular-nums text-muted-foreground">
-                          #{idx + 1}
-                        </span>
-                        <InlineStatus status={kind} label={STATUS_LABEL[kind]} />
-                        <span className="min-w-0 flex-1 truncate text-sm" title={it.input}>
-                          {it.input}
-                        </span>
-                        {typeof it.tokens === "number" && (
-                          <Badge variant="info">{fmtNumber(it.tokens)} tok</Badge>
-                        )}
-                      </div>
-
-                      {it.output != null && it.output !== "" && (
-                        <pre
-                          className={cn(
-                            "ml-11 max-h-48 overflow-auto whitespace-pre-wrap rounded-md",
-                            "bg-muted p-3 font-mono text-xs text-foreground",
-                          )}
-                        >
-                          {it.output}
-                        </pre>
-                      )}
-
-                      {it.status === "error" && it.error && (
-                        <p className="ml-11 text-xs text-error">{it.error}</p>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+              <Table responsive>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-40">Custom ID</TableHead>
+                    <TableHead className="w-24">Status</TableHead>
+                    <TableHead>Response</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {result.results.map((r) => {
+                    const ok = r.status === "success";
+                    const text = ok ? extractText(r.response) : extractError(r.error);
+                    return (
+                      <TableRow key={r.custom_id}>
+                        <TableCell label="Custom ID" className="font-mono text-xs">
+                          {r.custom_id}
+                        </TableCell>
+                        <TableCell label="Status">
+                          <Badge variant={ok ? "success" : "error"}>{r.status}</Badge>
+                        </TableCell>
+                        <TableCell label="Response">
+                          <pre
+                            className={cn(
+                              "max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-xs",
+                              ok ? "text-foreground" : "text-error",
+                            )}
+                          >
+                            {text || (ok ? "(empty)" : "Unknown error")}
+                          </pre>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
             )}
           </Card>
-        </TabsContent>
-      </Tabs>
+        </div>
+      )}
     </PageShell>
   );
 }
