@@ -98,8 +98,7 @@ def _select_image_engine(manager, model):
     # different, already-loaded image engine (e.g. one a mis-routed request left resident) in
     # its place, which would generate from the WRONG model.
     if n_loaded == 1 and not any(
-        e.model_id == model or e.model_id.lower() == ml
-        for e in manager.list_entries()
+        e.model_id == model or e.model_id.lower() == ml for e in manager.list_entries()
     ):
         return first
     return None
