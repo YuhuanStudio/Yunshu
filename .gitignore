@@ -45,8 +45,9 @@ bench/**/*.csv
 # Logs
 *.log
 
-# Models (too large for git)
-/models/
+# Models (too large for git) — root-anchored, NO trailing slash so it also matches the
+# `models` symlink to an external drive (a trailing slash would match dirs only).
+/models
 
 # Internal / development
 .claude/
