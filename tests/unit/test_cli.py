@@ -29,7 +29,6 @@ class TestCLIRegistration:
             "chat",
             "model",
             "status",
-            "config",
             "launch",
             "eval",
             "bench",
@@ -91,17 +90,6 @@ class TestCLIStatus:
         result = runner.invoke(app, ["status", "--help"])
         assert result.exit_code == 0
         assert "--url" in _plain(result.output)
-
-
-class TestCLIConfig:
-    def test_config_help(self):
-        result = runner.invoke(app, ["config", "--help"])
-        assert result.exit_code == 0
-        assert "--url" in _plain(result.output)
-
-    def test_config_set_help(self):
-        result = runner.invoke(app, ["config", "set", "--help"])
-        assert result.exit_code in (0, 1)  # Typer argparse fallback
 
 
 class TestCLILaunch:

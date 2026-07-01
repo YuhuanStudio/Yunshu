@@ -5,7 +5,6 @@ Subcommands:
   chat     — Interactive terminal chat with streaming
   model    — Model management (list, download, info, benchmark)
   status   — Quick server health and stats overview
-  config   — View/edit server configuration
   bench    — Run benchmarks (roofline, latency, throughput, inference)
   diagnose — System diagnostics (GPU, memory, MLX, models)
 """
@@ -63,7 +62,6 @@ def _global_options(
 
 from .benchmark import bench_app
 from .chat import chat_app
-from .config import config_app
 from .diagnose import diagnose_app
 from .eval import eval_app
 from .integrations import launch_app
@@ -75,7 +73,6 @@ app.add_typer(serve_app, name="serve")
 app.add_typer(chat_app, name="chat")
 app.add_typer(model_app, name="model")
 app.add_typer(status_app, name="status")
-app.add_typer(config_app, name="config")
 app.add_typer(launch_app, name="launch")
 app.add_typer(eval_app, name="eval")
 app.add_typer(bench_app, name="bench")

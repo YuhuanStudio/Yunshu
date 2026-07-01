@@ -359,11 +359,16 @@ def benchmark_model(
 
     console.print(f"Prompt tokens: {len(tokens)}, Max output: {max_tokens}")
 
+    # generate_step signature is (prompt, model, *, max_tokens, sampler); the prompt is an
+    # mx.array. (Was imported from the wrong module, only inside the warmup loop so it was
+    # unbound when warmup=0, and called with model/tokens reversed + a removed `temp` kwarg.)
+    from mlx_lm.generate import generate_step
+
+    _prompt = mx.array(tokens)
+
     # Warmup
     for _ in range(warmup):
-        from mlx_lm.utils import generate_step
-
-        for _ in generate_step(ml_model, tokens, max_tokens=16, temp=0.0):
+        for _ in generate_step(_prompt, ml_model, max_tokens=16):
             pass
         mx.synchronize()
 
@@ -372,7 +377,7 @@ def benchmark_model(
     for run in range(num_runs):
         t0 = time.perf_counter()
         generated = 0
-        for _ in generate_step(ml_model, tokens, max_tokens=max_tokens, temp=0.7):
+        for _ in generate_step(_prompt, ml_model, max_tokens=max_tokens):
             generated += 1
         mx.synchronize()
         elapsed = time.perf_counter() - t0

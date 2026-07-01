@@ -213,8 +213,8 @@ def bench_throughput(
     )
 
     async def _run():
-        connector = httpx.AsyncHTTPConnector(limit=concurrency)
-        async with httpx.AsyncClient(connector=connector, timeout=120) as client:
+        limits = httpx.Limits(max_connections=concurrency)
+        async with httpx.AsyncClient(limits=limits, timeout=120) as client:
             semaphore = asyncio.Semaphore(concurrency)
             completed = 0
             total_tokens = 0

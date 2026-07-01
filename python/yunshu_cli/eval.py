@@ -29,7 +29,9 @@ from rich.progress import (
 from rich.table import Table
 
 console = Console()
-eval_app = typer.Typer(help="Run accuracy benchmarks.", no_args_is_help=True)
+# No subcommands (list/all are handled by the callback's positional to avoid the
+# callback-positional-vs-subcommand shadowing); bare `eval` lists.
+eval_app = typer.Typer(help="Run accuracy benchmarks.")
 
 logger = logging.getLogger(__name__)
 
@@ -461,9 +463,8 @@ def _load_jsonl(filename: str, sample_size: int = 0) -> list[dict]:
 # ── Commands ──
 
 
-@eval_app.command("list")
 def list_benchmarks():
-    """List available benchmarks."""
+    """List available benchmarks (invoked via `eval list`)."""
     table = Table(title="Available Benchmarks")
     table.add_column("Name", style="bold cyan")
     table.add_column("Description")
@@ -492,9 +493,16 @@ def run_eval(
         False, "--quick", "-q", help="Quick run with 50 samples."
     ),
 ):
-    """Run an accuracy benchmark against a running Yunshu server."""
+    """Run an accuracy benchmark against a running Yunshu server.
+
+    `benchmark` is a benchmark name, `all` (run every benchmark), or `list`.
+    (These live on the positional arg rather than as subcommands because a Typer
+    callback positional shadows sibling subcommands — `eval all` would otherwise be
+    parsed as an unknown benchmark named "all".)"""
     if benchmark == "list":
         return list_benchmarks()
+    if benchmark == "all":
+        return run_all(url, model, 50 if quick else (sample or 50))
 
     bench = BENCHMARKS.get(benchmark)
     if not bench:
@@ -525,13 +533,8 @@ def run_eval(
     _print_results(result)
 
 
-@eval_app.command("all")
-def run_all(
-    url: str = typer.Option("http://localhost:8000", "--url", "-u", help="Server URL."),
-    model: str | None = typer.Option(None, "--model", "-m", help="Model to evaluate."),
-    sample: int = typer.Option(50, "--sample", "-n", help="Sample size per benchmark."),
-):
-    """Run all available benchmarks."""
+def run_all(url: str, model: str | None, sample: int = 50):
+    """Run all available benchmarks (invoked via `eval all`)."""
     resolved = model or _resolve_model(url)
     if not resolved:
         console.print("[red]No model available.[/]")
