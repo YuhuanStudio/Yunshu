@@ -11,6 +11,8 @@ import {
   MessageSquare,
   Mic,
   ImageIcon,
+  Video,
+  ScanText,
   Box,
   Activity,
   Zap,
@@ -24,29 +26,41 @@ import {
   Layers,
 } from "lucide-react";
 
-// Grouped nav sections — mirrors the YunUI / Yunxin sidebar structure (a lead
-// item, then titled groups) instead of one flat list.
+// Grouped nav sections — the target IA (a lead item + Playground / Generate /
+// Toolkit / Operate). More items land as later rewrite phases add their pages.
 const SECTIONS: SidebarSection[] = [
   { items: [{ href: "/", label: "Dashboard", icon: LayoutDashboard }] },
   {
-    title: "Inference",
+    title: "Playground",
     items: [
       { href: "/chat", label: "Chat", icon: MessageSquare },
       { href: "/completions", label: "Completions", icon: FileText },
-      { href: "/embeddings", label: "Embeddings", icon: VectorSquare },
-      { href: "/tokenize", label: "Tokenize", icon: Hash },
-      { href: "/audio", label: "Audio", icon: Mic },
-      { href: "/images", label: "Images", icon: ImageIcon },
       { href: "/realtime", label: "Realtime", icon: Radio },
     ],
   },
   {
-    title: "Manage",
+    title: "Generate",
+    items: [
+      { href: "/images", label: "Images", icon: ImageIcon },
+      { href: "/video", label: "Video", icon: Video },
+      { href: "/audio", label: "Audio", icon: Mic },
+      { href: "/ocr", label: "OCR", icon: ScanText },
+    ],
+  },
+  {
+    title: "Toolkit",
+    items: [
+      { href: "/embeddings", label: "Embeddings", icon: VectorSquare },
+      { href: "/tokenize", label: "Tokenize", icon: Hash },
+      { href: "/batch", label: "Batch", icon: Layers },
+      { href: "/mcp", label: "MCP", icon: Wrench },
+    ],
+  },
+  {
+    title: "Operate",
     items: [
       { href: "/models", label: "Models", icon: Box },
       { href: "/monitoring", label: "Monitoring", icon: Activity },
-      { href: "/mcp", label: "MCP", icon: Wrench },
-      { href: "/batch", label: "Batch", icon: Layers },
       { href: "/benchmarks", label: "Benchmarks", icon: Zap },
       { href: "/settings", label: "Settings", icon: Settings2 },
     ],
