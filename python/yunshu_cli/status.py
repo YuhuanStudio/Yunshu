@@ -13,7 +13,9 @@ from rich.panel import Panel
 from rich.table import Table
 
 console = Console()
-status_app = typer.Typer(help="Server status.", no_args_is_help=True)
+# No `no_args_is_help` — status has a single invoke_without_command callback, so bare
+# `yunshu status` must RUN it (show status), not print the help screen.
+status_app = typer.Typer(help="Server status.")
 
 logger = logging.getLogger(__name__)
 

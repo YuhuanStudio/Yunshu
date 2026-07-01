@@ -20,7 +20,7 @@ from rich.console import Console
 console = Console()
 app = typer.Typer(
     name="yunshu",
-    help="Production-grade MLX inference platform for Apple Silicon.",
+    help="Fast local multimodal (omni) MLX inference engine for Apple Silicon.",
     no_args_is_help=True,
     rich_markup_mode="rich",
 )

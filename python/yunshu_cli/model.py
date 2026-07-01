@@ -26,8 +26,10 @@ def _get_models_dir() -> Path:
     env_dir = __import__("os").environ.get("YUNSHU_MODELS_DIR")
     if env_dir:
         return Path(env_dir)
-    # Default: yunshu/models/
-    return Path(__file__).parent.parent.parent.parent / "models"
+    # Default: <repo>/models/  (model.py is <repo>/python/yunshu_cli/model.py → 3 parents
+    # reach the repo root; a 4th overshot to the repo's PARENT dir, so `model list` looked
+    # in the wrong place and reported "Models directory not found").
+    return Path(__file__).parent.parent.parent / "models"
 
 
 def _detect_model_type(config_path: Path) -> str:
