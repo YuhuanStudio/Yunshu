@@ -23,6 +23,15 @@ def set_json_mode(enabled: bool) -> None:
     _json_mode = enabled
 
 
+def auth_headers() -> dict[str, str]:
+    """Authorization header from ``YUNSHU_AUTH_TOKEN`` so the CLI can reach the gateway's
+    token-gated admin/monitoring endpoints. Empty when no token is set (open server)."""
+    import os
+
+    tok = os.environ.get("YUNSHU_AUTH_TOKEN")
+    return {"Authorization": f"Bearer {tok}"} if tok else {}
+
+
 def is_json() -> bool:
     return _json_mode
 

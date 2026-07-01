@@ -14,10 +14,14 @@ from pathlib import Path
 
 import typer
 
-from ._output import console, emit, fail
+from ._output import auth_headers, console, emit, fail
 
 _URL = typer.Option(
-    "http://localhost:8000", "--url", "-u", envvar="YUNSHU_GATEWAY_URL", help="Server URL."
+    "http://localhost:8000",
+    "--url",
+    "-u",
+    envvar="YUNSHU_GATEWAY_URL",
+    help="Server URL.",
 )
 _MODEL = typer.Option("local", "--model", "-m", help="Model name (single-model: any).")
 
@@ -27,7 +31,14 @@ def _post(url: str, path: str, *, json=None, files=None, data=None, timeout=300)
     import httpx
 
     try:
-        resp = httpx.post(f"{url}{path}", json=json, files=files, data=data, timeout=timeout)
+        resp = httpx.post(
+            f"{url}{path}",
+            json=json,
+            files=files,
+            data=data,
+            headers=auth_headers(),
+            timeout=timeout,
+        )
     except httpx.ConnectError:
         fail(f"Cannot connect to {url} — start the server with `yunshu serve`.", code=2)
     except Exception as e:  # noqa: BLE001
@@ -37,7 +48,11 @@ def _post(url: str, path: str, *, json=None, files=None, data=None, timeout=300)
         with contextlib.suppress(Exception):
             body = resp.json()
             detail = body.get("error", {}).get("message") or body.get("detail", detail)
-        fail(f"Server error {resp.status_code}: {detail}", code=1, status=resp.status_code)
+        fail(
+            f"Server error {resp.status_code}: {detail}",
+            code=1,
+            status=resp.status_code,
+        )
     return resp
 
 
@@ -102,7 +117,12 @@ def embed(
     d = resp.json()
     vec = d["data"][0]["embedding"]
     emit(
-        {"embedding": vec, "dim": len(vec), "model": d.get("model"), "usage": d.get("usage")},
+        {
+            "embedding": vec,
+            "dim": len(vec),
+            "model": d.get("model"),
+            "usage": d.get("usage"),
+        },
         human=lambda: console.print(
             f"dim [bold]{len(vec)}[/] — first 8: {[round(x, 4) for x in vec[:8]]}"
         ),
@@ -125,7 +145,9 @@ def rerank(
 
     def _human():
         for r in d.get("results", []):
-            console.print(f"  {r['relevance_score']:.4f}  [{r['index']}] {documents[r['index']][:70]}")
+            console.print(
+                f"  {r['relevance_score']:.4f}  [{r['index']}] {documents[r['index']][:70]}"
+            )
 
     emit(d, human=_human)
 
@@ -146,7 +168,12 @@ def transcribe(
     if language and not translate:
         data["language"] = language
     with open(file, "rb") as f:
-        resp = _post(url, path, files={"file": (file.name, f, "application/octet-stream")}, data=data)
+        resp = _post(
+            url,
+            path,
+            files={"file": (file.name, f, "application/octet-stream")},
+            data=data,
+        )
     d = resp.json()
     emit(d, human=lambda: console.print(d.get("text", "")))
 
@@ -168,7 +195,9 @@ def speak(
     out.write_bytes(resp.content)
     emit(
         {"file": str(out), "bytes": len(resp.content), "format": fmt},
-        human=lambda: console.print(f"wrote [bold]{out}[/] ({len(resp.content)} bytes)"),
+        human=lambda: console.print(
+            f"wrote [bold]{out}[/] ({len(resp.content)} bytes)"
+        ),
     )
 
 
@@ -179,7 +208,12 @@ def ocr(
 ):
     """Extract text from an image (POST /v1/ocr)."""
     with open(file, "rb") as f:
-        resp = _post(url, "/v1/ocr", files={"file": (file.name, f, "image/png")}, data={"model": model})
+        resp = _post(
+            url,
+            "/v1/ocr",
+            files={"file": (file.name, f, "image/png")},
+            data={"model": model},
+        )
     d = resp.json()
     emit(d, human=lambda: console.print(d.get("text", "")))
 
@@ -209,7 +243,9 @@ def image(
     out.write_bytes(base64.b64decode(b64))
     emit(
         {"file": str(out), "bytes": out.stat().st_size, "size": size},
-        human=lambda: console.print(f"wrote [bold]{out}[/] ({out.stat().st_size} bytes)"),
+        human=lambda: console.print(
+            f"wrote [bold]{out}[/] ({out.stat().st_size} bytes)"
+        ),
     )
 
 

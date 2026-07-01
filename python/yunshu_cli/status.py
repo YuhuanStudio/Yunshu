@@ -27,7 +27,9 @@ def status(
     """Show Yunshu server status."""
     import httpx
 
-    from ._output import emit, fail, is_json
+    from ._output import auth_headers, emit, fail, is_json
+
+    _hdr = auth_headers()
 
     # Health
     try:
@@ -42,7 +44,7 @@ def status(
     # System stats
     sys_data = {}
     try:
-        resp = httpx.get(f"{url}/api/v1/monitoring/system", timeout=5)
+        resp = httpx.get(f"{url}/api/v1/gw/monitoring/system", headers=_hdr, timeout=5)
         if resp.status_code == 200:
             sys_data = resp.json()
     except Exception:
@@ -51,7 +53,7 @@ def status(
     # Engine stats
     eng_data = {}
     try:
-        resp = httpx.get(f"{url}/api/v1/monitoring/engine", timeout=5)
+        resp = httpx.get(f"{url}/api/v1/gw/monitoring/engine", headers=_hdr, timeout=5)
         if resp.status_code == 200:
             eng_data = resp.json()
     except Exception:
@@ -83,15 +85,23 @@ def status(
     lines.append(f"URL: {url}")
 
     if sys_data:
+        # Keys match /api/v1/gw/monitoring/system: gpu.total_uma_bytes (unified memory),
+        # cpu.percent (nested), mlx_version lives under gpu.
         gpu = sys_data.get("gpu", {})
         if gpu:
             lines.append(
-                f"GPU: {_fmt(gpu.get('active_bytes', 0))} / {_fmt(gpu.get('total_bytes', 0))} ({gpu.get('utilization_pct', 0):.0f}%)"
+                f"GPU: {_fmt(gpu.get('active_bytes', 0))} / {_fmt(gpu.get('total_uma_bytes', 0))} ({gpu.get('utilization_pct', 0):.0f}%)"
             )
-        if sys_data.get("cpu_percent"):
-            lines.append(f"CPU: {sys_data['cpu_percent']:.1f}%")
-        if sys_data.get("mlx_version"):
-            lines.append(f"MLX: {sys_data['mlx_version']}")
+            if gpu.get("mlx_version"):
+                lines.append(f"MLX: {gpu['mlx_version']}")
+        cpu = sys_data.get("cpu", {})
+        if cpu.get("percent") is not None:
+            lines.append(f"CPU: {cpu['percent']:.1f}%")
+        mem = sys_data.get("memory", {})
+        if mem.get("used_bytes") is not None:
+            lines.append(
+                f"RAM: {_fmt(mem.get('used_bytes', 0))} / {_fmt(mem.get('total_bytes', 0))} ({mem.get('percent', 0):.0f}%)"
+            )
 
     if eng_data:
         lines.append(f"Requests: {eng_data.get('requests_processed', 0)}")
