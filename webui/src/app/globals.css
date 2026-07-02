@@ -3,6 +3,10 @@
    package.json (`yunui: github:YuhuanStudio/YunUI#<commit>`); to change it, bump
    the pin + pnpm install. */
 @import "yunui/css";
+/* YunUI content stack (MarkdownRenderer) styles + KaTeX math CSS. Imported once
+   here so `yunui/content` renders correctly app-wide. */
+@import "yunui/content.css";
+@import "katex/dist/katex.min.css";
 /* Tailwind v4 must scan YunUI's compiled components so their inline utility
    classes get generated (the git-installed dist is real files). */
 @source "../../node_modules/yunui/dist";

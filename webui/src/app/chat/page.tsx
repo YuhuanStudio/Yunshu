@@ -21,18 +21,21 @@ import {
   cn,
 } from "yunui";
 import { ThinkingBlock } from "yunui/ai";
+import {
+  ChatMessage as ChatBubble,
+  ChatMessageList,
+  ChatComposer,
+  ChatHeader,
+} from "yunui/chat";
 import { ModelPicker } from "@/components/model-picker";
 import {
   Plus,
   Trash2,
-  Send,
-  Square,
   Settings2,
   MessageSquare,
   Wrench,
   ImagePlus,
   X,
-  User,
   Sparkles,
 } from "lucide-react";
 import { api, streamSSE } from "@/lib/api";
@@ -119,7 +122,6 @@ export default function ChatPage() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [showSettings, setShowSettings] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   // Load persisted conversations + settings.
@@ -178,10 +180,6 @@ export default function ChatPage() {
       ? (schema.error ?? (schema.value == null ? "A JSON schema is required." : null))
       : null;
   const settingsInvalid = Boolean(toolsError) || Boolean(schemaError);
-
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [active?.messages.length, streaming]);
 
   const updateConversation = useCallback(
     (id: string, fn: (c: Conversation) => Conversation) => {
@@ -420,104 +418,96 @@ export default function ChatPage() {
       {/* Main */}
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Header */}
-        <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
-          <ModelPicker models={models} value={model} onChange={setModel} className="w-64" />
-          {settings.enableThinking && <Badge variant="info">thinking</Badge>}
-          {Array.isArray(tools.value) && tools.value.length > 0 && (
-            <Badge variant="default">{tools.value.length} tools</Badge>
-          )}
-          {settings.responseFormat !== "text" && <Badge variant="default">{settings.responseFormat}</Badge>}
-          <IconButton
-            className="ml-auto"
-            icon={<Settings2 className="h-4 w-4" />}
-            label="Settings"
-            onClick={() => setShowSettings(true)}
-          />
-        </div>
+        <ChatHeader
+          className="border-b border-border"
+          left={
+            <>
+              <ModelPicker models={models} value={model} onChange={setModel} className="w-64" />
+              {settings.enableThinking && <Badge variant="info">thinking</Badge>}
+              {Array.isArray(tools.value) && tools.value.length > 0 && (
+                <Badge variant="default">{tools.value.length} tools</Badge>
+              )}
+              {settings.responseFormat !== "text" && <Badge variant="default">{settings.responseFormat}</Badge>}
+            </>
+          }
+        />
 
         {/* Transcript */}
-        <div ref={scrollRef} className="flex-1 overflow-auto px-4 py-6">
-          <div className="mx-auto max-w-3xl space-y-6">
-            {!active || active.messages.length === 0 ? (
-              <div className="pt-20">
-                <EmptyState
-                  icon={<Sparkles className="h-6 w-6" />}
-                  title="Start a conversation"
-                  description="Pick a model and send a message. Vision, thinking, tool calls and structured output are all supported — configure them in Settings."
-                />
-              </div>
-            ) : (
-              active.messages.map((m) => <MessageBubble key={m.id} message={m} />)
-            )}
-          </div>
-        </div>
+        <ChatMessageList
+          className="px-4 py-6"
+          empty={
+            <EmptyState
+              icon={<Sparkles className="h-6 w-6" />}
+              title="Start a conversation"
+              description="Pick a model and send a message. Vision, thinking, tool calls and structured output are all supported — configure them in Settings."
+            />
+          }
+        >
+          {active && active.messages.length > 0 ? (
+            <div className="mx-auto max-w-3xl">
+              {active.messages.map((m) => (
+                <MessageBubble key={m.id} message={m} />
+              ))}
+            </div>
+          ) : null}
+        </ChatMessageList>
 
         {/* Composer */}
         <div className="border-t border-border p-4">
           <div className="mx-auto max-w-3xl space-y-2">
-            {attachments.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {attachments.map((src, i) => (
-                  <div key={i} className="relative">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={src} alt="attachment" className="h-16 w-16 rounded-lg border border-border object-cover" />
-                    <button
-                      type="button"
-                      onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
-                      className="absolute -right-1.5 -top-1.5 rounded-full bg-foreground/80 p-0.5 text-background hover:bg-foreground"
-                      aria-label="Remove image"
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="flex items-end gap-2">
-              <input
-                ref={fileRef}
-                type="file"
-                accept="image/*"
-                multiple
-                hidden
-                onChange={(e) => {
-                  onPickFiles(e.target.files);
-                  e.target.value = "";
-                }}
-              />
-              <IconButton
-                icon={<ImagePlus className="h-4 w-4" />}
-                label={isVision ? "Attach image" : "The selected model is not a vision model"}
-                onClick={() => fileRef.current?.click()}
-                disabled={!isVision || streaming}
-              />
-              <Textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    send();
-                  }
-                }}
-                placeholder="Send a message…  (Enter to send, Shift+Enter for newline)"
-                rows={2}
-                className="flex-1 resize-none"
-                disabled={streaming}
-              />
-              {streaming ? (
-                <Button variant="secondary" onClick={stop}>
-                  <Square className="h-4 w-4" /> Stop
-                </Button>
-              ) : (
-                <Button
-                  onClick={send}
-                  disabled={(!input.trim() && attachments.length === 0) || !model || settingsInvalid}
-                >
-                  <Send className="h-4 w-4" /> Send
-                </Button>
-              )}
-            </div>
+            <ChatComposer
+              value={input}
+              onChange={setInput}
+              onSend={send}
+              onStop={stop}
+              loading={streaming}
+              sendDisabled={!model || settingsInvalid}
+              placeholder="Send a message…  (Enter to send, Shift+Enter for newline)"
+              attachments={
+                attachments.length > 0
+                  ? attachments.map((src, i) => (
+                      <div key={i} className="relative">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={src} alt="attachment" className="h-16 w-16 rounded-lg border border-border object-cover" />
+                        <button
+                          type="button"
+                          onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
+                          className="absolute -right-1.5 -top-1.5 rounded-full bg-foreground/80 p-0.5 text-background hover:bg-foreground"
+                          aria-label="Remove image"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))
+                  : undefined
+              }
+              toolbar={
+                <>
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    hidden
+                    onChange={(e) => {
+                      onPickFiles(e.target.files);
+                      e.target.value = "";
+                    }}
+                  />
+                  <IconButton
+                    icon={<ImagePlus className="h-4 w-4" />}
+                    label={isVision ? "Attach image" : "The selected model is not a vision model"}
+                    onClick={() => fileRef.current?.click()}
+                    disabled={!isVision || streaming}
+                  />
+                  <IconButton
+                    icon={<Settings2 className="h-4 w-4" />}
+                    label="Settings"
+                    onClick={() => setShowSettings(true)}
+                  />
+                </>
+              }
+            />
             {settingsInvalid && (
               <p className="text-xs text-error">Fix the invalid Tools / schema JSON in Settings before sending.</p>
             )}
@@ -640,59 +630,54 @@ export default function ChatPage() {
 
 function MessageBubble({ message: m }: { message: ChatMessage }) {
   const isUser = m.role === "user";
+  // "tool" is a stored role that ChatMessage doesn't model — render it like an
+  // assistant row.
+  const role = m.role === "tool" ? "assistant" : m.role;
+  const badges =
+    !m.streaming && (m.tokens || m.latencyMs) ? (
+      <>
+        {m.tokens ? <Badge variant="default">{fmtNumber(m.tokens)} tok</Badge> : null}
+        {m.latencyMs ? (
+          <span className="text-muted-foreground">{(m.latencyMs / 1000).toFixed(1)}s</span>
+        ) : null}
+      </>
+    ) : undefined;
+
   return (
-    <div className={cn("message-fade-in flex gap-3", isUser && "flex-row-reverse")}>
-      <div
-        className={cn(
-          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
-          isUser ? "bg-accent/10 text-accent" : "bg-muted text-muted-foreground",
-        )}
-      >
-        {isUser ? <User className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
-      </div>
-      <div className={cn("min-w-0 flex-1", isUser && "flex flex-col items-end")}>
-        {m.reasoning ? (
-          <div className="mb-2 w-full">
-            <ThinkingBlock content={m.reasoning} isStreaming={m.streaming} renderContent={(c) => <Markdown>{c}</Markdown>} />
-          </div>
-        ) : null}
+    <ChatBubble role={role} className="message-fade-in" badges={badges}>
+      {m.reasoning ? (
+        <ThinkingBlock
+          content={m.reasoning}
+          isStreaming={m.streaming}
+          renderContent={(c) => <Markdown>{c}</Markdown>}
+        />
+      ) : null}
 
-        {m.images && m.images.length > 0 && (
-          <div className={cn("mb-2 flex flex-wrap gap-2", isUser && "justify-end")}>
-            {m.images.map((src, i) => (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img key={i} src={src} alt="attachment" className="max-h-48 rounded-lg border border-border object-cover" />
-            ))}
-          </div>
-        )}
+      {m.images && m.images.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {m.images.map((src, i) => (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img key={i} src={src} alt="attachment" className="max-h-48 rounded-lg border border-border object-cover" />
+          ))}
+        </div>
+      )}
 
-        {m.toolCalls?.map((t) => (
-          <Card key={t.id} className="mb-2 w-full p-3">
-            <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-              <Wrench className="h-3.5 w-3.5" /> {t.function.name}
-            </div>
-            <pre className="overflow-auto rounded bg-muted p-2 text-xs">{t.function.arguments}</pre>
-          </Card>
+      {m.toolCalls?.map((t) => (
+        <Card key={t.id} className="p-3">
+          <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <Wrench className="h-3.5 w-3.5" /> {t.function.name}
+          </div>
+          <pre className="overflow-auto rounded bg-muted p-2 text-xs">{t.function.arguments}</pre>
+        </Card>
+      ))}
+
+      {(m.content || m.streaming) &&
+        (isUser ? (
+          <p className="whitespace-pre-wrap break-words text-sm">{m.content}</p>
+        ) : (
+          <Markdown>{m.content || "…"}</Markdown>
         ))}
-
-        {(m.content || m.streaming) && (
-          <Card className={cn("w-fit max-w-full p-3.5", isUser && "bg-accent/10")}>
-            {isUser ? (
-              <p className="whitespace-pre-wrap break-words text-sm">{m.content}</p>
-            ) : (
-              <Markdown>{m.content || "…"}</Markdown>
-            )}
-          </Card>
-        )}
-
-        {!m.streaming && (m.tokens || m.latencyMs) ? (
-          <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-            {m.tokens ? <Badge variant="default">{fmtNumber(m.tokens)} tok</Badge> : null}
-            {m.latencyMs ? <span>{(m.latencyMs / 1000).toFixed(1)}s</span> : null}
-          </div>
-        ) : null}
-      </div>
-    </div>
+    </ChatBubble>
   );
 }
 
