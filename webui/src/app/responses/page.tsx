@@ -396,8 +396,8 @@ export default function ResponsesPage() {
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
-      <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
-        <ModelPicker models={models} value={model} onChange={setModel} className="w-64" />
+      <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
+        <ModelPicker models={models} value={model} onChange={setModel} className="w-full sm:w-64" />
         <Badge variant={prevResponseId ? "success" : "default"} className="font-mono text-xs">
           {prevResponseId ? `thread → ${prevResponseId.slice(0, 14)}…` : "new thread"}
         </Badge>

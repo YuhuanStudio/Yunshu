@@ -262,11 +262,11 @@ export default function BatchPage() {
                 onChange={(e) => setPrompts(e.target.value)}
               />
             </label>
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <span className="text-sm text-muted-foreground">
                 {fmtNumber(queuedCount)} request(s) → /v1/chat/completions
               </span>
-              <Button onClick={runBuilder} disabled={running || !activeModel || queuedCount === 0}>
+              <Button className="shrink-0" onClick={runBuilder} disabled={running || !activeModel || queuedCount === 0}>
                 {running ? <Spinner size="sm" /> : <Play className="h-4 w-4" />} Run batch
               </Button>
             </div>

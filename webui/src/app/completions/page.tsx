@@ -436,7 +436,7 @@ export default function CompletionsPage() {
             <div className="flex items-center justify-between gap-3 text-sm">
               <span className="text-muted-foreground">Seed</span>
               <div className="flex items-center gap-1.5">
-                <div className="w-24">
+                <div className="w-32">
                   <NumberInput value={seed ?? 0} onChange={(v) => setSeed(v)} step={1} />
                 </div>
                 <Button

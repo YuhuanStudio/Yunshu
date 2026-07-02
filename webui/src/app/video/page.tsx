@@ -388,7 +388,10 @@ export default function VideoPage() {
 
           {/* Dimensions + frames */}
           <Card className="space-y-4 p-5">
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            {/* 2×2, not 4-across: in the lg two-column layout this form is only
+                half-width, and 4 steppers here squeezed the NumberInput so a
+                4-digit value like 1280 clipped to "128". */}
+            <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium">Width</label>
                 <NumberInput value={width} onChange={setWidth} min={64} max={2048} step={64} />
