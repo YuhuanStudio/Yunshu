@@ -462,6 +462,7 @@ export default function ChatPage() {
               onStop={stop}
               loading={streaming}
               sendDisabled={!model || settingsInvalid}
+              allowSendEmpty={attachments.length > 0}
               placeholder="Send a message…  (Enter to send, Shift+Enter for newline)"
               attachments={
                 attachments.length > 0
