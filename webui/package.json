@@ -28,7 +28,7 @@
     "remark-math": "^6.0.0",
     "shiki": "^1.24.0",
     "tailwindcss": "^4.3.0",
-    "yunui": "github:YuhuanStudio/YunUI#1c0f4efd3fa572debd55370604ee77458c5b298f"
+    "yunui": "github:YuhuanStudio/YunUI#f7645bcdf6024bfd86671798320729f131825075"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",
