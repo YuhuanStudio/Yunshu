@@ -16,6 +16,7 @@ import {
 } from "yunui";
 import { StatCard } from "yunui/patterns";
 import { Cpu, MemoryStick, Activity, Clock, ChevronDown, Server } from "lucide-react";
+import { PageShell } from "@/components/page-shell";
 import { api, usePolling } from "@/lib/api";
 import { fmtBytes, fmtNumber, fmtPct, fmtDuration } from "@/lib/format";
 import type { EngineStats, SystemStats, RadixTreeStats, HealthStatus } from "@/lib/types";
@@ -166,13 +167,11 @@ export default function MonitoringPage() {
   const gpuFree = gpu ? Math.max(0, gpu.total_uma_bytes - gpu.active_bytes - gpu.cache_bytes) : 0;
 
   return (
-    <div className="page-enter px-6 py-6 sm:px-8">
-      <div className="mx-auto max-w-7xl space-y-4">
-        <div>
-          <h1 className="heading-xl">Monitoring</h1>
-          <p className="text-body mt-1">Engine, GPU, cache and system telemetry — refreshed every 5s.</p>
-        </div>
-
+    <PageShell
+      title="Monitoring"
+      description="Engine, GPU, cache and system telemetry — refreshed every 5s."
+      className="space-y-4"
+    >
         {/* Top gauges */}
         <div className={cn("grid grid-cols-1 gap-4", hitRate != null ? "lg:grid-cols-3" : "lg:grid-cols-2")}>
           <Card className="flex items-center gap-5 p-5">
@@ -280,7 +279,6 @@ export default function MonitoringPage() {
               </>
             );
           })()}
-      </div>
-    </div>
+    </PageShell>
   );
 }

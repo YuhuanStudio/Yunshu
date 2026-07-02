@@ -13,6 +13,7 @@ import {
 } from "yunui";
 import { StatCard } from "yunui/patterns";
 import { Activity, Cpu, Clock, Download, RefreshCw, Zap } from "lucide-react";
+import { PageShell } from "@/components/page-shell";
 import { api, usePolling } from "@/lib/api";
 import { fmtBytes, fmtNumber, fmtDuration, fmtPct } from "@/lib/format";
 import { ModelTypeChip, guessModelType } from "@/lib/model-type";
@@ -77,20 +78,17 @@ export default function DashboardPage() {
   const modelList = models.data?.data ?? [];
 
   return (
-    <div className="page-enter px-6 py-6 sm:px-8">
-      <div className="mx-auto max-w-7xl">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h1 className="heading-xl">Dashboard</h1>
-            <p className="text-body mt-1">Live engine, GPU and model status.</p>
-          </div>
-          <Button variant="secondary" size="sm" onClick={refreshAll}>
-            <RefreshCw className="h-4 w-4" /> Refresh
-          </Button>
-        </div>
-
+    <PageShell
+      title="Dashboard"
+      description="Live engine, GPU and model status."
+      actions={
+        <Button variant="secondary" size="sm" onClick={refreshAll}>
+          <RefreshCw className="h-4 w-4" /> Refresh
+        </Button>
+      }
+    >
         {/* Stat grid */}
-        <div className="mt-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <StatCard
             icon={Activity}
             label="Active requests"
@@ -221,7 +219,6 @@ export default function DashboardPage() {
             </div>
           )}
         </Card>
-      </div>
-    </div>
+    </PageShell>
   );
 }

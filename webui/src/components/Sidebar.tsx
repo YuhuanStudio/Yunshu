@@ -121,7 +121,9 @@ export default function Sidebar({ isOpen, onClose, collapsed, onToggleCollapse }
 
   const footer = (
     <div className="card space-y-1.5 px-3 py-2.5">
-      <StatusIndicator status={connected ? "online" : "offline"}>
+      {/* className="flex": as an inline-flex the indicator sits on the card's
+          text baseline and the strut drags it ~4px low inside the pill. */}
+      <StatusIndicator status={connected ? "online" : "offline"} className="flex">
         <span className={connected ? "text-success" : "text-muted-foreground"}>
           {connected ? "Connected" : "Disconnected"}
         </span>

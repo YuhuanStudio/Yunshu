@@ -14,9 +14,11 @@ import {
   EmptyState,
   CustomSelect,
   Alert,
+  ThemeToggle,
   cn,
   toast,
 } from "yunui";
+import { ShellChrome } from "@/components/app-shell";
 import { ThinkingBlock } from "yunui/ai";
 import { ChatComposer } from "yunui/chat";
 import {
@@ -397,7 +399,10 @@ export default function ResponsesPage() {
     <div className="flex h-full flex-col">
       {/* Header */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
-        <ModelPicker models={models} value={model} onChange={setModel} className="w-full sm:w-64" />
+        <ShellChrome />
+        {/* flex-1 on mobile so the picker shares the row with the nav chrome
+            instead of w-full forcing it onto its own line. */}
+        <ModelPicker models={models} value={model} onChange={setModel} className="min-w-0 flex-1 sm:flex-none sm:w-64" />
         <Badge variant={prevResponseId ? "success" : "default"} className="font-mono text-xs">
           {prevResponseId ? `thread → ${prevResponseId.slice(0, 14)}…` : "new thread"}
         </Badge>
@@ -410,6 +415,7 @@ export default function ResponsesPage() {
             label="Settings"
             onClick={() => setShowSettings((s) => !s)}
           />
+          <ThemeToggle variant="pill" />
         </div>
       </div>
 

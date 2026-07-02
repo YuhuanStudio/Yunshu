@@ -18,8 +18,10 @@ import {
   SelectTrigger,
   SelectValue,
   Separator,
+  ThemeToggle,
   cn,
 } from "yunui";
+import { ShellChrome } from "@/components/app-shell";
 import { ThinkingBlock } from "yunui/ai";
 import {
   ChatMessage as ChatBubble,
@@ -449,8 +451,10 @@ export default function ChatPage() {
         {/* Header */}
         <ChatHeader
           className="border-b border-border"
+          actions={<ThemeToggle variant="pill" />}
           left={
             <>
+              <ShellChrome />
               <IconButton
                 icon={<PanelLeft className="h-4 w-4" />}
                 label="Open conversations"
@@ -683,7 +687,7 @@ function MessageBubble({ message: m }: { message: ChatMessage }) {
     ) : undefined;
 
   return (
-    <ChatBubble role={role} className="message-fade-in" badges={badges}>
+    <ChatBubble role={role} className="animate-enter" badges={badges}>
       {m.reasoning ? (
         <ThinkingBlock
           content={m.reasoning}
