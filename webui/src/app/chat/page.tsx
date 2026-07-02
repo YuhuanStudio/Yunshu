@@ -37,6 +37,7 @@ import {
   ImagePlus,
   X,
   Sparkles,
+  PanelLeft,
 } from "lucide-react";
 import { api, streamSSE } from "@/lib/api";
 import { fmtNumber } from "@/lib/format";
@@ -118,6 +119,8 @@ export default function ChatPage() {
   const [model, setModel] = useState("");
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<string[]>([]);
+  // Conversation drawer (off-canvas on mobile; static column on md+).
+  const [convOpen, setConvOpen] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [showSettings, setShowSettings] = useState(false);
@@ -200,6 +203,7 @@ export default function ChatPage() {
       return next;
     });
     setActiveId(conv.id);
+    setConvOpen(false);
   };
 
   const deleteChat = (id: string) => {
@@ -378,19 +382,44 @@ export default function ChatPage() {
     setSettings((s) => ({ ...s, [key]: value }));
 
   return (
-    <div className="flex h-full">
-      {/* Conversation list */}
-      <div className="flex w-64 shrink-0 flex-col border-r border-border">
-        <div className="p-3">
+    <div className="relative flex h-full">
+      {/* Mobile backdrop when the conversation drawer is open */}
+      {convOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/40 md:hidden"
+          onClick={() => setConvOpen(false)}
+          aria-hidden
+        />
+      )}
+
+      {/* Conversation list — off-canvas drawer on mobile, static column on md+ */}
+      <div
+        className={cn(
+          "flex w-72 shrink-0 flex-col border-r border-border bg-background",
+          "max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:shadow-xl max-md:transition-transform",
+          "md:w-64 md:translate-x-0",
+          convOpen ? "max-md:translate-x-0" : "max-md:-translate-x-full",
+        )}
+      >
+        <div className="flex items-center gap-2 p-3">
           <Button className="w-full" onClick={createChat}>
             <Plus className="h-4 w-4" /> New chat
           </Button>
+          <IconButton
+            icon={<X className="h-4 w-4" />}
+            label="Close conversations"
+            onClick={() => setConvOpen(false)}
+            className="shrink-0 md:hidden"
+          />
         </div>
         <div className="flex-1 space-y-0.5 overflow-auto px-2 pb-2">
           {conversations.map((c) => (
             <div
               key={c.id}
-              onClick={() => setActiveId(c.id)}
+              onClick={() => {
+                setActiveId(c.id);
+                setConvOpen(false);
+              }}
               className={cn(
                 "group flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm transition-colors",
                 c.id === activeId ? "bg-accent/10 text-accent" : "text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -422,7 +451,13 @@ export default function ChatPage() {
           className="border-b border-border"
           left={
             <>
-              <ModelPicker models={models} value={model} onChange={setModel} className="w-64" />
+              <IconButton
+                icon={<PanelLeft className="h-4 w-4" />}
+                label="Open conversations"
+                onClick={() => setConvOpen(true)}
+                className="shrink-0 md:hidden"
+              />
+              <ModelPicker models={models} value={model} onChange={setModel} className="w-44 md:w-64" />
               {settings.enableThinking && <Badge variant="info">thinking</Badge>}
               {Array.isArray(tools.value) && tools.value.length > 0 && (
                 <Badge variant="default">{tools.value.length} tools</Badge>
