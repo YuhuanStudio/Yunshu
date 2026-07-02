@@ -18,10 +18,9 @@ import {
   toast,
 } from "yunui";
 import { ThinkingBlock } from "yunui/ai";
+import { ChatComposer } from "yunui/chat";
 import {
   Plus,
-  Send,
-  Square,
   Trash2,
   Settings2,
   Sparkles,
@@ -503,30 +502,16 @@ export default function ResponsesPage() {
 
       {/* Composer */}
       <div className="border-t border-border p-4">
-        <div className="mx-auto flex max-w-3xl items-end gap-2">
-          <Textarea
+        <div className="mx-auto max-w-3xl space-y-2">
+          <ChatComposer
             value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                send();
-              }
-            }}
+            onChange={setInput}
+            onSend={send}
+            onStop={stop}
+            loading={running}
+            sendDisabled={!model}
             placeholder="Continue the thread…  (Enter to send, Shift+Enter for newline)"
-            rows={2}
-            className="flex-1 resize-none"
-            disabled={running}
           />
-          {running ? (
-            <Button variant="secondary" onClick={stop}>
-              <Square className="h-4 w-4" /> Cancel
-            </Button>
-          ) : (
-            <Button onClick={send} disabled={!input.trim() || !model}>
-              <Send className="h-4 w-4" /> Send
-            </Button>
-          )}
         </div>
       </div>
     </div>
