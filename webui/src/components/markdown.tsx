@@ -20,5 +20,12 @@ export const Markdown = memo(function Markdown({
   children: string;
   className?: string;
 }) {
-  return <MarkdownRenderer content={children} className={className} />;
+  // `break-words` so long unbroken strings (URLs) wrap instead of overflowing
+  // on narrow screens.
+  return (
+    <MarkdownRenderer
+      content={children}
+      className={["break-words", className].filter(Boolean).join(" ")}
+    />
+  );
 });

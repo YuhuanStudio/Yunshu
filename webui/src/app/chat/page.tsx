@@ -458,11 +458,14 @@ export default function ChatPage() {
                 className="shrink-0 md:hidden"
               />
               <ModelPicker models={models} value={model} onChange={setModel} className="w-44 md:w-64" />
-              {settings.enableThinking && <Badge variant="info">thinking</Badge>}
-              {Array.isArray(tools.value) && tools.value.length > 0 && (
-                <Badge variant="default">{tools.value.length} tools</Badge>
-              )}
-              {settings.responseFormat !== "text" && <Badge variant="default">{settings.responseFormat}</Badge>}
+              {/* Status badges collapse on narrow screens to avoid header overflow */}
+              <div className="hidden items-center gap-1.5 sm:flex">
+                {settings.enableThinking && <Badge variant="info">thinking</Badge>}
+                {Array.isArray(tools.value) && tools.value.length > 0 && (
+                  <Badge variant="default">{tools.value.length} tools</Badge>
+                )}
+                {settings.responseFormat !== "text" && <Badge variant="default">{settings.responseFormat}</Badge>}
+              </div>
             </>
           }
         />
