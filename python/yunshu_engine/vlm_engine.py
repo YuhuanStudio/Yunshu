@@ -2582,7 +2582,13 @@ class VLMEngine:
                     queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
-            _request_temp_files.reset(_temp_token)
+            # This async generator is driven step-by-step from a separate task by
+            # the SSE keepalive wrapper, so this finally can run in a different
+            # contextvars.Context than the one .set() ran in — reset() would then
+            # raise "Token was created in a different Context". File cleanup below
+            # uses the closure list, not the ContextVar, so a failed reset is safe.
+            with contextlib.suppress(ValueError):
+                _request_temp_files.reset(_temp_token)
             _mine = list(_req_temp_files)
             if _mine:
                 _mine_set = set(_mine)
