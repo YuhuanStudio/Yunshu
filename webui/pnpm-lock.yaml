@@ -54,8 +54,8 @@ importers:
         specifier: ^4.3.0
         version: 4.3.0
       yunui:
-        specifier: github:YuhuanStudio/YunUI#46038294c33341e4f71fa841b12287ac69327211
-        version: '@yuhuanowo/yunui@https://codeload.github.com/YuhuanStudio/YunUI/tar.gz/46038294c33341e4f71fa841b12287ac69327211(@types/react@19.2.15)(katex@0.16.47)(mermaid@11.16.0)(react-dom@19.2.6(react@19.2.6))(react-markdown@10.1.0(@types/react@19.2.15)(react@19.2.6))(react@19.2.6)(rehype-katex@7.0.1)(rehype-raw@7.0.0)(rehype-slug@6.0.0)(remark-gfm@4.0.1)(remark-math@6.0.0)(shiki@1.29.2)(tailwindcss@4.3.0)'
+        specifier: github:YuhuanStudio/YunUI#5a4e18d4fc884b748d7c868f87676688d8f9d2e9
+        version: '@yuhuanowo/yunui@https://codeload.github.com/YuhuanStudio/YunUI/tar.gz/5a4e18d4fc884b748d7c868f87676688d8f9d2e9(@types/react@19.2.15)(katex@0.16.47)(mermaid@11.16.0)(react-dom@19.2.6(react@19.2.6))(react-markdown@10.1.0(@types/react@19.2.15)(react@19.2.6))(react@19.2.6)(rehype-katex@7.0.1)(rehype-raw@7.0.0)(rehype-slug@6.0.0)(remark-gfm@4.0.1)(remark-math@6.0.0)(shiki@1.29.2)(tailwindcss@4.3.0)'
     devDependencies:
       '@testing-library/jest-dom':
         specifier: ^6.9.1
@@ -1484,8 +1484,8 @@ packages:
   '@vitest/utils@4.1.7':
     resolution: {integrity: sha512-T532WBu791cBxJlCl6SO+J14l81DQx6uQHm1bQbmCDY7nqlEIgkza/UFnSBNaUtSf41unldDFjdOBYEQC4b5Hw==}
 
-  '@yuhuanowo/yunui@https://codeload.github.com/YuhuanStudio/YunUI/tar.gz/46038294c33341e4f71fa841b12287ac69327211':
-    resolution: {tarball: https://codeload.github.com/YuhuanStudio/YunUI/tar.gz/46038294c33341e4f71fa841b12287ac69327211}
+  '@yuhuanowo/yunui@https://codeload.github.com/YuhuanStudio/YunUI/tar.gz/5a4e18d4fc884b748d7c868f87676688d8f9d2e9':
+    resolution: {tarball: https://codeload.github.com/YuhuanStudio/YunUI/tar.gz/5a4e18d4fc884b748d7c868f87676688d8f9d2e9}
     version: 0.2.17
     peerDependencies:
       katex: '>=0.16'
@@ -4142,7 +4142,7 @@ snapshots:
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.0
 
-  '@yuhuanowo/yunui@https://codeload.github.com/YuhuanStudio/YunUI/tar.gz/46038294c33341e4f71fa841b12287ac69327211(@types/react@19.2.15)(katex@0.16.47)(mermaid@11.16.0)(react-dom@19.2.6(react@19.2.6))(react-markdown@10.1.0(@types/react@19.2.15)(react@19.2.6))(react@19.2.6)(rehype-katex@7.0.1)(rehype-raw@7.0.0)(rehype-slug@6.0.0)(remark-gfm@4.0.1)(remark-math@6.0.0)(shiki@1.29.2)(tailwindcss@4.3.0)':
+  '@yuhuanowo/yunui@https://codeload.github.com/YuhuanStudio/YunUI/tar.gz/5a4e18d4fc884b748d7c868f87676688d8f9d2e9(@types/react@19.2.15)(katex@0.16.47)(mermaid@11.16.0)(react-dom@19.2.6(react@19.2.6))(react-markdown@10.1.0(@types/react@19.2.15)(react@19.2.6))(react@19.2.6)(rehype-katex@7.0.1)(rehype-raw@7.0.0)(rehype-slug@6.0.0)(remark-gfm@4.0.1)(remark-math@6.0.0)(shiki@1.29.2)(tailwindcss@4.3.0)':
     dependencies:
       '@radix-ui/react-accordion': 1.2.20(@types/react@19.2.15)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
       '@radix-ui/react-avatar': 1.2.6(@types/react@19.2.15)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
