@@ -793,7 +793,7 @@ export default function RealtimePage() {
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-medium text-muted-foreground">Voice</label>
               <Select value={voice} onValueChange={setVoice}>
-                <SelectTrigger>
+                <SelectTrigger aria-label="Voice">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -808,7 +808,7 @@ export default function RealtimePage() {
 
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-medium text-muted-foreground">Instructions</label>
-              <Textarea
+              <Textarea aria-label="Instructions"
                 rows={4}
                 value={instructions}
                 onChange={(e) => setInstructions(e.target.value)}
@@ -820,7 +820,7 @@ export default function RealtimePage() {
                 <span className="font-medium text-muted-foreground">Temperature</span>
                 <Badge variant="info">{temperature.toFixed(2)}</Badge>
               </div>
-              <Slider
+              <Slider label="Temperature"
                 value={[temperature]}
                 onValueChange={(v) => setTemperature(v[0] ?? 0.8)}
                 min={0.6}
@@ -836,7 +836,7 @@ export default function RealtimePage() {
                   Auto-detect end of speech
                 </span>
               </span>
-              <Switch checked={vad} onCheckedChange={setVad} />
+              <Switch label="Auto-detect end of speech" checked={vad} onCheckedChange={setVad} />
             </label>
 
             <Button

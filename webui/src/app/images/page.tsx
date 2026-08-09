@@ -447,7 +447,7 @@ export default function ImagesPage() {
               <div className="space-y-2">
                 <label className="text-sm font-medium">Size</label>
                 <Select value={size} onValueChange={setSize}>
-                  <SelectTrigger>
+                  <SelectTrigger aria-label="Size">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -461,7 +461,7 @@ export default function ImagesPage() {
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium">Seed</label>
-                <NumberInput
+                <NumberInput aria-label="Seed"
                   value={seed ?? 0}
                   onChange={setSeed}
                   min={0}
@@ -476,7 +476,7 @@ export default function ImagesPage() {
           {showPrompt && (
             <Card className="space-y-2 p-5">
               <label className="text-sm font-medium">Prompt</label>
-              <Textarea
+              <Textarea aria-label="Prompt"
                 rows={4}
                 placeholder="Describe the image you want…"
                 value={prompt}
@@ -535,12 +535,12 @@ export default function ImagesPage() {
                       Stream step-by-step previews while the image renders.
                     </p>
                   </div>
-                  <Switch checked={livePreview} onCheckedChange={setLivePreview} />
+                  <Switch label="Live preview" checked={livePreview} onCheckedChange={setLivePreview} />
                 </div>
                 {livePreview && (
                   <div className="space-y-2">
                     <label className="text-sm font-medium">Preview interval (steps)</label>
-                    <NumberInput
+                    <NumberInput aria-label="Preview interval (steps)"
                       value={previewInterval}
                       onChange={(v) => setPreviewInterval(v ?? 1)}
                       min={1}
@@ -555,7 +555,7 @@ export default function ImagesPage() {
             {showSteps && (
               <div className="space-y-2">
                 <label className="text-sm font-medium">Steps</label>
-                <NumberInput
+                <NumberInput aria-label="Steps"
                   value={steps}
                   onChange={(v) => setSteps(v ?? 1)}
                   min={1}
@@ -571,7 +571,7 @@ export default function ImagesPage() {
                   <label className="font-medium">Denoise strength</label>
                   <Badge variant="info">{denoise.toFixed(2)}</Badge>
                 </div>
-                <Slider
+                <Slider label="Denoise strength"
                   value={[denoise]}
                   onValueChange={(v) => setDenoise(v[0] ?? 0)}
                   min={0}
@@ -587,7 +587,7 @@ export default function ImagesPage() {
                   <label className="font-medium">Control scale</label>
                   <Badge variant="info">{controlScale.toFixed(2)}</Badge>
                 </div>
-                <Slider
+                <Slider label="Control scale"
                   value={[controlScale]}
                   onValueChange={(v) => setControlScale(v[0] ?? 0)}
                   min={0}
@@ -616,7 +616,7 @@ export default function ImagesPage() {
                     <label className="font-medium">ControlNet strength</label>
                     <Badge variant="info">{controlnetStrength.toFixed(2)}</Badge>
                   </div>
-                  <Slider
+                  <Slider label="ControlNet strength"
                     value={[controlnetStrength]}
                     onValueChange={(v) => setControlnetStrength(v[0] ?? 0)}
                     min={0}
@@ -628,7 +628,7 @@ export default function ImagesPage() {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <label className="text-sm font-medium">Canny low</label>
-                      <NumberInput
+                      <NumberInput aria-label="Canny low"
                         value={cannyLow}
                         onChange={(v) => setCannyLow(v ?? 0)}
                         min={0}
@@ -638,7 +638,7 @@ export default function ImagesPage() {
                     </div>
                     <div className="space-y-2">
                       <label className="text-sm font-medium">Canny high</label>
-                      <NumberInput
+                      <NumberInput aria-label="Canny high"
                         value={cannyHigh}
                         onChange={(v) => setCannyHigh(v ?? 0)}
                         min={0}
@@ -657,7 +657,7 @@ export default function ImagesPage() {
                   <label className="font-medium">Depth strength</label>
                   <Badge variant="info">{depthStrength.toFixed(2)}</Badge>
                 </div>
-                <Slider
+                <Slider label="Depth strength"
                   value={[depthStrength]}
                   onValueChange={(v) => setDepthStrength(v[0] ?? 0)}
                   min={0}

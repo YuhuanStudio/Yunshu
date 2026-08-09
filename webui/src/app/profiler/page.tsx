@@ -257,6 +257,7 @@ export default function ProfilerPage() {
                 Auto-stop after (seconds)
               </label>
               <NumberInput
+                aria-label="Auto-stop after (seconds)"
                 min={1}
                 step={1}
                 value={durationSeconds}
@@ -270,7 +271,7 @@ export default function ProfilerPage() {
 
             <div>
               <label className="mb-2 block text-sm font-medium">Output path (optional)</label>
-              <Input
+              <Input aria-label="Output path (optional)"
                 placeholder="/tmp/yunshu_profiles/capture.gputrace"
                 value={outputPath}
                 onChange={(e) => setOutputPath(e.target.value)}

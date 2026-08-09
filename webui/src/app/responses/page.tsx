@@ -424,7 +424,7 @@ export default function ResponsesPage() {
         <div className="space-y-4 border-b border-border bg-muted/30 px-4 py-4">
           <div className="space-y-1.5">
             <label className="text-xs font-medium">Instructions (system)</label>
-            <Textarea
+            <Textarea aria-label="Instructions (system)"
               rows={2}
               placeholder="Optional system instructions applied to the whole thread…"
               value={instructions}

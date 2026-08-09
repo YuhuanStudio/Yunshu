@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode, useId, cloneElement, isValidElement, type ReactElement } from "react";
 import {
   Button,
   Card,
@@ -145,11 +145,27 @@ function Field({
   hint?: string;
   children: ReactNode;
 }) {
+  const id = useId();
+  const hintId = hint ? `${id}-hint` : undefined;
   return (
     <div className="space-y-1.5">
-      <span className="block text-sm font-medium">{label}</span>
-      {children}
-      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+      {/* A <span> named nothing: the control beside it was announced as a bare
+          "edit text". A real <label htmlFor> plus the id handed down to the
+          child is what ties them together — axe flagged four of these. */}
+      <label htmlFor={id} className="block text-sm font-medium">
+        {label}
+      </label>
+      {isValidElement(children)
+        ? cloneElement(children as ReactElement<{ id?: string; "aria-describedby"?: string }>, {
+            id,
+            "aria-describedby": hintId,
+          })
+        : children}
+      {hint && (
+        <p id={hintId} className="text-xs text-muted-foreground">
+          {hint}
+        </p>
+      )}
     </div>
   );
 }

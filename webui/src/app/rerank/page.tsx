@@ -231,7 +231,7 @@ function RerankTab({ models }: { models: Model[] }) {
         <ModelField models={models} value={model} onChange={setModel} />
         <div className="space-y-2">
           <label className="text-sm font-medium">Query</label>
-          <Input
+          <Input aria-label="Query"
             placeholder="What are you searching for?"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -253,7 +253,7 @@ function RerankTab({ models }: { models: Model[] }) {
         </div>
         <div className="space-y-2 sm:max-w-48">
           <label className="text-sm font-medium">Top N</label>
-          <NumberInput
+          <NumberInput aria-label="Top N"
             min={1}
             max={docs.length || undefined}
             value={topN ?? undefined}
@@ -347,7 +347,7 @@ function ScoreTab({ models }: { models: Model[] }) {
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
             <label className="text-sm font-medium">Text 1</label>
-            <Textarea
+            <Textarea aria-label="Text 1"
               rows={4}
               placeholder="one text per line"
               value={t1}
@@ -356,7 +356,7 @@ function ScoreTab({ models }: { models: Model[] }) {
           </div>
           <div className="space-y-2">
             <label className="text-sm font-medium">Text 2</label>
-            <Textarea
+            <Textarea aria-label="Text 2"
               rows={4}
               placeholder="one text per line"
               value={t2}
@@ -478,7 +478,7 @@ function ClassifyTab({ models }: { models: Model[] }) {
         </div>
         <div className="space-y-2">
           <label className="text-sm font-medium">Labels</label>
-          <Input
+          <Input aria-label="Labels"
             placeholder="positive, negative, neutral"
             value={labelsText}
             onChange={(e) => setLabelsText(e.target.value)}
@@ -496,7 +496,7 @@ function ClassifyTab({ models }: { models: Model[] }) {
         </div>
         <div className="space-y-2 sm:max-w-48">
           <label className="text-sm font-medium">Temperature</label>
-          <NumberInput
+          <NumberInput aria-label="Temperature"
             min={0.01}
             max={10}
             step={0.01}

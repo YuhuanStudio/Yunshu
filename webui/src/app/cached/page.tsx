@@ -148,7 +148,7 @@ export default function CachedContentsPage() {
 
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Display name</label>
-              <Input
+              <Input aria-label="Display name"
                 placeholder="Optional label, e.g. “Support persona”"
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
@@ -157,7 +157,7 @@ export default function CachedContentsPage() {
 
             <div className="space-y-1.5">
               <label className="text-sm font-medium">System instruction</label>
-              <Textarea
+              <Textarea aria-label="System instruction"
                 rows={4}
                 placeholder="Shared system prompt to warm into the cache…"
                 value={systemInstruction}
@@ -167,7 +167,7 @@ export default function CachedContentsPage() {
 
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Content</label>
-              <Textarea
+              <Textarea aria-label="Content"
                 rows={5}
                 placeholder="Seed context / documents to cache as a reusable prefix…"
                 value={content}
@@ -177,7 +177,7 @@ export default function CachedContentsPage() {
 
             <div className="space-y-1.5">
               <label className="text-sm font-medium">TTL (seconds)</label>
-              <NumberInput
+              <NumberInput aria-label="TTL (seconds)"
                 value={ttl}
                 onChange={setTtl}
                 min={TTL_MIN}
@@ -330,7 +330,7 @@ function CacheRow({ entry, onChanged }: { entry: CachedEntry; onChanged: () => v
         <div className="flex flex-wrap items-end gap-2 border-t border-border pt-3">
           <div className="space-y-1.5">
             <label className="text-xs font-medium">New TTL (seconds)</label>
-            <NumberInput
+            <NumberInput aria-label="New TTL (seconds)"
               value={ttl}
               onChange={setTtl}
               min={TTL_MIN}

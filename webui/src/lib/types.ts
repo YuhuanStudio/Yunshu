@@ -72,11 +72,22 @@ export interface RadixTreeStats {
 }
 
 // ---- health / version (no prefix) ----------------------------------------
+/**
+ * `/health` is the one endpoint that anything in front of the engine might
+ * answer instead of the engine itself — a gateway, a load balancer, a stale
+ * service on a mis-set `YUNSHU_BACKEND_URL`. Every field past `status` is
+ * therefore optional, so TypeScript forces the guard at each use site.
+ *
+ * It was not, and `/settings` read `health.engine.loaded` behind a plain
+ * `health ? …` null check. A backend answering `{"status":"ok"}` — a perfectly
+ * ordinary health response — white-screened the entire page, on the one screen
+ * a user opens to find out why the backend is unreachable.
+ */
 export interface HealthStatus {
   status: string;
-  engine: { loaded: boolean };
-  server_state: string;
-  uptime_seconds: number;
+  engine?: { loaded?: boolean };
+  server_state?: string;
+  uptime_seconds?: number;
   sleep?: unknown;
 }
 

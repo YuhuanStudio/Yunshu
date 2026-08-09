@@ -185,7 +185,7 @@ export default function EmbeddingsPage() {
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <label className="text-sm font-medium">Dimensions</label>
-              <NumberInput
+              <NumberInput aria-label="Dimensions"
                 min={1}
                 max={MAX_DIMS}
                 step={64}
@@ -208,7 +208,7 @@ export default function EmbeddingsPage() {
 
           <div className="space-y-2">
             <label className="text-sm font-medium">Instruction</label>
-            <Input
+            <Input aria-label="Instruction"
               placeholder="Optional task instruction (e.g. Represent this sentence for retrieval)"
               value={instruction}
               onChange={(e) => setInstruction(e.target.value)}

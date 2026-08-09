@@ -281,7 +281,7 @@ export default function OmniPage() {
                 <label className="font-medium">Thinker max new tokens</label>
                 <Badge variant="info">{thinkerMaxTokens}</Badge>
               </div>
-              <Slider
+              <Slider label="Thinker max new tokens"
                 value={[thinkerMaxTokens]}
                 onValueChange={(v) => setThinkerMaxTokens(v[0] ?? 0)}
                 min={0}

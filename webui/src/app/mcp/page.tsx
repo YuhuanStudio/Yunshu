@@ -221,7 +221,7 @@ export default function MCPPage() {
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Tool</label>
               <Select value={selected} onValueChange={setSelected}>
-                <SelectTrigger className="max-w-md">
+                <SelectTrigger aria-label="Tool" className="max-w-md">
                   <SelectValue placeholder="Select a tool…" />
                 </SelectTrigger>
                 <SelectContent>
@@ -258,7 +258,7 @@ export default function MCPPage() {
 
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Arguments (JSON)</label>
-              <Textarea
+              <Textarea aria-label="Arguments (JSON)"
                 value={argsText}
                 onChange={(e) => setArgsText(e.target.value)}
                 rows={6}

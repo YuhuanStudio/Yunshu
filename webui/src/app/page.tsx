@@ -112,7 +112,7 @@ export default function DashboardPage() {
           <StatCard
             icon={Clock}
             label="Uptime"
-            value={health.data ? fmtDuration(health.data.uptime_seconds) : "—"}
+            value={health.data?.uptime_seconds === undefined ? "—" : fmtDuration(health.data.uptime_seconds)}
             subtext={gpu ? `MLX ${gpu.mlx_version}` : undefined}
             tone="purple"
           />

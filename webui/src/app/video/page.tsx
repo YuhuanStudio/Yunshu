@@ -326,7 +326,7 @@ export default function VideoPage() {
 
             <div className="space-y-2">
               <label className="text-sm font-medium">Prompt</label>
-              <Textarea
+              <Textarea aria-label="Prompt"
                 rows={3}
                 placeholder="Describe the motion and scene you want…"
                 value={prompt}
@@ -394,19 +394,19 @@ export default function VideoPage() {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium">Width</label>
-                <NumberInput value={width} onChange={setWidth} min={64} max={2048} step={64} />
+                <NumberInput aria-label="Width" value={width} onChange={setWidth} min={64} max={2048} step={64} />
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium">Height</label>
-                <NumberInput value={height} onChange={setHeight} min={64} max={2048} step={64} />
+                <NumberInput aria-label="Height" value={height} onChange={setHeight} min={64} max={2048} step={64} />
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium">Frames</label>
-                <NumberInput value={numFrames} onChange={setNumFrames} min={1} max={257} step={4} />
+                <NumberInput aria-label="Frames" value={numFrames} onChange={setNumFrames} min={1} max={257} step={4} />
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium">FPS</label>
-                <NumberInput value={fps} onChange={setFps} min={1} max={60} step={1} />
+                <NumberInput aria-label="FPS" value={fps} onChange={setFps} min={1} max={60} step={1} />
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
@@ -416,11 +416,11 @@ export default function VideoPage() {
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
               <div className="space-y-2">
                 <label className="text-sm font-medium">Steps</label>
-                <NumberInput value={steps} onChange={setSteps} min={1} max={100} step={1} />
+                <NumberInput aria-label="Steps" value={steps} onChange={setSteps} min={1} max={100} step={1} />
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium">Seed</label>
-                <NumberInput
+                <NumberInput aria-label="Seed"
                   value={seed ?? 0}
                   onChange={setSeed}
                   min={0}
@@ -433,7 +433,7 @@ export default function VideoPage() {
                   <label className="font-medium">Guidance</label>
                   <Badge variant="info">{guideScale.toFixed(1)}</Badge>
                 </div>
-                <Slider
+                <Slider label="Guidance"
                   value={[guideScale]}
                   onValueChange={(v) => setGuideScale(v[0] ?? 0)}
                   min={1}
@@ -447,7 +447,7 @@ export default function VideoPage() {
               <div className="space-y-2">
                 <label className="text-sm font-medium">Scheduler</label>
                 <Select value={scheduler} onValueChange={setScheduler}>
-                  <SelectTrigger>
+                  <SelectTrigger aria-label="Scheduler">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -462,7 +462,7 @@ export default function VideoPage() {
               <div className="space-y-2">
                 <label className="text-sm font-medium">Tiling</label>
                 <Select value={tiling} onValueChange={setTiling}>
-                  <SelectTrigger>
+                  <SelectTrigger aria-label="Tiling">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -487,7 +487,7 @@ export default function VideoPage() {
                 />
               </div>
               <label className="flex items-center gap-2 text-sm">
-                <Switch checked={livePreview} onCheckedChange={setLivePreview} />
+                <Switch label="Output format" checked={livePreview} onCheckedChange={setLivePreview} />
                 Live preview (stream frames)
               </label>
             </div>

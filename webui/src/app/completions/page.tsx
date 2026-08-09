@@ -27,6 +27,7 @@ import { ModelPicker } from "@/components/model-picker";
 import { api, streamSSE, ApiError } from "@/lib/api";
 import { fmtNumber } from "@/lib/format";
 import type { Model, CompletionResult } from "@/lib/types";
+import { SliderRow, NumberRow } from "@/components/field-rows";
 
 /** Flat logprobs payload as returned by /v1/completions (OpenAI legacy shape). */
 interface FlatLogprobs {
@@ -44,58 +45,6 @@ interface Choice {
 }
 
 /** A labeled slider row with a live numeric readout, for the settings panel. */
-function SliderRow({
-  label,
-  value,
-  onChange,
-  min,
-  max,
-  step,
-}: {
-  label: string;
-  value: number;
-  onChange: (v: number) => void;
-  min: number;
-  max: number;
-  step: number;
-}) {
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between text-sm">
-        <span className="text-muted-foreground">{label}</span>
-        <span className="font-mono tabular-nums">{value}</span>
-      </div>
-      <Slider value={[value]} min={min} max={max} step={step} onValueChange={(v) => onChange(v[0] ?? value)} />
-    </div>
-  );
-}
-
-/** A labeled numeric field row for the settings panel. */
-function NumberRow({
-  label,
-  value,
-  onChange,
-  min,
-  max,
-  step,
-}: {
-  label: string;
-  value: number;
-  onChange: (v: number) => void;
-  min?: number;
-  max?: number;
-  step?: number;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3 text-sm">
-      <span className="text-muted-foreground">{label}</span>
-      <div className="w-28 shrink-0">
-        <NumberInput value={value} onChange={onChange} min={min} max={max} step={step} />
-      </div>
-    </div>
-  );
-}
-
 /** Compact per-token logprob strip: token chips shaded by confidence, with a
  *  tooltip listing the top-k alternatives. */
 function LogprobsView({ lp }: { lp: FlatLogprobs }) {
@@ -416,12 +365,12 @@ export default function CompletionsPage() {
             <SettingRow
               title="Stream"
               description="Server-sent token deltas"
-              control={<Switch checked={stream} onCheckedChange={setStream} />}
+              control={<Switch label="Stream" checked={stream} onCheckedChange={setStream} />}
             />
             <SettingRow
               title="Echo"
               description="Include the prompt in output"
-              control={<Switch checked={echo} onCheckedChange={setEcho} />}
+              control={<Switch label="Echo" checked={echo} onCheckedChange={setEcho} />}
             />
 
             <Separator />
@@ -437,7 +386,7 @@ export default function CompletionsPage() {
               <span className="text-muted-foreground">Seed</span>
               <div className="flex items-center gap-1.5">
                 <div className="w-32">
-                  <NumberInput value={seed ?? 0} onChange={(v) => setSeed(v)} step={1} />
+                  <NumberInput aria-label="Seed" value={seed ?? 0} onChange={(v) => setSeed(v)} step={1} />
                 </div>
                 <Button
                   variant="ghost"

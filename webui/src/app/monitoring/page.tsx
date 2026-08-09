@@ -175,7 +175,7 @@ export default function MonitoringPage() {
         {/* Top gauges */}
         <div className={cn("grid grid-cols-1 gap-4", hitRate != null ? "lg:grid-cols-3" : "lg:grid-cols-2")}>
           <Card className="flex items-center gap-5 p-5">
-            <Gauge value={gpu?.utilization_pct ?? 0} tone={pctTone(gpu?.utilization_pct ?? 0)} size={96} thickness={8} />
+            <Gauge ariaLabel="GPU utilization" value={gpu?.utilization_pct ?? 0} tone={pctTone(gpu?.utilization_pct ?? 0)} size={96} thickness={8} />
             <div className="min-w-0">
               <div className="text-sm font-medium">GPU utilization</div>
               <div className="mt-1 text-xs text-muted-foreground">{gpu ? `${fmtBytes(gpu.active_bytes)} active` : "—"}</div>
@@ -186,7 +186,7 @@ export default function MonitoringPage() {
           </Card>
 
           <Card className="flex items-center gap-5 p-5">
-            <Gauge value={memPct} tone={pctTone(memPct)} size={96} thickness={8} />
+            <Gauge ariaLabel="System memory" value={memPct} tone={pctTone(memPct)} size={96} thickness={8} />
             <div className="min-w-0">
               <div className="text-sm font-medium">System memory</div>
               <div className="mt-1 text-xs text-muted-foreground">
@@ -198,7 +198,7 @@ export default function MonitoringPage() {
 
           {hitRate != null && (
             <Card className="flex items-center gap-5 p-5">
-              <Gauge value={hitRate} tone={hitRate >= 50 ? "success" : "warning"} size={96} thickness={8} />
+              <Gauge ariaLabel="RadixTree hit rate" value={hitRate} tone={hitRate >= 50 ? "success" : "warning"} size={96} thickness={8} />
               <div className="min-w-0">
                 <div className="text-sm font-medium">RadixTree hit rate</div>
                 <div className="mt-1 text-xs text-muted-foreground">
@@ -214,7 +214,7 @@ export default function MonitoringPage() {
           <StatCard icon={Activity} label="Active" value={eng ? fmtNumber(eng.active_requests) : "—"} subtext={eng ? `${fmtNumber(eng.waiting_requests)} waiting` : undefined} />
           <StatCard icon={Server} label="Processed" value={eng ? fmtNumber(eng.requests_processed) : "—"} tone="emerald" />
           <StatCard icon={Cpu} label="Out tokens" value={eng ? fmtNumber(eng.total_completion_tokens) : "—"} tone="blue" />
-          <StatCard icon={Clock} label="Uptime" value={health.data ? fmtDuration(health.data.uptime_seconds) : "—"} tone="purple" />
+          <StatCard icon={Clock} label="Uptime" value={health.data?.uptime_seconds === undefined ? "—" : fmtDuration(health.data.uptime_seconds)} tone="purple" />
         </div>
 
         {/* GPU memory breakdown */}

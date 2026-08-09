@@ -153,7 +153,7 @@ function TokenizeTab({ model }: { model: string }) {
   return (
     <Card className="mt-4 p-5">
       <label className="mb-2 block text-sm font-medium">Text</label>
-      <Textarea
+      <Textarea aria-label="Text"
         rows={5}
         placeholder="Enter text to tokenize…"
         value={text}
@@ -161,7 +161,7 @@ function TokenizeTab({ model }: { model: string }) {
       />
       <div className="mt-3 flex items-center justify-between gap-3">
         <label className="flex cursor-pointer items-center gap-2 text-sm">
-          <Switch checked={addSpecial} onCheckedChange={setAddSpecial} />
+          <Switch label="Text" checked={addSpecial} onCheckedChange={setAddSpecial} />
           Add special tokens
         </label>
         <Button onClick={run} disabled={!model || !text.trim() || busy}>
@@ -257,7 +257,7 @@ function DetokenizeTab({ model }: { model: string }) {
   return (
     <Card className="mt-4 p-5">
       <label className="mb-2 block text-sm font-medium">Token ids</label>
-      <Input
+      <Input aria-label="Token ids"
         placeholder="Comma or space separated ids, e.g. 1, 15043, 29892"
         value={raw}
         onChange={(e) => setRaw(e.target.value)}
@@ -336,7 +336,7 @@ function CountTab({ model }: { model: string }) {
   return (
     <Card className="mt-4 p-5">
       <label className="mb-2 block text-sm font-medium">Prompt</label>
-      <Textarea
+      <Textarea aria-label="Prompt"
         rows={5}
         placeholder="Enter a prompt to count tokens…"
         value={prompt}
@@ -344,7 +344,7 @@ function CountTab({ model }: { model: string }) {
       />
       <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
         <label className="flex cursor-pointer items-center gap-2 text-sm">
-          <Switch checked={addSpecial} onCheckedChange={setAddSpecial} />
+          <Switch label="Prompt" checked={addSpecial} onCheckedChange={setAddSpecial} />
           Add special tokens
         </label>
         <Button onClick={run} disabled={!model || !prompt.trim() || busy}>

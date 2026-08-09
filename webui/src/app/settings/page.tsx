@@ -205,7 +205,7 @@ print(resp.choices[0].message.content)`;
             <StatCard
               icon={Boxes}
               label="Engine"
-              value={health ? (health.engine.loaded ? "Loaded" : "Idle") : "—"}
+              value={health?.engine?.loaded === undefined ? "—" : health.engine.loaded ? "Loaded" : "Idle"}
               compact
               tone="blue"
             />
@@ -219,7 +219,7 @@ print(resp.choices[0].message.content)`;
             <StatCard
               icon={Info}
               label="Uptime"
-              value={health ? fmtDuration(health.uptime_seconds) : "—"}
+              value={health?.uptime_seconds === undefined ? "—" : fmtDuration(health.uptime_seconds)}
               compact
               tone="purple"
             />

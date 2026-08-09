@@ -42,6 +42,7 @@ import { api, streamSSE, ApiError, type SSEChunk } from "@/lib/api";
 import { fmtBytes } from "@/lib/format";
 import { PageShell } from "@/components/page-shell";
 import type { Model } from "@/lib/types";
+import { SliderRow } from "@/components/field-rows";
 
 type Mode = "tts" | "stt" | "pipeline" | "sts";
 type StsOp = "enhance" | "separate" | "transform";
@@ -143,38 +144,6 @@ function Field({
         {hint && <span className="ml-1 font-normal text-muted-foreground">{hint}</span>}
       </label>
       {children}
-    </div>
-  );
-}
-
-function SliderRow({
-  label,
-  value,
-  onChange,
-  min,
-  max,
-  step,
-}: {
-  label: string;
-  value: number;
-  onChange: (v: number) => void;
-  min: number;
-  max: number;
-  step: number;
-}) {
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between text-sm">
-        <label className="font-medium">{label}</label>
-        <Badge variant="info">{value}</Badge>
-      </div>
-      <Slider
-        value={[value]}
-        onValueChange={(v) => onChange(v[0] ?? min)}
-        min={min}
-        max={max}
-        step={step}
-      />
     </div>
   );
 }
@@ -646,7 +615,7 @@ export default function AudioPage() {
               </Field>
             </div>
 
-            <SliderRow label="Speed" value={speed} onChange={setSpeed} min={0.25} max={4} step={0.05} />
+            <SliderRow variant="badge" label="Speed" value={speed} onChange={setSpeed} min={0.25} max={4} step={0.05} />
 
             <label className="flex items-center justify-between gap-3 rounded-lg border border-border p-3">
               <div className="space-y-0.5">
@@ -655,7 +624,7 @@ export default function AudioPage() {
                   Receive PCM16 chunks over SSE (assembled into one clip; format is forced to WAV).
                 </p>
               </div>
-              <Switch checked={stream} onCheckedChange={setStream} disabled={generating} />
+              <Switch label="Stream" checked={stream} onCheckedChange={setStream} disabled={generating} />
             </label>
 
             <Collapsible open={advOpen} onOpenChange={setAdvOpen}>
@@ -680,7 +649,7 @@ export default function AudioPage() {
                 </Field>
 
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <SliderRow
+                  <SliderRow variant="badge"
                     label="Temperature"
                     value={temperature}
                     onChange={setTemperature}
@@ -688,7 +657,7 @@ export default function AudioPage() {
                     max={2}
                     step={0.05}
                   />
-                  <SliderRow
+                  <SliderRow variant="badge"
                     label="Top-p"
                     value={topP}
                     onChange={setTopP}
@@ -951,7 +920,7 @@ export default function AudioPage() {
                   searchable
                 />
               </Field>
-              <SliderRow
+              <SliderRow variant="badge"
                 label="Speed"
                 value={pipeSpeed}
                 onChange={setPipeSpeed}
@@ -961,7 +930,7 @@ export default function AudioPage() {
               />
             </div>
 
-            <SliderRow
+            <SliderRow variant="badge"
               label="LLM temperature"
               value={llmTemperature}
               onChange={setLlmTemperature}
@@ -1053,7 +1022,7 @@ export default function AudioPage() {
             </div>
 
             {stsOp === "enhance" && (
-              <SliderRow
+              <SliderRow variant="badge"
                 label="Noise floor (dB)"
                 value={noiseFloor}
                 onChange={setNoiseFloor}
@@ -1075,7 +1044,7 @@ export default function AudioPage() {
 
             {stsOp === "transform" && (
               <div className="grid gap-4 sm:grid-cols-2">
-                <SliderRow
+                <SliderRow variant="badge"
                   label="Pitch shift (semitones)"
                   value={pitchShift}
                   onChange={setPitchShift}
@@ -1083,7 +1052,7 @@ export default function AudioPage() {
                   max={12}
                   step={1}
                 />
-                <SliderRow
+                <SliderRow variant="badge"
                   label="Formant ratio"
                   value={formantRatio}
                   onChange={setFormantRatio}
