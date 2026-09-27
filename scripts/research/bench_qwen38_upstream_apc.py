@@ -18,6 +18,11 @@ def main() -> None:
     parser.add_argument("--turns", type=int, default=8)
     parser.add_argument("--memory-max-gb", type=float)
     parser.add_argument("--prefix-repeats", type=int, default=300)
+    parser.add_argument(
+        "--distinct-prefixes",
+        action="store_true",
+        help="Run independent documents, then revisit the oldest and newest",
+    )
     args = parser.parse_args()
     model = args.model.expanduser().resolve()
     if (
@@ -78,10 +83,42 @@ def main() -> None:
                         * args.prefix_repeats
                     )
                     with args.output.open("w") as file:
-                        for turn in range(args.turns):
+                        document_words = (
+                            "ALPHA",
+                            "COBALT",
+                            "ORCHID",
+                            "LILAC",
+                            "CEDAR",
+                            "ONYX",
+                            "FALCON",
+                            "EMBER",
+                            "OCEAN",
+                            "TOPAZ",
+                        )
+                        if args.distinct_prefixes and args.turns > len(document_words):
+                            raise ValueError(
+                                "distinct-prefixes supports at most 10 docs"
+                            )
+                        sequence = (
+                            [*range(args.turns), args.turns - 1, 0, args.turns - 1]
+                            if args.distinct_prefixes
+                            else [None] * args.turns
+                        )
+                        for turn, document_index in enumerate(sequence):
                             prepare_start = time.perf_counter()
-                            expected = "ALPHA" if turn < args.turns // 2 else "COBALT"
-                            if turn == 0:
+                            expected = (
+                                document_words[document_index]
+                                if document_index is not None
+                                else ("ALPHA" if turn < args.turns // 2 else "COBALT")
+                            )
+                            if document_index is not None:
+                                user = (
+                                    f"Document {document_index}.\n"
+                                    + base
+                                    + f"\nThe current code is {expected}. Reply only with the current code."
+                                )
+                                messages = [{"role": "user", "content": user}]
+                            elif turn == 0:
                                 user = (
                                     base
                                     + "\nThe current code is ALPHA. Reply only with the current code."
@@ -90,7 +127,8 @@ def main() -> None:
                                 user = "Update the current code to COBALT. Reply only with the current code."
                             else:
                                 user = "What is the current code? Reply only with the current code."
-                            messages = history + [{"role": "user", "content": user}]
+                            if document_index is None:
+                                messages = history + [{"role": "user", "content": user}]
                             ids = engine._tokenize_with_cache(
                                 messages, enable_thinking=False
                             ).tolist()
@@ -140,6 +178,7 @@ def main() -> None:
                                 "memory_max_gb": args.memory_max_gb,
                                 "prefix_repeats": args.prefix_repeats,
                                 "turn": turn + 1,
+                                "document_index": document_index,
                                 "expected": expected,
                                 "text": text,
                                 "correct": text.strip() == expected,
@@ -174,12 +213,13 @@ def main() -> None:
                                 after["matched_tokens"] if after else None,
                                 flush=True,
                             )
-                            history.extend(
-                                [
-                                    {"role": "user", "content": user},
-                                    {"role": "assistant", "content": expected},
-                                ]
-                            )
+                            if document_index is None:
+                                history.extend(
+                                    [
+                                        {"role": "user", "content": user},
+                                        {"role": "assistant", "content": expected},
+                                    ]
+                                )
                 finally:
                     gen.close()
 

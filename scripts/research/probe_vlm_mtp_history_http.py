@@ -66,11 +66,12 @@ def main() -> None:
     parser.add_argument("--reference-repeats", type=int, default=100)
     parser.add_argument("--turns", type=int, default=12)
     parser.add_argument("--update-turn", type=int, default=6)
+    parser.add_argument("--distinct-prefixes", action="store_true")
     args = parser.parse_args()
     if (
         args.reference_repeats < 0
         or args.turns < 2
-        or not 0 < args.update_turn < args.turns
+        or (not args.distinct_prefixes and not 0 < args.update_turn < args.turns)
     ):
         parser.error("require repeats >= 0 and 0 < update-turn < turns")
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -79,10 +80,42 @@ def main() -> None:
         * args.reference_repeats
     )
     messages = []
+    document_words = (
+        "ALPHA",
+        "COBALT",
+        "ORCHID",
+        "LILAC",
+        "CEDAR",
+        "ONYX",
+        "FALCON",
+        "EMBER",
+        "OCEAN",
+        "TOPAZ",
+    )
+    if args.distinct_prefixes and args.turns > len(document_words):
+        parser.error("distinct-prefixes supports at most 10 documents")
+    sequence = (
+        [*range(args.turns), args.turns - 1, 0]
+        if args.distinct_prefixes
+        else list(range(args.turns))
+    )
     with args.output.open("w") as file:
-        for turn in range(args.turns):
-            expected = "COBALT" if turn >= args.update_turn else "ALPHA"
-            if turn == 0:
+        for turn, document_index in enumerate(sequence):
+            expected = (
+                document_words[document_index]
+                if args.distinct_prefixes
+                else ("COBALT" if turn >= args.update_turn else "ALPHA")
+            )
+            if args.distinct_prefixes:
+                messages = [
+                    {
+                        "role": "user",
+                        "content": f"Document {document_index}.\n"
+                        + reference
+                        + f"\nThe current code is {expected}. Reply with the current code only.",
+                    }
+                ]
+            elif turn == 0:
                 user = (
                     reference
                     + "\nThe current code is ALPHA. Reply with the current code only."
@@ -91,7 +124,8 @@ def main() -> None:
                 user = "Update the current code to COBALT. Reply with the current code only."
             else:
                 user = "What is the current code? Reply with that code only."
-            messages.append({"role": "user", "content": user})
+            if not args.distinct_prefixes:
+                messages.append({"role": "user", "content": user})
             result = _call(
                 args.url,
                 {
@@ -107,6 +141,7 @@ def main() -> None:
             row = {
                 "mode": args.mode,
                 "turn": turn + 1,
+                "document_index": document_index if args.distinct_prefixes else None,
                 "reference_repeats": args.reference_repeats,
                 "expected": expected,
                 **result,
@@ -125,7 +160,8 @@ def main() -> None:
             )
             # Keep the next request's history identical between AR and MTP even
             # if either mode makes a mistake on this turn.
-            messages.append({"role": "assistant", "content": expected})
+            if not args.distinct_prefixes:
+                messages.append({"role": "assistant", "content": expected})
 
 
 if __name__ == "__main__":
