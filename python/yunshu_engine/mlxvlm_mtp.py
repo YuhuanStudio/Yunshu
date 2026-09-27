@@ -22,7 +22,6 @@ mlx-lm fast path.
 from __future__ import annotations
 
 import contextlib
-import glob
 import json
 import logging
 import os
@@ -50,7 +49,7 @@ def _ensure_mlxvlm_on_path() -> bool:
 
 
 def is_mtp_capable(model_path: str) -> bool:
-    """True if the checkpoint is a Qwen3.5/3.6 with native MTP weights."""
+    """True only when a supported checkpoint has indexed native MTP weights."""
     cfg_path = Path(model_path) / "config.json"
     if not cfg_path.exists():
         return False
@@ -63,15 +62,26 @@ def is_mtp_capable(model_path: str) -> bool:
         return False
     if cfg.get("model_type") not in ("qwen3_5", "qwen3_6"):
         return False
-    # MTP weights present (bare mtp.* or VLM-nested language_model.mtp.*)?
+    # A config can advertise MTP even when the downloaded checkpoint omits
+    # the head. Do not turn an unreadable/missing index into a positive match.
     try:
         idx = json.loads(
             (Path(model_path) / "model.safetensors.index.json").read_text()
         )
         wm = idx.get("weight_map", idx)
-        return any(".mtp." in k or k.startswith("mtp.") for k in wm)
-    except Exception:
-        return True  # config says MTP; assume embedded
+        if not isinstance(wm, dict):
+            return False
+        shards = {
+            shard
+            for key, shard in wm.items()
+            if key.startswith("mtp.") or key.startswith("language_model.mtp.")
+        }
+        return bool(shards) and all(
+            isinstance(shard, str) and (Path(model_path) / shard).is_file()
+            for shard in shards
+        )
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
 
 
 @contextlib.contextmanager
@@ -101,18 +111,35 @@ def _build_drafter(model_path: str, out_dir: str) -> str:
     the bare ``mtp.*`` layout and this checkpoint's VLM-nested
     ``language_model.mtp.*`` layout (mlx-vlm's own splitter only handles bare)."""
     import mlx.core as mx
+    from safetensors import safe_open
 
     out = Path(out_dir)
     if (out / "model.safetensors").exists() and (out / "config.json").exists():
         return str(out)
     out.mkdir(parents=True, exist_ok=True)
+    index = json.loads((Path(model_path) / "model.safetensors.index.json").read_text())
+    weight_map = index.get("weight_map", index)
+    if not isinstance(weight_map, dict):
+        raise ValueError("Invalid safetensors weight map")
+    by_shard: dict[str, list[str]] = {}
+    for key, shard in weight_map.items():
+        if key.startswith("language_model.mtp.") or key.startswith("mtp."):
+            by_shard.setdefault(shard, []).append(key)
     sel = {}
-    for sh in glob.glob(str(Path(model_path) / "*.safetensors")):
-        for k, v in mx.load(sh).items():
-            if k.startswith("language_model.mtp."):
-                sel[k[len("language_model.mtp.") :]] = v
-            elif k.startswith("mtp."):
-                sel[k[len("mtp.") :]] = v
+    for shard, keys in by_shard.items():
+        path = Path(model_path) / shard
+        try:
+            # Match mlx-vlm's selective load where the safetensors dtype permits.
+            with safe_open(path, framework="mlx") as source:
+                tensors = {key: mx.array(source.get_tensor(key)) for key in keys}
+        except (AttributeError, RuntimeError, TypeError):
+            # safetensors' MLX bridge currently rejects bf16 in the Qwen3.8
+            # head. Limit mx.load to its indexed shard, not every model shard.
+            full_shard = mx.load(str(path))
+            tensors = {key: full_shard[key] for key in keys}
+        for key, value in tensors.items():
+            name = key.removeprefix("language_model.mtp.").removeprefix("mtp.")
+            sel[name] = value
     if not sel:
         raise ValueError(f"No MTP tensors found in {model_path}")
     src_cfg = json.loads((Path(model_path) / "config.json").read_text())
