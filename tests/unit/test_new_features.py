@@ -84,8 +84,10 @@ class TestCleanToolCallMarkup:
     def test_removes_tool_calls(self):
         text = r"before <tool_call\>content here</tool_call\> after"
         result = clean_tool_call_markup(text)
-        # At minimum, no crash and original text preserved outside tags
-        assert isinstance(result, str)
+        assert result == "before  after"
+
+    def test_removes_orphan_legacy_tag_after_parsed_call(self):
+        assert clean_tool_call_markup(r"<tool_call\>") == ""
 
     def test_preserves_normal_text(self):
         assert clean_tool_call_markup("No tool calls here") == "No tool calls here"

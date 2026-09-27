@@ -880,9 +880,13 @@ def clean_tool_call_markup(text: str) -> str:
     text = _strip_marker_and_balanced(text, r"\[TOOL_CALLS\]", "[", "]")
     text = _strip_marker_and_balanced(text, r"\[TOOL_CALL\]", "{", "}")
     text = _strip_marker_and_balanced(text, r"<\|python_tag\|>", "{", "}")
-    # Remove <tool_call/>...</tool_call/> blocks (well-formed)
+    # The gateway's legacy injected format uses a literal backslash before `>`;
+    # accept it as well as the usual tag when cleaning parsed tool calls.
     text = re.sub(
-        r"<tool_call\s*/?\s*>.*?</tool_call\s*/?\s*>", "", text, flags=re.DOTALL
+        r"<tool_call\s*[/\\]?\s*>.*?</tool_call\s*[/\\]?\s*>",
+        "",
+        text,
+        flags=re.DOTALL,
     )
     # Remove <function=name>...</function> blocks
     text = re.sub(r"<function\s*=\s*[\w.\-]+>.*?</function>", "", text, flags=re.DOTALL)
@@ -911,9 +915,9 @@ def clean_tool_call_markup(text: str) -> str:
     # tokens before the closing tag. Strip from `<tool_call>` to end-of-text
     # so the residual JSON/markup doesn't leak into the text content block
     # alongside the extracted tool_use.
-    text = re.sub(r"<tool_call\s*/?\s*>.*$", "", text, flags=re.DOTALL)
+    text = re.sub(r"<tool_call\s*[/\\]?\s*>.*$", "", text, flags=re.DOTALL)
     # Strip a dangling closing tag if any
-    text = re.sub(r"</tool_call\s*/?\s*>", "", text)
+    text = re.sub(r"</tool_call\s*[/\\]?\s*>", "", text)
     # Remove bare-JSON tool-call patterns the model may emit when prompted
     # to "call tool X" without the explicit `<tool_call>` markup. We try to
     # find a balanced `{...}` block whose first key is `"name"` or that
