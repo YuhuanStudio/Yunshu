@@ -17,6 +17,7 @@ def main() -> None:
     parser.add_argument("--apc", choices=("on", "off"), required=True)
     parser.add_argument("--turns", type=int, default=8)
     parser.add_argument("--memory-max-gb", type=float)
+    parser.add_argument("--prefix-repeats", type=int, default=300)
     args = parser.parse_args()
     model = args.model.expanduser().resolve()
     if (
@@ -72,7 +73,10 @@ def main() -> None:
                         processor=engine._processor,
                     )
                     history = []
-                    base = "The archive record is neutral background text.\n" * 300
+                    base = (
+                        "The archive record is neutral background text.\n"
+                        * args.prefix_repeats
+                    )
                     with args.output.open("w") as file:
                         for turn in range(args.turns):
                             prepare_start = time.perf_counter()
@@ -134,6 +138,7 @@ def main() -> None:
                             row = {
                                 "mode": args.apc,
                                 "memory_max_gb": args.memory_max_gb,
+                                "prefix_repeats": args.prefix_repeats,
                                 "turn": turn + 1,
                                 "expected": expected,
                                 "text": text,
