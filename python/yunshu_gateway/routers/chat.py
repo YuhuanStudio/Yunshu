@@ -2652,6 +2652,20 @@ async def _stream_vlm_response(
     vlm_prompt_tok = 0
     vlm_completion_tok = 0
     vlm_reasoning_tok = 0
+    use_tool_streamer = bool(req.tools and req.tool_choice != "none")
+    tool_streamer = (
+        ToolCallStreamer(
+            forced_tool_name=(
+                req.tool_choice.function.name
+                if isinstance(req.tool_choice, ToolChoiceFunction)
+                else None
+            ),
+            allow_parallel=req.parallel_tool_calls,
+            model_name=req.model,
+        )
+        if use_tool_streamer
+        else None
+    )
 
     async def _token_source():
         nonlocal \
@@ -2665,6 +2679,58 @@ async def _stream_vlm_response(
         vlm_cached_tok = 0
         vlm_last_finish_reason = None
         _vlm_streamed_text = ""  # track emitted text for stop-sequence correction
+        tool_call_index = 0
+        has_emitted_tool_call = False
+        tc_args_streamed = False
+
+        def _tool_chunks(outputs):
+            nonlocal \
+                first_chunk, \
+                tool_call_index, \
+                has_emitted_tool_call, \
+                tc_args_streamed
+            for out in outputs:
+                if out.text:
+                    yield format_openai_chunk(
+                        completion_id=completion_id,
+                        model=req.model,
+                        delta_content=out.text,
+                        include_role=first_chunk,
+                    )
+                    first_chunk = False
+                elif out.tool_call_start:
+                    yield _format_tool_call_start_chunk(
+                        completion_id,
+                        req.model,
+                        tc_index=tool_call_index,
+                        tc_id=out.tool_call_start.id,
+                        tc_name=out.tool_call_start.name,
+                        include_role=first_chunk,
+                    )
+                    first_chunk = False
+                    tc_args_streamed = False
+                elif out.tool_call_args_delta:
+                    yield _format_tool_call_args_delta_chunk(
+                        completion_id,
+                        req.model,
+                        tc_index=tool_call_index,
+                        args_delta=out.tool_call_args_delta,
+                    )
+                    tc_args_streamed = True
+                elif out.tool_call:
+                    if not tc_args_streamed:
+                        args = (out.tool_call.arguments or "").strip()
+                        if args and args != "{}":
+                            yield _format_tool_call_args_delta_chunk(
+                                completion_id,
+                                req.model,
+                                tc_index=tool_call_index,
+                                args_delta=args,
+                            )
+                    has_emitted_tool_call = True
+                    tool_call_index += 1
+                    tc_args_streamed = False
+
         include_usage = (
             req.stream_options is not None and req.stream_options.include_usage
         )
@@ -2773,6 +2839,11 @@ async def _stream_vlm_response(
                             include_role=first_chunk,
                         )
                         first_chunk = False
+                elif tool_streamer is not None and _vlm_token_text:
+                    for chunk in _tool_chunks(
+                        tool_streamer.process_token(_vlm_token_text)
+                    ):
+                        yield chunk
                 else:
                     if _vlm_token_text or not _vlm_is_final:
                         yield format_openai_chunk(
@@ -2783,6 +2854,10 @@ async def _stream_vlm_response(
                             include_role=first_chunk,
                         )
                         first_chunk = False
+
+        if tool_streamer is not None:
+            for chunk in _tool_chunks(tool_streamer.flush()):
+                yield chunk
 
         # Final chunk with finish_reason
         # If no tokens were emitted (first_chunk is still True), this is also
@@ -2809,7 +2884,11 @@ async def _stream_vlm_response(
             completion_id=completion_id,
             model=req.model,
             delta_content="",
-            finish_reason=_normalize_finish_reason(vlm_last_finish_reason),
+            finish_reason=(
+                "tool_calls"
+                if has_emitted_tool_call
+                else _normalize_finish_reason(vlm_last_finish_reason)
+            ),
             include_role=first_chunk,
         )
 
