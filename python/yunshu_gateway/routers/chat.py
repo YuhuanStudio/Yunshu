@@ -2383,6 +2383,7 @@ async def _handle_vlm_chat(
         priority=req.priority,
         logits_processors=req.logits_processors,
         timeout_seconds=req.timeout,
+        mtp_allowed=not req.tools,
     )
     if json_schema:
         gen_kwargs["json_schema"] = json_schema
@@ -2687,85 +2688,93 @@ async def _stream_vlm_response(
             cancel_event=_vlm_cancel_evt,
             timeout_seconds=req.timeout,
             lora_adapter=loaded_adapter,
+            mtp_allowed=not req.tools,
         )
         if json_schema:
             stream_kwargs["json_schema"] = json_schema
-        async for output in vlm_engine.generate_stream(**stream_kwargs):
-            if (
-                hasattr(output, "completion_tokens")
-                and output.completion_tokens is not None
-                and output.completion_tokens > 0
-            ):
-                vlm_completion_tok = output.completion_tokens
-            elif (
-                hasattr(output, "token_text")
-                and output.token_text
-                and getattr(output, "current_state", None) != "reasoning"
-            ):
-                # Only count non-reasoning tokens toward completion_tok
-                vlm_completion_tok += 1
-            if hasattr(output, "reasoning_tokens") and output.reasoning_tokens:
-                vlm_reasoning_tok = output.reasoning_tokens
-            if hasattr(output, "cached_tokens") and output.cached_tokens:
-                vlm_cached_tok = max(vlm_cached_tok, output.cached_tokens)
-            if hasattr(output, "prompt_tokens") and output.prompt_tokens:
-                vlm_prompt_tok = output.prompt_tokens
-            if output.finish_reason is not None:
-                vlm_last_finish_reason = output.finish_reason
-            # Track emitted text for stop-sequence correction
-            _vlm_token_text = output.token_text or ""
-            if (
-                _vlm_token_text
-                and getattr(output, "current_state", None) != "reasoning"
-            ):
-                _vlm_streamed_text += _vlm_token_text
-                if len(_vlm_streamed_text) > _MAX_STREAMING_TEXT_BUFFER:
-                    logger.error("VLM streaming text buffer exceeded 1MB — truncating")
-                    _vlm_streamed_text = _vlm_streamed_text[-_TRUNCATE_KEEP:]
-            # Detect stop-sequence overcount on final output
-            if (
-                req.stop
-                and vlm_last_finish_reason == "stop"
-                and getattr(output, "finished", False)
-            ):
-                for _seq in req.stop:
-                    if _seq and _seq in _vlm_streamed_text:
-                        _idx = _vlm_streamed_text.find(_seq)
-                        _vlm_streamed_text = _vlm_streamed_text[:_idx]
-                        _tok = getattr(vlm_engine, "_tokenizer", None)
-                        if _tok:
-                            try:
-                                _correct_count = len(_tok.encode(_vlm_streamed_text))
-                                if _correct_count < vlm_completion_tok:
-                                    vlm_completion_tok = _correct_count
-                            except Exception:
-                                pass
-                        break
-            # Route thinking content based on engine's current_state
-            _is_reasoning = getattr(output, "current_state", None) == "reasoning"
-            _vlm_token_text = output.token_text or ""
-            _vlm_is_final = output.finish_reason is not None
-            if _is_reasoning:
-                if _vlm_token_text or not _vlm_is_final:
-                    yield format_openai_chunk(
-                        completion_id=completion_id,
-                        model=req.model,
-                        delta_content="",
-                        thinking_content=_vlm_token_text,
-                        finish_reason=None,
-                        include_role=first_chunk,
-                    )
-                    first_chunk = False
-            else:
-                if _vlm_token_text or not _vlm_is_final:
-                    yield format_openai_chunk(
-                        completion_id=completion_id,
-                        model=req.model,
-                        delta_content=_vlm_token_text,
-                        finish_reason=None,  # intermediate: always None
-                        include_role=first_chunk,
-                    )
-                    first_chunk = False
+        async with contextlib.aclosing(
+            vlm_engine.generate_stream(**stream_kwargs)
+        ) as stream:
+            async for output in stream:
+                if (
+                    hasattr(output, "completion_tokens")
+                    and output.completion_tokens is not None
+                    and output.completion_tokens > 0
+                ):
+                    vlm_completion_tok = output.completion_tokens
+                elif (
+                    hasattr(output, "token_text")
+                    and output.token_text
+                    and getattr(output, "current_state", None) != "reasoning"
+                ):
+                    # Only count non-reasoning tokens toward completion_tok
+                    vlm_completion_tok += 1
+                if hasattr(output, "reasoning_tokens") and output.reasoning_tokens:
+                    vlm_reasoning_tok = output.reasoning_tokens
+                if hasattr(output, "cached_tokens") and output.cached_tokens:
+                    vlm_cached_tok = max(vlm_cached_tok, output.cached_tokens)
+                if hasattr(output, "prompt_tokens") and output.prompt_tokens:
+                    vlm_prompt_tok = output.prompt_tokens
+                if output.finish_reason is not None:
+                    vlm_last_finish_reason = output.finish_reason
+                # Track emitted text for stop-sequence correction
+                _vlm_token_text = output.token_text or ""
+                if (
+                    _vlm_token_text
+                    and getattr(output, "current_state", None) != "reasoning"
+                ):
+                    _vlm_streamed_text += _vlm_token_text
+                    if len(_vlm_streamed_text) > _MAX_STREAMING_TEXT_BUFFER:
+                        logger.error(
+                            "VLM streaming text buffer exceeded 1MB — truncating"
+                        )
+                        _vlm_streamed_text = _vlm_streamed_text[-_TRUNCATE_KEEP:]
+                # Detect stop-sequence overcount on final output
+                if (
+                    req.stop
+                    and vlm_last_finish_reason == "stop"
+                    and getattr(output, "finished", False)
+                ):
+                    for _seq in req.stop:
+                        if _seq and _seq in _vlm_streamed_text:
+                            _idx = _vlm_streamed_text.find(_seq)
+                            _vlm_streamed_text = _vlm_streamed_text[:_idx]
+                            _tok = getattr(vlm_engine, "_tokenizer", None)
+                            if _tok:
+                                try:
+                                    _correct_count = len(
+                                        _tok.encode(_vlm_streamed_text)
+                                    )
+                                    if _correct_count < vlm_completion_tok:
+                                        vlm_completion_tok = _correct_count
+                                except Exception:
+                                    pass
+                            break
+                # Route thinking content based on engine's current_state
+                _is_reasoning = getattr(output, "current_state", None) == "reasoning"
+                _vlm_token_text = output.token_text or ""
+                _vlm_is_final = output.finish_reason is not None
+                if _is_reasoning:
+                    if _vlm_token_text or not _vlm_is_final:
+                        yield format_openai_chunk(
+                            completion_id=completion_id,
+                            model=req.model,
+                            delta_content="",
+                            thinking_content=_vlm_token_text,
+                            finish_reason=None,
+                            include_role=first_chunk,
+                        )
+                        first_chunk = False
+                else:
+                    if _vlm_token_text or not _vlm_is_final:
+                        yield format_openai_chunk(
+                            completion_id=completion_id,
+                            model=req.model,
+                            delta_content=_vlm_token_text,
+                            finish_reason=None,  # intermediate: always None
+                            include_role=first_chunk,
+                        )
+                        first_chunk = False
 
         # Final chunk with finish_reason
         # If no tokens were emitted (first_chunk is still True), this is also
@@ -2827,12 +2836,15 @@ async def _stream_vlm_response(
     done_emitted = False
     metrics_recorded = False
     try:
-        async for event in with_sse_keepalive(
-            _token_source(),
-            http_request=request,
-            cancel_event=_vlm_cancel_evt,
-        ):
-            yield event.encode("utf-8")
+        async with contextlib.aclosing(
+            with_sse_keepalive(
+                _token_source(),
+                http_request=request,
+                cancel_event=_vlm_cancel_evt,
+            )
+        ) as events:
+            async for event in events:
+                yield event.encode("utf-8")
     except MemoryError:
         if _vlm_cancel_evt is not None:
             _vlm_cancel_evt.set()

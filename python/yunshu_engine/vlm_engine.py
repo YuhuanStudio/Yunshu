@@ -819,6 +819,7 @@ class VLMEngine:
         self._model_path = model_path
         self._model = None
         self._tokenizer = None
+        self._mtp_backend = None
         self._processor = None
         self._config: dict = {}
         self._running = False
@@ -1353,6 +1354,35 @@ class VLMEngine:
             f"mrope={self._mrope_info.enabled})"
         )
 
+        # A Qwen VLM stays a VLM: keep its vision/grammar path and attach the
+        # native head only for explicitly eligible text requests. This shares
+        # the already-loaded target and never exports a second model folder.
+        if self._is_vlm and os.environ.get("YUNSHU_MTP", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            try:
+                from mlx_vlm.speculative.drafters import validate_drafter_compatibility
+
+                from .mlxvlm_mtp import (
+                    MLXVLMMtp,
+                    _load_drafter_in_memory,
+                    is_mtp_capable,
+                )
+
+                if is_mtp_capable(str(model_path)):
+                    backend = MLXVLMMtp(str(model_path))
+                    backend.model = self._model
+                    backend.tokenizer = self._tokenizer
+                    backend.drafter = _load_drafter_in_memory(str(model_path))
+                    validate_drafter_compatibility(self._model, backend.drafter, "mtp")
+                    backend._loaded = True
+                    self._mtp_backend = backend
+                    logger.info("VLM native MTP head attached to shared target")
+            except Exception:
+                logger.warning("VLM MTP head unavailable; using AR", exc_info=True)
+
         # run the KV-reuse losslessness probe NOW (load runs on the
         # MLX executor thread, so the probe's forwards land on the right GPU
         # stream). Memoizes self._reuse_probe_ok so _text_prefix_reuse_safe is a
@@ -1453,6 +1483,7 @@ class VLMEngine:
         self._cleanup_temp_files()
         self._model = None
         self._tokenizer = None
+        self._mtp_backend = None
         self._processor = None
         self._running = False
 
@@ -1505,6 +1536,51 @@ class VLMEngine:
         }
 
     # ── Generation ──
+
+    def _mtp_text_eligible(
+        self,
+        *,
+        temperature: float,
+        top_p: float,
+        top_k: int,
+        min_p: float,
+        repetition_penalty: float,
+        stop: list[str] | None,
+        stop_token_ids: list[int] | None,
+        enable_thinking: bool | None,
+        logprobs: bool,
+        top_logprobs: int | None,
+        kwargs: dict,
+    ) -> bool:
+        """Restrict speculative decode to requests with proven AR parity."""
+        return bool(
+            self._mtp_backend is not None
+            and kwargs.get("mtp_allowed") is True
+            and enable_thinking is False
+            and temperature <= 0
+            and top_p >= 1
+            and not top_k
+            and not min_p
+            and repetition_penalty == 1
+            and not stop
+            and not stop_token_ids
+            and not logprobs
+            and not top_logprobs
+            and not kwargs.get("json_schema")
+            and not kwargs.get("grammar")
+            and not kwargs.get("frequency_penalty")
+            and not kwargs.get("presence_penalty")
+            and not kwargs.get("logit_bias")
+            and not kwargs.get("thinking_budget")
+            and not kwargs.get("reasoning_effort")
+            and not kwargs.get("xtc_probability")
+            and not kwargs.get("xtc_threshold")
+            and not kwargs.get("logits_processors")
+            and not kwargs.get("lora_adapter")
+            and not kwargs.get("min_tokens")
+            and not kwargs.get("ignore_eos")
+            and not kwargs.get("suppress_tokens")
+        )
 
     async def generate(
         self,
@@ -1646,6 +1722,38 @@ class VLMEngine:
                 )
 
                 if self._is_vlm:
+                    if self._mtp_text_eligible(
+                        temperature=temperature,
+                        top_p=top_p,
+                        top_k=top_k,
+                        min_p=min_p,
+                        repetition_penalty=repetition_penalty,
+                        stop=stop,
+                        stop_token_ids=stop_token_ids,
+                        enable_thinking=_enable_thinking,
+                        logprobs=logprobs,
+                        top_logprobs=top_logprobs,
+                        kwargs=kwargs,
+                    ):
+                        mtp = self._mtp_backend.generate(
+                            [],
+                            max_tokens=max_tokens,
+                            temperature=0.0,
+                            prompt=input_ids.tolist(),
+                            cancel_event=kwargs.get("cancel_event"),
+                        )
+                        logger.debug(
+                            "VLM text used native MTP: %d tokens",
+                            mtp["completion_tokens"],
+                        )
+                        return (
+                            mtp["text"],
+                            0,
+                            mtp["completion_tokens"],
+                            mtp["completion_tokens"] < max_tokens,
+                            False,
+                            0,
+                        )
                     freq_p = kwargs.get("frequency_penalty", 0.0)
                     pres_p = kwargs.get("presence_penalty", 0.0)
                     lb = kwargs.get("logit_bias")
@@ -2086,6 +2194,27 @@ class VLMEngine:
                 )
 
                 if self._is_vlm:
+                    if max_tokens <= 240 and self._mtp_text_eligible(
+                        temperature=temperature,
+                        top_p=top_p,
+                        top_k=top_k,
+                        min_p=min_p,
+                        repetition_penalty=repetition_penalty,
+                        stop=stop,
+                        stop_token_ids=stop_token_ids,
+                        enable_thinking=enable_thinking,
+                        logprobs=logprobs,
+                        top_logprobs=top_logprobs,
+                        kwargs=kwargs,
+                    ):
+                        self._stream_vlm_mtp_text(
+                            input_ids,
+                            max_tokens,
+                            req_id,
+                            _safe_queue,
+                            cancel_event,
+                        )
+                        return
                     freq_p = kwargs.get("frequency_penalty", 0.0)
                     pres_p = kwargs.get("presence_penalty", 0.0)
                     lb = kwargs.get("logit_bias")
@@ -3910,6 +4039,76 @@ class VLMEngine:
                         self._ensure_kv_prefix_state(image_hash)
             except Exception:
                 logger.debug("post-stream bookkeeping failed", exc_info=True)
+
+    def _stream_vlm_mtp_text(
+        self,
+        input_ids: mx.array,
+        max_tokens: int,
+        req_id: str,
+        queue: Any,
+        cancel_event: Any,
+    ) -> None:
+        """Stream verified MTP tokens from the shared VLM target on Metal owner."""
+        detokenizer = self._tokenizer.detokenizer
+        detokenizer.reset()
+        count = 0
+        prompt_tokens = len(input_ids)
+        start = time.perf_counter()
+        first_ms = 0.0
+        for token_id in self._mtp_backend.iter_token_ids(
+            [],
+            max_tokens=max_tokens,
+            temperature=0.0,
+            prompt=input_ids.tolist(),
+            cancel_event=cancel_event,
+        ):
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            count += 1
+            detokenizer.add_token(token_id)
+            segment = detokenizer.last_segment
+            if count == 1:
+                first_ms = (time.perf_counter() - start) * 1000
+            if segment:
+                queue.put_nowait(
+                    RequestOutput(
+                        request_id=req_id,
+                        new_text=segment,
+                        new_token_ids=[token_id],
+                        completion_tokens=count,
+                        prompt_tokens=prompt_tokens,
+                        ttft_ms=first_ms if count == 1 else 0.0,
+                    )
+                )
+        detokenizer.finalize()
+        tail = detokenizer.last_segment
+        if tail:
+            queue.put_nowait(
+                RequestOutput(
+                    request_id=req_id,
+                    new_text=tail,
+                    completion_tokens=count,
+                    prompt_tokens=prompt_tokens,
+                )
+            )
+        cancelled = cancel_event is not None and cancel_event.is_set()
+        queue.put_nowait(
+            RequestOutput(
+                request_id=req_id,
+                finish_reason=(
+                    "cancel"
+                    if cancelled
+                    else "length"
+                    if count >= max_tokens
+                    else "stop"
+                ),
+                finished=True,
+                completion_tokens=count,
+                prompt_tokens=prompt_tokens,
+                ttft_ms=first_ms,
+            )
+        )
+        logger.debug("VLM text used native MTP stream: %d tokens", count)
 
     def _stream_vlm_text(
         self,

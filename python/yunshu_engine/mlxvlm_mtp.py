@@ -281,8 +281,9 @@ class MLXVLMMtp:
         messages: list[dict],
         max_tokens: int = 256,
         temperature: float = 0.0,
-        prompt: str | None = None,
+        prompt: str | list[int] | None = None,
         use_mtp: bool = True,
+        cancel_event=None,
     ) -> Iterator[int]:
         """Yield verified tokens on the executor thread as soon as they exist.
 
@@ -302,7 +303,11 @@ class MLXVLMMtp:
         if not self._loaded:
             self.load()
         ids = (
-            self._encode_text(prompt) if prompt is not None else self._encode(messages)
+            list(prompt)
+            if isinstance(prompt, list)
+            else self._encode_text(prompt)
+            if prompt is not None
+            else self._encode(messages)
         )
         input_mx = mx.array([ids], dtype=mx.int32)
         lm = self.model.language_model
@@ -357,6 +362,8 @@ class MLXVLMMtp:
                 ),
                 start=1,
             ):
+                if cancel_event is not None and cancel_event.is_set():
+                    break
                 t = int(tk) if not isinstance(tk, list) else int(tk[0])
                 if t in eos:
                     break
@@ -370,11 +377,13 @@ class MLXVLMMtp:
         o = lm(input_mx, cache=c)
         t = int(sample(o.logits[:, -1:]).item())
         emitted = 0
-        if t in eos:
+        if t in eos or (cancel_event is not None and cancel_event.is_set()):
             return
         yield t
         emitted = 1
         for _ in range(max_tokens - 1):
+            if cancel_event is not None and cancel_event.is_set():
+                break
             if emitted >= max_tokens:
                 break
             o = lm(mx.array([[t]]), cache=c)
@@ -389,12 +398,15 @@ class MLXVLMMtp:
         messages: list[dict],
         max_tokens: int = 256,
         temperature: float = 0.0,
-        prompt: str | None = None,
+        prompt: str | list[int] | None = None,
         use_mtp: bool = True,
+        cancel_event=None,
     ) -> dict:
         """Collect token iterator for non-streaming callers."""
         toks = list(
-            self.iter_token_ids(messages, max_tokens, temperature, prompt, use_mtp)
+            self.iter_token_ids(
+                messages, max_tokens, temperature, prompt, use_mtp, cancel_event
+            )
         )
         return {
             "text": self.tokenizer.decode(toks),
