@@ -2385,6 +2385,7 @@ async def _handle_vlm_chat(
         logits_processors=req.logits_processors,
         timeout_seconds=req.timeout,
         mtp_allowed=not req.tools,
+        apc_allowed=not req.tools,
     )
     if json_schema:
         gen_kwargs["json_schema"] = json_schema
@@ -2460,6 +2461,7 @@ async def _handle_vlm_chat(
                 "reasoning_tokens": rt,
                 "completion_tokens": ct,
                 "prompt_tokens": pt,
+                "cached_tokens": r.get("cached_tokens", 0) or 0,
                 "finish_reason": finish_reason,
                 "tool_calls": tool_calls,
             },
@@ -2556,10 +2558,12 @@ async def _handle_vlm_chat(
 
     total_completion_tok = 0
     total_reasoning_tok = 0
+    vlm_cached_tok = 0
     choices = []
     for idx, data, _ in results:
         total_completion_tok += data["completion_tokens"]
         total_reasoning_tok += data["reasoning_tokens"]
+        vlm_cached_tok = max(vlm_cached_tok, data.get("cached_tokens", 0))
         # Use max across choices — engine prompt_tokens is per-call but should
         # be identical for the same input across n>1. Falls back to text-only
         # estimate if engine returned 0.
@@ -2603,6 +2607,8 @@ async def _handle_vlm_chat(
         vlm_usage["completion_tokens_details"] = {
             "reasoning_tokens": total_reasoning_tok
         }
+    if vlm_cached_tok > 0:
+        vlm_usage["prompt_tokens_details"] = {"cached_tokens": vlm_cached_tok}
 
     # Record metrics for VLM non-streaming path
     if prompt_tok > 0 or total_completion_tok > 0 or total_reasoning_tok > 0:
@@ -2690,6 +2696,7 @@ async def _stream_vlm_response(
             timeout_seconds=req.timeout,
             lora_adapter=loaded_adapter,
             mtp_allowed=not req.tools,
+            apc_allowed=not req.tools,
         )
         if json_schema:
             stream_kwargs["json_schema"] = json_schema

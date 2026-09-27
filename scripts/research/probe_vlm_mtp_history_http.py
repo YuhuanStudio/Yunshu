@@ -56,7 +56,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="http://127.0.0.1:18764/v1/chat/completions")
     parser.add_argument("--model", default="Qwen3.8-27B-oQ4e-mtp")
-    parser.add_argument("--mode", choices=["ar", "mtp"], required=True)
+    parser.add_argument("--mode", choices=["ar", "mtp", "apc"], required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--server-pid", type=int)
     args = parser.parse_args()
@@ -70,7 +70,10 @@ def main() -> None:
         for turn in range(12):
             expected = "COBALT" if turn >= 6 else "ALPHA"
             if turn == 0:
-                user = reference + "\nThe current code is ALPHA. Reply with the current code only."
+                user = (
+                    reference
+                    + "\nThe current code is ALPHA. Reply with the current code only."
+                )
             elif turn == 6:
                 user = "Update the current code to COBALT. Reply with the current code only."
             else:

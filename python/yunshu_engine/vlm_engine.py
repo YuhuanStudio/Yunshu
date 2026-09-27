@@ -820,6 +820,8 @@ class VLMEngine:
         self._model = None
         self._tokenizer = None
         self._mtp_backend = None
+        self._apc_backend = None
+        self._apc_semantic_hash = None
         self._processor = None
         self._config: dict = {}
         self._running = False
@@ -1383,6 +1385,47 @@ class VLMEngine:
             except Exception:
                 logger.warning("VLM MTP head unavailable; using AR", exc_info=True)
 
+        # Experimental text-only APC. The manager holds recurrent/KV checkpoints
+        # across requests; the model remains the same already-loaded VLM target.
+        # Keep disk persistence off and require an explicit byte budget.
+        if self._is_vlm and os.environ.get(
+            "YUNSHU_VLM_UPSTREAM_APC", "0"
+        ).strip().lower() in ("1", "true", "yes"):
+            try:
+                from mlx_vlm.apc import APCManager, semantic_extra_hash
+                from mlx_vlm.generate.ar import BatchGenerator  # noqa: F401
+
+                lm = self._model.language_model
+                if (
+                    self._processor is None
+                    or not self.backend_capabilities(lm).cache.is_hybrid
+                ):
+                    raise ValueError(
+                        "APC candidate requires a hybrid VLM and processor"
+                    )
+                budget = float(os.environ.get("YUNSHU_VLM_APC_MEMORY_GB", "1.5"))
+                if budget <= 0:
+                    raise ValueError("YUNSHU_VLM_APC_MEMORY_GB must be positive")
+                self._apc_backend = APCManager(
+                    num_blocks=512,
+                    block_size=16,
+                    disk=None,
+                    overrides={"memory_max_gb": budget},
+                )
+                self._apc_semantic_hash = semantic_extra_hash(
+                    image_hash=0,
+                    media={"audio": None, "video": None},
+                    model=lm,
+                    processor=self._processor,
+                )
+                logger.info(
+                    "VLM text-only APC candidate enabled with %.2f GiB budget", budget
+                )
+            except Exception:
+                self._apc_backend = None
+                self._apc_semantic_hash = None
+                logger.warning("VLM APC candidate unavailable; using AR", exc_info=True)
+
         # run the KV-reuse losslessness probe NOW (load runs on the
         # MLX executor thread, so the probe's forwards land on the right GPU
         # stream). Memoizes self._reuse_probe_ok so _text_prefix_reuse_safe is a
@@ -1484,6 +1527,8 @@ class VLMEngine:
         self._model = None
         self._tokenizer = None
         self._mtp_backend = None
+        self._apc_backend = None
+        self._apc_semantic_hash = None
         self._processor = None
         self._running = False
 
@@ -1580,6 +1625,40 @@ class VLMEngine:
             and not kwargs.get("min_tokens")
             and not kwargs.get("ignore_eos")
             and not kwargs.get("suppress_tokens")
+            and not kwargs.get("spec_decode")
+        )
+
+    def _apc_text_eligible(self, **params) -> bool:
+        """Use APC only for the text-only greedy subset validated on Qwen3.8."""
+        kwargs = params["kwargs"]
+        return bool(
+            self._apc_backend is not None
+            and kwargs.get("apc_allowed") is True
+            and params["enable_thinking"] is False
+            and params["temperature"] <= 0
+            and params["top_p"] >= 1
+            and not params["top_k"]
+            and not params["min_p"]
+            and params["repetition_penalty"] == 1
+            and not params["stop"]
+            and not params["stop_token_ids"]
+            and not params["logprobs"]
+            and not params["top_logprobs"]
+            and not kwargs.get("json_schema")
+            and not kwargs.get("grammar")
+            and not kwargs.get("frequency_penalty")
+            and not kwargs.get("presence_penalty")
+            and not kwargs.get("logit_bias")
+            and not kwargs.get("thinking_budget")
+            and not kwargs.get("reasoning_effort")
+            and not kwargs.get("xtc_probability")
+            and not kwargs.get("xtc_threshold")
+            and not kwargs.get("logits_processors")
+            and not kwargs.get("lora_adapter")
+            and not kwargs.get("min_tokens")
+            and not kwargs.get("ignore_eos")
+            and not kwargs.get("suppress_tokens")
+            and not kwargs.get("spec_decode")
         )
 
     async def generate(
@@ -1753,6 +1832,22 @@ class VLMEngine:
                             mtp["completion_tokens"] < max_tokens,
                             False,
                             0,
+                        )
+                    if max_tokens > 0 and self._apc_text_eligible(
+                        temperature=temperature,
+                        top_p=top_p,
+                        top_k=top_k,
+                        min_p=min_p,
+                        repetition_penalty=repetition_penalty,
+                        stop=stop,
+                        stop_token_ids=stop_token_ids,
+                        enable_thinking=_enable_thinking,
+                        logprobs=logprobs,
+                        top_logprobs=top_logprobs,
+                        kwargs=kwargs,
+                    ):
+                        return self._generate_vlm_apc_text(
+                            input_ids, max_tokens, kwargs.get("cancel_event")
                         )
                     freq_p = kwargs.get("frequency_penalty", 0.0)
                     pres_p = kwargs.get("presence_penalty", 0.0)
@@ -2136,6 +2231,25 @@ class VLMEngine:
                 ):  # event loop closed during shutdown
                     self._loop.call_soon_threadsafe(self._q.put_nowait, item)
 
+            def put_blocking(self, item, cancel):
+                """Bound APC's producer by the async consumer, including slow clients."""
+                try:
+                    future = asyncio.run_coroutine_threadsafe(
+                        self._q.put(item), self._loop
+                    )
+                except RuntimeError:
+                    return False
+                while True:
+                    try:
+                        future.result(timeout=0.05)
+                        return True
+                    except TimeoutError:
+                        if cancel is not None and cancel.is_set():
+                            future.cancel()
+                            return False
+                    except Exception:
+                        return False
+
         _safe_queue = _ThreadSafeQueue(queue, _loop_for_queue)
 
         _stream_ttft_t0 = [time.perf_counter()]
@@ -2208,6 +2322,27 @@ class VLMEngine:
                         kwargs=kwargs,
                     ):
                         self._stream_vlm_mtp_text(
+                            input_ids,
+                            max_tokens,
+                            req_id,
+                            _safe_queue,
+                            cancel_event,
+                        )
+                        return
+                    if max_tokens > 0 and self._apc_text_eligible(
+                        temperature=temperature,
+                        top_p=top_p,
+                        top_k=top_k,
+                        min_p=min_p,
+                        repetition_penalty=repetition_penalty,
+                        stop=stop,
+                        stop_token_ids=stop_token_ids,
+                        enable_thinking=enable_thinking,
+                        logprobs=logprobs,
+                        top_logprobs=top_logprobs,
+                        kwargs=kwargs,
+                    ):
+                        self._stream_vlm_apc_text(
                             input_ids,
                             max_tokens,
                             req_id,
@@ -4045,6 +4180,181 @@ class VLMEngine:
                         self._ensure_kv_prefix_state(image_hash)
             except Exception:
                 logger.debug("post-stream bookkeeping failed", exc_info=True)
+
+    def _new_vlm_apc_request(self, input_ids: mx.array, max_tokens: int):
+        """Prepare one upstream APC request on the serialized Metal thread."""
+        from mlx_vlm.generate.ar import BatchGenerator
+
+        from .mrope import clear_rope_state
+
+        clear_rope_state(self._model)
+        embeddings = self._model.get_input_embeddings(input_ids[None], None, mask=None)
+        prompt_kwargs = embeddings.to_dict()
+        prompt_kwargs["_apc_semantic_hash"] = self._apc_semantic_hash
+        manager = self._apc_backend
+        matched_before = manager.stats.matched_tokens
+        generator = BatchGenerator(
+            self._model.language_model,
+            self._processor,
+            max_tokens=max_tokens,
+            apc_manager=manager,
+            greedy_sampling=True,
+            compute_logprobs=False,
+            prefill_step_size=256,
+        )
+        try:
+            uid = generator.insert(
+                [input_ids.tolist()],
+                max_tokens=max_tokens,
+                prompt_kwargs=[prompt_kwargs],
+            )[0]
+        except Exception:
+            generator.close()
+            raise
+        return generator, uid, matched_before
+
+    def _generate_vlm_apc_text(
+        self, input_ids: mx.array, max_tokens: int, cancel_event: Any
+    ) -> tuple[str, int, int, bool, bool, int]:
+        """Non-streaming APC counterpart, with the same result contract as AR."""
+        generator, uid, matched_before = self._new_vlm_apc_request(
+            input_ids, max_tokens
+        )
+        token_ids = []
+        finish_reason = None
+        try:
+            for _ in range(max(1024, len(input_ids) // 256 + max_tokens + 32)):
+                if cancel_event is not None and cancel_event.is_set():
+                    finish_reason = "cancel"
+                    break
+                _, responses = generator.next()
+                for response in responses:
+                    if response.uid != uid:
+                        continue
+                    token_ids.append(int(response.token))
+                    if response.finish_reason is not None:
+                        finish_reason = response.finish_reason
+                        break
+                if finish_reason is not None:
+                    break
+            else:
+                raise RuntimeError("VLM APC generation exceeded its step bound")
+            return (
+                self._tokenizer.decode(token_ids, skip_special_tokens=True),
+                0,
+                len(token_ids),
+                finish_reason == "stop",
+                False,
+                self._apc_backend.stats.matched_tokens - matched_before,
+            )
+        finally:
+            if finish_reason in (None, "cancel"):
+                with contextlib.suppress(Exception):
+                    generator.remove(uid)
+            generator.close()
+
+    def _stream_vlm_apc_text(
+        self,
+        input_ids: mx.array,
+        max_tokens: int,
+        req_id: str,
+        queue: Any,
+        cancel_event: Any,
+    ) -> None:
+        """Run upstream hybrid APC against the existing VLM target on Metal owner."""
+        prompt_tokens = len(input_ids)
+        generator, uid, matched_before = self._new_vlm_apc_request(
+            input_ids, max_tokens
+        )
+        manager = self._apc_backend
+        detokenizer = self._tokenizer.detokenizer
+        detokenizer.reset()
+        eos_ids = self._get_eos_ids()
+        count = 0
+        first_ms = 0.0
+        finish_reason = None
+        start = time.perf_counter()
+        try:
+            for _ in range(max(1024, prompt_tokens // 256 + max_tokens + 32)):
+                if cancel_event is not None and cancel_event.is_set():
+                    finish_reason = "cancel"
+                    break
+                _, responses = generator.next()
+                for response in responses:
+                    if response.uid != uid:
+                        continue
+                    count += 1
+                    if count == 1:
+                        first_ms = (time.perf_counter() - start) * 1000
+                    token_id = int(response.token)
+                    segment = ""
+                    if token_id not in eos_ids:
+                        detokenizer.add_token(token_id)
+                        segment = detokenizer.last_segment
+                    if segment:
+                        delivered = queue.put_blocking(
+                            RequestOutput(
+                                request_id=req_id,
+                                new_text=segment,
+                                new_token_ids=[token_id],
+                                completion_tokens=count,
+                                prompt_tokens=prompt_tokens,
+                                cached_tokens=(
+                                    manager.stats.matched_tokens - matched_before
+                                    if count == 1
+                                    else 0
+                                ),
+                                ttft_ms=first_ms if count == 1 else 0.0,
+                            ),
+                            cancel_event,
+                        )
+                        if not delivered:
+                            finish_reason = "cancel"
+                            return
+                    if response.finish_reason is not None:
+                        finish_reason = response.finish_reason
+                        break
+                if finish_reason is not None:
+                    break
+            else:
+                raise RuntimeError("VLM APC generation exceeded its step bound")
+            if finish_reason != "cancel":
+                detokenizer.finalize()
+                tail = detokenizer.last_segment
+                if tail:
+                    if not queue.put_blocking(
+                        RequestOutput(
+                            request_id=req_id,
+                            new_text=tail,
+                            completion_tokens=count,
+                            prompt_tokens=prompt_tokens,
+                        ),
+                        cancel_event,
+                    ):
+                        finish_reason = "cancel"
+                        return
+            queue.put_blocking(
+                RequestOutput(
+                    request_id=req_id,
+                    finish_reason=finish_reason or "stop",
+                    finished=True,
+                    completion_tokens=count,
+                    prompt_tokens=prompt_tokens,
+                    cached_tokens=manager.stats.matched_tokens - matched_before,
+                    ttft_ms=first_ms,
+                ),
+                cancel_event,
+            )
+            logger.debug(
+                "VLM APC stream: %d tokens, %d cached prompt tokens",
+                count,
+                manager.stats.matched_tokens - matched_before,
+            )
+        finally:
+            if uid is not None and finish_reason in (None, "cancel"):
+                with contextlib.suppress(Exception):
+                    generator.remove(uid)
+            generator.close()
 
     def _stream_vlm_mtp_text(
         self,
