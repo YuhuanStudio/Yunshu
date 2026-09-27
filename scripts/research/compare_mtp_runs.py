@@ -84,6 +84,18 @@ def main():
         and a.get("done_received")
         and b.get("done_received")
     ]
+    completed_answer_pairs = [
+        (a, b)
+        for a, b in paired
+        if a.get("http_status") == b.get("http_status") == 200
+        and a.get("done_received")
+        and b.get("done_received")
+        and a.get("finish_reason") == b.get("finish_reason") == "stop"
+        and a.get("output", "").strip()
+        and b.get("output", "").strip()
+        and isinstance(a.get("wall_s"), (int, float))
+        and isinstance(b.get("wall_s"), (int, float))
+    ]
     token_rates = [
         (
             a.get("usage", {}).get("generation_tokens_per_second"),
@@ -132,6 +144,14 @@ def main():
         "off_median_wall_s": median([a for a, _ in timings]),
         "on_median_wall_s": median([b for _, b in timings]),
         "paired_median_speedup": median([a / b for a, b in timings if b > 0]),
+        "both_completed_answer_count": len(completed_answer_pairs),
+        "both_completed_answer_median_speedup": median(
+            [a["wall_s"] / b["wall_s"] for a, b in completed_answer_pairs if b["wall_s"] > 0]
+        ),
+        "off_empty_final_count": sum(not row.get("output", "").strip() for row in off_rows),
+        "on_empty_final_count": sum(not row.get("output", "").strip() for row in on_rows),
+        "off_length_count": sum(row.get("finish_reason") == "length" for row in off_rows),
+        "on_length_count": sum(row.get("finish_reason") == "length" for row in on_rows),
         "off_median_first_content_s": median([a for a, _ in first_text]),
         "on_median_first_content_s": median([b for _, b in first_text]),
         "off_median_server_first_visible_token_s": median([a for a, _ in first_visible]),
