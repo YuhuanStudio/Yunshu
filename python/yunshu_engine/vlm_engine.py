@@ -2609,6 +2609,16 @@ class VLMEngine:
 
         stream_task = loop.run_in_executor(self._executor, _stream_sync)
 
+        # The executor owns the model lease. A disconnected ASGI task can be
+        # cancelled during an await in the async generator's cleanup, so its
+        # finally block cannot be the sole owner of this counter. Release only
+        # after the Metal worker actually exits.
+        def _release_worker_lease(_future):
+            with self._active_count_lock:
+                self._active_count = max(0, self._active_count - 1)
+
+        stream_task.add_done_callback(_release_worker_lease)
+
         # the gateway passes timeout_seconds=req.timeout (chat.py), but this
         # read the wrong key 'timeout' → a user-set per-request timeout was SILENTLY
         # ignored and the inactivity timeout was permanently hardcoded to 300s. The
@@ -2695,15 +2705,11 @@ class VLMEngine:
                 )
             except Exception:
                 pass
-            with self._active_count_lock:
-                # floor at 0 to match the non-streaming path (line ~1454).
-                # Without it an unbalanced decrement underflows _active_count negative,
-                # making is_busy() wrongly report idle (could unload the model mid-work).
-                self._active_count = max(0, self._active_count - 1)
             if not stream_task.done():
-                stream_task.cancel()
+                if cancel_event is not None:
+                    cancel_event.set()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await stream_task
+                    await asyncio.shield(stream_task)
             # Drain remaining queue items to unblock the executor thread
             # so it can observe the cancellation and exit promptly.
             while not queue.empty():

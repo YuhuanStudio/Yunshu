@@ -1,9 +1,14 @@
 """Tests for streaming module — ThinkingParser, SSE formatters, keepalive."""
 
+import asyncio
 import json
+
+import pytest
+from starlette.requests import ClientDisconnect
 
 from yunshu_gateway.streaming import (
     _KEEPALIVE_SENTINEL,
+    ClosingStreamingResponse,
     ThinkingParser,
     clean_tool_call_markup,
     extract_thinking,
@@ -22,6 +27,32 @@ from yunshu_gateway.streaming import (
     format_responses_text_delta,
     format_responses_text_done,
 )
+
+
+@pytest.mark.asyncio
+async def test_stream_response_closes_generator_when_send_fails():
+    closed = asyncio.Event()
+
+    async def body():
+        try:
+            yield b"first"
+            yield b"second"
+        finally:
+            closed.set()
+
+    async def send(message):
+        if message["type"] == "http.response.body":
+            raise OSError("client disconnected")
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    response = ClosingStreamingResponse(body())
+    scope = {"type": "http", "asgi": {"spec_version": "2.4"}}
+    with pytest.raises(ClientDisconnect):
+        await response(scope, receive, send)
+    assert closed.is_set()
+
 
 # ── ThinkingParser ──
 

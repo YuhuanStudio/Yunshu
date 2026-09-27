@@ -26,11 +26,35 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
+import anyio
+from starlette.responses import StreamingResponse
+
 # ── Sentinel for _safe_anext ──
 
 _KEEPALIVE_SENTINEL = object()
 
 logger = logging.getLogger(__name__)
+
+
+class ClosingStreamingResponse(StreamingResponse):
+    """Close the body iterator when ASGI send fails after a client disconnect.
+
+    Starlette's stream_response iterates the body but does not close an async
+    generator if send raises. That leaves nested inference generators suspended
+    with their request lease and cleanup finally blocks unexecuted.
+    """
+
+    async def stream_response(self, send):
+        try:
+            await super().stream_response(send)
+        finally:
+            if hasattr(self.body_iterator, "aclose"):
+                # Starlette's ASGI <2.4 disconnect listener cancels the task
+                # group. Cleanup awaits need shielding or cancellation aborts
+                # them before the nested inference generator can release its
+                # request lease.
+                with anyio.CancelScope(shield=True):
+                    await self.body_iterator.aclose()
 
 
 # ── SSE Keepalive Wrapper ──

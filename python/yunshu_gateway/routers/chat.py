@@ -31,6 +31,7 @@ from yunshu_engine.tool_call_streamer import ToolCallStreamer
 
 from ..engine import get_engine, get_model_manager
 from ..streaming import (
+    ClosingStreamingResponse,
     clean_tool_call_markup,
     extract_thinking,
     extract_tool_calls_model_aware,
@@ -2342,7 +2343,7 @@ async def _handle_vlm_chat(
                 status_code=400,
                 detail="VLM streaming does not support n > 1. Use non-streaming mode for multiple choices.",
             )
-        return StreamingResponse(
+        return ClosingStreamingResponse(
             _stream_vlm_response(
                 vlm_engine,
                 messages,
