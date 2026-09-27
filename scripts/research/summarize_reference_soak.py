@@ -51,11 +51,15 @@ def summarize(path):
         and not row.get("stream_error")
     ]
     lengths = [row.get("wall_s") for row in requests if isinstance(row.get("wall_s"), (int, float))]
-    workload = next((row.get("arguments", {}).get("workload") for row in rows if row.get("event") == "start"), None)
+    arguments = next((row.get("arguments", {}) for row in rows if row.get("event") == "start"), {})
+    workload = arguments.get("workload")
+    planned_requests = arguments.get("requests")
     result = {
         "path": str(path),
         "workload": workload,
-        "complete": bool(events["idle_end"]),
+        "complete": bool(events["idle_end"]) and len(requests) == planned_requests and not events["stopped"],
+        "planned_requests": planned_requests,
+        "terminated_by_guard": bool(events["stopped"]),
         "events": dict(events),
         "request_count": len(requests),
         "success_count": len(successful),
