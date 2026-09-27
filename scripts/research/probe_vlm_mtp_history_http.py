@@ -28,6 +28,7 @@ def _call(url: str, body: dict) -> dict:
     first = None
     parts = []
     finish = None
+    usage = None
     with httpx.stream("POST", url, json=body, timeout=120) as response:
         for line in response.iter_lines():
             if not line.startswith("data: "):
@@ -35,7 +36,9 @@ def _call(url: str, body: dict) -> dict:
             if line[6:] == "[DONE]":
                 break
             event = json.loads(line[6:])
-            choice = event.get("choices", [{}])[0]
+            if event.get("usage"):
+                usage = event["usage"]
+            choice = (event.get("choices") or [{}])[0]
             segment = choice.get("delta", {}).get("content") or ""
             if segment:
                 if first is None:
@@ -49,6 +52,7 @@ def _call(url: str, body: dict) -> dict:
         "complete_s": round(time.perf_counter() - start, 6),
         "text": "".join(parts),
         "finish_reason": finish,
+        "usage": usage,
     }
 
 
@@ -59,22 +63,31 @@ def main() -> None:
     parser.add_argument("--mode", choices=["ar", "mtp", "apc"], required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--server-pid", type=int)
+    parser.add_argument("--reference-repeats", type=int, default=100)
+    parser.add_argument("--turns", type=int, default=12)
+    parser.add_argument("--update-turn", type=int, default=6)
     args = parser.parse_args()
+    if (
+        args.reference_repeats < 0
+        or args.turns < 2
+        or not 0 < args.update_turn < args.turns
+    ):
+        parser.error("require repeats >= 0 and 0 < update-turn < turns")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     reference = (
         "Reference paragraph for a document summary. It does not modify the code. "
-        * 100
+        * args.reference_repeats
     )
     messages = []
     with args.output.open("w") as file:
-        for turn in range(12):
-            expected = "COBALT" if turn >= 6 else "ALPHA"
+        for turn in range(args.turns):
+            expected = "COBALT" if turn >= args.update_turn else "ALPHA"
             if turn == 0:
                 user = (
                     reference
                     + "\nThe current code is ALPHA. Reply with the current code only."
                 )
-            elif turn == 6:
+            elif turn == args.update_turn:
                 user = "Update the current code to COBALT. Reply with the current code only."
             else:
                 user = "What is the current code? Reply with that code only."
@@ -88,11 +101,13 @@ def main() -> None:
                     "max_tokens": 32,
                     "enable_thinking": False,
                     "stream": True,
+                    "stream_options": {"include_usage": True},
                 },
             )
             row = {
                 "mode": args.mode,
                 "turn": turn + 1,
+                "reference_repeats": args.reference_repeats,
                 "expected": expected,
                 **result,
                 "correct": result["text"].strip() == expected,
