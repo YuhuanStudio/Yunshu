@@ -29,9 +29,13 @@ def main():
     args = parser.parse_args()
     model_path = Path(args.model).expanduser().resolve()
     if not model_path.is_dir() or not (model_path / "config.json").is_file():
-        parser.error("--model must be an existing local model directory with config.json; downloads are disabled")
+        parser.error(
+            "--model must be an existing local model directory with config.json; downloads are disabled"
+        )
     if not model_path.is_relative_to(Path("/Volumes/P5Plus")):
-        parser.error("Research models must use existing model directories on /Volumes/P5Plus")
+        parser.error(
+            "Research models must use existing model directories on /Volumes/P5Plus"
+        )
     args.model = str(model_path)
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
@@ -97,6 +101,38 @@ def main():
         ),
     ]
     cases.insert(3, ("long_repeat", *cases[2][1:]))
+    cases.insert(
+        4,
+        (
+            "long_edited_tail",
+            ("The archive entry has code ALPHA and status OPEN.\n" * 300)
+            + "\nThe code changed to COBALT. What is the current code? Reply only with the code.",
+            None,
+            24,
+        ),
+    )
+    long_32k = (
+        "The archive entry has code ALPHA and status OPEN.\n" * 3000
+    ) + "\nWhat is the code? Reply only with the code."
+    cases.extend(
+        [
+            ("long_32k_prefill", long_32k, None, 24),
+            ("long_32k_repeat", long_32k, None, 24),
+            (
+                "long_32k_edited_tail",
+                ("The archive entry has code ALPHA and status OPEN.\n" * 3000)
+                + "\nThe code changed to COBALT. What is the current code? Reply only with the code.",
+                None,
+                24,
+            ),
+            (
+                "vision_after_32k",
+                "Which half is red, left or right? Reply with one word.",
+                str(image_path.resolve()),
+                24,
+            ),
+        ]
+    )
     if args.selected_cases:
         cases = [c for c in cases if c[0] in args.selected_cases]
         if not cases:
@@ -247,6 +283,7 @@ def main():
                                 output="".join(chunks),
                                 generation_tokens=last.completion_tokens if last else 0,
                                 prompt_tokens=last.prompt_tokens if last else 0,
+                                cached_tokens=last.cached_tokens if last else 0,
                                 finish_reason=last.finish_reason if last else None,
                                 engine_stats=engine.get_stats(),
                                 text_kv_stats=engine._text_kv_prefix_cache.get_stats()

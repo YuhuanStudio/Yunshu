@@ -940,8 +940,8 @@ class VLMEngine:
         self._text_hybrid_prefix_enabled = os.environ.get(
             "YUNSHU_VLM_HYBRID_PREFIX", "1"
         ).strip() in ("1", "true", "yes")
-        self._text_hybrid_block = int(
-            os.environ.get("YUNSHU_VLM_HYBRID_PREFIX_BLOCK", "128")
+        self._text_hybrid_block = max(
+            1, int(os.environ.get("YUNSHU_VLM_HYBRID_PREFIX_BLOCK", "128"))
         )
         self._hybrid_reuse_probe_ok: bool | None = None
 
@@ -3068,6 +3068,22 @@ class VLMEngine:
             return start_offset
         p = int(start_offset)
         end = n - 1
+        if n > 8192:
+            # Full hybrid snapshots grow with context length. Capturing every
+            # boundary at 32K retained tens of GiB, so keep only the latest
+            # useful boundary and prefill the earlier span in larger chunks.
+            boundary = (end // block) * block
+            while p < boundary:
+                q = min(p + max(block, 512), boundary)
+                lm(full_ids[p:q][None], cache=cache)
+                p = q
+            if p == boundary and start_offset < boundary and p >= pc._min_prefix:
+                pc.clear()
+                pc.add(full_ids[:p], cache)
+            if p < end:
+                lm(full_ids[p:end][None], cache=cache)
+                p = end
+            return p
         while p < end:
             chunk = full_ids[p : min(p + block, end)]
             cn = int(chunk.shape[0])
@@ -3334,7 +3350,10 @@ class VLMEngine:
             # entry (verified: lossless for short answers, wrong for long ones).
             # add() makes a detached copy (trim=0 here since offset==prompt_len),
             # so subsequent decode on the live `cache` doesn't touch the entry.
-            if _text_pc is not None:
+            # A full-length hybrid snapshot cannot yield first logits on an
+            # exact repeat without replay, and ArraysCache cannot trim it.
+            # Keep the earlier no-trim boundary checkpoints instead.
+            if _text_pc is not None and not _hybrid_mode:
                 try:
                     _text_pc.add(input_ids, cache)
                 except Exception:
@@ -3936,12 +3955,16 @@ class VLMEngine:
             or logit_bias
         )
 
-        # streaming text KV prefix reuse — same gate as the
-        # non-streaming path (lossless-only bypass via _text_prefix_reuse_safe,
-        # explicit mRoPE positions below). Both paths share YUNSHU_VLM_KV_PREFIX.
+        # Reuse the same capability gates as non-streaming generation. Hybrid
+        # recurrent layers need no-trim boundary snapshots, not sliced KV.
         _text_pc = (
             self._text_kv_prefix_cache if self._text_prefix_reuse_safe(lm) else None
         )
+        _hybrid_mode = False
+        if _text_pc is None and self._text_hybrid_reuse_safe(lm):
+            _text_pc = self._text_kv_prefix_cache
+            _text_pc._no_trim_mode = True
+            _hybrid_mode = True
 
         # JSON schema / grammar constraint (streaming path)
         json_constraint = None
@@ -4029,14 +4052,22 @@ class VLMEngine:
                         cache = _cached_kv
                         _prefill_ids = input_ids[_pc_matched:]
                         if len(_prefill_ids) == 0:
-                            _refeed = min(len(input_ids) - 1, 128)
-                            cache = _text_pc._snapshot_cache(cache, trim=_refeed)
-                            _prefill_ids = input_ids[-_refeed:]
-                            _pc_matched = len(input_ids) - _refeed
+                            if _hybrid_mode:
+                                # ArraysCache cannot be trimmed. Cold-prefill a
+                                # full match, recording resumable boundaries.
+                                cache = make_prompt_cache(lm)
+                                _prefill_ids = input_ids
+                                _pc_matched = 0
+                            else:
+                                _refeed = min(len(input_ids) - 1, 128)
+                                cache = _text_pc._snapshot_cache(cache, trim=_refeed)
+                                _prefill_ids = input_ids[-_refeed:]
+                                _pc_matched = len(input_ids) - _refeed
                         logger.debug(
-                            "VLM stream text KV prefix hit: matched=%d/%d",
+                            "VLM stream text KV prefix hit: matched=%d/%d hybrid=%s",
                             _pc_matched,
                             len(input_ids),
+                            _hybrid_mode,
                         )
                     else:
                         _pc_matched = 0
@@ -4053,8 +4084,29 @@ class VLMEngine:
             if _text_pc is not None and self._text_reuse_needs_positions(lm):
                 self._prime_mrope_reuse_state(lm)
 
-            # Prefill
+            # Capture exact recurrent state at block boundaries before the
+            # final prefill token. The next request can resume after a shared
+            # boundary without replaying the whole text prompt.
             _pf_t0 = time.perf_counter()
+            if _hybrid_mode and _text_pc is not None and int(_prefill_ids.shape[0]) > 1:
+                try:
+                    _resident = self._capture_vlm_hybrid_prefix(
+                        lm,
+                        input_ids,
+                        cache,
+                        _text_pc,
+                        _pc_matched,
+                        self._text_hybrid_block,
+                    )
+                    _prefill_ids = input_ids[_resident:]
+                except Exception:
+                    logger.warning(
+                        "VLM stream hybrid prefix capture failed — full prefill",
+                        exc_info=True,
+                    )
+                    cache = make_prompt_cache(lm)
+                    _prefill_ids = input_ids
+                    _pc_matched = 0
             output = lm(_prefill_ids[None], cache=cache)
             logits = output.logits[:, -1, :]
             current = sampler(logits)
@@ -4073,7 +4125,9 @@ class VLMEngine:
             # store the prompt-boundary snapshot NOW (before decode
             # pollutes the rotating window) — see _generate_vlm_text. This is
             # what makes streaming reuse lossless for long generations too.
-            if _text_pc is not None:
+            # See the non-streaming path: a full hybrid snapshot would win
+            # lookup over every reusable boundary but force a cold prefill.
+            if _text_pc is not None and not _hybrid_mode:
                 try:
                     _text_pc.add(input_ids, cache)
                 except Exception:
@@ -4164,6 +4218,7 @@ class VLMEngine:
                         finished=finish_reason is not None,
                         completion_tokens=token_count,
                         prompt_tokens=_num_prompt_tokens,
+                        cached_tokens=int(_pc_matched),
                         current_state=_state,
                         reasoning_tokens=_thinking_tokens,
                         ttft_ms=round(_ttft_val[0] * 1000, 1)
@@ -4206,6 +4261,7 @@ class VLMEngine:
                                 finished=True,
                                 completion_tokens=token_count,
                                 prompt_tokens=_num_prompt_tokens,
+                                cached_tokens=int(_pc_matched),
                                 reasoning_tokens=_thinking_tokens,
                             )
                         )
@@ -4314,6 +4370,7 @@ class VLMEngine:
                                 completion_tokens=token_count,
                                 current_state=_state,
                                 prompt_tokens=_num_prompt_tokens,
+                                cached_tokens=int(_pc_matched),
                                 reasoning_tokens=_thinking_tokens,
                             )
                         )
@@ -4363,6 +4420,7 @@ class VLMEngine:
                                 finished=finish_reason is not None,
                                 completion_tokens=token_count,
                                 prompt_tokens=_num_prompt_tokens,
+                                cached_tokens=int(_pc_matched),
                                 current_state=_state,
                                 reasoning_tokens=_thinking_tokens,
                             )
@@ -4413,6 +4471,7 @@ class VLMEngine:
                         finished=True,
                         completion_tokens=token_count,
                         prompt_tokens=_num_prompt_tokens,
+                        cached_tokens=int(_pc_matched),
                         current_state=_final_state,
                         reasoning_tokens=_thinking_tokens,
                     )
