@@ -16,6 +16,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--apc", choices=("on", "off"), required=True)
     parser.add_argument("--turns", type=int, default=8)
+    parser.add_argument("--memory-max-gb", type=float)
     args = parser.parse_args()
     model = args.model.expanduser().resolve()
     if (
@@ -41,7 +42,16 @@ def main() -> None:
 
             def probe() -> None:
                 apc = (
-                    APCManager(num_blocks=512, block_size=16, disk=None)
+                    APCManager(
+                        num_blocks=512,
+                        block_size=16,
+                        disk=None,
+                        overrides=(
+                            {"memory_max_gb": args.memory_max_gb}
+                            if args.memory_max_gb is not None
+                            else None
+                        ),
+                    )
                     if args.apc == "on"
                     else None
                 )
@@ -123,6 +133,7 @@ def main() -> None:
                             )
                             row = {
                                 "mode": args.apc,
+                                "memory_max_gb": args.memory_max_gb,
                                 "turn": turn + 1,
                                 "expected": expected,
                                 "text": text,
