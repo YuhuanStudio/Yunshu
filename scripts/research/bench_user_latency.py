@@ -164,7 +164,15 @@ def main():
     raw_dir.mkdir(parents=True, exist_ok=True)
     for repeat in range(args.repeats):
         for name, messages, limit, expected in cases:
-            row = {"case": name, "repeat": repeat, "model": args.model, "expected": expected}
+            row = {
+                "case": name,
+                "repeat": repeat,
+                "model": args.model,
+                "expected": expected,
+                "process_load_state": "not_controlled",
+                "first_in_sequence": repeat == 0 and name == cases[0][0],
+                "prefix_first_exposure": repeat == 0 and name == "long_cold",
+            }
             raw_path = raw_dir / f"{repeat:03d}-{name}.sse"
             try:
                 row.update(run_request(args.url, args.model, messages, limit, raw_path))
