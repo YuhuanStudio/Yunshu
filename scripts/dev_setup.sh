@@ -83,17 +83,6 @@ else
     echo "  You can still run commands manually via uv run ..."
 fi
 
-# ─── 4. pnpm ──────────────────────────────────────────────────
-section "Checking pnpm (Node.js package manager for WebUI)"
-
-if command -v pnpm &>/dev/null; then
-    PNPM_VERSION=$(pnpm --version 2>/dev/null || echo "unknown")
-    pass "pnpm $PNPM_VERSION"
-else
-    warn "pnpm not found (only needed for WebUI development)."
-    echo "  Install: corepack enable && corepack prepare pnpm@latest --activate"
-fi
-
 # ─── 5. Platform check ───────────────────────────────────────
 section "Checking platform"
 
@@ -124,20 +113,6 @@ if command -v uv &>/dev/null; then
     fi
 else
     warn "Skipping dependency install (uv not available)."
-fi
-
-# ─── 7. Install WebUI dependencies ───────────────────────────
-section "Setting up WebUI (if applicable)"
-
-if [ -d "$PROJECT_ROOT/webui" ] && command -v pnpm &>/dev/null; then
-    info "Installing WebUI dependencies..."
-    if (cd "$PROJECT_ROOT/webui" && pnpm install); then
-        pass "WebUI dependencies installed"
-    else
-        warn "WebUI install failed (non-fatal)."
-    fi
-else
-    info "Skipping WebUI setup (no webui/ dir or pnpm not found)."
 fi
 
 # ─── 8. Smoke test: import check ─────────────────────────────

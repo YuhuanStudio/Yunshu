@@ -11,10 +11,6 @@ dead, what's being refactored). By participating you agree to the [Code of Condu
 - [uv](https://github.com/astral-sh/uv) package manager
 - [just](https://github.com/casey/just) command runner (`brew install just`)
 
-Optional, only if you touch the dashboard:
-
-- [pnpm](https://pnpm.io/) for the WebUI
-
 ## Setup
 
 ```bash
@@ -23,8 +19,7 @@ cd Yunshu
 just setup
 ```
 
-This runs `uv sync --all-extras --dev` (Python only — the WebUI dashboard's Node/pnpm deps are
-**not** installed here; run `just setup-webui` separately if you touch `webui/`). For a lighter
+This runs `uv sync --all-extras --dev`. For a lighter
 checkout, pick just the extras you need instead of `--all-extras`:
 
 ```bash
@@ -64,7 +59,7 @@ Yunshu is a flat monorepo (no `yunshu/` subdir):
 > **Note:** `python/yunshu_engine/` is being actively refactored by the owner. If your change is
 > engine-side, coordinate before opening a large PR.
 
-The Next.js dashboard is in `webui/`. Yunshu has **no custom Metal kernels** — it wraps MLX
+Yunshu has **no custom Metal kernels** — it wraps MLX
 (hand-written kernels benchmarked slower on a single decode stream), so there's nothing to build there.
 
 ## Commit & PR conventions
@@ -86,7 +81,6 @@ Open a PR against `main`. Include:
 ## Code style
 
 - **Python:** ruff-formatted, 88-char line, Python 3.13+. `just lint` is authoritative.
-- **TypeScript/React:** Next.js 16 App Router, strict mode.
 - Comments explain the **why** (hidden constraint, subtle invariant, workaround), not the what.
 
 ## License

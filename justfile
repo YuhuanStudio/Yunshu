@@ -8,26 +8,18 @@ default:
 
 # ── Setup ──
 
-# Python deps only — what you need to run/develop the server. The WebUI dashboard
-# (Node/pnpm) is optional; run `just setup-webui` separately if you touch it.
 setup:
     uv sync --all-extras --dev
-
-# Optional: WebUI dashboard deps (needs Node + corepack/pnpm).
-setup-webui:
-    cd webui && corepack enable && pnpm install
 
 # ── Build ──
 # No build-metal: there are no hand-written Metal kernels (they benchmarked slower
 # than mx.fast/mx.matmul on Apple Silicon and were removed). All compute is via MLX.
 
-build: build-python build-webui
+build: build-python
 
 build-python:
     uv sync
 
-build-webui:
-    cd webui && pnpm build
 
 # ── Test ──
 
@@ -69,7 +61,3 @@ dev-model MODEL:
 # CLI
 cli *ARGS:
     uv run python -m yunshu_cli {{ ARGS }}
-
-# WebUI dev server
-dev-webui:
-    cd webui && pnpm dev
