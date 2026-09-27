@@ -7201,13 +7201,17 @@ class BatchedEngine:
                 ),
             )
             _txt = _r.get("text", "")
-            # the MTP backend ignores `stop`; honor it post-hoc.
-            if stop:
-                for _s in stop:
-                    if _s and _s in _txt:
-                        _txt = _txt[: _txt.find(_s)]
-                        break
+            # The non-streaming backend still decodes the full result. Apply
+            # the earliest stop, regardless of stop-list order.
+            _stop_positions = [_txt.find(s) for s in (stop or []) if s and s in _txt]
+            _stopped = bool(_stop_positions)
+            if _stopped:
+                _txt = _txt[: min(_stop_positions)]
             _ct = _r.get("completion_tokens", 0)
+            if _stopped:
+                _ct = len(
+                    self._mlxvlm_mtp.tokenizer.encode(_txt, add_special_tokens=False)
+                )
             return GenerationOutput(
                 text=_txt,
                 new_text=_txt,
@@ -7215,7 +7219,8 @@ class BatchedEngine:
                 prompt_tokens=self._mtp_prompt_tokens(_r, messages, enable_thinking),
                 completion_tokens=_ct,
                 finished=True,
-                finish_reason="length" if _ct >= max_tokens else "stop",
+                finish_reason="stop" if _stopped or _ct < max_tokens else "length",
+                stopped_by_stop_sequence=_stopped,
             )
 
         prompt = self._apply_chat_template(messages, enable_thinking)
@@ -7251,10 +7256,9 @@ class BatchedEngine:
         **kwargs,
     ) -> AsyncIterator[GenerationOutput]:
         """Streaming chat completion (messages → template → stream_generate)."""
-        # under the mlx-vlm MTP backend (YUNSHU_MTP=1) the mlx-lm fast path is NOT
-        # loaded (self._model is None), so stream_generate would crash on `model = self._model`.
-        # Generate via the MTP backend and emit the result as a single chunk (the backend
-        # doesn't token-stream). Honor `stop` post-hoc since the backend ignores it.
+        # The MTP backend owns its own target and drafter. Keep iteration on the
+        # single Metal executor, forwarding verified tokens through a bounded
+        # loop-owned queue so first content can reach the client before decode ends.
         if self._mlxvlm_mtp is not None:
             from .mlx_executor import get_mlx_executor
 
@@ -7269,33 +7273,141 @@ class BatchedEngine:
                 kwargs.get("json_schema"),
             )
             _loop = asyncio.get_running_loop()
-            # see chat() — template via the engine (role remap + BOS guard).
             _mtp_prompt = self._apply_chat_template(messages, enable_thinking)
-            _r = await _loop.run_in_executor(
-                get_mlx_executor(),
-                lambda: self._mlxvlm_mtp.generate(
-                    messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    prompt=_mtp_prompt,
-                ),
-            )
-            _txt = _r.get("text", "")
-            if stop:
-                for _s in stop:
-                    if _s and _s in _txt:
-                        _txt = _txt[: _txt.find(_s)]
+            _q: asyncio.Queue = asyncio.Queue(maxsize=64)
+            _slots = threading.BoundedSemaphore(64)
+            _done = object()
+            _cancel = threading.Event()
+            _request_cancel = kwargs.get("cancel_event")
+            _started = time.perf_counter()
+
+            def _post(item) -> bool:
+                # Reserve capacity before scheduling; the event loop releases
+                # it when consuming. Never wait for a per-token round trip,
+                # which serialized GPU decode against socket writes.
+                while not _slots.acquire(timeout=0.01):
+                    if _cancel.is_set() or _is_cancelled(_request_cancel):
+                        return False
+                try:
+                    _loop.call_soon_threadsafe(_q.put_nowait, item)
+                    return True
+                except RuntimeError:
+                    _slots.release()
+                    return False
+
+            def _produce() -> None:
+                try:
+                    for token in self._mlxvlm_mtp.iter_token_ids(
+                        messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        prompt=_mtp_prompt,
+                    ):
+                        if _cancel.is_set() or _is_cancelled(_request_cancel):
+                            break
+                        if not _post(token):
+                            break
+                except Exception as exc:
+                    _post(exc)
+                finally:
+                    if not _cancel.is_set():
+                        _post(_done)
+
+            detok = self._mlxvlm_mtp.tokenizer.detokenizer
+            detok.reset()
+            holdback = StopHoldbackBuffer(stop)
+            accumulated = ""
+            token_count = 0
+            first_text_emitted = False
+            stopped = False
+            failure = None
+            timed_out = False
+            timeout = kwargs.get("timeout_seconds")
+            deadline = _started + float(timeout) if timeout else None
+            worker = _loop.run_in_executor(get_mlx_executor(), _produce)
+            try:
+                while True:
+                    remaining = (
+                        max(0.0, deadline - time.perf_counter()) if deadline else None
+                    )
+                    try:
+                        item = await asyncio.wait_for(_q.get(), timeout=remaining)
+                    except TimeoutError:
+                        timed_out = True
                         break
-            _ct = _r.get("completion_tokens", 0)
-            yield GenerationOutput(
-                text=_txt,
-                new_text=_txt,
-                # real prompt_tokens (was hardcoded 0 → under-billing).
-                prompt_tokens=self._mtp_prompt_tokens(_r, messages, enable_thinking),
-                completion_tokens=_ct,
-                finished=True,
-                finish_reason="length" if _ct >= max_tokens else "stop",
-            )
+                    _slots.release()
+                    if item is _done:
+                        break
+                    if isinstance(item, Exception):
+                        failure = item
+                        break
+                    token_count += 1
+                    detok.add_token(item)
+                    delta = holdback.feed(detok.last_segment)
+                    if delta:
+                        accumulated += delta
+                        yield GenerationOutput(
+                            text=accumulated,
+                            new_text=delta,
+                            completion_tokens=token_count,
+                            ttft_ms=(time.perf_counter() - _started) * 1000
+                            if not first_text_emitted
+                            else 0.0,
+                        )
+                        first_text_emitted = True
+                    if holdback.contains_stop():
+                        stopped = True
+                        break
+
+                if not stopped and failure is None and not timed_out:
+                    detok.finalize()
+                    tail = holdback.feed(detok.last_segment)
+                    if holdback.contains_stop():
+                        stopped = True
+                        tail += holdback.take_stopped()
+                    else:
+                        tail += holdback.flush()
+                elif stopped:
+                    tail = holdback.take_stopped()
+                else:
+                    tail = ""
+                accumulated += tail
+                visible_count = token_count
+                if stopped:
+                    visible_count = len(
+                        self._mlxvlm_mtp.tokenizer.encode(
+                            accumulated, add_special_tokens=False
+                        )
+                    )
+                yield GenerationOutput(
+                    text=accumulated,
+                    new_text=tail,
+                    prompt_tokens=self._mtp_prompt_tokens(
+                        {}, messages, enable_thinking
+                    ),
+                    completion_tokens=visible_count,
+                    finished=True,
+                    finish_reason=(
+                        "timeout"
+                        if timed_out
+                        else "error"
+                        if failure is not None
+                        else "stop"
+                        if stopped or token_count < max_tokens
+                        else "length"
+                    ),
+                    stopped_by_stop_sequence=stopped,
+                    error=str(failure) if failure is not None else None,
+                )
+            finally:
+                _cancel.set()
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    # A canceled HTTP task must not release its model lease
+                    # while the executor still owns the MTP generator.
+                    await asyncio.shield(worker)
+                    raise
             return
         prompt = self._apply_chat_template(messages, enable_thinking)
         async for output in self.stream_generate(

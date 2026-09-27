@@ -5,7 +5,8 @@ captures intermediate SSM states + rollback_speculative_cache + qwen3_5_mtp
 drafter + run_speculative_rounds). HONESTY: a standalone proof script
 (scripts/bench/bench_mtp_vlm_27b.py, self-marked "INTEGRATION TODO") measured ~1.82x
 on Qwen3.6-27B (M3 Max) — that figure is NOT served/regression-gated, and the wired
-backend honors only temperature + is non-streaming + single-backend. Treat as
+backend honors only temperature + is single-backend. The served token stream
+is now wired, but has not passed real-model HTTP latency or cancellation gates. Treat as
 EXPERIMENTAL, not a shipped prod win. Our mlx-lm-based MTP patch could not do this — it
 lacked the SSM intermediate-state capture (so 27B gave garbage); mlx-vlm has it.
 
@@ -27,6 +28,7 @@ import logging
 import os
 import shutil
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -106,17 +108,11 @@ def _tolerant_target_load():
         nn.Module.load_weights = orig
 
 
-def _build_drafter(model_path: str, out_dir: str) -> str:
-    """Split the native MTP head into a standalone drafter folder. Handles BOTH
-    the bare ``mtp.*`` layout and this checkpoint's VLM-nested
-    ``language_model.mtp.*`` layout (mlx-vlm's own splitter only handles bare)."""
+def _load_mtp_head_tensors(model_path: str) -> dict:
+    """Read indexed MTP tensors without copying a drafter onto disk."""
     import mlx.core as mx
     from safetensors import safe_open
 
-    out = Path(out_dir)
-    if (out / "model.safetensors").exists() and (out / "config.json").exists():
-        return str(out)
-    out.mkdir(parents=True, exist_ok=True)
     index = json.loads((Path(model_path) / "model.safetensors.index.json").read_text())
     weight_map = index.get("weight_map", index)
     if not isinstance(weight_map, dict):
@@ -142,6 +138,18 @@ def _build_drafter(model_path: str, out_dir: str) -> str:
             sel[name] = value
     if not sel:
         raise ValueError(f"No MTP tensors found in {model_path}")
+    return sel
+
+
+def _build_drafter(model_path: str, out_dir: str) -> str:
+    """Optional explicit export; serving loads the head in memory instead."""
+    import mlx.core as mx
+
+    out = Path(out_dir)
+    if (out / "model.safetensors").exists() and (out / "config.json").exists():
+        return str(out)
+    out.mkdir(parents=True, exist_ok=True)
+    sel = _load_mtp_head_tensors(model_path)
     src_cfg = json.loads((Path(model_path) / "config.json").read_text())
     tc = dict(src_cfg.get("text_config") or {})
     mx.save_safetensors(str(out / "model.safetensors"), sel, metadata={"format": "mlx"})
@@ -169,13 +177,49 @@ def _build_drafter(model_path: str, out_dir: str) -> str:
     return str(out)
 
 
+def _load_drafter_in_memory(model_path: str):
+    """Instantiate mlx-vlm's Qwen MTP head from the existing target shards."""
+    import mlx.core as mx
+    import mlx.nn as nn
+    from mlx_vlm.speculative.drafters.qwen3_5_mtp.config import Qwen3_5MTPConfig
+    from mlx_vlm.speculative.drafters.qwen3_5_mtp.qwen3_5_mtp import (
+        Qwen3_5MTPDraftModel,
+    )
+
+    src_cfg = json.loads((Path(model_path) / "config.json").read_text())
+    text_cfg = src_cfg.get("text_config") or {}
+    weights = _load_mtp_head_tensors(model_path)
+    config = Qwen3_5MTPConfig.from_dict(
+        {
+            "model_type": "qwen3_5_mtp",
+            "text_config": text_cfg,
+            "block_size": int(text_cfg.get("mtp_num_hidden_layers", 1)) + 2,
+            "tie_word_embeddings": bool(text_cfg.get("tie_word_embeddings", True)),
+        }
+    )
+    drafter = Qwen3_5MTPDraftModel(config)
+    if any(key.endswith(".scales") for key in weights):
+        quant = src_cfg.get("mtplx_mtp_quantization") or src_cfg.get("quantization")
+        if not isinstance(quant, dict):
+            raise ValueError("Quantized MTP head has no quantization config")
+        nn.quantize(
+            drafter,
+            group_size=int(quant["group_size"]),
+            bits=int(quant["bits"]),
+            mode=quant.get("mode", "affine"),
+            class_predicate=lambda path, _module: f"{path}.scales" in weights,
+        )
+    drafter.load_weights(list(weights.items()), strict=True)
+    mx.eval(drafter.parameters())
+    return drafter
+
+
 class MLXVLMMtp:
     """Loads an mlx-vlm Qwen3.5/3.6 target + its MTP drafter and serves greedy
     requests with lossless MTP speculative decoding."""
 
-    def __init__(self, model_path: str, drafter_dir: str | None = None):
+    def __init__(self, model_path: str):
         self.model_path = model_path
-        self.drafter_dir = drafter_dir or (model_path.rstrip("/") + "-mtp-drafter")
         self.model = None
         self.drafter = None
         self.tokenizer = None
@@ -184,17 +228,17 @@ class MLXVLMMtp:
     def load(self) -> None:
         if not _ensure_mlxvlm_on_path():
             raise RuntimeError("reference/mlx-vlm with speculative MTP not available")
-        from mlx_vlm.speculative.drafters import load_drafter
+        from mlx_lm.tokenizer_utils import load as load_tokenizer
+        from mlx_vlm.speculative.drafters import validate_drafter_compatibility
         from mlx_vlm.utils import load_model as vlm_load
-        from transformers import AutoTokenizer
 
-        drafter_path = _build_drafter(self.model_path, self.drafter_dir)
         with _tolerant_target_load():
             self.model = vlm_load(Path(self.model_path))
-        self.drafter, kind = load_drafter(drafter_path)
-        if kind != "mtp":
-            raise RuntimeError(f"expected mtp drafter, got {kind}")
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
+        self.drafter = _load_drafter_in_memory(self.model_path)
+        validate_drafter_compatibility(self.model, self.drafter, "mtp")
+        # Per-request streaming detokenizers are available through the MLX
+        # wrapper; it forwards ordinary HF tokenizer methods unchanged.
+        self.tokenizer = load_tokenizer(Path(self.model_path))
         self._loaded = True
         logger.info("MLXVLMMtp loaded: %s (+ MTP drafter)", self.model_path)
 
@@ -232,15 +276,15 @@ class MLXVLMMtp:
         )
         return self._encode_text(txt)
 
-    def generate(
+    def iter_token_ids(
         self,
         messages: list[dict],
         max_tokens: int = 256,
         temperature: float = 0.0,
         prompt: str | None = None,
-    ) -> dict:
-        """Greedy → MTP (lossless ~1.8x); temperature>0 → plain generation.
-        Returns {text, token_ids, completion_tokens, used_mtp}.
+        use_mtp: bool = True,
+    ) -> Iterator[int]:
+        """Yield verified tokens on the executor thread as soon as they exist.
 
         If ``prompt`` (a pre-templated string from the engine's
         _apply_chat_template) is given it is used directly — preferred, since it
@@ -248,6 +292,7 @@ class MLXVLMMtp:
         import mlx.core as mx
         from mlx_lm.models import cache as kvcache
         from mlx_lm.sample_utils import make_sampler
+        from mlx_vlm.generate.ar import _make_cache
         from mlx_vlm.speculative.utils import (
             make_speculative_prompt_cache,
             run_speculative_rounds,
@@ -285,57 +330,75 @@ class MLXVLMMtp:
             if isinstance(e, int):
                 eos.add(e)
 
-        if greedy:
+        if greedy and use_mtp:
             pk = speculative_prefill_kwargs("mtp", self.drafter)
             cache_ = make_speculative_prompt_cache(
-                lm, draft_kind="mtp", batch_size=1, left_padding=[0], make_cache=None
+                lm,
+                draft_kind="mtp",
+                batch_size=1,
+                left_padding=[0],
+                make_cache=lambda model, left_padding: _make_cache(model, left_padding),
             )
             out = lm(input_mx, cache=cache_, **pk)
             first_tok = sample(out.logits[:, -1:])
-            toks: list[int] = []
-            for tk, _lp in run_speculative_rounds(
-                self.model,
-                self.drafter,
-                cache_,
-                input_mx,
-                first_tok,
-                out.logits[:, -1:],
-                out,
-                draft_kind="mtp",
-                max_tokens=max_tokens,
-                sampler=sample,
-                sampler_is_greedy=True,
+            for emitted, (tk, _lp) in enumerate(
+                run_speculative_rounds(
+                    self.model,
+                    self.drafter,
+                    cache_,
+                    input_mx,
+                    first_tok,
+                    out.logits[:, -1:],
+                    out,
+                    draft_kind="mtp",
+                    max_tokens=max_tokens,
+                    sampler=sample,
+                    sampler_is_greedy=True,
+                ),
+                start=1,
             ):
                 t = int(tk) if not isinstance(tk, list) else int(tk[0])
                 if t in eos:
                     break
-                toks.append(t)
-                if len(toks) >= max_tokens:
+                yield t
+                if emitted >= max_tokens:
                     break
-            text = self.tokenizer.decode(toks)
-            return {
-                "text": text,
-                "token_ids": toks,
-                "completion_tokens": len(toks),
-                "used_mtp": True,
-            }
+            return
 
         # Non-greedy fallback: plain autoregressive on the same model.
         c = kvcache.make_prompt_cache(lm)
         o = lm(input_mx, cache=c)
         t = int(sample(o.logits[:, -1:]).item())
-        toks = []
-        if t not in eos:
-            toks.append(t)
+        emitted = 0
+        if t in eos:
+            return
+        yield t
+        emitted = 1
         for _ in range(max_tokens - 1):
+            if emitted >= max_tokens:
+                break
             o = lm(mx.array([[t]]), cache=c)
             t = int(sample(o.logits[:, -1:]).item())
             if t in eos:
                 break
-            toks.append(t)
+            yield t
+            emitted += 1
+
+    def generate(
+        self,
+        messages: list[dict],
+        max_tokens: int = 256,
+        temperature: float = 0.0,
+        prompt: str | None = None,
+        use_mtp: bool = True,
+    ) -> dict:
+        """Collect token iterator for non-streaming callers."""
+        toks = list(
+            self.iter_token_ids(messages, max_tokens, temperature, prompt, use_mtp)
+        )
         return {
             "text": self.tokenizer.decode(toks),
             "token_ids": toks,
             "completion_tokens": len(toks),
-            "used_mtp": False,
+            "used_mtp": temperature <= 0.0 and use_mtp,
         }
