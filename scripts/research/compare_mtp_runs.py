@@ -92,6 +92,23 @@ def main():
         for a, b in paired
         if isinstance(a.get("usage"), dict) and isinstance(b.get("usage"), dict)
     ]
+    first_text = [
+        (a["first_text_s"], b["first_text_s"])
+        for a, b in paired
+        if isinstance(a.get("first_text_s"), (int, float))
+        and isinstance(b.get("first_text_s"), (int, float))
+    ]
+    first_visible = [
+        (
+            a["usage"]["time_to_first_visible_token"],
+            b["usage"]["time_to_first_visible_token"],
+        )
+        for a, b in paired
+        if isinstance(a.get("usage"), dict)
+        and isinstance(b.get("usage"), dict)
+        and isinstance(a["usage"].get("time_to_first_visible_token"), (int, float))
+        and isinstance(b["usage"].get("time_to_first_visible_token"), (int, float))
+    ]
     output_changes = [
         {
             "id": a["dataset_id"],
@@ -115,6 +132,10 @@ def main():
         "off_median_wall_s": median([a for a, _ in timings]),
         "on_median_wall_s": median([b for _, b in timings]),
         "paired_median_speedup": median([a / b for a, b in timings if b > 0]),
+        "off_median_first_content_s": median([a for a, _ in first_text]),
+        "on_median_first_content_s": median([b for _, b in first_text]),
+        "off_median_server_first_visible_token_s": median([a for a, _ in first_visible]),
+        "on_median_server_first_visible_token_s": median([b for _, b in first_visible]),
         "off_median_reported_generation_tps": median([a for a, _ in token_rates if isinstance(a, (int, float))]),
         "on_median_reported_generation_tps": median([b for _, b in token_rates if isinstance(b, (int, float))]),
         "off_peak_phys_footprint_gib": memory_peak(off_mem),
@@ -122,7 +143,7 @@ def main():
         "mtp_runtime_evidence": parse_mtp_log(args.mtp_server_log),
         "output_change_count": len(output_changes),
         "output_changes": output_changes,
-        "limits": "Check actual MTP draft/verify logs and cache/temperature settings separately; completion time includes different output lengths.",
+        "limits": "Check actual MTP draft/verify logs and cache/temperature settings separately; completion and first-content time include different reasoning/output lengths. Server first-visible-token is not socket first content.",
     }
     print(json.dumps(result, ensure_ascii=False))
 
