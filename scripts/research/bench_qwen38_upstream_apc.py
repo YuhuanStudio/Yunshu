@@ -154,6 +154,15 @@ def main() -> None:
                                 "token_ids": token_ids,
                                 "apc_before": before,
                                 "apc_after": after,
+                                "apc_resident_bytes": (
+                                    apc.resident_bytes() if apc is not None else None
+                                ),
+                                "apc_exact_entries": (
+                                    len(apc._exact_cache) if apc is not None else None
+                                ),
+                                "apc_budget_bytes": (
+                                    apc.memory_max_bytes if apc is not None else None
+                                ),
                             }
                             file.write(json.dumps(row, ensure_ascii=False) + "\n")
                             file.flush()

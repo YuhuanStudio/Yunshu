@@ -1633,6 +1633,7 @@ class VLMEngine:
         kwargs = params["kwargs"]
         return bool(
             self._apc_backend is not None
+            and self._apc_capacity_allows(params.get("input_ids"))
             and kwargs.get("apc_allowed") is True
             and params["enable_thinking"] is False
             and params["temperature"] <= 0
@@ -1660,6 +1661,51 @@ class VLMEngine:
             and not kwargs.get("suppress_tokens")
             and not kwargs.get("spec_decode")
         )
+
+    def _apc_capacity_allows(self, input_ids) -> bool:
+        """Avoid costly chunked prefill when this Qwen cache cannot be retained.
+
+        Calibrated from 8K/32K/64K checkpoint resident-byte probes. Keep a
+        matching existing checkpoint eligible even when the full new prompt
+        exceeds budget: partial prefix reuse can still save prefill time.
+        """
+        manager = self._apc_backend
+        if input_ids is None or manager is None:
+            return True
+        config = self._config.get("text_config", {})
+        if not all(
+            (
+                config.get("model_type") == "qwen3_5_text",
+                config.get("num_hidden_layers") == 64,
+                config.get("full_attention_interval") == 4,
+                config.get("num_key_value_heads") == 4,
+                config.get("head_dim") == 256,
+                config.get("hidden_size") == 5120,
+            )
+        ):
+            return True
+        budget = getattr(manager, "memory_max_bytes", None)
+        if budget is None:
+            return True
+        # Empirical resident size: ~160 MiB + 130 KiB per token (within 0.6%
+        # of three measured points). The 20% margin covers short history growth
+        # and prevents a nominal fit from paying chunk overhead but not storing.
+        estimated = (160 << 20) + len(input_ids) * (130 << 10)
+        if estimated * 1.2 <= budget:
+            return True
+        try:
+            tokens = tuple(input_ids.tolist())
+            with manager.lock:
+                return any(
+                    entry.extra_hash == self._apc_semantic_hash
+                    and len(entry.token_ids) >= 512
+                    and len(entry.token_ids) < len(tokens)
+                    and tokens[: len(entry.token_ids)] == entry.token_ids
+                    for entry in manager._exact_cache.values()
+                )
+        except Exception:
+            logger.debug("APC capacity prefix check unavailable", exc_info=True)
+            return False
 
     async def generate(
         self,
@@ -1834,6 +1880,7 @@ class VLMEngine:
                             0,
                         )
                     if max_tokens > 0 and self._apc_text_eligible(
+                        input_ids=input_ids,
                         temperature=temperature,
                         top_p=top_p,
                         top_k=top_k,
@@ -2330,6 +2377,7 @@ class VLMEngine:
                         )
                         return
                     if max_tokens > 0 and self._apc_text_eligible(
+                        input_ids=input_ids,
                         temperature=temperature,
                         top_p=top_p,
                         top_k=top_k,
