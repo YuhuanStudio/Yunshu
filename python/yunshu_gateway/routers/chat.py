@@ -629,6 +629,13 @@ def _vlm_json_output_error(content: str, schema: dict | str | None) -> str | Non
     return None
 
 
+def _vlm_tool_schema_conflict(
+    req: ChatCompletionRequest, json_schema: dict | str | None
+) -> bool:
+    """Whether VLM cannot preserve both the tool and output-format contracts."""
+    return json_schema is not None and bool(req.tools) and req.tool_choice != "none"
+
+
 def _prepend_cached_content(
     messages: list[dict],
     cached_content: str | None,
@@ -2202,6 +2209,16 @@ async def _handle_vlm_chat(
 ) -> StreamingResponse | JSONResponse:
     """Handle chat completion via VLM engine (streaming + non-streaming)."""
     from yunshu_engine.vlm_engine import VLMEngine
+
+    # The current VLM constrained sampler masks the entire response. A JSON
+    # schema therefore makes <tool_call> impossible even when the model would
+    # choose a tool under tool_choice=auto. Until a union constraint can express
+    # both branches, reject this combination before loading/generating.
+    if _vlm_tool_schema_conflict(req, json_schema):
+        raise HTTPException(
+            status_code=400,
+            detail="VLM tool calls and response_format / grammar cannot be combined yet",
+        )
 
     # The image generation path can't apply grammar/JSON-schema constraints (the
     # constrained sampler is wired only on the text paths), so structured output on an

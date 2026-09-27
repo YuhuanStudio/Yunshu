@@ -495,6 +495,30 @@ class TestGuidedAliasesW736:
 
 
 class TestVLMStructuredOutputValidation:
+    @pytest.mark.parametrize(
+        ("tool_choice", "expected"),
+        [("auto", True), ("required", True), ("none", False)],
+    )
+    def test_tool_and_schema_admission(self, tool_choice, expected):
+        from yunshu_gateway.routers.chat import _vlm_tool_schema_conflict
+
+        req = ChatCompletionRequest(
+            model="m",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+            tool_choice=tool_choice,
+        )
+        assert _vlm_tool_schema_conflict(req, {"type": "object"}) is expected
+        assert not _vlm_tool_schema_conflict(req, None)
+
     def test_valid_and_invalid_schema_outputs(self):
         from yunshu_gateway.routers.chat import _vlm_json_output_error
 
