@@ -3370,6 +3370,44 @@ class VLMEngine:
                     )
         return p
 
+    def _prefill_vlm_ar_text(self, lm, input_ids, cache, cancel_event):
+        """Opt-in, bounded text prefill for the Qwen hybrid AR fallback.
+
+        Leave the last token for the first logits, as upstream mlx-vlm does.
+        Cache state is evaluated after every chunk so cancellation has a real
+        Metal completion boundary rather than waiting on one giant forward.
+        """
+        try:
+            step = int(os.environ.get("YUNSHU_VLM_AR_PREFILL_CHUNK_TOKENS", "0"))
+        except ValueError:
+            step = 0
+        text_config = self._config.get("text_config", {})
+        if (
+            step <= 0
+            or text_config.get("model_type") != "qwen3_5_text"
+            or len(input_ids) <= step + 1
+        ):
+            return lm(input_ids[None], cache=cache)
+        step = max(16, step)
+        offset = 0
+        last = len(input_ids) - 1
+        while offset < last:
+            if cancel_event is not None and cancel_event.is_set():
+                return None
+            n = min(step, last - offset)
+            output = lm(
+                input_ids[offset : offset + n][None],
+                cache=cache,
+                skip_logits=True,
+            )
+            del output
+            mx.eval([entry.state for entry in cache])
+            mx.clear_cache()
+            offset += n
+        if cancel_event is not None and cancel_event.is_set():
+            return None
+        return lm(input_ids[last:][None], cache=cache)
+
     def _generate_vlm_text(
         self,
         input_ids: mx.array,
@@ -3595,7 +3633,9 @@ class VLMEngine:
                         "VLM hybrid prefix capture failed — full prefill", exc_info=True
                     )
             _pf_t0 = time.perf_counter()
-            output = lm(_prefill_ids[None], cache=cache)
+            output = self._prefill_vlm_ar_text(lm, _prefill_ids, cache, cancel_event)
+            if output is None:
+                return "", 0, 0, False, False, int(_pc_matched)
             logits = output.logits[:, -1, :]
             if json_constraint is not None:
                 from .json_schema import apply_json_constraint
@@ -4626,7 +4666,9 @@ class VLMEngine:
                     cache = make_prompt_cache(lm)
                     _prefill_ids = input_ids
                     _pc_matched = 0
-            output = lm(_prefill_ids[None], cache=cache)
+            output = self._prefill_vlm_ar_text(lm, _prefill_ids, cache, cancel_event)
+            if output is None:
+                return
             logits = output.logits[:, -1, :]
             if json_constraint is not None:
                 from .json_schema import apply_json_constraint
