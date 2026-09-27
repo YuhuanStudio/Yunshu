@@ -602,6 +602,32 @@ def _parse_response_format(
     return None
 
 
+def _vlm_json_output_error(content: str, schema: dict | str | None) -> str | None:
+    """Reject a completed VLM JSON response that did not meet its contract."""
+    if schema is None or (
+        isinstance(schema, dict) and schema.get("type") in ("regex", "choice", "cfg")
+    ):
+        return None
+    try:
+        value = json.loads(content)
+    except (TypeError, ValueError) as exc:
+        return f"Generated content is not valid JSON: {exc}"
+    if schema == "json_object":
+        return (
+            None
+            if isinstance(value, dict)
+            else "Generated content is not a JSON object"
+        )
+    if isinstance(schema, dict):
+        from jsonschema import Draft202012Validator
+
+        try:
+            Draft202012Validator(schema).validate(value)
+        except Exception as exc:
+            return f"Generated JSON does not match response_format schema: {exc.message if hasattr(exc, 'message') else exc}"
+    return None
+
+
 def _prepend_cached_content(
     messages: list[dict],
     cached_content: str | None,
@@ -2195,6 +2221,22 @@ async def _handle_vlm_chat(
             "together with image inputs",
         )
 
+    if isinstance(json_schema, dict) and json_schema.get("type") not in (
+        "regex",
+        "choice",
+        "cfg",
+    ):
+        from jsonschema import Draft202012Validator
+        from jsonschema.exceptions import SchemaError
+
+        try:
+            Draft202012Validator.check_schema(json_schema)
+        except SchemaError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid response_format JSON schema: {exc.message}",
+            ) from exc
+
     manager = get_model_manager()
     vlm_engine = None
     load_error: str | None = None
@@ -2495,6 +2537,21 @@ async def _handle_vlm_chat(
                 content={"error": {"message": err, "type": "inference_error"}},
             )
 
+    if json_schema is not None:
+        for _idx, data, _err in results:
+            if data["finish_reason"] == "stop":
+                validation_error = _vlm_json_output_error(data["content"], json_schema)
+                if validation_error:
+                    return JSONResponse(
+                        status_code=422,
+                        content={
+                            "error": {
+                                "message": validation_error,
+                                "type": "invalid_structured_output",
+                            }
+                        },
+                    )
+
     total_completion_tok = 0
     total_reasoning_tok = 0
     choices = []
@@ -2713,6 +2770,24 @@ async def _stream_vlm_response(
         # Final chunk with finish_reason
         # If no tokens were emitted (first_chunk is still True), this is also
         # the first chunk and must include role=assistant per OpenAI spec.
+        if json_schema is not None and vlm_last_finish_reason == "stop":
+            validation_error = _vlm_json_output_error(_vlm_streamed_text, json_schema)
+            if validation_error:
+                yield (
+                    "data: "
+                    + json.dumps(
+                        {
+                            "error": {
+                                "message": validation_error,
+                                "type": "invalid_structured_output",
+                            }
+                        }
+                    )
+                    + "\n\n"
+                )
+                done_emitted = True
+                yield format_openai_done()
+                return
         yield format_openai_chunk(
             completion_id=completion_id,
             model=req.model,

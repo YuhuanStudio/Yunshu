@@ -3183,8 +3183,8 @@ class VLMEngine:
                     from .json_schema import JsonSchemaConstraint
 
                     json_constraint = JsonSchemaConstraint(json_schema)
-            except Exception:
-                logger.warning("Grammar constraint init failed", exc_info=True)
+            except Exception as exc:
+                raise ValueError("Grammar constraint initialization failed") from exc
 
         has_penalty = (
             repetition_penalty != 1.0
@@ -3327,8 +3327,17 @@ class VLMEngine:
             _pf_t0 = time.perf_counter()
             output = lm(_prefill_ids[None], cache=cache)
             logits = output.logits[:, -1, :]
+            if json_constraint is not None:
+                from .json_schema import apply_json_constraint
+
+                allowed = json_constraint.get_allowed_tokens(self._tokenizer, [])
+                if not allowed:
+                    raise ValueError("JSON constraint has no valid first token")
+                logits = apply_json_constraint(logits, allowed)
             current = sampler(logits)
             mx.eval(current)
+            if json_constraint is not None:
+                json_constraint.advance(self._tokenizer.decode([int(current.item())]))
             # Feed cold-prefill throughput to the text KV cache so its SSD tier can
             # auto-gate fast-prefill VLMs : GLM-OCR prefills ~6300 t/s,
             # for which restoring a prefix from disk is SLOWER than re-prefilling
@@ -3420,16 +3429,14 @@ class VLMEngine:
 
                 # JSON schema constraint masking
                 if json_constraint is not None and tokens:
-                    try:
-                        allowed = json_constraint.get_allowed_tokens(
-                            self._tokenizer, tokens
-                        )
-                        if allowed:
-                            from .json_schema import apply_json_constraint
+                    allowed = json_constraint.get_allowed_tokens(
+                        self._tokenizer, tokens
+                    )
+                    if not allowed:
+                        raise ValueError("JSON constraint has no valid next token")
+                    from .json_schema import apply_json_constraint
 
-                            logits = apply_json_constraint(logits, allowed)
-                    except Exception:
-                        logger.debug("failed", exc_info=True)
+                    logits = apply_json_constraint(logits, allowed)
 
                 current = sampler(logits)
                 mx.eval(current)
@@ -3438,11 +3445,8 @@ class VLMEngine:
 
                 # Advance JSON constraint state with the new token text
                 if json_constraint is not None:
-                    try:
-                        token_text = self._tokenizer.decode([tok_id])
-                        json_constraint.advance(token_text)
-                    except Exception:
-                        logger.debug("json constraint advance failed", exc_info=True)
+                    token_text = self._tokenizer.decode([tok_id])
+                    json_constraint.advance(token_text)
                 # Track thinking segment boundaries
                 if _think_single_token and think_start_id is not None:
                     if not _in_thinking and tok_id == think_start_id:
@@ -3998,8 +4002,8 @@ class VLMEngine:
                     from .json_schema import JsonSchemaConstraint
 
                     json_constraint = JsonSchemaConstraint(json_schema)
-            except Exception:
-                logger.warning("Grammar constraint init failed (stream)", exc_info=True)
+            except Exception as exc:
+                raise ValueError("Grammar constraint initialization failed") from exc
 
         # Build stop IDs + explicit stop_token_ids
         stop_ids = set(eos_ids)
@@ -4109,8 +4113,17 @@ class VLMEngine:
                     _pc_matched = 0
             output = lm(_prefill_ids[None], cache=cache)
             logits = output.logits[:, -1, :]
+            if json_constraint is not None:
+                from .json_schema import apply_json_constraint
+
+                allowed = json_constraint.get_allowed_tokens(self._tokenizer, [])
+                if not allowed:
+                    raise ValueError("JSON constraint has no valid first token")
+                logits = apply_json_constraint(logits, allowed)
             current = sampler(logits)
             mx.eval(current)
+            if json_constraint is not None:
+                json_constraint.advance(self._tokenizer.decode([int(current.item())]))
             # Cold-prefill throughput → SSD auto-gate (see _generate_vlm_text)
             if _text_pc is not None and _pc_matched == 0:
                 try:
@@ -4293,16 +4306,14 @@ class VLMEngine:
 
                     # JSON schema constraint masking
                     if json_constraint is not None:
-                        try:
-                            allowed = json_constraint.get_allowed_tokens(
-                                self._tokenizer, tokens_list
-                            )
-                            if allowed:
-                                from .json_schema import apply_json_constraint
+                        allowed = json_constraint.get_allowed_tokens(
+                            self._tokenizer, tokens_list
+                        )
+                        if not allowed:
+                            raise ValueError("JSON constraint has no valid next token")
+                        from .json_schema import apply_json_constraint
 
-                                logits = apply_json_constraint(logits, allowed)
-                        except Exception:
-                            logger.debug("failed", exc_info=True)
+                        logits = apply_json_constraint(logits, allowed)
 
                     current = sampler(logits)
                     mx.eval(current)
@@ -4313,13 +4324,8 @@ class VLMEngine:
 
                     # Advance JSON constraint state with the new token text
                     if json_constraint is not None:
-                        try:
-                            _tok_text = self._tokenizer.decode([token_id])
-                            json_constraint.advance(_tok_text)
-                        except Exception:
-                            logger.debug(
-                                "json constraint advance failed (stream)", exc_info=True
-                            )
+                        _tok_text = self._tokenizer.decode([token_id])
+                        json_constraint.advance(_tok_text)
                     # Track thinking segment boundaries in VLM streaming
                     if _think_single_token and think_start_id is not None:
                         if not _in_thinking and token_id == think_start_id:

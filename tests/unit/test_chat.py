@@ -494,6 +494,27 @@ class TestGuidedAliasesW736:
         assert parsed == {"type": "regex", "pattern": "x+"}
 
 
+class TestVLMStructuredOutputValidation:
+    def test_valid_and_invalid_schema_outputs(self):
+        from yunshu_gateway.routers.chat import _vlm_json_output_error
+
+        schema = {
+            "type": "object",
+            "properties": {"code": {"type": "string", "pattern": "^A$"}},
+            "required": ["code"],
+            "additionalProperties": False,
+        }
+        assert _vlm_json_output_error('{"code":"A"}', schema) is None
+        assert "does not match" in _vlm_json_output_error('{"code":"B"}', schema)
+        assert "not valid JSON" in _vlm_json_output_error("```json", schema)
+
+    def test_json_object_requires_object(self):
+        from yunshu_gateway.routers.chat import _vlm_json_output_error
+
+        assert _vlm_json_output_error("{}", "json_object") is None
+        assert "not a JSON object" in _vlm_json_output_error("[]", "json_object")
+
+
 class TestChatPromptLogprobsSchemaW744:
     def test_accepts_prompt_logprobs(self):
         r = ChatCompletionRequest(

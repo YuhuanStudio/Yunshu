@@ -1866,6 +1866,17 @@ class JsonSchemaConstraint:
         # the model can stop OR continue (a longer number is also valid).
         if self.can_terminate():
             allowed = allowed + self._eos_ids(tokenizer)
+        # A JSON grammar permits arbitrary insignificant whitespace, but a
+        # greedy model can prefer whitespace-only tokens forever. Bound only
+        # structural whitespace; string values remain untouched. A token that
+        # advances the structure after leading whitespace stays eligible.
+        if len(self._text_buffer) >= 8 and self._text_buffer[-8:].isspace():
+            text_map = self._token_text_map(tokenizer)
+            allowed = [
+                token_id
+                for token_id in allowed
+                if not (text_map.get(token_id) or "").isspace()
+            ]
         return allowed
 
     def _filter_fully_valid(self, tokenizer: Any, candidates: list[int]) -> list[int]:

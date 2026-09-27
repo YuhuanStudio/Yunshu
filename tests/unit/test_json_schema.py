@@ -78,6 +78,26 @@ class TestJsonSchemaConstraintBasicObject:
         assert '"' in chars
         assert "}" in chars
 
+    def test_structural_whitespace_cannot_consume_the_token_budget(self):
+        tokenizer = FakeTokenizer()
+        c = JsonSchemaConstraint(
+            {
+                "type": "object",
+                "properties": {"code": {"type": "string"}},
+                "required": ["code"],
+            }
+        )
+        c.advance("{")
+        assert ord(" ") in c.get_allowed_tokens(tokenizer, [])
+        c.advance(" " * 8)
+        allowed = c.get_allowed_tokens(tokenizer, [])
+        assert ord(" ") not in allowed
+        assert ord('"') in allowed
+
+        # Spaces inside a JSON string are data, not formatting to suppress.
+        c.advance('"code":"        ')
+        assert ord(" ") in c.get_allowed_tokens(tokenizer, [])
+
     def test_object_open_with_close(self):
         c = JsonSchemaConstraint()
         c.advance("{")

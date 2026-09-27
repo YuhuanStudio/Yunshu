@@ -309,3 +309,15 @@ M5 Max／128 GiB，原始資料與版本見 [實機比較](../research/REAL_RUNT
 | Splash 1.1.0 官方模型，INT8 KV | 3.221 / 0.130 s | `ALPHA` / `ALPHA` | 回報 cached 3,296；專用 Splash 模型，非共同權重 |
 
 Splash 官方模型 120 個交錯前綴請求全數輸出正確，約 316 s 後 `memory_actual.current_bytes` 20.03→42.82 GB，空閒 60 s 未下降。24 GiB 預算組 60/60 正確，約 160 s 後 current 18.87→24.87 GB，peak 24.93 GB，發生 reservation denial／reclaim 後仍可服務。這些數字是保留與有界行為的觀測，尚不足以判斷長時間 leak；後續須測清快取、卸載及更長時程。
+
+2026-09-28 追加，同一台 M5 Max／128 GiB，原有 P5Plus Qwen3.8-27B-4bit，候選 MLX 0.32.2／mlx-lm 0.31.3／mlx-vlm 0.7.3，直接 VLMEngine、greedy、非獨占 GPU。這些是局部 off/on，不併入上方固定 snapshot 表：
+
+| 條件 | 20 輪文字總完成時間 | 20/20 答案 | 最後 MLX active | 備註 |
+|---|---:|---:|---:|---|
+| hybrid 關 | 66.66 s | 正確 | 14.96 GiB | 每輪重算長前綴 |
+| hybrid 開，128-token 邊界 | 9.72 s | 正確 | 21.03 GiB | 第 10 輪 ALPHA→COBALT 正確 |
+| hybrid 開，512-token 邊界 | 12.23 s | 正確 | 16.48 GiB | 首次／佔用較低，熱輪較慢 |
+
+33,023-token 單提示：未限制快照的 128-token 邊界首次 104.65 s、active 64.54 GiB；單邊界＋512-token chunk 候選首次 40.36 s、重複 0.395 s、active 17.12 GiB，換尾段答案正確。無 hybrid 基線首次／重複 39.61／39.26 s，單次全長 forward 的 MLX peak 約 66.77 GiB。正式 `.venv` 的舊 MLX／transformers 組合 hybrid probe 失敗，這些性能收益尚未進入正式依賴。
+
+同 checkpoint 的 oMLX MTP 120 題抽樣，AR／MTP 中位完成時間 15.03／5.74 s，配對中位加速 2.55×，兩邊各 11 題在 2,048-token 上限截斷、10 題最終文字不同；這不是官方 MMLU-Pro 分數或能力等價證明。完整條件、長時間限制和逐題輸出見實機比較報告。
