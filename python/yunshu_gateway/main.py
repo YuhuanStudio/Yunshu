@@ -498,7 +498,38 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _startup_time = 0.0
 
 
+_YUNSHU_LOGGERS = (
+    "yunshu",
+    "yunshu_gateway",
+    "yunshu_engine",
+    "yunshu_kv",
+    "yunshu_control",
+    "yunshu_cli",
+)
+
+
+def _configure_logging() -> None:
+    """Give Yunshu's own loggers an output.
+
+    uvicorn only configures its own loggers, so without a root handler every
+    yunshu_* INFO/WARNING line (engine choice, runner/kernel state, fallbacks)
+    was silently dropped. An existing root configuration (an embedding app,
+    pytest) is left untouched; third-party libraries stay at WARNING.
+    """
+    root = logging.getLogger()
+    if root.handlers:
+        return
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    level = os.environ.get("YUNSHU_LOG_LEVEL", "INFO").upper()
+    for name in _YUNSHU_LOGGERS:
+        logging.getLogger(name).setLevel(level)
+
+
 def create_app() -> FastAPI:
+    _configure_logging()
     # Anthropic API paths — exact matching to avoid overmatching routes that
     # merely end in '/messages' (e.g. /api/v1/admin/messages).
     _ANTHROPIC_PATHS = frozenset(

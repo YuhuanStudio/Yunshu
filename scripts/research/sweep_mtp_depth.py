@@ -83,6 +83,15 @@ if "--adaptive" in sys.argv:
     omlx_set = set(omlx_set if use_omlx else set()) | {"adaptive"}
     use_omlx = True
 
+if "--tiled5" in sys.argv:
+    from yunshu_engine.kernels.verify_select import (
+        install as install_tiled5,  # noqa: E402
+    )
+
+    install_tiled5()
+    omlx_set = set(omlx_set if use_omlx else set()) | {"tiled5"}
+    use_omlx = True
+
 model, processor = load(model_dir)
 tok = processor.tokenizer
 if "--pack" in sys.argv:

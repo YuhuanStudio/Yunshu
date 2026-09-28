@@ -3,7 +3,8 @@
 One decode path for a loaded VLM target that combines, per request:
 
 - APC prefix reuse (exact + recurrent checkpoints for hybrid models),
-- a native MTP draft head (greedy, no logits processors) — token-identical to AR,
+- a speculative draft (greedy, no logits processors) — the checkpoint's native
+  MTP head or an external DFlash2 block-diffusion drafter; token-identical to AR,
 - mlx-native sampling (temperature / top-p / top-k / min-p / seed),
 - logits processors: repetition / presence / frequency penalties, logit bias and
   Yunshu's grammar / JSON-schema constraints.
@@ -130,12 +131,14 @@ class VLMBatchRunner:
         drafter: Any = None,
         draft_block_size: int | None = None,
         apc_admit: Any = None,
+        draft_kind: str = "mtp",
     ):
         self.model = model
         self.processor = processor
         self.apc_manager = apc_manager
         self.apc_semantic_hash = apc_semantic_hash
         self.drafter = drafter
+        self.draft_kind = draft_kind
         self.draft_block_size = draft_block_size
         # Callable(input_ids) -> bool: skip APC when its checkpoints cannot fit,
         # so a cold request does not pay APC bookkeeping for nothing.
@@ -244,7 +247,7 @@ class VLMBatchRunner:
             sampler=build_sampler(temperature, top_p, top_k, min_p),
             apc_manager=apc,
             draft_model=self.drafter if use_draft else None,
-            draft_kind="mtp" if use_draft else None,
+            draft_kind=self.draft_kind if use_draft else None,
             draft_block_size=self.draft_block_size if use_draft else None,
             greedy_sampling=greedy,
             compute_logprobs=False,

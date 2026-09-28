@@ -4448,6 +4448,17 @@ class VLMEngine:
                     processor=self._processor,
                 )
         drafter = getattr(self._mtp_backend, "drafter", None)
+        draft_kind = "mtp"
+        external = os.environ.get("YUNSHU_VLM_DRAFT", "").strip()
+        if drafter is None and external:
+            # External drafter directory, e.g. incoai/Qwen3.8-27B-DFlash2.
+            from mlx_vlm.speculative.drafters import (
+                load_drafter,
+                validate_drafter_compatibility,
+            )
+
+            drafter, draft_kind = load_drafter(external)
+            validate_drafter_compatibility(self._model, drafter, draft_kind)
         if drafter is None and os.environ.get(
             "YUNSHU_MTP", "1"
         ).strip().lower() not in (
@@ -4477,11 +4488,18 @@ class VLMEngine:
                 "yes",
             )
             kernels = apply_verify_kernels(fast=fast)
-            # Measured with exact kernels: block 3 ~= 4 on average (code 65/67,
-            # prose 53/51, json 62/60 tok/s) and block 5 jumps to ~108 ms per
-            # cycle; thinking output behaves like prose, so default to 3.
-            # Fast verify peaks around 5-6.
-            block = block or ("6" if fast else "3")
+            # Exact: 5-bit layers use token_tiled for >= 6 verify rows.
+            from .kernels.verify_select import install as install_tiled5
+
+            kernels["tiled5"] = install_tiled5()
+            # Measured with exact kernels: MTP block 3 ~= 4 on average (code
+            # 65/67, prose 53/51, json 62/60 tok/s) and block 5 jumps to ~108 ms
+            # per cycle; thinking output behaves like prose, so MTP defaults to
+            # 3. DFlash2 peaks at 4 (exact) / 6 (fast); MTP fast at 5-6.
+            if draft_kind == "dflash":
+                block = block or ("6" if fast else "4")
+            else:
+                block = block or ("6" if fast else "3")
         if drafter is not None and os.environ.get(
             "YUNSHU_MTP_ADAPTIVE", "0"
         ).strip().lower() in ("1", "true", "yes"):
@@ -4499,13 +4517,14 @@ class VLMEngine:
             drafter=drafter,
             draft_block_size=int(block) if block else None,
             apc_admit=self._apc_capacity_allows,
+            draft_kind=draft_kind,
         )
         logger.info(
             "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s",
             f"{self._apc_backend.memory_max_bytes / 2**30:.1f}GiB"
             if self._apc_backend is not None
             else "off",
-            "mtp" if drafter is not None else "off",
+            draft_kind if drafter is not None else "off",
             block or "default",
             kernels,
         )
