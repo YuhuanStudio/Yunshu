@@ -223,14 +223,27 @@ def install() -> bool:
     return True
 
 
+def _stock_batch_kv_classes() -> tuple:
+    """Both left-padded batch caches: mlx-vlm's BatchGenerator builds its own
+    ``mlx_vlm.models.cache.BatchKVCache`` (same fields as mlx-lm's)."""
+    from mlx_lm.models.cache import BatchKVCache as LmBatchKVCache
+
+    classes = [LmBatchKVCache]
+    try:
+        from mlx_vlm.models.cache import BatchKVCache as VlmBatchKVCache
+
+        classes.append(VlmBatchKVCache)
+    except ImportError:
+        pass
+    return tuple(classes)
+
+
 def convert_batch(prompt_cache: list) -> int:
     """Swap stock ``BatchKVCache`` entries of a generation batch for ragged
     ones; returns how many were converted (0 when already ragged)."""
-    from mlx_lm.models.cache import BatchKVCache
-
     n = 0
     for i, c in enumerate(prompt_cache):
-        if type(c) is BatchKVCache and c.keys is not None:
+        if type(c) in _stock_batch_kv_classes() and c.keys is not None:
             prompt_cache[i] = RaggedKVCache.from_batch_kv(c)
             n += 1
     return n

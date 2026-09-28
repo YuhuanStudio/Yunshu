@@ -181,3 +181,19 @@ def test_qwen3_5_attention_matches_stock_left_padded_path():
             n = rc.lengths[b]
             stock.keys[b, :, stock._idx - 1] = rc.keys[b, :, n - 1]
             stock.values[b, :, stock._idx - 1] = rc.values[b, :, n - 1]
+
+
+def test_convert_batch_accepts_mlx_vlm_batch_cache():
+    """mlx-vlm's BatchGenerator uses its own BatchKVCache class; the runner
+    path must convert it (the mlx-lm class alone never matched in serving)."""
+    from mlx_vlm.models.cache import BatchKVCache as VlmBatchKVCache
+
+    from yunshu_engine.kernels.ragged_kv import RaggedKVCache, convert_batch
+
+    c = VlmBatchKVCache([2, 0])
+    k = mx.random.normal((2, 4, 5, 8)).astype(mx.bfloat16)
+    c.update_and_fetch(k, k)
+    caches = [c]
+    assert convert_batch(caches) == 1
+    assert isinstance(caches[0], RaggedKVCache)
+    assert caches[0].lengths == [3, 5]
