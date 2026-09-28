@@ -179,7 +179,13 @@ mlx-video = { git = "https://github.com/Blaizzy/mlx-video.git" }
 line-length = 88
 target-version = "py313"
 src = ["python", "tests"]
-extend-exclude = ["reference", "python/yunshu_engine/kernels/omlx/qwen35_*.py"]
+extend-exclude = [
+    "reference",
+    "python/yunshu_engine/kernels/omlx/qwen35_*.py",
+    "python/yunshu_engine/kernels/omlx/row_exact_qmv.py",
+    "python/yunshu_engine/kernels/omlx/module_cache.py",
+    "python/yunshu_engine/kernels/omlx/moe_verify_gather.py",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "SIM"]

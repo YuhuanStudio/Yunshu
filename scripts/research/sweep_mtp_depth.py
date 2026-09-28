@@ -70,8 +70,16 @@ if _yk:
     # Vendored copy under python/yunshu_engine/kernels/omlx (exact | fast).
     from yunshu_engine.kernels import omlx as yk  # noqa: E402
 
+    # exact | fast | row_exact (oMLX d403e460: verify rows == stock serial decode)
     print(
-        json.dumps({"yunshu_kernels": yk.apply(fast=_yk == "fast"), "mode": _yk}),
+        json.dumps(
+            {
+                "yunshu_kernels": yk.apply(
+                    fast=_yk == "fast", row_exact=_yk == "row_exact"
+                ),
+                "mode": _yk,
+            }
+        ),
         flush=True,
     )
     use_omlx, omlx_set = True, {f"yunshu:{_yk}"}
@@ -161,7 +169,20 @@ tasks = [
 ]
 
 
+# --context=N prepends ~N tokens of filler so verify windows cross MLX's SDPA
+# plan switches (1024 keys; 16384 on M5), where row exactness can break.
+_context = int(
+    next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--context=")), "0")
+)
+_FILLER = "".join(
+    f"Log line {i}: sensor {i % 17} reading {i * 37 % 1000}.\n" for i in range(8000)
+)
+
+
 def run(name, prompt, max_tokens, block):
+    if _context:
+        filler_ids = tok.encode(_FILLER, add_special_tokens=False)[:_context]
+        prompt = tok.decode(filler_ids) + "\n\n" + prompt
     msgs = [{"role": "user", "content": prompt}]
     text = tok.apply_chat_template(
         msgs, tokenize=False, add_generation_prompt=True, enable_thinking=False
