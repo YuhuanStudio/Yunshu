@@ -31,21 +31,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from process_memory import process_tree_memory  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
-CORPUS = ROOT / "reference/omlx/omlx/admin/bench_corpora/code_python.txt"
+CORPORA = ROOT / "reference/omlx/omlx/admin/bench_corpora"
+CORPUS = CORPORA / "code_python.txt"
 LENGTHS = [1024, 4096, 8192, 16384, 32768, 65536, 131072, 200000]
 BATCHES = [2, 4, 8]
 INSTRUCTION = "\n\nContinue this code with more functions. Output only code."
+# --corpus: the prompt body and the request after it. code_python continues
+# the code (oMLX's benchmark), which lets copy-style drafters echo the context;
+# novel_en asks for new prose about an English novel excerpt, so drafts must
+# predict text that is not in the prompt.
+INSTRUCTIONS = {
+    "code_python": INSTRUCTION,
+    "novel_en": "\n\nIn your own words, write an essay on the characters and themes"
+    " of the passage above. Do not quote it.",
+}
 
 
-def make_prompt(tokenizer, corpus, target):
+def make_prompt(tokenizer, corpus, target, instruction=INSTRUCTION):
     prefix = f"BENCH-{uuid.uuid4().hex} "
-    body_tokens = target - len(tokenizer.encode(prefix + INSTRUCTION))
+    body_tokens = target - len(tokenizer.encode(prefix + instruction))
     ids = []
     text = corpus
     while len(ids) < body_tokens:
         ids = tokenizer.encode(text)
         text += corpus
-    return prefix + tokenizer.decode(ids[:body_tokens]) + INSTRUCTION
+    return prefix + tokenizer.decode(ids[:body_tokens]) + instruction
 
 
 def stream(url, model, prompt, max_tokens, timeout):
@@ -123,13 +133,20 @@ def main():
     ap.add_argument("--batch-pp", type=int, default=1024)
     ap.add_argument("--tg", type=int, default=128)
     ap.add_argument("--timeout", type=float, default=3600)
+    ap.add_argument(
+        "--corpus",
+        default="code_python",
+        choices=sorted(INSTRUCTIONS),
+        help="prompt body (oMLX bench corpora) and the request after it",
+    )
     ap.add_argument("--note", default="")
     ap.add_argument("--output", type=Path, required=True)
     a = ap.parse_args()
     from transformers import AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(a.tokenizer)
-    corpus = CORPUS.read_text()
+    corpus = (CORPORA / f"{a.corpus}.txt").read_text()
+    instruction = INSTRUCTIONS[a.corpus]
     a.output.parent.mkdir(parents=True, exist_ok=True)
     out = a.output.open("a")
 
@@ -164,19 +181,24 @@ def main():
             "model": a.model,
             "tg": a.tg,
             "note": a.note,
+            "corpus": a.corpus,
             "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "footprint_gib": mem(),
         }
     )
+
+    def prompt(pp):
+        return make_prompt(tok, corpus, pp, instruction)
+
     # Warm-up (not recorded): first-call compile and allocator growth.
-    stream(a.url, a.model, make_prompt(tok, corpus, 512), 16, a.timeout)
+    stream(a.url, a.model, prompt(512), 16, a.timeout)
     for pp in a.lengths:
-        r = stream(a.url, a.model, make_prompt(tok, corpus, pp), a.tg, a.timeout)
+        r = stream(a.url, a.model, prompt(pp), a.tg, a.timeout)
         emit({"kind": "single", "pp": pp, **r, "footprint_gib": mem()})
         if r.get("error"):
             break
     for bs in a.batches:
-        prompts = [make_prompt(tok, corpus, a.batch_pp) for _ in range(bs)]
+        prompts = [prompt(a.batch_pp) for _ in range(bs)]
         t0 = time.perf_counter()
         with concurrent.futures.ThreadPoolExecutor(bs) as pool:
             rs = list(
