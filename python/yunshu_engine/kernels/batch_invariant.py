@@ -81,8 +81,36 @@ def invariant_linear(linear: Any, x: mx.array, exact_fallback) -> mx.array:
     return exact_fallback(linear, x)
 
 
-def install(language_model: Any) -> dict:
-    """Route the target's decode + verify matmuls through invariant kernels."""
+def _install_packed(model: Any) -> int:
+    """Repack eligible 4-bit target projections for the M5 tensor unit and pad
+    single-row calls to 2 rows: the packed tensor-unit kernel is row-invariant
+    for 2..8 rows (docs/.../nax-packed-invariance.jsonl) but 1 row takes a
+    different matvec kernel."""
+    from .omlx import pack_projections, qwen35_packed_linear
+
+    packed = pack_projections(model)
+    cls = qwen35_packed_linear.PackedLinear
+    if packed and not getattr(cls, "_yunshu_invariant_pad", False):
+        orig = cls.__call__
+
+        def call(self, x):
+            if x.ndim == 3 and x.shape[0] * x.shape[1] == 1:
+                pad = mx.concatenate([x, mx.zeros_like(x)], axis=1)
+                return orig(self, pad)[:, :1]
+            return orig(self, x)
+
+        cls.__call__ = call
+        cls._yunshu_invariant_pad = True
+    return packed
+
+
+def install(language_model: Any, model: Any = None, packed: bool = False) -> dict:
+    """Route the target's decode + verify matmuls through invariant kernels.
+
+    ``packed`` (needs the full ``model``) moves eligible 4-bit projections to
+    oMLX's NAX packed kernel; remaining quantized projections use sg8.
+    """
+    n_packed = _install_packed(model) if packed and model is not None else 0
     import mlx_vlm.speculative.ops.linear as ops
     from mlx_vlm.models import quantized_verifier as qv
     from mlx_vlm.models.qwen3_5 import language as q35
@@ -162,5 +190,9 @@ def install(language_model: Any) -> dict:
 
     # Decode must take the same forward as verify: no fused greedy shortcut.
     language_model.fused_greedy_decode = None
-    logger.info("Batch-invariant decode: %d target projections rerouted", marked)
-    return {"marked": marked}
+    logger.info(
+        "Batch-invariant decode: %d sg8 + %d packed target projections",
+        marked,
+        n_packed,
+    )
+    return {"marked": marked, "packed": n_packed}

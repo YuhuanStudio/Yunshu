@@ -99,7 +99,18 @@ if "--invariant" in sys.argv:
         install as install_invariant,  # noqa: E402
     )
 
-    print(json.dumps({"batch_invariant": install_invariant(model.language_model)}), flush=True)
+    print(
+        json.dumps(
+            {
+                "batch_invariant": install_invariant(
+                    model.language_model,
+                    model=model,
+                    packed="--invariant-packed" in sys.argv,
+                )
+            }
+        ),
+        flush=True,
+    )
     omlx_set = set(omlx_set if use_omlx else set()) | {"invariant"}
     use_omlx = True
 if "--pack" in sys.argv:

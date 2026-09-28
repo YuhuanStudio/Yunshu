@@ -4518,6 +4518,20 @@ class VLMEngine:
                 "yes",
             )
             kernels = apply_verify_kernels(fast=fast)
+            if not fast and os.environ.get(
+                "YUNSHU_VLM_INVARIANT", "0"
+            ).strip().lower() in ("1", "true", "yes"):
+                # Splash-style lossless: decode and verify share row-invariant
+                # kernels, so speculative output == this engine's plain decode.
+                from .kernels.batch_invariant import install as install_invariant
+                from .kernels.omlx import is_nax_available
+
+                kernels["invariant"] = install_invariant(
+                    self._model.language_model,
+                    model=self._model,
+                    packed=is_nax_available()
+                    and os.environ.get("YUNSHU_VLM_INVARIANT_PACKED", "1") != "0",
+                )
             # Exact: 5-bit layers use the fixed streamed kernel for >= 5 verify rows.
             from .kernels.verify_select import install as install_streamed5
 
