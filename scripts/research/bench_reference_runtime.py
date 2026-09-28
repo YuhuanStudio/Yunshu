@@ -32,10 +32,6 @@ def main():
         parser.error(
             "--model must be an existing local model directory with config.json; downloads are disabled"
         )
-    if not model_path.is_relative_to(Path("/Volumes/P5Plus")):
-        parser.error(
-            "Research models must use existing model directories on /Volumes/P5Plus"
-        )
     args.model = str(model_path)
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"

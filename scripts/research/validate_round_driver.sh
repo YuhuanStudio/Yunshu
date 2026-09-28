@@ -12,9 +12,13 @@
 #            (4 streams + 16K / 32K prompt). The "on" server log must show
 #            "Round driver: N lane projections".
 # mmlu:      MMLU-Pro 300 b8 (16384, medium) with the driver on.
+#
+# M (the Qwen3.8-27B checkpoint dir) comes from the environment or
+# scripts/research/local.env (gitignored).
 set -u
 cd "$(dirname "$0")/../.."
-M=${M:-/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp}
+[ -f scripts/research/local.env ] && source scripts/research/local.env
+M=${M:?set M to the Qwen3.8-27B checkpoint directory}
 PORT=${PORT:-18764}
 OUT=${OUT:-docs/research/runs/$(date +%Y-%m-%d)-round-driver}
 PHASE=${PHASE:-all}

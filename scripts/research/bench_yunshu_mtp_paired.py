@@ -78,7 +78,7 @@ def _run(model, prompt: str, use_mtp: bool, max_tokens: int) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--model", default="/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
+        "--model", required=True, help="local Qwen3.5-family checkpoint directory"
     )
     parser.add_argument("--output", required=True)
     parser.add_argument("--max-tokens", type=int, default=128)

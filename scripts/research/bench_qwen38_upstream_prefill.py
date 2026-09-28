@@ -21,11 +21,10 @@ def main() -> None:
     )
     args = parser.parse_args()
     model = args.model.expanduser().resolve()
-    if (
-        not model.is_relative_to(Path("/Volumes/P5Plus/models"))
-        or not (model / "config.json").is_file()
-    ):
-        parser.error("Use an existing model under /Volumes/P5Plus/models")
+    if not (model / "config.json").is_file():
+        parser.error(
+            "--model must be an existing local model directory (downloads are disabled)"
+        )
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     args.output.parent.mkdir(parents=True, exist_ok=True)

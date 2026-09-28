@@ -14,16 +14,20 @@
 #             bench_engine_matrix for DFlash2.
 # tensorfold: TensorFold 0.3.6.1 DFlash2 bench_context_batch on novel_en (its
 #             code_python run: docs/research/runs/2026-09-28-tensorfold).
+#
+# Paths come from the environment (or scripts/research/local.env, gitignored):
+#   M  Qwen3.8-27B checkpoint dir     D  DFlash2 drafter dir
+#   TF tensorfold executable (tensorfold phase only)
 set -u
 cd "$(dirname "$0")/../.."
-M=${M:-/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp}
-D=${D:-/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2}
+[ -f scripts/research/local.env ] && source scripts/research/local.env
+M=${M:?set M to the Qwen3.8-27B checkpoint directory}
+D=${D:?set D to the Qwen3.8-27B DFlash2 drafter directory}
 PORT=${PORT:-18764}
 OUT=${OUT:-docs/research/runs/$(date +%Y-%m-%d)-dflash}
 PHASE=${PHASE:-all}
 URL=http://127.0.0.1:$PORT
 PY=.venv/bin/python
-TF=${TF:-/Volumes/P5Plus/yunshu-test-envs/tensorfold/bin/tensorfold}
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 mkdir -p $OUT
 log(){ echo "$(date +%H:%M:%S) $*"; }
@@ -74,7 +78,8 @@ if [ $PHASE = all -o $PHASE = server ]; then
 fi
 
 if [ $PHASE = all -o $PHASE = tensorfold ]; then
-  C=/Volumes/P5Plus/yunshu-test-cache/tensorfold-snap
+  TF=${TF:?set TF to the tensorfold executable}
+  C=${TF_SNAPSHOT_DIR:-${TMPDIR:-/tmp}/tensorfold-snap}
   mkdir -p $C
   $TF serve $M --port $PORT --name qwen38 --parallel 8 --drafter $D --snapshot-dir $C \
     --no-update-check > $OUT/server-tensorfold.log 2>&1 &

@@ -9,7 +9,7 @@ growing with N beyond the KV cache) points at unevaluated graphs carried
 across steps, and lane vs stock plain isolates the projection kernel.
 
     python scripts/research/probe_driver_prefill.py \
-        /Volumes/P5Plus/models/Qwen3.5-0.8B-MLX-bf16 --quantize \
+        ~/models/Qwen3.5-0.8B-MLX-bf16 --quantize \
         --lengths 2048 8192 16384 32768
 """
 
