@@ -4463,6 +4463,22 @@ class VLMEngine:
                 drafter = _load_drafter_in_memory(model_path)
                 validate_drafter_compatibility(self._model, drafter, "mtp")
         block = os.environ.get("YUNSHU_MTP_BLOCK_SIZE")
+        kernels = None
+        if drafter is not None and os.environ.get(
+            "YUNSHU_MTP_VERIFY_KERNELS", "1"
+        ).strip().lower() not in ("0", "false", "no"):
+            # oMLX verify kernels: exact ones always; the faster non-exact
+            # matmuls only with YUNSHU_MTP_FAST_VERIFY=1.
+            from .kernels.omlx import apply as apply_verify_kernels
+
+            fast = os.environ.get("YUNSHU_MTP_FAST_VERIFY", "0").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            kernels = apply_verify_kernels(fast=fast)
+            # Measured best depth: 4 with exact kernels, 6 with fast verify.
+            block = block or ("6" if fast else "4")
         runner = VLMBatchRunner(
             self._model,
             self._processor,
@@ -4473,11 +4489,13 @@ class VLMEngine:
             apc_admit=self._apc_capacity_allows,
         )
         logger.info(
-            "VLM batch runner: apc=%s draft=%s",
+            "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s",
             f"{self._apc_backend.memory_max_bytes / 2**30:.1f}GiB"
             if self._apc_backend is not None
             else "off",
             "mtp" if drafter is not None else "off",
+            block or "default",
+            kernels,
         )
         return runner
 

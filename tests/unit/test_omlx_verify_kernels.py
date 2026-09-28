@@ -1,0 +1,46 @@
+"""Vendored oMLX verify kernels install once and arm only inside MTP verify."""
+
+import pytest
+
+pytest.importorskip("mlx_vlm.speculative.mtp")
+
+
+def test_apply_installs_and_is_idempotent(monkeypatch):
+    import mlx_vlm.speculative.mtp as mtp
+
+    from yunshu_engine.kernels import omlx
+    from yunshu_engine.kernels.omlx import qwen35_verify_qmm
+
+    applied = omlx.apply(fast=False)
+    assert applied["gdn_prework"] and applied["sdpa_split"] and applied["verify_qmm"]
+    wrapped = mtp._mtp_verify_target
+    assert getattr(wrapped, "_yunshu_armed", False)
+    assert omlx.apply(fast=True) is applied
+    assert mtp._mtp_verify_target is wrapped
+
+    seen = []
+    inner = wrapped.__closure__
+    # Arming follows the fast flag during verify and is cleared afterwards.
+    original = next(c.cell_contents for c in inner if callable(c.cell_contents))
+    monkeypatch.setattr(
+        mtp, "_mtp_verify_target", wrapped
+    )  # keep the wrapper installed
+    import types
+
+    probe = types.SimpleNamespace(
+        run=lambda *a, **k: seen.append(qwen35_verify_qmm._is_armed())
+    )
+    for cell in inner:
+        if cell.cell_contents is original:
+            cell.cell_contents = probe.run
+    try:
+        omlx._STATE["fast"] = True
+        wrapped()
+        omlx._STATE["fast"] = False
+        wrapped()
+    finally:
+        for cell in inner:
+            if cell.cell_contents is probe.run:
+                cell.cell_contents = original
+    assert seen == [True, False]
+    assert qwen35_verify_qmm._is_armed() is False

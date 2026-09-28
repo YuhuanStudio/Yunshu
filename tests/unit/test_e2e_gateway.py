@@ -139,22 +139,12 @@ class TestE2EGateway:
             assert len(data["data"]) == 1
             assert data["data"][0]["id"] == "test-model"
 
-    def test_chat_wrong_model_404(self):
-        """Request for unloaded model returns 404."""
-        engine_mod._engine = _make_engine()
-        app = create_app()
-        with TestClient(app) as client:
-            resp = client.post(
-                "/v1/chat/completions",
-                json={
-                    "model": "nonexistent-model",
-                    "messages": [{"role": "user", "content": "hello"}],
-                },
-            )
-            assert resp.status_code == 404
+    def test_chat_no_model_503(self):
+        """Engine initialized but no model loaded → 503 (not ready), not 404.
 
-    def test_chat_no_model_404(self):
-        """Engine initialized but no model loaded → 404."""
+        Single-model mode serves the loaded model under any requested name, so
+        a model-name mismatch is not an error; an unloaded engine is.
+        """
         engine_mod._engine = Engine(EngineConfig())  # no model loaded
         app = create_app()
         with TestClient(app) as client:
@@ -165,7 +155,7 @@ class TestE2EGateway:
                     "messages": [{"role": "user", "content": "hello"}],
                 },
             )
-            assert resp.status_code == 404
+            assert resp.status_code == 503
 
     def test_chat_no_engine_503(self):
         """Without engine initialized, returns 503."""
@@ -182,20 +172,6 @@ class TestE2EGateway:
             # Engine is created by lifespan but no model loaded → 404
             # This test verifies the full path works without pre-set engine
             assert resp.status_code in (404, 503)
-
-    def test_completions_wrong_model_404(self):
-        """Completions endpoint returns 404 for unknown model."""
-        engine_mod._engine = _make_engine()
-        app = create_app()
-        with TestClient(app) as client:
-            resp = client.post(
-                "/v1/completions",
-                json={
-                    "model": "nonexistent",
-                    "prompt": "hello",
-                },
-            )
-            assert resp.status_code == 404
 
     def test_mcp_initialize(self, app_client):
         """MCP initialize endpoint returns capabilities."""

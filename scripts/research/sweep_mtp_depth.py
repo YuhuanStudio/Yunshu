@@ -22,9 +22,64 @@ from yunshu_engine.mlxvlm_mtp import _load_drafter_in_memory  # noqa: E402
 from yunshu_engine.mrope import clear_rope_state  # noqa: E402
 
 model_dir = sys.argv[1]
-sizes = [int(x) for x in sys.argv[2:]] or [3, 4, 5, 6]
+_kflag = next((a for a in sys.argv if a.startswith("--omlx-kernels")), None)
+use_omlx = _kflag is not None
+omlx_set = (
+    set(_kflag.split("=", 1)[1].split(","))
+    if _kflag and "=" in _kflag
+    else {"verify_linear", "gdn_prework", "sdpa_split", "verify_qmm", "gdn_replay"}
+)
+sizes = [int(x) for x in sys.argv[2:] if not x.startswith("--")] or [3, 4, 5, 6]
+
+if use_omlx:
+    # Experiment only: oMLX (Apache-2.0) verify kernels from reference/omlx,
+    # armed around upstream mlx-vlm's MTP target verify forward.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "reference" / "omlx"))
+    import mlx_vlm.speculative.mtp as _mtp  # noqa: E402
+    from omlx.patches import (  # noqa: E402
+        qwen35_gdn_prework,
+        qwen35_gdn_verify_fused,
+        qwen35_verify_qmm,
+        qwen35_verify_sdpa_split,
+    )
+    from omlx.patches.mlx_vlm_mtp import qwen35_verify_linear  # noqa: E402
+
+    patchers = {
+        "verify_linear": qwen35_verify_linear.apply,
+        "gdn_prework": qwen35_gdn_prework.apply_qwen35_gdn_prework_patch,
+        "sdpa_split": qwen35_verify_sdpa_split.apply_qwen35_verify_sdpa_split_patch,
+        "verify_qmm": qwen35_verify_qmm.apply_verify_qmm_patch,
+        "gdn_replay": qwen35_gdn_verify_fused.apply_arrays_cache_replay_patch,
+    }
+    applied = {k: fn() for k, fn in patchers.items() if k in omlx_set}
+    print(json.dumps({"omlx_patches": applied}), flush=True)
+    _orig_verify = _mtp._mtp_verify_target
+
+    def _armed_verify(*a, **k):
+        qwen35_verify_qmm.set_verify_qmm_armed(True)
+        try:
+            return _orig_verify(*a, **k)
+        finally:
+            qwen35_verify_qmm.set_verify_qmm_armed(False)
+
+    _mtp._mtp_verify_target = _armed_verify
+_yk = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--yunshu-kernels=")), None)
+if _yk:
+    # Vendored copy under python/yunshu_engine/kernels/omlx (exact | fast).
+    from yunshu_engine.kernels import omlx as yk  # noqa: E402
+
+    print(json.dumps({"yunshu_kernels": yk.apply(fast=_yk == "fast"), "mode": _yk}), flush=True)
+    use_omlx, omlx_set = True, {f"yunshu:{_yk}"}
+
 model, processor = load(model_dir)
 tok = processor.tokenizer
+if "--pack" in sys.argv:
+    from yunshu_engine.kernels.omlx import pack_projections  # noqa: E402
+
+    t0 = time.perf_counter()
+    print(json.dumps({"packed_layers": pack_projections(model), "pack_s": round(time.perf_counter() - t0, 2)}), flush=True)
+    omlx_set = set(omlx_set) | {"packed"}
+    use_omlx = True
 drafter = _load_drafter_in_memory(model_dir)
 lm = model.language_model
 
@@ -97,6 +152,7 @@ for name, prompt, mt in tasks:
     run(name, prompt, 16, 0)  # warm kernels for this shape
     for block in [0] + sizes:
         r = run(name, prompt, mt, block)
+        r["omlx_kernels"] = sorted(omlx_set) if use_omlx else []
         if block == 0:
             ref[name] = r["tokens"]
         r["parity"] = r["tokens"] == ref[name]
