@@ -240,3 +240,41 @@ def test_tools_reach_chat_template_and_cache_key():
     assert eng._tokenizer.calls[0]["tools"] == [WEATHER]
     assert "tools" not in eng._tokenizer.calls[1]
     assert with_tools.tolist() != without.tolist()
+
+
+def test_streamed_xml_call_starts_with_id_and_name():
+    from yunshu_engine.tool_call_streamer import ToolCallStreamer
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "city": {"type": "string"},
+                        "days": {"type": "integer"},
+                    },
+                },
+            },
+        }
+    ]
+    s = ToolCallStreamer(model_name="Qwen3.8-27B", tools=tools)
+    text = (
+        "<tool_call>\n<function=get_weather>\n<parameter=city>\nTaipei\n</parameter>\n"
+        "<parameter=days>\n3\n</parameter>\n</function>\n</tool_call>"
+    )
+    outs = []
+    for i in range(0, len(text), 3):
+        outs += s.process_token(text[i : i + 3])
+    outs += s.flush()
+    kinds = [
+        ("start" if o.tool_call_start else "call")
+        for o in outs
+        if o.tool_call_start or o.tool_call
+    ]
+    assert kinds == ["start", "call"]
+    start = next(o.tool_call_start for o in outs if o.tool_call_start)
+    call = next(o.tool_call for o in outs if o.tool_call)
+    assert start.name == "get_weather" and start.id == call.id

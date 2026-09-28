@@ -1446,6 +1446,7 @@ class VLMEngine:
             executor=self._executor,
         )
         runner.clear_on_idle = bool(getattr(self, "_mx_large_model", False))
+        runner.stop_tokens = set(self._get_eos_ids())
         logger.info(
             "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s",
             f"{self._apc_backend.memory_max_bytes / 2**30:.1f}GiB"
@@ -2926,9 +2927,28 @@ class VLMEngine:
             )
 
     def _get_eos_ids(self) -> list[int]:
+        """Tokenizer EOS plus generation_config / config eos_token_id (Gemma-4
+        ends turns with <turn|>, which only generation_config lists)."""
+        cached = getattr(self, "_eos_ids_cache", None)
+        if cached is not None:
+            return cached
         from .text_utils import get_eos_token_ids
 
-        return get_eos_token_ids(self._tokenizer)
+        ids = set(get_eos_token_ids(getattr(self, "_tokenizer", None)))
+        sources = [getattr(self, "_config", None) or {}]
+        with contextlib.suppress(Exception):
+            path = Path(getattr(self, "_model_path", "")) / "generation_config.json"
+            if path.exists():
+                sources.append(json.loads(path.read_text()))
+        for src in sources:
+            for cfg in (src, src.get("text_config") or {}):
+                eid = cfg.get("eos_token_id") if isinstance(cfg, dict) else None
+                if isinstance(eid, int):
+                    ids.add(eid)
+                elif isinstance(eid, list):
+                    ids.update(i for i in eid if isinstance(i, int))
+        self._eos_ids_cache = sorted(ids)
+        return self._eos_ids_cache
 
     # ── Stats ──
 

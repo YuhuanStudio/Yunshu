@@ -1830,6 +1830,20 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                 status_code=404, detail=f"Model '{req.model}' not found"
             ) from None
 
+    # Engines without a chat interface (OCR, ASR, TTS, image/video generation,
+    # embeddings) get a clear 400 instead of an AttributeError mid-stream.
+    if not any(
+        hasattr(engine, m)
+        for m in ("generate_stream", "stream_chat", "chat", "generate")
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Model '{req.model}' is served by {type(engine).__name__}, which has "
+                "no chat interface; use its dedicated endpoint (e.g. /v1/ocr for OCR)."
+            ),
+        )
+
     # Inject tool definitions if provided
     if req.tools:
         messages = _inject_tool_system_prompt(

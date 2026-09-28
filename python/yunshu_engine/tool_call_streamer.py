@@ -386,6 +386,37 @@ class ToolCallStreamer:
         return -1
 
     def process_token(self, token: str) -> list[StreamOutput]:
+        return self._with_starts(self._process_token(token))
+
+    def flush(self) -> list[StreamOutput]:
+        return self._with_starts(self._flush())
+
+    def _with_starts(self, outputs: list[StreamOutput]) -> list[StreamOutput]:
+        """Every complete tool call is preceded by a start (id + name).
+
+        Formats whose name only appears inside the body (Qwen3.x
+        ``<function=...>``, GLM bare names) never produce an incremental
+        start, and a streaming client cannot key a call without one.
+        """
+        started = self.__dict__.setdefault("_started_call_ids", set())
+        fixed: list[StreamOutput] = []
+        for out in outputs:
+            if out.tool_call_start is not None:
+                started.add(out.tool_call_start.id)
+            elif out.tool_call is not None and out.tool_call.id not in started:
+                fixed.append(
+                    StreamOutput(
+                        tool_call_start=ToolCallResult(
+                            id=out.tool_call.id, name=out.tool_call.name, arguments=""
+                        ),
+                        state=out.state,
+                    )
+                )
+                started.add(out.tool_call.id)
+            fixed.append(out)
+        return fixed
+
+    def _process_token(self, token: str) -> list[StreamOutput]:
         """Process a single streaming token, returning zero or more outputs.
 
         The token is typically a single token from the LLM (could be a
@@ -1059,7 +1090,7 @@ class ToolCallStreamer:
 
         return None
 
-    def flush(self) -> list[StreamOutput]:
+    def _flush(self) -> list[StreamOutput]:
         """Flush any remaining buffered content.
 
         Call this at the end of the stream to emit any remaining text

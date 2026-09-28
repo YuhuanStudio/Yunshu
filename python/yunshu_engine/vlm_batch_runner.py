@@ -220,6 +220,8 @@ class VLMBatchRunner:
         self._spec: _Group | None = None
         self._driving = False
         self.clear_on_idle = False
+        # All ids that end a turn (tokenizer + generation_config eos).
+        self.stop_tokens: set[int] | None = None
 
     def prepare_media(
         self,
@@ -437,6 +439,7 @@ class VLMBatchRunner:
         return BatchGenerator(
             self.model.language_model,
             self.processor,
+            stop_tokens=self.stop_tokens,
             sampler=sampler,
             apc_manager=self.apc_manager if use_apc else None,
             draft_model=self.drafter if spec else None,
