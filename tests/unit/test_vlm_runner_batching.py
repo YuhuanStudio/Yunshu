@@ -215,3 +215,27 @@ def test_token_mask_processor_min_tokens_ignore_eos_suppress():
     for _ in range(5):
         out = q.process_last_token(2, logits)
     assert out[0, 5].item() == float("-inf")
+
+
+def test_ragged_format_set_only_while_runner_steps():
+    from yunshu_engine.kernels import ragged_kv
+
+    runner = vbr.VLMBatchRunner(
+        SimpleNamespace(language_model=object()), processor=None
+    )
+    runner.ragged_kv = "int8"
+    seen = []
+
+    class Gen:
+        _prompt_batch = None
+        _generation_batch = None
+
+        def next(self):
+            seen.append(ragged_kv._STATE["format"])
+            return [], []
+
+    group = vbr._Group(gen=Gen(), spec=False)
+    group.jobs = {1: SimpleNamespace(cancel_event=None, abandoned=False)}
+    runner._step_group(group)
+    assert seen == ["int8"]
+    assert ragged_kv._STATE["format"] is None

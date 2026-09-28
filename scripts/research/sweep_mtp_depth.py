@@ -116,7 +116,7 @@ if "--invariant" in sys.argv:
     use_omlx = True
 if "--ragged-lane" in sys.argv:
     # The speculative lane's attention on the ragged tile kernel, as the
-    # runner does with YUNSHU_RAGGED_KV=1 (AR and MTP runs alike).
+    # runner does for qwen3_5 attention (AR and MTP runs alike).
     from yunshu_engine.kernels import ragged_kv  # noqa: E402
 
     ragged_kv.install()

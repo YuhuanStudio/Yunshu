@@ -226,9 +226,9 @@ class VLMBatchRunner:
         self.inflight = lambda: 0
         # All ids that end a turn (tokenizer + generation_config eos).
         self.stop_tokens: set[int] | None = None
-        # Per-row-length KV layout (YUNSHU_RAGGED_KV) for the shared batch and
-        # the speculative lane: None (off) or its precision, "bf16" / "int8"
-        # (YUNSHU_KV_PRECISION).
+        # Per-row-length KV layout for the shared batch and the speculative
+        # lane (models with qwen3_5 attention): None (stock caches) or its
+        # precision, "bf16" / "int8" (YUNSHU_KV_PRECISION).
         self.ragged_kv: str | None = None
         self._ragged_logged = False
 
@@ -554,17 +554,22 @@ class VLMBatchRunner:
         dense_lane = group.spec and bool(self.ragged_kv)
         if invariant:
             batch_invariant.set_active(True)
-        if dense_lane:
+        if self.ragged_kv:
             from .kernels import ragged_kv
 
-            ragged_kv.set_dense_lane(True)
+            # Joins build ragged caches only while this runner's model steps.
+            ragged_kv.set_format(self.ragged_kv)
+            if dense_lane:
+                ragged_kv.set_dense_lane(True)
         try:
             self._step_generator(group)
         finally:
             if invariant:
                 batch_invariant.set_active(False)
-            if dense_lane:
-                ragged_kv.set_dense_lane(False)
+            if self.ragged_kv:
+                ragged_kv.set_format(None)
+                if dense_lane:
+                    ragged_kv.set_dense_lane(False)
 
     def _step_generator(self, group: _Group) -> None:
         if group.spec:

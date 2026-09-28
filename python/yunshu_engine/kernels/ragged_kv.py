@@ -390,6 +390,28 @@ def _stock_batch_kv_classes() -> tuple:
 _STATE: dict = {"installed": False, "format": None, "dense_lane": False}
 
 
+def set_format(kv_format: str | None) -> None:
+    """KV format the generation-batch merge builds (None: stock caches). The
+    runner sets it only while its own model steps, so another model served in
+    the same process keeps upstream's caches."""
+    if kv_format not in (None, "bf16", "int8"):
+        raise ValueError(f"ragged KV: unknown format {kv_format!r}")
+    _STATE["format"] = kv_format
+
+
+def supports(language_model: Any) -> bool:
+    """True when the model's attention is qwen3_5's (what ``install`` routes
+    through the ragged kernels); any other family keeps stock caches."""
+    try:
+        from mlx_vlm.models.qwen3_5 import language as lang
+    except ImportError:  # pragma: no cover - older mlx-vlm
+        return False
+    modules = getattr(language_model, "modules", None)
+    if not callable(modules):
+        return False
+    return any(isinstance(m, lang.Qwen3_5Attention) for m in modules())
+
+
 def set_dense_lane(active: bool) -> None:
     """Route single-row ``KVCache`` attention (decode and speculative verify)
     through the ragged kernel while the speculative lane steps. Set on the
@@ -564,9 +586,7 @@ def enable(kv_format: str | None) -> None:
     attention caches in ``kv_format`` (None: stock behavior). A lone request
     keeps its stock cache; the first join converts the decoding row once and
     each later join copies only the joining row."""
-    if kv_format not in (None, "bf16", "int8"):
-        raise ValueError(f"ragged KV: unknown format {kv_format!r}")
-    _STATE["format"] = kv_format
+    set_format(kv_format)
     from mlx_vlm.generate import ar
 
     if getattr(ar._extend_cache, "_yunshu_ragged", False):

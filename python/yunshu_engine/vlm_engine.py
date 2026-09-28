@@ -1416,21 +1416,21 @@ class VLMEngine:
         runner.clear_on_idle = bool(getattr(self, "_mx_large_model", False))
         runner.stop_tokens = set(self._get_eos_ids())
         runner.inflight = lambda: self._active_count
-        # KV layout (technical; experimental until measured) and KV precision
-        # (the user's memory/quality choice) are separate settings.
+        # Per-row-length (ragged) KV + ragged decode attention for the shared
+        # batch and the speculative lane: the layout for every model with
+        # qwen3_5 attention (lossless; docs/research/runs/2026-09-29-ragged-idle).
+        # KV precision is the user's memory/quality choice.
         precision = settings.get("YUNSHU_KV_PRECISION")
-        if settings.get_bool("YUNSHU_RAGGED_KV"):
-            # Per-row-length KV + ragged decode attention for the shared batch
-            # and the speculative lane (qwen3_5 attention only).
-            from .kernels import ragged_kv
+        from .kernels import ragged_kv
 
+        if ragged_kv.supports(self._model.language_model):
             ragged_kv.install()
-            ragged_kv.enable(precision)
+            ragged_kv.enable(None)  # the runner sets the format while it steps
             runner.ragged_kv = precision
         elif precision != "bf16":
             logger.warning(
-                "YUNSHU_KV_PRECISION=%s needs the ragged KV layout "
-                "(YUNSHU_RAGGED_KV=1); the batch KV stays bf16",
+                "YUNSHU_KV_PRECISION=%s applies to Qwen3.5-family attention "
+                "only; this model's KV stays bf16",
                 precision,
             )
         logger.info(

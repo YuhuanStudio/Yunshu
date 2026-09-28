@@ -1,4 +1,4 @@
-"""Per-row-length KV cache and ragged decode attention (YUNSHU_RAGGED_KV)."""
+"""Per-row-length KV cache and ragged decode attention (default layout for qwen3_5 attention)."""
 
 import pytest
 
@@ -681,3 +681,33 @@ def test_tile_bits_independent_of_capacity():
             for cap in (-(-n // 64) * 64, 1536, 1600)
         ]
         assert all(mx.array_equal(outs[0], o) for o in outs[1:]), n
+
+
+def test_supports_only_qwen3_5_attention():
+    import mlx.nn as nn
+    from mlx_vlm.models.qwen3_5 import language as lang
+
+    class Other(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.proj = nn.Linear(4, 4)
+
+    assert not ragged_kv.supports(Other())
+    attn = lang.Qwen3_5Attention.__new__(lang.Qwen3_5Attention)
+    nn.Module.__init__(attn)
+
+    class Holder(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layers = [attn]
+
+    assert ragged_kv.supports(Holder())
+
+
+def test_set_format_validates_and_scopes():
+    ragged_kv.set_format("int8")
+    assert ragged_kv._STATE["format"] == "int8"
+    ragged_kv.set_format(None)
+    assert ragged_kv._STATE["format"] is None
+    with pytest.raises(ValueError):
+        ragged_kv.set_format("fp8")

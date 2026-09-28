@@ -119,7 +119,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 |---|---|---|---|
 | `YUNSHU_VLM_APC_MEMORY_GB` | float | 8.0 | VLM runner prefix cache (APC) RAM budget in GiB; 0 disables the prefix cache. |
 | `YUNSHU_VLM_APC_DISK_DIR` | path | unset | Directory for the APC SSD tier; evicted prefixes reload from disk instead of re-prefilling. |
-| `YUNSHU_KV_PRECISION` | `bf16` \| `int8` | bf16 | KV cache precision of the Qwen3.5-family runner's shared decode batch: 'bf16' (lossless) or 'int8' (int8 codes + one fp16 scale per 32-dim group: ~0.53x the KV memory and read bandwidth for a small attention error; memory vs quality). A lone request and the speculative lane stay bf16. Takes effect with the ragged KV layout (YUNSHU_RAGGED_KV). |
+| `YUNSHU_KV_PRECISION` | `bf16` \| `int8` | bf16 | KV cache precision of the Qwen3.5-family runner's shared decode batch: 'bf16' (lossless) or 'int8' (int8 codes + one fp16 scale per 32-dim group: ~0.53x the KV memory and read bandwidth for a small attention error; memory vs quality). A lone request and the speculative lane stay bf16. Applies to models with Qwen3.5-family attention (the ragged KV layout). |
 | `YUNSHU_VLM_APC_DISK_GB` | float | 64.0 | Size cap of the APC SSD tier in GiB. |
 | `YUNSHU_VLM_MAX_IMAGE_BYTES` | int | 26214400 (25 MiB) | Largest image a request may reference by URL, in bytes. |
 | `YUNSHU_VLM_INSECURE_SSL` | bool | off | Retry image downloads without TLS verification when verification fails. |
@@ -203,7 +203,6 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 
 | Setting | Type | Default | Description | Decided by | Added |
 |---|---|---|---|---|---|
-| `YUNSHU_RAGGED_KV` | bool | off | Qwen3.5-family runner: per-row-length KV layout with split-K decode attention for the shared batch (built at the first join; a lone request keeps its stock cache), and the speculative lane's decode + verify attention on one per-row kernel. Precision: YUNSHU_KV_PRECISION. | 27B idle GPU: probe_concurrency + bench_engine_matrix + bench_context_batch 32K/131K + sweep_mtp_depth --context vs off (aggregate tok/s up, single-request and MTP decode not down, MMLU-Pro equal); then always on and this flag deleted | 2026-09-28 |
 | `YUNSHU_MTP_ROW_EXACT` | bool | off | Qwen3.5-family runner: oMLX row-exact verify (verify rows bit-identical to one-row decode) instead of batch-invariant kernels. | sweep_mtp_depth parity at long contexts vs decode tok/s (currently 30-50% slower than batch-invariant) | 2026-09-28 |
 | `YUNSHU_ENGINE_LOOP` | bool | off | Text models: EngineCore continuous-batching loop instead of the single-request fast path. | unify text-only models onto the batch runner vs keeping this loop (concurrency probe on a text model) | 2026-06-30 |
 | `YUNSHU_OVERLAP` | `''` \| `cpu_gpu` \| `two_batch` | unset | Text engine loop: overlap CPU and GPU work ('cpu_gpu') or split a batch into two overlapping halves ('two_batch'). | concurrency probe tok/s on a text model with the engine loop; deleted with the loop if text models move to the runner | 2026-06-30 |
