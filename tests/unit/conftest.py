@@ -29,6 +29,16 @@ def _disable_auth(request):
         os.environ["YUNSHU_AUTH_DISABLED"] = old
 
 
+@pytest.fixture(autouse=True)
+def _no_user_config(tmp_path, monkeypatch):
+    """Tests never read the developer's ~/.yunshu/config.toml."""
+    from yunshu_engine import settings
+
+    monkeypatch.setattr(
+        settings, "user_config_path", lambda: tmp_path / "user-config.toml"
+    )
+
+
 @pytest.fixture(autouse=True, scope="session")
 def _fast_drain():
     """Zero drain timeout for all tests — avoids 30s wait on app teardown."""

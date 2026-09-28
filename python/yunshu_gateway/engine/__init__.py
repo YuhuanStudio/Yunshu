@@ -11,6 +11,7 @@ The gateway routers use get_engine_for_model() which works in all modes.
 import logging
 from pathlib import Path
 
+from yunshu_engine import settings
 from yunshu_engine.batched_engine import BatchedEngine as Engine
 from yunshu_engine.model_manager import ModelManager
 from yunshu_engine.types import EngineConfig
@@ -86,14 +87,20 @@ def _discover_models(models_dir: str) -> None:
         return
 
     models_path = Path(models_dir)
-    if not models_path.exists():
+    use_hf_cache = settings.get_bool("YUNSHU_HF_CACHE_MODELS")
+    if not models_path.exists() and not use_hf_cache:
         return
 
     # Primary: use model_discovery module
     try:
-        from yunshu_engine.model_discovery import discover_models
+        from yunshu_engine.model_discovery import (
+            discover_hf_cache_models,
+            discover_models,
+        )
 
-        discovered = discover_models(models_path)
+        discovered = discover_models(models_path) if models_path.exists() else {}
+        if use_hf_cache:
+            discovered = discover_hf_cache_models(discovered)
         for mid, info in discovered.items():
             _model_manager.register_model(
                 model_id=mid,
@@ -113,6 +120,8 @@ def _discover_models(models_dir: str) -> None:
         )
 
     # Fallback: simple directory scan
+    if not models_path.exists():
+        return
     for subdir in sorted(models_path.iterdir()):
         if not subdir.is_dir():
             continue

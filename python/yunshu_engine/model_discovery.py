@@ -121,6 +121,81 @@ def discover_models(model_dir: Path) -> dict[str, DiscoveredModel]:
     return models
 
 
+def hf_cache_snapshots() -> list[tuple[str, Path, int]]:
+    """Model repos in the Hugging Face cache that can load without a download:
+    ``(repo_id, snapshot_path, size_on_disk)``, newest complete revision per
+    repo (a ``config.json`` and ``*.safetensors`` weights)."""
+    try:
+        from huggingface_hub import scan_cache_dir
+
+        cache = scan_cache_dir()
+    except Exception:  # noqa: BLE001 - no cache yet, or an unreadable one
+        logger.debug("Hugging Face cache scan failed", exc_info=True)
+        return []
+    out = []
+    for repo in sorted(cache.repos, key=lambda r: r.repo_id):
+        if repo.repo_type != "model":
+            continue
+        for rev in sorted(repo.revisions, key=lambda r: r.last_modified, reverse=True):
+            names = {f.file_name for f in rev.files}
+            if "config.json" in names and any(
+                n.endswith(".safetensors") for n in names
+            ):
+                out.append((repo.repo_id, Path(rev.snapshot_path), rev.size_on_disk))
+                break
+    return out
+
+
+def discover_hf_cache_models(
+    models: dict[str, DiscoveredModel],
+) -> dict[str, DiscoveredModel]:
+    """Add Hugging Face cache models to ``models`` (already-discovered entries
+    win; a clashing short name is registered as ``org/name``)."""
+    taken = {m.model_path for m in models.values()}
+    for repo_id, snapshot, _size in hf_cache_snapshots():
+        if str(snapshot) in taken:
+            continue
+        org, _, name = repo_id.rpartition("/")
+        _register(models, snapshot, name=name, org=org or None)
+    return models
+
+
+def resolve_model_ref(ref: str | None, models_dir: Path | None = None) -> str | None:
+    """A local directory for a model reference, when one is on disk.
+
+    ``ref`` may be a path, a name under the models directory (``name`` or
+    ``org/name``, the layout ``yunshu pull`` writes), or a Hugging Face repo id
+    already in the Hugging Face cache. Returns that directory, or ``ref``
+    unchanged when nothing local matches (the loader then downloads it).
+    """
+    if not ref:
+        return ref
+    p = Path(ref).expanduser()
+    if p.exists():
+        return str(p)
+    if ref.startswith(("/", ".", "~")):
+        return ref
+    if models_dir is None:
+        from .paths import models_dir as _models_dir
+
+        models_dir = _models_dir()
+    for cand in (models_dir / ref, models_dir / ref.rsplit("/", 1)[-1]):
+        if cand.is_dir() and _is_model_dir(cand):
+            return str(cand)
+    if ref.count("/") == 1:
+        try:
+            from huggingface_hub import try_to_load_from_cache
+
+            config = try_to_load_from_cache(ref, "config.json")
+        except Exception:  # noqa: BLE001 - not a valid repo id / no cache
+            config = None
+        if isinstance(config, str):
+            snapshot = Path(config).parent
+            if any(snapshot.glob("*.safetensors")):
+                return str(snapshot)
+    return ref
+
+
 def discover_models_from_dirs(model_dirs: list[Path]) -> dict[str, DiscoveredModel]:
     """Scan multiple directories and merge results (first wins on conflicts)."""
     merged: dict[str, DiscoveredModel] = {}
@@ -136,7 +211,12 @@ def discover_models_from_dirs(model_dirs: list[Path]) -> dict[str, DiscoveredMod
     return merged
 
 
-def _register(models: dict[str, DiscoveredModel], model_dir: Path) -> None:
+def _register(
+    models: dict[str, DiscoveredModel],
+    model_dir: Path,
+    name: str | None = None,
+    org: str | None = None,
+) -> None:
     try:
         mt = detect_model_type(model_dir)
         size = estimate_model_size(model_dir)
@@ -152,13 +232,14 @@ def _register(models: dict[str, DiscoveredModel], model_dir: Path) -> None:
         # model with the same name was already registered (e.g. same model
         # name under different org directories like mlx-community/Qwen2.5
         # vs custom-org/Qwen2.5).  The existing entry wins (first-found).
-        key = model_dir.name
+        base_name = name or model_dir.name
+        key = base_name
         if key in models:
             existing_path = models[key].model_path
             if existing_path != str(model_dir):
                 # Collision: disambiguate with parent directory prefix
-                parent_name = model_dir.parent.name
-                key = f"{parent_name}/{model_dir.name}"
+                parent_name = org or model_dir.parent.name
+                key = f"{parent_name}/{base_name}"
                 logger.warning(
                     "Model name collision: '%s' from %s shadows %s, "
                     "using disambiguated key '%s'",
@@ -169,7 +250,7 @@ def _register(models: dict[str, DiscoveredModel], model_dir: Path) -> None:
                 )
 
         models[key] = DiscoveredModel(
-            model_id=model_dir.name,
+            model_id=base_name,
             model_path=str(model_dir),
             model_type=mt,
             engine_type=_engine_for_type(mt),
@@ -178,7 +259,7 @@ def _register(models: dict[str, DiscoveredModel], model_dir: Path) -> None:
         )
         logger.info(
             "Discovered: %s (type=%s, engine=%s, size=%.2fGB)",
-            model_dir.name,
+            key,
             mt,
             _engine_for_type(mt),
             size / 1024**3,

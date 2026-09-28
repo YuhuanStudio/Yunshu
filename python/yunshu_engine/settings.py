@@ -11,8 +11,9 @@ Sources, highest precedence first:
 1. overrides set in-process (``yunshu serve --set KEY=VALUE`` and the typed
    ``serve`` flags),
 2. the process environment,
-3. a config file (``yunshu serve --config PATH`` or ``YUNSHU_CONFIG``; TOML with
-   flat ``KEY = value`` entries, optionally grouped under tables),
+3. a config file (``yunshu serve --config PATH`` or ``YUNSHU_CONFIG``, else the
+   user file ``~/.yunshu/config.toml`` that ``yunshu config set`` writes; TOML
+   with flat ``KEY = value`` entries, optionally grouped under tables),
 4. the registry default.
 
 Values are resolved on every access, so a setting changed in the environment
@@ -106,6 +107,7 @@ def _add(
 _add("YUNSHU_MODEL", "path", None, "Model path or Hugging Face id served in single-model mode; every requested model name maps to it.", "model")
 _add("YUNSHU_MULTI_MODEL", "bool", False, "Multi-model mode: discover models under YUNSHU_MODELS_DIR and load them on demand. Ignored when YUNSHU_MODEL is set.", "model")
 _add("YUNSHU_MODELS_DIR", "path", None, "Directory of model folders for multi-model mode (each folder name is a model id). Unset: ~/.yunshu/models (also where `yunshu pull` downloads to).", "model")
+_add("YUNSHU_HF_CACHE_MODELS", "bool", True, "Multi-model mode: also offer models already in the Hugging Face cache (the models directory wins on name clashes). `yunshu serve -m org/name` uses a cached copy either way.", "model")
 _add("YUNSHU_MODEL_TTL_SECONDS", "float", None, "Multi-model mode: unload a model idle for this many seconds. Unset: never.", "model", minimum=0.0)
 _add("YUNSHU_ALLOW_AUTO_LOAD", "bool", False, "Multi-model mode: let audio requests load a model that is not loaded yet (otherwise they are rejected).", "model")
 _add("YUNSHU_MAX_LORAS", "int", 4, "Maximum LoRA adapters kept loaded (text models).", "model", minimum=1)
@@ -224,7 +226,7 @@ _add("YUNSHU_HF_ENDPOINT", "str", None, "Hugging Face Hub endpoint for `yunshu s
 
 _overrides: dict[str, str] = {}
 _file_values: dict[str, str] | None = None
-_file_path_loaded: str | None = None
+_file_path_loaded: tuple[str | None, int | None] | None = None
 
 
 def _setting(name: str) -> Setting:
@@ -254,10 +256,19 @@ def clear_overrides() -> None:
     _overrides.clear()
 
 
+def user_config_path() -> Path:
+    """The per-user config file (``yunshu config set`` writes it)."""
+    return Path.home() / ".yunshu" / "config.toml"
+
+
 def _config_path() -> str | None:
     if "YUNSHU_CONFIG" in _overrides:
         return _overrides["YUNSHU_CONFIG"] or None
-    return os.environ.get("YUNSHU_CONFIG") or None
+    explicit = os.environ.get("YUNSHU_CONFIG")
+    if explicit:
+        return explicit
+    user = user_config_path()
+    return str(user) if user.is_file() else None
 
 
 def _normalize_key(key: str) -> str:
@@ -290,10 +301,35 @@ def load_config_file(path: str | os.PathLike | None) -> dict[str, str]:
 def _file() -> dict[str, str]:
     global _file_values, _file_path_loaded
     path = _config_path()
-    if path != _file_path_loaded or _file_values is None:
+    try:
+        key = (path, Path(path).expanduser().stat().st_mtime_ns) if path else None
+    except OSError:
+        key = (path, None)
+    if key != _file_path_loaded or _file_values is None:
         _file_values = load_config_file(path) if path else {}
-        _file_path_loaded = path
+        _file_path_loaded = key
     return _file_values
+
+
+def write_config_value(name: str, value: Any | None, path: Path | None = None) -> Path:
+    """Set (or with ``value=None`` remove) one setting in a TOML config file,
+    validating it against the registry first. Entries are written flat."""
+    s = _setting(name)
+    target = Path(path).expanduser() if path else user_config_path()
+    values = load_config_file(target) if target.is_file() else {}
+    if value is None:
+        values.pop(name, None)
+    else:
+        text = _to_text(value)
+        _parse(s, text)  # raises SettingError on a bad value
+        values[name] = text
+    target.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Yunshu settings (`yunshu config set KEY VALUE`); see docs/CONFIGURATION.md"
+    ]
+    lines += [f"{k} = {json.dumps(v)}" for k, v in sorted(values.items())]
+    target.write_text("\n".join(lines) + "\n")
+    return target
 
 
 def raw(name: str) -> tuple[str | None, str]:

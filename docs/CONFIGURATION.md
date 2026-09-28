@@ -56,6 +56,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_MODEL` | path | unset | Model path or Hugging Face id served in single-model mode; every requested model name maps to it. |
 | `YUNSHU_MULTI_MODEL` | bool | off | Multi-model mode: discover models under YUNSHU_MODELS_DIR and load them on demand. Ignored when YUNSHU_MODEL is set. |
 | `YUNSHU_MODELS_DIR` | path | unset | Directory of model folders for multi-model mode (each folder name is a model id). Unset: ~/.yunshu/models (also where `yunshu pull` downloads to). |
+| `YUNSHU_HF_CACHE_MODELS` | bool | on | Multi-model mode: also offer models already in the Hugging Face cache (the models directory wins on name clashes). `yunshu serve -m org/name` uses a cached copy either way. |
 | `YUNSHU_MODEL_TTL_SECONDS` | float | unset | Multi-model mode: unload a model idle for this many seconds. Unset: never. |
 | `YUNSHU_ALLOW_AUTO_LOAD` | bool | off | Multi-model mode: let audio requests load a model that is not loaded yet (otherwise they are rejected). |
 | `YUNSHU_MAX_LORAS` | int | 4 | Maximum LoRA adapters kept loaded (text models). |

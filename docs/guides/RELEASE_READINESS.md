@@ -23,10 +23,10 @@ first public release, P2 = soon after, P3 = later or on request.
 |---|---|---|
 | From source (`uv sync --extra vision`) | ✅ | `uv.lock` pins MLX 0.32.2 / mlx-lm 0.31.3 / mlx-vlm 0.7.3 |
 | `uv tool install` from a wheel | ✅ | Clean tool env on 2026-09-29, then `doctor`, serve Qwen3.5-0.8B, `/health`, `/version`, `/v1/models`, chat, `/v1/messages`, `service install --dry-run` |
-| `uv tool install` from git (README quickstart) | 🟡 | Same package as the wheel. Works only once the GitHub repository is public |
-| PyPI (`uv tool install "yunshu[vision]"`, `pipx install`) | 🟡 P1 | Package builds; `twine check` passes; release workflow ready. Not published: needs the name decision and the one-time trusted-publisher setup ([RELEASING.md](../../RELEASING.md)) |
-| Homebrew | 🟡 P2 | Draft formula in `packaging/homebrew/yunshu.rb`; needs a tap location and a tagged release |
-| macOS app / menu bar / DMG | ❌ P3 | Decision needed (oMLX's main differentiator) |
+| `uv tool install` from git | ✅ | Same package as the wheel; the repository is public |
+| PyPI (`uv tool install "yunshu[vision]"`, `pipx install`) | 🟡 P1 | 0.1.1 builds and passes `twine check`; the name `yunshu` was free on 2026-09-29. Publishing waits for the maintainer's go-ahead and the one-time trusted-publisher setup ([RELEASING.md](../../RELEASING.md)) |
+| Homebrew | 🟡 P2 | Formula for the shared tap [YuhuanStudio/homebrew-tap](https://github.com/YuhuanStudio/homebrew-tap) (`brew install yuhuanstudio/tap/yunshu`) in `packaging/homebrew/`; added after the PyPI release ([steps](../../packaging/homebrew/README.md)) |
+| macOS app / menu bar / DMG | — | Not planned for now: CLI + launchd service (decided 2026-09-29) |
 | `curl … \| bash` installer with a model suggestion by RAM | ❌ P3 | Rapid-MLX has one; `uv tool install` + `yunshu doctor` covers most of it |
 | `[video]` extra from PyPI | 🟡 P2 | `mlx-video` is pinned to git in `[tool.uv.sources]`; a PyPI install resolves PyPI `mlx-video` 0.1.0, which is preprocessing-only |
 | Python versions | 🟡 P3 | 3.13 only (oMLX supports 3.11–3.13) |
@@ -38,6 +38,7 @@ first public release, P2 = soon after, P3 = later or on request.
 | `yunshu doctor` | ✅ | Checks platform / Rosetta, macOS, Python, MLX + Metal, mlx-lm / mlx-vlm, memory, settings, models dir + disk, model exists + fits, port, service. Every problem comes with a fix; exits 1 on failure; `--json` |
 | `yunshu pull org/name` | ✅ | Goes to `~/.yunshu/models/org/name`. Refuses when already on disk (models dir or HF cache); resumes an interrupted download; `--force` re-checks |
 | `yunshu model list` | ✅ | Models dir (flat or `org/name`) + Hugging Face cache, typed by the server's own detection |
+| Models directory | ✅ | Default `~/.yunshu/models`; `yunshu config set models_dir <path>` saves another location in `~/.yunshu/config.toml`; `serve -m org/name` uses a copy in the models dir or the Hugging Face cache; multi-model mode lists both (`YUNSHU_HF_CACHE_MODELS`) |
 | `yunshu --version`, grouped `--help` | ✅ | |
 | Model picker by RAM / curated list | ❌ P2 | Users still have to know a repo id. A short list of verified models (Qwen3.5 / 3.8 sizes and quantizations) with the memory each needs would close this |
 
@@ -48,10 +49,10 @@ first public release, P2 = soon after, P3 = later or on request.
 | `yunshu serve -m <model>` / `--models-dir` | ✅ | |
 | Safe default bind | ✅ | `127.0.0.1`; warns on a network bind without `--auth-token` |
 | Stop before loading a missing / half-downloaded / too-large model | ✅ | `serve` runs the doctor model checks |
-| Model load fails after the pre-flight | 🟡 P2 | The server stays up with `/health/ready` = 503 and a `FATAL` log line. Fine for the service; a terminal user might prefer an exit. Decision |
+| Model load fails after the pre-flight | ✅ | The server stays up with `/health/ready` = 503 and a `FATAL` log line (decided 2026-09-29: right for the background service) |
 | Background service | ✅ | `yunshu service install/uninstall/start/stop/restart/status/logs` (launchd, restart on crash, `~/Library/Logs/Yunshu`). Plist generation tested; not loaded on the development Mac |
 | Health / status endpoints | ✅ | `/health`, `/health/ready` (503 when not ready), `/health/live`, `/version`, `/metrics`; `yunshu status` |
-| Settings: one entry point | ✅ | Registry + TOML + `--set` + `yunshu config` + generated reference |
+| Settings: one entry point | ✅ | Registry + TOML (`~/.yunshu/config.toml` by default) + `--set` + `yunshu config` / `config set` + generated reference |
 | Admin web UI / built-in chat page | ❌ P3 | oMLX has `/admin`; Yunshu has the `yunshu chat` terminal client. Decision |
 | Application log file with rotation | 🟡 P3 | The service log is one file without rotation; the foreground server logs to the terminal |
 
@@ -75,22 +76,19 @@ first public release, P2 = soon after, P3 = later or on request.
 | | Status | Notes |
 |---|---|---|
 | One version source | ✅ | `pyproject.toml`; the CLI, `/version`, OpenAPI and MCP read the installed metadata |
-| CHANGELOG | ✅ | `[Unreleased]` curated as the proposed 0.1.1 |
+| CHANGELOG | ✅ | `## [0.1.1]` entry; version bumped in `pyproject.toml` and `uv.lock` |
 | Release workflow | ✅ | Tag-only; checks version / changelog, lint, tests, build, twine, clean install, PyPI behind approval, draft GitHub release |
-| CI on push | 🟡 P1 | Lint + build on Linux; macOS unit tests only on release / manual run (to save quota). **`ruff format --check` currently fails on main** for `python/yunshu_engine/kernels/omlx/__init__.py`, `tests/unit/test_omlx_verify_kernels.py` and `tests/unit/test_vlm_stop_content_loss.py`; the kernel owners need to run `ruff format` |
+| CI on push | 🟡 P1 | Lint + build on Linux; macOS unit tests only on release / manual run (to save quota). Never run on GitHub yet: the first push is the first run |
 | Third-party notices in the artifacts | ✅ | `THIRD_PARTY_NOTICES.md` ships in the wheel and sdist |
-| Telemetry | ✅ | None. Yunshu makes no network calls except the model downloads and MCP servers you ask for |
+| Telemetry | ✅ | None, stated in the README. Yunshu makes no network calls except the model downloads and MCP servers you ask for |
 
-## Decisions needed from the maintainer
+## Decisions (2026-09-29)
 
-1. PyPI name `yunshu` (availability and ownership) and the go-ahead to publish 0.1.1.
-2. Whether to build a macOS menu-bar app / DMG like oMLX, or stay CLI + service.
-3. Homebrew: our own tap (`YuhuanStudio/homebrew-yunshu`) or submitting to homebrew-core later.
-4. Default models directory `~/.yunshu/models` (current default, matching `~/.omlx/models`).
-5. Confirm "no telemetry" as a stated policy.
-6. License and notice review before publishing (Apache-2.0; vendored oMLX Apache-2.0 and
-   TensorFold MIT).
-7. Docs site: GitHub README + `docs/`, or a domain with a generated site.
-8. Whether a failed model load should exit the server (terminal use) or keep it up and not ready
-   (service use; current behavior).
-9. Whether the GitHub repository becomes public (the git-install quickstart depends on it).
+- The repository is public; PyPI `yunshu` 0.1.1 is published after the maintainer approves the
+  pre-release check.
+- CLI + launchd service; no app for now.
+- Homebrew through the shared tap `YuhuanStudio/homebrew-tap`.
+- Models in `~/.yunshu/models` by default; Hugging Face cache models usable in place; location
+  changeable with `yunshu config set models_dir`.
+- A failed model load keeps the server up and not ready.
+- Docs stay in the README and `docs/`; no telemetry.

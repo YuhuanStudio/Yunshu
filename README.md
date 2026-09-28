@@ -23,7 +23,12 @@ already paid for. The first fully tuned model is **Qwen3.8-27B**.
 - **Lossless speculative decode.** MTP (the checkpoint's own head) or an external DFlash drafter.
   Every decode and verify matmul of a drafting request goes through one batch-invariant kernel, so
   greedy output with speculation on is token-identical to speculation off — the guarantee Splash
-  calls lossless. Non-exact fast verify exists but is opt-in.
+  calls lossless.
+- **Per-row KV for concurrent requests.** Rows of the shared batch keep their own KV length, so a
+  short request never reads a long one's padding (Qwen3.5 family; MMLU-Pro at 8 in flight 88 → 139
+  tok/s, 131K-context decode 24 → 47 tok/s).
+- **Lossy only when you ask.** Every default is lossless. Memory savers that change outputs (int8
+  KV, KV quantization, 4-bit cached prefixes, int8 SSD cache) are settings you turn on.
 - **Prefix cache for hybrid models.** Qwen3.5-family models mix attention with recurrent
   GatedDeltaNet layers, which ordinary KV caches cannot slice. Yunshu keeps exact checkpoints,
   keyed by image pixels as well as text, 8 GiB in RAM by default plus an optional SSD tier.
@@ -40,12 +45,20 @@ Needs a Mac with Apple Silicon (macOS 14+) and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 # Install. The vision extra covers the Qwen3.5 / 3.6 / 3.8 family and every VLM.
-uv tool install "yunshu[vision] @ git+https://github.com/YuhuanStudio/Yunshu"
+uv tool install "yunshu[vision]"
 
 yunshu doctor                                   # checks this Mac and prints fixes
 yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit   # downloads to ~/.yunshu/models/
-yunshu serve -m ~/.yunshu/models/mlx-community/Qwen3.5-9B-MLX-4bit
+yunshu serve -m mlx-community/Qwen3.5-9B-MLX-4bit
 ```
+
+Other ways to install: `pipx install "yunshu[vision]"`, Homebrew
+(`brew install yuhuanstudio/tap/yunshu`), or the latest `main`
+(`uv tool install "yunshu[vision] @ git+https://github.com/YuhuanStudio/Yunshu"`).
+
+`yunshu serve -m org/name` uses a model already in the models directory or the Hugging Face cache
+and downloads only when neither has it. Models live in `~/.yunshu/models`; to keep them elsewhere,
+run `yunshu config set models_dir /path/to/models` (saved in `~/.yunshu/config.toml`).
 
 The server listens on `http://127.0.0.1:8000`. Any OpenAI client works unchanged:
 
@@ -71,6 +84,9 @@ local models, including the Hugging Face cache.
 `--all-extras`), then `uv run yunshu serve -m <model>`. `uv.lock` pins the exact versions
 (MLX 0.32, `mlx-vlm` 0.7.3+).
 
+**No telemetry.** Yunshu sends nothing anywhere. The only outgoing connections are the model
+downloads you ask for and MCP servers you configure.
+
 **Docs:**
 - [connecting clients](docs/guides/CLIENTS.md) (OpenAI / Anthropic SDKs, coding agents, Open WebUI)
 - [troubleshooting](docs/guides/TROUBLESHOOTING.md)
@@ -79,61 +95,73 @@ local models, including the Hugging Face cache.
 
 ## Performance
 
-Measured on an M5 Max (128 GB), Qwen3.8-27B, 2026-09-28. Same Jundot `oQ4e-mtp` checkpoint unless
-noted; raw data and methods in
-[docs/research/runs/2026-09-28-matrix](docs/research/runs/2026-09-28-matrix/README.md).
+Measured on an M5 Max (128 GB), Qwen3.8-27B, 2026-09-28/29. Same Jundot `oQ4e-mtp` checkpoint unless
+noted. Raw data and methods are in [docs/research/runs](docs/research/runs/) (sources per table in
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md)).
 
 | Engine | Capability checks | Chat TTFT (warm) | 8K prompt: cold / repeat / edited tail | Decode tok/s |
 |---|---|---|---|---|
-| **Yunshu** (default: MTP block 6, batch-invariant) | 34/34 | 0.194 s | 8.45 / 0.115 / 0.258 s | 80 |
-| **Yunshu** (DFlash2 + fast verify, opt-in) | 31/31 | 0.185 s | 8.71 / 0.112 / 0.239 s | 86 |
+| **Yunshu 0.1.1** (default: MTP block 6, batch-invariant, ragged KV) | 34/34 | 0.192 s | 8.42 / 0.115 / 0.259 s | 73 |
 | mlx-vlm 0.7.3 server (APC) | 27/28 | 0.212 s | 8.60 / 0.108 / 0.265 s | 32 |
 | oMLX.app 0.7 (MTP + cache) | 31/31 | 0.312 s | 8.60 / 0.361 / 0.376 s | 85 |
 | Splash 1.1 (own quantized model + DFlash2) | 31/31 | 0.206 s | 7.88 / 0.131 / 7.88 s | 119 |
+| TensorFold 0.3.6.1 (MTP, parallel 8) | 23/34 | — | — | 28 |
 
-Lossless decode by output type (same checkpoint, in-process, greedy, 384 tokens; tok/s):
+Yunshu's matrix has more checks than the older runs (logprobs, the streaming reasoning split);
+TensorFold fails the image, tool, JSON-schema and logprobs checks.
 
-| Decode | Code | Prose | JSON-like | Spec on == off |
+Lossless single-request decode by output type (same checkpoint, in-process, greedy, 384 tokens;
+tok/s):
+
+| Context | Code | Prose | JSON-like | Spec on == off |
 |---|---|---|---|---|
-| **Default**: batch-invariant + packed, MTP block 6 | 88.6 | 59.9 | 67.3 | yes (tested)¹ |
-| Previous default: exact verify kernels, MTP block 3 | 57–67 | 50–53 | 58–62 | yes (tested)¹ |
-| Non-exact fast verify (opt-in) | 83.8 | 59.9 | 66.7 | no |
+| 1K | 82.1 | 57.8 | 69.0 | yes (tested)¹ |
+| 32K | 75.4 | 51.2 | 64.2 | yes (tested)¹ |
+| 131K | 59.7 | 43.8 | 46.0 | yes (tested)¹ |
 
-¹ Speculative and plain greedy output matched token for token on every task at short prompts and at
-1.2K / 16.5K-token contexts (384 tokens each). Matmuls are row-invariant; verify attention runs a
-different MLX kernel than one-row decode, so bit-level logits can differ and a rare token flip is
-possible on other inputs. oMLX's row-exact attention removes that but decodes 30–50% slower
-(`YUNSHU_MTP_ROW_EXACT=1`).
+¹ Speculative and plain greedy output matched token for token on every task at every context
+above. Matmuls are row-invariant, and decode and verify attention run one per-row kernel whose
+result for a token does not depend on how many tokens are verified with it.
 
 MMLU-Pro, 300 questions, 8 in flight, max 16384 tokens, `reasoning_effort=medium` (accuracy and a
 long-run soak; same settings for every engine):
 
 | Engine | Correct | Wall time | Aggregate tok/s | Peak footprint |
 |---|---|---|---|---|
-| **Yunshu** (shared batch, commit fbbb1378) | 250 / 300 | 46.5 min | 88 | 45 GiB (back to 17 at the end) |
+| **Yunshu** (ragged KV) | 249 / 300 | 28.3 min | 139 | 33.7 GiB |
+| Yunshu 0.1.0-era shared batch (padded KV) | 250 / 300 | 46.5 min | 88 | 45 GiB |
+| TensorFold 0.3.6.1 (MTP, parallel 8) | 250 / 300 | 24.9 min | 159 | 35.1 GiB |
 | Splash 1.1 | 252 / 300 | 17.2 min | 223 | 67 GiB |
 | oMLX.app | 229 / 300 (27 rejected by its prefill memory guard) | 29.2 min | 120 | 75 GiB |
 
+With `YUNSHU_KV_PRECISION=int8` (lossy, opt-in) Yunshu scored 251 / 300 at a 28.1 GiB peak (measured
+on an earlier build of the ragged cache, 34.6 min).
+
 Speed sweep (unique prompts, no cache hits; 128 generated tokens; tok/s unless noted):
 
-| | Yunshu | oMLX | Splash |
-|---|---|---|---|
-| TTFT at 8K / 131K / 200K tokens | 8.4 / 209 / 394 s | 8.5 / 214 / 401 s | 7.9 / 207 / 390 s |
-| Decode after 1K / 32K / 200K | 58 / 44 / 17 | 71 / 60 / 29 | 101 / 48 / 66 |
-| 8 concurrent 1K prompts, aggregate | 61 | 53 | 70 |
+| | Yunshu | oMLX | Splash | TensorFold (MTP) |
+|---|---|---|---|---|
+| TTFT at 8K / 131K tokens | 8.6 / 207 s | 8.5 / 214 s | 7.9 / 207 s | 9.8 / 293 s |
+| Decode after 1K / 32K / 131K | 59² / 59 / 47 | 71 / 60 / 38 | 101 / 48 / 68 | 26 / 57 / 19 |
+| 8 concurrent 1K prompts, aggregate | 64 | 53 | 70 | 65 |
+
+² Single-request decode depends on how many drafted tokens are accepted, which varies with the
+prompt; Yunshu's 1K figure is the mean of 8 runs (single runs ranged 40–70). The other cells are
+single runs.
 
 Where Yunshu stands:
-- Prefix reuse and warm TTFT are the best measured; cold prefill is at the hardware ceiling (all three
-  engines within ~5%).
-- Accuracy matches Splash; 0 errors in every long run.
-- **Behind Splash** on long-context decode (it keeps KV in INT8) and on concurrent long outputs (the
-  upstream batch cache pads every row to the longest one). Quantized KV and a ragged per-row KV cache
-  are being validated to close both.
-- A 60-minute mixed soak (chat, long documents, images, tools, JSON schema, thinking, disconnects)
-  finished 699 requests with 0 server errors and no memory growth (footprint 17–26 GiB).
-
-Yunshu's matrix has two more checks than the older runs: logprobs and the streaming reasoning split.
-The long-run benchmark log is [docs/reports/PERF_TREND.md](docs/reports/PERF_TREND.md).
+- Prefix reuse and warm TTFT are the best measured; cold prefill is at the hardware ceiling (every
+  engine within ~10%).
+- Accuracy matches the others; 0 errors in every long run.
+- **Behind Splash** on long-context decode (131K: 47 vs 68 tok/s) and on concurrent long outputs
+  (MMLU-Pro: 139 vs 223 tok/s). TensorFold is also ahead there (159) because it drafts for every
+  row; Yunshu drafts only for a request that is alone. Multi-row speculative decoding is in
+  progress (`YUNSHU_ROUND_DRIVER`, experimental).
+- A long prompt that arrives while others decode stalls their decode during its prefill; every
+  engine measured does this.
+- A 60-minute mixed soak on the 2026-09-28 build (chat, long documents, images, tools, JSON schema,
+  thinking, disconnects) finished 699 requests with 0 server errors and no memory growth
+  (footprint 17–26 GiB).
 
 ## Supported models
 

@@ -224,6 +224,16 @@ def serve(
     effective_model = settings.get("YUNSHU_MODEL")
     effective_dir = settings.get("YUNSHU_MODELS_DIR")
     if effective_model:
+        from yunshu_engine.model_discovery import resolve_model_ref
+
+        # A name under the models directory, or a repo id already in the
+        # Hugging Face cache, serves that local copy instead of downloading.
+        local = resolve_model_ref(effective_model)
+        if local != effective_model:
+            console.print(f"[dim]Using the local copy of {effective_model}: {local}[/]")
+            settings.set_override("YUNSHU_MODEL", local)
+            env["YUNSHU_MODEL"] = local
+            effective_model = local
         _preflight_model(effective_model)
     if host not in ("127.0.0.1", "localhost", "::1") and not settings.get(
         "YUNSHU_AUTH_TOKEN"
