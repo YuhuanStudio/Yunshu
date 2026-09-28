@@ -57,6 +57,9 @@ def main():
     ap.add_argument("--kernels", default="exact", choices=["exact", "fast", "none"])
     ap.add_argument("--tokens", type=int, default=256)
     ap.add_argument("--pack", action="store_true", help="oMLX NAX packed projections")
+    ap.add_argument(
+        "--dflash", default=None, help="external DFlash drafter dir instead of MTP"
+    )
     ap.add_argument("--output", type=Path, required=True)
     a = ap.parse_args()
     a.output.parent.mkdir(parents=True, exist_ok=True)
@@ -77,7 +80,12 @@ def main():
         from yunshu_engine.kernels.omlx import pack_projections
 
         packed = pack_projections(model)
-    drafter = _load_drafter_in_memory(a.model_dir)
+    if a.dflash:
+        from mlx_vlm.speculative.drafters import load_drafter
+
+        drafter, draft_kind = load_drafter(a.dflash, kind="dflash")
+    else:
+        drafter, draft_kind = _load_drafter_in_memory(a.model_dir), "mtp"
     lm = model.language_model
 
     def emit(row):
@@ -86,7 +94,14 @@ def main():
         print(json.dumps(row), flush=True)
 
     emit(
-        {"kind": "meta", "model": a.model_dir, "kernels": a.kernels, "tokens": a.tokens}
+        {
+            "kind": "meta",
+            "model": a.model_dir,
+            "kernels": a.kernels,
+            "tokens": a.tokens,
+            "packed": packed,
+            "draft": draft_kind,
+        }
     )
 
     def prompt_ids(i):
@@ -108,7 +123,7 @@ def main():
                 processor,
                 max_tokens=a.tokens,
                 draft_model=drafter if block else None,
-                draft_kind="mtp" if block else None,
+                draft_kind=draft_kind if block else None,
                 draft_block_size=block or None,
                 greedy_sampling=True,
                 compute_logprobs=False,
