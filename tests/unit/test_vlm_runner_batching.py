@@ -199,3 +199,19 @@ def test_thinking_budget_uses_upstream_criteria_without_draft(runner):
     assert gen.kwargs["draft_model"] is None and not stats.used_draft
     (crit,) = gen.budgets
     assert crit is not None and crit.thinking_budget == 4
+
+
+def test_token_mask_processor_min_tokens_ignore_eos_suppress():
+    import mlx.core as mx
+
+    logits = mx.zeros((1, 6))
+    p = vbr.TokenMaskProcessor(suppress=[1], eos_ids=[5], min_tokens=2)
+    first = p(mx.array([]), logits)
+    assert first[0, 1].item() == float("-inf") and first[0, 5].item() == float("-inf")
+    p.process_last_token(3, logits)
+    second = p.process_last_token(3, logits)
+    assert second[0, 5].item() == 0.0  # min_tokens reached: EOS allowed again
+    q = vbr.TokenMaskProcessor(eos_ids=[5], ignore_eos=True)
+    for _ in range(5):
+        out = q.process_last_token(2, logits)
+    assert out[0, 5].item() == float("-inf")

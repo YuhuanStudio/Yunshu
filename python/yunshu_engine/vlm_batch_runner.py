@@ -128,6 +128,62 @@ def build_penalty_processors(
     )
 
 
+class TokenMaskProcessor:
+    """suppress_tokens / min_tokens / ignore_eos / top-nσ as one per-row
+    logits processor (first token via ``__call__``, later tokens via
+    ``process_last_token``, counting only generated tokens)."""
+
+    def __init__(
+        self,
+        *,
+        suppress: list[int] | None = None,
+        eos_ids: list[int] | None = None,
+        min_tokens: int = 0,
+        ignore_eos: bool = False,
+        top_n_sigma: float = 0.0,
+    ):
+        self._suppress = mx.array(sorted(set(suppress or [])), dtype=mx.int32)
+        self._eos = mx.array(sorted(set(eos_ids or [])), dtype=mx.int32)
+        self._min_tokens = int(min_tokens or 0)
+        self._ignore_eos = bool(ignore_eos)
+        self._n_sigma = float(top_n_sigma or 0.0)
+        self._generated = 0
+
+    @staticmethod
+    def active(**kw) -> bool:
+        return bool(
+            kw.get("suppress")
+            or kw.get("min_tokens")
+            or kw.get("ignore_eos")
+            or kw.get("top_n_sigma")
+        )
+
+    def _block(self, ids: mx.array, vocab: int) -> mx.array:
+        return mx.zeros((vocab,), dtype=mx.bool_).at[ids].add(True)
+
+    def _mask(self, logits: mx.array) -> mx.array:
+        # Functional (never writes into the caller's logits).
+        neg = mx.array(float("-inf"), logits.dtype)
+        vocab = logits.shape[-1]
+        if self._suppress.size:
+            logits = mx.where(self._block(self._suppress, vocab), neg, logits)
+        if self._eos.size and (self._ignore_eos or self._generated < self._min_tokens):
+            logits = mx.where(self._block(self._eos, vocab), neg, logits)
+        if self._n_sigma > 0:
+            top = mx.max(logits, axis=-1, keepdims=True)
+            finite = mx.where(mx.isinf(logits), top, logits)
+            sigma = mx.sqrt(mx.var(finite, axis=-1, keepdims=True))
+            logits = mx.where(logits < top - self._n_sigma * sigma, neg, logits)
+        return logits
+
+    def __call__(self, tokens: mx.array, logits: mx.array) -> mx.array:
+        return self._mask(logits)
+
+    def process_last_token(self, token: int, logits: mx.array) -> mx.array:
+        self._generated += 1
+        return self._mask(logits)
+
+
 class VLMBatchRunner:
     """Owns the APC manager, the drafter and the shared batch scheduler."""
 
@@ -245,6 +301,9 @@ class VLMBatchRunner:
         top_logprobs: int = 0,
         thinking_budget: int | None = None,
         prompt_preopens_thinking: bool = False,
+        xtc_probability: float = 0.0,
+        xtc_threshold: float = 0.0,
+        xtc_special_tokens: list | None = None,
     ) -> Iterator[int]:
         """Yield generated token ids; ``stats`` is filled in as generation runs.
 
@@ -287,7 +346,14 @@ class VLMBatchRunner:
                 None
                 if greedy
                 else RowParams(
-                    float(temperature), float(top_p), int(top_k), float(min_p), seed
+                    float(temperature),
+                    float(top_p),
+                    int(top_k),
+                    float(min_p),
+                    seed,
+                    float(xtc_probability or 0.0),
+                    float(xtc_threshold or 0.0),
+                    xtc_special_tokens,
                 )
             ),
             use_draft=use_draft,
@@ -582,6 +648,9 @@ class RowParams:
     top_k: int
     min_p: float
     seed: int | None = None
+    xtc_probability: float = 0.0
+    xtc_threshold: float = 0.0
+    xtc_special_tokens: list | None = None
 
 
 class RowSampler:
@@ -607,7 +676,12 @@ class RowSampler:
         return self(logprobs)
 
     def __call__(self, logprobs: mx.array) -> mx.array:
-        from mlx_lm.sample_utils import apply_min_p, apply_top_k, apply_top_p
+        from mlx_lm.sample_utils import (
+            apply_min_p,
+            apply_top_k,
+            apply_top_p,
+            apply_xtc,
+        )
 
         tokens = mx.argmax(logprobs, axis=-1)
         if not self._rows:
@@ -630,6 +704,13 @@ class RowSampler:
                 row = apply_top_p(row, p.top_p)
             if p.min_p:
                 row = apply_min_p(row, p.min_p)
+            if p.xtc_probability > 0.0:
+                row = apply_xtc(
+                    row,
+                    p.xtc_probability,
+                    p.xtc_threshold,
+                    list(p.xtc_special_tokens or []),
+                )
             if p.top_k > 0:
                 row = apply_top_k(row, p.top_k)
             row = row * (1 / p.temperature)

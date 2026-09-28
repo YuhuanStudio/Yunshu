@@ -4401,16 +4401,9 @@ class VLMEngine:
         )
         return runner
 
-    _RUNNER_UNSUPPORTED_KWARGS = (
-        "xtc_probability",
-        "xtc_threshold",
-        "logits_processors",
-        "lora_adapter",
-        "min_tokens",
-        "ignore_eos",
-        "suppress_tokens",
-        "spec_decode",
-    )
+    # Knobs the runner does not implement; such requests take the legacy loop.
+    # (spec_decode is accepted and ignored: the runner drafts on its own.)
+    _RUNNER_UNSUPPORTED_KWARGS = ("logits_processors", "lora_adapter")
 
     def _runner_text_eligible(self, *, logprobs: bool, top_logprobs, kwargs) -> bool:
         """Every text request goes through the runner unless it needs a knob the
@@ -4489,6 +4482,12 @@ class VLMEngine:
         apc_semantic_hash: int | None = None,
         logprobs: bool = False,
         top_logprobs: int | None = None,
+        min_tokens: int = 0,
+        ignore_eos: bool = False,
+        suppress_tokens: list[int] | None = None,
+        top_n_sigma: float = 0.0,
+        xtc_probability: float = 0.0,
+        xtc_threshold: float = 0.0,
     ):
         """Yield ``(text, token_id, state, finish_reason, thinking_tokens, logprob)``.
 
@@ -4499,16 +4498,30 @@ class VLMEngine:
         string), "length", "budget" (thinking budget reached) or "cancel".
         """
         from .text_utils import StopHoldbackBuffer
-        from .vlm_batch_runner import ConstraintProcessor, build_penalty_processors
+        from .vlm_batch_runner import (
+            ConstraintProcessor,
+            TokenMaskProcessor,
+            build_penalty_processors,
+        )
 
         processors = build_penalty_processors(
             repetition_penalty, frequency_penalty, presence_penalty, logit_bias
         )
+        mask_kw = {
+            "suppress": suppress_tokens,
+            "min_tokens": min_tokens,
+            "ignore_eos": ignore_eos,
+            "top_n_sigma": top_n_sigma,
+        }
+        if TokenMaskProcessor.active(**mask_kw):
+            processors.append(
+                TokenMaskProcessor(eos_ids=list(self._get_eos_ids()), **mask_kw)
+            )
         constraint = self._build_text_constraint(json_schema)
         if constraint is not None:
             processors.append(ConstraintProcessor(constraint, self._tokenizer))
 
-        stop_ids = set(self._get_eos_ids())
+        stop_ids = set() if ignore_eos else set(self._get_eos_ids())
         stop_ids.update(stop_token_ids or [])
         stop_strings = [s for s in (stop or []) if s]
         holdback = StopHoldbackBuffer(stop_strings)
@@ -4543,6 +4556,9 @@ class VLMEngine:
             top_logprobs=int(top_logprobs or 0),
             thinking_budget=thinking_budget if enable_thinking is not False else None,
             prompt_preopens_thinking=in_think,
+            xtc_probability=xtc_probability,
+            xtc_threshold=xtc_threshold,
+            xtc_special_tokens=list(self._get_eos_ids()),
         ):
             count += 1
             lp = stats.last_logprob if logprobs else None
@@ -4617,6 +4633,12 @@ class VLMEngine:
             logit_bias=kwargs.get("logit_bias"),
             json_schema=js,
             thinking_budget=tb,
+            min_tokens=int(kwargs.get("min_tokens") or 0),
+            ignore_eos=bool(kwargs.get("ignore_eos")),
+            suppress_tokens=kwargs.get("suppress_tokens"),
+            top_n_sigma=float(kwargs.get("top_n_sigma") or 0.0),
+            xtc_probability=float(kwargs.get("xtc_probability") or 0.0),
+            xtc_threshold=float(kwargs.get("xtc_threshold") or 0.0),
         )
 
     def _generate_vlm_runner_text(

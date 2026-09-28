@@ -24,16 +24,18 @@ def test_runner_serves_ordinary_requests():
 
 
 def test_runner_leaves_unimplemented_knobs_to_legacy_loop():
+    for key in ("lora_adapter", "logits_processors"):
+        assert not _runner_eligible(**{key: 1})
+    # Implemented by the runner (TokenMaskProcessor / RowSampler) or accepted.
     for key in (
         "xtc_probability",
-        "lora_adapter",
         "min_tokens",
         "ignore_eos",
         "suppress_tokens",
-        "logits_processors",
+        "top_n_sigma",
         "spec_decode",
     ):
-        assert not _runner_eligible(**{key: 1})
+        assert _runner_eligible(**{key: 1})
     engine = object.__new__(VLMEngine)
     engine._batch_runner = None
     assert not engine._runner_text_eligible(
