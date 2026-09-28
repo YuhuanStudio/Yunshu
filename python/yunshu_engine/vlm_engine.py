@@ -23,8 +23,10 @@ Architecture:
 
 import asyncio
 import base64
+import concurrent.futures
 import contextlib
 import contextvars
+import functools
 import gc
 import hashlib
 import importlib
@@ -58,6 +60,15 @@ logger = logging.getLogger(__name__)
 _request_temp_files: contextvars.ContextVar[list | None] = contextvars.ContextVar(
     "vlm_request_temp_files", default=None
 )
+
+
+class _RunnerCall(functools.partial):
+    """A runner request prepared on the MLX thread, to be consumed off it.
+
+    The batch runner's driver needs the (single) MLX executor, so the request
+    must wait for its tokens on another thread; ``_generate_sync`` /
+    ``_stream_sync`` return this instead of generating inline.
+    """
 
 
 def _build_noncached_sampler(
@@ -1699,8 +1710,9 @@ class VLMEngine:
                     ids, pkw, salt = self._batch_runner.prepare_images(
                         prompt, image_paths
                     )
-                    return self._generate_vlm_runner_text(
-                        ids,
+                    return _RunnerCall(
+                        self._generate_vlm_runner_text,
+                        ids.tolist(),
                         extras=_runner_extras,
                         prompt_kwargs=pkw,
                         apc_semantic_hash=salt,
@@ -1766,8 +1778,9 @@ class VLMEngine:
                     if max_tokens > 0 and self._runner_text_eligible(
                         logprobs=logprobs, top_logprobs=top_logprobs, kwargs=kwargs
                     ):
-                        return self._generate_vlm_runner_text(
-                            input_ids,
+                        return _RunnerCall(
+                            self._generate_vlm_runner_text,
+                            input_ids.tolist(),
                             extras=_runner_extras,
                             **self._runner_kwargs(
                                 max_tokens=max_tokens,
@@ -1941,6 +1954,18 @@ class VLMEngine:
                 # MLX thread, so a fixed default would also count queue time
                 # and fail requests that are merely waiting their turn.
                 _timeout_seconds = kwargs.get("timeout_seconds") or None
+                _out = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        self._executor, self._then_clear(_generate_sync)
+                    ),
+                    timeout=_timeout_seconds,
+                )
+                if isinstance(_out, _RunnerCall):
+                    # Batched runner: wait for tokens off the MLX thread.
+                    _out = await asyncio.wait_for(
+                        loop.run_in_executor(self._runner_consumers(), _out),
+                        timeout=_timeout_seconds,
+                    )
                 (
                     result,
                     reasoning_tokens,
@@ -1948,12 +1973,7 @@ class VLMEngine:
                     stop_hit,
                     budget_hit,
                     cached_token_count,
-                ) = await asyncio.wait_for(
-                    loop.run_in_executor(
-                        self._executor, self._then_clear(_generate_sync)
-                    ),
-                    timeout=_timeout_seconds,
-                )
+                ) = _out
             except TimeoutError:
                 self._num_requests_processed += 1
                 logger.warning(
@@ -2195,6 +2215,8 @@ class VLMEngine:
         _stream_ttft_recorded = [False]
         _stream_ttft_val = [0.0]
 
+        deferred: list = [None]
+
         def _stream_sync():
             nonlocal _has_detokenizer
             self._template_extra = tpl_extra
@@ -2227,8 +2249,9 @@ class VLMEngine:
                     ids, pkw, salt = self._batch_runner.prepare_images(
                         prompt, image_paths
                     )
-                    self._stream_vlm_runner_text(
-                        ids,
+                    deferred[0] = _RunnerCall(
+                        self._stream_vlm_runner_text,
+                        ids.tolist(),
                         req_id,
                         _safe_queue,
                         prompt_kwargs=pkw,
@@ -2293,8 +2316,9 @@ class VLMEngine:
                     if max_tokens > 0 and self._runner_text_eligible(
                         logprobs=logprobs, top_logprobs=top_logprobs, kwargs=kwargs
                     ):
-                        self._stream_vlm_runner_text(
-                            input_ids,
+                        deferred[0] = _RunnerCall(
+                            self._stream_vlm_runner_text,
+                            input_ids.tolist(),
                             req_id,
                             _safe_queue,
                             **self._runner_kwargs(
@@ -2701,16 +2725,29 @@ class VLMEngine:
                     )
                 )
             finally:
-                with contextlib.suppress(Exception):
-                    _safe_queue.put_nowait(None)
+                if deferred[0] is None:
+                    with contextlib.suppress(Exception):
+                        _safe_queue.put_nowait(None)
 
         with self._active_count_lock:
             self._active_count += 1
         loop = asyncio.get_running_loop()
 
-        stream_task = loop.run_in_executor(
-            self._executor, self._then_clear(_stream_sync)
-        )
+        async def _stream_job():
+            await loop.run_in_executor(self._executor, self._then_clear(_stream_sync))
+            call = deferred[0]
+            if call is not None:
+                # Batched runner: consume tokens off the MLX thread.
+                def _consume():
+                    try:
+                        call()
+                    finally:
+                        with contextlib.suppress(Exception):
+                            _safe_queue.put_nowait(None)
+
+                await loop.run_in_executor(self._runner_consumers(), _consume)
+
+        stream_task = asyncio.ensure_future(_stream_job())
 
         # The executor owns the model lease. A disconnected ASGI task can be
         # cancelled during an await in the async generator's cleanup, so its
@@ -4341,7 +4378,9 @@ class VLMEngine:
             draft_block_size=int(block) if block else None,
             apc_admit=self._apc_capacity_allows,
             draft_kind=draft_kind,
+            executor=self._executor,
         )
+        runner.clear_on_idle = bool(getattr(self, "_mx_large_model", False))
         logger.info(
             "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s",
             f"{self._apc_backend.memory_max_bytes / 2**30:.1f}GiB"
@@ -4472,7 +4511,7 @@ class VLMEngine:
         # clients rely on current_state to split reasoning from content.
         in_think = False
         if think_start is not None:
-            tail = input_ids[-64:].tolist()
+            tail = list(input_ids[-64:])
             if think_start in tail:
                 last_open = len(tail) - 1 - tail[::-1].index(think_start)
                 in_think = think_end is None or think_end not in tail[last_open + 1 :]
@@ -4629,7 +4668,7 @@ class VLMEngine:
             queue.put_nowait(output)
             return True
 
-        prompt_tokens = int(input_ids.shape[0])
+        prompt_tokens = len(input_ids)
         try:
             for text, token, state, finish, thinking, lp in self._runner_events(
                 input_ids, stats=stats, **params
@@ -5416,7 +5455,9 @@ class VLMEngine:
             try:
                 return fn()
             finally:
-                if getattr(self, "_mx_large_model", False):
+                runner = getattr(self, "_batch_runner", None)
+                busy = runner is not None and runner.busy()
+                if getattr(self, "_mx_large_model", False) and not busy:
                     try:
                         mx.synchronize()
                         mx.clear_cache()
@@ -5424,6 +5465,15 @@ class VLMEngine:
                         logger.debug("post-gen mx.clear_cache failed", exc_info=True)
 
         return run
+
+    def _runner_consumers(self):
+        """Threads that wait for batched-runner tokens (never MLX work)."""
+        pool = getattr(self, "_runner_consumer_pool", None)
+        if pool is None:
+            pool = self._runner_consumer_pool = concurrent.futures.ThreadPoolExecutor(
+                max_workers=64, thread_name_prefix="vlm-runner-consumer"
+            )
+        return pool
 
     def _template_effort_extra(self, kwargs: dict) -> dict | None:
         """Move ``reasoning_effort`` into the chat template when it supports it.

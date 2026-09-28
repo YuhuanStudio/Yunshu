@@ -1,4 +1,4 @@
-"""Single-request VLM text runner on upstream mlx-vlm ``BatchGenerator``.
+"""VLM text runner on upstream mlx-vlm ``BatchGenerator`` with shared batching.
 
 One decode path for a loaded VLM target that combines, per request:
 
@@ -15,13 +15,15 @@ BatchGenerator stays token-identical to AR while a repeated 5K prompt drops from
 
 The runner only yields token ids. Detokenizing, stop strings, thinking state and
 queue delivery stay in ``VLMEngine`` so every text path reports the same way.
-Everything here runs on the serialized MLX executor thread.
+GPU work runs on the serialized MLX executor thread; consumers read their\ntokens from a queue on any other thread.
 """
 
 from __future__ import annotations
 
 import contextlib
 import logging
+import queue
+import threading
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -126,7 +128,7 @@ def build_penalty_processors(
 
 
 class VLMBatchRunner:
-    """Owns the per-model APC manager and MTP drafter; builds one generator per request."""
+    """Owns the APC manager, the drafter and the shared batch scheduler."""
 
     def __init__(
         self,
@@ -139,6 +141,7 @@ class VLMBatchRunner:
         draft_block_size: int | None = None,
         apc_admit: Any = None,
         draft_kind: str = "mtp",
+        executor: Any = None,
     ):
         self.model = model
         self.processor = processor
@@ -150,6 +153,13 @@ class VLMBatchRunner:
         # Callable(input_ids) -> bool: skip APC when its checkpoints cannot fit,
         # so a cold request does not pay APC bookkeeping for nothing.
         self._apc_admit = apc_admit
+        # The serialized MLX executor the driver runs on (None: drive inline).
+        self._executor = executor
+        self._lock = threading.Lock()
+        self._pending: list[_Job] = []
+        self._groups: dict[tuple, _Group] = {}
+        self._driving = False
+        self.clear_on_idle = False
 
     def prepare_images(self, prompt: str, image_paths: list[str]):
         """Preprocess + encode images for one prompt on the MLX thread.
@@ -192,9 +202,19 @@ class VLMBatchRunner:
             )
         return input_ids[0], kwargs, salt
 
+    # ── Shared continuous batching ──────────────────────────────────────
+    #
+    # Requests submit a job and consume tokens from their own queue on any
+    # thread. One driver owns the GPU: it runs on the serialized MLX executor
+    # in short slices (admit new jobs, one generator step per group, dispatch),
+    # resubmitting itself while work remains so other MLX jobs (tokenizing,
+    # image encoding for the next request) interleave. Jobs that share
+    # sampling settings share one upstream BatchGenerator, so concurrent
+    # requests decode together instead of queueing behind each other.
+
     def iter_tokens(
         self,
-        input_ids: mx.array,
+        input_ids,
         *,
         max_tokens: int,
         temperature: float = 0.0,
@@ -211,13 +231,14 @@ class VLMBatchRunner:
         logprobs: bool = False,
         top_logprobs: int = 0,
     ) -> Iterator[int]:
-        """Yield generated token ids; ``stats`` is filled in as generation runs."""
-        from mlx_vlm.generate.ar import BatchGenerator
+        """Yield generated token ids; ``stats`` is filled in as generation runs.
 
-        from .mrope import clear_rope_state
-
+        Must not be called on the MLX executor thread when the runner has an
+        executor: the driver needs that thread.
+        """
         stats = stats if stats is not None else RunStats()
-        stats.prompt_tokens = int(input_ids.shape[0])
+        ids = input_ids.tolist() if hasattr(input_ids, "tolist") else list(input_ids)
+        stats.prompt_tokens = len(ids)
         greedy = temperature is None or temperature < 1e-6
         processors = list(logits_processors or [])
         # Upstream drops logprobs while drafting, so logprob requests decode AR.
@@ -228,95 +249,243 @@ class VLMBatchRunner:
             and not processors
             and not logprobs
         )
-        apc = self.apc_manager
-        if apc is not None and self._apc_admit is not None:
-            try:
-                if not self._apc_admit(input_ids):
-                    apc = None
-            except Exception:
-                logger.debug("APC admission check failed; using APC", exc_info=True)
-        stats.used_apc = apc is not None
-        stats.used_draft = use_draft
-        from .kernels import batch_invariant
-
-        if batch_invariant.is_installed():
-            # Invariance only matters when a request drafts (spec output ==
-            # plain output); requests that cannot draft (sampling, logits
-            # processors, logprobs) take the faster stock kernels.
-            batch_invariant.set_active(use_draft)
-
-        if seed is not None:
-            mx.random.seed(int(seed) & ((1 << 63) - 1))
-        if prompt_kwargs is None:
-            clear_rope_state(self.model)
-            prompt_kwargs = self.model.get_input_embeddings(
-                input_ids[None], None, mask=None
-            ).to_dict()
-        salt = (
-            apc_semantic_hash
-            if apc_semantic_hash is not None
-            else (self.apc_semantic_hash)
+        job = _Job(
+            ids=ids,
+            max_tokens=int(max_tokens),
+            greedy=greedy,
+            sampling=(
+                None
+                if greedy
+                else (float(temperature), float(top_p), int(top_k), float(min_p))
+            ),
+            use_draft=use_draft,
+            logprobs=bool(logprobs),
+            top_logprobs=int(top_logprobs or 0) if logprobs else 0,
+            processors=processors,
+            prompt_kwargs=prompt_kwargs,
+            salt=apc_semantic_hash,
+            seed=seed,
+            cancel_event=cancel_event,
+            stats=stats,
         )
-        if salt is not None:
-            prompt_kwargs["_apc_semantic_hash"] = salt
+        stats.used_draft = use_draft
+        self._submit(job)
+        try:
+            while True:
+                if self._executor is None:
+                    # No executor (tests / direct use): drive inline.
+                    while job.out.empty():
+                        self._drive_slice(resubmit=False)
+                item = job.out.get()
+                if item is _DONE:
+                    return
+                if isinstance(item, BaseException):
+                    raise item
+                token, lp = item
+                if lp is not None:
+                    stats.last_logprob = lp
+                yield token
+        finally:
+            # A consumer that stops early (stop string, max length reached on
+            # its side, disconnect) releases its row at the next slice.
+            job.abandoned = True
 
-        matched_before = apc.stats.matched_tokens if apc is not None else 0
-        generator = BatchGenerator(
+    def busy(self) -> bool:
+        with self._lock:
+            return bool(self._pending or self._groups or self._driving)
+
+    def _submit(self, job: _Job) -> None:
+        with self._lock:
+            self._pending.append(job)
+            if self._executor is None or self._driving:
+                return
+            self._driving = True
+        self._executor.submit(self._drive_slice)
+
+    def _group_key(self, job: _Job, use_apc: bool) -> tuple:
+        return (job.use_draft, job.sampling, job.logprobs, job.top_logprobs, use_apc)
+
+    def _new_group(self, job: _Job, use_apc: bool) -> _Group:
+        from mlx_vlm.generate.ar import BatchGenerator
+
+        sampler = build_sampler(*job.sampling) if job.sampling is not None else None
+        gen = BatchGenerator(
             self.model.language_model,
             self.processor,
-            max_tokens=max_tokens,
-            sampler=build_sampler(temperature, top_p, top_k, min_p),
-            apc_manager=apc,
-            draft_model=self.drafter if use_draft else None,
-            draft_kind=self.draft_kind if use_draft else None,
-            draft_block_size=self.draft_block_size if use_draft else None,
-            greedy_sampling=greedy,
-            compute_logprobs=bool(logprobs),
-            top_logprobs_k=int(top_logprobs or 0) if logprobs else 0,
+            max_tokens=job.max_tokens,
+            sampler=sampler,
+            apc_manager=self.apc_manager if use_apc else None,
+            draft_model=self.drafter if job.use_draft else None,
+            draft_kind=self.draft_kind if job.use_draft else None,
+            draft_block_size=self.draft_block_size if job.use_draft else None,
+            greedy_sampling=job.greedy,
+            compute_logprobs=job.logprobs,
+            top_logprobs_k=job.top_logprobs,
             prefill_step_size=PREFILL_STEP,
         )
-        uid = None
-        start = time.perf_counter()
-        try:
-            uid = generator.insert(
-                [input_ids.tolist()],
-                max_tokens=max_tokens,
-                prompt_kwargs=[prompt_kwargs],
-                logits_processors=[processors or None],
-            )[0]
-            # Upper bound on generator steps: prefill chunks + one token per step.
-            for _ in range(stats.prompt_tokens // 256 + max_tokens + 64):
-                if cancel_event is not None and cancel_event.is_set():
-                    stats.finish_reason = "cancel"
-                    return
-                _, responses = generator.next()
-                for response in responses:
-                    if response.uid != uid:
-                        continue
-                    if stats.generated == 0:
-                        stats.first_token_s = time.perf_counter() - start
-                        if apc is not None:
-                            stats.cached_tokens = (
-                                apc.stats.matched_tokens - matched_before
-                            )
-                    stats.generated += 1
-                    if logprobs:
-                        stats.last_logprob = {
-                            "token_id": int(response.token),
-                            "logprob": float(response.token_logprob),
-                            "top_logprobs": [
-                                {"token_id": int(t), "logprob": float(lp)}
-                                for t, lp in (response.top_logprobs or [])
-                            ],
-                        }
-                    if response.finish_reason is not None:
-                        stats.finish_reason = response.finish_reason
-                    yield int(response.token)
-                    if stats.finish_reason is not None:
-                        return
-            raise RuntimeError("VLM batch runner exceeded its step bound")
-        finally:
-            if uid is not None and stats.finish_reason in (None, "cancel"):
+        return _Group(gen=gen, use_draft=job.use_draft)
+
+    def _admit(self, job: _Job) -> None:
+        from .mrope import clear_rope_state
+
+        use_apc = self.apc_manager is not None
+        if use_apc and self._apc_admit is not None:
+            try:
+                use_apc = bool(self._apc_admit(mx.array(job.ids)))
+            except Exception:
+                logger.debug("APC admission check failed; using APC", exc_info=True)
+        job.stats.used_apc = use_apc
+        key = self._group_key(job, use_apc)
+        group = self._groups.get(key)
+        if group is None:
+            group = self._groups[key] = self._new_group(job, use_apc)
+        if job.seed is not None and not group.jobs:
+            mx.random.seed(int(job.seed) & ((1 << 63) - 1))
+        pkw = job.prompt_kwargs
+        if pkw is None:
+            if not self._active_jobs():
+                clear_rope_state(self.model)
+            pkw = self.model.get_input_embeddings(
+                mx.array(job.ids)[None], None, mask=None
+            ).to_dict()
+        salt = job.salt if job.salt is not None else self.apc_semantic_hash
+        if salt is not None:
+            pkw["_apc_semantic_hash"] = salt
+        (uid,) = group.gen.insert(
+            [job.ids],
+            max_tokens=job.max_tokens,
+            prompt_kwargs=[pkw],
+            logits_processors=[job.processors or None],
+        )
+        job.uid = uid
+        job.start = time.perf_counter()
+        group.jobs[uid] = job
+
+    def _active_jobs(self) -> int:
+        return sum(len(g.jobs) for g in self._groups.values())
+
+    def _finish(self, group: _Group, uid: int, reason: str | None) -> None:
+        job = group.jobs.pop(uid, None)
+        if job is None:
+            return
+        if reason is not None:
+            job.stats.finish_reason = reason
+        job.out.put(_DONE)
+
+    def _step_group(self, group: _Group) -> None:
+        from .kernels import batch_invariant
+
+        # Drop rows whose consumer left or whose request was cancelled.
+        for uid, job in list(group.jobs.items()):
+            cancelled = job.cancel_event is not None and job.cancel_event.is_set()
+            if job.abandoned or cancelled:
                 with contextlib.suppress(Exception):
-                    generator.remove(uid)
-            generator.close()
+                    group.gen.remove(uid)
+                self._finish(group, uid, "cancel" if cancelled else None)
+        if not group.jobs:
+            return
+        if batch_invariant.is_installed():
+            # Invariance only matters when a request drafts; others take
+            # the faster stock kernels.
+            batch_invariant.set_active(group.use_draft)
+        prompt_progress, responses = group.gen.next()
+        for progress in prompt_progress or []:
+            job = group.jobs.get(getattr(progress, "uid", None))
+            if job is not None:
+                job.stats.cached_tokens = int(getattr(progress, "cached_tokens", 0))
+        for response in responses:
+            job = group.jobs.get(response.uid)
+            if job is None:
+                continue
+            stats = job.stats
+            if stats.generated == 0:
+                stats.first_token_s = time.perf_counter() - job.start
+            if response.token is None:
+                self._finish(group, response.uid, response.finish_reason or "stop")
+                continue
+            stats.generated += 1
+            lp = None
+            if job.logprobs:
+                lp = {
+                    "token_id": int(response.token),
+                    "logprob": float(response.token_logprob),
+                    "top_logprobs": [
+                        {"token_id": int(t), "logprob": float(v)}
+                        for t, v in (response.top_logprobs or [])
+                    ],
+                }
+            job.out.put((int(response.token), lp))
+            if response.finish_reason is not None:
+                self._finish(group, response.uid, response.finish_reason)
+
+    def _drive_slice(self, resubmit: bool = True) -> None:
+        """One scheduling slice on the MLX thread."""
+        try:
+            with self._lock:
+                pending, self._pending = self._pending, []
+            for job in pending:
+                try:
+                    self._admit(job)
+                except Exception as exc:
+                    logger.exception("VLM runner admission failed")
+                    job.out.put(exc)
+            for key, group in list(self._groups.items()):
+                self._step_group(group)
+                if not group.jobs and not group.gen.has_work:
+                    group.gen.close()
+                    del self._groups[key]
+        except Exception as exc:
+            logger.exception("VLM runner step failed; failing active requests")
+            for group in self._groups.values():
+                for job in group.jobs.values():
+                    job.out.put(exc)
+                with contextlib.suppress(Exception):
+                    group.gen.close()
+            self._groups.clear()
+        if not resubmit:
+            return
+        with self._lock:
+            if self._pending or self._groups:
+                again = True
+            else:
+                self._driving = False
+                again = False
+        if again:
+            self._executor.submit(self._drive_slice)
+        elif self.clear_on_idle:
+            # Large models: release the buffer pool once the batch drains
+            # (clearing under an active batch would only force reallocation).
+            with contextlib.suppress(Exception):
+                mx.synchronize()
+                mx.clear_cache()
+
+
+_DONE = object()
+
+
+@dataclass
+class _Job:
+    ids: list[int]
+    max_tokens: int
+    greedy: bool
+    sampling: tuple | None
+    use_draft: bool
+    logprobs: bool
+    top_logprobs: int
+    processors: list
+    prompt_kwargs: dict | None
+    salt: int | None
+    seed: int | None
+    cancel_event: Any
+    stats: RunStats
+    out: queue.Queue = field(default_factory=queue.Queue)
+    uid: int | None = None
+    start: float = 0.0
+    abandoned: bool = False
+
+
+@dataclass
+class _Group:
+    gen: Any
+    use_draft: bool
+    jobs: dict = field(default_factory=dict)
