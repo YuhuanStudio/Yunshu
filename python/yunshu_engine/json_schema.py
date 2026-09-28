@@ -27,6 +27,7 @@ where the sampler is invoked per-token.
 import copy
 import json
 import logging
+import weakref
 from collections.abc import Callable
 from enum import Enum, auto
 from typing import Any
@@ -320,6 +321,11 @@ class JsonState(Enum):
 
 # Characters allowed in various JSON contexts
 _WHITESPACE_CHARS = {" ", "\t", "\n", "\r"}
+# Per-tokenizer vocab facts, keyed weakly like _token_text_map so a tokenizer
+# swapped in after a model reload never reads another tokenizer's entries.
+_TAB_CR_IDS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_STRING_PARTITION: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_ALL_IDS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _DIGIT_CHARS = set("0123456789")
 _HEX_CHARS = set("0123456789abcdefABCDEF")
 # States where we are INSIDE a string (any char continues it; `"` exits). Used to
@@ -1820,14 +1826,12 @@ class JsonSchemaConstraint:
             # new key past the strict post-value masking. CRITICAL: this was the
             # additionalProperties:false / strict-mode leak — inside-string tokens
             # were blanket-allowed, so extra keys got through.
-            all_ids = self._get_all_token_ids(tokenizer)
             if self._state in _STRING_STATES:
-                tmap = self._token_text_map(tokenizer)
-                exiting = [t for t in all_ids if '"' in (tmap.get(t) or "")]
+                safe, exiting = self._string_partition(tokenizer)
                 if exiting:
-                    safe = [t for t in all_ids if '"' not in (tmap.get(t) or "")]
                     return safe + self._filter_fully_valid(tokenizer, exiting)
-            return all_ids
+                return list(safe)
+            return self._get_all_token_ids(tokenizer)
 
         # Incomplete number states (e.g. "3." at token boundary): the state
         # machine is waiting for more digits.  Returning an empty set would
@@ -1877,7 +1881,46 @@ class JsonSchemaConstraint:
                 for token_id in allowed
                 if not (text_map.get(token_id) or "").isspace()
             ]
-        return allowed
+        # Raw tab / carriage return can only be insignificant whitespace (JSON
+        # strings must escape them), so keep output to spaces and newlines.
+        # Qwen3.8 otherwise emitted tab/CR indentation in schema answers.
+        bad = self._tab_cr_token_ids(tokenizer)
+        compact = [token_id for token_id in allowed if token_id not in bad]
+        return compact or allowed
+
+    def _string_partition(self, tokenizer: Any) -> tuple[list[int], list[int]]:
+        """Vocab split for string states, computed once per tokenizer.
+
+        ``safe``: tokens that stay inside the string (no quote, no raw control
+        character — JSON strings must escape those). ``exiting``: tokens with a
+        quote, which must be replayed against what follows the close-quote.
+        Rebuilding this per step cost ~144 ms on a 248K vocab.
+        """
+        cached = _STRING_PARTITION.get(tokenizer)
+        if cached is None:
+            tmap = self._token_text_map(tokenizer)
+            safe, exiting = [], []
+            for tid in self._get_all_token_ids(tokenizer):
+                text = tmap.get(tid) or ""
+                if '"' in text:
+                    exiting.append(tid)
+                elif not any(ord(c) < 0x20 for c in text):
+                    safe.append(tid)
+            cached = (safe, exiting)
+            _STRING_PARTITION[tokenizer] = cached
+        return cached
+
+    def _tab_cr_token_ids(self, tokenizer: Any) -> frozenset:
+        cached = _TAB_CR_IDS.get(tokenizer)
+        if cached is None:
+            text_map = self._token_text_map(tokenizer)
+            cached = frozenset(
+                tid
+                for tid, text in text_map.items()
+                if text and ("\t" in text or "\r" in text)
+            )
+            _TAB_CR_IDS[tokenizer] = cached
+        return cached
 
     def _filter_fully_valid(self, tokenizer: Any, candidates: list[int]) -> list[int]:
         """Keep only candidates whose full decoded text is accepted from here.
@@ -1973,7 +2016,13 @@ class JsonSchemaConstraint:
         return cache[tokenizer]
 
     def _get_all_token_ids(self, tokenizer: Any) -> list[int]:
-        """Get all token IDs from the tokenizer vocabulary."""
+        """Get all token IDs from the tokenizer vocabulary (cached per tokenizer)."""
+        cached = _ALL_IDS.get(tokenizer)
+        if cached is None:
+            cached = _ALL_IDS[tokenizer] = self._compute_all_token_ids(tokenizer)
+        return cached
+
+    def _compute_all_token_ids(self, tokenizer: Any) -> list[int]:
         if hasattr(tokenizer, "get_vocab"):
             vocab = tokenizer.get_vocab()
             return list(vocab.values())
