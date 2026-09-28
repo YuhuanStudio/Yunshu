@@ -1121,6 +1121,7 @@ class BatchedEngine:
                 cache_dir=settings.get("YUNSHU_SSD_CACHE_DIR"),
                 max_size_bytes=int(settings.get("YUNSHU_SSD_CACHE_MAX_GB") * 1024**3),
                 model_name=model_name,
+                precision=settings.get("YUNSHU_SSD_CACHE_PRECISION"),
             )
 
         # KV cache quantization config (mlx-lm pattern: to_quantized — group-wise
@@ -1583,6 +1584,7 @@ class BatchedEngine:
                 cache_dir=s.ssd_cache_dir,
                 max_size_bytes=s.ssd_cache_max_gb * 1024**3,
                 model_name=self.model_name,
+                precision=settings.get("YUNSHU_SSD_CACHE_PRECISION"),
             )
         if s.enable_thinking is not None:
             self.enable_thinking = s.enable_thinking

@@ -109,6 +109,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_PREFIX_HOT_LIMIT` | int | 0 | Text engine: keep only this many prefix KV entries full precision and store older ones 4-bit in RAM (lossy on reuse; memory vs quality). 0 = every entry full precision. |
 | `YUNSHU_SSD_CACHE` | bool | off | Text engine: persist prefix KV to SSD. |
 | `YUNSHU_SSD_CACHE_DIR` | path | ~/.cache/yunshu/kv-ssd | Text engine: SSD prefix-cache directory. |
+| `YUNSHU_SSD_CACHE_PRECISION` | `native` \| `int8` | native | Text engine: SSD prefix-cache storage precision: 'native' (KV and recurrent state stored bit-exact; lossless) or 'int8' (per-tensor int8, about half the disk bytes of bf16; lossy on reuse; memory vs quality). |
 | `YUNSHU_SSD_CACHE_MAX_GB` | float | 10.0 | Text engine: SSD prefix-cache size cap in GiB. |
 | `YUNSHU_KV_QUANT_BITS` | `auto` \| `off` \| `2` \| `3` \| `4` \| `8` | off | Text engine KV cache quantization (lossy; memory vs quality): 'off' (lossless), 'auto' (8-bit once the KV cache would exceed ~2 GiB), or 2/3/4/8 bits always. |
 
@@ -141,7 +142,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_GPU_SAMPLER` | bool | off | Text models: on-GPU Gumbel-max sampling (no per-token GPU->CPU sync). |
 | `YUNSHU_JUMP_FORWARD` | bool | off | Text models: emit grammar-forced structural tokens of JSON-schema output without a forward pass. |
 | `YUNSHU_GRAMMAR_BITMASK` | bool | off | Constrained decoding with the xgrammar-style bitmask engine instead of the allowlist sampler. |
-| `YUNSHU_QUANT_MODE` | `''` \| `mxfp4` \| `nvfp4` \| `mxfp8` \| `affine` | unset | Quantize weights in memory at load: mxfp4, nvfp4, mxfp8 or affine ('' keeps the checkpoint). |
+| `YUNSHU_QUANT_MODE` | `''` \| `mxfp4` \| `nvfp4` \| `mxfp8` \| `affine` | unset | Quantize weights in memory at load (lossy; memory vs quality): mxfp4, nvfp4, mxfp8 or affine ('' keeps the checkpoint). |
 | `YUNSHU_QUANT_CONFIG` | str | unset | Bits/group for affine in-memory quantization: JSON ({"bits":4,"group_size":64}) or 'bits' / 'bits,group'. |
 
 ### voice
