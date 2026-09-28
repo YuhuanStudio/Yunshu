@@ -95,13 +95,23 @@ class TestFormatPrompt:
         assert "<|im_start|>" in result
         mock_tokenizer.apply_chat_template.assert_called_once()
 
-    def test_chat_template_exception_falls_back(self):
+    def test_no_chat_template_uses_plain_prompt(self):
         engine = VLMEngine("/models/test")
         mock_tokenizer = MagicMock()
+        mock_tokenizer.chat_template = None
         mock_tokenizer.apply_chat_template.side_effect = RuntimeError("no template")
         engine._tokenizer = mock_tokenizer
         result = engine._format_prompt([{"role": "user", "content": "Hi"}])
         assert "User: Hi" in result
+
+    def test_failing_chat_template_raises(self):
+        engine = VLMEngine("/models/test")
+        mock_tokenizer = MagicMock()
+        mock_tokenizer.chat_template = "{{ raise }}"
+        mock_tokenizer.apply_chat_template.side_effect = RuntimeError("boom")
+        engine._tokenizer = mock_tokenizer
+        with pytest.raises(ValueError, match="Chat template failed"):
+            engine._format_prompt([{"role": "user", "content": "Hi"}])
 
 
 class TestExtractImages:

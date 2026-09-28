@@ -2199,9 +2199,18 @@ class VLMEngine:
                         raise
                 if text:
                     return text
-            except Exception:
-                logger.debug("chat template failed, using fallback", exc_info=True)
+            except Exception as exc:
+                # A model that has a chat template must be prompted with it; a
+                # silent plaintext prompt gives the model a format it was never
+                # trained on and the caller no hint why answers degrade.
+                if getattr(self._tokenizer, "chat_template", None):
+                    raise ValueError(f"Chat template failed: {exc}") from exc
+                logger.debug("apply_chat_template failed", exc_info=True)
 
+        logger.warning(
+            "Model %s has no chat template; using a plain 'Role: text' prompt",
+            getattr(self, "model_name", "?"),
+        )
         parts = []
         for msg in messages:
             role = msg.get("role", "user")
