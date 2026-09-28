@@ -11,7 +11,7 @@ import types
 
 from fastapi import HTTPException
 
-from yunshu_gateway.middleware.tenant_auth import _ErrorFormatter
+from yunshu_gateway.middleware.auth import _ErrorFormatter
 from yunshu_gateway.routers import (
     mcp as M,  # noqa: N812  # intentional short module alias
 )

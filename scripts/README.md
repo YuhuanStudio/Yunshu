@@ -14,11 +14,9 @@ scripts/
   bench/       # bench_*.py, sweep_*.py, fair_bench, profile_engine_loop + framework/loop
                #   helpers (_fw_*.py drive each framework; _bench_*.py drive engine-loop/oMLX)
   realmodel/   # test_*.py — real-model smoke/integration drivers (test_all_modalities, …)
-  validate/    # validate_*.py, run_phase0_validation, run_real_validation_gen, soak_test
-  tools/       # quality_comparison, extract_mtp_weights, launch_mesh, release_prep,
-               #   update_progress, roofline
-  _archive/    # dead / one-off experiments kept for history (Lance/DeltaNet velocity,
-               #   _diag_*, old benchmark_model/benchmark_paper, superseded bench.py)
+  validate/    # validate_*.py — CoreML / Gemma 4 model-specific validation
+  tools/       # quality_comparison, extract_mtp_weights, roofline, build_coremltools_ane.sh
+  research/    # reference-framework matrix, soaks, kernel probes (results in docs/research/runs)
 ```
 
 ## Conventions

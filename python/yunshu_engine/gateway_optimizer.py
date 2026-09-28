@@ -5,7 +5,6 @@ from __future__ import annotations
 Components:
   - RequestCoalescer: batches simultaneous requests per model
   - StreamingResponseBuffer: zero-alloc ring buffer for SSE streaming
-  - GatewayConnectionPool: HTTP connection pooling for distributed mode
   - ResponseCache: content-hash request dedup with TTL expiry
 
 Enabled via environment:
@@ -19,7 +18,7 @@ import json
 import logging
 import os
 import time
-from collections import OrderedDict, defaultdict
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -359,207 +358,7 @@ class StreamingResponseBuffer:
         }
 
 
-# ── 3. GatewayConnectionPool ────────────────────────────────────────────
-
-
-@dataclass
-class _PooledConnection:
-    """A reusable HTTP connection wrapper."""
-
-    endpoint: str
-    connection: Any  # httpx.AsyncClient or similar
-    created_at: float = field(default_factory=time.monotonic)
-    last_used: float = field(default_factory=time.monotonic)
-    active: bool = False
-    health_checks: int = 0
-    requests_served: int = 0
-
-
-class GatewayConnectionPool:
-    """HTTP connection pooling for upstream model servers (distributed mode).
-
-    Reuses TCP connections across requests instead of creating new ones.
-    Includes health checking that removes stale connections.
-
-    Connection lifecycle:
-      1. get_connection(endpoint) — returns idle conn or creates new one
-      2. Caller uses conn.connection for the HTTP request
-      3. return_connection(conn) — marks idle, prunes stale entries
-      4. health_check() — periodic cleanup of stale idle connections
-      5. close_all() — shutdown: close all connections gracefully
-
-    Usage::
-
-        pool = GatewayConnectionPool(max_per_host=4)
-        conn = await pool.get_connection("http://worker1:8000")
-        try:
-            # use conn.connection ...
-            pass
-        finally:
-            await pool.return_connection(conn)
-    """
-
-    def __init__(
-        self,
-        max_per_host: int = 8,
-        idle_timeout: float = 60.0,
-        health_check_interval: float = 30.0,
-    ):
-        self._max_per_host = max_per_host
-        self._idle_timeout = idle_timeout
-        self._health_check_interval = health_check_interval
-        # endpoint -> list of connections
-        self._pool: dict[str, list[_PooledConnection]] = defaultdict(list)
-        self._lock = asyncio.Lock()
-
-        # Stats
-        self._total_gets = 0
-        self._reuse_count = 0
-        self._create_count = 0
-        self._eviction_count = 0
-        self._rejection_count = 0
-
-    async def get_connection(self, endpoint: str) -> _PooledConnection:
-        """Get or create a pooled connection for the given endpoint.
-
-        Returns an idle connection if available, otherwise creates a new
-        one.  Raises ConnectionError if the pool is exhausted (all
-        connections for this endpoint are active and at max_per_host).
-        """
-        async with self._lock:
-            self._total_gets += 1
-
-            # Try to find an idle connection
-            conns = self._pool[endpoint]
-            for conn in conns:
-                if not conn.active and not self._is_stale(conn):
-                    conn.active = True
-                    conn.last_used = time.monotonic()
-                    conn.requests_served += 1
-                    self._reuse_count += 1
-                    return conn
-
-            # Prune stale connections to make room
-            before = len(conns)
-            self._pool[endpoint] = [
-                c for c in conns if c.active or not self._is_stale(c)
-            ]
-            pruned = before - len(self._pool[endpoint])
-            self._eviction_count += pruned
-            conns = self._pool[endpoint]
-
-            # Check max_per_host limit (count only active connections)
-            active_count = sum(1 for c in conns if c.active)
-            if active_count >= self._max_per_host:
-                self._rejection_count += 1
-                raise ConnectionError(
-                    f"Connection pool exhausted for {endpoint}: "
-                    f"{active_count}/{self._max_per_host} active connections"
-                )
-
-            # Create a new connection (mock for now; real impl uses httpx)
-            self._create_count += 1
-            new_conn = _PooledConnection(
-                endpoint=endpoint,
-                connection=None,  # Would be httpx.AsyncClient in production
-            )
-            new_conn.active = True
-            new_conn.requests_served = 1
-            conns.append(new_conn)
-            return new_conn
-
-    async def return_connection(self, conn: _PooledConnection) -> None:
-        """Return a connection to the pool for reuse."""
-        async with self._lock:
-            conn.active = False
-            conn.last_used = time.monotonic()
-
-            # Prune stale connections for this endpoint
-            self._prune_endpoint(conn.endpoint)
-
-    async def health_check(self) -> int:
-        """Remove stale/unhealthy connections. Returns count removed.
-
-        Active connections are preserved even if idle-timer exceeded,
-        since they are mid-request.
-        """
-        async with self._lock:
-            removed = 0
-            for endpoint in list(self._pool):
-                conns = self._pool[endpoint]
-                before = len(conns)
-                self._pool[endpoint] = [
-                    c for c in conns if c.active or not self._is_stale(c)
-                ]
-                removed += before - len(self._pool[endpoint])
-            self._eviction_count += removed
-            return removed
-
-    async def close_all(self) -> None:
-        """Close all connections. Call during shutdown.
-
-        Properly closes connections that have an aclose() coroutine
-        (e.g. httpx.AsyncClient).  Connections currently in use are
-        marked inactive before closing.
-        """
-        async with self._lock:
-            for endpoint, conns in self._pool.items():
-                for conn in conns:
-                    conn.active = False
-                    if conn.connection is not None and hasattr(
-                        conn.connection, "aclose"
-                    ):
-                        try:
-                            # aclose is typically async
-                            import inspect
-
-                            if inspect.iscoroutinefunction(conn.connection.aclose):
-                                await conn.connection.aclose()
-                            else:
-                                conn.connection.aclose()
-                        except Exception:
-                            logger.debug(
-                                "Failed to close connection to %s",
-                                endpoint,
-                                exc_info=True,
-                            )
-            self._pool.clear()
-
-    def get_stats(self) -> dict[str, Any]:
-        total = sum(len(c) for c in self._pool.values())
-        active = sum(1 for c in self._pool.values() for conn in c if conn.active)
-        idle = total - active
-        reuse_rate = (
-            self._reuse_count / self._total_gets if self._total_gets > 0 else 0.0
-        )
-        return {
-            "pool_size": total,
-            "active_connections": active,
-            "idle_connections": idle,
-            "endpoints": len(self._pool),
-            "total_gets": self._total_gets,
-            "reuse_count": self._reuse_count,
-            "create_count": self._create_count,
-            "reuse_rate": reuse_rate,
-            "eviction_count": self._eviction_count,
-            "rejection_count": self._rejection_count,
-        }
-
-    def _is_stale(self, conn: _PooledConnection) -> bool:
-        """Check if a connection has exceeded the idle timeout."""
-        idle_time = time.monotonic() - conn.last_used
-        return idle_time > self._idle_timeout
-
-    def _prune_endpoint(self, endpoint: str) -> None:
-        """Remove stale idle connections for a specific endpoint."""
-        conns = self._pool[endpoint]
-        before = len(conns)
-        self._pool[endpoint] = [c for c in conns if not self._is_stale(c) or c.active]
-        pruned = before - len(self._pool[endpoint])
-        self._eviction_count += pruned
-
-
-# ── 4. ResponseCache ────────────────────────────────────────────────────
+# ── 3. ResponseCache ─────────────────────────────────────────────────────
 
 
 @dataclass
@@ -832,7 +631,6 @@ def _sort_dict(d: dict) -> dict:
 
 _request_coalescer: RequestCoalescer | None = None
 _streaming_buffer_pool: list[StreamingResponseBuffer] = []
-_connection_pool: GatewayConnectionPool | None = None
 _response_cache: ResponseCache | None = None
 
 
@@ -873,14 +671,6 @@ def return_streaming_buffer(buf: StreamingResponseBuffer) -> None:
     max_pool_size = 32
     if len(_streaming_buffer_pool) < max_pool_size:
         _streaming_buffer_pool.append(buf)
-
-
-def get_connection_pool() -> GatewayConnectionPool:
-    """Get or create the global GatewayConnectionPool singleton."""
-    global _connection_pool
-    if _connection_pool is None:
-        _connection_pool = GatewayConnectionPool()
-    return _connection_pool
 
 
 def get_response_cache() -> ResponseCache:

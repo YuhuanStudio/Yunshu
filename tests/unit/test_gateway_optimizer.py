@@ -8,12 +8,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from yunshu_engine.gateway_optimizer import (
-    GatewayConnectionPool,
     RequestCoalescer,
     ResponseCache,
     StreamingResponseBuffer,
-    _PooledConnection,
-    get_connection_pool,
     get_request_coalescer,
     get_response_cache,
     get_streaming_buffer,
@@ -313,137 +310,6 @@ class TestStreamingResponseBuffer:
         events = buf.flush()
         assert len(events) == 1
         assert "你好" in events[0].decode("utf-8")
-
-
-# ── GatewayConnectionPool Tests ─────────────────────────────────────────
-
-
-class TestGatewayConnectionPool:
-    """Tests for GatewayConnectionPool — connection reuse."""
-
-    @pytest.mark.asyncio
-    async def test_create_connection_on_first_get(self):
-        pool = GatewayConnectionPool()
-        conn = await pool.get_connection("http://worker1:8000")
-        assert isinstance(conn, _PooledConnection)
-        assert conn.endpoint == "http://worker1:8000"
-        assert conn.active is True
-        await pool.close_all()
-
-    @pytest.mark.asyncio
-    async def test_return_and_reuse_connection(self):
-        pool = GatewayConnectionPool()
-        conn1 = await pool.get_connection("http://w1:8000")
-        await pool.return_connection(conn1)
-        assert conn1.active is False
-
-        conn2 = await pool.get_connection("http://w1:8000")
-        assert conn2 is conn1  # Reused
-        assert conn2.active is True
-        assert conn2.requests_served == 2
-        await pool.close_all()
-
-    @pytest.mark.asyncio
-    async def test_different_endpoints_separate_connections(self):
-        pool = GatewayConnectionPool()
-        c1 = await pool.get_connection("http://w1:8000")
-        c2 = await pool.get_connection("http://w2:8000")
-        assert c1 is not c2
-        assert c1.endpoint != c2.endpoint
-        await pool.close_all()
-
-    @pytest.mark.asyncio
-    async def test_max_per_host_respected(self):
-        pool = GatewayConnectionPool(max_per_host=2)
-        conns = [await pool.get_connection("http://w1:8000") for _ in range(2)]
-        # Third get should raise ConnectionError (pool exhausted)
-        with pytest.raises(ConnectionError, match="pool exhausted"):
-            await pool.get_connection("http://w1:8000")
-        # Return one and try again
-        await pool.return_connection(conns[0])
-        c3 = await pool.get_connection("http://w1:8000")
-        assert c3 is conns[0]  # reused the returned connection
-        await pool.close_all()
-
-    @pytest.mark.asyncio
-    async def test_max_per_host_different_endpoints_independent(self):
-        """Each endpoint has its own max_per_host limit."""
-        pool = GatewayConnectionPool(max_per_host=2)
-        c1 = await pool.get_connection("http://w1:8000")
-        await pool.get_connection("http://w1:8000")
-        # w2 endpoint should still work
-        c3 = await pool.get_connection("http://w2:8000")
-        assert c3 is not c1
-        await pool.close_all()
-
-    @pytest.mark.asyncio
-    async def test_stats_reuse_rate(self):
-        pool = GatewayConnectionPool()
-        c1 = await pool.get_connection("http://w1:8000")
-        await pool.return_connection(c1)
-        c2 = await pool.get_connection("http://w1:8000")  # Reuse
-        await pool.return_connection(c2)
-
-        stats = pool.get_stats()
-        assert stats["total_gets"] == 2
-        assert stats["reuse_count"] == 1
-        assert stats["create_count"] == 1
-        assert stats["reuse_rate"] == 0.5
-        await pool.close_all()
-
-    @pytest.mark.asyncio
-    async def test_health_check_removes_stale(self):
-        pool = GatewayConnectionPool(idle_timeout=0.01)  # 10ms timeout
-        c1 = await pool.get_connection("http://w1:8000")
-        await pool.return_connection(c1)
-        assert pool.get_stats()["pool_size"] == 1
-
-        # Wait for idle timeout
-        await asyncio.sleep(0.05)
-        removed = await pool.health_check()
-        assert removed >= 1
-        assert pool.get_stats()["pool_size"] == 0
-
-    @pytest.mark.asyncio
-    async def test_health_check_keeps_active(self):
-        pool = GatewayConnectionPool(idle_timeout=0.01)
-        c1 = await pool.get_connection("http://w1:8000")
-        # c1 is still active
-        await asyncio.sleep(0.05)
-        removed = await pool.health_check()
-        assert removed == 0
-        assert pool.get_stats()["pool_size"] == 1
-        await pool.return_connection(c1)
-        await pool.close_all()
-
-    @pytest.mark.asyncio
-    async def test_close_all(self):
-        pool = GatewayConnectionPool()
-        await pool.get_connection("http://w1:8000")
-        await pool.get_connection("http://w2:8000")
-        assert pool.get_stats()["pool_size"] == 2
-        await pool.close_all()
-        assert pool.get_stats()["pool_size"] == 0
-
-    @pytest.mark.asyncio
-    async def test_stats_initial(self):
-        pool = GatewayConnectionPool()
-        stats = pool.get_stats()
-        assert stats["pool_size"] == 0
-        assert stats["active_connections"] == 0
-        assert stats["idle_connections"] == 0
-        assert stats["reuse_rate"] == 0.0
-
-    @pytest.mark.asyncio
-    async def test_rejection_count_tracked(self):
-        """Pool exhaustion increments rejection_count stat."""
-        pool = GatewayConnectionPool(max_per_host=1)
-        await pool.get_connection("http://w1:8000")
-        with pytest.raises(ConnectionError):
-            await pool.get_connection("http://w1:8000")
-        stats = pool.get_stats()
-        assert stats["rejection_count"] == 1
-        await pool.close_all()
 
 
 # ── ResponseCache Tests ─────────────────────────────────────────────────
@@ -810,11 +676,6 @@ class TestModuleSingletons:
     def test_get_streaming_buffer(self):
         buf = get_streaming_buffer()
         assert isinstance(buf, StreamingResponseBuffer)
-
-    def test_get_connection_pool(self):
-        pool = get_connection_pool()
-        assert isinstance(pool, GatewayConnectionPool)
-        assert get_connection_pool() is pool
 
     def test_get_response_cache(self):
         cache = get_response_cache()

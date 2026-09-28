@@ -25,7 +25,7 @@ class CancelRequest(BaseModel):
 def _check_auth(request: Request) -> None:
     """Verify auth token when YUNSHU_AUTH_TOKEN is configured.
 
-    Single-consumer model: the simplified TenantAuthMiddleware stamps
+    Single-consumer model: the simplified AuthMiddleware stamps
     ``request.state.role = "owner"`` on every request it admits. Honor that.
 
     Raises HTTPException 401 if auth is required but missing/invalid.
@@ -88,7 +88,7 @@ async def cancel_generation(req: CancelRequest, request: Request):
 
     # Admin gate: cancel_all and arbitrary request_id cancellation are powerful,
     # so gate them on the canonical request.state.role stamped by the auth
-    # middleware. Single-consumer model: the simplified TenantAuthMiddleware
+    # middleware. Single-consumer model: the simplified AuthMiddleware
     # stamps role="owner" on every admitted request (or "admin"/"system" for
     # static-token holders), so the single owner can always cancel_all and
     # cancel by id. Auth-disabled dev mode is also treated as admin.

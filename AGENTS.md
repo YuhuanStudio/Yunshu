@@ -23,7 +23,7 @@ Describe only what the code verifiably does.
 ## Layout & commands
 
 Flat layout: `python/{yunshu_gateway,yunshu_engine,yunshu_kv,yunshu_cli}/`, `tests/`, `scripts/`, `docs/`.
-(`yunshu_mesh`/`yunshu_api`/`yunshu_control` are being removed — don't add new dependencies on them.)
+(`yunshu_control` stays only for `audit_log` and `token_counter`; the mesh/API/multi-tenant packages are gone.)
 
 ```bash
 just setup        # uv install

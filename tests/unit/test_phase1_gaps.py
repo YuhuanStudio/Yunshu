@@ -146,16 +146,16 @@ class TestStreamOptionsCompletionRequest:
 # ── Auth middleware public paths ──
 
 
-class TestGatewayTenantAuthMiddleware:
-    """Tests for gateway TenantAuthMiddleware public paths."""
+class TestGatewayAuthMiddleware:
+    """Tests for gateway AuthMiddleware public paths."""
 
     def test_all_health_paths_public(self):
-        from yunshu_gateway.middleware.tenant_auth import TenantAuthMiddleware
+        from yunshu_gateway.middleware.auth import AuthMiddleware
 
-        assert "/health" in TenantAuthMiddleware.PUBLIC_PATHS
-        assert "/health/live" in TenantAuthMiddleware.PUBLIC_PATHS
-        assert "/health/ready" in TenantAuthMiddleware.PUBLIC_PATHS
-        assert "/version" in TenantAuthMiddleware.PUBLIC_PATHS
+        assert "/health" in AuthMiddleware.PUBLIC_PATHS
+        assert "/health/live" in AuthMiddleware.PUBLIC_PATHS
+        assert "/health/ready" in AuthMiddleware.PUBLIC_PATHS
+        assert "/version" in AuthMiddleware.PUBLIC_PATHS
 
 
 # ── /version endpoint ──

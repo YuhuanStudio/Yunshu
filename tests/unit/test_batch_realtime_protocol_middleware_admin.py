@@ -39,9 +39,9 @@ def test_metrics_middleware_is_outermost():
 
     app = create_app()
     names = [m.cls.__name__ for m in app.user_middleware]
-    # outermost is index 0 (Starlette wraps in order); Metrics must precede TenantAuth
+    # outermost is index 0 (Starlette wraps in order); Metrics must precede AuthMiddleware
     assert names[0] == "MetricsMiddleware"
-    assert names.index("MetricsMiddleware") < names.index("TenantAuthMiddleware")
+    assert names.index("MetricsMiddleware") < names.index("AuthMiddleware")
     assert names.index("MetricsMiddleware") < names.index("RateLimitMiddleware")
 
 

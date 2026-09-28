@@ -15,9 +15,9 @@ import inspect
 
 
 def test_anthropic_error_type_map():
-    from yunshu_gateway.middleware import tenant_auth
+    from yunshu_gateway.middleware import auth as auth_mw
 
-    src = inspect.getsource(tenant_auth._ErrorFormatter.auth_error)
+    src = inspect.getsource(auth_mw._ErrorFormatter.auth_error)
     assert '429: "rate_limit_error"' in src
     assert '403: "permission_error"' in src
     assert '401: "authentication_error"' in src

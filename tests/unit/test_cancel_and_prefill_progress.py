@@ -567,7 +567,7 @@ class TestCancelAdminGating:
         )
         # Simulate a real authenticated (non dev-bypass) deployment.
         monkeypatch.delenv("YUNSHU_AUTH_DISABLED", raising=False)
-        # request.state.role is set by the simplified TenantAuthMiddleware for
+        # request.state.role is set by the simplified AuthMiddleware for
         # every admitted request; role as given drives the admin gate.
         st = types.SimpleNamespace(role=role)
         req_obj = types.SimpleNamespace(state=st, headers={})

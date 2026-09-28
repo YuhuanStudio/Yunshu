@@ -21,9 +21,9 @@ def test_simplified_middleware_stamps_owner_identity():
     """Single-consumer model: the simplified auth middleware stamps the
     same owner identity on current_actor for every request (no per-tenant
     branch). This keeps request_tracker ownership / engine_core dedup working."""
-    from yunshu_gateway.middleware import tenant_auth
+    from yunshu_gateway.middleware import auth as auth_mw
 
-    src = inspect.getsource(tenant_auth)
+    src = inspect.getsource(auth_mw)
     # The middleware stamps current_actor with the single-owner identity.
     assert "current_actor.set(owner)" in src
     assert 'request.state.role = "owner"' in src

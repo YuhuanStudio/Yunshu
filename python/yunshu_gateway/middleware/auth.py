@@ -110,12 +110,8 @@ def _owner_identity() -> str:
     return custom or "owner"
 
 
-class TenantAuthMiddleware(BaseHTTPMiddleware):
-    """Authenticate requests via a single optional static bearer token.
-
-    Name kept for backward-compat with ``app.add_middleware(TenantAuthMiddleware)``
-    in main.py and existing tests; the per-tenant/RBAC behavior is gone.
-    """
+class AuthMiddleware(BaseHTTPMiddleware):
+    """Authenticate requests via a single optional static bearer token."""
 
     PUBLIC_PATHS = {
         "/health",

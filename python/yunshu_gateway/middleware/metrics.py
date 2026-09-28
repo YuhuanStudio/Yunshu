@@ -318,7 +318,7 @@ def _check_metrics_auth(request: Request) -> None:
 
     SECURITY : MetricsMiddleware is the OUTERMOST middleware and
     short-circuits /metrics by returning a Response WITHOUT calling call_next,
-    so TenantAuthMiddleware (innermost) never runs for this path. Therefore
+    so AuthMiddleware (innermost) never runs for this path. Therefore
     validate the static bearer token independently here.
 
     Single-consumer model: only the static ``YUNSHU_AUTH_TOKEN`` gate is
@@ -333,7 +333,7 @@ def _check_metrics_auth(request: Request) -> None:
     static_token = os.environ.get("YUNSHU_AUTH_TOKEN") or ""
 
     # Honor an upstream-authenticated request if one exists (defensive — for
-    # paths/orderings where TenantAuthMiddleware did run first). The simplified
+    # paths/orderings where AuthMiddleware did run first). The simplified
     # middleware stamps request.state.role="owner" on every authenticated request.
     if hasattr(request, "state"):
         _role = str(getattr(request.state, "role", "") or "").lower()

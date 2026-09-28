@@ -1,4 +1,4 @@
-"""Tests for Diffusion pipeline infrastructure — scheduler, LoRA offloader, coordinator."""
+"""Tests for Diffusion pipeline infrastructure — scheduler and LoRA offloader."""
 
 import pytest
 
@@ -6,12 +6,9 @@ from yunshu_engine.diffusion_infra import (
     DiffusionLoRAOffloader,
     DiffusionScheduler,
     DiffusionStep,
-    DistributedDiffusionCoordinator,
     MemoryBudget,
     NoiseScheduleType,
     SchedulerType,
-    StepAssignmentStrategy,
-    SyncCheckpoint,
 )
 
 # ── DiffusionScheduler tests ──
@@ -310,133 +307,3 @@ class TestDiffusionLoRAOffloader:
         offloader.load_for_step(0, lora_ids=["lora_a"])
         offloader.load_for_step(0, lora_ids=["lora_a"])
         assert offloader.load_count == 1  # Not loaded twice
-
-
-# ── DistributedDiffusionCoordinator tests ──
-
-
-class TestDistributedDiffusionCoordinator:
-    def test_single_node(self):
-        coord = DistributedDiffusionCoordinator(total_steps=10, num_nodes=1)
-        assert 0 in coord.assignments
-        assert coord.assignments[0].steps == range(0, 10)
-        assert coord.assignments[0].is_primary is True
-
-    def test_two_nodes_contiguous(self):
-        coord = DistributedDiffusionCoordinator(
-            total_steps=10, num_nodes=2, strategy=StepAssignmentStrategy.CONTIGUOUS
-        )
-        assert coord.assignments[0].steps == range(0, 5)
-        assert coord.assignments[1].steps == range(5, 10)
-
-    def test_three_nodes_contiguous(self):
-        coord = DistributedDiffusionCoordinator(
-            total_steps=10, num_nodes=3, strategy=StepAssignmentStrategy.CONTIGUOUS
-        )
-        assert coord.assignments[0].steps == range(0, 4)
-        assert coord.assignments[1].steps == range(4, 7)
-        assert coord.assignments[2].steps == range(7, 10)
-
-    def test_round_robin(self):
-        coord = DistributedDiffusionCoordinator(
-            total_steps=8, num_nodes=2, strategy=StepAssignmentStrategy.ROUND_ROBIN
-        )
-        assert coord.get_node_for_step(0) == 0
-        assert coord.get_node_for_step(1) == 1
-        assert coord.get_node_for_step(2) == 0
-        assert coord.get_node_for_step(3) == 1
-
-    def test_get_node_for_step(self):
-        coord = DistributedDiffusionCoordinator(
-            total_steps=10, num_nodes=2, strategy=StepAssignmentStrategy.CONTIGUOUS
-        )
-        assert coord.get_node_for_step(3) == 0
-        assert coord.get_node_for_step(7) == 1
-
-    def test_sync_points_computed(self):
-        coord = DistributedDiffusionCoordinator(
-            total_steps=10, num_nodes=2, sync_interval=5
-        )
-        assert 0 in coord.sync_points
-        assert 5 in coord.sync_points
-        assert 10 in coord.sync_points
-
-    def test_sync_latents(self):
-        coord = DistributedDiffusionCoordinator(total_steps=10, num_nodes=2)
-        cp = coord.sync_latents(
-            source_node=0, target_node=1, step=5, latent_data="data"
-        )
-        assert isinstance(cp, SyncCheckpoint)
-        assert cp.step == 5
-        assert cp.node_id == 0
-        assert len(coord.checkpoints) == 1
-
-    def test_last_checkpoint(self):
-        coord = DistributedDiffusionCoordinator(total_steps=10, num_nodes=2)
-        assert coord.get_last_checkpoint() is None
-        coord.sync_latents(0, 1, 3)
-        coord.sync_latents(1, 0, 7)
-        cp = coord.get_last_checkpoint()
-        assert cp.step == 7
-
-    def test_restart_assignment(self):
-        coord = DistributedDiffusionCoordinator(total_steps=10, num_nodes=2)
-        coord.sync_latents(0, 1, 3)  # Checkpoint at step 3 on node 0
-        restart = coord.get_restart_assignment()
-        assert restart is not None
-        assert restart.node_id == 0
-        assert restart.steps.start == 4  # Step after checkpoint
-        assert restart.steps.stop == 5  # End of node 0's range
-
-    def test_restart_no_checkpoint(self):
-        coord = DistributedDiffusionCoordinator(total_steps=10, num_nodes=2)
-        assert coord.get_restart_assignment() is None
-
-    def test_assign_steps_reassignment(self):
-        coord = DistributedDiffusionCoordinator(total_steps=10, num_nodes=2)
-        new_assignments = coord.assign_steps(num_nodes=4, total_steps=20)
-        assert len(new_assignments) == 4
-        assert coord.total_steps == 20
-
-    def test_progress(self):
-        coord = DistributedDiffusionCoordinator(total_steps=10, num_nodes=2)
-        progress = coord.get_progress()
-        assert progress["total_steps"] == 10
-        assert progress["num_nodes"] == 2
-        assert progress["strategy"] == "contiguous"
-        assert progress["progress_pct"] == 0.0
-        coord.sync_latents(0, 1, 2)
-        coord.sync_latents(0, 1, 5)
-        progress = coord.get_progress()
-        assert progress["checkpoints_count"] == 2
-        assert progress["progress_pct"] == pytest.approx(20.0)
-
-    def test_invalid_num_nodes(self):
-        with pytest.raises(ValueError, match="num_nodes"):
-            DistributedDiffusionCoordinator(total_steps=10, num_nodes=0)
-
-    def test_invalid_total_steps(self):
-        with pytest.raises(ValueError, match="total_steps"):
-            DistributedDiffusionCoordinator(total_steps=0, num_nodes=1)
-
-    def test_more_nodes_than_steps(self):
-        """Nodes should be capped at total_steps."""
-        coord = DistributedDiffusionCoordinator(total_steps=4, num_nodes=10)
-        assert coord.num_nodes == 4
-        assert len(coord.assignments) == 4
-
-    def test_primary_node(self):
-        coord = DistributedDiffusionCoordinator(total_steps=10, num_nodes=3)
-        assert coord.assignments[0].is_primary is True
-        assert coord.assignments[1].is_primary is False
-
-    def test_sync_points_include_node_boundaries(self):
-        coord = DistributedDiffusionCoordinator(
-            total_steps=20, num_nodes=4, sync_interval=100
-        )
-        # Should still have sync points at node boundaries
-        assert 0 in coord.sync_points
-        assert 5 in coord.sync_points
-        assert 10 in coord.sync_points
-        assert 15 in coord.sync_points
-        assert 20 in coord.sync_points

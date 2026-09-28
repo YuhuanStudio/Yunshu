@@ -1069,16 +1069,6 @@ async def ssd_cache_stats(request: Request) -> dict[str, Any]:
     return {"active": True, "models": results}
 
 
-@router.get("/data-parallel")
-async def data_parallel_stats(request: Request) -> dict[str, Any]:
-    """Data-parallel routing statistics — load distribution across replicas.
-
-    Single-node local engine: data-parallel routing is not available.
-    """
-    _check_permission(request)
-    return {"active": False}
-
-
 @router.get("/per-model")
 async def per_model_stats(request: Request) -> dict[str, Any]:
     """Per-model request statistics."""
@@ -1468,7 +1458,6 @@ def _register_endpoints() -> None:
         "memory_guard": memory_guard_stats,
         "ssd_cache": ssd_cache_stats,
         "prefill_progress": prefill_progress,
-        "data_parallel": data_parallel_stats,
         "per_model": per_model_stats,
         "thinking_segments": thinking_segment_stats,
         "ane_embeddings": ane_embedding_stats,

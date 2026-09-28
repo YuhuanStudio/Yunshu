@@ -64,10 +64,6 @@ def __getattr__(name):
         "DiffusionLoRAOffloader": ".diffusion_infra",
         "LoRAAdapter": ".diffusion_infra",
         "MemoryBudget": ".diffusion_infra",
-        "DistributedDiffusionCoordinator": ".diffusion_infra",
-        "NodeAssignment": ".diffusion_infra",
-        "SyncCheckpoint": ".diffusion_infra",
-        "StepAssignmentStrategy": ".diffusion_infra",
         # Checkpoint / Restore (fault recovery)
         "InferenceCheckpoint": ".checkpoint",
         "InferenceState": ".checkpoint",

@@ -107,8 +107,6 @@ def _validate_env_vars() -> list[str]:
         # Hybrid / chunked prefill
         "YUNSHU_HYBRID_CHUNK_SIZE": (int, False),
         "YUNSHU_PREFILL_CHUNK_SIZE": (int, False),
-        # Data parallelism
-        "YUNSHU_DP_REPLICAS": (int, False),
     }
     for var, (type_fn, required) in numeric_vars.items():
         val = os.environ.get(var)
@@ -131,8 +129,6 @@ def _validate_env_vars() -> list[str]:
     # Boolean-ish env vars
     bool_vars = [
         "YUNSHU_MULTI_MODEL",
-        "YUNSHU_DATA_PARALLEL",
-        "YUNSHU_DISTRIBUTED",
         "YUNSHU_AUTH_DISABLED",
         "YUNSHU_RESPONSE_CACHE",
         "YUNSHU_PROCESS_ISOLATION",
@@ -190,7 +186,6 @@ def _validate_env_vars() -> list[str]:
         "YUNSHU_NGRAM_MAX_N": int,
         "YUNSHU_NGRAM_K": int,
         "YUNSHU_MAX_LORAS": int,
-        "YUNSHU_DP_REPLICAS": int,
     }
     for _pvar, _ptype in _positive_vars.items():
         _pval = os.environ.get(_pvar)
@@ -718,12 +713,12 @@ def create_app() -> FastAPI:
     )
 
     # Gateway middleware (order: outermost first)
+    from .middleware.auth import AuthMiddleware
     from .middleware.metrics import MetricsMiddleware
     from .middleware.rate_limit import RateLimitMiddleware
     from .middleware.request_logging import RequestLoggingMiddleware
-    from .middleware.tenant_auth import TenantAuthMiddleware
 
-    # MetricsMiddleware is registered LAST (below, after TenantAuth) so it is the
+    # MetricsMiddleware is registered LAST (below, after AuthMiddleware) so it is the
     # OUTERMOST middleware. add_middleware prepends, so the last-added wraps everything —
     # registering it here (first) made it the INNERMOST, so it only saw requests that passed
     # auth/rate-limit/body-size and EVERY gateway-level rejection (401/429/413/503) was
@@ -1001,14 +996,13 @@ def create_app() -> FastAPI:
 
     app.add_middleware(RequestLoggingMiddleware)
     app.add_middleware(RateLimitMiddleware)
-    app.add_middleware(TenantAuthMiddleware)
+    app.add_middleware(AuthMiddleware)
     # OUTERMOST — added last so it wraps auth/rate-limit and records their
     # rejections (401/429/413/503) into the metrics, which it could not see when innermost.
     app.add_middleware(MetricsMiddleware)
 
     # ── Gateway optimizer wiring ──
     from yunshu_engine.gateway_optimizer import (
-        get_connection_pool,
         get_request_coalescer,
         get_response_cache,
         get_streaming_buffer,
@@ -1019,17 +1013,13 @@ def create_app() -> FastAPI:
 
     # Auth: single optional bearer-token gate (YUNSHU_AUTH_TOKEN). The
     # multi-tenant RBACManager / TenantManager initialization has been removed
-    # — this engine serves a single consumer. TenantAuthMiddleware now only
+    # — this engine serves a single consumer. AuthMiddleware now only
     # validates the static token; the per-tenant/RBAC branches are gone.
 
     # Response cache: opt-in via YUNSHU_RESPONSE_CACHE=1
     if os.environ.get("YUNSHU_RESPONSE_CACHE", "").lower() in ("1", "true", "yes"):
         app.state.response_cache = get_response_cache()
         logger.info("ResponseCache enabled (YUNSHU_RESPONSE_CACHE=1)")
-    # Connection pool for distributed mode
-    if os.environ.get("YUNSHU_DISTRIBUTED", "").lower() in ("1", "true", "yes"):
-        app.state.connection_pool = get_connection_pool()
-        logger.info("GatewayConnectionPool enabled (YUNSHU_DISTRIBUTED=1)")
 
     # Startup warnings
     if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):

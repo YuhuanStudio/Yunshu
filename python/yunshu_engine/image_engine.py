@@ -1511,32 +1511,6 @@ class ImageGenEngine(ActiveRequestMixin):
                     f"Invalid YUNSHU_LORA_BUDGET_MB={lora_budget_mb!r}, expected number in MB"
                 )
 
-        # DistributedDiffusionCoordinator — splits diffusion steps across mesh nodes.
-        # Opt-in via YUNSHU_DIFFUSION_NODES env var (number of nodes >= 2).
-        # Uses contiguous step assignment by default.
-        self._diffusion_coordinator = None
-        diffusion_nodes = os.environ.get("YUNSHU_DIFFUSION_NODES", "").strip()
-        if diffusion_nodes:
-            try:
-                n_nodes = int(diffusion_nodes)
-                if n_nodes >= 2:
-                    from .diffusion_infra import DistributedDiffusionCoordinator
-
-                    self._diffusion_coordinator = DistributedDiffusionCoordinator(
-                        num_nodes=n_nodes
-                    )
-                    logger.info(
-                        f"DistributedDiffusionCoordinator enabled ({n_nodes} nodes)"
-                    )
-                else:
-                    logger.warning(
-                        f"YUNSHU_DIFFUSION_NODES must be >= 2 for distributed diffusion, got {n_nodes}"
-                    )
-            except ValueError:
-                logger.warning(
-                    f"Invalid YUNSHU_DIFFUSION_NODES={diffusion_nodes!r}, expected integer >= 2"
-                )
-
         # TeaCache config (opt-in via YUNSHU_TEACACHE=1 or threshold value).
         # Per-request instances are created in each denoising loop to prevent
         # state leakage between concurrent requests.
@@ -2546,20 +2520,6 @@ class ImageGenEngine(ActiveRequestMixin):
         # 4. Compute sigma schedule
         sigmas = self._resolve_sigmas(num_steps, width, height)
 
-        # 4b. Initialize distributed coordinator step assignment if active
-        if self._diffusion_coordinator is not None:
-            self._diffusion_coordinator.assign_steps(
-                num_nodes=self._diffusion_coordinator.num_nodes,
-                total_steps=num_steps,
-            )
-            # Log step distribution across nodes
-            for nid, assign in self._diffusion_coordinator.assignments.items():
-                logger.info(
-                    f"DistributedDiffusion: node {nid} -> "
-                    f"steps {assign.first_step}..{assign.last_step} "
-                    f"({assign.step_count} steps)"
-                )
-
         # 5. Denoising loop
         # TeaCache: create per-request instance for this denoising loop.
         _tc = None
@@ -2609,15 +2569,6 @@ class ImageGenEngine(ActiveRequestMixin):
                     if t + 1 < num_steps:
                         self._lora_offloader.load_for_step(t + 1)
 
-                # Distributed coordinator: record sync checkpoint at interval boundaries
-                if self._diffusion_coordinator is not None:
-                    self._diffusion_coordinator.sync_latents(
-                        source_node=0,
-                        target_node=0,
-                        step=t,
-                        latent_data=latents,
-                    )
-
             if _tc is not None:
                 tc_stats = _tc.get_stats()
                 logger.info(
@@ -2635,15 +2586,6 @@ class ImageGenEngine(ActiveRequestMixin):
                 logger.info(
                     f"LoRA offloader: unloaded {len(unloaded)} adapters after denoising"
                 )
-
-        # Distributed coordinator progress report
-        if self._diffusion_coordinator is not None:
-            progress = self._diffusion_coordinator.get_progress()
-            logger.info(
-                f"DistributedDiffusion: {progress['progress_pct']:.0f}% complete, "
-                f"{progress['checkpoints_count']} checkpoints, "
-                f"{progress['sync_points_count']} sync points"
-            )
 
         # 6. VAE decode (auto-tile for large images to reduce peak memory)
         if width * height > 1024 * 1024:

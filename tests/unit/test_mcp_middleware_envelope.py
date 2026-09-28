@@ -2,7 +2,7 @@
 lockout) returned the OpenAI HTTP error envelope even for the JSON-RPC /v1/mcp endpoint —
 a JSON-RPC client can't parse {"error":{...}}. had made only the auth-error path
 MCP-aware. Centralize the path-aware envelope (OpenAI / Anthropic / JSON-RPC) in
-format_error_response and route rate_limit.py's 429s + tenant_auth's lockout/concurrency/
+format_error_response and route rate_limit.py's 429s + auth.py's lockout/concurrency/
 TPM 429s through it."""
 
 from __future__ import annotations
@@ -65,10 +65,10 @@ def test_rate_limit_middleware_uses_shared_envelope():
     assert '"code": "rate_limit_exceeded",' not in src
 
 
-def test_tenant_auth_uses_shared_envelope():
-    from yunshu_gateway.middleware import tenant_auth
+def test_auth_uses_shared_envelope():
+    from yunshu_gateway.middleware import auth as auth_mw
 
-    src = inspect.getsource(tenant_auth)
+    src = inspect.getsource(auth_mw)
     # Single-consumer model: the simplified middleware routes its 401 denial
     # through the in-module _ErrorFormatter.auth_error helper, which produces
     # the path-aware envelope (JSON-RPC for /v1/mcp, Anthropic shape for

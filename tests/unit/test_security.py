@@ -93,7 +93,7 @@ def test_metrics_accepts_valid_static_token():
 
 
 def test_metrics_accepts_owner_role_from_middleware():
-    """When TenantAuthMiddleware has already authenticated the request and
+    """When AuthMiddleware has already authenticated the request and
     stamped state.role="owner", /metrics trusts that and allows."""
     from yunshu_gateway.middleware.metrics import _check_metrics_auth
 
