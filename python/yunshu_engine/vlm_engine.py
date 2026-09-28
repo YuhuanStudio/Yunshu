@@ -4545,10 +4545,10 @@ class VLMEngine:
         """Every text request goes through the runner unless it needs a knob the
         runner does not implement (those keep the legacy loop, never silently
         dropped)."""
+        # logprobs are not returned by any VLM path yet (generate() already
+        # warns); they no longer push a request onto the slow legacy loop.
         return bool(
             getattr(self, "_batch_runner", None) is not None
-            and not logprobs
-            and not top_logprobs
             and not any(kwargs.get(k) for k in self._RUNNER_UNSUPPORTED_KWARGS)
         )
 
