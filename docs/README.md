@@ -7,7 +7,10 @@ docs/
     perf_history/       ← time-named KPI snapshots (perf_<UTC>.json)
     img/                ← trend charts
   guides/               # hand-written reference notes
-    KV_CACHE_MATRIX.md, VLM_TEXT_KV_PREFIX.md, PROMPT_CACHING_APIS.md
+    ITERATION_RESEARCH_TODO.md  ← current research status and open work
+    KV_CACHE_MATRIX.md, VLM_TEXT_KV_PREFIX.md, PROMPT_CACHING_APIS.md,
+    BACKEND_RESEARCH.md, BACKEND_ROADMAP.md
+  research/runs/        # dated raw benchmark runs (engine matrix, soaks, sweeps) with a README each
   results/              # raw bench JSON artifacts (historical; framework_comparison etc.)
   archive/
     mlx_vlm_omni_audio/ ← real omni/audio findings (relevant to the omni refocus)

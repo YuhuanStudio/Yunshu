@@ -6,6 +6,35 @@ signals new capability, a patch bump signals fixes.
 
 ## [Unreleased]
 
+### Added
+
+- Qwen3.5-family VLM runner (Qwen3.5 / 3.6 / 3.8) on `mlx-vlm`'s generator: prefix cache with
+  exact hybrid checkpoints (text + image-pixel keys, optional SSD tier), MTP or DFlash speculative
+  decode, streaming reasoning split, tools, JSON schema, stop sequences, logprobs and cancel.
+  On Qwen3.8-27B (M5 Max) warm chat TTFT went from 2.5 s to 0.2 s, a repeated 8K prompt from 9 s to
+  0.1 s, and decode from 30 to 57 tok/s.
+- Exact verify kernels (GatedDeltaNet prework/replay, split SDPA, 5-bit streamed matmul) and
+  opt-in fast verify / batch-invariant kernels, partly vendored from oMLX (Apache-2.0).
+- `YUNSHU_LOG_LEVEL`; `scripts/research/` benchmark matrix, realistic soak and MMLU-Pro soak.
+
+### Changed
+
+- Dependencies: MLX 0.32.2, transformers 5.17, upstream `mlx-vlm` 0.7.3 (the fork is gone).
+- JSON-schema constraint: cached vocab split (in-string step 144 ms → 3 ms); structural whitespace
+  limited to spaces and newlines.
+
+### Fixed
+
+- Streaming thinking on Qwen3.8 was sent as content; it is now sent as reasoning.
+- Gateway startup failure no longer crashes in shutdown on an unbound engine.
+
+### Removed
+
+- The deprecated `Engine` class, multi-node / multi-tenant leftovers (distributed diffusion,
+  connection pool, data-parallel endpoint, tenant auth naming), and unused modules
+  (`vlm_async_engine`, `wan_vae`, `lid`, `optimizations`, `vision_encoding`).
+- The older VLM MTP / APC side paths, superseded by the runner.
+
 ## [0.1.0] - 2026-07-01
 
 First public release — the full capability surface below, each endpoint smoke-verified

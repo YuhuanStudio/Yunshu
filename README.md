@@ -40,10 +40,8 @@ Everything else runs too: any `mlx-lm` / `mlx-vlm` / `mlx-audio` model gets the 
 
 ## Quickstart
 
-> **Requires [uv](https://docs.astral.sh/uv/).** Not on PyPI yet — install from source.
-> `uv sync` honors `[tool.uv.sources]`, so it pulls the `mlx-vlm` fork Yunshu needs for Qwen3-Omni
-> (latest upstream + a Thinker early-exit optimization and omni fixes). A plain `pip install` would
-> pull unpinned upstream `mlx-vlm` instead, so use `uv sync`.
+> **Requires [uv](https://docs.astral.sh/uv/).** Not on PyPI yet — install from source with
+> `uv sync`, which installs the exact versions in `uv.lock` (MLX 0.32, upstream `mlx-vlm` 0.7.3+).
 
 ```bash
 # 1. Install from source
@@ -121,6 +119,8 @@ server/client, and an Anthropic-compatible `/v1/messages` surface.
   ├────────────────────────────────────────────────────┤
   │  Engine               modality dispatch + serving   │
   │   · LLM fast path (mlx-lm generate_step)            │
+  │   · VLM runner (Qwen3.5/3.6/3.8): prefix cache +    │
+  │     MTP / DFlash speculative decode + verify kernels│
   │   · VLM / OCR (mlx-vlm)  · ASR / TTS (mlx-audio)   │
   │   · OmniEngine (Qwen3-Omni Thinker→Talker)          │
   │   · image diffusion       · KV prefix cache          │
@@ -130,18 +130,44 @@ server/client, and an Anthropic-compatible `/v1/messages` surface.
 
 ## Performance
 
-Yunshu optimizes for **low latency**, not throughput — it serves one request at a time on a fast
-path, which is the right shape for a local, single-user server. A request goes through mlx-lm's
-`generate_step` with KV prefix + prompt caching on by default; single-stream decode is at parity
-with `mlx-lm`. Situational knobs — lossless n-gram speculative decode (wins on repetitive/agentic
-output, slower on normal prose, so it's opt-in), alternative samplers, in-memory weight quant,
-jump-forward — are opt-in, never silently on; see the [configuration reference](docs/CONFIGURATION.md).
-Honest benchmark trends live in [docs/reports/PERF_TREND.md](docs/reports/PERF_TREND.md).
+Yunshu serves one request at a time and optimizes for latency: first token (cold and cached),
+decode speed, and prefix reuse. The first fully tuned model is **Qwen3.8-27B**. Qwen3.5-family
+VLMs (Qwen3.5 / 3.6 / 3.8) run on a dedicated runner built on `mlx-vlm`'s generator:
+
+- **Prefix cache (APC)** with exact hybrid-model checkpoints, keyed by image pixels as well as text,
+  8 GiB RAM by default plus an optional SSD tier. Repeated or edited long prompts skip prefill.
+- **Speculative decode** with the checkpoint's MTP head, or an external DFlash drafter
+  (`YUNSHU_VLM_DRAFT`). The default verify kernels are exact: greedy output with speculation on is
+  token-identical to speculation off. Faster non-exact verify kernels are opt-in
+  (`YUNSHU_MTP_FAST_VERIFY=1`).
+- Streaming reasoning split, tool calls, JSON-schema constraints, stop sequences, logprobs and
+  cancellation all work on this path.
+
+Measured on an M5 Max (128 GB), Qwen3.8-27B, 2026-09-28. Same Jundot `oQ4e-mtp` checkpoint unless
+noted; raw data and methods in
+[docs/research/runs/2026-09-28-matrix](docs/research/runs/2026-09-28-matrix/README.md).
+
+| Engine | Capability checks | Chat TTFT (warm) | 8K prompt: cold / repeat / edited tail | Decode tok/s |
+|---|---|---|---|---|
+| **Yunshu** (default: MTP, exact verify) | 31/31 | 0.196 s | 8.62 / 0.095 / 0.253 s | 57 |
+| **Yunshu** (DFlash2 + fast verify, opt-in) | 31/31 | 0.185 s | 8.71 / 0.112 / 0.239 s | 86 |
+| mlx-vlm 0.7.3 server (APC) | 27/28 | 0.212 s | 8.60 / 0.108 / 0.265 s | 32 |
+| oMLX.app 0.7 (MTP + cache) | 31/31 | 0.312 s | 8.60 / 0.361 / 0.376 s | 85 |
+| Splash 1.1 (own quantized model + DFlash2) | 31/31 | 0.206 s | 7.88 / 0.131 / 7.88 s | 119 |
+
+Where Yunshu stands: prefix reuse and TTFT are the best measured; prefill is at the hardware
+ceiling for this checkpoint; **default decode is behind oMLX and Splash**, which use faster
+(non-exact or custom-quantized) kernels. Closing that gap without giving up exact output is the
+current work. Other, situational knobs (n-gram speculation, alternative samplers, KV quant,
+jump-forward) are opt-in; see the [configuration reference](docs/CONFIGURATION.md). The long-run
+benchmark log is [docs/reports/PERF_TREND.md](docs/reports/PERF_TREND.md).
 
 ## Built on
 
 [MLX](https://github.com/ml-explore/mlx) · [mlx-lm](https://github.com/ml-explore/mlx-lm) ·
-[mlx-vlm](https://github.com/Blaizzy/mlx-vlm) · [mlx-audio](https://github.com/Blaizzy/mlx-audio)
+[mlx-vlm](https://github.com/Blaizzy/mlx-vlm) · [mlx-audio](https://github.com/Blaizzy/mlx-audio).
+Some verify kernels are vendored from [oMLX](https://github.com/jundot/omlx) (Apache-2.0); see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## License
 

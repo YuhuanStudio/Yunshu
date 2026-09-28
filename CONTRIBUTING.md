@@ -23,7 +23,7 @@ This runs `uv sync --all-extras --dev`. For a lighter
 checkout, pick just the extras you need instead of `--all-extras`:
 
 ```bash
-uv sync --extra omni          # mlx-vlm fork — native Qwen3-Omni speech-to-speech (the flagship)
+uv sync --extra omni          # mlx-vlm + torch — native Qwen3-Omni speech-to-speech (the flagship)
 uv sync --extra vision        # mlx-vlm (VLM / OCR)
 uv sync --extra audio         # mlx-audio (ASR / TTS / Realtime voice cascade)
 uv sync --extra generation    # diffusers + torch (image / video generation)

@@ -38,9 +38,8 @@ Qwen3-Omni 的 **Talker** 架构是单个模型:它摄入原始音频、进行�
 
 ## 快速开始
 
-> **需要 [uv](https://docs.astral.sh/uv/)。** 还没上 PyPI —— 从源码安装。`uv sync` 会遵守
-> `[tool.uv.sources]`,所以会拉取 Yunshu 为 Qwen3-Omni 准备的 `mlx-vlm` fork(最新上游 +
-> Thinker 早退优化和 omni 修复)。纯 `pip install` 会装到未固定的上游 `mlx-vlm`,所以请用 `uv sync`。
+> **需要 [uv](https://docs.astral.sh/uv/)。** 还没上 PyPI —— 从源码以 `uv sync` 安装,
+> 它会安装 `uv.lock` 中固定的版本(MLX 0.32、上游 `mlx-vlm` 0.7.3+)。
 
 ```bash
 # 1. 从源码安装
@@ -118,6 +117,8 @@ print(
   ├────────────────────────────────────────────────────┤
   │  引擎                 模态分派 + 服务                 │
   │   · LLM 快速路径（mlx-lm generate_step）            │
+  │   · VLM runner（Qwen3.5/3.6/3.8）：前缀缓存 +       │
+  │     MTP / DFlash 推测解码 + 验证 kernel             │
   │   · VLM / OCR（mlx-vlm）  · ASR / TTS（mlx-audio）│
   │   · OmniEngine（Qwen3-Omni Thinker→Talker）         │
   │   · 图像扩散              · KV 前缀缓存               │
@@ -127,17 +128,41 @@ print(
 
 ## 性能
 
-Yunshu 为**低延迟**而非吞吐而优化 —— 它一次服务一个请求、走快速路径,这正是本地单用户服务器
-该有的形状。一个请求经过 mlx-lm 的 `generate_step`,带 KV 前缀 + prompt 缓存,默认开启;单流
-解码与 `mlx-lm` 持平。依场景的旋钮 —— 无损 n-gram 推测解码(在重复性/agentic 输出上加速,但在
-普通文本上更慢,所以按需开启)、替代采样器、内存内权重量化、jump-forward —— 都是按需开启、绝不
-静默生效;见 [配置参考](docs/CONFIGURATION.md)。诚实的基准趋势见
+Yunshu 一次服务一个请求,优化的是延迟:首 token(冷启动与缓存命中都算)、解码速度、前缀复用。
+第一个完整调校的模型是 **Qwen3.8-27B**。Qwen3.5 家族 VLM(Qwen3.5 / 3.6 / 3.8)走构建在 `mlx-vlm`
+生成器之上的专用 runner:
+
+- **前缀缓存(APC)**:混合架构的精确 checkpoint,以文本与图片像素共同作为键;默认 8 GiB 内存,
+  可选 SSD 层。重复或只改结尾的长 prompt 无需重新 prefill。
+- **推测解码**:使用 checkpoint 自带的 MTP 头,或外部 DFlash drafter(`YUNSHU_VLM_DRAFT`)。
+  默认验证 kernel 是精确的:greedy 下开启与关闭推测的输出逐 token 相同。更快但非精确的验证
+  kernel 需手动开启(`YUNSHU_MTP_FAST_VERIFY=1`)。
+- 流式推理分离、工具调用、JSON-schema 约束、停止序列、logprobs、取消在这条路径上都可用。
+
+测量环境:M5 Max(128 GB)、Qwen3.8-27B、2026-09-28。除特别注明外均为同一个 Jundot `oQ4e-mtp`
+checkpoint;原始数据与方法见
+[docs/research/runs/2026-09-28-matrix](docs/research/runs/2026-09-28-matrix/README.md)。
+
+| 引擎 | 能力检查 | 对话 TTFT（热） | 8K prompt：冷 / 重复 / 改尾 | 解码 tok/s |
+|---|---|---|---|---|
+| **Yunshu**（默认：MTP、精确验证） | 31/31 | 0.196 s | 8.62 / 0.095 / 0.253 s | 57 |
+| **Yunshu**（DFlash2 + 快速验证，需开启） | 31/31 | 0.185 s | 8.71 / 0.112 / 0.239 s | 86 |
+| mlx-vlm 0.7.3 server（APC） | 27/28 | 0.212 s | 8.60 / 0.108 / 0.265 s | 32 |
+| oMLX.app 0.7（MTP + 缓存） | 31/31 | 0.312 s | 8.60 / 0.361 / 0.376 s | 85 |
+| Splash 1.1（自家量化模型 + DFlash2） | 31/31 | 0.206 s | 7.88 / 0.131 / 7.88 s | 119 |
+
+现状:前缀复用与 TTFT 是测到最好的;这个 checkpoint 的 prefill 已到硬件上限;**默认解码仍落后
+oMLX 与 Splash**,它们用了更快(非精确或自定义量化)的 kernel。在不放弃精确输出的前提下追上,
+是当前的主要工作。其他场景旋钮(n-gram 推测、替代采样器、KV 量化、jump-forward)都需手动开启,
+见 [配置参考](docs/CONFIGURATION.md)。长期基准记录见
 [docs/reports/PERF_TREND.md](docs/reports/PERF_TREND.md)。
 
 ## 构建于
 
 [MLX](https://github.com/ml-explore/mlx) · [mlx-lm](https://github.com/ml-explore/mlx-lm) ·
-[mlx-vlm](https://github.com/Blaizzy/mlx-vlm) · [mlx-audio](https://github.com/Blaizzy/mlx-audio)
+[mlx-vlm](https://github.com/Blaizzy/mlx-vlm) · [mlx-audio](https://github.com/Blaizzy/mlx-audio)。
+部分验证 kernel 取自 [oMLX](https://github.com/jundot/omlx)(Apache-2.0),见
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ## 许可证
 

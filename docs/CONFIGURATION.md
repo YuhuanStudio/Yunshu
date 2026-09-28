@@ -26,6 +26,7 @@ Booleans accept `1`/`true`/`yes` (case-insensitive); anything else (or unset) is
 | `YUNSHU_OMNI_PERSONA` | _(built-in)_ | System persona used on the realtime voice path **only when the request carries no system message** — defaults to a concise, spoken-style assistant (voice wants short replies). A request's own system message always overrides it. Set to a custom string to change it, or empty to disable. |
 | `YUNSHU_DEFAULT_MAX_TOKENS` | `512` | Default completion length when a request omits `max_tokens`. |
 | `YUNSHU_CORS_ORIGINS` | `*` | Comma-separated allowed CORS origins. |
+| `YUNSHU_LOG_LEVEL` | `INFO` | Log level for Yunshu's own loggers (third-party loggers stay at WARNING). |
 | `YUNSHU_REALTIME_SILENCE_MS` | `500` | Realtime server-VAD: how long the user must pause before the model responds. Lower = snappier (but risks cutting off mid-sentence pauses). A client's `session.update` overrides per-session. |
 | `YUNSHU_REALTIME_BARGE_IN_MS` | `120` | Realtime: sustained speech needed to interrupt the model mid-reply (barge-in). Lower = easier to interrupt; too low lets a cough/blip kill a reply. |
 | `YUNSHU_REALTIME_VAD_THRESHOLD` | `0.5` | Realtime server-VAD speech-detection threshold. |
@@ -36,13 +37,13 @@ Booleans accept `1`/`true`/`yes` (case-insensitive); anything else (or unset) is
 ## Auth
 
 Inference endpoints (chat/completions, embeddings, …) are open by default for easy
-local use. Admin endpoints (model load/unload, profiling, dashboard) are denied
+local use. The few operational endpoints (monitoring, request cancel) are denied
 until a token is set.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `YUNSHU_AUTH_TOKEN` | _(unset)_ | Bearer token enabling the admin endpoints. Unset → admin endpoints are denied; inference stays open. |
-| `YUNSHU_AUTH_DISABLED` | off | Disable auth entirely (admin endpoints open too). Local-only convenience — do not expose the server publicly with this on. |
+| `YUNSHU_AUTH_TOKEN` | _(unset)_ | Bearer token. When set, every request except health/version/docs needs it. Unset → operational endpoints are denied; inference stays open. |
+| `YUNSHU_AUTH_DISABLED` | off | Disable auth entirely (operational endpoints open too). Local-only convenience — do not expose the server publicly with this on. |
 
 ## Decoding & optimization
 
@@ -62,6 +63,26 @@ caching is always on.
 | `YUNSHU_GPU_SAMPLER` | off | On-GPU Gumbel-max sampler (no per-token GPU→CPU sync). Default numpy sampler avoids mlx-lm's PRNG-compile-cache trap. |
 | `YUNSHU_SPEC_PREFILL` | off | Sparse speculative prefill (needs a draft model). |
 | `YUNSHU_ENGINE_LOOP` | off | Legacy continuous-batching loop instead of the single-request fast path. Not the supported path — for experiments only. |
+
+## Qwen3.5-family VLM runner (Qwen3.5 / 3.6 / 3.8)
+
+These models are served by a dedicated runner on `mlx-vlm`'s generator with a prefix cache and
+speculative decode on by default. Defaults are the measured best exact configuration for
+Qwen3.8-27B on M5 Max.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `YUNSHU_VLM_RUNNER` | on | `0` falls back to the older generic VLM path (no APC / speculative decode). |
+| `YUNSHU_VLM_APC_MEMORY_GB` | `8` | RAM budget of the prefix cache (exact hybrid checkpoints; text + image-pixel keys). `YUNSHU_VLM_UPSTREAM_APC=0` disables the cache. |
+| `YUNSHU_VLM_APC_DISK_DIR` | _(unset)_ | Directory for an SSD tier behind the RAM cache; evicted prefixes are reloaded from disk instead of re-prefilled. |
+| `YUNSHU_VLM_APC_DISK_GB` | `64` | Size cap of the SSD tier. |
+| `YUNSHU_MTP` | on | Use the checkpoint's MTP head as the draft (when present). `0` = plain decode. |
+| `YUNSHU_VLM_DRAFT` | _(unset)_ | Path to an external DFlash drafter (e.g. `Qwen3.8-27B-DFlash2`); replaces the MTP draft. |
+| `YUNSHU_MTP_BLOCK_SIZE` | `3` (MTP) / `4` (DFlash); `6` with fast verify | Draft block size. |
+| `YUNSHU_MTP_VERIFY_KERNELS` | on | Exact verify kernels (GatedDeltaNet / attention / 5-bit streamed). Output with speculation stays token-identical to without. |
+| `YUNSHU_MTP_FAST_VERIFY` | off | Faster, **non-exact** verify matmuls (oMLX `verify_qmm`). Measurably faster decode; greedy output can differ from speculation-off. |
+| `YUNSHU_VLM_INVARIANT` | off | Experimental batch-invariant decode: every decode and verify matmul goes through one row-invariant kernel (Splash-style lossless). Currently slower. `YUNSHU_VLM_INVARIANT_PACKED` (default on) uses the M5 tensor-unit packed kernel where available. |
+| `YUNSHU_MTP_ADAPTIVE` | off | Experimental adaptive draft depth (between 2 and `YUNSHU_MTP_MAX_BLOCK`, default 6). No measured gain yet. |
 
 ## Embeddings
 
