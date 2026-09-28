@@ -10,6 +10,13 @@ unless the directory says otherwise.
 
 | Run | What it measured |
 |---|---|
+| [2026-09-29-ragged-idle](research/runs/2026-09-29-ragged-idle/) | ragged KV on/off on an idle GPU: MTP lane decode by output type at 1K / 32K / 131K with parity, speed sweep, repeated short-context runs, concurrency |
+| [2026-09-29-ragged-lane](research/runs/2026-09-29-ragged-lane/) | ragged KV (slot buffers + lane kernel): MMLU-Pro soak, lane parity fix |
+| [2026-09-29-ragged-default](research/runs/2026-09-29-ragged-default/) | validation after ragged KV became the default (27B matrix, QA, concurrency; Gemma-4 keeps stock caches) |
+| [2026-09-29-tool-format](research/runs/2026-09-29-tool-format/) | capability matrix after the tool-call format dispatch (Gemma-4, Qwen3.8) |
+| [2026-09-29-fused-prefill](research/runs/2026-09-29-fused-prefill/), [2026-09-28-fairness](research/runs/2026-09-28-fairness/) | decode of other rows while a long prompt prefills (chunked / fused prefill; both removed) |
+| [2026-09-29-yunshu-dflash](research/runs/2026-09-29-yunshu-dflash/) | DFlash2 speed sweep before the DFlash fixes |
+| [2026-09-28-tensorfold](research/runs/2026-09-28-tensorfold/) | TensorFold 0.3.6.1 (MTP and DFlash2): matrix, speed sweep, MMLU-Pro soak |
 | [2026-09-28-matrix](research/runs/2026-09-28-matrix/README.md) | cross-engine capability matrix (34 checks), TTFT / cache reuse, decode by output type, MMLU-Pro soaks, the 1K–200K speed sweep, batch speculative decode |
 | [2026-09-28-ragged](research/runs/2026-09-28-ragged/) | ragged per-row KV cache (bf16 / int8): matrix, concurrency, mixed QA, MMLU-Pro soak |
 | [2026-09-28-kvquant](research/runs/2026-09-28-kvquant/) | upstream quantized KV vs bf16 (speed, concurrency, mixed QA) |

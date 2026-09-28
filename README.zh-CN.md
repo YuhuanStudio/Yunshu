@@ -21,7 +21,11 @@
 
 - **无损推测解码。** 使用 checkpoint 自带的 MTP 头,或外部 DFlash drafter。会推测的请求,其所有
   解码与验证矩阵乘都走同一颗 batch-invariant kernel,所以 greedy 下开启与关闭推测的输出逐 token
-  相同 —— 即 Splash 所说的无损。非精确的快速验证也有,但需手动开启。
+  相同 —— 即 Splash 所说的无损。
+- **并发请求各行独立的 KV。** 共享批次里每一行保有自己的 KV 长度,短请求不会读到长请求的补齐
+  (Qwen3.5 家族;8 路并发的 MMLU-Pro 88 → 139 tok/s,131K 上下文解码 24 → 47 tok/s)。
+- **有损的只在你要求时才开。** 所有默认值都是无损的。会改变输出的省内存选项(int8 KV、KV 量化、
+  4-bit 缓存前缀、int8 SSD 缓存)都是需要手动开启的设置。
 - **混合架构模型的前缀缓存。** Qwen3.5 家族把注意力层和循环的 GatedDeltaNet 层混在一起,普通的
   KV 缓存切不开。Yunshu 保存精确的 checkpoint,以文本与图片像素共同作为键,默认 8 GiB 内存,
   可再加一层 SSD。重复或只改结尾的长 prompt 无需重新 prefill。
@@ -36,12 +40,19 @@
 
 ```bash
 # 安装。vision extra 覆盖 Qwen3.5 / 3.6 / 3.8 系列和所有 VLM。
-uv tool install "yunshu[vision] @ git+https://github.com/YuhuanStudio/Yunshu"
+uv tool install "yunshu[vision]"
 
 yunshu doctor                                   # 检查这台 Mac,并列出修复方法
 yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit   # 下载到 ~/.yunshu/models/
-yunshu serve -m ~/.yunshu/models/mlx-community/Qwen3.5-9B-MLX-4bit
+yunshu serve -m mlx-community/Qwen3.5-9B-MLX-4bit
 ```
+
+其他安装方式:`pipx install "yunshu[vision]"`、Homebrew(`brew install yuhuanstudio/tap/yunshu`),
+或最新的 `main`(`uv tool install "yunshu[vision] @ git+https://github.com/YuhuanStudio/Yunshu"`)。
+
+`yunshu serve -m org/name` 会直接使用模型目录或 Hugging Face 缓存里已有的模型,两边都没有才下载。
+模型默认放在 `~/.yunshu/models`;要放到别处,执行 `yunshu config set models_dir /path/to/models`
+(保存在 `~/.yunshu/config.toml`)。
 
 服务器监听 `http://127.0.0.1:8000`,任何 OpenAI 客户端都能直接用:
 
@@ -66,6 +77,9 @@ print(r.choices[0].message.content)
 **从源码**(开发用):克隆仓库,运行 `uv sync --extra vision`(或 `--all-extras`),
 然后 `uv run yunshu serve -m <model>`。`uv.lock` 固定了确切版本(MLX 0.32、`mlx-vlm` 0.7.3+)。
 
+**不收集遥测。** Yunshu 不会把任何数据发送到任何地方。唯一的对外连接是你要求的模型下载,以及你配置的
+MCP 服务器。
+
 **文档:**
 - [连接客户端](docs/guides/CLIENTS.md)(OpenAI / Anthropic SDK、编程代理、Open WebUI)
 - [故障排查](docs/guides/TROUBLESHOOTING.md)
@@ -74,58 +88,66 @@ print(r.choices[0].message.content)
 
 ## 性能
 
-测量环境:M5 Max(128 GB)、Qwen3.8-27B、2026-09-28。除特别注明外均为同一个 Jundot `oQ4e-mtp`
-checkpoint;原始数据与方法见
-[docs/research/runs/2026-09-28-matrix](docs/research/runs/2026-09-28-matrix/README.md)。
+在 M5 Max(128 GB)上以 Qwen3.8-27B 测量,2026-09-28/29。除非另有注明,都用同一个 Jundot
+`oQ4e-mtp` checkpoint。原始数据与方法在 [docs/research/runs](docs/research/runs/)(各表来源见
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md))。
 
-| 引擎 | 能力检查 | 对话 TTFT(热) | 8K prompt:冷 / 重复 / 改尾 | 解码 tok/s |
+| 引擎 | 能力检查 | 对话 TTFT(热) | 8K prompt:冷 / 重复 / 改尾巴 | 解码 tok/s |
 |---|---|---|---|---|
-| **Yunshu**(默认:MTP 深度 6、batch-invariant) | 34/34 | 0.194 s | 8.45 / 0.115 / 0.258 s | 80 |
-| **Yunshu**(DFlash2 + 快速验证,需开启) | 31/31 | 0.185 s | 8.71 / 0.112 / 0.239 s | 86 |
+| **Yunshu 0.1.1**(默认:MTP block 6、batch-invariant、ragged KV) | 34/34 | 0.192 s | 8.42 / 0.115 / 0.259 s | 73 |
 | mlx-vlm 0.7.3 server(APC) | 27/28 | 0.212 s | 8.60 / 0.108 / 0.265 s | 32 |
 | oMLX.app 0.7(MTP + 缓存) | 31/31 | 0.312 s | 8.60 / 0.361 / 0.376 s | 85 |
 | Splash 1.1(自家量化模型 + DFlash2) | 31/31 | 0.206 s | 7.88 / 0.131 / 7.88 s | 119 |
+| TensorFold 0.3.6.1(MTP,parallel 8) | 23/34 | — | — | 28 |
 
-按输出类型的无损解码(同 checkpoint、进程内、greedy、384 token;tok/s):
+Yunshu 的检查项比旧的测量多(logprobs、流式推理分离);TensorFold 在图片、工具、JSON schema、
+logprobs 几项没有通过。
 
-| 解码方式 | 代码 | 文章 | JSON 类 | 开/关推测相同 |
+单个请求的无损解码,按输出类型(同一 checkpoint、进程内、greedy、384 token;tok/s):
+
+| 上下文 | 代码 | 散文 | 类 JSON | 开推测 == 关推测 |
 |---|---|---|---|---|
-| **默认**:batch-invariant + packed、MTP 深度 6 | 88.6 | 59.9 | 67.3 | 是(已測)¹ |
-| 旧默认:精确验证 kernel、MTP 深度 3 | 57–67 | 50–53 | 58–62 | 是(已測)¹ |
-| 非精确快速验证(需开启) | 83.8 | 59.9 | 66.7 | 否 |
+| 1K | 82.1 | 57.8 | 69.0 | 是(已测)¹ |
+| 32K | 75.4 | 51.2 | 64.2 | 是(已测)¹ |
+| 131K | 59.7 | 43.8 | 46.0 | 是(已测)¹ |
 
-¹ 短 prompt 以及 1.2K/16.5K token 上下文下(各 384 token),开启与关闭推测的 greedy 输出在每个任务
-都逐 token 相同。矩阵乘已逐行一致;推测验证的注意力走的 MLX kernel 和单行解码不同,所以位元层面的
-logits 可能有差,其他输入下仍可能偶有 token 不同。oMLX 的逐行精确注意力可以消除这点,但解码慢
-30–50%(`YUNSHU_MTP_ROW_EXACT=1`)。
+¹ 上面每个上下文、每个任务,开推测与不开推测的 greedy 输出都逐 token 相同。矩阵乘与行数无关;
+解码与验证的注意力走同一个逐行 kernel,一个 token 的结果不会因为一起验证的 token 数而改变。
 
-MMLU-Pro 300 题、同时 8 题、最多 16384 token、`reasoning_effort=medium`(准确率与长时间稳定性;
-每家设置相同):
+MMLU-Pro,300 题,8 路并行,上限 16384 token,`reasoning_effort=medium`(同时检验准确率与长时间
+稳定性;所有引擎设置相同):
 
 | 引擎 | 答对 | 耗时 | 总吞吐 tok/s | 内存峰值 |
 |---|---|---|---|---|
-| **Yunshu**(共用批次,commit fbbb1378) | 250 / 300 | 46.5 分钟 | 88 | 45 GiB(结束回到 17) |
-| Splash 1.1 | 252 / 300 | 17.2 分钟 | 223 | 67 GiB |
-| oMLX.app | 229 / 300(27 题被它的 prefill 内存守卫拒绝) | 29.2 分钟 | 120 | 75 GiB |
+| **Yunshu**(ragged KV) | 249 / 300 | 28.3 分 | 139 | 33.7 GiB |
+| Yunshu 0.1.0 时期的共享批次(补齐 KV) | 250 / 300 | 46.5 分 | 88 | 45 GiB |
+| TensorFold 0.3.6.1(MTP,parallel 8) | 250 / 300 | 24.9 分 | 159 | 35.1 GiB |
+| Splash 1.1 | 252 / 300 | 17.2 分 | 223 | 67 GiB |
+| oMLX.app | 229 / 300(27 题被它的 prefill 内存保护拒绝) | 29.2 分 | 120 | 75 GiB |
 
-速度全测(每个 prompt 唯一、不命中缓存;生成 128 token;未注明单位者为 tok/s):
+开启 `YUNSHU_KV_PRECISION=int8`(有损,需手动开启)时 Yunshu 答对 251 / 300,峰值 28.1 GiB
+(在较早版本的 ragged 缓存上测量,34.6 分)。
 
-| | Yunshu | oMLX | Splash |
-|---|---|---|---|
-| 8K / 131K / 200K token 的 TTFT | 8.4 / 209 / 394 s | 8.5 / 214 / 401 s | 7.9 / 207 / 390 s |
-| 1K / 32K / 200K 之后的解码 | 58 / 44 / 17 | 71 / 60 / 29 | 101 / 48 / 66 |
-| 8 个 1K prompt 同时,总吞吐 | 61 | 53 | 70 |
+速度扫描(每个 prompt 都不同,不命中缓存;生成 128 token;未注明单位者为 tok/s):
 
-现状:
-- 前缀复用与热 TTFT 是测到最好的;冷 prefill 已到硬件上限(三家相差约 5% 内)。
-- 准确率与 Splash 相当;每次长时间测试都 0 错误。
-- **落后 Splash** 的地方:长上下文解码(它的 KV 用 INT8),以及并发长输出(上游批次缓存把每行补到
-  最长那行)。量化 KV 与每行独立长度的 KV 缓存正在验证中,用来补上这两点。
-- 60 分钟混合 soak(对话、长文档、图片、工具、JSON schema、思考、中途断线)跑完 699 个请求,
-  服务器错误 0,内存没有增长(footprint 17–26 GiB)。
+| | Yunshu | oMLX | Splash | TensorFold(MTP) |
+|---|---|---|---|---|
+| 8K / 131K token 的 TTFT | 8.6 / 207 s | 8.5 / 214 s | 7.9 / 207 s | 9.8 / 293 s |
+| 1K / 32K / 131K 之后的解码 | 59² / 59 / 47 | 71 / 60 / 38 | 101 / 48 / 68 | 26 / 57 / 19 |
+| 8 个 1K prompt 并发,总吞吐 | 64 | 53 | 70 | 65 |
 
-Yunshu 的矩阵比旧测试多两项:logprobs 与流式推理分离。长期基准记录见
-[docs/reports/PERF_TREND.md](docs/reports/PERF_TREND.md)。
+² 单个请求的解码速度取决于草稿被接受多少,会随 prompt 变动;Yunshu 的 1K 数字是 8 次的平均
+(单次介于 40–70)。其他格都是单次测量。
+
+Yunshu 目前的位置:
+- 前缀重用与热 TTFT 是测到最好的;冷 prefill 已达硬件上限(各引擎相差约 10% 以内)。
+- 准确率与其他引擎相当;每次长时间运行都是 0 错误。
+- **落后 Splash** 的地方:长上下文解码(131K:47 vs 68 tok/s)与并发长输出(MMLU-Pro:139 vs
+  223 tok/s)。TensorFold 在后者也领先(159),因为它每一行都起草;Yunshu 只在请求单独运行时起草。
+  多行推测解码开发中(`YUNSHU_ROUND_DRIVER`,实验性)。
+- 其他请求解码时若有长 prompt 进来,prefill 期间其他请求的解码会停住;测过的每个引擎都是如此。
+- 2026-09-28 版本的 60 分钟混合压测(对话、长文档、图片、工具、JSON schema、思考、断线)完成
+  699 个请求,服务器 0 错误,内存没有增长(17–26 GiB)。
 
 ## 支持的模型
 

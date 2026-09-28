@@ -7,7 +7,7 @@ Release steps: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
-Proposed as **0.1.1** (not released yet).
+## [0.1.1] - 2026-09-29
 
 Yunshu is now positioned as a local LLM / VLM inference engine (decode speed, TTFT, prefix reuse,
 API completeness), with Qwen3.8-27B as the first fully tuned model. Speech-to-speech and the other
@@ -21,12 +21,17 @@ match.
   fix for each problem; `yunshu pull <org/name>` downloads into the models directory, refuses to
   download a model that is already on disk (models directory or Hugging Face cache) and resumes an
   interrupted download; `yunshu model list` also lists the Hugging Face cache; `yunshu --version`.
+- Models from the Hugging Face cache are usable in place: `yunshu serve -m org/name` (or a name under
+  the models directory) serves the local copy instead of downloading, and multi-model mode lists
+  cached models next to the models directory (`YUNSHU_HF_CACHE_MODELS`, on by default).
+- `yunshu config set KEY VALUE` / `unset` / `path`: settings saved in `~/.yunshu/config.toml`, read
+  by every command and the service (e.g. `yunshu config set models_dir /Volumes/Models`).
 - `yunshu service install|uninstall|start|stop|restart|status|logs`: a per-user launchd agent
   that starts Yunshu at login, restarts it after a crash, and logs to `~/Library/Logs/Yunshu`.
 - Docs: [connecting clients](docs/guides/CLIENTS.md), [service](docs/guides/SERVICE.md),
   [troubleshooting](docs/guides/TROUBLESHOOTING.md), [benchmark sources](docs/BENCHMARKS.md),
   [RELEASING.md](RELEASING.md); a tag-triggered release workflow (PyPI trusted publishing behind
-  an approval step) and a draft Homebrew formula (`packaging/homebrew/`).
+  an approval step) and a Homebrew formula for the `yuhuanstudio/tap` tap (`packaging/homebrew/`).
 - One settings registry for every `YUNSHU_*` setting: a TOML config file (`--config`),
   `yunshu serve --set KEY=VALUE`, `yunshu config` (effective value and source of each), generated
   [docs/CONFIGURATION.md](docs/CONFIGURATION.md); a bad value stops startup, a misspelled name
@@ -37,7 +42,18 @@ match.
   On Qwen3.8-27B (M5 Max) warm chat TTFT went from 2.5 s to 0.2 s, a repeated 8K prompt from 9 s to
   0.1 s, and decode from 30 to 57 tok/s.
 - Exact verify kernels (GatedDeltaNet prework/replay, split SDPA, 5-bit streamed matmul) and
-  opt-in fast verify / batch-invariant kernels, partly vendored from oMLX (Apache-2.0).
+  batch-invariant decode kernels, partly vendored from oMLX (Apache-2.0).
+- Per-row-length (ragged) KV cache for models with Qwen3.5-family attention, now the default: rows
+  in the shared batch no longer read or copy the longest row's padding, and the single-request
+  speculative lane runs decode and verify attention on one per-row kernel. Qwen3.8-27B (M5 Max):
+  MMLU-Pro 300 at 8 in flight 249/300 in 28.3 min at 139 tok/s, peak 33.7 GiB (padded cache:
+  250/300, 46.5 min, 88 tok/s, 45 GiB); single-request decode at 131K context 24.5 → 46.6 tok/s,
+  at 32K 39.6 → 59.1; short contexts unchanged within noise; spec on == off at 1K / 32K / 131K.
+- `YUNSHU_KV_PRECISION=bf16|int8` (default bf16): int8 K/V with one fp16 scale per 32 dims for the
+  shared batch — about half the KV memory and bandwidth, lossy (MMLU-Pro 251/300, peak 28.1 GiB).
+- Experimental own round driver for the Qwen3.5 family (`YUNSHU_ROUND_DRIVER`, off by default):
+  multi-row MTP drafting with a cost-aware draft depth (TensorFold's allocation rule, MIT) and
+  multi-prompt prefill; being measured.
 - `YUNSHU_LOG_LEVEL`; `scripts/research/` benchmark matrix, realistic soak and MMLU-Pro soak.
 
 ### Changed
@@ -62,7 +78,10 @@ match.
   decoding (Qwen3.5 family). The older per-request VLM loop was deleted; how it worked is recorded
   in `docs/archive/legacy_vlm_loop/`.
 - 5/6/8-bit projections run on TensorFold's integer-code tensor-unit matmul when packed (M5).
-- Text engine: KV cache quantization and the 4-bit warm prefix tier are opt-in (both are lossy).
+- Lossy optimizations are options with a lossless default. Text engine: KV cache quantization
+  (`YUNSHU_KV_QUANT_BITS`, was `auto`) and the 4-bit warm prefix tier (`YUNSHU_PREFIX_HOT_LIMIT`)
+  are off by default, and the SSD prefix cache stores KV and recurrent state bit-exact
+  (`YUNSHU_SSD_CACHE_PRECISION=native`; `int8` stays available and old int8 files still load).
 - `reasoning_effort` (top-level or in `chat_template_kwargs`) is passed to chat templates that
   support it (Qwen3.8: low / medium / xhigh) instead of being mapped to a thinking-token cap.
 - Dependencies: MLX 0.32.2, transformers 5.17, upstream `mlx-vlm` 0.7.3 (the fork is gone).
@@ -82,6 +101,13 @@ match.
   the model's chat template (upstream mlx-vlm/mlx-lm registry) instead of guessing from the
   request's model name, and every route (chat, Anthropic, Responses, Realtime; streaming and not)
   parses with that format's upstream parser. Arguments are typed with the request's tool schemas.
+  Gemma-4 E4B capability checks: 7/34 → 33/34.
+- DFlash2 speculative decode: the drafter's hidden-state capture covered the whole prompt instead
+  of the drafter's 2047-position window (about 48 TFLOP extra at 131K), the draft block was capped
+  at 4 (the drafter is trained for 8), and speculation on did not equal speculation off at longer
+  contexts; it now uses the per-row prefill path and batch-invariant kernels like MTP.
+- The SSD prefix cache's native-precision bf16 writer reinterpreted values instead of bits (it was
+  never reached while every write went through int8).
 
 ### Removed
 
@@ -90,7 +116,11 @@ match.
   (`vlm_async_engine`, `wan_vae`, `lid`, `optimizations`, `vision_encoding`).
 - The older VLM MTP / APC side paths, superseded by the runner.
 - The runner's upstream quantized-KV option (slower than bf16 at every measured length) and other
-  measured-out flags (`YUNSHU_PACKED_5BIT`, `YUNSHU_VLM_KV_BITS`, `YUNSHU_VLM_INVARIANT`).
+  measured-out flags (`YUNSHU_PACKED_5BIT`, `YUNSHU_VLM_KV_BITS`, `YUNSHU_VLM_INVARIANT`,
+  `YUNSHU_MTP_FAST_VERIFY`, `YUNSHU_RAGGED_KV` — ragged is now always on for qwen3_5 attention).
+- Yunshu's own tool-call parsers (`tool_call_parser.py`, `tool_call_parsers.py`, about 4,500 lines
+  with their tests), superseded by the upstream parser registry; Yunshu keeps only the formats
+  upstream lacks (its prompt-injected JSON format, DeepSeek, whole-message JSON).
 
 ## [0.1.0] - 2026-07-01
 

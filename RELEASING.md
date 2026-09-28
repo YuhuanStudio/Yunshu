@@ -61,4 +61,7 @@ A version that reached PyPI cannot be re-uploaded. Fix forward with the next pat
 
 - Check that the install works: `uv tool install "yunshu[vision]"` in a clean shell, then
   `yunshu doctor`.
-- If there is a Homebrew formula (see `packaging/homebrew/`), update its `url` and `sha256`.
+- Update the Homebrew formula in the shared tap: the `sha256` of the sdist PyPI now serves, then
+  copy `packaging/homebrew/yunshu.rb` to `Formula/yunshu.rb` in
+  [YuhuanStudio/homebrew-tap](https://github.com/YuhuanStudio/homebrew-tap)
+  ([steps](packaging/homebrew/README.md)).
