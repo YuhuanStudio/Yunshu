@@ -1024,8 +1024,8 @@ def create_app() -> FastAPI:
     # Startup warnings
     if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
         logger.warning(
-            "SECURITY: AUTH IS DISABLED — all endpoints (including admin, profiling, "
-            "dashboard, benchmarks) are publicly accessible without any authentication. "
+            "SECURITY: AUTH IS DISABLED — all endpoints are publicly accessible "
+            "without any authentication. "
             "This is INSECURE and should ONLY be used in development. "
             "Set YUNSHU_AUTH_TOKEN=<secret> or remove YUNSHU_AUTH_DISABLED for production."
         )
