@@ -170,3 +170,36 @@ def test_thinking_budget_forcing_invariant(tiny):
     ref = [_run(lm, None, [p], budget=True)[0][0] for p in PROMPTS]
     assert all(r[6:8] == [1, 2] for r in ref)
     assert _run(lm, drafter, PROMPTS, stagger=True, budget=True)[0] == ref
+
+
+def test_every_step_evaluates_the_caches_it_advanced(tiny, monkeypatch):
+    """A prompt chunk that emits no token still ends its step evaluated: no
+    lazy graph carries over to the next chunk (a long prompt otherwise builds
+    one graph over all its chunks and every KV buffer version)."""
+    from yunshu_engine.round_driver import driver as drv
+
+    lm, drafter = tiny
+    seen: list[set] = []
+    real_eval = mx.eval
+
+    def spy(*arrays):
+        flat = []
+        for a in arrays:
+            flat.extend(a if isinstance(a, (list, tuple)) else [a])
+        seen[-1].update(id(a) for a in flat)
+        return real_eval(*arrays)
+
+    monkeypatch.setattr(drv.mx, "eval", spy)
+    d = drv.RoundDriver(lm, drafter=drafter, stop_tokens=set())
+    long_prompt = [(3 * i + 1) % 500 for i in range(5 * drv.CHUNK + 7)]
+    d.add(drv.Request(long_prompt, 2, handle=0))
+    row = d.rows[0]
+    prefill_steps = 0
+    while row.pending is None:
+        seen.append(set())
+        d.step()
+        prefill_steps += 1
+        if row.pending is None:  # mid-prompt: nothing emitted this step
+            for buf in drv.cache_buffers(row.cache) + drv.cache_buffers(row.mtp_cache):
+                assert id(buf) in seen[-1]
+    assert prefill_steps >= 2
