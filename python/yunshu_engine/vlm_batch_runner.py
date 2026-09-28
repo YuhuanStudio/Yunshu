@@ -226,8 +226,9 @@ class VLMBatchRunner:
         self.inflight = lambda: 0
         # All ids that end a turn (tokenizer + generation_config eos).
         self.stop_tokens: set[int] | None = None
-        # Experimental per-row-length KV for the shared batch (YUNSHU_RAGGED_KV).
-        self.ragged_kv = False
+        # Experimental per-row-length KV for the shared batch (YUNSHU_RAGGED_KV):
+        # None, "bf16" or "int8".
+        self.ragged_kv: str | None = None
         self._ragged_logged = False
 
     def prepare_media(
@@ -571,13 +572,15 @@ class VLMBatchRunner:
             if batch is not None and len(batch) > 0:
                 from .kernels.ragged_kv import convert_batch
 
-                converted = convert_batch(batch.prompt_cache)
+                converted = convert_batch(batch.prompt_cache, self.ragged_kv)
                 if converted and not self._ragged_logged:
                     # Engagement proof in the server log (a no-op path once
                     # cost a full MMLU run to notice).
                     self._ragged_logged = True
                     logger.info(
-                        "Ragged KV engaged: %d attention caches converted", converted
+                        "Ragged KV engaged (%s): %d attention caches converted",
+                        self.ragged_kv,
+                        converted,
                     )
         for progress in prompt_progress or []:
             job = group.jobs.get(getattr(progress, "uid", None))

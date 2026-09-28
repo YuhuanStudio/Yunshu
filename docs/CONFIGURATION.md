@@ -201,7 +201,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 
 | Setting | Type | Default | Description | Decided by | Added |
 |---|---|---|---|---|---|
-| `YUNSHU_RAGGED_KV` | bool | off | Qwen3.5-family runner: per-row-length KV cache with split-K decode attention for the shared batch. | MMLU-Pro 300 b8 + probe_concurrency vs the padded batch cache (accuracy equal, aggregate tok/s up) | 2026-09-28 |
+| `YUNSHU_RAGGED_KV` | `off` \| `bf16` \| `int8` | off | Qwen3.5-family runner: per-row-length KV cache with split-K decode attention for the shared batch; 'int8' stores K/V as int8 codes + fp16 scales per 32-dim group, dequantized in the kernel (~0.53x K/V bytes). | bench_decode_step_mixed (1x16K+7x500) + MMLU-Pro 300 b8 + probe_concurrency vs the padded batch cache (accuracy equal, aggregate tok/s up); int8 also bench_ragged_decode_attention B=1 32K/131K | 2026-09-28 |
 | `YUNSHU_MTP_ROW_EXACT` | bool | off | Qwen3.5-family runner: oMLX row-exact verify (verify rows bit-identical to one-row decode) instead of batch-invariant kernels. | sweep_mtp_depth parity at long contexts vs decode tok/s (currently 30-50% slower than batch-invariant) | 2026-09-28 |
 | `YUNSHU_ENGINE_LOOP` | bool | off | Text models: EngineCore continuous-batching loop instead of the single-request fast path. | unify text-only models onto the batch runner vs keeping this loop (concurrency probe on a text model) | 2026-06-30 |
 | `YUNSHU_OVERLAP` | `''` \| `cpu_gpu` \| `two_batch` | unset | Text engine loop: overlap CPU and GPU work ('cpu_gpu') or split a batch into two overlapping halves ('two_batch'). | concurrency probe tok/s on a text model with the engine loop; deleted with the loop if text models move to the runner | 2026-06-30 |

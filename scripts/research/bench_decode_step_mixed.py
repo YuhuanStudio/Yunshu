@@ -3,7 +3,7 @@
 Builds one upstream BatchGenerator batch like a long-reasoning concurrency
 load: one row with a long context and several short rows, prefilled one at a
 time, then times plain decode steps. Runs the same batch with the stock padded
-BatchKVCache and with Yunshu's ragged per-row KV (--ragged), and optionally
+BatchKVCache and with Yunshu's ragged per-row KV (bf16 and int8), and optionally
 times the model's 16 attention layers alone (--attn-only) by timing a decode
 step with attention replaced by a no-op of the same output shape, so the
 difference is the attention share.
@@ -30,7 +30,7 @@ from mlx_vlm.generate.ar import BatchGenerator  # noqa: E402
 from yunshu_engine.mrope import clear_rope_state  # noqa: E402
 
 
-def run(model, processor, tok, a, ragged: bool, attn_noop: bool):
+def run(model, processor, tok, a, ragged: str | None, attn_noop: bool):
     corpus = CORPUS.read_text()
     lengths = [a.long] + [a.short] * (a.rows - 1)
     ids = [
@@ -60,7 +60,7 @@ def run(model, processor, tok, a, ragged: bool, attn_noop: bool):
     if ragged:
         from yunshu_engine.kernels.ragged_kv import convert_batch
 
-        convert_batch(gen._generation_batch.prompt_cache)
+        convert_batch(gen._generation_batch.prompt_cache, ragged)
     restore = None
     if attn_noop:
         from mlx_vlm.models.qwen3_5 import language as q35
@@ -126,7 +126,8 @@ def main():
             "steps": a.steps,
         }
         f.write(json.dumps(meta) + "\n")
-        for ragged, noop in ((False, False), (True, False), (False, True)):
+        runs = [(None, False), ("bf16", False), ("int8", False), (None, True)]
+        for ragged, noop in runs:
             row = {"kind": "run", **run(model, processor, tok, a, ragged, noop)}
             f.write(json.dumps(row) + "\n")
             print(json.dumps(row), flush=True)

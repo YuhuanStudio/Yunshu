@@ -197,3 +197,145 @@ def test_convert_batch_accepts_mlx_vlm_batch_cache():
     assert convert_batch(caches) == 1
     assert isinstance(caches[0], RaggedKVCache)
     assert caches[0].lengths == [3, 5]
+
+
+# --- int8 KV (YUNSHU_RAGGED_KV=int8) ----------------------------------------
+
+
+def _q8(x):
+    from yunshu_engine.kernels.ragged_attention import quantize_kv
+
+    return quantize_kv(x)
+
+
+def _dequant(codes, scales):
+    *lead, d = codes.shape
+    g = codes.astype(mx.float32).reshape(*lead, scales.shape[-1], -1)
+    return (g * scales.astype(mx.float32)[..., None]).reshape(*lead, d)
+
+
+def _cos(a, b):
+    a = a.astype(mx.float32).reshape(-1)
+    b = b.astype(mx.float32).reshape(-1)
+    return (mx.sum(a * b) / (mx.linalg.norm(a) * mx.linalg.norm(b))).item()
+
+
+@pytest.mark.parametrize("outliers", [False, True])
+@pytest.mark.parametrize("T", [1, 4])
+@pytest.mark.parametrize(
+    "lengths", [[37], [1030, 37], [5000, 1030, 37, 600], [17000, 37]]
+)
+def test_int8_kernel_close_to_bf16_reference(lengths, T, outliers):
+    """int8 codes + group scales vs stock SDPA on the original bf16 K/V, per
+    row: attention output (softmax-weighted V) and the pre-softmax logits."""
+    mx.random.seed(len(lengths) * 10 + T + 100 * outliers)
+    cap = -(-max(lengths) // 256) * 256 + 256
+    B = len(lengths)
+    k = mx.random.normal((B, HKV, cap, D))
+    v = mx.random.normal((B, HKV, cap, D))
+    if outliers:  # a few 20x channels, as real K caches have
+        boost = mx.where(mx.arange(D) % 37 == 0, 20.0, 1.0)
+        k, v = k * boost, v * boost
+    k, v = k.astype(mx.bfloat16), v.astype(mx.bfloat16)
+    q = mx.random.normal((B, H, T, D)).astype(mx.bfloat16)
+    kq, ks = _q8(k)
+    vq, vs = _q8(v)
+    out = ragged_decode_attention(
+        q, kq, vq, mx.array(lengths), D**-0.5, max(lengths), ks, vs
+    )
+    ref = _ref(q, k, v, lengths, T)
+    err = mx.max(mx.abs(out.astype(mx.float32) - ref.astype(mx.float32))).item()
+    for b in range(B):
+        assert _cos(out[b], ref[b]) > (0.997 if outliers else 0.9999)
+    if not outliers:
+        assert err < 0.03
+    # logits: q . k over the dequantized keys vs the bf16 keys
+    kd = _dequant(kq, ks)[:, :, : max(lengths)]
+    qg = q.astype(mx.float32).reshape(B, HKV, H // HKV * T, D)
+    lg = qg @ k[:, :, : max(lengths)].astype(mx.float32).swapaxes(-1, -2) * D**-0.5
+    lq = qg @ kd.swapaxes(-1, -2) * D**-0.5
+    rel = (mx.max(mx.abs(lg - lq)) / mx.max(mx.abs(lg))).item()
+    assert rel < (0.03 if outliers else 0.01), rel
+
+
+def test_int8_row_result_independent_of_batch():
+    mx.random.seed(13)
+    lengths = [900, 4100, 37]
+    cap = 4352
+    kq, ks = _q8(mx.random.normal((3, HKV, cap, D)).astype(mx.bfloat16))
+    vq, vs = _q8(mx.random.normal((3, HKV, cap, D)).astype(mx.bfloat16))
+    q = mx.random.normal((3, H, 1, D)).astype(mx.bfloat16)
+    full = ragged_decode_attention(q, kq, vq, mx.array(lengths), D**-0.5, 4100, ks, vs)
+    for b, n in enumerate(lengths):
+        alone = ragged_decode_attention(
+            q[b : b + 1],
+            kq[b : b + 1],
+            vq[b : b + 1],
+            mx.array([n]),
+            D**-0.5,
+            n,
+            ks[b : b + 1],
+            vs[b : b + 1],
+        )
+        assert mx.array_equal(full[b : b + 1], alone)
+
+
+def test_int8_needs_scales():
+    kq = mx.zeros((1, HKV, 64, D), mx.int8)
+    q = mx.zeros((1, H, 1, D), mx.bfloat16)
+    with pytest.raises(ValueError):
+        ragged_decode_attention(q, kq, kq, mx.array([8]), D**-0.5)
+
+
+def test_int8_cache_quantizes_on_write():
+    mx.random.seed(14)
+    lengths = [10, 3, 7]
+    stock, k, v, pads = _stock_cache(lengths)
+    rc = ragged_kv.RaggedKVCache.from_batch_kv(stock, "int8")
+    assert rc.quantized and rc.keys.dtype == mx.int8
+    assert rc.k_scales.shape[:3] == rc.keys.shape[:3] and rc.k_scales.shape[3] == 2
+    for b, n in enumerate(lengths):
+        kd = _dequant(rc.keys[b, :, :n], rc.k_scales[b, :, :n])
+        ref = k[b, :, pads[b] :].astype(mx.float32)
+        assert mx.max(mx.abs(kd - ref)).item() <= mx.max(mx.abs(ref)).item() / 127
+    new_k = mx.random.normal((3, HKV, 1, 64)).astype(mx.bfloat16)
+    rc.update_and_fetch(new_k, new_k)
+    assert rc.lengths == [11, 4, 8]
+    wq, ws = _q8(new_k)
+    for b, n in enumerate(rc.lengths):
+        assert mx.array_equal(rc.keys[b, :, n - 1], wq[b, :, 0])
+        assert mx.array_equal(rc.v_scales[b, :, n - 1], ws[b, :, 0])
+    other, *_ = _stock_cache([5])
+    rc.extend(other)
+    assert rc.lengths == [11, 4, 8, 5] and rc.k_scales.shape[0] == 4
+    with pytest.raises(ValueError):
+        rc.extend(ragged_kv.RaggedKVCache.from_batch_kv(_stock_cache([2])[0]))
+    rc.filter(mx.array([1, 3]))
+    assert rc.lengths == [4, 5] and rc.v_scales.shape[0] == 2
+    assert rc.trim(2) == 2 and rc.lengths == [2, 3]
+
+
+def test_int8_cache_grows_past_capacity():
+    mx.random.seed(15)
+    stock, *_ = _stock_cache([5, 2])
+    rc = ragged_kv.RaggedKVCache.from_batch_kv(stock, "int8")
+    cap = rc.capacity
+    for _ in range(cap):
+        x = mx.random.normal((2, HKV, 1, 64)).astype(mx.bfloat16)
+        rc.update_and_fetch(x, x)
+    assert rc.capacity > cap and rc.k_scales.shape[2] == rc.capacity
+    assert rc.lengths == [5 + cap, 2 + cap]
+
+
+def test_convert_batch_int8():
+    from mlx_vlm.models.cache import BatchKVCache as VlmBatchKVCache
+
+    from yunshu_engine.kernels.ragged_kv import RaggedKVCache, convert_batch
+
+    c = VlmBatchKVCache([2, 0])
+    k = mx.random.normal((2, 4, 5, 64)).astype(mx.bfloat16)
+    c.update_and_fetch(k, k)
+    caches = [c]
+    assert convert_batch(caches, "int8") == 1
+    assert isinstance(caches[0], RaggedKVCache) and caches[0].quantized
+    assert caches[0].lengths == [3, 5]

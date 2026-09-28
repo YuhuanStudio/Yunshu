@@ -1416,12 +1416,14 @@ class VLMEngine:
         runner.clear_on_idle = bool(getattr(self, "_mx_large_model", False))
         runner.stop_tokens = set(self._get_eos_ids())
         runner.inflight = lambda: self._active_count
-        if settings.get_bool("YUNSHU_RAGGED_KV"):
+        ragged = settings.get("YUNSHU_RAGGED_KV")
+        if ragged in ("bf16", "int8"):
             # Experimental: per-row-length KV + ragged decode attention for the
-            # shared batch (qwen3_5 attention only).
+            # shared batch (qwen3_5 attention only); int8 stores K/V quantized.
             from .kernels.ragged_kv import install as install_ragged_kv
 
-            runner.ragged_kv = install_ragged_kv()
+            install_ragged_kv()
+            runner.ragged_kv = ragged
         logger.info(
             "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s",
             f"{self._apc_backend.memory_max_bytes / 2**30:.1f}GiB"
