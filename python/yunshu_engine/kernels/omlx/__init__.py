@@ -118,18 +118,27 @@ def apply(fast: bool = False) -> dict:
             logger.warning("oMLX verify kernel %s not applied", name, exc_info=True)
             applied[name] = False
 
-    original = mtp._mtp_verify_target
-    if not getattr(original, "_yunshu_armed", False):
+    import mlx_vlm.speculative.dflash as dflash
 
-        def armed_verify(*args, **kwargs):
+    def arm(module, name):
+        original = getattr(module, name, None)
+        if original is None or getattr(original, "_yunshu_armed", False):
+            return
+
+        def armed(*args, **kwargs):
             qwen35_verify_qmm.set_verify_qmm_armed(_STATE["fast"])
             try:
                 return original(*args, **kwargs)
             finally:
                 qwen35_verify_qmm.set_verify_qmm_armed(False)
 
-        armed_verify._yunshu_armed = True
-        mtp._mtp_verify_target = armed_verify
+        armed._yunshu_armed = True
+        setattr(module, name, armed)
+
+    # MTP and DFlash each call their verify entry by module-level name.
+    arm(mtp, "_mtp_verify_target")
+    arm(dflash, "_dflash_verify_greedy")
+    arm(dflash, "_dflash_verify")
 
     _STATE["applied"] = applied
     logger.info("Qwen MTP verify kernels: %s (fast=%s)", applied, _STATE["fast"])

@@ -100,7 +100,18 @@ if "--pack" in sys.argv:
     )
     omlx_set = set(omlx_set) | {"packed"}
     use_omlx = True
-drafter = _load_drafter_in_memory(model_dir)
+_dflash = next(
+    (a.split("=", 1)[1] for a in sys.argv if a.startswith("--dflash=")), None
+)
+if _dflash:
+    from mlx_vlm.speculative.drafters import load_drafter  # noqa: E402
+
+    drafter, draft_kind = load_drafter(_dflash, kind="dflash")
+else:
+    drafter, draft_kind = _load_drafter_in_memory(model_dir), "mtp"
+print(
+    json.dumps({"draft_kind": draft_kind, "draft": _dflash or "mtp-head"}), flush=True
+)
 lm = model.language_model
 
 tasks = [
@@ -133,7 +144,7 @@ def run(name, prompt, max_tokens, block):
         processor,
         max_tokens=max_tokens,
         draft_model=drafter if block else None,
-        draft_kind="mtp" if block else None,
+        draft_kind=draft_kind if block else None,
         draft_block_size=block or None,
         greedy_sampling=True,
         compute_logprobs=False,

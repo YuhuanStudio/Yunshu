@@ -2,12 +2,9 @@
 
 Speculative decoding via mlx-vlm's CORRECT MTP path (MTP-aware GatedDeltaNet that
 captures intermediate SSM states + rollback_speculative_cache + qwen3_5_mtp
-drafter + run_speculative_rounds). HONESTY: a standalone proof script
-(scripts/bench/bench_mtp_vlm_27b.py, self-marked "INTEGRATION TODO") measured ~1.82x
-on Qwen3.6-27B (M3 Max) — that figure is NOT served/regression-gated, and the wired
-backend honors only temperature + is single-backend. The served token stream
-is now wired, but has not passed real-model HTTP latency or cancellation gates. Treat as
-EXPERIMENTAL, not a shipped prod win. Our mlx-lm-based MTP patch could not do this — it
+drafter + run_speculative_rounds). The served VLM path now drafts through
+``VLMBatchRunner`` instead (measured in scripts/research/sweep_mtp_depth.py); this
+standalone backend honors only temperature and remains EXPERIMENTAL. Our mlx-lm-based MTP patch could not do this — it
 lacked the SSM intermediate-state capture (so 27B gave garbage); mlx-vlm has it.
 
 Opt-in: requires the installed mlx-vlm to ship ``mlx_vlm.speculative`` (>=0.7.3,

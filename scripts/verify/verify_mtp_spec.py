@@ -25,7 +25,7 @@ os.environ.setdefault("YUNSHU_MTP", "1")
 # MTP in a separate mtp-weights.safetensors the index-check doesn't see). 27B-4bit
 # is ~14GB and loads as a SINGLE model within 36GB (no co-load). SKIPs cleanly if
 # absent or OOM.
-MODEL = os.environ.get("YUNSHU_MTP_MODEL", "./models/Qwen3.6-27B-MTP-4bit-MLX")
+MODEL = os.environ.get("YUNSHU_MTP_MODEL", "./models/Jundot/Qwen3.8-27B-oQ4e-mtp")
 
 
 def _text(o):

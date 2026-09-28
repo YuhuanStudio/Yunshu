@@ -1143,9 +1143,7 @@ class BatchedEngine:
         )
         # Opt-in MTP (YUNSHU_MTP=1). mlx-vlm is the supported MTP
         # implementation (its speculative path is the only correct one — see mlxvlm_mtp.py).
-        # HONESTY: the often-quoted "1.82x lossless" is from a STANDALONE PROOF
-        # script (bench_mtp_vlm_27b.py, self-marked "INTEGRATION TODO") — it is NOT a served,
-        # regression-gated number, and the wired path here is single-backend + honors only
+        # This text-engine MTP backend is single-backend + honors only
         # temperature (drops top_p/json_schema/penalties, see _warn_mtp_dropped_params) +
         # non-streaming. Treat it as EXPERIMENTAL, not a shipped prod win; the real spec win
         # is the gemma-4 assistant drafter. When set and the model has native MTP weights,
