@@ -1160,7 +1160,9 @@ class VLMEngine:
         # Only a client-set timeout applies: a fixed default also fired during
         # legitimate long prefills (a 200K-token prompt takes ~390 s before its
         # first token); a gone client is handled by the disconnect cancel.
-        _timeout_seconds = kwargs.get("timeout_seconds") or kwargs.get("timeout") or None
+        _timeout_seconds = (
+            kwargs.get("timeout_seconds") or kwargs.get("timeout") or None
+        )
         _prompt_tokens_count = 0
         _completion_tokens_count = 0
         _model_id = self.model_name
@@ -1451,6 +1453,18 @@ class VLMEngine:
         runner.clear_on_idle = bool(getattr(self, "_mx_large_model", False))
         runner.stop_tokens = set(self._get_eos_ids())
         runner.inflight = lambda: self._active_count
+        kv_bits = os.environ.get("YUNSHU_VLM_KV_BITS", "").strip()
+        if kv_bits:
+            # Experimental: quantized attention KV (halves KV bandwidth at long
+            # context). Not the default until measured for accuracy, joins and
+            # the speculative lane.
+            runner.kv_quant = {
+                "kv_bits": float(kv_bits) if "." in kv_bits else int(kv_bits),
+                "kv_quant_scheme": os.environ.get("YUNSHU_VLM_KV_SCHEME", "uniform"),
+                "quantized_kv_start": int(
+                    os.environ.get("YUNSHU_VLM_KV_QUANT_START", "5000")
+                ),
+            }
         logger.info(
             "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s",
             f"{self._apc_backend.memory_max_bytes / 2**30:.1f}GiB"
