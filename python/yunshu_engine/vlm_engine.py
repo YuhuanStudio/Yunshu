@@ -1937,7 +1937,10 @@ class VLMEngine:
 
             loop = asyncio.get_running_loop()
             try:
-                _timeout_seconds = kwargs.get("timeout_seconds") or 120.0
+                # Only a client-set timeout applies: requests serialize on the
+                # MLX thread, so a fixed default would also count queue time
+                # and fail requests that are merely waiting their turn.
+                _timeout_seconds = kwargs.get("timeout_seconds") or None
                 (
                     result,
                     reasoning_tokens,
@@ -1946,7 +1949,9 @@ class VLMEngine:
                     budget_hit,
                     cached_token_count,
                 ) = await asyncio.wait_for(
-                    loop.run_in_executor(self._executor, _generate_sync),
+                    loop.run_in_executor(
+                        self._executor, self._then_clear(_generate_sync)
+                    ),
                     timeout=_timeout_seconds,
                 )
             except TimeoutError:
@@ -2027,17 +2032,8 @@ class VLMEngine:
         finally:
             # release the MLX buffer pool after each request on large
             # models so it doesn't grow across requests → OOM/GPU-hang under
-            # sustained load (the Qwen3-Omni-30B hang). On the executor thread.
-            if getattr(self, "_mx_large_model", False):
-                try:
-                    import mlx.core as _mxc
-
-                    _loop = asyncio.get_running_loop()
-                    await _loop.run_in_executor(
-                        self._executor, lambda: (_mxc.synchronize(), _mxc.clear_cache())
-                    )
-                except Exception:
-                    logger.debug("post-gen mx.clear_cache failed", exc_info=True)
+            # sustained load (the Qwen3-Omni-30B hang). Done inside the
+            # generation job by _then_clear, not queued separately here.
             with self._active_count_lock:
                 self._active_count = max(0, self._active_count - 1)
             _request_temp_files.reset(_temp_token)
@@ -2712,7 +2708,9 @@ class VLMEngine:
             self._active_count += 1
         loop = asyncio.get_running_loop()
 
-        stream_task = loop.run_in_executor(self._executor, _stream_sync)
+        stream_task = loop.run_in_executor(
+            self._executor, self._then_clear(_stream_sync)
+        )
 
         # The executor owns the model lease. A disconnected ASGI task can be
         # cancelled during an await in the async generator's cleanup, so its
@@ -2788,17 +2786,7 @@ class VLMEngine:
                     _stream_ttft_recorded[0] = False
                 yield output
         finally:
-            # bound the MLX buffer pool on large models (see generate()).
-            if getattr(self, "_mx_large_model", False):
-                try:
-                    import mlx.core as _mxc
-
-                    _loop = asyncio.get_running_loop()
-                    await _loop.run_in_executor(
-                        self._executor, lambda: (_mxc.synchronize(), _mxc.clear_cache())
-                    )
-                except Exception:
-                    logger.debug("post-stream mx.clear_cache failed", exc_info=True)
+            # The MLX buffer pool is bounded inside the stream job (_then_clear).
             # Record in ServerMetrics for VLM streaming
             try:
                 from .server_metrics import get_server_metrics
@@ -5417,6 +5405,25 @@ class VLMEngine:
                 )
             patched.append(tc)
         return patched
+
+    def _then_clear(self, fn):
+        """Run ``fn`` on the MLX thread, then release the buffer pool for large
+        models in the same executor job. A separately queued clear would wait
+        behind every other queued request, holding this one's response until
+        they all finish."""
+
+        def run():
+            try:
+                return fn()
+            finally:
+                if getattr(self, "_mx_large_model", False):
+                    try:
+                        mx.synchronize()
+                        mx.clear_cache()
+                    except Exception:
+                        logger.debug("post-gen mx.clear_cache failed", exc_info=True)
+
+        return run
 
     def _template_effort_extra(self, kwargs: dict) -> dict | None:
         """Move ``reasoning_effort`` into the chat template when it supports it.
