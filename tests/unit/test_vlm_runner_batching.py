@@ -239,3 +239,61 @@ def test_ragged_format_set_only_while_runner_steps():
     runner._step_group(group)
     assert seen == ["int8"]
     assert ragged_kv._STATE["format"] is None
+
+
+class FakeDriver:
+    """Round driver stand-in: one token per row per step, ``10 + step``."""
+
+    def __init__(self):
+        self.rows, self.removed, self.head = [], [], object()
+
+    def add(self, req):
+        self.rows.append([req, 0])
+
+    def remove(self, handle):
+        self.removed.append(handle)
+        self.rows = [r for r in self.rows if r[0].handle is not handle]
+
+    def busy(self):
+        return bool(self.rows)
+
+    def step(self):
+        from yunshu_engine.round_driver.driver import Event
+
+        out = []
+        for row in self.rows:
+            row[1] += 1
+            done = row[1] >= row[0].max_tokens
+            out.append(
+                Event(row[0].handle, 10 + row[1], None, "length" if done else None)
+            )
+        self.rows = [r for r in self.rows if r[1] < r[0].max_tokens]
+        return out
+
+
+def test_text_requests_go_to_the_round_driver():
+    runner = vbr.VLMBatchRunner(
+        SimpleNamespace(language_model=object()), processor=None
+    )
+    runner.driver = FakeDriver()
+    stats = vbr.RunStats()
+    got = list(runner.iter_tokens([1, 2, 3], max_tokens=3, stats=stats))
+    assert got == [11, 12, 13]
+    assert stats.finish_reason == "length" and stats.generated == 3
+    assert stats.used_draft  # greedy, no processors: the driver may draft
+    assert not runner.busy()
+
+
+def test_round_driver_drops_cancelled_rows():
+    runner = vbr.VLMBatchRunner(
+        SimpleNamespace(language_model=object()), processor=None
+    )
+    runner.driver = FakeDriver()
+    cancel = threading.Event()
+    stats = vbr.RunStats()
+    it = runner.iter_tokens([1], max_tokens=50, cancel_event=cancel, stats=stats)
+    assert next(it) == 11
+    cancel.set()
+    assert list(it) == []
+    assert stats.finish_reason == "cancel"
+    assert len(runner.driver.removed) == 1
