@@ -15,7 +15,8 @@ share the call — the property ``batch_invariant`` needs.
 ``IntCodeLinear`` keeps MLX's weight layout (so prompt chunks above
 ``lane_qmm.MAX_ROWS`` rows use stock ``quantized_matmul`` without re-laying out
 weights) and adds the group-major (scale, bias) pairs the kernel reads.
-Opt-in: ``YUNSHU_PACKED_5BIT=int`` (see ``qwen35_packed_linear``).
+Used for every 5/6/8-bit projection when projections are packed (see
+``qwen35_packed_linear``); one row outside the speculative lane stays on MLX qmv.
 """
 
 from __future__ import annotations
@@ -48,26 +49,18 @@ def eligible(linear: Any) -> bool:
 class IntCodeLinear(nn.Module):
     """A 5/6/8-bit linear whose small-row calls run on the tensor units."""
 
-    def __init__(self, linear: nn.QuantizedLinear, tiled: bool = False):
+    def __init__(self, linear: nn.QuantizedLinear):
         super().__init__()
         bits = int(linear.bits)
         self.bits = bits
         self.group_size = 64
         self.output_dims = int(linear.weight.shape[0])
         self.input_dims = int(linear.weight.shape[1]) * 32 // bits
-        self.tiled = bool(tiled) and self.output_dims % lane_qmm.NT == 0
         self.weight = linear.weight
         self.scales = linear.scales
         self.biases = linear.biases
         # Group-major (scale, bias) bf16 pairs: (K/64, N, 2).
         self.lane_sbt = lane_qmm.pack_scales(linear.scales, linear.biases)
-        # Tiled codes: each (32-column tile, group) block contiguous. Costs a
-        # second copy of the weight only when chosen (benchmark option).
-        self.lane_weight = (
-            lane_qmm.tile_weight(linear.weight, bits=bits)
-            if self.tiled
-            else linear.weight
-        )
         self.freeze()
 
     def _extra_repr(self) -> str:
@@ -80,7 +73,14 @@ class IntCodeLinear(nn.Module):
         rows = 1
         for d in x.shape[:-1]:
             rows *= int(d)
-        if rows > lane_qmm.MAX_ROWS:
+        # One row outside the speculative lane: MLX's qmv is faster than a
+        # 16-row tensor-unit tile (256 vs 331 us on 17408x5120). Inside the
+        # lane (batch-invariant active) one row must match a verify row, so it
+        # stays on the lane kernel.
+        from .batch_invariant import _STATE as INVARIANT_STATE
+
+        single = rows == 1 and not INVARIANT_STATE.get("active", False)
+        if rows > lane_qmm.MAX_ROWS or single:
             return mx.quantized_matmul(
                 x,
                 self.weight,
@@ -92,7 +92,7 @@ class IntCodeLinear(nn.Module):
             )
         dtype = x.dtype
         x2 = x.reshape(-1, self.input_dims).astype(mx.bfloat16)
-        y = lane_qmm.lane_matmul(x2, self.lane_weight, self.lane_sbt, tiled=self.tiled)
+        y = lane_qmm.lane_matmul(x2, self.weight, self.lane_sbt, tiled=False)
         return y.reshape(*x.shape[:-1], self.output_dims).astype(dtype)
 
     def quantized_rows(self, ids: mx.array):

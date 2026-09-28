@@ -48,7 +48,6 @@ from . import settings
 from .request import RequestOutput
 from .types import EngineConfig
 
-
 logger = logging.getLogger(__name__)
 
 # Per-request temp-file registry. Set to a fresh list at the start of each

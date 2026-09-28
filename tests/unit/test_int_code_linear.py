@@ -33,14 +33,13 @@ def _reference(lin, x):
     )
 
 
-@pytest.mark.parametrize("tiled", [False, True])
 @pytest.mark.parametrize("bits", [5, 6, 8])
 @pytest.mark.parametrize("rows", [1, 2, 4, 8, 16, 64])
-def test_int_code_matches_quantized_matmul(tiled, bits, rows):
+def test_int_code_matches_quantized_matmul(bits, rows):
     from yunshu_engine.kernels.int_code_linear import IntCodeLinear
 
     lin = _linear(4096, 2048, bits)
-    ic = IntCodeLinear(lin, tiled=tiled)
+    ic = IntCodeLinear(lin)
     mx.random.seed(1)
     x = (mx.random.normal((rows, 4096)) * 0.5).astype(mx.bfloat16)
     ref = _reference(lin, x)
@@ -50,14 +49,15 @@ def test_int_code_matches_quantized_matmul(tiled, bits, rows):
     assert rel < 0.02, rel
 
 
-@pytest.mark.parametrize("tiled", [False, True])
 @pytest.mark.parametrize("bits", [5, 8])
-def test_int_code_rows_are_row_invariant(tiled, bits):
+def test_int_code_rows_are_row_invariant(bits, monkeypatch):
     """Rows 1..16 share one 16-row op: a row's bits never depend on the row count
-    (batch_invariant relies on it for 1 decode row and 2..8 verify rows)."""
+    (the speculative lane relies on it for 1 decode row and 2..8 verify rows)."""
+    from yunshu_engine.kernels import batch_invariant
     from yunshu_engine.kernels.int_code_linear import IntCodeLinear
 
-    ic = IntCodeLinear(_linear(2048, 1024, bits, seed=3), tiled=tiled)
+    monkeypatch.setitem(batch_invariant._STATE, "active", True)
+    ic = IntCodeLinear(_linear(2048, 1024, bits, seed=3))
     mx.random.seed(4)
     x = (mx.random.normal((16, 2048)) * 0.5).astype(mx.bfloat16)
     full = ic(x)
@@ -65,6 +65,17 @@ def test_int_code_rows_are_row_invariant(tiled, bits):
         assert mx.array_equal(ic(x[:rows]), full[:rows]).item(), rows
     # A single row equals a 2-row call's first row without padding.
     assert mx.array_equal(ic(x[:1]), ic(x[:2])[:1]).item()
+
+
+def test_int_code_single_row_outside_lane_uses_stock(monkeypatch):
+    from yunshu_engine.kernels import batch_invariant
+    from yunshu_engine.kernels.int_code_linear import IntCodeLinear
+
+    monkeypatch.setitem(batch_invariant._STATE, "active", False)
+    lin = _linear(2048, 1024, 5, seed=11)
+    ic = IntCodeLinear(lin)
+    x = (mx.random.normal((1, 2048)) * 0.5).astype(mx.bfloat16)
+    assert mx.array_equal(ic(x), lin(x)).item()
 
 
 def test_int_code_large_prompts_use_stock_matmul():
@@ -81,7 +92,7 @@ def test_int_code_quantized_rows():
     from yunshu_engine.kernels.int_code_linear import IntCodeLinear
 
     lin = _linear(2048, 1024, 5, seed=6)
-    ic = IntCodeLinear(lin, tiled=True)
+    ic = IntCodeLinear(lin)
     ids = mx.array([0, 7, 511, 1023])
     w, s, b = ic.quantized_rows(ids)
     assert mx.array_equal(w, lin.weight[ids]).item()
@@ -89,13 +100,12 @@ def test_int_code_quantized_rows():
     assert mx.array_equal(b, lin.biases[ids]).item()
 
 
-def test_pack_layer_int_mode_serves_5bit_with_int_codes(monkeypatch):
+def test_pack_layer_serves_5bit_with_int_codes():
     from types import SimpleNamespace
 
     from yunshu_engine.kernels.int_code_linear import IntCodeLinear
     from yunshu_engine.kernels.omlx import qwen35_packed_linear as pl
 
-    monkeypatch.setenv("YUNSHU_PACKED_5BIT", "int")
     mlp = SimpleNamespace(
         gate_proj=_linear(2048, 1024, 4, seed=7),
         up_proj=_linear(2048, 1024, 4, seed=8),
@@ -110,13 +120,9 @@ def test_pack_layer_int_mode_serves_5bit_with_int_codes(monkeypatch):
     assert err.item() < 0.02
 
 
-def test_int_mode_is_opt_in(monkeypatch):
+def test_int_mode_is_default():
     from yunshu_engine.kernels.omlx import qwen35_packed_linear as pl
 
-    monkeypatch.delenv("YUNSHU_PACKED_5BIT", raising=False)
-    assert pl.int_mode() is None
-    for mode in ("int", "int_tiled"):
-        monkeypatch.setenv("YUNSHU_PACKED_5BIT", mode)
-        assert pl.int_mode() == mode
+    assert pl.int_mode() == "int"
+    # 5-bit layers are not repacked by the 4-bit packed kernels.
     assert not pl.eligible(_linear(2048, 1024, 5))
-

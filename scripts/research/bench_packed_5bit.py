@@ -6,10 +6,10 @@ count (median of ``--iters``). Paths (``--paths``):
 - ``stock``: MLX ``QuantizedLinear`` (qmv / qmm)
 - ``packed``: our NAX ``PackedLinear`` (4-bit only: oMLX kernels)
 - ``int``: TensorFold's integer-code lane matmul (5/6/8-bit, MLX layout),
-  ``int_tiled`` the same on 32-column tiled codes (``YUNSHU_PACKED_5BIT=int``)
+  (the default for 5/6/8-bit layers when projections are packed)
 
     python scripts/research/bench_packed_5bit.py --bits 5 --rows 1 2 4 8 16 \
-        --shapes qkv6144 mlp17408 down5120 --paths stock packed int int_tiled \
+        --shapes qkv6144 mlp17408 down5120 --paths stock packed int \
         --output runs/packed-5bit.jsonl
 """
 
@@ -74,7 +74,7 @@ def main():
         "--paths",
         nargs="*",
         default=["stock", "packed"],
-        choices=["stock", "packed", "int", "int_tiled"],
+        choices=["stock", "packed", "int"],
     )
     ap.add_argument("--output", type=Path)
     a = ap.parse_args()
@@ -90,8 +90,6 @@ def main():
 
             if bits != 4 and "int" in a.paths:
                 impls["int"] = IntCodeLinear(lin)
-            if bits != 4 and "int_tiled" in a.paths:
-                impls["int_tiled"] = IntCodeLinear(lin, tiled=True)
             mx.eval([m.parameters() for m in impls.values()])
             for rows in a.rows:
                 x = (mx.random.normal((rows, K)) * 0.5).astype(mx.bfloat16)

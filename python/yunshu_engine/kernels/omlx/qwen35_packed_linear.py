@@ -576,13 +576,13 @@ def project(linears, x: mx.array):
     return tuple(outputs)
 
 
-# Yunshu addition: YUNSHU_PACKED_5BIT=int (or int_tiled) serves 5/6/8-bit
-# layers with TensorFold's integer-code tensor-unit matmul
-# (kernels/int_code_linear.py); 4-bit layers keep the packed kernels above.
+# Yunshu addition: 5/6/8-bit layers use TensorFold's integer-code
+# tensor-unit matmul (kernels/int_code_linear.py); 4-bit layers keep the
+# packed kernels above. Measured end to end on Qwen3.8-27B (M5 Max, lossless
+# MTP block 6): code/prose/json 88.9/60.2/67.1 -> 91.6/61.9/68.8 tok/s with
+# parity (docs/research/runs/2026-09-28-parity).
 def int_mode() -> str | None:
-    from ... import settings
-
-    return settings.get("YUNSHU_PACKED_5BIT") or None
+    return "int"
 
 
 def eligible(linear: Any) -> bool:
@@ -678,7 +678,7 @@ def _pack_layer(layer: Any) -> int:
                     setattr(
                         parent,
                         name,
-                        IntCodeLinear(module, tiled=mode == "int_tiled"),
+                        IntCodeLinear(module),
                     )
                     count += 1
     return count
