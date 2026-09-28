@@ -30,7 +30,21 @@ logger = logging.getLogger(__name__)
 
 MAX_ROWS = 8
 MIN_ROWS = 4
-_STATE: dict = {"installed": False}
+_STATE: dict = {"installed": False, "active": True}
+
+
+def set_active(active: bool) -> None:
+    """Route the next forward passes through the invariant kernels or not.
+
+    Invariance only matters for greedy requests (spec on must equal spec off);
+    sampled requests never draft, so they take the faster stock kernels. Set
+    per request on the single MLX thread, before its graphs are built.
+    """
+    _STATE["active"] = bool(active)
+
+
+def is_installed() -> bool:
+    return bool(_STATE["installed"])
 
 
 def mark_target(language_model: Any) -> int:
@@ -52,7 +66,8 @@ def _sg8():
 def invariant_linear(linear: Any, x: mx.array, exact_fallback) -> mx.array:
     """Row-invariant projection for a marked target layer, else ``exact_fallback``."""
     if (
-        getattr(linear, "_yunshu_invariant", False)
+        _STATE["active"]
+        and getattr(linear, "_yunshu_invariant", False)
         and isinstance(linear, nn.QuantizedLinear)
         and x.ndim == 3
         and getattr(linear, "mode", "affine") == "affine"
@@ -94,7 +109,7 @@ def _install_packed(model: Any) -> int:
         orig = cls.__call__
 
         def call(self, x):
-            if x.ndim == 3 and x.shape[0] * x.shape[1] == 1:
+            if _STATE["active"] and x.ndim == 3 and x.shape[0] * x.shape[1] == 1:
                 pad = mx.concatenate([x, mx.zeros_like(x)], axis=1)
                 return orig(self, pad)[:, :1]
             return orig(self, x)
@@ -159,7 +174,11 @@ def install(language_model: Any, model: Any = None, packed: bool = False) -> dic
                     setattr(mod, name, fn)
 
         def call(self, x):
-            if getattr(self, "_yunshu_invariant", False) and x.ndim == 3:
+            if (
+                _STATE["active"]
+                and getattr(self, "_yunshu_invariant", False)
+                and x.ndim == 3
+            ):
                 if x.shape[0] * x.shape[1] <= MAX_ROWS:
                     return invariant_linear(self, x, exact_rows)
             return stock_call(self, x)

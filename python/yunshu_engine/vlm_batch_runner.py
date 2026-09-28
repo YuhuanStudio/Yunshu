@@ -237,6 +237,12 @@ class VLMBatchRunner:
                 logger.debug("APC admission check failed; using APC", exc_info=True)
         stats.used_apc = apc is not None
         stats.used_draft = use_draft
+        from .kernels import batch_invariant
+
+        if batch_invariant.is_installed():
+            # Greedy requests keep spec-on == spec-off; sampled ones never
+            # draft and take the faster stock kernels.
+            batch_invariant.set_active(greedy)
 
         if seed is not None:
             mx.random.seed(int(seed) & ((1 << 63) - 1))

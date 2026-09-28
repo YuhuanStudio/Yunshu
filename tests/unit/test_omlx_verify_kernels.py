@@ -44,3 +44,21 @@ def test_apply_installs_and_is_idempotent(monkeypatch):
                 cell.cell_contents = original
     assert seen == [True, False]
     assert qwen35_verify_qmm._is_armed() is False
+
+
+def test_invariant_linear_inactive_uses_fallback():
+    import mlx.core as mx
+    import mlx.nn as nn
+
+    from yunshu_engine.kernels import batch_invariant as bi
+
+    lin = nn.QuantizedLinear(64, 64, bias=False, group_size=64, bits=4)
+    lin._yunshu_invariant = True
+    x = mx.zeros((1, 1, 64))
+    calls = []
+    try:
+        bi.set_active(False)
+        bi.invariant_linear(lin, x, lambda layer, v: calls.append(1) or v)
+    finally:
+        bi.set_active(True)
+    assert calls == [1]
