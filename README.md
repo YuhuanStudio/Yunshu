@@ -85,13 +85,15 @@ Lossless decode by output type (same checkpoint, in-process, greedy, 384 tokens;
 
 | Decode | Code | Prose | JSON-like | Spec on == off |
 |---|---|---|---|---|
-| **Default**: batch-invariant + packed, MTP block 6 | 88.6 | 59.9 | 67.3 | yes on short prompts¹ |
-| Previous default: exact verify kernels, MTP block 3 | 57–67 | 50–53 | 58–62 | yes on short prompts¹ |
+| **Default**: batch-invariant + packed, MTP block 6 | 88.6 | 59.9 | 67.3 | yes (tested)¹ |
+| Previous default: exact verify kernels, MTP block 3 | 57–67 | 50–53 | 58–62 | yes (tested)¹ |
 | Non-exact fast verify (opt-in) | 83.8 | 59.9 | 66.7 | no |
 
-¹ Matmuls are row-invariant, but verify attention uses a different MLX kernel than one-row decode,
-so at longer contexts speculative output can differ from plain decode in rare tokens. A row-exact
-attention path (synced from oMLX) is being validated to close this.
+¹ Speculative and plain greedy output matched token for token on every task at short prompts and at
+1.2K / 16.5K-token contexts (384 tokens each). Matmuls are row-invariant; verify attention runs a
+different MLX kernel than one-row decode, so bit-level logits can differ and a rare token flip is
+possible on other inputs. oMLX's row-exact attention removes that but decodes 30–50% slower
+(`YUNSHU_MTP_ROW_EXACT=1`).
 
 MMLU-Pro, 300 questions, 8 in flight, max 16384 tokens, `reasoning_effort=medium` (accuracy and a
 long-run soak; same settings for every engine):
