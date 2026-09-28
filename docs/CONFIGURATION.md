@@ -88,6 +88,7 @@ not supported for VLMs (HTTP 400).
 | `YUNSHU_MTP_VERIFY_KERNELS` | on | Exact verify kernels (GatedDeltaNet / attention / 5-bit streamed). Output with speculation stays token-identical to without. |
 | `YUNSHU_MTP_FAST_VERIFY` | off | Faster, **non-exact** verify matmuls (oMLX `verify_qmm`). Measurably faster decode; greedy output can differ from speculation-off. |
 | `YUNSHU_VLM_INVARIANT` | on for MTP, off for DFlash | Batch-invariant decode: every decode and verify matmul goes through one row-invariant kernel, so speculative output is token-identical to this engine's plain decode (Splash's definition of lossless; it can differ slightly from stock MLX single-row decode). Lets MTP run block 6. `YUNSHU_VLM_INVARIANT_PACKED` (default on) uses the M5 tensor-unit packed kernel where available. |
+| `YUNSHU_PACKED_5BIT` | off | Also repack 5-bit group-64 projections for the M5 tensor unit (4-bit are always packed). Correct, but slower than MLX's own 5-bit matmul for 1-8 rows on Qwen3.8 shapes, so experimental; `scripts/research/bench_packed_5bit.py` measures it. |
 | `YUNSHU_MTP_ADAPTIVE` | off | Experimental adaptive draft depth (between 2 and `YUNSHU_MTP_MAX_BLOCK`, default 6). No measured gain yet. |
 
 ## Embeddings
