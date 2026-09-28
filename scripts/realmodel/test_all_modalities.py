@@ -324,54 +324,54 @@ def test_image():
     return True
 
 
-def test_llm_engine_core():
-    """LLM via EngineCore: full engine stack with continuous batching."""
+def test_llm_engine():
+    """LLM via BatchedEngine: the default serving path (single-request fast path)."""
     print("=" * 60)
-    print("TEST LLM EngineCore: Qwen3.5-9B via Engine+EngineCore")
+    print("TEST LLM BatchedEngine: Qwen3.5-9B via Yunshu BatchedEngine")
     print("=" * 60)
 
     import asyncio
 
-    from yunshu_engine.engine import Engine, EngineConfig
+    from yunshu_engine.batched_engine import BatchedEngine
 
     async def _test():
-        engine = Engine(EngineConfig(), use_engine_core=True)
+        engine = BatchedEngine(MODELS["llm"])
         t0 = time.time()
-        engine.load(MODELS["llm"])
-        print(f"Engine loaded in {time.time()-t0:.1f}s")
-
         await engine.start()
+        print(f"Engine loaded in {time.time()-t0:.1f}s")
 
         # Non-streaming
         t0 = time.time()
-        state = await engine.generate(
-            prompt="Explain gravity in one sentence.",
+        out = await engine.chat(
+            messages=[{"role": "user", "content": "Explain gravity in one sentence."}],
             max_tokens=64,
             temperature=0.0,
         )
         elapsed = time.time() - t0
         print(f"Generate: {elapsed:.2f}s")
-        print(f"Text: {repr(state.generated_text[:200])}")
-        print(f"Finish: {state.finish_reason}, Prompt: {state.prompt_token_count}, Output: {state.completion_token_count}")
+        print(f"Text: {repr(out.text[:200])}")
+        print(f"Finish: {out.finish_reason}, Prompt: {out.prompt_tokens}, Output: {out.completion_tokens}")
+        assert out.text.strip(), "empty completion"
 
         # Streaming
         chunks = []
         t0 = time.time()
-        async for chunk in engine.generate_stream(
-            prompt="Count from 1 to 5.",
+        async for chunk in engine.stream_chat(
+            messages=[{"role": "user", "content": "Count from 1 to 5."}],
             max_tokens=64,
             temperature=0.0,
         ):
             chunks.append(chunk)
         elapsed = time.time() - t0
-        full_text = "".join(c.token_text for c in chunks)
+        full_text = "".join(c.new_text for c in chunks)
         print(f"\nStreamed {len(chunks)} chunks in {elapsed:.2f}s")
         print(f"Text: {repr(full_text[:200])}")
+        assert full_text.strip(), "empty stream"
 
         await engine.stop()
 
     asyncio.run(_test())
-    print("PASS: LLM EngineCore\n")
+    print("PASS: LLM BatchedEngine\n")
     return True
 
 
@@ -398,7 +398,7 @@ def main():
         # immediately after the 30B VLM. Put the 30B VLM LAST so nothing follows
         # it; Z-Image now runs after the light ASR on a clean GPU.
         "llm": ("LLM (mlx-lm BatchGenerator)", test_llm),
-        "llm_engine": ("LLM (EngineCore)", test_llm_engine_core),
+        "llm_engine": ("LLM (BatchedEngine)", test_llm_engine),
         "tts": ("TTS (mlx-audio)", test_tts),
         "asr": ("ASR (mlx-audio)", test_asr),
         "image": ("Image (Z-Image engine)", test_image),

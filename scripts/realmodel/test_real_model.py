@@ -1,102 +1,77 @@
-"""Real model integration test.
+"""Real model smoke test for the default serving path (BatchedEngine).
 
-Run manually with: uv run python scripts/test_real_model.py
+Run manually with: PYTHONPATH=. uv run python scripts/realmodel/test_real_model.py [model]
 
-This script loads a small MLX model and verifies the full pipeline:
-1. Engine.load() — model + tokenizer + BatchGenerator
-2. Engine.start() — step loop
-3. generate_stream() — per-request detokenizer + output queue
-4. OpenAI SSE formatting
+Loads a small MLX model and checks:
+1. BatchedEngine.start() — model + tokenizer load
+2. stream_chat() — streaming deltas, formatted as OpenAI SSE chunks
+3. chat() — non-streaming completion
 
-Uses a small 4-bit quantized model (~2GB download on first run).
+Default model is a small 4-bit checkpoint (~300 MB download on first run).
 """
 
 import asyncio
 import sys
 import time
 
-# Test model — small quantized model for Apple Silicon
 TEST_MODEL = "mlx-community/Qwen2.5-0.5B-Instruct-4bit"
 
 
-async def main():
-    from yunshu_engine.engine import Engine, EngineConfig
-    from yunshu_gateway.streaming import (
-        format_openai_chunk,
-        format_openai_done,
-    )
+async def main(model: str) -> int:
+    from yunshu_engine.batched_engine import BatchedEngine
+    from yunshu_gateway.streaming import format_openai_chunk, format_openai_done
 
-    print("=== Yunshu Real Model Integration Test ===")
-    print(f"Model: {TEST_MODEL}")
-    print()
+    print("=== Yunshu Real Model Smoke Test ===")
+    print(f"Model: {model}\n")
 
-    # 1. Create and load engine
-    print("[1/4] Loading model...")
-    engine = Engine(EngineConfig(
-        completion_batch_size=8,
-        prefill_batch_size=4,
-        prefill_step_size=1024,
-    ))
+    print("[1/3] Loading model...")
+    engine = BatchedEngine(model)
     t0 = time.time()
-    engine.load(TEST_MODEL)
+    await engine.start()
     print(f"      Loaded in {time.time() - t0:.1f}s")
 
-    # 2. Start step loop
-    print("[2/4] Starting step loop...")
-    await engine.start()
-    print("      Step loop running")
-
-    # 3. Generate streaming response
-    print("[3/4] Generating response...")
-    messages = [
-        {"role": "user", "content": "What is 2+2? Answer briefly."},
-    ]
-
+    print("[2/3] Streaming chat...")
     t0 = time.time()
-    full_text = ""
-    token_count = 0
-
-    async for output in engine.generate_stream(
-        prompt=messages,
+    first = None
+    text = ""
+    finish = None
+    async for out in engine.stream_chat(
+        messages=[{"role": "user", "content": "What is 2+2? Answer briefly."}],
         max_tokens=50,
         temperature=0.0,
     ):
-        token_count += 1
-        format_openai_chunk(
-            completion_id="test-123",
-            model=TEST_MODEL,
-            delta_content=output.token_text,
-            finish_reason=output.finish_reason,
-        )
-        # Print token text (simulating SSE output)
-        sys.stdout.write(output.token_text)
-        sys.stdout.flush()
-        full_text += output.token_text
-
-        if output.finish_reason:
-            print(f"\n      Finish: {output.finish_reason}")
+        if out.new_text:
+            first = first or time.time() - t0
+            format_openai_chunk(
+                completion_id="smoke",
+                model=model,
+                delta_content=out.new_text,
+                finish_reason=out.finish_reason,
+            )
+            sys.stdout.write(out.new_text)
+            sys.stdout.flush()
+            text += out.new_text
+        if out.finished:
+            finish = out.finish_reason
             break
-
     format_openai_done()
-    print(f"\n      Generated {token_count} tokens in {time.time() - t0:.1f}s")
+    print(f"\n      finish={finish} first_token={first or 0:.3f}s total={time.time() - t0:.1f}s")
 
-    # 4. Non-streaming test
-    print("[4/4] Non-streaming generate...")
+    print("[3/3] Non-streaming chat...")
     t0 = time.time()
-    state = await engine.generate(
-        prompt=[{"role": "user", "content": "Say hello in French."}],
+    out = await engine.chat(
+        messages=[{"role": "user", "content": "Say hello in French."}],
         max_tokens=20,
         temperature=0.0,
     )
-    print(f"      Response: {state.generated_text!r}")
-    print(f"      Finish: {state.finish_reason}, tokens: {state.completion_token_count}")
+    print(f"      {out.text!r} finish={out.finish_reason} tokens={out.completion_tokens}")
     print(f"      Time: {time.time() - t0:.1f}s")
 
-    # Cleanup
     await engine.stop()
-    print()
-    print("=== All tests passed ===")
+    ok = "4" in text and bool(out.text.strip())
+    print("\n=== PASS ===" if ok else "\n=== FAIL ===")
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else TEST_MODEL)))

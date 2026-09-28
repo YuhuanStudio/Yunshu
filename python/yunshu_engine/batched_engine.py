@@ -1351,9 +1351,7 @@ class BatchedEngine:
         """True when the engine core loop is active (continuous batching).
 
         Used by ``_ensure_engine_started`` in the gateway engine module
-        to decide whether ``start()`` needs to be called.  The legacy
-        Engine class has the same property; BatchedEngine was missing it,
-        which caused an ``AttributeError`` in single-engine fallback mode.
+        to decide whether ``start()`` needs to be called.
         """
         return self._loaded and (
             self._engine_core is not None and self._engine_core.is_running

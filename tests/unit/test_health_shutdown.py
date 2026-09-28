@@ -3,7 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from yunshu_engine.engine import Engine, EngineConfig
+from yunshu_engine.batched_engine import BatchedEngine
 
 
 class TestHealthChecks:
@@ -18,9 +18,10 @@ class TestHealthChecks:
         _main._active_requests = 0
         _main._server_state = _main.ServerState.RUNNING
 
-        self._engine = Engine(EngineConfig())
+        self._engine = BatchedEngine()
         self._engine._model = object()
-        self._engine._model_name = "test-model"
+        self._engine._loaded = True
+        self._engine.model_name = "test-model"
         self._engine._running = True
         set_engine(self._engine)
         self._main = _main
@@ -58,9 +59,10 @@ class TestHealthChecks:
         old_engine = get_engine()
 
         # Fresh engine to avoid shared state from other tests
-        engine = Engine(EngineConfig())
+        engine = BatchedEngine()
         engine._model = object()
-        engine._model_name = "test-model"
+        engine._loaded = True
+        engine.model_name = "test-model"
         engine._running = True
         set_engine(engine)
 
@@ -103,9 +105,10 @@ class TestRequestTracking:
     def _setup(self):
         from yunshu_gateway.engine import set_engine
 
-        self._engine = Engine(EngineConfig())
+        self._engine = BatchedEngine()
         self._engine._model = object()
-        self._engine._model_name = "test-model"
+        self._engine._loaded = True
+        self._engine.model_name = "test-model"
         self._engine._running = True
         set_engine(self._engine)
 

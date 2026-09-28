@@ -255,14 +255,14 @@ class TestEmbeddingEngineResolution:
 def _setup_engine():
     """Set up a mock engine for endpoint tests."""
     os.environ["YUNSHU_AUTH_DISABLED"] = "true"
-    from yunshu_engine.engine import Engine, EngineConfig
+    from yunshu_engine.batched_engine import BatchedEngine
     from yunshu_gateway.engine import set_engine
 
-    engine = Engine(EngineConfig())
+    engine = BatchedEngine()
     engine._model = object()
-    engine._model_name = "test-embedding"
-    engine._running = True
     engine._loaded = True
+    engine.model_name = "test-embedding"
+    engine._running = True
     set_engine(engine)
     yield engine
     set_engine(None)

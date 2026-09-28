@@ -478,49 +478,6 @@ class TestTokenCounting:
         )
 
 
-# ── 5. Engine._messages_to_text ──
-
-
-class TestEngineMessagesToText:
-    """Verify Engine._messages_to_text preserves tool call fields."""
-
-    def test_basic_messages(self):
-        """Simple messages should produce text output."""
-        from yunshu_engine.engine import Engine
-
-        engine = Engine.__new__(Engine)
-        engine._tokenizer = None  # Force fallback
-
-        msgs = [
-            {"role": "user", "content": "Hello"},
-            {"role": "assistant", "content": "Hi there!"},
-        ]
-        text = engine._messages_to_text(msgs)
-        assert "Hello" in text
-        assert "Hi there!" in text
-
-    def test_tool_calls_not_stripped_in_fallback(self):
-        """Even in fallback mode, tool_calls should not crash."""
-        from yunshu_engine.engine import Engine
-
-        engine = Engine.__new__(Engine)
-        engine._tokenizer = None
-
-        msgs = [
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {"id": "c1", "function": {"name": "f", "arguments": "{}"}},
-                ],
-            },
-            {"role": "tool", "content": "result", "tool_call_id": "c1", "name": "f"},
-        ]
-        # Should not crash - tool_calls, tool_call_id, name are preserved
-        text = engine._messages_to_text(msgs)
-        assert isinstance(text, str)
-
-
 # ── 6. Message Adapter ──
 
 

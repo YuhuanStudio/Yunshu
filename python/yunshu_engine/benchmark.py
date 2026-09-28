@@ -5,7 +5,7 @@ from __future__ import annotations
 .. deprecated:: This module is not used in the production pipeline. Kept for reference only.
 
 
-Provides BenchmarkRunner that works with any Engine or BatchedEngine instance.
+Provides BenchmarkRunner that works with any BatchedEngine-like instance.
 All engine interactions are async (generate / stream_generate) so the runner
 itself is fully async. For CLI usage the caller wraps in asyncio.run().
 
@@ -94,7 +94,7 @@ class BenchmarkSuite:
 class _EngineProto(Protocol):
     """Minimal interface BenchmarkRunner needs from an engine.
 
-    Both Engine and BatchedEngine satisfy this protocol via their
+    BatchedEngine satisfies this protocol via its
     generate / stream_generate methods.
     """
 
@@ -147,7 +147,7 @@ def _get_chip_name() -> str:
 
 
 class BenchmarkRunner:
-    """Benchmark an Engine or BatchedEngine instance.
+    """Benchmark a BatchedEngine-like instance.
 
     Usage::
 

@@ -13,7 +13,7 @@ Tests:
 
 import json
 import os
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -599,14 +599,14 @@ class TestAnthropicStreamingEvents:
 def _setup_engine():
     """Set up a mock engine for endpoint tests."""
     os.environ["YUNSHU_AUTH_DISABLED"] = "true"
-    from yunshu_engine.engine import Engine, EngineConfig
+    from yunshu_engine.batched_engine import BatchedEngine
     from yunshu_gateway.engine import set_engine
 
-    engine = Engine(EngineConfig())
+    engine = BatchedEngine()
     engine._model = object()
-    engine._model_name = "claude-3"
-    engine._running = True
     engine._loaded = True
+    engine.model_name = "claude-3"
+    engine._running = True
     set_engine(engine)
     yield engine
     set_engine(None)
@@ -707,7 +707,9 @@ class TestAnthropicEndpoint:
         captured = {}
 
         async def _fake_generate(*args, **kwargs):
-            captured["prompt"] = kwargs.get("prompt", args[0] if args else None)
+            captured["prompt"] = kwargs.get(
+                "messages", kwargs.get("prompt", args[0] if args else None)
+            )
             return GenerationOutput(
                 text="ok",
                 new_text="ok",
@@ -718,6 +720,7 @@ class TestAnthropicEndpoint:
             )
 
         monkeypatch.setattr(_setup_engine, "generate", _fake_generate)
+        monkeypatch.setattr(_setup_engine, "chat", _fake_generate)
 
         # (a) top-level system field
         client = _client()
@@ -838,15 +841,13 @@ class TestAnthropicStreamingEndpoint:
         client = _client()
         # Mock the engine to produce a simple response
         engine = _setup_engine
-        with patch.object(
-            engine, "generate_stream", new_callable=AsyncMock
-        ) as mock_stream:
-            # Create a mock async generator that yields nothing
-            async def _gen(*args, **kwargs):
-                return
-                yield  # make it a generator
 
-            mock_stream.return_value = _gen()
+        # A stream that yields nothing
+        async def _gen(*args, **kwargs):
+            return
+            yield  # make it a generator
+
+        with patch.object(engine, "stream_chat", _gen):
             resp = client.post(
                 "/v1/messages",
                 json={

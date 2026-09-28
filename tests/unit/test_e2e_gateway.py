@@ -6,10 +6,7 @@ Tests the full HTTP request → SSE response pipeline without a real model.
 import pytest
 from fastapi.testclient import TestClient
 
-from yunshu_engine.engine import (
-    Engine,
-    EngineConfig,
-)
+from yunshu_engine.batched_engine import BatchedEngine
 from yunshu_gateway import engine as engine_mod
 from yunshu_gateway.main import create_app
 
@@ -38,60 +35,12 @@ class _FakeDetokenizer:
         return ""
 
 
-class _FakeResponse:
-    def __init__(self, uid, text, token, finish_reason=None):
-        self.uid = uid
-        self.text = text
-        self.token = token
-        self.finish_reason = finish_reason
-
-
-class _FakeBatchGen:
-    def __init__(self):
-        self._uid_counter = 0
-        self._pending = {}
-
-    def insert(self, prompts, max_tokens):
-        uids = []
-        for _prompt, _mt in zip(prompts, max_tokens, strict=False):
-            uid = self._uid_counter
-            self._uid_counter += 1
-            uids.append(uid)
-            tokens = ["Hi", " there"]
-            self._pending[uid] = [
-                _FakeResponse(
-                    uid, t, j, finish_reason=("stop" if j == len(tokens) - 1 else None)
-                )
-                for j, t in enumerate(tokens)
-            ]
-        return uids
-
-    def next_generated(self):
-        batch = []
-        finished = []
-        for uid, responses in self._pending.items():
-            if responses:
-                batch.append(responses.pop(0))
-                if not responses:
-                    finished.append(uid)
-        for uid in finished:
-            del self._pending[uid]
-        return batch
-
-    def remove(self, uids):
-        for uid in uids:
-            self._pending.pop(uid, None)
-
-    def close(self):
-        pass
-
-
 def _make_engine():
-    eng = Engine(EngineConfig())
+    eng = BatchedEngine()
     eng._model = object()
+    eng._loaded = True
     eng._tokenizer = _FakeTokenizer()
-    eng._model_name = "test-model"
-    eng._batch_gen = _FakeBatchGen()
+    eng.model_name = "test-model"
     eng._running = True
     return eng
 
@@ -102,7 +51,6 @@ def _env_fast_drain(monkeypatch):
     monkeypatch.setenv("YUNSHU_DRAIN_TIMEOUT", "0")
     monkeypatch.delenv("DEFAULT_MODEL", raising=False)
     monkeypatch.delenv("YUNSHU_MULTI_MODEL", raising=False)
-    monkeypatch.delenv("YUNSHU_DATA_PARALLEL", raising=False)
     # Reset engine state before each test to prevent cross-contamination
     engine_mod._engine = None
     yield
@@ -145,7 +93,7 @@ class TestE2EGateway:
         Single-model mode serves the loaded model under any requested name, so
         a model-name mismatch is not an error; an unloaded engine is.
         """
-        engine_mod._engine = Engine(EngineConfig())  # no model loaded
+        engine_mod._engine = BatchedEngine()  # no model loaded
         app = create_app()
         with TestClient(app) as client:
             resp = client.post(

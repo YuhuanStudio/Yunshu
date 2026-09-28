@@ -143,8 +143,8 @@ async def get_engine_for_model(model_id: str) -> Engine:
     1. If ModelManager is active, resolve through it (supports aliases)
     2. Fall back to single engine with resolve_model_id()
 
-    The returned engine may be an Engine (legacy) or BatchedEngine.
-    Both expose generate(), generate_stream(), chat(), stream_chat().
+    The returned engine is a BatchedEngine or a modality engine (VLM, audio,
+    image, ...) registered with the ModelManager.
     """
     if _model_manager is not None:
         # Try model manager resolution
@@ -181,7 +181,7 @@ async def get_engine_for_model(model_id: str) -> Engine:
 
 
 async def _ensure_engine_started(engine) -> None:
-    """Ensure an engine is started, handling both Engine and BatchedEngine.
+    """Ensure an engine is started, whichever engine class it is.
 
     Uses an asyncio.Lock to prevent concurrent start() calls when multiple
     requests arrive for the same unloaded model simultaneously.

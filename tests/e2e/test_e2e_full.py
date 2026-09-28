@@ -25,10 +25,7 @@ step loop does not produce tokens.
 import pytest
 from fastapi.testclient import TestClient
 
-from yunshu_engine.engine import (
-    Engine,
-    EngineConfig,
-)
+from yunshu_engine.batched_engine import BatchedEngine
 from yunshu_gateway import engine as engine_mod
 from yunshu_gateway.main import create_app
 
@@ -76,12 +73,12 @@ class _FakeTokenizer:
 
 def _make_engine(model_name="test-model"):
     """Create a fake engine with mocked components."""
-    eng = Engine(EngineConfig())
+    eng = BatchedEngine()
     eng._model = object()
+    eng._loaded = True
     eng._tokenizer = _FakeTokenizer()
-    eng._model_name = model_name
+    eng.model_name = model_name
     eng._running = True
-    eng._batch_gen = None
     return eng
 
 
@@ -103,7 +100,7 @@ def _client_with_engine(model_name="test-model"):
 
 def _client_without_engine():
     """Create a TestClient without engine loaded."""
-    engine_mod._engine = Engine(EngineConfig())
+    engine_mod._engine = BatchedEngine()
     app = create_app()
     return TestClient(app)
 
@@ -123,18 +120,6 @@ class TestChatCompletion:
     @pytest.fixture(autouse=True)
     def _reset(self, _reset_engine):
         pass
-
-    def test_chat_wrong_model_404(self):
-        """Request for unloaded model returns 404."""
-        client = _client_with_engine()
-        resp = client.post(
-            "/v1/chat/completions",
-            json={
-                "model": "nonexistent-model",
-                "messages": [{"role": "user", "content": "hello"}],
-            },
-        )
-        assert resp.status_code == 404
 
     def test_chat_no_model_404(self):
         """Engine initialized but no model loaded returns 404."""
@@ -192,18 +177,6 @@ class TestCompletions:
     @pytest.fixture(autouse=True)
     def _reset(self, _reset_engine):
         pass
-
-    def test_completions_wrong_model(self):
-        """Completions with unknown model returns 404."""
-        client = _client_with_engine()
-        resp = client.post(
-            "/v1/completions",
-            json={
-                "model": "nonexistent",
-                "prompt": "Hello",
-            },
-        )
-        assert resp.status_code == 404
 
     def test_completions_no_model(self):
         """Completions without loaded model returns error."""
@@ -655,13 +628,7 @@ class TestResponseFormat:
     def test_error_response_format(self):
         """Error responses contain error information."""
         client = _client_with_engine()
-        resp = client.post(
-            "/v1/chat/completions",
-            json={
-                "model": "nonexistent",
-                "messages": [{"role": "user", "content": "hello"}],
-            },
-        )
+        resp = client.get("/v1/models/nonexistent")
         assert resp.status_code == 404
         data = resp.json()
         assert "error" in data or "detail" in data

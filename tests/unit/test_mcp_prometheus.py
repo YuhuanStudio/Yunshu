@@ -3,7 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from yunshu_engine.engine import Engine, EngineConfig
+from yunshu_engine.batched_engine import BatchedEngine
 
 
 class TestMCPProtocol:
@@ -13,9 +13,10 @@ class TestMCPProtocol:
     def _setup(self):
         from yunshu_gateway.engine import set_engine
 
-        self._engine = Engine(EngineConfig())
+        self._engine = BatchedEngine()
         self._engine._model = object()
-        self._engine._model_name = "test-model"
+        self._engine._loaded = True
+        self._engine.model_name = "test-model"
         self._engine._running = True
         set_engine(self._engine)
 
@@ -226,9 +227,10 @@ class TestPrometheusMetrics:
     def _setup(self):
         from yunshu_gateway.engine import set_engine
 
-        self._engine = Engine(EngineConfig())
+        self._engine = BatchedEngine()
         self._engine._model = object()
-        self._engine._model_name = "test-model"
+        self._engine._loaded = True
+        self._engine.model_name = "test-model"
         self._engine._running = True
         set_engine(self._engine)
 
