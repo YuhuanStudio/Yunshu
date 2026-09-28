@@ -164,13 +164,17 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         auth_token = settings.get("YUNSHU_AUTH_TOKEN") or ""
         auth = request.headers.get("Authorization", "")
+        # Anthropic SDKs send the key as x-api-key instead of a bearer token.
+        api_key = request.headers.get("x-api-key", "")
 
-        if not auth.startswith("Bearer "):
+        if auth.startswith("Bearer "):
+            token = auth[7:]
+        elif api_key:
+            token = api_key
+        else:
             return _ErrorFormatter.auth_error(
                 request, "Missing or invalid Authorization header"
             )
-
-        token = auth[7:]
 
         # Static token auth (constant-time comparison). The single consumer
         # authenticates with the one configured bearer token.

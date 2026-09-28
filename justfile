@@ -12,8 +12,8 @@ setup:
     uv sync --all-extras --dev
 
 # ── Build ──
-# No build-metal: there are no hand-written Metal kernels (they benchmarked slower
-# than mx.fast/mx.matmul on Apple Silicon and were removed). All compute is via MLX.
+# No build step for kernels: the Metal kernels in python/yunshu_engine/kernels/ are
+# compiled at runtime by mx.fast.metal_kernel.
 
 build: build-python
 
@@ -48,19 +48,23 @@ format:
 # use case, prefer multi-model mode so brain + VLM + ASR + TTS can co-reside.
 
 dev:
-    uv run uvicorn python.yunshu_gateway.main:app --host 0.0.0.0 --port 8000
+    uv run uvicorn python.yunshu_gateway.main:app --host 127.0.0.1 --port 8000
 
 # Multi-model mode (discovers all models in ./models/)
 dev-multi:
-    YUNSHU_MULTI_MODEL=1 YUNSHU_MODELS_DIR=./models uv run uvicorn python.yunshu_gateway.main:app --host 0.0.0.0 --port 8000
+    YUNSHU_MULTI_MODEL=1 YUNSHU_MODELS_DIR=./models uv run uvicorn python.yunshu_gateway.main:app --host 127.0.0.1 --port 8000
 
 # Load a specific model
 dev-model MODEL:
-    YUNSHU_MODEL=./models/{{ MODEL }} uv run uvicorn python.yunshu_gateway.main:app --host 0.0.0.0 --port 8000
+    YUNSHU_MODEL=./models/{{ MODEL }} uv run uvicorn python.yunshu_gateway.main:app --host 127.0.0.1 --port 8000
 
 # CLI
 cli *ARGS:
     uv run python -m yunshu_cli {{ ARGS }}
+
+# Release artifacts: sdist + wheel in dist/, metadata checked (see RELEASING.md)
+dist:
+    rm -rf dist && uv build && uvx twine check dist/*
 
 # What changed upstream for vendored kernels, watched repos and pinned packages
 vendor-check *args:

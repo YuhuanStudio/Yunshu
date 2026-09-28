@@ -23,6 +23,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+from yunshu_engine.version import yunshu_version
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["mcp"])
@@ -88,7 +90,7 @@ class MCPServerConfig:
     """
 
     server_name: str = "yunshu"
-    version: str = "0.1.0-dev"
+    version: str = field(default_factory=yunshu_version)
     tools: list[MCPTool] = field(default_factory=list)
 
 
@@ -151,7 +153,7 @@ async def _handle_initialize(params: dict | None, req_id: int | str | None) -> d
             },
             "serverInfo": {
                 "name": "yunshu",
-                "version": "0.1.0-dev",
+                "version": yunshu_version(),
             },
         },
         req_id,

@@ -72,3 +72,17 @@ class TestAuthMiddleware:
             assert resp.status_code == 200
         finally:
             os.environ.pop("YUNSHU_AUTH_DISABLED", None)
+
+    def test_token_as_bearer_or_anthropic_x_api_key(self):
+        """With YUNSHU_AUTH_TOKEN set, OpenAI clients send a bearer token and
+        Anthropic clients send x-api-key; both work, a wrong key does not."""
+        os.environ.pop("YUNSHU_AUTH_DISABLED", None)
+        with patch.dict(os.environ, {"YUNSHU_AUTH_TOKEN": "s3cret"}):
+            client = TestClient(create_app())
+            assert client.get("/v1/models").status_code == 401
+            bearer = {"Authorization": "Bearer s3cret"}
+            assert client.get("/v1/models", headers=bearer).status_code == 200
+            good = {"x-api-key": "s3cret"}
+            assert client.get("/v1/models", headers=good).status_code == 200
+            bad = {"x-api-key": "nope"}
+            assert client.get("/v1/models", headers=bad).status_code == 401

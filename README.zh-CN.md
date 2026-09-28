@@ -32,24 +32,23 @@
 
 ## 快速开始
 
-> **需要 [uv](https://docs.astral.sh/uv/)。** 还没上 PyPI —— 从源码以 `uv sync` 安装,
-> 它会安装 `uv.lock` 中固定的版本(MLX 0.32、上游 `mlx-vlm` 0.7.3+)。
+需要 Apple Silicon 的 Mac(macOS 14 以上)和 [uv](https://docs.astral.sh/uv/)。
 
 ```bash
-git clone https://github.com/YuhuanStudio/Yunshu.git
-cd Yunshu
-uv sync --extra vision       # LLM + VLM(Qwen3.5 / 3.6 / 3.8 需要)
-# 或:uv sync --all-extras   # 所有模态
+# 安装。vision extra 覆盖 Qwen3.5 / 3.6 / 3.8 系列和所有 VLM。
+uv tool install "yunshu[vision] @ git+https://github.com/YuhuanStudio/Yunshu"
 
-uv run yunshu serve -m /path/to/Qwen3.8-27B-mlx --port 8000
+yunshu doctor                                   # 检查这台 Mac,并列出修复方法
+yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit   # 下载到 ~/.yunshu/models/
+yunshu serve -m ~/.yunshu/models/mlx-community/Qwen3.5-9B-MLX-4bit
 ```
 
-任何 OpenAI 客户端都能直接用:
+服务器监听 `http://127.0.0.1:8000`,任何 OpenAI 客户端都能直接用:
 
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:8000/v1", api_key="local")  # 任意 key 都可以
+client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="local")  # 任意 key 都可以
 
 # 单模型模式:模型名只是占位,服务器服务的是你加载的那个模型。
 r = client.chat.completions.create(
@@ -60,8 +59,18 @@ r = client.chat.completions.create(
 print(r.choices[0].message.content)
 ```
 
-> **开发环境**:`just setup` 后 `YUNSHU_MODEL=<model> just dev`。
-> **文档**:[API 参考](docs/API.md) · [配置参考](docs/CONFIGURATION.md)。
+要在登录时于后台运行:`yunshu service install -m <model>`
+([服务指南](docs/guides/SERVICE.md))。每个命令都有 `--help`。`yunshu model list`
+会列出本机模型,包括 Hugging Face 缓存。
+
+**从源码**(开发用):克隆仓库,运行 `uv sync --extra vision`(或 `--all-extras`),
+然后 `uv run yunshu serve -m <model>`。`uv.lock` 固定了确切版本(MLX 0.32、`mlx-vlm` 0.7.3+)。
+
+**文档:**
+- [连接客户端](docs/guides/CLIENTS.md)(OpenAI / Anthropic SDK、编程代理、Open WebUI)
+- [故障排查](docs/guides/TROUBLESHOOTING.md)
+- [API 参考](docs/API.md)
+- [配置参考](docs/CONFIGURATION.md)
 
 ## 性能
 

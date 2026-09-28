@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import os
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
@@ -18,14 +17,14 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from yunshu_engine import settings
+from yunshu_engine.paths import models_dir
+from yunshu_engine.version import yunshu_version
 
 from .engine import get_engine, get_model_manager, init_model_manager
 
 # Default model (YUNSHU_MODEL) or None (requires explicit load via API)
 DEFAULT_MODEL = settings.get("YUNSHU_MODEL")
-MODELS_DIR = settings.get("YUNSHU_MODELS_DIR") or os.path.join(
-    os.path.dirname(__file__), "..", "..", "models"
-)
+MODELS_DIR = str(models_dir())
 
 # ProcessMemoryEnforcer instance (multi-model mode only)
 _memory_enforcer = None
@@ -395,8 +394,8 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title="Yunshu",
-        version="0.1.0-dev",
-        description="Production-grade MLX inference platform for Apple Silicon",
+        version=yunshu_version(),
+        description="Local LLM / VLM inference engine for Apple Silicon",
         lifespan=lifespan,
     )
 
@@ -1093,9 +1092,9 @@ def create_app() -> FastAPI:
     async def version() -> dict:
         """Server version info."""
         return {
-            "version": "0.1.0-dev",
+            "version": yunshu_version(),
             "service": "yunshu",
-            "description": "Production-grade MLX inference platform for Apple Silicon",
+            "description": "Local LLM / VLM inference engine for Apple Silicon",
         }
 
     # Anthropic SDK sends requests to /v1/messages without /v1 prefix

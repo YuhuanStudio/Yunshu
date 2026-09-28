@@ -1,9 +1,19 @@
 # docs/ layout
 
-Yunshu is a local LLM / VLM inference engine; start at the top-level [README](../README.md), then
-[API.md](API.md) (endpoints) and [CONFIGURATION.md](CONFIGURATION.md) (environment variables,
-including the VLM batch runner). Current measured results live in
-`research/runs/2026-09-28-matrix/README.md`.
+Yunshu is a local LLM / VLM inference engine. Start at the top-level [README](../README.md).
+
+Using it:
+
+- [guides/CLIENTS.md](guides/CLIENTS.md): connecting OpenAI / Anthropic SDKs, coding agents, Open
+  WebUI
+- [guides/SERVICE.md](guides/SERVICE.md): running in the background (launchd), uninstalling
+- [guides/TROUBLESHOOTING.md](guides/TROUBLESHOOTING.md)
+- [API.md](API.md): endpoints
+- [CONFIGURATION.md](CONFIGURATION.md): every `YUNSHU_*` setting (generated)
+- [BENCHMARKS.md](BENCHMARKS.md): where each published number comes from and how to reproduce it
+
+Maintaining it: [RELEASING.md](../RELEASING.md) (cutting a release) and
+[guides/RELEASE_READINESS.md](guides/RELEASE_READINESS.md) (the outward-facing checklist).
 
 ```
 docs/
@@ -11,7 +21,8 @@ docs/
     PERF_TREND.md       ← absolute-KPI trend log (append-only, honest; records regressions)
     perf_history/       ← time-named KPI snapshots (perf_<UTC>.json)
     img/                ← trend charts
-  guides/               # hand-written reference notes
+  guides/               # hand-written guides and reference notes
+    CLIENTS.md, SERVICE.md, TROUBLESHOOTING.md, RELEASE_READINESS.md
     ITERATION_RESEARCH_TODO.md  ← current research status and open work
     KV_CACHE_MATRIX.md, PROMPT_CACHING_APIS.md,
     BACKEND_RESEARCH.md, BACKEND_ROADMAP.md

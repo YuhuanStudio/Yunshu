@@ -38,9 +38,12 @@ def status(
     _hdr = auth_headers()
 
     # Health
+    engine_loaded = False
     try:
         resp = httpx.get(f"{url}/health", timeout=5)
         healthy = resp.status_code == 200
+        if healthy:
+            engine_loaded = bool(resp.json().get("engine", {}).get("loaded"))
     except httpx.ConnectError:
         fail(f"Cannot connect to {url} — start the server with `yunshu serve`.", code=2)
 
@@ -127,7 +130,8 @@ def status(
 
         for m in models_data:
             mid = m.get("id", "unknown")
-            loaded = m.get("loaded", False)
+            # Single-model mode lists one model without a per-model flag.
+            loaded = m.get("loaded", engine_loaded and len(models_data) == 1)
             table.add_row(mid, "[green]Loaded[/]" if loaded else "[dim]Registered[/]")
 
         console.print(table)

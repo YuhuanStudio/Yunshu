@@ -57,7 +57,13 @@ def serve(
         "-d",
         help="Directory to scan for models (multi-model mode).",
     ),
-    host: str = typer.Option("0.0.0.0", "--host", "-h", help="Bind host."),
+    host: str = typer.Option(
+        "127.0.0.1",
+        "--host",
+        "-h",
+        help="Bind host. 127.0.0.1 serves this Mac only; 0.0.0.0 also serves the "
+        "network (set --auth-token then).",
+    ),
     port: int = typer.Option(8000, "--port", "-p", help="Bind port."),
     workers: int = typer.Option(1, "--workers", "-w", help="Number of workers."),
     max_memory: str | None = typer.Option(
@@ -217,6 +223,15 @@ def serve(
 
     effective_model = settings.get("YUNSHU_MODEL")
     effective_dir = settings.get("YUNSHU_MODELS_DIR")
+    if effective_model:
+        _preflight_model(effective_model)
+    if host not in ("127.0.0.1", "localhost", "::1") and not settings.get(
+        "YUNSHU_AUTH_TOKEN"
+    ):
+        console.print(
+            f"[yellow]Warning:[/] serving on {host} without --auth-token: anyone "
+            "who can reach this port can use the model."
+        )
     is_multi = not effective_model and (
         effective_dir is not None or settings.get_bool("YUNSHU_MULTI_MODEL")
     )
@@ -274,6 +289,26 @@ def serve(
     )
 
 
+def _preflight_model(model: str) -> None:
+    """Stop before loading when the model cannot work: a path that does not
+    exist, a half-finished download, weights larger than memory."""
+    from .doctor import check_model
+
+    info: dict = {}
+    try:
+        import mlx.core as mx
+
+        info = dict(mx.device_info())
+    except Exception:  # noqa: BLE001 - doctor falls back to sysctl
+        pass
+    for c in check_model(model, info):
+        if c.status == "fail":
+            console.print(f"[red]Error:[/] {c.detail}\n  {c.fix}")
+            raise typer.Exit(2)
+        if c.status == "warn":
+            console.print(f"[yellow]Warning:[/] {c.detail}. {c.fix}")
+
+
 def _print_startup_banner(
     model: str | None,
     models_dir: str | None,
@@ -293,13 +328,9 @@ def _print_startup_banner(
     table.add_column(style="bold cyan", width=20)
     table.add_column()
 
-    try:
-        from importlib.metadata import version as _pkg_version
+    from yunshu_engine.version import yunshu_version
 
-        _ver = _pkg_version("yunshu")
-    except Exception:
-        _ver = "0.1.0"
-    table.add_row("Yunshu", f"[bold green]v{_ver}[/]")
+    table.add_row("Yunshu", f"[bold green]{yunshu_version()}[/]")
     table.add_row("Mode", "Multi-model" if is_multi else "Single-model")
     if model:
         table.add_row("Model", model)

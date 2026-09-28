@@ -67,8 +67,12 @@ jobs:
       - name: Build sdist + wheel
         run: uv build
 
-      - name: Verify console script is present
+      - name: Check package metadata (twine)
+        run: uvx twine check dist/*
+
+      - name: Verify console script and notices are present
         run: |
+          unzip -l dist/yunshu-*.whl | grep -q "licenses/THIRD_PARTY_NOTICES.md"
           unzip -p dist/yunshu-*.whl "*/entry_points.txt" | grep -q "yunshu = yunshu_cli:main"
           echo "console_scripts entrypoint OK"
 
@@ -106,3 +110,10 @@ jobs:
 
       - name: Run unit tests
         run: uv run pytest tests/unit -q --tb=short
+
+      - name: CLI smoke (no model)
+        run: |
+          uv run yunshu --version
+          # Hosted runners are VMs; Metal may be missing there, so doctor is
+          # printed for the log but not required to pass.
+          uv run yunshu doctor --port 18999 || true
