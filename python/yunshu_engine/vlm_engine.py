@@ -4477,8 +4477,20 @@ class VLMEngine:
                 "yes",
             )
             kernels = apply_verify_kernels(fast=fast)
-            # Measured best depth: 4 with exact kernels, 6 with fast verify.
-            block = block or ("6" if fast else "4")
+            # Measured with exact kernels: block 3 ~= 4 on average (code 65/67,
+            # prose 53/51, json 62/60 tok/s) and block 5 jumps to ~108 ms per
+            # cycle; thinking output behaves like prose, so default to 3.
+            # Fast verify peaks around 5-6.
+            block = block or ("6" if fast else "3")
+        if drafter is not None and os.environ.get(
+            "YUNSHU_MTP_ADAPTIVE", "0"
+        ).strip().lower() in ("1", "true", "yes"):
+            from .mtp_depth import install as install_adaptive_depth
+
+            # The requested block becomes the start depth; the controller
+            # moves between 2 and YUNSHU_MTP_MAX_BLOCK (default 6).
+            install_adaptive_depth(start=int(block or 4))
+            block = os.environ.get("YUNSHU_MTP_MAX_BLOCK", "6")
         runner = VLMBatchRunner(
             self._model,
             self._processor,

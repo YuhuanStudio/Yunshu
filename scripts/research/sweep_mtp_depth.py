@@ -63,13 +63,25 @@ if use_omlx:
             qwen35_verify_qmm.set_verify_qmm_armed(False)
 
     _mtp._mtp_verify_target = _armed_verify
-_yk = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--yunshu-kernels=")), None)
+_yk = next(
+    (a.split("=", 1)[1] for a in sys.argv if a.startswith("--yunshu-kernels=")), None
+)
 if _yk:
     # Vendored copy under python/yunshu_engine/kernels/omlx (exact | fast).
     from yunshu_engine.kernels import omlx as yk  # noqa: E402
 
-    print(json.dumps({"yunshu_kernels": yk.apply(fast=_yk == "fast"), "mode": _yk}), flush=True)
+    print(
+        json.dumps({"yunshu_kernels": yk.apply(fast=_yk == "fast"), "mode": _yk}),
+        flush=True,
+    )
     use_omlx, omlx_set = True, {f"yunshu:{_yk}"}
+
+if "--adaptive" in sys.argv:
+    from yunshu_engine.mtp_depth import install as install_adaptive  # noqa: E402
+
+    install_adaptive(max_block=max(sizes))
+    omlx_set = set(omlx_set if use_omlx else set()) | {"adaptive"}
+    use_omlx = True
 
 model, processor = load(model_dir)
 tok = processor.tokenizer
@@ -77,7 +89,15 @@ if "--pack" in sys.argv:
     from yunshu_engine.kernels.omlx import pack_projections  # noqa: E402
 
     t0 = time.perf_counter()
-    print(json.dumps({"packed_layers": pack_projections(model), "pack_s": round(time.perf_counter() - t0, 2)}), flush=True)
+    print(
+        json.dumps(
+            {
+                "packed_layers": pack_projections(model),
+                "pack_s": round(time.perf_counter() - t0, 2),
+            }
+        ),
+        flush=True,
+    )
     omlx_set = set(omlx_set) | {"packed"}
     use_omlx = True
 drafter = _load_drafter_in_memory(model_dir)
@@ -153,6 +173,10 @@ for name, prompt, mt in tasks:
     for block in [0] + sizes:
         r = run(name, prompt, mt, block)
         r["omlx_kernels"] = sorted(omlx_set) if use_omlx else []
+        if "adaptive" in r["omlx_kernels"]:
+            from yunshu_engine.mtp_depth import stats as _depth_stats
+
+            r["depth"] = _depth_stats()
         if block == 0:
             ref[name] = r["tokens"]
         r["parity"] = r["tokens"] == ref[name]
