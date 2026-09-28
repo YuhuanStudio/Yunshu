@@ -85,7 +85,9 @@ def main():
     a = ap.parse_args()
     a.output.parent.mkdir(parents=True, exist_ok=True)
     data = {}
-    for line in DATASET.read_text().splitlines():
+    for line in DATASET.read_text().split("\n"):
+        if not line.strip():
+            continue
         item = json.loads(line)
         data[item["id"]] = item
     ids = [q["id"] for q in json.loads(a.ids.read_text())["questions"]][: a.n]
@@ -222,7 +224,7 @@ def main():
     stop.set()
     mems = [
         json.loads(line)["footprint_gib"]
-        for line in a.output.read_text().splitlines()
+        for line in a.output.read_text().split("\n")
         if '"kind": "mem"' in line and json.loads(line).get("footprint_gib")
     ]
     cats = collections.defaultdict(lambda: [0, 0])
