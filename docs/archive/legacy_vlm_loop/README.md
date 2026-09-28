@@ -141,7 +141,7 @@ Snapshot of `python/yunshu_engine/vlm_engine.py` (6615 lines) taken before the l
 
 ## 5. Known bugs and quirks noted in code, commits and docs
 
-- **Omni turn-2 "!!!!" corruption:** lazy mRoPE `position_ids` aliased across `generate_step` calls. The fork added `mx.eval(position_ids)` (commit a1ff3c81). Per docs/research/runs/2026-09-28-omni/README.md and commit 8638e572 it does not reproduce on mlx 0.32.2 / mlx-vlm 0.7.3 (text and audio). Images and 20-turn sessions were not tested.
+- **Omni turn-2 "!!!!" corruption:** lazy mRoPE `position_ids` aliased across `generate_step` calls. The fork added `mx.eval(position_ids)` (commit a1ff3c81). A maintainer re-check on 2026-09-28 found it does not reproduce on mlx 0.32.2 / mlx-vlm 0.7.3 (text and audio). Images and 20-turn sessions were not tested.
 - **S=0 guard:** `mlx_vlm_patches._patch_qwen3_5_empty_chunk` (L81-108) returns `x` for empty chunks. It is hit by hybrid boundary resume with an empty suffix.
 - **Empty-suffix `lm([])` crash** is avoided by the full-match refeed (L3574-3576).
 - **Store before decode:** `add()` runs before decode because sliding-window caches get corrupted by a post-generation add (L3664-3674).

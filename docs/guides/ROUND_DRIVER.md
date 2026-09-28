@@ -29,7 +29,7 @@ packed forward of one kind:
 While rows decode and prompts wait, prefill and decode steps alternate one-to-one; the prefill
 budget sets the trade between the waiting prompt's TTFT and the decoding rows' rate. (Packing the
 decode rows *into* the prefill forward measured no better than alternating separate forwards at the
-same chunk size — `docs/research/runs/2026-09-29-fused-prefill/` — because prefill is compute
+same chunk size on Qwen3.8-27B (2026-09-29) — because prefill is compute
 bound and the only shared saving is one weight read; so steps stay single-kind.)
 
 Per layer, everything with weights runs once over the packed tokens (norms, attention and GDN

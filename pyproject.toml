@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 packages = ["python/yunshu_gateway", "python/yunshu_control", "python/yunshu_engine", "python/yunshu_kv", "python/yunshu_cli"]
 
 # The sdist carries what is needed to build and test the package, not the
-# benchmark data under docs/research.
+# local benchmark data.
 [tool.hatch.build.targets.sdist]
 include = [
     "python/",
@@ -116,8 +116,7 @@ audio = [
 # Qwen3-Omni's video sub-processor on model load, which hard-requires torch even
 # though Yunshu never runs video inference. mlx-vlm>=0.6.0 carries the audio-input
 # fix (#1240) the native speech-in path relies on. Upstream 0.7.3 was verified
-# to keep turn 2+ correct for text and speech input
-# (docs/research/runs/2026-09-28-omni/), so the fork's position_ids patch is gone.
+# to keep turn 2+ correct for text and speech input (2026-09-28), so the fork's position_ids patch is gone.
 omni = [
     "mlx-vlm>=0.7.3",
     "torch>=2.1.0",

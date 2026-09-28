@@ -298,7 +298,7 @@ one audio-in pass too, so the first speech-to-speech turn lands at steady state 
 
 # 2026-09-27 Qwen3.8-27B 實機探索（與上方固定 snapshot 表分開）
 
-M5 Max／128 GiB，原始資料與版本見 [實機比較](../research/REAL_RUNTIME_COMPARISON.md) 及 [run JSONL](../research/runs/2026-09-27-qwen38/)。這些是單次、非獨占 GPU 的探索案例，不能加進上方固定 benchmark 的歷史趨勢或聲稱 p95。共同目標的初次下載副本已刪除；後續測試使用 P5Plus 原有模型。
+M5 Max／128 GiB，原始資料與版本見 實機比較 及 run JSONL。這些是單次、非獨占 GPU 的探索案例，不能加進上方固定 benchmark 的歷史趨勢或聲稱 p95。共同目標的初次下載副本已刪除；後續測試使用 P5Plus 原有模型。
 
 | 引擎／條件 | 3,323-token 長提示首字，冷／重複 | 長提示結果 | 註記 |
 |---|---:|---|---|
@@ -322,7 +322,7 @@ Splash 官方模型 120 個交錯前綴請求全數輸出正確，約 316 s 後 
 
 同 checkpoint 的 oMLX MTP 120 題抽樣，AR／MTP 中位完成時間 15.03／5.74 s，配對中位加速 2.55×，兩邊各 11 題在 2,048-token 上限截斷、10 題最終文字不同；這不是官方 MMLU-Pro 分數或能力等價證明。完整條件、長時間限制和逐題輸出見實機比較報告。
 
-2026-09-29 ragged KV 開銷與 speculative lane（非獨占 GPU，另一 27B server 同時跑 MMLU-Pro；27B 端到端待 idle GPU 確認）。原始資料：[run 目錄](../research/runs/2026-09-29-ragged-lane/)。
+2026-09-29 ragged KV 開銷與 speculative lane（非獨占 GPU，另一 27B server 同時跑 MMLU-Pro；27B 端到端待 idle GPU 確認）。原始資料：run 目錄。
 
 | 項目（Qwen3.5-0.8B in-process，除註明） | 之前 | 之後 |
 |---|---:|---:|

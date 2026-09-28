@@ -96,8 +96,8 @@ downloads you ask for and MCP servers you configure.
 ## Performance
 
 Measured on an M5 Max (128 GB), Qwen3.8-27B, 2026-09-28/29. Same Jundot `oQ4e-mtp` checkpoint unless
-noted. Raw data and methods are in [docs/research/runs](docs/research/runs/) (sources per table in
-[docs/BENCHMARKS.md](docs/BENCHMARKS.md)).
+noted. How each table was measured (scripts and methods) is in [docs/BENCHMARKS.md](docs/BENCHMARKS.md);
+the raw run data stays with the maintainers.
 
 | Engine | Capability checks | Chat TTFT (warm) | 8K prompt: cold / repeat / edited tail | Decode tok/s |
 |---|---|---|---|---|
@@ -191,7 +191,7 @@ round**, which covered LLM/VLM only.
 For speech-to-speech, serve a Qwen3-Omni model (`uv sync --extra omni`) and try
 [`examples/talk.py`](examples/talk.py) (microphone) or [`examples/quickstart.py`](examples/quickstart.py)
 (writes a WAV, no audio hardware). Upstream `mlx-vlm` 0.7.3 was checked to keep multi-turn omni
-output correct ([notes](docs/research/runs/2026-09-28-omni/README.md)); the server's Realtime path
+output correct (notes); the server's Realtime path
 was not.
 
 Also: MCP server/client and an Anthropic-compatible `/v1/messages` surface.

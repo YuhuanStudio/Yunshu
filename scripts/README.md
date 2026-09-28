@@ -16,7 +16,7 @@ scripts/
   realmodel/   # test_*.py — real-model smoke/integration drivers (test_all_modalities, …)
   validate/    # validate_*.py — CoreML / Gemma 4 model-specific validation
   tools/       # quality_comparison, extract_mtp_weights, roofline, build_coremltools_ane.sh
-  research/    # reference-framework matrix, soaks, kernel probes (results in docs/research/runs)
+  research/    # reference-framework matrix, soaks, kernel probes (results are kept locally)
 ```
 
 ## Conventions

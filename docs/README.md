@@ -23,12 +23,7 @@ docs/
     img/                ← trend charts
   guides/               # hand-written guides and reference notes
     CLIENTS.md, SERVICE.md, TROUBLESHOOTING.md, RELEASE_READINESS.md
-    ITERATION_RESEARCH_TODO.md  ← current research status and open work
-    KV_CACHE_MATRIX.md, PROMPT_CACHING_APIS.md,
-    BACKEND_RESEARCH.md, BACKEND_ROADMAP.md
-  research/runs/        # dated raw benchmark runs with a README each
-    2026-09-28-matrix/  ← Qwen3.8-27B cross-engine matrix, decode sweeps, soaks (current numbers)
-    2026-09-28-omni/    ← Qwen3-Omni multi-turn check on upstream mlx-vlm
+    KV_CACHE_MATRIX.md, PROMPT_CACHING_APIS.md, ROUND_DRIVER.md
   results/              # raw bench JSON artifacts (historical; framework_comparison etc.)
   archive/
     mlx_vlm_omni_audio/ ← real omni/audio findings (speech-to-speech capability)

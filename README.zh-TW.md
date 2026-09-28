@@ -89,8 +89,8 @@ MCP 伺服器。
 ## 效能
 
 在 M5 Max(128 GB)上以 Qwen3.8-27B 量測,2026-09-28/29。除非另有註明,都用同一個 Jundot
-`oQ4e-mtp` checkpoint。原始數據與方法在 [docs/research/runs](docs/research/runs/)(各表來源見
-[docs/BENCHMARKS.md](docs/BENCHMARKS.md))。
+`oQ4e-mtp` checkpoint。各表的量測方法與腳本見
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md);原始數據由維護者保存,不隨 repo 發布。
 
 | 引擎 | 能力檢查 | 對話 TTFT(熱) | 8K prompt:冷 / 重複 / 改尾巴 | 解碼 tok/s |
 |---|---|---|---|---|
@@ -177,7 +177,7 @@ Yunshu 目前的位置:
 語音對語音:服務一個 Qwen3-Omni 模型(`uv sync --extra omni`),試試
 [`examples/talk.py`](examples/talk.py)(麥克風)或 [`examples/quickstart.py`](examples/quickstart.py)
 (輸出 WAV,不需音訊硬體)。已確認上游 `mlx-vlm` 0.7.3 多輪 omni 輸出正確
-([紀錄](docs/research/runs/2026-09-28-omni/README.md));伺服器的 Realtime 路徑尚未確認。
+(紀錄);伺服器的 Realtime 路徑尚未確認。
 
 另外:MCP 伺服器/客戶端,以及相容 Anthropic 的 `/v1/messages`。
 
