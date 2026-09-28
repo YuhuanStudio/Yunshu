@@ -13,12 +13,16 @@ array) for full-attention layers once rows are decoding:
   another ``RaggedKVCache``; ``filter`` drops finished rows and releases
   capacity when the longest row leaves.
 
+``kv_format="int8"`` stores K/V as int8 codes plus fp16 scales per (row, KV
+head, token, 32-dim group), quantized on write, and the kernel reads them directly (half the
+K/V bytes per decode step; see ``ragged_attention``).
+
 It deliberately has no ``left_padding`` attribute: mlx-vlm's qwen3_5 model keys
 its left-padded decode and single-row shortcuts off that attribute, and neither
 applies here. Prefill (one request at a time in the runner) stays on the stock
 cache; the runner converts a generation batch's caches after each step.
 
-Opt-in (``YUNSHU_RAGGED_KV=1``) until measured end to end.
+Opt-in (``YUNSHU_RAGGED_KV=bf16|int8``) until measured end to end.
 """
 
 from __future__ import annotations
@@ -27,7 +31,7 @@ from typing import Any
 
 import mlx.core as mx
 
-from .ragged_attention import ragged_decode_attention
+from .ragged_attention import quantize_kv, ragged_decode_attention
 
 STEP = 256
 
@@ -40,10 +44,23 @@ class RaggedKVCache:
     """Batch KV with per-row lengths (see module docstring)."""
 
     def __init__(
-        self, keys: mx.array | None, values: mx.array | None, lengths: list[int]
+        self,
+        keys: mx.array | None,
+        values: mx.array | None,
+        lengths: list[int],
+        k_scales: mx.array | None = None,
+        v_scales: mx.array | None = None,
+        kv_format: str = "bf16",
     ):
+        if kv_format not in ("bf16", "int8"):
+            raise ValueError(f"RaggedKVCache: unknown kv_format {kv_format!r}")
+        self.kv_format = kv_format
         self.keys = keys
         self.values = values
+        # int8 only: fp16 scales per (row, KV head, token, 32-dim group),
+        # [B, HKV, CAP, D/32].
+        self.k_scales = k_scales
+        self.v_scales = v_scales
         self.lengths = [int(n) for n in lengths]
         self._sync()
 
@@ -62,7 +79,21 @@ class RaggedKVCache:
 
     @property
     def state(self):
-        return [a for a in (self.keys, self.values) if a is not None]
+        return [
+            a
+            for a in (self.keys, self.values, self.k_scales, self.v_scales)
+            if a is not None
+        ]
+
+    @property
+    def quantized(self) -> bool:
+        return self.kv_format == "int8"
+
+    def _encode(self, x: mx.array):
+        """bf16 [.., T, D] -> stored form (codes, scales) or (x, None)."""
+        if self.quantized:
+            return quantize_kv(x)
+        return x, None
 
     def empty(self) -> bool:
         return self.keys is None
@@ -75,11 +106,13 @@ class RaggedKVCache:
 
     # ── construction ─────────────────────────────────────────────────────
     @classmethod
-    def from_batch_kv(cls, cache: Any) -> RaggedKVCache:
-        """Convert a left-padded mlx-lm ``BatchKVCache`` (valid keys of row b
-        at ``left_padding[b] .. _idx - 1``) into right-aligned rows."""
+    def from_batch_kv(cls, cache: Any, kv_format: str = "bf16") -> RaggedKVCache:
+        """Convert a left-padded ``BatchKVCache`` (valid keys of row b at
+        ``left_padding[b] .. _idx - 1``) into right-aligned rows."""
         if cache.keys is None:
-            return cls(None, None, [0] * int(cache.offset.shape[0]))
+            return cls(
+                None, None, [0] * int(cache.offset.shape[0]), kv_format=kv_format
+            )
         idx = int(cache._idx)
         pads = [int(p) for p in cache.left_padding.tolist()]
         lengths = [idx - p for p in pads]
@@ -93,7 +126,12 @@ class RaggedKVCache:
             v = cache.values[b, :, p:idx, :]
             ks.append(mx.concatenate([k, mx.zeros((H, cap - n, D), k.dtype)], axis=1))
             vs.append(mx.concatenate([v, mx.zeros((H, cap - n, Dv), v.dtype)], axis=1))
-        return cls(mx.stack(ks), mx.stack(vs), lengths)
+        keys, values = mx.stack(ks), mx.stack(vs)
+        if kv_format == "int8":
+            kq, kscale = quantize_kv(keys)
+            vq, vscale = quantize_kv(values)
+            return cls(kq, vq, lengths, kscale, vscale, kv_format="int8")
+        return cls(keys, values, lengths)
 
     def _grow(self, needed: int) -> None:
         cap = _round_up(needed)
@@ -107,23 +145,39 @@ class RaggedKVCache:
         self.values = mx.concatenate(
             [self.values, mx.zeros((B, H, cap - old, Dv), self.values.dtype)], axis=2
         )
+        if self.quantized:
+            ng = self.k_scales.shape[3]
+            pad = mx.zeros((B, H, cap - old, ng), mx.float16)
+            self.k_scales = mx.concatenate([self.k_scales, pad], axis=2)
+            self.v_scales = mx.concatenate([self.v_scales, pad], axis=2)
 
     # ── model interface ──────────────────────────────────────────────────
     def update_and_fetch(self, keys: mx.array, values: mx.array):
         B, H, T, D = keys.shape
+        kq, kscale = self._encode(keys)
+        vq, vscale = self._encode(values)
         if self.keys is None:
             cap = _round_up(max(self.lengths) + T + 1)
-            self.keys = mx.zeros((B, H, cap, D), keys.dtype)
-            self.values = mx.zeros((B, H, cap, values.shape[3]), values.dtype)
+            self.keys = mx.zeros((B, H, cap, D), kq.dtype)
+            self.values = mx.zeros((B, H, cap, values.shape[3]), vq.dtype)
+            if self.quantized:
+                self.k_scales = mx.zeros((B, H, cap, kscale.shape[3]), mx.float16)
+                self.v_scales = mx.zeros((B, H, cap, vscale.shape[3]), mx.float16)
         self._grow(max(self.lengths) + T + 1)
         if len(set(self.lengths)) == 1:
             n = self.lengths[0]
-            self.keys[:, :, n : n + T, :] = keys
-            self.values[:, :, n : n + T, :] = values
+            self.keys[:, :, n : n + T, :] = kq
+            self.values[:, :, n : n + T, :] = vq
+            if self.quantized:
+                self.k_scales[:, :, n : n + T, :] = kscale
+                self.v_scales[:, :, n : n + T, :] = vscale
         else:
             for b, n in enumerate(self.lengths):
-                self.keys[b, :, n : n + T, :] = keys[b]
-                self.values[b, :, n : n + T, :] = values[b]
+                self.keys[b, :, n : n + T, :] = kq[b]
+                self.values[b, :, n : n + T, :] = vq[b]
+                if self.quantized:
+                    self.k_scales[b, :, n : n + T, :] = kscale[b]
+                    self.v_scales[b, :, n : n + T, :] = vscale[b]
         self.lengths = [n + T for n in self.lengths]
         self._sync()
         return self.keys, self.values
@@ -132,7 +186,14 @@ class RaggedKVCache:
         """Attention of this step's queries over each row's keys (after
         ``update_and_fetch`` stored them)."""
         return ragged_decode_attention(
-            queries, self.keys, self.values, self.offset, scale, max_length=self._idx
+            queries,
+            self.keys,
+            self.values,
+            self.offset,
+            scale,
+            max_length=self._idx,
+            k_scales=self.k_scales,
+            v_scales=self.v_scales,
         )
 
     # ── batch ops used by upstream GenerationBatch ───────────────────────
@@ -150,22 +211,31 @@ class RaggedKVCache:
             sel = mx.array(idx, dtype=mx.int32)
             self.keys = self.keys[sel]
             self.values = self.values[sel]
+            if self.quantized:
+                self.k_scales = self.k_scales[sel]
+                self.v_scales = self.v_scales[sel]
             need = _round_up(max(self.lengths, default=0) + 1)
             if self.lengths and need * 2 <= self.capacity:
                 # the longest row left: give its capacity back
                 self.keys = mx.contiguous(self.keys[:, :, :need, :])
                 self.values = mx.contiguous(self.values[:, :, :need, :])
+                if self.quantized:
+                    self.k_scales = mx.contiguous(self.k_scales[:, :, :need, :])
+                    self.v_scales = mx.contiguous(self.v_scales[:, :, :need, :])
         self._sync()
 
     def extend(self, other: Any) -> None:
         if not isinstance(other, RaggedKVCache):
-            other = RaggedKVCache.from_batch_kv(other)
+            other = RaggedKVCache.from_batch_kv(other, self.kv_format)
+        if other.kv_format != self.kv_format:
+            raise ValueError("RaggedKVCache.extend: kv_format mismatch")
         if other.keys is None:
             self.lengths += other.lengths
             self._sync()
             return
         if self.keys is None:
             self.keys, self.values = other.keys, other.values
+            self.k_scales, self.v_scales = other.k_scales, other.v_scales
             self.lengths += other.lengths
             self._sync()
             return
@@ -175,6 +245,9 @@ class RaggedKVCache:
                 c._grow(cap)
         self.keys = mx.concatenate([self.keys, other.keys], axis=0)
         self.values = mx.concatenate([self.values, other.values], axis=0)
+        if self.quantized:
+            self.k_scales = mx.concatenate([self.k_scales, other.k_scales], axis=0)
+            self.v_scales = mx.concatenate([self.v_scales, other.v_scales], axis=0)
         self.lengths += other.lengths
         self._sync()
 
@@ -238,13 +311,13 @@ def _stock_batch_kv_classes() -> tuple:
     return tuple(classes)
 
 
-def convert_batch(prompt_cache: list) -> int:
+def convert_batch(prompt_cache: list, kv_format: str = "bf16") -> int:
     """Swap stock ``BatchKVCache`` entries of a generation batch for ragged
     ones; returns how many were converted (0 when already ragged)."""
     n = 0
     for i, c in enumerate(prompt_cache):
         if type(c) in _stock_batch_kv_classes() and c.keys is not None:
-            prompt_cache[i] = RaggedKVCache.from_batch_kv(c)
+            prompt_cache[i] = RaggedKVCache.from_batch_kv(c, kv_format)
             n += 1
     return n
 

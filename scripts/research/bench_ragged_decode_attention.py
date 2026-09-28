@@ -10,10 +10,18 @@ different lengths inside one left-padded BatchKVCache-style buffer. Compares:
 - upstream_fallback: mlx-vlm's per-pad-group path (taken when rows fall into
   different vector plans)
 - ragged: Yunshu's per-row-length kernel (right-aligned per-row storage)
-- ideal_rows: per-row SDPA on exact slices (B launches; lower bound on bytes)
+- ragged_int8: the same kernel over int8 K/V + fp16 32-dim group scales
+  (YUNSHU_RAGGED_KV=int8)
+- ideal_rows: per-row SDPA on exact slices (B launches; lower bound on bytes).
+  At B=1 this is plain MLX fast SDPA over the row.
+
+GB/s is the K/V bytes each path must read (dense: the padded length; the rest:
+each row's own keys; int8: codes + scales) over the measured time.
 
     PYTHONPATH=python python scripts/research/bench_ragged_decode_attention.py \
         --lengths 16000 500 500 500 500 500 500 500 --iters 30
+    PYTHONPATH=python python scripts/research/bench_ragged_decode_attention.py \
+        --lengths 131072 --iters 30 --paths ragged ragged_int8 ideal_rows
 """
 
 import argparse
@@ -40,6 +48,7 @@ def main():
     )
     ap.add_argument("--lengths", type=int, nargs="+", default=[16000] + [500] * 7)
     ap.add_argument("--iters", type=int, default=30)
+    ap.add_argument("--paths", nargs="+", default=None, help="subset of paths")
     ap.add_argument(
         "--step", type=int, default=256, help="BatchKVCache allocation step"
     )
@@ -88,7 +97,14 @@ def main():
         ]
     )
     lens = mx.array(lengths, dtype=mx.int32)
-    mx.eval(kbuf, vbuf, q, kc, vc, rk, rv)
+    rkq, rks = ra.quantize_kv(rk)
+    rvq, rvs = ra.quantize_kv(rv)
+    mx.eval(kbuf, vbuf, q, kc, vc, rk, rv, rkq, rks, rvq, rvs)
+    row_bytes = sum(lengths) * HKV * D * 2 * 2  # bf16 K + V, rows' own keys
+    kv_bytes = {
+        "dense": B * L * HKV * D * 2 * 2,
+        "ragged_int8": sum(lengths) * HKV * (D + D // ra.GROUP * 2) * 2,
+    }
 
     class Stub:
         pass
@@ -136,6 +152,9 @@ def main():
         ),
         "upstream_fallback": fallback,
         "ragged": lambda: ra.ragged_decode_attention(q, rk, rv, lens, scale),
+        "ragged_int8": lambda: ra.ragged_decode_attention(
+            q, rkq, rvq, lens, scale, None, rks, rvs
+        ),
         "ideal_rows": lambda: mx.concatenate(
             [
                 mx.fast.scaled_dot_product_attention(
@@ -151,6 +170,8 @@ def main():
     }
     row = {"lengths": lengths, "cap": cap}
     for name, fn in paths.items():
+        if a.paths and name not in a.paths:
+            continue
         out = fn()
         if out is None:
             row[name] = "not launched (plans differ)"
@@ -158,7 +179,13 @@ def main():
         err = float(
             mx.max(mx.abs(out.astype(mx.float32) - ref.astype(mx.float32))).item()
         )
-        row[name] = {"us": round(timeit(fn, a.iters), 1), "max_abs_err": round(err, 5)}
+        us = timeit(fn, a.iters)
+        gbs = kv_bytes.get(name, row_bytes) / us / 1e3
+        row[name] = {
+            "us": round(us, 1),
+            "GB/s": round(gbs, 1),
+            "max_abs_err": round(err, 5),
+        }
     print(json.dumps(row))
 
 

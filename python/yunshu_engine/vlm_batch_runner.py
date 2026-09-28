@@ -226,8 +226,9 @@ class VLMBatchRunner:
         self.inflight = lambda: 0
         # All ids that end a turn (tokenizer + generation_config eos).
         self.stop_tokens: set[int] | None = None
-        # Experimental per-row-length KV for the shared batch (YUNSHU_RAGGED_KV).
-        self.ragged_kv = False
+        # Experimental per-row-length KV for the shared batch (YUNSHU_RAGGED_KV):
+        # None, "bf16" or "int8".
+        self.ragged_kv: str | None = None
 
     def prepare_media(
         self,
@@ -570,7 +571,7 @@ class VLMBatchRunner:
             if batch is not None and len(batch) > 0:
                 from .kernels.ragged_kv import convert_batch
 
-                convert_batch(batch.prompt_cache)
+                convert_batch(batch.prompt_cache, self.ragged_kv)
         for progress in prompt_progress or []:
             job = group.jobs.get(getattr(progress, "uid", None))
             if job is not None:
