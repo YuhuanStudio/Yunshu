@@ -1309,6 +1309,21 @@ class VLMEngine:
         logger.info("APC disk tier at %s (cap %.0f GiB)", disk.dir, max_gb)
         return disk
 
+    def _round_driver_wanted(self, lm) -> bool:
+        """``YUNSHU_ROUND_DRIVER`` on a dense Qwen3.5-family text decoder with
+        bf16 KV (int8 KV precision keeps the upstream path)."""
+        if not settings.get_bool("YUNSHU_ROUND_DRIVER"):
+            return False
+        from .round_driver import forward as rd_forward
+
+        if not rd_forward.supports(lm):
+            logger.warning("YUNSHU_ROUND_DRIVER: not a dense Qwen3.5-family model")
+            return False
+        if settings.get("YUNSHU_KV_PRECISION") != "bf16":
+            logger.warning("YUNSHU_ROUND_DRIVER: int8 KV keeps the upstream path")
+            return False
+        return True
+
     def _build_batch_runner(self, model_path: str):
         """Build the runner that serves every request of this model.
 
@@ -1322,6 +1337,21 @@ class VLMEngine:
 
         spec_family = self._config.get("model_type") in self._SPEC_MODEL_TYPES
         lm = self._model.language_model
+        use_driver = self._round_driver_wanted(lm)
+        if use_driver:
+            # Row-invariant lane projections everywhere (before any verify
+            # kernel install repacks them): the round driver's rows, and the
+            # upstream paths that still serve image prompts, both use them.
+            from .kernels import lane_linear
+
+            lanes = lane_linear.convert(lm)
+            if lm.args.tie_word_embeddings:
+                lm._yunshu_lane_head = lane_linear.lane_head(lm.model.embed_tokens)
+            logger.info(
+                "Round driver: %d lane projections (%d skipped)",
+                lanes["converted"],
+                len(lanes["skipped"]),
+            )
         budget = settings.get("YUNSHU_VLM_APC_MEMORY_GB")
         if self._apc_backend is None and budget > 0:
             from mlx_vlm.apc import APCManager, semantic_extra_hash
@@ -1433,11 +1463,13 @@ class VLMEngine:
                 "only; this model's KV stays bf16",
                 precision,
             )
-        from . import fused_prefill
+        if use_driver:
+            from .round_driver.driver import RoundDriver
 
-        if fused_prefill.supports(self._model.language_model):
-            runner.fused_prefill_tokens = int(
-                settings.get("YUNSHU_FUSED_PREFILL_TOKENS") or 0
+            runner.driver = RoundDriver(
+                self._model,
+                drafter=drafter if draft_kind == "mtp" else None,
+                stop_tokens=runner.stop_tokens,
             )
         logger.info(
             "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s",

@@ -231,9 +231,10 @@ class VLMBatchRunner:
         # precision, "bf16" / "int8" (YUNSHU_KV_PRECISION).
         self.ragged_kv: str | None = None
         self._ragged_logged = False
-        # Fused chunked prefill (YUNSHU_FUSED_PREFILL_TOKENS): prefill tokens
-        # per step run inside the decode forward while rows decode; 0 = off.
-        self.fused_prefill_tokens = 0
+        # Yunshu's round driver (YUNSHU_ROUND_DRIVER, round_driver/): serves
+        # text requests of dense Qwen3.5-family models; None = upstream only.
+        self.driver: Any = None
+        self._driver_jobs: dict[int, _Job] = {}
 
     def prepare_media(
         self,
@@ -403,6 +404,11 @@ class VLMBatchRunner:
             stats=stats,
             budget=budget,
         )
+        # The round driver drafts for any greedy row without logits
+        # processors or logprobs (a thinking budget is fine there).
+        job.allow_draft = bool(
+            allow_draft and greedy and not processors and not logprobs
+        )
         stats.used_draft = use_draft
         self._submit(job)
         try:
@@ -427,7 +433,13 @@ class VLMBatchRunner:
 
     def busy(self) -> bool:
         with self._lock:
-            return bool(self._pending or self._batches or self._spec or self._driving)
+            return bool(
+                self._pending
+                or self._batches
+                or self._spec
+                or self._driving
+                or self._driver_jobs
+            )
 
     def _submit(self, job: _Job) -> None:
         with self._lock:
@@ -443,7 +455,7 @@ class VLMBatchRunner:
         )
 
     def _active_jobs(self) -> int:
-        return sum(len(g.jobs) for g in self._groups())
+        return sum(len(g.jobs) for g in self._groups()) + len(self._driver_jobs)
 
     def _new_generator(self, *, spec: bool, use_apc: bool, top_logprobs: int, sampler):
         from mlx_vlm.generate.ar import BatchGenerator
@@ -466,6 +478,10 @@ class VLMBatchRunner:
 
     def _admit(self, job: _Job, alone: bool) -> None:
         from .mrope import clear_rope_state
+
+        if self.driver is not None and job.prompt_kwargs is None:
+            self._admit_driver(job)
+            return
 
         use_apc = self.apc_manager is not None
         if use_apc and self._apc_admit is not None:
@@ -525,6 +541,50 @@ class VLMBatchRunner:
         if group.sampler is not None and job.sampling is not None:
             group.sampler.add(uid, job.sampling)
 
+    # ── round driver ────────────────────────────────────────────────────
+    def _admit_driver(self, job: _Job) -> None:
+        from .round_driver.driver import Request
+
+        self.driver.add(
+            Request(
+                ids=job.ids,
+                max_tokens=job.max_tokens,
+                sampling=job.sampling,
+                processors=list(job.processors or []),
+                logprobs=job.logprobs,
+                top_logprobs=job.top_logprobs,
+                draft=job.allow_draft,
+                budget=job.budget,
+                handle=job,
+            )
+        )
+        job.start = time.perf_counter()
+        job.stats.used_apc = False
+        job.stats.used_draft = bool(job.allow_draft and self.driver.head is not None)
+        self._driver_jobs[id(job)] = job
+
+    def _step_driver(self) -> None:
+        for key, job in list(self._driver_jobs.items()):
+            cancelled = job.cancel_event is not None and job.cancel_event.is_set()
+            if job.abandoned or cancelled:
+                self.driver.remove(job)
+                del self._driver_jobs[key]
+                job.stats.finish_reason = "cancel" if cancelled else None
+                job.out.put(_DONE)
+        if not self._driver_jobs:
+            return
+        for event in self.driver.step():
+            job = event.handle
+            stats = job.stats
+            if stats.generated == 0:
+                stats.first_token_s = time.perf_counter() - job.start
+            stats.generated += 1
+            job.out.put((int(event.token), event.logprob))
+            if event.finish is not None:
+                stats.finish_reason = event.finish
+                self._driver_jobs.pop(id(job), None)
+                job.out.put(_DONE)
+
     def _finish(self, group: _Group, uid: int, reason: str | None) -> None:
         job = group.jobs.pop(uid, None)
         if group.sampler is not None:
@@ -582,20 +642,7 @@ class VLMBatchRunner:
             lm = self.model.language_model
             if hasattr(lm, "_rope_deltas"):
                 lm._rope_deltas = mx.array([[job.rope_delta]], dtype=mx.float32)
-        fused = None
-        if self.fused_prefill_tokens > 0 and not group.spec:
-            from . import fused_prefill
-
-            # The decode step and the waiting prompt's prefill chunk of this
-            # next() run as one forward (see fused_prefill).
-            fused = fused_prefill.plan(
-                group.gen, self.fused_prefill_tokens, PREFILL_STEP
-            )
-        try:
-            prompt_progress, responses = group.gen.next()
-        finally:
-            if self.fused_prefill_tokens > 0 and not group.spec:
-                fused_prefill.finish(fused)
+        prompt_progress, responses = group.gen.next()
         if self.ragged_kv and not self._ragged_logged and not group.spec:
             # Engagement proof in the server log (a no-op path once cost a
             # full MMLU run to notice). Joins build the ragged caches
@@ -656,6 +703,8 @@ class VLMBatchRunner:
                     job.out.put(exc)
             for group in self._groups():
                 self._step_group(group)
+            if self._driver_jobs:
+                self._step_driver()
             if self._spec is not None and not self._spec.jobs:
                 if not self._spec.gen.has_work:
                     self._spec.gen.close()
@@ -673,10 +722,20 @@ class VLMBatchRunner:
                     group.gen.close()
             self._batches.clear()
             self._spec = None
+            for job in self._driver_jobs.values():
+                job.out.put(exc)
+                if self.driver is not None:
+                    self.driver.remove(job)
+            self._driver_jobs.clear()
         if not resubmit:
             return
         with self._lock:
-            if self._pending or self._batches or self._spec is not None:
+            if (
+                self._pending
+                or self._batches
+                or self._spec is not None
+                or self._driver_jobs
+            ):
                 again = True
             else:
                 self._driving = False
@@ -829,6 +888,7 @@ class _Job:
     abandoned: bool = False
     budget: Any = None
     rope_delta: float = 0.0
+    allow_draft: bool = False
 
 
 @dataclass
