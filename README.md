@@ -75,7 +75,7 @@ noted; raw data and methods in
 
 | Engine | Capability checks | Chat TTFT (warm) | 8K prompt: cold / repeat / edited tail | Decode tok/s |
 |---|---|---|---|---|
-| **Yunshu** (default: MTP block 6, batch-invariant) | 33/33 | 0.195 s | 8.40 / 0.112 / 0.259 s | 80 |
+| **Yunshu** (default: MTP block 6, batch-invariant) | 34/34 | 0.194 s | 8.45 / 0.115 / 0.258 s | 80 |
 | **Yunshu** (DFlash2 + fast verify, opt-in) | 31/31 | 0.185 s | 8.71 / 0.112 / 0.239 s | 86 |
 | mlx-vlm 0.7.3 server (APC) | 27/28 | 0.212 s | 8.60 / 0.108 / 0.265 s | 32 |
 | oMLX.app 0.7 (MTP + cache) | 31/31 | 0.312 s | 8.60 / 0.361 / 0.376 s | 85 |
@@ -85,15 +85,38 @@ Lossless decode by output type (same checkpoint, in-process, greedy, 384 tokens;
 
 | Decode | Code | Prose | JSON-like | Spec on == off |
 |---|---|---|---|---|
-| **Default**: batch-invariant + packed, MTP block 6 | 88.6 | 59.9 | 67.3 | yes |
-| Previous default: exact verify kernels, MTP block 3 | 57–67 | 50–53 | 58–62 | yes |
+| **Default**: batch-invariant + packed, MTP block 6 | 88.6 | 59.9 | 67.3 | yes on short prompts¹ |
+| Previous default: exact verify kernels, MTP block 3 | 57–67 | 50–53 | 58–62 | yes on short prompts¹ |
 | Non-exact fast verify (opt-in) | 83.8 | 59.9 | 66.7 | no |
 
+¹ Matmuls are row-invariant, but verify attention uses a different MLX kernel than one-row decode,
+so at longer contexts speculative output can differ from plain decode in rare tokens. A row-exact
+attention path (synced from oMLX) is being validated to close this.
+
+MMLU-Pro, 300 questions, 8 in flight, max 16384 tokens, `reasoning_effort=medium` (accuracy and a
+long-run soak; same settings for every engine):
+
+| Engine | Correct | Wall time | Aggregate tok/s | Peak footprint |
+|---|---|---|---|---|
+| **Yunshu** (v7) | 250 / 300 | 46.5 min | 88 | 45 GiB (back to 17 at the end) |
+| Splash 1.1 | 252 / 300 | 17.2 min | 223 | 67 GiB |
+| oMLX.app | 229 / 300 (27 rejected by its prefill memory guard) | 29.2 min | 120 | 75 GiB |
+
+Speed sweep (unique prompts, no cache hits; 128 generated tokens; tok/s unless noted):
+
+| | Yunshu | oMLX | Splash |
+|---|---|---|---|
+| TTFT at 8K / 131K / 200K tokens | 8.4 / 209 / 394 s | 8.5 / 214 / 401 s | 7.9 / 207 / 390 s |
+| Decode after 1K / 32K / 200K | 58 / 44 / 17 | 71 / 60 / 29 | 101 / 48 / 66 |
+| 8 concurrent 1K prompts, aggregate | 61 | 53 | 70 |
+
 Where Yunshu stands:
-- Prefix reuse and warm TTFT are the best measured.
-- Cold prefill is at the hardware ceiling for this checkpoint.
-- Default decode is on par with oMLX while keeping lossless output, and **behind Splash**, which pairs
-  DFlash2 with its own quantized model. Closing that gap is the current work.
+- Prefix reuse and warm TTFT are the best measured; cold prefill is at the hardware ceiling (all three
+  engines within ~5%).
+- Accuracy matches Splash; 0 errors in every long run.
+- **Behind Splash** on long-context decode (it keeps KV in INT8) and on concurrent long outputs (the
+  upstream batch cache pads every row to the longest one). Quantized KV and a ragged per-row KV cache
+  are being validated to close both.
 - A 60-minute mixed soak (chat, long documents, images, tools, JSON schema, thinking, disconnects)
   finished 699 requests with 0 server errors and no memory growth (footprint 17–26 GiB).
 
