@@ -226,8 +226,9 @@ class VLMBatchRunner:
         self.inflight = lambda: 0
         # All ids that end a turn (tokenizer + generation_config eos).
         self.stop_tokens: set[int] | None = None
-        # Experimental per-row-length KV for the shared batch (YUNSHU_RAGGED_KV):
-        # None, "bf16" or "int8".
+        # Per-row-length KV layout (YUNSHU_RAGGED_KV) for the shared batch and
+        # the speculative lane: None (off) or its precision, "bf16" / "int8"
+        # (YUNSHU_KV_PRECISION).
         self.ragged_kv: str | None = None
         self._ragged_logged = False
         # Prefill chunk while other rows decode (0: always PREFILL_STEP).
@@ -549,13 +550,23 @@ class VLMBatchRunner:
         # only while the single-row speculative lane steps (and off for every
         # other user of the model, including the shared batch).
         invariant = group.spec and batch_invariant.is_installed()
+        # With ragged KV on, the speculative lane's decode and verify
+        # attention run the ragged kernel over its one-row cache, so both
+        # share per-row arithmetic (and the shared batch's).
+        dense_lane = group.spec and bool(self.ragged_kv)
         if invariant:
             batch_invariant.set_active(True)
+        if dense_lane:
+            from .kernels import ragged_kv
+
+            ragged_kv.set_dense_lane(True)
         try:
             self._step_generator(group)
         finally:
             if invariant:
                 batch_invariant.set_active(False)
+            if dense_lane:
+                ragged_kv.set_dense_lane(False)
 
     def _step_generator(self, group: _Group) -> None:
         if group.spec:
@@ -577,24 +588,20 @@ class VLMBatchRunner:
                     self.prefill_chunk_while_decoding if decoding else PREFILL_STEP
                 )
         prompt_progress, responses = group.gen.next()
-        if self.ragged_kv and not group.spec:
-            # Rows that just finished prefill arrive with a stock left-padded
-            # BatchKVCache; switch the decode batch to per-row-length KV so no
-            # row reads (or copies) the longest row's padding.
-            batch = getattr(group.gen, "_generation_batch", None)
-            if batch is not None and len(batch) > 0:
-                from .kernels.ragged_kv import convert_batch
+        if self.ragged_kv and not self._ragged_logged and not group.spec:
+            # Engagement proof in the server log (a no-op path once cost a
+            # full MMLU run to notice). Joins build the ragged caches
+            # (``ragged_kv.enable``); a lone request keeps its stock cache.
+            from .kernels.ragged_kv import RaggedKVCache
 
-                converted = convert_batch(batch.prompt_cache, self.ragged_kv)
-                if converted and not self._ragged_logged:
-                    # Engagement proof in the server log (a no-op path once
-                    # cost a full MMLU run to notice).
-                    self._ragged_logged = True
-                    logger.info(
-                        "Ragged KV engaged (%s): %d attention caches converted",
-                        self.ragged_kv,
-                        converted,
-                    )
+            batch = getattr(group.gen, "_generation_batch", None)
+            caches = getattr(batch, "prompt_cache", None) or []
+            n = sum(isinstance(c, RaggedKVCache) for c in caches)
+            if n:
+                self._ragged_logged = True
+                logger.info(
+                    "Ragged KV engaged (%s): %d attention caches", self.ragged_kv, n
+                )
         for progress in prompt_progress or []:
             job = group.jobs.get(getattr(progress, "uid", None))
             if job is not None:

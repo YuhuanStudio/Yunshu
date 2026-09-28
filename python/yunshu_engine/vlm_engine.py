@@ -1419,14 +1419,23 @@ class VLMEngine:
         runner.prefill_chunk_while_decoding = int(
             settings.get("YUNSHU_PREFILL_CHUNK_WHILE_DECODING") or 0
         )
-        ragged = settings.get("YUNSHU_RAGGED_KV")
-        if ragged in ("bf16", "int8"):
-            # Experimental: per-row-length KV + ragged decode attention for the
-            # shared batch (qwen3_5 attention only); int8 stores K/V quantized.
-            from .kernels.ragged_kv import install as install_ragged_kv
+        # KV layout (technical; experimental until measured) and KV precision
+        # (the user's memory/quality choice) are separate settings.
+        precision = settings.get("YUNSHU_KV_PRECISION")
+        if settings.get_bool("YUNSHU_RAGGED_KV"):
+            # Per-row-length KV + ragged decode attention for the shared batch
+            # and the speculative lane (qwen3_5 attention only).
+            from .kernels import ragged_kv
 
-            install_ragged_kv()
-            runner.ragged_kv = ragged
+            ragged_kv.install()
+            ragged_kv.enable(precision)
+            runner.ragged_kv = precision
+        elif precision != "bf16":
+            logger.warning(
+                "YUNSHU_KV_PRECISION=%s needs the ragged KV layout "
+                "(YUNSHU_RAGGED_KV=1); the batch KV stays bf16",
+                precision,
+            )
         logger.info(
             "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s",
             f"{self._apc_backend.memory_max_bytes / 2**30:.1f}GiB"

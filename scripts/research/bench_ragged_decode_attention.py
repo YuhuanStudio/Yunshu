@@ -13,7 +13,7 @@ different lengths inside one left-padded BatchKVCache-style buffer. Compares:
   key-parallel variant launched over the rows' own chunks (what RaggedKVCache
   runs)
 - ragged_int8: the same kernel over int8 K/V + fp16 32-dim group scales
-  (YUNSHU_RAGGED_KV=int8)
+  (YUNSHU_KV_PRECISION=int8)
 - ideal_rows: per-row SDPA on exact slices (B launches; lower bound on bytes).
   At B=1 this is plain MLX fast SDPA over the row.
 - ragged_per_head / ragged_int8_per_head: the per-query-head kernel (one

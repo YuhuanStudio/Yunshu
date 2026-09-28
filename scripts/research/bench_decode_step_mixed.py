@@ -31,6 +31,10 @@ from yunshu_engine.mrope import clear_rope_state  # noqa: E402
 
 
 def run(model, processor, tok, a, ragged: str | None, attn_noop: bool):
+    from yunshu_engine.kernels.ragged_kv import enable
+
+    # the batch forms through upstream's merge, ragged from the first join
+    enable(ragged)
     corpus = CORPUS.read_text()
     lengths = [a.long] + [a.short] * (a.rows - 1)
     ids = [
@@ -57,10 +61,6 @@ def run(model, processor, tok, a, ragged: str | None, attn_noop: bool):
         and not gen._unprocessed_sequences
     ):
         gen.next()
-    if ragged:
-        from yunshu_engine.kernels.ragged_kv import convert_batch
-
-        convert_batch(gen._generation_batch.prompt_cache, ragged)
     restore = None
     if attn_noop:
         from mlx_vlm.models.qwen3_5 import language as q35
@@ -86,6 +86,7 @@ def run(model, processor, tok, a, ragged: str | None, attn_noop: bool):
     if restore:
         restore[0].__call__ = restore[1]
     gen.close()
+    enable(None)
     mx.clear_cache()
     return {
         "ragged": ragged,
