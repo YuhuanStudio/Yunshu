@@ -15,9 +15,8 @@ GEN_TOKENS = 128
 
 
 async def _run(auto_quant: str) -> dict:
-    os.environ["YUNSHU_KV_QUANT_AUTO"] = auto_quant
-    # gate is KV-BYTES based; force ON by min_bytes=0 (quantize regardless of size).
-    os.environ["YUNSHU_KV_QUANT_AUTO_MIN_BYTES"] = "0" if auto_quant == "1" else str(10**18)
+    # "1": 8-bit KV regardless of size (what the auto gate picks at long context); else off.
+    os.environ["YUNSHU_KV_QUANT_BITS"] = "8" if auto_quant == "1" else "off"
     from yunshu_engine.batched_engine import BatchedEngine
     eng = BatchedEngine(MODEL)
     await eng.start()

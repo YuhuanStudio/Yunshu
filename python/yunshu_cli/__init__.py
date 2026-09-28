@@ -68,6 +68,7 @@ def _global_options(
 
 from .benchmark import bench_app
 from .chat import chat_app
+from .config import config_app
 from .diagnose import diagnose_app
 from .eval import eval_app
 from .integrations import launch_app
@@ -77,6 +78,7 @@ from .status import status_app
 
 app.add_typer(serve_app, name="serve")
 app.add_typer(chat_app, name="chat")
+app.add_typer(config_app, name="config")
 app.add_typer(model_app, name="model")
 app.add_typer(status_app, name="status")
 app.add_typer(launch_app, name="launch")

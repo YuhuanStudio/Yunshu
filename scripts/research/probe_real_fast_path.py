@@ -14,7 +14,7 @@ from yunshu_engine.batched_engine import BatchedEngine
 async def main():
     if (
         os.environ.get("YUNSHU_ENGINE_LOOP") == "1"
-        or os.environ.get("YUNSHU_TEXT_MTP") == "1"
+        or os.environ.get("YUNSHU_SPEC_UNVERIFIED") == "mlxvlm_mtp"
     ):
         raise SystemExit("Run with default fast path (no ENGINE_LOOP or MTP override)")
     path = Path("models/Qwen2.5-3B-Instruct-4bit")

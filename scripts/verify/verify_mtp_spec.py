@@ -1,6 +1,6 @@
 """MTP speculative-decoding gate (small Qwen3.5 with mtp-weights).
 
-The production MTP path is mlx-vlm (YUNSHU_TEXT_MTP=1): in chat(), greedy decode uses
+The production MTP path is mlx-vlm (YUNSHU_SPEC_UNVERIFIED=mlxvlm_mtp): in chat(), greedy decode uses
 the multi-token-prediction heads to draft+verify, which must be LOSSLESS — i.e.
 bit-identical to plain greedy decode (the target verifies every drafted token).
 
@@ -11,7 +11,7 @@ Qwen3.5-0.8B ships mtp-weights.safetensors, so MTP is testable on a SMALL model
  (2) MTP greedy output == plain greedy output (toggle _mlxvlm_mtp off for the ref).
  (3) MTP output is non-degenerate.
 
-Run: PYTHONPATH=.:reference/mlx-vlm YUNSHU_TEXT_MTP=1 uv run python scripts/verify_mtp_spec.py
+Run: PYTHONPATH=.:reference/mlx-vlm YUNSHU_SPEC_UNVERIFIED=mlxvlm_mtp uv run python scripts/verify_mtp_spec.py
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ import asyncio
 import os
 import sys
 
-os.environ.setdefault("YUNSHU_TEXT_MTP", "1")
+os.environ.setdefault("YUNSHU_SPEC_UNVERIFIED", "mlxvlm_mtp")
 # The backend's is_mtp_capable() requires the native MTP head in the main weight
 # index — only the Qwen3.6-27B-MTP checkpoint qualifies (the small Qwen3.5 keep
 # MTP in a separate mtp-weights.safetensors the index-check doesn't see). 27B-4bit
@@ -47,7 +47,7 @@ async def main() -> int:
 
     if getattr(eng, "_mlxvlm_mtp", None) is None:
         await eng.stop()
-        print("SKIP: MTP backend not loaded (model not MTP-capable or YUNSHU_TEXT_MTP unset)")
+        print("SKIP: MTP backend not loaded (model not MTP-capable or YUNSHU_SPEC_UNVERIFIED unset)")
         return 0
 
     # The MTP backend IS the model (it skips the standard dual-load), so a

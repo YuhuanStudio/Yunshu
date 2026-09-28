@@ -66,7 +66,7 @@ TECHNIQUES = [
     ("KV-prefix cache SSD tier", "GATED", "cache-tier matrix (all models)",
      ["Qwen2.5-3B"], "Net-negative for fast-prefill models (documented)."),
     ("KV-prefix hybrid (Qwen3.5)", "GATED", "cache-lossless: VLM text (GLM-OCR + gemma)",
-     ["Qwen3.5"], "Boundary-snapshot reuse; opt-in YUNSHU_HYBRID_PREFIX=1."),
+     ["Qwen3.5"], "Boundary-snapshot reuse (always on)."),
     ("gemma-4 assistant-drafter spec decode", "GATED", "spec-decode lossless (gemma-4)",
      ["gemma-4-assistant"], "THE production spec win — an EAGLE-style ASSISTANT DRAFTER "
      "(NOT MTP), 2.13x lossless greedy measured live. Note: 'MTP' proper (home-grown "

@@ -177,8 +177,9 @@ Yunshu 的矩阵比旧测试多两项:logprobs 与流式推理分离。长期基
 
 ## 配置
 
-环境变量与 `yunshu serve` 参数见 [配置参考](docs/CONFIGURATION.md),包含 runner 相关设置
-(`YUNSHU_VLM_APC_*`、`YUNSHU_MTP*`、`YUNSHU_VLM_DRAFT`、`YUNSHU_VLM_INVARIANT`)。
+所有设置都是 [配置参考](docs/CONFIGURATION.md) 列出的 `YUNSHU_*` 名称(由同一份注册表生成)。
+可用环境变量、TOML 文件(`yunshu serve --config yunshu.toml`)或 `yunshu serve --set KEY=VALUE`
+设置;`yunshu config` 显示每项的生效值与来源。值无法解析会中止启动,拼错的名称会收到警告。
 
 ## 构建于
 

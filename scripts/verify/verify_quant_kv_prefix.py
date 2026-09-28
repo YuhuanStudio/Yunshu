@@ -64,7 +64,6 @@ async def fresh(model, kv_quant=None):
     # set the KV-quant env BEFORE constructing the engine (read in start())
     if kv_quant:
         os.environ["YUNSHU_KV_QUANT_BITS"] = str(kv_quant)
-        os.environ["YUNSHU_KV_QUANT_START"] = "0"
     else:
         os.environ.pop("YUNSHU_KV_QUANT_BITS", None)
     from yunshu_engine.batched_engine import BatchedEngine

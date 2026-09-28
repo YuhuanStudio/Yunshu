@@ -65,10 +65,10 @@ def serve(
         "--max-memory",
         help="Max GPU memory for models (e.g., 32GB, 'disabled'). Default: 80%% of system.",
     ),
-    completion_batch_size: int = typer.Option(
-        32,
+    completion_batch_size: int | None = typer.Option(
+        None,
         "--completion-batch",
-        help="Completion batch size.",
+        help="Completion batch size (default 32).",
     ),
     max_concurrent: int | None = typer.Option(
         None,
@@ -79,19 +79,16 @@ def serve(
         None,
         "--auth-token",
         help="API bearer token for authentication.",
-        envvar="YUNSHU_AUTH_TOKEN",
     ),
     mcp_config: str | None = typer.Option(
         None,
         "--mcp-config",
         help="Path to MCP configuration file (JSON/YAML).",
-        envvar="YUNSHU_MCP_CONFIG",
     ),
     hf_endpoint: str | None = typer.Option(
         None,
         "--hf-endpoint",
         help="Custom HuggingFace Hub endpoint URL.",
-        envvar="YUNSHU_HF_ENDPOINT",
     ),
     http_proxy: str | None = typer.Option(
         None,
@@ -111,35 +108,30 @@ def serve(
     log_level: str = typer.Option(
         "info", "--log-level", help="Log level (trace|debug|info|warning|error)."
     ),
-    startup_timeout: float = typer.Option(
-        300.0,
+    startup_timeout: float | None = typer.Option(
+        None,
         "--startup-timeout",
         help="Max seconds to wait for model loading before giving up.",
-        envvar="YUNSHU_STARTUP_TIMEOUT",
     ),
-    slow_request_threshold: float = typer.Option(
-        30.0,
+    slow_request_threshold: float | None = typer.Option(
+        None,
         "--slow-request-threshold",
         help="Log a warning for requests exceeding this duration (seconds).",
-        envvar="YUNSHU_SLOW_REQUEST_THRESHOLD",
     ),
-    drain_timeout: float = typer.Option(
-        30.0,
+    drain_timeout: float | None = typer.Option(
+        None,
         "--drain-timeout",
         help="Max seconds to wait for request draining on shutdown.",
-        envvar="YUNSHU_DRAIN_TIMEOUT",
     ),
-    keep_alive_timeout: int = typer.Option(
-        5,
+    keep_alive_timeout: int | None = typer.Option(
+        None,
         "--keep-alive-timeout",
         help="Seconds to keep idle connections alive (0 to disable).",
-        envvar="YUNSHU_KEEP_ALIVE_TIMEOUT",
     ),
-    max_request_size: int = typer.Option(
-        10 * 1024 * 1024,
+    max_request_size: int | None = typer.Option(
+        None,
         "--max-request-size",
-        help="Maximum request body size in bytes (default: 10MB).",
-        envvar="YUNSHU_MAX_REQUEST_SIZE",
+        help="Maximum request body size in bytes (default 10MB).",
     ),
     server_header: bool = typer.Option(
         False,
@@ -151,25 +143,68 @@ def serve(
         "--reload",
         help="Enable auto-reload (development mode).",
     ),
+    config: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="TOML file of YUNSHU_* settings (see docs/CONFIGURATION.md).",
+    ),
+    set_: list[str] = typer.Option(
+        [],
+        "--set",
+        help="Override a setting: --set KEY=VALUE (repeatable; KEY with or "
+        "without the YUNSHU_ prefix).",
+    ),
 ):
     """Start Yunshu inference server."""
     import uvicorn
 
-    # Build environment
+    # Flags and --set become highest-precedence settings. They are also
+    # exported so worker/reload subprocesses see them.
+    overrides: dict[str, object] = {}
+    if config:
+        overrides["YUNSHU_CONFIG"] = os.path.abspath(os.path.expanduser(config))
+    for key, value in (
+        ("YUNSHU_MODEL", model),
+        ("YUNSHU_MODELS_DIR", models_dir),
+        ("YUNSHU_MULTI_MODEL", True if models_dir else None),
+        ("YUNSHU_MAX_MEMORY_GB", max_memory),
+        ("YUNSHU_AUTH_TOKEN", auth_token),
+        ("YUNSHU_MCP_CONFIG", mcp_config),
+        ("YUNSHU_HF_ENDPOINT", hf_endpoint),
+        ("YUNSHU_MAX_CONCURRENT", max_concurrent),
+        ("YUNSHU_COMPLETION_BATCH_SIZE", completion_batch_size),
+        ("YUNSHU_STARTUP_TIMEOUT", startup_timeout),
+        ("YUNSHU_SLOW_REQUEST_THRESHOLD", slow_request_threshold),
+        ("YUNSHU_DRAIN_TIMEOUT", drain_timeout),
+        ("YUNSHU_KEEP_ALIVE_TIMEOUT", keep_alive_timeout),
+        ("YUNSHU_MAX_REQUEST_SIZE", max_request_size),
+    ):
+        if value is not None:
+            overrides[key] = value
+    for item in set_:
+        key, sep, value = item.partition("=")
+        name = settings._normalize_key(key)
+        if not sep or name not in settings.REGISTRY:
+            close = settings.close_matches(name)
+            hint = f" (did you mean {', '.join(close)}?)" if close else ""
+            console.print(f"[red]Error:[/] --set {item!r}: unknown setting{hint}")
+            raise typer.Exit(2)
+        overrides[name] = value
+    for key, value in overrides.items():
+        settings.set_override(key, value)
+    try:
+        for warning in settings.validate(warn=False):
+            console.print(f"[yellow]Warning:[/] {warning}")
+    except settings.SettingError as exc:
+        console.print(f"[red]Error:[/] {exc}")
+        raise typer.Exit(2) from None
+
     env = os.environ.copy()
-    if model:
-        env["YUNSHU_MODEL"] = model
-    if models_dir:
-        env["YUNSHU_MULTI_MODEL"] = "1"
-        env["YUNSHU_MODELS_DIR"] = models_dir
-    if max_memory:
-        env["YUNSHU_MAX_MEMORY_GB"] = max_memory
-    if auth_token:
-        env["YUNSHU_AUTH_TOKEN"] = auth_token
-    if mcp_config:
-        env["YUNSHU_MCP_CONFIG"] = mcp_config
-    if hf_endpoint:
-        env["HF_ENDPOINT"] = hf_endpoint
+    env.update({k: settings._to_text(v) for k, v in overrides.items()})
+    hf = settings.get("YUNSHU_HF_ENDPOINT")
+    if hf:
+        env["HF_ENDPOINT"] = hf
     if http_proxy:
         env["HTTP_PROXY"] = http_proxy
         env["http_proxy"] = http_proxy
@@ -179,31 +214,19 @@ def serve(
     if no_proxy:
         env["NO_PROXY"] = no_proxy
         env["no_proxy"] = no_proxy
-    if max_concurrent is not None:
-        env["YUNSHU_MAX_CONCURRENT"] = str(max_concurrent)
-    env["YUNSHU_COMPLETION_BATCH_SIZE"] = str(completion_batch_size)
-    env["YUNSHU_STARTUP_TIMEOUT"] = str(startup_timeout)
-    env["YUNSHU_SLOW_REQUEST_THRESHOLD"] = str(slow_request_threshold)
-    env["YUNSHU_DRAIN_TIMEOUT"] = str(drain_timeout)
-    env["YUNSHU_KEEP_ALIVE_TIMEOUT"] = str(keep_alive_timeout)
-    env["YUNSHU_MAX_REQUEST_SIZE"] = str(max_request_size)
 
-    # Determine effective model source
-    effective_model = model or settings.get("YUNSHU_MODEL")
-    effective_dir = models_dir or settings.get("YUNSHU_MODELS_DIR")
-    is_multi = effective_dir is not None or (settings.get_bool("YUNSHU_MULTI_MODEL"))
+    effective_model = settings.get("YUNSHU_MODEL")
+    effective_dir = settings.get("YUNSHU_MODELS_DIR")
+    is_multi = not effective_model and (
+        effective_dir is not None or settings.get_bool("YUNSHU_MULTI_MODEL")
+    )
 
     # Native speech-to-speech is automatic: serving an omni model (one that has a
     # Talker) lights up the voice path by REUSING that same loaded model — no flag,
-    # no second copy. Voice is off only for non-omni models or YUNSHU_REALTIME_OMNI=0.
-    _omni_off = env.get("YUNSHU_REALTIME_OMNI", "").strip().lower() in (
-        "0",
-        "false",
-        "no",
-        "off",
-    )
+    # no second copy. Voice is off only for non-omni models or YUNSHU_REALTIME_OMNI=off.
+    _omni_off = settings.get("YUNSHU_REALTIME_OMNI") in ("0", "false", "no", "off")
     voice_on = not _omni_off and (
-        bool(env.get("YUNSHU_OMNI_MODEL")) or _is_omni_model(effective_model)
+        bool(settings.get("YUNSHU_OMNI_MODEL")) or _is_omni_model(effective_model)
     )
 
     # Display startup info
@@ -213,9 +236,9 @@ def serve(
         is_multi=is_multi,
         host=host,
         port=port,
-        completion_batch=completion_batch_size,
-        mcp_config=mcp_config,
-        hf_endpoint=hf_endpoint,
+        completion_batch=settings.get("YUNSHU_COMPLETION_BATCH_SIZE"),
+        mcp_config=settings.get("YUNSHU_MCP_CONFIG"),
+        hf_endpoint=hf,
         has_proxy=bool(http_proxy or https_proxy),
         voice_on=voice_on,
     )
@@ -244,7 +267,7 @@ def serve(
         log_level=log_level,
         reload=reload,
         factory=False,
-        timeout_keep_alive=keep_alive_timeout,
+        timeout_keep_alive=settings.get("YUNSHU_KEEP_ALIVE_TIMEOUT"),
         # NB: uvicorn.run has no request-size limit kwarg; the limit is enforced
         # by the gateway middleware via YUNSHU_MAX_REQUEST_SIZE (set above).
         server_header="Yunshu" if server_header else None,

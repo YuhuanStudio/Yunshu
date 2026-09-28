@@ -389,6 +389,11 @@ def is_set(name: str) -> bool:
 # ── validation and reporting ───────────────────────────────────────────
 
 
+def close_matches(name: str) -> list[str]:
+    """Registered names closest to ``name`` (typo hints)."""
+    return difflib.get_close_matches(name, REGISTRY, n=3, cutoff=0.6)
+
+
 def unknown_names(
     environ: Mapping[str, str] | None = None,
 ) -> list[tuple[str, list[str]]]:
@@ -398,7 +403,7 @@ def unknown_names(
     names = {k for k in env if k.startswith("YUNSHU_")} | set(_file())
     out = []
     for name in sorted(names - REGISTRY.keys()):
-        out.append((name, difflib.get_close_matches(name, REGISTRY, n=3, cutoff=0.6)))
+        out.append((name, close_matches(name)))
     return out
 
 

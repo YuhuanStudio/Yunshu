@@ -188,9 +188,11 @@ time. Every response returns as soon as its own generation finishes.
 
 ## Configuration
 
-Environment variables and `yunshu serve` flags are in the
-[configuration reference](docs/CONFIGURATION.md), including the runner knobs
-(`YUNSHU_VLM_APC_*`, `YUNSHU_MTP*`, `YUNSHU_VLM_DRAFT`, `YUNSHU_VLM_INVARIANT`).
+Every setting is a `YUNSHU_*` name listed in the
+[configuration reference](docs/CONFIGURATION.md) (generated from one registry). Set it as an
+environment variable, in a TOML file (`yunshu serve --config yunshu.toml`), or with
+`yunshu serve --set KEY=VALUE`; `yunshu config` shows each effective value and where it came
+from. A bad value stops startup; a misspelled name gets a warning.
 
 ## Built on
 

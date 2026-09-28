@@ -26,6 +26,12 @@ Describe only what the code verifiably does.
 Flat layout: `python/{yunshu_gateway,yunshu_engine,yunshu_kv,yunshu_cli}/`, `tests/`, `scripts/`, `docs/`.
 (`yunshu_control` stays only for `audit_log` and `token_counter`; the mesh/API/multi-tenant packages are gone.)
 
+Settings: every `YUNSHU_*` setting goes through `python/yunshu_engine/settings.py` — never read one with
+`os.environ`/`getenv` (a unit test enforces it). Add a new flag there, then run
+`uv run python scripts/gen_config_docs.py` to regenerate `docs/CONFIGURATION.md`. Experimental flags are
+temporary: each needs `decide=` (the measurement that settles it) and `added=`, at most 8 exist, and once
+measured the winner becomes the default and the flag plus the losing path are deleted.
+
 ```bash
 just setup        # uv install
 just dev          # dev server on :8000 (YUNSHU_MODEL=/path/to/mlx-model)

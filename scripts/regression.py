@@ -256,7 +256,7 @@ def _sections():
          [PY, "scripts/bench/bench_realistic_cache.py"], {"PYTHONPATH": VLM_PP,
           "YUNSHU_BENCH_MODEL": "./models/Qwen2.5-3B-Instruct-bf16"}, _p_metrics("REALISTIC")),
         ("MTP spec decode (Qwen3.6-27B production path, coherent)", "full", True,
-         [PY, "scripts/verify/verify_mtp_spec.py"], {"YUNSHU_TEXT_MTP": "1", "PYTHONPATH": VLM_PP}, _p_passfail_skip),
+         [PY, "scripts/verify/verify_mtp_spec.py"], {"YUNSHU_SPEC_UNVERIFIED": "mlxvlm_mtp", "PYTHONPATH": VLM_PP}, _p_passfail_skip),
         # (methodology): the PRIMARY cross-framework comparison is ALL-EXTERNAL
         # (server bench below) — only real HTTP servers are a fair, production-truthful
         # measure. This in-process bench is the OTHER half: EVERY framework measured
@@ -466,9 +466,9 @@ HOT/WARM tiers.
 
 **SSD tier IS net-negative for fast-prefill models** (the one real cache-cost case).
 GLM-OCR (prefill ~6300 t/s) restores from SSD slower than it re-prefills → F-SSD
-0.93×. Auto-gated by `YUNSHU_SSD_PREFILL_TPS_CEIL` (default 4000 t/s): when a model's
+0.93×. Auto-gated by a prefill-throughput ceiling (4000 t/s): when a model's
 measured prefill throughput exceeds the ceiling, the SSD restore is skipped in favour
-of re-prefill. `YUNSHU_SSD_RESTORE_MIN_TOKENS` also gates by prefix size (default 0).
+of re-prefill.
 Standard-attention models get weaker SSD (Qwen2.5-3B 2.16× vs HOT 5.92×) because
 full-precision KV is large on disk — still positive, just not gated.
 

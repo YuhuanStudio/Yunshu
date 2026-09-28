@@ -1,5 +1,5 @@
 import asyncio, os
-os.environ["YUNSHU_KV_QUANT_AUTO_THRESHOLD"] = "8"  # force quant on a short prompt
+os.environ["YUNSHU_KV_QUANT_BITS"] = "8"  # force quant on a short prompt
 MODEL = "mlx-community/Qwen2.5-0.5B-Instruct-4bit"
 async def main():
     from yunshu_engine.batched_engine import BatchedEngine
@@ -14,7 +14,7 @@ async def main():
     print("[KV-quant active] output:", repr(r.text[:80]))
     assert r.text.strip() and any(d in r.text for d in "12345"), f"incoherent: {r.text!r}"
     # opt-out
-    os.environ["YUNSHU_KV_QUANT_AUTO"] = "0"
+    os.environ["YUNSHU_KV_QUANT_BITS"] = "off"
     assert eng._effective_kv_quant_bits(100000) is None, "opt-out must disable"
     await eng.stop()
     print("\nW740 length-gated KV-quant smoke: PASS")

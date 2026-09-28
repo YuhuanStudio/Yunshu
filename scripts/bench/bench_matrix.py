@@ -23,7 +23,7 @@ CONFIGS=[
  ("yunshu-fast",        "_fw_yunshu.py", {"FW":"yunshu-fast"}, "YBENCH_MODEL", SELF, "."),
  ("yunshu-loop",        "_fw_yunshu.py", {"FW":"yunshu-loop","YUNSHU_ENGINE_LOOP":"1"}, "YBENCH_MODEL", SELF, "."),
  ("yunshu-loop+kvq4",   "_fw_yunshu.py", {"FW":"y","YUNSHU_ENGINE_LOOP":"1","YUNSHU_KV_QUANT_BITS":"4"}, "YBENCH_MODEL", SELF, "."),
- ("yunshu-loop+hybpfx", "_fw_yunshu.py", {"FW":"y","YUNSHU_ENGINE_LOOP":"1","YUNSHU_HYBRID_PREFIX":"1"}, "YBENCH_MODEL", SELF, "."),
+ ("yunshu-loop+hybpfx", "_fw_yunshu.py", {"FW":"y","YUNSHU_ENGINE_LOOP":"1"}, "YBENCH_MODEL", SELF, "."),
  ("mlx-lm",             "_fw_mlxlm.py",  {}, "YBENCH_MODEL", SELF, "."),
  ("vllm-mlx",           "_fw_vllmmlx.py",{}, "YBENCH_MODEL", SELF, "."),
  ("oMLX",               "_fw_omlx.py",   {}, "OMLX_MODEL", OMLXPY, "./reference/omlx"),
