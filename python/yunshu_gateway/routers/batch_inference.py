@@ -17,7 +17,6 @@ import asyncio
 import csv
 import io
 import logging
-import os
 import threading
 import time
 import uuid
@@ -31,19 +30,16 @@ logger = logging.getLogger(__name__)
 import contextlib
 
 from yunshu_control.audit_log import log_operation, resolve_actor
+from yunshu_engine import settings
 
 router = APIRouter(tags=["batch"])
 
 # Configurable limits
-_BATCH_MAX_ITEMS = int(os.environ.get("YUNSHU_BATCH_MAX_ITEMS", "500"))
-_BATCH_DEFAULT_TIMEOUT = float(os.environ.get("YUNSHU_BATCH_TIMEOUT", "300"))
-_BATCH_MAX_CSV_SIZE = int(
-    os.environ.get("YUNSHU_BATCH_MAX_CSV_SIZE", str(50 * 1024 * 1024))
-)  # 50 MB
-_BATCH_STORE_TTL = int(
-    os.environ.get("YUNSHU_BATCH_STORE_TTL", "3600")
-)  # 1 hour default
-_BATCH_STORE_MAX_SIZE = int(os.environ.get("YUNSHU_BATCH_STORE_MAX_SIZE", "1000"))
+_BATCH_MAX_ITEMS = settings.get("YUNSHU_BATCH_MAX_ITEMS")
+_BATCH_DEFAULT_TIMEOUT = settings.get("YUNSHU_BATCH_TIMEOUT")
+_BATCH_MAX_CSV_SIZE = 50 * 1024 * 1024  # 50 MB
+_BATCH_STORE_TTL = 3600  # 1 hour
+_BATCH_STORE_MAX_SIZE = 1000
 
 # In-memory progress tracking
 _batch_store: dict[str, dict] = {}
@@ -591,7 +587,7 @@ async def upload_batch_csv(
     if len(content) > _BATCH_MAX_CSV_SIZE:
         raise HTTPException(
             status_code=400,
-            detail=f"CSV file too large: {len(content)} bytes exceeds limit of {_BATCH_MAX_CSV_SIZE} bytes (set YUNSHU_BATCH_MAX_CSV_SIZE env var)",
+            detail=f"CSV file too large: {len(content)} bytes exceeds limit of {_BATCH_MAX_CSV_SIZE} bytes",
         )
     # a non-UTF-8 upload raised an uncaught UnicodeDecodeError → 500. Return a
     # clean 400 for the malformed-input case instead.

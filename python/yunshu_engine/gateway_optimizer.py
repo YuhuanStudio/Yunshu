@@ -16,11 +16,12 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
+
+from . import settings
 
 logger = logging.getLogger(__name__)
 
@@ -410,7 +411,7 @@ class ResponseCache:
         self._ttl = ttl
         self._max_entries = max_entries
         self._max_memory = max_memory_bytes
-        self._enabled = os.environ.get("YUNSHU_RESPONSE_CACHE", "").strip() == "1"
+        self._enabled = settings.get_bool("YUNSHU_RESPONSE_CACHE")
         self._entries: dict[str, _CacheEntry] = {}
         # OrderedDict for O(1) LRU: front = oldest, back = newest
         self._lru: OrderedDict[str, None] = OrderedDict()

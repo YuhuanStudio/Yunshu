@@ -1,7 +1,5 @@
 """Tests for per-model settings integration with BatchedEngine."""
 
-import os
-
 
 class TestModelSettingsLoadApply:
     def test_load_model_settings_defaults(self, tmp_path):
@@ -31,20 +29,6 @@ class TestModelSettingsLoadApply:
         assert settings.max_tokens == 8192
         assert settings.temperature == 0.5
         assert settings.kv_cache_quant_bits == 4
-
-    def test_env_overrides_json(self, tmp_path):
-        import json
-
-        from yunshu_engine.model_settings import load_model_settings
-
-        settings_file = tmp_path / "model_settings.json"
-        settings_file.write_text(json.dumps({"max_tokens": 8192}))
-        os.environ["YUNSHU_MODEL_TEST_MODEL_MAX_TOKENS"] = "16384"
-        try:
-            settings = load_model_settings(str(tmp_path), "test-model")
-            assert settings.max_tokens == 16384
-        finally:
-            del os.environ["YUNSHU_MODEL_TEST_MODEL_MAX_TOKENS"]
 
     def test_apply_overrides(self):
         from yunshu_engine.model_settings import ModelSettings

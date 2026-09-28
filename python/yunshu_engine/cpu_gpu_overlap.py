@@ -25,7 +25,6 @@ Integration:
 """
 
 import logging
-import os
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -54,18 +53,6 @@ class OverlapConfig:
     overlap_response_dist: bool = False
     sync_timeout_ms: float = 100.0
     metrics_window: int = 100
-
-    @classmethod
-    def from_env(cls) -> OverlapConfig:
-        """Create config from environment variables."""
-        return cls(
-            enabled=os.environ.get("YUNSHU_CPU_GPU_OVERLAP", "0") == "1",
-            async_eval=os.environ.get("YUNSHU_ASYNC_EVAL", "1") == "1",
-            overlap_detokenize=os.environ.get("YUNSHU_OVERLAP_DETOKENIZE", "1") == "1",
-            overlap_grammar=os.environ.get("YUNSHU_OVERLAP_GRAMMAR", "1") == "1",
-            overlap_response_dist=os.environ.get("YUNSHU_OVERLAP_RESPONSE_DIST", "0")
-            == "1",
-        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -180,7 +167,7 @@ class OverlapScheduler:
     """
 
     def __init__(self, config: OverlapConfig | None = None) -> None:
-        self._config = config or OverlapConfig.from_env()
+        self._config = config or OverlapConfig()
         self._metrics = OverlapMetrics()
         self._pending_outputs: list[Any] | None = None
         self._gpu_pending: bool = False

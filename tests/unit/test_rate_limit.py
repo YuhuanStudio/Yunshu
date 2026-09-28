@@ -1,8 +1,7 @@
 """Tests for Yunshu Rate Limiting — LRU eviction, TTL expiry, and memory safety."""
 
-import os
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from yunshu_gateway.middleware.rate_limit import (
     RateLimitMiddleware,
@@ -171,18 +170,6 @@ class TestRateLimitMiddlewareInit:
         app = MagicMock()
         mw = RateLimitMiddleware(app, rpm=60)
         assert mw._rpm == 60
-
-    def test_env_override_max_buckets(self):
-        app = MagicMock()
-        with patch.dict(os.environ, {"YUNSHU_RATE_LIMIT_MAX_BUCKETS": "500"}):
-            mw = RateLimitMiddleware(app)
-        assert mw._bucket_cache._max_buckets == 500
-
-    def test_env_override_ttl(self):
-        app = MagicMock()
-        with patch.dict(os.environ, {"YUNSHU_RATE_LIMIT_TTL_SECONDS": "300"}):
-            mw = RateLimitMiddleware(app)
-        assert mw._bucket_cache._ttl == 300.0
 
 
 class TestRateLimitMiddlewareNoGrowth:

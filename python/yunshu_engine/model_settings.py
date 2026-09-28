@@ -1,19 +1,14 @@
 """Per-Model Settings — configurable runtime parameters per model.
 
 Inspired by oMLX's per-model config system. Each registered model can
-have its own settings that override global defaults. Settings are:
-
-1. Set via API (admin endpoint)
-2. Loaded from model directory (model_settings.json)
-3. Overridden by environment variables (YUNSHU_MODEL_{ID}_*)
+have its own settings that override global defaults, loaded from the model
+directory (model_settings.json) on top of adaptive hardware defaults.
 
 Settings are applied when loading the engine and can be hot-reloaded.
 """
 
-import contextlib
 import json
 import logging
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -25,10 +20,8 @@ logger = logging.getLogger(__name__)
 class ModelSettings:
     """Per-model runtime configuration.
 
-    All fields have sensible defaults. Override via:
-    - admin API: PUT /admin/models/{id}/settings
-    - model directory: model_settings.json
-    - env var: YUNSHU_MODEL_{MODEL_ID}_{FIELD}
+    All fields have sensible defaults. Override via model_settings.json in
+    the model directory.
     """
 
     # ── Generation defaults ──
@@ -165,19 +158,14 @@ def load_model_settings(
     """Load per-model settings from model directory or env vars.
 
     Priority (highest to lowest):
-    1. Environment variable overrides
-    2. model_settings.json in model directory
-    3. Adaptive hardware defaults (if use_adaptive=True)
-    4. Defaults
+    1. model_settings.json in model directory
+    2. Adaptive hardware defaults (if use_adaptive=True)
+    3. Defaults
     """
     settings = ModelSettings()
 
     # 3. Apply adaptive hardware defaults (lowest priority override)
-    if use_adaptive and os.environ.get("YUNSHU_ADAPTIVE_DEFAULTS", "1").strip() not in (
-        "0",
-        "false",
-        "no",
-    ):
+    if use_adaptive:
         try:
             from yunshu_engine.utils.hardware import compute_adaptive_defaults
 
@@ -204,33 +192,5 @@ def load_model_settings(
             logger.debug(
                 f"Failed to load model settings from {settings_path}", exc_info=True
             )
-
-    # 1. Override from env vars: YUNSHU_MODEL_{SANITIZED_ID}_{FIELD}
-    env_prefix = f"YUNSHU_MODEL_{model_id.upper().replace('-', '_').replace('.', '_').replace('/', '_')}_"
-    env_overrides: dict[str, Any] = {}
-    for env_key, env_val in os.environ.items():
-        if env_key.startswith(env_prefix):
-            field_name = env_key[len(env_prefix) :].lower()
-            if field_name in settings.__dataclass_fields__:
-                try:
-                    # Parse booleans and ints
-                    val: Any = env_val
-                    if env_val.lower() in ("true", "1", "yes"):
-                        val = True
-                    elif env_val.lower() in ("false", "0", "no"):
-                        val = False
-                    elif env_val.isdigit():
-                        val = int(env_val)
-                    else:
-                        with contextlib.suppress(ValueError):
-                            val = float(env_val)
-                    env_overrides[field_name] = val
-                except Exception:
-                    logger.debug("env var parsing failed", exc_info=True)
-
-    if env_overrides:
-        changed = settings.apply_overrides(env_overrides)
-        if changed:
-            logger.info(f"Model {model_id} env overrides: {changed}")
 
     return settings

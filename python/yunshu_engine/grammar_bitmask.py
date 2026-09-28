@@ -41,7 +41,6 @@ Performance characteristics (vs JsonSchemaConstraint allowlist approach):
 
 import json
 import logging
-import os
 import weakref
 from collections.abc import Callable
 from typing import Any
@@ -527,8 +526,10 @@ class BitmaskConstrainedSampler:
 
 
 def is_bitmask_enabled() -> bool:
-    """Check if bitmask engine is enabled via environment variable."""
-    return os.environ.get("YUNSHU_GRAMMAR_BITMASK", "0") == "1"
+    """Check if the bitmask engine is enabled (YUNSHU_GRAMMAR_BITMASK)."""
+    from . import settings
+
+    return settings.get_bool("YUNSHU_GRAMMAR_BITMASK")
 
 
 def build_bitmask_engine(

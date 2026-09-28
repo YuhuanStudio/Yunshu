@@ -12,6 +12,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from yunshu_engine import settings
+
 console = Console()
 
 serve_app = typer.Typer(help="Start inference server.", no_args_is_help=True)
@@ -187,11 +189,9 @@ def serve(
     env["YUNSHU_MAX_REQUEST_SIZE"] = str(max_request_size)
 
     # Determine effective model source
-    effective_model = model or os.environ.get("YUNSHU_MODEL")
-    effective_dir = models_dir or os.environ.get("YUNSHU_MODELS_DIR")
-    is_multi = effective_dir is not None or (
-        os.environ.get("YUNSHU_MULTI_MODEL", "").strip().lower() in ("1", "true", "yes")
-    )
+    effective_model = model or settings.get("YUNSHU_MODEL")
+    effective_dir = models_dir or settings.get("YUNSHU_MODELS_DIR")
+    is_multi = effective_dir is not None or (settings.get_bool("YUNSHU_MULTI_MODEL"))
 
     # Native speech-to-speech is automatic: serving an omni model (one that has a
     # Talker) lights up the voice path by REUSING that same loaded model — no flag,

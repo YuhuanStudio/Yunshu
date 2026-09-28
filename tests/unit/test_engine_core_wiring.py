@@ -98,14 +98,6 @@ class TestEngineCoreWiring:
         assert core._auto_tuner is not None
         assert core._adaptive_batch_sizer is not None
 
-    def test_dedup_disabled_by_default(self):
-        core = _make_core()
-        assert core._request_dedup is None
-
-    def test_dedup_enabled_via_env(self):
-        core = _make_core(YUNSHU_REQUEST_DEDUP="1")
-        assert core._request_dedup is not None
-
     def test_composition_scheduler_field_exists(self):
         core = _make_core()
         assert hasattr(core, "_composition_scheduler")
@@ -166,19 +158,6 @@ class TestLifecycleWiringInAddRequest:
         assert state.phase in (RequestPhase.QUEUED, RequestPhase.PREFILLING)
 
 
-class TestDedupWiringInAddRequest:
-    """Test that add_request() uses dedup when enabled."""
-
-    @pytest.mark.asyncio
-    async def test_dedup_registers_request(self):
-        core = _make_core(YUNSHU_REQUEST_DEDUP="1")
-        core._wake_event = asyncio.Event()
-        core._running = True  # Engine must be running to accept requests
-
-        req_id = await core.add_request(prompt="hello", max_tokens=100)
-        assert req_id in core._dedup_hashes
-
-
 class TestBatchedEngineWiring:
     """Test BatchedEngine wires preprocessor registry."""
 
@@ -201,7 +180,7 @@ class TestCrossModuleIntegration:
     """Test that wired modules interact correctly with each other."""
 
     def test_lifecycle_concurrency_from_env(self):
-        core = _make_core(YUNSHU_CONCURRENCY_MAX="4")
+        core = _make_core(YUNSHU_MAX_CONCURRENT="4")
         assert core._lifecycle_orchestrator._concurrency._maximum == 4
 
     def test_budget_from_env(self):

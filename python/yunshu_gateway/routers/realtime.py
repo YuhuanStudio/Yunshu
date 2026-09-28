@@ -19,6 +19,8 @@ import uuid
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from yunshu_engine import settings
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["realtime"])
@@ -30,15 +32,9 @@ router = APIRouter(tags=["realtime"])
 # server-VAD never hits the silence window — grows it without limit (and g711 input is
 # 2x-amplified on decode). Any can_infer key can reach the WS, making this a memory-
 # growth/DoS vector (the 36GB-Mac SIGABRT class). Default ~10MB ≈ 3.5 min @ 24kHz/16-bit
-# — generous for a real utterance, bounded against runaway. Env-tunable.
+# — generous for a real utterance, bounded against runaway. Configurable.
 def _max_input_audio_bytes() -> int:
-    import os
-
-    try:
-        v = int(os.environ.get("YUNSHU_REALTIME_MAX_INPUT_AUDIO_BYTES", "10485760"))
-        return v if v > 0 else 10485760
-    except (TypeError, ValueError):
-        return 10485760
+    return settings.get("YUNSHU_REALTIME_MAX_INPUT_AUDIO_BYTES")
 
 
 _OPENAI_STD_VOICES = {
@@ -83,20 +79,12 @@ def _default_turn_detection() -> dict:
       (lower = easier to interrupt, but a cough/blip can kill a reply).
     - threshold / prefix_padding_ms: VAD sensitivity / lead-in kept before speech.
     """
-    import os
-
-    def _num(name: str, default, cast):
-        try:
-            return cast(os.environ.get(name, default))
-        except (TypeError, ValueError):
-            return cast(default)
-
     return {
         "type": "server_vad",
-        "threshold": _num("YUNSHU_REALTIME_VAD_THRESHOLD", 0.5, float),
-        "prefix_padding_ms": _num("YUNSHU_REALTIME_PREFIX_PADDING_MS", 300, int),
-        "silence_duration_ms": _num("YUNSHU_REALTIME_SILENCE_MS", 500, int),
-        "barge_in_min_ms": _num("YUNSHU_REALTIME_BARGE_IN_MS", 120, int),
+        "threshold": settings.get("YUNSHU_REALTIME_VAD_THRESHOLD"),
+        "prefix_padding_ms": settings.get("YUNSHU_REALTIME_PREFIX_PADDING_MS"),
+        "silence_duration_ms": settings.get("YUNSHU_REALTIME_SILENCE_MS"),
+        "barge_in_min_ms": settings.get("YUNSHU_REALTIME_BARGE_IN_MS"),
     }
 
 
@@ -106,13 +94,7 @@ def _max_conversation_items() -> int:
     # assistant (+ function_call) items and _build_messages replays the WHOLE history into
     # every prompt, so a client flooding conversation.item.create grows RSS without bound and
     # balloons per-prompt cost. Keep the most recent N (oldest evicted, see Conversation.add_item).
-    import os
-
-    try:
-        v = int(os.environ.get("YUNSHU_REALTIME_MAX_CONVERSATION_ITEMS", "1000"))
-        return v if v > 0 else 1000
-    except (TypeError, ValueError):
-        return 1000
+    return settings.get("YUNSHU_REALTIME_MAX_CONVERSATION_ITEMS")
 
 
 # ── Event types ──
@@ -151,17 +133,15 @@ def _event(event_type: str, **kwargs) -> dict:
 def _omni_realtime_enabled() -> bool:
     """Native-omni on the realtime socket. On by default whenever a speakable model
     is available — the served model has a Talker (reused, no second copy), or
-    YUNSHU_OMNI_MODEL points at a dedicated one. ``YUNSHU_REALTIME_OMNI=0`` forces
-    the ASR→LLM→TTS cascade; ``=1`` forces native on. A non-omni model has no Talker,
+    YUNSHU_OMNI_MODEL points at a dedicated one. ``YUNSHU_REALTIME_OMNI=off`` forces
+    the ASR→LLM→TTS cascade; ``=on`` forces native on. A non-omni model has no Talker,
     so this is False for it → cascade, unchanged."""
-    import os
-
-    flag = os.environ.get("YUNSHU_REALTIME_OMNI", "").strip().lower()
+    flag = settings.get("YUNSHU_REALTIME_OMNI")
     if flag in ("0", "false", "no", "off"):
         return False
     if flag in ("1", "true", "yes", "on"):
         return True
-    if os.environ.get("YUNSHU_OMNI_MODEL"):
+    if settings.get("YUNSHU_OMNI_MODEL"):
         return True
     try:
         from .omni import _shared_speakable_model
@@ -233,9 +213,7 @@ _OMNI_DEFAULT_PERSONA = (
 
 def _omni_persona() -> str:
     """The default voice persona; YUNSHU_OMNI_PERSONA overrides it (empty = none)."""
-    import os
-
-    val = os.environ.get("YUNSHU_OMNI_PERSONA")
+    val = settings.get("YUNSHU_OMNI_PERSONA")
     return _OMNI_DEFAULT_PERSONA if val is None else val.strip()
 
 
@@ -408,9 +386,7 @@ _SILERO_REPO = "mlx-community/silero-vad"
 
 
 def _silero_vad_enabled() -> bool:
-    import os
-
-    return os.environ.get("YUNSHU_REALTIME_VAD", "").strip().lower() == "silero"
+    return settings.get("YUNSHU_REALTIME_VAD") == "silero"
 
 
 def _get_silero_vad():
@@ -421,13 +397,9 @@ def _get_silero_vad():
         if not _silero_vad_enabled():
             return None
         try:
-            import os
-
             import mlx_audio.vad as _vad
 
-            _silero_vad = _vad.load(
-                os.environ.get("YUNSHU_REALTIME_VAD_MODEL", _SILERO_REPO)
-            )
+            _silero_vad = _vad.load(settings.get("YUNSHU_REALTIME_VAD_MODEL"))
             logger.info("Realtime VAD: Silero loaded (%s).", _SILERO_REPO)
         except Exception:
             logger.warning(
@@ -3326,9 +3298,7 @@ async def realtime_endpoint(ws: WebSocket):
     using the official SDK will hit the /v1/ path; existing yunshu
     callers keep working on the bare /realtime path.
     """
-    import os
-
-    auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
+    auth_token = settings.get("YUNSHU_AUTH_TOKEN")
 
     # Accept the WebSocket first — Starlette requires accept() before close().
     await ws.accept()
@@ -3336,7 +3306,7 @@ async def realtime_endpoint(ws: WebSocket):
     # Origin validation: reject cross-origin WebSocket connections unless CORS is wildcard
     origin = ws.headers.get("origin", "")
     if origin:
-        cors_origins_str = os.environ.get("YUNSHU_CORS_ORIGINS", "*")
+        cors_origins_str = settings.get("YUNSHU_CORS_ORIGINS")
         if cors_origins_str != "*":
             allowed = {
                 o.strip().rstrip("/") for o in cors_origins_str.split(",") if o.strip()
@@ -3350,11 +3320,8 @@ async def realtime_endpoint(ws: WebSocket):
     # the REST middleware policy in main.py). Single-consumer model: only the
     # static YUNSHU_AUTH_TOKEN gate is honored; the RBAC WebSocket path has
     # been removed.
-    auth_disabled = os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in (
-        "true",
-        "1",
-        "yes",
-    )
+    auth_disabled = settings.get_bool("YUNSHU_AUTH_DISABLED")
+
     auth_required = bool(auth_token) and not auth_disabled
 
     if auth_required:

@@ -180,13 +180,11 @@ class TestInferenceBudgetManager:
             "os.environ",
             {
                 "YUNSHU_DEFAULT_MAX_TOKENS": "1024",
-                "YUNSHU_MAX_WALL_TIME_MS": "60000.0",
             },
         ):
             mgr = InferenceBudgetManager.from_env()
             budget = mgr.register("r1")
             assert budget.max_tokens == 1024
-            assert budget.max_wall_time_ms == 60000.0
 
     def test_stats(self):
         mgr = InferenceBudgetManager()

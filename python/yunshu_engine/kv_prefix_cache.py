@@ -346,14 +346,7 @@ class KVPrefixCache:
         # prefilling. Skip the disk read when the candidate prefix is below this
         # many tokens. Default 0 = always restore (preserves prior behaviour);
         # operators on fast-prefill models can raise it (e.g. 512).
-        import os as _os_kvp
-
-        try:
-            self._ssd_restore_min_tokens = int(
-                _os_kvp.environ.get("YUNSHU_SSD_RESTORE_MIN_TOKENS", "0")
-            )
-        except (TypeError, ValueError):
-            self._ssd_restore_min_tokens = 0
+        self._ssd_restore_min_tokens = 0
         # SSD prefill-speed auto-gate: for fast-prefill models, reading
         # a prefix back from disk + dequant is SLOWER than just re-prefilling
         # (measured GLM-OCR ~6300 t/s → F-SSD 0.93×, net-negative). When the model's
@@ -362,14 +355,9 @@ class KVPrefixCache:
         # (0.8B 2947→2.0×, 9B 430→7.8×) and only drops it for blazing ones (GLM).
         # _prefill_tps is fed by the engine via note_prefill_tps(); None = unknown
         # (no gate, preserves prior behaviour).
-        try:
-            self._ssd_prefill_tps_ceil = float(
-                _os_kvp.environ.get("YUNSHU_SSD_PREFILL_TPS_CEIL", "4000")
-            )
-        except (TypeError, ValueError):
-            self._ssd_prefill_tps_ceil = 4000.0
+        self._ssd_prefill_tps_ceil = 4000.0
         self._prefill_tps: float | None = None
-        # Pre-eviction callback for DeltaNet inversion (set by BatchedEngine)
+        # Pre-eviction callback (unused by default)
         self._pre_evict_callback: Any | None = None
         # Block eviction checker: callable(block_hash) -> bool (e.g., MemoryGuard.should_evict_block)
         self._block_evict_checker: Any | None = None
@@ -1707,30 +1695,6 @@ class KVPrefixCache:
         except Exception:
             logger.warning("SSD multi-block reassembly failed", exc_info=True)
             return None, 0
-
-    def try_ssd_restore(self, block_hash: bytes) -> list | None:
-        """Try to restore a block from SSD cache (GUARDED OFF by default).
-
-        The SSD SAVE path is now fixed+verified (persists
-        int8-quantized KV blocks), but the RESTORE is incomplete — the get()
-        caller restores only a SINGLE 64-token block and the reconstructed
-        single-block structure is not a valid cache for insert_segments, so it
-        produced EMPTY output. A correct restore needs multi-block reassembly
-        into a contiguous offset-correct cache + int8 dequant (lossy by design).
-        Until that exists, return None so a miss falls back to a correct full
-        prefill. Enable experimentally with YUNSHU_SSD_KV_RESTORE=1.
-        """
-        if self._ssd_cache is None:
-            return None
-        import os
-
-        if os.environ.get("YUNSHU_SSD_KV_RESTORE", "").strip() not in (
-            "1",
-            "true",
-            "yes",
-        ):
-            return None
-        return self._ssd_cache.load_block(block_hash)
 
     def close(self) -> None:
         """Flush SSD cache and release resources."""

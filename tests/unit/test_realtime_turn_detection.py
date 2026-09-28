@@ -33,11 +33,3 @@ def test_env_override(monkeypatch):
     assert td["barge_in_min_ms"] == 80
     assert td["threshold"] == 0.6
     assert td["prefix_padding_ms"] == 200
-
-
-def test_bad_env_falls_back(monkeypatch):
-    monkeypatch.setenv("YUNSHU_REALTIME_SILENCE_MS", "not-a-number")
-    monkeypatch.setenv("YUNSHU_REALTIME_VAD_THRESHOLD", "")
-    td = _default_turn_detection()
-    assert td["silence_duration_ms"] == 500
-    assert td["threshold"] == 0.5

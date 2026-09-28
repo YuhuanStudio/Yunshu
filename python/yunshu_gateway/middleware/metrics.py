@@ -24,6 +24,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from yunshu_engine import settings
+
 logger = logging.getLogger(__name__)
 
 # Known API prefixes — anything beyond the first two segments is collapsed
@@ -325,12 +327,11 @@ def _check_metrics_auth(request: Request) -> None:
     honored; the RBAC / legacy-tenant paths have been removed.
     """
     import hmac
-    import os
 
-    if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
+    if settings.get_bool("YUNSHU_AUTH_DISABLED"):
         return
 
-    static_token = os.environ.get("YUNSHU_AUTH_TOKEN") or ""
+    static_token = settings.get("YUNSHU_AUTH_TOKEN") or ""
 
     # Honor an upstream-authenticated request if one exists (defensive — for
     # paths/orderings where AuthMiddleware did run first). The simplified

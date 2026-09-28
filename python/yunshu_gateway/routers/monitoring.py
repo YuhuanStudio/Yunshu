@@ -19,6 +19,8 @@ from fastapi.responses import PlainTextResponse
 
 logger = logging.getLogger(__name__)
 
+from yunshu_engine import settings
+
 from ..middleware.metrics_aggregator import get_metrics_aggregator
 from ..middleware.prometheus_exporter import get_prometheus_metrics
 
@@ -35,9 +37,9 @@ def _check_permission(request: Request) -> None:
     # Skip redundant re-check when called from /all aggregator
     if getattr(request.state, "_monitoring_authed", False):
         return
-    if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
+    if settings.get_bool("YUNSHU_AUTH_DISABLED"):
         return
-    auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
+    auth_token = settings.get("YUNSHU_AUTH_TOKEN")
     if not auth_token:
         # No auth configured — deny access.
         raise HTTPException(

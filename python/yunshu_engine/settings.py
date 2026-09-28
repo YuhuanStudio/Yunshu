@@ -56,7 +56,7 @@ class SettingError(ValueError):
 @dataclass(frozen=True)
 class Setting:
     name: str
-    type: str  # bool | int | float | str | enum | path | list | json
+    type: str  # bool | int | float | gb | str | enum | path | list | json
     default: Any
     description: str
     category: str
@@ -90,7 +90,9 @@ CATEGORIES = (
 )
 
 
-def _add(name: str, type_: str, default: Any, description: str, category: str, **kw: Any) -> None:
+def _add(
+    name: str, type_: str, default: Any, description: str, category: str, **kw: Any
+) -> None:
     if name in REGISTRY:
         raise RuntimeError(f"duplicate setting {name}")
     if category not in CATEGORIES:
@@ -98,6 +100,8 @@ def _add(name: str, type_: str, default: Any, description: str, category: str, *
     REGISTRY[name] = Setting(name, type_, default, description, category, **kw)
 
 
+# One line per setting, kept as a table.
+# fmt: off
 # ── model ──────────────────────────────────────────────────────────────
 _add("YUNSHU_MODEL", "path", None, "Model path or Hugging Face id served in single-model mode; every requested model name maps to it.", "model")
 _add("YUNSHU_MULTI_MODEL", "bool", False, "Multi-model mode: discover models under YUNSHU_MODELS_DIR and load them on demand. Ignored when YUNSHU_MODEL is set.", "model")
@@ -134,7 +138,8 @@ _add("YUNSHU_RATE_LIMIT_RPM", "int", 120, "Per-client request rate limit (reques
 _add("YUNSHU_TRUSTED_PROXIES", "list", (), "Comma-separated proxy IPs whose X-Forwarded-For header is trusted.", "auth")
 
 # ── memory ─────────────────────────────────────────────────────────────
-_add("YUNSHU_MAX_MEMORY_GB", "str", None, "Process memory ceiling, e.g. '48' or '48GB'; 'disabled' turns the enforcer off. Unset: automatic.", "memory")
+_add("YUNSHU_MAX_MEMORY_GB", "gb", None, "Multi-model mode memory ceiling in GiB, e.g. '48' or '48GB'; 'disabled' turns the enforcer off. Unset: 80% of unified memory.", "memory")
+_add("YUNSHU_PREFILL_STEP_SIZE", "int", 2048, "Text engine: prompt tokens per prefill forward pass; lower it to cap the prefill activation peak on small-memory machines.", "memory", minimum=1)
 _add("YUNSHU_MEM_PRESSURE_THRESHOLD", "float", 85.0, "Text engine: evict prefix-cache entries above this memory use (percent, or a fraction <= 1).", "memory", minimum=0.0)
 
 # ── cache (text engine) ────────────────────────────────────────────────
@@ -213,6 +218,7 @@ _add("YUNSHU_AUDIT_LOG_FILE", "path", None, "Also write the audit log to this fi
 _add("YUNSHU_GATEWAY_URL", "str", "http://localhost:8000", "Server URL used by the yunshu CLI client commands.", "cli")
 _add("YUNSHU_HF_ENDPOINT", "str", None, "Hugging Face Hub endpoint for `yunshu serve` (exported as HF_ENDPOINT).", "cli")
 
+# fmt: on
 
 # ── resolution ─────────────────────────────────────────────────────────
 
@@ -318,11 +324,22 @@ def _parse(s: Setting, text: str) -> Any:
             out: Any = int(value)
         elif s.type == "float":
             out = float(value)
+        elif s.type == "gb":
+            # GiB with an optional "GB" suffix; "disabled" = 0 (no limit).
+            if value.lower() == "disabled":
+                return 0.0
+            out = float(value.upper().removesuffix("GB").strip())
+            if out <= 0:
+                raise ValueError("expected a positive size in GB or 'disabled'")
         elif s.type == "enum":
             # Choices are lower-case except the log level, which is upper-case.
-            out = value.upper() if s.choices and s.choices[0].isupper() else value.lower()
+            out = (
+                value.upper() if s.choices and s.choices[0].isupper() else value.lower()
+            )
             if out not in s.choices:
-                raise ValueError(f"expected one of {', '.join(repr(c) for c in s.choices)}")
+                raise ValueError(
+                    f"expected one of {', '.join(repr(c) for c in s.choices)}"
+                )
             return out
         elif s.type == "list":
             return tuple(p.strip() for p in value.split(",") if p.strip())
@@ -372,7 +389,9 @@ def is_set(name: str) -> bool:
 # ── validation and reporting ───────────────────────────────────────────
 
 
-def unknown_names(environ: Mapping[str, str] | None = None) -> list[tuple[str, list[str]]]:
+def unknown_names(
+    environ: Mapping[str, str] | None = None,
+) -> list[tuple[str, list[str]]]:
     """``YUNSHU_*`` names in the environment/config that nothing reads, with
     the closest registered names (typo guard)."""
     env = os.environ if environ is None else environ
@@ -383,7 +402,9 @@ def unknown_names(environ: Mapping[str, str] | None = None) -> list[tuple[str, l
     return out
 
 
-def validate(environ: Mapping[str, str] | None = None, *, warn: bool = True) -> list[str]:
+def validate(
+    environ: Mapping[str, str] | None = None, *, warn: bool = True
+) -> list[str]:
     """Parse every provided value (raise ``SettingError`` listing all bad ones)
     and warn about unregistered ``YUNSHU_*`` names. Returns the warnings."""
     errors = []

@@ -868,11 +868,6 @@ class TestResolveWarmPrompts:
         result = ModelWarmupManager.resolve_warm_prompts()
         assert result == []
 
-    def test_custom_env_var(self, monkeypatch):
-        monkeypatch.setenv("CUSTOM_PROMPTS", "custom prompt")
-        result = ModelWarmupManager.resolve_warm_prompts(env_var="CUSTOM_PROMPTS")
-        assert result == ["custom prompt"]
-
 
 class FakeKVCacheLayer:
     """Fake KV cache layer with keys/values/offset for snapshot testing."""
@@ -1014,34 +1009,6 @@ class TestWarmPromptPrefill:
         # "real prompt" is attempted and fails
         assert result.prompts_failed == 2
         assert result.prompts_loaded == 3
-
-    def test_warm_max_tokens_env_override(self, monkeypatch):
-        """YUNSHU_WARM_MAX_TOKENS should override the default."""
-        monkeypatch.setenv("YUNSHU_WARM_MAX_TOKENS", "5")
-        mgr = ModelWarmupManager()
-        # Just verify the env var is read — actual prefill requires MLX
-        result = mgr.warm_prompt_prefill(
-            model=MagicMock(),
-            tokenizer=FakeTokenizer(),
-            kv_prefix_cache=FakeKVPrefixCache(),
-            warm_prompts=["test"],
-            max_tokens=1,  # default, should be overridden to 5 by env
-        )
-        # The result will show a failure since no real MLX, but the
-        # important thing is that the env var was processed
-        assert isinstance(result, WarmPromptResult)
-
-    def test_warm_max_tokens_invalid_env(self, monkeypatch):
-        """Invalid YUNSHU_WARM_MAX_TOKENS should keep the default."""
-        monkeypatch.setenv("YUNSHU_WARM_MAX_TOKENS", "not_a_number")
-        mgr = ModelWarmupManager()
-        result = mgr.warm_prompt_prefill(
-            model=MagicMock(),
-            tokenizer=FakeTokenizer(),
-            kv_prefix_cache=FakeKVPrefixCache(),
-            warm_prompts=["test"],
-        )
-        assert isinstance(result, WarmPromptResult)
 
 
 class TestWarmPromptPrefillWithKV:

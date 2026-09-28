@@ -12,14 +12,13 @@ number of speculative draft tokens (K) based on acceptance rate feedback:
   - Min/max bounds keep K in a safe range
 
 Integration:
-  - Enabled via YUNSHU_ADAPTIVE_SPEC=1 env var (requires N-gram spec active)
+  - Always on when the n-gram proposer runs
   - BatchedEngine creates AdaptiveSpecController when both are enabled
   - After each speculation step, record_step() is called with results
   - get_draft_length() returns the recommended K for the next step
 """
 
 import logging
-import os
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -212,62 +211,3 @@ class AdaptiveSpecController:
             "decrease_threshold": self._decrease_threshold,
             "ema_alpha": self._ema_alpha,
         }
-
-    @classmethod
-    def from_env(cls) -> AdaptiveSpecController | None:
-        """Create an AdaptiveSpecController from environment variables.
-
-        Returns None if YUNSHU_ADAPTIVE_SPEC is not set to 1/true/yes.
-        """
-        val = os.environ.get("YUNSHU_ADAPTIVE_SPEC", "").strip().lower()
-        if val not in ("1", "true", "yes"):
-            return None
-
-        config = AdaptiveSpecConfig(
-            min_draft_length=int(os.environ.get("YUNSHU_ADAPTIVE_SPEC_MIN_K", "0")),
-            max_draft_length=int(os.environ.get("YUNSHU_ADAPTIVE_SPEC_MAX_K", "8")),
-            initial_draft_length=int(
-                os.environ.get("YUNSHU_ADAPTIVE_SPEC_INITIAL_K", "2")
-            ),
-            ema_alpha=float(os.environ.get("YUNSHU_ADAPTIVE_SPEC_EMA_ALPHA", "0.3")),
-            increase_threshold=float(
-                os.environ.get("YUNSHU_ADAPTIVE_SPEC_INCREASE_THRESH", "0.8")
-            ),
-            decrease_threshold=float(
-                os.environ.get("YUNSHU_ADAPTIVE_SPEC_DECREASE_THRESH", "0.5")
-            ),
-            increase_step=int(
-                os.environ.get("YUNSHU_ADAPTIVE_SPEC_INCREASE_STEP", "1")
-            ),
-            decrease_step=int(
-                os.environ.get("YUNSHU_ADAPTIVE_SPEC_DECREASE_STEP", "1")
-            ),
-            cooldown_steps=int(os.environ.get("YUNSHU_ADAPTIVE_SPEC_COOLDOWN", "3")),
-            probe_interval=int(
-                os.environ.get("YUNSHU_ADAPTIVE_SPEC_PROBE_INTERVAL", "16")
-            ),
-            probe_length=int(os.environ.get("YUNSHU_ADAPTIVE_SPEC_PROBE_K", "2")),
-        )
-
-        controller = cls(
-            min_draft_length=config.min_draft_length,
-            max_draft_length=config.max_draft_length,
-            initial_draft_length=config.initial_draft_length,
-            ema_alpha=config.ema_alpha,
-            increase_threshold=config.increase_threshold,
-            decrease_threshold=config.decrease_threshold,
-            increase_step=config.increase_step,
-            decrease_step=config.decrease_step,
-            cooldown_steps=config.cooldown_steps,
-            probe_interval=config.probe_interval,
-            probe_length=config.probe_length,
-        )
-
-        logger.info(
-            f"Adaptive spec controller initialized: "
-            f"k=[{config.min_draft_length},{config.max_draft_length}], "
-            f"initial_k={config.initial_draft_length}, "
-            f"ema_alpha={config.ema_alpha}, "
-            f"thresholds=[{config.decrease_threshold},{config.increase_threshold}]"
-        )
-        return controller

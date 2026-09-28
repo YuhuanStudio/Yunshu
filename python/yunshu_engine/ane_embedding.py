@@ -36,6 +36,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import settings
+
 logger = logging.getLogger(__name__)
 
 # ── Conditional coremltools import ───────────────────────────────────────────
@@ -345,7 +347,7 @@ class ANEEmbeddingProcessor:
 
             # Honor the configured max_seq_length (NOT a hardcoded 128 cap). A
             # min(max_seq_length, 128) silently truncates every input past 128 tokens — even
-            # when the operator set YUNSHU_ANE_MAX_SEQ_LENGTH=512 — so ANE produces different
+            # when max_seq_length=512 — so ANE produces different
             # (worse) vectors than the MLX fallback path, which uses the FULL sequence. Trace
             # and inference share this same length, so they stay
             # consistent; lower max_seq_length to cap ANE's traced shape.
@@ -1164,8 +1166,8 @@ def get_ane_processor() -> ANEEmbeddingProcessor | None:
     if not is_ane_available():
         return None
 
-    model_name = os.environ.get("YUNSHU_ANE_EMBEDDING_MODEL", "intfloat/e5-small-v2")
-    max_seq = int(os.environ.get("YUNSHU_ANE_MAX_SEQ_LENGTH", "512"))
+    model_name = settings.get("YUNSHU_ANE_EMBEDDING_MODEL")
+    max_seq = 512
     config = ANEEmbeddingConfig(
         model_name=model_name,
         max_seq_length=max_seq,
@@ -1183,10 +1185,7 @@ def get_ane_processor() -> ANEEmbeddingProcessor | None:
 
 def is_ane_embeddings_enabled() -> bool:
     """Check whether ANE embeddings are enabled via the YUNSHU_ANE_EMBEDDINGS env var."""
-    return (
-        os.environ.get("YUNSHU_ANE_EMBEDDINGS", "").strip() in ("1", "true", "yes")
-        and is_ane_available()
-    )
+    return settings.get_bool("YUNSHU_ANE_EMBEDDINGS") and is_ane_available()
 
 
 def get_ane_embedding_stats() -> dict[str, Any]:

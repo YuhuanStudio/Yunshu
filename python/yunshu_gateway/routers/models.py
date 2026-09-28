@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 
 from fastapi import APIRouter, HTTPException, Request
@@ -13,6 +12,7 @@ logger = logging.getLogger(__name__)
 from pydantic import BaseModel, model_validator
 
 from yunshu_control.audit_log import log_operation, resolve_actor
+from yunshu_engine import settings
 
 from ..engine import get_engine, get_model_manager
 
@@ -35,11 +35,11 @@ def _check_permission(request: Request, permission: str) -> None:
          or set a token to lock it down.
        - anything else (model load/unload + admin ops) → DENY (secure default).
     """
-    if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
+    if settings.get_bool("YUNSHU_AUTH_DISABLED"):
         return
     # Static token auth — must verify the request actually provides it.
     # When a token IS configured it gates everything, inference included.
-    auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
+    auth_token = settings.get("YUNSHU_AUTH_TOKEN")
     if auth_token is not None and auth_token:
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):

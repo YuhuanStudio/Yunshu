@@ -1,7 +1,7 @@
 """Tests for scheduler_mixins.py — modular scheduler components."""
 
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -337,22 +337,6 @@ class TestMemoryPressureMixin:
         mp._admission_paused = True
         assert mp.recommended_batch_size == 4
         assert mp.is_admission_paused
-
-    def test_from_env(self):
-        with patch.dict(
-            "os.environ",
-            {
-                "YUNSHU_MEM_WARNING": "0.7",
-                "YUNSHU_MEM_CRITICAL": "0.9",
-                "YUNSHU_BATCH_NORMAL": "64",
-                "YUNSHU_BATCH_WARNING": "32",
-                "YUNSHU_BATCH_CRITICAL": "8",
-            },
-        ):
-            mp = MemoryPressureMixin.from_env()
-            assert mp._warning_threshold == 0.7
-            assert mp._critical_threshold == 0.9
-            assert mp._batch_normal == 64
 
     def test_get_stats(self):
         mp = MemoryPressureMixin()

@@ -10,7 +10,6 @@ Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true for access.
 """
 import hmac
 import logging
-import os
 import threading
 import time
 
@@ -23,6 +22,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["profiling"])
 
 from yunshu_control.audit_log import log_operation, resolve_actor
+from yunshu_engine import settings
 
 _profiling_active = False
 _profile_start_time = 0.0
@@ -35,9 +35,9 @@ def _check_permission(request: Request) -> None:
     Profiling controls are admin-sensitive: they can cause performance
     degradation and the output_path write is filesystem-sensitive.
     """
-    if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
+    if settings.get_bool("YUNSHU_AUTH_DISABLED"):
         return
-    auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
+    auth_token = settings.get("YUNSHU_AUTH_TOKEN")
     if auth_token:
         # Verify the request actually provides a valid Bearer token
         auth = request.headers.get("Authorization", "")

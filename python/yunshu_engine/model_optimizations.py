@@ -1138,23 +1138,22 @@ class ModelWarmupManager:
     # ── Warm Prompt Prefill (vllm-mlx pattern) ─────────────────────────────
 
     @staticmethod
-    def resolve_warm_prompts(env_var: str = "YUNSHU_WARM_PROMPTS") -> list[str]:
-        """Resolve warm prompts from env var (||-separated text or file paths).
+    def resolve_warm_prompts() -> list[str]:
+        """Resolve YUNSHU_WARM_PROMPTS (||-separated text or file paths).
 
         Supports:
         - Inline text: "prompt1||prompt2||prompt3"
         - File paths: "/path/to/prompts.txt" or "~/prompts.txt"
         - Mixed: "inline text||/path/to/file.txt||more text"
 
-        Args:
-            env_var: Environment variable name to read.
-
         Returns:
             List of resolved prompt strings.
         """
         import os
 
-        raw = os.environ.get(env_var, "").strip()
+        from . import settings
+
+        raw = (settings.get("YUNSHU_WARM_PROMPTS") or "").strip()
         if not raw:
             return []
 
@@ -1209,24 +1208,12 @@ class ModelWarmupManager:
         Returns:
             WarmPromptResult with prefill statistics.
         """
-        import os
-
         # Resolve prompts
         if warm_prompts is None:
             warm_prompts = self.resolve_warm_prompts()
             source = "env"
         else:
             source = "config"
-
-        # Override max_tokens from env if set
-        env_max = os.environ.get("YUNSHU_WARM_MAX_TOKENS", "").strip()
-        if env_max:
-            try:
-                max_tokens = int(env_max)
-            except ValueError:
-                logger.warning(
-                    f"Invalid YUNSHU_WARM_MAX_TOKENS={env_max}, using {max_tokens}"
-                )
 
         result = WarmPromptResult(
             prompts_loaded=len(warm_prompts),

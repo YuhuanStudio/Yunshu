@@ -12,12 +12,13 @@ Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true for access.
 
 import asyncio
 import logging
-import os
 import time
 import urllib.request
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+from yunshu_engine import settings
 
 logger = logging.getLogger(__name__)
 
@@ -33,10 +34,10 @@ def _check_permission(request: Request) -> None:
     Security: verifies the request actually presents a valid token,
     not merely that a token is configured.
     """
-    if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
+    if settings.get_bool("YUNSHU_AUTH_DISABLED"):
         return
     # Static token auth — must verify the request actually provides it
-    auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
+    auth_token = settings.get("YUNSHU_AUTH_TOKEN")
     if auth_token:
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):

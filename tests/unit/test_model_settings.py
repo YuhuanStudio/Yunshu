@@ -82,21 +82,6 @@ class TestModelSettings:
             s = load_model_settings(tmpdir, "test-model")
             assert s.max_tokens == 4096  # still default
 
-    def test_env_var_override(self, monkeypatch):
-        monkeypatch.setenv("YUNSHU_MODEL_MY_MODEL_MAX_TOKENS", "16384")
-        monkeypatch.setenv("YUNSHU_MODEL_MY_MODEL_TEMPERATURE", "0.9")
-        monkeypatch.setenv("YUNSHU_MODEL_MY_MODEL_SPEC_DECODE_ENABLED", "true")
-
-        s = load_model_settings("/tmp/nonexistent", "my-model")
-        assert s.max_tokens == 16384
-        assert s.temperature == 0.9
-        assert s.spec_decode_enabled is True
-
-    def test_env_var_bool_false(self, monkeypatch):
-        monkeypatch.setenv("YUNSHU_MODEL_TEST_PREFIX_CACHE_ENABLED", "false")
-        s = load_model_settings("/tmp/nonexistent", "test")
-        assert s.prefix_cache_enabled is False
-
     def test_all_fields_have_defaults(self):
         """Ensure all fields have usable defaults."""
         s = ModelSettings()

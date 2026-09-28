@@ -21,8 +21,6 @@ This is the engine that ModelManager and the gateway routers use.
 import asyncio
 import contextvars
 import logging
-import os
-import platform
 import threading
 import time
 from collections.abc import AsyncIterator
@@ -30,6 +28,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from typing import Any
 
+from . import settings
 from .text_utils import StopHoldbackBuffer
 
 logger = logging.getLogger(__name__)
@@ -302,8 +301,8 @@ def _create_prompt_cache_with_quant(
     when the start threshold meant quantization should never engage — quantizing
     an empty cache and writing prefill into a 4-bit-quantized buffer corrupts the
     K/V. Deferring to the populated-cache ``to_quantized`` conversion (the
-    upstream path) both fixes 4-bit and makes ``YUNSHU_KV_QUANT_START`` actually
-    take effect. ``kv_quant_bits`` is accepted for signature compatibility.
+    upstream path) fixes 4-bit. ``kv_quant_bits`` is accepted for signature
+    compatibility.
     """
     from mlx_lm.models.cache import make_prompt_cache
 
@@ -354,13 +353,7 @@ def _prefill_step_size() -> int:
     peak on very memory-constrained hardware; raise it to speed up long prefills
     when memory is ample. Tuned via YUNSHU_PREFILL_STEP_SIZE.
     """
-    import os
-
-    try:
-        v = int(os.environ.get("YUNSHU_PREFILL_STEP_SIZE", "2048"))
-    except (TypeError, ValueError):
-        v = 2048
-    return v if v > 0 else 2048
+    return settings.get("YUNSHU_PREFILL_STEP_SIZE")
 
 
 def _wrap_custom_logits_processor(proc):
@@ -500,26 +493,6 @@ def _progressive_quantize_kv_cache(
     if kv_bits is None or current_token_count % interval != 0:
         return
     _maybe_quantize_kv_cache(prompt_cache, quantized_kv_start, kv_group_size, kv_bits)
-
-
-def _store_thinking_segment(
-    ids, thinking_tokens: list[int], thinking_store, kv_cache=None
-) -> None:
-    """Store a thinking segment KV for future reuse."""
-    try:
-        import hashlib as _hl
-
-        conv_id = _hl.sha256(str([int(t) for t in ids[:16]]).encode()).hexdigest()[:16]
-        # Snapshot to avoid sharing mutable reference with prefix_cache
-        _kv_snapshot = [c for c in kv_cache] if kv_cache else None
-        thinking_store.store(
-            conversation_id=conv_id,
-            thinking_tokens=thinking_tokens,
-            context_tokens=[int(t) for t in ids],
-            kv_data=_kv_snapshot,
-        )
-    except Exception:
-        logger.debug("thinking segment store failed", exc_info=True)
 
 
 def _build_noncached_sampler_text(
@@ -765,8 +738,7 @@ def _build_gpu_sampler_text(
 
 
 # Per-request top-nσ, set by generate()/stream_generate() and read by
-# _build_temp_sampler() within the same event-loop task. Default None → fall back
-# to the YUNSHU_TOP_N_SIGMA server-wide default.
+# _build_temp_sampler() within the same event-loop task. Default None → off.
 _REQUEST_TOP_N_SIGMA: contextvars.ContextVar[float | None] = contextvars.ContextVar(
     "yunshu_request_top_n_sigma", default=None
 )
@@ -803,29 +775,17 @@ def _build_temp_sampler(
     """Pick the temp>0 sampler. Default = numpy (proven, avoids the
     @mx.compile PRNG trap). YUNSHU_GPU_SAMPLER=1 = on-GPU Gumbel-max (no per-token
     GPU→CPU sync, preserves mlx-lm's async pipeline; same distribution)."""
-    import os as _os
-
     # top-nσ resolution order: explicit call arg → per-request value (set on the
-    # ContextVar by generate()/stream_generate()) → server-wide YUNSHU_TOP_N_SIGMA.
+    # ContextVar by generate()/stream_generate()).
     # The sampler is built on the request's event-loop task BEFORE the executor
     # decode, so the ContextVar set in the entrypoint is visible here and gets
     # baked into the returned closure — no need to thread the value through the
     # deep fast-path call chain.
     if not top_n_sigma or float(top_n_sigma) <= 0:
         _req_nsig = _REQUEST_TOP_N_SIGMA.get()
-        if _req_nsig and _req_nsig > 0:
-            top_n_sigma = _req_nsig
-        else:
-            try:
-                top_n_sigma = float(_os.environ.get("YUNSHU_TOP_N_SIGMA", "0") or 0)
-            except ValueError:
-                top_n_sigma = 0.0
+        top_n_sigma = _req_nsig if _req_nsig and _req_nsig > 0 else 0.0
 
-    if _os.environ.get("YUNSHU_GPU_SAMPLER", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    ):
+    if settings.get_bool("YUNSHU_GPU_SAMPLER"):
         return _build_gpu_sampler_text(
             temperature,
             top_p,
@@ -1081,19 +1041,13 @@ class BatchedEngine:
         self._response_cache_hits = 0
         self._response_cache_misses = 0
 
-        # GPU-accelerated rejection sampling (opt-in via YUNSHU_GPU_REJECTION=1)
-        from .gpu_rejection import GPURejectionSampler, should_enable_gpu_rejection
-
-        self._gpu_rejection_sampler = GPURejectionSampler()
-        self._gpu_rejection_enabled = should_enable_gpu_rejection()
-
         # Spec draft verifier: production-grade draft verification with
         # KV cache trimming and bonus token emission
         from .spec_draft_verifier import SpecDraftVerifier
 
         self._spec_draft_verifier = SpecDraftVerifier(track_stats=True)
 
-        # Adaptive speculative decode controller (opt-in via YUNSHU_ADAPTIVE_SPEC=1)
+        # Adaptive speculative decode controller (built with the n-gram proposer)
         self._adaptive_spec = None
 
         # Lookahead reasoning: boosts spec decode during <think/> blocks
@@ -1105,44 +1059,29 @@ class BatchedEngine:
         self._medusa_proposer = None  # MedusaProposer instance
         self._medusa_strategy = None  # MedusaStrategy wrapper
 
-        # SpecPrefill config (opt-in via YUNSHU_SPEC_PREFILL env var)
-        self._spec_prefill_enabled = False
-        self._spec_prefill_threshold = 8192
-        self._spec_prefill_keep_rate = 0.20
-        self._spec_prefill_draft_model = None
-
         # KV prefix cache for multi-turn speedup
         # Enable the WARM tier — 128 cached prefixes (32 full-
         # precision HOT + up to 96 4-bit-quantized WARM) fit in roughly the
-        # memory of the old 64 full entries on UMA. Tunable via env for bench.
-        import os as _os
-
+        # memory of the old 64 full entries on UMA.
         from .kv_prefix_cache import KVPrefixCache
 
-        _pc_max = int(_os.environ.get("YUNSHU_PREFIX_MAX_ENTRIES", "128"))
-        _pc_hot = int(_os.environ.get("YUNSHU_PREFIX_HOT_LIMIT", "32"))
         self._kv_prefix_cache = KVPrefixCache(
-            max_entries=_pc_max, hot_limit=_pc_hot, min_prefix_length=32
+            max_entries=settings.get("YUNSHU_PREFIX_MAX_ENTRIES"),
+            hot_limit=settings.get("YUNSHU_PREFIX_HOT_LIMIT"),
+            min_prefix_length=32,
         )
         # HYBRID-model prefix reuse on the fast path. Hybrid
         # models (Qwen3.5: KVCache + ArraysCache) normally bypass the prefix
         # cache because trimming the recurrent ArraysCache state corrupts it.
         # With this on, the fast path instead chunk-prefills and stores trim=0
-        # block-boundary snapshots, which reuse losslessly (verified). Opt-in
-        # while it proves out; the bypass remains the fallback on any error.
-        # Default ON: only affects HYBRID models — standard models are
-        # trimmable and never enter this path. block=128 is the knee of the
-        # reuse/cold-penalty curve (≈3.1x reuse for ≈+18% cold prefill);
-        # YUNSHU_HYBRID_PREFIX_BLOCK=64 buys more reuse for a steeper cold cost,
-        # 256 the reverse. Set YUNSHU_HYBRID_PREFIX=0 to fall back to bypass.
-        self._hybrid_prefix_enabled = _os.environ.get(
-            "YUNSHU_HYBRID_PREFIX", "1"
-        ).strip() in ("1", "true", "yes")
-        self._hybrid_prefix_block = int(
-            _os.environ.get("YUNSHU_HYBRID_PREFIX_BLOCK", "128")
-        )
-        # Opt-in MTP for text-only models (YUNSHU_TEXT_MTP=1; YUNSHU_MTP is the VLM
-        # runner's MTP draft switch, default on). mlx-vlm is the supported MTP
+        # block-boundary snapshots, which reuse losslessly (verified); the
+        # bypass remains the fallback on any error. Only affects HYBRID models —
+        # standard models are trimmable and never enter this path. block=128 is
+        # the knee of the reuse/cold-penalty curve (≈3.1x reuse for ≈+18% cold
+        # prefill).
+        self._hybrid_prefix_block = 128
+        # Experimental MTP for text-only models (YUNSHU_SPEC_UNVERIFIED=mlxvlm_mtp;
+        # YUNSHU_MTP is the VLM runner's MTP draft switch). mlx-vlm is the supported MTP
         # implementation (its speculative path is the only correct one — see mlxvlm_mtp.py).
         # This text-engine MTP backend is single-backend + honors only
         # temperature (drops top_p/json_schema/penalties, see _warn_mtp_dropped_params) +
@@ -1150,10 +1089,8 @@ class BatchedEngine:
         # is the gemma-4 assistant drafter. When set and the model has native MTP weights,
         # the engine serves via that backend (single-backend swap, no dual-load): greedy →
         # MTP; sampling → plain gen on the same model.
-        self._mlxvlm_mtp_enabled = _os.environ.get("YUNSHU_TEXT_MTP", "").strip() in (
-            "1",
-            "true",
-            "yes",
+        self._mlxvlm_mtp_enabled = (
+            settings.get("YUNSHU_SPEC_UNVERIFIED") == "mlxvlm_mtp"
         )
         self._mlxvlm_mtp = None
 
@@ -1180,134 +1117,49 @@ class BatchedEngine:
         )
 
         # SSD KV cache persistence (opt-in via YUNSHU_SSD_CACHE=1)
-        import os
-
-        if os.environ.get("YUNSHU_SSD_CACHE", "").strip() in ("1", "true", "yes"):
-            ssd_dir = os.environ.get("YUNSHU_SSD_CACHE_DIR", "~/.cache/yunshu/kv-ssd")
-            _ssd_raw = os.environ.get("YUNSHU_SSD_CACHE_MAX_GB", "10")
-            try:
-                _ssd_float = float(_ssd_raw)
-            except (TypeError, ValueError):
-                logger.warning(
-                    "YUNSHU_SSD_CACHE_MAX_GB invalid value %r, using default 10",
-                    _ssd_raw,
-                )
-                _ssd_float = 10.0
-            ssd_max_gb = int(_ssd_float)
-            if _ssd_float != ssd_max_gb:
-                logger.warning(
-                    "YUNSHU_SSD_CACHE_MAX_GB=%r truncated to %d GB (fractional GB not supported)",
-                    _ssd_raw,
-                    ssd_max_gb,
-                )
+        if settings.get_bool("YUNSHU_SSD_CACHE"):
             self._kv_prefix_cache.enable_ssd_cache(
-                cache_dir=ssd_dir,
-                max_size_bytes=ssd_max_gb * 1024**3,
+                cache_dir=settings.get("YUNSHU_SSD_CACHE_DIR"),
+                max_size_bytes=int(settings.get("YUNSHU_SSD_CACHE_MAX_GB") * 1024**3),
                 model_name=model_name,
             )
 
         # KV cache quantization config (mlx-lm pattern: to_quantized — group-wise
         # affine along head_dim for BOTH keys and values). Enable via
-        # YUNSHU_KV_QUANT_BITS=2, 3, 4, or 8. NOTE: this is mlx-lm's group quant,
+        # YUNSHU_KV_QUANT_BITS=2, 3, 4, or 8 (default 'auto', see
+        # _effective_kv_quant_bits). NOTE: this is mlx-lm's group quant,
         # NOT KIVI's per-channel-key / per-token-value scheme — mx.quantize is
         # last-axis only, so KIVI's per-channel key quant would need a forked
         # quantized-attention path (out of scope: this engine wraps MLX). 2-bit
         # is usable (verified quality-preserving) but only pays off at very long
         # context where the KV cache dominates bandwidth; it is a no-op otherwise,
         # which is why it auto-engages only above ~2GB est. KV (_effective_kv_quant_bits).
-        _qbits = os.environ.get("YUNSHU_KV_QUANT_BITS")
-        if _qbits:
-            _qbits_int = int(_qbits)
-            if _qbits_int not in (2, 3, 4, 8):
-                logger.warning(
-                    "CONFIG: YUNSHU_KV_QUANT_BITS=%s is not a supported value "
-                    "(MLX supports 2, 3, 4, 8). Ignoring.",
-                    _qbits,
-                )
-                self._kv_quant_bits: int | None = None
-            else:
-                self._kv_quant_bits = _qbits_int
-        else:
-            self._kv_quant_bits = None
-        self._kv_quant_group_size: int = int(
-            os.environ.get("YUNSHU_KV_QUANT_GROUP_SIZE", "64")
+        _qbits = settings.get("YUNSHU_KV_QUANT_BITS")
+        self._kv_quant_auto = _qbits == "auto"
+        self._kv_quant_bits: int | None = (
+            int(_qbits) if _qbits not in ("auto", "off") else None
         )
-        self._kv_quant_start: int = int(os.environ.get("YUNSHU_KV_QUANT_START", "0"))
+        self._kv_quant_group_size: int = 64
+        self._kv_quant_start: int = 0
 
         # Memory pressure eviction config (vllm-mlx pattern)
         # Stored as a percentage (0-100) for consistency with
         # KVPrefixCache.evict_under_pressure(). Converted to a 0-1
         # fraction when calling KVCacheManager.memory_pressure_evict().
-        self._mem_pressure_threshold = float(
-            os.environ.get("YUNSHU_MEM_PRESSURE_THRESHOLD", "85.0")
-        )
+        self._mem_pressure_threshold = settings.get("YUNSHU_MEM_PRESSURE_THRESHOLD")
         # If the value looks like a fraction (<=1.0), convert to percentage
         if 0 < self._mem_pressure_threshold <= 1.0:
             self._mem_pressure_threshold *= 100.0
 
-        # DeltaNet state inversion for KV cache eviction recovery
-        # Enable via YUNSHU_DELTANET_INVERSION=1 — when KV blocks are evicted
-        # from the prefix cache, analytically invert the SSM recurrence so
-        # the evicted context can be partially recovered (75x less overhead
-        # than checkpoint/restore). Works with GatedDeltaNet models (Qwen3.5).
-        self._deltanet_inverter = None
-        self._deltanet_inversion_enabled = os.environ.get(
-            "YUNSHU_DELTANET_INVERSION", ""
-        ).strip() in ("1", "true", "yes")
-        self._deltanet_inversion_stats = {
-            "evictions_captured": 0,
-            "inversions_attempted": 0,
-            "inversions_succeeded": 0,
-            "states_stored": 0,
-        }
-
         # Per-model settings (loaded from model_settings.json + env vars)
         self._settings = None
-
-        # Thinking Segment KV Substore — reasoning token KV cache reuse
-        # Enable via YUNSHU_THINKING_CACHE=1
-        self._thinking_store = None
         self._total_reasoning_tokens = 0
-        if os.environ.get("YUNSHU_THINKING_CACHE", "").strip() in ("1", "true", "yes"):
-            from yunshu_kv.thinking_segment import (
-                ThinkingSegmentConfig,
-                ThinkingSegmentSubstore,
-            )
-
-            _thinking_cfg = ThinkingSegmentConfig(
-                max_segments_per_conversation=int(
-                    os.environ.get("YUNSHU_THINKING_MAX_PER_CONV", "10")
-                ),
-                max_total_segments=int(
-                    os.environ.get("YUNSHU_THINKING_MAX_TOTAL", "1000")
-                ),
-                min_tokens_to_cache=int(
-                    os.environ.get("YUNSHU_THINKING_MIN_TOKENS", "32")
-                ),
-                ttl_seconds=float(os.environ.get("YUNSHU_THINKING_TTL", "3600")),
-                enable_ssd=os.environ.get("YUNSHU_THINKING_SSD", "").strip()
-                in ("1", "true", "yes"),
-                ssd_cache_dir=os.environ.get("YUNSHU_THINKING_SSD_DIR", ""),
-                enable_compression=os.environ.get(
-                    "YUNSHU_THINKING_COMPRESS", ""
-                ).strip()
-                in ("1", "true", "yes"),
-            )
-            self._thinking_store = ThinkingSegmentSubstore(_thinking_cfg)
 
         # LoRA adapter manager
         self._lora_manager = None
 
-        # mx.compile() for Metal kernel caching
+        # mx.compile() for Metal kernel caching (done once, at warmup)
         self._compiled = False
-        _mx_compile_env = os.environ.get("YUNSHU_MX_COMPILE", "").strip().lower()
-        if _mx_compile_env in ("1", "true", "yes"):
-            self._use_compile = True
-        elif _mx_compile_env in ("0", "false", "no"):
-            self._use_compile = False
-        else:
-            # Auto-enable mx.compile on Apple Silicon — it's always safe
-            self._use_compile = platform.system() == "Darwin"
 
         # The hand-written Metal kernels were REMOVED. They were never
         # invoked in the served path and, benchmarked head-to-head on this M3 Max,
@@ -1318,17 +1170,8 @@ class BatchedEngine:
         self._metal_kernel_manager = None
         self._metal_kernels_enabled = False
 
-        # Engine loop default (continuous batching mode)
-        # Enable via YUNSHU_ENGINE_LOOP=1 for multi-user concurrent serving
-        self._engine_loop_default = os.environ.get(
-            "YUNSHU_ENGINE_LOOP", ""
-        ).strip() in ("1", "true", "yes")
-
-        # Streaming optimizer pipeline components (C18 pattern)
-        # Enable via YUNSHU_STREAMING_PIPELINE=1 for pipelined GPU/CPU overlap
-        self._streaming_pipeline_enabled = os.environ.get(
-            "YUNSHU_STREAMING_PIPELINE", ""
-        ).strip() in ("1", "true", "yes")
+        # Engine loop default (continuous batching mode, experimental)
+        self._engine_loop_default = settings.get_bool("YUNSHU_ENGINE_LOOP")
 
     @property
     def is_loaded(self) -> bool:
@@ -1408,7 +1251,8 @@ class BatchedEngine:
                     logger.info("mlx-vlm MTP backend active for %s", self.model_name)
                     return
                 logger.info(
-                    "YUNSHU_TEXT_MTP set but %s is not MTP-capable; using standard path",
+                    "YUNSHU_SPEC_UNVERIFIED=mlxvlm_mtp set but %s is not MTP-capable; "
+                    "using standard path",
                     self.model_name,
                 )
             except Exception:
@@ -1430,7 +1274,7 @@ class BatchedEngine:
             # load (the except below only caught ValueError). The mlx-lm contract is to
             # override the model's config.json quantization via `model_config`. Parse the
             # env as JSON ({"group_size":64,"bits":4}) or a compact "bits" / "bits,group".
-            qconfig = os.environ.get("YUNSHU_QUANT_CONFIG")
+            qconfig = settings.get("YUNSHU_QUANT_CONFIG")
             if qconfig:
                 _qd = _parse_quant_config_env(qconfig)
                 if _qd:
@@ -1493,8 +1337,8 @@ class BatchedEngine:
         # affine-4bit on quality-per-bit). Runs on the MLX executor. Already-quantized
         # layers are skipped by the predicate (no to_quantized), so it's safe to set
         # even on a pre-quantized model (no-op there).
-        _qmode = os.environ.get("YUNSHU_QUANT_MODE", "").strip().lower()
-        if _qmode in ("mxfp4", "nvfp4", "mxfp8", "affine"):
+        _qmode = settings.get("YUNSHU_QUANT_MODE")
+        if _qmode:
             await loop.run_in_executor(executor, self._quantize_on_load, _qmode)
         _cache_tokenizer_vocab(self._tokenizer)
 
@@ -1568,26 +1412,23 @@ class BatchedEngine:
         except Exception:
             logger.warning("Model optimization detection skipped", exc_info=True)
 
-        # The home-grown Qwen3.5 MTP (n_confirmed_patch +
-        # mtp_patch + mtp_decoder) is DEPRECATED. It reimplemented what mlx-vlm
-        # already does correctly, but lacked mlx-vlm's GatedDeltaNet
-        # intermediate-state capture, so it produced garbage on 27B and only ~0.9x
-        # on 9B. The supported MTP path is now mlx-vlm (YUNSHU_TEXT_MTP=1, see
-        # mlxvlm_mtp.py — ~1.82x in a proof script only, not served/gated; EXPERIMENTAL).
-        # The legacy patches are only applied under YUNSHU_LEGACY_MTP=1 (escape hatch).
-        if os.environ.get("YUNSHU_LEGACY_MTP", "0").strip() in ("1", "true", "yes"):
+        # The home-grown Qwen3.5 MTP (n_confirmed_patch + mtp_patch +
+        # mtp_decoder) lacked mlx-vlm's GatedDeltaNet intermediate-state capture
+        # (garbage on 27B, ~0.9x on 9B); Qwen3.5-family MTP is served by the VLM
+        # runner. Kept only as the experimental YUNSHU_SPEC_UNVERIFIED=mtp route.
+        if settings.get("YUNSHU_SPEC_UNVERIFIED") == "mtp":
             try:
                 from .n_confirmed_patch import apply_n_confirmed_patch
 
                 if apply_n_confirmed_patch():
-                    logger.info("[legacy] n_confirmed patch applied")
+                    logger.info("[experimental] n_confirmed patch applied")
             except Exception:
                 logger.debug("n_confirmed patch skipped", exc_info=True)
             try:
                 from .mtp_patch import apply_mtp_patch
 
                 if apply_mtp_patch():
-                    logger.info("[legacy] MTP patch applied")
+                    logger.info("[experimental] MTP patch applied")
             except Exception:
                 logger.warning("MTP patch skipped", exc_info=True)
 
@@ -1609,12 +1450,6 @@ class BatchedEngine:
         except Exception as e:
             logger.debug(f"Cache type detection skipped: {e}")
             self._cache_config = None
-
-        # Initialize DeltaNet inversion for KV eviction recovery
-        # Registers capture hooks on SSM layers and wires the pre-eviction
-        # callback into the KV prefix cache so evicted states are inverted.
-        if self._deltanet_inversion_enabled and self._model is not None:
-            self._init_deltanet_inversion()
 
         # Warmup: ModelWarmupManager handles compile caching + KV prefill
         # The basic generate_step warmup is wrapped inside _model_warmup()
@@ -1641,8 +1476,9 @@ class BatchedEngine:
                 if family in name_lower:
                     model_type = family
                     break
-            use_compile = self._use_compile and not self._compiled
-            result = mgr.warmup(self._model, model_type=model_type, compile=use_compile)
+            result = mgr.warmup(
+                self._model, model_type=model_type, compile=not self._compiled
+            )
             if not result.output_valid:
                 raise RuntimeError(
                     f"Model warmup produced invalid outputs for {self.model_name} "
@@ -1667,7 +1503,7 @@ class BatchedEngine:
         # compile also recompiles on every prefill shape change (ragged batching),
         # which can hurt. Removed the dead attempt — no engine-level whole-model
         # compile is performed. (ModelWarmupManager's own compile path above is
-        # unchanged; the _use_compile/_compiled flags remain for back-compat.)
+        # unchanged.)
 
         # Initialize speculative decoding if model supports it (Phase 4)
         self._init_spec_decode()
@@ -1678,150 +1514,20 @@ class BatchedEngine:
         # Warm prompt prefill: pre-populate KV cache with common system prompts
         await self._warm_prompt_prefill()
 
-        # Auto-start EngineCore for continuous batching (default production path)
-        # Previously was lazy-loaded only when use_engine_loop=True.
-        # Now always starts so the scheduler is ready for concurrent requests.
-        use_fast_only = os.environ.get("YUNSHU_FAST_PATH_ONLY", "").strip() in (
-            "1",
-            "true",
-            "yes",
-        )
-        if not use_fast_only:
-            try:
-                await self._ensure_engine_core()
-                logger.info("EngineCore auto-started — continuous batching ready")
-            except Exception as e:
-                logger.warning(
-                    f"EngineCore auto-start failed ({e}), falling back to fast-path only"
-                )
-                self._engine_core = None
+        # Auto-start EngineCore so the scheduler is ready for concurrent requests.
+        try:
+            await self._ensure_engine_core()
+            logger.info("EngineCore auto-started — continuous batching ready")
+        except Exception as e:
+            logger.warning(
+                f"EngineCore auto-start failed ({e}), falling back to fast-path only"
+            )
+            self._engine_core = None
 
         # KV-5: Apply auto-tuner KV quantization recommendation if available
         self._apply_auto_tuner_kv_quant()
 
         # Metal kernel init removed (kernels deleted — slower than mx.fast).
-
-    def _init_deltanet_inversion(self) -> None:
-        """Initialize DeltaNet state inversion for KV cache eviction recovery.
-
-        Creates a DeltaNetInverter, registers capture hooks on the model's
-        SSM layers, and wires a pre-eviction callback into KVPrefixCache.
-        When KV blocks are evicted under memory pressure, the callback
-        analytically inverts the SSM recurrence to recover the pre-eviction
-        state — 75x less overhead than checkpoint/restore.
-
-        Only activates for models with SSM layers (GatedDeltaNet, e.g. Qwen3.5).
-        Controlled via YUNSHU_DELTANET_INVERSION=1 env var.
-        """
-        try:
-            from .deltanet_inversion import DeltaNetInverter
-
-            self._deltanet_inverter = DeltaNetInverter()
-
-            # Register capture hooks on any SSM layers the model has
-            has_ssm = any(hasattr(m, "state") for _, m in self._model.named_modules())
-            if has_ssm:
-                self._deltanet_inverter.register_hooks(self._model)
-                logger.info(
-                    "DeltaNet inversion hooks registered — SSM eviction recovery enabled"
-                )
-            else:
-                logger.info(
-                    "DeltaNet inversion enabled but no SSM layers found — "
-                    "inversion will run only on explicit invert_evicted_state() calls"
-                )
-
-            # Wire pre-eviction callback into KV prefix cache
-            # Use a weak reference to avoid a reference cycle:
-            # engine -> _kv_prefix_cache -> _pre_evict_callback -> engine
-            if self._kv_prefix_cache is not None:
-                import weakref
-
-                _weak_self = weakref.ref(self)
-
-                def _on_evict(prompt_tokens, cache):
-                    strong = _weak_self()
-                    if strong is not None:
-                        strong._on_prefix_cache_eviction(prompt_tokens, cache)
-
-                self._kv_prefix_cache._pre_evict_callback = _on_evict
-                logger.info("DeltaNet eviction callback wired into KV prefix cache")
-
-        except Exception as e:
-            logger.warning(
-                f"DeltaNet inversion init failed ({e}), continuing without SSM recovery"
-            )
-            self._deltanet_inverter = None
-
-    def _on_prefix_cache_eviction(self, _prompt_tokens, cache) -> None:
-        """Pre-eviction callback: capture DeltaNet state before KV cache is dropped.
-
-        Called by KVPrefixCache._remove_entry() when an entry is evicted.
-        Scans the cache layers for SSM state tensors and captures their
-        inverted form so the evicted context can be partially recovered.
-        """
-        if self._deltanet_inverter is None:
-            return
-        self._deltanet_inversion_stats["evictions_captured"] += 1
-
-        # Attempt to extract and invert SSM states from cache layers.
-        # Standard KVCache layers are skipped — only SSM (DeltaNet) layers
-        # with a .state attribute are candidates for inversion.
-        if not isinstance(cache, list):
-            return
-
-        for layer in cache:
-            state = getattr(layer, "state", None)
-            if state is None:
-                continue
-            # If the inverter has captured entries (from model hooks),
-            # invert them to recover pre-step state.
-            try:
-                self._deltanet_inversion_stats["inversions_attempted"] += 1
-                self._deltanet_inverter.start_capture()
-                recovered = self._deltanet_inverter.invert_all()
-                if recovered:
-                    self._deltanet_inversion_stats["inversions_succeeded"] += 1
-                    self._deltanet_inversion_stats["states_stored"] += len(recovered)
-                    logger.debug(
-                        f"DeltaNet inversion: recovered {len(recovered)} layer states "
-                        f"from evicted cache"
-                    )
-            except Exception:
-                logger.debug(
-                    "DeltaNet inversion failed for evicted layer", exc_info=True
-                )
-
-    def invert_evicted_state(self, _prompt_tokens: list[int] | None = None) -> list:
-        """Trigger DeltaNet state inversion for evicted or current SSM states.
-
-        Manually triggers inversion of captured SSM intermediates. Useful for
-        testing or for recovering state after programmatic eviction.
-
-        Args:
-            prompt_tokens: Optional prompt tokens to identify which cache entry
-                to invert. If None, inverts the last captured state.
-
-        Returns:
-            List of recovered mx.array states (one per SSM layer), or empty
-            list if inversion is disabled or no state is available.
-        """
-        if self._deltanet_inverter is None:
-            logger.debug(
-                "DeltaNet inversion not enabled — invert_evicted_state() is no-op"
-            )
-            return []
-
-        try:
-            self._deltanet_inversion_stats["inversions_attempted"] += 1
-            results = self._deltanet_inverter.invert_all()
-            if results:
-                self._deltanet_inversion_stats["inversions_succeeded"] += 1
-                self._deltanet_inversion_stats["states_stored"] += len(results)
-            return results
-        except Exception:
-            logger.debug("DeltaNet invert_evicted_state failed", exc_info=True)
-            return []
 
     def _load_model_settings(self):
         """Load per-model settings from model directory and apply to engine."""
@@ -1846,8 +1552,7 @@ class BatchedEngine:
             return
         s = self._settings
         if s.kv_cache_quant_bits is not None:
-            # Validate the bits BEFORE assigning, mirroring the
-            # YUNSHU_KV_QUANT_BITS env path above. model_settings.json (and the
+            # Validate the bits BEFORE assigning. model_settings.json (and the
             # YUNSHU_MODEL_{ID}_KV_CACHE_QUANT_BITS override) flowed through here
             # WITHOUT validation, so an invalid value (e.g. 5) reached
             # to_quantized(bits=5) and crashed every request that hit the quant
@@ -1867,16 +1572,13 @@ class BatchedEngine:
         # must NOT be assigned to self._kv_quant_start, which is mlx-lm's
         # quantized_kv_start: a TOKEN-POSITION threshold compared against cache.offset.
         # Conflating them made "quantize from layer N" silently mean "quantize once the
-        # sequence reaches N tokens". _kv_quant_start stays env-driven
-        # (YUNSHU_KV_QUANT_START); the layer field is consumed by turbo_quant only.
+        # sequence reaches N tokens". _kv_quant_start stays 0; the layer field is
+        # consumed by turbo_quant only.
         if not s.prefix_cache_enabled:
             self._kv_prefix_cache = None
         if s.spec_decode_enabled:
             self._spec_enabled = True
-        if s.spec_prefill_enabled:
-            self._spec_prefill_enabled = True
-            self._spec_prefill_threshold = s.spec_prefill_threshold
-            self._spec_prefill_keep_rate = s.spec_prefill_keep_rate
+
         if s.ssd_cache_enabled and self._kv_prefix_cache is not None:
             self._kv_prefix_cache.enable_ssd_cache(
                 cache_dir=s.ssd_cache_dir,
@@ -2104,7 +1806,7 @@ class BatchedEngine:
     def _effective_kv_quant_bits(self, total_tokens: int) -> int | None:
         """KV-quant bits for THIS request.
 
-        Explicit config (env YUNSHU_KV_QUANT_BITS / per-model settings) always
+        Explicit config (YUNSHU_KV_QUANT_BITS=N / per-model settings) always
         wins. Otherwise apply a SIZE-gated default: 8-bit (near-lossless) once the
         estimated KV cache is large enough that it dominates decode bandwidth.
 
@@ -2116,32 +1818,17 @@ class BatchedEngine:
         8-bit KV only wins when KV bytes are a large fraction of the per-step read,
         which depends on layers*kv_heads*head_dim*tokens, NOT tokens alone. So gate
         on estimated total KV bytes (default >=2GB, big-model/very-long-context
-        regime). Opt out with YUNSHU_KV_QUANT_AUTO=0; tune via
-        YUNSHU_KV_QUANT_AUTO_MIN_BYTES. Falls back to the old token threshold only
-        when model dims can't be read."""
+        regime). YUNSHU_KV_QUANT_BITS=off disables it. Falls back to a token
+        threshold (16384) only when model dims can't be read."""
         if self._kv_quant_bits is not None:
             return self._kv_quant_bits
-        if os.environ.get("YUNSHU_KV_QUANT_AUTO", "1").strip().lower() in (
-            "0",
-            "false",
-            "no",
-        ):
+        if not getattr(self, "_kv_quant_auto", True):
             return None
         per_tok = self._kv_bytes_per_token()
         if per_tok > 0:
-            try:
-                min_bytes = int(
-                    os.environ.get("YUNSHU_KV_QUANT_AUTO_MIN_BYTES", str(2 * 1024**3))
-                )
-            except ValueError:
-                min_bytes = 2 * 1024**3
-            return 8 if (per_tok * total_tokens) >= min_bytes else None
+            return 8 if (per_tok * total_tokens) >= 2 * 1024**3 else None
         # Dims unreadable — fall back to the conservative token threshold.
-        try:
-            threshold = int(os.environ.get("YUNSHU_KV_QUANT_AUTO_THRESHOLD", "16384"))
-        except ValueError:
-            threshold = 16384
-        return 8 if total_tokens >= threshold else None
+        return 8 if total_tokens >= 16384 else None
 
     def _apply_auto_tuner_kv_quant(self) -> None:
         """KV-5: Apply auto-tuner's kv_quantization_bits recommendation.
@@ -2170,7 +1857,7 @@ class BatchedEngine:
 
     def _init_lora(self):
         """Initialize LoRA adapter manager after model load."""
-        max_loras = int(os.environ.get("YUNSHU_MAX_LORAS", "4"))
+        max_loras = settings.get("YUNSHU_MAX_LORAS")
         from .lora_manager import LoRAAdapterManager, set_lora_manager
 
         self._lora_manager = LoRAAdapterManager(max_loras=max_loras)
@@ -2223,25 +1910,12 @@ class BatchedEngine:
         executor = get_mlx_executor()
         arch_kwargs = self._extract_model_arch(self._model)
 
-        # Sarathi-style hybrid chunked prefill (opt-in via YUNSHU_HYBRID_PREFILL=1)
-        hybrid_prefill = os.environ.get("YUNSHU_HYBRID_PREFILL", "").strip() in (
-            "1",
-            "true",
-            "yes",
-        )
-        hybrid_chunk = int(os.environ.get("YUNSHU_HYBRID_CHUNK_SIZE", "512"))
-
-        prefill_chunk_size = int(os.environ.get("YUNSHU_PREFILL_CHUNK_SIZE", "2048"))
-
         self._engine_core = EngineCore(
             model=self._model,
             tokenizer=self._tokenizer,
             config=EngineCoreConfig(
                 stream_interval=self.stream_interval,
-                enable_hybrid_prefill=hybrid_prefill,
-                hybrid_chunk_size=hybrid_chunk,
-                prefill_chunk_size=prefill_chunk_size,
-                # Decode-batch width is env-tunable, but the
+                # Decode-batch width is configurable, but the
                 # default of 32 is near-optimal on Apple-Silicon UMA and should
                 # rarely be raised. Decode is memory-bandwidth-bound, so
                 # aggregate throughput SATURATES around batch ~32; measured on
@@ -2249,18 +1923,7 @@ class BatchedEngine:
                 # crash) because a wider decode batch only adds KV memory
                 # pressure without more throughput. The N>=32 throughput plateau
                 # is the hardware ceiling, not a tunable software limit.
-                completion_batch_size=int(
-                    __import__("os").environ.get("YUNSHU_COMPLETION_BATCH_SIZE", "32")
-                ),
-                # Scheduling policy is now plumbed through (was hardwired
-                # FCFS → PRIORITY/FAIR preemption + aging were unreachable). Opt in
-                # with YUNSHU_SCHEDULER_POLICY=priority|fair (engine-loop only).
-                scheduler_policy=__import__("os")
-                .environ.get("YUNSHU_SCHEDULER_POLICY", "fcfs")
-                .lower(),
-                aging_weight=float(
-                    __import__("os").environ.get("YUNSHU_SCHEDULER_AGING_WEIGHT", "0.1")
-                ),
+                completion_batch_size=settings.get("YUNSHU_COMPLETION_BATCH_SIZE"),
                 **arch_kwargs,
             ),
             executor=executor,
@@ -2302,24 +1965,13 @@ class BatchedEngine:
                 if num_layers > 0:
                     quant_bits = getattr(model_cfg, "kv_cache_quant_bits", None)
                     quant_start = int(
-                        os.environ.get(
-                            "YUNSHU_TURBOQUANT_START_LAYER",
-                            getattr(model_cfg, "kv_cache_quant_start_layer", 0),
-                        )
+                        getattr(model_cfg, "kv_cache_quant_start_layer", 0)
                     )
                     quant_group = int(
-                        os.environ.get(
-                            "YUNSHU_TURBOQUANT_GROUP_SIZE",
-                            getattr(model_cfg, "kv_cache_quant_group_size", 64),
-                        )
+                        getattr(model_cfg, "kv_cache_quant_group_size", 64)
                     )
-                    # Enable if model has quant settings or env opt-in
-                    env_enable = os.environ.get("YUNSHU_TURBOQUANT", "").strip() in (
-                        "1",
-                        "true",
-                        "yes",
-                    )
-                    if quant_bits is not None or env_enable:
+                    # Enable when the model config carries quant settings.
+                    if quant_bits is not None:
                         self._engine_core.setup_turbo_quant(
                             total_layers=num_layers,
                             kv_quant_bits=quant_bits,
@@ -2443,13 +2095,7 @@ class BatchedEngine:
         self._medusa_proposer = None
         self._medusa_strategy = None
         self._warm_prompts = None
-        self._thinking_store = None
         self._metal_kernel_manager = None
-
-        # Unregister DeltaNet inversion hooks to restore original class methods
-        if self._deltanet_inverter is not None:
-            self._deltanet_inverter.unregister_hooks()
-            self._deltanet_inverter = None
 
         # Stop LoRA adapter manager (unload all adapters, release weights)
         if self._lora_manager is not None:
@@ -2522,12 +2168,10 @@ class BatchedEngine:
         use_engine_loop: bool,
         gemma4_eligible=None,
     ) -> str | None:
-        import os
-
         if use_engine_loop or logprobs:
             return None
         greedy = temperature is None or temperature <= 0.0
-        experimental = os.environ.get("YUNSHU_SPEC_UNVERIFIED", "").strip().lower()
+        experimental = settings.get("YUNSHU_SPEC_UNVERIFIED")
         if spec_decode and greedy and experimental == "eagle" and not stream:
             if getattr(self, "_spec_enabled", False) and getattr(
                 self, "_spec_decoder", None
@@ -2721,9 +2365,7 @@ class BatchedEngine:
         """Async wrapper: derive input_ids from the prompt (templating chat
         messages) and compute prompt logprobs on the MLX executor. Length-gated
         to bound the [seq, vocab] logits memory."""
-        import os
-
-        cap = int(os.environ.get("YUNSHU_PROMPT_LOGPROBS_MAX_TOKENS", "8192"))
+        cap = 8192
         if isinstance(prompt, list):
             text = self._apply_chat_template(prompt, enable_thinking=enable_thinking)
         else:
@@ -2734,7 +2376,7 @@ class BatchedEngine:
         if len(input_ids) > cap:
             logger.warning(
                 "prompt_logprobs skipped: prompt %d tokens exceeds cap %d "
-                "(set YUNSHU_PROMPT_LOGPROBS_MAX_TOKENS to raise)",
+                "(logits memory bound)",
                 len(input_ids),
                 cap,
             )
@@ -3737,8 +3379,7 @@ class BatchedEngine:
         # ignore a request constraint; those requests fall through to the normal
         # constrained decode below.
         if (
-            os.environ.get("YUNSHU_JUMP_FORWARD", "").strip().lower()
-            in ("1", "true", "yes")
+            settings.get_bool("YUNSHU_JUMP_FORWARD")
             and json_schema is not None
             and not logprobs
             and (temperature is None or temperature <= 1e-6)
@@ -4042,12 +3683,11 @@ class BatchedEngine:
             # disable ALL KV caching for them — correctness over TTFT.
             _cache_trimmable = self._cache_supports_trim(model)
             # Hybrid models are normally bypassed (not
-            # trimmable). When YUNSHU_HYBRID_PREFIX is on, route them through the
+            # trimmable), so route them through the
             # boundary-snapshot path instead: keep the cache enabled, force
             # trim=0-only reuse (no_trim mode), and chunk-prefill with snapshots.
             _hybrid_mode = (
                 (not _cache_trimmable)
-                and self._hybrid_prefix_enabled
                 and not _bypass_cache_for_seed
                 and self._kv_prefix_cache is not None
             )
@@ -4227,197 +3867,12 @@ class BatchedEngine:
             except Exception:
                 logger.debug("inflight prefix register failed", exc_info=True)
 
-            # Thinking segment KV lookup — reuse reasoning KV from prior turns.
-            # This is a non-functional STUB — it finds a stored segment but never
-            # injects `_best.kv_data` into `cache`, so the KV is NOT actually reused. The old
-            # code still did `cached_tokens += _best.num_tokens`, which (a) over-reported
-            # prompt_tokens_details.cached_tokens by tokens that were never reused and, far
-            # worse, (b) on the hybrid path `_capture_hybrid_prefix(start_offset=cached_tokens)`
-            # then prefilled `full_ids[start_offset:-1]` from the inflated offset, SKIPPING
-            # `num_tokens` real prompt tokens → cache/RoPE misalignment → wrong output. Until
-            # the KV is genuinely injected, do not touch cached_tokens; just log the match.
-            if self._thinking_store is not None and enable_thinking:
-                try:
-                    import hashlib as _hl
-
-                    _conv_id = _hl.sha256(str(ids[:16]).encode()).hexdigest()[:16]
-                    _conv_segs = self._thinking_store.get_conversation_segments(
-                        _conv_id
-                    )
-                    if _conv_segs:
-                        _best = max(_conv_segs, key=lambda s: s.last_accessed)
-                        if _best.kv_data is not None:
-                            logger.debug(
-                                f"Thinking KV match (not yet injected): {_conv_id} → "
-                                f"{_best.num_tokens} tokens, hash={_best.step_hash}"
-                            )
-                except Exception:
-                    logger.debug("Thinking segment lookup failed", exc_info=True)
-
             gen_t0 = time.perf_counter()
             _timeout_deadline = gen_t0 + timeout_seconds
             first = True
             _itl_samples: list[float] = []
             _last_tok_time = 0.0
             _lprocs = logits_processors if logits_processors else None
-            spec_prefill_done = False
-
-            # SpecPrefill: sparse prefill for long prompts
-            if (
-                self._spec_prefill_enabled
-                and self._spec_prefill_draft_model is not None
-                and len(ids_to_prefill) >= self._spec_prefill_threshold
-            ):
-                from .spec_prefill import (
-                    cleanup_rope,
-                    score_tokens,
-                    select_chunks,
-                    sparse_prefill,
-                )
-
-                try:
-                    importance = score_tokens(
-                        self._spec_prefill_draft_model, ids_to_prefill
-                    )
-                    selected = select_chunks(
-                        importance, keep_pct=self._spec_prefill_keep_rate
-                    )
-                    logits = sparse_prefill(model, ids_to_prefill, selected, cache)
-                    mx.eval(logits)
-                    ttft_s = time.perf_counter() - gen_t0
-                    first = False
-                    first_token = int(sampler(logits[:, -1:, :]))
-                    tokens.append(first_token)
-                    if logprobs:
-                        _lp_logits = logits[:, -1, :].astype(mx.float32)
-                        log_probs = _lp_logits - mx.logsumexp(
-                            _lp_logits, axis=-1, keepdims=True
-                        )
-                        log_probs = mx.where(
-                            mx.isnan(log_probs),
-                            mx.array(-100.0, dtype=log_probs.dtype),
-                            log_probs,
-                        )
-                        tok_lp = float(log_probs[0, first_token])
-                        token_logprobs.append(
-                            {"token_id": first_token, "logprob": tok_lp}
-                        )
-                    if first_token in stop_ids:
-                        tokens.pop()
-                        _stopped_by_stop_id = True
-                    else:
-                        detokenizer.add_token(first_token)
-                        # Check stop suffix on first_token (was missing)
-                        if stop_suffixes and any(
-                            detokenizer.text.endswith(s) for s in stop_suffixes
-                        ):
-                            tokens.pop()
-                            _stopped_by_suffix = True
-                        else:
-                            # Check if first_token starts a thinking segment
-                            if (
-                                think_start_token is not None
-                                and first_token == think_start_token
-                            ):
-                                _in_thinking = True
-                                _thinking_tokens = []
-                    remaining = max_tokens - 1
-                    if (
-                        remaining > 0
-                        and first_token not in stop_ids
-                        and not _stopped_by_suffix
-                    ):
-                        for token, logits in generate_step(
-                            mx.array([first_token]).reshape(1, -1),
-                            model,
-                            max_tokens=remaining,
-                            sampler=sampler,
-                            prompt_cache=cache,
-                            logits_processors=_lprocs,
-                        ):
-                            tokens.append(token)
-                            if logprobs:
-                                _lp_logits = logits.astype(mx.float32)
-                                log_probs = _lp_logits - mx.logsumexp(
-                                    _lp_logits, axis=-1, keepdims=True
-                                )
-                                log_probs = mx.where(
-                                    mx.isnan(log_probs),
-                                    mx.array(-100.0, dtype=log_probs.dtype),
-                                    log_probs,
-                                )
-                                tok_lp = float(log_probs[token])
-                                token_logprobs.append(
-                                    {"token_id": int(token), "logprob": tok_lp}
-                                )
-                            if token in stop_ids:
-                                tokens.pop()
-                                _stopped_by_stop_id = True
-                                break
-                            detokenizer.add_token(token)
-                            if stop_suffixes:
-                                if any(
-                                    detokenizer.text.endswith(s) for s in stop_suffixes
-                                ):
-                                    tokens.pop()  # Exclude suffix-triggering token from count
-                                    _stopped_by_suffix = True
-                                    break
-                            # Cancellation check — after append so the token
-                            # is not silently lost (consistent with main loop).
-                            if _is_cancelled(cancel_event):
-                                mx.synchronize()
-                                break
-                            # Timeout check (was missing — SpecPrefill could run indefinitely)
-                            if (
-                                len(tokens) % 32 == 0
-                                and time.perf_counter() > _timeout_deadline
-                            ):
-                                logger.warning(
-                                    f"SpecPrefill generation timed out after {timeout_seconds}s ({len(tokens)} tokens)"
-                                )
-                                break
-                            # Track thinking segment boundaries BEFORE budget check
-                            # (was missing — thinking mode was non-functional in SpecPrefill)
-                            if think_start_token is not None:
-                                if not _in_thinking and token == think_start_token:
-                                    _in_thinking = True
-                                    _thinking_tokens = []
-                                elif _in_thinking:
-                                    _thinking_tokens.append(token)
-                                    if token == think_end_token:
-                                        _in_thinking = False
-                            # Thinking budget enforcement (same as main loop).
-                            # Only force-append think_end_token if the current token
-                            # is NOT already the natural closing tag (avoids duplicate).
-                            if thinking_budget is not None and _in_thinking:
-                                thinking_tokens_used += 1
-                                if (
-                                    thinking_tokens_used >= thinking_budget
-                                    and think_end_token is not None
-                                ):
-                                    _in_thinking = False
-                                    if token != think_end_token:
-                                        tokens.append(think_end_token)
-                                        _thinking_tokens.append(think_end_token)
-                                        detokenizer.add_token(think_end_token)
-                                    break
-                    cleanup_rope(model)
-                    spec_prefill_done = True
-                except Exception:
-                    logger.warning(
-                        "SpecPrefill failed, falling back to standard prefill",
-                        exc_info=True,
-                    )
-                    tokens.clear()
-                    detokenizer.reset()
-                    cache = _create_prompt_cache_with_quant(
-                        model, _req_kv_bits, self._kv_quant_group_size
-                    )
-                    ids_to_prefill = ids
-                    first = True
-                    _thinking_tokens = []
-                    _in_thinking = False
-                    thinking_tokens_used = 0
 
             # HYBRID boundary-snapshot capture. Chunk-prefill
             # the prompt (minus its last token) into `cache`, storing a trim=0
@@ -4425,7 +3880,7 @@ class BatchedEngine:
             # reuse losslessly. generate_step then prefills only the final token
             # and starts decoding. Any failure falls through to a normal full
             # prefill below (ids_to_prefill unchanged).
-            if _hybrid_mode and not spec_prefill_done and len(ids_to_prefill) > 1:
+            if _hybrid_mode and len(ids_to_prefill) > 1:
                 try:
                     _resident = self._capture_hybrid_prefix(
                         model,
@@ -4443,160 +3898,159 @@ class BatchedEngine:
                         exc_info=True,
                     )
 
-            if not spec_prefill_done:
-                _timeout_check_interval = 32
-                with _wired_limit_ctx(model):
-                    for token, logits in generate_step(
-                        ids_to_prefill,
-                        model,
-                        max_tokens=max_tokens,
-                        sampler=sampler,
-                        prompt_cache=cache,
-                        logits_processors=_lprocs,
-                        prefill_step_size=_prefill_step_size(),
+            _timeout_check_interval = 32
+            with _wired_limit_ctx(model):
+                for token, logits in generate_step(
+                    ids_to_prefill,
+                    model,
+                    max_tokens=max_tokens,
+                    sampler=sampler,
+                    prompt_cache=cache,
+                    logits_processors=_lprocs,
+                    prefill_step_size=_prefill_step_size(),
+                ):
+                    if first:
+                        ttft_s = time.perf_counter() - gen_t0
+                        first = False
+                        # Feed cold-prefill throughput to the KV cache so the
+                        # SSD tier can auto-gate fast-prefill models.
+                        # Only on a cold prefill (cached==0) of a non-trivial
+                        # prompt, where ttft_s ≈ pure prefill of ids_to_prefill.
+                        if cached_tokens == 0 and ttft_s > 0:
+                            try:
+                                _n_pf = (
+                                    int(ids_to_prefill.shape[0])
+                                    if hasattr(ids_to_prefill, "shape")
+                                    else len(ids_to_prefill)
+                                )
+                                if _n_pf >= 256:
+                                    self._kv_prefix_cache.note_prefill_tps(
+                                        _n_pf / ttft_s
+                                    )
+                            except Exception:
+                                pass
+                        # Prefill complete — remove from progress tracker
+                        if _prefill_tracker is not None:
+                            _prefill_tracker.update(
+                                _prefill_req_id,
+                                prompt_tokens,
+                                prompt_tokens,
+                                self.model_name or "default",
+                            )
+                        _last_tok_time = time.perf_counter()
+                    else:
+                        # ITL tracking
+                        _tok_now = time.perf_counter()
+                        _itl = _tok_now - _last_tok_time
+                        _last_tok_time = _tok_now
+                        if _itl > 0 and _itl < 10:
+                            _itl_samples.append(_itl)
+                    tokens.append(token)
+                    # Request-level timeout: check every N tokens
+                    if len(tokens) % _timeout_check_interval == 0:
+                        if time.perf_counter() > _timeout_deadline:
+                            logger.warning(
+                                f"Generation timed out after {timeout_seconds}s ({len(tokens)} tokens)"
+                            )
+                            break
+                    # Progressive KV quantization (C6: keep memory flat during generation)
+                    if _req_kv_bits is not None:
+                        _progressive_quantize_kv_cache(
+                            cache,
+                            self._kv_quant_start,
+                            self._kv_quant_group_size,
+                            _req_kv_bits,
+                            len(tokens),
+                        )
+                    # Compute logprobs BEFORE stop checks — logprobs for stop
+                    # tokens are trimmed later via lp_result[:len(tokens)].
+                    if logprobs:
+                        import mlx.core as mx
+
+                        _lp_logits = logits.astype(mx.float32)
+                        log_probs = _lp_logits - mx.logsumexp(
+                            _lp_logits, axis=-1, keepdims=True
+                        )
+                        log_probs = mx.where(
+                            mx.isnan(log_probs),
+                            mx.array(-100.0, dtype=log_probs.dtype),
+                            log_probs,
+                        )
+                        tok_lp = float(log_probs[token])
+                        entry = {"token_id": int(token), "logprob": tok_lp}
+                        if top_logprobs and top_logprobs > 0:
+                            k = min(top_logprobs, log_probs.shape[0])
+                            sorted_idx = mx.argsort(-log_probs)
+                            top_k_idx = sorted_idx[:k]
+                            entry["top_logprobs"] = [
+                                {
+                                    "token_id": int(top_k_idx[j]),
+                                    "logprob": float(log_probs[int(top_k_idx[j])]),
+                                }
+                                for j in range(k)
+                            ]
+                        token_logprobs.append(entry)
+                    # Stop ID check — must happen before thinking budget so that
+                    # a stop token gets finish_reason="stop" even during thinking.
+                    if token in stop_ids:
+                        tokens.pop()  # Exclude stop token from output
+                        _stopped_by_stop_id = True
+                        break
+                    # Always add token to detokenizer for incremental state
+                    # consistency — previously only added when stop_suffixes
+                    # was non-empty, leaving the detokenizer empty and its
+                    # state stale when no suffix matching was requested.
+                    detokenizer.add_token(token)
+                    if stop_suffixes and any(
+                        detokenizer.text.endswith(s) for s in stop_suffixes
                     ):
-                        if first:
-                            ttft_s = time.perf_counter() - gen_t0
-                            first = False
-                            # Feed cold-prefill throughput to the KV cache so the
-                            # SSD tier can auto-gate fast-prefill models.
-                            # Only on a cold prefill (cached==0) of a non-trivial
-                            # prompt, where ttft_s ≈ pure prefill of ids_to_prefill.
-                            if cached_tokens == 0 and ttft_s > 0:
-                                try:
-                                    _n_pf = (
-                                        int(ids_to_prefill.shape[0])
-                                        if hasattr(ids_to_prefill, "shape")
-                                        else len(ids_to_prefill)
-                                    )
-                                    if _n_pf >= 256:
-                                        self._kv_prefix_cache.note_prefill_tps(
-                                            _n_pf / ttft_s
-                                        )
-                                except Exception:
-                                    pass
-                            # Prefill complete — remove from progress tracker
-                            if _prefill_tracker is not None:
-                                _prefill_tracker.update(
-                                    _prefill_req_id,
-                                    prompt_tokens,
-                                    prompt_tokens,
-                                    self.model_name or "default",
-                                )
-                            _last_tok_time = time.perf_counter()
-                        else:
-                            # ITL tracking
-                            _tok_now = time.perf_counter()
-                            _itl = _tok_now - _last_tok_time
-                            _last_tok_time = _tok_now
-                            if _itl > 0 and _itl < 10:
-                                _itl_samples.append(_itl)
-                        tokens.append(token)
-                        # Request-level timeout: check every N tokens
-                        if len(tokens) % _timeout_check_interval == 0:
-                            if time.perf_counter() > _timeout_deadline:
-                                logger.warning(
-                                    f"Generation timed out after {timeout_seconds}s ({len(tokens)} tokens)"
-                                )
-                                break
-                        # Progressive KV quantization (C6: keep memory flat during generation)
-                        if _req_kv_bits is not None:
-                            _progressive_quantize_kv_cache(
-                                cache,
-                                self._kv_quant_start,
-                                self._kv_quant_group_size,
-                                _req_kv_bits,
-                                len(tokens),
+                        tokens.pop()  # Exclude suffix-triggering token from count
+                        _stopped_by_suffix = True
+                        break
+                    # Cancellation check
+                    if _is_cancelled(cancel_event):
+                        mx.synchronize()
+                        break
+                    # Track thinking segment boundaries BEFORE budget check
+                    # so that a natural </think token is detected first and
+                    # the budget enforcement does not append a duplicate.
+                    if think_start_token is not None:
+                        if not _in_thinking and token == think_start_token:
+                            _in_thinking = True
+                            _thinking_tokens = []
+                            self._lookahead_reasoning.check_thinking_state_text(
+                                "<think"
                             )
-                        # Compute logprobs BEFORE stop checks — logprobs for stop
-                        # tokens are trimmed later via lp_result[:len(tokens)].
-                        if logprobs:
-                            import mlx.core as mx
-
-                            _lp_logits = logits.astype(mx.float32)
-                            log_probs = _lp_logits - mx.logsumexp(
-                                _lp_logits, axis=-1, keepdims=True
-                            )
-                            log_probs = mx.where(
-                                mx.isnan(log_probs),
-                                mx.array(-100.0, dtype=log_probs.dtype),
-                                log_probs,
-                            )
-                            tok_lp = float(log_probs[token])
-                            entry = {"token_id": int(token), "logprob": tok_lp}
-                            if top_logprobs and top_logprobs > 0:
-                                k = min(top_logprobs, log_probs.shape[0])
-                                sorted_idx = mx.argsort(-log_probs)
-                                top_k_idx = sorted_idx[:k]
-                                entry["top_logprobs"] = [
-                                    {
-                                        "token_id": int(top_k_idx[j]),
-                                        "logprob": float(log_probs[int(top_k_idx[j])]),
-                                    }
-                                    for j in range(k)
-                                ]
-                            token_logprobs.append(entry)
-                        # Stop ID check — must happen before thinking budget so that
-                        # a stop token gets finish_reason="stop" even during thinking.
-                        if token in stop_ids:
-                            tokens.pop()  # Exclude stop token from output
-                            _stopped_by_stop_id = True
-                            break
-                        # Always add token to detokenizer for incremental state
-                        # consistency — previously only added when stop_suffixes
-                        # was non-empty, leaving the detokenizer empty and its
-                        # state stale when no suffix matching was requested.
-                        detokenizer.add_token(token)
-                        if stop_suffixes and any(
-                            detokenizer.text.endswith(s) for s in stop_suffixes
-                        ):
-                            tokens.pop()  # Exclude suffix-triggering token from count
-                            _stopped_by_suffix = True
-                            break
-                        # Cancellation check
-                        if _is_cancelled(cancel_event):
-                            mx.synchronize()
-                            break
-                        # Track thinking segment boundaries BEFORE budget check
-                        # so that a natural </think token is detected first and
-                        # the budget enforcement does not append a duplicate.
-                        if think_start_token is not None:
-                            if not _in_thinking and token == think_start_token:
-                                _in_thinking = True
-                                _thinking_tokens = []
-                                self._lookahead_reasoning.check_thinking_state_text(
-                                    "<think"
-                                )
-                            elif _in_thinking:
-                                _thinking_tokens.append(token)
-                                if token == think_end_token:
-                                    _in_thinking = False
-                                    self._lookahead_reasoning.check_thinking_state_text(
-                                        "</think"
-                                    )
-
-                        # Thinking budget enforcement: cap thinking tokens.
-                        # Only force-append think_end_token if the current token
-                        # is NOT already the natural closing tag (avoids duplicate).
-                        if thinking_budget is not None and _in_thinking:
-                            thinking_tokens_used += 1
-                            if (
-                                thinking_tokens_used >= thinking_budget
-                                and think_end_token is not None
-                            ):
+                        elif _in_thinking:
+                            _thinking_tokens.append(token)
+                            if token == think_end_token:
                                 _in_thinking = False
-                                # Add forced closing tag to tokens so it appears in
-                                # tokenizer.decode(tokens) output (non-streaming path).
-                                # Also add to detokenizer so detokenizer.text stays
-                                # consistent with the tokens list — previously the
-                                # forced tag was only in tokens[], causing
-                                # detokenizer.text to miss it when suffix matching
-                                # chose the detokenizer path for output assembly.
-                                if token != think_end_token:
-                                    tokens.append(think_end_token)
-                                    _thinking_tokens.append(think_end_token)
-                                    detokenizer.add_token(think_end_token)
-                                break
+                                self._lookahead_reasoning.check_thinking_state_text(
+                                    "</think"
+                                )
+
+                    # Thinking budget enforcement: cap thinking tokens.
+                    # Only force-append think_end_token if the current token
+                    # is NOT already the natural closing tag (avoids duplicate).
+                    if thinking_budget is not None and _in_thinking:
+                        thinking_tokens_used += 1
+                        if (
+                            thinking_tokens_used >= thinking_budget
+                            and think_end_token is not None
+                        ):
+                            _in_thinking = False
+                            # Add forced closing tag to tokens so it appears in
+                            # tokenizer.decode(tokens) output (non-streaming path).
+                            # Also add to detokenizer so detokenizer.text stays
+                            # consistent with the tokens list — previously the
+                            # forced tag was only in tokens[], causing
+                            # detokenizer.text to miss it when suffix matching
+                            # chose the detokenizer path for output assembly.
+                            if token != think_end_token:
+                                tokens.append(think_end_token)
+                                _thinking_tokens.append(think_end_token)
+                                detokenizer.add_token(think_end_token)
+                            break
 
             # Cache the completed KV state for future prefix matching
             # Quantize cache layers to save memory (mlx-lm pattern)
@@ -4690,24 +4144,6 @@ class BatchedEngine:
                     )
                 except Exception:
                     logger.debug("prompt cache store failed", exc_info=True)
-
-            # Store thinking segment KV for future reuse (if enabled)
-            if _thinking_tokens and self._thinking_store is not None:
-                try:
-                    import hashlib as _hl
-
-                    conv_id = _hl.sha256(str(ids[:16]).encode()).hexdigest()[:16]
-                    # Snapshot the cache so the thinking store doesn't hold a
-                    # reference to the same mutable list as prefix_cache.
-                    _thinking_kv = [c for c in cache] if cache else None
-                    self._thinking_store.store(
-                        conversation_id=conv_id,
-                        thinking_tokens=_thinking_tokens,
-                        context_tokens=[int(t) for t in ids],
-                        kv_data=_thinking_kv,
-                    )
-                except Exception:
-                    logger.debug("Thinking segment store failed", exc_info=True)
 
             # Finalize detokenizer to flush any remaining partial UTF-8 bytes
             # before assembling final output text.
@@ -5527,10 +4963,9 @@ class BatchedEngine:
     ) -> AsyncIterator[GenerationOutput]:
         """Fast streaming: runs generate_step on executor, yields via asyncio.Queue.
 
-        When YUNSHU_STREAMING_PIPELINE=1, wraps generation with:
-        - StreamingBackpressureController to prevent OOM on slow clients
-        - TokenPipeline for GPU/CPU overlap (future: full pipeline)
-        - PrefetchSampler for sampling plan pre-computation (future: per-step)
+        Wraps generation with a StreamingBackpressureController to prevent OOM
+        on slow clients.
+
         """
         from mlx_lm.generate import generate_step
         from mlx_lm.sample_utils import make_sampler
@@ -5539,15 +4974,6 @@ class BatchedEngine:
         from .streaming_optimizer import StreamingBackpressureController
 
         _backpressure = StreamingBackpressureController(max_queue_size=100)
-
-        # TokenPipeline for GPU/CPU overlap — activated via YUNSHU_STREAMING_PIPELINE=1
-        _pipeline = None
-        if self._streaming_pipeline_enabled:
-            from .streaming_optimizer import PipelineConfig, TokenPipeline
-
-            _pipeline = TokenPipeline(PipelineConfig(enable_overlap=True))
-            _pipeline.start_pipeline(request=None)
-            logger.debug("TokenPipeline active for streaming fast path")
 
         tokenizer = self._tokenizer
         model = self._model
@@ -6210,14 +5636,6 @@ class BatchedEngine:
                                     {"token_id": int(_top_k_idx[j]), "logprob": _tlp}
                                 )
                             _lp_entry["top_logprobs"] = _top_entries
-                    # TokenPipeline: submit GPU stages for tracking
-                    if _pipeline is not None and _pipeline.is_running:
-                        _ptok = _pipeline.submit_stage1_result(
-                            logits=None, token_id=int(token)
-                        )
-                        _ptok = _pipeline.submit_stage2_result(
-                            _ptok, sampled_id=int(token)
-                        )
                     # Check cancellation
                     if _is_cancelled(cancel_event):
                         mx.synchronize()
@@ -6256,8 +5674,6 @@ class BatchedEngine:
                                 "reasoning" if _in_thinking else "normal",
                             )
                         )
-                        if _pipeline is not None:
-                            _pipeline.finish()
                         if _prefill_tracker is not None:
                             _prefill_tracker.remove(_prefill_req_id)
                         _unregister_inflight()
@@ -6303,8 +5719,6 @@ class BatchedEngine:
                                 "reasoning" if _in_thinking else "normal",
                             )
                         )
-                        if _pipeline is not None:
-                            _pipeline.finish()
                         if _prefill_tracker is not None:
                             _prefill_tracker.remove(_prefill_req_id)
                         _unregister_inflight()
@@ -6407,14 +5821,6 @@ class BatchedEngine:
                                             "reasoning",
                                         )
                                     )
-                            # Store thinking segment before returning
-                            if _thinking_tokens and self._thinking_store is not None:
-                                _store_thinking_segment(
-                                    ids,
-                                    _thinking_tokens,
-                                    self._thinking_store,
-                                    kv_cache=cache,
-                                )
                             detokenizer.finalize()
                             _remaining = detokenizer.last_segment
                             if _hb_active:
@@ -6442,8 +5848,6 @@ class BatchedEngine:
                                     "normal",
                                 )
                             )
-                            if _pipeline is not None:
-                                _pipeline.finish()
                             if prefix_cache is not None:
                                 prefix_cache.add(ids, cache)
                             _save_breakpoint_prefixes(ids, cache)
@@ -6554,14 +5958,6 @@ class BatchedEngine:
                     if _hb_active and not _is_stopping and _hb.contains_stop():
                         _is_stopping = True
                     if _is_stopping:
-                        # Store thinking segment on stop
-                        if _thinking_tokens and self._thinking_store is not None:
-                            _store_thinking_segment(
-                                ids,
-                                _thinking_tokens,
-                                self._thinking_store,
-                                kv_cache=cache,
-                            )
                         detokenizer.finalize()
                         _remaining = detokenizer.last_segment
                         if _hb_active:
@@ -6619,19 +6015,12 @@ class BatchedEngine:
                         _put(
                             ("", n_tok, "stop", len(_thinking_tokens), None, _cur_state)
                         )
-                        if _pipeline is not None:
-                            _pipeline.finish()
                         if prefix_cache is not None:
                             prefix_cache.add(ids, cache)
                         _save_breakpoint_prefixes(ids, cache)
                         mx.synchronize()
                         _unregister_inflight()
                         return
-                # Store thinking segment at end of generation
-                if _thinking_tokens and self._thinking_store is not None:
-                    _store_thinking_segment(
-                        ids, _thinking_tokens, self._thinking_store, kv_cache=cache
-                    )
                 if prefix_cache is not None:
                     prefix_cache.add(ids, cache)
                 _save_breakpoint_prefixes(ids, cache)
@@ -6655,9 +6044,6 @@ class BatchedEngine:
                     )
                 _put(("", n_tok, "length", len(_thinking_tokens), None, _final_state))
                 mx.synchronize()
-                # Finish pipeline tracking at end of generation
-                if _pipeline is not None:
-                    _pipeline.finish()
                 # Clean up prefill progress entry (may persist if first token wasn't reached)
                 if _prefill_tracker is not None:
                     _prefill_tracker.remove(_prefill_req_id)
@@ -6878,16 +6264,6 @@ class BatchedEngine:
                     break
                 n_tok = tok_count
 
-                # TokenPipeline: run stage 3 overlap for stats tracking
-                if (
-                    _pipeline is not None
-                    and _pipeline.is_running
-                    and _pipeline._current is not None
-                ):
-                    await _pipeline.next_token(
-                        detokenize_fn=lambda _tid, _t=new_text: _t,
-                    )
-
                 # Streaming backpressure: slow down if client can't keep up
                 if _backpressure.check_backpressure(_q.qsize()):
                     _delay = _backpressure.get_delay_ms(_q.qsize())
@@ -6992,13 +6368,6 @@ class BatchedEngine:
                         "ServerMetrics recording failed in streaming fast path",
                         exc_info=True,
                     )
-            # Stop pipeline and log stats
-            if _pipeline is not None:
-                _pipeline.stop()
-                logger.info(
-                    "TokenPipeline stats: %s",
-                    _pipeline.get_stats(),
-                )
             if not future.done():
                 future.cancel()
                 with suppress(asyncio.CancelledError, Exception):
@@ -7067,7 +6436,7 @@ class BatchedEngine:
         if dropped and not getattr(self, "_mtp_dropped_warned", False):
             self._mtp_dropped_warned = True
             logger.warning(
-                "YUNSHU_TEXT_MTP backend honors only temperature; these request params "
+                "mlx-vlm MTP backend honors only temperature; these request params "
                 "are NOT applied and were ignored: %s",
                 ", ".join(dropped),
             )
@@ -7415,73 +6784,64 @@ class BatchedEngine:
         Also initializes N-gram proposer as a model-free fallback.
         """
         # Always initialize N-gram proposer (model-free, zero overhead when idle)
-        import os
+        from .ngram_proposer import NgramConfig, NgramProposer
 
-        if os.environ.get("YUNSHU_NGRAM_SPEC", "").strip() not in ("0", "false", "no"):
-            from .ngram_proposer import NgramConfig, NgramProposer
+        max_n, k, mode = 5, 5, "lps"
+        # Spec proposer family (shares the lossless verify path + base loop):
+        #   "ngram"  (default) — fixed-length n-gram suffix→continuation, O(1)
+        #   "suffix" — Suffix Decoding (arXiv 2411.04975): LONGEST-suffix match,
+        #              stronger on repetitive output (code/JSON/agentic loops).
+        # Both are lossless by construction — verify_with_last_token only
+        # accepts the model's own argmax, so the proposer affects speed, not
+        # output. The slot below is the single "spec proposer" the routing
+        # gates and per-request construction read.
+        _proposer_kind = settings.get("YUNSHU_SPEC_PROPOSER")
+        if _proposer_kind == "suffix":
+            from .suffix_proposer import SuffixConfig, SuffixProposer
 
-            max_n = int(os.environ.get("YUNSHU_NGRAM_MAX_N", "5"))
-            k = int(os.environ.get("YUNSHU_NGRAM_K", "5"))
-            mode = os.environ.get("YUNSHU_NGRAM_MODE", "lps").strip()
-            # Spec proposer family (shares the lossless verify path + base loop):
-            #   "ngram"  (default) — fixed-length n-gram suffix→continuation, O(1)
-            #   "suffix" — Suffix Decoding (arXiv 2411.04975): LONGEST-suffix match,
-            #              stronger on repetitive output (code/JSON/agentic loops).
-            # Both are lossless by construction — verify_with_last_token only
-            # accepts the model's own argmax, so the proposer affects speed, not
-            # output. The slot below is the single "spec proposer" the routing
-            # gates and per-request construction read.
-            _proposer_kind = (
-                os.environ.get("YUNSHU_SPEC_PROPOSER", "ngram").strip().lower()
+            self._ngram_proposer = SuffixProposer(
+                SuffixConfig(max_draft=k, max_trie_depth=max(max_n, 16) * 4)
             )
-            if _proposer_kind == "suffix":
-                from .suffix_proposer import SuffixConfig, SuffixProposer
-
-                self._ngram_proposer = SuffixProposer(
-                    SuffixConfig(max_draft=k, max_trie_depth=max(max_n, 16) * 4)
-                )
-            else:
-                self._ngram_proposer = NgramProposer(
-                    NgramConfig(max_n=max_n, k=k, mode=mode)
-                )
-            # Correctness history: the earlier gross corruption (dropped/
-            # duplicated tokens — "2, 4, 6"→"246", "…the average speed"→"…the
-            # average average") was NOT the verifier: it was the prefill+base loop
-            # driving the KV cache with generate_step's prefill-break + per-token
-            # feed while the verify path used direct model() calls — the mixed
-            # access skewed the cache offset. Both loops now use direct model()
-            # forwards (consistent with verify_with_last_token), which is lossless:
-            #   • speculation is exact — full-spec output == base-only (no-spec)
-            #     output, byte-for-byte;
-            #   • byte-identical to the fast path on short/medium greedy gen across
-            #     gemma-4-e4b, Qwen2.5-3B-4bit (spec actually running) and
-            #     Qwen3.5-2B (hybrid cache → spec correctly disabled).
-            # A residual single-token divergence can appear DEEP in long greedy gen
-            # (~1.4k chars in): the n-gram loop (direct model() + mlx sampler) and
-            # the fast loop (generate_step + numpy sampler) break a near-tie argmax
-            # differently. It is FP-level path difference — both are valid greedy
-            # decodes, same class as the cross-process non-determinism this engine
-            # already has — NOT corruption.
-            #
-            # DEFAULT OFF (measured 2026-06-30): n-gram spec is lossless but NOT free —
-            # it batch-verifies K draft tokens per step, so when acceptance is low (normal
-            # prose, code — the common case) it pays K× compute for ~1 token and is SLOWER.
-            # Measured on Qwen2.5-3B-4bit greedy: ~2.5× slower on normal/code, ~1.2× faster
-            # only on highly repetitive output; on Qwen3.5-2B-bf16 ~3% slower everywhere.
-            # So it's opt-in (YUNSHU_NGRAM_DEFAULT=1) for repetitive/agentic workloads where
-            # it wins, not a safe global default. Routing: see _spec_route (per-request
-            # spec_decode=true or YUNSHU_NGRAM_DEFAULT=1; greedy, non-streaming only).
-            self._ngram_greedy_default = os.environ.get(
-                "YUNSHU_NGRAM_DEFAULT", "0"
-            ).strip().lower() in ("1", "true", "yes")
-            logger.info(
-                "Spec proposer initialized: kind=%s, max_n=%d, k=%d, mode=%s, greedy_default=%s",
-                _proposer_kind,
-                max_n,
-                k,
-                mode,
-                self._ngram_greedy_default,
+        else:
+            self._ngram_proposer = NgramProposer(
+                NgramConfig(max_n=max_n, k=k, mode=mode)
             )
+        # Correctness history: the earlier gross corruption (dropped/
+        # duplicated tokens — "2, 4, 6"→"246", "…the average speed"→"…the
+        # average average") was NOT the verifier: it was the prefill+base loop
+        # driving the KV cache with generate_step's prefill-break + per-token
+        # feed while the verify path used direct model() calls — the mixed
+        # access skewed the cache offset. Both loops now use direct model()
+        # forwards (consistent with verify_with_last_token), which is lossless:
+        #   • speculation is exact — full-spec output == base-only (no-spec)
+        #     output, byte-for-byte;
+        #   • byte-identical to the fast path on short/medium greedy gen across
+        #     gemma-4-e4b, Qwen2.5-3B-4bit (spec actually running) and
+        #     Qwen3.5-2B (hybrid cache → spec correctly disabled).
+        # A residual single-token divergence can appear DEEP in long greedy gen
+        # (~1.4k chars in): the n-gram loop (direct model() + mlx sampler) and
+        # the fast loop (generate_step + numpy sampler) break a near-tie argmax
+        # differently. It is FP-level path difference — both are valid greedy
+        # decodes, same class as the cross-process non-determinism this engine
+        # already has — NOT corruption.
+        #
+        # DEFAULT OFF (measured 2026-06-30): n-gram spec is lossless but NOT free —
+        # it batch-verifies K draft tokens per step, so when acceptance is low (normal
+        # prose, code — the common case) it pays K× compute for ~1 token and is SLOWER.
+        # Measured on Qwen2.5-3B-4bit greedy: ~2.5× slower on normal/code, ~1.2× faster
+        # only on highly repetitive output; on Qwen3.5-2B-bf16 ~3% slower everywhere.
+        # So it's opt-in (YUNSHU_NGRAM_DEFAULT=1) for repetitive/agentic workloads where
+        # it wins, not a safe global default. Routing: see _spec_route (per-request
+        # spec_decode=true or YUNSHU_NGRAM_DEFAULT=1; greedy, non-streaming only).
+        self._ngram_greedy_default = settings.get_bool("YUNSHU_NGRAM_DEFAULT")
+        logger.info(
+            "Spec proposer initialized: kind=%s, max_n=%d, k=%d, mode=%s, greedy_default=%s",
+            _proposer_kind,
+            max_n,
+            k,
+            mode,
+            self._ngram_greedy_default,
+        )
 
         # Adaptive spec controller (requires N-gram proposer active). ON by default
         # whenever spec runs: it sets the draft length K from acceptance feedback and
@@ -7496,62 +6856,10 @@ class BatchedEngine:
         # generate_step — a structural cost of being inside _generate_ngram_spec at all.
         # Eliminating it would mean routing idle steps back through generate_step (major
         # surgery, deferred). So this just makes the OPT-IN spec path safe + self-tuning.
-        # YUNSHU_ADAPTIVE_SPEC=0 disables it (fixed proposer K, old behavior); =1 tunes via env.
         if self._ngram_proposer is not None:
             from .adaptive_spec import AdaptiveSpecController
 
-            _adaptive_flag = os.environ.get("YUNSHU_ADAPTIVE_SPEC", "").strip().lower()
-            if _adaptive_flag in ("0", "false", "no"):
-                self._adaptive_spec = None
-            else:
-                self._adaptive_spec = (
-                    AdaptiveSpecController.from_env() or AdaptiveSpecController()
-                )
-
-        # SpecPrefill: sparse (lossy) prefill for long prompts — keeps only the
-        # most "important" prompt tokens (scored by a small draft model) to cut
-        # TTFT on very long contexts. Opt-in via YUNSHU_SPEC_PREFILL=1 AND a draft
-        # model (YUNSHU_SPEC_PREFILL_DRAFT_MODEL, falling back to YUNSHU_DRAFT_MODEL).
-        # The fast-path block that consumes this REQUIRES _spec_prefill_draft_model
-        # to be non-None — without a draft model the flag would silently do nothing,
-        # so we either wire a real draft here or warn loudly that it stays inactive.
-        if os.environ.get("YUNSHU_SPEC_PREFILL", "").strip() in ("1", "true", "yes"):
-            self._spec_prefill_threshold = int(
-                os.environ.get("YUNSHU_SPEC_PREFILL_THRESHOLD", "8192")
-            )
-            self._spec_prefill_keep_rate = float(
-                os.environ.get("YUNSHU_SPEC_PREFILL_KEEP_RATE", "0.20")
-            )
-            sp_draft_path = (
-                os.environ.get("YUNSHU_SPEC_PREFILL_DRAFT_MODEL", "").strip()
-                or os.environ.get("YUNSHU_DRAFT_MODEL", "").strip()
-            )
-            if sp_draft_path:
-                try:
-                    from mlx_lm.utils import load as load_model
-
-                    self._spec_prefill_draft_model, _ = load_model(sp_draft_path)
-                    self._spec_prefill_enabled = True
-                    logger.info(
-                        "SpecPrefill active: draft=%s threshold=%d keep_rate=%.2f",
-                        sp_draft_path,
-                        self._spec_prefill_threshold,
-                        self._spec_prefill_keep_rate,
-                    )
-                except Exception as e:  # noqa: BLE001
-                    logger.warning(
-                        "SpecPrefill requested but draft model %r failed to load "
-                        "(%s) — SpecPrefill stays INACTIVE.",
-                        sp_draft_path,
-                        e,
-                    )
-            else:
-                logger.warning(
-                    "YUNSHU_SPEC_PREFILL=1 but no draft model set "
-                    "(YUNSHU_SPEC_PREFILL_DRAFT_MODEL / YUNSHU_DRAFT_MODEL) — "
-                    "SpecPrefill needs one to score token importance and stays "
-                    "INACTIVE. The fast path runs normal full prefill."
-                )
+            self._adaptive_spec = AdaptiveSpecController()
 
         # Gemma-4 assistant drafter (external EAGLE-style drafter, KV-shared with
         # target). Independent of target spec heads, so initialize before the
@@ -7576,13 +6884,13 @@ class BatchedEngine:
 
         head_info = detect_spec_heads(model_config)
 
-        # : an EXTERNAL cross-model draft (YUNSHU_DRAFT_MODEL /
+        # An EXTERNAL cross-model draft (YUNSHU_DRAFT_MODEL /
         # config draft_model_path) is independent of the target's native spec
         # heads — it works for ANY model. Load it BEFORE the no-native-heads
         # early return below, otherwise an explicitly-configured draft model was
         # silently ignored for models without native heads (e.g. plain Qwen2.5),
         # and a `spec_decode: true` request fell through to the n-gram path.
-        draft_path = os.environ.get("YUNSHU_DRAFT_MODEL", "").strip()
+        draft_path = settings.get("YUNSHU_DRAFT_MODEL")
         if not draft_path and model_config:
             draft_path = model_config.get("draft_model_path", "")
         if draft_path:
@@ -7621,19 +6929,16 @@ class BatchedEngine:
             f"draft_length={spec_config.draft_length}"
         )
 
-        # the home-grown MTP decoder path is DEPRECATED — it
-        # lacked mlx-vlm's GatedDeltaNet intermediate-state capture (garbage on
-        # 27B, ~0.9x on 9B). Use YUNSHU_TEXT_MTP=1 for the supported mlx-vlm MTP backend.
-        # HONESTY: mlx-vlm MTP is EXPERIMENTAL (the "1.8x" figure is proof-script
-        # only, not served/gated; the path drops sampling params + is non-streaming) — not a
-        # shipped prod win.
-        if head_info.head_type == "mtp" and os.environ.get(
-            "YUNSHU_LEGACY_MTP", "0"
-        ).strip() not in ("1", "true", "yes"):
+        # The home-grown MTP decoder lacked mlx-vlm's GatedDeltaNet
+        # intermediate-state capture (garbage on 27B, ~0.9x on 9B). Both text
+        # MTP backends are experimental (YUNSHU_SPEC_UNVERIFIED=mtp|mlxvlm_mtp).
+        if (
+            head_info.head_type == "mtp"
+            and settings.get("YUNSHU_SPEC_UNVERIFIED") != "mtp"
+        ):
             logger.info(
-                "Native MTP head detected on %s, but the home-grown MTP path is "
-                "deprecated — set YUNSHU_TEXT_MTP=1 for the (experimental) mlx-vlm MTP backend "
-                "or YUNSHU_LEGACY_MTP=1 for the old path.",
+                "Native MTP head detected on %s; text MTP is experimental "
+                "(YUNSHU_SPEC_UNVERIFIED=mlxvlm_mtp or mtp).",
                 self.model_name,
             )
         elif head_info.head_type == "mtp" and self._spec_decoder is None:
@@ -7662,9 +6967,6 @@ class BatchedEngine:
 
                 mtp_config = MTPConfig(
                     max_tokens=256,
-                    cooldown_on_reject=os.environ.get("YUNSHU_MTP_COOLDOWN", "").strip()
-                    in ("1", "true", "yes"),
-                    fastmtp_top_k=int(os.environ.get("YUNSHU_MTP_FASTMTP_TOP_K", "0")),
                     use_n_confirmed=True,
                 )
                 self._mtp_decoder = MTPDecoder(
@@ -7709,9 +7011,8 @@ class BatchedEngine:
         rather than the scheduler's generic draft-model path. Validated ~1.27×
         (greedy-only). Graceful no-op when unset or on any load failure.
         """
-        import os
+        drafter_dir = settings.get("YUNSHU_GEMMA4_ASSISTANT")
 
-        drafter_dir = os.environ.get("YUNSHU_GEMMA4_ASSISTANT", "").strip()
         if not drafter_dir:
             return
         try:
@@ -10463,220 +9764,101 @@ class BatchedEngine:
                     if hasattr(batch_logits, "logits"):
                         batch_logits = batch_logits.logits
 
-                    # GPU-accelerated rejection sampling when enabled
-                    if self._gpu_rejection_enabled:
-                        from .gpu_rejection import GPURejectionSampler as _GRS
-
-                        rej_result = self._gpu_rejection_sampler.verify_greedy(
-                            batch_logits[0, :n_draft], draft_ids[:n_draft]
-                        )
-                        accepted = rej_result.accepted_count
-
-                        # NG-PEN: Apply penalty/bias to bonus position logits.
-                        # Only the bonus token (first new token after accepted drafts)
-                        # gets penalties — draft tokens are already committed.
-                        _has_ng_pen = (
-                            repetition_penalty != 1.0
-                            or frequency_penalty != 0.0
-                            or presence_penalty != 0.0
-                            or (logit_bias is not None and len(logit_bias) > 0)
-                        )
-                        if _has_ng_pen and accepted < n_draft:
-                            _ng_bonus_logits = batch_logits[0, accepted, :]
-                            _ng_token_hist = all_token_ids
-                            _ng_bonus_logits = _apply_spec_bonus_penalties(
-                                _ng_bonus_logits,
-                                _ng_token_hist,
+                    # Sequential verify
+                    # NG-PEN: Apply penalty/bias to the bonus/correction logits
+                    # at the first rejection position (the first "new" token).
+                    _has_ng_pen_cpu = (
+                        repetition_penalty != 1.0
+                        or frequency_penalty != 0.0
+                        or presence_penalty != 0.0
+                        or (logit_bias is not None and len(logit_bias) > 0)
+                    )
+                    for i in range(n_draft):
+                        # Apply penalties at the first rejection position only
+                        if _has_ng_pen_cpu and i == accepted:
+                            _ng_bonus_logits_cpu = batch_logits[0, i, :]
+                            _ng_token_hist_cpu = all_token_ids
+                            _ng_bonus_logits_cpu = _apply_spec_bonus_penalties(
+                                _ng_bonus_logits_cpu,
+                                _ng_token_hist_cpu,
                                 len(input_ids),
                                 repetition_penalty=repetition_penalty,
                                 frequency_penalty=frequency_penalty,
                                 presence_penalty=presence_penalty,
                                 logit_bias=logit_bias,
                             )
-                            batch_logits[0, accepted, :] = _ng_bonus_logits
-
-                        for i in range(n_draft):
-                            if i < accepted:
-                                accepted_id = draft_ids[i]
-                            elif i == accepted:
-                                accepted_id = _GRS.compute_bonus_token(
-                                    batch_logits[0, :n_draft], accepted
-                                )
-                            else:
-                                break
-                            tokens.append(accepted_id)
-                            all_token_ids.append(accepted_id)
-                            remaining -= 1
-                            n_tok += 1
-                            stop_hit = accepted_id in stop_ids
-                            if stop_hit:
-                                n_tok -= 1  # Exclude stop token from count
-                                _put(("", n_tok, "stop", accepted_id))
+                            batch_logits[0, i, :] = _ng_bonus_logits_cpu
+                        model_pick = int(mx.argmax(batch_logits[0, i], axis=-1).item())
+                        draft_id = draft_ids[i]
+                        is_accept = model_pick == draft_id
+                        accepted_id = draft_id if is_accept else model_pick
+                        tokens.append(accepted_id)
+                        all_token_ids.append(accepted_id)
+                        if is_accept:
+                            accepted += 1
+                        remaining -= 1
+                        n_tok += 1
+                        stop_hit = accepted_id in stop_ids
+                        if stop_hit:
+                            n_tok -= 1  # Exclude stop token from count
+                            _put(("", n_tok, "stop", accepted_id))
+                            stopped = True
+                        else:
+                            detokenizer.add_token(accepted_id)
+                            if _ng_track_thinking(accepted_id):
                                 stopped = True
-                            else:
-                                detokenizer.add_token(accepted_id)
-                                if _ng_track_thinking(accepted_id):
-                                    stopped = True
-                                    break
-                                suffix_hit = False
-                                if stop_suffixes:
-                                    suffix_hit = any(
-                                        detokenizer.text.endswith(s)
-                                        for s in stop_suffixes
-                                    )
-                                _text = "" if suffix_hit else detokenizer.last_segment
-                                if suffix_hit:
-                                    n_tok -= (
-                                        1  # Exclude suffix-triggering token from count
-                                    )
-                                _put(
-                                    (
-                                        _text,
-                                        n_tok,
-                                        "stop" if suffix_hit else None,
-                                        accepted_id,
-                                    )
-                                )
-                                if suffix_hit:
-                                    stopped = True
-                            # Advance grammar constraint for accepted/bonus token
-                            if _stream_grammar_constraint is not None and not stop_hit:
-                                try:
-                                    tok_text = tokenizer.decode([accepted_id])
-                                    _stream_grammar_constraint.advance(tok_text)
-                                except Exception:
-                                    logger.debug(
-                                        "grammar advance failed for n-gram streaming accepted token",
-                                        exc_info=True,
-                                    )
-                            if i >= accepted:
-                                stopped = True
-                            if stopped:
                                 break
-
-                        # Trim KV cache to remove entries for rejected draft tokens.
-                        # The batch forward populated the cache with n_draft entries,
-                        # but only `accepted` were verified. Trim the rejected ones.
-                        # Then feed the bonus/correction token so its KV entry is
-                        # present for the next iteration's batch forward.
-                        if accepted < n_draft:
-                            try:
-                                from mlx_lm.models.cache import trim_prompt_cache
-
-                                trim_prompt_cache(cache, n_draft - accepted)
-                            except Exception:
-                                logger.debug(
-                                    "trim_prompt_cache (n-gram GPU partial) failed, falling back",
-                                    exc_info=True,
+                            suffix_hit = False
+                            if stop_suffixes:
+                                suffix_hit = any(
+                                    detokenizer.text.endswith(s) for s in stop_suffixes
                                 )
-                                for c in cache:
-                                    if hasattr(c, "trim"):
-                                        c.trim(n_draft - accepted)
-                            # Feed the correction token to populate its KV entry
-                            if not stopped and tokens:
-                                _correction = tokens[-1]
-                                _ = model(mx.array([[_correction]]), cache=cache)
-                    else:
-                        # CPU sequential fallback
-                        # NG-PEN: Apply penalty/bias to the bonus/correction logits
-                        # at the first rejection position (the first "new" token).
-                        _has_ng_pen_cpu = (
-                            repetition_penalty != 1.0
-                            or frequency_penalty != 0.0
-                            or presence_penalty != 0.0
-                            or (logit_bias is not None and len(logit_bias) > 0)
-                        )
-                        for i in range(n_draft):
-                            # Apply penalties at the first rejection position only
-                            if _has_ng_pen_cpu and i == accepted:
-                                _ng_bonus_logits_cpu = batch_logits[0, i, :]
-                                _ng_token_hist_cpu = all_token_ids
-                                _ng_bonus_logits_cpu = _apply_spec_bonus_penalties(
-                                    _ng_bonus_logits_cpu,
-                                    _ng_token_hist_cpu,
-                                    len(input_ids),
-                                    repetition_penalty=repetition_penalty,
-                                    frequency_penalty=frequency_penalty,
-                                    presence_penalty=presence_penalty,
-                                    logit_bias=logit_bias,
+                            _text = "" if suffix_hit else detokenizer.last_segment
+                            if suffix_hit:
+                                n_tok -= 1  # Exclude suffix-triggering token from count
+                            _put(
+                                (
+                                    _text,
+                                    n_tok,
+                                    "stop" if suffix_hit else None,
+                                    accepted_id,
                                 )
-                                batch_logits[0, i, :] = _ng_bonus_logits_cpu
-                            model_pick = int(
-                                mx.argmax(batch_logits[0, i], axis=-1).item()
                             )
-                            draft_id = draft_ids[i]
-                            is_accept = model_pick == draft_id
-                            accepted_id = draft_id if is_accept else model_pick
-                            tokens.append(accepted_id)
-                            all_token_ids.append(accepted_id)
-                            if is_accept:
-                                accepted += 1
-                            remaining -= 1
-                            n_tok += 1
-                            stop_hit = accepted_id in stop_ids
-                            if stop_hit:
-                                n_tok -= 1  # Exclude stop token from count
-                                _put(("", n_tok, "stop", accepted_id))
+                            if suffix_hit:
                                 stopped = True
-                            else:
-                                detokenizer.add_token(accepted_id)
-                                if _ng_track_thinking(accepted_id):
-                                    stopped = True
-                                    break
-                                suffix_hit = False
-                                if stop_suffixes:
-                                    suffix_hit = any(
-                                        detokenizer.text.endswith(s)
-                                        for s in stop_suffixes
-                                    )
-                                _text = "" if suffix_hit else detokenizer.last_segment
-                                if suffix_hit:
-                                    n_tok -= (
-                                        1  # Exclude suffix-triggering token from count
-                                    )
-                                _put(
-                                    (
-                                        _text,
-                                        n_tok,
-                                        "stop" if suffix_hit else None,
-                                        accepted_id,
-                                    )
-                                )
-                                if suffix_hit:
-                                    stopped = True
-                            # Advance grammar constraint for accepted/bonus token
-                            if _stream_grammar_constraint is not None and not stop_hit:
-                                try:
-                                    tok_text = tokenizer.decode([accepted_id])
-                                    _stream_grammar_constraint.advance(tok_text)
-                                except Exception:
-                                    logger.debug(
-                                        "grammar advance failed for n-gram streaming CPU token",
-                                        exc_info=True,
-                                    )
-                            if not is_accept:
-                                stopped = True
-                            if stopped:
-                                break
-
-                        # CPU fallback: trim KV cache for rejected tokens
-                        if accepted < n_draft:
+                        # Advance grammar constraint for accepted/bonus token
+                        if _stream_grammar_constraint is not None and not stop_hit:
                             try:
-                                from mlx_lm.models.cache import trim_prompt_cache
-
-                                trim_prompt_cache(cache, n_draft - accepted)
+                                tok_text = tokenizer.decode([accepted_id])
+                                _stream_grammar_constraint.advance(tok_text)
                             except Exception:
                                 logger.debug(
-                                    "trim_prompt_cache (n-gram CPU fallback) failed, falling back",
+                                    "grammar advance failed for n-gram streaming CPU token",
                                     exc_info=True,
                                 )
-                                for c in cache:
-                                    if hasattr(c, "trim"):
-                                        c.trim(n_draft - accepted)
-                            # Feed the correction token to populate its KV entry
-                            if not stopped and tokens:
-                                _correction = tokens[-1]
-                                _ = model(mx.array([[_correction]]), cache=cache)
+                        if not is_accept:
+                            stopped = True
+                        if stopped:
+                            break
+
+                    # CPU fallback: trim KV cache for rejected tokens
+                    if accepted < n_draft:
+                        try:
+                            from mlx_lm.models.cache import trim_prompt_cache
+
+                            trim_prompt_cache(cache, n_draft - accepted)
+                        except Exception:
+                            logger.debug(
+                                "trim_prompt_cache (n-gram CPU fallback) failed, falling back",
+                                exc_info=True,
+                            )
+                            for c in cache:
+                                if hasattr(c, "trim"):
+                                    c.trim(n_draft - accepted)
+                        # Feed the correction token to populate its KV entry
+                        if not stopped and tokens:
+                            _correction = tokens[-1]
+                            _ = model(mx.array([[_correction]]), cache=cache)
 
                     self._ngram_stats["accepted"] += accepted
                     if self._adaptive_spec is not None:
@@ -12435,8 +11617,6 @@ class BatchedEngine:
             stats["loaded"] = self._loaded
         else:
             stats = {"model": self.model_name, "loaded": self._loaded}
-        if self._thinking_store is not None:
-            stats["thinking_segment_store"] = self._thinking_store.get_stats()
         if self._adaptive_spec is not None:
             stats["adaptive_spec"] = self._adaptive_spec.get_stats()
         if getattr(self, "_spec_decoder", None) is not None:
@@ -12466,21 +11646,6 @@ class BatchedEngine:
         except Exception:
             logger.debug("ane embedding stats failed", exc_info=True)
             stats["ane_embeddings"] = {"enabled": False, "active": False}
-        # DeltaNet inversion status (when enabled via YUNSHU_DELTANET_INVERSION=1)
-        stats["deltanet_inversion"] = {
-            "enabled": getattr(self, "_deltanet_inversion_enabled", False),
-            "hooks_registered": getattr(self, "_deltanet_inverter", None) is not None,
-            **getattr(
-                self,
-                "_deltanet_inversion_stats",
-                {
-                    "evictions_captured": 0,
-                    "inversions_attempted": 0,
-                    "inversions_succeeded": 0,
-                    "states_stored": 0,
-                },
-            ),
-        }
         # Model preprocessor registry stats
         if (
             hasattr(self, "_preprocessor_registry")

@@ -17,13 +17,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from yunshu_engine import settings
+
 from .engine import get_engine, get_model_manager, init_model_manager
 
-# Default model from environment or None (requires explicit load via API)
-DEFAULT_MODEL = os.environ.get("YUNSHU_MODEL")
-MODELS_DIR = os.environ.get(
-    "YUNSHU_MODELS_DIR",
-    os.path.join(os.path.dirname(__file__), "..", "..", "models"),
+# Default model (YUNSHU_MODEL) or None (requires explicit load via API)
+DEFAULT_MODEL = settings.get("YUNSHU_MODEL")
+MODELS_DIR = settings.get("YUNSHU_MODELS_DIR") or os.path.join(
+    os.path.dirname(__file__), "..", "..", "models"
 )
 
 # ProcessMemoryEnforcer instance (multi-model mode only)
@@ -64,166 +65,27 @@ _drain_event: asyncio.Event | None = None
 
 
 def _is_multi_model_enabled() -> bool:
-    """Return True if YUNSHU_MULTI_MODEL is set to a truthy value.
-
-    Accepts the same conventions used elsewhere in the codebase
-    (1/true/yes, case-insensitive). Any other value — including
-    "0", "false", "no", or empty — disables multi-model mode.
-    """
-    val = os.environ.get("YUNSHU_MULTI_MODEL", "").strip().lower()
-    return val in ("1", "true", "yes")
+    """True when YUNSHU_MULTI_MODEL is on."""
+    return settings.get_bool("YUNSHU_MULTI_MODEL")
 
 
-def _validate_env_vars() -> list[str]:
-    """Validate production env vars and return warnings."""
-    warnings = []
-
-    # Numeric env vars that must parse correctly
-    numeric_vars = {
-        "YUNSHU_MAX_MEMORY_GB": (float, False),
-        "YUNSHU_DRAIN_TIMEOUT": (float, False),
-        "YUNSHU_MEMORY_POLL_INTERVAL": (float, False),
-        "YUNSHU_MODEL_TTL_SECONDS": (float, False),
-        "YUNSHU_MAX_CONCURRENT": (int, False),
-        "YUNSHU_RATE_LIMIT_RPM": (float, False),
-        "YUNSHU_RATE_LIMIT_MAX_BUCKETS": (int, False),
-        "YUNSHU_RATE_LIMIT_TTL_SECONDS": (float, False),
-        "YUNSHU_SLOW_REQUEST_THRESHOLD": (float, False),
-        "YUNSHU_STARTUP_TIMEOUT": (float, False),
-        "YUNSHU_SSD_CACHE_MAX_GB": (float, False),
-        "YUNSHU_KV_QUANT_BITS": (int, False),
-        "YUNSHU_KV_QUANT_GROUP_SIZE": (int, False),
-        "YUNSHU_MEM_PRESSURE_THRESHOLD": (float, False),
-        "YUNSHU_MAX_REQUEST_SIZE": (int, False),
-        "YUNSHU_KEEP_ALIVE_TIMEOUT": (int, False),
-        # Speculative decoding
-        "YUNSHU_NGRAM_MAX_N": (int, False),
-        "YUNSHU_NGRAM_K": (int, False),
-        "YUNSHU_SPEC_PREFILL_KEEP_RATE": (float, False),
-        # LoRA / adapter
-        "YUNSHU_MAX_LORAS": (int, False),
-        # Checkpointing
-        "YUNSHU_CHECKPOINT_INTERVAL": (int, False),
-        # Hybrid / chunked prefill
-        "YUNSHU_HYBRID_CHUNK_SIZE": (int, False),
-        "YUNSHU_PREFILL_CHUNK_SIZE": (int, False),
-    }
-    for var, (type_fn, required) in numeric_vars.items():
-        val = os.environ.get(var)
-        if val is not None:
-            try:
-                # YUNSHU_MAX_MEMORY_GB allows "8GB" suffix and "disabled"
-                if var == "YUNSHU_MAX_MEMORY_GB":
-                    cleaned = val.strip().upper().removesuffix("GB").strip()
-                    if cleaned.lower() != "disabled" and cleaned:
-                        float(cleaned)
-                else:
-                    type_fn(val)
-            except (ValueError, TypeError):
-                warnings.append(
-                    f"Invalid value for {var}: '{val}' (expected {type_fn.__name__})"
-                )
-        elif required:
-            warnings.append(f"Required env var {var} is not set")
-
-    # Boolean-ish env vars
-    bool_vars = [
-        "YUNSHU_MULTI_MODEL",
-        "YUNSHU_AUTH_DISABLED",
-        "YUNSHU_RESPONSE_CACHE",
-        "YUNSHU_PROCESS_ISOLATION",
-    ]
-    for var in bool_vars:
-        val = os.environ.get(var)
-        if val is not None and val.lower() not in (
-            "0",
-            "1",
-            "true",
-            "false",
-            "yes",
-            "no",
-        ):
-            warnings.append(f"Invalid boolean value for {var}: '{val}'")
-
-    # Conflicting config: both YUNSHU_MODEL and YUNSHU_MULTI_MODEL set
+def _validate_settings() -> list[str]:
+    """Parse every YUNSHU_* setting (raises SettingError on a bad value) and
+    return warnings: unknown YUNSHU_* names and conflicting modes."""
+    warnings = settings.validate(warn=False)
     if DEFAULT_MODEL and _is_multi_model_enabled():
         warnings.append(
             "Both YUNSHU_MODEL and YUNSHU_MULTI_MODEL are set — "
             "YUNSHU_MODEL takes precedence (single-model mode)"
         )
-
-    # Range validation for numeric env vars
-    _mem_thresh = os.environ.get("YUNSHU_MEM_PRESSURE_THRESHOLD")
-    if _mem_thresh:
-        try:
-            _val = float(_mem_thresh)
-            if _val <= 0 or _val > 100:
-                warnings.append(
-                    f"YUNSHU_MEM_PRESSURE_THRESHOLD should be 0-100, got {_val}"
-                )
-        except (ValueError, TypeError):
-            pass  # Already caught by numeric_vars check above
-
-    _kv_bits = os.environ.get("YUNSHU_KV_QUANT_BITS")
-    if _kv_bits:
-        try:
-            _val = int(_kv_bits)
-            if _val not in (2, 3, 4, 8):
-                warnings.append(
-                    f"YUNSHU_KV_QUANT_BITS={_val} is not supported (MLX supports 2, 3, 4, 8)"
-                )
-        except (ValueError, TypeError):
-            pass
-
-    # Positive-value validation for vars that must be > 0
-    _positive_vars = {
-        "YUNSHU_MAX_CONCURRENT": int,
-        "YUNSHU_DRAIN_TIMEOUT": float,
-        "YUNSHU_STARTUP_TIMEOUT": float,
-        "YUNSHU_KEEP_ALIVE_TIMEOUT": int,
-        "YUNSHU_MAX_REQUEST_SIZE": int,
-        "YUNSHU_RATE_LIMIT_RPM": float,
-        "YUNSHU_NGRAM_MAX_N": int,
-        "YUNSHU_NGRAM_K": int,
-        "YUNSHU_MAX_LORAS": int,
-    }
-    for _pvar, _ptype in _positive_vars.items():
-        _pval = os.environ.get(_pvar)
-        if _pval is not None:
-            try:
-                _num = _ptype(_pval)
-                if _num <= 0:
-                    warnings.append(f"{_pvar} must be positive, got {_pval}")
-            except (ValueError, TypeError):
-                pass  # Already caught by numeric_vars check
-
     return warnings
 
 
 def _get_memory_limit_bytes() -> int:
-    """Compute memory limit from environment or UMA size.
-
-    Uses YUNSHU_MAX_MEMORY_GB env var, or defaults to 80% of UMA.
-    """
-    env_val = os.environ.get("YUNSHU_MAX_MEMORY_GB")
-    if env_val and env_val.strip():
-        # Strip optional "GB"/"gb" suffix for CLI ergonomics
-        cleaned = env_val.strip().upper().removesuffix("GB").strip()
-        if not cleaned:
-            logger.warning(
-                "CONFIG: YUNSHU_MAX_MEMORY_GB is empty after stripping, ignoring"
-            )
-            # Fall through to default
-        elif cleaned.lower() == "disabled":
-            return 0  # unlimited
-        else:
-            try:
-                return int(float(cleaned) * 1024**3)
-            except (ValueError, OverflowError):
-                logger.warning(
-                    "CONFIG: Invalid YUNSHU_MAX_MEMORY_GB value '%s', ignoring", env_val
-                )
-                # Fall through to default
+    """Compute memory limit from YUNSHU_MAX_MEMORY_GB, or 80% of UMA."""
+    limit_gb = settings.get("YUNSHU_MAX_MEMORY_GB")
+    if limit_gb is not None:
+        return int(limit_gb * 1024**3)  # 0 = 'disabled' (unlimited)
 
     # Default: 80% of UMA (reserve for system + KV cache)
     try:
@@ -247,7 +109,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Startup/shutdown lifecycle with production hardening.
 
     Production features:
-    - Startup validation of env vars with warning log
+    - Startup validation of settings (bad values abort startup)
     - Startup timeout for model loading (configurable via YUNSHU_STARTUP_TIMEOUT)
     - Graceful shutdown: reject new -> drain -> cleanup -> model manager shutdown
     - Background task tracking for clean cancellation
@@ -267,7 +129,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.server_state = ServerState.RUNNING
 
     # ── Startup validation ──
-    env_warnings = _validate_env_vars()
+    env_warnings = _validate_settings()
     for w in env_warnings:
         logger.warning("CONFIG: %s", w)
 
@@ -286,7 +148,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
 
     # ── Startup timeout ──
-    startup_timeout = float(os.environ.get("YUNSHU_STARTUP_TIMEOUT", "300"))
+    startup_timeout = settings.get("YUNSHU_STARTUP_TIMEOUT")
 
     _startup_time = time.monotonic()
 
@@ -360,20 +222,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if max_bytes > 0:
             from yunshu_engine.process_memory_enforcer import ProcessMemoryEnforcer
 
-            ttl_seconds = os.environ.get("YUNSHU_MODEL_TTL_SECONDS")
             _memory_enforcer = ProcessMemoryEnforcer(
                 model_manager=manager,
                 max_bytes=max_bytes,
-                poll_interval=float(
-                    os.environ.get("YUNSHU_MEMORY_POLL_INTERVAL", "2.0")
-                ),
-                ttl_seconds=float(ttl_seconds) if ttl_seconds else None,
+                poll_interval=2.0,
+                ttl_seconds=settings.get("YUNSHU_MODEL_TTL_SECONDS"),
             )
             _memory_enforcer.start()
             logger.info(
-                "ProcessMemoryEnforcer started (limit=%.1fGB, poll=%.1fs)",
-                max_bytes / 1024**3,
-                float(os.environ.get("YUNSHU_MEMORY_POLL_INTERVAL", "2.0")),
+                "ProcessMemoryEnforcer started (limit=%.1fGB)", max_bytes / 1024**3
             )
 
         logger.info(
@@ -383,9 +240,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
 
     # Initialize MCP client manager (LLM → external MCP tool servers)
-    mcp_config_path = os.environ.get("YUNSHU_MCP_CONFIG")
-    mcp_servers_env = os.environ.get("YUNSHU_MCP_SERVERS", "")
-    if mcp_config_path or mcp_servers_env:
+    mcp_config_path = settings.get("YUNSHU_MCP_CONFIG")
+    if mcp_config_path or settings.is_set("YUNSHU_MCP_SERVERS"):
         try:
             from yunshu_engine.mcp_client import init_mcp_client
 
@@ -426,7 +282,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # _drain_event.wait() returned IMMEDIATELY even when a request was in-flight at shutdown,
     # letting engine.stop() tear the model out from under a running generation. Loop until
     # the count is genuinely 0 or the timeout elapses.
-    drain_timeout = float(os.environ.get("YUNSHU_DRAIN_TIMEOUT", "30"))
+    drain_timeout = settings.get("YUNSHU_DRAIN_TIMEOUT")
     _drain_deadline = time.monotonic() + drain_timeout
     while _active_requests > 0 and time.monotonic() < _drain_deadline:
         await asyncio.sleep(0.1)
@@ -518,7 +374,8 @@ def _configure_logging() -> None:
         level=logging.WARNING,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    level = os.environ.get("YUNSHU_LOG_LEVEL", "INFO").upper()
+    level = settings.get("YUNSHU_LOG_LEVEL")
+
     for name in _YUNSHU_LOGGERS:
         logging.getLogger(name).setLevel(level)
 
@@ -681,9 +538,7 @@ def create_app() -> FastAPI:
     # Defaults to ["*"] in dev, should be restricted in production.
     # Note: allow_credentials=True is invalid with allow_origins=["*"] per CORS spec;
     # browsers will reject the response. Use specific origins in production.
-    cors_origins_str = os.environ.get(
-        "YUNSHU_CORS_ORIGINS", "http://localhost:3000,http://localhost:8000"
-    )
+    cors_origins_str = settings.get("YUNSHU_CORS_ORIGINS")
     cors_origins = cors_origins_str.split(",") if cors_origins_str != "*" else ["*"]
     allow_credentials = cors_origins != ["*"]
     if cors_origins == ["*"]:
@@ -729,7 +584,7 @@ def create_app() -> FastAPI:
     # outermost, and /metrics serving has its own _check_metrics_auth.
 
     # Response cache middleware: caches non-streaming responses when enabled
-    if os.environ.get("YUNSHU_RESPONSE_CACHE", "").lower() in ("1", "true", "yes"):
+    if settings.get_bool("YUNSHU_RESPONSE_CACHE"):
         from .middleware.gateway_optimizer import ResponseCacheMiddleware
 
         app.add_middleware(ResponseCacheMiddleware)
@@ -905,9 +760,7 @@ def create_app() -> FastAPI:
         return await call_next(request)
 
     # Request body size limit middleware (reject oversized payloads early)
-    max_request_size = int(
-        os.environ.get("YUNSHU_MAX_REQUEST_SIZE", str(10 * 1024 * 1024))
-    )
+    max_request_size = settings.get("YUNSHU_MAX_REQUEST_SIZE")
 
     @app.middleware("http")
     async def request_size_limit(request: Request, call_next):
@@ -1017,19 +870,19 @@ def create_app() -> FastAPI:
     # validates the static token; the per-tenant/RBAC branches are gone.
 
     # Response cache: opt-in via YUNSHU_RESPONSE_CACHE=1
-    if os.environ.get("YUNSHU_RESPONSE_CACHE", "").lower() in ("1", "true", "yes"):
+    if settings.get_bool("YUNSHU_RESPONSE_CACHE"):
         app.state.response_cache = get_response_cache()
         logger.info("ResponseCache enabled (YUNSHU_RESPONSE_CACHE=1)")
 
     # Startup warnings
-    if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
+    if settings.get_bool("YUNSHU_AUTH_DISABLED"):
         logger.warning(
             "SECURITY: AUTH IS DISABLED — all endpoints are publicly accessible "
             "without any authentication. "
             "This is INSECURE and should ONLY be used in development. "
             "Set YUNSHU_AUTH_TOKEN=<secret> or remove YUNSHU_AUTH_DISABLED for production."
         )
-    elif not os.environ.get("YUNSHU_AUTH_TOKEN"):
+    elif not settings.get("YUNSHU_AUTH_TOKEN"):
         logger.warning(
             "SECURITY: No YUNSHU_AUTH_TOKEN set — admin endpoints (profiling, sleep/wake, "
             "model load/unload, benchmarks, dashboard) are DENIED by default. "
@@ -1059,8 +912,7 @@ def create_app() -> FastAPI:
     # MCP client manager (LLM → external MCP tool servers)
     # Actual initialization happens in lifespan() since init_mcp_client is async.
     # Here we just check if the singleton was already initialized (e.g. in tests).
-    mcp_servers_env = os.environ.get("YUNSHU_MCP_SERVERS", "")
-    if mcp_servers_env:
+    if settings.is_set("YUNSHU_MCP_SERVERS"):
         try:
             from yunshu_engine.mcp_client import get_mcp_client_manager
 

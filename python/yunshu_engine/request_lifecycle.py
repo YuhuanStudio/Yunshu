@@ -17,11 +17,12 @@ Provides:
 
 import contextlib
 import logging
-import os
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum, auto
+
+from . import settings
 
 logger = logging.getLogger(__name__)
 
@@ -174,25 +175,10 @@ class AdaptiveConcurrencyController:
 
     @classmethod
     def from_env(cls) -> AdaptiveConcurrencyController:
-        # YUNSHU_MAX_CONCURRENT caps the maximum if set (CLI --max-concurrent)
-        max_concurrent_env = os.environ.get("YUNSHU_MAX_CONCURRENT")
-        max_concurrent_cap = int(max_concurrent_env) if max_concurrent_env else None
-        maximum = int(os.environ.get("YUNSHU_CONCURRENCY_MAX", "128"))
-        if max_concurrent_cap is not None and max_concurrent_cap > 0:
-            maximum = min(maximum, max_concurrent_cap)
-        initial = int(os.environ.get("YUNSHU_CONCURRENCY_INITIAL", "8"))
-        # Clamp initial to maximum
-        initial = min(initial, maximum)
-        return cls(
-            initial=initial,
-            # floor at 1 — a minimum of 0 lets sustained failures drive the limit
-            # to 0, after which active>=limit is always true → everything queues/REJECTs
-            # (admission deadlock if the limit ever becomes authoritative).
-            minimum=max(1, int(os.environ.get("YUNSHU_CONCURRENCY_MIN", "1"))),
-            maximum=maximum,
-            slo_ttft_ms=float(os.environ.get("YUNSHU_SLO_TTFT_MS", "500.0")),
-            slo_total_ms=float(os.environ.get("YUNSHU_SLO_TOTAL_MS", "10000.0")),
-        )
+        """Defaults, with the maximum capped by YUNSHU_MAX_CONCURRENT when set."""
+        cap = settings.get("YUNSHU_MAX_CONCURRENT")
+        maximum = min(128, cap) if cap else 128
+        return cls(initial=min(8, maximum), minimum=1, maximum=maximum)
 
     @property
     def current_limit(self) -> int:

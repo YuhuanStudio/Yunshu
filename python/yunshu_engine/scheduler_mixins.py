@@ -22,7 +22,6 @@ Usage:
 
 import collections
 import logging
-import os
 import time
 from abc import ABC, abstractmethod
 from collections import defaultdict, deque
@@ -160,8 +159,7 @@ class ProfilingMixin(SchedulerMixin):
     """Detailed step profiling with optional trace export.
 
     Captures per-step latency breakdowns (prefill vs decode vs spec verify),
-    memory usage snapshots, and batch composition. Enable via
-    YUNSHU_SCHEDULER_PROFILING=1.
+    memory usage snapshots, and batch composition. Not attached by default.
     """
 
     def __init__(
@@ -388,16 +386,6 @@ class MemoryPressureMixin(SchedulerMixin):
         self._transitions = 0
         self._last_memory_fraction = 0.0
         self._admission_paused = False
-
-    @classmethod
-    def from_env(cls) -> MemoryPressureMixin:
-        return cls(
-            warning_threshold=float(os.environ.get("YUNSHU_MEM_WARNING", "0.80")),
-            critical_threshold=float(os.environ.get("YUNSHU_MEM_CRITICAL", "0.95")),
-            batch_size_normal=int(os.environ.get("YUNSHU_BATCH_NORMAL", "32")),
-            batch_size_warning=int(os.environ.get("YUNSHU_BATCH_WARNING", "16")),
-            batch_size_critical=int(os.environ.get("YUNSHU_BATCH_CRITICAL", "4")),
-        )
 
     def pre_step(self, scheduler: Any) -> None:
         try:

@@ -388,55 +388,6 @@ class TestEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# from_env() tests
-# ---------------------------------------------------------------------------
-
-
-class TestFromEnv:
-    def test_disabled_by_default(self, monkeypatch):
-        monkeypatch.delenv("YUNSHU_ADAPTIVE_SPEC", raising=False)
-        result = AdaptiveSpecController.from_env()
-        assert result is None
-
-    def test_enabled_with_1(self, monkeypatch):
-        monkeypatch.setenv("YUNSHU_ADAPTIVE_SPEC", "1")
-        result = AdaptiveSpecController.from_env()
-        assert result is not None
-        assert result.get_stats()["enabled"] is True
-
-    def test_enabled_with_true(self, monkeypatch):
-        monkeypatch.setenv("YUNSHU_ADAPTIVE_SPEC", "true")
-        result = AdaptiveSpecController.from_env()
-        assert result is not None
-
-    def test_enabled_with_yes(self, monkeypatch):
-        monkeypatch.setenv("YUNSHU_ADAPTIVE_SPEC", "yes")
-        result = AdaptiveSpecController.from_env()
-        assert result is not None
-
-    def test_disabled_with_0(self, monkeypatch):
-        monkeypatch.setenv("YUNSHU_ADAPTIVE_SPEC", "0")
-        result = AdaptiveSpecController.from_env()
-        assert result is None
-
-    def test_env_overrides(self, monkeypatch):
-        monkeypatch.setenv("YUNSHU_ADAPTIVE_SPEC", "1")
-        monkeypatch.setenv("YUNSHU_ADAPTIVE_SPEC_MIN_K", "2")
-        monkeypatch.setenv("YUNSHU_ADAPTIVE_SPEC_MAX_K", "12")
-        monkeypatch.setenv("YUNSHU_ADAPTIVE_SPEC_INITIAL_K", "6")
-        monkeypatch.setenv("YUNSHU_ADAPTIVE_SPEC_EMA_ALPHA", "0.5")
-        monkeypatch.setenv("YUNSHU_ADAPTIVE_SPEC_COOLDOWN", "10")
-        result = AdaptiveSpecController.from_env()
-        assert result is not None
-        stats = result.get_stats()
-        assert stats["min_k"] == 2
-        assert stats["max_k"] == 12
-        assert stats["current_k"] == 6
-        assert stats["ema_alpha"] == 0.5
-        assert stats["steps_since_last_adjust"] == 0
-
-
-# ---------------------------------------------------------------------------
 # Hysteresis band test
 # ---------------------------------------------------------------------------
 

@@ -24,6 +24,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
+from yunshu_engine import settings
 from yunshu_engine.tool_arguments import coerce_tool_calls
 
 from ..engine import get_engine, get_engine_for_model
@@ -82,9 +83,8 @@ def _resolve_owner(request) -> str:
 
 def _is_admin(request) -> bool:
     """Admin/static-token/auth-disabled check (matches cancel.py:101-107)."""
-    import os
 
-    if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
+    if settings.get_bool("YUNSHU_AUTH_DISABLED"):
         return True
     role_str = str(getattr(getattr(request, "state", None), "role", "") or "")
     return role_str.lower() in (

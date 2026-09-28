@@ -16,6 +16,8 @@ from rich.console import Console
 from rich.table import Table
 from rich.tree import Tree
 
+from yunshu_engine import settings
+
 from ._output import auth_headers, fail
 
 console = Console()
@@ -24,7 +26,7 @@ model_app = typer.Typer(help="Model management.", no_args_is_help=True)
 
 def _get_models_dir() -> Path:
     """Resolve models directory from env or default."""
-    env_dir = __import__("os").environ.get("YUNSHU_MODELS_DIR")
+    env_dir = settings.get("YUNSHU_MODELS_DIR")
     if env_dir:
         return Path(env_dir)
     # Default: <repo>/models/  (model.py is <repo>/python/yunshu_cli/model.py → 3 parents

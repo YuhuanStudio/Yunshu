@@ -135,21 +135,12 @@ class TestAdaptiveConcurrencyController:
         ctrl = AdaptiveConcurrencyController(initial=8)
         assert ctrl.current_limit == 8
 
-    def test_from_env(self):
-        with patch.dict(
-            "os.environ",
-            {
-                "YUNSHU_CONCURRENCY_INITIAL": "16",
-                "YUNSHU_CONCURRENCY_MIN": "2",
-                "YUNSHU_CONCURRENCY_MAX": "256",
-                "YUNSHU_SLO_TTFT_MS": "300.0",
-                "YUNSHU_SLO_TOTAL_MS": "5000.0",
-            },
-        ):
+    def test_from_env_caps_maximum(self):
+        with patch.dict("os.environ", {"YUNSHU_MAX_CONCURRENT": "4"}):
             ctrl = AdaptiveConcurrencyController.from_env()
-            assert ctrl.current_limit == 16
-            assert ctrl._minimum == 2
-            assert ctrl._maximum == 256
+            assert ctrl.current_limit == 4
+            assert ctrl._minimum == 1
+            assert ctrl._maximum == 4
 
     def test_increase_on_success(self):
         ctrl = AdaptiveConcurrencyController(initial=8, increase_window=0.0)
@@ -254,18 +245,11 @@ class TestRequestLifecycleOrchestrator:
         assert orch.pending_count == 0  # no stale id left behind
 
     def test_concurrency_min_floored_at_one(self):
-        import os
-
-        # YUNSHU_CONCURRENCY_MIN=0 must be floored to 1 (a 0 limit deadlocks
-        # admission once active>=limit is always true).
-        os.environ["YUNSHU_CONCURRENCY_MIN"] = "0"
-        try:
-            ctrl = AdaptiveConcurrencyController.from_env()
-            for _ in range(20):
-                ctrl.report_failure()  # drive the limit down hard
-            assert ctrl.current_limit >= 1
-        finally:
-            os.environ.pop("YUNSHU_CONCURRENCY_MIN", None)
+        # A 0 limit deadlocks admission once active>=limit is always true.
+        ctrl = AdaptiveConcurrencyController.from_env()
+        for _ in range(20):
+            ctrl.report_failure()  # drive the limit down hard
+        assert ctrl.current_limit >= 1
 
     def test_retry_on_failure(self):
         orch = RequestLifecycleOrchestrator()

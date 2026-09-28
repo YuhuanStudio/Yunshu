@@ -29,6 +29,8 @@ from typing import Any
 import anyio
 from starlette.responses import StreamingResponse
 
+from yunshu_engine import settings
+
 # ── Sentinel for _safe_anext ──
 
 _KEEPALIVE_SENTINEL = object()
@@ -1139,12 +1141,8 @@ def get_max_prefill_tokens() -> int:
     is effectively unlimited (the context-window check is the real bound); set
     YUNSHU_MAX_PREFILL_TOKENS to a positive value to enforce a cap.
     """
-    import os
 
-    try:
-        v = int(os.environ.get("YUNSHU_MAX_PREFILL_TOKENS", "0"))
-    except (TypeError, ValueError):
-        v = 0
+    v = settings.get("YUNSHU_MAX_PREFILL_TOKENS")
     # 0 / unset / non-positive → no cap (very large sentinel)
     return v if v > 0 else 1_000_000_000
 

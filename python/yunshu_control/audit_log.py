@@ -23,8 +23,9 @@ single-owner identity for the local single-consumer deployment (constant
 """
 
 import logging
-import os
 import sys
+
+from yunshu_engine import settings
 
 # Dedicated logger so operators can route audit records independently of
 # the root / yunshu loggers (e.g. to a separate file or syslog).
@@ -48,7 +49,7 @@ def _attach_default_handler() -> None:
     if parent.handlers:
         audit_logger.setLevel(logging.INFO)
         return  # propagation handles emission
-    log_path = os.environ.get("YUNSHU_AUDIT_LOG_FILE", "").strip()
+    log_path = settings.get("YUNSHU_AUDIT_LOG_FILE") or ""
     if log_path:
         handler: logging.Handler = logging.FileHandler(log_path, encoding="utf-8")
     else:
@@ -123,7 +124,7 @@ def _default_actor() -> str:
     Overridable via ``YUNSHU_ACTOR_IDENTITY`` for operators who want a custom
     label in audit lines; defaults to ``"owner"``.
     """
-    custom = os.environ.get("YUNSHU_ACTOR_IDENTITY", "").strip()
+    custom = settings.get("YUNSHU_ACTOR_IDENTITY") or ""
     return custom or "owner"
 
 

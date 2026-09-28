@@ -21,7 +21,6 @@ Architecture:
 
 import copy
 import logging
-import os
 import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -46,7 +45,7 @@ class BatchSpecPrefillConfig:
 
     Enables sparse prefill for long prompts in the batch/scheduler path,
     using a draft model's attention scores to skip unimportant tokens.
-    Controlled via YUNSHU_BATCH_SPEC_PREFILL=1.
+    Enabled by SchedulerConfig.batch_spec_prefill_enabled.
     """
 
     enabled: bool = False
@@ -126,7 +125,7 @@ class BatchPathSpecPrefill:
       2. select_chunks() — chunk-based top-K% selection
       3. sparse_prefill() — target prefill with selected tokens
 
-    Enabled via YUNSHU_BATCH_SPEC_PREFILL=1.
+    Enabled by SchedulerConfig.batch_spec_prefill_enabled.
     """
 
     def __init__(self, config: BatchSpecPrefillConfig | None = None) -> None:
@@ -626,7 +625,8 @@ class SchedulerConfig:
     ngram_spec_k: int = 5  # Draft tokens per step
     ngram_spec_mode: str = "lps"  # Proposer mode: lps, hashpool, lcg
     # Batch-path SpecPrefill (sparse prefill for long prompts)
-    batch_spec_prefill_enabled: bool = False  # Enable via YUNSHU_BATCH_SPEC_PREFILL=1
+    batch_spec_prefill_enabled: bool = False
+
     batch_spec_prefill_threshold: int = 8192  # Min prompt length to trigger
     batch_spec_prefill_keep_rate: float = 0.20  # Fraction of tokens to keep
     # Spec-aware batch scheduling
@@ -783,45 +783,15 @@ class Scheduler:
         # N-gram speculative decoding (model-free, available in batch path)
         self._ngram_proposer: NgramProposer | None = None
         if self.config.ngram_spec_enabled:
-            # GPU-accelerated N-gram proposer (opt-in via YUNSHU_GPU_NGRAM=1)
-            if os.environ.get("YUNSHU_GPU_NGRAM", "").strip() in ("1", "true", "yes"):
-                try:
-                    from .gpu_ngram import GPUNgramConfig, GPUNgramProposer
-
-                    gpu_config = GPUNgramConfig(
-                        min_n=self.config.ngram_spec_min_n,
-                        max_n=self.config.ngram_spec_max_n,
-                        k=self.config.ngram_spec_k,
-                        max_model_len=self.config.max_kv_size or 32768,
-                        gpu_fallback=True,
-                    )
-                    self._ngram_proposer = GPUNgramProposer(gpu_config)
-                    logger.info(
-                        "GPU-accelerated N-gram proposer enabled (YUNSHU_GPU_NGRAM=1)"
-                    )
-                except Exception:
-                    logger.debug(
-                        "GPU N-gram init failed, falling back to CPU", exc_info=True
-                    )
-                    self._ngram_proposer = NgramProposer(
-                        NgramConfig(
-                            min_n=self.config.ngram_spec_min_n,
-                            max_n=self.config.ngram_spec_max_n,
-                            k=self.config.ngram_spec_k,
-                            mode=self.config.ngram_spec_mode,
-                            max_model_len=self.config.max_kv_size or 32768,
-                        )
-                    )
-            else:
-                self._ngram_proposer = NgramProposer(
-                    NgramConfig(
-                        min_n=self.config.ngram_spec_min_n,
-                        max_n=self.config.ngram_spec_max_n,
-                        k=self.config.ngram_spec_k,
-                        mode=self.config.ngram_spec_mode,
-                        max_model_len=self.config.max_kv_size or 32768,
-                    )
+            self._ngram_proposer = NgramProposer(
+                NgramConfig(
+                    min_n=self.config.ngram_spec_min_n,
+                    max_n=self.config.ngram_spec_max_n,
+                    k=self.config.ngram_spec_k,
+                    mode=self.config.ngram_spec_mode,
+                    max_model_len=self.config.max_kv_size or 32768,
                 )
+            )
 
         # Speculative decoding — batch-path draft/verify state
         # Maps request_id → list[int] of draft token IDs from the spec decoder.
@@ -901,23 +871,13 @@ class Scheduler:
         self._active_partial_prefills: int = 0  # Count of in-flight partial prefills
 
         # Batch-path SpecPrefill (attention-based sparse prefill for long prompts)
-        import os as _os
-
         self._batch_spec_prefill: BatchPathSpecPrefill | None = None
-        if self.config.batch_spec_prefill_enabled or _os.environ.get(
-            "YUNSHU_BATCH_SPEC_PREFILL", ""
-        ).strip() in ("1", "true", "yes"):
+        if self.config.batch_spec_prefill_enabled:
             self._batch_spec_prefill = BatchPathSpecPrefill(
                 BatchSpecPrefillConfig(
                     enabled=True,
-                    threshold=self.config.batch_spec_prefill_threshold
-                    or int(
-                        _os.environ.get("YUNSHU_BATCH_SPEC_PREFILL_THRESHOLD", "8192")
-                    ),
-                    keep_rate=self.config.batch_spec_prefill_keep_rate
-                    or float(
-                        _os.environ.get("YUNSHU_BATCH_SPEC_PREFILL_KEEP_RATE", "0.20")
-                    ),
+                    threshold=self.config.batch_spec_prefill_threshold,
+                    keep_rate=self.config.batch_spec_prefill_keep_rate,
                 )
             )
             logger.info(
@@ -4755,18 +4715,11 @@ class Scheduler:
         For cross-model: also rolls back the draft model cache on rejection.
         For N-gram: only statistical tracking (no cache to manage).
 
-        When YUNSHU_GPU_REJECTION=1, uses MLX batched comparison to find
-        the first mismatch across all draft tokens for each request.
         """
         if not self._spec_drafts:
             return
 
         has_cross_model = isinstance(self._spec_decoder, SpeculativeDecoder)
-
-        # Check if GPU rejection is enabled for batch comparison
-        from .gpu_rejection import should_enable_gpu_rejection
-
-        use_gpu = should_enable_gpu_rejection()
 
         verified_ids = []
         for output in outputs:
@@ -4809,23 +4762,12 @@ class Scheduler:
                 verified_ids.append(rid)
                 continue
 
-            # GPU-accelerated batch comparison: find first mismatch via MLX
-            if use_gpu and n_compare > 0:
-                import mlx.core as mx
-
-                draft_arr = mx.array(draft_ids[:n_compare])
-                actual_arr = mx.array(recent_actual[:n_compare])
-                match_mask = draft_arr == actual_arr
-                # cumsum trick: count consecutive matches from the start
-                cum_mismatch = mx.cumsum((~match_mask).astype(mx.int32))
-                accepted = int(mx.sum(cum_mismatch == 0).item())
-            else:
-                accepted = 0
-                for i, draft_tok in enumerate(draft_ids):
-                    if i < len(recent_actual) and recent_actual[i] == draft_tok:
-                        accepted += 1
-                    else:
-                        break
+            accepted = 0
+            for i, draft_tok in enumerate(draft_ids):
+                if i < len(recent_actual) and recent_actual[i] == draft_tok:
+                    accepted += 1
+                else:
+                    break
 
             rejected = len(draft_ids) - accepted
 

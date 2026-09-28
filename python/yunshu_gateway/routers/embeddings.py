@@ -15,12 +15,13 @@ OpenAI API contract. Matryoshka dimension truncation is supported via the
 
 import logging
 import math
-import os
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, model_validator
+
+from yunshu_engine import settings
 
 from ..engine import get_engine, get_model_manager
 from .models import _check_model_access, _check_permission
@@ -572,15 +573,13 @@ async def _generate_embeddings(
             out.append([x / norm for x in v] if norm > 0 else v)
         return out
     # ── ANE path: offload to Apple Neural Engine via CoreML ──
-    if os.environ.get("YUNSHU_ANE_EMBEDDINGS", "").strip() in ("1", "true", "yes"):
+    if settings.get_bool("YUNSHU_ANE_EMBEDDINGS"):
         # the ANE processor is a SINGLETON bound to
         # YUNSHU_ANE_EMBEDDING_MODEL. Only route a request to it when the caller's
         # model matches (or none was specified) — otherwise it would serve a
         # DIFFERENT model's vectors (wrong dimensionality / embedding space) than
         # the request asked for. Mismatched models fall through to the MLX path.
-        _ane_model = os.environ.get(
-            "YUNSHU_ANE_EMBEDDING_MODEL", "intfloat/e5-small-v2"
-        )
+        _ane_model = settings.get("YUNSHU_ANE_EMBEDDING_MODEL")
         _ane_ok = (
             (not model_id)
             or model_id == _ane_model

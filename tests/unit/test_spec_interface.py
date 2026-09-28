@@ -6,7 +6,6 @@ Covers:
   - MTPStrategy lifecycle (with and without decoder)
   - CompositeStrategy combining multiple strategies
   - SpecStrategyFactory creation from config
-  - SpecStrategyFactory.from_env()
   - Stats tracking and reset
   - Edge cases: empty drafts, all rejected, sequential requests
 """
@@ -522,35 +521,6 @@ class TestSpecStrategyFactory:
         with pytest.raises(ValueError, match="type"):
             SpecStrategyFactory.create({})
 
-    def test_from_env_no_config(self):
-        """from_env returns None when no env var set."""
-        old = os.environ.pop("YUNSHU_SPEC_STRATEGY", None)
-        try:
-            result = SpecStrategyFactory.from_env()
-            assert result is None
-        finally:
-            if old is not None:
-                os.environ["YUNSHU_SPEC_STRATEGY"] = old
-
-    def test_from_env_ngram(self):
-        old_strategy = os.environ.get("YUNSHU_SPEC_STRATEGY")
-        old_mode = os.environ.get("YUNSHU_NGRAM_MODE")
-        try:
-            os.environ["YUNSHU_SPEC_STRATEGY"] = "ngram"
-            os.environ["YUNSHU_NGRAM_MODE"] = "hashpool"
-            s = SpecStrategyFactory.from_env()
-            assert isinstance(s, NgramStrategy)
-            assert s._config.mode == "hashpool"
-        finally:
-            if old_strategy is not None:
-                os.environ["YUNSHU_SPEC_STRATEGY"] = old_strategy
-            else:
-                os.environ.pop("YUNSHU_SPEC_STRATEGY", None)
-            if old_mode is not None:
-                os.environ["YUNSHU_NGRAM_MODE"] = old_mode
-            else:
-                os.environ.pop("YUNSHU_NGRAM_MODE", None)
-
 
 # ── DraftProposal Tests ──
 
@@ -747,15 +717,3 @@ class TestSpecStrategyFactoryDeltaNet:
     def test_factory_unknown_type_mentions_deltanet(self):
         with pytest.raises(ValueError, match="deltanet"):
             SpecStrategyFactory.create({"type": "unknown_strategy"})
-
-    def test_from_env_deltanet(self):
-        old = os.environ.get("YUNSHU_SPEC_STRATEGY")
-        try:
-            os.environ["YUNSHU_SPEC_STRATEGY"] = "deltanet"
-            s = SpecStrategyFactory.from_env()
-            assert isinstance(s, DeltaNetInversionStrategy)
-        finally:
-            if old is not None:
-                os.environ["YUNSHU_SPEC_STRATEGY"] = old
-            else:
-                os.environ.pop("YUNSHU_SPEC_STRATEGY", None)

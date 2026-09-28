@@ -20,28 +20,6 @@ class TestOverlapConfig:
         assert cfg.sync_timeout_ms == 100.0
         assert cfg.metrics_window == 100
 
-    def test_from_env_disabled(self):
-        cfg = OverlapConfig.from_env()
-        assert not cfg.enabled
-
-    def test_from_env_enabled(self, monkeypatch):
-        monkeypatch.setenv("YUNSHU_CPU_GPU_OVERLAP", "1")
-        cfg = OverlapConfig.from_env()
-        assert cfg.enabled
-
-    def test_from_env_all_flags(self, monkeypatch):
-        monkeypatch.setenv("YUNSHU_CPU_GPU_OVERLAP", "1")
-        monkeypatch.setenv("YUNSHU_ASYNC_EVAL", "0")
-        monkeypatch.setenv("YUNSHU_OVERLAP_DETOKENIZE", "0")
-        monkeypatch.setenv("YUNSHU_OVERLAP_GRAMMAR", "0")
-        monkeypatch.setenv("YUNSHU_OVERLAP_RESPONSE_DIST", "1")
-        cfg = OverlapConfig.from_env()
-        assert cfg.enabled
-        assert not cfg.async_eval
-        assert not cfg.overlap_detokenize
-        assert not cfg.overlap_grammar
-        assert cfg.overlap_response_dist
-
     def test_to_dict(self):
         cfg = OverlapConfig(enabled=True)
         d = cfg.to_dict()
@@ -321,14 +299,6 @@ class TestOverlapSchedulerMetrics:
 
 
 class TestOverlapIntegration:
-    def test_config_from_env_roundtrip(self, monkeypatch):
-        monkeypatch.setenv("YUNSHU_CPU_GPU_OVERLAP", "1")
-        cfg = OverlapConfig.from_env()
-        scheduler = OverlapScheduler(cfg)
-        assert scheduler.config.enabled
-        stats = scheduler.get_stats()
-        assert stats["config"]["enabled"] is True
-
     def test_engine_core_config_has_overlap(self):
         from yunshu_engine.engine_core import EngineCoreConfig
 

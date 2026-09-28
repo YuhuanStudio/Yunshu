@@ -205,13 +205,6 @@ class TestCrossModuleWave43:
         assert "attention" in mo
         assert "moe" in mo
 
-    def test_process_isolation_in_stats(self):
-        core = _make_core()
-        core._start_time = None
-        stats = core.get_stats()
-        assert "process_isolation" in stats
-        assert stats["process_isolation"]["enabled"] is False
-
     def test_output_parser_wired(self):
         core = _make_core()
         assert core._parse_output is not None

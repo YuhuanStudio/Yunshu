@@ -11,7 +11,6 @@ track_active_requests middleware in main.py, not here.
 
 import contextlib
 import logging
-import os
 import threading
 import time
 import uuid
@@ -19,14 +18,16 @@ import uuid
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
+from yunshu_engine import settings
+
 logger = logging.getLogger("yunshu.gateway")
 
 # Slow request threshold (seconds). Requests exceeding this get a WARNING log.
-SLOW_REQUEST_THRESHOLD = float(os.environ.get("YUNSHU_SLOW_REQUEST_THRESHOLD", "30.0"))
+SLOW_REQUEST_THRESHOLD = settings.get("YUNSHU_SLOW_REQUEST_THRESHOLD")
 
 # Memory pressure warning threshold (fraction of system memory).
 # Logged when active memory exceeds this fraction of hw.memsize.
-_MEMORY_PRESSURE_THRESHOLD = float(os.environ.get("YUNSHU_MEM_WARNING", "0.85"))
+_MEMORY_PRESSURE_THRESHOLD = 0.85
 
 
 def _check_memory_pressure() -> None:

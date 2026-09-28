@@ -56,12 +56,6 @@ def test_conversation_history_capped(monkeypatch):
 def test_default_cap_is_positive():
     os.environ.pop("YUNSHU_REALTIME_MAX_CONVERSATION_ITEMS", None)
     assert rt._max_conversation_items() == 1000
-    # malformed env → default, never 0/negative
-    os.environ["YUNSHU_REALTIME_MAX_CONVERSATION_ITEMS"] = "-3"
-    assert rt._max_conversation_items() == 1000
-    os.environ["YUNSHU_REALTIME_MAX_CONVERSATION_ITEMS"] = "notanint"
-    assert rt._max_conversation_items() == 1000
-    os.environ.pop("YUNSHU_REALTIME_MAX_CONVERSATION_ITEMS", None)
 
 
 def test_trim_preserves_previous_item_insert(monkeypatch):

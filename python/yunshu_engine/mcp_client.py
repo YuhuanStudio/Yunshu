@@ -20,10 +20,11 @@ MCP client behavior:
 import asyncio
 import json
 import logging
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from . import settings
 
 logger = logging.getLogger(__name__)
 
@@ -347,11 +348,10 @@ class MCPClientManager:
             if path.exists():
                 configs = self._parse_config_file(path)
 
-        # Environment: YUNSHU_MCP_SERVERS=json_array
-        env_servers = os.environ.get("YUNSHU_MCP_SERVERS")
-        if env_servers and not configs:
+        # YUNSHU_MCP_SERVERS=json_array
+        if not configs:
             try:
-                servers = json.loads(env_servers)
+                servers = settings.get("YUNSHU_MCP_SERVERS") or []
                 for s in servers:
                     configs.append(
                         MCPServerConfig(
@@ -364,8 +364,8 @@ class MCPClientManager:
                             enabled=s.get("enabled", True),
                         )
                     )
-            except json.JSONDecodeError:
-                logger.error("Failed to parse YUNSHU_MCP_SERVERS env var")
+            except settings.SettingError:
+                logger.error("Failed to parse YUNSHU_MCP_SERVERS")
 
         # Register and connect
         connected = 0

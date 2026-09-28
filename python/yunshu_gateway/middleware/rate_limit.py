@@ -8,12 +8,9 @@ this engine serves a single consumer; limiting is purely per-IP now.)
 
 Memory safety: LRU eviction + TTL expiry prevents unbounded growth from
 unique-IP DoS. Configurable via environment:
-  YUNSHU_RATE_LIMIT_MAX_BUCKETS — max per-IP buckets (default: 10000)
-  YUNSHU_RATE_LIMIT_TTL_SECONDS — bucket TTL in seconds (default: 600)
 """
 
 
-import os
 import threading
 import time
 from collections import OrderedDict
@@ -21,6 +18,8 @@ from collections import OrderedDict
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
+
+from yunshu_engine import settings
 
 # Paths served by the Anthropic router — must use Anthropic error format
 _ANTHROPIC_PATHS = (
@@ -138,8 +137,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     Configured via environment:
       YUNSHU_RATE_LIMIT_RPM — requests per minute (default: 120)
-      YUNSHU_RATE_LIMIT_MAX_BUCKETS — max per-IP buckets (default: 10000)
-      YUNSHU_RATE_LIMIT_TTL_SECONDS — bucket TTL in seconds (default: 600)
       YUNSHU_TRUSTED_PROXIES — comma-separated trusted proxy IPs (default: none)
     """
 
@@ -161,23 +158,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     def __init__(self, app, rpm: int | None = None):
         super().__init__(app)
-        rpm = rpm or int(os.environ.get("YUNSHU_RATE_LIMIT_RPM", "120"))
+        rpm = rpm or settings.get("YUNSHU_RATE_LIMIT_RPM")
         self._rpm = rpm
-        max_buckets = int(os.environ.get("YUNSHU_RATE_LIMIT_MAX_BUCKETS", "10000"))
-        ttl = float(os.environ.get("YUNSHU_RATE_LIMIT_TTL_SECONDS", "600"))
         self._bucket_cache = _LRUBucketCache(
             rate=rpm / 60.0,
             capacity=rpm,
-            max_buckets=max_buckets,
-            ttl=ttl,
+            max_buckets=10000,
+            ttl=600.0,
         )
-        # Parse trusted proxies for X-Forwarded-For validation
-        trusted_raw = os.environ.get("YUNSHU_TRUSTED_PROXIES", "").strip()
-        self._trusted_proxies: set[str] = (
-            {ip.strip() for ip in trusted_raw.split(",") if ip.strip()}
-            if trusted_raw
-            else set()
-        )
+        # Trusted proxies for X-Forwarded-For validation
+        self._trusted_proxies: set[str] = set(settings.get("YUNSHU_TRUSTED_PROXIES"))
 
     async def dispatch(self, request: Request, call_next):
         if request.url.path in self.PUBLIC_PATHS:

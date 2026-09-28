@@ -30,13 +30,12 @@ overlaps with GPU decode of 1–5ms per step, yielding ~10–25% throughput
 improvement at high batch sizes.
 
 Integration:
-  - YUNSHU_TBO=1 env var enables TBO
+  - YUNSHU_OVERLAP=two_batch enables TBO
   - EngineCore._engine_loop() uses wrap_step() when TBO is active
   - Falls back to sequential when batch_size <= 1 or low utilization
 """
 
 import logging
-import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -103,17 +102,6 @@ class TBOConfig:
     low_util_threshold: float = 0.1
     fallback_window: int = 50
     metrics_window: int = 100
-
-    @classmethod
-    def from_env(cls) -> TBOConfig:
-        """Create config from environment variables."""
-        return cls(
-            enabled=os.environ.get("YUNSHU_TBO", "0") == "1",
-            min_batch_size=int(os.environ.get("YUNSHU_TBO_MIN_BATCH", "2")),
-            low_util_threshold=float(os.environ.get("YUNSHU_TBO_LOW_UTIL", "0.1")),
-            fallback_window=int(os.environ.get("YUNSHU_TBO_FALLBACK_WINDOW", "50")),
-            metrics_window=int(os.environ.get("YUNSHU_TBO_METRICS_WINDOW", "100")),
-        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -272,7 +260,7 @@ class TwoBatchOverlapScheduler:
     """
 
     def __init__(self, config: TBOConfig | None = None) -> None:
-        self._config = config or TBOConfig.from_env()
+        self._config = config or TBOConfig()
         self._metrics = TBOMetrics(_window=self._config.metrics_window)
 
         # Double-buffer state

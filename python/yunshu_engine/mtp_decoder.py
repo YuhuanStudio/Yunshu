@@ -1,7 +1,7 @@
 # DEPRECATED: home-grown Qwen3.5 MTP — superseded by mlx-vlm's
-# native MTP (see mlxvlm_mtp.py + YUNSHU_TEXT_MTP=1; ~1.82x in a proof script, not served/gated — experimental).
+# native MTP (see mlxvlm_mtp.py + YUNSHU_SPEC_UNVERIFIED=mlxvlm_mtp; ~1.82x in a proof script, not served/gated — experimental).
 # This lacked mlx-vlm's GatedDeltaNet intermediate-state capture (garbage on 27B,
-# ~0.9x on 9B). Kept only as a legacy escape hatch under YUNSHU_LEGACY_MTP=1.
+# ~0.9x on 9B). Kept only as the experimental YUNSHU_SPEC_UNVERIFIED=mtp route.
 from __future__ import annotations
 
 """MTP always-advance speculative decoder with n_confirmed skip state.

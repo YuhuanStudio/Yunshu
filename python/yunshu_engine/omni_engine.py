@@ -21,12 +21,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Literal
 
 import numpy as np
+
+from . import settings
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +123,7 @@ class OmniEngine:
         self.thinker_max = (
             thinker_max_new_tokens
             if thinker_max_new_tokens is not None
-            else int(os.environ.get("YUNSHU_OMNI_THINKER_MAX", "256"))
+            else settings.get("YUNSHU_OMNI_THINKER_MAX")
         )
         self.talker_max = talker_max_new_tokens
         self.talker_temp = talker_temperature

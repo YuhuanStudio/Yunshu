@@ -35,7 +35,6 @@ Integration:
   - Gateway endpoint at /v1/video/generations remains unchanged
 
 Env vars:
-  YUNSHU_VIDEO_PIPELINE=native  Force native pipeline (skip mlx-video)
   YUNSHU_VIDEO_LORA=path        Auto-load LoRA adapter at startup
 """
 

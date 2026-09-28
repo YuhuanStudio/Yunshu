@@ -22,11 +22,12 @@ single-consumer model.
 import contextlib
 import hmac
 import logging
-import os
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+
+from yunshu_engine import settings
 
 logger = logging.getLogger(__name__)
 
@@ -106,8 +107,7 @@ class _ErrorFormatter:
 
 def _owner_identity() -> str:
     """Single-consumer owner identity, overridable via YUNSHU_ACTOR_IDENTITY."""
-    custom = os.environ.get("YUNSHU_ACTOR_IDENTITY", "").strip()
-    return custom or "owner"
+    return settings.get("YUNSHU_ACTOR_IDENTITY") or "owner"
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -128,9 +128,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
     PUBLIC_PREFIXES = ("/static/", "/assets/")
 
     def _is_auth_enabled(self) -> bool:
-        if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
+        if settings.get_bool("YUNSHU_AUTH_DISABLED"):
             return False
-        _static = os.environ.get("YUNSHU_AUTH_TOKEN")
+        _static = settings.get("YUNSHU_AUTH_TOKEN")
         return bool(_static)
 
     async def dispatch(self, request: Request, call_next):
@@ -162,7 +162,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if not self._is_auth_enabled():
             return await call_next(request)
 
-        auth_token = os.environ.get("YUNSHU_AUTH_TOKEN", "")
+        auth_token = settings.get("YUNSHU_AUTH_TOKEN") or ""
         auth = request.headers.get("Authorization", "")
 
         if not auth.startswith("Bearer "):

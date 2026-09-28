@@ -25,8 +25,7 @@ Integration:
   - Gateway endpoint at /v1/video/generations
   - Reuses mlx-video's native MLX computation
 
-Env vars:
-  YUNSHU_VIDEO_STREAMING=1   Enable streaming frame decoder
+Settings:
   YUNSHU_VIDEO_LORA=path     Auto-load LoRA adapter at startup
 """
 
@@ -45,6 +44,8 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from . import settings
 
 logger = logging.getLogger(__name__)
 
@@ -165,30 +166,10 @@ class VideoEngine(ActiveRequestMixin):
         self._base_model_weights: dict | None = None
 
         # Env var: auto-load LoRA adapter
-        env_lora = os.environ.get("YUNSHU_VIDEO_LORA", "").strip()
+        env_lora = settings.get("YUNSHU_VIDEO_LORA") or ""
         if env_lora and os.path.isdir(env_lora):
             self._lora_adapter_path = env_lora
             logger.info(f"Video LoRA adapter path set from env: {env_lora}")
-
-        # TeaCache config for diffusion acceleration (opt-in via YUNSHU_VIDEO_TEACACHE).
-        # Per-request instances are created in each generation call to prevent
-        # state leakage between concurrent requests.
-        self._teacache_config = None
-        teacache_env = os.environ.get("YUNSHU_VIDEO_TEACACHE", "").strip()
-        if teacache_env in ("1", "true", "yes"):
-            from .teacache import TeaCacheConfig
-
-            self._teacache_config = TeaCacheConfig(rel_l1_thresh=0.2)
-            logger.info("Video TeaCache enabled (threshold=0.2)")
-        elif teacache_env and teacache_env not in ("0", "false", "no"):
-            try:
-                thresh = float(teacache_env)
-                from .teacache import TeaCacheConfig
-
-                self._teacache_config = TeaCacheConfig(rel_l1_thresh=thresh)
-                logger.info(f"Video TeaCache enabled (threshold={thresh})")
-            except ValueError:
-                pass
 
     @property
     def model_name(self) -> str:
@@ -279,7 +260,7 @@ class VideoEngine(ActiveRequestMixin):
         if not self._running and self._model is None:
             return
         self._running = False
-        self._teacache_config = None
+
         self.unload_lora_adapter()
         self._model = None
         self._base_model_weights = None
@@ -304,7 +285,7 @@ class VideoEngine(ActiveRequestMixin):
         if not self._running and self._model is None:
             return
         self._running = False
-        self._teacache_config = None
+
         self.unload_lora_adapter()
         self._model = None
         self._base_model_weights = None
@@ -532,10 +513,7 @@ class VideoEngine(ActiveRequestMixin):
                 model_dir = self._get_model_dir()
 
                 # Determine if we can use the native pipeline for streaming
-                use_native = (
-                    os.environ.get("YUNSHU_VIDEO_PIPELINE", "").strip() == "native"
-                    or self._native_pipeline is not None
-                )
+                use_native = self._native_pipeline is not None
                 has_model = model_dir and os.path.isdir(model_dir)
 
                 if has_model and use_native:
@@ -693,98 +671,81 @@ class VideoEngine(ActiveRequestMixin):
             scheduler=scheduler,
         )
 
-        # Wire TeaCache — create per-request instance
-        if self._teacache_config is not None:
-            from .teacache import TeaCacheHook
-
-            _local_tc = TeaCacheHook(self._teacache_config)
-            _local_tc.reset()
-            self._native_pipeline._teacache_hook = _local_tc
-        else:
-            _local_tc = None
-
-        try:
-            # Convert image bytes to mx.array for I2V
-            image_mx = None
-            if image is not None:
-                import mlx.core as mx
-                import numpy as np
-                from PIL import Image as PILImage
-
-                pil_img = PILImage.open(io.BytesIO(image)).convert("RGB")
-                img_np = np.array(pil_img, dtype=np.float32) / 255.0
-                image_mx = mx.array(img_np)
-
+        # Convert image bytes to mx.array for I2V
+        image_mx = None
+        if image is not None:
+            import mlx.core as mx
             import numpy as np
             from PIL import Image as PILImage
 
-            # Use generate_frames_iter to get frames one at a time.
-            # We use a one-frame look-ahead buffer so we can mark is_final
-            # on the last frame accurately.
-            if not self._running:
-                return 0
-            frame_iter = self._native_pipeline.generate_frames_iter(
-                request,
-                image=image_mx,
-            )
-            pending_data: dict | None = None
-            frames_emitted = 0
+            pil_img = PILImage.open(io.BytesIO(image)).convert("RGB")
+            img_np = np.array(pil_img, dtype=np.float32) / 255.0
+            image_mx = mx.array(img_np)
 
-            for frame, frame_idx, _ in frame_iter:
-                if cancel.is_set() or not self._running:
-                    break
+        import numpy as np
+        from PIL import Image as PILImage
 
-                # Convert mx.array -> numpy -> PIL -> PNG bytes
-                frame_np = np.array(frame)
-                if frame_np.ndim != 3 or frame_np.shape[2] != 3:
-                    continue
+        # Use generate_frames_iter to get frames one at a time.
+        # We use a one-frame look-ahead buffer so we can mark is_final
+        # on the last frame accurately.
+        if not self._running:
+            return 0
+        frame_iter = self._native_pipeline.generate_frames_iter(
+            request,
+            image=image_mx,
+        )
+        pending_data: dict | None = None
+        frames_emitted = 0
 
-                # mx arrays may be float16; clip and convert to uint8
-                frame_uint8 = np.clip(frame_np * 255, 0, 255).astype(np.uint8)
-                pil = PILImage.fromarray(frame_uint8)
-                buf = io.BytesIO()
-                pil.save(buf, format="PNG")
-                frame_bytes = buf.getvalue()
+        for frame, frame_idx, _ in frame_iter:
+            if cancel.is_set() or not self._running:
+                break
 
-                frame_data = {
-                    "index": frame_idx,
-                    "frame": frame_bytes,
-                    "width": width,
-                    "height": height,
-                    "is_final": False,
-                    "method": "native_mlx_stream",
-                }
+            # Convert mx.array -> numpy -> PIL -> PNG bytes
+            frame_np = np.array(frame)
+            if frame_np.ndim != 3 or frame_np.shape[2] != 3:
+                continue
 
-                # Emit the previously buffered frame (if any)
-                if pending_data is not None:
-                    try:
-                        thread_queue.put(pending_data, timeout=5.0)
-                        frames_emitted += 1
-                    except _queue_mod.Full:
-                        logger.warning("Stream queue full — consumer likely gone")
-                        pending_data = None
-                        break
+            # mx arrays may be float16; clip and convert to uint8
+            frame_uint8 = np.clip(frame_np * 255, 0, 255).astype(np.uint8)
+            pil = PILImage.fromarray(frame_uint8)
+            buf = io.BytesIO()
+            pil.save(buf, format="PNG")
+            frame_bytes = buf.getvalue()
 
-                # Buffer current frame (will be emitted next iteration or
-                # marked as final after the loop)
-                pending_data = frame_data
+            frame_data = {
+                "index": frame_idx,
+                "frame": frame_bytes,
+                "width": width,
+                "height": height,
+                "is_final": False,
+                "method": "native_mlx_stream",
+            }
 
-            # Mark the last buffered frame as final and emit it
+            # Emit the previously buffered frame (if any)
             if pending_data is not None:
-                pending_data["is_final"] = True
                 try:
                     thread_queue.put(pending_data, timeout=5.0)
                     frames_emitted += 1
                 except _queue_mod.Full:
                     logger.warning("Stream queue full — consumer likely gone")
+                    pending_data = None
+                    break
 
-            return frames_emitted
+            # Buffer current frame (will be emitted next iteration or
+            # marked as final after the loop)
+            pending_data = frame_data
 
-        finally:
-            if _local_tc is not None and hasattr(
-                self._native_pipeline, "_teacache_hook"
-            ):
-                self._native_pipeline._teacache_hook = None
+        # Mark the last buffered frame as final and emit it
+        if pending_data is not None:
+            pending_data["is_final"] = True
+            try:
+                thread_queue.put(pending_data, timeout=5.0)
+                frames_emitted += 1
+            except _queue_mod.Full:
+                logger.warning("Stream queue full — consumer likely gone")
+
+        return frames_emitted
 
     def _stream_mlx_video(
         self,
@@ -1056,9 +1017,8 @@ class VideoEngine(ActiveRequestMixin):
                 output_format,
             )
 
-        # Try native MLX pipeline first (YUNSHU_VIDEO_PIPELINE=native)
-        use_native = os.environ.get("YUNSHU_VIDEO_PIPELINE", "").strip() == "native"
-        if use_native or self._native_pipeline is not None:
+        # Try the native MLX pipeline first
+        if self._native_pipeline is not None:
             result = self._generate_with_native_pipeline(
                 prompt=prompt,
                 negative_prompt=negative_prompt,
@@ -1270,8 +1230,6 @@ class VideoEngine(ActiveRequestMixin):
                     wan_kwargs["tiling"] = tiling
                 generate_video(**wan_kwargs)
             elif self._model_type == "ltx_2":
-                import os as _os
-
                 from mlx_video.models.ltx_2.generate import generate_video
 
                 # The real LTX-2 generate_video requires model_repo +
@@ -1281,7 +1239,7 @@ class VideoEngine(ActiveRequestMixin):
                 # the real signature, forward the init image for I2V, and resolve the
                 # SEPARATE text-encoder repo from an env override (else assume the
                 # model repo bundles it).
-                _te_repo = _os.environ.get("YUNSHU_LTX_TEXT_ENCODER_REPO") or model_dir
+                _te_repo = settings.get("YUNSHU_LTX_TEXT_ENCODER_REPO") or model_dir
                 ltx_kwargs = dict(
                     model_repo=model_dir,
                     text_encoder_repo=_te_repo,
@@ -1364,7 +1322,7 @@ class VideoEngine(ActiveRequestMixin):
         scheduler: str,
         model_dir: str,
     ):
-        """Generate video using native MLX pipeline (WanVideoPipeline + TeaCache)."""
+        """Generate video using the native MLX pipeline (WanVideoPipeline)."""
         try:
             from .video_pipeline import VideoGenRequest, WanVideoPipeline
 
@@ -1409,46 +1367,30 @@ class VideoEngine(ActiveRequestMixin):
                 scheduler=scheduler,
             )
 
-            # Wire TeaCache into the pipeline's denoising loop.
-            # Create a per-request instance to avoid state leakage.
-            _local_tc = None
-            if self._teacache_config is not None:
-                from .teacache import TeaCacheHook
+            if image is not None:
+                # Load image bytes directly as an MLX array for the
+                # native pipeline — avoids unnecessary disk write.
+                import mlx.core as mx
+                import numpy as np
+                from PIL import Image as PILImage
 
-                _local_tc = TeaCacheHook(self._teacache_config)
-                _local_tc.reset()
-                self._native_pipeline._teacache_hook = _local_tc
+                pil_img = PILImage.open(io.BytesIO(image)).convert("RGB")
+                img_np = np.array(pil_img, dtype=np.float32) / 255.0
+                img_mx = mx.array(img_np)
+                if not self._running:
+                    return None
+                result = self._native_pipeline.generate_from_image(
+                    request=request,
+                    image=img_mx,
+                )
+            else:
+                if not self._running:
+                    return None
+                result = self._native_pipeline.generate_frames(request)
 
-            try:
-                if image is not None:
-                    # Load image bytes directly as an MLX array for the
-                    # native pipeline — avoids unnecessary disk write.
-                    import mlx.core as mx
-                    import numpy as np
-                    from PIL import Image as PILImage
-
-                    pil_img = PILImage.open(io.BytesIO(image)).convert("RGB")
-                    img_np = np.array(pil_img, dtype=np.float32) / 255.0
-                    img_mx = mx.array(img_np)
-                    if not self._running:
-                        return None
-                    result = self._native_pipeline.generate_from_image(
-                        request=request,
-                        image=img_mx,
-                    )
-                else:
-                    if not self._running:
-                        return None
-                    result = self._native_pipeline.generate_frames(request)
-
-                if result and result.frames:
-                    return result
-                return None
-            finally:
-                if _local_tc is not None and hasattr(
-                    self._native_pipeline, "_teacache_hook"
-                ):
-                    self._native_pipeline._teacache_hook = None
+            if result and result.frames:
+                return result
+            return None
         except Exception as e:
             logger.error(f"Native pipeline generation failed: {e}", exc_info=True)
             return None
@@ -1708,7 +1650,6 @@ class VideoEngine(ActiveRequestMixin):
             "lora_loaded": self._lora_loaded,
             "lora_merged": self._lora_merged,
             "lora_adapter_id": lora_adapter_id,
-            "teacache_enabled": self._teacache_config is not None,
         }
 
     # ═══════════════════════════════════════════════════════════════════════
@@ -1761,9 +1702,6 @@ class VideoEngine(ActiveRequestMixin):
 
         _thread_queue: _queue_mod.Queue[dict | None] = _queue_mod.Queue(maxsize=128)
         _consumer_cancel = threading.Event()
-
-        # Check env var for streaming mode
-        os.environ.get("YUNSHU_VIDEO_STREAMING", "0").strip() in ("1", "true", "yes")
 
         def _decode_sync():
             """Synchronous frame decoder running in the MLX executor."""

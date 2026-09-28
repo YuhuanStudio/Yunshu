@@ -17,7 +17,6 @@ import contextlib
 import copy
 import json
 import logging
-import os
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -27,6 +26,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
+from yunshu_engine import settings
 from yunshu_engine.tool_call_streamer import ToolCallStreamer
 
 from ..engine import get_engine, get_model_manager
@@ -394,7 +394,7 @@ class ChatCompletionRequest(BaseModel):
     )  # engine requires [0,0.5]; le=1.0 made out-of-range 500 not 422
     # top-nσ (ACL 2025): keep only tokens whose raw logit is within n·σ of the max
     # logit (a temperature-invariant quality filter; 0 = off). Server-wide default
-    # via YUNSHU_TOP_N_SIGMA; this per-request value overrides it when > 0.
+    # (off by default); this per-request value enables it when > 0.
     top_n_sigma: float = Field(default=0.0, ge=0.0, le=10.0)
     # Serving parity:
     min_tokens: int = Field(
@@ -1673,9 +1673,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                             try:
                                 # SECURITY: gate trust_remote_code (RCE from a
                                 # model dir's *.py) behind an explicit opt-in, default OFF.
-                                _trc = os.environ.get(
-                                    "YUNSHU_TRUST_REMOTE_CODE", ""
-                                ).lower() in ("1", "true", "yes")
+                                _trc = settings.get_bool("YUNSHU_TRUST_REMOTE_CODE")
                                 from transformers import AutoTokenizer
 
                                 _tokenizer = AutoTokenizer.from_pretrained(

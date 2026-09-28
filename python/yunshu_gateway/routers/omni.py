@@ -32,6 +32,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from yunshu_engine import settings
+
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["omni"])
 
@@ -166,7 +168,7 @@ def _get_omni_engine():
         # separately-configured YUNSHU_OMNI_MODEL only when the served model can't
         # speak (e.g. a text-only main model + a dedicated omni model).
         shared = _shared_speakable_model()
-        path = os.environ.get("YUNSHU_OMNI_MODEL")
+        path = settings.get("YUNSHU_OMNI_MODEL")
         if shared is not None:
             model, processor = shared
             _omni_engine = OmniEngine(model=model, processor=processor)
@@ -187,9 +189,9 @@ async def preload_and_warmup() -> None:
     warm (~4s) instead of cold (~30s). Runs whenever a speakable model is available
     — the served model itself (reuse) or a separate YUNSHU_OMNI_MODEL. Opt out with
     YUNSHU_OMNI_PRELOAD=0. Best-effort — failures are logged, not fatal."""
-    if os.environ.get("YUNSHU_OMNI_PRELOAD", "1") == "0":
+    if not settings.get_bool("YUNSHU_OMNI_PRELOAD"):
         return
-    if not (os.environ.get("YUNSHU_OMNI_MODEL") or _shared_speakable_model()):
+    if not (settings.get("YUNSHU_OMNI_MODEL") or _shared_speakable_model()):
         return
     try:
         eng = _get_omni_engine()

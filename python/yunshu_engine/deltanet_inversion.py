@@ -4,7 +4,7 @@ from __future__ import annotations
 
 Used in the KV cache eviction path: when KV blocks are evicted from the prefix
 cache under memory pressure, the inverted state allows partial recovery of
-evicted context. Enabled via YUNSHU_DELTANET_INVERSION=1 env var.
+evicted context. Research module (not wired into serving).
 
 The GatedDeltaNet recurrence (ICLR 2025, Songlin Yang et al.):
 
@@ -45,7 +45,7 @@ Limitations:
 
 Verdict: Mathematically correct (float32 roundtrip < 1e-7 error) but
 NOT practical for BF16 speculative decoding. Wired into KV cache eviction
-path as an opt-in feature (YUNSHU_DELTANET_INVERSION=1) for SSM layer
+path as a research feature for SSM layer
 state recovery. May become more useful if float32 states or mixed-precision
 inference becomes viable.
 Capture mechanism integrated via register_hooks() for DeltaNet layers.

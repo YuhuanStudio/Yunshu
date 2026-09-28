@@ -7,7 +7,6 @@ Without auth, any client could cancel arbitrary in-progress generations
 or enumerate active request metadata.
 """
 
-import os
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -15,6 +14,7 @@ from pydantic import BaseModel
 router = APIRouter(tags=["cancel"])
 
 from yunshu_control.audit_log import log_operation, resolve_actor
+from yunshu_engine import settings
 
 
 class CancelRequest(BaseModel):
@@ -36,22 +36,18 @@ def _check_auth(request: Request) -> None:
         if getattr(request.state, "role", None):
             return
 
-    auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
+    auth_token = settings.get("YUNSHU_AUTH_TOKEN")
     if not auth_token:
         # Deny by default when no auth is configured (secure default).
         # Explicit opt-in via YUNSHU_AUTH_DISABLED=true is required to
         # skip authentication.
-        if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() not in (
-            "true",
-            "1",
-            "yes",
-        ):
+        if not settings.get_bool("YUNSHU_AUTH_DISABLED"):
             raise HTTPException(
                 status_code=401,
                 detail="No authentication configured. Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true.",
             )
         return
-    if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
+    if settings.get_bool("YUNSHU_AUTH_DISABLED"):
         return  # Auth explicitly disabled
 
     auth = request.headers.get("Authorization", "")
@@ -92,11 +88,7 @@ async def cancel_generation(req: CancelRequest, request: Request):
     # stamps role="owner" on every admitted request (or "admin"/"system" for
     # static-token holders), so the single owner can always cancel_all and
     # cancel by id. Auth-disabled dev mode is also treated as admin.
-    _auth_disabled = os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in (
-        "true",
-        "1",
-        "yes",
-    )
+    _auth_disabled = settings.get_bool("YUNSHU_AUTH_DISABLED")
     _role_str = str(getattr(request.state, "role", "") or "")
     is_admin = (
         _auth_disabled
@@ -188,11 +180,7 @@ async def list_active_generations(request: Request):
     admin (was leaking every tenant's live request_id + model)."""
     _check_auth(request)
     actor = resolve_actor(request)
-    _auth_disabled = os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in (
-        "true",
-        "1",
-        "yes",
-    )
+    _auth_disabled = settings.get_bool("YUNSHU_AUTH_DISABLED")
     _role_str = str(getattr(request.state, "role", "") or "")
     is_admin = (
         _auth_disabled

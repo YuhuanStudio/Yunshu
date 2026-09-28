@@ -25,12 +25,13 @@ import contextlib
 import gc
 import itertools
 import logging
-import os
 import time
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
+
+from . import settings
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ class EngineCoreConfig:
     kv_num_blocks: int = 0  # pre-computed block count (0 = auto-compute)
     # C18: CPU/GPU overlap scheduling
     enable_cpu_gpu_overlap: bool = (
-        False  # Disabled by default; enable via YUNSHU_CPU_GPU_OVERLAP=1
+        False  # Disabled by default; enable via YUNSHU_OVERLAP=cpu_gpu
     )
     # N-gram speculative decoding in batch path (model-free, zero GPU overhead)
     ngram_spec_enabled: bool = False
@@ -82,7 +83,7 @@ class EngineCoreConfig:
     # requests when slots are short), or "fair" (round-robin across priority
     # levels to prevent low-priority starvation). Previously the scheduler's
     # policy was hardwired FCFS (never plumbed), so PRIORITY/FAIR preemption +
-    # aging were unreachable. Set via YUNSHU_SCHEDULER_POLICY.
+    # aging were unreachable.
     scheduler_policy: str = "fcfs"
     aging_weight: float = 0.1  # priority bonus per second waiting (anti-starvation)
     prefill_chunk_size: int = 2048
@@ -242,7 +243,11 @@ class EngineCore:
                     kv_manager = KVCacheManager(kv_config, num_blocks=num_blocks)
 
                     # Wrap with TieredKVCacheManager if SSD cache is configured
-                    ssd_dir = os.environ.get("YUNSHU_SSD_CACHE_DIR")
+                    ssd_dir = (
+                        settings.get("YUNSHU_SSD_CACHE_DIR")
+                        if settings.get_bool("YUNSHU_SSD_CACHE")
+                        else None
+                    )
                     if ssd_dir:
                         from yunshu_kv.tiered import SSDCacheStore, TieredKVCacheManager
 
@@ -349,15 +354,16 @@ class EngineCore:
         # C18: CPU/GPU overlap scheduler
         from .cpu_gpu_overlap import OverlapConfig, OverlapScheduler
 
-        overlap_cfg = OverlapConfig.from_env()
-        if self.config.enable_cpu_gpu_overlap:
-            overlap_cfg.enabled = True
+        overlap_mode = settings.get("YUNSHU_OVERLAP")
+        overlap_cfg = OverlapConfig(
+            enabled=overlap_mode == "cpu_gpu" or self.config.enable_cpu_gpu_overlap
+        )
         self._overlap_scheduler = OverlapScheduler(overlap_cfg)
 
         # Two-Batch Overlap scheduler (TBO)
         from .two_batch_overlap import TBOConfig, TwoBatchOverlapScheduler
 
-        tbo_cfg = TBOConfig.from_env()
+        tbo_cfg = TBOConfig(enabled=overlap_mode == "two_batch")
         self._tbo_scheduler = TwoBatchOverlapScheduler(tbo_cfg)
 
         # Adaptive batch scheduler (load-aware batch sizing)
@@ -368,8 +374,7 @@ class EngineCore:
         # Telemetry (sampled metric collection)
         from .telemetry import TelemetryCollector, TelemetryConfig
 
-        telemetry_enabled = os.environ.get("YUNSHU_TELEMETRY", "0") == "1"
-        self._telemetry = TelemetryCollector(TelemetryConfig(enabled=telemetry_enabled))
+        self._telemetry = TelemetryCollector(TelemetryConfig(enabled=False))
 
         # ── 實現-整合 wiring ──
 
@@ -391,19 +396,8 @@ class EngineCore:
         from .inference_budget import InferenceBudgetManager
 
         self._budget_manager = InferenceBudgetManager.from_env()
-        self._sched_full_ab = os.environ.get("YUNSHU_SCHED_FULL", "").strip() in (
-            "1",
-            "true",
-            "yes",
-        )
         logger.info("InferenceBudgetManager wired")
 
-        # Request deduplication (SHA-256 content-hash dedup with fan-out)
-        from .request_dedup import RequestDeduplicator
-
-        self._request_dedup: RequestDeduplicator | None = None
-        self._dedup_hashes: dict[str, str] = {}  # req_id → content_hash
-        self._dedup_shadows: dict[str, str] = {}  # shadow_req_id → primary_req_id
         self._finalized_ids: set[str] = set()  # idempotency guard for _finalize_request
         self._ttft_done: set[str] = set()  # TTFT deduplication guard
         self._request_block_ids: dict[
@@ -412,9 +406,6 @@ class EngineCore:
         self._pbs_halve_cooldown: int = (
             0  # Cooldown steps after prefill_batch_size halving
         )
-        if os.environ.get("YUNSHU_REQUEST_DEDUP", "").strip() in ("1", "true", "yes"):
-            self._request_dedup = RequestDeduplicator.from_env()
-            logger.info("RequestDeduplicator wired (SHA-256 content-hash dedup)")
 
         # KV lifecycle manager (4-tier hot/warm/cool/cold admission/migration/eviction)
         from .kv_lifecycle import KVLifecycleManager
@@ -468,22 +459,13 @@ class EngineCore:
             CompositionScheduler,
             MemoryPressureMixin,
             MetricsMixin,
-            ProfilingMixin,
-            SpecDecodeMixin,
         )
 
         try:
             self._composition_scheduler = CompositionScheduler(self.scheduler)
             self._composition_scheduler.add_mixin(MetricsMixin())
-            self._composition_scheduler.add_mixin(MemoryPressureMixin.from_env())
+            self._composition_scheduler.add_mixin(MemoryPressureMixin())
 
-            # ProfilingMixin — YUNSHU_SCHEDULER_PROFILING=1
-            if os.environ.get("YUNSHU_SCHEDULER_PROFILING", "").strip() == "1":
-                self._composition_scheduler.add_mixin(ProfilingMixin())
-
-            # SpecDecodeMixin — YUNSHU_SPEC_DECODE_TRACKING=1
-            if os.environ.get("YUNSHU_SPEC_DECODE_TRACKING", "").strip() == "1":
-                self._composition_scheduler.add_mixin(SpecDecodeMixin())
         except Exception:
             logger.debug("CompositionScheduler setup skipped", exc_info=True)
             self._composition_scheduler = None
@@ -574,31 +556,6 @@ class EngineCore:
         self._attention_optimizer = AttentionOptimizer()
         self._moe_optimizer = MoEEfficiencyOptimizer()
         self._warmup_manager = ModelWarmupManager()
-
-        # Process isolation (opt-in via YUNSHU_PROCESS_ISOLATION=1)
-        self._isolation_enabled = False
-        if os.environ.get("YUNSHU_PROCESS_ISOLATION", "").lower() in (
-            "1",
-            "true",
-            "yes",
-        ):
-            from .process_isolation import is_isolation_enabled
-
-            self._isolation_enabled = is_isolation_enabled()
-            if self._isolation_enabled:
-                logger.info("Process isolation enabled (YUNSHU_PROCESS_ISOLATION=1)")
-
-        # Inference checkpoint/restore (opt-in via YUNSHU_CHECKPOINT_INTERVAL > 0)
-        self._checkpoint_mgr = None
-        _cp_interval = int(os.environ.get("YUNSHU_CHECKPOINT_INTERVAL", "0"))
-        if _cp_interval > 0:
-            from .checkpoint import AutoCheckpointPolicy, InferenceCheckpoint
-
-            self._checkpoint_mgr = InferenceCheckpoint(
-                auto_checkpoint_interval=_cp_interval,
-                auto_checkpoint_policy=AutoCheckpointPolicy.EVERY_N_TOKENS,
-            )
-            logger.info(f"Auto-checkpoint enabled: every {_cp_interval} tokens")
 
         # Output parser (model-specific output extraction)
         from .output_parser import parse_output
@@ -965,21 +922,6 @@ class EngineCore:
 
         logger.info("EngineCore started")
 
-        # Checkpoint recovery: restore in-flight requests from previous crash
-        if self._checkpoint_mgr is not None:
-            try:
-                saved_ids = self._checkpoint_mgr.list_checkpoints()
-                if saved_ids:
-                    logger.info(
-                        f"Checkpoint recovery: {len(saved_ids)} saved states found"
-                    )
-                    for ckpt_id in saved_ids:
-                        state = self._checkpoint_mgr.load(ckpt_id)
-                        if state is not None:
-                            logger.debug(f"Restored checkpoint for {ckpt_id}")
-            except Exception:
-                logger.debug("checkpoint recovery failed", exc_info=True)
-
     async def stop(self) -> None:
         """Stop the engine with graceful drain (3-state shutdown).
 
@@ -1001,7 +943,7 @@ class EngineCore:
 
         # Phase 2: wait for in-flight requests to drain (up to 30s)
         if self._loop_task is not None:
-            drain_timeout = float(os.environ.get("YUNSHU_SHUTDOWN_DRAIN_TIMEOUT", "30"))
+            drain_timeout = settings.get("YUNSHU_DRAIN_TIMEOUT")
             if self.scheduler.has_requests():
                 logger.info(
                     f"Graceful shutdown requested, waiting up to {drain_timeout}s "
@@ -1089,9 +1031,6 @@ class EngineCore:
             self._ttft_timestamps.clear()
         self._request_lora_adapters.clear()
         self._kv_prefix_hashes.clear()
-        if self._request_dedup is not None:
-            self._dedup_hashes.clear()
-            self._dedup_shadows.clear()
         self._finalized_ids.clear()
         self._ttft_done.clear()
         self._request_block_ids.clear()
@@ -1508,9 +1447,6 @@ class EngineCore:
                             f"LoRA release failed in context window rejection for {req_id}",
                             exc_info=True,
                         )
-                self._fail_dedup_shadows(
-                    req_id, "Prompt exceeds context window", "error"
-                )
                 return req_id
 
         # ── Budget check (token/time/cost/thinking) ──
@@ -1567,181 +1503,7 @@ class EngineCore:
             self._output_collectors[req_id].put(error_output)
             self._output_collectors[req_id].put(None)
             self._finished_events[req_id].set()
-            self._fail_dedup_shadows(
-                req_id, f"Budget exceeded: {budget_reason}", budget_reason
-            )
             return req_id
-
-        # ── Request dedup ──
-        if self._request_dedup is not None:
-            from .request_dedup import RequestDeduplicator
-
-            # Scope the hash by the requesting actor (tenant/API key) so two DIFFERENT
-            # tenants sending an identical prompt within the dedup window don't collide
-            # and leak one tenant's output to the other — compute_hash takes tenant_id
-            # precisely to prevent this, but it was never wired (always tenant=""). The
-            # actor is stamped on the request coroutine's context by the auth middleware.
-            try:
-                from .request_tracker import current_actor
-
-                _dedup_tenant = str(current_actor.get() or "")
-            except Exception:
-                _dedup_tenant = ""
-            content_hash = RequestDeduplicator.compute_hash(
-                model=str(getattr(self.scheduler, "model_id", "") or ""),
-                tenant_id=_dedup_tenant,
-                prompt=prompt,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                top_k=top_k,
-                min_p=min_p,
-                repetition_penalty=repetition_penalty,
-                frequency_penalty=frequency_penalty,
-                presence_penalty=presence_penalty,
-                seed=seed,
-                stop=stop,
-                stop_token_ids=stop_token_ids,
-                json_schema=str(json_schema) if json_schema else None,
-                thinking_budget=thinking_budget,
-                reasoning_effort=reasoning_effort,
-                enable_thinking=enable_thinking,
-                grammar=str(grammar) if grammar else None,
-                lora_adapter=lora_adapter,
-                priority=priority,
-                logprobs=logprobs,
-                top_logprobs=top_logprobs,
-                logit_bias=str(logit_bias) if logit_bias else None,
-            )
-            dedup_result, orphaned_shadow_groups = self._request_dedup.check(
-                req_id, content_hash
-            )
-            # Deliver error outputs to any shadows orphaned by stuck-entry pruning.
-            # Without this, those shadows would hang until their per-request timeout
-            # fires (default 300 s) because the dedup entry that would normally
-            # trigger their fan-out delivery has been removed.
-            if orphaned_shadow_groups:
-                from .request import RequestOutput as _OrphanRO
-
-                for _group in orphaned_shadow_groups:
-                    for _orphan_sid in _group:
-                        _oc = self._output_collectors.get(_orphan_sid)
-                        if _oc is not None:
-                            _oc.put(
-                                _OrphanRO(
-                                    request_id=_orphan_sid,
-                                    finished=True,
-                                    finish_reason="error",
-                                    error="Dedup primary entry pruned (stuck/orphaned)",
-                                )
-                            )
-                            _oc.put(None)
-                        self._signal_finished(_orphan_sid)
-                        self._finalize_request(_orphan_sid)
-            if dedup_result is not None:
-                # Shadow request: don't add to scheduler, wait for primary's output
-                primary_id = dedup_result.primary_request_id
-                logger.debug(f"Request {req_id} dedup hit, shadowing {primary_id}")
-                self._dedup_shadows[req_id] = primary_id
-                self._dedup_hashes[req_id] = content_hash
-                # Clean up registrations that won't be used by shadow path
-                self._budget_manager.remove(req_id)
-                # Bug 5 fix: release LoRA adapter on early return
-                if loaded_lora and lora_adapter:
-                    try:
-                        from .lora_manager import get_lora_manager
-
-                        lora_mgr = get_lora_manager(
-                            engine_id=getattr(self.scheduler, "model_id", "default")
-                            or "default"
-                        )
-                        if lora_mgr is not None:
-                            lora_mgr.release_adapter(lora_adapter)
-                    except Exception:
-                        logger.debug(
-                            f"LoRA release failed in dedup shadow for {req_id}",
-                            exc_info=True,
-                        )
-                try:
-                    from .inflight_prefix_sharing import get_inflight_tracker
-
-                    get_inflight_tracker().unregister(req_id)
-                except Exception:
-                    logger.debug(
-                        f"inflight unregister failed in dedup shadow for {req_id}",
-                        exc_info=True,
-                    )
-                # Create output collector + finished event so the caller can await
-                from .output_collector import RequestOutputCollector, RequestStreamState
-
-                shadow_collector = RequestOutputCollector(aggregate=True)
-                self._output_collectors[req_id] = shadow_collector
-                self._stream_states[req_id] = RequestStreamState(
-                    stream_interval=self.config.stream_interval
-                )
-                self._finished_events[req_id] = asyncio.Event()
-                self._request_timestamps[req_id] = time.monotonic()
-
-                # Forward primary's accumulated output so the shadow doesn't
-                # miss tokens produced before the shadow registered.  Peek at
-                # the primary's collector buffered output (not consumed yet by
-                # its own consumer).  This may be partial — the primary could
-                # have already had tokens consumed by its stream — but it's the
-                # best we can do without maintaining a separate replay buffer.
-                primary_collector = self._output_collectors.get(primary_id)
-                if (
-                    primary_collector is not None
-                    and primary_collector.output is not None
-                ):
-                    from .request import RequestOutput as _RO
-
-                    primary_out = primary_collector.output
-                    shadow_collector.put(
-                        _RO(
-                            request_id=req_id,
-                            new_token_ids=list(primary_out.new_token_ids),
-                            new_text=primary_out.new_text,
-                            output_text=primary_out.output_text,
-                            output_token_ids=list(primary_out.output_token_ids)
-                            if primary_out.output_token_ids
-                            else [],
-                            completion_tokens=primary_out.completion_tokens,
-                            finished=False,
-                            prompt_tokens=primary_out.prompt_tokens,
-                            logprobs=primary_out.logprobs,
-                            current_state=primary_out.current_state,
-                            reasoning_tokens=primary_out.reasoning_tokens,
-                            cached_tokens=primary_out.cached_tokens,
-                            error=None,
-                            ttft_ms=0.0,  # TTFT is for primary, not shadow
-                        )
-                    )
-
-                return req_id
-            else:
-                dedup_entry, orphaned_groups = self._request_dedup.register(
-                    req_id, content_hash
-                )
-                # Deliver error outputs to shadows orphaned by stuck-entry pruning.
-                if orphaned_groups:
-                    from .request import RequestOutput as _OrphanRO
-
-                    for _group in orphaned_groups:
-                        for _orphan_sid in _group:
-                            _oc = self._output_collectors.get(_orphan_sid)
-                            if _oc is not None:
-                                _oc.put(
-                                    _OrphanRO(
-                                        request_id=_orphan_sid,
-                                        finished=True,
-                                        finish_reason="error",
-                                        error="Dedup primary entry pruned (stuck/orphaned)",
-                                    )
-                                )
-                                _oc.put(None)
-                            self._signal_finished(_orphan_sid)
-                            self._finalize_request(_orphan_sid)
-            self._dedup_hashes[req_id] = dedup_entry.content_hash
 
         # ── Lifecycle tracking ──
         self._lifecycle_orchestrator.on_request_added(req_id)
@@ -1871,12 +1633,6 @@ class EngineCore:
                     self._output_collectors[req_id].put(error_output)
                     self._output_collectors[req_id].put(None)  # sentinel
                     self._finished_events[req_id].set()
-                    # Fail any dedup shadows waiting for this primary
-                    self._fail_dedup_shadows(
-                        req_id,
-                        "Memory-aware scheduler: insufficient memory",
-                        "memory_exceeded",
-                    )
                     return req_id
         except Exception:
             logger.debug("memory-aware admission check skipped", exc_info=True)
@@ -1963,10 +1719,6 @@ class EngineCore:
                 self._output_collectors[req_id].put(error_output)
                 self._output_collectors[req_id].put(None)  # sentinel
                 self._finished_events[req_id].set()
-                # Fail any dedup shadows waiting for this primary
-                self._fail_dedup_shadows(
-                    req_id, f"Memory guard rejected: {reason}", "memory_exceeded"
-                )
                 return req_id
 
         sampling_params = SamplingParams(
@@ -2092,7 +1844,6 @@ class EngineCore:
                 collector.put(None)
             self._signal_finished(req_id)
             self._cleanup_request(req_id)
-            self._fail_dedup_shadows(req_id, f"Scheduler insert failed: {exc}", "error")
             return req_id
 
         # Check if the scheduler rejected the request (queue full, etc.)
@@ -2124,9 +1875,6 @@ class EngineCore:
                 collector.put(None)  # sentinel
             self._signal_finished(req_id)
             self._finalize_request(req_id)
-            self._fail_dedup_shadows(
-                req_id, f"Scheduler rejected: {error_reason}", "error"
-            )
             return req_id
 
         # Wake engine loop from idle sleep (event-driven scheduling)
@@ -2136,11 +1884,7 @@ class EngineCore:
         return req_id
 
     async def abort_request(self, request_id: str) -> None:
-        """Deferred abort (enqueued, processed at next step).
-
-        Also fails any dedup shadow requests so their consumers don't hang
-        waiting for output from a primary that will never produce more tokens.
-        """
+        """Deferred abort (enqueued, processed at next step)."""
         from .request import RequestOutput
 
         # Look up request to preserve token counts in abort output
@@ -2163,40 +1907,11 @@ class EngineCore:
             )
             collector.put(None)  # sentinel
 
-        # Bug fix: fail dedup shadows so their consumers don't hang forever.
-        # Without this, shadow requests whose primary is aborted would never
-        # receive a sentinel or finished event, causing generate()/stream_outputs()
-        # to hang until the engine-wide timeout enforcement rescues them.
-        if self._request_dedup is not None:
-            shadow_ids = [
-                sid
-                for sid, pid in list(self._dedup_shadows.items())
-                if pid == request_id
-            ]
-            for sid in shadow_ids:
-                s_collector = self._output_collectors.get(sid)
-                if s_collector is not None:
-                    s_collector.put(
-                        RequestOutput(
-                            request_id=sid,
-                            finished=True,
-                            finish_reason="abort",
-                            error=f"Primary request {request_id} was aborted",
-                        )
-                    )
-                    s_collector.put(None)
-                self._signal_finished(sid)
-                self._cleanup_request(sid)
-
         self._signal_finished(request_id)
         self._cleanup_request(request_id)
 
     async def abort_all_requests(self) -> None:
-        """Abort all active requests (error recovery).
-
-        Also fails dedup shadow requests that are not tracked by the scheduler
-        but have collectors waiting for output from a primary.
-        """
+        """Abort all active requests (error recovery)."""
         from .request import RequestOutput
 
         failed_ids = self.scheduler.fail_all_requests()
@@ -2214,27 +1929,6 @@ class EngineCore:
                 collector.put(None)  # sentinel
             self._signal_finished(req_id)
             self._cleanup_request(req_id)
-
-        # Bug fix: also fail dedup shadow requests not tracked by the scheduler.
-        # fail_all_requests() only returns scheduler-tracked IDs, so shadow
-        # requests (short-circuited in add_request, never added to scheduler)
-        # are missed. Without this, shadow consumers hang forever.
-        if self._request_dedup is not None:
-            for sid in list(self._dedup_shadows.keys()):
-                if sid not in failed_ids:
-                    s_collector = self._output_collectors.get(sid)
-                    if s_collector is not None:
-                        s_collector.put(
-                            RequestOutput(
-                                request_id=sid,
-                                finished=True,
-                                finish_reason="abort",
-                                error="All requests aborted (dedup shadow)",
-                            )
-                        )
-                        s_collector.put(None)
-                    self._signal_finished(sid)
-                    self._cleanup_request(sid)
 
     async def stream_outputs(
         self,
@@ -2566,21 +2260,11 @@ class EngineCore:
                 # trickle into later under-filled steps → non-deterministic throughput
                 # collapse under HTTP concurrency. Briefly wait so concurrent arrivals
                 # queue and batch in ONE step; early-exit once prefill_batch_size are
-                # waiting, so single-request TTFT is barely affected. (config.batch_wait_ms,
-                # env YUNSHU_BATCH_WAIT_MS; 0 disables.)
+                # waiting, so single-request TTFT is barely affected.
+                # (config.batch_wait_ms; 0 disables.)
                 _bw = getattr(self, "_batch_wait_s", None)
                 if _bw is None:
-                    try:
-                        _bw = (
-                            float(
-                                os.environ.get(
-                                    "YUNSHU_BATCH_WAIT_MS", self.config.batch_wait_ms
-                                )
-                            )
-                            / 1000.0
-                        )
-                    except Exception:
-                        _bw = self.config.batch_wait_ms / 1000.0
+                    _bw = self.config.batch_wait_ms / 1000.0
                     self._batch_wait_s = _bw
                 if _bw > 0 and self.scheduler.has_requests():
                     _accum_deadline = time.monotonic() + _bw
@@ -2670,10 +2354,6 @@ class EngineCore:
                     if hasattr(self.scheduler.waiting, "__len__")
                     else (1 if self.scheduler.waiting else 0)
                 )
-                if (
-                    self._sched_full_ab
-                ):  # A/B toggle (YUNSHU_SCHED_FULL=1): force old path
-                    _n_waiting = max(_n_waiting, 1)
                 # Priority inversion guard: detect and resolve priority inversion
                 # before scheduling (token_scheduler.py PriorityInversionGuard)
                 if _n_waiting > 0:
@@ -3007,48 +2687,6 @@ class EngineCore:
                             if stream_state is not None:
                                 stream_state.mark_sent(req_output.completion_tokens)
 
-                        # Forward intermediate output to dedup shadow requests
-                        if not req_output.finished and self._request_dedup is not None:
-                            shadow_ids = [
-                                sid
-                                for sid, pid in self._dedup_shadows.items()
-                                if pid == rid
-                            ]
-                            for sid in shadow_ids:
-                                s_collector = self._output_collectors.get(sid)
-                                if s_collector is not None:
-                                    from .request import RequestOutput as _RO
-
-                                    s_collector.put(
-                                        _RO(
-                                            request_id=sid,
-                                            # Bug fix: deep-copy mutable list fields so shadow
-                                            # collector doesn't share state with primary. Without
-                                            # this, _merge or downstream mutation would corrupt
-                                            # the primary's accumulated output.
-                                            new_token_ids=list(req_output.new_token_ids)
-                                            if req_output.new_token_ids
-                                            else req_output.new_token_ids,
-                                            new_text=req_output.new_text,
-                                            output_token_ids=list(
-                                                req_output.output_token_ids
-                                            )
-                                            if req_output.output_token_ids
-                                            else req_output.output_token_ids,
-                                            output_text=req_output.output_text,
-                                            completion_tokens=req_output.completion_tokens,
-                                            finished=False,
-                                            prompt_tokens=req_output.prompt_tokens,
-                                            logprobs=list(req_output.logprobs)
-                                            if isinstance(req_output.logprobs, list)
-                                            else req_output.logprobs,
-                                            current_state=req_output.current_state,
-                                            reasoning_tokens=req_output.reasoning_tokens,
-                                            cached_tokens=req_output.cached_tokens,
-                                            prefill_progress=req_output.prefill_progress,
-                                        )
-                                    )
-
                         if req_output.finished:
                             self._num_requests_processed += 1
                             # FairnessTracker: record completion before finalize pops timestamp
@@ -3065,76 +2703,7 @@ class EngineCore:
                                         "fairness record_completion failed",
                                         exc_info=True,
                                     )
-                            # Checkpoint: save final state for crash recovery
-                            if self._checkpoint_mgr is not None:
-                                try:
-                                    from .checkpoint import InferenceState
 
-                                    self._checkpoint_mgr.save(
-                                        rid,
-                                        InferenceState(
-                                            request_id=rid,
-                                            output_text=req_output.output_text or "",
-                                            position=req_output.prompt_tokens
-                                            + req_output.completion_tokens,
-                                        ),
-                                    )
-                                except Exception:
-                                    logger.debug(
-                                        "checkpoint save failed", exc_info=True
-                                    )
-                            # Dedup fan-out: deliver output to shadow requests before finalize
-                            if self._request_dedup is not None:
-                                content_hash = self._dedup_hashes.get(rid)
-                                if content_hash:
-                                    all_ids = self._request_dedup.complete(content_hash)
-                                    from .request import RequestOutput as _RO
-
-                                    for shadow_id in all_ids:
-                                        if shadow_id == rid:
-                                            continue
-                                        shadow_collector = self._output_collectors.get(
-                                            shadow_id
-                                        )
-                                        if shadow_collector is not None:
-                                            shadow_output = _RO(
-                                                request_id=shadow_id,
-                                                # Bug fix: deep-copy mutable list fields to
-                                                # prevent shared-state corruption between
-                                                # primary and shadow collectors.
-                                                new_token_ids=list(
-                                                    req_output.new_token_ids
-                                                )
-                                                if req_output.new_token_ids
-                                                else req_output.new_token_ids,
-                                                new_text=req_output.new_text,
-                                                output_token_ids=list(
-                                                    req_output.output_token_ids
-                                                )
-                                                if req_output.output_token_ids
-                                                else req_output.output_token_ids,
-                                                output_text=req_output.output_text,
-                                                finished=True,
-                                                finish_reason=req_output.finish_reason,
-                                                prompt_tokens=req_output.prompt_tokens,
-                                                completion_tokens=req_output.completion_tokens,
-                                                logprobs=list(req_output.logprobs)
-                                                if isinstance(req_output.logprobs, list)
-                                                else req_output.logprobs,
-                                                current_state=req_output.current_state,
-                                                reasoning_tokens=req_output.reasoning_tokens,
-                                                cached_tokens=req_output.cached_tokens,
-                                                prefill_progress=req_output.prefill_progress,
-                                            )
-                                            shadow_collector.put(shadow_output)
-                                            shadow_collector.put(None)  # sentinel
-                                            # Signal shadow finished — don't cleanup here,
-                                            # let the consumer's finally block handle it to
-                                            # avoid racing with the consumer reading the collector.
-                                            self._signal_finished(shadow_id)
-                                            # Remove from dedup tracking so subsequent timeout
-                                            # enforcement doesn't deliver a duplicate result.
-                                            self._dedup_shadows.pop(shadow_id, None)
                             # Signal request completion before finalize so generate()
                             # consumers waiting on the event can wake up.
                             self._signal_finished(rid)
@@ -3179,11 +2748,6 @@ class EngineCore:
                                     )
                             self._signal_finished(_rid)
                             self._finalize_request(_rid)
-                            self._fail_dedup_shadows(
-                                _rid,
-                                f"Output distribution failed: {_output_err}",
-                                "error",
-                            )
 
                 # Update adaptive batch scheduler metrics
                 if scheduler_output.outputs:
@@ -3245,29 +2809,7 @@ class EngineCore:
                                         )
                                     )
                                     _bc.put(None)
-                                # Fail dedup shadows so their consumers don't hang
-                                if self._request_dedup is not None:
-                                    _shadow_ids = [
-                                        sid
-                                        for sid, pid in self._dedup_shadows.items()
-                                        if pid == rid
-                                    ]
-                                    for _sid in _shadow_ids:
-                                        _sc = self._output_collectors.get(_sid)
-                                        if _sc is not None:
-                                            _sc.put(
-                                                _RO(
-                                                    request_id=_sid,
-                                                    finished=True,
-                                                    finish_reason=budget_result,
-                                                    error=f"Primary request {rid} budget exhausted",
-                                                    prompt_tokens=req_output.prompt_tokens,
-                                                    completion_tokens=req_output.completion_tokens,
-                                                )
-                                            )
-                                            _sc.put(None)
-                                        self._signal_finished(_sid)
-                                        self._finalize_request(_sid)
+
                                 self._signal_finished(rid)
                                 self._finalize_request(
                                     rid,
@@ -3335,38 +2877,6 @@ class EngineCore:
                                     logger.debug(
                                         "sliding window tracking failed", exc_info=True
                                     )
-
-                    # Auto-checkpoint: save inference state periodically for crash recovery
-                    if self._checkpoint_mgr is not None:
-                        try:
-                            for req_output in scheduler_output.outputs:
-                                if (
-                                    not req_output.finished
-                                    and req_output.completion_tokens > 0
-                                ):
-                                    if self._checkpoint_mgr.should_auto_checkpoint(
-                                        req_output.request_id,
-                                        req_output.completion_tokens,
-                                    ):
-                                        from .checkpoint import InferenceState
-
-                                        self._checkpoint_mgr.save(
-                                            req_output.request_id,
-                                            InferenceState(
-                                                request_id=req_output.request_id,
-                                                position=req_output.prompt_tokens
-                                                + req_output.completion_tokens,
-                                                generated_tokens=[],
-                                                output_text=getattr(
-                                                    req_output, "output_text", ""
-                                                ),
-                                                model_name=getattr(
-                                                    self.scheduler, "model_id", ""
-                                                ),
-                                            ),
-                                        )
-                        except Exception:
-                            logger.debug("auto-checkpoint failed", exc_info=True)
 
                     # ── Profiler + auto-tuner + fairness ──
                     try:
@@ -3541,31 +3051,7 @@ class EngineCore:
                                         )
                                         collector.put(timeout_output)
                                         collector.put(None)
-                                    # Dedup fan-out: deliver timeout to shadow requests
-                                    if self._request_dedup is not None:
-                                        shadow_ids = [
-                                            sid
-                                            for sid, pid in self._dedup_shadows.items()
-                                            if pid == rid
-                                        ]
-                                        for sid in shadow_ids:
-                                            s_collector = self._output_collectors.get(
-                                                sid
-                                            )
-                                            if s_collector is not None:
-                                                from .request import RequestOutput
 
-                                                s_collector.put(
-                                                    RequestOutput(
-                                                        request_id=sid,
-                                                        finished=True,
-                                                        finish_reason="timeout",
-                                                        error=f"Primary request {rid} timed out",
-                                                    )
-                                                )
-                                                s_collector.put(None)
-                                            self._signal_finished(sid)
-                                            # Shadow cleanup deferred to consumer
                                     self._signal_finished(rid)
                                     self._finalize_request(rid, finish_reason="timeout")
                                     # Do NOT call _cleanup_request here — that destroys
@@ -3573,43 +3059,6 @@ class EngineCore:
                                     # (generate/stream_outputs) has read the timeout output.
                                     # The consumer's finally block handles cleanup.
 
-                            # ── Shadow request timeout enforcement ──
-                            # Shadow requests are never in scheduler.running, so the loop
-                            # above skips them.  If the primary request's output distribution
-                            # never fires (e.g. engine loop crashed between scheduler step
-                            # and output distribution, or primary was aborted externally
-                            # without fan-out), the shadow's event is never set and its
-                            # generate()/stream_outputs() hangs forever.  Check shadows
-                            # directly against their timestamps.
-                            if self._request_dedup is not None:
-                                for sid in list(self._dedup_shadows.keys()):
-                                    start = self._request_timestamps.get(sid)
-                                    if start is None:
-                                        continue
-                                    if (now - start) > timeout_s:
-                                        logger.warning(
-                                            f"Dedup shadow {sid} timed out "
-                                            f"({now - start:.0f}s > {timeout_s}s)"
-                                        )
-                                        s_collector = self._output_collectors.get(sid)
-                                        if s_collector is not None:
-                                            from .request import RequestOutput
-
-                                            s_collector.put(
-                                                RequestOutput(
-                                                    request_id=sid,
-                                                    finished=True,
-                                                    finish_reason="timeout",
-                                                    error=f"Dedup shadow timed out after {timeout_s}s (primary never completed)",
-                                                )
-                                            )
-                                            s_collector.put(None)
-                                        self._signal_finished(sid)
-                                        self._cleanup_request(sid)
-                                        # Remove from dedup tracking so the primary's
-                                        # fan-out doesn't deliver a duplicate result to
-                                        # the already-timed-out shadow's collector.
-                                        self._dedup_shadows.pop(sid, None)
                     except Exception:
                         logger.debug("timeout enforcement failed", exc_info=True)
 
@@ -3782,11 +3231,6 @@ class EngineCore:
                                         )
                                 self._signal_finished(_rid)
                                 self._finalize_request(_rid)
-                                self._fail_dedup_shadows(
-                                    _rid,
-                                    f"Post-step processing error: {_post_step_err}",
-                                    "error",
-                                )
                 except Exception:
                     logger.debug("post-step error cleanup failed", exc_info=True)
                 # Accumulate step time even on post-step error so
@@ -3908,21 +3352,6 @@ class EngineCore:
                 self._kv_lifecycle.release(_block_id)
             except Exception:
                 logger.debug("kv_lifecycle release failed", exc_info=True)
-        # Dedup: only the primary request calls complete(). Shadows
-        # are fanned-out by the engine loop before reaching here, so
-        # calling complete() again would be redundant (and the entry
-        # may already be removed by TTL pruning).
-        is_shadow = request_id in self._dedup_shadows
-        if self._request_dedup is not None:
-            content_hash = self._dedup_hashes.pop(request_id, None)
-            self._dedup_shadows.pop(request_id, None)
-            if content_hash and not is_shadow:
-                self._request_dedup.complete(content_hash)
-        else:
-            self._dedup_shadows.pop(request_id, None)
-        # Checkpoint
-        if self._checkpoint_mgr is not None:
-            self._checkpoint_mgr.delete(request_id)
         # Sliding window
         if self._sliding_window_mgr is not None:
             try:
@@ -3934,16 +3363,12 @@ class EngineCore:
             self._fairness_tracker.remove_request(request_id)
         except Exception:
             logger.debug("fairness tracker cleanup failed", exc_info=True)
-        # Remove from scheduler (only if actually added — dedup shadows
-        # are short-circuited before reaching scheduler.add_request)
-        if not is_shadow:
-            self.scheduler.remove_finished_request(request_id)
+        self.scheduler.remove_finished_request(request_id)
 
     def _fail_active_requests(self, error_msg: str) -> None:
-        """Fail all active requests (scheduler + dedup shadows) with an error.
+        """Fail all active requests with an error.
 
-        Used by engine loop exception handlers to ensure ALL requests —
-        including dedup shadow requests that are not in the scheduler —
+        Used by engine loop exception handlers to ensure ALL requests
         receive error outputs and sentinel values so consumers don't hang.
 
         Also cleans up consumer-side state (collectors, events, timestamps)
@@ -3960,25 +3385,17 @@ class EngineCore:
             )
             failed = list(self._output_collectors.keys())
 
-        # Also collect dedup shadow request IDs that have collectors but
-        # are NOT in the scheduler (short-circuited in add_request).
-        shadow_ids = []
-        if self._request_dedup is not None:
-            for sid, _primary_id in list(self._dedup_shadows.items()):
-                if sid not in failed:
-                    shadow_ids.append(sid)
-
         # Also include requests in _output_collectors that aren't tracked
         # by the scheduler or dedup. These come from early-return error
         # paths (memory guard rejection, budget rejection, context window
         # overflow) where the request was never added to the scheduler.
         _collector_only_ids = []
-        _known_ids = set(failed) | set(shadow_ids)
+        _known_ids = set(failed)
         for rid in list(self._output_collectors.keys()):
             if rid not in _known_ids:
                 _collector_only_ids.append(rid)
 
-        all_ids = failed + shadow_ids + _collector_only_ids
+        all_ids = failed + _collector_only_ids
 
         # Snapshot _finalized_ids BEFORE the finalize loop so the
         # deduplication check below sees the pre-finalize state.
@@ -4017,47 +3434,10 @@ class EngineCore:
         if new_fails:
             self._num_requests_processed += len(new_fails)
 
-    def _fail_dedup_shadows(
-        self, primary_id: str, error_msg: str, finish_reason: str = "error"
-    ) -> None:
-        """Deliver error output to all dedup shadows of a failed primary request.
-
-        When a primary request is rejected before entering the scheduler (memory
-        guard, budget, etc.), its shadow requests have collectors but no output.
-        This method delivers error outputs to all of them so consumers don't hang.
-        """
-        from .request import RequestOutput
-
-        shadow_ids = [
-            sid for sid, pid in list(self._dedup_shadows.items()) if pid == primary_id
-        ]
-        for sid in shadow_ids:
-            collector = self._output_collectors.get(sid)
-            if collector is not None:
-                collector.put(
-                    RequestOutput(
-                        request_id=sid,
-                        finished=True,
-                        finish_reason=finish_reason,
-                        error=error_msg,
-                        prompt_tokens=0,
-                        completion_tokens=0,
-                    )
-                )
-                collector.put(None)
-            self._signal_finished(sid)
-            # Finalize scheduler-side resources (lifecycle, budget, KV) but
-            # do NOT call _cleanup_request here — that removes consumer-side
-            # state (collector, event) which the shadow's consumer (generate/
-            # stream_outputs) still needs to read the error output we just put.
-            # The consumer's finally block will call _cleanup_request.
-            self._finalize_request(sid)
-
     def _cleanup_request(self, request_id: str) -> None:
         """Remove per-request state (consumer-side entry point).
 
         Called from stream_outputs() finally block and generate() finally block.
-        Also called for dedup shadow requests that have no consumer.
         Releases scheduler-side resources via _finalize_request, then removes
         consumer-side state (collector, event, stream state, timestamps).
         """
@@ -4180,8 +3560,6 @@ class EngineCore:
         stats["fairness"] = self._fairness_tracker.get_stats()
         stats["profiler"] = self._profiler.get_stats()
         stats["slo"] = self._slo_monitor.get_stats()
-        if self._request_dedup is not None:
-            stats["request_dedup"] = self._request_dedup.get_stats()
         if self._composition_scheduler is not None:
             stats["composition_scheduler"] = self._composition_scheduler.get_stats()
         # Additional module stats
@@ -4191,8 +3569,6 @@ class EngineCore:
         )
         stats["context_window"] = self._context_window_mgr.get_stats()
         stats["kv_prefix_compression"] = self._kv_compressor.get_stats()
-        if self._checkpoint_mgr is not None:
-            stats["checkpoint"] = self._checkpoint_mgr.get_stats()
         if self._sliding_window_mgr is not None:
             stats["sliding_window"] = self._sliding_window_mgr.get_stats()
         stats["hybrid_kv"] = self._hybrid_kv.get_stats()
@@ -4203,7 +3579,7 @@ class EngineCore:
             "moe": self._moe_optimizer.get_stats(),
             "warmup": self._warmup_manager.get_stats(),
         }
-        stats["process_isolation"] = {"enabled": self._isolation_enabled}
+
         stats["spec_prefill_engine"] = self._spec_prefill_engine.get_stats()
         stats["turbo_quant"] = self._turbo_quant.get_stats()
         # Model preprocessor stats

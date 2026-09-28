@@ -14,6 +14,8 @@ from typing import Any
 
 from rich.console import Console
 
+from yunshu_engine import settings
+
 console = Console()
 
 _json_mode = False
@@ -36,9 +38,8 @@ def set_json_mode(enabled: bool) -> None:
 def auth_headers() -> dict[str, str]:
     """Authorization header from ``YUNSHU_AUTH_TOKEN`` so the CLI can reach the gateway's
     token-gated monitoring endpoints. Empty when no token is set (open server)."""
-    import os
 
-    tok = os.environ.get("YUNSHU_AUTH_TOKEN")
+    tok = settings.get("YUNSHU_AUTH_TOKEN")
     return {"Authorization": f"Bearer {tok}"} if tok else {}
 
 

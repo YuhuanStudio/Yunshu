@@ -9,8 +9,6 @@ Tests:
 
 from __future__ import annotations
 
-import os
-
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -34,7 +32,6 @@ def _reset_sleep_state():
     sleep_mod._sleep_level = -1
     sleep_mod._sleep_transitioning = False
     sleep_mod._saved_model_name = None
-    os.environ.pop("YUNSHU_SLEEPING", None)
 
 
 @pytest.fixture(autouse=True)

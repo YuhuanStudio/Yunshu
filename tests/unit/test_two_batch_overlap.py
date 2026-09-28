@@ -1,7 +1,7 @@
 """Tests for Two-Batch Overlap (TBO) Scheduler — gap from SGLang comparison.
 
 Covers:
-  - TBOConfig initialization, defaults, from_env
+  - TBOConfig initialization and defaults
   - BatchState lifecycle
   - TwoBatchOverlapScheduler initialization, step, batch swapping
   - Auto-detection via should_enable_tbo()
@@ -86,27 +86,6 @@ class TestTBOConfig:
         assert cfg.low_util_threshold == 0.2
         assert cfg.fallback_window == 30
         assert cfg.metrics_window == 200
-
-    def test_from_env_disabled(self, monkeypatch):
-        monkeypatch.delenv("YUNSHU_TBO", raising=False)
-        cfg = TBOConfig.from_env()
-        assert cfg.enabled is False
-
-    def test_from_env_enabled(self, monkeypatch):
-        monkeypatch.setenv("YUNSHU_TBO", "1")
-        cfg = TBOConfig.from_env()
-        assert cfg.enabled is True
-
-    def test_from_env_custom_min_batch(self, monkeypatch):
-        monkeypatch.setenv("YUNSHU_TBO", "1")
-        monkeypatch.setenv("YUNSHU_TBO_MIN_BATCH", "8")
-        cfg = TBOConfig.from_env()
-        assert cfg.min_batch_size == 8
-
-    def test_from_env_custom_threshold(self, monkeypatch):
-        monkeypatch.setenv("YUNSHU_TBO_LOW_UTIL", "0.25")
-        cfg = TBOConfig.from_env()
-        assert cfg.low_util_threshold == 0.25
 
     def test_to_dict(self):
         cfg = TBOConfig(enabled=True, min_batch_size=3)

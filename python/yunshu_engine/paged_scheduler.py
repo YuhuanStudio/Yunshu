@@ -10,9 +10,9 @@ Extends the base Scheduler with:
 """
 
 import logging
-import os
 from typing import Any
 
+from . import settings
 from .kv_optimizations import KVBlockCompactor, KVEvictionPredictor
 from .request import Request, RequestOutput, RequestStatus
 from .scheduler import Scheduler, SchedulerConfig, SchedulerOutput
@@ -39,7 +39,7 @@ class PagedScheduler(Scheduler):
         self._finalized_requests: set[str] = set()
         # Boundary snapshot store for non-sliceable cache layers
         self._boundary_store = None
-        ssd_dir = os.environ.get("YUNSHU_SSD_CACHE_DIR")
+        ssd_dir = settings.get("YUNSHU_SSD_CACHE_DIR")
         if ssd_dir:
             try:
                 from pathlib import Path

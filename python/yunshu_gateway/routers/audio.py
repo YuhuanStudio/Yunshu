@@ -21,6 +21,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
+from yunshu_engine import settings
 from yunshu_engine.audio_engine import list_voices as _list_tts_voices
 
 from ..engine import get_model_manager
@@ -210,8 +211,7 @@ def _enforce_no_auto_load(manager, model: str) -> None:
         # Single-model mode: the served model is the global engine, always "loaded";
         # there is nothing to auto-load and no manager to consult.
         return
-    allow = os.environ.get("YUNSHU_ALLOW_AUTO_LOAD", "").strip().lower()
-    if allow in ("1", "true", "yes", "on"):
+    if settings.get_bool("YUNSHU_ALLOW_AUTO_LOAD"):
         return
     if not model or not model.strip():
         # Empty model — leave to downstream validators
@@ -407,9 +407,7 @@ class TTSRequest(BaseModel):
             # Reject absolute paths unless the operator opts into local files.
             import os as _os
 
-            if _os.path.isabs(ra) and _os.environ.get(
-                "YUNSHU_ALLOW_LOCAL_FILES", ""
-            ).lower() not in ("1", "true", "yes"):
+            if _os.path.isabs(ra) and not settings.get_bool("YUNSHU_ALLOW_LOCAL_FILES"):
                 raise ValueError(
                     "ref_audio: absolute paths are not allowed "
                     "(set YUNSHU_ALLOW_LOCAL_FILES=1 to permit local files)"

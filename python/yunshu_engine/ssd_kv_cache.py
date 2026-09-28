@@ -11,7 +11,7 @@ Features:
 - Dynamic disk budget awareness
 - SQLite-backed metadata for crash consistency
 
-Backend selection via YUNSHU_SSD_BACKEND env var:
+Backend selection (constructor argument):
   "sqlite" (default) — crash-consistent WAL-mode SQLite (yunshu_kv.SSDSQLiteStore)
   "json" — legacy JSON index (backward compat, no crash safety)
 
@@ -257,12 +257,10 @@ class SSDKVCache:
         self._index: dict[str, _BlockMeta] = {}
 
         # Backend selection: "sqlite" (default, crash-consistent) or "json" (legacy)
-        self._backend = (
-            backend or os.environ.get("YUNSHU_SSD_BACKEND", "sqlite")
-        ).lower()
+        self._backend = (backend or "sqlite").lower()
         if self._backend not in ("sqlite", "json"):
             logger.warning(
-                "Unknown YUNSHU_SSD_BACKEND=%r, falling back to sqlite", self._backend
+                "Unknown SSD cache backend %r, falling back to sqlite", self._backend
             )
             self._backend = "sqlite"
 

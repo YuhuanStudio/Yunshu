@@ -403,18 +403,6 @@ class TestSSDKVCacheBackendSelection:
         assert cache._sqlite_store is None
         cache.close()
 
-    def test_env_var_backend(self, tmp_path):
-        """YUNSHU_SSD_BACKEND env var is respected."""
-        from yunshu_engine.ssd_kv_cache import SSDKVCache
-
-        os.environ["YUNSHU_SSD_BACKEND"] = "json"
-        try:
-            cache = SSDKVCache(cache_dir=str(tmp_path / "kv-env"))
-            assert cache._backend == "json"
-            cache.close()
-        finally:
-            os.environ.pop("YUNSHU_SSD_BACKEND", None)
-
 
 class TestBatchOperations:
     """Tests for batch_put, batch_get, batch_delete."""

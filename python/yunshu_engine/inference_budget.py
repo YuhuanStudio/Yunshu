@@ -13,7 +13,6 @@ and stop requests that exceed their allocated resources.
 """
 
 import logging
-import os
 import threading
 import time
 from collections import defaultdict
@@ -174,15 +173,9 @@ class InferenceBudgetManager:
 
     @classmethod
     def from_env(cls) -> InferenceBudgetManager:
-        return cls(
-            default_max_tokens=int(os.environ.get("YUNSHU_DEFAULT_MAX_TOKENS", "512")),
-            default_max_wall_time_ms=float(
-                os.environ.get("YUNSHU_MAX_WALL_TIME_MS", "30000.0")
-            ),
-            global_token_rate_limit=int(
-                os.environ.get("YUNSHU_GLOBAL_TOKEN_RATE", "0")
-            ),
-        )
+        from . import settings
+
+        return cls(default_max_tokens=settings.get("YUNSHU_DEFAULT_MAX_TOKENS"))
 
     def register(
         self,

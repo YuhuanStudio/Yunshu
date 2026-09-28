@@ -39,6 +39,7 @@ import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 
+from . import settings
 from .types import EngineConfig
 
 logger = logging.getLogger(__name__)
@@ -1452,21 +1453,11 @@ class ImageGenEngine(ActiveRequestMixin):
 
         self._executor = get_mlx_executor()
 
-        # DFlash Block Diffusion (opt-in via YUNSHU_DFLASH=1)
-        self._dflash = None
-        import os
-
-        if os.environ.get("YUNSHU_DFLASH", "").strip() in ("1", "true", "yes"):
-            from .dflash import DFlashConfig, DFlashEngine
-
-            self._dflash = DFlashEngine(DFlashConfig.from_env())
-            logger.info("DFlash Block Diffusion enabled")
-
         # Diffusion scheduler + pipeline registry
         from .diffusion_infra import DiffusionScheduler, SchedulerType
 
         self._diffusion_scheduler_type: SchedulerType | None = None
-        scheduler_env = os.environ.get("YUNSHU_DIFFUSION_SCHEDULER", "").strip().lower()
+        scheduler_env = settings.get("YUNSHU_DIFFUSION_SCHEDULER")
         if scheduler_env:
             scheduler_map = {s.value: s for s in SchedulerType}
             if scheduler_env in scheduler_map:
@@ -1485,51 +1476,10 @@ class ImageGenEngine(ActiveRequestMixin):
 
         self._pipeline_type = PipelineType
 
-        # DiffusionLoRAOffloader — priority-based LoRA adapter memory management.
-        # Opt-in via YUNSHU_LORA_BUDGET_MB env var (GPU memory budget in MB).
-        # When set, LoRA adapters are swapped in/out per diffusion step based on
-        # priority and assigned step ranges.
-        self._lora_offloader = None
         self._original_modules: dict[
             str, object
         ] = {}  # name→original Linear before LoRA wrap
         self._lora_lock = threading.Lock()
-        lora_budget_mb = os.environ.get("YUNSHU_LORA_BUDGET_MB", "").strip()
-        if lora_budget_mb:
-            try:
-                budget_bytes = int(float(lora_budget_mb) * 1024 * 1024)
-                from .diffusion_infra import DiffusionLoRAOffloader
-
-                self._lora_offloader = DiffusionLoRAOffloader(
-                    memory_budget_bytes=budget_bytes
-                )
-                logger.info(
-                    f"DiffusionLoRAOffloader enabled ({lora_budget_mb} MB budget)"
-                )
-            except ValueError:
-                logger.warning(
-                    f"Invalid YUNSHU_LORA_BUDGET_MB={lora_budget_mb!r}, expected number in MB"
-                )
-
-        # TeaCache config (opt-in via YUNSHU_TEACACHE=1 or threshold value).
-        # Per-request instances are created in each denoising loop to prevent
-        # state leakage between concurrent requests.
-        self._teacache_config = None
-        teacache_env = os.environ.get("YUNSHU_TEACACHE", "").strip()
-        if teacache_env in ("1", "true", "yes"):
-            from .teacache import TeaCacheConfig
-
-            self._teacache_config = TeaCacheConfig(rel_l1_thresh=0.2)
-            logger.info("TeaCache enabled (threshold=0.2)")
-        elif teacache_env and teacache_env not in ("0", "false", "no"):
-            try:
-                thresh = float(teacache_env)
-                from .teacache import TeaCacheConfig
-
-                self._teacache_config = TeaCacheConfig(rel_l1_thresh=thresh)
-                logger.info(f"TeaCache enabled (threshold={thresh})")
-            except ValueError:
-                pass
 
     @property
     def model_name(self) -> str:
@@ -1665,13 +1615,8 @@ class ImageGenEngine(ActiveRequestMixin):
         # model dir at load (arbitrary code execution from a downloaded model). The
         # tokenizers we load use standard tokenizer.json — default OFF; opt back in
         # via YUNSHU_TRUST_REMOTE_CODE=1 for a vetted repo that genuinely needs it.
-        import os as _os
 
-        _trc = _os.environ.get("YUNSHU_TRUST_REMOTE_CODE", "").lower() in (
-            "1",
-            "true",
-            "yes",
-        )
+        _trc = settings.get_bool("YUNSHU_TRUST_REMOTE_CODE")
         from transformers import AutoTokenizer
 
         self._tokenizer = AutoTokenizer.from_pretrained(
@@ -1707,17 +1652,11 @@ class ImageGenEngine(ActiveRequestMixin):
         self._vae = None
         self._tokenizer = None
         self._running = False
-        self._teacache_config = None
         # Cached ControlNet weights are bound to the (now-cleared) transformer's dim;
         # drop them too or they leak GPU memory and a reload would return a stale
         # controlnet built for the previous model.
         self._zimage_controlnet = None
-        if self._lora_offloader is not None:
-            try:
-                self._lora_offloader.unload_all()
-            except Exception:
-                logger.debug("LoRA offloader unload failed during stop", exc_info=True)
-        self._lora_offloader = None
+
         gc.collect()
         loop = asyncio.get_running_loop()
         from .mlx_executor import sync_and_clear_cache
@@ -1796,18 +1735,11 @@ class ImageGenEngine(ActiveRequestMixin):
 
         t0 = time.monotonic()
 
-        # Use DFlash block diffusion if enabled and compatible
-        use_dflash = (
-            self._dflash is not None
-            and self._dflash.is_enabled
-            and self._dflash.is_compatible(self._transformer)
-        )
-
         # Inline LoRA: <lora:NAME:WEIGHT> in the prompt → load the named adapter(s)
         # for this request, strip the tags, generate, unload. The remaining clean
         # prompt still gets (word:weight) emphasis inside _encode_prompt.
         _clean_prompt, _lora_tags = _parse_lora_tags(prompt)
-        _pipeline = self._run_dflash_pipeline if use_dflash else self._run_pipeline
+        _pipeline = self._run_pipeline
 
         def _generate_sync() -> bytes:
             _applied = self._apply_inline_loras(_lora_tags)
@@ -2245,166 +2177,6 @@ class ImageGenEngine(ActiveRequestMixin):
                 except _queue_mod.Empty:
                     break
 
-    def _run_dflash_pipeline(
-        self,
-        prompt: str,
-        width: int,
-        height: int,
-        num_steps: int,
-        seed: int,
-    ) -> bytes:
-        """Run block diffusion pipeline using DFlash.
-
-        Implements the 2-stage block diffusion protocol:
-        1. Coarse stage: Generate a low-resolution block plan with fewer steps
-        2. Refinement stage: Refine each block with full steps and warm-start
-           from L1 cached coarse latents
-
-        The key acceleration comes from:
-        - Coarse blocks run at reduced resolution (block_size x block_size)
-        - L1 cache reuses coarse latents as warm-starts for refinement
-        - Block-level parallelism where memory allows
-        """
-        from .dflash import BlockPlan
-
-        dflash = self._dflash
-        config = dflash.config
-        overlap = config.overlap_margin if config.overlap_blocks else 0
-
-        # Create block plan for the image
-        block_plan = BlockPlan.create(
-            width,
-            height,
-            config.block_size,
-            overlap=overlap,
-        )
-        logger.info(
-            f"DFlash pipeline: {width}x{height} → {block_plan.num_blocks} blocks "
-            f"(coarse={config.coarse_steps}, refine={config.refine_steps})"
-        )
-
-        # 1+2. Tokenize + text-encode (with (word:weight) emphasis support)
-        cap_feats = self._encode_prompt(prompt)
-
-        # 3. Compute sigma schedules for coarse and refine stages
-        sigmas_coarse = _compute_sigmas(config.coarse_steps, width, height)
-        sigmas_refine = _compute_sigmas(config.refine_steps, width, height)
-
-        # 4. Stage 1: Coarse generation per block
-        coarse_latents = {}
-        for i, (bx, by, bx_end, by_end) in enumerate(block_plan.blocks):
-            block_key = f"coarse_{bx}_{by}"
-
-            # Check L1 cache for reusable coarse latent
-            cached = dflash._l1_cache.get(block_key)
-            if cached is not None:
-                coarse_latents[block_key] = cached
-                logger.debug(f"DFlash block ({bx},{by}): L1 cache hit (coarse)")
-                continue
-
-            # Generate initial noise at block granularity
-            block_latent_h = (by_end - by) // 8
-            block_latent_w = (bx_end - bx) // 8
-            block_latents = mx.random.normal(
-                shape=[16, 1, block_latent_h, block_latent_w],
-                key=mx.random.key(seed + i),
-            ).astype(mx.float16)
-
-            # Coarse denoising: fewer steps on full latent space
-            for t in range(config.coarse_steps):
-                sigma_t = sigmas_coarse[t].reshape((1,))
-                timestep = mx.ones_like(sigma_t) - sigma_t
-                noise_pred = self._transformer(
-                    x=block_latents,
-                    timestep=timestep,
-                    sigmas=sigmas_coarse,
-                    cap_feats=cap_feats,
-                )
-                dt = sigmas_coarse[t + 1] - sigmas_coarse[t]
-                block_latents = block_latents + noise_pred * dt
-                mx.eval(block_latents)
-
-            coarse_latents[block_key] = block_latents
-            dflash._l1_cache.put(block_key, block_latents)
-            logger.debug(
-                f"DFlash block ({bx},{by}): coarse done ({config.coarse_steps} steps)"
-            )
-
-        # 5. Stage 2: Refinement using coarse latents as warm start
-        # Use the coarse latent as the initial state and refine with full steps
-        # Pick the best coarse latent (last block covers the most context)
-        best_key = f"coarse_{block_plan.blocks[-1][0]}_{block_plan.blocks[-1][1]}"
-        latents = coarse_latents.get(best_key)
-        if latents is None:
-            # Fallback to first block's latent
-            first_key = f"coarse_{block_plan.blocks[0][0]}_{block_plan.blocks[0][1]}"
-            latents = coarse_latents[first_key]
-
-        # TeaCache: create per-request instance for this denoising loop.
-        _tc = None
-        if self._teacache_config is not None:
-            from .teacache import TeaCacheHook
-
-            _tc = TeaCacheHook(self._teacache_config)
-        try:
-            # Refinement denoising loop with full steps
-            for t in range(config.refine_steps):
-                sigma_t = sigmas_refine[t].reshape((1,))
-                timestep = mx.ones_like(sigma_t) - sigma_t
-
-                if _tc is not None:
-                    noise_pred = _tc.forward(
-                        self._transformer,
-                        latents,
-                        timestep,
-                        sigmas_refine,
-                        cap_feats,
-                    )
-                else:
-                    noise_pred = self._transformer(
-                        x=latents,
-                        timestep=timestep,
-                        sigmas=sigmas_refine,
-                        cap_feats=cap_feats,
-                    )
-
-                dt = sigmas_refine[t + 1] - sigmas_refine[t]
-                latents = latents + noise_pred * dt
-                mx.eval(latents)
-                logger.debug(f"DFlash refine step {t + 1}/{config.refine_steps}")
-
-            if _tc is not None:
-                tc_stats = _tc.get_stats()
-                logger.info(
-                    f"TeaCache: {tc_stats['cache_hits']} hits, "
-                    f"{tc_stats['cache_misses']} misses, "
-                    f"hit_rate={tc_stats['hit_rate']:.1%}"
-                )
-        finally:
-            _tc = None
-
-        # 6. VAE decode
-        if width * height > 1024 * 1024:
-            image = self._vae.decode_tiled(latents, tile_size_px=512, overlap_px=64)
-        else:
-            image = self._vae.decode(latents)
-        mx.eval(image)
-
-        # 7. Update DFlash stats
-        dflash._stats["total_generations"] += 1
-        dflash._stats["total_blocks_processed"] += block_plan.num_blocks
-        dflash._stats["l1_cache_saved_steps"] += sum(
-            1 for k in coarse_latents if dflash._l1_cache.get(f"_saved_{k}") is not None
-        )
-
-        logger.info(
-            f"DFlash pipeline complete: {block_plan.num_blocks} blocks, "
-            f"coarse={config.coarse_steps} + refine={config.refine_steps} steps"
-        )
-
-        # 8. Convert to PNG
-        return self._to_png(image)
-
     def _resolve_sigmas(
         self,
         num_steps: int,
@@ -2521,71 +2293,28 @@ class ImageGenEngine(ActiveRequestMixin):
         sigmas = self._resolve_sigmas(num_steps, width, height)
 
         # 5. Denoising loop
-        # TeaCache: create per-request instance for this denoising loop.
-        _tc = None
-        if self._teacache_config is not None:
-            from .teacache import TeaCacheHook
 
-            _tc = TeaCacheHook(self._teacache_config)
-        try:
-            # 5b. LoRA offloader: load adapters needed for step 0
-            if self._lora_offloader is not None:
-                self._lora_offloader.load_for_step(0)
+        for t in range(num_steps):
+            if cancel_flag is not None and cancel_flag.is_set():
+                raise asyncio.CancelledError("image generation cancelled")
+            sigma_t = sigmas[t].reshape((1,))
+            timestep = mx.ones_like(sigma_t) - sigma_t
 
-            for t in range(num_steps):
-                if cancel_flag is not None and cancel_flag.is_set():
-                    raise asyncio.CancelledError("image generation cancelled")
-                sigma_t = sigmas[t].reshape((1,))
-                timestep = mx.ones_like(sigma_t) - sigma_t
+            noise_pred = self._transformer(
+                x=latents,
+                timestep=timestep,
+                sigmas=sigmas,
+                cap_feats=cap_feats,
+                controlnet=controlnet,
+                control_image=control_context,
+                control_scale=control_scale,
+            )
 
-                if _tc is not None and controlnet is None:
-                    noise_pred = _tc.forward(
-                        self._transformer,
-                        latents,
-                        timestep,
-                        sigmas,
-                        cap_feats,
-                    )
-                else:
-                    noise_pred = self._transformer(
-                        x=latents,
-                        timestep=timestep,
-                        sigmas=sigmas,
-                        cap_feats=cap_feats,
-                        controlnet=controlnet,
-                        control_image=control_context,
-                        control_scale=control_scale,
-                    )
-
-                # Euler step: x_{t+1} = x_t + (sigma_{t+1} - sigma_t) * noise
-                dt = sigmas[t + 1] - sigmas[t]
-                latents = latents + noise_pred * dt
-                mx.eval(latents)
-                logger.debug(f"Step {t + 1}/{num_steps}: sigma={float(sigmas[t]):.4f}")
-
-                # LoRA offloader: swap adapters for next step
-                if self._lora_offloader is not None:
-                    self._lora_offloader.unload_after_step(t)
-                    if t + 1 < num_steps:
-                        self._lora_offloader.load_for_step(t + 1)
-
-            if _tc is not None:
-                tc_stats = _tc.get_stats()
-                logger.info(
-                    f"TeaCache: {tc_stats['cache_hits']} hits, "
-                    f"{tc_stats['cache_misses']} misses, "
-                    f"hit_rate={tc_stats['hit_rate']:.1%}"
-                )
-        finally:
-            _tc = None
-
-        # LoRA offloader cleanup after denoising
-        if self._lora_offloader is not None:
-            unloaded = self._lora_offloader.unload_all()
-            if unloaded:
-                logger.info(
-                    f"LoRA offloader: unloaded {len(unloaded)} adapters after denoising"
-                )
+            # Euler step: x_{t+1} = x_t + (sigma_{t+1} - sigma_t) * noise
+            dt = sigmas[t + 1] - sigmas[t]
+            latents = latents + noise_pred * dt
+            mx.eval(latents)
+            logger.debug(f"Step {t + 1}/{num_steps}: sigma={float(sigmas[t]):.4f}")
 
         # 6. VAE decode (auto-tile for large images to reduce peak memory)
         if width * height > 1024 * 1024:
@@ -2723,48 +2452,29 @@ class ImageGenEngine(ActiveRequestMixin):
         mx.eval(latents)
 
         # 6. Partial denoising loop (from start_step to num_steps)
-        # TeaCache: create per-request instance for this denoising loop.
-        _tc = None
-        if self._teacache_config is not None:
-            from .teacache import TeaCacheHook
+        for t in range(start_step, num_steps):
+            # Abort the in-flight diffusion on client disconnect instead of
+            # wasting the rest of the GPU work (executor work can't be killed by
+            # task.cancel; this thread-safe flag is the only way to stop it).
+            if cancel_flag is not None and cancel_flag.is_set():
+                raise asyncio.CancelledError("image generation cancelled")
+            sigma_t = sigmas[t].reshape((1,))
+            timestep = mx.ones_like(sigma_t) - sigma_t
 
-            _tc = TeaCacheHook(self._teacache_config)
-        try:
-            for t in range(start_step, num_steps):
-                # Abort the in-flight diffusion on client disconnect instead of
-                # wasting the rest of the GPU work (executor work can't be killed by
-                # task.cancel; this thread-safe flag is the only way to stop it).
-                if cancel_flag is not None and cancel_flag.is_set():
-                    raise asyncio.CancelledError("image generation cancelled")
-                sigma_t = sigmas[t].reshape((1,))
-                timestep = mx.ones_like(sigma_t) - sigma_t
+            noise_pred = self._transformer(
+                x=latents,
+                timestep=timestep,
+                sigmas=sigmas,
+                cap_feats=cap_feats,
+            )
 
-                if _tc is not None:
-                    noise_pred = _tc.forward(
-                        self._transformer,
-                        latents,
-                        timestep,
-                        sigmas,
-                        cap_feats,
-                    )
-                else:
-                    noise_pred = self._transformer(
-                        x=latents,
-                        timestep=timestep,
-                        sigmas=sigmas,
-                        cap_feats=cap_feats,
-                    )
-
-                # Euler step
-                dt = sigmas[t + 1] - sigmas[t]
-                latents = latents + noise_pred * dt
-                mx.eval(latents)
-                logger.debug(
-                    f"img2img step {t + 1}/{num_steps}: sigma={float(sigmas[t]):.4f}"
-                )
-        finally:
-            _tc = None
-
+            # Euler step
+            dt = sigmas[t + 1] - sigmas[t]
+            latents = latents + noise_pred * dt
+            mx.eval(latents)
+            logger.debug(
+                f"img2img step {t + 1}/{num_steps}: sigma={float(sigmas[t]):.4f}"
+            )
         # 7. VAE decode (auto-tile for large images)
         if width * height > 1024 * 1024:
             image = self._vae.decode_tiled(latents, tile_size_px=512, overlap_px=64)
@@ -2902,64 +2612,35 @@ class ImageGenEngine(ActiveRequestMixin):
         cap_feats = self._encode_prompt(prompt)
 
         # 7. Masked denoising loop
-        # TeaCache: create per-request instance for this denoising loop.
-        _tc = None
-        if self._teacache_config is not None:
-            from .teacache import TeaCacheHook
+        for t in range(start_step, num_steps):
+            if cancel_flag is not None and cancel_flag.is_set():
+                raise asyncio.CancelledError("image generation cancelled")
+            sigma_t = sigmas[t].reshape((1,))
+            timestep = mx.ones_like(sigma_t) - sigma_t
 
-            _tc = TeaCacheHook(self._teacache_config)
-        try:
-            for t in range(start_step, num_steps):
-                if cancel_flag is not None and cancel_flag.is_set():
-                    raise asyncio.CancelledError("image generation cancelled")
-                sigma_t = sigmas[t].reshape((1,))
-                timestep = mx.ones_like(sigma_t) - sigma_t
+            noise_pred = self._transformer(
+                x=latents,
+                timestep=timestep,
+                sigmas=sigmas,
+                cap_feats=cap_feats,
+            )
 
-                if _tc is not None:
-                    noise_pred = _tc.forward(
-                        self._transformer,
-                        latents,
-                        timestep,
-                        sigmas,
-                        cap_feats,
-                    )
-                else:
-                    noise_pred = self._transformer(
-                        x=latents,
-                        timestep=timestep,
-                        sigmas=sigmas,
-                        cap_feats=cap_feats,
-                    )
+            # Euler step → latents now advanced to sigma_{t+1}
+            dt = sigmas[t + 1] - sigmas[t]
+            denoised = latents + noise_pred * dt
 
-                # Euler step → latents now advanced to sigma_{t+1}
-                dt = sigmas[t + 1] - sigmas[t]
-                denoised = latents + noise_pred * dt
-
-                # RePaint composite: re-noise the KEPT region to the CURRENT step's noise
-                # level (sigma_{t+1}) before blending, so the model's context is on-manifold
-                # for the timestep it was told. The old code kept the previous latents for
-                # the kept region — which, since that region is never denoised, froze it at
-                # the CLEAN (sigma≈0) VAE encoding while the loop ran at high sigma → the
-                # kept context was off-distribution every step → boundary seams (worst at
-                # early high-sigma steps). At the final step sigma_{t+1}=0 so the kept region
-                # ends fully clean, matching the source exactly.
-                sigma_next = sigmas[t + 1]
-                known_at_sigma = (
-                    1 - sigma_next
-                ) * known_latents_4d + sigma_next * noise
-                latents = (1 - mask_4d) * known_at_sigma + mask_4d * denoised
-                mx.eval(latents)
-
-            if _tc is not None:
-                tc_stats = _tc.get_stats()
-                logger.info(
-                    f"TeaCache (inpaint): {tc_stats['cache_hits']} hits, "
-                    f"{tc_stats['cache_misses']} misses, "
-                    f"hit_rate={tc_stats['hit_rate']:.1%}"
-                )
-        finally:
-            _tc = None
-
+            # RePaint composite: re-noise the KEPT region to the CURRENT step's noise
+            # level (sigma_{t+1}) before blending, so the model's context is on-manifold
+            # for the timestep it was told. The old code kept the previous latents for
+            # the kept region — which, since that region is never denoised, froze it at
+            # the CLEAN (sigma≈0) VAE encoding while the loop ran at high sigma → the
+            # kept context was off-distribution every step → boundary seams (worst at
+            # early high-sigma steps). At the final step sigma_{t+1}=0 so the kept region
+            # ends fully clean, matching the source exactly.
+            sigma_next = sigmas[t + 1]
+            known_at_sigma = (1 - sigma_next) * known_latents_4d + sigma_next * noise
+            latents = (1 - mask_4d) * known_at_sigma + mask_4d * denoised
+            mx.eval(latents)
         # 8. VAE decode (auto-tile for large images)
         if width * height > 1024 * 1024:
             image = self._vae.decode_tiled(latents, tile_size_px=512, overlap_px=64)
@@ -3119,8 +2800,7 @@ class ImageGenEngine(ActiveRequestMixin):
             "loaded": self.is_loaded,
             "running": self._running,
         }
-        if self._dflash is not None:
-            stats["dflash"] = self._dflash.get_stats()
+
         return stats
 
     def _run_controlled_pipeline(
@@ -3639,22 +3319,6 @@ class ImageGenEngine(ActiveRequestMixin):
             mx.eval(self._transformer.parameters())
             logger.info(f"LoRA adapter loaded: {adapter_path}, {applied} layers")
 
-            # Register with LoRA offloader if active
-            if self._lora_offloader is not None:
-                adapter_id = (
-                    adapter_path.rsplit("/", 1)[-1]
-                    if "/" in adapter_path
-                    else adapter_path
-                )
-                # Estimate memory: rank * (in + out) * 4 bytes per layer
-                est_bytes = applied * _rank * (256 + 256) * 4  # rough estimate
-                self._lora_offloader.register_adapter(
-                    lora_id=adapter_id,
-                    memory_bytes=est_bytes,
-                    priority=int(_scale),
-                )
-                logger.info(f"LoRA adapter registered with offloader: {adapter_id}")
-
             return True
         except Exception as e:
             logger.error(f"Failed to load LoRA adapter: {e}", exc_info=True)
@@ -3693,14 +3357,6 @@ class ImageGenEngine(ActiveRequestMixin):
                         setattr(parent, parts[1], orig_module)
             self._original_modules.clear()
             mx.eval(self._transformer.parameters())
-            # Clean up LoRA offloader state on unload
-            if self._lora_offloader is not None:
-                try:
-                    self._lora_offloader.unload_all()
-                except Exception:
-                    logger.debug(
-                        "LoRA offloader cleanup during unload failed", exc_info=True
-                    )
             logger.info("LoRA adapter unloaded, original modules restored")
             return True
         except Exception as e:

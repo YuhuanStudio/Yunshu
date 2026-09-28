@@ -9,7 +9,6 @@ from __future__ import annotations
 """
 import contextlib
 import logging
-import os
 import threading
 
 from fastapi import APIRouter, HTTPException, Request
@@ -21,6 +20,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["sleep"])
 
 from yunshu_control.audit_log import log_operation, resolve_actor
+from yunshu_engine import settings
 
 
 def _check_permission(request: Request, permission: str) -> None:
@@ -31,10 +31,10 @@ def _check_permission(request: Request, permission: str) -> None:
     2. If YUNSHU_AUTH_TOKEN is set, verify request actually presents it
     3. If no auth configured and not disabled — DENY access (secure default)
     """
-    if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
+    if settings.get_bool("YUNSHU_AUTH_DISABLED"):
         return
     # Static token auth — must verify the request actually provides it
-    auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
+    auth_token = settings.get("YUNSHU_AUTH_TOKEN")
     if auth_token is not None and auth_token:
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
@@ -142,7 +142,6 @@ async def sleep_server(req: SleepRequest, request: Request):
         _sleep_level = level
         _sleeping = True
         _sleep_transitioning = True
-        os.environ["YUNSHU_SLEEPING"] = "1"
 
     try:
         engine = get_engine()
@@ -153,7 +152,7 @@ async def sleep_server(req: SleepRequest, request: Request):
             _saved_model_name = (
                 getattr(engine, "_model_name", None)
                 or getattr(engine, "model_name", None)
-                or os.environ.get("YUNSHU_MODEL")
+                or settings.get("YUNSHU_MODEL")
             )
 
         logger.info("Server entering L%d sleep", level)
@@ -205,7 +204,6 @@ async def sleep_server(req: SleepRequest, request: Request):
         with _sleep_lock:
             _sleeping = False
             _sleep_level = -1
-            os.environ.pop("YUNSHU_SLEEPING", None)
         log_operation("server_sleep", "server", "failure", actor=actor, level=req.level)
         raise
     finally:
@@ -228,7 +226,7 @@ async def wake_up_server(request: Request):
 
     try:
         level = _sleep_level
-        model_name = _saved_model_name or os.environ.get("YUNSHU_MODEL")
+        model_name = _saved_model_name or settings.get("YUNSHU_MODEL")
 
         if level >= 1 and model_name:
             # Reload the model
@@ -245,7 +243,6 @@ async def wake_up_server(request: Request):
         _sleeping = False
         _sleep_level = -1
         _saved_model_name = None
-        os.environ.pop("YUNSHU_SLEEPING", None)
 
         log_operation(
             "server_wake", "server", "success", actor=actor, previous_level=level
