@@ -857,7 +857,7 @@ def main():
                 [{"role": "user", "content": "Reply with only the word COBALT."}], 16
             )
         )
-        ok = (b.get("content") or "").strip(" .").upper() == "COBALT"
+        ok = (b.get("content") or "").strip().strip(" .").upper() == "COBALT"
         emit(
             {
                 "kind": "capability",
