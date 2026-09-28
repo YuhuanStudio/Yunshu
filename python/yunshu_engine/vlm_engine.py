@@ -1466,6 +1466,16 @@ class VLMEngine:
         runner.clear_on_idle = bool(getattr(self, "_mx_large_model", False))
         runner.stop_tokens = set(self._get_eos_ids())
         runner.inflight = lambda: self._active_count
+        if os.environ.get("YUNSHU_RAGGED_KV", "0").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            # Experimental: per-row-length KV + ragged decode attention for the
+            # shared batch (qwen3_5 attention only).
+            from .kernels.ragged_kv import install as install_ragged_kv
+
+            runner.ragged_kv = install_ragged_kv()
         kv_bits = os.environ.get("YUNSHU_VLM_KV_BITS", "").strip()
         if kv_bits:
             # Experimental: quantized attention KV (halves KV bandwidth at long

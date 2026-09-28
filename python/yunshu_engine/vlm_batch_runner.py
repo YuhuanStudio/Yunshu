@@ -229,6 +229,8 @@ class VLMBatchRunner:
         # Optional quantized KV for attention layers (upstream kv_bits /
         # kv_quant_scheme / quantized_kv_start); None keeps bf16 KV.
         self.kv_quant: dict | None = None
+        # Experimental per-row-length KV for the shared batch (YUNSHU_RAGGED_KV).
+        self.ragged_kv = False
 
     def prepare_media(
         self,
@@ -564,6 +566,15 @@ class VLMBatchRunner:
             if hasattr(lm, "_rope_deltas"):
                 lm._rope_deltas = mx.array([[job.rope_delta]], dtype=mx.float32)
         prompt_progress, responses = group.gen.next()
+        if self.ragged_kv and not group.spec:
+            # Rows that just finished prefill arrive with a stock left-padded
+            # BatchKVCache; switch the decode batch to per-row-length KV so no
+            # row reads (or copies) the longest row's padding.
+            batch = getattr(group.gen, "_generation_batch", None)
+            if batch is not None and len(batch) > 0:
+                from .kernels.ragged_kv import convert_batch
+
+                convert_batch(batch.prompt_cache)
         for progress in prompt_progress or []:
             job = group.jobs.get(getattr(progress, "uid", None))
             if job is not None:
