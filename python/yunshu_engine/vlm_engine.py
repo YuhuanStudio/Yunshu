@@ -1422,15 +1422,6 @@ class VLMEngine:
             from .kernels.ragged_kv import install as install_ragged_kv
 
             runner.ragged_kv = install_ragged_kv()
-        kv_bits = settings.get("YUNSHU_VLM_KV_BITS")
-        if kv_bits:
-            # Experimental: quantized attention KV (halves KV bandwidth at long
-            # context). Fractional bits select upstream TurboQuant.
-            bits = float(kv_bits)
-            runner.kv_quant = {
-                "kv_bits": int(bits) if bits.is_integer() else bits,
-                "kv_quant_scheme": "uniform" if bits.is_integer() else "turboquant",
-            }
         logger.info(
             "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s",
             f"{self._apc_backend.memory_max_bytes / 2**30:.1f}GiB"

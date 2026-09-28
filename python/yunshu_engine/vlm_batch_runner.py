@@ -226,9 +226,6 @@ class VLMBatchRunner:
         self.inflight = lambda: 0
         # All ids that end a turn (tokenizer + generation_config eos).
         self.stop_tokens: set[int] | None = None
-        # Optional quantized KV for attention layers (upstream kv_bits /
-        # kv_quant_scheme / quantized_kv_start); None keeps bf16 KV.
-        self.kv_quant: dict | None = None
         # Experimental per-row-length KV for the shared batch (YUNSHU_RAGGED_KV).
         self.ragged_kv = False
 
@@ -459,7 +456,6 @@ class VLMBatchRunner:
             top_logprobs_k=top_logprobs,
             prefill_step_size=PREFILL_STEP,
             prefill_batch_size=1,
-            **(self.kv_quant or {}),
         )
 
     def _admit(self, job: _Job, alone: bool) -> None:
