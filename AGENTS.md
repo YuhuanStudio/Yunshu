@@ -7,14 +7,15 @@ mirror.
 
 ## What Yunshu is
 
-A **local, single-node, multimodal (omni) inference engine for Apple Silicon**: one OpenAI/Anthropic-compatible
-process serving text · vision · OCR · ASR · TTS · Realtime voice · image generation, on-device via MLX
-(`mlx-lm`, `mlx-vlm`, `mlx-audio`). It is the local sensory body for [Yunmo](../Yunmo) (a digital-being
-framework), and usable standalone.
+A **fast, local, single-node LLM / VLM inference engine for Apple Silicon**: one OpenAI/Anthropic-compatible
+process, on-device via MLX (`mlx-lm`, `mlx-vlm`, `mlx-audio`). Primary axes: LLM/VLM decode speed, TTFT (cold and
+cached), prefix reuse, capability completeness. Qwen3.8-27B is the first fully tuned model. Speech-to-speech
+(Qwen3-Omni), ASR/TTS, Realtime voice, image/video generation and embeddings are supported capabilities, not the
+identity — fix them when shared with the LLM/VLM path or explicitly prioritized. [Yunmo](../Yunmo) is one consumer.
 
 **Non-goals (do not reintroduce):** no distributed/multi-node mesh, no throughput/batching race, no
 multi-tenant control plane. Custom Metal kernels only when a same-checkpoint A/B proves an end-to-end win with
-matching output. Performance = TTFT, decode speed, prefix reuse, voice round-trip (cold and warm).
+matching output. Performance = TTFT, decode speed, prefix reuse (cold and warm).
 
 This repo is mid-**refocus** away from its old "production platform / distributed Infra" framing. The
 whitepaper and the wave-narrative VALIDATION_REPORT are retired — do not cite or resurrect their claims.
@@ -32,6 +33,8 @@ just test         # full suite   ·   just lint && just format
 PYTHONPATH=. uv run python scripts/realmodel/test_real_model.py
 ```
 
-Serving = single-request fast path (`_generate_fast` → mlx-lm `generate_step`, `max_workers=1`). Per-request
-sampler + SequenceStateMachine (Aho-Corasick), per-request detokenizer (never pool), single Metal thread,
-`uv` only. Constrained JSON-schema decoding is wired into the fast path — keep it working.
+Serving: Qwen3.5-family VLMs → VLM batch runner (`vlm_batch_runner.py`: APC prefix cache, MTP/DFlash spec
+decode, batch-invariant kernels so spec on == off); text-only mlx-lm models → single-request fast path
+(`_generate_fast` → mlx-lm `generate_step`). Both on one MLX thread (`max_workers=1`). Per-request sampler +
+SequenceStateMachine (Aho-Corasick), per-request detokenizer (never pool), `uv` only. Constrained JSON-schema
+decoding is wired into both paths — keep it working.

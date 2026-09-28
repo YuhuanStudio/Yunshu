@@ -2,11 +2,10 @@
 
 # Yunshu
 
-**一个快速、本地、面向 Apple Silicon 的多模态推理引擎。**
+**为 Apple Silicon 打造的快速本地 LLM / VLM 推理引擎。**
 
-单一进程,兼容 OpenAI/Anthropic,全部经由 MLX 在设备本地运行:文本、视觉、OCR、音频、图像、
-嵌入,以及一个实时语音 WebSocket。它的与众不同之处是**原生流式语音到语音** —— 你说话,模型约
-1.4 秒后用它自己的声音回话,无云端、也没有语音转文字 → LLM → 文字转语音的级联。
+单一进程,兼容 OpenAI 与 Anthropic API,通过 MLX 在设备端运行。为单机低延迟而设计:首 token 快、
+无损解码快,并以前缀复用跳过已经算过的部分。第一个完整调校的模型是 **Qwen3.8-27B**。
 
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
@@ -18,23 +17,18 @@
 
 ---
 
-## 原生语音到语音
+## 与众不同之处
 
-大多数本地语音方案都是**级联**:语音转文字把你转写出来 → LLM 写出回复 → 文字转语音读出来。
-每一跳都增加延迟、丢掉韵律 —— 系统从不"听见"你的语气,也无法塑造自己的语气。
-
-Qwen3-Omni 的 **Talker** 架构是单个模型:它摄入原始音频、进行推理,并直接解码出语音 token ——
-中间没有文字。Yunshu 经由 `mlx-vlm` 在 Apple Silicon 上原生提供这一能力,在你说完话后约 1 秒内
-就开始把音频流回。
-
-```
-你（音频） ──► Qwen3-Omni Thinker（推理） ──► Talker（流式输出音频） ──► 你
-                     一个统一模型,没有管线跳转
-```
-
-其他一切也都能跑:任意 `mlx-lm` / `mlx-vlm` / `mlx-audio` 模型都走标准端点。
-
----
+- **无损推测解码。** 使用 checkpoint 自带的 MTP 头,或外部 DFlash drafter。会推测的请求,其所有
+  解码与验证矩阵乘都走同一颗 batch-invariant kernel,所以 greedy 下开启与关闭推测的输出逐 token
+  相同 —— 即 Splash 所说的无损。非精确的快速验证也有,但需手动开启。
+- **混合架构模型的前缀缓存。** Qwen3.5 家族把注意力层和循环的 GatedDeltaNet 层混在一起,普通的
+  KV 缓存切不开。Yunshu 保存精确的 checkpoint,以文本与图片像素共同作为键,默认 8 GiB 内存,
+  可再加一层 SSD。重复或只改结尾的长 prompt 无需重新 prefill。
+- **以输出验证过的验证 kernel。** GatedDeltaNet、注意力、5-bit 矩阵乘的验证 kernel,部分取自
+  oMLX,每一颗都经过同 checkpoint A/B 才采用。
+- **快速路径上有完整 API。** 工具调用、JSON-schema 约束、停止序列、logprobs、流式推理/内容分离、
+  `reasoning_effort` 直接传给支持它的 chat template(Qwen3.8),以及客户端断开时取消生成。
 
 ## 快速开始
 
@@ -42,121 +36,128 @@ Qwen3-Omni 的 **Talker** 架构是单个模型:它摄入原始音频、进行�
 > 它会安装 `uv.lock` 中固定的版本(MLX 0.32、上游 `mlx-vlm` 0.7.3+)。
 
 ```bash
-# 1. 从源码安装
 git clone https://github.com/YuhuanStudio/Yunshu.git
 cd Yunshu
-uv sync --extra omni        # 原生 Qwen3-Omni 语音（语音输入/输出）
-# 或: uv sync --all-extras  # 全部:文本 + 视觉 + 音频 + omni + 图像 + 嵌入
+uv sync --extra vision       # LLM + VLM(Qwen3.5 / 3.6 / 3.8 需要)
+# 或:uv sync --all-extras   # 所有模态
 
-# 2. 启动模型。来自 mlx-community 的任意 4-bit Qwen3-Omni 变体都可以 —— 原生语音会自动开启
-#    （同一份已载入的模型同时服务文本和语音,不额外占内存）。
-uv run yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --port 8000
+uv run yunshu serve -m /path/to/Qwen3.8-27B-mlx --port 8000
 ```
 
-### 跟它对话
-
-```bash
-uv run --with sounddevice --with numpy --with websockets python examples/talk.py
-```
-
-[`examples/talk.py`](examples/talk.py) 是一段真正的语音对话:按 Enter、说话、再按一次 Enter ——
-模型出声回答,并记得整段对话。
-
-不想接麦克风?[`examples/quickstart.py`](examples/quickstart.py) 会把一段语音回复流式写入 WAV
-文件,并演示文本端点 —— 不需要任何音频硬件。
-
-### 用任意 OpenAI 客户端
-
-文本、视觉、嵌入和重排序都说标准 API —— 客户端无需改动:
+任何 OpenAI 客户端都能直接用:
 
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:8000/v1", api_key="local")  # 任意 key 都行
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="local")  # 任意 key 都可以
 
-# 在单模型模式下,模型名只是占位符 —— 服务器会服务你加载的那个模型
-#（就像 Ollama / LM Studio），所以填 "local" 即可。
-print(
-    client.chat.completions.create(
-        model="local",
-        messages=[{"role": "user", "content": "Explain MLX in one sentence."}],
-    ).choices[0].message.content
+# 单模型模式:模型名只是占位,服务器服务的是你加载的那个模型。
+r = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "用一句话解释 MLX。"}],
+    extra_body={"reasoning_effort": "medium"},
 )
+print(r.choices[0].message.content)
 ```
 
-> **开发签出**:`just setup`,然后 `YUNSHU_MODEL=<model> just dev`。
+> **开发环境**:`just setup` 后 `YUNSHU_MODEL=<model> just dev`。
 > **文档**:[API 参考](docs/API.md) · [配置参考](docs/CONFIGURATION.md)。
 
----
-
-## 能力
-
-| 模态 | 端点 | 后端 | Extra |
-|---|---|---|---|
-| **原生语音到语音**（Qwen3-Omni，流式；预热后语音输入约 1.4 秒首音、文本输入约 1.2 秒） | `POST /v1/omni/speech/stream` | `mlx-vlm` Thinker+Talker | `omni` |
-| 文本（工具调用、JSON-schema、流式、logprobs） | `/v1/chat/completions`、`/v1/messages` | `mlx-lm` | _(核心)_ |
-| 视觉 / OCR | `/v1/chat/completions`（图像内容） | `mlx-vlm` | `vision` |
-| ASR | `/v1/audio/transcriptions` | `mlx-audio` / Whisper | `audio` |
-| TTS | `/v1/audio/speech` | `mlx-audio` | `audio` |
-| 实时语音 WS | `WS /v1/realtime` | omni 或 ASR + TTS | `audio` |
-| 图像生成 | `/v1/images/generations` | 扩散 | `generation` |
-| 视频生成（Wan 2.x / LTX-2，文本→视频 + 图像→视频） | `/v1/video/generations` | `mlx-video` | `video` |
-| 嵌入（文本 + **多模态**：经由 Qwen3-VL-Embedding 的图像 / 跨模态） | `/v1/embeddings` | `mlx-lm` (text) / `mlx-embeddings` (multimodal) | `embeddings` |
-| 重排序（双编码器余弦，或经由 Qwen3-VL-Reranker 的**真正交叉编码器**） | `/v1/rerank` | `mlx-lm` (text) / `mlx-embeddings` (multimodal) | `embeddings` |
-
-此外还有:单节点 KV 前缀缓存（+ 可选 SSD 持久化 + 按请求 KV 量化）、MCP 服务端/客户端,以及
-兼容 Anthropic 的 `/v1/messages` 接口。
-
-## 架构
-
-```
-  客户端（任意 OpenAI / Anthropic SDK）
-        │   OpenAI / Anthropic / MCP / Realtime-WS / SSE
-  ┌─────┴──────────────────────────────────────────────┐
-  │  网关（FastAPI）      路由 + 中间件                   │
-  ├────────────────────────────────────────────────────┤
-  │  引擎                 模态分派 + 服务                 │
-  │   · LLM 快速路径（mlx-lm generate_step）            │
-  │   · VLM runner（Qwen3.5/3.6/3.8）：前缀缓存 +       │
-  │     MTP / DFlash 推测解码 + 验证 kernel             │
-  │   · VLM / OCR（mlx-vlm）  · ASR / TTS（mlx-audio）│
-  │   · OmniEngine（Qwen3-Omni Thinker→Talker）         │
-  │   · 图像扩散              · KV 前缀缓存               │
-  └────────────────────────────────────────────────────┘
-              经由 Apple MLX 在设备本地运行
-```
-
 ## 性能
-
-Yunshu 一次服务一个请求,优化的是延迟:首 token(冷启动与缓存命中都算)、解码速度、前缀复用。
-第一个完整调校的模型是 **Qwen3.8-27B**。Qwen3.5 家族 VLM(Qwen3.5 / 3.6 / 3.8)走构建在 `mlx-vlm`
-生成器之上的专用 runner:
-
-- **前缀缓存(APC)**:混合架构的精确 checkpoint,以文本与图片像素共同作为键;默认 8 GiB 内存,
-  可选 SSD 层。重复或只改结尾的长 prompt 无需重新 prefill。
-- **推测解码**:使用 checkpoint 自带的 MTP 头,或外部 DFlash drafter(`YUNSHU_VLM_DRAFT`)。
-  默认下,会推测的请求其解码与验证矩阵乘都走同一颗 batch-invariant kernel,所以 greedy 下
-  开启与关闭推测的输出逐 token 相同(即 Splash 所说的无损)。非精确的快速验证需手动开启
-  (`YUNSHU_MTP_FAST_VERIFY=1`)。
-- 流式推理分离、工具调用、JSON-schema 约束、停止序列、logprobs、取消在这条路径上都可用。
 
 测量环境:M5 Max(128 GB)、Qwen3.8-27B、2026-09-28。除特别注明外均为同一个 Jundot `oQ4e-mtp`
 checkpoint;原始数据与方法见
 [docs/research/runs/2026-09-28-matrix](docs/research/runs/2026-09-28-matrix/README.md)。
 
-| 引擎 | 能力检查 | 对话 TTFT（热） | 8K prompt：冷 / 重复 / 改尾 | 解码 tok/s |
+| 引擎 | 能力检查 | 对话 TTFT(热) | 8K prompt:冷 / 重复 / 改尾 | 解码 tok/s |
 |---|---|---|---|---|
-| **Yunshu**（默认：MTP 深度 6、batch-invariant） | 33/33 | 0.195 s | 8.40 / 0.112 / 0.259 s | 80 |
-| **Yunshu**（DFlash2 + 快速验证，需开启） | 31/31 | 0.185 s | 8.71 / 0.112 / 0.239 s | 86 |
-| mlx-vlm 0.7.3 server（APC） | 27/28 | 0.212 s | 8.60 / 0.108 / 0.265 s | 32 |
-| oMLX.app 0.7（MTP + 缓存） | 31/31 | 0.312 s | 8.60 / 0.361 / 0.376 s | 85 |
-| Splash 1.1（自家量化模型 + DFlash2） | 31/31 | 0.206 s | 7.88 / 0.131 / 7.88 s | 119 |
+| **Yunshu**(默认:MTP 深度 6、batch-invariant) | 33/33 | 0.195 s | 8.40 / 0.112 / 0.259 s | 80 |
+| **Yunshu**(DFlash2 + 快速验证,需开启) | 31/31 | 0.185 s | 8.71 / 0.112 / 0.239 s | 86 |
+| mlx-vlm 0.7.3 server(APC) | 27/28 | 0.212 s | 8.60 / 0.108 / 0.265 s | 32 |
+| oMLX.app 0.7(MTP + 缓存) | 31/31 | 0.312 s | 8.60 / 0.361 / 0.376 s | 85 |
+| Splash 1.1(自家量化模型 + DFlash2) | 31/31 | 0.206 s | 7.88 / 0.131 / 7.88 s | 119 |
 
-现状:前缀复用与 TTFT 是测到最好的;这个 checkpoint 的 prefill 已到硬件上限;默认解码在保持
-无损输出下与 oMLX 持平,**仍落后 Splash**(DFlash2 搭配它自家量化的模型)。追上它是当前的主要
-工作。(Yunshu 的矩阵比旧测试多两项:logprobs 与流式推理分离。)其他场景旋钮(n-gram 推测、替代采样器、KV 量化、jump-forward)都需手动开启,
-见 [配置参考](docs/CONFIGURATION.md)。长期基准记录见
+按输出类型的无损解码(同 checkpoint、进程内、greedy、384 token;tok/s):
+
+| 解码方式 | 代码 | 文章 | JSON 类 | 开/关推测相同 |
+|---|---|---|---|---|
+| **默认**:batch-invariant + packed、MTP 深度 6 | 88.6 | 59.9 | 67.3 | 是 |
+| 旧默认:精确验证 kernel、MTP 深度 3 | 57–67 | 50–53 | 58–62 | 是 |
+| 非精确快速验证(需开启) | 83.8 | 59.9 | 66.7 | 否 |
+
+现状:
+- 前缀复用与热 TTFT 是测到最好的。
+- 冷 prefill 已到这个 checkpoint 的硬件上限。
+- 默认解码在保持无损输出下与 oMLX 持平,**仍落后 Splash**(DFlash2 搭配它自家量化的模型)。
+  追上它是当前的主要工作。
+- 60 分钟混合 soak(对话、长文档、图片、工具、JSON schema、思考、中途断开)跑完 699 个请求,
+  服务器错误 0,内存没有增长(footprint 17–26 GiB)。
+
+Yunshu 的矩阵比旧测试多两项:logprobs 与流式推理分离。长期基准记录见
 [docs/reports/PERF_TREND.md](docs/reports/PERF_TREND.md)。
+
+## 支持的模型
+
+| 层级 | 模型 | 路径 | 可得到的功能 |
+|---|---|---|---|
+| 1 —— 已调校并测量 | Qwen3.5 / 3.6 / 3.8 家族(文本 + 图片) | VLM batch runner | 前缀缓存(内存 + SSD)、MTP / DFlash 无损推测解码、上述所有 API 功能 |
+| 2 —— 支持 | 任何 `mlx-lm` 文本模型 | 单请求快速路径(`generate_step`) | KV 前缀缓存、工具、JSON schema、logprobs;可开启 n-gram 推测、KV 量化 |
+| 2 —— 支持 | 其他 `mlx-vlm` 模型 | 通用 VLM 路径 | 图片 / OCR;没有混合架构前缀缓存与推测解码,较慢 |
+
+2026-09-28 这一轮只重新测量了第 1 层。
+
+## 其他模态
+
+以下功能在同一个服务器里,通过可选 extras 安装。**2026-09-28 这一轮都没有重新验证**,
+这一轮只覆盖 LLM/VLM。
+
+| 模态 | 端点 | 后端 | Extra |
+|---|---|---|---|
+| 原生语音到语音(Qwen3-Omni Thinker→Talker,流式) | `POST /v1/omni/speech/stream` | `mlx-vlm` | `omni` |
+| 实时语音 | `WS /v1/realtime` | omni,或 ASR → LLM → TTS | `audio` |
+| ASR | `/v1/audio/transcriptions` | `mlx-audio` / Whisper | `audio` |
+| TTS | `/v1/audio/speech` | `mlx-audio` | `audio` |
+| 图像生成 | `/v1/images/generations` | 扩散模型 | `generation` |
+| 视频生成(Wan 2.x / LTX-2) | `/v1/video/generations` | `mlx-video` | `video` |
+| Embeddings / rerank(文本 + 多模态) | `/v1/embeddings`、`/v1/rerank` | `mlx-lm` / `mlx-embeddings` | `embeddings` |
+
+语音到语音:服务一个 Qwen3-Omni 模型(`uv sync --extra omni`),试试
+[`examples/talk.py`](examples/talk.py)(麦克风)或 [`examples/quickstart.py`](examples/quickstart.py)
+(输出 WAV,无需音频硬件)。已确认上游 `mlx-vlm` 0.7.3 多轮 omni 输出正确
+([记录](docs/research/runs/2026-09-28-omni/README.md));服务器的 Realtime 路径尚未确认。
+
+另外:MCP 服务器/客户端,以及兼容 Anthropic 的 `/v1/messages`。
+
+## 架构
+
+```
+  客户端(任意 OpenAI / Anthropic SDK)
+        │   OpenAI / Anthropic / MCP / Realtime-WS / SSE
+  ┌─────┴───────────────────────────────────────────────┐
+  │  网关(FastAPI)       路由 + 中间件                   │
+  ├─────────────────────────────────────────────────────┤
+  │  引擎                                                 │
+  │   · VLM batch runner(Qwen3.5 / 3.6 / 3.8)           │
+  │       前缀缓存(内存 + SSD)· MTP / DFlash            │
+  │       batch-invariant 解码 + 验证 kernel              │
+  │   · LLM 快速路径(mlx-lm generate_step)              │
+  │       KV 前缀缓存 · 约束解码                          │
+  │   · 通用 VLM / OCR(mlx-vlm)                         │
+  │   · 其他模态:omni、ASR/TTS、图像、视频、embeddings   │
+  └─────────────────────────────────────────────────────┘
+        单一 MLX 线程 · 通过 Apple MLX 在设备端运行
+```
+
+## 服务模型
+
+Yunshu 是单用户引擎。所有 GPU 工作都在一条 MLX 线程上,所以并发请求会排队、依次执行;
+每个响应在它自己的生成结束时就立即返回。没有 continuous batching 吞吐模式 —— 目标是单一用户的
+延迟,而不是总 tokens/秒。
+
+## 配置
+
+环境变量与 `yunshu serve` 参数见 [配置参考](docs/CONFIGURATION.md),包含 runner 相关设置
+(`YUNSHU_VLM_APC_*`、`YUNSHU_MTP*`、`YUNSHU_VLM_DRAFT`、`YUNSHU_VLM_INVARIANT`)。
 
 ## 构建于
 

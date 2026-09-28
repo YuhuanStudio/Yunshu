@@ -6,6 +6,11 @@ signals new capability, a patch bump signals fixes.
 
 ## [Unreleased]
 
+Yunshu is now positioned as a local LLM / VLM inference engine (decode speed, TTFT, prefix reuse,
+API completeness), with Qwen3.8-27B as the first fully tuned model. Speech-to-speech and the other
+modalities remain supported capabilities; the README, CLAUDE.md and AGENTS.md were restructured to
+match.
+
 ### Added
 
 - Qwen3.5-family VLM runner (Qwen3.5 / 3.6 / 3.8) on `mlx-vlm`'s generator: prefix cache with
@@ -19,6 +24,15 @@ signals new capability, a patch bump signals fixes.
 
 ### Changed
 
+- Default decode for MTP models is lossless batch-invariant decode at MTP block 6: decode and verify
+  matmuls of a drafting request share one row-invariant kernel (M5 tensor-unit packed where
+  available), so greedy output with speculation on equals speculation off. Qwen3.8-27B (M5 Max,
+  in-process) code / prose / JSON-like: 88.6 / 59.9 / 67.3 tok/s, vs 57–67 / 50–53 / 58–62 for the
+  previous exact kernels at block 3; server matrix decode 57 → 80 tok/s, 33/33 checks. Requests that
+  cannot draft (sampling, logits processors, logprobs) keep the stock kernels.
+  `YUNSHU_VLM_INVARIANT=0` restores the previous default.
+- `reasoning_effort` (top-level or in `chat_template_kwargs`) is passed to chat templates that
+  support it (Qwen3.8: low / medium / xhigh) instead of being mapped to a thinking-token cap.
 - Dependencies: MLX 0.32.2, transformers 5.17, upstream `mlx-vlm` 0.7.3 (the fork is gone).
 - JSON-schema constraint: cached vocab split (in-string step 144 ms → 3 ms); structural whitespace
   limited to spaces and newlines.
@@ -27,6 +41,10 @@ signals new capability, a patch bump signals fixes.
 
 - Streaming thinking on Qwen3.8 was sent as content; it is now sent as reasoning.
 - Gateway startup failure no longer crashes in shutdown on an unbound engine.
+- VLM responses under concurrent load are returned as soon as each generation finishes; before, a
+  post-request cache clear queued behind every other request held all responses until the last
+  one finished. The non-streaming VLM path also no longer applies a 120 s default timeout that
+  counted time spent waiting in the queue (a client-set `timeout` still applies).
 
 ### Removed
 
