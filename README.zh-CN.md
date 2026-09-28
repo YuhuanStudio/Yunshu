@@ -135,8 +135,9 @@ Yunshu 一次服务一个请求,优化的是延迟:首 token(冷启动与缓存�
 - **前缀缓存(APC)**:混合架构的精确 checkpoint,以文本与图片像素共同作为键;默认 8 GiB 内存,
   可选 SSD 层。重复或只改结尾的长 prompt 无需重新 prefill。
 - **推测解码**:使用 checkpoint 自带的 MTP 头,或外部 DFlash drafter(`YUNSHU_VLM_DRAFT`)。
-  默认验证 kernel 是精确的:greedy 下开启与关闭推测的输出逐 token 相同。更快但非精确的验证
-  kernel 需手动开启(`YUNSHU_MTP_FAST_VERIFY=1`)。
+  默认下,会推测的请求其解码与验证矩阵乘都走同一颗 batch-invariant kernel,所以 greedy 下
+  开启与关闭推测的输出逐 token 相同(即 Splash 所说的无损)。非精确的快速验证需手动开启
+  (`YUNSHU_MTP_FAST_VERIFY=1`)。
 - 流式推理分离、工具调用、JSON-schema 约束、停止序列、logprobs、取消在这条路径上都可用。
 
 测量环境:M5 Max(128 GB)、Qwen3.8-27B、2026-09-28。除特别注明外均为同一个 Jundot `oQ4e-mtp`
@@ -145,15 +146,15 @@ checkpoint;原始数据与方法见
 
 | 引擎 | 能力检查 | 对话 TTFT（热） | 8K prompt：冷 / 重复 / 改尾 | 解码 tok/s |
 |---|---|---|---|---|
-| **Yunshu**（默认：MTP、精确验证） | 31/31 | 0.196 s | 8.62 / 0.095 / 0.253 s | 57 |
+| **Yunshu**（默认：MTP 深度 6、batch-invariant） | 33/33 | 0.195 s | 8.40 / 0.112 / 0.259 s | 80 |
 | **Yunshu**（DFlash2 + 快速验证，需开启） | 31/31 | 0.185 s | 8.71 / 0.112 / 0.239 s | 86 |
 | mlx-vlm 0.7.3 server（APC） | 27/28 | 0.212 s | 8.60 / 0.108 / 0.265 s | 32 |
 | oMLX.app 0.7（MTP + 缓存） | 31/31 | 0.312 s | 8.60 / 0.361 / 0.376 s | 85 |
 | Splash 1.1（自家量化模型 + DFlash2） | 31/31 | 0.206 s | 7.88 / 0.131 / 7.88 s | 119 |
 
-现状:前缀复用与 TTFT 是测到最好的;这个 checkpoint 的 prefill 已到硬件上限;**默认解码仍落后
-oMLX 与 Splash**,它们用了更快(非精确或自定义量化)的 kernel。在不放弃精确输出的前提下追上,
-是当前的主要工作。其他场景旋钮(n-gram 推测、替代采样器、KV 量化、jump-forward)都需手动开启,
+现状:前缀复用与 TTFT 是测到最好的;这个 checkpoint 的 prefill 已到硬件上限;默认解码在保持
+无损输出下与 oMLX 持平,**仍落后 Splash**(DFlash2 搭配它自家量化的模型)。追上它是当前的主要
+工作。(Yunshu 的矩阵比旧测试多两项:logprobs 与流式推理分离。)其他场景旋钮(n-gram 推测、替代采样器、KV 量化、jump-forward)都需手动开启,
 见 [配置参考](docs/CONFIGURATION.md)。长期基准记录见
 [docs/reports/PERF_TREND.md](docs/reports/PERF_TREND.md)。
 

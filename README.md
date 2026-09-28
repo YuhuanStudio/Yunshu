@@ -137,8 +137,9 @@ VLMs (Qwen3.5 / 3.6 / 3.8) run on a dedicated runner built on `mlx-vlm`'s genera
 - **Prefix cache (APC)** with exact hybrid-model checkpoints, keyed by image pixels as well as text,
   8 GiB RAM by default plus an optional SSD tier. Repeated or edited long prompts skip prefill.
 - **Speculative decode** with the checkpoint's MTP head, or an external DFlash drafter
-  (`YUNSHU_VLM_DRAFT`). The default verify kernels are exact: greedy output with speculation on is
-  token-identical to speculation off. Faster non-exact verify kernels are opt-in
+  (`YUNSHU_VLM_DRAFT`). By default every decode and verify matmul of a drafting request goes
+  through one batch-invariant kernel, so greedy output with speculation on is token-identical to
+  speculation off (the same guarantee Splash calls lossless). Non-exact fast verify is opt-in
   (`YUNSHU_MTP_FAST_VERIFY=1`).
 - Streaming reasoning split, tool calls, JSON-schema constraints, stop sequences, logprobs and
   cancellation all work on this path.
@@ -149,16 +150,17 @@ noted; raw data and methods in
 
 | Engine | Capability checks | Chat TTFT (warm) | 8K prompt: cold / repeat / edited tail | Decode tok/s |
 |---|---|---|---|---|
-| **Yunshu** (default: MTP, exact verify) | 31/31 | 0.196 s | 8.62 / 0.095 / 0.253 s | 57 |
+| **Yunshu** (default: MTP block 6, batch-invariant) | 33/33 | 0.195 s | 8.40 / 0.112 / 0.259 s | 80 |
 | **Yunshu** (DFlash2 + fast verify, opt-in) | 31/31 | 0.185 s | 8.71 / 0.112 / 0.239 s | 86 |
 | mlx-vlm 0.7.3 server (APC) | 27/28 | 0.212 s | 8.60 / 0.108 / 0.265 s | 32 |
 | oMLX.app 0.7 (MTP + cache) | 31/31 | 0.312 s | 8.60 / 0.361 / 0.376 s | 85 |
 | Splash 1.1 (own quantized model + DFlash2) | 31/31 | 0.206 s | 7.88 / 0.131 / 7.88 s | 119 |
 
 Where Yunshu stands: prefix reuse and TTFT are the best measured; prefill is at the hardware
-ceiling for this checkpoint; **default decode is behind oMLX and Splash**, which use faster
-(non-exact or custom-quantized) kernels. Closing that gap without giving up exact output is the
-current work. Other, situational knobs (n-gram speculation, alternative samplers, KV quant,
+ceiling for this checkpoint; default decode is on par with oMLX while keeping lossless output, and
+**behind Splash**, which pairs DFlash2 with its own quantized model. Closing that gap is the
+current work. (Yunshu's matrix has two more checks than the older runs: logprobs and the
+streaming reasoning split.) Other, situational knobs (n-gram speculation, alternative samplers, KV quant,
 jump-forward) are opt-in; see the [configuration reference](docs/CONFIGURATION.md). The long-run
 benchmark log is [docs/reports/PERF_TREND.md](docs/reports/PERF_TREND.md).
 

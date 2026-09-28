@@ -690,9 +690,10 @@ def main():
         try:
             r = cli.stream(body)
             obj = json.loads((r.get("content") or "").strip())
-            ok = (
-                obj.get("red_half") == "left"
-                and "blue" in str(obj.get("other_color", "")).lower()
+            color = str(obj.get("other_color", "")).lower().strip()
+            # A hex/rgb spelling of pure blue is as correct as the word.
+            ok = obj.get("red_half") == "left" and (
+                "blue" in color or color in ("#0000ff", "#00f", "rgb(0, 0, 255)")
             )
             why = f"obj={obj!r}"
         except Exception as e:  # noqa: BLE001

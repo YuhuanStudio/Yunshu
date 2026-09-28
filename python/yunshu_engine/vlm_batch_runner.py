@@ -240,9 +240,10 @@ class VLMBatchRunner:
         from .kernels import batch_invariant
 
         if batch_invariant.is_installed():
-            # Greedy requests keep spec-on == spec-off; sampled ones never
-            # draft and take the faster stock kernels.
-            batch_invariant.set_active(greedy)
+            # Invariance only matters when a request drafts (spec output ==
+            # plain output); requests that cannot draft (sampling, logits
+            # processors, logprobs) take the faster stock kernels.
+            batch_invariant.set_active(use_draft)
 
         if seed is not None:
             mx.random.seed(int(seed) & ((1 << 63) - 1))
