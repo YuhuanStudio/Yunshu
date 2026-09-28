@@ -8,14 +8,14 @@ packages = ["python/yunshu_gateway", "python/yunshu_control", "python/yunshu_eng
 [project]
 name = "yunshu"
 version = "0.1.0"
-description = "Fast local multimodal (omni) inference engine for Apple Silicon — OpenAI/Anthropic-compatible, with native streaming speech-to-speech"
+description = "Fast local LLM/VLM inference engine for Apple Silicon — lossless speculative decoding, prefix caching, OpenAI/Anthropic-compatible"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.13"
 authors = [
     {name = "YuhuanStudio"},
 ]
-keywords = ["mlx", "apple-silicon", "qwen-omni", "speech-to-speech", "voice-agent", "realtime", "local-ai", "llm", "multimodal", "mac"]
+keywords = ["mlx", "apple-silicon", "inference", "llm", "vlm", "speculative-decoding", "prefix-cache", "openai-compatible", "local-ai", "mac"]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "Intended Audience :: Developers",
