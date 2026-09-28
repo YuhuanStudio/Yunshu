@@ -14,7 +14,7 @@ from pydantic import BaseModel, model_validator
 from yunshu_control.audit_log import log_operation, resolve_actor
 from yunshu_engine import settings
 
-from ..engine import get_engine, get_model_manager
+from ..engine import get_display_model_id, get_engine, get_model_manager
 
 router = APIRouter(tags=["models"])
 
@@ -165,7 +165,7 @@ async def list_models(request: Request) -> dict:
         )
         models.append(
             {
-                "id": engine.model_name,
+                "id": get_display_model_id() or engine.model_name,
                 "object": "model",
                 "created": int(_load_time) if _load_time else int(time.time()),
                 "owned_by": "yunshu",

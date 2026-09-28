@@ -20,17 +20,18 @@ import pytest
 
 mx = pytest.importorskip("mlx.core")
 
-MODEL = Path(
-    os.environ.get(
-        "YUNSHU_PARITY_MODEL", "/Volumes/P5Plus/models/Qwen3.5-0.8B-MLX-bf16"
-    )
-)
+# A local Qwen3.5 checkpoint (e.g. Qwen3.5-0.8B-MLX-bf16); the test skips
+# when YUNSHU_PARITY_MODEL is unset.
+MODEL = Path(os.environ.get("YUNSHU_PARITY_MODEL", "")).expanduser()
 
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.slow,
     pytest.mark.skipif(not mx.metal.is_available(), reason="needs an Apple GPU"),
-    pytest.mark.skipif(not (MODEL / "config.json").exists(), reason=f"no {MODEL}"),
+    pytest.mark.skipif(
+        not (MODEL / "config.json").exists(),
+        reason="set YUNSHU_PARITY_MODEL to a local Qwen3.5 checkpoint directory",
+    ),
 ]
 
 FILLER = "".join(

@@ -70,3 +70,4 @@ testresource/
 !docs/reports/**
 docs/reports/history/
 docs/research/
+scripts/research/local.env

@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from yunshu_engine import settings
-from yunshu_engine.model_discovery import resolve_model_ref
+from yunshu_engine.model_discovery import hf_repo_id_for, resolve_model_ref
 from yunshu_engine.paths import models_dir
 from yunshu_engine.version import yunshu_version
 
@@ -188,7 +188,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 instantiate_engine(_engine_mt, DEFAULT_MODEL),
                 timeout=startup_timeout,
             )
-            set_engine(engine)
+            # A Hugging Face cache snapshot is listed under its repo id.
+            set_engine(engine, display_id=hf_repo_id_for(DEFAULT_MODEL))
             logger.info(
                 "Startup complete: model '%s' loaded (%.1fs)",
                 DEFAULT_MODEL,
