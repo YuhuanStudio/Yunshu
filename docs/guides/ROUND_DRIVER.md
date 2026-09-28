@@ -1,82 +1,86 @@
-# Round driver (Qwen3.5 family): one packed forward per step
+# Round driver (Qwen3.5 family): packed rows, per-row invariant, multi-row drafting
 
-Status: stage 1 behind `YUNSHU_ROUND_DRIVER` (experimental). Replaces, once validated on
-Qwen3.8-27B, both the upstream-`BatchGenerator` shared batch and the single-request speculative
-lane for dense Qwen3.5-family models, and the stage-1 fused-prefill capture hack.
+Status: stage 1 behind `YUNSHU_ROUND_DRIVER` (experimental, off). Once validated on Qwen3.8-27B
+(`scripts/research/validate_round_driver.sh`) it replaces, for dense Qwen3.5-family models, both
+the upstream-`BatchGenerator` shared batch and the single-request speculative lane, and the flag
+is deleted.
 
 ## Why
 
-Upstream mlx-vlm's `BatchGenerator` runs one `_prompt_batch` at a time, prefill and decode as
-separate forwards, speculative batches that cannot take joins, and MTP drafter state for one
-batch. Measured consequences on 27B (M5 Max):
+Upstream mlx-vlm's `BatchGenerator` runs one `_prompt_batch` at a time, speculative batches that
+cannot take joins, and MTP drafter state for one batch. Measured on 27B (M5 Max):
 
-- MMLU-Pro 300 b8 (long reasoning, 8 in flight): Yunshu 139 tok/s (drafts only when a request
-  is alone), TensorFold MTP parallel-8 159, Splash 223.
-- A 16K prompt arriving while 4 rows decode stalls them to 0.7 tok/s for the whole prefill.
+- MMLU-Pro 300 b8 (long reasoning, 8 in flight): Yunshu 139 tok/s (drafts only while a request is
+  alone), TensorFold MTP parallel-8 159, Splash 223.
 - 8 concurrent 1K prompts: the last TTFT is ~10 s (prefill one request at a time).
 
 ## Shape
 
-Every request is a **row** with its *own* single-row caches (a `KVCache` per attention layer,
-an `ArraysCache` per GatedDeltaNet layer, and a `KVCache` for its MTP head). A **step** builds
-one packed forward over **segments**:
+Every request is a **row** with its *own* single-row caches (a `KVCache` per attention layer, an
+`ArraysCache` per GatedDeltaNet layer, and a `KVCache` for its MTP head). Each **step** is one
+packed forward of one kind:
 
-- decode rows: `1 + d` tokens (the pending token plus `d` drafts, `d >= 0`);
-- prefill chunks: fixed 64-token spans of waiting prompts (absolute positions from the prompt
-  start), as many as the step's token budget allows, several prompts at once.
+- **decode step**: every decoding row's window, `1 + d` tokens (the pending token plus `d >= 0`
+  drafts);
+- **prefill step**: fixed 512-token chunks of waiting prompts (absolute spans from the prompt
+  start), several prompts in one forward, up to 2048 tokens when no row decodes and 512 while rows
+  decode.
 
-Per layer, everything with weights runs **once** over the packed tokens (norms, attention and
-GDN in/out projections, MLP, the LM head for rows that need logits); only the sequence mixers
-run per segment on the row's own caches (attention over its KV; the GDN conv + recurrence on its
-state). Decode is bandwidth bound, so the decode rows ride along the prefill tokens the step
-computes anyway (Sarathi / vLLM chunked prefill), and draft rows ride along the decode rows.
+While rows decode and prompts wait, prefill and decode steps alternate one-to-one; the prefill
+budget sets the trade between the waiting prompt's TTFT and the decoding rows' rate. (Packing the
+decode rows *into* the prefill forward measured no better than alternating separate forwards at the
+same chunk size — `docs/research/runs/2026-09-29-fused-prefill/` — because prefill is compute
+bound and the only shared saving is one weight read; so steps stay single-kind.)
+
+Per layer, everything with weights runs once over the packed tokens (norms, attention and GDN
+in/out projections, MLP, then one LM-head call over the rows that need logits); only the sequence
+mixers run per segment on the row's own caches (attention over its KV; the GDN conv + recurrence on
+its state).
 
 ## Lossless: what holds per row
 
-A row's arithmetic must not depend on which rows share the step, how many drafts the others
+A row's arithmetic does not depend on which rows share the step, how many drafts the others
 verify, or whether it drafts at all:
 
 - **Projections** (every target linear and the LM head): TensorFold's lane matmul
-  (`kernels/tensorfold/lane_qmm.py`, MIT), whose per-row bits follow the weight shape, not the
-  row count, for 1..128 rows; larger calls are cut into 128-row pieces (`kernels/lane_linear.py`).
-- **Decode / verify attention** (`T <= 8` tokens): the ragged token-tile kernel over the row's
-  own `KVCache` buffer, whose per-token bits do not depend on `T` (capacity padded to the
-  kernel's 64-key window, see `ragged_kv.dense_lane_attention`).
-- **GDN**: per row, on its own state; decode/verify rows always run the recorded-history kernel
-  under an upstream speculative cache transaction, so a draft window and plain decode take the
-  same per-token recurrence; rejected tokens roll back by the transaction's commit (KV trimmed,
-  GDN state replayed to the accepted length).
-- **Prefill**: fixed 64-token chunks, each its own segment (attention SDPA and GDN kernel over
-  exactly that chunk), so a prompt's bits do not depend on what it was packed with.
+  (`kernels/tensorfold/lane_qmm.py`, MIT) — per-row bits follow the weight shape, not the row
+  count, for 1..128 rows; wider calls are cut into 128-row pieces (`kernels/lane_linear.py`;
+  tested 1..300 rows, 4/5/8-bit, including the narrow GDN `in_proj_a/b`).
+- **Decode / verify attention** (`T <= 8` tokens): the ragged token-tile kernel over the row's own
+  `KVCache` buffer, per-token bits independent of `T` (capacity padded to 64-key windows).
+- **GDN**: per row on its own state; every decode window runs under an upstream speculative cache
+  transaction, and a rejected suffix rolls back by the transaction's commit (KV trimmed, GDN state
+  at the kept length).
+- **Prefill**: fixed chunks, each its own segment, so a prompt's bits do not depend on what it was
+  packed with.
 - Norms, activations, embedding: per token.
 
-So for greedy rows: **spec on == spec off, and a row alone == the same row in any batch**
-(tested bitwise on a 4-bit Qwen3.5-0.8B: `tests/unit/test_round_driver.py`). Sampled rows use
-their own seeded key per drawn position and never draft; rows with logits processors
-(grammar/JSON, penalties) never draft.
+For greedy rows: **spec on == spec off, and a row alone == the same row in any batch or join
+order**, with drafts all accepted or all rejected, and with the thinking budget's forced tokens
+(`tests/unit/test_round_driver.py` on a random 4-bit Qwen3.5; `scripts/research/
+sweep_round_driver.py` on a real checkpoint). Sampled rows draw with their own seeded key and never
+draft; rows with logits processors (grammar / JSON, penalties) or logprobs never draft.
 
-## Drafting: cost-aware, per row, every step
+## Drafting: the MTP head for every greedy row, cost-aware depth
 
-Each row keeps its MTP head's KV current every step (the head runs on the kept positions'
-hidden states and next tokens: one extra decoder layer per committed token), so any row can
-start drafting at any step — no "enter speculation with missing history".
+Each draftable row keeps its MTP head's KV current every step: the head absorbs every committed
+position with the *target's* hidden state (prompt chunks as they prefill, then each step's kept
+window), so the head's cache is the same whether or not the row drafted, and any row can start
+drafting at any step. Chain entries from drafting are temporary and trimmed before the next absorb.
 
-Draft lengths come from TensorFold's allocation rule (`engine/allocate.py`, MIT): each row's
-`j`-th draft lands with probability `prod(acceptance rate at depth <= j)` (per-row per-depth
-EMA), and rows are granted drafts greedily by marginal expected tokens while
-`expected tokens / (forward ms(rows) + overhead)` improves. `forward ms(rows)` is measured
-online by total packed rows. Alone, a row drafts deep; at 8 rows, drafts stop when a wider
-forward costs more than it lands — no fixed row-count threshold.
+Draft depth per row comes from TensorFold's allocation rule (`round_driver/allocate.py`, MIT): the
+`j`-th draft lands with probability `prod(per-depth acceptance EMA)`, rows get drafts greedily by
+marginal expected tokens, and the step keeps the allocation that maximizes expected committed
+tokens per `(forward ms at that many packed rows + chain ms x deepest chain)`, both measured online.
+Alone, a row drafts as deep as it pays; at 8 rows, drafts stop where a wider forward costs more than
+it lands — no row-count thresholds.
 
-## Scheduling
+## Not yet (stage 2)
 
-Admit → prefill chunks under a token budget (small while rows decode, large when none do) →
-decode rows every step (never starved) → commit, stop checks, MTP head update → emit tokens.
-Cancellation and abandonment are checked between steps.
-
-## Not yet (stage 2+)
-
-- APC prefix reuse and checkpoints, images / mRoPE prompts, thinking budgets, int8 KV, MoE:
-  such requests keep the existing runner path until moved.
-- DFlash2 drafting (block drafts need the target's layer taps; same allocation).
+- Batched mixers: decode rows' attention and GDN run one call per row per layer; one launch per
+  layer for all rows needs slot-buffer caches (the ragged KV cache's layout for rows' KV and GDN
+  state) — the main per-row overhead.
+- APC prefix reuse and checkpoints, image / audio prompts (mRoPE), int8 KV, MoE: those requests stay
+  on the upstream path.
+- DFlash2 drafting (block drafts from the target's layer taps; same allocation).
 - Tree drafts.

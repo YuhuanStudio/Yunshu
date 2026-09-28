@@ -26,7 +26,10 @@ The exact source commit and our intended local changes for every vendored file a
 (from `src/tensorfold/kernels/`) are copied from https://github.com/ashhart/TensorFold at commit
 `34bae79ac97da6c3ab3fe10159cf49633ce8112a`. Only intra-package imports were changed. Yunshu calls
 their integer-code tensor-unit matmul from `python/yunshu_engine/kernels/int_code_linear.py`
-(the default for 5/6/8-bit projections when packed). TensorFold's own notices credit MLX (MIT) for code it derives.
+(the default for 5/6/8-bit projections when packed) and from `python/yunshu_engine/kernels/lane_linear.py`
+(every projection under the round driver). `python/yunshu_engine/round_driver/allocate.py` adapts the
+draft-allocation rule of TensorFold's `src/tensorfold/engine/allocate.py` (same commit).
+TensorFold's own notices credit MLX (MIT) for code it derives.
 
 ```
 MIT License
