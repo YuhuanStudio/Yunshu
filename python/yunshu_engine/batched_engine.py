@@ -2548,31 +2548,24 @@ class BatchedEngine:
         return None
 
     def _should_use_engine_loop(self, use_engine_loop: bool | None) -> bool:
-        """Determine whether to route through EngineCore continuous batching.
+        """Route through EngineCore continuous batching or the fast path.
 
-        Auto-detects: if EngineCore has active requests, prefer the batch
-        path for better throughput under concurrency. Single-request fast
-        path is preferred for latency when no other requests are pending.
+        The choice is configuration, never load: ``YUNSHU_ENGINE_LOOP=1`` (or an
+        explicit per-call ``use_engine_loop``) selects the loop; otherwise every
+        request takes the single-request fast path. (It used to switch to the
+        loop whenever EngineCore had active requests, so numerics and available
+        features depended on timing.)
         """
-        if use_engine_loop is not None:
-            return use_engine_loop
-        # If a fast-path request is already in-flight, do NOT route to the
-        # engine loop — the BatchGenerator shares the model + generation_stream
-        # with the fast path on the single max_workers=1 MLX executor, and
+        # Safety, not a heuristic: the BatchGenerator shares the model and
+        # generation_stream with the fast path on the single MLX executor, and
         # overlapping insert()/next() with a fast-path generate_step corrupts
-        # BatchGenerator._currently_processing vs _prompt_batch (IndexError in
-        # mlx_lm.generate._next). This guard must run BEFORE the forced-mode
-        # check so YUNSHU_ENGINE_LOOP=1 cannot bypass it.
+        # BatchGenerator state (IndexError in mlx_lm.generate._next). While a
+        # fast-path request runs, nothing may enter the loop.
         if getattr(self, "_active_fast_path_count", 0) > 0:
             return False
-        # Forced continuous-batching mode (YUNSHU_ENGINE_LOOP=1): route to the
-        # engine loop whenever no fast-path request occupies the executor.
-        if getattr(self, "_engine_loop_default", False):
-            return True
-        # Auto-detect: switch to batch path when concurrency is detected
-        return bool(
-            self._engine_core is not None and self._engine_core.has_active_requests
-        )
+        if use_engine_loop is not None:
+            return use_engine_loop
+        return bool(getattr(self, "_engine_loop_default", False))
 
     # ── Non-generative tasks: embeddings, pooling ────────────────────────────
 
