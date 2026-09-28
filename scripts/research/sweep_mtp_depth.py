@@ -5,6 +5,7 @@ cold. Reports decode tok/s, first-token latency and token parity against AR.
 
     HF_HUB_OFFLINE=1 .venv/bin/python scripts/research/sweep_mtp_depth.py MODEL_DIR [sizes...] \
         [--yunshu-kernels=exact] [--invariant [--invariant-packed]] [--ragged-lane] [--context=N] [--tasks=code,prose,json_like]
+        [--dflash=DRAFTER_DIR]   # DFlash drafter instead of the MTP head; sizes are block ceilings
 """
 
 import json
@@ -144,7 +145,12 @@ _dflash = next(
 if _dflash:
     from mlx_vlm.speculative.drafters import load_drafter  # noqa: E402
 
+    from yunshu_engine.dflash_context import install as install_dflash  # noqa: E402
+
     drafter, draft_kind = load_drafter(_dflash, kind="dflash")
+    # As served: per-row prefill with capture, the shared verify head, and
+    # the drafter's context window (python/yunshu_engine/dflash_context.py).
+    install_dflash(model.language_model)
 else:
     drafter, draft_kind = _load_drafter_in_memory(model_dir), "mtp"
 print(

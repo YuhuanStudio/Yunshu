@@ -1383,6 +1383,11 @@ class VLMEngine:
 
             drafter, draft_kind = load_drafter(external)
             validate_drafter_compatibility(self._model, drafter, draft_kind)
+            if draft_kind == "dflash":
+                # Project only the context window the drafter attends to.
+                from .dflash_context import install as install_dflash_context
+
+                install_dflash_context(self._model.language_model)
         if spec_family and drafter is None and settings.get_bool("YUNSHU_MTP"):
             from mlx_vlm.speculative.drafters import validate_drafter_compatibility
 
@@ -1408,8 +1413,9 @@ class VLMEngine:
             # block 3 and 83.8/59.9/66.7 for the non-exact fast verify, with
             # parity on every task
             # (docs/research/runs/2026-09-28-matrix/invariant-packed-mtp-sweep.jsonl).
-            # DFlash keeps the exact kernels until measured with invariance.
-            invariant = draft_kind != "dflash" and not row_exact
+            # DFlash verifies through the same target forward, so it gets the
+            # same guarantee.
+            invariant = not row_exact
             if invariant:
                 from .kernels.batch_invariant import install as install_invariant
                 from .kernels.batch_invariant import set_active
@@ -1427,11 +1433,16 @@ class VLMEngine:
                 from .kernels.verify_select import install as install_streamed5
 
                 kernels["streamed5"] = install_streamed5()
-            # Invariant kernels cost little per extra verify row and peak at 6;
-            # exact kernels peak at 3 (MTP) / 4 (DFlash2): at 5 rows a cycle
-            # jumps to ~108 ms.
+            # Invariant kernels cost little per extra verify row and peak at 6
+            # for MTP; exact kernels peak at 3: at 5 rows a cycle jumps to
+            # ~108 ms. A DFlash drafter proposes a whole block in one forward
+            # and upstream adapts the depth to acceptance under this ceiling,
+            # so the ceiling is the block it was trained on.
             if block is None:
-                block = 6 if invariant else (4 if draft_kind == "dflash" else 3)
+                if draft_kind == "dflash":
+                    block = int(getattr(drafter.config, "block_size", 0)) or None
+                else:
+                    block = 6 if invariant else 3
         runner = VLMBatchRunner(
             self._model,
             self._processor,

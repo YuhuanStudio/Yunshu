@@ -161,8 +161,8 @@ _add("YUNSHU_VLM_INSECURE_SSL", "bool", False, "Retry image downloads without TL
 
 # ── speculative decoding ───────────────────────────────────────────────
 _add("YUNSHU_MTP", "bool", True, "Qwen3.5-family VLMs: draft with the checkpoint's MTP head (batch-invariant, spec on == spec off).", "speculative")
-_add("YUNSHU_VLM_DRAFT", "path", None, "Qwen3.5-family VLMs: external DFlash drafter directory; replaces the MTP draft.", "speculative")
-_add("YUNSHU_MTP_BLOCK_SIZE", "int", None, "Draft block size. Unset: 6 for MTP, 4 for DFlash.", "speculative", minimum=2)
+_add("YUNSHU_VLM_DRAFT", "path", None, "Qwen3.5-family VLMs: external DFlash drafter directory; replaces the MTP draft (batch-invariant verify, spec on == spec off).", "speculative")
+_add("YUNSHU_MTP_BLOCK_SIZE", "int", None, "Draft block size (DFlash: the ceiling its acceptance-driven depth stays under). Unset: 6 for MTP, the drafter's trained block for DFlash.", "speculative", minimum=2)
 _add("YUNSHU_NGRAM_DEFAULT", "bool", False, "Text models: lossless n-gram speculation on greedy requests by default (per-request spec_decode also enables it). Wins on repetitive output.", "speculative")
 _add("YUNSHU_SPEC_PROPOSER", "enum", "ngram", "Text models: speculative proposer family for n-gram speculation.", "speculative", choices=("ngram", "suffix"))
 _add("YUNSHU_GEMMA4_ASSISTANT", "path", None, "Text Gemma-4 models: assistant drafter directory (KV-shared speculative drafter).", "speculative")
