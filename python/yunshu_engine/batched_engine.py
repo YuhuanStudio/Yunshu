@@ -1126,7 +1126,7 @@ class BatchedEngine:
 
         # KV cache quantization config (mlx-lm pattern: to_quantized — group-wise
         # affine along head_dim for BOTH keys and values). Enable via
-        # YUNSHU_KV_QUANT_BITS=2, 3, 4, or 8 (default 'auto', see
+        # YUNSHU_KV_QUANT_BITS=2, 3, 4, 8 or 'auto' (default 'off': lossy, so opt-in; see
         # _effective_kv_quant_bits). NOTE: this is mlx-lm's group quant,
         # NOT KIVI's per-channel-key / per-token-value scheme — mx.quantize is
         # last-axis only, so KIVI's per-channel key quant would need a forked
@@ -1840,6 +1840,9 @@ class BatchedEngine:
 
         Priority: env var > model settings > auto_tuner recommendation.
         """
+        # Lossy: only when the user opted into automatic KV quantization.
+        if not getattr(self, "_kv_quant_auto", False):
+            return
         # Only apply if KV quantization isn't already explicitly configured
         if self._kv_quant_bits is not None:
             return  # Already configured via env var or model settings

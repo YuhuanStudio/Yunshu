@@ -110,7 +110,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_SSD_CACHE` | bool | off | Text engine: persist prefix KV to SSD. |
 | `YUNSHU_SSD_CACHE_DIR` | path | ~/.cache/yunshu/kv-ssd | Text engine: SSD prefix-cache directory. |
 | `YUNSHU_SSD_CACHE_MAX_GB` | float | 10.0 | Text engine: SSD prefix-cache size cap in GiB. |
-| `YUNSHU_KV_QUANT_BITS` | `auto` \| `off` \| `2` \| `3` \| `4` \| `8` | auto | Text engine KV cache quantization: 'auto' (8-bit once the KV cache would exceed ~2 GiB), 'off', or 2/3/4/8 bits always. |
+| `YUNSHU_KV_QUANT_BITS` | `auto` \| `off` \| `2` \| `3` \| `4` \| `8` | off | Text engine KV cache quantization (lossy; memory vs quality): 'off' (lossless), 'auto' (8-bit once the KV cache would exceed ~2 GiB), or 2/3/4/8 bits always. |
 
 ### vlm-runner
 
