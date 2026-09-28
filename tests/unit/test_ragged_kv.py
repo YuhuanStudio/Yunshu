@@ -339,3 +339,87 @@ def test_convert_batch_int8():
     assert convert_batch(caches, "int8") == 1
     assert isinstance(caches[0], RaggedKVCache) and caches[0].quantized
     assert caches[0].lengths == [3, 5]
+
+
+# --- kernel variants: key-parallel (default, D=256) vs per-head ---------------
+
+
+def _rand_kv(lengths, T, seed):
+    mx.random.seed(seed)
+    cap = -(-max(lengths) // 256) * 256 + 256
+    B = len(lengths)
+    k = mx.random.normal((B, HKV, cap, D)).astype(mx.bfloat16)
+    v = mx.random.normal((B, HKV, cap, D)).astype(mx.bfloat16)
+    q = mx.random.normal((B, H, T, D)).astype(mx.bfloat16)
+    return q, k, v
+
+
+def _attn(q, k, v, lengths, q8, **kw):
+    if q8:
+        kq, ks = _q8(k)
+        vq, vs = _q8(v)
+        kw.setdefault("max_length", None)
+        return ragged_decode_attention(
+            q, kq, vq, mx.array(lengths), D**-0.5, k_scales=ks, v_scales=vs, **kw
+        )
+    return ragged_decode_attention(q, k, v, mx.array(lengths), D**-0.5, **kw)
+
+
+@pytest.mark.parametrize("q8", [False, True])
+@pytest.mark.parametrize("T", [1, 4, 8])
+def test_variants_match_reference_and_each_other(T, q8):
+    """Chunk-boundary lengths (512, 513, 1024) and a short row; the key-parallel
+    kernel (dense grid and work-list launch) and the per-head kernel agree
+    with stock SDPA and with each other."""
+    lengths = [1030, 37, 512, 513, 1024]
+    q, k, v = _rand_kv(lengths, T, 40 + T)
+    ref = _ref(q, k, v, lengths, T).astype(mx.float32)
+    outs = {
+        "per_head": _attn(q, k, v, lengths, q8, impl="per_head"),
+        "key_parallel": _attn(q, k, v, lengths, q8, impl="key_parallel"),
+        "work_list": _attn(q, k, v, lengths, q8, row_lengths=lengths),
+    }
+    for name, out in outs.items():
+        err = mx.max(mx.abs(out.astype(mx.float32) - ref)).item()
+        assert err < (0.04 if q8 else 4e-3), (name, err)
+    # the work-list launch computes the same chunks: same bits
+    assert mx.array_equal(outs["key_parallel"], outs["work_list"])
+
+
+@pytest.mark.parametrize("q8", [False, True])
+@pytest.mark.parametrize("T", [1, 3, 8])
+def test_key_parallel_row_bits_independent_of_batch(T, q8):
+    """A row's output bits do not depend on its batch neighbours, the grid
+    size (``max_length``) or the launch mode — the property speculative verify
+    (T <= 8) vs plain decode relies on."""
+    lengths = [2049, 700, 37, 512]
+    q, k, v = _rand_kv(lengths, T, 60 + T)
+    full = _attn(q, k, v, lengths, q8, row_lengths=lengths)
+    dense = _attn(q, k, v, lengths, q8, max_length=8192)
+    assert mx.array_equal(full, dense)
+    for b, n in enumerate(lengths):
+        sl = slice(b, b + 1)
+        alone = _attn(q[sl], k[sl], v[sl], [n], q8, row_lengths=[n])
+        assert mx.array_equal(full[sl], alone), b
+
+
+def test_other_head_dim_falls_back_to_per_head():
+    mx.random.seed(7)
+    d = 128
+    k = mx.random.normal((2, HKV, 512, d)).astype(mx.bfloat16)
+    v = mx.random.normal((2, HKV, 512, d)).astype(mx.bfloat16)
+    q = mx.random.normal((2, H, 1, d)).astype(mx.bfloat16)
+    lengths = [300, 40]
+    out = ragged_decode_attention(
+        q, k, v, mx.array(lengths), d**-0.5, row_lengths=lengths
+    )
+    for b, n in enumerate(lengths):
+        ref = mx.fast.scaled_dot_product_attention(
+            q[b : b + 1], k[b : b + 1, :, :n], v[b : b + 1, :, :n], scale=d**-0.5
+        )
+        err = mx.max(mx.abs(out[b : b + 1].astype(mx.float32) - ref.astype(mx.float32)))
+        assert err.item() < 4e-3
+    with pytest.raises(ValueError):
+        ragged_decode_attention(
+            q, k, v, mx.array(lengths), d**-0.5, impl="key_parallel"
+        )

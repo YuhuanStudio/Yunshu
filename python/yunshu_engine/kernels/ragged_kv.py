@@ -194,6 +194,7 @@ class RaggedKVCache:
             max_length=self._idx,
             k_scales=self.k_scales,
             v_scales=self.v_scales,
+            row_lengths=self.lengths,
         )
 
     # ── batch ops used by upstream GenerationBatch ───────────────────────
