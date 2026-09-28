@@ -4293,11 +4293,19 @@ class VLMEngine:
                 "yes",
             )
             kernels = apply_verify_kernels(fast=fast)
-            if not fast and os.environ.get(
-                "YUNSHU_VLM_INVARIANT", "0"
-            ).strip().lower() in ("1", "true", "yes"):
-                # Splash-style lossless: decode and verify share row-invariant
-                # kernels, so speculative output == this engine's plain decode.
+            # Splash-style lossless decode: decode and verify share row-invariant
+            # kernels, so speculative output == this engine's plain decode.
+            # Default for the MTP draft: uncontended on Qwen3.8-27B (M5 Max),
+            # invariant + NAX-packed at block 6 decodes code/prose/json at
+            # 88.6/59.9/67.3 tok/s vs 57-67/50-53/58-62 for the exact kernels at
+            # block 3, with parity on every task
+            # (docs/research/runs/2026-09-28-matrix/invariant-packed-mtp-sweep.jsonl).
+            # Not yet measured with DFlash, so that stays opt-in.
+            inv_env = os.environ.get("YUNSHU_VLM_INVARIANT", "").strip().lower()
+            invariant = not fast and (
+                inv_env in ("1", "true", "yes") if inv_env else draft_kind != "dflash"
+            )
+            if invariant:
                 from .kernels.batch_invariant import install as install_invariant
                 from .kernels.omlx import is_nax_available
 
@@ -4307,18 +4315,20 @@ class VLMEngine:
                     packed=is_nax_available()
                     and os.environ.get("YUNSHU_VLM_INVARIANT_PACKED", "1") != "0",
                 )
-            # Exact: 5-bit layers use the fixed streamed kernel for >= 5 verify rows.
-            from .kernels.verify_select import install as install_streamed5
+            else:
+                # Exact: 5-bit layers use the fixed streamed kernel for >= 5 verify rows.
+                from .kernels.verify_select import install as install_streamed5
 
-            kernels["streamed5"] = install_streamed5()
+                kernels["streamed5"] = install_streamed5()
             # Measured with exact kernels: MTP block 3 ~= 4 on average (code
             # 65/67, prose 53/51, json 62/60 tok/s) and block 5 jumps to ~108 ms
-            # per cycle; thinking output behaves like prose, so MTP defaults to
-            # 3. DFlash2 peaks at 4 (exact) / 6 (fast); MTP fast at 5-6.
+            # per cycle, so exact MTP defaults to 3. The invariant kernels cost
+            # less per extra verify row, so they peak at 6 (sweep above).
+            # DFlash2 peaks at 4 (exact) / 6 (fast); MTP fast at 5-6.
             if draft_kind == "dflash":
                 block = block or ("6" if fast else "4")
             else:
-                block = block or ("6" if fast else "3")
+                block = block or ("6" if fast or invariant else "3")
         if drafter is not None and os.environ.get(
             "YUNSHU_MTP_ADAPTIVE", "0"
         ).strip().lower() in ("1", "true", "yes"):

@@ -78,10 +78,10 @@ Qwen3.8-27B on M5 Max.
 | `YUNSHU_VLM_APC_DISK_GB` | `64` | Size cap of the SSD tier. |
 | `YUNSHU_MTP` | on | Use the checkpoint's MTP head as the draft (when present). `0` = plain decode. |
 | `YUNSHU_VLM_DRAFT` | _(unset)_ | Path to an external DFlash drafter (e.g. `Qwen3.8-27B-DFlash2`); replaces the MTP draft. |
-| `YUNSHU_MTP_BLOCK_SIZE` | `3` (MTP) / `4` (DFlash); `6` with fast verify | Draft block size. |
+| `YUNSHU_MTP_BLOCK_SIZE` | `6` (MTP, invariant) / `4` (DFlash); `3` for MTP with `YUNSHU_VLM_INVARIANT=0` | Draft block size. |
 | `YUNSHU_MTP_VERIFY_KERNELS` | on | Exact verify kernels (GatedDeltaNet / attention / 5-bit streamed). Output with speculation stays token-identical to without. |
 | `YUNSHU_MTP_FAST_VERIFY` | off | Faster, **non-exact** verify matmuls (oMLX `verify_qmm`). Measurably faster decode; greedy output can differ from speculation-off. |
-| `YUNSHU_VLM_INVARIANT` | off | Experimental batch-invariant decode: every decode and verify matmul goes through one row-invariant kernel (Splash-style lossless). Currently slower. `YUNSHU_VLM_INVARIANT_PACKED` (default on) uses the M5 tensor-unit packed kernel where available. |
+| `YUNSHU_VLM_INVARIANT` | on for MTP, off for DFlash | Batch-invariant decode: every decode and verify matmul goes through one row-invariant kernel, so speculative output is token-identical to this engine's plain decode (Splash's definition of lossless; it can differ slightly from stock MLX single-row decode). Lets MTP run block 6. `YUNSHU_VLM_INVARIANT_PACKED` (default on) uses the M5 tensor-unit packed kernel where available. |
 | `YUNSHU_MTP_ADAPTIVE` | off | Experimental adaptive draft depth (between 2 and `YUNSHU_MTP_MAX_BLOCK`, default 6). No measured gain yet. |
 
 ## Embeddings
