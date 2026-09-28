@@ -228,6 +228,7 @@ class VLMBatchRunner:
         self.stop_tokens: set[int] | None = None
         # Experimental per-row-length KV for the shared batch (YUNSHU_RAGGED_KV).
         self.ragged_kv = False
+        self._ragged_logged = False
 
     def prepare_media(
         self,
@@ -570,7 +571,14 @@ class VLMBatchRunner:
             if batch is not None and len(batch) > 0:
                 from .kernels.ragged_kv import convert_batch
 
-                convert_batch(batch.prompt_cache)
+                converted = convert_batch(batch.prompt_cache)
+                if converted and not self._ragged_logged:
+                    # Engagement proof in the server log (a no-op path once
+                    # cost a full MMLU run to notice).
+                    self._ragged_logged = True
+                    logger.info(
+                        "Ragged KV engaged: %d attention caches converted", converted
+                    )
         for progress in prompt_progress or []:
             job = group.jobs.get(getattr(progress, "uid", None))
             if job is not None:
