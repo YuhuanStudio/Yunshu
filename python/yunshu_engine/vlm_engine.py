@@ -1613,6 +1613,9 @@ class VLMEngine:
         if self._model is None:
             raise RuntimeError("Engine not started")
         tpl_extra = self._template_effort_extra(kwargs)
+        # A timeout below must be able to stop the generation it abandons.
+        if kwargs.get("cancel_event") is None:
+            kwargs["cancel_event"] = threading.Event()
 
         t0 = time.monotonic()
 
@@ -1681,9 +1684,6 @@ class VLMEngine:
             _runner_extras: dict = {}
 
             def _generate_sync():
-                # Requests serialize on the single MLX thread, so the template
-                # helpers read this request's extras from the instance.
-                self._template_extra = tpl_extra
                 # NOTE: don't call mx.random.seed(seed) here — the actual
                 # sampling happens inside `with mx.stream(generation_stream)`
                 # in _generate_vlm_text / _generate_vlm_vision, which uses
@@ -1706,6 +1706,7 @@ class VLMEngine:
                         enable_thinking=_enable_thinking,
                         num_audios=0,
                         max_images=len(image_paths),
+                        template_extra=tpl_extra,
                     )
                     ids, pkw, salt = self._batch_runner.prepare_images(
                         prompt, image_paths
@@ -1771,7 +1772,7 @@ class VLMEngine:
                     )
 
                 input_ids = self._tokenize_with_cache(
-                    messages, enable_thinking=_enable_thinking
+                    messages, enable_thinking=_enable_thinking, template_extra=tpl_extra
                 )
 
                 if self._is_vlm:
@@ -1976,6 +1977,7 @@ class VLMEngine:
                 ) = _out
             except TimeoutError:
                 self._num_requests_processed += 1
+                kwargs["cancel_event"].set()
                 logger.warning(
                     f"VLM non-streaming generate timed out after {_timeout_seconds}s"
                 )
@@ -1998,7 +2000,10 @@ class VLMEngine:
 
             # Use VLM template for vision path (includes image placeholders),
             # plain _format_prompt for text-only path
-            if (image_paths and self._has_vision and self._is_vlm) or (
+            if _runner_extras.get("prompt_tokens"):
+                # The batch runner knows the exact prompt length (incl. image tokens).
+                prompt_tokens = int(_runner_extras["prompt_tokens"])
+            elif (image_paths and self._has_vision and self._is_vlm) or (
                 audio_paths and self._is_vlm
             ):
                 # pass the SAME max_images/num_audios as the generation call
@@ -2010,6 +2015,7 @@ class VLMEngine:
                     enable_thinking=_enable_thinking,
                     num_audios=len(audio_paths) if audio_paths else 0,
                     max_images=len(image_paths) if image_paths else None,
+                    template_extra=tpl_extra,
                 )
                 prompt_tokens = self._count_text_tokens(_vlm_prompt)
                 # Add per-image token estimate so prompt_tokens reflects the
@@ -2017,11 +2023,10 @@ class VLMEngine:
                 if image_paths:
                     prompt_tokens += self._estimate_image_tokens() * len(image_paths)
             else:
-                prompt_text = self._format_prompt(messages)
+                prompt_text = self._format_prompt(
+                    messages, enable_thinking=_enable_thinking, template_extra=tpl_extra
+                )
                 prompt_tokens = self._count_text_tokens(prompt_text)
-            # The batch runner knows the exact prompt length (incl. image tokens).
-            if _runner_extras.get("prompt_tokens"):
-                prompt_tokens = int(_runner_extras["prompt_tokens"])
             # Determine correct finish_reason based on exit condition
             _finish_reason = "stop" if stop_hit or budget_hit else "length"
             # record ServerMetrics for VLM NON-streaming. Only
@@ -2219,7 +2224,6 @@ class VLMEngine:
 
         def _stream_sync():
             nonlocal _has_detokenizer
-            self._template_extra = tpl_extra
             # Initialize eagerly so the error handler can reference it
             # even if the exception fires before the point where it was
             # previously assigned inside the try block.
@@ -2245,6 +2249,7 @@ class VLMEngine:
                         enable_thinking=enable_thinking,
                         num_audios=0,
                         max_images=len(image_paths),
+                        template_extra=tpl_extra,
                     )
                     ids, pkw, salt = self._batch_runner.prepare_images(
                         prompt, image_paths
@@ -2309,7 +2314,7 @@ class VLMEngine:
                     return
 
                 input_ids = self._tokenize_with_cache(
-                    messages, enable_thinking=enable_thinking
+                    messages, enable_thinking=enable_thinking, template_extra=tpl_extra
                 )
 
                 if self._is_vlm:
@@ -4346,6 +4351,10 @@ class VLMEngine:
                     packed=is_nax_available()
                     and os.environ.get("YUNSHU_VLM_INVARIANT_PACKED", "1") != "0",
                 )
+                # The runner turns them on only while its speculative lane steps.
+                from .kernels.batch_invariant import set_active
+
+                set_active(False)
             else:
                 # Exact: 5-bit layers use the fixed streamed kernel for >= 5 verify rows.
                 from .kernels.verify_select import install as install_streamed5
@@ -5505,7 +5514,10 @@ class VLMEngine:
         return {"reasoning_effort": str(effort)}
 
     def _format_prompt(
-        self, messages: list[dict], enable_thinking: bool | None = None
+        self,
+        messages: list[dict],
+        enable_thinking: bool | None = None,
+        template_extra: dict | None = None,
     ) -> str:
         # this text-only-chat path (a VLM model serving a non-image chat
         # turn) was a stale clone missing three BatchedEngine fixes — role
@@ -5576,7 +5588,7 @@ class VLMEngine:
                     tpl_kwargs["add_generation_prompt"] = True
                 if enable_thinking is not None:
                     tpl_kwargs["enable_thinking"] = enable_thinking
-                tpl_kwargs.update(getattr(self, "_template_extra", None) or {})
+                tpl_kwargs.update(template_extra or {})
                 try:
                     text = self._tokenizer.apply_chat_template(clean, **tpl_kwargs)
                 except (TypeError, ValueError) as e:
@@ -5618,6 +5630,7 @@ class VLMEngine:
         self,
         messages: list[dict],
         enable_thinking: bool | None = None,
+        template_extra: dict | None = None,
     ) -> mx.array:
         """Format prompt and tokenize, using the text prompt cache to skip work.
 
@@ -5628,16 +5641,17 @@ class VLMEngine:
             messages,
             enable_thinking,
         )
-        extra = getattr(self, "_template_extra", None) or {}
-        if extra:
-            cache_key = f"{cache_key}|{json.dumps(extra, sort_keys=True)}"
+        if template_extra:
+            cache_key = f"{cache_key}|{json.dumps(template_extra, sort_keys=True)}"
 
         cached_ids = self._text_prompt_cache.get_token_ids(cache_key)
         if cached_ids is not None:
             logger.debug("VLM text prompt cache hit: %d tokens", len(cached_ids))
             return mx.array(cached_ids)
 
-        prompt_text = self._format_prompt(messages, enable_thinking=enable_thinking)
+        prompt_text = self._format_prompt(
+            messages, enable_thinking=enable_thinking, template_extra=template_extra
+        )
         # Avoid double-BOS: prompt_text came from apply_chat_template(tokenize=False),
         # which already injected the literal bos_token for BOS-prepending models
         # (Gemma-3-VL, Llama-3.2-Vision, Pixtral). A bare encode() defaults to
@@ -5665,6 +5679,7 @@ class VLMEngine:
         enable_thinking: bool | None = None,
         num_audios: int = 0,
         max_images: int | None = None,
+        template_extra: dict | None = None,
     ) -> str:
         """Apply VLM processor chat template with caching.
 
@@ -5686,7 +5701,7 @@ class VLMEngine:
             key_parts.append(f"audios={num_audios}")
         if max_images is not None:
             key_parts.append(f"max_images={max_images}")
-        extra = getattr(self, "_template_extra", None) or {}
+        extra = template_extra or {}
         if extra:
             key_parts.append(json.dumps(extra, sort_keys=True))
         cache_key = hashlib.blake2b(

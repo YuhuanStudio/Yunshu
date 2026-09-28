@@ -425,10 +425,19 @@ class VLMBatchRunner:
                 self._finish(group, uid, "cancel" if cancelled else None)
         if not group.jobs:
             return
-        if batch_invariant.is_installed():
-            # The invariant kernels are what make spec on == spec off; only
-            # the single-row speculative lane drafts.
-            batch_invariant.set_active(group.spec)
+        # The invariant kernels are what make spec on == spec off; they are on
+        # only while the single-row speculative lane steps (and off for every
+        # other user of the model, including the shared batch).
+        invariant = group.spec and batch_invariant.is_installed()
+        if invariant:
+            batch_invariant.set_active(True)
+        try:
+            self._step_generator(group)
+        finally:
+            if invariant:
+                batch_invariant.set_active(False)
+
+    def _step_generator(self, group: _Group) -> None:
         if group.spec:
             # Upstream's speculative verify reads mRoPE deltas from model
             # state, which the shared batch's steps overwrite.
@@ -582,9 +591,16 @@ class RowSampler:
         from mlx_lm.sample_utils import apply_min_p, apply_top_k, apply_top_p
 
         tokens = mx.argmax(logprobs, axis=-1)
-        uids = _STEP_UIDS
-        if not self._rows or uids is None or len(uids) != logprobs.shape[0]:
+        if not self._rows:
             return tokens
+        uids = _STEP_UIDS
+        if uids is None or len(uids) != logprobs.shape[0]:
+            # Never fall back to greedy for sampled requests silently: this
+            # means upstream changed how it calls the sampler.
+            raise RuntimeError(
+                f"RowSampler cannot map {logprobs.shape[0]} rows to requests "
+                f"(step uids: {uids})"
+            )
         for i, uid in enumerate(uids):
             entry = self._rows.get(uid)
             if entry is None:
