@@ -4,8 +4,7 @@ Random weights at Qwen3.8-27B projection shapes; times one call at each row
 count (median of ``--iters``). Paths (``--paths``):
 
 - ``stock``: MLX ``QuantizedLinear`` (qmv / qmm)
-- ``packed``: our NAX ``PackedLinear`` (4-bit: oMLX kernels; 5-bit: the
-  dequantize-to-bf16 GEMM, ``YUNSHU_PACKED_5BIT=1``)
+- ``packed``: our NAX ``PackedLinear`` (4-bit only: oMLX kernels)
 - ``int``: TensorFold's integer-code lane matmul (5/6/8-bit, MLX layout),
   ``int_tiled`` the same on 32-column tiled codes (``YUNSHU_PACKED_5BIT=int``)
 
@@ -86,13 +85,9 @@ def main():
         for bits in a.bits:
             lin = make(K, N, bits)
             impls = {"stock": lin}
-            if "packed" in a.paths:
-                saved = pl.PACKED_BITS
-                pl.PACKED_BITS = (4, 5)
-                try:
-                    (impls["packed"],) = pl._pack([lin])
-                finally:
-                    pl.PACKED_BITS = saved
+            if bits == 4 and "packed" in a.paths:
+                (impls["packed"],) = pl._pack([lin])
+
             if bits != 4 and "int" in a.paths:
                 impls["int"] = IntCodeLinear(lin)
             if bits != 4 and "int_tiled" in a.paths:

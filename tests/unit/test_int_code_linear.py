@@ -95,8 +95,7 @@ def test_pack_layer_int_mode_serves_5bit_with_int_codes(monkeypatch):
     from yunshu_engine.kernels.int_code_linear import IntCodeLinear
     from yunshu_engine.kernels.omlx import qwen35_packed_linear as pl
 
-    monkeypatch.setattr(pl, "PACKED_BITS", (4,))
-    monkeypatch.setattr(pl, "INT_MODE", "int")
+    monkeypatch.setenv("YUNSHU_PACKED_5BIT", "int")
     mlp = SimpleNamespace(
         gate_proj=_linear(2048, 1024, 4, seed=7),
         up_proj=_linear(2048, 1024, 4, seed=8),
@@ -115,9 +114,9 @@ def test_int_mode_is_opt_in(monkeypatch):
     from yunshu_engine.kernels.omlx import qwen35_packed_linear as pl
 
     monkeypatch.delenv("YUNSHU_PACKED_5BIT", raising=False)
-    assert pl._int_mode_from_env() is None
-    for value, mode in (("1", None), ("int", "int"), ("int_tiled", "int_tiled")):
-        monkeypatch.setenv("YUNSHU_PACKED_5BIT", value)
-        assert pl._int_mode_from_env() == mode
-    monkeypatch.setenv("YUNSHU_PACKED_5BIT", "int")
-    assert pl._packed_bits_from_env() == (4,)
+    assert pl.int_mode() is None
+    for mode in ("int", "int_tiled"):
+        monkeypatch.setenv("YUNSHU_PACKED_5BIT", mode)
+        assert pl.int_mode() == mode
+    assert not pl.eligible(_linear(2048, 1024, 5))
+

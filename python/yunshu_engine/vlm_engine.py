@@ -44,8 +44,10 @@ from typing import Any
 
 import mlx.core as mx
 
+from . import settings
 from .request import RequestOutput
 from .types import EngineConfig
+
 
 logger = logging.getLogger(__name__)
 
@@ -197,10 +199,10 @@ def _VALIDATE_LOCAL_PATH(path: str) -> str:
     import os as _os
     from pathlib import Path as _Path
 
-    if _os.environ.get("YUNSHU_ALLOW_LOCAL_FILES", "").lower() in ("true", "1", "yes"):
+    if settings.get_bool("YUNSHU_ALLOW_LOCAL_FILES"):
         return path
 
-    media_dir = _os.environ.get("YUNSHU_MEDIA_DIR") or _os.path.join(
+    media_dir = settings.get("YUNSHU_MEDIA_DIR") or _os.path.join(
         _os.environ.get("TMPDIR", "/tmp"), "yunshu_media"
     )
     media_root = _Path(media_dir).resolve()
@@ -401,7 +403,7 @@ class VLMEngine:
         # template extras), plus _processor.apply_chat_template() output for
         # media prompts. Avoids re-templating identical prompts.
         self._text_prompt_cache = _VLMTextPromptCache(
-            max_entries=int(os.environ.get("YUNSHU_VLM_TEXT_CACHE_MAX", "256")),
+            max_entries=256,
         )
         # Memoized backbone serving capabilities (see model_backend.py).
         self._backend_caps: Any = None
@@ -686,7 +688,7 @@ class VLMEngine:
             for _f in _glob.glob(os.path.join(self._model_path, "*.safetensors")):
                 with contextlib.suppress(OSError):
                     _bytes += os.path.getsize(_f)
-            _thresh = int(os.environ.get("YUNSHU_VLM_LARGE_MODEL_GB", "10")) * 1024**3
+            _thresh = 10 * 1024**3
             self._mx_large_model = _bytes > _thresh
             logger.info(
                 "VLM model ~%.1fGB on disk, large=%s (clear buffer pool on idle %s)",
@@ -1279,21 +1281,21 @@ class VLMEngine:
     _SPEC_MODEL_TYPES = ("qwen3_5", "qwen3_6", "qwen3_5_moe")
 
     def _apc_disk_tier(self):
-        """Optional APC disk tier (``YUNSHU_VLM_APC_DISK_DIR``), off by default.
+        """Optional APC SSD tier (``YUNSHU_VLM_APC_DISK_DIR``), off by default.
 
         Holds evicted prefix checkpoints (incl. hybrid recurrent state) so a
         long document revisited after RAM eviction is read back instead of
         re-prefilled. Namespaced by model path; capped by
-        ``YUNSHU_VLM_APC_DISK_GB`` (default 64).
+        ``YUNSHU_VLM_APC_DISK_GB``.
         """
-        path = os.environ.get("YUNSHU_VLM_APC_DISK_DIR", "").strip()
+        path = settings.get("YUNSHU_VLM_APC_DISK_DIR")
         if not path:
             return None
         import hashlib
 
         from mlx_vlm.apc import DiskBlockStore
 
-        max_gb = float(os.environ.get("YUNSHU_VLM_APC_DISK_GB", "64"))
+        max_gb = settings.get("YUNSHU_VLM_APC_DISK_GB")
         namespace = hashlib.sha256(str(self._model_path).encode()).hexdigest()[:16]
         try:
             disk = DiskBlockStore(
@@ -1311,29 +1313,23 @@ class VLMEngine:
     def _build_batch_runner(self, model_path: str):
         """Build the runner that serves every request of this model.
 
-        APC is on by default with a bounded byte budget
-        (``YUNSHU_VLM_APC_MEMORY_GB``, default 8; ``YUNSHU_VLM_UPSTREAM_APC=0``
-        disables it) for every family whose cache has no sliding window.
-        Speculative decoding (checkpoint MTP head, or ``YUNSHU_VLM_DRAFT``) and
-        its verify / batch-invariant kernels are Qwen3.5-family only
-        (``_SPEC_MODEL_TYPES``); ``YUNSHU_MTP=0`` disables the MTP draft.
+        APC (prefix cache, ``YUNSHU_VLM_APC_MEMORY_GB``; 0 disables it) for every
+        family whose cache has no sliding window. Speculative decoding
+        (checkpoint MTP head, or ``YUNSHU_VLM_DRAFT``) and its verify kernels are
+        Qwen3.5-family only (``_SPEC_MODEL_TYPES``); ``YUNSHU_MTP=0`` disables the
+        MTP draft.
         """
         from .vlm_batch_runner import VLMBatchRunner
 
         spec_family = self._config.get("model_type") in self._SPEC_MODEL_TYPES
         lm = self._model.language_model
-        if self._apc_backend is None and os.environ.get(
-            "YUNSHU_VLM_UPSTREAM_APC", "1"
-        ).strip().lower() not in ("0", "false", "no"):
+        budget = settings.get("YUNSHU_VLM_APC_MEMORY_GB")
+        if self._apc_backend is None and budget > 0:
             from mlx_vlm.apc import APCManager, semantic_extra_hash
 
-            budget = float(os.environ.get("YUNSHU_VLM_APC_MEMORY_GB", "8"))
             # Sliding-window (rotating) caches cannot be checkpointed at a
             # prefix boundary, so those families decode without APC.
-            if (
-                budget > 0
-                and not self.backend_capabilities(lm).cache.has_sliding_window
-            ):
+            if not self.backend_capabilities(lm).cache.has_sliding_window:
                 self._apc_backend = APCManager(
                     num_blocks=512,
                     block_size=16,
@@ -1348,7 +1344,7 @@ class VLMEngine:
                 )
         drafter = None
         draft_kind = "mtp"
-        external = os.environ.get("YUNSHU_VLM_DRAFT", "").strip()
+        external = settings.get("YUNSHU_VLM_DRAFT")
         if spec_family and external:
             # External drafter directory, e.g. incoai/Qwen3.8-27B-DFlash2.
             from mlx_vlm.speculative.drafters import (
@@ -1358,16 +1354,7 @@ class VLMEngine:
 
             drafter, draft_kind = load_drafter(external)
             validate_drafter_compatibility(self._model, drafter, draft_kind)
-        if (
-            spec_family
-            and drafter is None
-            and os.environ.get("YUNSHU_MTP", "1").strip().lower()
-            not in (
-                "0",
-                "false",
-                "no",
-            )
-        ):
+        if spec_family and drafter is None and settings.get_bool("YUNSHU_MTP"):
             from mlx_vlm.speculative.drafters import validate_drafter_compatibility
 
             from .mlxvlm_mtp import _load_drafter_in_memory, is_mtp_capable
@@ -1375,83 +1362,47 @@ class VLMEngine:
             if is_mtp_capable(model_path):
                 drafter = _load_drafter_in_memory(model_path)
                 validate_drafter_compatibility(self._model, drafter, "mtp")
-        block = os.environ.get("YUNSHU_MTP_BLOCK_SIZE")
+        block = settings.get("YUNSHU_MTP_BLOCK_SIZE")
         kernels = None
-        if drafter is not None and os.environ.get(
-            "YUNSHU_MTP_VERIFY_KERNELS", "1"
-        ).strip().lower() not in ("0", "false", "no"):
-            # oMLX verify kernels: exact ones always; the faster non-exact
-            # matmuls only with YUNSHU_MTP_FAST_VERIFY=1.
+        if drafter is not None:
             from .kernels.omlx import apply as apply_verify_kernels
 
-            fast = os.environ.get("YUNSHU_MTP_FAST_VERIFY", "0").strip().lower() in (
-                "1",
-                "true",
-                "yes",
-            )
-            # Opt-in alternative to the invariant kernels (experimental, needs a
-            # GPU A/B): upstream oMLX row-exact verify keeps the stock decode path
-            # and computes each verify row with one-row decode arithmetic, so
-            # spec output equals stock serial decode.
-            row_exact = not fast and os.environ.get(
-                "YUNSHU_MTP_ROW_EXACT", "0"
-            ).strip().lower() in ("1", "true", "yes")
-            kernels = apply_verify_kernels(fast=fast, row_exact=row_exact)
-            # Splash-style lossless decode: decode and verify share row-invariant
-            # kernels, so speculative output == this engine's plain decode.
-            # Default for the MTP draft: uncontended on Qwen3.8-27B (M5 Max),
-            # invariant + NAX-packed at block 6 decodes code/prose/json at
-            # 88.6/59.9/67.3 tok/s vs 57-67/50-53/58-62 for the exact kernels at
-            # block 3, with parity on every task
+            # Experimental alternative (YUNSHU_MTP_ROW_EXACT): upstream oMLX
+            # row-exact verify keeps the stock decode path and computes each
+            # verify row with one-row decode arithmetic.
+            row_exact = settings.get_bool("YUNSHU_MTP_ROW_EXACT")
+            kernels = apply_verify_kernels(row_exact=row_exact)
+            # Lossless MTP decode: decode and verify share row-invariant kernels,
+            # so speculative output == this engine's plain decode. On Qwen3.8-27B
+            # (M5 Max) invariant + NAX-packed at block 6 decodes code/prose/json
+            # at 88.6/59.9/67.3 tok/s vs 57-67/50-53/58-62 for exact kernels at
+            # block 3 and 83.8/59.9/66.7 for the non-exact fast verify, with
+            # parity on every task
             # (docs/research/runs/2026-09-28-matrix/invariant-packed-mtp-sweep.jsonl).
-            # Not yet measured with DFlash, so that stays opt-in.
-            inv_env = os.environ.get("YUNSHU_VLM_INVARIANT", "").strip().lower()
-            invariant = (
-                not fast
-                and not row_exact
-                and (
-                    inv_env in ("1", "true", "yes")
-                    if inv_env
-                    else draft_kind != "dflash"
-                )
-            )
+            # DFlash keeps the exact kernels until measured with invariance.
+            invariant = draft_kind != "dflash" and not row_exact
             if invariant:
                 from .kernels.batch_invariant import install as install_invariant
+                from .kernels.batch_invariant import set_active
                 from .kernels.omlx import is_nax_available
 
                 kernels["invariant"] = install_invariant(
                     self._model.language_model,
                     model=self._model,
-                    packed=is_nax_available()
-                    and os.environ.get("YUNSHU_VLM_INVARIANT_PACKED", "1") != "0",
+                    packed=is_nax_available(),
                 )
                 # The runner turns them on only while its speculative lane steps.
-                from .kernels.batch_invariant import set_active
-
                 set_active(False)
             else:
                 # Exact: 5-bit layers use the fixed streamed kernel for >= 5 verify rows.
                 from .kernels.verify_select import install as install_streamed5
 
                 kernels["streamed5"] = install_streamed5()
-            # Measured with exact kernels: MTP block 3 ~= 4 on average (code
-            # 65/67, prose 53/51, json 62/60 tok/s) and block 5 jumps to ~108 ms
-            # per cycle, so exact MTP defaults to 3. The invariant kernels cost
-            # less per extra verify row, so they peak at 6 (sweep above).
-            # DFlash2 peaks at 4 (exact) / 6 (fast); MTP fast at 5-6.
-            if draft_kind == "dflash":
-                block = block or ("6" if fast else "4")
-            else:
-                block = block or ("6" if fast or invariant else "3")
-        if drafter is not None and os.environ.get(
-            "YUNSHU_MTP_ADAPTIVE", "0"
-        ).strip().lower() in ("1", "true", "yes"):
-            from .mtp_depth import install as install_adaptive_depth
-
-            # The requested block becomes the start depth; the controller
-            # moves between 2 and YUNSHU_MTP_MAX_BLOCK (default 6).
-            install_adaptive_depth(start=int(block or 4))
-            block = os.environ.get("YUNSHU_MTP_MAX_BLOCK", "6")
+            # Invariant kernels cost little per extra verify row and peak at 6;
+            # exact kernels peak at 3 (MTP) / 4 (DFlash2): at 5 rows a cycle
+            # jumps to ~108 ms.
+            if block is None:
+                block = 6 if invariant else (4 if draft_kind == "dflash" else 3)
         runner = VLMBatchRunner(
             self._model,
             self._processor,
@@ -1466,27 +1417,20 @@ class VLMEngine:
         runner.clear_on_idle = bool(getattr(self, "_mx_large_model", False))
         runner.stop_tokens = set(self._get_eos_ids())
         runner.inflight = lambda: self._active_count
-        if os.environ.get("YUNSHU_RAGGED_KV", "0").strip().lower() in (
-            "1",
-            "true",
-            "yes",
-        ):
+        if settings.get_bool("YUNSHU_RAGGED_KV"):
             # Experimental: per-row-length KV + ragged decode attention for the
             # shared batch (qwen3_5 attention only).
             from .kernels.ragged_kv import install as install_ragged_kv
 
             runner.ragged_kv = install_ragged_kv()
-        kv_bits = os.environ.get("YUNSHU_VLM_KV_BITS", "").strip()
+        kv_bits = settings.get("YUNSHU_VLM_KV_BITS")
         if kv_bits:
             # Experimental: quantized attention KV (halves KV bandwidth at long
-            # context). Not the default until measured for accuracy, joins and
-            # the speculative lane.
+            # context). Fractional bits select upstream TurboQuant.
+            bits = float(kv_bits)
             runner.kv_quant = {
-                "kv_bits": float(kv_bits) if "." in kv_bits else int(kv_bits),
-                "kv_quant_scheme": os.environ.get("YUNSHU_VLM_KV_SCHEME", "uniform"),
-                "quantized_kv_start": int(
-                    os.environ.get("YUNSHU_VLM_KV_QUANT_START", "5000")
-                ),
+                "kv_bits": int(bits) if bits.is_integer() else bits,
+                "kv_quant_scheme": "uniform" if bits.is_integer() else "turboquant",
             }
         logger.info(
             "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s",
@@ -2661,9 +2605,7 @@ class VLMEngine:
             # out-of-band from the model server. Check Content-Length up front AND count bytes
             # while streaming (a lying/absent header can't evade it). "size limit" in the
             # message lets the outer handler skip the insecure-SSL retry (no re-download).
-            _cap = int(
-                os.environ.get("YUNSHU_VLM_MAX_IMAGE_BYTES", str(25 * 1024 * 1024))
-            )
+            _cap = settings.get("YUNSHU_VLM_MAX_IMAGE_BYTES")
             with opener.open(req, timeout=30) as resp:
                 _clen = resp.headers.get("Content-Length")
                 if _clen is not None and str(_clen).isdigit() and int(_clen) > _cap:
@@ -2695,11 +2637,7 @@ class VLMEngine:
                 raise ValueError(str(e)) from e
             # Insecure SSL fallback is a MITM vector — only enable when the
             # operator explicitly opts in via YUNSHU_VLM_INSECURE_SSL=true.
-            _insecure_ok = os.environ.get("YUNSHU_VLM_INSECURE_SSL", "").lower() in (
-                "1",
-                "true",
-                "yes",
-            )
+            _insecure_ok = settings.get_bool("YUNSHU_VLM_INSECURE_SSL")
             if not _insecure_ok:
                 logger.warning(f"Failed to download image from {url}: {e}")
                 raise ValueError(f"Cannot download image: {e}") from e

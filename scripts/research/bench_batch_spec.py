@@ -7,8 +7,8 @@ the same kernels, before building a scheduler around either.
     python scripts/research/bench_batch_spec.py <model_dir> --batches 1 2 4 8 \
         --blocks 0 3 6 --kernels exact --output runs/batch-spec.jsonl
 
-``--kernels``: exact (Yunshu default verify kernels) | fast (non-exact verify
-qmm) | none (upstream). Block 0 = AR.
+``--kernels``: exact (Yunshu default verify kernels) | none (upstream).
+Block 0 = AR.
 """
 
 import argparse
@@ -54,7 +54,7 @@ def main():
     ap.add_argument("model_dir")
     ap.add_argument("--batches", type=int, nargs="*", default=[1, 2, 4, 8])
     ap.add_argument("--blocks", type=int, nargs="*", default=[0, 3, 6])
-    ap.add_argument("--kernels", default="exact", choices=["exact", "fast", "none"])
+    ap.add_argument("--kernels", default="exact", choices=["exact", "none"])
     ap.add_argument("--tokens", type=int, default=256)
     ap.add_argument("--pack", action="store_true", help="oMLX NAX packed projections")
     ap.add_argument(
@@ -68,7 +68,7 @@ def main():
     if a.kernels != "none":
         from yunshu_engine.kernels import omlx as yk
 
-        yk.apply(fast=a.kernels == "fast")
+        yk.apply()
         if a.kernels == "exact":
             from yunshu_engine.kernels.verify_select import install as install_streamed5
 

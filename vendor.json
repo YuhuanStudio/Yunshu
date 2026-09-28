@@ -54,7 +54,6 @@
       "license": "Apache-2.0",
       "local_changes": [
         "imports point at yunshu_engine.kernels.omlx",
-        "opt-in 5-bit repack + matvec/GEMM kernels (YUNSHU_PACKED_5BIT=1); 4-bit kernel sources unchanged",
         "YUNSHU_PACKED_5BIT=int|int_tiled: _pack_layer/warmup hand 5/6/8-bit layers to kernels/int_code_linear.IntCodeLinear"
       ]
     },

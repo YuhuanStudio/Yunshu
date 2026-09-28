@@ -17,7 +17,8 @@ forward MTP runs to check drafted tokens):
   call per row. Bit-exact.
 - ``verify_qmm`` (+ ``verify_linear`` routing): one-weight-pass quantized
   matmuls for 4-8 verify rows. Not bit-exact (tail-ULP differences), so it is
-  armed only when ``fast`` is requested.
+  never armed as a fast path; its ``row_exact`` mode (``row_exact_qmv``) is the
+  experimental ``YUNSHU_MTP_ROW_EXACT`` alternative to batch-invariant decode.
 
 Measured on Qwen3.8-27B (docs/research/runs/2026-09-28-matrix/): upstream MTP
 ~57 tok/s; exact kernels ~65; all kernels ~78-84 on code.
@@ -32,7 +33,7 @@ import mlx.core as mx
 
 logger = logging.getLogger(__name__)
 
-_STATE = {"applied": None, "fast": False, "row_exact": False}
+_STATE = {"applied": None, "row_exact": False}
 
 
 def _sync_and_clear_cache(stream=None):
@@ -89,16 +90,15 @@ def pack_projections(model) -> int:
     return int(qwen35_packed_linear.pack_model(model) or 0)
 
 
-def apply(fast: bool = False, row_exact: bool = False) -> dict:
+def apply(row_exact: bool = False) -> dict:
     """Install the verify kernels once.
 
-    ``fast`` arms the non-exact matmuls. ``row_exact`` arms upstream's
-    row-exact mode instead: every multi-row verify projection runs one-row
+    ``row_exact`` arms upstream's row-exact mode: every multi-row verify
+    projection runs one-row
     decode arithmetic per row (``row_exact_qmv``) and verify attention keeps
     each row on its own one-row SDPA plan, so verify rows equal serial decode
     with stock kernels (no change to the decode path).
     """
-    _STATE["fast"] = bool(fast) and not row_exact
     _STATE["row_exact"] = bool(row_exact)
     if _STATE["applied"] is not None:
         return _STATE["applied"]
@@ -135,10 +135,9 @@ def apply(fast: bool = False, row_exact: bool = False) -> dict:
             return
 
         def armed(*args, **kwargs):
-            if _STATE["row_exact"]:
-                qwen35_verify_qmm.set_verify_qmm_armed(True, row_exact=True)
-            else:
-                qwen35_verify_qmm.set_verify_qmm_armed(_STATE["fast"])
+            qwen35_verify_qmm.set_verify_qmm_armed(
+                _STATE["row_exact"], row_exact=_STATE["row_exact"]
+            )
             try:
                 return original(*args, **kwargs)
             finally:
@@ -154,9 +153,9 @@ def apply(fast: bool = False, row_exact: bool = False) -> dict:
 
     _STATE["applied"] = applied
     logger.info(
-        "Qwen MTP verify kernels: %s (fast=%s, row_exact=%s)",
+        "Qwen MTP verify kernels: %s (row_exact=%s)",
         applied,
-        _STATE["fast"],
         _STATE["row_exact"],
+
     )
     return applied

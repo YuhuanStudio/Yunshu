@@ -3,7 +3,7 @@
 Speculative decoding via mlx-vlm's CORRECT MTP path (MTP-aware GatedDeltaNet that
 captures intermediate SSM states + rollback_speculative_cache + qwen3_5_mtp
 drafter + run_speculative_rounds). The served VLM path now drafts through
-``VLMBatchRunner`` instead (measured in scripts/research/sweep_mtp_depth.py); this
+``VLMBatchRunner`` instead; this
 standalone backend honors only temperature and remains EXPERIMENTAL. Our mlx-lm-based MTP patch could not do this — it
 lacked the SSM intermediate-state capture (so 27B gave garbage); mlx-vlm has it.
 

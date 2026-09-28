@@ -67,16 +67,14 @@ _yk = next(
     (a.split("=", 1)[1] for a in sys.argv if a.startswith("--yunshu-kernels=")), None
 )
 if _yk:
-    # Vendored copy under python/yunshu_engine/kernels/omlx (exact | fast).
+    # Vendored copy under python/yunshu_engine/kernels/omlx.
     from yunshu_engine.kernels import omlx as yk  # noqa: E402
 
-    # exact | fast | row_exact (oMLX d403e460: verify rows == stock serial decode)
+    # exact | row_exact (oMLX d403e460: verify rows == stock serial decode)
     print(
         json.dumps(
             {
-                "yunshu_kernels": yk.apply(
-                    fast=_yk == "fast", row_exact=_yk == "row_exact"
-                ),
+                "yunshu_kernels": yk.apply(row_exact=_yk == "row_exact"),
                 "mode": _yk,
             }
         ),
@@ -84,12 +82,6 @@ if _yk:
     )
     use_omlx, omlx_set = True, {f"yunshu:{_yk}"}
 
-if "--adaptive" in sys.argv:
-    from yunshu_engine.mtp_depth import install as install_adaptive  # noqa: E402
-
-    install_adaptive(max_block=max(sizes))
-    omlx_set = set(omlx_set if use_omlx else set()) | {"adaptive"}
-    use_omlx = True
 
 if "--streamed5" in sys.argv:
     from yunshu_engine.kernels.verify_select import (
@@ -233,10 +225,7 @@ for name, prompt, mt in tasks:
     for block in [0] + sizes:
         r = run(name, prompt, mt, block)
         r["omlx_kernels"] = sorted(omlx_set) if use_omlx else []
-        if "adaptive" in r["omlx_kernels"]:
-            from yunshu_engine.mtp_depth import stats as _depth_stats
 
-            r["depth"] = _depth_stats()
         if block == 0:
             ref[name] = r["tokens"]
         r["parity"] = r["tokens"] == ref[name]

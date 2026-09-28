@@ -11,16 +11,16 @@ def test_apply_installs_and_is_idempotent(monkeypatch):
     from yunshu_engine.kernels import omlx
     from yunshu_engine.kernels.omlx import qwen35_verify_qmm
 
-    applied = omlx.apply(fast=False)
+    applied = omlx.apply()
     assert applied["gdn_prework"] and applied["sdpa_split"] and applied["verify_qmm"]
     wrapped = mtp._mtp_verify_target
     assert getattr(wrapped, "_yunshu_armed", False)
-    assert omlx.apply(fast=True) is applied
+    assert omlx.apply(row_exact=True) is applied
     assert mtp._mtp_verify_target is wrapped
 
     seen = []
     inner = wrapped.__closure__
-    # Arming follows the fast flag during verify and is cleared afterwards.
+    # Only row-exact mode is armed during verify, and it is cleared afterwards.
     original = next(c.cell_contents for c in inner if callable(c.cell_contents))
     monkeypatch.setattr(
         mtp, "_mtp_verify_target", wrapped
@@ -28,22 +28,26 @@ def test_apply_installs_and_is_idempotent(monkeypatch):
     import types
 
     probe = types.SimpleNamespace(
-        run=lambda *a, **k: seen.append(qwen35_verify_qmm._is_armed())
+        run=lambda *a, **k: seen.append(
+            (qwen35_verify_qmm._is_armed(), qwen35_verify_qmm.is_row_exact_armed())
+        )
     )
     for cell in inner:
         if cell.cell_contents is original:
             cell.cell_contents = probe.run
     try:
-        omlx._STATE["fast"] = True
+        omlx._STATE["row_exact"] = True
         wrapped()
-        omlx._STATE["fast"] = False
+        omlx._STATE["row_exact"] = False
         wrapped()
     finally:
         for cell in inner:
             if cell.cell_contents is probe.run:
                 cell.cell_contents = original
-    assert seen == [True, False]
+    assert seen == [(False, True), (False, False)]
     assert qwen35_verify_qmm._is_armed() is False
+    assert qwen35_verify_qmm.is_row_exact_armed() is False
+
 
 
 def test_invariant_linear_inactive_uses_fallback():

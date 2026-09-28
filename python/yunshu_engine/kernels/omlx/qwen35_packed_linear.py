@@ -215,75 +215,6 @@ _REDUCE_SOURCE = """
     *(device bfloat4*)((device bfloat*)out + base) = bfloat4(v);
 """
 
-# 5-bit codes (Yunshu addition). MLX packs 5-bit values as one little-endian
-# bit stream per row (value i at bit 5 * i), so a 64-value quant group is 40
-# contiguous bytes. The repack keeps those 40 bytes per (tile, group, column)
-# exactly like the 4-bit 32-byte blocks. There is no MetalPerformancePrimitives
-# 5-bit tensor format, so rows >= 2 dequantize into threadgroup memory (the
-# GEMM path below) instead of feeding the tensor unit packed codes.
-_Q5_HEADER = """
-inline uint yunshu_q5(const thread uint* words, int i) {
-    const int bit = 5 * i;
-    const int wi = bit >> 5;
-    const int sh = bit & 31;
-    uint v = words[wi] >> sh;
-    if (sh > 27) {
-        v |= words[wi + 1] << (32 - sh);
-    }
-    return v & 31u;
-}
-"""
-
-_MATVEC5_SOURCE = """
-    constexpr int GROUPS = K / 64;
-    constexpr int GPS = GROUPS / KSPLIT;
-    const uint tile = threadgroup_position_in_grid.x;
-    const uint split = threadgroup_position_in_grid.y;
-    const uint col = thread_position_in_threadgroup.x;
-    const uint g0 = split * GPS;
-    const device uchar* wt = (const device uchar*)w + ulong(tile) * GROUPS * TILE_N * 40;
-    const device bfloat* st = (const device bfloat*)sc + ulong(tile) * GROUPS * TILE_N;
-    const device bfloat* bt = (const device bfloat*)bi + ulong(tile) * GROUPS * TILE_N;
-    float acc[M];
-    for (int r = 0; r < M; ++r) {
-        acc[r] = 0.0f;
-    }
-    for (uint gq = 0; gq < GPS; gq += 4) {
-        const uint g = g0 + gq;
-        const ulong at = (ulong(g / 4) * TILE_N + col) * 4;
-        const vec<bfloat, 4> s4 = *(const device vec<bfloat, 4>*)(st + at);
-        const vec<bfloat, 4> b4 = *(const device vec<bfloat, 4>*)(bt + at);
-        for (int j = 0; j < 4; ++j) {
-            const device uint* wp = (const device uint*)(wt + (ulong(g + j) * TILE_N + col) * 40);
-            uint words[10];
-            for (int k = 0; k < 10; ++k) {
-                words[k] = wp[k];
-            }
-            for (int r = 0; r < M; ++r) {
-                const device bfloat* xr = (const device bfloat*)x + r * K + (g + j) * 64;
-                float dot = 0.0f;
-                float sum = 0.0f;
-                for (int q = 0; q < 8; ++q) {
-                    const vec<float, 8> xv = vec<float, 8>(*(const device vec<bfloat, 8>*)(xr + q * 8));
-                    for (int e = 0; e < 8; ++e) {
-                        dot += float(yunshu_q5(words, q * 8 + e)) * xv[e];
-                        sum += xv[e];
-                    }
-                }
-                acc[r] += float(s4[j]) * dot + float(b4[j]) * sum;
-            }
-        }
-    }
-    const uint n = tile * TILE_N + col;
-    for (int r = 0; r < M; ++r) {
-        if (KSPLIT == 1) {
-            ((device bfloat*)y)[r * N + n] = bfloat(acc[r]);
-        } else {
-            ((device float*)y)[(split * M + r) * N + n] = acc[r];
-        }
-    }
-"""
-
 # MLX's own NAX qmm (qmm_t_nax_tgp_impl) with the weight loader swapped for
 # the packed layout. The dequantize math stays in float: bfloat arithmetic is
 # emulated and costs about 25%.
@@ -374,36 +305,6 @@ _GEMM_SOURCE = """
 """
 
 
-_GEMM5_SOURCE = _GEMM_SOURCE.replace(
-    "const device uchar* wtile = (const device uchar*)w + ulong(ptile) * GROUPS * TILE_N * 32;",
-    "const device uchar* wtile = (const device uchar*)w + ulong(ptile) * GROUPS * TILE_N * 40;",
-).replace(
-    """            const uint4 v = *(const device uint4*)(wtile + (ulong(g) * TILE_N + col) * 32 + chunk * 16);
-            const uint words[4] = {v.x, v.y, v.z, v.w};
-            for (int wi = 0; wi < 4; ++wi) {
-                vec<bfloat, 8> o;
-                for (int j = 0; j < 8; ++j) {
-                    o[j] = bfloat(float((words[wi] >> (4 * j)) & 15u) * s + b);
-                }
-                *(threadgroup vec<bfloat, 8>*)(dst + wi * 8) = o;
-            }""",
-    """            // 32 values of this half-group = 160 bits = 5 words.
-            const device uint* wp = (const device uint*)(wtile + (ulong(g) * TILE_N + col) * 40 + chunk * 20);
-            uint words[5];
-            for (int k = 0; k < 5; ++k) {
-                words[k] = wp[k];
-            }
-            for (int wi = 0; wi < 4; ++wi) {
-                vec<bfloat, 8> o;
-                for (int j = 0; j < 8; ++j) {
-                    o[j] = bfloat(float(yunshu_q5(words, wi * 8 + j)) * s + b);
-                }
-                *(threadgroup vec<bfloat, 8>*)(dst + wi * 8) = o;
-            }""",
-)
-assert _GEMM5_SOURCE.count("yunshu_q5") == 1 and "TILE_N * 40" in _GEMM5_SOURCE
-
-
 def _steel_header() -> str:
     """MLX's steel NAX tile headers, inlined for a JIT kernel."""
     root = os.path.join(
@@ -450,20 +351,6 @@ def _kernels():
             header=_steel_header(),
             source=_GEMM_SOURCE,
         )
-        _KERNELS["matvec5"] = mx.fast.metal_kernel(
-            name="yunshu_qwen35_packed_matvec5",
-            input_names=["x", "w", "sc", "bi"],
-            output_names=["y"],
-            header=_Q5_HEADER,
-            source=_MATVEC5_SOURCE,
-        )
-        _KERNELS["gemm5"] = mx.fast.metal_kernel(
-            name="yunshu_qwen35_packed_gemm5",
-            input_names=["x", "w", "sc", "bi"],
-            output_names=["y"],
-            header=_steel_header() + _Q5_HEADER,
-            source=_GEMM5_SOURCE,
-        )
     return _KERNELS
 
 
@@ -499,15 +386,11 @@ def _gemm_tile(M: int) -> tuple[int, int, int, int]:
     return 128, 64, 2, 2
 
 
-def packed_matmul(
-    x2: mx.array, w, sc, bi, K: int, N: int, bits: int = 4
-) -> mx.array:
+def packed_matmul(x2: mx.array, w, sc, bi, K: int, N: int) -> mx.array:
     """``x2`` (M, K) bf16 times a packed (N, K) weight -> (M, N) bf16."""
     kernels = _kernels()
     M = int(x2.shape[0])
     x2 = mx.contiguous(x2)
-    if bits == 5:
-        return _packed_matmul5(x2, w, sc, bi, K, N)
     if M > _SMALL_ROWS:
         bm, bn, wm, wn = _gemm_tile(M)
         (y,) = kernels["gemm"](
@@ -547,48 +430,6 @@ def packed_matmul(
         output_dtypes=[mx.bfloat16 if ksplit == 1 else mx.float32],
     )
     return _reduce(y, ksplit, M, N)
-
-
-def _packed_matmul5(x2: mx.array, w, sc, bi, K: int, N: int) -> mx.array:
-    """5-bit: SIMD matvec for one row, dequantize-to-threadgroup NAX GEMM
-    for more (its per-row result does not depend on the row count)."""
-    M = int(x2.shape[0])
-    kernels = _kernels()
-    if M == 1:
-        ksplit = _ksplit(N // TILE_N, K // 256)
-        (y,) = kernels["matvec5"](
-            inputs=[x2, w, sc, bi],
-            template=[
-                ("K", K),
-                ("N", N),
-                ("M", M),
-                ("TILE_N", TILE_N),
-                ("KSPLIT", ksplit),
-            ],
-            grid=(N, ksplit, 1),
-            threadgroup=(TILE_N, 1, 1),
-            output_shapes=[(M, N) if ksplit == 1 else (ksplit * M * N,)],
-            output_dtypes=[mx.bfloat16 if ksplit == 1 else mx.float32],
-        )
-        return _reduce(y, ksplit, M, N)
-    bm, bn, wm, wn = _gemm_tile(M)
-    (y,) = kernels["gemm5"](
-        inputs=[x2, w, sc, bi],
-        template=[
-            ("K", K),
-            ("N", N),
-            ("TILE_N", TILE_N),
-            ("BM", bm),
-            ("BN", bn),
-            ("WM", wm),
-            ("WN", wn),
-        ],
-        grid=(32 * wm * wn * (N // bn), -(-M // bm), 1),
-        threadgroup=(32 * wm * wn, 1, 1),
-        output_shapes=[(M, N)],
-        output_dtypes=[mx.bfloat16],
-    )
-    return y
 
 
 def _matvec(x2: mx.array, w, sc, bi, K: int, N: int) -> mx.array:
@@ -631,16 +472,11 @@ def _reduce(y: mx.array, ksplit: int, M: int, N: int) -> mx.array:
 class _PackedStore:
     """Packed buffers shared by projections that read the same input."""
 
-    __slots__ = ("K", "N", "w", "sc", "bi", "bits")
-
-
-def _code_bytes(bits: int) -> int:
-    """Bytes per (tile, group, column) block: 64 codes at ``bits`` bits."""
-    return 64 * bits // 8
+    __slots__ = ("K", "N", "w", "sc", "bi")
 
 
 class PackedLinear(nn.Module):
-    """A 4- or 5-bit, group-64, bias-free affine linear in the packed tile layout.
+    """A 4-bit, group-64, bias-free affine linear in the packed tile layout.
 
     ``packed_*`` are views into a store shared with sibling projections;
     ``_tile0`` is the first tile of this projection inside the store.
@@ -650,13 +486,13 @@ class PackedLinear(nn.Module):
         super().__init__()
         self.input_dims = store.K
         self.output_dims = output_dims
-        self.bits = store.bits
+        self.bits = 4
         self.group_size = 64
         self._store = store
         self._tile0 = tile0
         groups = store.K // 64
         tiles = output_dims // TILE_N
-        codes = groups * TILE_N * _code_bytes(store.bits)
+        codes = groups * TILE_N * 32
         affine = groups * TILE_N
         self.packed_weight = store.w[tile0 * codes : (tile0 + tiles) * codes]
         self.packed_scales = store.sc[tile0 * affine : (tile0 + tiles) * affine]
@@ -676,24 +512,20 @@ class PackedLinear(nn.Module):
             self.packed_biases,
             self.input_dims,
             self.output_dims,
-            self.bits,
         )
         return y.reshape(*x.shape[:-1], self.output_dims).astype(dtype)
 
     def quantized_rows(self, ids: mx.array):
         """``QuantizedLinear`` weight, scales and biases of output rows ``ids``."""
         groups = self.input_dims // 64
-        words = _code_bytes(self.bits) // 4
         n = int(ids.shape[0])
         ids = ids.astype(mx.uint32)
         tile = (ids // TILE_N)[:, None]
         col = (ids % TILE_N)[:, None]
-        # One code block (32 B at 4 bits, 40 B at 5) per (tile, group, column).
+        # One 32-byte code block per (tile, group, column).
         codes = (tile * groups + mx.arange(groups, dtype=mx.uint32)) * TILE_N + col
         weight = mx.take(
-            self.packed_weight.view(mx.uint32).reshape(-1, words),
-            codes.reshape(-1),
-            axis=0,
+            self.packed_weight.view(mx.uint32).reshape(-1, 8), codes.reshape(-1), axis=0
         )
         # One 4-group block of scales or biases per (tile, group / 4, column).
         quads = (
@@ -703,7 +535,7 @@ class PackedLinear(nn.Module):
         scales = mx.take(self.packed_scales.reshape(-1, 4), quads, axis=0)
         biases = mx.take(self.packed_biases.reshape(-1, 4), quads, axis=0)
         return (
-            weight.reshape(n, groups * words),
+            weight.reshape(n, groups * 8),
             scales.reshape(n, groups),
             biases.reshape(n, groups),
         )
@@ -725,7 +557,7 @@ def project(linears, x: mx.array):
     first = linears[0]._tile0
     n = (tile - first) * TILE_N
     groups = store.K // 64
-    codes = groups * TILE_N * _code_bytes(store.bits)
+    codes = groups * TILE_N * 32
     affine = groups * TILE_N
     if first == 0 and n == store.N:
         w, sc, bi = store.w, store.sc, store.bi
@@ -734,7 +566,7 @@ def project(linears, x: mx.array):
         sc = store.sc[first * affine : tile * affine]
         bi = store.bi[first * affine : tile * affine]
     x2 = x.reshape(-1, store.K).astype(mx.bfloat16)
-    y = packed_matmul(x2, w, sc, bi, store.K, n, store.bits)
+    y = packed_matmul(x2, w, sc, bi, store.K, n)
     y = y.reshape(*x.shape[:-1], n).astype(x.dtype)
     outputs = []
     offset = 0
@@ -744,54 +576,39 @@ def project(linears, x: mx.array):
     return tuple(outputs)
 
 
-# Bit widths with packed kernels. 5-bit (Yunshu addition) is correct but opt-in:
-# with no MPP 5-bit tensor format it dequantizes into threadgroup memory, and
-# on Qwen3.8 shapes that is slower than MLX's own 5-bit qmv/qmm for 1..8 rows
-# (e.g. 2 rows 291 vs 182 us at 6144x5120; wins only from ~16 rows).
-def _packed_bits_from_env() -> tuple[int, ...]:
-    return (4, 5) if os.environ.get("YUNSHU_PACKED_5BIT", "0") == "1" else (4,)
-
-
-PACKED_BITS = _packed_bits_from_env()
-
-
 # Yunshu addition: YUNSHU_PACKED_5BIT=int (or int_tiled) serves 5/6/8-bit
-# layers with TensorFold's integer-code tensor-unit matmul instead
+# layers with TensorFold's integer-code tensor-unit matmul
 # (kernels/int_code_linear.py); 4-bit layers keep the packed kernels above.
-def _int_mode_from_env() -> str | None:
-    mode = os.environ.get("YUNSHU_PACKED_5BIT", "0")
-    return mode if mode in ("int", "int_tiled") else None
+def int_mode() -> str | None:
+    from ... import settings
 
-
-INT_MODE = _int_mode_from_env()
+    return settings.get("YUNSHU_PACKED_5BIT") or None
 
 
 def eligible(linear: Any) -> bool:
     return (
         type(linear) is nn.QuantizedLinear
         and getattr(linear, "mode", "affine") == "affine"
-        and int(linear.bits) in PACKED_BITS
+        and int(linear.bits) == 4
         and int(linear.group_size) == 64
         and "bias" not in linear
         and linear.get("biases") is not None
         and linear.scales.dtype == mx.bfloat16
         and int(linear.weight.shape[0]) % TILE_N == 0
-        and int(linear.weight.shape[1]) * 32 // int(linear.bits) % 256 == 0
+        and int(linear.weight.shape[1]) * 8 % 256 == 0
     )
 
 
 def _pack(linears) -> list[PackedLinear]:
-    """Pack same-input, same-width linears into one store; return their replacements."""
-    bits = int(linears[0].bits)
-    block = _code_bytes(bits)
-    K = int(linears[0].weight.shape[1]) * 32 // bits
+    """Pack same-input linears into one store; return their replacements."""
+    K = int(linears[0].weight.shape[1]) * 8
     groups = K // 64
     weight = mx.concatenate([lin.weight for lin in linears])
     scales = mx.concatenate([lin.scales for lin in linears])
     biases = mx.concatenate([lin.biases for lin in linears])
     n = int(weight.shape[0])
     tiles = n // TILE_N
-    codes = weight.view(mx.uint8).reshape(tiles, TILE_N, groups, block)
+    codes = weight.view(mx.uint8).reshape(tiles, TILE_N, groups, 32)
 
     def affine(a):
         a = a.reshape(tiles, TILE_N, groups // 4, 4).transpose(0, 2, 1, 3)
@@ -800,7 +617,6 @@ def _pack(linears) -> list[PackedLinear]:
     store = _PackedStore()
     store.K = K
     store.N = n
-    store.bits = bits
     store.w = mx.contiguous(codes.transpose(0, 2, 1, 3)).reshape(-1)
     store.sc = affine(scales)
     store.bi = affine(biases)
@@ -827,18 +643,11 @@ _LAYER_GROUPS = (
 
 
 def _runs(parent, names):
-    """Maximal runs of adjacent eligible projections of one bit width
-    (a store holds a single code layout)."""
+    """Maximal runs of adjacent eligible projections."""
     run = []
-    run_bits = None
     for name in names:
-        module = getattr(parent, name, None)
-        if eligible(module):
-            if run and int(module.bits) != run_bits:
-                yield run
-                run = []
+        if eligible(getattr(parent, name, None)):
             run.append(name)
-            run_bits = int(module.bits)
             continue
         if run:
             yield run
@@ -849,6 +658,7 @@ def _runs(parent, names):
 
 def _pack_layer(layer: Any) -> int:
     count = 0
+    mode = int_mode()
     for attr, names in _LAYER_GROUPS:
         parent = getattr(layer, attr, None)
         if parent is None:
@@ -858,7 +668,7 @@ def _pack_layer(layer: Any) -> int:
             for name, module in zip(run, packed):
                 setattr(parent, name, module)
             count += len(run)
-        if INT_MODE is not None:
+        if mode is not None:
             from ..int_code_linear import IntCodeLinear
             from ..int_code_linear import eligible as int_eligible
 
@@ -868,7 +678,7 @@ def _pack_layer(layer: Any) -> int:
                     setattr(
                         parent,
                         name,
-                        IntCodeLinear(module, tiled=INT_MODE == "int_tiled"),
+                        IntCodeLinear(module, tiled=mode == "int_tiled"),
                     )
                     count += 1
     return count
@@ -940,19 +750,17 @@ def warmup(model: Any) -> None:
         if not isinstance(module, PackedLinear):
             continue
         shapes.setdefault(
-            (module.input_dims, module.output_dims, module.bits),
+            (module.input_dims, module.output_dims),
             (module.packed_weight, module.packed_scales, module.packed_biases),
         )
         store = module._store
         if store.N != module.output_dims:
-            shapes.setdefault(
-                (store.K, store.N, store.bits), (store.w, store.sc, store.bi)
-            )
-    for (K, N, bits), arrays in shapes.items():
+            shapes.setdefault((store.K, store.N), (store.w, store.sc, store.bi))
+    for (K, N), arrays in shapes.items():
         for rows in _WARM_ROWS:
             x = mx.zeros((rows, K), dtype=mx.bfloat16)
-            mx.eval(packed_matmul(x, *arrays, K, N, bits))
-    if INT_MODE is not None:
+            mx.eval(packed_matmul(x, *arrays, K, N))
+    if int_mode() is not None:
         from ..int_code_linear import IntCodeLinear
 
         seen = set()
@@ -964,6 +772,7 @@ def warmup(model: Any) -> None:
             # One pipeline per 16-row op width: rows 1..16, 17..32, 33+.
             for rows in (1, 17, 33):
                 mx.eval(module(mx.zeros((rows, module.input_dims), dtype=mx.bfloat16)))
+
 
 
 def enabled(model: Any) -> bool:
