@@ -243,6 +243,8 @@ class VLMBatchRunner:
         stats: RunStats | None = None,
         logprobs: bool = False,
         top_logprobs: int = 0,
+        thinking_budget: int | None = None,
+        prompt_preopens_thinking: bool = False,
     ) -> Iterator[int]:
         """Yield generated token ids; ``stats`` is filled in as generation runs.
 
@@ -255,13 +257,28 @@ class VLMBatchRunner:
         greedy = temperature is None or temperature < 1e-6
         processors = list(logits_processors or [])
         # Upstream drops logprobs while drafting, so logprob requests decode AR.
+        # A thinking budget forces "\n</think>" through upstream's
+        # ThinkingBudgetCriteria, which only the non-speculative batch applies.
         use_draft = bool(
             allow_draft
             and self.drafter is not None
             and greedy
             and not processors
             and not logprobs
+            and thinking_budget is None
         )
+        budget = None
+        if thinking_budget is not None:
+            from mlx_vlm.utils import ThinkingBudgetCriteria
+
+            budget = ThinkingBudgetCriteria(
+                getattr(self.processor, "tokenizer", self.processor),
+                int(thinking_budget),
+                thinking_end_token="</think>",
+                thinking_start_token="<think>",
+                enable_thinking=True,
+                prompt_preopens_thinking=prompt_preopens_thinking,
+            )
         job = _Job(
             ids=ids,
             max_tokens=int(max_tokens),
@@ -282,6 +299,7 @@ class VLMBatchRunner:
             seed=seed,
             cancel_event=cancel_event,
             stats=stats,
+            budget=budget,
         )
         stats.used_draft = use_draft
         self._submit(job)
@@ -396,6 +414,7 @@ class VLMBatchRunner:
             max_tokens=job.max_tokens,
             prompt_kwargs=[pkw],
             logits_processors=[job.processors or None],
+            thinking_budget_criteria=[job.budget],
         )
         job.uid = uid
         job.start = time.perf_counter()
@@ -646,6 +665,7 @@ class _Job:
     uid: int | None = None
     start: float = 0.0
     abandoned: bool = False
+    budget: Any = None
     rope_delta: float = 0.0
 
 

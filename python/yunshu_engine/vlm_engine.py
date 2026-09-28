@@ -4541,6 +4541,8 @@ class VLMEngine:
             stats=stats,
             logprobs=bool(logprobs),
             top_logprobs=int(top_logprobs or 0),
+            thinking_budget=thinking_budget if enable_thinking is not False else None,
+            prompt_preopens_thinking=in_think,
         ):
             count += 1
             lp = stats.last_logprob if logprobs else None
@@ -4578,13 +4580,6 @@ class VLMEngine:
                     return
             else:
                 text = segment
-            if (
-                thinking_budget is not None
-                and in_think
-                and (thinking_tokens >= thinking_budget)
-            ):
-                yield text, token, state, "budget", thinking_tokens, lp
-                return
             if count >= max_tokens:
                 detok.finalize()
                 tail = holdback.feed(detok.last_segment) + holdback.flush()

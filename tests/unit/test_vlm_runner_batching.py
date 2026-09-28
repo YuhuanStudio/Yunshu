@@ -23,8 +23,16 @@ class FakeGen:
         self.closed = False
         FakeGen.instances.append(self)
 
-    def insert(self, prompts, max_tokens, prompt_kwargs, logits_processors):
+    def insert(
+        self,
+        prompts,
+        max_tokens,
+        prompt_kwargs,
+        logits_processors,
+        thinking_budget_criteria=None,
+    ):
         assert self.kwargs.get("prefill_batch_size") == 1
+        self.budgets = thinking_budget_criteria
         uid = self.next_uid
         self.next_uid += 1
         self.rows[uid] = [0, max_tokens]
@@ -171,3 +179,23 @@ def test_cancel_event_finishes_with_cancel(runner):
     ev.set()
     assert list(it) == []
     assert stats.finish_reason == "cancel"
+
+
+def test_thinking_budget_uses_upstream_criteria_without_draft(runner):
+    class Tok:
+        def encode(self, text, add_special_tokens=False):
+            return {"</think>": [7], "<think>": [6], "\n": [5]}[text]
+
+    runner.processor = SimpleNamespace(tokenizer=Tok())
+    runner.drafter = object()
+    stats = vbr.RunStats()
+    out = list(
+        runner.iter_tokens(
+            [1], max_tokens=2, prompt_kwargs={}, thinking_budget=4, stats=stats
+        )
+    )
+    gen = FakeGen.instances[0]
+    assert out == [1, 2]
+    assert gen.kwargs["draft_model"] is None and not stats.used_draft
+    (crit,) = gen.budgets
+    assert crit is not None and crit.thinking_budget == 4
