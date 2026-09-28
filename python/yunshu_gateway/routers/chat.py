@@ -1150,7 +1150,38 @@ def _append_tool_prefill(messages: list[dict], prefill: str) -> list[dict]:
     return messages
 
 
-def _enforce_tool_choice(tool_calls, tool_choice, parallel_tool_calls):
+def _vlm_renders_tools(engine) -> bool:
+    """True when ``engine`` accepts ``tools=`` and its chat template renders
+    them natively (VLMEngine.supports_native_tools)."""
+    check = getattr(engine, "supports_native_tools", None)
+    if not callable(check):
+        return False
+    try:
+        return bool(check())
+    except Exception:
+        logger.debug("native tool support check failed", exc_info=True)
+        return False
+
+
+def _vlm_tool_plan(req, engine, messages: list[dict]):
+    """Return ``(messages, native_tools)`` for a VLM request with tools.
+
+    Native (definitions passed to the engine's chat template, messages
+    untouched) when the template renders tools and tool_choice is auto/None;
+    otherwise the generic injected tool system prompt, as before."""
+    if not req.tools:
+        return messages, None
+    if req.tool_choice in (None, "auto") and _vlm_renders_tools(engine):
+        return messages, [t.model_dump() for t in req.tools]
+    return (
+        _inject_tool_system_prompt(
+            messages, req.tools, req.tool_choice, req.parallel_tool_calls
+        ),
+        None,
+    )
+
+
+def _enforce_tool_choice(tool_calls, tool_choice, parallel_tool_calls, tools=None):
     """Post-generation enforcement of the OpenAI tool_choice / parallel_tool_calls
     contract. The system-prompt injection (`_inject_tool_system_prompt`) only *advises*
     the model — a model can ignore it. This applies the hard guarantees we can enforce
@@ -1173,7 +1204,11 @@ def _enforce_tool_choice(tool_calls, tool_choice, parallel_tool_calls):
         tool_calls = [tc for tc in tool_calls if tc.get("name") == forced]
     if parallel_tool_calls is False and len(tool_calls) > 1:
         tool_calls = tool_calls[:1]
-    return tool_calls
+    # Type string parameter values with the request's schemas (Qwen XML
+    # <parameter=...> values are text).
+    from yunshu_engine.tool_arguments import coerce_tool_calls
+
+    return coerce_tool_calls(tool_calls, tools)
 
 
 def _lp_bytes(entry: dict, decoded: str, tokenizer) -> list[int]:
@@ -1459,7 +1494,7 @@ async def _build_multi_choice(
         if req.tools:
             _raw_calls = extract_tool_calls_model_aware(regular_content, req.model)
             tool_calls = _enforce_tool_choice(
-                _raw_calls, req.tool_choice, req.parallel_tool_calls
+                _raw_calls, req.tool_choice, req.parallel_tool_calls, tools=req.tools
             )
             # Clean markup whenever any was parsed (see n=1 path) — a suppressed
             # wrong-named tool's raw markup must not leak into content. Also clean when a
@@ -2112,7 +2147,10 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
             if req.tools:
                 _raw_calls = extract_tool_calls_model_aware(regular_content, req.model)
                 tool_calls = _enforce_tool_choice(
-                    _raw_calls, req.tool_choice, req.parallel_tool_calls
+                    _raw_calls,
+                    req.tool_choice,
+                    req.parallel_tool_calls,
+                    tools=req.tools,
                 )
                 # strip tool-call markup whenever ANY was parsed, not only when a
                 # call SURVIVES enforcement. With a named/forced tool_choice the model may
@@ -2357,11 +2395,11 @@ async def _handle_vlm_chat(
 
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
 
-    # Inject tool definitions if provided
-    if req.tools:
-        messages = _inject_tool_system_prompt(
-            messages, req.tools, req.tool_choice, req.parallel_tool_calls
-        )
+    # Tools: a chat template that renders `tools` itself (Qwen3.x) gets the
+    # definitions natively — the model's own tool-call format. Forced
+    # tool_choice (none/required/named) keeps the injected prompt, which
+    # carries those instructions.
+    messages, native_tools = _vlm_tool_plan(req, vlm_engine, messages)
 
     if req.stream:
         if req.n > 1:
@@ -2377,6 +2415,7 @@ async def _handle_vlm_chat(
                 completion_id,
                 request,
                 json_schema=json_schema,
+                native_tools=native_tools,
             ),
             media_type="text/event-stream",
             headers={
@@ -2413,6 +2452,8 @@ async def _handle_vlm_chat(
     )
     if json_schema:
         gen_kwargs["json_schema"] = json_schema
+    if native_tools:
+        gen_kwargs["tools"] = native_tools
 
     tok = getattr(vlm_engine, "_tokenizer", None)
     # Pre-compute a text-only fallback prompt_tok for the case where the engine
@@ -2469,7 +2510,7 @@ async def _handle_vlm_chat(
         if req.tools:
             _raw_calls = extract_tool_calls_model_aware(content, req.model)
             tool_calls = _enforce_tool_choice(
-                _raw_calls, req.tool_choice, req.parallel_tool_calls
+                _raw_calls, req.tool_choice, req.parallel_tool_calls, tools=req.tools
             )
             # clean markup whenever any was parsed (see LLM n=1 path) so a
             # suppressed wrong-named tool's markup doesn't leak into VLM content.
@@ -2663,6 +2704,7 @@ async def _stream_vlm_response(
     completion_id: str,
     request: Request,
     json_schema: dict | str | None = None,
+    native_tools: list[dict] | None = None,
 ) -> AsyncIterator[bytes]:
     """SSE streaming for VLM engine ."""
     loaded_adapter = _apply_lora_adapter(vlm_engine, req.lora_adapter)
@@ -2692,6 +2734,7 @@ async def _stream_vlm_response(
             ),
             allow_parallel=req.parallel_tool_calls,
             model_name=req.model,
+            tools=req.tools,
         )
         if use_tool_streamer
         else None
@@ -2794,6 +2837,8 @@ async def _stream_vlm_response(
         )
         if json_schema:
             stream_kwargs["json_schema"] = json_schema
+        if native_tools:
+            stream_kwargs["tools"] = native_tools
         async with contextlib.aclosing(
             vlm_engine.generate_stream(**stream_kwargs)
         ) as stream:
@@ -3191,6 +3236,7 @@ async def _stream_response_multi(
                     ),
                     allow_parallel=req.parallel_tool_calls,
                     model_name=req.model,  # hint for the BUFFER_ALL flush parser
+                    tools=req.tools,
                 )
                 if use_tool_streamer
                 else None
@@ -3905,6 +3951,7 @@ async def _stream_response(
             ),
             allow_parallel=req.parallel_tool_calls,
             model_name=req.model,  # hint for the BUFFER_ALL flush parser
+            tools=req.tools,
         )
         if use_tool_streamer
         else None

@@ -135,6 +135,7 @@ class ToolCallStreamer:
         forced_tool_name: str | None = None,
         allow_parallel: bool = True,
         model_name: str | None = None,
+        tools: list | None = None,
     ) -> None:
         self._flush_threshold = flush_threshold
         self._call_id_prefix = call_id_prefix
@@ -143,6 +144,11 @@ class ToolCallStreamer:
         # model hint for the BUFFER_ALL flush parser (parse_tool_calls accepts
         # None and auto-detects by content, so this is best-effort).
         self._model_name = model_name
+        # Request tool schemas: completed calls get their string parameter
+        # values typed (Qwen XML parameters arrive as text).
+        from .tool_arguments import tool_schemas
+
+        self._tool_schemas = tool_schemas(tools)
         # safety net: when a tool marker is split across the text-emit boundary
         # (e.g. a long preamble before Mistral [TOOL_CALLS] flushes the buffer first),
         # early BUFFER_ALL detection misses it and the markup leaks as text with the call
@@ -202,6 +208,14 @@ class ToolCallStreamer:
         constraint. A suppressed call has its start, every args delta, and
         its final tool_call dropped so the consumer never surfaces it. Text passes
         through untouched. No constraint → pure pass-through (no behaviour change)."""
+        if self._tool_schemas:
+            from .tool_arguments import coerce_tool_arguments
+
+            for _o in results:
+                if _o.tool_call is not None:
+                    _o.tool_call.arguments = coerce_tool_arguments(
+                        _o.tool_call.name, _o.tool_call.arguments, self._tool_schemas
+                    )
         # note whether the model produced ANY recognized tool call (pre-suppression
         # — a constrained-away call still means no recovery is needed at flush).
         if not self._emitted_tool_call:
@@ -665,34 +679,8 @@ class ToolCallStreamer:
             if gt_idx != -1:
                 remaining = after_close[gt_idx + 1 :]
 
-                # Parse the complete JSON for the full tool_call output
-                tool_call = self._parse_tool_json(json_text)
-                if tool_call is None and "<arg_key>" in json_text:
-                    # GLM-4.6/4.7 emit <tool_call>name<arg_key>k</arg_key>
-                    # <arg_value>v</arg_value></tool_call> — key/value PAIRS, not a JSON
-                    # body — so _parse_tool_json (JSON-only) returns None and the whole
-                    # tool call was silently DROPPED (the streamer entered TOOL_JSON via
-                    # the shared `<tool_call` opener, buffered without leaking, then reset
-                    # to TEXT here with nothing emitted). Fall back to the model-aware
-                    # GLM parser on the reconstructed markup.
-                    try:
-                        from .tool_call_parser import parse_tool_calls
-
-                        _glm = parse_tool_calls(
-                            f"{TOOL_CALL_OPEN}>{json_text}{TOOL_CALL_CLOSE}>",
-                            model_name=self._model_name or "glm",
-                        )
-                    except Exception:
-                        _glm = []
-                    if _glm:
-                        _c = _glm[0]
-                        tool_call = ToolCallResult(
-                            id=self._current_tc_id
-                            if self._current_tc_start_emitted
-                            else self._next_call_id(),
-                            name=getattr(_c, "name", "") or "",
-                            arguments=getattr(_c, "arguments", "") or "{}",
-                        )
+                # Parse the complete body for the full tool_call output
+                tool_call = self._parse_tool_body(json_text)
                 if tool_call:
                     # Use the id/name we already assigned during streaming
                     if self._current_tc_start_emitted:
@@ -824,7 +812,7 @@ class ToolCallStreamer:
             self._pending_json_text = ""
             self._json_buffer = ""
 
-            tool_call = self._parse_tool_json(json_text) if json_text else None
+            tool_call = self._parse_tool_body(json_text) if json_text else None
             if tool_call:
                 # Use the id/name we already assigned during streaming
                 if self._current_tc_start_emitted:
@@ -961,6 +949,41 @@ class ToolCallStreamer:
 
         return results
 
+    def _parse_tool_body(self, body: str) -> ToolCallResult | None:
+        """Parse the body of one ``<tool_call>...</tool_call>`` block.
+
+        JSON bodies (Hermes/Qwen2.5 style) go through ``_parse_tool_json``.
+        Non-JSON bodies — GLM ``<arg_key>/<arg_value>`` pairs and Qwen3.x
+        ``<function=f><parameter=k>v</parameter></function>`` — go through the
+        model-aware parser on the reconstructed markup, so the call is emitted
+        when its block closes (not only by the end-of-stream recovery net).
+        """
+        tool_call = self._parse_tool_json(body)
+        if tool_call is not None:
+            return tool_call
+        if "<arg_key>" not in body and "<function=" not in body:
+            return None
+        try:
+            from .tool_call_parser import parse_tool_calls
+
+            calls = parse_tool_calls(
+                f"{TOOL_CALL_OPEN}>{body}{TOOL_CALL_CLOSE}>",
+                model_name=self._model_name
+                or ("glm" if "<arg_key>" in body else "qwen"),
+            )
+        except Exception:
+            calls = []
+        if not calls:
+            return None
+        call = calls[0]
+        return ToolCallResult(
+            id=self._current_tc_id
+            if self._current_tc_start_emitted
+            else self._next_call_id(),
+            name=getattr(call, "name", "") or "",
+            arguments=getattr(call, "arguments", "") or "{}",
+        )
+
     def _parse_tool_json(self, json_text: str) -> ToolCallResult | None:
         """Parse JSON from inside a <tool_call/>...</tool_call/> block.
 
@@ -1082,7 +1105,7 @@ class ToolCallStreamer:
         if self._state == StreamState.TOOL_JSON and self._json_buffer.strip():
             # We have accumulated JSON but never saw closing tag
             # Try to parse it anyway (truncated output)
-            tool_call = self._parse_tool_json(self._json_buffer.strip())
+            tool_call = self._parse_tool_body(self._json_buffer.strip())
             if tool_call:
                 # Use the id/name we already assigned during streaming
                 if self._current_tc_start_emitted:
@@ -1115,7 +1138,7 @@ class ToolCallStreamer:
             json_text = getattr(self, "_pending_json_text", "")
             self._pending_json_text = ""
             if json_text.strip():
-                tool_call = self._parse_tool_json(json_text.strip())
+                tool_call = self._parse_tool_body(json_text.strip())
                 if tool_call:
                     if self._current_tc_start_emitted:
                         tool_call.id = self._current_tc_id

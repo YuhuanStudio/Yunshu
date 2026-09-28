@@ -73,7 +73,10 @@ def test_all_three_nonstream_paths_call_enforce():
     # parse, not the enforced result) but enforcement is still called on all 3 paths.
     # ruff may split the call across lines; count the helper invocations on _raw_calls.
     assert src.count("_enforce_tool_choice(") >= 3
-    assert src.count("_raw_calls, req.tool_choice, req.parallel_tool_calls") >= 3
+    flat = " ".join(src.split())
+    # every call also passes the request's tool schemas (typed arguments).
+    call = "_raw_calls, req.tool_choice, req.parallel_tool_calls, tools=req.tools"
+    assert flat.count(call) >= 3
 
 
 def test_streamer_gated_on_not_none():
