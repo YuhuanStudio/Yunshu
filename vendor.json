@@ -54,7 +54,8 @@
       "license": "Apache-2.0",
       "local_changes": [
         "imports point at yunshu_engine.kernels.omlx",
-        "opt-in 5-bit repack + matvec/GEMM kernels (YUNSHU_PACKED_5BIT); 4-bit kernel sources unchanged"
+        "opt-in 5-bit repack + matvec/GEMM kernels (YUNSHU_PACKED_5BIT=1); 4-bit kernel sources unchanged",
+        "YUNSHU_PACKED_5BIT=int|int_tiled: _pack_layer/warmup hand 5/6/8-bit layers to kernels/int_code_linear.IntCodeLinear"
       ]
     },
     {
@@ -97,6 +98,36 @@
       "license": "Apache-2.0",
       "local_changes": [],
       "why": "qmv traversal header used by row_exact_qmv"
+    },
+    {
+      "path": "python/yunshu_engine/kernels/tensorfold/lane_qmm.py",
+      "repo": "https://github.com/ashhart/TensorFold",
+      "clone": "reference/TensorFold",
+      "upstream_path": "src/tensorfold/kernels/qwen/dense/v1/lane_qmm.py",
+      "commit": "34bae79a",
+      "license": "MIT",
+      "local_changes": [
+        "imports point at yunshu_engine.kernels.tensorfold (inputs, lane_widen)"
+      ],
+      "why": "integer-code tensor-unit matmul (5/6/8-bit via uint8 widening), used by kernels/int_code_linear.py"
+    },
+    {
+      "path": "python/yunshu_engine/kernels/tensorfold/lane_widen.py",
+      "repo": "https://github.com/ashhart/TensorFold",
+      "clone": "reference/TensorFold",
+      "upstream_path": "src/tensorfold/kernels/qwen/dense/v1/lane_widen.py",
+      "commit": "34bae79a",
+      "license": "MIT",
+      "local_changes": []
+    },
+    {
+      "path": "python/yunshu_engine/kernels/tensorfold/inputs.py",
+      "repo": "https://github.com/ashhart/TensorFold",
+      "clone": "reference/TensorFold",
+      "upstream_path": "src/tensorfold/kernels/inputs.py",
+      "commit": "34bae79a",
+      "license": "MIT",
+      "local_changes": []
     }
   ],
   "watch": [

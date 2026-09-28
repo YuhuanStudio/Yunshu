@@ -755,6 +755,17 @@ def _packed_bits_from_env() -> tuple[int, ...]:
 PACKED_BITS = _packed_bits_from_env()
 
 
+# Yunshu addition: YUNSHU_PACKED_5BIT=int (or int_tiled) serves 5/6/8-bit
+# layers with TensorFold's integer-code tensor-unit matmul instead
+# (kernels/int_code_linear.py); 4-bit layers keep the packed kernels above.
+def _int_mode_from_env() -> str | None:
+    mode = os.environ.get("YUNSHU_PACKED_5BIT", "0")
+    return mode if mode in ("int", "int_tiled") else None
+
+
+INT_MODE = _int_mode_from_env()
+
+
 def eligible(linear: Any) -> bool:
     return (
         type(linear) is nn.QuantizedLinear
@@ -847,6 +858,19 @@ def _pack_layer(layer: Any) -> int:
             for name, module in zip(run, packed):
                 setattr(parent, name, module)
             count += len(run)
+        if INT_MODE is not None:
+            from ..int_code_linear import IntCodeLinear
+            from ..int_code_linear import eligible as int_eligible
+
+            for name in names:
+                module = getattr(parent, name, None)
+                if int_eligible(module):
+                    setattr(
+                        parent,
+                        name,
+                        IntCodeLinear(module, tiled=INT_MODE == "int_tiled"),
+                    )
+                    count += 1
     return count
 
 
@@ -928,6 +952,18 @@ def warmup(model: Any) -> None:
         for rows in _WARM_ROWS:
             x = mx.zeros((rows, K), dtype=mx.bfloat16)
             mx.eval(packed_matmul(x, *arrays, K, N, bits))
+    if INT_MODE is not None:
+        from ..int_code_linear import IntCodeLinear
+
+        seen = set()
+        for _, module in model.named_modules():
+            key = (type(module), getattr(module, "input_dims", 0), getattr(module, "output_dims", 0), getattr(module, "bits", 0))
+            if not isinstance(module, IntCodeLinear) or key in seen:
+                continue
+            seen.add(key)
+            # One pipeline per 16-row op width: rows 1..16, 17..32, 33+.
+            for rows in (1, 17, 33):
+                mx.eval(module(mx.zeros((rows, module.input_dims), dtype=mx.bfloat16)))
 
 
 def enabled(model: Any) -> bool:

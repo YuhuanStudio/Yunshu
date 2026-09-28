@@ -13,3 +13,35 @@ carry their own upstream credits (MTPLX, dflash-mlx, Splash — Apache-2.0).
 
 The exact source commit and our intended local changes for every vendored file are listed in
 `vendor.json`; `just vendor-check` reports what changed upstream since.
+
+## TensorFold — `python/yunshu_engine/kernels/tensorfold/`
+
+`lane_qmm.py`, `lane_widen.py` (from `src/tensorfold/kernels/qwen/dense/v1/`) and `inputs.py`
+(from `src/tensorfold/kernels/`) are copied from https://github.com/ashhart/TensorFold at commit
+`34bae79ac97da6c3ab3fe10159cf49633ce8112a`. Only intra-package imports were changed. Yunshu calls
+their integer-code tensor-unit matmul from `python/yunshu_engine/kernels/int_code_linear.py`
+(opt-in `YUNSHU_PACKED_5BIT=int`). TensorFold's own notices credit MLX (MIT) for code it derives.
+
+```
+MIT License
+
+Copyright (c) 2026 TensorFold contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

@@ -1,10 +1,16 @@
-"""Stock QuantizedLinear vs NAX PackedLinear per projection, 4- and 5-bit.
+"""Stock QuantizedLinear vs tensor-unit projections per shape, 4- and 5-bit.
 
 Random weights at Qwen3.8-27B projection shapes; times one call at each row
-count (median of ``--iters``) so the 5-bit packed kernels can be judged
-against MLX's own quantized matmul before a full-model run.
+count (median of ``--iters``). Paths (``--paths``):
 
-    python scripts/research/bench_packed_5bit.py --rows 1 2 4 8 16 \
+- ``stock``: MLX ``QuantizedLinear`` (qmv / qmm)
+- ``packed``: our NAX ``PackedLinear`` (4-bit: oMLX kernels; 5-bit: the
+  dequantize-to-bf16 GEMM, ``YUNSHU_PACKED_5BIT=1``)
+- ``int``: TensorFold's integer-code lane matmul (5/6/8-bit, MLX layout),
+  ``int_tiled`` the same on 32-column tiled codes (``YUNSHU_PACKED_5BIT=int``)
+
+    python scripts/research/bench_packed_5bit.py --bits 5 --rows 1 2 4 8 16 \
+        --shapes qkv6144 mlp17408 down5120 --paths stock packed int int_tiled \
         --output runs/packed-5bit.jsonl
 """
 
@@ -19,6 +25,7 @@ import mlx.nn as nn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python"))
 
+from yunshu_engine.kernels.int_code_linear import IntCodeLinear  # noqa: E402
 from yunshu_engine.kernels.omlx import qwen35_packed_linear as pl  # noqa: E402
 
 # (name, K, N) for Qwen3.8-27B (hidden 5120, MLP 17408).
@@ -28,6 +35,10 @@ SHAPES = [
     ("attn_q", 5120, 12288),
     ("attn_o", 6144, 5120),
     ("gdn_qkv", 5120, 10240),
+    # Shapes named in the 5-bit comparison request.
+    ("qkv6144", 5120, 6144),
+    ("mlp17408", 5120, 17408),
+    ("down5120", 17408, 5120),
 ]
 
 
@@ -60,6 +71,12 @@ def main():
     ap.add_argument("--bits", type=int, nargs="*", default=[4, 5])
     ap.add_argument("--iters", type=int, default=30)
     ap.add_argument("--shapes", nargs="*", help="subset of shape names")
+    ap.add_argument(
+        "--paths",
+        nargs="*",
+        default=["stock", "packed"],
+        choices=["stock", "packed", "int", "int_tiled"],
+    )
     ap.add_argument("--output", type=Path)
     a = ap.parse_args()
     out = a.output.open("a") if a.output else None
@@ -68,28 +85,43 @@ def main():
             continue
         for bits in a.bits:
             lin = make(K, N, bits)
-            (packed,) = pl._pack([lin])
+            impls = {"stock": lin}
+            if "packed" in a.paths:
+                saved = pl.PACKED_BITS
+                pl.PACKED_BITS = (4, 5)
+                try:
+                    (impls["packed"],) = pl._pack([lin])
+                finally:
+                    pl.PACKED_BITS = saved
+            if bits != 4 and "int" in a.paths:
+                impls["int"] = IntCodeLinear(lin)
+            if bits != 4 and "int_tiled" in a.paths:
+                impls["int_tiled"] = IntCodeLinear(lin, tiled=True)
+            mx.eval([m.parameters() for m in impls.values()])
             for rows in a.rows:
                 x = (mx.random.normal((rows, K)) * 0.5).astype(mx.bfloat16)
-                stock = timeit(lin, x, a.iters)
-                pk = timeit(packed, x, a.iters)
+                us = {
+                    path: round(timeit(impls[path], x, a.iters) * 1e6, 1)
+                    for path in a.paths
+                    if path in impls
+                }
                 gb = N * K * bits / 8 / 1e9
+                best = min(us, key=us.get)
                 row = {
                     "shape": name,
                     "K": K,
                     "N": N,
                     "bits": bits,
                     "rows": rows,
-                    "stock_us": round(stock * 1e6, 1),
-                    "packed_us": round(pk * 1e6, 1),
-                    "speedup": round(stock / pk, 2),
-                    "packed_gbps": round(gb / pk, 1),
+                    **{f"{p}_us": v for p, v in us.items()},
+                    "best": best,
+                    "best_gbps": round(gb / (us[best] / 1e6), 1),
                 }
                 print(json.dumps(row), flush=True)
                 if out:
                     out.write(json.dumps(row) + "\n")
                     out.flush()
-            del lin, packed
+            del lin, impls
             mx.clear_cache()
 
 

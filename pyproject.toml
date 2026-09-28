@@ -185,6 +185,9 @@ extend-exclude = [
     "python/yunshu_engine/kernels/omlx/row_exact_qmv.py",
     "python/yunshu_engine/kernels/omlx/module_cache.py",
     "python/yunshu_engine/kernels/omlx/moe_verify_gather.py",
+    "python/yunshu_engine/kernels/tensorfold/lane_qmm.py",
+    "python/yunshu_engine/kernels/tensorfold/lane_widen.py",
+    "python/yunshu_engine/kernels/tensorfold/inputs.py",
 ]
 
 [tool.ruff.lint]
