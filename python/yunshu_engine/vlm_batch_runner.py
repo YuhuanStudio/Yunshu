@@ -36,6 +36,10 @@ logger = logging.getLogger(__name__)
 # Upstream prefill default; APC checkpoints land on these chunk boundaries and
 # cancellation is honoured between chunks (~2 s at 2K tokens on a 27B model).
 PREFILL_STEP = 2048
+# Speculative batches are cohorts: wait this long for simultaneous arrivals.
+SPEC_COALESCE_S = 0.03
+SPEC_MIN_COALESCE_S = 0.005
+SPEC_MAX_ROWS = 8
 
 
 @dataclass
@@ -157,9 +161,12 @@ class VLMBatchRunner:
         self._executor = executor
         self._lock = threading.Lock()
         self._pending: list[_Job] = []
-        self._groups: dict[tuple, _Group] = {}
+        self._groups: dict[int, _Group] = {}
         self._driving = False
         self.clear_on_idle = False
+        # Requests the engine has accepted (incl. ones still being prepared);
+        # speculative cohorts only wait for arrivals when others are coming.
+        self.inflight = lambda: 0
 
     def prepare_images(self, prompt: str, image_paths: list[str]):
         """Preprocess + encode images for one prompt on the MLX thread.
@@ -303,7 +310,19 @@ class VLMBatchRunner:
         self._executor.submit(self._drive_slice)
 
     def _group_key(self, job: _Job, use_apc: bool) -> tuple:
-        return (job.use_draft, job.sampling, job.logprobs, job.top_logprobs, use_apc)
+        # Requests with logits processors (constraints, penalties) get their own
+        # generator: in a shared batch a JSON constraint was applied to another
+        # row after mixed warm/cold APC admission (a math answer "102" came out
+        # as "1" + EOS). Plain requests batch together.
+        solo = id(job) if job.processors else None
+        return (
+            job.use_draft,
+            job.sampling,
+            job.logprobs,
+            job.top_logprobs,
+            use_apc,
+            solo,
+        )
 
     def _new_group(self, job: _Job, use_apc: bool) -> _Group:
         from mlx_vlm.generate.ar import BatchGenerator
@@ -335,10 +354,22 @@ class VLMBatchRunner:
             except Exception:
                 logger.debug("APC admission check failed; using APC", exc_info=True)
         job.stats.used_apc = use_apc
+        if job.use_draft and any(
+            g.use_draft and g.sealed for g in self._groups.values()
+        ):
+            # The drafter holds state for one speculative batch, and a running
+            # speculative batch cannot take new rows: decode this request in
+            # the continuous (non-speculative) batch alongside it instead.
+            job.use_draft = False
+            job.stats.used_draft = False
         key = self._group_key(job, use_apc)
-        group = self._groups.get(key)
+        group = next(
+            (g for g in self._groups.values() if g.key == key and not g.sealed), None
+        )
         if group is None:
-            group = self._groups[key] = self._new_group(job, use_apc)
+            group = self._new_group(job, use_apc)
+            group.key = key
+            self._groups[id(group)] = group
         if job.seed is not None and not group.jobs:
             mx.random.seed(int(job.seed) & ((1 << 63) - 1))
         pkw = job.prompt_kwargs
@@ -351,6 +382,8 @@ class VLMBatchRunner:
         salt = job.salt if job.salt is not None else self.apc_semantic_hash
         if salt is not None:
             pkw["_apc_semantic_hash"] = salt
+        rd = pkw.get("rope_deltas")
+        job.rope_delta = float(rd.reshape(-1)[0].item()) if rd is not None else 0.0
         (uid,) = group.gen.insert(
             [job.ids],
             max_tokens=job.max_tokens,
@@ -368,6 +401,7 @@ class VLMBatchRunner:
         job = group.jobs.pop(uid, None)
         if job is None:
             return
+        group.done[uid] = job
         if reason is not None:
             job.stats.finish_reason = reason
         job.out.put(_DONE)
@@ -384,10 +418,24 @@ class VLMBatchRunner:
                 self._finish(group, uid, "cancel" if cancelled else None)
         if not group.jobs:
             return
+        if group.use_draft and not group.sealed:
+            # A running speculative batch cannot take new rows (upstream), so
+            # give near-simultaneous arrivals a moment to join this cohort;
+            # later ones start their own group.
+            age = time.perf_counter() - group.created
+            if len(group.jobs) < SPEC_MAX_ROWS and (
+                age < SPEC_MIN_COALESCE_S
+                or (age < SPEC_COALESCE_S and self.inflight() > self._active_jobs())
+            ):
+                return
+            group.sealed = True
         if batch_invariant.is_installed():
-            # Invariance only matters when a request drafts; others take
-            # the faster stock kernels.
-            batch_invariant.set_active(group.use_draft)
+            # Spec on == spec off is only guaranteed for one drafting row
+            # (the invariant kernels take <= 8 verify rows); everything else
+            # takes the faster verify kernels.
+            batch_invariant.set_active(group.use_draft and len(group.jobs) == 1)
+        if group.use_draft:
+            self._set_spec_rope_deltas(group)
         prompt_progress, responses = group.gen.next()
         for progress in prompt_progress or []:
             job = group.jobs.get(getattr(progress, "uid", None))
@@ -417,6 +465,23 @@ class VLMBatchRunner:
             job.out.put((int(response.token), lp))
             if response.finish_reason is not None:
                 self._finish(group, response.uid, response.finish_reason)
+
+    def _set_spec_rope_deltas(self, group: _Group) -> None:
+        """Speculative verify reads mRoPE deltas from model state, which any
+        other prefill (another group, a mixed warm/cold APC batch) overwrites;
+        set them for this batch's rows before every step."""
+        batch = getattr(group.gen, "_generation_batch", None)
+        uids = getattr(batch, "_all_uids", None)
+        lm = self.model.language_model
+        if not uids or not getattr(batch, "is_speculative", False):
+            return
+        if not hasattr(lm, "_rope_deltas"):
+            return
+        deltas = [
+            getattr(group.jobs.get(uid) or group.done.get(uid), "rope_delta", 0.0)
+            for uid in uids
+        ]
+        lm._rope_deltas = mx.array(deltas, dtype=mx.float32)[:, None]
 
     def _drive_slice(self, resubmit: bool = True) -> None:
         """One scheduling slice on the MLX thread."""
@@ -482,10 +547,15 @@ class _Job:
     uid: int | None = None
     start: float = 0.0
     abandoned: bool = False
+    rope_delta: float = 0.0
 
 
 @dataclass
 class _Group:
     gen: Any
     use_draft: bool
+    key: tuple = ()
+    sealed: bool = False
+    created: float = field(default_factory=time.perf_counter)
     jobs: dict = field(default_factory=dict)
+    done: dict = field(default_factory=dict)

@@ -152,13 +152,25 @@ def install(language_model: Any, model: Any = None, packed: bool = False) -> dic
             ]
             return mx.concatenate(rows, axis=0).reshape(*x.shape[:2], -1)
 
+        # Inactive (sampled or multi-row batches): the verify kernels that
+        # were installed before us, not the slow exact per-row fallback.
+        orig_linear = ops._target_verify_linear
+        orig_linears = ops._target_verify_linears
+        orig_quantized = ops._target_verify_quantized_linear
+
         def inv_linear(linear, x):
+            if not _STATE["active"]:
+                return orig_linear(linear, x)
             return invariant_linear(linear, x, exact_rows)
 
         def inv_linears(linears, x):
+            if not _STATE["active"]:
+                return orig_linears(linears, x)
             return tuple(inv_linear(linear, x) for linear in linears)
 
         def inv_quantized(linear, x):
+            if not _STATE["active"]:
+                return orig_quantized(linear, x)
             return inv_linear(linear, x)
 
         ops._target_verify_linear = inv_linear
@@ -186,17 +198,29 @@ def install(language_model: Any, model: Any = None, packed: bool = False) -> dic
         nn.QuantizedLinear.__call__ = call
 
         verifier_cls = sv.Qwen3_5BatchInvariantForward
+        orig_v = {
+            name: getattr(verifier_cls, name)
+            for name in ("_linear", "_linears", "quantized_linear", "quantized_argmax")
+        }
 
         def v_linear(self, linear, x):
+            if not _STATE["active"]:
+                return orig_v["_linear"](self, linear, x)
             return inv_linear(linear, x)
 
         def v_linears(self, linears, x):
+            if not _STATE["active"]:
+                return orig_v["_linears"](self, linears, x)
             return inv_linears(linears, x)
 
         def v_quantized_linear(self, linear, x):
+            if not _STATE["active"]:
+                return orig_v["quantized_linear"](self, linear, x)
             return inv_linear(linear, x)
 
         def v_quantized_argmax(self, linear, x, *args, **kwargs):
+            if not _STATE["active"]:
+                return orig_v["quantized_argmax"](self, linear, x, *args, **kwargs)
             if kwargs.get("token_mask") is not None or (args and args[0] is not None):
                 return None
             return mx.argmax(inv_linear(linear, x), axis=-1)
