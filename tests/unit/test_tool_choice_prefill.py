@@ -18,18 +18,16 @@ from __future__ import annotations
 import inspect
 
 from yunshu_engine.tool_call_streamer import ToolCallStreamer
+from yunshu_engine.tool_format import fallback_formats, parse_tool_output
 from yunshu_gateway.routers.chat import (
     ToolChoiceFunction,
     _append_tool_prefill,
     _enforce_tool_choice,
     _tool_choice_prefill,
 )
-from yunshu_gateway.streaming import (
-    clean_tool_call_markup,
-    extract_tool_calls_model_aware,
-)
 
-MODEL = "qwen2.5"
+# A model without a template tool format: the injected prompt's form.
+FORMATS = fallback_formats()
 
 
 # ── _tool_choice_prefill ──
@@ -95,7 +93,7 @@ def _parse_with_prefill(prefill: str, model_completion: str, tool_choice):
     """Mirror the non-streaming gateway path: the engine returns only the
     CONTINUATION (model_completion); prepend the prefill, parse, enforce."""
     raw_text = prefill + model_completion
-    raw_calls = extract_tool_calls_model_aware(raw_text, MODEL)
+    raw_calls, _content = parse_tool_output(raw_text, FORMATS)
     calls = _enforce_tool_choice(raw_calls, tool_choice, True)
     return raw_text, raw_calls, calls
 
@@ -134,7 +132,7 @@ def test_prefill_markup_does_not_leak_into_content():
     prefill = _tool_choice_prefill("required")
     completion = '{"name": "get_weather", "arguments": {"city": "SF"}}\n</tool_call>'
     raw_text = prefill + completion
-    cleaned = clean_tool_call_markup(raw_text)
+    _calls, cleaned = parse_tool_output(raw_text, FORMATS)
     assert "<tool_call>" not in cleaned
     assert "get_weather" not in cleaned
 
@@ -145,7 +143,7 @@ def test_prefill_markup_does_not_leak_into_content():
 def test_streamer_seeded_with_prefill_surfaces_call():
     # The opening marker lives in the prompt, so the streamer must be seeded with it
     # before the model's continuation or it never enters tool-call state.
-    streamer = ToolCallStreamer(model_name=MODEL)
+    streamer = ToolCallStreamer(FORMATS)
     prefill = _tool_choice_prefill("required")
     completion = '{"name": "get_weather", "arguments": {"city": "SF"}}</tool_call>'
 
@@ -164,7 +162,7 @@ def test_streamer_seeded_with_prefill_surfaces_call():
 
 def test_streamer_named_force_seeded_with_args_only_completion():
     tc = ToolChoiceFunction(type="function", function={"name": "get_weather"})
-    streamer = ToolCallStreamer(model_name=MODEL, forced_tool_name="get_weather")
+    streamer = ToolCallStreamer(FORMATS, forced_tool_name="get_weather")
     prefill = _tool_choice_prefill(tc)
     completion = '"city": "SF"}}</tool_call>'
 

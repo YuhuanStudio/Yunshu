@@ -133,3 +133,13 @@ def coerce_tool_calls(calls: list | None, tools: Any) -> list | None:
             }
         out.append(call)
     return out
+
+
+def arguments_json(arguments: Any) -> str:
+    """Tool-call ``arguments`` as the wire string: strings pass through,
+    ``None`` is ``"{}"``, anything else is JSON-encoded."""
+    if isinstance(arguments, str):
+        return arguments
+    if arguments is None:
+        return "{}"
+    return json.dumps(arguments, ensure_ascii=False)

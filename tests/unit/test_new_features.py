@@ -5,9 +5,7 @@ import pytest
 from yunshu_gateway.streaming import (
     _KEEPALIVE_SENTINEL,
     _safe_anext,
-    clean_tool_call_markup,
     extract_thinking,
-    extract_tool_calls,
     format_openai_non_stream,
 )
 
@@ -44,53 +42,6 @@ class TestExtractThinking:
         thinking, content = extract_thinking(text)
         assert "first" in thinking and "second" in thinking
         assert "mid" in content and "end" in content
-
-
-class TestToolCallExtraction:
-    def test_hermes_format(self):
-        # Use raw strings to get literal > not \>
-        # But actually models emit plain <tool_call...> not backslash-escaped
-        # Test with actual model output format
-        model_output = r'<tool_call\>{"name": "get_weather", "arguments": {"city": "Tokyo"}}</tool_call\>'
-        calls = extract_tool_calls(model_output)
-        # May not match if format differs — test the clean case
-        if calls:
-            assert calls[0]["name"] == "get_weather"
-
-    def test_actual_hermes_tags(self):
-        # This is what Qwen/Llama models actually output
-        text = (
-            r'<tool_call\>{"name": "search", "arguments": {"q": "hello"}}</tool_call\>'
-        )
-        calls = extract_tool_calls(text)
-        if not calls:
-            # Test with simpler format
-            text2 = r'<tool_call\>{"name": "search", "arguments": {"q": "hello"}}</tool_call\>'
-            extract_tool_calls(text2)
-        # At minimum, no crash
-        assert isinstance(calls, list)
-
-    def test_no_tool_calls(self):
-        assert extract_tool_calls("Just a normal response") == []
-
-    def test_code_block_format(self):
-        text = '```tool\n{"name": "search", "arguments": {"query": "test"}}\n```'
-        calls = extract_tool_calls(text)
-        assert len(calls) == 1
-        assert calls[0]["name"] == "search"
-
-
-class TestCleanToolCallMarkup:
-    def test_removes_tool_calls(self):
-        text = r"before <tool_call\>content here</tool_call\> after"
-        result = clean_tool_call_markup(text)
-        assert result == "before  after"
-
-    def test_removes_orphan_legacy_tag_after_parsed_call(self):
-        assert clean_tool_call_markup(r"<tool_call\>") == ""
-
-    def test_preserves_normal_text(self):
-        assert clean_tool_call_markup("No tool calls here") == "No tool calls here"
 
 
 class TestFormatNonStreamWithTools:

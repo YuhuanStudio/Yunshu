@@ -32,6 +32,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from yunshu_engine.tool_arguments import coerce_tool_calls
 from yunshu_engine.tool_call_streamer import ToolCallStreamer
+from yunshu_engine.tool_format import parse_tool_output, tool_formats
 
 from ..engine import get_engine
 from ..streaming import (
@@ -1088,7 +1089,7 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
         tool_prompt = (
             "\n\nYou have access to the following tools. When you need to call a tool, "
         )
-        tool_prompt += 'output a tool call in the following format:\n<tool_call\\>{"name": "...", "arguments": {...}}</tool_call\\>\n\n'
+        tool_prompt += 'output a tool call in the following format:\n<tool_call>{"name": "...", "arguments": {...}}</tool_call>\n\n'
         tool_prompt += "Available tools:\n"
         for tool in req.tools:
             tool_prompt += f"- {tool.name}"
@@ -1150,7 +1151,7 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
                         # Switch to prompt-only enforcement: strongly request the
                         # `<tool_call>{...}</tool_call>` format in the system
                         # prompt + emit explicit JSON template, then rely on
-                        # extract_tool_calls_v2 + ToolCallStreamer to parse the
+                        # the model's tool formats + ToolCallStreamer to parse the
                         # output. The "auto" path uses this exact strategy and
                         # produces valid tool_use blocks reliably.
                         tool_prompt += (
@@ -1547,26 +1548,24 @@ async def _non_stream_batched(
     has_tool_calls = False
     if _suppress_tool_extraction and req.tools:
         # tool_choice="none" suppresses tool_use emission, but the model may still
-        # emit <tool_call> markup — strip it from the visible text so it doesn't leak (the
-        # chat router cleans even under "none"; the old Anthropic path skipped cleanup).
-        from ..streaming import clean_tool_call_markup
-
-        text_block["text"] = clean_tool_call_markup(visible_text)
+        # emit tool-call markup — keep it out of the visible text.
+        text_block["text"] = parse_tool_output(
+            visible_text, tool_formats(engine), req.tools
+        )[1]
     if req.tools and not _suppress_tool_extraction:
-        from ..streaming import clean_tool_call_markup, extract_tool_calls_model_aware
-
         # Prepend the forced-tool prefill (if any) so the markup is complete for the
         # parser — the model only generated the continuation after it.
         _parse_text = getattr(req, "_tool_prefill", "") + visible_text
-        tool_calls = extract_tool_calls_model_aware(_parse_text, req.model)
+        tool_calls, cleaned = parse_tool_output(
+            _parse_text, tool_formats(engine), req.tools
+        )
         # enforce a forced/none-parallel tool_choice post-generation (parity with
         # chat's _enforce_tool_choice) — drop wrong-named / surplus calls.
         tool_calls = _enforce_anthropic_tool_choice(tool_calls, req.tool_choice)
         tool_calls = coerce_tool_calls(tool_calls, req.tools)
         if tool_calls:
             has_tool_calls = True
-            # Remove the text block and replace with cleaned version
-            cleaned = clean_tool_call_markup(_parse_text)
+            # Replace the text block with the markup-free text
             text_block["text"] = cleaned
             # Per Anthropic spec: omit empty text blocks when tool_use is present
             if not cleaned.strip():
@@ -1807,26 +1806,24 @@ async def _non_stream_legacy(
     has_tool_calls = False
     if _suppress_tool_extraction and req.tools:
         # tool_choice="none" suppresses tool_use emission, but the model may still
-        # emit <tool_call> markup — strip it from the visible text so it doesn't leak (the
-        # chat router cleans even under "none"; the old Anthropic path skipped cleanup).
-        from ..streaming import clean_tool_call_markup
-
-        text_block["text"] = clean_tool_call_markup(visible_text)
+        # emit tool-call markup — keep it out of the visible text.
+        text_block["text"] = parse_tool_output(
+            visible_text, tool_formats(engine), req.tools
+        )[1]
     if req.tools and not _suppress_tool_extraction:
-        from ..streaming import clean_tool_call_markup, extract_tool_calls_model_aware
-
         # Prepend the forced-tool prefill (if any) so the markup is complete for the
         # parser — the model only generated the continuation after it.
         _parse_text = getattr(req, "_tool_prefill", "") + visible_text
-        tool_calls = extract_tool_calls_model_aware(_parse_text, req.model)
+        tool_calls, cleaned = parse_tool_output(
+            _parse_text, tool_formats(engine), req.tools
+        )
         # enforce a forced/none-parallel tool_choice post-generation (parity with
         # chat's _enforce_tool_choice) — drop wrong-named / surplus calls.
         tool_calls = _enforce_anthropic_tool_choice(tool_calls, req.tool_choice)
         tool_calls = coerce_tool_calls(tool_calls, req.tools)
         if tool_calls:
             has_tool_calls = True
-            # Remove the text block and replace with cleaned version
-            cleaned = clean_tool_call_markup(_parse_text)
+            # Replace the text block with the markup-free text
             text_block["text"] = cleaned
             # Per Anthropic spec: omit empty text blocks when tool_use is present
             if not cleaned.strip():
@@ -1929,9 +1926,10 @@ async def _stream_anthropic(
     _allow_parallel = not (_tc.get("disable_parallel_tool_use") if _tc else False)
     _tool_streamer = (
         ToolCallStreamer(
-            model_name=req.model,
+            tool_formats(engine),
             forced_tool_name=_forced_name,
             allow_parallel=_allow_parallel,
+            tools=req.tools,
         )
         if has_tools
         else None
@@ -2848,7 +2846,7 @@ async def count_tokens(req: AnthropicMessagesRequest, request: Request) -> dict:
         tool_prompt = (
             "\n\nYou have access to the following tools. When you need to call a tool, "
         )
-        tool_prompt += 'output a tool call in the following format:\n<tool_call\\>{"name": "...", "arguments": {...}}</tool_call\\>\n\n'
+        tool_prompt += 'output a tool call in the following format:\n<tool_call>{"name": "...", "arguments": {...}}</tool_call>\n\n'
         tool_prompt += "Available tools:\n"
         for tool in req.tools:
             tool_prompt += f"- {tool.name}"

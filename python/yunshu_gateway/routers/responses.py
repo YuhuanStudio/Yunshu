@@ -25,7 +25,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
 from yunshu_engine import settings
-from yunshu_engine.tool_arguments import coerce_tool_calls
 
 from ..engine import get_engine, get_engine_for_model
 
@@ -1421,18 +1420,18 @@ async def create_response(req: ResponsesRequest, request: Request):
             # Extract tool calls for this choice
             tool_calls = None
             if req.tools:
-                from .chat import clean_tool_call_markup, extract_tool_calls_model_aware
+                from yunshu_engine.tool_format import parse_tool_output, tool_formats
 
                 # Prepend the forced-tool prefill (if any) so the markup is complete for
                 # the parser — the model only generated the continuation after it.
                 _parse_text = (
                     (_resp_tool_prefill + text) if _resp_tool_prefill else text
                 )
-                tool_calls = coerce_tool_calls(
-                    extract_tool_calls_model_aware(_parse_text, req.model), req.tools
+                tool_calls, _clean = parse_tool_output(
+                    _parse_text, tool_formats(engine), req.tools
                 )
                 if tool_calls:
-                    text = clean_tool_call_markup(_parse_text)
+                    text = _clean
                     finish_reason = "tool_calls"
 
             # Build output item for this choice
@@ -1803,9 +1802,11 @@ async def _stream_response(
         _tc_forced = (
             req.tool_choice.get("name") if isinstance(req.tool_choice, dict) else None
         )
+        from yunshu_engine.tool_format import tool_formats
+
         _resp_tool_streamer = ToolCallStreamer(
+            tool_formats(engine),
             forced_tool_name=_tc_forced,
-            model_name=req.model,
             allow_parallel=req.parallel_tool_calls,
             tools=req.tools,
         )
@@ -2230,14 +2231,13 @@ async def _stream_response(
             tool_calls = None
             clean_text = accumulated_text
             if req.tools:
-                from .chat import clean_tool_call_markup, extract_tool_calls_model_aware
+                from yunshu_engine.tool_format import parse_tool_output, tool_formats
 
-                tool_calls = coerce_tool_calls(
-                    extract_tool_calls_model_aware(accumulated_text, req.model),
-                    req.tools,
+                tool_calls, _clean = parse_tool_output(
+                    accumulated_text, tool_formats(engine), req.tools
                 )
                 if tool_calls:
-                    clean_text = clean_tool_call_markup(accumulated_text)
+                    clean_text = _clean
 
             # ── Lifecycle: response.output_text.done (use cleaned text). output_index is
             # _msg_idx (1 when a reasoning item precedes the message, else 0) —. ──
@@ -2311,7 +2311,7 @@ async def _stream_response(
                         item_type="function_call",
                         call_id=fc_call_id,
                         # tc is a dict ({"name","arguments"} from
-                        # extract_tool_calls_model_aware), NOT an object — getattr() on a
+                        # parse_tool_output), NOT an object — getattr() on a
                         # dict returns the default, so the fix silently emitted EMPTY
                         # name/arguments on the streaming output_item.added (re-breaking
                         # on the sibling path). Use subscript like the .done events

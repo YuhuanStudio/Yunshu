@@ -77,6 +77,11 @@ match.
   post-request cache clear queued behind every other request held all responses until the last
   one finished. The non-streaming VLM path also no longer applies a 120 s default timeout that
   counted time spent waiting in the queue (a client-set `timeout` still applies).
+- Tool calls from non-Qwen families (Gemma-4, GLM-4.7, Mistral, pythonic, DeepSeek, Kimi,
+  MiniMax, …) were left in `content` with `tool_calls` empty. The tool-call format now comes from
+  the model's chat template (upstream mlx-vlm/mlx-lm registry) instead of guessing from the
+  request's model name, and every route (chat, Anthropic, Responses, Realtime; streaming and not)
+  parses with that format's upstream parser. Arguments are typed with the request's tool schemas.
 
 ### Removed
 

@@ -6,7 +6,7 @@ Each model family has its own output format for
 reasoning, tool calls, and structured content. This factory auto-detects
 the model family and applies the correct parser to extract:
 - Reasoning/thinking content
-- Tool calls (already handled by tool_call_parser.py)
+- Tool calls (handled by tool_format.py)
 - Clean content (stripping model-specific markup)
 
 Complements reasoning_parser.py (which handles thinking tags) by also

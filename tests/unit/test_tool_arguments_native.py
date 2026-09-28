@@ -11,6 +11,12 @@ from yunshu_engine.tool_arguments import (
     tool_schemas,
 )
 from yunshu_engine.tool_call_streamer import ToolCallStreamer
+from yunshu_engine.tool_format import formats_for_tokenizer
+
+# Qwen3.x: the chat template's tool format is upstream's qwen3_coder XML.
+QWEN = formats_for_tokenizer(
+    SimpleNamespace(chat_template="{{ '<tool_call>\\n<function=' }}")
+)
 
 WEATHER = {
     "type": "function",
@@ -117,7 +123,7 @@ QWEN_XML = (
 
 @pytest.mark.parametrize("step", [1, 3, 7])
 def test_streamer_types_qwen_xml_call(step):
-    st = ToolCallStreamer(model_name="Qwen3.8-27B", tools=[WEATHER])
+    st = ToolCallStreamer(QWEN, tools=[WEATHER])
     outs = []
     for i in range(0, len(QWEN_XML), step):
         outs += st.process_token(QWEN_XML[i : i + step])
@@ -133,7 +139,7 @@ def test_streamer_types_qwen_xml_call(step):
 
 
 def test_streamer_without_tools_keeps_strings():
-    st = ToolCallStreamer(model_name="Qwen3.8-27B")
+    st = ToolCallStreamer(QWEN)
     outs = st.process_token(QWEN_XML) + st.flush()
     (call,) = [o.tool_call for o in outs if o.tool_call is not None]
     assert json.loads(call.arguments)["days"] == "3"
@@ -260,7 +266,7 @@ def test_streamed_xml_call_starts_with_id_and_name():
             },
         }
     ]
-    s = ToolCallStreamer(model_name="Qwen3.8-27B", tools=tools)
+    s = ToolCallStreamer(QWEN, tools=tools)
     text = (
         "<tool_call>\n<function=get_weather>\n<parameter=city>\nTaipei\n</parameter>\n"
         "<parameter=days>\n3\n</parameter>\n</function>\n</tool_call>"

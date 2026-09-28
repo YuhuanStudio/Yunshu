@@ -79,7 +79,7 @@ def test_function_call_item_carries_fields():
 def test_stream_function_call_added_uses_subscript_not_getattr():
     """the responses STREAMING function_call output_item.added must read
     name/arguments via dict subscript. tool_calls comes from
-    extract_tool_calls_model_aware → list[dict], so getattr(tc, "name", "") returns
+    parse_tool_output → list[dict], so getattr(tc, "name", "") returns
     the EMPTY default on a dict, silently re-breaking only on the stream path.
     Guard the real call site against regression to getattr."""
     import inspect

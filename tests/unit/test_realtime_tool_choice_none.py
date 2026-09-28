@@ -48,10 +48,10 @@ def test_generate_response_snapshots_and_gates_on_tool_choice():
     # assignment and the key independently)
     assert "_snap_tool_choice = config.get(" in src
     assert '"tool_choice"' in src
-    # the tool-call parse is gated on tool_choice != "none"
+    # markup is always stripped from the transcript; the calls themselves are
+    # kept only when tool_choice != "none"
     snap = src.index("_snap_tool_choice")
-    gate = src.index('_snap_tool_choice != "none"', snap)
-    parse = src.index("parse_tool_calls(full_text", gate)
-    assert snap < gate < parse, "parse must be gated on _snap_tool_choice != 'none'"
-    # and the none path still strips stray markup (class)
-    assert '_snap_tool_choice == "none"' in src
+    parse = src.index("self._parse_tool_calls(", snap)
+    gate = src.index('_snap_tool_choice != "none" and _calls', parse)
+    keep = src.index("tool_calls = _calls", gate)
+    assert snap < parse < gate < keep

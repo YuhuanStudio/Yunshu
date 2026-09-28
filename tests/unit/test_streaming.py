@@ -10,9 +10,7 @@ from yunshu_gateway.streaming import (
     _KEEPALIVE_SENTINEL,
     ClosingStreamingResponse,
     ThinkingParser,
-    clean_tool_call_markup,
     extract_thinking,
-    extract_tool_calls,
     format_anthropic_chunk,
     format_openai_chunk,
     format_openai_done,
@@ -294,86 +292,6 @@ class TestExtractThinking:
 # ── Tool call extraction ──
 
 
-class TestExtractToolCalls:
-    def test_hermes_format(self):
-        text = '<tool_call/>{"name": "get_weather", "arguments": {"city": "SF"}}</tool_call/>'
-        calls = extract_tool_calls(text)
-        assert len(calls) == 1
-        assert calls[0]["name"] == "get_weather"
-        assert "city" in calls[0]["arguments"]
-
-    def test_multiple_tool_calls(self):
-        text = (
-            '<tool_call/>{"name": "fn1", "arguments": {"a": 1}}</tool_call/>'
-            '<tool_call/>{"name": "fn2", "arguments": {"b": 2}}</tool_call/>'
-        )
-        calls = extract_tool_calls(text)
-        assert len(calls) == 2
-
-    def test_no_tool_calls(self):
-        calls = extract_tool_calls("just normal text")
-        assert calls == []
-
-    def test_code_block_format(self):
-        text = '```json\n{"name": "search", "arguments": {"q": "test"}}\n```'
-        calls = extract_tool_calls(text)
-        assert len(calls) == 1
-        assert calls[0]["name"] == "search"
-
-
-class TestCleanToolCallMarkup:
-    def test_removes_tool_call_tags(self):
-        text = 'before<tool_call/>{"name": "fn"}</tool_call/>after'
-        cleaned = clean_tool_call_markup(text)
-        assert "<tool_call" not in cleaned
-        assert "</tool_call" not in cleaned
-        assert "before" in cleaned
-        assert "after" in cleaned
-
-    def test_cleans_extra_newlines(self):
-        text = "hello\n\n\n\nworld"
-        cleaned = clean_tool_call_markup(text)
-        assert cleaned == "hello\n\nworld"
-
-
-class TestQwenXmlToolCalls:
-    """Tests for Qwen/Llama XML format tool calling."""
-
-    def test_qwen_xml_format(self):
-        text = '<function=get_weather>{"city": "SF"}</function>'
-        calls = extract_tool_calls(text)
-        assert len(calls) == 1
-        assert calls[0]["name"] == "get_weather"
-        assert "city" in calls[0]["arguments"]
-
-    def test_qwen_xml_with_parameters(self):
-        text = "<function=search><parameter=query>test query</parameter></function>"
-        calls = extract_tool_calls(text)
-        assert len(calls) == 1
-        assert calls[0]["name"] == "search"
-        assert "test query" in calls[0]["arguments"]
-
-    def test_clean_removes_function_tags(self):
-        text = 'before<function=fn>{"a": 1}</function>after'
-        cleaned = clean_tool_call_markup(text)
-        assert "<function" not in cleaned
-        assert "before" in cleaned
-        assert "after" in cleaned
-
-    def test_argument_sanitization(self):
-        from yunshu_gateway.streaming import _sanitize_arguments
-
-        assert _sanitize_arguments({"a": 1}) == '{"a": 1}'
-        assert _sanitize_arguments('{"a": 1}') == '{"a": 1}'
-        # Invalid JSON is preserved as-is for caller to handle (not silently
-        # replaced with "{}")
-        assert _sanitize_arguments("not json") == "not json"
-        assert _sanitize_arguments(None) == "{}"
-
-
-# ── Sentinel ──
-
-
 class TestSentinel:
     def test_sentinel_is_unique(self):
         assert _KEEPALIVE_SENTINEL is not None
@@ -438,70 +356,6 @@ class TestLogprobsFormatting:
         )
         chunk = json.loads(chunk_str.split("data: ")[1].strip())
         assert "logprobs" not in chunk["choices"][0]
-
-
-class TestExtractToolCallsV2:
-    """Tests for extended tool call parser (C15: Mistral, ChatML, DeepSeek formats)."""
-
-    def test_mistral_format(self):
-        from yunshu_gateway.streaming import extract_tool_calls_v2
-
-        text = '{"function": {"name": "get_weather", "arguments": {"city": "Tokyo"}}}'
-        calls = extract_tool_calls_v2(text)
-        assert len(calls) == 1
-        assert calls[0]["name"] == "get_weather"
-        assert "Tokyo" in calls[0]["arguments"]
-
-    def test_mistral_format_string_args(self):
-        from yunshu_gateway.streaming import extract_tool_calls_v2
-
-        text = (
-            '{"function": {"name": "search", "arguments": "{\\"query\\": \\"test\\"}"}}'
-        )
-        calls = extract_tool_calls_v2(text)
-        assert len(calls) == 1
-        assert calls[0]["name"] == "search"
-
-    def test_chatml_format(self):
-        from yunshu_gateway.streaming import extract_tool_calls_v2
-
-        text = '[TOOL_CALLS] [{"name": "run_code", "arguments": {"lang": "python"}}]'
-        calls = extract_tool_calls_v2(text)
-        assert len(calls) == 1
-        assert calls[0]["name"] == "run_code"
-
-    def test_chatml_multiple_calls(self):
-        from yunshu_gateway.streaming import extract_tool_calls_v2
-
-        text = '[TOOL_CALLS] [{"name": "f1", "arguments": {}}, {"name": "f2", "arguments": {}}]'
-        calls = extract_tool_calls_v2(text)
-        assert len(calls) == 2
-        assert calls[0]["name"] == "f1"
-        assert calls[1]["name"] == "f2"
-
-    def test_deepseek_format(self):
-        from yunshu_gateway.streaming import extract_tool_calls_v2
-
-        text = '✿FUNCTION✿ {"name": "calculate", "arguments": {"expr": "2+2"}} ✿'
-        calls = extract_tool_calls_v2(text)
-        assert len(calls) == 1
-        assert calls[0]["name"] == "calculate"
-
-    def test_fallback_to_original_hermes(self):
-        from yunshu_gateway.streaming import extract_tool_calls_v2
-
-        text = '<tool_call\n{"name": "test_fn", "arguments": {"x": 1}}\n</tool_call'
-        calls = extract_tool_calls_v2(text)
-        # Original hermes parser requires proper closing tag with >
-        # This falls through to Mistral parser which matches {"name": ...}
-        assert len(calls) >= 1
-        assert calls[0]["name"] == "test_fn"
-
-    def test_no_calls_returns_empty(self):
-        from yunshu_gateway.streaming import extract_tool_calls_v2
-
-        calls = extract_tool_calls_v2("just regular text with no tool calls")
-        assert calls == []
 
 
 def _parse_sse_event(raw: str) -> tuple[str, dict]:

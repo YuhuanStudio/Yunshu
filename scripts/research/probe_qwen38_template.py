@@ -12,7 +12,7 @@ from pathlib import Path
 from transformers import AutoTokenizer
 
 from yunshu_engine.batched_engine import _REASONING_EFFORT_MAP, BatchedEngine
-from yunshu_engine.tool_call_parser import parse_tool_calls
+from yunshu_engine.tool_format import formats_for_tokenizer, parse_tool_output
 from yunshu_engine.vlm_engine import VLMEngine
 
 root = Path(sys.argv[1])
@@ -57,7 +57,7 @@ canonical = tok.apply_chat_template(canonical_history, **kw)
 built_vision_history = vlm._build_vlm_messages(history)
 
 xml = "<tool_call><function=locate><parameter=x>12</parameter><parameter=ok>true</parameter></function></tool_call>"
-parsed = parse_tool_calls(xml, "Qwen3.8-27B")
+parsed, _ = parse_tool_output(xml, formats_for_tokenizer(tok))
 index = json.loads((root / "model.safetensors.index.json").read_text())
 weights = index["weight_map"]
 result = {
@@ -81,7 +81,7 @@ result = {
         "output": sorted(built_vision_history[1]),
         "output_content": built_vision_history[1]["content"],
     },
-    "qwen_xml_parsed_arguments": [json.loads(p.arguments) for p in parsed],
+    "qwen_xml_parsed_arguments": [json.loads(p["arguments"]) for p in parsed],
     "vlm_estimated_tokens_per_image": vlm._estimate_image_tokens(),
     "weights": {
         "tensor_count": len(weights),
