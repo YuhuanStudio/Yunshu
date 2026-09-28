@@ -36,24 +36,23 @@ already paid for. The first fully tuned model is **Qwen3.8-27B**.
 
 ## Quickstart
 
-> **Requires [uv](https://docs.astral.sh/uv/).** Not on PyPI yet — install from source with
-> `uv sync`, which installs the exact versions in `uv.lock` (MLX 0.32, upstream `mlx-vlm` 0.7.3+).
+Needs a Mac with Apple Silicon (macOS 14+) and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone https://github.com/YuhuanStudio/Yunshu.git
-cd Yunshu
-uv sync --extra vision       # LLM + VLM (Qwen3.5 / 3.6 / 3.8 need this)
-# or: uv sync --all-extras   # every modality
+# Install. The vision extra covers the Qwen3.5 / 3.6 / 3.8 family and every VLM.
+uv tool install "yunshu[vision] @ git+https://github.com/YuhuanStudio/Yunshu"
 
-uv run yunshu serve -m /path/to/Qwen3.8-27B-mlx --port 8000
+yunshu doctor                                   # checks this Mac and prints fixes
+yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit   # downloads to ~/.yunshu/models/
+yunshu serve -m ~/.yunshu/models/mlx-community/Qwen3.5-9B-MLX-4bit
 ```
 
-Any OpenAI client works unchanged:
+The server listens on `http://127.0.0.1:8000`. Any OpenAI client works unchanged:
 
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:8000/v1", api_key="local")  # any key works
+client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="local")  # any key works
 
 # Single-model mode: the model name is a placeholder, the server serves what you loaded.
 r = client.chat.completions.create(
@@ -64,8 +63,19 @@ r = client.chat.completions.create(
 print(r.choices[0].message.content)
 ```
 
-> **Dev checkout**: `just setup` then `YUNSHU_MODEL=<model> just dev`.
-> **Docs**: [API reference](docs/API.md) · [configuration reference](docs/CONFIGURATION.md).
+To run it in the background at login: `yunshu service install -m <model>`
+([service guide](docs/guides/SERVICE.md)). Every command has `--help`. `yunshu model list` shows
+local models, including the Hugging Face cache.
+
+**From source** (development): clone the repository, run `uv sync --extra vision` (or
+`--all-extras`), then `uv run yunshu serve -m <model>`. `uv.lock` pins the exact versions
+(MLX 0.32, `mlx-vlm` 0.7.3+).
+
+**Docs:**
+- [connecting clients](docs/guides/CLIENTS.md) (OpenAI / Anthropic SDKs, coding agents, Open WebUI)
+- [troubleshooting](docs/guides/TROUBLESHOOTING.md)
+- [API reference](docs/API.md)
+- [configuration reference](docs/CONFIGURATION.md)
 
 ## Performance
 
@@ -198,7 +208,8 @@ from. A bad value stops startup; a misspelled name gets a warning.
 
 [MLX](https://github.com/ml-explore/mlx) · [mlx-lm](https://github.com/ml-explore/mlx-lm) ·
 [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) · [mlx-audio](https://github.com/Blaizzy/mlx-audio).
-Some verify kernels are vendored from [oMLX](https://github.com/jundot/omlx) (Apache-2.0); see
+Some kernels are vendored from [oMLX](https://github.com/jundot/omlx) (Apache-2.0) and
+[TensorFold](https://github.com/ashhart/TensorFold) (MIT); see
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## License

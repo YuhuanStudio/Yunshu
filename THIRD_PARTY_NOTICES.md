@@ -8,7 +8,7 @@ Qwen3.5-family MTP verify kernels (`qwen35_verify_qmm.py`, `qwen35_gdn_prework.p
 copied from https://github.com/jundot/omlx (`omlx/patches/`, per-file commits in `vendor.json`),
 licensed under the Apache License 2.0. Only intra-package imports were changed, except
 `qwen35_packed_linear.py`, which Yunshu modified (2026-09-28) to route 5/6/8-bit
-projections to the TensorFold integer-code matmul (opt-in `YUNSHU_PACKED_5BIT=int`); its 4-bit
+projections to the TensorFold integer-code matmul (the default when projections are packed); its 4-bit
 kernels are unchanged. The files
 carry their own upstream credits (MTPLX, dflash-mlx, Splash — Apache-2.0).
 
@@ -21,7 +21,7 @@ The exact source commit and our intended local changes for every vendored file a
 (from `src/tensorfold/kernels/`) are copied from https://github.com/ashhart/TensorFold at commit
 `34bae79ac97da6c3ab3fe10159cf49633ce8112a`. Only intra-package imports were changed. Yunshu calls
 their integer-code tensor-unit matmul from `python/yunshu_engine/kernels/int_code_linear.py`
-(opt-in `YUNSHU_PACKED_5BIT=int`). TensorFold's own notices credit MLX (MIT) for code it derives.
+(the default for 5/6/8-bit projections when packed). TensorFold's own notices credit MLX (MIT) for code it derives.
 
 ```
 MIT License
