@@ -45,6 +45,8 @@ class RunStats:
     finish_reason: str | None = None
     used_apc: bool = False
     used_draft: bool = False
+    # Per-token {"token_id", "logprob", "top_logprobs": [...]} when requested.
+    last_logprob: dict | None = None
     extra: dict = field(default_factory=dict)
 
 
@@ -206,6 +208,8 @@ class VLMBatchRunner:
         apc_semantic_hash: int | None = None,
         cancel_event: Any = None,
         stats: RunStats | None = None,
+        logprobs: bool = False,
+        top_logprobs: int = 0,
     ) -> Iterator[int]:
         """Yield generated token ids; ``stats`` is filled in as generation runs."""
         from mlx_vlm.generate.ar import BatchGenerator
@@ -216,8 +220,13 @@ class VLMBatchRunner:
         stats.prompt_tokens = int(input_ids.shape[0])
         greedy = temperature is None or temperature < 1e-6
         processors = list(logits_processors or [])
+        # Upstream drops logprobs while drafting, so logprob requests decode AR.
         use_draft = bool(
-            allow_draft and self.drafter is not None and greedy and not processors
+            allow_draft
+            and self.drafter is not None
+            and greedy
+            and not processors
+            and not logprobs
         )
         apc = self.apc_manager
         if apc is not None and self._apc_admit is not None:
@@ -255,7 +264,8 @@ class VLMBatchRunner:
             draft_kind=self.draft_kind if use_draft else None,
             draft_block_size=self.draft_block_size if use_draft else None,
             greedy_sampling=greedy,
-            compute_logprobs=False,
+            compute_logprobs=bool(logprobs),
+            top_logprobs_k=int(top_logprobs or 0) if logprobs else 0,
             prefill_step_size=PREFILL_STEP,
         )
         uid = None
@@ -283,6 +293,15 @@ class VLMBatchRunner:
                                 apc.stats.matched_tokens - matched_before
                             )
                     stats.generated += 1
+                    if logprobs:
+                        stats.last_logprob = {
+                            "token_id": int(response.token),
+                            "logprob": float(response.token_logprob),
+                            "top_logprobs": [
+                                {"token_id": int(t), "logprob": float(lp)}
+                                for t, lp in (response.top_logprobs or [])
+                            ],
+                        }
                     if response.finish_reason is not None:
                         stats.finish_reason = response.finish_reason
                     yield int(response.token)

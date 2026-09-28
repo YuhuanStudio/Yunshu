@@ -1809,11 +1809,15 @@ class VLMEngine:
 
             # logprobs is not supported by VLM engine (mlx_vlm.generate() and
             # model.language_model don't expose per-token logprobs).
-            if logprobs or top_logprobs:
+            if (logprobs or top_logprobs) and getattr(
+                self, "_batch_runner", None
+            ) is None:
                 logger.warning(
-                    "VLMEngine does not support logprobs/top_logprobs — "
-                    "parameter ignored. Use BatchedEngine for logprobs support."
+                    "logprobs need the VLM batch runner (Qwen3.5-family); "
+                    "parameter ignored on the legacy loop."
                 )
+
+            _runner_extras: dict = {}
 
             def _generate_sync():
                 # NOTE: don't call mx.random.seed(seed) here — the actual
@@ -1844,6 +1848,7 @@ class VLMEngine:
                     )
                     return self._generate_vlm_runner_text(
                         ids,
+                        extras=_runner_extras,
                         prompt_kwargs=pkw,
                         apc_semantic_hash=salt,
                         **self._runner_kwargs(
@@ -1856,6 +1861,8 @@ class VLMEngine:
                             stop=stop,
                             stop_token_ids=stop_token_ids,
                             repetition_penalty=repetition_penalty,
+                            logprobs=logprobs,
+                            top_logprobs=top_logprobs,
                             enable_thinking=_enable_thinking,
                             thinking_budget=thinking_budget,
                             cancel_event=kwargs.get("cancel_event"),
@@ -1908,6 +1915,7 @@ class VLMEngine:
                     ):
                         return self._generate_vlm_runner_text(
                             input_ids,
+                            extras=_runner_extras,
                             **self._runner_kwargs(
                                 max_tokens=max_tokens,
                                 temperature=temperature,
@@ -1918,6 +1926,8 @@ class VLMEngine:
                                 stop=stop,
                                 stop_token_ids=stop_token_ids,
                                 repetition_penalty=repetition_penalty,
+                                logprobs=logprobs,
+                                top_logprobs=top_logprobs,
                                 enable_thinking=_enable_thinking,
                                 thinking_budget=thinking_budget,
                                 cancel_event=kwargs.get("cancel_event"),
@@ -2180,6 +2190,9 @@ class VLMEngine:
             else:
                 prompt_text = self._format_prompt(messages)
                 prompt_tokens = self._count_text_tokens(prompt_text)
+            # The batch runner knows the exact prompt length (incl. image tokens).
+            if _runner_extras.get("prompt_tokens"):
+                prompt_tokens = int(_runner_extras["prompt_tokens"])
             # Determine correct finish_reason based on exit condition
             _finish_reason = "stop" if stop_hit or budget_hit else "length"
             # record ServerMetrics for VLM NON-streaming. Only
@@ -2205,6 +2218,7 @@ class VLMEngine:
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_token_count,
                 "cached_tokens": cached_token_count,
+                "logprobs": _runner_extras.get("logprobs"),
             }
         finally:
             # release the MLX buffer pool after each request on large
@@ -2266,10 +2280,10 @@ class VLMEngine:
             raise RuntimeError("Engine not started")
 
         # logprobs is not supported by VLM engine
-        if logprobs or top_logprobs:
+        if (logprobs or top_logprobs) and getattr(self, "_batch_runner", None) is None:
             logger.warning(
-                "VLMEngine does not support logprobs/top_logprobs — "
-                "parameter ignored. Use BatchedEngine for logprobs support."
+                "logprobs need the VLM batch runner (Qwen3.5-family); "
+                "parameter ignored on the legacy loop."
             )
 
         # Extract images/audio once, reuse for both pipeline and generation.
@@ -2427,6 +2441,8 @@ class VLMEngine:
                             stop=stop,
                             stop_token_ids=stop_token_ids,
                             repetition_penalty=repetition_penalty,
+                            logprobs=logprobs,
+                            top_logprobs=top_logprobs,
                             enable_thinking=enable_thinking,
                             thinking_budget=kwargs.get("thinking_budget"),
                             cancel_event=cancel_event,
@@ -2489,6 +2505,8 @@ class VLMEngine:
                                 stop=stop,
                                 stop_token_ids=stop_token_ids,
                                 repetition_penalty=repetition_penalty,
+                                logprobs=logprobs,
+                                top_logprobs=top_logprobs,
                                 enable_thinking=enable_thinking,
                                 thinking_budget=kwargs.get("thinking_budget"),
                                 cancel_event=cancel_event,
@@ -4660,8 +4678,13 @@ class VLMEngine:
         stats: Any,
         prompt_kwargs: dict | None = None,
         apc_semantic_hash: int | None = None,
+        logprobs: bool = False,
+        top_logprobs: int | None = None,
     ):
-        """Yield ``(text, token_id, state, finish_reason, thinking_tokens)``.
+        """Yield ``(text, token_id, state, finish_reason, thinking_tokens, logprob)``.
+
+        ``logprob`` is the token's {"token_id", "logprob", "top_logprobs"} entry
+        when ``logprobs`` is requested, else ``None``.
 
         ``finish_reason`` is set only on the last event: "stop" (EOS or stop
         string), "length", "budget" (thinking budget reached) or "cancel".
@@ -4701,12 +4724,15 @@ class VLMEngine:
             apc_semantic_hash=apc_semantic_hash,
             cancel_event=cancel_event,
             stats=stats,
+            logprobs=bool(logprobs),
+            top_logprobs=int(top_logprobs or 0),
         ):
             count += 1
+            lp = stats.last_logprob if logprobs else None
             if token in stop_ids:
                 detok.finalize()
                 tail = holdback.feed(detok.last_segment) + holdback.flush()
-                yield tail, token, "normal", "stop", thinking_tokens
+                yield tail, token, "normal", "stop", thinking_tokens, lp
                 return
             if token == think_start:
                 in_think = True
@@ -4725,7 +4751,8 @@ class VLMEngine:
                         token,
                         state,
                         "stop",
-                        (thinking_tokens),
+                        thinking_tokens,
+                        lp,
                     )
                     return
             else:
@@ -4735,16 +4762,16 @@ class VLMEngine:
                 and in_think
                 and (thinking_tokens >= thinking_budget)
             ):
-                yield text, token, state, "budget", thinking_tokens
+                yield text, token, state, "budget", thinking_tokens, lp
                 return
             if count >= max_tokens:
                 detok.finalize()
                 tail = holdback.feed(detok.last_segment) + holdback.flush()
-                yield text + tail, token, state, "length", thinking_tokens
+                yield text + tail, token, state, "length", thinking_tokens, lp
                 return
-            yield text, token, state, None, thinking_tokens
+            yield text, token, state, None, thinking_tokens, lp
         if stats.finish_reason == "cancel":
-            yield "", None, "normal", "cancel", thinking_tokens
+            yield "", None, "normal", "cancel", thinking_tokens, None
             return
         detok.finalize()
         tail = holdback.feed(detok.last_segment) + holdback.flush()
@@ -4753,7 +4780,8 @@ class VLMEngine:
             None,
             "normal",
             "stop" if count < max_tokens else "length",
-            (thinking_tokens),
+            thinking_tokens,
+            None,
         )
 
     def _runner_kwargs(self, **params) -> dict:
@@ -4775,7 +4803,9 @@ class VLMEngine:
             thinking_budget=tb,
         )
 
-    def _generate_vlm_runner_text(self, input_ids: mx.array, **params):
+    def _generate_vlm_runner_text(
+        self, input_ids: mx.array, extras: dict | None = None, **params
+    ):
         """Non-streaming runner path; returns the legacy 6-tuple."""
         from .vlm_batch_runner import RunStats
 
@@ -4783,10 +4813,17 @@ class VLMEngine:
         parts: list[str] = []
         finish = None
         thinking = 0
+        lps: list[dict] = []
         for event in self._runner_events(input_ids, stats=stats, **params):
-            text, _token, _state, finish, thinking = event
+            text, _token, _state, finish, thinking, lp = event
             if text:
                 parts.append(text)
+            if lp is not None:
+                lps.append(lp)
+        if extras is not None:
+            extras["prompt_tokens"] = stats.prompt_tokens
+            if params.get("logprobs"):
+                extras["logprobs"] = lps
         if finish == "cancel":
             raise asyncio.CancelledError()
         return (
@@ -4816,7 +4853,7 @@ class VLMEngine:
 
         prompt_tokens = int(input_ids.shape[0])
         try:
-            for text, token, state, finish, thinking in self._runner_events(
+            for text, token, state, finish, thinking, lp in self._runner_events(
                 input_ids, stats=stats, **params
             ):
                 reason = {"budget": "stop"}.get(finish, finish)
@@ -4836,6 +4873,7 @@ class VLMEngine:
                         current_state=state,
                         reasoning_tokens=thinking,
                         ttft_ms=round(stats.first_token_s * 1000, 1) if first else 0.0,
+                        logprobs=[lp] if lp is not None else None,
                     )
                 )
                 if not ok or reason is not None:

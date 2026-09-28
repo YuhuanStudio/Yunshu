@@ -2484,6 +2484,7 @@ async def _handle_vlm_chat(
                 "cached_tokens": r.get("cached_tokens", 0) or 0,
                 "finish_reason": finish_reason,
                 "tool_calls": tool_calls,
+                "logprobs": r.get("logprobs"),
             },
             None,
         )
@@ -2605,13 +2606,18 @@ async def _handle_vlm_chat(
                 }
                 for i, tc in enumerate(data["tool_calls"])
             ]
-        choices.append(
-            {
-                "index": idx,
-                "message": message,
-                "finish_reason": data["finish_reason"],
-            }
-        )
+        choice = {
+            "index": idx,
+            "message": message,
+            "finish_reason": data["finish_reason"],
+        }
+        if req.logprobs:
+            choice["logprobs"] = _format_chat_logprobs(
+                data.get("logprobs"),
+                tokenizer=getattr(vlm_engine, "_tokenizer", None),
+                top_logprobs=req.top_logprobs,
+            )
+        choices.append(choice)
 
     # If every choice returned 0 (e.g., timeout), fall back to text-only count
     if prompt_tok == 0:
@@ -2872,6 +2878,15 @@ async def _stream_vlm_response(
                             delta_content=_vlm_token_text,
                             finish_reason=None,  # intermediate: always None
                             include_role=first_chunk,
+                            logprobs=(
+                                _format_chat_logprobs(
+                                    output.logprobs,
+                                    tokenizer=getattr(vlm_engine, "_tokenizer", None),
+                                    top_logprobs=req.top_logprobs,
+                                )
+                                if req.logprobs and getattr(output, "logprobs", None)
+                                else None
+                            ),
                         )
                         first_chunk = False
 

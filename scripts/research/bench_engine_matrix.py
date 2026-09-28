@@ -712,6 +712,47 @@ def main():
             }
         )
 
+    if want("logprobs"):
+        body = cli.body(
+            [{"role": "user", "content": "Reply with only the word ORCHID."}],
+            8,
+            logprobs=True,
+            top_logprobs=3,
+        )
+        r = cli.complete(body)
+        raw = None
+        try:
+            conn = http.client.HTTPConnection(cli.host, cli.port, timeout=cli.timeout)
+            conn.request(
+                "POST",
+                "/v1/chat/completions",
+                json.dumps(dict(body, stream=False)),
+                {"Content-Type": "application/json"},
+            )
+            raw = json.loads(conn.getresponse().read())
+            conn.close()
+            content = ((raw.get("choices") or [{}])[0].get("logprobs") or {}).get(
+                "content"
+            ) or []
+            ok = bool(content) and all(
+                isinstance(e.get("logprob"), (int, float))
+                and e["logprob"] <= 0
+                and len(e.get("top_logprobs") or []) == 3
+                for e in content
+            )
+            why = f"{len(content)} entries, first={content[0] if content else None}"
+        except Exception as e:  # noqa: BLE001
+            ok, why = False, repr(e)
+        emit(
+            {
+                "kind": "capability",
+                "case": "logprobs",
+                "ok": ok,
+                "why": str(why)[:300],
+                **r,
+            }
+        )
+
     if want("stop_sequence"):
         r = cli.stream(
             cli.body(
