@@ -231,6 +231,9 @@ class VLMBatchRunner:
         # precision, "bf16" / "int8" (YUNSHU_KV_PRECISION).
         self.ragged_kv: str | None = None
         self._ragged_logged = False
+        # Fused chunked prefill (YUNSHU_FUSED_PREFILL_TOKENS): prefill tokens
+        # per step run inside the decode forward while rows decode; 0 = off.
+        self.fused_prefill_tokens = 0
 
     def prepare_media(
         self,
@@ -579,7 +582,20 @@ class VLMBatchRunner:
             lm = self.model.language_model
             if hasattr(lm, "_rope_deltas"):
                 lm._rope_deltas = mx.array([[job.rope_delta]], dtype=mx.float32)
-        prompt_progress, responses = group.gen.next()
+        fused = None
+        if self.fused_prefill_tokens > 0 and not group.spec:
+            from . import fused_prefill
+
+            # The decode step and the waiting prompt's prefill chunk of this
+            # next() run as one forward (see fused_prefill).
+            fused = fused_prefill.plan(
+                group.gen, self.fused_prefill_tokens, PREFILL_STEP
+            )
+        try:
+            prompt_progress, responses = group.gen.next()
+        finally:
+            if self.fused_prefill_tokens > 0 and not group.spec:
+                fused_prefill.finish(fused)
         if self.ragged_kv and not self._ragged_logged and not group.spec:
             # Engagement proof in the server log (a no-op path once cost a
             # full MMLU run to notice). Joins build the ragged caches

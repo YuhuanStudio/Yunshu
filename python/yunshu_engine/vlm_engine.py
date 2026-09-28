@@ -1433,6 +1433,12 @@ class VLMEngine:
                 "only; this model's KV stays bf16",
                 precision,
             )
+        from . import fused_prefill
+
+        if fused_prefill.supports(self._model.language_model):
+            runner.fused_prefill_tokens = int(
+                settings.get("YUNSHU_FUSED_PREFILL_TOKENS") or 0
+            )
         logger.info(
             "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s",
             f"{self._apc_backend.memory_max_bytes / 2**30:.1f}GiB"
