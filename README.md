@@ -191,8 +191,13 @@ round**, which covered LLM/VLM only.
 For speech-to-speech, serve a Qwen3-Omni model (`uv sync --extra omni`) and try
 [`examples/talk.py`](examples/talk.py) (microphone) or [`examples/quickstart.py`](examples/quickstart.py)
 (writes a WAV, no audio hardware). Upstream `mlx-vlm` 0.7.3 was checked to keep multi-turn omni
-output correct (notes); the server's Realtime path
+output correct (maintainer check, 2026-09-28); the server's Realtime path
 was not.
+
+Video generation needs `mlx-video` from git: the PyPI release (0.1.0) only has preprocessing, so
+`yunshu[video]` from PyPI installs an incomplete backend and `yunshu[all]` leaves video out. To add it:
+`uv tool install "yunshu[vision]" --with "mlx-video @ git+https://github.com/Blaizzy/mlx-video.git"`
+(a source checkout gets it with `uv sync --extra video`).
 
 Also: MCP server/client and an Anthropic-compatible `/v1/messages` surface.
 

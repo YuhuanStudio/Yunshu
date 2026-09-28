@@ -143,3 +143,45 @@ def test_cli_config_set_unset(tmp_path, monkeypatch):
 
     r = runner.invoke(app, ["config", "path"])
     assert r.output.strip() == str(settings.user_config_path())
+
+
+def test_hf_repo_id_for_snapshot_paths(tmp_path):
+    snap = (
+        tmp_path
+        / "hub"
+        / "models--mlx-community--Qwen3.5-0.8B-4bit"
+        / "snapshots"
+        / "abc123"
+    )
+    assert md.hf_repo_id_for(snap) == "mlx-community/Qwen3.5-0.8B-4bit"
+    assert md.hf_repo_id_for(str(snap)) == "mlx-community/Qwen3.5-0.8B-4bit"
+    assert md.hf_repo_id_for(tmp_path / "models" / "Qwen3.5-0.8B") is None
+    assert md.hf_repo_id_for(None) is None
+
+
+def test_single_model_lists_hf_repo_id(mock_engine, monkeypatch):
+    """A model served from a Hugging Face cache snapshot is listed under its
+    repo id, not the revision hash; any requested name still reaches it."""
+    from fastapi.testclient import TestClient
+
+    from yunshu_gateway import engine as gw
+    from yunshu_gateway.engine import set_engine
+    from yunshu_gateway.main import create_app
+
+    monkeypatch.setattr(gw, "_model_manager", None)  # single-model mode
+    mock_engine.is_loaded = True
+    mock_engine.model_name = "abc123"
+    set_engine(mock_engine, display_id="mlx-community/Qwen3.5-0.8B-4bit")
+    try:
+        with TestClient(create_app(), raise_server_exceptions=False) as c:
+            ids = [m["id"] for m in c.get("/v1/models").json()["data"]]
+        assert ids == ["mlx-community/Qwen3.5-0.8B-4bit"]
+    finally:
+        set_engine(None)
+    set_engine(mock_engine)
+    try:
+        with TestClient(create_app(), raise_server_exceptions=False) as c:
+            ids = [m["id"] for m in c.get("/v1/models").json()["data"]]
+        assert ids == ["abc123"]
+    finally:
+        set_engine(None)

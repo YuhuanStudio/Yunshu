@@ -116,7 +116,8 @@ audio = [
 # Qwen3-Omni's video sub-processor on model load, which hard-requires torch even
 # though Yunshu never runs video inference. mlx-vlm>=0.6.0 carries the audio-input
 # fix (#1240) the native speech-in path relies on. Upstream 0.7.3 was verified
-# to keep turn 2+ correct for text and speech input (2026-09-28), so the fork's position_ids patch is gone.
+# to keep turn 2+ correct for text and speech input (2026-09-28), so the fork's
+# position_ids patch is gone.
 omni = [
     "mlx-vlm>=0.7.3",
     "torch>=2.1.0",
@@ -153,8 +154,8 @@ compression = [
     "zstandard>=0.22.0",
     "lz4>=4.3.0",
 ]
-# Omni: every modality above. This is what `pip install "yunshu[all]"` installs
-# for users who want the full text+vision+audio+image+embeddings surface.
+# Every modality except video: PyPI metadata can only name the incomplete PyPI
+# mlx-video 0.1.0; the working pipeline comes from git (see README).
 all = [
     "yunshu[vision]",
     "yunshu[audio]",

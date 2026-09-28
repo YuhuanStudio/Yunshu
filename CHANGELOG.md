@@ -87,6 +87,17 @@ match.
 - Dependencies: MLX 0.32.2, transformers 5.17, upstream `mlx-vlm` 0.7.3 (the fork is gone).
 - JSON-schema constraint: cached vocab split (in-string step 144 ms → 3 ms); structural whitespace
   limited to spaces and newlines.
+- Research scripts and parity tests take model paths from arguments or the environment
+  (`M`/`D`/`TF` for the validation scripts, optionally from a gitignored
+  `scripts/research/local.env`; `YUNSHU_PARITY_MODEL` for the parity tests, which skip when unset).
+- A model served from the Hugging Face cache is listed under its repo id (`org/name`) in
+  `/v1/models`, not the snapshot path.
+
+### Known limitations
+
+- Video generation (`/v1/video/generations`) needs `mlx-video` from git; the PyPI release (0.1.0) is
+  preprocessing-only, so `yunshu[video]` installed from PyPI is incomplete and `yunshu[all]` does not
+  include it. See the README's "Other modalities" section for the install command.
 
 ### Fixed
 

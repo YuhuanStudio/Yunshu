@@ -19,6 +19,9 @@ from yunshu_engine.types import EngineConfig
 logger = logging.getLogger(__name__)
 
 _engine: Engine | None = None
+# The id /v1/models shows for the single engine when its model_name is not a
+# useful name (a Hugging Face cache snapshot shows up as its revision hash).
+_display_model_id: str | None = None
 _model_manager: ModelManager | None = None
 _engine_start_lock = None  # asyncio.Lock, created lazily in _get_engine_start_lock()
 
@@ -51,10 +54,16 @@ def init_engine(config: EngineConfig | None = None) -> Engine:
     return _engine
 
 
-def set_engine(engine: Engine) -> None:
-    """Set the single engine (used by tests)."""
-    global _engine
+def set_engine(engine: Engine, display_id: str | None = None) -> None:
+    """Set the single engine; ``display_id`` names it in /v1/models."""
+    global _engine, _display_model_id
     _engine = engine
+    _display_model_id = display_id
+
+
+def get_display_model_id() -> str | None:
+    """The single engine's listed id when it differs from its model_name."""
+    return _display_model_id
 
 
 def get_model_manager() -> ModelManager | None:

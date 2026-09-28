@@ -177,7 +177,12 @@ Yunshu 目前的位置:
 語音對語音:服務一個 Qwen3-Omni 模型(`uv sync --extra omni`),試試
 [`examples/talk.py`](examples/talk.py)(麥克風)或 [`examples/quickstart.py`](examples/quickstart.py)
 (輸出 WAV,不需音訊硬體)。已確認上游 `mlx-vlm` 0.7.3 多輪 omni 輸出正確
-(紀錄);伺服器的 Realtime 路徑尚未確認。
+(維護者於 2026-09-28 確認);伺服器的 Realtime 路徑尚未確認。
+
+影片生成需要從 git 安裝 `mlx-video`:PyPI 上的版本(0.1.0)只有前處理,所以從 PyPI 裝
+`yunshu[video]` 會得到不完整的後端,`yunshu[all]` 也不含影片。要加上它:
+`uv tool install "yunshu[vision]" --with "mlx-video @ git+https://github.com/Blaizzy/mlx-video.git"`
+(原始碼 checkout 用 `uv sync --extra video` 即可)。
 
 另外:MCP 伺服器/客戶端,以及相容 Anthropic 的 `/v1/messages`。
 

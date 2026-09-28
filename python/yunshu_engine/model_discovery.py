@@ -146,6 +146,19 @@ def hf_cache_snapshots() -> list[tuple[str, Path, int]]:
     return out
 
 
+def hf_repo_id_for(path: str | Path | None) -> str | None:
+    """``org/name`` for a snapshot directory inside the Hugging Face cache
+    (``.../models--org--name/snapshots/<revision>``), else None."""
+    if not path:
+        return None
+    parts = Path(path).parts
+    for i, part in enumerate(parts[:-2]):
+        if part.startswith("models--") and parts[i + 1] == "snapshots":
+            org, sep, name = part[len("models--") :].partition("--")
+            return f"{org}/{name}" if sep and org and name else None
+    return None
+
+
 def discover_hf_cache_models(
     models: dict[str, DiscoveredModel],
 ) -> dict[str, DiscoveredModel]:
