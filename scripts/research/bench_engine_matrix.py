@@ -753,6 +753,37 @@ def main():
             }
         )
 
+    if want("thinking_split"):
+        think_q = [
+            {"role": "user", "content": "What is 12*12? Answer with the number only."}
+        ]
+        body = {
+            "model": cli.model,
+            "messages": think_q,
+            "max_tokens": 600,
+            "temperature": 0,
+            "enable_thinking": True,
+            "chat_template_kwargs": {"enable_thinking": True},
+        }
+        for mode in ("stream", "nonstream"):
+            r = cli.stream(body) if mode == "stream" else cli.complete(body)
+            content = (r.get("content") or "").strip()
+            reasoning = r.get("reasoning") or ""
+            if mode == "nonstream" and not reasoning:
+                reasoning = (
+                    "?"  # complete() does not surface reasoning; judge content only
+                )
+            ok = content.strip(" .") == "144" and bool(reasoning)
+            emit(
+                {
+                    "kind": "capability",
+                    "case": f"thinking_split_{mode}",
+                    "ok": ok,
+                    "why": f"content={content[:60]!r} reasoning_len={len(reasoning)}",
+                    **r,
+                }
+            )
+
     if want("stop_sequence"):
         r = cli.stream(
             cli.body(

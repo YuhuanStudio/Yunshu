@@ -4706,9 +4706,15 @@ class VLMEngine:
         detok = self._tokenizer.detokenizer
         detok.reset()
         think_start, think_end = self._think_token_ids()
-        # Same state machine as the legacy loop: reasoning state follows the
-        # think tokens the model emits (the router's parser splits content).
+        # Qwen3.x templates open <think> at the end of the prompt when thinking
+        # is on, so generation starts inside the reasoning block; streaming
+        # clients rely on current_state to split reasoning from content.
         in_think = False
+        if think_start is not None:
+            tail = input_ids[-64:].tolist()
+            if think_start in tail:
+                last_open = len(tail) - 1 - tail[::-1].index(think_start)
+                in_think = think_end is None or think_end not in tail[last_open + 1 :]
         thinking_tokens = 0
         count = 0
         for token in self._batch_runner.iter_tokens(
@@ -4734,11 +4740,17 @@ class VLMEngine:
                 tail = holdback.feed(detok.last_segment) + holdback.flush()
                 yield tail, token, "normal", "stop", thinking_tokens, lp
                 return
-            if token == think_start:
-                in_think = True
-            elif token == think_end:
-                in_think = False
-            elif in_think:
+            if token in (think_start, think_end):
+                # The tags only switch state; they are never shown as text.
+                in_think = token == think_start
+                state = "reasoning" if in_think else "normal"
+                if count >= max_tokens:
+                    detok.finalize()
+                    tail = holdback.feed(detok.last_segment) + holdback.flush()
+                    yield tail, token, state, "length", thinking_tokens, lp
+                    return
+                continue
+            if in_think:
                 thinking_tokens += 1
             state = "reasoning" if in_think else "normal"
             detok.add_token(token)
@@ -4814,12 +4826,17 @@ class VLMEngine:
         finish = None
         thinking = 0
         lps: list[dict] = []
+        reasoning: list[str] = []
         for event in self._runner_events(input_ids, stats=stats, **params):
-            text, _token, _state, finish, thinking, lp = event
+            text, _token, state, finish, thinking, lp = event
             if text:
-                parts.append(text)
+                (reasoning if state == "reasoning" else parts).append(text)
             if lp is not None:
                 lps.append(lp)
+        if reasoning:
+            # The router splits reasoning from content on the think tags,
+            # which the event stream itself never shows.
+            parts = ["<think>", *reasoning, "</think>", *parts]
         if extras is not None:
             extras["prompt_tokens"] = stats.prompt_tokens
             if params.get("logprobs"):
