@@ -137,7 +137,8 @@ def _extract_tensor_bytes(arr) -> tuple[bytes, str, list[int]]:
     """
     import mlx.core as mx
 
-    dtype_name = str(arr.dtype)
+    # str(mx dtype) is "mlx.core.bfloat16"; compare on the bare name.
+    dtype_name = str(arr.dtype).split(".")[-1]
     st_dtype = _DTYPE_MAP.get(dtype_name, "F16")
     shape = list(arr.shape)
 
@@ -145,7 +146,8 @@ def _extract_tensor_bytes(arr) -> tuple[bytes, str, list[int]]:
     mx.eval(arr)
 
     if dtype_name == "bfloat16":
-        raw = bytes(memoryview(arr.astype(mx.uint16)))
+        # Bit-reinterpret (view), not a value cast: numpy has no bfloat16.
+        raw = bytes(memoryview(arr.view(mx.uint16)))
     else:
         try:
             raw = bytes(memoryview(arr))
@@ -238,7 +240,14 @@ class SSDKVCache:
         hot_cache_size: int = 100,
         writer_queue_size: int = 64,
         backend: str | None = None,
+        precision: str = "native",
     ):
+        # "native": blocks stored bit-exact in the KV dtype (lossless reuse).
+        # "int8": per-tensor symmetric int8 (~half the bytes of bf16; lossy on
+        # reuse). Loading reads either format regardless of this setting.
+        if precision not in ("native", "int8"):
+            raise ValueError(f"unknown SSD cache precision {precision!r}")
+        self._precision = precision
         self._cache_dir = Path(os.path.expanduser(cache_dir))
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -493,36 +502,37 @@ class SSDKVCache:
             token_count: Number of tokens in this block
             model_name: Model name for isolation
         """
-        # Extract tensor bytes on the inference thread with 8-bit quantization
-        # to reduce SSD I/O bandwidth and disk usage (2x compression vs FP16).
-        # Each entry: (quantized_bytes, "I8", shape, scale_factor).
-        tensors_quantized: dict[str, tuple[bytes, str, list[int], float]] = {}
+        # Extract tensor bytes on the inference thread: bit-exact in the KV
+        # dtype by default, or per-tensor int8 (precision="int8", lossy) to
+        # halve SSD bytes. Each entry: (bytes, dtype, shape, scale | None).
+        quantize = self._precision == "int8"
+
+        def _extract(t):
+            if quantize:
+                return _extract_tensor_bytes_quantized(t)
+            return (*_extract_tensor_bytes(t), None)
+
+        tensors_quantized: dict[str, tuple[bytes, str, list[int], float | None]] = {}
         tensors_raw: dict[str, tuple[bytes, str, list[int]]] = {}
         for i, layer_data in enumerate(cache_data):
             if isinstance(layer_data, (list, tuple)):
                 for k, tensor in enumerate(layer_data):
                     if tensor is not None and hasattr(tensor, "shape"):
-                        key = f"layer_{i}_state_{k}"
-                        tensors_quantized[key] = _extract_tensor_bytes_quantized(tensor)
+                        tensors_quantized[f"layer_{i}_state_{k}"] = _extract(tensor)
             elif hasattr(layer_data, "keys") and hasattr(layer_data, "values"):
-                tensors_quantized[f"layer_{i}_keys"] = _extract_tensor_bytes_quantized(
-                    layer_data.keys
-                )
-                tensors_quantized[f"layer_{i}_values"] = (
-                    _extract_tensor_bytes_quantized(layer_data.values)
-                )
+                tensors_quantized[f"layer_{i}_keys"] = _extract(layer_data.keys)
+                tensors_quantized[f"layer_{i}_values"] = _extract(layer_data.values)
             elif hasattr(layer_data, "shape"):
                 # Raw mx.array layer (no keys/values wrapper)
-                tensors_quantized[f"layer_{i}_state_0"] = (
-                    _extract_tensor_bytes_quantized(layer_data)
-                )
+                tensors_quantized[f"layer_{i}_state_0"] = _extract(layer_data)
 
         # Build the safetensors-compatible dict: (bytes, dtype, shape)
         # Store scale factors in metadata for dequantization on load.
         scale_factors: dict[str, float] = {}
         for key, (raw_bytes, dtype_str, shape, scale) in tensors_quantized.items():
             tensors_raw[key] = (raw_bytes, dtype_str, shape)
-            scale_factors[key] = scale
+            if scale is not None:
+                scale_factors[key] = scale
 
         if not tensors_raw:
             return
@@ -533,9 +543,10 @@ class SSDKVCache:
             "num_layers": str(len(cache_data)),
             "model_name": model_name,
             "created_at": str(time.time()),
-            "quantization": "int8",
-            "scale_factors": json.dumps(scale_factors),
         }
+        if quantize:
+            meta["quantization"] = "int8"
+            meta["scale_factors"] = json.dumps(scale_factors)
 
         hex_hash = block_hash.hex()
         file_path = self._block_path(block_hash)

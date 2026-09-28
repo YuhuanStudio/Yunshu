@@ -1519,11 +1519,14 @@ class KVPrefixCache:
         cache_dir: str = "~/.cache/yunshu/kv-ssd",
         max_size_bytes: int = 10 * 1024**3,
         model_name: str = "",
+        precision: str = "native",
     ) -> None:
         """Enable SSD-tier KV cache persistence.
 
         After enabling, blocks saved to the prefix cache are also persisted
         to disk. On restart, previously cached blocks are recovered.
+        ``precision``: "native" stores KV / recurrent state bit-exact;
+        "int8" stores it quantized (smaller, lossy on reuse).
         """
         from .ssd_kv_cache import SSDKVCache
 
@@ -1542,6 +1545,7 @@ class KVPrefixCache:
         self._ssd_cache = SSDKVCache(
             cache_dir=scoped_dir,
             max_size_bytes=max_size_bytes,
+            precision=precision,
         )
         self._ssd_model_name = model_name
         # whole-snapshot SSD store for HYBRID models (the
@@ -1549,12 +1553,13 @@ class KVPrefixCache:
         try:
             from .hybrid_ssd_snapshot import HybridSnapshotStore
 
-            self._hybrid_ssd = HybridSnapshotStore(scoped_dir)
+            self._hybrid_ssd = HybridSnapshotStore(scoped_dir, precision=precision)
         except Exception:
             self._hybrid_ssd = None
             logger.debug("hybrid SSD snapshot store init failed", exc_info=True)
         logger.info(
-            f"SSD KV cache enabled: dir={scoped_dir}, max={max_size_bytes / 1024**3:.0f}GB"
+            f"SSD KV cache enabled: dir={scoped_dir}, "
+            f"max={max_size_bytes / 1024**3:.0f}GB, precision={precision}"
         )
 
     @staticmethod

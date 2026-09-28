@@ -46,7 +46,13 @@ Qwen3-Omni-30B-A3B-4bit    vlm-imrope 1239  866    59.7   1431      13.27x 12.35
 
 - **F-HOT / F-WARM / F-SSD** = TTFT speedup of re-requesting the same prefix vs a
   cold full prefill, on the default fast path / VLM text path 4-tier KV cache.
-  - HOT = GPU-resident full precision. WARM = 4-bit-in-RAM (UMA). SSD = int8 on disk.
+  - HOT = GPU-resident full precision. WARM = 4-bit-in-RAM (UMA). SSD = on disk.
+  - Defaults (since 2026-09-29, "lossy is opt-in"): WARM is off
+    (`YUNSHU_PREFIX_HOT_LIMIT=0`, every entry full precision) and the SSD tier
+    (`YUNSHU_SSD_CACHE=1`) stores KV and recurrent state bit-exact
+    (`YUNSHU_SSD_CACHE_PRECISION=native`). The WARM and SSD columns below were
+    measured with the earlier lossy defaults (4-bit WARM, int8 SSD); set
+    `YUNSHU_PREFIX_HOT_LIMIT>0` / `YUNSHU_SSD_CACHE_PRECISION=int8` to get them.
   - F-SSD trailing ✓ = the SSD tier actually restored from disk (not a full-prefill
     fallback).
 - **WARMram** = HOT-entry / WARM-entry RAM ratio (the 4-bit saving). ~3.56× for
@@ -310,7 +316,7 @@ An audit of the cache subsystem — `kv_prefix_cache.py`, `ssd_kv_cache.py`,
 | 2 | Migration stats (`kv_migration.py`) | **REMOVED in the refocus** — the counts were cosmetic LOGICAL tier/temperature transitions (~1e-5 s), not physical I/O. Real KV bytes move in `SSDKVCache`/`hybrid_ssd_snapshot`, which remain; the tiered-migration manager was dead capacity-scaling code and was deleted. |
 | 3 | WARM 4-bit quantization | **OK** — `to_quantized(bits=4)` for KVCache layers; sliding-window/recurrent layers pass through unquantized (→ gemma WARMram 1.0×, honest). |
 | 4 | SSD net-negative for fast-prefill models | **INHERENT TRADEOFF** — e.g. GLM-OCR prefills at 6489 tok/s, so reading the prefix back from disk (~0.96×) is ~break-even; SSD wins for slow-prefill / capacity-bound cases. No guard skips it (would risk regressing the capacity case it exists for). |
-| 5 | Hybrid SSD snapshot size (0.8B ≈ 549 MB) | **OK / inherent** — int8-quantized WHOLE multi-layer recurrent state per boundary (ArraysCache isn't block-decomposable); bounded by the SSD cap. |
+| 5 | Hybrid SSD snapshot size (0.8B ≈ 549 MB) | **OK / inherent** — the WHOLE multi-layer recurrent state per boundary (ArraysCache isn't block-decomposable); bounded by the SSD cap. Measured with int8 storage; the default is now bit-exact (larger files), int8 is `YUNSHU_SSD_CACHE_PRECISION=int8`. |
 | 6 | SSD restore axis (`axis=2`) | **Hardened** → `axis=-2` / `shape[-2]` (was correct only for 4-D `[B,H,S,D]`; matrix already showed it lossless). |
 | 7 | Eviction block-refcount | **NOT a bug** — `_remove_entry` → `_rebuild_hash_index` clears+recomputes `_block_refcount` from scratch; and `_snapshot_cache` ALWAYS deep-copies (no refcount-conditional aliasing), so no correctness exposure. |
 

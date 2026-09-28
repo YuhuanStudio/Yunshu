@@ -161,7 +161,9 @@ class TestSSDKVCacheRecovery:
         as corrupt).
         """
         with tempfile.TemporaryDirectory() as tmp:
-            cache = _make_cache(tmp)
+            cache = SSDKVCache(
+                cache_dir=tmp, max_size_bytes=10 * 1024**2, precision="int8"
+            )
             block_hash = b"\xcc" * 16
             data = [mx.zeros((2, 4))]
             cache.save_block(block_hash, data, token_count=16)
@@ -197,3 +199,59 @@ class TestSSDKVCacheRecovery:
             result = cache.load_block(block_hash)
             assert result is None  # Should detect corruption, not return garbage
             cache.close()
+
+
+class _KV:
+    def __init__(self, keys, values):
+        self.keys = keys
+        self.values = values
+
+
+def _disk_roundtrip(tmp, precision, data):
+    cache = SSDKVCache(cache_dir=tmp, max_size_bytes=10 * 1024**2, precision=precision)
+    block_hash = b"\xee" * 16
+    cache.save_block(block_hash, data, token_count=4)
+    cache._process_pending_writes()
+    cache._hot_cache.clear()
+    out = cache.load_block(block_hash)
+    cache.close()
+    return out
+
+
+class TestSSDPrecision:
+    """Lossy storage is opt-in: the default SSD tier is bit-exact."""
+
+    def test_default_is_native(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = SSDKVCache(cache_dir=tmp, max_size_bytes=10 * 1024**2)
+            assert cache._precision == "native"
+            cache.close()
+
+    def test_native_roundtrip_is_bit_exact_bf16(self):
+        k = (mx.random.normal((1, 2, 4, 8)) * 37.0).astype(mx.bfloat16)
+        v = (mx.random.normal((1, 2, 4, 8)) * 0.01).astype(mx.bfloat16)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = _disk_roundtrip(tmp, "native", [_KV(k, v)])
+        rk, rv = out[0]
+        assert rk.dtype == mx.bfloat16 and rv.dtype == mx.bfloat16
+        assert mx.array_equal(rk, k).item() and mx.array_equal(rv, v).item()
+
+    def test_native_roundtrip_is_bit_exact_state(self):
+        s = mx.random.normal((1, 4, 16)).astype(mx.float32)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = _disk_roundtrip(tmp, "native", [[s]])
+        assert mx.array_equal(out[0][0], s).item()
+
+    def test_int8_option_is_lossy_but_close(self):
+        k = mx.random.normal((1, 2, 4, 8)).astype(mx.bfloat16)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = _disk_roundtrip(tmp, "int8", [_KV(k, k)])
+        rk = out[0][0].astype(mx.float32)
+        err = mx.max(mx.abs(rk - k.astype(mx.float32))).item()
+        assert 0 < err < 0.05
+
+    def test_unknown_precision_rejected(self):
+        import pytest
+
+        with tempfile.TemporaryDirectory() as tmp, pytest.raises(ValueError):
+            SSDKVCache(cache_dir=tmp, precision="fp4")

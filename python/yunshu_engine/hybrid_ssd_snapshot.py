@@ -13,7 +13,8 @@ Layer serialization:
   - ArraysCache layer    -> tensors l{i}_a{j} for each non-None state array ;
                             meta l{i}=arr, l{i}n=count, l{i}m=non-None-index-csv
 On load the same object types are rebuilt (KVCache keys/values/offset, ArraysCache
-.cache list), giving a cache identical to the in-RAM boundary snapshot.
+.cache list), giving a cache identical to the in-RAM boundary snapshot (bit-exact
+by default; precision="int8" trades that for ~4x smaller files).
 """
 
 from __future__ import annotations
@@ -35,7 +36,13 @@ logger = logging.getLogger(__name__)
 class HybridSnapshotStore:
     """Disk store of full hybrid cache snapshots, keyed by prefix-token hash."""
 
-    def __init__(self, cache_dir: str):
+    def __init__(self, cache_dir: str, precision: str = "native"):
+        # "native": tensors stored bit-exact (lossless reuse). "int8": per-tensor
+        # symmetric int8 (~4x smaller than fp32 state; lossy on reuse, and the
+        # recurrent state carries the whole prefix). Load reads either format.
+        if precision not in ("native", "int8"):
+            raise ValueError(f"unknown SSD cache precision {precision!r}")
+        self._precision = precision
         self._dir = Path(os.path.expanduser(cache_dir)) / "hybrid_snapshots"
         self._dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
@@ -108,18 +115,22 @@ class HybridSnapshotStore:
     def save(self, key: bytes, cache_list: list, token_count: int) -> None:
         """Serialize a whole boundary snapshot (all layers) to one file."""
         tensors: dict[str, mx.array] = {}
+        quantize = self._precision == "int8"
         meta: dict[str, str] = {
             "n": str(len(cache_list)),
             "tok": str(token_count),
-            "q": "i8",
         }
+        if quantize:
+            meta["q"] = "i8"
 
         def _put(name: str, arr) -> None:
-            """int8-quantize one tensor (per-tensor symmetric scale) into the
-            output, recording its scale + original dtype in metadata. int8 ≈ 4x
-            smaller on disk than bf16/fp32, matching the standard per-block SSD
-            path; lossy-by-design (SSD tier accepts it)."""
+            """Store one tensor: as-is (bit-exact), or with precision="int8"
+            quantized per tensor (symmetric scale + original dtype in metadata;
+            lossy)."""
             a = mx.array(arr)
+            if not quantize:
+                tensors[name] = a
+                return
             orig_dtype = str(a.dtype).split(".")[-1]
             af = a.astype(mx.float32)
             amax = mx.max(mx.abs(af))
