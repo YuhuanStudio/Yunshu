@@ -822,6 +822,7 @@ class VLMEngine:
         self._mtp_backend = None
         self._apc_backend = None
         self._apc_semantic_hash = None
+        self._batch_runner = None
         self._processor = None
         self._config: dict = {}
         self._running = False
@@ -1426,6 +1427,22 @@ class VLMEngine:
                 self._apc_semantic_hash = None
                 logger.warning("VLM APC candidate unavailable; using AR", exc_info=True)
 
+        if self._is_vlm and os.environ.get(
+            "YUNSHU_VLM_RUNNER", "1"
+        ).strip().lower() not in (
+            "0",
+            "false",
+            "no",
+        ):
+            try:
+                self._batch_runner = self._build_batch_runner(str(model_path))
+            except Exception:
+                self._batch_runner = None
+                logger.warning(
+                    "VLM batch runner unavailable; using legacy text loop",
+                    exc_info=True,
+                )
+
         # run the KV-reuse losslessness probe NOW (load runs on the
         # MLX executor thread, so the probe's forwards land on the right GPU
         # stream). Memoizes self._reuse_probe_ok so _text_prefix_reuse_safe is a
@@ -1529,6 +1546,7 @@ class VLMEngine:
         self._mtp_backend = None
         self._apc_backend = None
         self._apc_semantic_hash = None
+        self._batch_runner = None
         self._processor = None
         self._running = False
 
@@ -1847,6 +1865,27 @@ class VLMEngine:
                 )
 
                 if self._is_vlm:
+                    if max_tokens > 0 and self._runner_text_eligible(
+                        logprobs=logprobs, top_logprobs=top_logprobs, kwargs=kwargs
+                    ):
+                        return self._generate_vlm_runner_text(
+                            input_ids,
+                            **self._runner_kwargs(
+                                max_tokens=max_tokens,
+                                temperature=temperature,
+                                top_p=top_p,
+                                top_k=top_k,
+                                min_p=min_p,
+                                seed=seed,
+                                stop=stop,
+                                stop_token_ids=stop_token_ids,
+                                repetition_penalty=repetition_penalty,
+                                enable_thinking=_enable_thinking,
+                                thinking_budget=thinking_budget,
+                                cancel_event=kwargs.get("cancel_event"),
+                                kwargs=kwargs,
+                            ),
+                        )
                     if self._mtp_text_eligible(
                         temperature=temperature,
                         top_p=top_p,
@@ -2355,6 +2394,30 @@ class VLMEngine:
                 )
 
                 if self._is_vlm:
+                    if max_tokens > 0 and self._runner_text_eligible(
+                        logprobs=logprobs, top_logprobs=top_logprobs, kwargs=kwargs
+                    ):
+                        self._stream_vlm_runner_text(
+                            input_ids,
+                            req_id,
+                            _safe_queue,
+                            **self._runner_kwargs(
+                                max_tokens=max_tokens,
+                                temperature=temperature,
+                                top_p=top_p,
+                                top_k=top_k,
+                                min_p=min_p,
+                                seed=seed,
+                                stop=stop,
+                                stop_token_ids=stop_token_ids,
+                                repetition_penalty=repetition_penalty,
+                                enable_thinking=enable_thinking,
+                                thinking_budget=kwargs.get("thinking_budget"),
+                                cancel_event=cancel_event,
+                                kwargs=kwargs,
+                            ),
+                        )
+                        return
                     if max_tokens <= 240 and self._mtp_text_eligible(
                         temperature=temperature,
                         top_p=top_p,
@@ -4268,6 +4331,362 @@ class VLMEngine:
                         self._ensure_kv_prefix_state(image_hash)
             except Exception:
                 logger.debug("post-stream bookkeeping failed", exc_info=True)
+
+    # ── Unified BatchGenerator text path (APC + MTP + sampling + constraints) ──
+
+    _RUNNER_MODEL_TYPES = ("qwen3_5", "qwen3_6", "qwen3_5_moe")
+
+    def _build_batch_runner(self, model_path: str):
+        """Build the unified runner for model families validated on it.
+
+        APC is on by default with a bounded byte budget
+        (``YUNSHU_VLM_APC_MEMORY_GB``, default 8; ``YUNSHU_VLM_UPSTREAM_APC=0``
+        disables it). The MTP draft attaches when the checkpoint really ships
+        MTP weights (``YUNSHU_MTP=0`` disables it). Other families keep the
+        legacy loop until they pass the same matrix.
+        """
+        from .vlm_batch_runner import VLMBatchRunner
+
+        if self._config.get("model_type") not in self._RUNNER_MODEL_TYPES:
+            return None
+        lm = self._model.language_model
+        if self._apc_backend is None and os.environ.get(
+            "YUNSHU_VLM_UPSTREAM_APC", "1"
+        ).strip().lower() not in ("0", "false", "no"):
+            from mlx_vlm.apc import APCManager, semantic_extra_hash
+
+            budget = float(os.environ.get("YUNSHU_VLM_APC_MEMORY_GB", "8"))
+            if budget > 0 and self.backend_capabilities(lm).cache.is_hybrid:
+                self._apc_backend = APCManager(
+                    num_blocks=512,
+                    block_size=16,
+                    disk=None,
+                    overrides={"memory_max_gb": budget},
+                )
+                self._apc_semantic_hash = semantic_extra_hash(
+                    image_hash=0,
+                    media={"audio": None, "video": None},
+                    model=lm,
+                    processor=self._processor,
+                )
+        drafter = getattr(self._mtp_backend, "drafter", None)
+        if drafter is None and os.environ.get(
+            "YUNSHU_MTP", "1"
+        ).strip().lower() not in (
+            "0",
+            "false",
+            "no",
+        ):
+            from mlx_vlm.speculative.drafters import validate_drafter_compatibility
+
+            from .mlxvlm_mtp import _load_drafter_in_memory, is_mtp_capable
+
+            if is_mtp_capable(model_path):
+                drafter = _load_drafter_in_memory(model_path)
+                validate_drafter_compatibility(self._model, drafter, "mtp")
+        block = os.environ.get("YUNSHU_MTP_BLOCK_SIZE")
+        runner = VLMBatchRunner(
+            self._model,
+            self._processor,
+            apc_manager=self._apc_backend,
+            apc_semantic_hash=self._apc_semantic_hash,
+            drafter=drafter,
+            draft_block_size=int(block) if block else None,
+            apc_admit=self._apc_capacity_allows,
+        )
+        logger.info(
+            "VLM batch runner: apc=%s draft=%s",
+            f"{self._apc_backend.memory_max_bytes / 2**30:.1f}GiB"
+            if self._apc_backend is not None
+            else "off",
+            "mtp" if drafter is not None else "off",
+        )
+        return runner
+
+    _RUNNER_UNSUPPORTED_KWARGS = (
+        "xtc_probability",
+        "xtc_threshold",
+        "logits_processors",
+        "lora_adapter",
+        "min_tokens",
+        "ignore_eos",
+        "suppress_tokens",
+        "spec_decode",
+    )
+
+    def _runner_text_eligible(self, *, logprobs: bool, top_logprobs, kwargs) -> bool:
+        """Every text request goes through the runner unless it needs a knob the
+        runner does not implement (those keep the legacy loop, never silently
+        dropped)."""
+        return bool(
+            getattr(self, "_batch_runner", None) is not None
+            and not logprobs
+            and not top_logprobs
+            and not any(kwargs.get(k) for k in self._RUNNER_UNSUPPORTED_KWARGS)
+        )
+
+    def _build_text_constraint(self, json_schema):
+        if json_schema is None:
+            return None
+        try:
+            if isinstance(json_schema, dict) and json_schema.get("type") in (
+                "regex",
+                "choice",
+                "cfg",
+            ):
+                from .grammar_constraint import ConstraintFactory
+
+                gtype = json_schema["type"]
+                grammar = {
+                    "regex": json_schema.get("pattern", ""),
+                    "choice": json_schema.get("choices", []),
+                    "cfg": json_schema.get("grammar", ""),
+                }[gtype]
+                return ConstraintFactory.create(gtype, grammar, self._tokenizer)
+            from .json_schema import JsonSchemaConstraint
+
+            if isinstance(json_schema, str) and json_schema == "json_object":
+                return JsonSchemaConstraint(None)
+            return JsonSchemaConstraint(json_schema)
+        except Exception as exc:
+            raise ValueError("Grammar constraint initialization failed") from exc
+
+    def _think_token_ids(self) -> tuple[int | None, int | None]:
+        cached = getattr(self, "_think_ids_cache", None)
+        if cached is None:
+            try:
+                ts = self._tokenizer.encode("<think>", add_special_tokens=False)
+                te = self._tokenizer.encode("</think>", add_special_tokens=False)
+                cached = (
+                    ts[0] if len(ts) == 1 else None,
+                    te[0] if len(te) == 1 else None,
+                )
+            except Exception:
+                cached = (None, None)
+            self._think_ids_cache = cached
+        return cached
+
+    def _runner_events(
+        self,
+        input_ids: mx.array,
+        *,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+        top_k: int,
+        min_p: float,
+        seed: int | None,
+        stop: list[str] | None,
+        stop_token_ids: list[int] | None,
+        repetition_penalty: float,
+        frequency_penalty: float,
+        presence_penalty: float,
+        logit_bias: dict | None,
+        json_schema,
+        enable_thinking: bool | None,
+        thinking_budget: int | None,
+        cancel_event: Any,
+        stats: Any,
+    ):
+        """Yield ``(text, token_id, state, finish_reason, thinking_tokens)``.
+
+        ``finish_reason`` is set only on the last event: "stop" (EOS or stop
+        string), "length", "budget" (thinking budget reached) or "cancel".
+        """
+        from .text_utils import StopHoldbackBuffer
+        from .vlm_batch_runner import ConstraintProcessor, build_penalty_processors
+
+        processors = build_penalty_processors(
+            repetition_penalty, frequency_penalty, presence_penalty, logit_bias
+        )
+        constraint = self._build_text_constraint(json_schema)
+        if constraint is not None:
+            processors.append(ConstraintProcessor(constraint, self._tokenizer))
+
+        stop_ids = set(self._get_eos_ids())
+        stop_ids.update(stop_token_ids or [])
+        stop_strings = [s for s in (stop or []) if s]
+        holdback = StopHoldbackBuffer(stop_strings)
+        detok = self._tokenizer.detokenizer
+        detok.reset()
+        think_start, think_end = self._think_token_ids()
+        # Same state machine as the legacy loop: reasoning state follows the
+        # think tokens the model emits (the router's parser splits content).
+        in_think = False
+        thinking_tokens = 0
+        count = 0
+        for token in self._batch_runner.iter_tokens(
+            input_ids,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            min_p=min_p,
+            seed=seed,
+            logits_processors=processors,
+            cancel_event=cancel_event,
+            stats=stats,
+        ):
+            count += 1
+            if token in stop_ids:
+                detok.finalize()
+                tail = holdback.feed(detok.last_segment) + holdback.flush()
+                yield tail, token, "normal", "stop", thinking_tokens
+                return
+            if token == think_start:
+                in_think = True
+            elif token == think_end:
+                in_think = False
+            elif in_think:
+                thinking_tokens += 1
+            state = "reasoning" if in_think else "normal"
+            detok.add_token(token)
+            segment = detok.last_segment
+            if stop_strings and not in_think:
+                text = holdback.feed(segment)
+                if holdback.contains_stop():
+                    yield (
+                        text + holdback.take_stopped(),
+                        token,
+                        state,
+                        "stop",
+                        (thinking_tokens),
+                    )
+                    return
+            else:
+                text = segment
+            if (
+                thinking_budget is not None
+                and in_think
+                and (thinking_tokens >= thinking_budget)
+            ):
+                yield text, token, state, "budget", thinking_tokens
+                return
+            if count >= max_tokens:
+                detok.finalize()
+                tail = holdback.feed(detok.last_segment) + holdback.flush()
+                yield text + tail, token, state, "length", thinking_tokens
+                return
+            yield text, token, state, None, thinking_tokens
+        if stats.finish_reason == "cancel":
+            yield "", None, "normal", "cancel", thinking_tokens
+            return
+        detok.finalize()
+        tail = holdback.feed(detok.last_segment) + holdback.flush()
+        yield (
+            tail,
+            None,
+            "normal",
+            "stop" if count < max_tokens else "length",
+            (thinking_tokens),
+        )
+
+    def _runner_kwargs(self, **params) -> dict:
+        kwargs = params.pop("kwargs")
+        js = kwargs.get("json_schema")
+        if js is None:
+            js = kwargs.get("grammar")
+        tb = params.pop("thinking_budget", None)
+        if tb is None and kwargs.get("reasoning_effort") is not None:
+            tb = {"low": 2048, "medium": 8192, "high": 32768}.get(
+                kwargs["reasoning_effort"], 8192
+            )
+        return dict(
+            params,
+            frequency_penalty=kwargs.get("frequency_penalty", 0.0) or 0.0,
+            presence_penalty=kwargs.get("presence_penalty", 0.0) or 0.0,
+            logit_bias=kwargs.get("logit_bias"),
+            json_schema=js,
+            thinking_budget=tb,
+        )
+
+    def _generate_vlm_runner_text(self, input_ids: mx.array, **params):
+        """Non-streaming runner path; returns the legacy 6-tuple."""
+        from .vlm_batch_runner import RunStats
+
+        stats = RunStats()
+        parts: list[str] = []
+        finish = None
+        thinking = 0
+        for event in self._runner_events(input_ids, stats=stats, **params):
+            text, _token, _state, finish, thinking = event
+            if text:
+                parts.append(text)
+        if finish == "cancel":
+            raise asyncio.CancelledError()
+        return (
+            "".join(parts),
+            thinking,
+            stats.generated,
+            finish in ("stop", "budget"),
+            finish == "budget",
+            stats.cached_tokens,
+        )
+
+    def _stream_vlm_runner_text(
+        self, input_ids: mx.array, req_id: str, queue: Any, **params
+    ) -> None:
+        """Streaming runner path with bounded delivery to the async consumer."""
+        from .vlm_batch_runner import RunStats
+
+        stats = RunStats()
+        cancel_event = params.get("cancel_event")
+        put = getattr(queue, "put_blocking", None)
+
+        def deliver(output: RequestOutput) -> bool:
+            if put is not None:
+                return put(output, cancel_event)
+            queue.put_nowait(output)
+            return True
+
+        prompt_tokens = int(input_ids.shape[0])
+        try:
+            for text, token, state, finish, thinking in self._runner_events(
+                input_ids, stats=stats, **params
+            ):
+                reason = {"budget": "stop"}.get(finish, finish)
+                if not (text or reason):
+                    continue
+                first = stats.generated == 1 and token is not None
+                ok = deliver(
+                    RequestOutput(
+                        request_id=req_id,
+                        new_text=text,
+                        new_token_ids=[token] if token is not None else [],
+                        finish_reason=reason,
+                        finished=reason is not None,
+                        completion_tokens=stats.generated,
+                        prompt_tokens=prompt_tokens,
+                        cached_tokens=stats.cached_tokens,
+                        current_state=state,
+                        reasoning_tokens=thinking,
+                        ttft_ms=round(stats.first_token_s * 1000, 1) if first else 0.0,
+                    )
+                )
+                if not ok or reason is not None:
+                    return
+        except Exception as exc:
+            logger.error("VLM runner streaming error: %s", exc, exc_info=True)
+            queue.put_nowait(
+                RequestOutput(
+                    request_id=req_id,
+                    finish_reason="error",
+                    finished=True,
+                    error=str(exc),
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=stats.generated,
+                )
+            )
+        finally:
+            logger.debug(
+                "VLM runner: prompt=%d cached=%d generated=%d apc=%s draft=%s finish=%s",
+                prompt_tokens,
+                stats.cached_tokens,
+                stats.generated,
+                stats.used_apc,
+                stats.used_draft,
+                stats.finish_reason,
+            )
 
     def _new_vlm_apc_request(self, input_ids: mx.array, max_tokens: int):
         """Prepare one upstream APC request on the serialized Metal thread."""
