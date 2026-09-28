@@ -65,6 +65,11 @@ class ConstraintProcessor:
         self._generated: list[int] = []
 
     def _mask(self, logits: mx.array) -> mx.array:
+        fast = getattr(self._constraint, "allowed_mask", None)
+        if fast is not None:
+            mask = fast(self._tokenizer, logits.shape[-1])
+            if mask is not None:
+                return mx.where(mask, logits, mx.array(float("-inf"), logits.dtype))
         allowed = self._constraint.get_allowed_tokens(self._tokenizer, self._generated)
         if not allowed:
             raise ValueError("Grammar constraint has no valid next token")

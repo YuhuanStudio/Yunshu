@@ -326,6 +326,7 @@ _WHITESPACE_CHARS = {" ", "\t", "\n", "\r"}
 _TAB_CR_IDS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _STRING_PARTITION: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _ALL_IDS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_STRING_MASKS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _DIGIT_CHARS = set("0123456789")
 _HEX_CHARS = set("0123456789abcdefABCDEF")
 # States where we are INSIDE a string (any char continues it; `"` exits). Used to
@@ -1887,6 +1888,36 @@ class JsonSchemaConstraint:
         bad = self._tab_cr_token_ids(tokenizer)
         compact = [token_id for token_id in allowed if token_id not in bad]
         return compact or allowed
+
+    def allowed_mask(self, tokenizer: Any, vocab_size: int):
+        """Boolean mask of allowed next tokens for string states, else ``None``.
+
+        Inside a string ~99% of the vocab is allowed; building the mask from a
+        245K-long id list each step costs ~8 ms, so the string-safe part is a
+        cached mask and only the few quote-carrying tokens are scattered in.
+        Callers fall back to :meth:`get_allowed_tokens` on ``None``.
+        """
+        if self._state not in _STRING_STATES or self._get_expected_chars() is not None:
+            return None
+        import mlx.core as mx
+
+        safe, exiting = self._string_partition(tokenizer)
+        per_tok = _STRING_MASKS.setdefault(tokenizer, {})
+        base = per_tok.get(vocab_size)
+        if base is None:
+            ids = mx.array([t for t in safe if t < vocab_size], dtype=mx.int32)
+            base = mx.zeros((vocab_size,), dtype=mx.bool_)
+            base[ids] = True
+            mx.eval(base)
+            per_tok[vocab_size] = base
+        extra = [
+            t for t in self._filter_fully_valid(tokenizer, exiting) if t < vocab_size
+        ]
+        if not extra:
+            return base
+        mask = mx.array(base)
+        mask[mx.array(extra, dtype=mx.int32)] = True
+        return mask
 
     def _string_partition(self, tokenizer: Any) -> tuple[list[int], list[int]]:
         """Vocab split for string states, computed once per tokenizer.
