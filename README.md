@@ -98,7 +98,7 @@ long-run soak; same settings for every engine):
 
 | Engine | Correct | Wall time | Aggregate tok/s | Peak footprint |
 |---|---|---|---|---|
-| **Yunshu** (v7) | 250 / 300 | 46.5 min | 88 | 45 GiB (back to 17 at the end) |
+| **Yunshu** (shared batch, commit fbbb1378) | 250 / 300 | 46.5 min | 88 | 45 GiB (back to 17 at the end) |
 | Splash 1.1 | 252 / 300 | 17.2 min | 223 | 67 GiB |
 | oMLX.app | 229 / 300 (27 rejected by its prefill memory guard) | 29.2 min | 120 | 75 GiB |
 
