@@ -160,7 +160,7 @@ async def main():
     if _IS_VLM:
         from yunshu_engine.types import EngineConfig
         from yunshu_engine.vlm_engine import VLMEngine
-        print("║ path: VLMEngine text path | _text_kv_prefix_cache 4-tier | ssd=1")
+        print("║ path: VLMEngine (batch runner APC; the 4-tier KVPrefixCache is LLM-only)")
         engine = VLMEngine(MODEL, EngineConfig())
     else:
         from yunshu_engine.batched_engine import BatchedEngine
@@ -174,16 +174,6 @@ async def main():
     # / hybrid). Report that honestly instead of running empty tiers.
     _bypassed = pc is None
     _bypass_why = "no prefix cache"
-    if not _bypassed and _IS_VLM:
-        try:
-            if not engine._text_prefix_reuse_safe(engine._model.language_model):
-                _bypassed = True
-                caps = engine.backend_capabilities(engine._model.language_model)
-                _bypass_why = caps.bypass_reason() or (
-                    "reuse probe not lossless" if not getattr(engine, "_reuse_probe_ok", None)
-                    else "bypassed")
-        except Exception:
-            pass
     if _bypassed:
         print(f"║ reuse BYPASSED ({_bypass_why}) — correct for this backbone")
         print("@@RESULT4T@@ " + __import__("json").dumps({

@@ -75,7 +75,13 @@ mlx-lm lacks the `model_type` (`importlib.util.find_spec("mlx_lm.models.{type}")
 
 ## VLM cache-tier reality
 
-The VLM text path gets the SAME 4-tier KV hierarchy as the LLM fast path, gated by a
+> **Historical (deleted 2026-09-28).** VLMEngine no longer has its own text KV
+> prefix cache: every VLM request is served by the batch runner, whose prefix
+> reuse is upstream mlx-vlm APC (all families without a sliding-window cache;
+> optional SSD tier via `YUNSHU_VLM_APC_DISK_DIR`). The numbers below describe
+> the deleted legacy path, recorded in `docs/archive/legacy_vlm_loop/`.
+
+The VLM text path got the SAME 4-tier KV hierarchy as the LLM fast path, gated by a
 two-step safety check (`_text_prefix_reuse_safe`): the cache must be resumable AND an
 empirical load-time probe must confirm bit-identical reuse.
 
@@ -86,7 +92,7 @@ empirical load-time probe must confirm bit-identical reuse.
 - **gemma-4** would bypass under VLMEngine (sliding-window), but the resolver routes it
   to BatchedEngine (mlx-lm gemma4) where it reuses losslessly (3.4×).
 
-See `docs/VLM_TEXT_KV_PREFIX.md` for the full root-cause + safety analysis.
+See `docs/archive/legacy_vlm_loop/VLM_TEXT_KV_PREFIX.md` for the full root-cause + safety analysis.
 Full JSON: `docs/kv_cache_matrix_results.json`.
 
 ## Multi-framework comparison (single-req + batched)

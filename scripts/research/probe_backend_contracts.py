@@ -56,16 +56,6 @@ async def main():
         incomplete.load_weights([])
     rows["mtp_missing_weights"] = dict(strict_rejected=rejected, tolerant_accepted=True)
 
-    from yunshu_engine.vlm_engine import _CachingVisionTower
-
-    tower = _CachingVisionTower(lambda pixels, grid=None: grid)
-    pixels = mx.array([1.0])
-    first = tower(pixels, grid=mx.array([1]))
-    second = tower(pixels, grid=mx.array([2]))
-    rows["vision_keyword_cache"] = dict(
-        first=first.tolist(), second=second.tolist(), expected_second=[2]
-    )
-
     from unittest.mock import patch
 
     from yunshu_engine.vlm_engine import VLMEngine

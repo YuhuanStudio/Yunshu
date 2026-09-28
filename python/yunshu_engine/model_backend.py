@@ -17,7 +17,7 @@ engines (and any future backend) make the SAME decision from the SAME logic
 instead of hard-coding per-engine checks.
 
 It encodes the three hard-won lossless-reuse disqualifiers (see
-docs/VLM_TEXT_KV_PREFIX.md):
+docs/archive/legacy_vlm_loop/VLM_TEXT_KV_PREFIX.md):
 1. hybrid recurrent caches (ArraysCache) — not sliceable;
 2. sliding-window caches (RotatingKVCache) — circular buffer loses linear history;
 3. mRoPE — position tracked outside the cache, reset per request.

@@ -106,9 +106,9 @@ The long-run benchmark log is [docs/reports/PERF_TREND.md](docs/reports/PERF_TRE
 |---|---|---|---|
 | 1 — tuned and measured | Qwen3.5 / 3.6 / 3.8 family (text + images) | VLM batch runner | prefix cache (RAM + SSD), MTP / DFlash lossless spec decode, all API features above |
 | 2 — supported | any `mlx-lm` text model | single-request fast path (`generate_step`) | KV prefix cache, tools, JSON schema, logprobs; opt-in n-gram spec, KV quant |
-| 2 — supported | any other `mlx-vlm` model | generic VLM path | images/OCR; no hybrid prefix cache or spec decode, so slower |
+| 2 — supported | any other `mlx-vlm` model (GLM, Qwen-VL, Gemma-4, Qwen3-Omni, Nemotron-Omni, …) | the same VLM batch runner | continuous batching, prefix cache (unless the model uses a sliding window), images / audio / video, all API features above; no speculative decode |
 
-Only tier 1 was re-measured in the 2026-09-28 round.
+Only tier 1 was re-measured in the 2026-09-28 round; tier-2 VLMs moved onto the runner afterwards and still need their real-model smoke run.
 
 ## Other modalities
 
@@ -142,12 +142,11 @@ Also: MCP server/client and an Anthropic-compatible `/v1/messages` surface.
   │  Gateway (FastAPI)     routers + middleware           │
   ├─────────────────────────────────────────────────────┤
   │  Engine                                               │
-  │   · VLM batch runner (Qwen3.5 / 3.6 / 3.8)            │
-  │       prefix cache (RAM + SSD) · MTP / DFlash         │
-  │       batch-invariant decode + verify kernels         │
+  │   · VLM batch runner (every mlx-vlm model)            │
+  │       continuous batching · prefix cache (RAM + SSD)  │
+  │       Qwen3.5 family: MTP / DFlash + batch-invariant  │
   │   · LLM fast path (mlx-lm generate_step)              │
   │       KV prefix cache · constrained decoding          │
-  │   · generic VLM / OCR (mlx-vlm)                       │
   │   · other modalities: omni, ASR/TTS, image, video,    │
   │     embeddings                                        │
   └─────────────────────────────────────────────────────┘
@@ -156,10 +155,11 @@ Also: MCP server/client and an Anthropic-compatible `/v1/messages` surface.
 
 ## Serving model
 
-Yunshu is a single-user engine. All GPU work runs on one MLX thread, so concurrent requests queue
-and run one at a time; each response returns as soon as its own generation finishes. There is no
-continuous-batching throughput mode — the target is latency for one consumer, not aggregate
-tokens per second.
+All GPU work runs on one MLX thread. VLM (mlx-vlm) models serve concurrent requests in one
+continuous batch, each row with its own sampling settings; a request that is alone uses speculative
+decoding (Qwen3.5 family), and requests that arrive meanwhile join the shared batch without it.
+Text-only mlx-lm models use the single-request fast path, so their concurrent requests run one at a
+time. Every response returns as soon as its own generation finishes.
 
 ## Configuration
 

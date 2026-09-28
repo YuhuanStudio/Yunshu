@@ -234,13 +234,7 @@ def main():
                         event="loaded",
                         seconds=time.perf_counter() - t,
                         loaded=engine.is_loaded,
-                        text_prefix_safe=engine._text_prefix_reuse_safe(
-                            engine._model.language_model
-                        ),
-                        hybrid_prefix_safe=engine._text_hybrid_reuse_safe(
-                            engine._model.language_model
-                        ),
-                        hybrid_probe=engine._hybrid_reuse_probe_ok,
+                        apc=engine._apc_backend is not None,
                     )
                 )
                 for name, text, image_file, maximum in cases:
@@ -286,9 +280,6 @@ def main():
                                 cached_tokens=last.cached_tokens if last else 0,
                                 finish_reason=last.finish_reason if last else None,
                                 engine_stats=engine.get_stats(),
-                                text_kv_stats=engine._text_kv_prefix_cache.get_stats()
-                                if engine._text_kv_prefix_cache is not None
-                                else None,
                                 peak_bytes=mx.get_peak_memory(),
                                 active_bytes=mx.get_active_memory(),
                             )

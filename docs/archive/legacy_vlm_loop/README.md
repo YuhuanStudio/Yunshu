@@ -1,3 +1,5 @@
+**Deleted in bdbcc198** (every VLM now goes through `VLMBatchRunner`).
+
 <!-- Recorded 2026-09-28 at commit e26737b3, before the legacy VLM loop was deleted. Line numbers refer to that commit's python/yunshu_engine/vlm_engine.py. -->
 
 # VLMEngine legacy generation path: implementation record

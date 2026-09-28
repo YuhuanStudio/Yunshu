@@ -12594,7 +12594,7 @@ class BatchedEngine:
         backbone-agnostic `model_backend` layer (Part 2/3) — the same classifier
         VLMEngine uses, so both backends make the SAME reuse decision from the
         SAME logic. LM models are never mRoPE. Not memoized (cheap; called rarely
-        for introspection). See docs/VLM_TEXT_KV_PREFIX.md."""
+        for introspection). See docs/archive/legacy_vlm_loop/VLM_TEXT_KV_PREFIX.md."""
         from .model_backend import BackendKind, derive_capabilities
 
         if model is None:

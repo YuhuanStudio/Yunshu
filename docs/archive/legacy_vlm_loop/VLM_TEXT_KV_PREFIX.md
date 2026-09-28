@@ -1,3 +1,5 @@
+> **Deleted with the legacy VLM loop (2026-09-28).** Kept as a record; see README.md in this directory.
+
 # VLM text-path 4-tier KV prefix cache
 
 ## Status: DEFAULT ON — `YUNSHU_VLM_KV_PREFIX=0` to disable

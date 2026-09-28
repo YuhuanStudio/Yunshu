@@ -102,9 +102,9 @@ Yunshu 的矩阵比旧测试多两项:logprobs 与流式推理分离。长期基
 |---|---|---|---|
 | 1 —— 已调校并测量 | Qwen3.5 / 3.6 / 3.8 家族(文本 + 图片) | VLM batch runner | 前缀缓存(内存 + SSD)、MTP / DFlash 无损推测解码、上述所有 API 功能 |
 | 2 —— 支持 | 任何 `mlx-lm` 文本模型 | 单请求快速路径(`generate_step`) | KV 前缀缓存、工具、JSON schema、logprobs;可开启 n-gram 推测、KV 量化 |
-| 2 —— 支持 | 其他 `mlx-vlm` 模型 | 通用 VLM 路径 | 图片 / OCR;没有混合架构前缀缓存与推测解码,较慢 |
+| 2 —— 支持 | 其他 `mlx-vlm` 模型(GLM、Qwen-VL、Gemma-4、Qwen3-Omni、Nemotron-Omni 等) | 同一个 VLM batch runner | 连续批处理、前缀缓存(使用 sliding window 的模型除外)、图片 / 音频 / 视频、上述所有 API 功能;无推测解码 |
 
-2026-09-28 这一轮只重新测量了第 1 层。
+2026-09-28 这一轮只重新测量了第 1 层;第 2 层的 VLM 之后才改走 runner,仍需实机冒烟测试。
 
 ## 其他模态
 
@@ -137,12 +137,11 @@ Yunshu 的矩阵比旧测试多两项:logprobs 与流式推理分离。长期基
   │  网关(FastAPI)       路由 + 中间件                   │
   ├─────────────────────────────────────────────────────┤
   │  引擎                                                 │
-  │   · VLM batch runner(Qwen3.5 / 3.6 / 3.8)           │
-  │       前缀缓存(内存 + SSD)· MTP / DFlash            │
-  │       batch-invariant 解码 + 验证 kernel              │
+  │   · VLM batch runner(所有 mlx-vlm 模型)             │
+  │       连续批处理 · 前缀缓存(内存 + SSD)             │
+  │       Qwen3.5 家族:MTP / DFlash + batch-invariant    │
   │   · LLM 快速路径(mlx-lm generate_step)              │
   │       KV 前缀缓存 · 约束解码                          │
-  │   · 通用 VLM / OCR(mlx-vlm)                         │
   │   · 其他模态:omni、ASR/TTS、图像、视频、embeddings   │
   └─────────────────────────────────────────────────────┘
         单一 MLX 线程 · 通过 Apple MLX 在设备端运行
@@ -150,9 +149,9 @@ Yunshu 的矩阵比旧测试多两项:logprobs 与流式推理分离。长期基
 
 ## 服务模型
 
-Yunshu 是单用户引擎。所有 GPU 工作都在一条 MLX 线程上,所以并发请求会排队、依次执行;
-每个响应在它自己的生成结束时就立即返回。没有 continuous batching 吞吐模式 —— 目标是单一用户的
-延迟,而不是总 tokens/秒。
+所有 GPU 工作都在一条 MLX 线程上。VLM(mlx-vlm)模型的并发请求共用一个连续批次,每行有自己的
+采样设置;单独一个请求时会使用推测解码(Qwen3.5 家族),期间进来的请求则加入共用批次、不做推测。
+纯文本的 mlx-lm 模型走单请求快速路径,并发请求会依次执行。每个响应在它自己的生成结束时就立即返回。
 
 ## 配置
 

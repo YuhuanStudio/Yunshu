@@ -2,7 +2,7 @@
 
 Yunshu is a local LLM / VLM inference engine; start at the top-level [README](../README.md), then
 [API.md](API.md) (endpoints) and [CONFIGURATION.md](CONFIGURATION.md) (environment variables,
-including the Qwen3.5-family runner). Current measured results live in
+including the VLM batch runner). Current measured results live in
 `research/runs/2026-09-28-matrix/README.md`.
 
 ```
@@ -13,7 +13,7 @@ docs/
     img/                ← trend charts
   guides/               # hand-written reference notes
     ITERATION_RESEARCH_TODO.md  ← current research status and open work
-    KV_CACHE_MATRIX.md, VLM_TEXT_KV_PREFIX.md, PROMPT_CACHING_APIS.md,
+    KV_CACHE_MATRIX.md, PROMPT_CACHING_APIS.md,
     BACKEND_RESEARCH.md, BACKEND_ROADMAP.md
   research/runs/        # dated raw benchmark runs with a README each
     2026-09-28-matrix/  ← Qwen3.8-27B cross-engine matrix, decode sweeps, soaks (current numbers)
@@ -21,6 +21,7 @@ docs/
   results/              # raw bench JSON artifacts (historical; framework_comparison etc.)
   archive/
     mlx_vlm_omni_audio/ ← real omni/audio findings (speech-to-speech capability)
+    legacy_vlm_loop/    ← how the deleted pre-runner VLM generation loop worked (+ its KV-prefix notes)
     reports/omlx_scheduler_gaps.md  ← competitive notes on oMLX
 ```
 

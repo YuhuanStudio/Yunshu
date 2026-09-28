@@ -33,8 +33,10 @@ just test         # full suite   ·   just lint && just format
 PYTHONPATH=. uv run python scripts/realmodel/test_real_model.py
 ```
 
-Serving: Qwen3.5-family VLMs → VLM batch runner (`vlm_batch_runner.py`: APC prefix cache, MTP/DFlash spec
-decode, batch-invariant kernels so spec on == off); text-only mlx-lm models → single-request fast path
-(`_generate_fast` → mlx-lm `generate_step`). Both on one MLX thread (`max_workers=1`). Per-request sampler +
+Serving: every mlx-vlm model → VLM batch runner (`vlm_batch_runner.py`: shared continuous batching with
+per-row sampling, APC prefix cache, image/audio/video via `prepare_media`; Qwen3.5 family also MTP/DFlash spec
+decode with batch-invariant kernels so spec on == off). There is no other VLM generation path (the deleted
+legacy loop is recorded in `docs/archive/legacy_vlm_loop/`). Text-only mlx-lm models → single-request fast
+path (`_generate_fast` → mlx-lm `generate_step`). Both on one MLX thread (`max_workers=1`). Per-request sampler +
 SequenceStateMachine (Aho-Corasick), per-request detokenizer (never pool), `uv` only. Constrained JSON-schema
 decoding is wired into both paths — keep it working.

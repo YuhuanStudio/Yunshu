@@ -148,8 +148,6 @@ def _sections():
     return [
         ("unit-tests", "smoke", True,
          [PY, "-m", "pytest", "tests/", "-q"], {}, _p_pytest),
-        ("cache-lossless: VLM text (GLM-OCR + gemma)", "smoke", True,
-         [PY, "scripts/verify/verify_vlm_text_kv_prefix.py"], {"PYTHONPATH": VLM_PP}, _p_passfail),
         ("cache-lossless: engine-loop", "smoke", True,
          [PY, "scripts/verify/verify_engine_loop.py"], {}, _p_verify),
         ("modalities (6-modality smoke)", "smoke", True,
@@ -236,8 +234,6 @@ def _sections():
          [PY, "scripts/verify/verify_tts_asr_roundtrip.py"], {}, _p_passfail_skip),
         ("VLM OCR (discriminative image reading)", "standard", True,
          [PY, "scripts/verify/verify_vlm_ocr.py"], {}, _p_passfail_skip),
-        ("VLM vision/image-reuse cache (wrapper + ~6x repeat-image)", "standard", True,
-         [PY, "scripts/verify/verify_vlm_vision_cache.py"], {"PYTHONPATH": VLM_PP}, _p_passfail_skip),
         ("image t2i (prompt drives pixels, discriminative)", "standard", True,
          [PY, "scripts/verify/verify_image_t2i.py"], {}, _p_passfail_skip),
         ("image-gen HTTP route (/v1/images/generations b64_json)", "standard", True,

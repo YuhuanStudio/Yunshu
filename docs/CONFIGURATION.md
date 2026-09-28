@@ -64,20 +64,24 @@ caching is always on.
 | `YUNSHU_SPEC_PREFILL` | off | Sparse speculative prefill (needs a draft model). |
 | `YUNSHU_ENGINE_LOOP` | off | Legacy continuous-batching loop instead of the single-request fast path. Not the supported path — for experiments only. |
 
-## Qwen3.5-family VLM runner (Qwen3.5 / 3.6 / 3.8)
+## VLM batch runner (all mlx-vlm models)
 
-These models are served by a dedicated runner on `mlx-vlm`'s generator with a prefix cache and
-speculative decode on by default. Defaults are the measured best exact configuration for
-Qwen3.8-27B on M5 Max.
+Every multimodal (mlx-vlm) model is served by one runner on `mlx-vlm`'s `BatchGenerator`:
+concurrent requests share a continuous batch (each with its own sampling settings), text,
+image, audio and video inputs go through the same path, and a prefix cache (APC) is on for
+every family whose cache has no sliding window. Speculative decoding (MTP / DFlash) is
+Qwen3.5-family only (Qwen3.5 / 3.6 / 3.8); its defaults are the measured best exact
+configuration for Qwen3.8-27B on M5 Max. LoRA adapters and custom `logits_processors` are
+not supported for VLMs (HTTP 400).
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `YUNSHU_VLM_RUNNER` | on | `0` falls back to the older generic VLM path (no APC / speculative decode). |
-| `YUNSHU_VLM_APC_MEMORY_GB` | `8` | RAM budget of the prefix cache (exact hybrid checkpoints; text + image-pixel keys). `YUNSHU_VLM_UPSTREAM_APC=0` disables the cache. |
+| `YUNSHU_VLM_APC_MEMORY_GB` | `8` | RAM budget of the prefix cache (exact checkpoints incl. hybrid recurrent state; keyed by text plus image-pixel / audio-feature hashes). `YUNSHU_VLM_UPSTREAM_APC=0` disables the cache. |
 | `YUNSHU_VLM_APC_DISK_DIR` | _(unset)_ | Directory for an SSD tier behind the RAM cache; evicted prefixes are reloaded from disk instead of re-prefilled. |
 | `YUNSHU_VLM_APC_DISK_GB` | `64` | Size cap of the SSD tier. |
-| `YUNSHU_MTP` | on | Use the checkpoint's MTP head as the draft (when present). `0` = plain decode. |
-| `YUNSHU_VLM_DRAFT` | _(unset)_ | Path to an external DFlash drafter (e.g. `Qwen3.8-27B-DFlash2`); replaces the MTP draft. |
+| `YUNSHU_VLM_LARGE_MODEL_GB` | `10` | Models larger than this on disk release the MLX buffer pool whenever the batch drains. |
+| `YUNSHU_MTP` | on | Qwen3.5 family: use the checkpoint's MTP head as the draft (when present). `0` = plain decode. |
+| `YUNSHU_VLM_DRAFT` | _(unset)_ | Qwen3.5 family: path to an external DFlash drafter (e.g. `Qwen3.8-27B-DFlash2`); replaces the MTP draft. |
 | `YUNSHU_MTP_BLOCK_SIZE` | `6` (MTP, invariant) / `4` (DFlash); `3` for MTP with `YUNSHU_VLM_INVARIANT=0` | Draft block size. |
 | `YUNSHU_MTP_VERIFY_KERNELS` | on | Exact verify kernels (GatedDeltaNet / attention / 5-bit streamed). Output with speculation stays token-identical to without. |
 | `YUNSHU_MTP_FAST_VERIFY` | off | Faster, **non-exact** verify matmuls (oMLX `verify_qmm`). Measurably faster decode; greedy output can differ from speculation-off. |
