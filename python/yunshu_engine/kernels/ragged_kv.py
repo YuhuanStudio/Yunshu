@@ -443,9 +443,17 @@ def dense_lane_attention(queries: mx.array, cache: Any, scale: float):
     # tile: every token x head of the KV head per pass over the keys (verify
     # reads K/V once); the key-parallel fallback (no tensor ops) keeps the
     # same per-token bits for any T but reads K/V once per token.
-    tile = (
-        keys.shape[2] >= 64 and queries.shape[1] // keys.shape[1] <= 8 and tile_ready()
-    )
+    tile = queries.shape[1] // keys.shape[1] <= 8 and tile_ready()
+    if tile and keys.shape[2] % 64:
+        # The tile kernel walks keys in 64-key windows at absolute positions,
+        # but pulls the last window back inside a buffer whose capacity is not
+        # a multiple of 64 — which moves keys to other columns and changes the
+        # bits. Stock caches grow to ``offset + 256`` after a rollback, so the
+        # verify cache would have such a capacity while plain decode's does
+        # not: pad the buffer (once per growth) so windows never move.
+        pad = [(0, 0), (0, 0), (0, _round_up(keys.shape[2]) - keys.shape[2]), (0, 0)]
+        cache.keys = keys = mx.pad(keys, pad)
+        cache.values = values = mx.pad(values, pad)
     return ragged_decode_attention(
         queries,
         keys,

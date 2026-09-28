@@ -613,3 +613,71 @@ def test_dense_lane_matches_ragged_cache_bits(batch_cache):
             impl="tile" if tile_ready() else "auto",
         )
         assert mx.array_equal(out, batch[1:])
+
+
+@pytest.mark.parametrize("prev", [1000, 1017, 1020, 1023])
+@pytest.mark.parametrize("T", [1, 3, 7])
+def test_dense_lane_verify_equals_decode_after_rollback_growth(prev, T):
+    """After a rollback, a stock cache grows to ``offset + 256`` (a capacity
+    that is not a multiple of 64). Each verify token through the lane kernel
+    must still equal a one-token decode at its position over an aligned
+    buffer — the tile kernel's key windows may not depend on the capacity."""
+    from mlx_vlm.models.cache import KVCache
+
+    from yunshu_engine.kernels.ragged_kv import dense_lane_attention, set_dense_lane
+
+    if not tile_ready():
+        pytest.skip("tensor-op tile kernel unavailable on this GPU")
+    mx.random.seed(prev + T)
+    total = prev + T
+    k = mx.random.normal((1, HKV, 1280, D)).astype(mx.bfloat16)
+    v = mx.random.normal((1, HKV, 1280, D)).astype(mx.bfloat16)
+    q = mx.random.normal((1, H, T, D)).astype(mx.bfloat16)
+    c = KVCache()
+    c.update_and_fetch(k[:, :, :1024], v[:, :, :1024])  # capacity 1024
+    c.trim(1024 - prev)  # rollback to ``prev``
+    c.update_and_fetch(k[:, :, prev:total], v[:, :, prev:total])
+    assert c.offset == total
+    set_dense_lane(True)
+    try:
+        out = dense_lane_attention(q, c, D**-0.5)
+    finally:
+        set_dense_lane(False)
+    assert c.keys.shape[2] % 64 == 0
+    for t in range(T):
+        m = total - (T - 1 - t)
+        one = ragged_decode_attention(
+            q[:, :, t : t + 1],
+            k,
+            v,
+            mx.array([m]),
+            D**-0.5,
+            row_lengths=[m],
+            impl="tile",
+        )
+        assert mx.array_equal(out[:, :, t : t + 1], one), t
+
+
+def test_tile_bits_independent_of_capacity():
+    """Same keys in buffers of different capacities (multiples of 64): same
+    bits (the lane pads other capacities to one)."""
+    if not tile_ready():
+        pytest.skip("tensor-op tile kernel unavailable on this GPU")
+    mx.random.seed(5)
+    k = mx.random.normal((1, HKV, 1600, D)).astype(mx.bfloat16)
+    v = mx.random.normal((1, HKV, 1600, D)).astype(mx.bfloat16)
+    for n in (1000, 1023, 1025, 1087):
+        q = mx.random.normal((1, H, 1, D)).astype(mx.bfloat16)
+        outs = [
+            ragged_decode_attention(
+                q,
+                mx.contiguous(k[:, :, :cap]),
+                mx.contiguous(v[:, :, :cap]),
+                mx.array([n]),
+                D**-0.5,
+                row_lengths=[n],
+                impl="tile",
+            )
+            for cap in (-(-n // 64) * 64, 1536, 1600)
+        ]
+        assert all(mx.array_equal(outs[0], o) for o in outs[1:]), n
