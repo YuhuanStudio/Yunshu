@@ -1824,6 +1824,44 @@ class VLMEngine:
                 # See _generate_vlm_text and _generate_vlm_vision below
                 # where mx.random.seed is called INSIDE the stream context.
 
+                if (
+                    image_paths
+                    and not audio_paths
+                    and self._has_vision
+                    and max_tokens > 0
+                    and self._runner_text_eligible(
+                        logprobs=logprobs, top_logprobs=top_logprobs, kwargs=kwargs
+                    )
+                ):
+                    prompt = self._apply_vlm_template_with_cache(
+                        messages,
+                        enable_thinking=_enable_thinking,
+                        num_audios=0,
+                        max_images=len(image_paths),
+                    )
+                    ids, pkw, salt = self._batch_runner.prepare_images(
+                        prompt, image_paths
+                    )
+                    return self._generate_vlm_runner_text(
+                        ids,
+                        prompt_kwargs=pkw,
+                        apc_semantic_hash=salt,
+                        **self._runner_kwargs(
+                            max_tokens=max_tokens,
+                            temperature=temperature,
+                            top_p=top_p,
+                            top_k=top_k,
+                            min_p=min_p,
+                            seed=seed,
+                            stop=stop,
+                            stop_token_ids=stop_token_ids,
+                            repetition_penalty=repetition_penalty,
+                            enable_thinking=_enable_thinking,
+                            thinking_budget=thinking_budget,
+                            cancel_event=kwargs.get("cancel_event"),
+                            kwargs=kwargs,
+                        ),
+                    )
                 if (image_paths and self._has_vision and self._is_vlm) or (
                     audio_paths and self._is_vlm
                 ):
@@ -2356,6 +2394,46 @@ class VLMEngine:
                 # Seed is forwarded to _stream_vlm_text / _stream_vlm_vision
                 # which set it inside their `with mx.stream()` block.
 
+                if (
+                    has_images
+                    and not has_audio
+                    and max_tokens > 0
+                    and self._runner_text_eligible(
+                        logprobs=logprobs, top_logprobs=top_logprobs, kwargs=kwargs
+                    )
+                ):
+                    prompt = self._apply_vlm_template_with_cache(
+                        messages,
+                        enable_thinking=enable_thinking,
+                        num_audios=0,
+                        max_images=len(image_paths),
+                    )
+                    ids, pkw, salt = self._batch_runner.prepare_images(
+                        prompt, image_paths
+                    )
+                    self._stream_vlm_runner_text(
+                        ids,
+                        req_id,
+                        _safe_queue,
+                        prompt_kwargs=pkw,
+                        apc_semantic_hash=salt,
+                        **self._runner_kwargs(
+                            max_tokens=max_tokens,
+                            temperature=temperature,
+                            top_p=top_p,
+                            top_k=top_k,
+                            min_p=min_p,
+                            seed=seed,
+                            stop=stop,
+                            stop_token_ids=stop_token_ids,
+                            repetition_penalty=repetition_penalty,
+                            enable_thinking=enable_thinking,
+                            thinking_budget=kwargs.get("thinking_budget"),
+                            cancel_event=cancel_event,
+                            kwargs=kwargs,
+                        ),
+                    )
+                    return
                 if has_images or has_audio:
                     # Resolve reasoning_effort -> thinking_budget for VLM vision streaming
                     _tb = kwargs.get("thinking_budget")
@@ -4487,6 +4565,8 @@ class VLMEngine:
         thinking_budget: int | None,
         cancel_event: Any,
         stats: Any,
+        prompt_kwargs: dict | None = None,
+        apc_semantic_hash: int | None = None,
     ):
         """Yield ``(text, token_id, state, finish_reason, thinking_tokens)``.
 
@@ -4524,6 +4604,8 @@ class VLMEngine:
             min_p=min_p,
             seed=seed,
             logits_processors=processors,
+            prompt_kwargs=prompt_kwargs,
+            apc_semantic_hash=apc_semantic_hash,
             cancel_event=cancel_event,
             stats=stats,
         ):

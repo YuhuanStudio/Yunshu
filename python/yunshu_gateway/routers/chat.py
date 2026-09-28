@@ -2220,25 +2220,6 @@ async def _handle_vlm_chat(
             detail="VLM tool calls and response_format / grammar cannot be combined yet",
         )
 
-    # The image generation path can't apply grammar/JSON-schema constraints (the
-    # constrained sampler is wired only on the text paths), so structured output on an
-    # image request would be silently ignored. Reject it with a clean 400 — but only
-    # when an image is actually present (text-only VLM requests DO honor json_schema).
-    if json_schema and any(
-        isinstance(m.get("content"), list)
-        and any(
-            isinstance(p, dict)
-            and p.get("type") in ("image_url", "image", "input_image")
-            for p in m["content"]
-        )
-        for m in messages
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail="response_format / json_schema (structured output) is not supported "
-            "together with image inputs",
-        )
-
     if isinstance(json_schema, dict) and json_schema.get("type") not in (
         "regex",
         "choice",
@@ -2310,6 +2291,28 @@ async def _handle_vlm_chat(
         raise HTTPException(
             status_code=404,
             detail=f"VLM model '{req.model}' not registered or not loaded",
+        )
+
+    # The legacy image path cannot apply grammar/JSON-schema constraints, so
+    # structured output on an image request would be silently ignored. The
+    # batch runner constrains image turns too; only reject when it is absent.
+    if (
+        json_schema
+        and getattr(vlm_engine, "_batch_runner", None) is None
+        and any(
+            isinstance(m.get("content"), list)
+            and any(
+                isinstance(p, dict)
+                and p.get("type") in ("image_url", "image", "input_image")
+                for p in m["content"]
+            )
+            for m in messages
+        )
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="response_format / json_schema (structured output) is not supported "
+            "together with image inputs",
         )
 
     # VLM/multimodal chat previously BYPASSED the context + prefill

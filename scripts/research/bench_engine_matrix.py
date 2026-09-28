@@ -437,6 +437,47 @@ def build_cases(doc_lines: int, chat_turns: int):
             "right",
         )
     )
+    # Same image + question again: prefix reuse across image turns.
+    cases.append(
+        (
+            "image_right_repeat",
+            "perf",
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": image_url(False)}},
+                        {"type": "text", "text": img_q},
+                    ],
+                }
+            ],
+            8,
+            "right",
+        )
+    )
+    # Two different images in one turn; the answer depends on the second one.
+    two_q = (
+        "There are two images. In the SECOND image, which half is red? "
+        "Reply with exactly one word: left or right."
+    )
+    cases.append(
+        (
+            "image_two",
+            "perf",
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": image_url(True)}},
+                        {"type": "image_url", "image_url": {"url": image_url(False)}},
+                        {"type": "text", "text": two_q},
+                    ],
+                }
+            ],
+            8,
+            "right",
+        )
+    )
     return cases
 
 
@@ -609,6 +650,61 @@ def main():
             {
                 "kind": "capability",
                 "case": name,
+                "ok": ok,
+                "why": why,
+                **r,
+                "memory": sample_memory(args.pid),
+            }
+        )
+
+    if want("image_schema"):
+        img_schema = {
+            "type": "object",
+            "properties": {
+                "red_half": {"type": "string", "enum": ["left", "right"]},
+                "other_color": {"type": "string"},
+            },
+            "required": ["red_half", "other_color"],
+            "additionalProperties": False,
+        }
+        msgs = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": image_url(True)}},
+                    {
+                        "type": "text",
+                        "text": "Which half is red, and what color is the other half? Answer as JSON.",
+                    },
+                ],
+            }
+        ]
+        body = cli.body(
+            msgs,
+            96,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": "halves", "schema": img_schema, "strict": True},
+            },
+        )
+        try:
+            r = cli.stream(body)
+            obj = json.loads((r.get("content") or "").strip())
+            ok = (
+                obj.get("red_half") == "left"
+                and "blue" in str(obj.get("other_color", "")).lower()
+            )
+            why = f"obj={obj!r}"
+        except Exception as e:  # noqa: BLE001
+            r = r if "r" in dir() else {}
+            ok, why = (
+                False,
+                f"{e!r} http={r.get('http_status')} body={str(r.get('error_body'))[:200]}",
+            )
+        emit(
+            {
+                "kind": "capability",
+                "case": "image_schema",
                 "ok": ok,
                 "why": why,
                 **r,

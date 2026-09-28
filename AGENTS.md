@@ -13,8 +13,8 @@ process serving text · vision · OCR · ASR · TTS · Realtime voice · image g
 framework), and usable standalone.
 
 **Non-goals (do not reintroduce):** no distributed/multi-node mesh, no throughput/batching race, no
-multi-tenant control plane, no custom Metal kernels. It wraps MLX; decode is at parity with `mlx-lm`. The only
-performance axis that matters is **latency** (TTFT / voice round-trip).
+multi-tenant control plane. Custom Metal kernels only when a same-checkpoint A/B proves an end-to-end win with
+matching output. Performance = TTFT, decode speed, prefix reuse, voice round-trip (cold and warm).
 
 This repo is mid-**refocus** away from its old "production platform / distributed Infra" framing. The
 whitepaper and the wave-narrative VALIDATION_REPORT are retired — do not cite or resurrect their claims.

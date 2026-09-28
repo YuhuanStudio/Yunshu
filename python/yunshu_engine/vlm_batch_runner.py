@@ -141,6 +141,47 @@ class VLMBatchRunner:
         # so a cold request does not pay APC bookkeeping for nothing.
         self._apc_admit = apc_admit
 
+    def prepare_images(self, prompt: str, image_paths: list[str]):
+        """Preprocess + encode images for one prompt on the MLX thread.
+
+        Returns ``(input_ids, prompt_kwargs, apc_semantic_hash)``. The APC salt
+        hashes the processed pixel values, so a prefix is only reused for the
+        same image content (never across images or with text-only prompts).
+        """
+        from mlx_vlm import apc as _apc
+        from mlx_vlm.utils import prepare_inputs
+
+        from .mrope import clear_rope_state
+
+        raw = prepare_inputs(
+            self.processor,
+            images=image_paths,
+            prompts=prompt,
+            image_token_index=getattr(self.model.config, "image_token_index", None),
+            add_special_tokens=True,
+        )
+        input_ids = raw["input_ids"]
+        pixel_values = raw.get("pixel_values")
+        data = {
+            k: v
+            for k, v in raw.items()
+            if k not in ("input_ids", "pixel_values", "attention_mask")
+        }
+        clear_rope_state(self.model)
+        embed = self.model.get_input_embeddings(
+            input_ids, pixel_values, mask=raw.get("attention_mask"), **data
+        )
+        kwargs = {**data, **{k: v for k, v in embed.to_dict().items() if v is not None}}
+        salt = None
+        if self.apc_manager is not None:
+            salt = _apc.semantic_extra_hash(
+                image_hash=_apc.hash_image_payload(pixel_values=pixel_values),
+                media={"audio": None, "video": raw.get("pixel_values_videos")},
+                model=self.model.language_model,
+                processor=self.processor,
+            )
+        return input_ids[0], kwargs, salt
+
     def iter_tokens(
         self,
         input_ids: mx.array,
@@ -154,6 +195,7 @@ class VLMBatchRunner:
         logits_processors: list | None = None,
         allow_draft: bool = True,
         prompt_kwargs: dict | None = None,
+        apc_semantic_hash: int | None = None,
         cancel_event: Any = None,
         stats: RunStats | None = None,
     ) -> Iterator[int]:
@@ -181,13 +223,18 @@ class VLMBatchRunner:
 
         if seed is not None:
             mx.random.seed(int(seed) & ((1 << 63) - 1))
-        clear_rope_state(self.model)
         if prompt_kwargs is None:
+            clear_rope_state(self.model)
             prompt_kwargs = self.model.get_input_embeddings(
                 input_ids[None], None, mask=None
             ).to_dict()
-        if self.apc_semantic_hash is not None:
-            prompt_kwargs["_apc_semantic_hash"] = self.apc_semantic_hash
+        salt = (
+            apc_semantic_hash
+            if apc_semantic_hash is not None
+            else (self.apc_semantic_hash)
+        )
+        if salt is not None:
+            prompt_kwargs["_apc_semantic_hash"] = salt
 
         matched_before = apc.stats.matched_tokens if apc is not None else 0
         generator = BatchGenerator(
