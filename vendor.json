@@ -142,6 +142,22 @@
       ],
       "why": "quantized matmul / NAX kernels",
       "pin_package": "mlx"
+    },
+    {
+      "repo": "https://github.com/ashhart/TensorFold",
+      "clone": "reference/TensorFold",
+      "globs": [
+        "src/tensorfold/**"
+      ],
+      "why": "exact speculative decoding, lane engine, multi-bit tensor-unit kernels for Qwen3.8"
+    },
+    {
+      "repo": "https://github.com/basecompute/baseRT",
+      "clone": "reference/baseRT",
+      "globs": [
+        "**"
+      ],
+      "why": "native Metal runtime using M5 Neural Accelerators (MPP) for prefill/GEMM"
     }
   ],
   "packages": [
