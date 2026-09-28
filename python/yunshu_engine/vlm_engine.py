@@ -4488,10 +4488,10 @@ class VLMEngine:
                 "yes",
             )
             kernels = apply_verify_kernels(fast=fast)
-            # Exact: 5-bit layers use token_tiled for >= 6 verify rows.
-            from .kernels.verify_select import install as install_tiled5
+            # Exact: 5-bit layers use the fixed streamed kernel for >= 5 verify rows.
+            from .kernels.verify_select import install as install_streamed5
 
-            kernels["tiled5"] = install_tiled5()
+            kernels["streamed5"] = install_streamed5()
             # Measured with exact kernels: MTP block 3 ~= 4 on average (code
             # 65/67, prose 53/51, json 62/60 tok/s) and block 5 jumps to ~108 ms
             # per cycle; thinking output behaves like prose, so MTP defaults to

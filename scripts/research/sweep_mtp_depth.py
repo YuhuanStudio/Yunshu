@@ -83,13 +83,13 @@ if "--adaptive" in sys.argv:
     omlx_set = set(omlx_set if use_omlx else set()) | {"adaptive"}
     use_omlx = True
 
-if "--tiled5" in sys.argv:
+if "--streamed5" in sys.argv:
     from yunshu_engine.kernels.verify_select import (
-        install as install_tiled5,  # noqa: E402
+        install as install_streamed5,  # noqa: E402
     )
 
-    install_tiled5()
-    omlx_set = set(omlx_set if use_omlx else set()) | {"tiled5"}
+    install_streamed5()
+    omlx_set = set(omlx_set if use_omlx else set()) | {"streamed5"}
     use_omlx = True
 
 model, processor = load(model_dir)
