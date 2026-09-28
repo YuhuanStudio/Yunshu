@@ -321,3 +321,17 @@ Splash 官方模型 120 個交錯前綴請求全數輸出正確，約 316 s 後 
 33,023-token 單提示：未限制快照的 128-token 邊界首次 104.65 s、active 64.54 GiB；單邊界＋512-token chunk 候選首次 40.36 s、重複 0.395 s、active 17.12 GiB，換尾段答案正確。無 hybrid 基線首次／重複 39.61／39.26 s，單次全長 forward 的 MLX peak 約 66.77 GiB。正式 `.venv` 的舊 MLX／transformers 組合 hybrid probe 失敗，這些性能收益尚未進入正式依賴。
 
 同 checkpoint 的 oMLX MTP 120 題抽樣，AR／MTP 中位完成時間 15.03／5.74 s，配對中位加速 2.55×，兩邊各 11 題在 2,048-token 上限截斷、10 題最終文字不同；這不是官方 MMLU-Pro 分數或能力等價證明。完整條件、長時間限制和逐題輸出見實機比較報告。
+
+2026-09-29 ragged KV 開銷與 speculative lane（非獨占 GPU，另一 27B server 同時跑 MMLU-Pro；27B 端到端待 idle GPU 確認）。原始資料：[run 目錄](../research/runs/2026-09-29-ragged-lane/)。
+
+| 項目（Qwen3.5-0.8B in-process，除註明） | 之前 | 之後 |
+|---|---:|---:|
+| B=8 短列均一 decode step（off / bf16 / int8） | 10.68 / 10.88 / 10.99 ms | 10.39 / 10.15 / 10.22 ms |
+| B=8 混合（1×8K + 7×512）step（off / bf16 / int8） | 19.36 / 10.93 / 12.81 ms | 19.10 / 10.33 / 10.38 ms |
+| B=1 8K decode step（off / bf16 / int8，單列不轉換） | 7.36 / 7.38 / 7.33 ms | 7.12 / 7.17 / 7.20 ms |
+| 整批轉換（B=8 混合，bf16 / int8） | 34.3 / 115.4 ms | 17.5 / 11.6 ms |
+| 一列加入解碼中的批次（B=8 混合，bf16 / int8） | 22.5 / 18.4 ms | 2.3 / 2.3 ms |
+| 27B 形狀 attention-only，混合批 16 層（bf16 / int8） | 6.45 / 9.49 ms | 3.20 / 2.99 ms（stock 6.75） |
+| 27B 形狀 lane verify T=6，32K／131K，16 層 | stock 6.32 / 21.5 ms | tile 6.77 / 22.2 ms |
+
+0.8B（4-bit in-memory）MTP block 3/6 貪婪輸出與一般貪婪逐 token 相同（21／1528／4020／17020-token 提示，lane 開）。

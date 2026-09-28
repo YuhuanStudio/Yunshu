@@ -1,30 +1,37 @@
 """Decode/verify attention over per-row key lengths (ragged batch KV).
 
-Keys and values live in one buffer per layer, ``[B, HKV, CAP, D]``, with row
-``b``'s ``lengths[b]`` valid keys at positions ``0 .. lengths[b] - 1`` (right-
-aligned storage, no left padding). Each query row reads only its own keys, so a
-short request in a batch with a 16K-token neighbour no longer pays for the
-neighbour's length — upstream's left-padded ``BatchKVCache`` pads every row to
-the longest one.
+Keys and values live in one buffer per layer, ``[S, HKV, CAP, D]``; query row
+``b`` reads buffer row ``slots[b]`` (default ``b``), whose ``lengths[b]`` valid
+keys sit at positions ``0 .. lengths[b] - 1`` (right-aligned storage, no left
+padding). Each query row reads only its own keys, so a short request in a batch
+with a 16K-token neighbour no longer pays for the neighbour's length —
+upstream's left-padded ``BatchKVCache`` pads every row to the longest one.
 
-Split-K ("flash decoding"): keys are cut into fixed ``CK``-key chunks; one
-threadgroup per (row, query token, KV head, chunk) computes the chunk's partial
-softmax for the KV head's ``G`` query heads, then a merge kernel combines a
-row's chunk partials in chunk order. Chunk boundaries depend only on absolute
-key position and every in-chunk reduction order is fixed, so a row's result
-does not depend on the other rows in the batch (the fixed-chunk + ordered-merge
-idea follows TensorFold's lane_attention; these kernels are written
-independently, plain SIMD). ``T`` > 1 query tokens (speculative verify) attend
-causally within the window: token ``t`` sees keys ``< lengths[b] - (T - 1 - t)``.
+Split-K ("flash decoding"): keys are cut into fixed ``CK``-key chunks; the
+partial kernels compute each chunk's softmax partials, then a merge kernel
+combines a row's chunk partials in chunk order. Chunk boundaries depend only on
+absolute key position and every in-chunk reduction order is fixed, so a row's
+result does not depend on the other rows in the batch (the fixed-chunk +
+ordered-merge idea follows TensorFold's lane_attention). ``T`` > 1 query tokens
+(speculative verify) attend causally within the window: token ``t`` sees keys
+``< lengths[b] - (T - 1 - t)``, and its bits equal a one-token call at that
+position (every kernel below).
 
-Two partial kernels:
+Three partial kernels:
 
-- key-parallel (default for head_dim 256): the threadgroup's 8 simdgroups read
-  each K/V row once for all ``G`` heads with 16-byte loads, score all keys of
-  the chunk, take one softmax over the chunk, then accumulate P.V with the
-  simdgroups split over dims — no per-key serial chain. Given host-side row
-  lengths it launches only the rows' non-empty chunks (a work list), so short
-  rows next to a long one do not pay for empty threadgroups.
+- key-parallel (default for head_dim 256): one threadgroup per (row, query
+  token, KV head, chunk); its 8 simdgroups read each K/V row once for all ``G``
+  heads with 16-byte loads, score all keys of the chunk, take one softmax over
+  the chunk, then accumulate P.V with the simdgroups split over dims — no
+  per-key serial chain. Given host-side row lengths it launches only the rows'
+  non-empty chunks (a work list, the T tokens of a chunk back to back), so
+  short rows next to a long one do not pay for empty threadgroups.
+- tile (bf16, head_dim 256, GPUs with MetalPerformancePrimitives tensor ops):
+  one threadgroup per (row, KV head, chunk) serves all T tokens x G heads with
+  tensor-op matmuls, so a verify step reads K/V once instead of once per token
+  (16 layers, 27B heads, T=6: 6.6 ms at 32K keys vs 13.2 ms key-parallel, on
+  par with oMLX's verify kernel). The speculative lane runs decode and verify
+  on it (``ragged_kv.set_dense_lane``).
 - per-head (fallback, any head_dim that is a multiple of 32): one simdgroup per
   query head walks the chunk key by key with an online softmax; the G
   simdgroups of a KV group each read the chunk.
@@ -76,7 +83,7 @@ _PARTIAL = r"""
   const float s = scale[0];
   float q[DPL];
   for (int i = 0; i < DPL; i++) q[i] = s * float(qp[i]);
-  const int64_t kv0 = (((int64_t)b * HKV + hk) * CAP) * D + lane * DPL;
+  const int64_t kv0 = (((int64_t)slots[b] * HKV + hk) * CAP) * D + lane * DPL;
   const device bfloat16_t* kp = keys + kv0 + (int64_t)kbeg * D;
   const device bfloat16_t* vp = values + kv0 + (int64_t)kbeg * D;
   float m = -INFINITY, l = 0.0f, o[DPL];
@@ -123,7 +130,7 @@ _PARTIAL_Q8 = r"""
   const float s = scale[0];
   float q[DPL];
   for (int i = 0; i < DPL; i++) q[i] = s * float(qp[i]);
-  const int64_t row0 = ((int64_t)b * HKV + hk) * CAP;
+  const int64_t row0 = ((int64_t)slots[b] * HKV + hk) * CAP;
   const device int8_t* kp = keys + (row0 + kbeg) * D + lane * DPL;
   const device int8_t* vp = values + (row0 + kbeg) * D + lane * DPL;
   constexpr int NG = D / GS;                                   // scale groups per token
@@ -168,10 +175,9 @@ _PARTIAL_Q8 = r"""
 _KEYPAR = r"""
   const uint lane = thread_index_in_simdgroup;
   const uint sg = simdgroup_index_in_threadgroup;
-  uint hk, c, bt, w;                  // w: partial slot of (bt, c)
+  uint hk, c, bt;
   if (WL) {                           // work list: one entry per non-empty chunk
-    w = threadgroup_position_in_grid.y / HKV;
-    const uint item = uint(work[w]);
+    const uint item = uint(work[threadgroup_position_in_grid.y / HKV]);
     hk = threadgroup_position_in_grid.y % HKV;
     bt = item / NC;
     c = item % NC;
@@ -179,14 +185,14 @@ _KEYPAR = r"""
     hk = threadgroup_position_in_grid.y / NC;
     c = threadgroup_position_in_grid.y % NC;
     bt = threadgroup_position_in_grid.z;
-    w = bt * NC + c;
   }
+  const uint w = uint(wstart[bt]) + c;  // partial slot of (bt, c)
   const uint b = bt / T, t = bt % T;
   const int kbeg = int(c) * CK;
   const int n = min(CK, lengths[b] - int(T - 1 - t) - kbeg);   // keys in this chunk
   if (n <= 0) return;                 // beyond the row: the merge never reads it
   threadgroup float S[G * CK];
-  const int64_t row0 = ((int64_t)b * HKV + hk) * CAP + kbeg;   // chunk's first key
+  const int64_t row0 = ((int64_t)slots[b] * HKV + hk) * CAP + kbeg;   // chunk's first key
   {
     const float s = scale[0];
     float q[G][8];
@@ -297,6 +303,149 @@ _KEYPAR_Q8 = (
     .replace("VSCALE", "float(vscales[(row0 + k) * (D / GS) + d0 / GS])")
 )
 
+# Token-tile partial (bf16, D == 256, M5-class tensor ops): one threadgroup of
+# 8 simdgroups per (row, KV head, chunk) serves every query token x head of the
+# KV head at once, so a speculative verify step reads each K/V row once, not
+# once per token. Queries arrive fused as [B, HKV, 8 * G, D] (row f = t * G +
+# g, tokens padded to 8 with zeros), so the matmul shapes are the same for any
+# T <= 8 — a verify row runs the same arithmetic as a one-token decode of the
+# same position. The chunk is walked in N-key steps with an online softmax per
+# row: Q.K^T and P.V run on MetalPerformancePrimitives matmul2d (fp32
+# scores, bf16 probabilities, fp32 accumulators); four threads own a row's
+# softmax. The structure follows oMLX's verify kernel
+# (``kernels/omlx/qwen35_verify_sdpa_split._GQA_PARTIAL``, Apache-2.0) with
+# fixed 512-key chunks, per-row lengths, slots and the causal limit per token.
+_TILE_HEADER = """
+#include <MetalPerformancePrimitives/MetalPerformancePrimitives.h>
+using namespace mpp::tensor_ops;
+"""
+
+_TILE = r"""
+  constexpr int N = 64;               // keys per step
+  constexpr int KPL = N / 4;          // keys per thread in the softmax
+  constexpr int M = 8 * G;            // fused rows: 8 tokens x G heads
+  const uint tid = thread_position_in_threadgroup.x;
+  uint hk, c, b;
+  if (WL) {                           // work list: one entry per (row, chunk)
+    const uint item = uint(work[threadgroup_position_in_grid.y / HKV]);
+    hk = threadgroup_position_in_grid.y % HKV;
+    b = item / NC;
+    c = item % NC;
+  } else {
+    hk = threadgroup_position_in_grid.y / NC;
+    c = threadgroup_position_in_grid.y % NC;
+    b = threadgroup_position_in_grid.z;
+  }
+  const int kbeg = int(c) * CK;
+  const int lim = lengths[b] - kbeg;  // keys of the last token in this chunk
+  const int nmax = min(CK, lim);
+  if (nmax <= 0) return;
+
+  threadgroup float scores[M * N];
+  threadgroup bfloat16_t probs[M * N];
+  threadgroup float row_max[M];
+  threadgroup float row_sum[M];
+  threadgroup float row_scale[M];
+  if (tid < uint(M)) { row_max[tid] = -INFINITY; row_sum[tid] = 0.0f; }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+
+  auto qt = tensor(
+      const_cast<device bfloat16_t*>(queries) + ((int64_t)b * HKV + hk) * M * D,
+      dextents<int, 2>{D, M}, array<int, 2>{1, D});
+  auto st = tensor((threadgroup float*)scores, dextents<int, 2>{N, M}, array<int, 2>{1, N});
+  auto pt = tensor((threadgroup bfloat16_t*)probs, dextents<int, 2>{N, M}, array<int, 2>{1, N});
+  auto q0 = qt.template slice<D, M>(0, 0);
+  auto p0 = pt.template slice<N, M>(0, 0);
+  const int64_t row0 = ((int64_t)slots[b] * HKV + hk) * CAP;
+  device bfloat16_t* kh = const_cast<device bfloat16_t*>(keys) + row0 * D;
+  device bfloat16_t* vh = const_cast<device bfloat16_t*>(values) + row0 * D;
+  constexpr auto qk_desc = matmul2d_descriptor(
+      M, N, D, false, true, false, matmul2d_descriptor::mode::multiply);
+  constexpr auto pv_desc = matmul2d_descriptor(
+      M, D, N, false, false, false, matmul2d_descriptor::mode::multiply_accumulate);
+  matmul2d<qk_desc, execution_simdgroups<8>> qk;
+  matmul2d<pv_desc, execution_simdgroups<8>> pv;
+  auto v_first = tensor(vh, dextents<int, 2>{D, N}, array<int, 2>{1, D}).template slice<D, N>(0, 0);
+  auto running = pv.template get_destination_cooperative_tensor<
+      decltype(p0), decltype(v_first), float>();
+  for (ushort i = 0; i < running.get_capacity(); ++i)
+    if (running.is_valid_element(i)) running[i] = 0.0f;
+
+  const float s = scale[0];
+  const int f = int(tid) / 4;         // four threads own fused row f
+  const int col = (int(tid) % 4) * KPL;
+  const int t_of_f = f / G;
+  // keys this row may see in the chunk (causal limit of its token)
+  const int nf = t_of_f < T ? lim - (T - 1 - t_of_f) : 0;
+  const int kend = kbeg + nmax;
+  for (int t0 = kbeg; t0 < kend; t0 += N) {
+    const int ts = min(t0, CAP - N);  // stay inside the buffer; keys < t0 masked
+    auto ks = tensor(kh + (int64_t)ts * D, dextents<int, 2>{D, N}, array<int, 2>{1, D})
+        .template slice<D, N>(0, 0);
+    auto vs = tensor(vh + (int64_t)ts * D, dextents<int, 2>{D, N}, array<int, 2>{1, D})
+        .template slice<D, N>(0, 0);
+    auto sc = qk.template get_destination_cooperative_tensor<
+        decltype(q0), decltype(ks), float>();
+    qk.run(q0, ks, sc);
+    sc.store(st.template slice<N, M>(0, 0));
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (f < M) {
+      float sv[KPL];
+      float lmax = -INFINITY;
+      for (int j = 0; j < KPL; ++j) {
+        const int key = ts + col + j;
+        const bool ok = key >= t0 && key - kbeg < nf;
+        sv[j] = ok ? scores[f * N + col + j] * s : -INFINITY;
+        lmax = max(lmax, sv[j]);
+      }
+      lmax = max(lmax, simd_shuffle_xor(lmax, ushort(1)));
+      lmax = max(lmax, simd_shuffle_xor(lmax, ushort(2)));
+      const float pmax = row_max[f];
+      const float nm = max(pmax, lmax);
+      float lsum = 0.0f;
+      for (int j = 0; j < KPL; ++j) {
+        const float p = sv[j] == -INFINITY ? 0.0f : fast::exp(sv[j] - nm);
+        lsum += p;
+        probs[f * N + col + j] = bfloat16_t(p);
+      }
+      lsum += simd_shuffle_xor(lsum, ushort(1));
+      lsum += simd_shuffle_xor(lsum, ushort(2));
+      if (col == 0) {
+        const float a = nm == pmax ? 1.0f : fast::exp(pmax - nm);
+        row_scale[f] = a;
+        row_sum[f] = row_sum[f] * a + lsum;
+        row_max[f] = nm;
+      }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (ushort i = 0; i < running.get_capacity(); ++i) {
+      if (!running.is_valid_element(i)) continue;
+      auto ix = running.get_multidimensional_index(i);
+      running[i] *= row_scale[ix[1]];
+    }
+    pv.run(p0, vs, running);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  // partial slot of (token, chunk): wstart[b * T + t] + c; rows past T or
+  // without keys in this chunk have no slot
+  for (ushort i = 0; i < running.get_capacity(); ++i) {
+    if (!running.is_valid_element(i)) continue;
+    auto ix = running.get_multidimensional_index(i);
+    const int fr = ix[1], t = fr / G;
+    if (t >= T || lim - (T - 1 - t) <= 0) continue;
+    const int64_t base = ((int64_t)wstart[b * T + t] + c) * H + hk * G + fr % G;
+    PO[base * D + ix[0]] = running[i];
+  }
+  if (tid < uint(M)) {
+    const int t = int(tid) / G;
+    if (t < T && lim - (T - 1 - t) > 0) {
+      const int64_t base = ((int64_t)wstart[b * T + t] + c) * H + hk * G + int(tid) % G;
+      PM[base] = row_max[tid];
+      PL[base] = row_sum[tid];
+    }
+  }
+"""
+
 _MERGE = r"""
   const uint lane = thread_index_in_simdgroup;
   const uint r = threadgroup_position_in_grid.y;               // (row * T + token) * H + head
@@ -328,7 +477,25 @@ _KERNELS: dict = {}
 
 def _kernel(name: str):
     if name not in _KERNELS:
-        if name in ("keypar", "keypar_q8"):
+        if name == "tile":
+            _KERNELS[name] = mx.fast.metal_kernel(
+                name="yunshu_ragged_attn_tile",
+                input_names=[
+                    "queries",
+                    "keys",
+                    "values",
+                    "lengths",
+                    "slots",
+                    "scale",
+                    "work",
+                    "wstart",
+                ],
+                output_names=["PO", "PM", "PL"],
+                source=_TILE,
+                header=_TILE_HEADER,
+                ensure_row_contiguous=False,
+            )
+        elif name in ("keypar", "keypar_q8"):
             q8 = name == "keypar_q8"
             _KERNELS[name] = mx.fast.metal_kernel(
                 name=f"yunshu_ragged_attn_{name}",
@@ -337,7 +504,7 @@ def _kernel(name: str):
                     if q8
                     else ["queries", "keys", "values", "lengths"]
                 )
-                + ["scale", "work"],
+                + ["slots", "scale", "work", "wstart"],
                 output_names=["PO", "PM", "PL"],
                 source=_KEYPAR_Q8 if q8 else _KEYPAR_BF16,
                 ensure_row_contiguous=False,
@@ -352,6 +519,7 @@ def _kernel(name: str):
                     "values",
                     "vscales",
                     "lengths",
+                    "slots",
                     "scale",
                 ],
                 output_names=["PO", "PM", "PL"],
@@ -361,7 +529,7 @@ def _kernel(name: str):
         elif name == "partial":
             _KERNELS[name] = mx.fast.metal_kernel(
                 name="yunshu_ragged_attn_partial",
-                input_names=["queries", "keys", "values", "lengths", "scale"],
+                input_names=["queries", "keys", "values", "lengths", "slots", "scale"],
                 output_names=["PO", "PM", "PL"],
                 source=_PARTIAL,
                 ensure_row_contiguous=False,
@@ -377,30 +545,69 @@ def _kernel(name: str):
 
 
 _WORK: dict = {}
+_TILE_READY: list = []
 
 
-def _work_list(row_lengths: tuple, T: int, nc: int) -> tuple[mx.array, mx.array]:
-    """Partial slots for the key-parallel kernel's work-list launch: ``work``
-    holds ``bt * NC + c`` for every non-empty chunk ``c`` of every (row, query
-    token) ``bt`` in (bt, c) order, and ``wstart[bt]`` is bt's first slot.
-    Cached per step (a decode step's layers share one list)."""
-    key = (row_lengths, T, nc, CHUNK)
+def tile_ready() -> bool:
+    """Whether this OS / GPU compiles and runs the tensor-op tile kernel
+    (MetalPerformancePrimitives; M5-class GPUs)."""
+    if not _TILE_READY:
+        try:
+            q = mx.zeros((1, 2, 2, 256), dtype=mx.bfloat16)
+            kv = mx.zeros((1, 1, 64, 256), dtype=mx.bfloat16)
+            _TILE_READY.append(True)  # let the probe call through
+            mx.eval(
+                ragged_decode_attention(
+                    q, kv, kv, mx.array([3]), 1.0, impl="tile", row_lengths=(3,)
+                )
+            )
+        except Exception:  # noqa: BLE001 - any compile/launch failure
+            _TILE_READY[:] = [False]
+    return _TILE_READY[0]
+
+
+_ARANGE: dict = {}
+
+
+def _arange(n: int) -> mx.array:
+    a = _ARANGE.get(n)
+    if a is None:
+        a = _ARANGE[n] = mx.arange(n, dtype=mx.int32)
+    return a
+
+
+def _work_list(
+    row_lengths: tuple, T: int, nc: int, tile: bool = False
+) -> tuple[mx.array, mx.array, int]:
+    """The key-parallel kernel's work-list launch: ``work`` holds ``bt * NC +
+    c`` for every non-empty chunk ``c`` of every (row, query token) ``bt``,
+    and ``wstart[bt]`` is bt's first partial slot (slot of (bt, c) is
+    ``wstart[bt] + c``, what the merge reads). Items run row, chunk, token:
+    the T verify tokens of one chunk are launched back to back, so they read
+    the chunk's K/V while it is still in cache. Cached per step (a decode
+    step's layers share one list). ``tile``: one item ``b * NC + c`` per (row,
+    chunk) for the token-tile kernel (same slots)."""
+    key = (row_lengths, T, nc, CHUNK, tile)
     hit = _WORK.get(key)
     if hit is None:
-        items, starts = [], []
+        items, starts, total = [], [], 0
         for b, n in enumerate(row_lengths):
+            counts = [min(nc, max(0, -(-(n - (T - 1 - t)) // CHUNK))) for t in range(T)]
             for t in range(T):
-                starts.append(len(items))
-                nk = n - (T - 1 - t)
-                items += [
-                    (b * T + t) * nc + c
-                    for c in range(min(nc, max(0, -(-nk // CHUNK))))
-                ]
+                starts.append(total)
+                total += counts[t]
+            for c in range(max(counts, default=0)):
+                if tile:
+                    items.append(b * nc + c)
+                else:
+                    items += [(b * T + t) * nc + c for t in range(T) if c < counts[t]]
         hit = (
             mx.array(items or [0], dtype=mx.int32),
             mx.array(starts, dtype=mx.int32),
+            max(total, 1),
         )
-        _WORK.clear()
+        if len(_WORK) > 8:
+            _WORK.clear()
         _WORK[key] = hit
     return hit
 
@@ -416,9 +623,14 @@ def ragged_decode_attention(
     v_scales: mx.array | None = None,
     impl: str = "auto",
     row_lengths: Sequence[int] | None = None,
+    slots: mx.array | None = None,
 ) -> mx.array:
     """Attention of ``queries`` [B, H, T, D] over each row's first ``lengths[b]``
-    keys of ``keys``/``values`` [B, HKV, CAP, D]; returns [B, H, T, D] bf16.
+    keys of ``keys``/``values`` [S, HKV, CAP, D]; returns [B, H, T, D] bf16.
+
+    ``slots`` (int32 [B], default ``arange(B)``) maps query row ``b`` to its
+    buffer row, so a cache can keep free rows and drop finished ones without
+    moving the others.
 
     ``max_length`` (host int) sizes the chunk grid; defaults to the buffer
     capacity. The last ``T`` keys of each row are the query tokens' own keys.
@@ -431,7 +643,11 @@ def ragged_decode_attention(
     ``"per_head"`` or ``"auto"`` (key-parallel where it applies).
     """
     B, H, T, D = (int(v) for v in queries.shape)
-    _, HKV, CAP, Dk = (int(v) for v in keys.shape)
+    S, HKV, CAP, Dk = (int(v) for v in keys.shape)
+    if slots is None:
+        if S < B:
+            raise ValueError("ragged_decode_attention: fewer buffer rows than queries")
+        slots = _arange(B)
     if Dk != D or D % 32 or H % HKV or T > 8:
         raise ValueError(
             f"ragged_decode_attention: unsupported q={queries.shape} k={keys.shape}"
@@ -443,7 +659,7 @@ def ragged_decode_attention(
         raise ValueError("ragged_decode_attention: int8 K/V need k_scales/v_scales")
     G = H // HKV
     nc = max(1, -(-int(max_length or CAP) // CHUNK))
-    # The kernel indexes a dense [B, HKV, CAP, D] buffer; the ragged cache hands
+    # The kernel indexes a dense [S, HKV, CAP, D] buffer; the ragged cache hands
     # over its whole buffer (not a slice), so these are no-ops there.
     keys, values, queries = (
         mx.contiguous(keys),
@@ -461,21 +677,36 @@ def ragged_decode_attention(
         ("NC", nc),
     ]
     lengths = lengths.astype(mx.int32)
+    slots = slots.astype(mx.int32)
     scale_arr = mx.array([float(scale)], dtype=mx.float32)
-    # Key-parallel kernel: 8 dims per lane in the score phase (D == 256) and a
-    # G x CHUNK score tile in threadgroup memory; otherwise the per-head kernel.
-    use_kp = impl != "per_head" and D == 256 and G * CHUNK * 4 <= 32 * 1024
+    # Kernels: "key_parallel" (default, D == 256: one query token per
+    # threadgroup), "per_head" (any D % 32 == 0), and "tile" (bf16, D == 256,
+    # tensor ops: every token x head of a KV head in one pass over the keys —
+    # the speculative lane's decode and verify).
+    if impl == "auto":
+        impl = "key_parallel" if D == 256 else "per_head"
+    tile = impl == "tile"
+    if tile and (q8 or D != 256 or G > 8 or CAP < 64 or T > 8 or not tile_ready()):
+        raise ValueError("ragged_decode_attention: tile needs bf16, D=256, G<=8")
+    use_kp = impl == "key_parallel" and D == 256 and G * CHUNK * 4 <= 32 * 1024
     if impl == "key_parallel" and not use_kp:
         raise ValueError("ragged_decode_attention: key_parallel needs D=256")
-    wl = use_kp and row_lengths is not None
+    wl = (tile or use_kp) and row_lengths is not None
     if wl:
-        work, wstart = _work_list(tuple(int(n) for n in row_lengths), T, nc)
-        slots = int(work.size)
+        work, wstart, nslot = _work_list(
+            tuple(int(n) for n in row_lengths), T, nc, tile
+        )
     else:
         # dense launch: every (bt, chunk < NC); slot bt * NC + c
         work = scale_arr
         wstart = mx.arange(B * T, dtype=mx.int32) * nc
-        slots = B * T * nc
+        nslot = B * T * nc
+    if tile:
+        # fused rows f = t * G + g per (row, KV head), tokens padded to 8
+        q = queries.reshape(B, HKV, G, T, D).transpose(0, 1, 3, 2, 4)
+        if T < 8:
+            q = mx.pad(q, [(0, 0), (0, 0), (0, 8 - T), (0, 0), (0, 0)])
+        queries = mx.contiguous(q.reshape(B, HKV, 8 * G, D))
     if q8:
         name = "partial_q8"
         inputs = [
@@ -485,17 +716,27 @@ def ragged_decode_attention(
             values,
             mx.contiguous(v_scales.astype(mx.float16)),
             lengths,
+            slots,
             scale_arr,
         ]
     else:
         name = "partial"
-        inputs = [queries, keys, values, lengths, scale_arr]
-    out_shapes = [(slots * H * D,), (slots * H,), (slots * H,)]
-    if use_kp:
+        inputs = [queries, keys, values, lengths, slots, scale_arr]
+    out_shapes = [(nslot * H * D,), (nslot * H,), (nslot * H,)]
+    if tile:
+        po, pm, pl = _kernel("tile")(
+            inputs=inputs + [work, wstart],
+            template=tmpl + [("WL", wl)],
+            grid=(256, HKV * int(work.size), 1) if wl else (256, HKV * nc, B),
+            threadgroup=(256, 1, 1),
+            output_shapes=out_shapes,
+            output_dtypes=[mx.float32, mx.float32, mx.float32],
+        )
+    elif use_kp:
         po, pm, pl = _kernel(name.replace("partial", "keypar"))(
-            inputs=inputs + [work],
+            inputs=inputs + [work, wstart],
             template=tmpl + [("NS", NS), ("WL", wl)] + ([("GS", GROUP)] if q8 else []),
-            grid=(32 * NS, HKV * slots, 1) if wl else (32 * NS, HKV * nc, B * T),
+            grid=(32 * NS, HKV * nslot, 1) if wl else (32 * NS, HKV * nc, B * T),
             threadgroup=(32 * NS, 1, 1),
             output_shapes=out_shapes,
             output_dtypes=[mx.float32, mx.float32, mx.float32],
@@ -519,11 +760,58 @@ def ragged_decode_attention(
     )[0]
 
 
+# One threadgroup of 32 lanes per 32-dim group: the group's max |x| by one
+# simd_max, then each lane writes its code. Same arithmetic as
+# ``quantize_kv_reference``.
+_QUANT = r"""
+  const uint lane = thread_position_in_threadgroup.x;
+  const uint gi = threadgroup_position_in_grid.y;              // (token row) * NG + group
+  const bool isv = threadgroup_position_in_grid.z == 1;
+  const float x = float((isv ? v : k)[gi * 32 + lane]);
+  const half sh = half(simd_max(fabs(x)) / 127.0f);
+  const float sf = float(sh);
+  const float q = clamp(rint(x / (sf > 0.0f ? sf : 1.0f)), -127.0f, 127.0f);
+  (isv ? vq : kq)[gi * 32 + lane] = int8_t(q);
+  if (lane == 0) (isv ? vs : ks)[gi] = sh;
+"""
+
+
+def quantize_kv_pair(k: mx.array, v: mx.array) -> tuple[mx.array, ...]:
+    """``quantize_kv`` of K and V (same shape, bf16) in one launch: returns
+    ``(k_codes, k_scales, v_codes, v_scales)``."""
+    if k.shape != v.shape or k.shape[-1] % GROUP:
+        raise ValueError(f"quantize_kv_pair: k {k.shape} v {v.shape}")
+    if "quant" not in _KERNELS:
+        _KERNELS["quant"] = mx.fast.metal_kernel(
+            name="yunshu_ragged_kv_quantize",
+            input_names=["k", "v"],
+            output_names=["kq", "ks", "vq", "vs"],
+            source=_QUANT,
+        )
+    *lead, d = k.shape
+    groups = k.size // GROUP
+    kq, ks, vq, vs = _KERNELS["quant"](
+        inputs=[k.astype(mx.bfloat16), v.astype(mx.bfloat16)],
+        grid=(32, groups, 2),
+        threadgroup=(32, 1, 1),
+        output_shapes=[k.shape, (*lead, d // GROUP)] * 2,
+        output_dtypes=[mx.int8, mx.float16] * 2,
+    )
+    return kq, ks, vq, vs
+
+
 def quantize_kv(x: mx.array) -> tuple[mx.array, mx.array]:
     """Symmetric int8 over 32-dim groups of the last axis: ``x`` [..., D] ->
     int8 codes [..., D] and fp16 scales [..., D/32] (``max|x| / 127``; 0 for
     all-zero groups). Codes use the fp16-rounded scale, so dequantization in
     the kernel matches what was quantized."""
+    kq, ks, _, _ = quantize_kv_pair(x, x)
+    return kq, ks
+
+
+def quantize_kv_reference(x: mx.array) -> tuple[mx.array, mx.array]:
+    """``quantize_kv`` in MLX ops (the definition the kernel is tested
+    against)."""
     *lead, d = x.shape
     xg = x.astype(mx.float32).reshape(*lead, d // GROUP, GROUP)
     s = (mx.max(mx.abs(xg), axis=-1) / 127.0).astype(mx.float16)
@@ -533,4 +821,10 @@ def quantize_kv(x: mx.array) -> tuple[mx.array, mx.array]:
     return q.reshape(*lead, d), s
 
 
-__all__ = ["CHUNK", "quantize_kv", "ragged_decode_attention"]
+__all__ = [
+    "CHUNK",
+    "quantize_kv",
+    "quantize_kv_pair",
+    "quantize_kv_reference",
+    "ragged_decode_attention",
+]

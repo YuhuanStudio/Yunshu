@@ -12,6 +12,11 @@ projections to the TensorFold integer-code matmul (opt-in `YUNSHU_PACKED_5BIT=in
 kernels are unchanged. The files
 carry their own upstream credits (MTPLX, dflash-mlx, Splash — Apache-2.0).
 
+The token-tile partial kernel in `python/yunshu_engine/kernels/ragged_attention.py` (`_TILE`) is
+adapted from oMLX's tensor-op verify attention (`_GQA_PARTIAL` in `qwen35_verify_sdpa_split.py`,
+Apache-2.0): same MetalPerformancePrimitives matmul/online-softmax structure, with Yunshu's fixed
+512-key chunks, per-row lengths, cache slots and a fixed 8-token row tile.
+
 The exact source commit and our intended local changes for every vendored file are listed in
 `vendor.json`; `just vendor-check` reports what changed upstream since.
 

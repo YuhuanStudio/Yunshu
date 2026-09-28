@@ -233,7 +233,9 @@ def test_cli_config_json(tmp_path, monkeypatch):
     assert rows["YUNSHU_DEFAULT_MAX_TOKENS"]["value"] == 77
     assert rows["YUNSHU_DEFAULT_MAX_TOKENS"]["source"] == "file"
     assert rows["YUNSHU_AUTH_TOKEN"]["value"] == "***"
-    assert "YUNSHU_RAGGED_KV" not in rows
+    assert "YUNSHU_RAGGED_KV" not in rows  # experimental: only with --all
+    # KV precision is the user's memory/quality choice: a stable setting
+    assert rows["YUNSHU_KV_PRECISION"]["value"] == "bf16"
 
 
 def test_cli_config_all_table():
