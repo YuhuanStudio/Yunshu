@@ -220,6 +220,10 @@ class VLMBatchRunner:
         self._spec: _Group | None = None
         self._driving = False
         self.clear_on_idle = False
+        # Requests the engine has accepted, including ones still being
+        # prepared (templating, image encoding) — the runner alone cannot see
+        # those, and a request is only "alone" if the engine has no others.
+        self.inflight = lambda: 0
         # All ids that end a turn (tokenizer + generation_config eos).
         self.stop_tokens: set[int] | None = None
 
@@ -591,7 +595,9 @@ class VLMBatchRunner:
         try:
             with self._lock:
                 pending, self._pending = self._pending, []
-            alone = len(pending) == 1 and self._active_jobs() == 0
+            alone = (
+                len(pending) == 1 and self._active_jobs() == 0 and self.inflight() <= 1
+            )
             for job in pending:
                 try:
                     self._admit(job, alone)

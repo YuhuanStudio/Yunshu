@@ -1447,6 +1447,7 @@ class VLMEngine:
         )
         runner.clear_on_idle = bool(getattr(self, "_mx_large_model", False))
         runner.stop_tokens = set(self._get_eos_ids())
+        runner.inflight = lambda: self._active_count
         logger.info(
             "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s",
             f"{self._apc_backend.memory_max_bytes / 2**30:.1f}GiB"
