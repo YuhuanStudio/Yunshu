@@ -954,11 +954,6 @@ class VLMEngine:
         self._vlm_kv_prefix_hits = 0
         self._vlm_kv_prefix_misses = 0
 
-        # (dead-code removal): the VisionEncoderFactory was constructed
-        # here but NEVER used — real vision encoding goes through
-        # mlx_vlm.stream_generate/generate. The dead instantiation AND the whole
-        # vision_encoding.py module (790 lines, no other importer) were removed.
-
         # SpecPrefill for VLM text portion (opt-in via YUNSHU_VLM_SPEC_PREFILL)
         self._spec_prefill_enabled = False
         if os.environ.get("YUNSHU_VLM_SPEC_PREFILL", "").strip() in (

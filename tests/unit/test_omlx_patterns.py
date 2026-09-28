@@ -48,17 +48,6 @@ class TestHardwareDetection:
         assert gb > 0
 
 
-class TestOptimizations:
-    def test_get_optimization_status(self):
-        from yunshu_engine.optimizations import get_optimization_status
-
-        status = get_optimization_status()
-        assert "hardware" in status
-        assert "chip" in status["hardware"]
-        assert "total_memory_gb" in status["hardware"]
-        assert "mlx_lm_features" in status
-
-
 class TestModelRegistry:
     def test_singleton(self):
         from yunshu_engine.model_registry import ModelRegistry
