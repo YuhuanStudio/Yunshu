@@ -3,7 +3,8 @@
 Same in-memory drafter as probe_apc_mtp_batchgen.py; no APC so every request is
 cold. Reports decode tok/s, first-token latency and token parity against AR.
 
-    HF_HUB_OFFLINE=1 .venv/bin/python scripts/research/sweep_mtp_depth.py MODEL_DIR [sizes...]
+    HF_HUB_OFFLINE=1 .venv/bin/python scripts/research/sweep_mtp_depth.py MODEL_DIR [sizes...] \
+        [--yunshu-kernels=exact] [--invariant [--invariant-packed]] [--ragged-lane] [--context=N]
 """
 
 import json
@@ -112,6 +113,15 @@ if "--invariant" in sys.argv:
         flush=True,
     )
     omlx_set = set(omlx_set if use_omlx else set()) | {"invariant"}
+    use_omlx = True
+if "--ragged-lane" in sys.argv:
+    # The speculative lane's attention on the ragged tile kernel, as the
+    # runner does with YUNSHU_RAGGED_KV=1 (AR and MTP runs alike).
+    from yunshu_engine.kernels import ragged_kv  # noqa: E402
+
+    ragged_kv.install()
+    ragged_kv.set_dense_lane(True)
+    omlx_set = set(omlx_set if use_omlx else set()) | {"ragged-lane"}
     use_omlx = True
 if "--pack" in sys.argv:
     from yunshu_engine.kernels.omlx import pack_projections  # noqa: E402
