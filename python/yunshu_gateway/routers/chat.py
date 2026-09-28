@@ -28,13 +28,12 @@ from pydantic import BaseModel, Field, model_validator
 
 from yunshu_engine import settings
 from yunshu_engine.tool_call_streamer import ToolCallStreamer
+from yunshu_engine.tool_format import parse_tool_output, tool_formats
 
 from ..engine import get_engine, get_model_manager
 from ..streaming import (
     ClosingStreamingResponse,
-    clean_tool_call_markup,
     extract_thinking,
-    extract_tool_calls_model_aware,
     format_openai_chunk,
     format_openai_done,
     format_openai_non_stream,
@@ -1042,7 +1041,7 @@ def _inject_tool_system_prompt(
     tool_prompt = (
         "You have access to the following tools. When you need to call a tool, "
         "output a tool call in the following format:\n"
-        '<tool_call\\>{"name": "function_name", "arguments": {...}}</tool_call\\>\n\n'
+        '<tool_call>{"name": "function_name", "arguments": {...}}</tool_call>\n\n'
     )
     if not parallel_tool_calls:
         tool_prompt += "You MUST make only ONE tool call per response.\n\n"
@@ -1053,11 +1052,8 @@ def _inject_tool_system_prompt(
             tool_prompt += f"  Parameters: {td['parameters']}\n"
 
     # tool_choice = specific function: instruct model to call that tool
-    # Note: emit explicit `<tool_call>{...}</tool_call>` tags + JSON shape so
-    # the gateway parser (extract_tool_calls_v2 + Mistral/ChatML/Qwen
-    # patterns) reliably picks them up. Without explicit format guidance,
-    # models sometimes emit `{"tool_call":{"name":..,"arguments":..}}` or
-    # raw `{"name":..}` JSON that older parser versions missed.
+    # The explicit `<tool_call>{...}</tool_call>` shape is the ``yunshu_json``
+    # tool format (yunshu_engine.tool_format), which every model's parse tries.
     _tool_format_example = '\nFormat: <tool_call>{"name": "<tool_name>", "arguments": {<args_json>}}</tool_call>'
     if isinstance(tool_choice, ToolChoiceFunction):
         forced_name = tool_choice.function.name
@@ -1209,6 +1205,16 @@ def _enforce_tool_choice(tool_calls, tool_choice, parallel_tool_calls, tools=Non
     from yunshu_engine.tool_arguments import coerce_tool_calls
 
     return coerce_tool_calls(tool_calls, tools)
+
+
+def _parse_tool_calls(text: str, engine, tools, prefill: str = ""):
+    """``(calls, content)`` for a finished output: the calls in the model's
+    tool-call formats and the text without their markup. A forced-choice
+    prefill that produced no call is dropped from the content."""
+    calls, content = parse_tool_output(text, tool_formats(engine), tools)
+    if not calls and prefill and content.startswith(prefill):
+        content = content[len(prefill) :]
+    return calls, content
 
 
 def _lp_bytes(entry: dict, decoded: str, tokenizer) -> list[int]:
@@ -1492,15 +1498,16 @@ async def _build_multi_choice(
 
         tool_calls = []
         if req.tools:
-            _raw_calls = extract_tool_calls_model_aware(regular_content, req.model)
+            _raw_calls, _content = _parse_tool_calls(
+                regular_content, engine, req.tools, tool_prefill
+            )
             tool_calls = _enforce_tool_choice(
                 _raw_calls, req.tool_choice, req.parallel_tool_calls, tools=req.tools
             )
-            # Clean markup whenever any was parsed (see n=1 path) — a suppressed
-            # wrong-named tool's raw markup must not leak into content. Also clean when a
-            # prefill was applied so the prefilled marker never leaks into content.
+            # Content without markup whenever any call parsed — a suppressed
+            # wrong-named call's markup must not leak — or a prefill was applied.
             if _raw_calls or tool_prefill:
-                cleaned = clean_tool_call_markup(regular_content)
+                cleaned = _content.strip()
             if tool_calls:
                 fr = "tool_calls"
 
@@ -1508,7 +1515,7 @@ async def _build_multi_choice(
         if thinking_content:
             message["reasoning_content"] = thinking_content
         if tool_calls:
-            from ..streaming import _sanitize_arguments
+            from yunshu_engine.tool_arguments import arguments_json
 
             message["tool_calls"] = [
                 {
@@ -1516,7 +1523,7 @@ async def _build_multi_choice(
                     "type": "function",
                     "function": {
                         "name": tc["name"],
-                        "arguments": _sanitize_arguments(tc.get("arguments", {})),
+                        "arguments": arguments_json(tc.get("arguments", {})),
                     },
                 }
                 for i, tc in enumerate(tool_calls)
@@ -2157,23 +2164,20 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
             tool_calls = []
             cleaned_content = regular_content
             if req.tools:
-                _raw_calls = extract_tool_calls_model_aware(regular_content, req.model)
+                _raw_calls, _content = _parse_tool_calls(
+                    regular_content, engine, req.tools, _tool_prefill
+                )
                 tool_calls = _enforce_tool_choice(
                     _raw_calls,
                     req.tool_choice,
                     req.parallel_tool_calls,
                     tools=req.tools,
                 )
-                # strip tool-call markup whenever ANY was parsed, not only when a
-                # call SURVIVES enforcement. With a named/forced tool_choice the model may
-                # emit markup for a DIFFERENT (suppressed) tool; gating cleanup on the
-                # post-enforcement count left that raw <tool_call> markup in user-visible
-                # content — a leak vs the streaming path, which drops suppressed calls.
-                # Also clean when a prefill was applied (the prefilled <tool_call> marker
-                # must not leak into content even if the model went off-script and no call
-                # parsed).
+                # Content without markup whenever ANY call parsed (a suppressed
+                # call to another function must not leak its markup) or a prefill
+                # was applied.
                 if _raw_calls or _tool_prefill:
-                    cleaned_content = clean_tool_call_markup(regular_content)
+                    cleaned_content = _content
 
             finish_reason = "tool_calls" if tool_calls else finish
 
@@ -2518,14 +2522,12 @@ async def _handle_vlm_chat(
 
         tool_calls = None
         if req.tools:
-            _raw_calls = extract_tool_calls_model_aware(content, req.model)
+            _raw_calls, _content = _parse_tool_calls(content, vlm_engine, req.tools)
             tool_calls = _enforce_tool_choice(
                 _raw_calls, req.tool_choice, req.parallel_tool_calls, tools=req.tools
             )
-            # clean markup whenever any was parsed (see LLM n=1 path) so a
-            # suppressed wrong-named tool's markup doesn't leak into VLM content.
             if _raw_calls:
-                content = clean_tool_call_markup(content)
+                content = _content
             if tool_calls:
                 finish_reason = "tool_calls"
         return (
@@ -2645,7 +2647,7 @@ async def _handle_vlm_chat(
         if data.get("reasoning_content"):
             message["reasoning_content"] = data["reasoning_content"]
         if data["tool_calls"]:
-            from ..streaming import _sanitize_arguments
+            from yunshu_engine.tool_arguments import arguments_json
 
             message["tool_calls"] = [
                 {
@@ -2653,7 +2655,7 @@ async def _handle_vlm_chat(
                     "type": "function",
                     "function": {
                         "name": tc["name"],
-                        "arguments": _sanitize_arguments(tc.get("arguments", {})),
+                        "arguments": arguments_json(tc.get("arguments", {})),
                     },
                 }
                 for i, tc in enumerate(data["tool_calls"])
@@ -2733,13 +2735,13 @@ async def _stream_vlm_response(
     use_tool_streamer = bool(req.tools and req.tool_choice != "none")
     tool_streamer = (
         ToolCallStreamer(
+            tool_formats(vlm_engine),
             forced_tool_name=(
                 req.tool_choice.function.name
                 if isinstance(req.tool_choice, ToolChoiceFunction)
                 else None
             ),
             allow_parallel=req.parallel_tool_calls,
-            model_name=req.model,
             tools=req.tools,
         )
         if use_tool_streamer
@@ -3235,13 +3237,13 @@ async def _stream_response_multi(
             # the same contract the non-streaming path does via _enforce_tool_choice.
             choice_tool_streamer = (
                 ToolCallStreamer(
+                    tool_formats(engine),
                     forced_tool_name=(
                         req.tool_choice.function.name
                         if isinstance(req.tool_choice, ToolChoiceFunction)
                         else None
                     ),
                     allow_parallel=req.parallel_tool_calls,
-                    model_name=req.model,  # hint for the BUFFER_ALL flush parser
                     tools=req.tools,
                 )
                 if use_tool_streamer
@@ -3950,13 +3952,13 @@ async def _stream_response(
     # contract the non-streaming path does via _enforce_tool_choice.
     tool_streamer = (
         ToolCallStreamer(
+            tool_formats(engine),
             forced_tool_name=(
                 req.tool_choice.function.name
                 if isinstance(req.tool_choice, ToolChoiceFunction)
                 else None
             ),
             allow_parallel=req.parallel_tool_calls,
-            model_name=req.model,  # hint for the BUFFER_ALL flush parser
             tools=req.tools,
         )
         if use_tool_streamer

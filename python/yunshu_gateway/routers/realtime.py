@@ -1282,6 +1282,20 @@ class RealtimeSession:
         self._active_response._item_id = item_id
         self._active_modalities = modalities
 
+    def _parse_tool_calls(self, text: str, tools) -> tuple[list, str]:
+        """Tool calls in the session model's formats (objects with ``name`` /
+        ``arguments``) and the text without their markup."""
+        from types import SimpleNamespace
+
+        from yunshu_engine.tool_format import parse_tool_output, tool_formats
+
+        try:
+            engine = self._resolve_engine()
+        except Exception:
+            engine = None
+        calls, visible = parse_tool_output(text, tool_formats(engine), tools)
+        return [SimpleNamespace(**c) for c in calls], visible.strip()
+
     def _extract_visible_and_tool_calls(
         self,
         full_text: str,
@@ -1317,37 +1331,13 @@ class RealtimeSession:
         # so do NOT parse/emit tool calls even when tools are present.
         # "auto"/"required"/a named-function dict keep parsing (post-gen
         # "required"/named forcing isn't feasible here — it stays prompt-advised).
-        if snap_tools and snap_tool_choice != "none":
-            from yunshu_engine.tool_call_parser import parse_tool_calls
-
-            tool_calls = parse_tool_calls(full_text, model_name=snap_model)
-            if tool_calls:
-                # full_text still holds the raw <tool_call>… markup. Storing it as
-                # the assistant message text leaked the markup back into the NEXT
-                # turn's prompt AND duplicated the call. Strip it; when nothing
-                # visible remains, the turn is represented ONCE by the function_call
-                # item. Also don't TTS the markup.
-                from ..streaming import clean_tool_call_markup
-
-                try:
-                    visible_text = clean_tool_call_markup(visible_text).strip()
-                    # Qwen3-Omni emits the call as BARE JSON ({"name":…,"arguments":…}),
-                    # not <tool_call> markup, so clean_tool_call_markup leaves it intact.
-                    # The call is already captured as a function_call item, so drop any
-                    # residual leading-JSON tool payload (don't store/speak/replay it).
-                    if visible_text[:1] in ("{", "["):
-                        visible_text = ""
-                except Exception:
-                    visible_text = ""
-        elif snap_tools and snap_tool_choice == "none" and "<tool_call" in full_text:
-            # tool_choice="none" forbids EMITTING tool calls, but if the model
-            # emitted <tool_call> markup anyway, still strip it from the visible
-            # transcript so it doesn't leak into the next prompt / get TTS'd. No
-            # function_call items are produced (tool_calls stays None).
-            from ..streaming import clean_tool_call_markup
-
-            with contextlib.suppress(Exception):
-                visible_text = clean_tool_call_markup(visible_text).strip()
+        if snap_tools:
+            # The visible transcript never carries tool-call markup (it would
+            # leak into the next turn's prompt, duplicate the call, and be
+            # spoken). tool_choice="none" drops the calls themselves.
+            calls, visible_text = self._parse_tool_calls(visible_text, snap_tools)
+            if snap_tool_choice != "none" and calls:
+                tool_calls = calls
 
         # persist each tool call as a function_call item so it's in history WITH its
         # call_id. The client returns a function_call_output carrying the same
@@ -1791,36 +1781,17 @@ class RealtimeSession:
             # tool_choice enforcement, which realtime lacked) → a function_call leaked out when
             # the client asked for none. "auto"/"required"/a named-function dict keep parsing
             # (post-gen "required"/named forcing isn't feasible here — it stays prompt-advised).
-            if _snap_tools and _snap_tool_choice != "none":
-                from yunshu_engine.tool_call_parser import parse_tool_calls
-
-                tool_calls = parse_tool_calls(full_text, model_name=_snap_model)
-                if tool_calls:
-                    # full_text still holds the raw <tool_call>… markup. Storing it
-                    # as the assistant message text leaked the markup back into the NEXT turn's
-                    # prompt AND duplicated the call (once as the function_call item below, once
-                    # as markup in the message). Strip it; when nothing visible remains,
-                    # _build_messages skips the empty message (no text_parts) so the turn is
-                    # represented ONCE by the function_call item. Also don't TTS the markup.
-                    from ..streaming import clean_tool_call_markup
-
-                    try:
-                        _visible_text = clean_tool_call_markup(_visible_text).strip()
-                    except Exception:
-                        _visible_text = ""
-            elif (
-                _snap_tools
-                and _snap_tool_choice == "none"
-                and "<tool_call" in full_text
-            ):
-                # tool_choice="none" forbids EMITTING tool calls, but if the model
-                # emitted <tool_call> markup anyway, still strip it from the visible transcript
-                # so it doesn't leak into the next prompt / get TTS'd (class). No
-                # function_call items are produced (tool_calls stays None).
-                from ..streaming import clean_tool_call_markup
-
-                with contextlib.suppress(Exception):
-                    _visible_text = clean_tool_call_markup(_visible_text).strip()
+            if _snap_tools:
+                # The stored transcript never carries tool-call markup (it would
+                # leak into the next prompt, duplicate the call and be spoken);
+                # when nothing visible remains, _build_messages skips the empty
+                # message so the turn is represented once by the function_call
+                # item. tool_choice="none" drops the calls themselves.
+                _calls, _visible_text = self._parse_tool_calls(
+                    _visible_text, _snap_tools
+                )
+                if _snap_tool_choice != "none" and _calls:
+                    tool_calls = _calls
 
             # persist each tool call as a function_call item so it's in history
             # WITH its call_id. The client returns a function_call_output carrying the same

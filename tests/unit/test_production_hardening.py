@@ -560,8 +560,8 @@ class TestNPlusOneIsolation:
         assert streamer0 is not streamer1
         # Processing tokens on one doesn't affect the other
         streamer0.process_token("<")
-        # streamer1 is untouched (empty buffer)
-        assert streamer1._buffer == ""
+        # streamer1 is untouched: its first token streams straight out
+        assert [o.text for o in streamer1.process_token("hi")] == ["hi"]
 
     def test_cancel_stops_remaining_choices(self):
         """When cancel event fires, remaining choices get finish_reason='stop'."""

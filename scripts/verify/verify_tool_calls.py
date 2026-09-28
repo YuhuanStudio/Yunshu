@@ -1,6 +1,6 @@
 """Tool-call parsing gate (no model needed — pure parser).
 
-Verifies the model-aware tool-call parser extracts name+arguments correctly,
+Verifies the tool-call parser (injected <tool_call> JSON form) extracts name+arguments correctly,
 including the string-aware-brace edge case (structural `}{`/quotes INSIDE an
 argument string value must not break JSON brace tracking) and multiple tool calls
 in one response. Guards the tool-calling protocol surface.
@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import sys
 
-from yunshu_engine.tool_call_parser import parse_tool_calls
+from yunshu_engine.tool_format import fallback_formats, parse_tool_output
 
 
 def _name_args(c):
@@ -48,7 +48,7 @@ CASES = [
 def main() -> int:
     fails = 0
     for label, text, model, check in CASES:
-        calls = parse_tool_calls(text, model)
+        calls, _ = parse_tool_output(text, fallback_formats())
         if label == "multiple calls":
             ok = len(calls) == 2 and {_name_args(c)[0] for c in calls} == {"a", "b"}
         else:

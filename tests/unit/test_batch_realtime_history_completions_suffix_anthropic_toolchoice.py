@@ -20,7 +20,7 @@ def test_realtime_stores_cleaned_text():
     from yunshu_gateway.routers import realtime
 
     src = inspect.getsource(realtime)
-    assert "_visible_text = clean_tool_call_markup(_visible_text).strip()" in src
+    assert "_calls, _visible_text = self._parse_tool_calls(" in src
     # the assistant content/transcript/synth use _visible_text, not raw full_text
     assert 'content_parts = [{"type": "text", "text": _visible_text}]' in src
     assert (
