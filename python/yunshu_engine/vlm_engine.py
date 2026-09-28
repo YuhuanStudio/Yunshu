@@ -1416,9 +1416,6 @@ class VLMEngine:
         runner.clear_on_idle = bool(getattr(self, "_mx_large_model", False))
         runner.stop_tokens = set(self._get_eos_ids())
         runner.inflight = lambda: self._active_count
-        runner.prefill_chunk_while_decoding = int(
-            settings.get("YUNSHU_PREFILL_CHUNK_WHILE_DECODING") or 0
-        )
         # KV layout (technical; experimental until measured) and KV precision
         # (the user's memory/quality choice) are separate settings.
         precision = settings.get("YUNSHU_KV_PRECISION")

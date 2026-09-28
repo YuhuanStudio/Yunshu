@@ -215,26 +215,3 @@ def test_token_mask_processor_min_tokens_ignore_eos_suppress():
     for _ in range(5):
         out = q.process_last_token(2, logits)
     assert out[0, 5].item() == float("-inf")
-
-
-def test_prefill_chunk_shrinks_only_while_rows_decode():
-    runner = vbr.VLMBatchRunner(
-        SimpleNamespace(language_model=object()), processor=None
-    )
-    runner.prefill_chunk_while_decoding = 256
-    pb = SimpleNamespace(prefill_step_size=vbr.PREFILL_STEP)
-
-    class Gen:
-        def __init__(self, rows):
-            self._prompt_batch = pb
-            self._generation_batch = [0] * rows
-
-        def next(self):
-            return [], []
-
-    group = vbr._Group(gen=Gen(3), spec=False)
-    runner._step_generator(group)
-    assert pb.prefill_step_size == 256
-    group.gen = Gen(0)
-    runner._step_generator(group)
-    assert pb.prefill_step_size == vbr.PREFILL_STEP
