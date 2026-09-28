@@ -1058,10 +1058,8 @@ class ASREngine(ActiveRequestMixin):
                     "VAD pre-check failed, continuing with transcription", exc_info=True
                 )
 
-        # LID: the spectral-heuristic LID in lid.py is unreliable and was
-        # feeding the raw WAV file (including header bytes) to the FFT,
-        # producing garbage results.  Trust the ASR model's own language
-        # detection instead — pass `language=None` and use `result.language`.
+        # LID: trust the ASR model's own language detection — pass
+        # `language=None` and use `result.language`.
         # If the caller did provide a language, honor it as a hint.
         detected_lang = language
 
