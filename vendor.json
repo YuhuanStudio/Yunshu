@@ -6,7 +6,7 @@
       "repo": "https://github.com/jundot/omlx",
       "clone": "reference/omlx",
       "upstream_path": "omlx/patches/qwen35_verify_qmm.py",
-      "commit": "f0d8428a",
+      "commit": "a98d8c8c",
       "license": "Apache-2.0",
       "local_changes": [
         "imports point at yunshu_engine.kernels.omlx"
@@ -17,7 +17,7 @@
       "repo": "https://github.com/jundot/omlx",
       "clone": "reference/omlx",
       "upstream_path": "omlx/patches/qwen35_gdn_prework.py",
-      "commit": "f0d8428a",
+      "commit": "a98d8c8c",
       "license": "Apache-2.0",
       "local_changes": [
         "imports point at yunshu_engine.kernels.omlx"
@@ -28,7 +28,7 @@
       "repo": "https://github.com/jundot/omlx",
       "clone": "reference/omlx",
       "upstream_path": "omlx/patches/qwen35_gdn_verify_fused.py",
-      "commit": "f0d8428a",
+      "commit": "a98d8c8c",
       "license": "Apache-2.0",
       "local_changes": [
         "imports point at yunshu_engine.kernels.omlx"
@@ -39,7 +39,7 @@
       "repo": "https://github.com/jundot/omlx",
       "clone": "reference/omlx",
       "upstream_path": "omlx/patches/qwen35_verify_sdpa_split.py",
-      "commit": "f0d8428a",
+      "commit": "a98d8c8c",
       "license": "Apache-2.0",
       "local_changes": [
         "imports point at yunshu_engine.kernels.omlx"
@@ -62,11 +62,41 @@
       "repo": "https://github.com/jundot/omlx",
       "clone": "reference/omlx",
       "upstream_path": "omlx/patches/mlx_vlm_mtp/qwen35_verify_linear.py",
-      "commit": "f0d8428a",
+      "commit": "a98d8c8c",
       "license": "Apache-2.0",
       "local_changes": [
         "imports point at yunshu_engine.kernels.omlx"
       ]
+    },
+    {
+      "path": "python/yunshu_engine/kernels/omlx/row_exact_qmv.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_path": "omlx/patches/row_exact_qmv.py",
+      "commit": "a98d8c8c",
+      "license": "Apache-2.0",
+      "local_changes": [],
+      "why": "row-exact verify projections (one-row qmv arithmetic per row)"
+    },
+    {
+      "path": "python/yunshu_engine/kernels/omlx/module_cache.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_path": "omlx/patches/module_cache.py",
+      "commit": "a98d8c8c",
+      "license": "Apache-2.0",
+      "local_changes": [],
+      "why": "per-module plan cache used by qwen35_gdn_prework"
+    },
+    {
+      "path": "python/yunshu_engine/kernels/omlx/moe_verify_gather.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_path": "omlx/patches/moe_verify_gather.py",
+      "commit": "a98d8c8c",
+      "license": "Apache-2.0",
+      "local_changes": [],
+      "why": "qmv traversal header used by row_exact_qmv"
     }
   ],
   "watch": [

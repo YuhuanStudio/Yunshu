@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Qwen3.5-family MTP verify kernels vendored from oMLX.
 
-Source: https://github.com/jundot/omlx (Apache-2.0), commit
-f0d8428acd3220c364177d1ea9593e4e15f94107, ``omlx/patches/``. The modules are
-copied unchanged except for imports that pointed at other oMLX packages
-(``_sync_and_clear_cache`` and ``is_nax_available`` below). Upstream credits in
+Source: https://github.com/jundot/omlx (Apache-2.0), ``omlx/patches/``; per-file
+source commits are in ``vendor.json`` (``just vendor-check`` reports upstream
+changes). The modules are copied unchanged except for imports that pointed at
+other oMLX packages (``_sync_and_clear_cache`` and ``is_nax_available`` below)
+and the flattened ``mlx_vlm_mtp/qwen35_verify_linear.py`` import. Upstream credits in
 the files (MTPLX, dflash-mlx, Splash — all Apache-2.0) are kept as written.
 
 They monkey-patch mlx-vlm's Qwen3.5 target-verify forward (the multi-token
@@ -31,7 +32,7 @@ import mlx.core as mx
 
 logger = logging.getLogger(__name__)
 
-_STATE = {"applied": None, "fast": False}
+_STATE = {"applied": None, "fast": False, "row_exact": False}
 
 
 def _sync_and_clear_cache(stream=None):
@@ -88,9 +89,17 @@ def pack_projections(model) -> int:
     return int(qwen35_packed_linear.pack_model(model) or 0)
 
 
-def apply(fast: bool = False) -> dict:
-    """Install the verify kernels once; ``fast`` arms the non-exact matmuls."""
-    _STATE["fast"] = bool(fast)
+def apply(fast: bool = False, row_exact: bool = False) -> dict:
+    """Install the verify kernels once.
+
+    ``fast`` arms the non-exact matmuls. ``row_exact`` arms upstream's
+    row-exact mode instead: every multi-row verify projection runs one-row
+    decode arithmetic per row (``row_exact_qmv``) and verify attention keeps
+    each row on its own one-row SDPA plan, so verify rows equal serial decode
+    with stock kernels (no change to the decode path).
+    """
+    _STATE["fast"] = bool(fast) and not row_exact
+    _STATE["row_exact"] = bool(row_exact)
     if _STATE["applied"] is not None:
         return _STATE["applied"]
     import mlx_vlm.speculative.mtp as mtp
@@ -126,7 +135,10 @@ def apply(fast: bool = False) -> dict:
             return
 
         def armed(*args, **kwargs):
-            qwen35_verify_qmm.set_verify_qmm_armed(_STATE["fast"])
+            if _STATE["row_exact"]:
+                qwen35_verify_qmm.set_verify_qmm_armed(True, row_exact=True)
+            else:
+                qwen35_verify_qmm.set_verify_qmm_armed(_STATE["fast"])
             try:
                 return original(*args, **kwargs)
             finally:
@@ -141,5 +153,10 @@ def apply(fast: bool = False) -> dict:
     arm(dflash, "_dflash_verify")
 
     _STATE["applied"] = applied
-    logger.info("Qwen MTP verify kernels: %s (fast=%s)", applied, _STATE["fast"])
+    logger.info(
+        "Qwen MTP verify kernels: %s (fast=%s, row_exact=%s)",
+        applied,
+        _STATE["fast"],
+        _STATE["row_exact"],
+    )
     return applied

@@ -1389,7 +1389,14 @@ class VLMEngine:
                 "true",
                 "yes",
             )
-            kernels = apply_verify_kernels(fast=fast)
+            # Opt-in alternative to the invariant kernels (experimental, needs a
+            # GPU A/B): upstream oMLX row-exact verify keeps the stock decode path
+            # and computes each verify row with one-row decode arithmetic, so
+            # spec output equals stock serial decode.
+            row_exact = not fast and os.environ.get(
+                "YUNSHU_MTP_ROW_EXACT", "0"
+            ).strip().lower() in ("1", "true", "yes")
+            kernels = apply_verify_kernels(fast=fast, row_exact=row_exact)
             # Splash-style lossless decode: decode and verify share row-invariant
             # kernels, so speculative output == this engine's plain decode.
             # Default for the MTP draft: uncontended on Qwen3.8-27B (M5 Max),
@@ -1399,8 +1406,14 @@ class VLMEngine:
             # (docs/research/runs/2026-09-28-matrix/invariant-packed-mtp-sweep.jsonl).
             # Not yet measured with DFlash, so that stays opt-in.
             inv_env = os.environ.get("YUNSHU_VLM_INVARIANT", "").strip().lower()
-            invariant = not fast and (
-                inv_env in ("1", "true", "yes") if inv_env else draft_kind != "dflash"
+            invariant = (
+                not fast
+                and not row_exact
+                and (
+                    inv_env in ("1", "true", "yes")
+                    if inv_env
+                    else draft_kind != "dflash"
+                )
             )
             if invariant:
                 from .kernels.batch_invariant import install as install_invariant
