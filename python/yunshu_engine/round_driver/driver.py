@@ -52,6 +52,17 @@ ACCEPT_PRIOR = 0.7  # per-depth draft acceptance before a row has history
 ACCEPT_EMA = 0.15
 
 
+def cache_buffers(cache: list) -> list:
+    """A row's cache arrays (KV buffers, GDN conv / recurrent state)."""
+    out = []
+    for c in cache:
+        if getattr(c, "keys", None) is not None:
+            out += [c.keys, c.values]
+        else:
+            out += [a for a in getattr(c, "cache", ()) if isinstance(a, mx.array)]
+    return out
+
+
 @dataclass
 class Request:
     """What a row needs from the caller (the runner's job)."""
@@ -261,7 +272,16 @@ class RoundDriver:
                     idx = mx.argsort(lp, axis=-1)[..., -req.top_logprobs :][..., ::-1]
                     extra += [idx, mx.take_along_axis(lp, idx, axis=-1)]
             draws.append((it, tok, extra))
-        mx.eval(*[d[1] for d in draws], *[a for d in draws if d[2] for a in d[2]])
+        # Evaluate every cache the step advanced, not only what feeds a token:
+        # a prompt chunk that emits nothing would otherwise stay a lazy graph
+        # on top of the previous chunk's, and a long prompt becomes one graph
+        # holding every chunk's KV buffer version until its last chunk.
+        advanced = {id(it.row): it.row for it in items if it.kind == "p"}
+        mx.eval(
+            *[d[1] for d in draws],
+            *[a for d in draws if d[2] for a in d[2]],
+            *[a for r in advanced.values() for a in cache_buffers(r.cache)],
+        )
         self.cost.observe(
             sum(it.seg.length for it in items), (time.perf_counter() - started) * 1e3
         )
@@ -321,6 +341,8 @@ class RoundDriver:
             for (r, _), d in zip(ready, drafts, strict=True):
                 r.drafts = d
                 self.drafted += len(d)
+            # the head caches of rows still prefilling (no drafts yet)
+            mx.eval(*[a for r, _, _ in live for a in cache_buffers(r.mtp_cache)])
         self.steps += 1
         return events
 
@@ -392,4 +414,4 @@ class RoundDriver:
         )
 
 
-__all__ = ["CHUNK", "Event", "Request", "RoundDriver"]
+__all__ = ["CHUNK", "Event", "Request", "RoundDriver", "cache_buffers"]
