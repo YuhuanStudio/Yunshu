@@ -13,6 +13,7 @@ idle period at the end.
 
 import argparse
 import collections
+import concurrent.futures
 import http.client
 import json
 import re
@@ -76,7 +77,11 @@ def main():
         help="result JSON whose question ids to reuse",
     )
     ap.add_argument("--n", type=int, default=300)
-    ap.add_argument("--max-tokens", type=int, default=8192)
+    # Defaults match the user's oMLX MMLU-Pro run: 16384 max output, medium
+    # reasoning effort, 8 questions in flight.
+    ap.add_argument("--max-tokens", type=int, default=16384)
+    ap.add_argument("--reasoning-effort", default="medium", help="'' to omit")
+    ap.add_argument("--concurrency", type=int, default=8)
     ap.add_argument("--no-thinking", action="store_true")
     ap.add_argument("--final-idle-s", type=float, default=120)
     ap.add_argument("--footprint-stop-gib", type=float, default=100)
@@ -124,6 +129,8 @@ def main():
             "n": len(ids),
             "thinking": think,
             "max_tokens": a.max_tokens,
+            "reasoning_effort": a.reasoning_effort,
+            "concurrency": a.concurrency,
             "note": a.note,
             "start_footprint_gib": start_mem,
             "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -132,7 +139,11 @@ def main():
     threading.Thread(target=sampler, daemon=True).start()
     t_start = time.time()
     rows = []
-    for qi, qid in enumerate(ids):
+    aborted = threading.Event()
+
+    def run_one(qi, qid):
+        if aborted.is_set():
+            return None
         item = data[qid]
         body = {
             "model": a.model,
@@ -144,6 +155,9 @@ def main():
             "enable_thinking": think,
             "chat_template_kwargs": {"enable_thinking": think},
         }
+        if a.reasoning_effort:
+            body["reasoning_effort"] = a.reasoning_effort
+            body["chat_template_kwargs"]["reasoning_effort"] = a.reasoning_effort
         t0 = time.perf_counter()
         row = {
             "kind": "q",
@@ -153,7 +167,7 @@ def main():
             "answer": item["answer"],
         }
         try:
-            conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=1800)
+            conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=7200)
             conn.request(
                 "POST",
                 "/v1/chat/completions",
@@ -191,7 +205,6 @@ def main():
         row["wall_s"] = round(time.perf_counter() - t0, 2)
         row["footprint_gib"] = mem()
         emit(row)
-        rows.append(row)
         print(
             json.dumps(
                 {
@@ -212,13 +225,21 @@ def main():
             flush=True,
         )
         if row["footprint_gib"] and row["footprint_gib"] > a.footprint_stop_gib:
+            aborted.set()
             emit(
                 {
                     "kind": "abort",
                     "reason": f"footprint {row['footprint_gib']} > {a.footprint_stop_gib}",
                 }
             )
-            break
+        return row
+
+    with concurrent.futures.ThreadPoolExecutor(a.concurrency) as pool:
+        futures = [pool.submit(run_one, qi, qid) for qi, qid in enumerate(ids)]
+        for fut in concurrent.futures.as_completed(futures):
+            row = fut.result()
+            if row is not None:
+                rows.append(row)
     elapsed = time.time() - t_start
     time.sleep(a.final_idle_s)
     stop.set()

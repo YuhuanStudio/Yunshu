@@ -440,6 +440,12 @@ class ChatCompletionRequest(BaseModel):
             _et = self.chat_template_kwargs.get("enable_thinking")
             if isinstance(_et, bool):
                 self.enable_thinking = _et
+        if self.reasoning_effort is None and isinstance(
+            self.chat_template_kwargs, dict
+        ):
+            _eff = self.chat_template_kwargs.get("reasoning_effort")
+            if isinstance(_eff, str) and _eff:
+                self.reasoning_effort = _eff
         # Fold vLLM/SGLang guided_* aliases into the existing grammar /
         # response_format plumbing (only when the native field isn't already set).
         if self.grammar is None:

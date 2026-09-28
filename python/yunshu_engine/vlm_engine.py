@@ -1601,6 +1601,7 @@ class VLMEngine:
             messages = messages or []
         if self._model is None:
             raise RuntimeError("Engine not started")
+        tpl_extra = self._template_effort_extra(kwargs)
 
         t0 = time.monotonic()
 
@@ -1669,6 +1670,9 @@ class VLMEngine:
             _runner_extras: dict = {}
 
             def _generate_sync():
+                # Requests serialize on the single MLX thread, so the template
+                # helpers read this request's extras from the instance.
+                self._template_extra = tpl_extra
                 # NOTE: don't call mx.random.seed(seed) here — the actual
                 # sampling happens inside `with mx.stream(generation_stream)`
                 # in _generate_vlm_text / _generate_vlm_vision, which uses
@@ -2079,6 +2083,7 @@ class VLMEngine:
         if self._model is None:
             raise RuntimeError("Engine not started")
 
+        tpl_extra = self._template_effort_extra(kwargs)
         # logprobs is not supported by VLM engine
         if (logprobs or top_logprobs) and getattr(self, "_batch_runner", None) is None:
             logger.warning(
@@ -2196,6 +2201,7 @@ class VLMEngine:
 
         def _stream_sync():
             nonlocal _has_detokenizer
+            self._template_extra = tpl_extra
             # Initialize eagerly so the error handler can reference it
             # even if the exception fires before the point where it was
             # previously assigned inside the try block.
@@ -5412,6 +5418,35 @@ class VLMEngine:
             patched.append(tc)
         return patched
 
+    def _template_effort_extra(self, kwargs: dict) -> dict | None:
+        """Move ``reasoning_effort`` into the chat template when it supports it.
+
+        Qwen3.8's template takes ``reasoning_effort`` (low / medium / xhigh)
+        and changes how the model reasons; mapping it to a thinking-token cap
+        instead would keep the model at the template default and cut it off.
+        Pops the key from ``kwargs`` so no budget mapping runs afterwards.
+        """
+        effort = kwargs.get("reasoning_effort")
+        if effort is None:
+            ctk = kwargs.get("chat_template_kwargs") or {}
+            effort = ctk.get("reasoning_effort") if isinstance(ctk, dict) else None
+        if effort is None:
+            return None
+        supported = getattr(self, "_template_has_effort", None)
+        if supported is None:
+            texts = [
+                getattr(self._tokenizer, "chat_template", None),
+                getattr(self._processor, "chat_template", None),
+            ]
+            supported = any(
+                isinstance(t, str) and "reasoning_effort" in t for t in texts
+            )
+            self._template_has_effort = supported
+        if not supported:
+            return None
+        kwargs.pop("reasoning_effort", None)
+        return {"reasoning_effort": str(effort)}
+
     def _format_prompt(
         self, messages: list[dict], enable_thinking: bool | None = None
     ) -> str:
@@ -5484,6 +5519,7 @@ class VLMEngine:
                     tpl_kwargs["add_generation_prompt"] = True
                 if enable_thinking is not None:
                     tpl_kwargs["enable_thinking"] = enable_thinking
+                tpl_kwargs.update(getattr(self, "_template_extra", None) or {})
                 try:
                     text = self._tokenizer.apply_chat_template(clean, **tpl_kwargs)
                 except (TypeError, ValueError) as e:
@@ -5535,6 +5571,9 @@ class VLMEngine:
             messages,
             enable_thinking,
         )
+        extra = getattr(self, "_template_extra", None) or {}
+        if extra:
+            cache_key = f"{cache_key}|{json.dumps(extra, sort_keys=True)}"
 
         cached_ids = self._text_prompt_cache.get_token_ids(cache_key)
         if cached_ids is not None:
@@ -5590,6 +5629,9 @@ class VLMEngine:
             key_parts.append(f"audios={num_audios}")
         if max_images is not None:
             key_parts.append(f"max_images={max_images}")
+        extra = getattr(self, "_template_extra", None) or {}
+        if extra:
+            key_parts.append(json.dumps(extra, sort_keys=True))
         cache_key = hashlib.blake2b(
             "|".join(key_parts).encode(),
             digest_size=16,
@@ -5606,6 +5648,7 @@ class VLMEngine:
             tpl_kwargs["enable_thinking"] = enable_thinking
         if num_audios > 0:
             tpl_kwargs["num_audios"] = num_audios
+        tpl_kwargs.update(extra)
 
         try:
             template_text = self._processor.apply_chat_template(
