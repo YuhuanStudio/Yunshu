@@ -2404,8 +2404,6 @@ async def _handle_vlm_chat(
         priority=req.priority,
         logits_processors=req.logits_processors,
         timeout_seconds=req.timeout,
-        mtp_allowed=not req.tools,
-        apc_allowed=not req.tools,
     )
     if json_schema:
         gen_kwargs["json_schema"] = json_schema
@@ -2787,8 +2785,6 @@ async def _stream_vlm_response(
             cancel_event=_vlm_cancel_evt,
             timeout_seconds=req.timeout,
             lora_adapter=loaded_adapter,
-            mtp_allowed=not req.tools,
-            apc_allowed=not req.tools,
         )
         if json_schema:
             stream_kwargs["json_schema"] = json_schema

@@ -819,7 +819,6 @@ class VLMEngine:
         self._model_path = model_path
         self._model = None
         self._tokenizer = None
-        self._mtp_backend = None
         self._apc_backend = None
         self._apc_semantic_hash = None
         self._batch_runner = None
@@ -1357,76 +1356,6 @@ class VLMEngine:
             f"mrope={self._mrope_info.enabled})"
         )
 
-        # A Qwen VLM stays a VLM: keep its vision/grammar path and attach the
-        # native head only for explicitly eligible text requests. This shares
-        # the already-loaded target and never exports a second model folder.
-        if self._is_vlm and os.environ.get("YUNSHU_MTP", "").strip().lower() in (
-            "1",
-            "true",
-            "yes",
-        ):
-            try:
-                from mlx_vlm.speculative.drafters import validate_drafter_compatibility
-
-                from .mlxvlm_mtp import (
-                    MLXVLMMtp,
-                    _load_drafter_in_memory,
-                    is_mtp_capable,
-                )
-
-                if is_mtp_capable(str(model_path)):
-                    backend = MLXVLMMtp(str(model_path))
-                    backend.model = self._model
-                    backend.tokenizer = self._tokenizer
-                    backend.drafter = _load_drafter_in_memory(str(model_path))
-                    validate_drafter_compatibility(self._model, backend.drafter, "mtp")
-                    backend._loaded = True
-                    self._mtp_backend = backend
-                    logger.info("VLM native MTP head attached to shared target")
-            except Exception:
-                logger.warning("VLM MTP head unavailable; using AR", exc_info=True)
-
-        # Experimental text-only APC. The manager holds recurrent/KV checkpoints
-        # across requests; the model remains the same already-loaded VLM target.
-        # Keep disk persistence off and require an explicit byte budget.
-        if self._is_vlm and os.environ.get(
-            "YUNSHU_VLM_UPSTREAM_APC", "0"
-        ).strip().lower() in ("1", "true", "yes"):
-            try:
-                from mlx_vlm.apc import APCManager, semantic_extra_hash
-                from mlx_vlm.generate.ar import BatchGenerator  # noqa: F401
-
-                lm = self._model.language_model
-                if (
-                    self._processor is None
-                    or not self.backend_capabilities(lm).cache.is_hybrid
-                ):
-                    raise ValueError(
-                        "APC candidate requires a hybrid VLM and processor"
-                    )
-                budget = float(os.environ.get("YUNSHU_VLM_APC_MEMORY_GB", "1.5"))
-                if budget <= 0:
-                    raise ValueError("YUNSHU_VLM_APC_MEMORY_GB must be positive")
-                self._apc_backend = APCManager(
-                    num_blocks=512,
-                    block_size=16,
-                    disk=None,
-                    overrides={"memory_max_gb": budget},
-                )
-                self._apc_semantic_hash = semantic_extra_hash(
-                    image_hash=0,
-                    media={"audio": None, "video": None},
-                    model=lm,
-                    processor=self._processor,
-                )
-                logger.info(
-                    "VLM text-only APC candidate enabled with %.2f GiB budget", budget
-                )
-            except Exception:
-                self._apc_backend = None
-                self._apc_semantic_hash = None
-                logger.warning("VLM APC candidate unavailable; using AR", exc_info=True)
-
         if self._is_vlm and os.environ.get(
             "YUNSHU_VLM_RUNNER", "1"
         ).strip().lower() not in (
@@ -1447,7 +1376,13 @@ class VLMEngine:
         # MLX executor thread, so the probe's forwards land on the right GPU
         # stream). Memoizes self._reuse_probe_ok so _text_prefix_reuse_safe is a
         # pure memoized read on the hot path. Only probe reuse-capable caches.
-        if self._is_vlm and self._text_kv_prefix_cache is not None:
+        # The batch runner owns prefix reuse (APC) when present; the probe only
+        # serves the legacy loop, so skip its ~2-3 s of load-time forwards.
+        if (
+            self._is_vlm
+            and self._text_kv_prefix_cache is not None
+            and self._batch_runner is None
+        ):
             try:
                 lm = getattr(self._model, "language_model", None)
                 if lm is not None:
@@ -1543,7 +1478,6 @@ class VLMEngine:
         self._cleanup_temp_files()
         self._model = None
         self._tokenizer = None
-        self._mtp_backend = None
         self._apc_backend = None
         self._apc_semantic_hash = None
         self._batch_runner = None
@@ -1599,86 +1533,6 @@ class VLMEngine:
         }
 
     # ── Generation ──
-
-    def _mtp_text_eligible(
-        self,
-        *,
-        temperature: float,
-        top_p: float,
-        top_k: int,
-        min_p: float,
-        repetition_penalty: float,
-        stop: list[str] | None,
-        stop_token_ids: list[int] | None,
-        enable_thinking: bool | None,
-        logprobs: bool,
-        top_logprobs: int | None,
-        kwargs: dict,
-    ) -> bool:
-        """Restrict speculative decode to requests with proven AR parity."""
-        return bool(
-            self._mtp_backend is not None
-            and kwargs.get("mtp_allowed") is True
-            and enable_thinking is False
-            and temperature <= 0
-            and top_p >= 1
-            and not top_k
-            and not min_p
-            and repetition_penalty == 1
-            and not stop
-            and not stop_token_ids
-            and not logprobs
-            and not top_logprobs
-            and not kwargs.get("json_schema")
-            and not kwargs.get("grammar")
-            and not kwargs.get("frequency_penalty")
-            and not kwargs.get("presence_penalty")
-            and not kwargs.get("logit_bias")
-            and not kwargs.get("thinking_budget")
-            and not kwargs.get("reasoning_effort")
-            and not kwargs.get("xtc_probability")
-            and not kwargs.get("xtc_threshold")
-            and not kwargs.get("logits_processors")
-            and not kwargs.get("lora_adapter")
-            and not kwargs.get("min_tokens")
-            and not kwargs.get("ignore_eos")
-            and not kwargs.get("suppress_tokens")
-            and not kwargs.get("spec_decode")
-        )
-
-    def _apc_text_eligible(self, **params) -> bool:
-        """Use APC only for the text-only greedy subset validated on Qwen3.8."""
-        kwargs = params["kwargs"]
-        return bool(
-            self._apc_backend is not None
-            and self._apc_capacity_allows(params.get("input_ids"))
-            and kwargs.get("apc_allowed") is True
-            and params["enable_thinking"] is False
-            and params["temperature"] <= 0
-            and params["top_p"] >= 1
-            and not params["top_k"]
-            and not params["min_p"]
-            and params["repetition_penalty"] == 1
-            and not params["stop"]
-            and not params["stop_token_ids"]
-            and not params["logprobs"]
-            and not params["top_logprobs"]
-            and not kwargs.get("json_schema")
-            and not kwargs.get("grammar")
-            and not kwargs.get("frequency_penalty")
-            and not kwargs.get("presence_penalty")
-            and not kwargs.get("logit_bias")
-            and not kwargs.get("thinking_budget")
-            and not kwargs.get("reasoning_effort")
-            and not kwargs.get("xtc_probability")
-            and not kwargs.get("xtc_threshold")
-            and not kwargs.get("logits_processors")
-            and not kwargs.get("lora_adapter")
-            and not kwargs.get("min_tokens")
-            and not kwargs.get("ignore_eos")
-            and not kwargs.get("suppress_tokens")
-            and not kwargs.get("spec_decode")
-        )
 
     def _apc_capacity_allows(self, input_ids) -> bool:
         """Avoid costly chunked prefill when this Qwen cache cannot be retained.
@@ -1933,55 +1787,6 @@ class VLMEngine:
                                 cancel_event=kwargs.get("cancel_event"),
                                 kwargs=kwargs,
                             ),
-                        )
-                    if self._mtp_text_eligible(
-                        temperature=temperature,
-                        top_p=top_p,
-                        top_k=top_k,
-                        min_p=min_p,
-                        repetition_penalty=repetition_penalty,
-                        stop=stop,
-                        stop_token_ids=stop_token_ids,
-                        enable_thinking=_enable_thinking,
-                        logprobs=logprobs,
-                        top_logprobs=top_logprobs,
-                        kwargs=kwargs,
-                    ):
-                        mtp = self._mtp_backend.generate(
-                            [],
-                            max_tokens=max_tokens,
-                            temperature=0.0,
-                            prompt=input_ids.tolist(),
-                            cancel_event=kwargs.get("cancel_event"),
-                        )
-                        logger.debug(
-                            "VLM text used native MTP: %d tokens",
-                            mtp["completion_tokens"],
-                        )
-                        return (
-                            mtp["text"],
-                            0,
-                            mtp["completion_tokens"],
-                            mtp["completion_tokens"] < max_tokens,
-                            False,
-                            0,
-                        )
-                    if max_tokens > 0 and self._apc_text_eligible(
-                        input_ids=input_ids,
-                        temperature=temperature,
-                        top_p=top_p,
-                        top_k=top_k,
-                        min_p=min_p,
-                        repetition_penalty=repetition_penalty,
-                        stop=stop,
-                        stop_token_ids=stop_token_ids,
-                        enable_thinking=_enable_thinking,
-                        logprobs=logprobs,
-                        top_logprobs=top_logprobs,
-                        kwargs=kwargs,
-                    ):
-                        return self._generate_vlm_apc_text(
-                            input_ids, max_tokens, kwargs.get("cancel_event")
                         )
                     freq_p = kwargs.get("frequency_penalty", 0.0)
                     pres_p = kwargs.get("presence_penalty", 0.0)
@@ -2512,49 +2317,6 @@ class VLMEngine:
                                 cancel_event=cancel_event,
                                 kwargs=kwargs,
                             ),
-                        )
-                        return
-                    if max_tokens <= 240 and self._mtp_text_eligible(
-                        temperature=temperature,
-                        top_p=top_p,
-                        top_k=top_k,
-                        min_p=min_p,
-                        repetition_penalty=repetition_penalty,
-                        stop=stop,
-                        stop_token_ids=stop_token_ids,
-                        enable_thinking=enable_thinking,
-                        logprobs=logprobs,
-                        top_logprobs=top_logprobs,
-                        kwargs=kwargs,
-                    ):
-                        self._stream_vlm_mtp_text(
-                            input_ids,
-                            max_tokens,
-                            req_id,
-                            _safe_queue,
-                            cancel_event,
-                        )
-                        return
-                    if max_tokens > 0 and self._apc_text_eligible(
-                        input_ids=input_ids,
-                        temperature=temperature,
-                        top_p=top_p,
-                        top_k=top_k,
-                        min_p=min_p,
-                        repetition_penalty=repetition_penalty,
-                        stop=stop,
-                        stop_token_ids=stop_token_ids,
-                        enable_thinking=enable_thinking,
-                        logprobs=logprobs,
-                        top_logprobs=top_logprobs,
-                        kwargs=kwargs,
-                    ):
-                        self._stream_vlm_apc_text(
-                            input_ids,
-                            max_tokens,
-                            req_id,
-                            _safe_queue,
-                            cancel_event,
                         )
                         return
                     freq_p = kwargs.get("frequency_penalty", 0.0)
@@ -4495,7 +4257,7 @@ class VLMEngine:
                     model=lm,
                     processor=self._processor,
                 )
-        drafter = getattr(self._mtp_backend, "drafter", None)
+        drafter = None
         draft_kind = "mtp"
         external = os.environ.get("YUNSHU_VLM_DRAFT", "").strip()
         if drafter is None and external:
@@ -4917,251 +4679,6 @@ class VLMEngine:
                 stats.used_draft,
                 stats.finish_reason,
             )
-
-    def _new_vlm_apc_request(self, input_ids: mx.array, max_tokens: int):
-        """Prepare one upstream APC request on the serialized Metal thread."""
-        from mlx_vlm.generate.ar import BatchGenerator
-
-        from .mrope import clear_rope_state
-
-        clear_rope_state(self._model)
-        embeddings = self._model.get_input_embeddings(input_ids[None], None, mask=None)
-        prompt_kwargs = embeddings.to_dict()
-        prompt_kwargs["_apc_semantic_hash"] = self._apc_semantic_hash
-        manager = self._apc_backend
-        matched_before = manager.stats.matched_tokens
-        generator = BatchGenerator(
-            self._model.language_model,
-            self._processor,
-            max_tokens=max_tokens,
-            apc_manager=manager,
-            greedy_sampling=True,
-            compute_logprobs=False,
-            prefill_step_size=256,
-        )
-        try:
-            uid = generator.insert(
-                [input_ids.tolist()],
-                max_tokens=max_tokens,
-                prompt_kwargs=[prompt_kwargs],
-            )[0]
-        except Exception:
-            generator.close()
-            raise
-        return generator, uid, matched_before
-
-    def _generate_vlm_apc_text(
-        self, input_ids: mx.array, max_tokens: int, cancel_event: Any
-    ) -> tuple[str, int, int, bool, bool, int]:
-        """Non-streaming APC counterpart, with the same result contract as AR."""
-        generator, uid, matched_before = self._new_vlm_apc_request(
-            input_ids, max_tokens
-        )
-        token_ids = []
-        finish_reason = None
-        try:
-            for _ in range(max(1024, len(input_ids) // 256 + max_tokens + 32)):
-                if cancel_event is not None and cancel_event.is_set():
-                    finish_reason = "cancel"
-                    break
-                _, responses = generator.next()
-                for response in responses:
-                    if response.uid != uid:
-                        continue
-                    token_ids.append(int(response.token))
-                    if response.finish_reason is not None:
-                        finish_reason = response.finish_reason
-                        break
-                if finish_reason is not None:
-                    break
-            else:
-                raise RuntimeError("VLM APC generation exceeded its step bound")
-            return (
-                self._tokenizer.decode(token_ids, skip_special_tokens=True),
-                0,
-                len(token_ids),
-                finish_reason == "stop",
-                False,
-                self._apc_backend.stats.matched_tokens - matched_before,
-            )
-        finally:
-            if finish_reason in (None, "cancel"):
-                with contextlib.suppress(Exception):
-                    generator.remove(uid)
-            generator.close()
-
-    def _stream_vlm_apc_text(
-        self,
-        input_ids: mx.array,
-        max_tokens: int,
-        req_id: str,
-        queue: Any,
-        cancel_event: Any,
-    ) -> None:
-        """Run upstream hybrid APC against the existing VLM target on Metal owner."""
-        prompt_tokens = len(input_ids)
-        generator, uid, matched_before = self._new_vlm_apc_request(
-            input_ids, max_tokens
-        )
-        manager = self._apc_backend
-        detokenizer = self._tokenizer.detokenizer
-        detokenizer.reset()
-        eos_ids = self._get_eos_ids()
-        count = 0
-        first_ms = 0.0
-        finish_reason = None
-        start = time.perf_counter()
-        try:
-            for _ in range(max(1024, prompt_tokens // 256 + max_tokens + 32)):
-                if cancel_event is not None and cancel_event.is_set():
-                    finish_reason = "cancel"
-                    break
-                _, responses = generator.next()
-                for response in responses:
-                    if response.uid != uid:
-                        continue
-                    count += 1
-                    if count == 1:
-                        first_ms = (time.perf_counter() - start) * 1000
-                    token_id = int(response.token)
-                    segment = ""
-                    if token_id not in eos_ids:
-                        detokenizer.add_token(token_id)
-                        segment = detokenizer.last_segment
-                    if segment:
-                        delivered = queue.put_blocking(
-                            RequestOutput(
-                                request_id=req_id,
-                                new_text=segment,
-                                new_token_ids=[token_id],
-                                completion_tokens=count,
-                                prompt_tokens=prompt_tokens,
-                                cached_tokens=(
-                                    manager.stats.matched_tokens - matched_before
-                                    if count == 1
-                                    else 0
-                                ),
-                                ttft_ms=first_ms if count == 1 else 0.0,
-                            ),
-                            cancel_event,
-                        )
-                        if not delivered:
-                            finish_reason = "cancel"
-                            return
-                    if response.finish_reason is not None:
-                        finish_reason = response.finish_reason
-                        break
-                if finish_reason is not None:
-                    break
-            else:
-                raise RuntimeError("VLM APC generation exceeded its step bound")
-            if finish_reason != "cancel":
-                detokenizer.finalize()
-                tail = detokenizer.last_segment
-                if tail:
-                    if not queue.put_blocking(
-                        RequestOutput(
-                            request_id=req_id,
-                            new_text=tail,
-                            completion_tokens=count,
-                            prompt_tokens=prompt_tokens,
-                        ),
-                        cancel_event,
-                    ):
-                        finish_reason = "cancel"
-                        return
-            queue.put_blocking(
-                RequestOutput(
-                    request_id=req_id,
-                    finish_reason=finish_reason or "stop",
-                    finished=True,
-                    completion_tokens=count,
-                    prompt_tokens=prompt_tokens,
-                    cached_tokens=manager.stats.matched_tokens - matched_before,
-                    ttft_ms=first_ms,
-                ),
-                cancel_event,
-            )
-            logger.debug(
-                "VLM APC stream: %d tokens, %d cached prompt tokens",
-                count,
-                manager.stats.matched_tokens - matched_before,
-            )
-        finally:
-            if uid is not None and finish_reason in (None, "cancel"):
-                with contextlib.suppress(Exception):
-                    generator.remove(uid)
-            generator.close()
-
-    def _stream_vlm_mtp_text(
-        self,
-        input_ids: mx.array,
-        max_tokens: int,
-        req_id: str,
-        queue: Any,
-        cancel_event: Any,
-    ) -> None:
-        """Stream verified MTP tokens from the shared VLM target on Metal owner."""
-        detokenizer = self._tokenizer.detokenizer
-        detokenizer.reset()
-        count = 0
-        prompt_tokens = len(input_ids)
-        start = time.perf_counter()
-        first_ms = 0.0
-        for token_id in self._mtp_backend.iter_token_ids(
-            [],
-            max_tokens=max_tokens,
-            temperature=0.0,
-            prompt=input_ids.tolist(),
-            cancel_event=cancel_event,
-        ):
-            if cancel_event is not None and cancel_event.is_set():
-                break
-            count += 1
-            detokenizer.add_token(token_id)
-            segment = detokenizer.last_segment
-            if count == 1:
-                first_ms = (time.perf_counter() - start) * 1000
-            if segment:
-                queue.put_nowait(
-                    RequestOutput(
-                        request_id=req_id,
-                        new_text=segment,
-                        new_token_ids=[token_id],
-                        completion_tokens=count,
-                        prompt_tokens=prompt_tokens,
-                        ttft_ms=first_ms if count == 1 else 0.0,
-                    )
-                )
-        detokenizer.finalize()
-        tail = detokenizer.last_segment
-        if tail:
-            queue.put_nowait(
-                RequestOutput(
-                    request_id=req_id,
-                    new_text=tail,
-                    completion_tokens=count,
-                    prompt_tokens=prompt_tokens,
-                )
-            )
-        cancelled = cancel_event is not None and cancel_event.is_set()
-        queue.put_nowait(
-            RequestOutput(
-                request_id=req_id,
-                finish_reason=(
-                    "cancel"
-                    if cancelled
-                    else "length"
-                    if count >= max_tokens
-                    else "stop"
-                ),
-                finished=True,
-                completion_tokens=count,
-                prompt_tokens=prompt_tokens,
-                ttft_ms=first_ms,
-            )
-        )
-        logger.debug("VLM text used native MTP stream: %d tokens", count)
 
     def _stream_vlm_text(
         self,

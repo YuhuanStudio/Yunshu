@@ -1,4 +1,4 @@
-"""APC must leave unsupported VLM request semantics on the existing path."""
+"""Runner routing and the Qwen APC capacity gate."""
 
 import contextlib
 from types import SimpleNamespace
@@ -8,41 +8,37 @@ import mlx.core as mx
 from yunshu_engine.vlm_engine import VLMEngine
 
 
-def _eligible(**changes):
+def _runner_eligible(**kwargs):
     engine = object.__new__(VLMEngine)
-    engine._apc_backend = object()
-    params = dict(
-        temperature=0,
-        top_p=1,
-        top_k=0,
-        min_p=0,
-        repetition_penalty=1,
-        stop=None,
-        stop_token_ids=None,
-        enable_thinking=False,
-        logprobs=False,
-        top_logprobs=None,
-        kwargs={"apc_allowed": True},
+    engine._batch_runner = object()
+    return engine._runner_text_eligible(
+        logprobs=False, top_logprobs=None, kwargs=kwargs
     )
-    params.update(changes)
-    return engine._apc_text_eligible(**params)
 
 
-def test_plain_greedy_text_can_use_apc():
-    assert _eligible()
+def test_runner_serves_ordinary_requests():
+    # Sampling, thinking, stop, schema, tools and logprobs all stay on the runner.
+    assert _runner_eligible()
+    assert _runner_eligible(json_schema={"type": "object"})
+    assert _runner_eligible(reasoning_effort="low")
 
 
-def test_apc_does_not_steal_unsupported_request_modes():
-    assert not _eligible(kwargs={"apc_allowed": False})  # tools/media gate
-    assert not _eligible(
-        kwargs={"apc_allowed": True, "json_schema": {"type": "object"}}
+def test_runner_leaves_unimplemented_knobs_to_legacy_loop():
+    for key in (
+        "xtc_probability",
+        "lora_adapter",
+        "min_tokens",
+        "ignore_eos",
+        "suppress_tokens",
+        "logits_processors",
+        "spec_decode",
+    ):
+        assert not _runner_eligible(**{key: 1})
+    engine = object.__new__(VLMEngine)
+    engine._batch_runner = None
+    assert not engine._runner_text_eligible(
+        logprobs=False, top_logprobs=None, kwargs={}
     )
-    assert not _eligible(kwargs={"apc_allowed": True, "lora_adapter": object()})
-    assert not _eligible(kwargs={"apc_allowed": True, "spec_decode": True})
-    assert not _eligible(temperature=0.5)
-    assert not _eligible(enable_thinking=True)
-    assert not _eligible(stop=["END"])
-    assert not _eligible(logprobs=True)
 
 
 def test_qwen_capacity_gate_avoids_uncacheable_32k_prefill():
