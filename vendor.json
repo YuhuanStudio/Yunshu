@@ -1,0 +1,124 @@
+{
+  "_doc": "Code copied from other projects. scripts/vendor/check_upstream.py compares each entry with its upstream's latest version. 'local_changes' lists what we changed on purpose, so a sync keeps it.",
+  "vendored": [
+    {
+      "path": "python/yunshu_engine/kernels/omlx/qwen35_verify_qmm.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_path": "omlx/patches/qwen35_verify_qmm.py",
+      "commit": "f0d8428a",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "imports point at yunshu_engine.kernels.omlx"
+      ]
+    },
+    {
+      "path": "python/yunshu_engine/kernels/omlx/qwen35_gdn_prework.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_path": "omlx/patches/qwen35_gdn_prework.py",
+      "commit": "f0d8428a",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "imports point at yunshu_engine.kernels.omlx"
+      ]
+    },
+    {
+      "path": "python/yunshu_engine/kernels/omlx/qwen35_gdn_verify_fused.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_path": "omlx/patches/qwen35_gdn_verify_fused.py",
+      "commit": "f0d8428a",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "imports point at yunshu_engine.kernels.omlx"
+      ]
+    },
+    {
+      "path": "python/yunshu_engine/kernels/omlx/qwen35_verify_sdpa_split.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_path": "omlx/patches/qwen35_verify_sdpa_split.py",
+      "commit": "f0d8428a",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "imports point at yunshu_engine.kernels.omlx"
+      ]
+    },
+    {
+      "path": "python/yunshu_engine/kernels/omlx/qwen35_packed_linear.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_path": "omlx/patches/qwen35_packed_linear.py",
+      "commit": "f0d8428a",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "imports point at yunshu_engine.kernels.omlx",
+        "5-bit support (in progress)"
+      ]
+    },
+    {
+      "path": "python/yunshu_engine/kernels/omlx/qwen35_verify_linear.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_path": "omlx/patches/mlx_vlm_mtp/qwen35_verify_linear.py",
+      "commit": "f0d8428a",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "imports point at yunshu_engine.kernels.omlx"
+      ]
+    }
+  ],
+  "watch": [
+    {
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "globs": [
+        "omlx/patches/qwen35_*.py",
+        "omlx/patches/mlx_vlm_mtp/*.py"
+      ],
+      "why": "new or changed Qwen3.5-family kernels we may want"
+    },
+    {
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "globs": [
+        "mlx_vlm/generate/ar.py",
+        "mlx_vlm/speculative/**/*.py",
+        "mlx_vlm/apc*.py",
+        "mlx_vlm/models/qwen3_5/*.py"
+      ],
+      "why": "runner, APC, speculative decode we build on",
+      "pin_package": "mlx-vlm"
+    },
+    {
+      "repo": "https://github.com/ml-explore/mlx-lm",
+      "clone": "reference/mlx-lm",
+      "globs": [
+        "mlx_lm/generate.py",
+        "mlx_lm/models/cache.py",
+        "mlx_lm/sample_utils.py"
+      ],
+      "why": "text path, caches, samplers",
+      "pin_package": "mlx-lm"
+    },
+    {
+      "repo": "https://github.com/ml-explore/mlx",
+      "clone": "reference/mlx",
+      "globs": [
+        "mlx/backend/metal/kernels/quantized*",
+        "mlx/backend/metal/kernels/steel/**",
+        "python/mlx/nn/layers/quantized.py"
+      ],
+      "why": "quantized matmul / NAX kernels",
+      "pin_package": "mlx"
+    }
+  ],
+  "packages": [
+    "mlx",
+    "mlx-lm",
+    "mlx-vlm",
+    "mlx-metal",
+    "transformers"
+  ]
+}

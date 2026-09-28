@@ -61,3 +61,7 @@ dev-model MODEL:
 # CLI
 cli *ARGS:
     uv run python -m yunshu_cli {{ ARGS }}
+
+# What changed upstream for vendored kernels, watched repos and pinned packages
+vendor-check *args:
+    uv run python scripts/vendor/check_upstream.py {{args}}
