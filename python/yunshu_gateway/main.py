@@ -341,15 +341,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 DEFAULT_MODEL,
                 startup_timeout,
             )
-            await engine.stop()
-            # Server starts but /health/ready will report not-ready
+            # No engine was bound (wait_for cancelled instantiate_engine), so
+            # there is nothing to stop. Server starts; /health/ready reports
+            # not-ready.
         except Exception as e:
             logger.error(
                 "FATAL: model '%s' load failed: %s — server not ready",
                 DEFAULT_MODEL,
                 e,
             )
-            await engine.stop()
 
     elif _is_multi_model_enabled():
         # Multi-model mode: auto-discover and register models from models_dir.
