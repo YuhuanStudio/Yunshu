@@ -105,8 +105,8 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `YUNSHU_PREFIX_MAX_ENTRIES` | int | 128 | Text engine: prefix KV cache entries. |
-| `YUNSHU_PREFIX_HOT_LIMIT` | int | 32 | Text engine: prefix KV entries kept unquantized in RAM. |
+| `YUNSHU_PREFIX_MAX_ENTRIES` | int | 64 | Text engine: prefix KV cache entries. |
+| `YUNSHU_PREFIX_HOT_LIMIT` | int | 0 | Text engine: keep only this many prefix KV entries full precision and store older ones 4-bit in RAM (lossy on reuse; memory vs quality). 0 = every entry full precision. |
 | `YUNSHU_SSD_CACHE` | bool | off | Text engine: persist prefix KV to SSD. |
 | `YUNSHU_SSD_CACHE_DIR` | path | ~/.cache/yunshu/kv-ssd | Text engine: SSD prefix-cache directory. |
 | `YUNSHU_SSD_CACHE_MAX_GB` | float | 10.0 | Text engine: SSD prefix-cache size cap in GiB. |

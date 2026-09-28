@@ -1060,14 +1060,13 @@ class BatchedEngine:
         self._medusa_strategy = None  # MedusaStrategy wrapper
 
         # KV prefix cache for multi-turn speedup
-        # Enable the WARM tier — 128 cached prefixes (32 full-
-        # precision HOT + up to 96 4-bit-quantized WARM) fit in roughly the
-        # memory of the old 64 full entries on UMA.
+        # The 4-bit WARM tier (YUNSHU_PREFIX_HOT_LIMIT > 0) is lossy on reuse,
+        # so it is opt-in; by default every cached prefix is full precision.
         from .kv_prefix_cache import KVPrefixCache
 
         self._kv_prefix_cache = KVPrefixCache(
             max_entries=settings.get("YUNSHU_PREFIX_MAX_ENTRIES"),
-            hot_limit=settings.get("YUNSHU_PREFIX_HOT_LIMIT"),
+            hot_limit=settings.get("YUNSHU_PREFIX_HOT_LIMIT") or None,
             min_prefix_length=32,
         )
         # HYBRID-model prefix reuse on the fast path. Hybrid

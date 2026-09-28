@@ -143,8 +143,8 @@ _add("YUNSHU_PREFILL_STEP_SIZE", "int", 2048, "Text engine: prompt tokens per pr
 _add("YUNSHU_MEM_PRESSURE_THRESHOLD", "float", 85.0, "Text engine: evict prefix-cache entries above this memory use (percent, or a fraction <= 1).", "memory", minimum=0.0)
 
 # ── cache (text engine) ────────────────────────────────────────────────
-_add("YUNSHU_PREFIX_MAX_ENTRIES", "int", 128, "Text engine: prefix KV cache entries.", "cache", minimum=1)
-_add("YUNSHU_PREFIX_HOT_LIMIT", "int", 32, "Text engine: prefix KV entries kept unquantized in RAM.", "cache", minimum=0)
+_add("YUNSHU_PREFIX_MAX_ENTRIES", "int", 64, "Text engine: prefix KV cache entries.", "cache", minimum=1)
+_add("YUNSHU_PREFIX_HOT_LIMIT", "int", 0, "Text engine: keep only this many prefix KV entries full precision and store older ones 4-bit in RAM (lossy on reuse; memory vs quality). 0 = every entry full precision.", "cache", minimum=0)
 _add("YUNSHU_SSD_CACHE", "bool", False, "Text engine: persist prefix KV to SSD.", "cache")
 _add("YUNSHU_SSD_CACHE_DIR", "path", "~/.cache/yunshu/kv-ssd", "Text engine: SSD prefix-cache directory.", "cache")
 _add("YUNSHU_SSD_CACHE_MAX_GB", "float", 10.0, "Text engine: SSD prefix-cache size cap in GiB.", "cache", minimum=0.0)
