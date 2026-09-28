@@ -156,6 +156,5 @@ def apply(row_exact: bool = False) -> dict:
         "Qwen MTP verify kernels: %s (row_exact=%s)",
         applied,
         _STATE["row_exact"],
-
     )
     return applied

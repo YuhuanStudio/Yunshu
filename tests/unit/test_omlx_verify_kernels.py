@@ -49,7 +49,6 @@ def test_apply_installs_and_is_idempotent(monkeypatch):
     assert qwen35_verify_qmm.is_row_exact_armed() is False
 
 
-
 def test_invariant_linear_inactive_uses_fallback():
     import mlx.core as mx
     import mlx.nn as nn

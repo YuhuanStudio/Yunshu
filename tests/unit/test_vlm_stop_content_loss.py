@@ -22,4 +22,3 @@ def test_holdback_loses_content_when_only_take_stopped_used():
     assert emit == "goodbye" and tail == ""
     # the OLD code emitted only `tail` → "goodbye" lost; the NEW code emits emit+tail
     assert emit + tail == "goodbye"
-
