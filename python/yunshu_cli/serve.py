@@ -63,16 +63,6 @@ def serve(
         "--max-memory",
         help="Max GPU memory for models (e.g., 32GB, 'disabled'). Default: 80%% of system.",
     ),
-    cache_size_mb: int = typer.Option(
-        512,
-        "--cache-size",
-        help="Metal buffer cache size in MB.",
-    ),
-    prefill_batch_size: int = typer.Option(
-        8,
-        "--prefill-batch",
-        help="Prefill batch size.",
-    ),
     completion_batch_size: int = typer.Option(
         32,
         "--completion-batch",
@@ -115,11 +105,6 @@ def serve(
         None,
         "--no-proxy",
         help="Comma-separated hosts to bypass proxy.",
-    ),
-    base_path: str | None = typer.Option(
-        None,
-        "--base-path",
-        help="Base directory for Yunshu data (default: ~/.yunshu).",
     ),
     log_level: str = typer.Option(
         "info", "--log-level", help="Log level (trace|debug|info|warning|error)."
@@ -192,12 +177,8 @@ def serve(
     if no_proxy:
         env["NO_PROXY"] = no_proxy
         env["no_proxy"] = no_proxy
-    if base_path:
-        env["YUNSHU_BASE_PATH"] = base_path
     if max_concurrent is not None:
         env["YUNSHU_MAX_CONCURRENT"] = str(max_concurrent)
-    env["YUNSHU_CACHE_SIZE_MB"] = str(cache_size_mb)
-    env["YUNSHU_PREFILL_BATCH_SIZE"] = str(prefill_batch_size)
     env["YUNSHU_COMPLETION_BATCH_SIZE"] = str(completion_batch_size)
     env["YUNSHU_STARTUP_TIMEOUT"] = str(startup_timeout)
     env["YUNSHU_SLOW_REQUEST_THRESHOLD"] = str(slow_request_threshold)
@@ -232,9 +213,7 @@ def serve(
         is_multi=is_multi,
         host=host,
         port=port,
-        prefill_batch=prefill_batch_size,
         completion_batch=completion_batch_size,
-        cache_size_mb=cache_size_mb,
         mcp_config=mcp_config,
         hf_endpoint=hf_endpoint,
         has_proxy=bool(http_proxy or https_proxy),
@@ -278,9 +257,7 @@ def _print_startup_banner(
     is_multi: bool,
     host: str,
     port: int,
-    prefill_batch: int,
     completion_batch: int,
-    cache_size_mb: int,
     mcp_config: str | None = None,
     hf_endpoint: str | None = None,
     has_proxy: bool = False,
@@ -306,9 +283,7 @@ def _print_startup_banner(
     if models_dir:
         table.add_row("Models Dir", models_dir)
     table.add_row("Address", f"http://{host}:{port}")
-    table.add_row("Prefill Batch", str(prefill_batch))
     table.add_row("Completion Batch", str(completion_batch))
-    table.add_row("Cache Size", f"{cache_size_mb} MB")
     if voice_on:
         table.add_row("Voice", "[bold green]native speech-to-speech (omni) ON[/]")
 

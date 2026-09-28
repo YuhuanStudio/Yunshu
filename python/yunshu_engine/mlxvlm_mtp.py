@@ -13,7 +13,7 @@ requests get the MTP speedup (lossless by construction — the verify is exact);
 everything else falls back to plain autoregressive generation on the same model.
 
 This is a standalone backend (its own mlx-vlm model + drafter), used only when
-YUNSHU_MTP=1 and the model is MTP-capable. It does NOT touch the default
+YUNSHU_TEXT_MTP=1 and the model is MTP-capable. It does NOT touch the default
 mlx-lm fast path.
 """
 

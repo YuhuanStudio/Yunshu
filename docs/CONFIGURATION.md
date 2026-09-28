@@ -53,7 +53,7 @@ caching is always on.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `YUNSHU_NGRAM_DEFAULT` | off | n-gram speculative decode on greedy requests. **Lossless** (the verifier accepts only the model's own argmax) but **opt-in**: it batch-verifies draft tokens, so it speeds up **repetitive / agentic** output (~1.7× on Qwen2.5-3B-4bit) but is somewhat slower on normal prose / code. An adaptive controller (on by default when spec runs) auto-tunes the draft length and backs off to plain decode on low acceptance, bounding the worst case to ~1.15× (vs ~2.5× slower without it). Set `1` to enable globally; per-request `spec_decode: true` also turns it on. |
+| `YUNSHU_NGRAM_DEFAULT` | off | n-gram speculative decode on greedy requests. **Lossless** (the verifier accepts only the model's own argmax) but **opt-in**: it batch-verifies draft tokens, so it speeds up **repetitive / agentic** output (~1.7× on Qwen2.5-3B-4bit) but is somewhat slower on normal prose / code. An adaptive controller (on by default when spec runs) auto-tunes the draft length and backs off to plain decode on low acceptance, bounding the worst case to ~1.15× (vs ~2.5× slower without it). Set `1` to enable globally; per-request `spec_decode: true` also turns it on. Text-only models, non-streaming only (see `BatchedEngine._spec_route`). |
 | `YUNSHU_ADAPTIVE_SPEC` | on | Adaptive draft-length controller for spec decode — dynamically sizes K from acceptance feedback and idles to plain decode when acceptance is low. On whenever spec runs; `0` reverts to a fixed draft length (the old, unbounded behavior). |
 | `YUNSHU_SPEC_PROPOSER` | `ngram` | Speculative proposer family: `ngram` (default, fastest on M-series) or `suffix` (SuffixDecoding; lossless but slower here). |
 | `YUNSHU_TOP_N_SIGMA` | `0` (off) | Server-wide top-nσ sampler (ACL 2025) — keep only logits within n·σ of the max. Per-request `"top_n_sigma"` on `/v1/chat/completions` overrides this. |
@@ -62,7 +62,9 @@ caching is always on.
 | `YUNSHU_JUMP_FORWARD` | off | Jump-forward decoding for JSON-schema/grammar-constrained output (emits FSM-forced structural tokens without a per-token forward). |
 | `YUNSHU_GPU_SAMPLER` | off | On-GPU Gumbel-max sampler (no per-token GPU→CPU sync). Default numpy sampler avoids mlx-lm's PRNG-compile-cache trap. |
 | `YUNSHU_SPEC_PREFILL` | off | Sparse speculative prefill (needs a draft model). |
-| `YUNSHU_ENGINE_LOOP` | off | Legacy continuous-batching loop instead of the single-request fast path. Not the supported path — for experiments only. |
+| `YUNSHU_ENGINE_LOOP` | off | Text-only models: route every request through the EngineCore continuous-batching loop instead of the single-request fast path. A fixed setting, never switched by load. Experimental. |
+| `YUNSHU_TEXT_MTP` | off | Text-only models with native MTP weights: serve greedy requests through the mlx-vlm MTP backend (honors only temperature; experimental). VLMs use `YUNSHU_MTP`. |
+| `YUNSHU_SPEC_UNVERIFIED` | _(unset)_ | Text-only models, experiments only: `eagle` or `mtp` enables the EAGLE / mlx-lm MTP speculative routes for greedy `spec_decode: true` requests. Not verified lossless; EAGLE never streams. |
 
 ## VLM batch runner (all mlx-vlm models)
 

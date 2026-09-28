@@ -777,8 +777,8 @@ class TieredKVCacheManager:
         free_request, so any other access raised
         "'TieredKVCacheManager' object has no attribute 'block_size'" and the
         engine-loop ``add_request`` insert failed for EVERY request → empty
-        output. That made the entire 4-tier KV path (YUNSHU_SSD_CACHE=1 /
-        YUNSHU_KV_OFFLOAD=1 under the continuous-batching loop) unusable. This
+        output. That made the tiered KV path (YUNSHU_SSD_CACHE=1 under the
+        continuous-batching loop) unusable. This
         makes Tiered a true drop-in wrapper: anything it doesn't override falls
         through to the hot manager (block_size/block_pool/free counts all live
         there). ``name == 'hot'`` is guarded to avoid recursion before __init__
