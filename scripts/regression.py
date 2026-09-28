@@ -256,7 +256,7 @@ def _sections():
          [PY, "scripts/bench/bench_realistic_cache.py"], {"PYTHONPATH": VLM_PP,
           "YUNSHU_BENCH_MODEL": "./models/Qwen2.5-3B-Instruct-bf16"}, _p_metrics("REALISTIC")),
         ("MTP spec decode (Qwen3.6-27B production path, coherent)", "full", True,
-         [PY, "scripts/verify/verify_mtp_spec.py"], {"YUNSHU_MTP": "1", "PYTHONPATH": VLM_PP}, _p_passfail_skip),
+         [PY, "scripts/verify/verify_mtp_spec.py"], {"YUNSHU_TEXT_MTP": "1", "PYTHONPATH": VLM_PP}, _p_passfail_skip),
         # (methodology): the PRIMARY cross-framework comparison is ALL-EXTERNAL
         # (server bench below) — only real HTTP servers are a fair, production-truthful
         # measure. This in-process bench is the OTHER half: EVERY framework measured

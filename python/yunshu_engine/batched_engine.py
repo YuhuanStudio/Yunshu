@@ -1141,19 +1141,20 @@ class BatchedEngine:
         self._hybrid_prefix_block = int(
             _os.environ.get("YUNSHU_HYBRID_PREFIX_BLOCK", "128")
         )
-        # Opt-in MTP (YUNSHU_MTP=1). mlx-vlm is the supported MTP
+        # Opt-in MTP for text-only models (YUNSHU_TEXT_MTP=1; YUNSHU_MTP is the VLM
+        # runner's MTP draft switch, default on). mlx-vlm is the supported MTP
         # implementation (its speculative path is the only correct one — see mlxvlm_mtp.py).
         # This text-engine MTP backend is single-backend + honors only
         # temperature (drops top_p/json_schema/penalties, see _warn_mtp_dropped_params) +
         # non-streaming. Treat it as EXPERIMENTAL, not a shipped prod win; the real spec win
         # is the gemma-4 assistant drafter. When set and the model has native MTP weights,
         # the engine serves via that backend (single-backend swap, no dual-load): greedy →
-        # MTP; sampling → plain gen on the same model. (YUNSHU_MLXVLM_MTP kept as an alias.)
-        self._mlxvlm_mtp_enabled = _os.environ.get("YUNSHU_MTP", "").strip() in (
+        # MTP; sampling → plain gen on the same model.
+        self._mlxvlm_mtp_enabled = _os.environ.get("YUNSHU_TEXT_MTP", "").strip() in (
             "1",
             "true",
             "yes",
-        ) or _os.environ.get("YUNSHU_MLXVLM_MTP", "0").strip() in ("1", "true", "yes")
+        )
         self._mlxvlm_mtp = None
 
         # Warm prompt prefill stats (tracked across _warm_prompt_prefill calls)
@@ -1407,7 +1408,7 @@ class BatchedEngine:
                     logger.info("mlx-vlm MTP backend active for %s", self.model_name)
                     return
                 logger.info(
-                    "YUNSHU_MTP set but %s is not MTP-capable; using standard path",
+                    "YUNSHU_TEXT_MTP set but %s is not MTP-capable; using standard path",
                     self.model_name,
                 )
             except Exception:
@@ -1571,7 +1572,7 @@ class BatchedEngine:
         # mtp_patch + mtp_decoder) is DEPRECATED. It reimplemented what mlx-vlm
         # already does correctly, but lacked mlx-vlm's GatedDeltaNet
         # intermediate-state capture, so it produced garbage on 27B and only ~0.9x
-        # on 9B. The supported MTP path is now mlx-vlm (YUNSHU_MTP=1, see
+        # on 9B. The supported MTP path is now mlx-vlm (YUNSHU_TEXT_MTP=1, see
         # mlxvlm_mtp.py — ~1.82x in a proof script only, not served/gated; EXPERIMENTAL).
         # The legacy patches are only applied under YUNSHU_LEGACY_MTP=1 (escape hatch).
         if os.environ.get("YUNSHU_LEGACY_MTP", "0").strip() in ("1", "true", "yes"):
@@ -7066,7 +7067,7 @@ class BatchedEngine:
         if dropped and not getattr(self, "_mtp_dropped_warned", False):
             self._mtp_dropped_warned = True
             logger.warning(
-                "YUNSHU_MTP backend honors only temperature; these request params "
+                "YUNSHU_TEXT_MTP backend honors only temperature; these request params "
                 "are NOT applied and were ignored: %s",
                 ", ".join(dropped),
             )
@@ -7622,7 +7623,7 @@ class BatchedEngine:
 
         # the home-grown MTP decoder path is DEPRECATED — it
         # lacked mlx-vlm's GatedDeltaNet intermediate-state capture (garbage on
-        # 27B, ~0.9x on 9B). Use YUNSHU_MTP=1 for the supported mlx-vlm MTP backend.
+        # 27B, ~0.9x on 9B). Use YUNSHU_TEXT_MTP=1 for the supported mlx-vlm MTP backend.
         # HONESTY: mlx-vlm MTP is EXPERIMENTAL (the "1.8x" figure is proof-script
         # only, not served/gated; the path drops sampling params + is non-streaming) — not a
         # shipped prod win.
@@ -7631,7 +7632,7 @@ class BatchedEngine:
         ).strip() not in ("1", "true", "yes"):
             logger.info(
                 "Native MTP head detected on %s, but the home-grown MTP path is "
-                "deprecated — set YUNSHU_MTP=1 for the (experimental) mlx-vlm MTP backend "
+                "deprecated — set YUNSHU_TEXT_MTP=1 for the (experimental) mlx-vlm MTP backend "
                 "or YUNSHU_LEGACY_MTP=1 for the old path.",
                 self.model_name,
             )

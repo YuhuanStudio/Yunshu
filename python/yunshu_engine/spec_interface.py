@@ -656,7 +656,7 @@ class DeltaNetInversionStrategy(SpecStrategy):
     here as a selectable spec decode strategy for research and future
     mixed-precision inference.
 
-    Enable via YUNSHU_DELTANET_SPEC=1 env var or SpecStrategyFactory.create({"type": "deltanet"}).
+    Enable via SpecStrategyFactory.create({"type": "deltanet"}) (no env flag).
     """
 
     def __init__(self, inverter: Any = None, config: Any = None) -> None:

@@ -588,7 +588,7 @@ class EngineCore:
             if self._isolation_enabled:
                 logger.info("Process isolation enabled (YUNSHU_PROCESS_ISOLATION=1)")
 
-        # Inference checkpoint/restore (opt-in via YUNSHU_AUTO_CHECKPOINT)
+        # Inference checkpoint/restore (opt-in via YUNSHU_CHECKPOINT_INTERVAL > 0)
         self._checkpoint_mgr = None
         _cp_interval = int(os.environ.get("YUNSHU_CHECKPOINT_INTERVAL", "0"))
         if _cp_interval > 0:
