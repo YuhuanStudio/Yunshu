@@ -30,6 +30,7 @@ import contextlib
 
 from pydantic import BaseModel, Field, model_validator
 
+from yunshu_engine.tool_arguments import coerce_tool_calls
 from yunshu_engine.tool_call_streamer import ToolCallStreamer
 
 from ..engine import get_engine
@@ -1561,6 +1562,7 @@ async def _non_stream_batched(
         # enforce a forced/none-parallel tool_choice post-generation (parity with
         # chat's _enforce_tool_choice) — drop wrong-named / surplus calls.
         tool_calls = _enforce_anthropic_tool_choice(tool_calls, req.tool_choice)
+        tool_calls = coerce_tool_calls(tool_calls, req.tools)
         if tool_calls:
             has_tool_calls = True
             # Remove the text block and replace with cleaned version
@@ -1820,6 +1822,7 @@ async def _non_stream_legacy(
         # enforce a forced/none-parallel tool_choice post-generation (parity with
         # chat's _enforce_tool_choice) — drop wrong-named / surplus calls.
         tool_calls = _enforce_anthropic_tool_choice(tool_calls, req.tool_choice)
+        tool_calls = coerce_tool_calls(tool_calls, req.tools)
         if tool_calls:
             has_tool_calls = True
             # Remove the text block and replace with cleaned version

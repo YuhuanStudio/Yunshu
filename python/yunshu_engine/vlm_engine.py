@@ -1612,7 +1612,7 @@ class VLMEngine:
             messages = messages or []
         if self._model is None:
             raise RuntimeError("Engine not started")
-        tpl_extra = self._template_effort_extra(kwargs)
+        tpl_extra = self._request_template_extra(kwargs)
         # A timeout below must be able to stop the generation it abandons.
         if kwargs.get("cancel_event") is None:
             kwargs["cancel_event"] = threading.Event()
@@ -1760,6 +1760,7 @@ class VLMEngine:
                         thinking_budget=thinking_budget,
                         seed=seed,
                         min_p=min_p,
+                        template_extra=tpl_extra,
                     )
 
                 if image_paths or audio_paths:
@@ -2104,7 +2105,7 @@ class VLMEngine:
         if self._model is None:
             raise RuntimeError("Engine not started")
 
-        tpl_extra = self._template_effort_extra(kwargs)
+        tpl_extra = self._request_template_extra(kwargs)
         # logprobs is not supported by VLM engine
         if (logprobs or top_logprobs) and getattr(self, "_batch_runner", None) is None:
             logger.warning(
@@ -2310,6 +2311,7 @@ class VLMEngine:
                         _ttft_recorded=_stream_ttft_recorded,
                         _ttft_val=_stream_ttft_val,
                         seed=seed,
+                        template_extra=tpl_extra,
                     )
                     return
 
@@ -2883,6 +2885,7 @@ class VLMEngine:
         thinking_budget: int | None = None,
         seed: int | None = None,
         min_p: float = 0.0,
+        template_extra: dict | None = None,
     ) -> str:
         """Vision + text generation using mlx_vlm.generate().
 
@@ -2899,6 +2902,7 @@ class VLMEngine:
             enable_thinking=enable_thinking,
             num_audios=num_audios,
             max_images=len(image_paths) if image_paths else None,
+            template_extra=template_extra,
         )
 
         # Compute image hash for KV prefix cache lookup
@@ -3831,6 +3835,7 @@ class VLMEngine:
         _ttft_recorded: list | None = None,
         _ttft_val: list | None = None,
         seed: int | None = None,
+        template_extra: dict | None = None,
     ) -> None:
         """Streaming vision + text generation using mlx_vlm.stream_generate().
 
@@ -3847,6 +3852,7 @@ class VLMEngine:
             enable_thinking=enable_thinking,
             num_audios=num_audios,
             max_images=len(image_paths) if image_paths else None,
+            template_extra=template_extra,
         )
 
         # Compute image hash for KV prefix cache lookup
@@ -5501,6 +5507,30 @@ class VLMEngine:
             )
         return pool
 
+    def supports_native_tools(self) -> bool:
+        """True when the chat template renders a ``tools`` variable itself
+        (Qwen3.x: ``<tool_call><function=...><parameter=...>``). The gateway
+        then passes tool definitions here instead of injecting a generic tool
+        system prompt."""
+        return any(
+            isinstance(t, str) and "tools" in t
+            for t in (
+                getattr(self._tokenizer, "chat_template", None),
+                getattr(self._processor, "chat_template", None),
+            )
+        )
+
+    def _request_template_extra(self, kwargs: dict) -> dict | None:
+        """Per-request chat-template variables: ``reasoning_effort`` (when the
+        template supports it) and native ``tools``. Pops them from ``kwargs``;
+        the result is passed explicitly to every template helper and is part
+        of their cache keys."""
+        extra = dict(self._template_effort_extra(kwargs) or {})
+        tools = kwargs.pop("tools", None)
+        if tools:
+            extra["tools"] = tools
+        return extra or None
+
     def _template_effort_extra(self, kwargs: dict) -> dict | None:
         """Move ``reasoning_effort`` into the chat template when it supports it.
 
@@ -5763,6 +5793,7 @@ class VLMEngine:
             tok_kwargs = {"tokenize": False, "add_generation_prompt": True}
             if enable_thinking is not None:
                 tok_kwargs["enable_thinking"] = enable_thinking
+            tok_kwargs.update(extra)
             template_text = self._tokenizer.apply_chat_template(
                 vlm_messages,
                 **tok_kwargs,

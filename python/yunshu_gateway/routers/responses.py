@@ -24,6 +24,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
+from yunshu_engine.tool_arguments import coerce_tool_calls
+
 from ..engine import get_engine, get_engine_for_model
 
 logger = logging.getLogger(__name__)
@@ -1426,7 +1428,9 @@ async def create_response(req: ResponsesRequest, request: Request):
                 _parse_text = (
                     (_resp_tool_prefill + text) if _resp_tool_prefill else text
                 )
-                tool_calls = extract_tool_calls_model_aware(_parse_text, req.model)
+                tool_calls = coerce_tool_calls(
+                    extract_tool_calls_model_aware(_parse_text, req.model), req.tools
+                )
                 if tool_calls:
                     text = clean_tool_call_markup(_parse_text)
                     finish_reason = "tool_calls"
@@ -1803,6 +1807,7 @@ async def _stream_response(
             forced_tool_name=_tc_forced,
             model_name=req.model,
             allow_parallel=req.parallel_tool_calls,
+            tools=req.tools,
         )
 
     def _next_seq():
@@ -2227,7 +2232,10 @@ async def _stream_response(
             if req.tools:
                 from .chat import clean_tool_call_markup, extract_tool_calls_model_aware
 
-                tool_calls = extract_tool_calls_model_aware(accumulated_text, req.model)
+                tool_calls = coerce_tool_calls(
+                    extract_tool_calls_model_aware(accumulated_text, req.model),
+                    req.tools,
+                )
                 if tool_calls:
                     clean_text = clean_tool_call_markup(accumulated_text)
 
