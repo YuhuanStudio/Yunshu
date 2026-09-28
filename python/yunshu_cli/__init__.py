@@ -1,8 +1,9 @@
 """Yunshu CLI — command-line interface for the Yunshu inference engine.
 
-Inference commands (talk to a running server): complete, embed, tokenize, rerank,
-transcribe, speak, ocr, image. Management: serve, chat, model, status, launch, eval,
-bench, diagnose. Every command honors the global ``--json`` flag for agent use.
+Getting started: doctor, pull, serve, service. Inference commands (talk to a
+running server): complete, embed, tokenize, rerank, transcribe, speak, ocr, image.
+Management: chat, model, config, status, launch, eval, bench, diagnose. Every
+command honors the global ``--json`` flag for agent use.
 """
 
 from __future__ import annotations
@@ -15,13 +16,21 @@ from rich.console import Console
 console = Console()
 app = typer.Typer(
     name="yunshu",
-    help="Fast local multimodal (omni) MLX inference engine for Apple Silicon.",
+    help="Fast local LLM / VLM inference engine for Apple Silicon (MLX).",
     no_args_is_help=True,
     rich_markup_mode="rich",
 )
 
 
 DEFAULT_GATEWAY_URL = "http://localhost:8000"
+
+
+def _print_version(value: bool) -> None:
+    if value:
+        from yunshu_engine.version import yunshu_version
+
+        typer.echo(f"yunshu {yunshu_version()}")
+        raise typer.Exit()
 
 
 @app.callback()
@@ -39,6 +48,14 @@ def _global_options(
         "--json",
         help="Machine-readable JSON on stdout (for agents/scripts). Exit code signals "
         "success (0) or failure (non-zero).",
+    ),
+    version: bool = typer.Option(
+        False,
+        "--version",
+        "-V",
+        is_eager=True,
+        callback=_print_version,
+        help="Print the Yunshu version and exit.",
     ),
 ) -> None:
     """Top-level options shared by every subcommand."""
@@ -70,27 +87,40 @@ from .benchmark import bench_app
 from .chat import chat_app
 from .config import config_app
 from .diagnose import diagnose_app
+from .doctor import doctor
 from .eval import eval_app
 from .integrations import launch_app
-from .model import model_app
+from .model import model_app, pull
 from .serve import serve_app
+from .service import service_app
 from .status import status_app
 
-app.add_typer(serve_app, name="serve")
-app.add_typer(chat_app, name="chat")
-app.add_typer(config_app, name="config")
-app.add_typer(model_app, name="model")
-app.add_typer(status_app, name="status")
-app.add_typer(launch_app, name="launch")
-app.add_typer(eval_app, name="eval")
-app.add_typer(bench_app, name="bench")
-app.add_typer(diagnose_app, name="diagnose")
+_START = "Get started"
+_SERVER = "Server and models"
+_TOOLS = "Evaluate and diagnose"
+_INFER = "Inference (calls a running server)"
+
+app.command("doctor", rich_help_panel=_START)(doctor)
+app.command("pull", rich_help_panel=_START)(pull)
+app.add_typer(serve_app, name="serve", rich_help_panel=_START)
+app.add_typer(service_app, name="service", rich_help_panel=_START)
+app.add_typer(chat_app, name="chat", rich_help_panel=_START)
+app.add_typer(model_app, name="model", rich_help_panel=_SERVER)
+app.add_typer(config_app, name="config", rich_help_panel=_SERVER)
+app.add_typer(status_app, name="status", rich_help_panel=_SERVER)
+app.add_typer(launch_app, name="launch", rich_help_panel=_SERVER)
+app.add_typer(eval_app, name="eval", rich_help_panel=_TOOLS)
+app.add_typer(bench_app, name="bench", rich_help_panel=_TOOLS)
+app.add_typer(diagnose_app, name="diagnose", rich_help_panel=_TOOLS)
 
 # Top-level single-shot inference commands (complete/embed/tokenize/rerank/transcribe/
 # speak/ocr/image) — the agent-facing surface, all JSON-capable + non-interactive.
 from .infer import register as register_infer
 
+_n = len(app.registered_commands)
 register_infer(app)
+for _cmd in app.registered_commands[_n:]:
+    _cmd.rich_help_panel = _INFER
 
 
 def main() -> None:

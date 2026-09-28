@@ -105,7 +105,7 @@ def _add(
 # ── model ──────────────────────────────────────────────────────────────
 _add("YUNSHU_MODEL", "path", None, "Model path or Hugging Face id served in single-model mode; every requested model name maps to it.", "model")
 _add("YUNSHU_MULTI_MODEL", "bool", False, "Multi-model mode: discover models under YUNSHU_MODELS_DIR and load them on demand. Ignored when YUNSHU_MODEL is set.", "model")
-_add("YUNSHU_MODELS_DIR", "path", None, "Directory of model folders for multi-model mode (each folder name is a model id). Unset: the repository's models/ directory.", "model")
+_add("YUNSHU_MODELS_DIR", "path", None, "Directory of model folders for multi-model mode (each folder name is a model id). Unset: ~/.yunshu/models (also where `yunshu pull` downloads to).", "model")
 _add("YUNSHU_MODEL_TTL_SECONDS", "float", None, "Multi-model mode: unload a model idle for this many seconds. Unset: never.", "model", minimum=0.0)
 _add("YUNSHU_ALLOW_AUTO_LOAD", "bool", False, "Multi-model mode: let audio requests load a model that is not loaded yet (otherwise they are rejected).", "model")
 _add("YUNSHU_MAX_LORAS", "int", 4, "Maximum LoRA adapters kept loaded (text models).", "model", minimum=1)

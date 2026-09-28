@@ -1,6 +1,7 @@
 """Yunshu CLI — model subcommand.
 
-Model management: list, download, info, benchmark.
+Local models: list (models directory + Hugging Face cache), pull, info,
+benchmark; and load/unload on a running server.
 """
 
 from __future__ import annotations
@@ -16,64 +17,31 @@ from rich.console import Console
 from rich.table import Table
 from rich.tree import Tree
 
-from yunshu_engine import settings
+from yunshu_engine import paths
 
-from ._output import auth_headers, fail
+from ._output import auth_headers, emit, fail, is_json
 
 console = Console()
 model_app = typer.Typer(help="Model management.", no_args_is_help=True)
 
 
 def _get_models_dir() -> Path:
-    """Resolve models directory from env or default."""
-    env_dir = settings.get("YUNSHU_MODELS_DIR")
-    if env_dir:
-        return Path(env_dir)
-    # Default: <repo>/models/  (model.py is <repo>/python/yunshu_cli/model.py → 3 parents
-    # reach the repo root; a 4th overshot to the repo's PARENT dir, so `model list` looked
-    # in the wrong place and reported "Models directory not found").
-    return Path(__file__).parent.parent.parent / "models"
+    """YUNSHU_MODELS_DIR, else ~/.yunshu/models."""
+    return paths.models_dir()
 
 
-def _detect_model_type(config_path: Path) -> str:
-    """Auto-detect model type from config.json ."""
-    if not config_path.exists():
-        return "UNKNOWN"
+def _detect_model_type(model_path: Path) -> str:
+    """The server's own detection, so the CLI and the gateway agree."""
+    from yunshu_engine.model_manager import _detect_model_type as detect
+
     try:
-        with open(config_path) as f:
-            cfg = json.load(f)
-    except Exception:
-        logger.debug(
-            "Failed to read or parse config.json at %s", config_path, exc_info=True
-        )
+        return detect(str(model_path)).name
+    except Exception:  # noqa: BLE001 - listing must not fail on one odd folder
+        logger.debug("type detection failed for %s", model_path, exc_info=True)
         return "UNKNOWN"
 
-    # Check model_index.json first (diffusion models)
-    model_index = config_path.parent / "model_index.json"
-    if model_index.exists():
-        return "IMAGE_GEN"
 
-    model_type = cfg.get("model_type", "")
-    if model_type in ("tts",):
-        return "TTS"
-    if model_type in ("asr",):
-        return "ASR"
-
-    architectures = []
-    for arch in cfg.get("architectures", []):
-        architectures.append(arch.lower())
-
-    arch_str = " ".join(architectures)
-    if any(k in arch_str for k in ("omni", "vlm", "vision")):
-        return "VLM"
-
-    if cfg.get("model_type") == "encoder_decoder" and "audio" in str(cfg):
-        return "ASR"
-
-    return "LLM"
-
-
-def _format_size(size_bytes: int) -> str:
+def _format_size(size_bytes: float) -> str:
     """Format bytes to human-readable size."""
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if size_bytes < 1024:
@@ -82,24 +50,125 @@ def _format_size(size_bytes: int) -> str:
     return f"{size_bytes:.1f} PB"
 
 
+def _is_model_dir(path: Path) -> bool:
+    return (
+        (path / "config.json").exists()
+        or (path / "model_index.json").exists()
+        or any(path.glob("*.safetensors"))
+    )
+
+
+def _dir_size(path: Path) -> int:
+    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+
+
+def scan_models_dir(base: Path) -> list[dict]:
+    """Model folders directly under ``base`` or one level down (``org/name``),
+    the same layout the server's multi-model discovery reads."""
+    found: list[Path] = []
+    if base.is_dir():
+        for sub in sorted(base.iterdir()):
+            if not sub.is_dir() or sub.name.startswith("."):
+                continue
+            if _is_model_dir(sub):
+                found.append(sub)
+                continue
+            found.extend(
+                c
+                for c in sorted(sub.iterdir())
+                if c.is_dir() and not c.name.startswith(".") and _is_model_dir(c)
+            )
+    return [
+        {
+            "name": str(p.relative_to(base)),
+            "path": str(p),
+            "type": _detect_model_type(p),
+            "size": _dir_size(p),
+            "source": "models-dir",
+        }
+        for p in found
+    ]
+
+
+def scan_hf_cache() -> list[dict]:
+    """Model repos in the Hugging Face cache that have a config and weights
+    (anything `yunshu serve -m <repo id>` can load without downloading)."""
+    try:
+        from huggingface_hub import scan_cache_dir
+
+        cache = scan_cache_dir()
+    except Exception:  # noqa: BLE001 - no cache yet, or an unreadable one
+        logger.debug("Hugging Face cache scan failed", exc_info=True)
+        return []
+    out = []
+    for repo in sorted(cache.repos, key=lambda r: r.repo_id):
+        if repo.repo_type != "model":
+            continue
+        for rev in sorted(repo.revisions, key=lambda r: r.last_modified, reverse=True):
+            names = {f.file_name for f in rev.files}
+            if "config.json" in names and any(
+                n.endswith(".safetensors") for n in names
+            ):
+                out.append(
+                    {
+                        "name": repo.repo_id,
+                        "path": str(rev.snapshot_path),
+                        "type": _detect_model_type(rev.snapshot_path),
+                        "size": rev.size_on_disk,
+                        "source": "hf-cache",
+                    }
+                )
+                break
+    return out
+
+
+def weights_complete(path: Path) -> tuple[bool, str]:
+    """Is the model folder a finished download? Returns (complete, reason)."""
+    if not path.is_dir():
+        return False, "missing"
+    if (path / "model_index.json").exists():
+        return True, "diffusers pipeline"
+    if not (path / "config.json").exists():
+        return False, "no config.json"
+    partial = path / ".cache" / "huggingface" / "download"
+    if partial.is_dir() and any(partial.rglob("*.incomplete")):
+        return False, "interrupted download"
+    index = path / "model.safetensors.index.json"
+    if index.exists():
+        try:
+            shards = set(json.loads(index.read_text())["weight_map"].values())
+        except (OSError, ValueError, KeyError):
+            return False, "unreadable model.safetensors.index.json"
+        missing = sorted(s for s in shards if not (path / s).exists())
+        if missing:
+            return False, f"{len(missing)} weight shard(s) missing"
+        return True, "complete"
+    if any(path.glob("*.safetensors")):
+        return True, "complete"
+    return False, "no *.safetensors weights"
+
+
 @model_app.command("list")
 def list_models(
     models_dir: str | None = typer.Option(
-        None, "--dir", "-d", help="Models directory."
+        None, "--dir", "-d", help="Models directory (default: YUNSHU_MODELS_DIR)."
     ),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed info."),
+    hf_cache: bool = typer.Option(
+        True,
+        "--hf-cache/--no-hf-cache",
+        help="Also list models already in the Hugging Face cache.",
+    ),
     url: str | None = typer.Option(
         None,
         "--url",
         "-u",
         envvar="YUNSHU_GATEWAY_URL",
         help="Gateway URL; when provided, list models reported by the running server "
-        "instead of scanning the local models directory.",
+        "instead of scanning the local disk.",
     ),
 ):
-    """List available models."""
-    # If --url is supplied, query the live gateway. Otherwise fall back to a
-    # local on-disk scan of the models directory.
+    """List models on disk (models directory + Hugging Face cache), or on a server."""
+    # If --url is supplied, query the live gateway. Otherwise scan the disk.
     if url:
         import httpx
 
@@ -111,7 +180,6 @@ def list_models(
         except Exception as e:
             fail(f"Error querying {url}: {e}", code=1)
         models = data.get("data", []) if isinstance(data, dict) else (data or [])
-        from ._output import emit, is_json
 
         if is_json():
             emit({"models": models, "source": url})
@@ -133,139 +201,125 @@ def list_models(
         console.print(f"\n[dim]Total: {len(models)} models on {url}[/]")
         return
 
-    base = Path(models_dir) if models_dir else _get_models_dir()
-
-    if not base.exists():
-        from ._output import emit, is_json
-
-        if is_json():
-            emit({"models": [], "source": str(base)})
-            return
-        console.print(f"[yellow]Models directory not found: {base}[/]")
-        console.print("[dim]Download models with: yunshu model download <model-id>[/]")
-        return
-
-    models = []
-    for subdir in sorted(base.iterdir()):
-        if not subdir.is_dir():
-            continue
-        config_path = subdir / "config.json"
-        has_weights = any(subdir.rglob("*.safetensors"))
-
-        if config_path.exists() or has_weights:
-            size = sum(f.stat().st_size for f in subdir.rglob("*") if f.is_file())
-            model_type = _detect_model_type(config_path)
-            models.append(
-                {
-                    "name": subdir.name,
-                    "type": model_type,
-                    "size": size,
-                    "has_config": config_path.exists(),
-                }
-            )
-
-    from ._output import emit, is_json
+    base = Path(models_dir).expanduser() if models_dir else _get_models_dir()
+    models = scan_models_dir(base) + (scan_hf_cache() if hf_cache else [])
 
     if is_json():
-        emit({"models": models, "source": str(base)})
+        emit({"models": models, "models_dir": str(base)})
         return
     if not models:
-        console.print("[yellow]No models found.[/]")
+        where = " or the Hugging Face cache" if hf_cache else ""
+        console.print(f"[yellow]No models found[/] in {base}{where}.")
+        console.print("[dim]Download one with: yunshu pull <org/name>[/]")
         return
 
-    table = Table(title="Available Models", show_lines=True)
+    table = Table(title="Local models")
     table.add_column("Model", style="bold cyan")
-    table.add_column("Type", style="green")
+    table.add_column("Type")
     table.add_column("Size", justify="right")
-    table.add_column("Config", justify="center")
-
-    type_colors = {
-        "LLM": "bright_blue",
-        "VLM": "magenta",
-        "TTS": "yellow",
-        "ASR": "green",
-        "IMAGE_GEN": "red",
-        "UNKNOWN": "dim",
-    }
-
+    table.add_column("Where", style="dim")
     for m in models:
-        color = type_colors.get(m["type"], "white")
-        table.add_row(
-            m["name"],
-            f"[{color}]{m['type']}[/]",
-            _format_size(m["size"]),
-            "✓" if m["has_config"] else "✗",
-        )
-
+        where = "models dir" if m["source"] == "models-dir" else "HF cache"
+        table.add_row(m["name"], m["type"], _format_size(m["size"]), where)
     console.print(table)
-    console.print(f"\n[dim]Total: {len(models)} models in {base}[/]")
-
-
-@model_app.command("download")
-def download_model(
-    model_id: str = typer.Argument(
-        help="HuggingFace model ID (e.g. mlx-community/Qwen3.5-9B-MLX-4bit)."
-    ),
-    models_dir: str | None = typer.Option(
-        None, "--dir", "-d", help="Download directory."
-    ),
-    revision: str | None = typer.Option(
-        None, "--revision", "-r", help="Model revision/branch."
-    ),
-):
-    """Download a model from HuggingFace."""
-    from huggingface_hub import snapshot_download
-    from rich.progress import (
-        BarColumn,
-        DownloadColumn,
-        Progress,
-        SpinnerColumn,
-        TextColumn,
-        TransferSpeedColumn,
+    console.print(
+        f"\n[dim]{len(models)} models. Models dir: {base}. "
+        "Serve one with: yunshu serve -m <path or repo id>[/]"
     )
 
-    base = Path(models_dir) if models_dir else _get_models_dir()
-    base.mkdir(parents=True, exist_ok=True)
 
-    # Extract local name from HF ID
-    local_name = model_id.rsplit("/", 1)[-1] if "/" in model_id else model_id
-    target_dir = base / local_name
+def _hf_cached_snapshot(repo_id: str) -> Path | None:
+    for m in scan_hf_cache():
+        if m["name"] == repo_id:
+            return Path(m["path"])
+    return None
 
-    if target_dir.exists():
-        console.print(f"[yellow]Model already exists at {target_dir}[/]")
-        overwrite = typer.confirm("Overwrite?", default=False)
-        if not overwrite:
-            return
-        import shutil
 
-        shutil.rmtree(target_dir)
+def pull(
+    repo_id: str = typer.Argument(
+        help="Hugging Face repo id, e.g. mlx-community/Qwen3.5-9B-MLX-4bit."
+    ),
+    models_dir: str | None = typer.Option(
+        None, "--dir", "-d", help="Download under this directory (default: models dir)."
+    ),
+    revision: str | None = typer.Option(
+        None, "--revision", "-r", help="Branch, tag or commit."
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Download even if the model is already on disk. Only missing or "
+        "changed files are fetched; nothing is deleted.",
+    ),
+):
+    """Download a model from Hugging Face into the models directory.
 
-    console.print(f"[bold]Downloading[/] {model_id} → {target_dir}")
+    Refuses to download a model that is already on disk (models directory or
+    Hugging Face cache); an interrupted download is resumed.
+    """
+    parts = repo_id.split("/")
+    if len(parts) != 2 or not all(parts):
+        fail(f"Expected a Hugging Face repo id like org/name, got {repo_id!r}.", code=2)
+    base = Path(models_dir).expanduser() if models_dir else _get_models_dir()
+    target = base / parts[0] / parts[1]
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        DownloadColumn(),
-        TransferSpeedColumn(),
-        console=console,
-    ) as progress:
-        task = progress.add_task(f"Downloading {model_id}", total=None)
-        try:
-            snapshot_download(
-                repo_id=model_id,
-                local_dir=str(target_dir),
-                revision=revision,
+    if not force:
+        for candidate in (target, base / parts[1]):
+            if weights_complete(candidate)[0]:
+                emit(
+                    {"status": "present", "path": str(candidate), "repo_id": repo_id},
+                    human=lambda c=candidate: console.print(
+                        f"[green]Already downloaded[/] at {c} — not downloading "
+                        f"again.\nServe it with: [bold]yunshu serve -m {c}[/]\n"
+                        "[dim](--force re-checks the files against the Hub.)[/]"
+                    ),
+                )
+                return
+        cached = _hf_cached_snapshot(repo_id)
+        if cached is not None:
+            emit(
+                {"status": "present", "path": str(cached), "repo_id": repo_id},
+                human=lambda: console.print(
+                    f"[green]Already in the Hugging Face cache[/] at {cached} — not "
+                    f"downloading again.\nServe it with: [bold]yunshu serve -m "
+                    f"{repo_id}[/]\n[dim](--force also copies it into {base}.)[/]"
+                ),
             )
-            progress.update(task, completed=1, total=1)
-        except Exception as e:
-            logger.debug("Model download failed for %s", model_id, exc_info=True)
-            console.print(f"[red]Download failed: {e}[/]")
-            raise typer.Exit(1) from e
+            return
 
-    config_path = target_dir / "config.json"
-    model_type = _detect_model_type(config_path)
-    console.print(f"[green]✓ Downloaded[/] {model_id} ({model_type}) → {target_dir}")
+    if not is_json():
+        verb = "Resuming" if target.exists() else "Downloading"
+        console.print(f"[bold]{verb}[/] {repo_id} → {target}")
+    from huggingface_hub import snapshot_download
+
+    try:
+        snapshot_download(repo_id=repo_id, local_dir=str(target), revision=revision)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Model download failed for %s", repo_id, exc_info=True)
+        fail(
+            f"Download of {repo_id} failed: {e}. Run the same command again to resume.",
+            code=1,
+        )
+    done, reason = weights_complete(target)
+    if not done:
+        fail(f"Download finished but the model looks incomplete: {reason}.", code=1)
+    model_type = _detect_model_type(target)
+    emit(
+        {
+            "status": "downloaded",
+            "path": str(target),
+            "repo_id": repo_id,
+            "type": model_type,
+        },
+        human=lambda: console.print(
+            f"[green]✓ Downloaded[/] {repo_id} ({model_type}) → {target}\n"
+            f"Serve it with: [bold]yunshu serve -m {target}[/]"
+        ),
+    )
+
+
+# `yunshu pull` is the command; `yunshu model download` stays as its alias.
+model_app.command("download", hidden=True)(pull)
 
 
 @model_app.command("info")
@@ -284,13 +338,11 @@ def model_info(
                 model_path = subdir
                 break
 
-    from ._output import emit, fail, is_json
-
     if not model_path.exists():
         fail(f"Model not found: {model}", code=1)
 
     config_path = model_path / "config.json"
-    model_type = _detect_model_type(config_path)
+    model_type = _detect_model_type(model_path)
     total_size = sum(f.stat().st_size for f in model_path.rglob("*") if f.is_file())
     num_files = sum(1 for f in model_path.rglob("*") if f.is_file())
     safetensors_files = list(model_path.rglob("*.safetensors"))
@@ -374,7 +426,6 @@ def load_model_cmd(
     url: str = _SRV_URL,
 ):
     """Load a model on the running server (POST /v1/models/load)."""
-    from ._output import emit
     from .infer import _body, _post
 
     resp = _post(url, "/v1/models/load", json={"model": model}, timeout=600)
@@ -387,7 +438,6 @@ def unload_model_cmd(
     url: str = _SRV_URL,
 ):
     """Unload a model from the running server (POST /v1/models/unload/{id})."""
-    from ._output import emit
     from .infer import _body, _post
 
     resp = _post(url, f"/v1/models/unload/{model}", json={})
@@ -464,8 +514,6 @@ def benchmark_model(
         )
 
     avg = sum(results) / len(results)
-
-    from ._output import emit, is_json
 
     if is_json():
         emit(

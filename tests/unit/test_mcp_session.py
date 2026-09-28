@@ -53,7 +53,9 @@ class TestMCPServerConfig:
     def test_defaults(self):
         cfg = MCPServerConfig()
         assert cfg.server_name == "yunshu"
-        assert cfg.version == "0.1.0-dev"
+        from yunshu_engine.version import yunshu_version
+
+        assert cfg.version == yunshu_version()
         assert cfg.tools == []
 
     def test_custom_config(self):

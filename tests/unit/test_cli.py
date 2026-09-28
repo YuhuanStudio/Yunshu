@@ -186,7 +186,7 @@ class TestCLIJson:
 
     def test_json_success_is_pure_json(self):
         # A no-server command with an empty result still emits parseable JSON, exit 0.
-        r = self._run("model", "list", "--dir", "/nonexistent/xyz")
+        r = self._run("model", "list", "--dir", "/nonexistent/xyz", "--no-hf-cache")
         assert r.returncode == 0
         assert json.loads(r.stdout)["models"] == []
 
