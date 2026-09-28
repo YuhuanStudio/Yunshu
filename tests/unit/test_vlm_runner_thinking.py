@@ -48,11 +48,23 @@ def _events(prompt_tail, generated):
     return list(
         eng._runner_events(
             mx.array([5, 6] + prompt_tail),
-            max_tokens=32, temperature=0.0, top_p=1.0, top_k=0, min_p=0.0, seed=None,
-            stop=None, stop_token_ids=None, repetition_penalty=1.0,
-            frequency_penalty=0.0, presence_penalty=0.0, logit_bias=None,
-            json_schema=None, enable_thinking=True, thinking_budget=None,
-            cancel_event=None, stats=RunStats(),
+            max_tokens=32,
+            temperature=0.0,
+            top_p=1.0,
+            top_k=0,
+            min_p=0.0,
+            seed=None,
+            stop=None,
+            stop_token_ids=None,
+            repetition_penalty=1.0,
+            frequency_penalty=0.0,
+            presence_penalty=0.0,
+            logit_bias=None,
+            json_schema=None,
+            enable_thinking=True,
+            thinking_budget=None,
+            cancel_event=None,
+            stats=RunStats(),
         )
     )
 

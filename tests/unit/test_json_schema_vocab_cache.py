@@ -16,8 +16,28 @@ class _Tok:
         return "".join(self._pieces[i] for i in ids)
 
 
-PIECES = ["{", "}", '"', ":", ",", " ", "\n", "\t", "a", "b", "ab\tc", 'x"', "\r", "1", "city"]
-SCHEMA = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+PIECES = [
+    "{",
+    "}",
+    '"',
+    ":",
+    ",",
+    " ",
+    "\n",
+    "\t",
+    "a",
+    "b",
+    "ab\tc",
+    'x"',
+    "\r",
+    "1",
+    "city",
+]
+SCHEMA = {
+    "type": "object",
+    "properties": {"city": {"type": "string"}},
+    "required": ["city"],
+}
 
 
 def _texts(tok, ids):
