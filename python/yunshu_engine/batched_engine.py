@@ -2491,6 +2491,62 @@ class BatchedEngine:
             logger.debug("MLX executor cleanup skipped (executor already shut down)")
         logger.info(f"BatchedEngine stopped: {self.model_name}")
 
+    # ── Speculative decoding routes (the single gating table) ────────────────
+    #
+    # | route            | taken when                                          | evidence                                   |
+    # |------------------|-----------------------------------------------------|--------------------------------------------|
+    # | gemma4_assistant | spec_decode, non-stream, fast path, eligible request | dual-load drafter, 2.08x, greedy-exact     |
+    # |                  | (YUNSHU_GEMMA4_ASSISTANT loaded)                     | (_gemma4_spec_eligible)                    |
+    # | ngram            | non-stream, fast path, greedy, no logprobs, proposer | tests/unit/test_ngram_spec_lossless.py:    |
+    # |                  | on, and (spec_decode or YUNSHU_NGRAM_DEFAULT=1);     | output == plain greedy with drafts accepted|
+    # |                  | non-trimmable caches fall back inside the method     | opt-in: ~2.5x slower on low-acceptance     |
+    # |                  |                                                      | prose/code, ~1.7x faster on repetitive     |
+    # | eagle / mtp      | only with YUNSHU_SPEC_UNVERIFIED=eagle|mtp, greedy,  | NOT verified lossless: EAGLE's acceptance  |
+    # |                  | (eagle never streams: its streamer has no stop       |                                            |
+    # |                  | hold-back, so multi-token stops would leak)          |                                            |
+    # |                  | fast path, no logprobs (experiments)                 | ignores request temperature; both give     |
+    # |                  |                                                      | empty output on non-trimmable (hybrid)     |
+    # |                  |                                                      | caches; no measured win on Apple Silicon.  |
+    # |                  |                                                      | Qwen3.5-family MTP lives in the VLM runner.|
+    # | (streaming ngram)| never: _stream_generate_ngram_spec early-terminates  | live repro: "count to 8" streamed "1 "     |
+    #
+    # Everything else is plain decoding.
+    def _spec_route(
+        self,
+        *,
+        spec_decode: bool,
+        stream: bool,
+        temperature: float | None,
+        logprobs: bool,
+        use_engine_loop: bool,
+        gemma4_eligible=None,
+    ) -> str | None:
+        import os
+
+        if use_engine_loop or logprobs:
+            return None
+        greedy = temperature is None or temperature <= 0.0
+        experimental = os.environ.get("YUNSHU_SPEC_UNVERIFIED", "").strip().lower()
+        if spec_decode and greedy and experimental == "eagle" and not stream:
+            if getattr(self, "_spec_enabled", False) and getattr(
+                self, "_spec_decoder", None
+            ):
+                return "eagle"
+        if spec_decode and greedy and experimental == "mtp":
+            if getattr(self, "_mtp_decoder", None) is not None:
+                return "mtp"
+        if stream:
+            return None
+        if spec_decode and gemma4_eligible is not None and gemma4_eligible():
+            return "gemma4_assistant"
+        if (
+            greedy
+            and getattr(self, "_ngram_proposer", None) is not None
+            and (spec_decode or getattr(self, "_ngram_greedy_default", False))
+        ):
+            return "ngram"
+        return None
+
     def _should_use_engine_loop(self, use_engine_loop: bool | None) -> bool:
         """Determine whether to route through EngineCore continuous batching.
 
@@ -2940,19 +2996,13 @@ class BatchedEngine:
         )
         _use_engine_loop = self._should_use_engine_loop(use_engine_loop)
 
-        # spec_decode is re-enabled ONLY for the one route proven
-        # lossless AND beneficial — the Gemma-4 dual-load external-drafter
-        # primitive (verified 2.08x, greedy-exact; YUNSHU_GEMMA4_ASSISTANT). The
-        # other fast-path spec routes stay OFF because they are NOT lossless:
-        # - cross-model / MTP on hybrid-recurrent models (Qwen3.5 ArraysCache)
-        # can't trim/rollback their recurrent state → EMPTY output;
-        # - the n-gram draft-verifier duplicates accepted tokens → wrong output;
-        # - and on bandwidth-bound Apple Silicon those routes are also slower.
-        # _gemma4_spec_eligible only returns True for greedy/pure-temperature
-        # requests with the assistant drafter loaded, so routing them changes no
-        # output. Everything else falls back to the verified fast path.
-        if spec_decode:
-            if (not _use_engine_loop) and self._gemma4_spec_eligible(
+        _spec = self._spec_route(
+            spec_decode=spec_decode,
+            stream=False,
+            temperature=temperature,
+            logprobs=bool(logprobs),
+            use_engine_loop=_use_engine_loop,
+            gemma4_eligible=lambda: self._gemma4_spec_eligible(
                 logprobs=logprobs,
                 json_schema=json_schema,
                 logits_processors=logits_processors,
@@ -2965,18 +3015,9 @@ class BatchedEngine:
                 presence_penalty=presence_penalty,
                 xtc_probability=xtc_probability,
                 lora_adapter=lora_adapter,
-            ):
-                logger.debug(
-                    "spec_decode: routing to verified Gemma-4 assistant "
-                    "primitive (lossless, ~2x)"
-                )
-            else:
-                logger.debug(
-                    "spec_decode requested — using standard generation "
-                    "(only the Gemma-4 assistant primitive is proven "
-                    "lossless here; MTP/cross-model/n-gram are not)"
-                )
-                spec_decode = False
+            ),
+        )
+        spec_decode = _spec is not None
 
         # Memory guard preflight check
         guard_rejection = self._check_memory_guard(prompt, max_tokens)
@@ -3099,24 +3140,7 @@ class BatchedEngine:
         # validated dual-load primitive (~2.5x, lossless). Eligibility-gated so
         # the output is identical to normal generation; only active when the
         # drafter was loaded (YUNSHU_GEMMA4_ASSISTANT).
-        if (
-            spec_decode
-            and not _use_engine_loop
-            and self._gemma4_spec_eligible(
-                logprobs=logprobs,
-                json_schema=json_schema,
-                logits_processors=logits_processors,
-                logit_bias=logit_bias,
-                top_p=top_p,
-                top_k=top_k,
-                min_p=min_p,
-                repetition_penalty=repetition_penalty,
-                frequency_penalty=frequency_penalty,
-                presence_penalty=presence_penalty,
-                xtc_probability=xtc_probability,
-                lora_adapter=lora_adapter,
-            )
-        ):
+        if _spec == "gemma4_assistant":
             try:
                 return await self._generate_gemma4_assistant_spec(
                     prompt=prompt,
@@ -3141,14 +3165,7 @@ class BatchedEngine:
         # temperature>0 (output distribution is biased toward the greedy
         # sequence). Restrict it to GREEDY requests, where longest-exact-argmax
         # acceptance IS lossless; temp>0 falls through to correct normal decode.
-        if (
-            spec_decode
-            and not logprobs
-            and not _use_engine_loop
-            and self._spec_enabled
-            and self._spec_decoder is not None
-            and temperature <= 0.0
-        ):
+        if _spec == "eagle":
             return await self._generate_speculative(
                 prompt=prompt,
                 max_tokens=max_tokens,
@@ -3177,12 +3194,7 @@ class BatchedEngine:
             )
 
         # MTP speculative decoding (built-in multi-token prediction heads)
-        if (
-            spec_decode
-            and not logprobs
-            and self._mtp_decoder is not None
-            and not _use_engine_loop
-        ):
+        if _spec == "mtp":
             return await self._generate_mtp(
                 prompt=prompt,
                 max_tokens=max_tokens,
@@ -3223,13 +3235,7 @@ class BatchedEngine:
         # repetitive/copy-heavy/agentic output. Reach it via per-request spec_decode=true or
         # YUNSHU_NGRAM_DEFAULT=1 (the adaptive controller does NOT yet back off enough to make
         # default-on safe). Engages only for greedy (temp<=0).
-        if (
-            self._ngram_proposer is not None
-            and (spec_decode or self._ngram_greedy_default)
-            and not logprobs
-            and not _use_engine_loop
-            and temperature <= 0.0
-        ):
+        if _spec == "ngram":
             return await self._generate_ngram_spec(
                 prompt=prompt,
                 max_tokens=max_tokens,
@@ -5163,15 +5169,16 @@ class BatchedEngine:
             top_n_sigma if top_n_sigma and top_n_sigma > 0 else None
         )
         _use_engine_loop = self._should_use_engine_loop(use_engine_loop)
-        # : spec_decode falls back to the fast path — see the non-streaming
-        # path for the full rationale (fast-path spec routes are not currently
-        # lossless and give no speedup on Apple Silicon).
-        if spec_decode:
-            logger.debug(
-                "spec_decode requested — using standard streaming generation "
-                "(fast-path spec routes are not currently lossless)"
-            )
-            spec_decode = False
+        # Streaming speculation follows the route table (see _spec_route): only
+        # the experimental EAGLE / MTP routes stream; everything else is plain.
+        _spec = self._spec_route(
+            spec_decode=spec_decode,
+            stream=True,
+            temperature=temperature,
+            logprobs=bool(logprobs),
+            use_engine_loop=_use_engine_loop,
+        )
+        spec_decode = _spec is not None
         # Resolve reasoning_effort → thinking_budget if not explicitly set
         if thinking_budget is None and reasoning_effort is not None:
             thinking_budget = _REASONING_EFFORT_MAP.get(reasoning_effort, 8192)
@@ -5246,13 +5253,7 @@ class BatchedEngine:
             _cancel_event = _CompositeCancelEvent()
 
         # Speculative decoding path (Phase 4)
-        if (
-            spec_decode
-            and not logprobs
-            and not _use_engine_loop
-            and self._spec_enabled
-            and self._spec_decoder is not None
-        ):
+        if _spec == "eagle":
             try:
                 async for output in self._stream_generate_speculative(
                     prompt=prompt,
@@ -5288,20 +5289,9 @@ class BatchedEngine:
                         logger.debug("request tracker cleanup failed", exc_info=True)
             return
 
-        # MTP speculative decoding streaming (built-in mlx-lm MTPDecoder path).
-        # NOTE: `spec_decode` is forced False for streaming at the top
-        # of this method, so this branch is currently UNREACHABLE — _stream_generate_mtp
-        # is dead in the streaming flow today. The live opt-in MTP backend
-        # (YUNSHU_MTP=1, mlx-vlm) is a SEPARATE path: stream_chat delegates to it
-        # and emits a single chunk with `stop` trimmed post-hoc, so it has no
-        # multi-token-stop streaming leak. The hold-back fix in _stream_generate_mtp
-        # is defensive — correct if this branch is ever re-enabled.
-        if (
-            spec_decode
-            and not logprobs
-            and self._mtp_decoder is not None
-            and not _use_engine_loop
-        ):
+        # MTP speculative decoding streaming (built-in mlx-lm MTPDecoder path),
+        # experimental route only (YUNSHU_SPEC_UNVERIFIED=mtp).
+        if _spec == "mtp":
             try:
                 async for output in self._stream_generate_mtp(
                     prompt=prompt,
@@ -5329,60 +5319,6 @@ class BatchedEngine:
                     logits_processors=logits_processors,
                     lora_adapter=lora_adapter,
                     kv_cache_breakpoints=kv_cache_breakpoints,
-                    min_tokens=min_tokens,
-                    ignore_eos=ignore_eos,
-                    suppress_tokens=suppress_tokens,
-                ):
-                    yield output
-            finally:
-                if _tracker is not None:
-                    try:
-                        _tracker.unregister(_stream_req_id)
-                    except Exception:
-                        logger.debug("request tracker cleanup failed", exc_info=True)
-            return
-
-        # N-gram speculative decoding streaming (model-free). The
-        # real impl `_stream_generate_ngram_spec` EXISTS but is BROKEN — it
-        # early-terminates (live: a "count to 8" prompt streamed only "1 " vs the
-        # correct full sequence). Streaming n-gram spec is also bandwidth-bound
-        # (≤baseline on Apple Silicon), so rather than serve truncated output we
-        # fall back to CORRECT plain generation. (The old comment falsely claimed
-        # the method was "not yet implemented"; the truth is it's implemented but
-        # buggy — fixing it is low-value, deferred.) Output is correct; only the
-        # spec speedup is forgone for streaming.
-        if (
-            spec_decode
-            and not logprobs
-            and self._ngram_proposer is not None
-            and not _use_engine_loop
-        ):
-            try:
-                async for output in self._stream_generate_fast(
-                    prompt=prompt,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    top_k=top_k,
-                    min_p=min_p,
-                    repetition_penalty=repetition_penalty,
-                    frequency_penalty=frequency_penalty,
-                    presence_penalty=presence_penalty,
-                    logit_bias=logit_bias,
-                    stop=stop,
-                    stop_token_ids=stop_token_ids,
-                    seed=seed,
-                    json_schema=json_schema,
-                    logprobs=logprobs,
-                    top_logprobs=top_logprobs,
-                    xtc_probability=xtc_probability,
-                    xtc_threshold=xtc_threshold,
-                    cancel_event=_cancel_event,
-                    timeout_seconds=timeout_seconds or 300.0,
-                    logits_processors=logits_processors,
-                    enable_thinking=enable_thinking,
-                    thinking_budget=thinking_budget,
-                    lora_adapter=lora_adapter,
                     min_tokens=min_tokens,
                     ignore_eos=ignore_eos,
                     suppress_tokens=suppress_tokens,
@@ -7514,7 +7450,7 @@ class BatchedEngine:
                 self._ngram_proposer = NgramProposer(
                     NgramConfig(max_n=max_n, k=k, mode=mode)
                 )
-            # DEFAULT ON for greedy. The earlier gross corruption (dropped/
+            # Correctness history: the earlier gross corruption (dropped/
             # duplicated tokens — "2, 4, 6"→"246", "…the average speed"→"…the
             # average average") was NOT the verifier: it was the prefill+base loop
             # driving the KV cache with generate_step's prefill-break + per-token
@@ -7539,8 +7475,8 @@ class BatchedEngine:
             # Measured on Qwen2.5-3B-4bit greedy: ~2.5× slower on normal/code, ~1.2× faster
             # only on highly repetitive output; on Qwen3.5-2B-bf16 ~3% slower everywhere.
             # So it's opt-in (YUNSHU_NGRAM_DEFAULT=1) for repetitive/agentic workloads where
-            # it wins, not a safe global default. (Re-enabling default-on needs the adaptive
-            # controller below to actually back off on low acceptance — it currently doesn't.)
+            # it wins, not a safe global default. Routing: see _spec_route (per-request
+            # spec_decode=true or YUNSHU_NGRAM_DEFAULT=1; greedy, non-streaming only).
             self._ngram_greedy_default = os.environ.get(
                 "YUNSHU_NGRAM_DEFAULT", "0"
             ).strip().lower() in ("1", "true", "yes")
