@@ -230,6 +230,8 @@ class VLMBatchRunner:
         # None, "bf16" or "int8".
         self.ragged_kv: str | None = None
         self._ragged_logged = False
+        # Prefill chunk while other rows decode (0: always PREFILL_STEP).
+        self.prefill_chunk_while_decoding = 0
 
     def prepare_media(
         self,
@@ -563,6 +565,17 @@ class VLMBatchRunner:
             lm = self.model.language_model
             if hasattr(lm, "_rope_deltas"):
                 lm._rope_deltas = mx.array([[job.rope_delta]], dtype=mx.float32)
+        if self.prefill_chunk_while_decoding:
+            # Fairness: a 2048-token prefill chunk stalls every decoding row
+            # for ~2 s on a 27B model; smaller chunks let decode steps
+            # interleave. APC checkpoint columns are independent of the chunk.
+            pb = getattr(group.gen, "_prompt_batch", None)
+            gb = getattr(group.gen, "_generation_batch", None)
+            if pb is not None:
+                decoding = gb is not None and len(gb) > 0
+                pb.prefill_step_size = (
+                    self.prefill_chunk_while_decoding if decoding else PREFILL_STEP
+                )
         prompt_progress, responses = group.gen.next()
         if self.ragged_kv and not group.spec:
             # Rows that just finished prefill arrive with a stock left-padded

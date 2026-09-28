@@ -1416,6 +1416,9 @@ class VLMEngine:
         runner.clear_on_idle = bool(getattr(self, "_mx_large_model", False))
         runner.stop_tokens = set(self._get_eos_ids())
         runner.inflight = lambda: self._active_count
+        runner.prefill_chunk_while_decoding = int(
+            settings.get("YUNSHU_PREFILL_CHUNK_WHILE_DECODING") or 0
+        )
         ragged = settings.get("YUNSHU_RAGGED_KV")
         if ragged in ("bf16", "int8"):
             # Experimental: per-row-length KV + ragged decode attention for the
