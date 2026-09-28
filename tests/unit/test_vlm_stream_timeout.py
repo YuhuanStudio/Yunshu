@@ -19,9 +19,10 @@ def _src():
 def test_timeout_reads_timeout_seconds_key():
     s = _src()
     # The streaming consumer must read the gateway's 'timeout_seconds' key (with the old
-    # 'timeout' as a fallback), not 'timeout' alone.
+    # 'timeout' as a fallback), not 'timeout' alone, and no fixed default (a
+    # 200K-token prefill runs ~390 s before its first token).
     # ruff normalises string quotes to double quotes.
-    assert 'kwargs.get("timeout_seconds") or kwargs.get("timeout") or 300' in s
+    assert 'kwargs.get("timeout_seconds") or kwargs.get("timeout") or None' in s
     # the old wrong-key-only read is gone
     assert '_timeout_seconds = kwargs.get("timeout", 300)' not in s
 

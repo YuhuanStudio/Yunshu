@@ -1157,7 +1157,10 @@ class VLMEngine:
         # read the wrong key 'timeout' → a user-set per-request timeout was SILENTLY
         # ignored and the inactivity timeout was permanently hardcoded to 300s. The
         # non-streaming twin (generate, ~line 1578) correctly reads 'timeout_seconds'.
-        _timeout_seconds = kwargs.get("timeout_seconds") or kwargs.get("timeout") or 300
+        # Only a client-set timeout applies: a fixed default also fired during
+        # legitimate long prefills (a 200K-token prompt takes ~390 s before its
+        # first token); a gone client is handled by the disconnect cancel.
+        _timeout_seconds = kwargs.get("timeout_seconds") or kwargs.get("timeout") or None
         _prompt_tokens_count = 0
         _completion_tokens_count = 0
         _model_id = self.model_name
