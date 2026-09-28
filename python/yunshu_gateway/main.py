@@ -17,13 +17,16 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from yunshu_engine import settings
+from yunshu_engine.model_discovery import resolve_model_ref
 from yunshu_engine.paths import models_dir
 from yunshu_engine.version import yunshu_version
 
 from .engine import get_engine, get_model_manager, init_model_manager
 
-# Default model (YUNSHU_MODEL) or None (requires explicit load via API)
-DEFAULT_MODEL = settings.get("YUNSHU_MODEL")
+# Default model (YUNSHU_MODEL) or None (requires explicit load via API). A name
+# under the models directory or a repo id already in the Hugging Face cache
+# resolves to that local folder, so nothing is downloaded again.
+DEFAULT_MODEL = resolve_model_ref(settings.get("YUNSHU_MODEL"))
 MODELS_DIR = str(models_dir())
 
 # ProcessMemoryEnforcer instance (multi-model mode only)

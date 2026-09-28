@@ -18,6 +18,7 @@ config_app = typer.Typer(help="Show effective settings and their sources.")
 
 @config_app.callback(invoke_without_command=True)
 def config(
+    ctx: typer.Context,
     all_: bool = typer.Option(
         False, "--all", "-a", help="Include experimental and internal settings."
     ),
@@ -27,6 +28,8 @@ def config(
     ),
 ):
     """Show every setting's effective value and source (cli/env/file/default)."""
+    if ctx.invoked_subcommand is not None:
+        return
     if file:
         settings.set_override(
             "YUNSHU_CONFIG", os.path.abspath(os.path.expanduser(file))
@@ -61,3 +64,61 @@ def _valid() -> bool:
     except settings.SettingError as exc:
         console.print(f"[red]{exc}[/]")
         return False
+
+
+def _name(key: str) -> str:
+    name = settings._normalize_key(key)
+    if name not in settings.REGISTRY:
+        close = settings.close_matches(name)
+        hint = f" (did you mean {', '.join(close)}?)" if close else ""
+        console.print(f"[red]Error:[/] unknown setting {key!r}{hint}")
+        raise typer.Exit(2)
+    return name
+
+
+@config_app.command("set")
+def config_set(
+    key: str = typer.Argument(help="Setting name, with or without YUNSHU_."),
+    value: str = typer.Argument(help="New value."),
+    file: str | None = typer.Option(
+        None, "--config", "-c", help="Write this TOML file instead of the user file."
+    ),
+):
+    """Save a setting in the user config file (~/.yunshu/config.toml).
+
+    Example: `yunshu config set models_dir /Volumes/Models` moves where
+    `yunshu pull` downloads and where the server looks for models.
+    """
+    name = _name(key)
+    if settings.REGISTRY[name].type == "path":
+        value = os.path.abspath(os.path.expanduser(value))
+    try:
+        target = settings.write_config_value(name, value, file)
+    except settings.SettingError as exc:
+        console.print(f"[red]Error:[/] {exc}")
+        raise typer.Exit(2) from None
+    console.print(f"{name} = {value}  [dim]({target})[/]")
+    if name in os.environ:
+        console.print(
+            f"[yellow]Note:[/] {name} is also set in the environment, which takes "
+            "precedence over the config file."
+        )
+
+
+@config_app.command("unset")
+def config_unset(
+    key: str = typer.Argument(help="Setting name, with or without YUNSHU_."),
+    file: str | None = typer.Option(
+        None, "--config", "-c", help="Edit this TOML file instead of the user file."
+    ),
+):
+    """Remove a setting from the user config file (back to its default)."""
+    name = _name(key)
+    target = settings.write_config_value(name, None, file)
+    console.print(f"{name} removed  [dim]({target})[/]")
+
+
+@config_app.command("path")
+def config_path():
+    """Print the user config file location."""
+    typer.echo(str(settings.user_config_path()))

@@ -93,33 +93,18 @@ def scan_models_dir(base: Path) -> list[dict]:
 def scan_hf_cache() -> list[dict]:
     """Model repos in the Hugging Face cache that have a config and weights
     (anything `yunshu serve -m <repo id>` can load without downloading)."""
-    try:
-        from huggingface_hub import scan_cache_dir
+    from yunshu_engine.model_discovery import hf_cache_snapshots
 
-        cache = scan_cache_dir()
-    except Exception:  # noqa: BLE001 - no cache yet, or an unreadable one
-        logger.debug("Hugging Face cache scan failed", exc_info=True)
-        return []
-    out = []
-    for repo in sorted(cache.repos, key=lambda r: r.repo_id):
-        if repo.repo_type != "model":
-            continue
-        for rev in sorted(repo.revisions, key=lambda r: r.last_modified, reverse=True):
-            names = {f.file_name for f in rev.files}
-            if "config.json" in names and any(
-                n.endswith(".safetensors") for n in names
-            ):
-                out.append(
-                    {
-                        "name": repo.repo_id,
-                        "path": str(rev.snapshot_path),
-                        "type": _detect_model_type(rev.snapshot_path),
-                        "size": rev.size_on_disk,
-                        "source": "hf-cache",
-                    }
-                )
-                break
-    return out
+    return [
+        {
+            "name": repo_id,
+            "path": str(snapshot),
+            "type": _detect_model_type(snapshot),
+            "size": size,
+            "source": "hf-cache",
+        }
+        for repo_id, snapshot, size in hf_cache_snapshots()
+    ]
 
 
 def weights_complete(path: Path) -> tuple[bool, str]:
