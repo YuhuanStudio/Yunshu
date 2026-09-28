@@ -4414,6 +4414,36 @@ class VLMEngine:
 
     _RUNNER_MODEL_TYPES = ("qwen3_5", "qwen3_6", "qwen3_5_moe")
 
+    def _apc_disk_tier(self):
+        """Optional APC disk tier (``YUNSHU_VLM_APC_DISK_DIR``), off by default.
+
+        Holds evicted prefix checkpoints (incl. hybrid recurrent state) so a
+        long document revisited after RAM eviction is read back instead of
+        re-prefilled. Namespaced by model path; capped by
+        ``YUNSHU_VLM_APC_DISK_GB`` (default 64).
+        """
+        path = os.environ.get("YUNSHU_VLM_APC_DISK_DIR", "").strip()
+        if not path:
+            return None
+        import hashlib
+
+        from mlx_vlm.apc import DiskBlockStore
+
+        max_gb = float(os.environ.get("YUNSHU_VLM_APC_DISK_GB", "64"))
+        namespace = hashlib.sha256(str(self._model_path).encode()).hexdigest()[:16]
+        try:
+            disk = DiskBlockStore(
+                Path(path).expanduser(),
+                namespace=namespace,
+                num_workers=1,
+                max_bytes=int(max_gb * (1 << 30)) if max_gb > 0 else None,
+            )
+        except Exception:
+            logger.warning("APC disk tier unavailable at %s", path, exc_info=True)
+            return None
+        logger.info("APC disk tier at %s (cap %.0f GiB)", disk.dir, max_gb)
+        return disk
+
     def _build_batch_runner(self, model_path: str):
         """Build the unified runner for model families validated on it.
 
@@ -4438,7 +4468,7 @@ class VLMEngine:
                 self._apc_backend = APCManager(
                     num_blocks=512,
                     block_size=16,
-                    disk=None,
+                    disk=self._apc_disk_tier(),
                     overrides={"memory_max_gb": budget},
                 )
                 self._apc_semantic_hash = semantic_extra_hash(

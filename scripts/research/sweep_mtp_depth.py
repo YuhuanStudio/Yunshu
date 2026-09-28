@@ -94,6 +94,14 @@ if "--streamed5" in sys.argv:
 
 model, processor = load(model_dir)
 tok = processor.tokenizer
+if "--invariant" in sys.argv:
+    from yunshu_engine.kernels.batch_invariant import (
+        install as install_invariant,  # noqa: E402
+    )
+
+    print(json.dumps({"batch_invariant": install_invariant(model.language_model)}), flush=True)
+    omlx_set = set(omlx_set if use_omlx else set()) | {"invariant"}
+    use_omlx = True
 if "--pack" in sys.argv:
     from yunshu_engine.kernels.omlx import pack_projections  # noqa: E402
 
@@ -200,6 +208,7 @@ for name, prompt, mt in tasks:
         if block == 0:
             ref[name] = r["tokens"]
         r["parity"] = r["tokens"] == ref[name]
+        r["tokens_head"] = r["tokens"][:64]
         r.pop("tokens")
         print(json.dumps(r), flush=True)
     mx.clear_cache()
