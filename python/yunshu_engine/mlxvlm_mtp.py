@@ -10,8 +10,8 @@ is now wired, but has not passed real-model HTTP latency or cancellation gates. 
 EXPERIMENTAL, not a shipped prod win. Our mlx-lm-based MTP patch could not do this — it
 lacked the SSM intermediate-state capture (so 27B gave garbage); mlx-vlm has it.
 
-Opt-in: requires reference/mlx-vlm on the path (it imports cleanly in our env;
-the installed mlx_vlm 0.5.0 lacks the speculative module). Greedy/pure-temperature
+Opt-in: requires the installed mlx-vlm to ship ``mlx_vlm.speculative`` (>=0.7.3,
+the locked version). Greedy/pure-temperature
 requests get the MTP speedup (lossless by construction — the verify is exact);
 everything else falls back to plain autoregressive generation on the same model.
 
@@ -25,29 +25,21 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import os
 import shutil
-import sys
 from collections.abc import Iterator
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_REF_MLXVLM = "reference/mlx-vlm"
 
-
-def _ensure_mlxvlm_on_path() -> bool:
-    """Put reference/mlx-vlm first on sys.path (has the MTP the installed 0.5.0 lacks)."""
-    ref = os.path.abspath(_REF_MLXVLM)
-    if not os.path.isdir(ref):
-        return False
-    if ref not in sys.path:
-        sys.path.insert(0, ref)
-    # Drop a pre-imported MTP-less mlx_vlm so the reference one is picked up.
+def _mlxvlm_has_mtp() -> bool:
+    """True when the installed mlx-vlm ships the speculative MTP runtime (>=0.7)."""
     import importlib.util as u
 
-    spec = u.find_spec("mlx_vlm.speculative.mtp")
-    return spec is not None
+    try:
+        return u.find_spec("mlx_vlm.speculative.mtp") is not None
+    except ModuleNotFoundError:
+        return False
 
 
 def is_mtp_capable(model_path: str) -> bool:
@@ -226,8 +218,10 @@ class MLXVLMMtp:
         self._loaded = False
 
     def load(self) -> None:
-        if not _ensure_mlxvlm_on_path():
-            raise RuntimeError("reference/mlx-vlm with speculative MTP not available")
+        if not _mlxvlm_has_mtp():
+            raise RuntimeError(
+                "installed mlx-vlm lacks speculative MTP (need mlx-vlm>=0.7.3)"
+            )
         from mlx_lm.tokenizer_utils import load as load_tokenizer
         from mlx_vlm.speculative.drafters import validate_drafter_compatibility
         from mlx_vlm.utils import load_model as vlm_load

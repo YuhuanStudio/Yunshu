@@ -30,15 +30,26 @@ prompts = [
 
 t0 = time.perf_counter()
 model, processor = load(model_dir)
-print(json.dumps({"model": model_dir, "mlx_vlm": mlx_vlm.__version__, "mlx": mx.__version__,
-                  "load_s": round(time.perf_counter() - t0, 2)}), flush=True)
+print(
+    json.dumps(
+        {
+            "model": model_dir,
+            "mlx_vlm": mlx_vlm.__version__,
+            "mlx": mx.__version__,
+            "load_s": round(time.perf_counter() - t0, 2),
+        }
+    ),
+    flush=True,
+)
 
 for i in range(turns):
     if audios:
         audio = audios[i % len(audios)]
         prompt = f"audio:{audio.rsplit('/', 1)[-1]}"
-        content = [{"type": "audio", "audio": audio},
-                   {"type": "text", "text": "Answer the spoken question in a few words."}]
+        content = [
+            {"type": "audio", "audio": audio},
+            {"type": "text", "text": "Answer the spoken question in a few words."},
+        ]
     else:
         prompt = prompts[i % len(prompts)]
         content = [{"type": "text", "text": prompt}]
@@ -47,10 +58,20 @@ for i in range(turns):
     t = time.perf_counter()
     text_ids, audio_chunks, first_audio = [], 0, None
     for kind, payload in model.generate_stream(
-        mi["input_ids"], speaker="Ethan", thinker_max_new_tokens=24,
-        talker_max_new_tokens=64, chunk_size=25,
-        **{k: mi[k] for k in ("input_features", "feature_attention_mask",
-                              "audio_feature_lengths") if mi.get(k) is not None},
+        mi["input_ids"],
+        speaker="Ethan",
+        thinker_max_new_tokens=24,
+        talker_max_new_tokens=64,
+        chunk_size=25,
+        **{
+            k: mi[k]
+            for k in (
+                "input_features",
+                "feature_attention_mask",
+                "audio_feature_lengths",
+            )
+            if mi.get(k) is not None
+        },
     ):
         if kind == "text":
             text_ids = payload.tolist() if hasattr(payload, "tolist") else list(payload)
@@ -60,8 +81,18 @@ for i in range(turns):
                 first_audio = time.perf_counter() - t
     flat = [x for row in text_ids for x in (row if isinstance(row, list) else [row])]
     text = processor.decode(flat, skip_special_tokens=True) if flat else ""
-    print(json.dumps({"turn": i + 1, "prompt": prompt, "text": text,
-                      "bang_collapse": text.strip().startswith("!!!"),
-                      "audio_chunks": audio_chunks,
-                      "first_audio_s": round(first_audio, 3) if first_audio else None,
-                      "total_s": round(time.perf_counter() - t, 3)}, ensure_ascii=False), flush=True)
+    print(
+        json.dumps(
+            {
+                "turn": i + 1,
+                "prompt": prompt,
+                "text": text,
+                "bang_collapse": text.strip().startswith("!!!"),
+                "audio_chunks": audio_chunks,
+                "first_audio_s": round(first_audio, 3) if first_audio else None,
+                "total_s": round(time.perf_counter() - t, 3),
+            },
+            ensure_ascii=False,
+        ),
+        flush=True,
+    )

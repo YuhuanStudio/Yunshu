@@ -33,10 +33,10 @@ classifiers = [
 # install stays light on machines that only need text.
 dependencies = [
     # ── Apple ML Stack (text path only) ──
-    "mlx>=0.31.2",
+    "mlx>=0.32.2",
     "mlx-lm>=0.31.3",
     # ── Model / Tokenizer ──
-    "transformers>=4.53.0",
+    "transformers>=5.17.0",
     "tokenizers>=0.21.0",
     "safetensors>=0.5.0",
     "huggingface-hub>=0.23.0",
@@ -78,7 +78,9 @@ Issues = "https://github.com/YuhuanStudio/Yunshu/issues"
 [project.optional-dependencies]
 # Vision / VLM / OCR (mlx-vlm) — needed for image inputs and vision-language models.
 vision = [
-    "mlx-vlm>=0.4.4",
+    # >=0.7.3: APC (semantic_extra_hash / resident_bytes) and speculative MTP,
+    # both used by the Qwen3.5/3.8 VLM path.
+    "mlx-vlm>=0.7.3",
     "Pillow>=10.0.0",
 ]
 # Audio: speech-to-text (ASR) + text-to-speech (TTS) via mlx-audio.
@@ -91,9 +93,11 @@ audio = [
 # Realtime path). Needs mlx-vlm AND torch/torchvision: transformers eagerly loads
 # Qwen3-Omni's video sub-processor on model load, which hard-requires torch even
 # though Yunshu never runs video inference. mlx-vlm>=0.6.0 carries the audio-input
-# fix (#1240) the native speech-in path relies on.
+# fix (#1240) the native speech-in path relies on. Upstream 0.7.3 was verified
+# to keep turn 2+ correct for text and speech input
+# (docs/research/runs/2026-09-28-omni/), so the fork's position_ids patch is gone.
 omni = [
-    "mlx-vlm>=0.6.0",
+    "mlx-vlm>=0.7.3",
     "torch>=2.1.0",
     "torchvision>=0.16.0",
     "Pillow>=10.0.0",
@@ -172,12 +176,9 @@ dev = [
     "einops>=0.7.0",
 ]
 
-# Source mlx-vlm from our fork's branch, which is latest upstream main plus the
-# Qwen3-Omni thinker early-exit optimization (byte-identical, ~1.86x faster on the
-# redundant hidden-state forward). Tracking the branch means `uv sync --upgrade`
-# keeps pulling the latest. Revert to a plain release pin once the PR merges upstream.
+# mlx-vlm comes from PyPI: upstream now captures the Talker hidden states during
+# Thinker generation, which supersedes the fork's thinker early-exit branch.
 [tool.uv.sources]
-mlx-vlm = { git = "https://github.com/yuhuanowo/mlx-vlm.git", branch = "feat/qwen3-omni-thinker-early-exit" }
 mlx-video = { git = "https://github.com/Blaizzy/mlx-video.git" }
 
 [tool.ruff]
