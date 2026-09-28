@@ -15,7 +15,8 @@ BatchGenerator stays token-identical to AR while a repeated 5K prompt drops from
 
 The runner only yields token ids. Detokenizing, stop strings, thinking state and
 queue delivery stay in ``VLMEngine`` so every text path reports the same way.
-GPU work runs on the serialized MLX executor thread; consumers read their\ntokens from a queue on any other thread.
+GPU work runs on the serialized MLX executor thread; consumers read their
+tokens from a queue on any other thread.
 """
 
 from __future__ import annotations
@@ -36,10 +37,6 @@ logger = logging.getLogger(__name__)
 # Upstream prefill default; APC checkpoints land on these chunk boundaries and
 # cancellation is honoured between chunks (~2 s at 2K tokens on a 27B model).
 PREFILL_STEP = 2048
-# Speculative batches are cohorts: wait this long for simultaneous arrivals.
-SPEC_COALESCE_S = 0.03
-SPEC_MIN_COALESCE_S = 0.005
-SPEC_MAX_ROWS = 8
 
 
 @dataclass
@@ -161,12 +158,12 @@ class VLMBatchRunner:
         self._executor = executor
         self._lock = threading.Lock()
         self._pending: list[_Job] = []
-        self._groups: dict[int, _Group] = {}
+        # Shared continuous batches keyed by (top_logprobs_k, use_apc) and the
+        # exclusive speculative lane (one request, only while it is alone).
+        self._batches: dict[tuple, _Group] = {}
+        self._spec: _Group | None = None
         self._driving = False
         self.clear_on_idle = False
-        # Requests the engine has accepted (incl. ones still being prepared);
-        # speculative cohorts only wait for arrivals when others are coming.
-        self.inflight = lambda: 0
 
     def prepare_images(self, prompt: str, image_paths: list[str]):
         """Preprocess + encode images for one prompt on the MLX thread.
@@ -209,15 +206,24 @@ class VLMBatchRunner:
             )
         return input_ids[0], kwargs, salt
 
-    # ── Shared continuous batching ──────────────────────────────────────
+    # ── Scheduling ──────────────────────────────────────────────────────
     #
-    # Requests submit a job and consume tokens from their own queue on any
-    # thread. One driver owns the GPU: it runs on the serialized MLX executor
-    # in short slices (admit new jobs, one generator step per group, dispatch),
-    # resubmitting itself while work remains so other MLX jobs (tokenizing,
-    # image encoding for the next request) interleave. Jobs that share
-    # sampling settings share one upstream BatchGenerator, so concurrent
-    # requests decode together instead of queueing behind each other.
+    # Requests submit a job and read tokens from their own queue on any thread.
+    # One driver owns the GPU: it runs on the serialized MLX executor in short
+    # slices (admit, one step per batch, dispatch) and resubmits itself while
+    # work remains, so prep for new requests (templating, image encoding)
+    # interleaves.
+    #
+    # - Every request joins one shared continuous batch (upstream
+    #   BatchGenerator) with its own sampling params and seed (RowSampler),
+    #   its own logits processors, and one-request-at-a-time prefill (as oMLX
+    #   does; upstream's mixed warm/cold multi-row prefill mis-assigned rows).
+    # - A request that is alone uses speculative decoding (MTP / DFlash) in an
+    #   exclusive lane; spec on == spec off holds there (batch-invariant
+    #   kernels). Requests arriving meanwhile go to the shared batch.
+    #   Upstream keeps drafter/round state for exactly one speculative batch
+    #   and cannot add rows to it, so multi-row speculation needs our own
+    #   round driver (not done yet).
 
     def iter_tokens(
         self,
@@ -263,7 +269,9 @@ class VLMBatchRunner:
             sampling=(
                 None
                 if greedy
-                else (float(temperature), float(top_p), int(top_k), float(min_p))
+                else RowParams(
+                    float(temperature), float(top_p), int(top_k), float(min_p), seed
+                )
             ),
             use_draft=use_draft,
             logprobs=bool(logprobs),
@@ -299,7 +307,7 @@ class VLMBatchRunner:
 
     def busy(self) -> bool:
         with self._lock:
-            return bool(self._pending or self._groups or self._driving)
+            return bool(self._pending or self._batches or self._spec or self._driving)
 
     def _submit(self, job: _Job) -> None:
         with self._lock:
@@ -309,42 +317,33 @@ class VLMBatchRunner:
             self._driving = True
         self._executor.submit(self._drive_slice)
 
-    def _group_key(self, job: _Job, use_apc: bool) -> tuple:
-        # Requests with logits processors (constraints, penalties) get their own
-        # generator: in a shared batch a JSON constraint was applied to another
-        # row after mixed warm/cold APC admission (a math answer "102" came out
-        # as "1" + EOS). Plain requests batch together.
-        solo = id(job) if job.processors else None
-        return (
-            job.use_draft,
-            job.sampling,
-            job.logprobs,
-            job.top_logprobs,
-            use_apc,
-            solo,
+    def _groups(self) -> list[_Group]:
+        return ([self._spec] if self._spec is not None else []) + list(
+            self._batches.values()
         )
 
-    def _new_group(self, job: _Job, use_apc: bool) -> _Group:
+    def _active_jobs(self) -> int:
+        return sum(len(g.jobs) for g in self._groups())
+
+    def _new_generator(self, *, spec: bool, use_apc: bool, top_logprobs: int, sampler):
         from mlx_vlm.generate.ar import BatchGenerator
 
-        sampler = build_sampler(*job.sampling) if job.sampling is not None else None
-        gen = BatchGenerator(
+        return BatchGenerator(
             self.model.language_model,
             self.processor,
-            max_tokens=job.max_tokens,
             sampler=sampler,
             apc_manager=self.apc_manager if use_apc else None,
-            draft_model=self.drafter if job.use_draft else None,
-            draft_kind=self.draft_kind if job.use_draft else None,
-            draft_block_size=self.draft_block_size if job.use_draft else None,
-            greedy_sampling=job.greedy,
-            compute_logprobs=job.logprobs,
-            top_logprobs_k=job.top_logprobs,
+            draft_model=self.drafter if spec else None,
+            draft_kind=self.draft_kind if spec else None,
+            draft_block_size=self.draft_block_size if spec else None,
+            greedy_sampling=spec,
+            compute_logprobs=not spec,
+            top_logprobs_k=top_logprobs,
             prefill_step_size=PREFILL_STEP,
+            prefill_batch_size=1,
         )
-        return _Group(gen=gen, use_draft=job.use_draft)
 
-    def _admit(self, job: _Job) -> None:
+    def _admit(self, job: _Job, alone: bool) -> None:
         from .mrope import clear_rope_state
 
         use_apc = self.apc_manager is not None
@@ -354,27 +353,13 @@ class VLMBatchRunner:
             except Exception:
                 logger.debug("APC admission check failed; using APC", exc_info=True)
         job.stats.used_apc = use_apc
-        if job.use_draft and any(
-            g.use_draft and g.sealed for g in self._groups.values()
-        ):
-            # The drafter holds state for one speculative batch, and a running
-            # speculative batch cannot take new rows: decode this request in
-            # the continuous (non-speculative) batch alongside it instead.
+        spec = job.use_draft and alone and self._spec is None
+        if not spec:
             job.use_draft = False
             job.stats.used_draft = False
-        key = self._group_key(job, use_apc)
-        group = next(
-            (g for g in self._groups.values() if g.key == key and not g.sealed), None
-        )
-        if group is None:
-            group = self._new_group(job, use_apc)
-            group.key = key
-            self._groups[id(group)] = group
-        if job.seed is not None and not group.jobs:
-            mx.random.seed(int(job.seed) & ((1 << 63) - 1))
         pkw = job.prompt_kwargs
         if pkw is None:
-            if not self._active_jobs():
+            if alone:
                 clear_rope_state(self.model)
             pkw = self.model.get_input_embeddings(
                 mx.array(job.ids)[None], None, mask=None
@@ -384,6 +369,28 @@ class VLMBatchRunner:
             pkw["_apc_semantic_hash"] = salt
         rd = pkw.get("rope_deltas")
         job.rope_delta = float(rd.reshape(-1)[0].item()) if rd is not None else 0.0
+        if spec:
+            group = self._spec = _Group(
+                gen=self._new_generator(
+                    spec=True, use_apc=use_apc, top_logprobs=0, sampler=None
+                ),
+                spec=True,
+            )
+        else:
+            key = (job.top_logprobs, use_apc)
+            group = self._batches.get(key)
+            if group is None:
+                sampler = RowSampler()
+                group = self._batches[key] = _Group(
+                    gen=self._new_generator(
+                        spec=False,
+                        use_apc=use_apc,
+                        top_logprobs=job.top_logprobs,
+                        sampler=sampler,
+                    ),
+                    spec=False,
+                    sampler=sampler,
+                )
         (uid,) = group.gen.insert(
             [job.ids],
             max_tokens=job.max_tokens,
@@ -393,15 +400,15 @@ class VLMBatchRunner:
         job.uid = uid
         job.start = time.perf_counter()
         group.jobs[uid] = job
-
-    def _active_jobs(self) -> int:
-        return sum(len(g.jobs) for g in self._groups.values())
+        if group.sampler is not None and job.sampling is not None:
+            group.sampler.add(uid, job.sampling)
 
     def _finish(self, group: _Group, uid: int, reason: str | None) -> None:
         job = group.jobs.pop(uid, None)
+        if group.sampler is not None:
+            group.sampler.drop(uid)
         if job is None:
             return
-        group.done[uid] = job
         if reason is not None:
             job.stats.finish_reason = reason
         job.out.put(_DONE)
@@ -418,24 +425,17 @@ class VLMBatchRunner:
                 self._finish(group, uid, "cancel" if cancelled else None)
         if not group.jobs:
             return
-        if group.use_draft and not group.sealed:
-            # A running speculative batch cannot take new rows (upstream), so
-            # give near-simultaneous arrivals a moment to join this cohort;
-            # later ones start their own group.
-            age = time.perf_counter() - group.created
-            if len(group.jobs) < SPEC_MAX_ROWS and (
-                age < SPEC_MIN_COALESCE_S
-                or (age < SPEC_COALESCE_S and self.inflight() > self._active_jobs())
-            ):
-                return
-            group.sealed = True
         if batch_invariant.is_installed():
-            # Spec on == spec off is only guaranteed for one drafting row
-            # (the invariant kernels take <= 8 verify rows); everything else
-            # takes the faster verify kernels.
-            batch_invariant.set_active(group.use_draft and len(group.jobs) == 1)
-        if group.use_draft:
-            self._set_spec_rope_deltas(group)
+            # The invariant kernels are what make spec on == spec off; only
+            # the single-row speculative lane drafts.
+            batch_invariant.set_active(group.spec)
+        if group.spec:
+            # Upstream's speculative verify reads mRoPE deltas from model
+            # state, which the shared batch's steps overwrite.
+            (job,) = group.jobs.values()
+            lm = self.model.language_model
+            if hasattr(lm, "_rope_deltas"):
+                lm._rope_deltas = mx.array([[job.rope_delta]], dtype=mx.float32)
         prompt_progress, responses = group.gen.next()
         for progress in prompt_progress or []:
             job = group.jobs.get(getattr(progress, "uid", None))
@@ -466,51 +466,42 @@ class VLMBatchRunner:
             if response.finish_reason is not None:
                 self._finish(group, response.uid, response.finish_reason)
 
-    def _set_spec_rope_deltas(self, group: _Group) -> None:
-        """Speculative verify reads mRoPE deltas from model state, which any
-        other prefill (another group, a mixed warm/cold APC batch) overwrites;
-        set them for this batch's rows before every step."""
-        batch = getattr(group.gen, "_generation_batch", None)
-        uids = getattr(batch, "_all_uids", None)
-        lm = self.model.language_model
-        if not uids or not getattr(batch, "is_speculative", False):
-            return
-        if not hasattr(lm, "_rope_deltas"):
-            return
-        deltas = [
-            getattr(group.jobs.get(uid) or group.done.get(uid), "rope_delta", 0.0)
-            for uid in uids
-        ]
-        lm._rope_deltas = mx.array(deltas, dtype=mx.float32)[:, None]
-
     def _drive_slice(self, resubmit: bool = True) -> None:
         """One scheduling slice on the MLX thread."""
+        _install_row_context()
         try:
             with self._lock:
                 pending, self._pending = self._pending, []
+            alone = len(pending) == 1 and self._active_jobs() == 0
             for job in pending:
                 try:
-                    self._admit(job)
+                    self._admit(job, alone)
                 except Exception as exc:
                     logger.exception("VLM runner admission failed")
                     job.out.put(exc)
-            for key, group in list(self._groups.items()):
+            for group in self._groups():
                 self._step_group(group)
+            if self._spec is not None and not self._spec.jobs:
+                if not self._spec.gen.has_work:
+                    self._spec.gen.close()
+                    self._spec = None
+            for key, group in list(self._batches.items()):
                 if not group.jobs and not group.gen.has_work:
                     group.gen.close()
-                    del self._groups[key]
+                    del self._batches[key]
         except Exception as exc:
             logger.exception("VLM runner step failed; failing active requests")
-            for group in self._groups.values():
+            for group in self._groups():
                 for job in group.jobs.values():
                     job.out.put(exc)
                 with contextlib.suppress(Exception):
                     group.gen.close()
-            self._groups.clear()
+            self._batches.clear()
+            self._spec = None
         if not resubmit:
             return
         with self._lock:
-            if self._pending or self._groups:
+            if self._pending or self._batches or self._spec is not None:
                 again = True
             else:
                 self._driving = False
@@ -518,11 +509,103 @@ class VLMBatchRunner:
         if again:
             self._executor.submit(self._drive_slice)
         elif self.clear_on_idle:
-            # Large models: release the buffer pool once the batch drains
-            # (clearing under an active batch would only force reallocation).
+            # Large models: release the buffer pool once everything drains
+            # (clearing under active batches would only force reallocation).
             with contextlib.suppress(Exception):
                 mx.synchronize()
                 mx.clear_cache()
+
+
+# Uids of the rows the upstream batch is sampling right now (set by the
+# wrappers below). Upstream calls the sampler for the whole batch and passes
+# row_ids=[0]*n, so a per-row sampler has no other way to know which request
+# each row is.
+_STEP_UIDS: list | None = None
+
+
+def _install_row_context() -> None:
+    import importlib
+
+    ar = importlib.import_module("mlx_vlm.generate.ar")
+    if getattr(ar, "_yunshu_row_context", False):
+        return
+    step = ar.GenerationBatch._step
+    generate = ar.PromptProcessingBatch.generate
+
+    def _step(self):
+        global _STEP_UIDS
+        _STEP_UIDS = list(self.uids)
+        return step(self)
+
+    def _generate(self, *args, **kwargs):
+        global _STEP_UIDS
+        _STEP_UIDS = list(self.uids)
+        return generate(self, *args, **kwargs)
+
+    ar.GenerationBatch._step = _step
+    ar.PromptProcessingBatch.generate = _generate
+    ar._yunshu_row_context = True
+
+
+@dataclass
+class RowParams:
+    temperature: float
+    top_p: float
+    top_k: int
+    min_p: float
+    seed: int | None = None
+
+
+class RowSampler:
+    """Per-row sampling for one shared BatchGenerator.
+
+    Rows without params are greedy (argmax). Sampled rows apply their own
+    top-p / min-p / top-k and temperature (same order as mlx-lm's
+    make_sampler) and draw with their own PRNG key when seeded, so a seeded
+    request is reproducible regardless of what else is in the batch.
+    """
+
+    def __init__(self):
+        self._rows: dict[int, tuple[RowParams, Any]] = {}
+
+    def add(self, uid: int, params: RowParams) -> None:
+        key = mx.random.key(int(params.seed)) if params.seed is not None else None
+        self._rows[uid] = (params, key)
+
+    def drop(self, uid: int) -> None:
+        self._rows.pop(uid, None)
+
+    def sample_target(self, logprobs, row_ids=None, positions=None):
+        return self(logprobs)
+
+    def __call__(self, logprobs: mx.array) -> mx.array:
+        from mlx_lm.sample_utils import apply_min_p, apply_top_k, apply_top_p
+
+        tokens = mx.argmax(logprobs, axis=-1)
+        uids = _STEP_UIDS
+        if not self._rows or uids is None or len(uids) != logprobs.shape[0]:
+            return tokens
+        for i, uid in enumerate(uids):
+            entry = self._rows.get(uid)
+            if entry is None:
+                continue
+            p, key = entry
+            row = logprobs[i : i + 1]
+            if 0 < p.top_p < 1.0:
+                row = apply_top_p(row, p.top_p)
+            if p.min_p:
+                row = apply_min_p(row, p.min_p)
+            if p.top_k > 0:
+                row = apply_top_k(row, p.top_k)
+            row = row * (1 / p.temperature)
+            if key is not None:
+                key, sub = mx.random.split(key)
+                self._rows[uid] = (p, key)
+                token = mx.random.categorical(row, key=sub)
+            else:
+                token = mx.random.categorical(row)
+            tokens[i] = token[0]
+        return tokens
 
 
 _DONE = object()
@@ -533,7 +616,7 @@ class _Job:
     ids: list[int]
     max_tokens: int
     greedy: bool
-    sampling: tuple | None
+    sampling: RowParams | None
     use_draft: bool
     logprobs: bool
     top_logprobs: int
@@ -553,9 +636,6 @@ class _Job:
 @dataclass
 class _Group:
     gen: Any
-    use_draft: bool
-    key: tuple = ()
-    sealed: bool = False
-    created: float = field(default_factory=time.perf_counter)
+    spec: bool
+    sampler: RowSampler | None = None
     jobs: dict = field(default_factory=dict)
-    done: dict = field(default_factory=dict)

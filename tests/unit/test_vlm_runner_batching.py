@@ -24,6 +24,7 @@ class FakeGen:
         FakeGen.instances.append(self)
 
     def insert(self, prompts, max_tokens, prompt_kwargs, logits_processors):
+        assert self.kwargs.get("prefill_batch_size") == 1
         uid = self.next_uid
         self.next_uid += 1
         self.rows[uid] = [0, max_tokens]
@@ -103,15 +104,18 @@ def test_concurrent_requests_share_one_generator(runner):
     assert not runner.busy()
 
 
-def test_different_sampling_uses_separate_groups(runner):
+def test_mixed_sampling_shares_one_batch(runner):
     ex = ThreadPoolExecutor(max_workers=1)
     runner._executor = ex
     out = {}
+    barrier = threading.Barrier(2)
 
     def a():
+        barrier.wait()
         out["a"] = _collect(runner, 4)
 
     def b():
+        barrier.wait()
         out["b"] = _collect(runner, 4, temperature=0.7, top_p=0.9)
 
     ta, tb = threading.Thread(target=a), threading.Thread(target=b)
@@ -121,8 +125,31 @@ def test_different_sampling_uses_separate_groups(runner):
     tb.join(10)
     ex.shutdown(wait=True)
     assert len(out["a"]) == 4 and len(out["b"]) == 4
-    samplers = {g.kwargs.get("sampler") is None for g in FakeGen.instances}
-    assert samplers == {True, False}
+    # One shared generator with the per-row sampler, no per-params groups.
+    assert len(FakeGen.instances) == 1
+    assert isinstance(FakeGen.instances[0].kwargs["sampler"], vbr.RowSampler)
+
+
+def test_row_sampler_per_row_params_and_seed():
+    import mlx.core as mx
+
+    logprobs = mx.log(mx.softmax(mx.random.normal((3, 50)), axis=-1))
+    greedy = mx.argmax(logprobs, axis=-1).tolist()
+
+    def draw(seed):
+        s = vbr.RowSampler()
+        s.add(11, vbr.RowParams(1.0, 1.0, 0, 0.0, seed))
+        vbr._STEP_UIDS = [10, 11, 12]
+        try:
+            return [s(logprobs).tolist() for _ in range(5)]
+        finally:
+            vbr._STEP_UIDS = None
+
+    first, again = draw(7), draw(7)
+    assert first == again  # seeded row reproducible
+    for toks in first:
+        assert toks[0] == greedy[0] and toks[2] == greedy[2]  # other rows greedy
+    assert len({t[1] for t in first}) > 1  # the sampled row actually samples
 
 
 def test_abandoned_consumer_frees_its_row(runner):
@@ -131,7 +158,7 @@ def test_abandoned_consumer_frees_its_row(runner):
     it.close()  # consumer stops early (e.g. a stop string)
     runner._drive_slice(resubmit=False)
     assert FakeGen.instances[0].removed == [0]
-    assert not runner._groups
+    assert not runner.busy() or not runner._batches
 
 
 def test_cancel_event_finishes_with_cancel(runner):
