@@ -4,7 +4,7 @@ Same in-memory drafter as probe_apc_mtp_batchgen.py; no APC so every request is
 cold. Reports decode tok/s, first-token latency and token parity against AR.
 
     HF_HUB_OFFLINE=1 .venv/bin/python scripts/research/sweep_mtp_depth.py MODEL_DIR [sizes...] \
-        [--yunshu-kernels=exact] [--invariant [--invariant-packed]] [--ragged-lane] [--context=N]
+        [--yunshu-kernels=exact] [--invariant [--invariant-packed]] [--ragged-lane] [--context=N] [--tasks=code,prose,json_like]
 """
 
 import json
@@ -171,6 +171,10 @@ tasks = [
 ]
 
 
+_only = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--tasks=")), "")
+if _only:
+    tasks = [t for t in tasks if t[0] in _only.split(",")]
+
 # --context=N prepends ~N tokens of filler so verify windows cross MLX's SDPA
 # plan switches (1024 keys; 16384 on M5), where row exactness can break.
 _context = int(
@@ -239,6 +243,17 @@ for name, prompt, mt in tasks:
         if block == 0:
             ref[name] = r["tokens"]
         r["parity"] = r["tokens"] == ref[name]
+        if not r["parity"]:
+            r["first_diff"] = next(
+                (
+                    i
+                    for i, (a, b) in enumerate(
+                        zip(r["tokens"], ref[name], strict=False)
+                    )
+                    if a != b
+                ),
+                min(len(r["tokens"]), len(ref[name])),
+            )
         r["tokens_head"] = r["tokens"][:64]
         r.pop("tokens")
         print(json.dumps(r), flush=True)
