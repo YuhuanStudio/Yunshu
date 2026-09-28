@@ -33,7 +33,6 @@ def test_timeout_branch_sets_cancel_event():
     to = s.index("VLM stream timeout: no token")
     region = s[to : to + 1400]
     assert "cancel_event.set()" in region
-    assert "if cancel_event is not None" in region
 
 
 def test_cancel_event_set_works_for_both_event_types():

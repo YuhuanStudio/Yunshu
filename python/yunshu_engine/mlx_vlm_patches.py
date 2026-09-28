@@ -42,7 +42,6 @@ def apply_mlx_vlm_patches() -> list[str]:
     applied: list[str] = []
     applied += _patch_qwen3_omni_audio_mask()
     applied += _patch_formatter_audio_token()
-    applied += _patch_qwen3_5_empty_chunk()
     applied += _patch_nemotron_omni_model_type_remap()
     _APPLIED = True
 
@@ -76,36 +75,6 @@ def _patch_nemotron_omni_model_type_remap() -> list[str]:
             _vu.MODEL_REMAPPING[k] = v
             added = True
     return ["nemotron omni Reasoning_V3 model_type remap"] if added else []
-
-
-def _patch_qwen3_5_empty_chunk() -> list[str]:
-    """Make the qwen3_5 hybrid decoder survive an empty (S=0) chunk.
-
-    Both layer types reshape with `-1` (`z.reshape(B,S,-1,head_v_dim)` in the
-    GatedDeltaNet; `q.reshape(B,L,heads,-1)` in the attention), and `-1` cannot be
-    inferred from a 0-element array → "Cannot infer the shape of an empty array".
-    This fires on the A2 hybrid-VLM text-prefix reuse path (VLMEngine, Qwen3.5/3.6)
-    when a boundary-snapshot resume leaves an empty suffix. Guarding at the DECODER
-    LAYER (one place, covers linear-attn + full-attn + mlp) is robust: a transformer
-    layer over 0 tokens is a no-op on the residual stream and leaves the KV/recurrent
-    state unchanged, so we return `x` untouched. Non-empty chunks run unmodified.
-    """
-    try:
-        from mlx_vlm.models.qwen3_5.language import Qwen3_5DecoderLayer as Layer
-    except Exception:
-        return []
-    if getattr(Layer, "_yunshu_empty_chunk_patched", False):
-        return []
-    _orig = Layer.__call__
-
-    def patched(self, x, *args, **kwargs):
-        if getattr(x, "ndim", 0) >= 2 and x.shape[1] == 0:  # S == 0: nothing to do
-            return x
-        return _orig(self, x, *args, **kwargs)
-
-    Layer.__call__ = patched
-    Layer._yunshu_empty_chunk_patched = True
-    return ["qwen3_5 empty-chunk (S=0) decoder-layer guard"]
 
 
 def _patch_qwen3_omni_audio_mask() -> list[str]:

@@ -11,9 +11,6 @@ too.
 
 from __future__ import annotations
 
-import inspect
-
-from yunshu_engine import vlm_engine
 from yunshu_engine.text_utils import StopHoldbackBuffer
 
 
@@ -26,15 +23,3 @@ def test_holdback_loses_content_when_only_take_stopped_used():
     # the OLD code emitted only `tail` → "goodbye" lost; the NEW code emits emit+tail
     assert emit + tail == "goodbye"
 
-
-def test_vlm_streaming_emits_feed_plus_take_stopped():
-    src = inspect.getsource(vlm_engine)
-    # the broken pattern (feed then take_stopped on separate lines, discarding feed) is gone
-    assert "_hb.feed(_seg)\n                token_text = _hb.take_stopped()" not in src
-    assert (
-        "_hb.feed(_seg)\n                        token_text = _hb.take_stopped()"
-        not in src
-    )
-    # the corrected combined form is present on the VLM stop paths
-    assert src.count("_hb.feed(_seg) + _hb.take_stopped()") >= 2
-    assert "_hb.feed(token_text) + _hb.take_stopped()" in src

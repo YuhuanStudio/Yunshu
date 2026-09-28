@@ -221,12 +221,21 @@ class VLMBatchRunner:
         self._driving = False
         self.clear_on_idle = False
 
-    def prepare_images(self, prompt: str, image_paths: list[str]):
-        """Preprocess + encode images for one prompt on the MLX thread.
+    def prepare_media(
+        self,
+        prompt: str,
+        image_paths: list[str] | None = None,
+        audio: list | None = None,
+    ):
+        """Preprocess + encode images / audio for one prompt on the MLX thread.
 
-        Returns ``(input_ids, prompt_kwargs, apc_semantic_hash)``. The APC salt
-        hashes the processed pixel values, so a prefix is only reused for the
-        same image content (never across images or with text-only prompts).
+        ``audio`` is the preloaded waveform list from ``VLMEngine._audio_arg``;
+        the processor turns it into ``input_features`` (and masks), which ride
+        in the prompt kwargs to the model's ``get_input_embeddings``. Returns
+        ``(input_ids, prompt_kwargs, apc_semantic_hash)``. The APC salt hashes
+        the processed pixel values and audio features, so a prefix is only
+        reused for the same media content (never across media or with
+        text-only prompts).
         """
         from mlx_vlm import apc as _apc
         from mlx_vlm.utils import prepare_inputs
@@ -235,7 +244,8 @@ class VLMBatchRunner:
 
         raw = prepare_inputs(
             self.processor,
-            images=image_paths,
+            images=image_paths or None,
+            audio=audio or None,
             prompts=prompt,
             image_token_index=getattr(self.model.config, "image_token_index", None),
             add_special_tokens=True,
@@ -247,7 +257,10 @@ class VLMBatchRunner:
             for k, v in raw.items()
             if k not in ("input_ids", "pixel_values", "attention_mask")
         }
-        clear_rope_state(self.model)
+        if not self.busy():
+            # Stale mRoPE state from an earlier request; while a batch runs,
+            # its rows carry their own positions / deltas.
+            clear_rope_state(self.model)
         embed = self.model.get_input_embeddings(
             input_ids, pixel_values, mask=raw.get("attention_mask"), **data
         )
@@ -255,8 +268,15 @@ class VLMBatchRunner:
         salt = None
         if self.apc_manager is not None:
             salt = _apc.semantic_extra_hash(
-                image_hash=_apc.hash_image_payload(pixel_values=pixel_values),
-                media={"audio": None, "video": raw.get("pixel_values_videos")},
+                image_hash=(
+                    _apc.hash_image_payload(pixel_values=pixel_values)
+                    if pixel_values is not None
+                    else 0
+                ),
+                media={
+                    "audio": raw.get("input_features"),
+                    "video": raw.get("pixel_values_videos"),
+                },
                 model=self.model.language_model,
                 processor=self.processor,
             )
@@ -301,6 +321,8 @@ class VLMBatchRunner:
         top_logprobs: int = 0,
         thinking_budget: int | None = None,
         prompt_preopens_thinking: bool = False,
+        thinking_start_token: str = "<think>",
+        thinking_end_token: str = "</think>",
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
         xtc_special_tokens: list | None = None,
@@ -333,8 +355,8 @@ class VLMBatchRunner:
             budget = ThinkingBudgetCriteria(
                 getattr(self.processor, "tokenizer", self.processor),
                 int(thinking_budget),
-                thinking_end_token="</think>",
-                thinking_start_token="<think>",
+                thinking_end_token=thinking_end_token,
+                thinking_start_token=thinking_start_token,
                 enable_thinking=True,
                 prompt_preopens_thinking=prompt_preopens_thinking,
             )

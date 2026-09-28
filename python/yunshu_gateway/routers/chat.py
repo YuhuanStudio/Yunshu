@@ -2337,26 +2337,21 @@ async def _handle_vlm_chat(
             detail=f"VLM model '{req.model}' not registered or not loaded",
         )
 
-    # The legacy image path cannot apply grammar/JSON-schema constraints, so
-    # structured output on an image request would be silently ignored. The
-    # batch runner constrains image turns too; only reject when it is absent.
-    if (
-        json_schema
-        and getattr(vlm_engine, "_batch_runner", None) is None
-        and any(
-            isinstance(m.get("content"), list)
-            and any(
-                isinstance(p, dict)
-                and p.get("type") in ("image_url", "image", "input_image")
-                for p in m["content"]
-            )
-            for m in messages
+    # No VLM path implements LoRA adapters or custom logits processors; say so
+    # instead of accepting the request and generating on the base model.
+    _unsupported = [
+        name
+        for name, value in (
+            ("lora_adapter", req.lora_adapter),
+            ("logits_processors", req.logits_processors),
         )
-    ):
+        if value
+    ]
+    if _unsupported:
         raise HTTPException(
             status_code=400,
-            detail="response_format / json_schema (structured output) is not supported "
-            "together with image inputs",
+            detail=f"{', '.join(_unsupported)} is not supported for multimodal "
+            f"(VLM) model '{req.model}'",
         )
 
     # VLM/multimodal chat previously BYPASSED the context + prefill
@@ -2451,7 +2446,6 @@ async def _handle_vlm_chat(
         top_logprobs=req.top_logprobs,
         spec_decode=req.spec_decode,
         priority=req.priority,
-        logits_processors=req.logits_processors,
         timeout_seconds=req.timeout,
     )
     if json_schema:
@@ -2539,8 +2533,6 @@ async def _handle_vlm_chat(
         )
 
     n = max(req.n, 1)
-    loaded_adapter = _apply_lora_adapter(vlm_engine, req.lora_adapter)
-    gen_kwargs["lora_adapter"] = loaded_adapter
 
     # register for cancellation + client-disconnect stop. This non-streaming VLM
     # path previously had NO tracker entry, NO cancel_event, and NO disconnect guard, so
@@ -2583,7 +2575,6 @@ async def _handle_vlm_chat(
             request, _run_all_choices(), cancel_event=_vlm_cancel
         )
     finally:
-        _release_lora_adapter(vlm_engine, loaded_adapter)
         if _vlm_tracker is not None:
             with contextlib.suppress(Exception):
                 _vlm_tracker.unregister(completion_id)
@@ -2711,7 +2702,6 @@ async def _stream_vlm_response(
     native_tools: list[dict] | None = None,
 ) -> AsyncIterator[bytes]:
     """SSE streaming for VLM engine ."""
-    loaded_adapter = _apply_lora_adapter(vlm_engine, req.lora_adapter)
 
     # Register with request tracker for cancellation support (before _token_source
     # so cancel_event is available to pass into the engine)
@@ -2746,7 +2736,6 @@ async def _stream_vlm_response(
 
     async def _token_source():
         nonlocal \
-            loaded_adapter, \
             done_emitted, \
             vlm_prompt_tok, \
             vlm_completion_tok, \
@@ -2830,14 +2819,16 @@ async def _stream_vlm_response(
             logit_bias=req.logit_bias,
             xtc_probability=req.xtc_probability,
             xtc_threshold=req.xtc_threshold,
+            top_n_sigma=req.top_n_sigma,
+            min_tokens=req.min_tokens,
+            ignore_eos=req.ignore_eos,
+            suppress_tokens=req.suppress_tokens,
             logprobs=req.logprobs,
             top_logprobs=req.top_logprobs,
             spec_decode=req.spec_decode,
             priority=req.priority,
-            logits_processors=req.logits_processors,
             cancel_event=_vlm_cancel_evt,
             timeout_seconds=req.timeout,
-            lora_adapter=loaded_adapter,
         )
         if json_schema:
             stream_kwargs["json_schema"] = json_schema
@@ -3032,7 +3023,6 @@ async def _stream_vlm_response(
         if not done_emitted:
             yield b"data: [DONE]\n\n"
     finally:
-        _release_lora_adapter(vlm_engine, loaded_adapter)
         if _vlm_tracker is not None:
             with contextlib.suppress(Exception):
                 _vlm_tracker.unregister(completion_id)

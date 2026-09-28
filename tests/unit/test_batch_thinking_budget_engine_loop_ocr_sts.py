@@ -17,15 +17,6 @@ from __future__ import annotations
 import inspect
 
 
-def test_vlm_budget_finish_reason_is_length():
-    from yunshu_engine import vlm_engine
-
-    src = inspect.getsource(vlm_engine)
-    # the budget-exhaustion terminal now reports length + closes the think tag
-    assert 'finish_reason="length"' in src
-    assert '_budget_close = "</think>"' in src
-
-
 def test_engine_loop_batch_bidirectional():
     from yunshu_engine import engine_core
 

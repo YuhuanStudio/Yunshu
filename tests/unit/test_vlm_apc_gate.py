@@ -4,43 +4,52 @@ import contextlib
 from types import SimpleNamespace
 
 import mlx.core as mx
+import pytest
 
 from yunshu_engine.vlm_engine import VLMEngine
 
 
-def _runner_eligible(**kwargs):
+def _engine(runner=True, vision=True, processor=True):
     engine = object.__new__(VLMEngine)
-    engine._batch_runner = object()
-    return engine._runner_text_eligible(
-        logprobs=False, top_logprobs=None, kwargs=kwargs
-    )
+    engine._batch_runner = object() if runner else None
+    engine._has_vision = vision
+    engine._processor = object() if processor else None
+    engine._model_path = "/models/m"
+    return engine
 
 
-def test_runner_serves_ordinary_requests():
-    # Sampling, thinking, stop, schema, tools and logprobs all stay on the runner.
-    assert _runner_eligible()
-    assert _runner_eligible(json_schema={"type": "object"})
-    assert _runner_eligible(reasoning_effort="low")
-
-
-def test_runner_leaves_unimplemented_knobs_to_legacy_loop():
-    for key in ("lora_adapter", "logits_processors"):
-        assert not _runner_eligible(**{key: 1})
-    # Implemented by the runner (TokenMaskProcessor / RowSampler) or accepted.
-    for key in (
-        "xtc_probability",
-        "min_tokens",
-        "ignore_eos",
-        "suppress_tokens",
-        "top_n_sigma",
-        "spec_decode",
+def test_runner_serves_every_request_knob():
+    engine = _engine()
+    for kwargs in (
+        {},
+        {"json_schema": {"type": "object"}},
+        {"reasoning_effort": "low"},
+        {"xtc_probability": 0.5},
+        {"min_tokens": 3},
+        {"ignore_eos": True},
+        {"suppress_tokens": [1]},
+        {"top_n_sigma": 1.0},
+        {"spec_decode": True},
     ):
-        assert _runner_eligible(**{key: 1})
-    engine = object.__new__(VLMEngine)
-    engine._batch_runner = None
-    assert not engine._runner_text_eligible(
-        logprobs=False, top_logprobs=None, kwargs={}
-    )
+        engine._check_request_supported([], [], kwargs)
+
+
+def test_unimplemented_knobs_are_rejected_not_ignored():
+    engine = _engine()
+    for key in ("lora_adapter", "logits_processors"):
+        with pytest.raises(ValueError, match=key):
+            engine._check_request_supported([], [], {key: 1})
+
+
+def test_media_requirements_fail_loudly():
+    with pytest.raises(RuntimeError, match="no batch runner"):
+        _engine(runner=False)._check_request_supported([], [], {})
+    with pytest.raises(ValueError, match="no vision encoder"):
+        _engine(vision=False)._check_request_supported(["a.png"], [], {})
+    with pytest.raises(RuntimeError, match="no mlx_vlm processor"):
+        _engine(processor=False)._check_request_supported([], ["a.wav"], {})
+    # Audio-only models (no vision tower) still take audio.
+    _engine(vision=False)._check_request_supported([], ["a.wav"], {})
 
 
 def test_qwen_capacity_gate_avoids_uncacheable_32k_prefill():

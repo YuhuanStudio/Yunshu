@@ -29,7 +29,6 @@ import contextvars
 import functools
 import gc
 import hashlib
-import importlib
 import json
 import logging
 import os
@@ -69,85 +68,6 @@ class _RunnerCall(functools.partial):
     must wait for its tokens on another thread; ``_generate_sync`` /
     ``_stream_sync`` return this instead of generating inline.
     """
-
-
-def _build_noncached_sampler(
-    temperature: float, top_p: float, top_k: int, min_p: float, seed: int | None
-):
-    """Build a numpy-backed sampler that bypasses mlx-lm's @mx.compile cache.
-
-    The mlx-lm `categorical_sampling` is decorated with
-    `@mx.compile(inputs=mx.random.state, outputs=mx.random.state)`. The
-    compile cache traps the first call's PRNG state, so subsequent calls
-    produce identical token streams even after `mx.random.seed()` between
-    requests. This is the ⚠️ A "VLM determinism" bug — calling
-    the same temp=2.0 prompt 3 times returns byte-identical output.
-
-    For temperature==0 (greedy) we keep mlx-lm's compiled argmax path
-    (deterministic anyway, faster). For temperature>0 we sample via
-    `numpy.random.Generator` so each request has independent randomness.
-
-    Caller responsibilities:
-    - `seed=None` → request gets a time-based fresh seed
-    - `seed=<int>` → identical seed produces identical output across calls
-    """
-    if temperature is None or temperature < 1e-6:
-        from mlx_lm.sample_utils import make_sampler
-
-        return make_sampler(
-            temp=0.0, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p
-        )
-
-    import time as _t
-
-    import numpy as _np
-
-    base = (
-        int(seed) & ((1 << 63) - 1)
-        if seed is not None
-        else _t.time_ns() & ((1 << 63) - 1)
-    )
-    rng = _np.random.default_rng(base)
-    _t_ = float(temperature)
-    _tp = float(top_p)
-    _tk = int(top_k) if top_k and top_k > 0 else 0
-    _mp = float(min_p) if min_p else 0.0
-
-    def _sampler(logits):
-        arr = _np.asarray(logits.astype(mx.float32))
-        flat = arr.reshape(-1, arr.shape[-1])
-        out = _np.empty(flat.shape[0], dtype=_np.int64)
-        for i in range(flat.shape[0]):
-            l = flat[i].astype(_np.float64) / _t_
-            l = l - _np.max(l)
-            p = _np.exp(l)
-            p = p / p.sum()
-            if _tk and _tk < len(p):
-                idx = _np.argpartition(p, -_tk)[-_tk:]
-                m = _np.zeros_like(p)
-                m[idx] = 1.0
-                p = p * m
-                p = p / p.sum()
-            if 0 < _tp < 1:
-                order = _np.argsort(-p)
-                cum = _np.cumsum(p[order])
-                # Include the threshold-crossing token (matches mlx-lm apply_top_p);
-                # `order[cum <= _tp]` dropped it → nucleus too narrow. See batched_engine.
-                k = int(_np.searchsorted(cum, _tp, side="left")) + 1
-                keep = order[: max(1, min(k, len(order)))]
-                m = _np.zeros_like(p)
-                m[keep] = 1.0
-                p = p * m
-                p = p / p.sum()
-            if _mp > 0:
-                pmax = p.max()
-                m = (p >= _mp * pmax).astype(_np.float64)
-                p = p * m
-                p = p / p.sum()
-            out[i] = int(rng.choice(len(p), p=p))
-        return mx.array(out.reshape(arr.shape[:-1]).astype(_np.int64))
-
-    return _sampler
 
 
 def _quantize_shape_safety_patch():
@@ -295,166 +215,6 @@ def _VALIDATE_LOCAL_PATH(path: str) -> str:
     return str(resolved)
 
 
-def _get_model_classes_with_vlm_fallback(config: dict):
-    """Resolve model classes.
-
-    This is invoked by `mlx_lm.utils.load_model` (which passes a flat-dict
-    config). mlx_lm.models.* `ModelArgs` is a dataclass that accepts a flat
-    dict; mlx_vlm.models.* `ModelConfig` typically expects nested sub-configs
-    (e.g., TextConfig) and chokes on flat dicts with
-    `AttributeError: 'dict' object has no attribute 'model_type'`.
-
-    Therefore: try mlx_lm first (it handles flat dicts natively). Only fall
-    back to mlx_vlm when mlx_lm has no module for this model_type. The
-    vision-encoder path is handled separately by `_load_vision_model`, which
-    invokes mlx_vlm.utils.load directly with the proper nested config.
-    """
-    from mlx_lm.utils import MODEL_REMAPPING
-
-    model_type = config.get("model_type", "")
-    remapped = MODEL_REMAPPING.get(model_type, model_type)
-
-    # Try mlx-lm first — it handles flat dict configs via dataclass ModelArgs
-    try:
-        arch = importlib.import_module(f"mlx_lm.models.{remapped}")
-        return arch.Model, arch.ModelArgs
-    except ImportError:
-        pass
-
-    # Fall back to mlx-vlm (covers VLM-only model types)
-    try:
-        arch = importlib.import_module(f"mlx_vlm.models.{remapped}")
-        return arch.Model, arch.ModelConfig
-    except ImportError:
-        pass
-
-    raise ValueError(f"Model type {model_type} not supported by mlx-lm or mlx-vlm.")
-
-
-def _convert_nested_config(model_args_class, config_dict):
-    """Convert nested dicts in config to proper config objects for mlx-vlm models.
-
-    BaseModelConfig.from_dict() doesn't recurse into nested dicts, so
-    vision_config/text_config stay as raw dicts. This function manually
-    converts them to the correct dataclass types.
-    """
-    import dataclasses
-
-    if not dataclasses.is_dataclass(model_args_class):
-        return model_args_class.from_dict(config_dict)
-
-    fields = dataclasses.fields(model_args_class)
-    kwargs = {}
-    for f in fields:
-        if f.name not in config_dict:
-            continue
-        val = config_dict[f.name]
-        if isinstance(val, dict) and dataclasses.is_dataclass(f.type):
-            try:
-                kwargs[f.name] = f.type(**val)
-            except TypeError:
-                kwargs[f.name] = val
-        elif isinstance(f.type, str):
-            kwargs[f.name] = val
-        else:
-            kwargs[f.name] = val
-
-    try:
-        return model_args_class(**kwargs)
-    except TypeError:
-        return model_args_class.from_dict(config_dict)
-
-
-def _is_mlx_vlm_model(model) -> bool:
-    """Check if a model was loaded from mlx-vlm's model classes (vs mlx-lm)."""
-    return type(model).__module__.startswith("mlx_vlm.models.")
-
-
-def _wrap_mlx_vlm_for_mlx_lm(model):
-    """Adapt an mlx_vlm model so mlx_lm's generate_step can drive it text-only.
-
-    Two upstream mlx_vlm quirks break the mlx_lm fast path:
-
-    1. The top-level Model.__call__ returns a `LanguageModelOutput` dataclass
-       (or sometimes another wrapper) instead of raw `mx.array` logits.
-       mlx_lm.generate_step slices the return with ``[:, -1, :]`` and crashes
-       on a dataclass.
-
-    2. Some mlx_vlm thinkers (e.g. qwen3_omni_moe.thinker.Thinker.__call__)
-       still try to unpack ``self.get_input_embeddings(...)`` into a 3-tuple,
-       but the helper now returns an ``InputEmbeddingsFeatures`` dataclass.
-       This raises ``InputEmbeddingsFeatures cannot be unpacked``.
-
-    We fix (1) by replacing ``__call__`` with a thin shim that pulls ``.logits``
-    out of any non-array return.  We fix (2) by replacing the offending
-    ``get_input_embeddings`` with a wrapper that returns ``(inputs_embeds,
-    visual_pos_masks, deepstack_visual_embeds)`` — the tuple shape its caller
-    expects.  Both patches are idempotent and limited to the wrapped instance.
-    """
-    import mlx.core as mx
-
-    # (2) Patch get_input_embeddings on the inner thinker if present.
-    thinker = getattr(model, "thinker", None)
-    if thinker is not None and hasattr(thinker, "get_input_embeddings"):
-        original = thinker.get_input_embeddings
-
-        def _tuple_input_embeddings(*args, **kwargs):
-            out = original(*args, **kwargs)
-            # Already a tuple/list — pass through.
-            if isinstance(out, tuple):
-                return out
-            # Dataclass with the expected fields — shape into a 3-tuple.
-            inputs_embeds = getattr(out, "inputs_embeds", None)
-            if inputs_embeds is None:
-                return out
-            return (
-                inputs_embeds,
-                getattr(out, "visual_pos_masks", None),
-                getattr(out, "deepstack_visual_embeds", None),
-            )
-
-        try:
-            thinker.get_input_embeddings = _tuple_input_embeddings
-        except Exception:
-            # nn.Module may forbid attribute assignment; bind via __dict__.
-            object.__setattr__(thinker, "get_input_embeddings", _tuple_input_embeddings)
-
-    # (1) Wrap __call__ to coerce the return to raw logits.  Python looks up
-    # ``__call__`` on the *type*, not the instance, so per-instance attribute
-    # assignment is ignored by ``model(...)``.  Build a one-off subclass of the
-    # model's type that overrides __call__ and rebind the instance to it.
-    original_cls = type(model)
-    if not getattr(original_cls, "_yunshu_mlx_lm_adapted", False):
-
-        def _logits_only_call(self, *args, **kwargs):
-            out = original_cls.__call__(self, *args, **kwargs)
-            if isinstance(out, mx.array):
-                return out
-            logits = getattr(out, "logits", None)
-            if logits is not None:
-                return logits
-            if isinstance(out, (tuple, list)) and out and isinstance(out[0], mx.array):
-                return out[0]
-            raise RuntimeError(
-                f"mlx_vlm fallback for {original_cls.__module__}.{original_cls.__name__}: "
-                f"model __call__ returned {type(out).__name__} with no .logits; "
-                "cannot adapt to mlx_lm generate_step.  "
-                "This model is not supported via the text-only mlx_lm fallback path."
-            )
-
-        adapted_cls = type(
-            f"{original_cls.__name__}_YunshuMlxLmAdapter",
-            (original_cls,),
-            {
-                "__call__": _logits_only_call,
-                "_yunshu_mlx_lm_adapted": True,
-            },
-        )
-        # In-place rebind: preserves all module weights and submodule registry.
-        model.__class__ = adapted_cls
-    return model
-
-
 # Models that only support a single image input
 SINGLE_IMAGE_ONLY_MODELS = frozenset(
     {
@@ -572,219 +332,6 @@ class _VLMTextPromptCache:
             return s
 
 
-class _CachingVisionTower:
-    """Cross-request vision-feature cache by wrapping a VLM's vision
-    tower.
-
-    The VLM vision-feature cache used to be wired as a `vision_cache` kwarg to
-    mlx_vlm.generate/stream_generate — but the installed mlx_vlm has NO such
-    parameter, so the adapter's get/put were NEVER called and the vision tower
-    (ViT) re-encoded the image on EVERY request, even across a multi-turn
-    conversation about the same image. This wrapper actually implements the
-    cache: it intercepts the tower call, keys on the pixel-values hash (+ any
-    grid/extra args), and returns the previously-computed image features on a
-    repeat — skipping the expensive ViT forward. Bounded LRU to cap memory.
-
-    It transparently proxies attribute access to the wrapped tower (some models
-    read e.g. `vision_tower.patch_embed.proj.weight.dtype`), so it is a drop-in
-    replacement for the module on its parent.
-    """
-
-    def __init__(self, tower, max_entries: int = 4):
-        object.__setattr__(self, "_tower", tower)
-        object.__setattr__(self, "_lru", __import__("collections").OrderedDict())
-        object.__setattr__(self, "_max", max(1, int(max_entries)))
-        object.__setattr__(self, "_hits", 0)
-        object.__setattr__(self, "_misses", 0)
-
-    @staticmethod
-    def _key(pixel_values, args) -> str:
-        import hashlib
-
-        import numpy as _np
-
-        h = hashlib.blake2b(digest_size=16)
-
-        def _feed(x) -> None:
-            # CORRECTNESS FIX: hash the REAL pixel bytes. The old code did
-            # np.asarray(x, dtype=float32) then, on ANY failure (e.g. an mlx.array
-            # whose dtype/format that call rejects), fell back to repr(x) — and a
-            # large array's repr is TRUNCATED ("array([[[0.1, ...]]] )"), so two
-            # DIFFERENT images produced the SAME key → the cache returned the wrong
-            # image's features (read QUASAR as BANANA). Force a full materialization
-            # via np.array (mlx arrays implement __array__); include shape+dtype; and
-            # NEVER fall back to a colliding repr — use an id()-salted miss instead.
-            try:
-                arr = _np.array(x, copy=True)
-                h.update(str(arr.shape).encode())
-                h.update(str(arr.dtype).encode())
-                h.update(arr.tobytes())
-                return
-            except Exception:
-                pass
-            try:
-                import mlx.core as _mx
-
-                if isinstance(x, _mx.array):
-                    h.update(str(x.shape).encode())
-                    h.update(_np.array(_mx.stop_gradient(x), copy=True).tobytes())
-                    return
-            except Exception:
-                pass
-            # Last resort: a UNIQUE (non-colliding) token so distinct objects never
-            # share a key. This degrades to "always miss" (safe) rather than the
-            # silent wrong-image collision the truncated repr caused.
-            h.update(f"{type(x).__name__}:{getattr(x, 'shape', None)}:{id(x)}".encode())
-
-        _feed(pixel_values)
-        for a in args:
-            _feed(a)
-        return h.hexdigest()
-
-    def __call__(self, pixel_values, *args, **kwargs):
-        lru = object.__getattribute__(self, "_lru")
-        key = self._key(pixel_values, args)
-        if key in lru:
-            lru.move_to_end(key)
-            object.__setattr__(
-                self, "_hits", object.__getattribute__(self, "_hits") + 1
-            )
-            return lru[key]
-        out = object.__getattribute__(self, "_tower")(pixel_values, *args, **kwargs)
-        try:
-            import mlx.core as _mx
-
-            _mx.eval(out)  # materialize before caching so the hit path is free
-        except Exception:
-            pass
-        lru[key] = out
-        object.__setattr__(
-            self, "_misses", object.__getattribute__(self, "_misses") + 1
-        )
-        while len(lru) > object.__getattribute__(self, "_max"):
-            lru.popitem(last=False)
-        return out
-
-    def cache_stats(self) -> dict:
-        return {
-            "vision_tower_cache_hits": object.__getattribute__(self, "_hits"),
-            "vision_tower_cache_misses": object.__getattribute__(self, "_misses"),
-            "vision_tower_cache_entries": len(object.__getattribute__(self, "_lru")),
-        }
-
-    def __getattr__(self, name):
-        # Proxy everything else (parameters, sub-modules, dtype reads) to the tower.
-        return getattr(object.__getattribute__(self, "_tower"), name)
-
-
-def _wrap_vision_towers(model, max_entries: int = 4) -> list:
-    """Find a VLM model's vision tower(s) and replace them with caching wrappers.
-
-    Walks the model + its common container children (thinker/model/language_model)
-    for attributes named vision_tower/vision_model/visual/image_encoder and swaps
-    in a _CachingVisionTower. Returns the list of installed wrappers (for stats).
-    Idempotent — skips already-wrapped towers.
-    """
-    _ATTRS = ("vision_tower", "vision_model", "visual", "image_encoder")
-    wrappers = []
-    seen = set()
-    # Candidate parents: the model itself + one level of common containers.
-    parents = [model]
-    for cname in ("thinker", "model", "language_model", "vlm", "multi_modal"):
-        child = getattr(model, cname, None)
-        if child is not None:
-            parents.append(child)
-    for parent in parents:
-        if id(parent) in seen:
-            continue
-        seen.add(id(parent))
-        for attr in _ATTRS:
-            tower = getattr(parent, attr, None)
-            if tower is None or isinstance(tower, _CachingVisionTower):
-                continue
-            if not callable(tower):
-                continue
-            try:
-                wrapper = _CachingVisionTower(tower, max_entries=max_entries)
-                setattr(parent, attr, wrapper)
-                wrappers.append(wrapper)
-            except Exception:
-                logger.debug(
-                    "vision tower wrap failed for %s.%s",
-                    type(parent).__name__,
-                    attr,
-                    exc_info=True,
-                )
-    return wrappers
-
-
-class _MlxVlmVisionCacheAdapter:
-    """Adapts VisionFeatureCache to mlx_vlm's expected vision_cache interface.
-
-    mlx_vlm's stream_generate expects a dict-like object with:
-      - get(image) -> features or None
-      - put(image, features) -> None
-
-    where `image` is the image path string (or list of strings).
-    Our VisionFeatureCache uses (image_hash, model_name) as the key.
-    This adapter computes the hash and delegates to the real cache.
-    """
-
-    def __init__(self, cache, model_name: str):
-        self._cache = cache
-        self._model_name = model_name
-
-    def get(self, image):
-        """Look up cached vision features by image path(s)."""
-        from .vision_feature_cache import compute_image_hash
-
-        try:
-            if isinstance(image, list):
-                # Multi-image: hash actual file contents, not paths
-                parts = []
-                for p in image:
-                    if os.path.exists(p):
-                        with open(p, "rb") as f:
-                            parts.append(f.read())
-                    else:
-                        parts.append(p.encode())
-                img_hash = compute_image_hash(b"".join(parts))
-            else:
-                if os.path.exists(image):
-                    with open(image, "rb") as f:
-                        img_hash = compute_image_hash(f.read())
-                else:
-                    img_hash = compute_image_hash(image.encode())
-            return self._cache.get(img_hash, self._model_name)
-        except Exception:
-            logger.debug("vision cache adapter get failed", exc_info=True)
-            return None
-
-    def put(self, image, features):
-        """Store vision features keyed by image path(s)."""
-        from .vision_feature_cache import compute_image_hash
-
-        try:
-            if isinstance(image, list):
-                parts = []
-                for p in image:
-                    if os.path.exists(p):
-                        with open(p, "rb") as f:
-                            parts.append(f.read())
-                    else:
-                        parts.append(p.encode())
-                img_hash = compute_image_hash(b"".join(parts))
-            else:
-                if os.path.exists(image):
-                    with open(image, "rb") as f:
-                        img_hash = compute_image_hash(f.read())
-                else:
-                    img_hash = compute_image_hash(image.encode())
-            self._cache.put(img_hash, self._model_name, features)
-        except Exception:
-            logger.debug("vision cache adapter put failed", exc_info=True)
-
-
 def _derive_vlm_quantization(config: dict) -> dict | None:
     """Resolve the effective ``quantization`` dict for a VLM checkpoint.
 
@@ -819,11 +366,14 @@ def _derive_vlm_quantization(config: dict) -> dict | None:
 
 
 class VLMEngine:
-    """Vision-Language Model engine with dual mlx-lm/mlx-vlm support.
+    """Multimodal (mlx-vlm) model engine.
 
-    For text-only LLMs (mlx-lm supported): uses mlx_lm.generate.generate_step.
-    For VLM/Omni models (mlx-vlm model classes): uses model.language_model
-    with manual generate loop and LanguageModelOutput.
+    Every request is served by ``VLMBatchRunner`` (upstream mlx-vlm
+    ``BatchGenerator``): shared continuous batching, APC prefix reuse, and —
+    for Qwen3.5-family checkpoints — MTP/DFlash speculative decoding. Text-only
+    models are served by ``BatchedEngine`` (model_manager routes them there).
+    The pre-runner generation loops are recorded in
+    docs/archive/legacy_vlm_loop/README.md.
     """
 
     def __init__(self, model_path: str, config: EngineConfig | None = None) -> None:
@@ -846,134 +396,16 @@ class VLMEngine:
         self._temp_files: list[str] | None = None
         self._temp_files_lock = threading.Lock()
 
-        # mRoPE state (detected during load)
-        self._mrope_info = None
-        self._rope_delta_manager = None
-
-        # Vision feature cache — enabled by default for VLM models.
-        # Caches image encoder outputs (vision_tower + projector) keyed by
-        # (image_hash, model_name) so repeated images skip re-encoding.
-        self._vision_cache = None
-        import os as _os
-
-        _vc_env = _os.environ.get("YUNSHU_VISION_CACHE", "").strip()
-        if _vc_env not in ("0", "false", "no", "disabled"):
-            from .vision_feature_cache import VisionFeatureCache
-
-            cache_dir = _os.environ.get(
-                "YUNSHU_VISION_CACHE_DIR",
-                "~/.cache/yunshu/vision",
-            )
-            self._vision_cache = VisionFeatureCache(cache_dir=cache_dir)
-            logger.info("Vision feature cache enabled (dir=%s)", cache_dir)
-
-        # Adapter that wraps VisionFeatureCache for mlx_vlm's interface.
-        # Created lazily after model load when model_name is known.
-        self._vlm_vision_cache_adapter = None
-        # installed _CachingVisionTower wrappers (cross-request vision
-        # feature cache). Populated at load(); empty for text-only models.
-        self._vision_tower_wrappers: list = []
-
-        # Encoder cache — caches encoder hidden states (vision/audio/text encoder)
-        # keyed by request_id. When the same image/audio is seen again in the
-        # batch path, reuse cached encoder output instead of re-encoding.
-        # Complements VisionFeatureCache (which caches at the mlx_vlm layer).
-        from .encoder_cache import EncoderCacheManager
-
-        self._encoder_cache = EncoderCacheManager(
-            max_entries=int(os.environ.get("YUNSHU_ENCODER_CACHE_MAX", "64")),
-            ttl_seconds=float(os.environ.get("YUNSHU_ENCODER_CACHE_TTL", "300")),
-        )
-
         # Text prompt tokenization cache — caches _format_prompt() output and
-        # tokenizer.encode() results keyed by message content hash.  Avoids
-        # re-tokenizing identical prompts across requests.  Also caches
-        # _processor.apply_chat_template() output for the VLM vision path.
+        # tokenizer.encode() results keyed by message content hash (and the
+        # template extras), plus _processor.apply_chat_template() output for
+        # media prompts. Avoids re-templating identical prompts.
         self._text_prompt_cache = _VLMTextPromptCache(
             max_entries=int(os.environ.get("YUNSHU_VLM_TEXT_CACHE_MAX", "256")),
         )
-
-        # Per-image KV prefix cache state — maps image_hash to PromptCacheState.
-        # When the same image appears with different text contexts, the KV cache
-        # from the previous conversation is reused for the common image prefix.
-        # Thread-safe: accessed from MLX executor thread and async stop() path.
-        self._kv_prefix_states: dict[str, Any] = {}
-        self._kv_prefix_lock = threading.Lock()
-        self._kv_prefix_max_entries = 32
-
-        # 4-tier KV prefix cache (HOT full-precision / WARM 4-bit-in-RAM
-        # / SSD int8-on-disk) for the VLM *text* path. Previously VLM models had
-        # NO cross-request KV prefix reuse on the text path — only the per-image
-        # KV-state reuse above and the token-id/template _text_prompt_cache.
-        #
-        # DEFAULT ON (YUNSHU_VLM_KV_PREFIX=0 to disable). Verified BYTE-LOSSLESS on
-        # mRoPE full-attention VLMs (GLM-OCR; the Qwen-VL family uses the same
-        # mechanism): the text path supplies explicit sequential position_ids so a
-        # reused prefix's suffix resumes at `matched`. Backbones that
-        # CAN'T reuse losslessly are auto-bypassed by _text_prefix_reuse_safe
-        # (shared model_backend layer): sliding-window (gemma RotatingKVCache) and
-        # hybrid recurrent (Qwen3.5 ArraysCache). Stores the snapshot at the prompt
-        # boundary (before decode pollutes it). See docs/VLM_TEXT_KV_PREFIX.md.
-        self._text_kv_prefix_enabled = os.environ.get(
-            "YUNSHU_VLM_KV_PREFIX", "1"
-        ).strip() in ("1", "true", "yes")
-        self._text_kv_prefix_cache = None
-        if self._text_kv_prefix_enabled:
-            from .kv_prefix_cache import KVPrefixCache
-
-            _pc_max = int(os.environ.get("YUNSHU_PREFIX_MAX_ENTRIES", "128"))
-            _pc_hot = int(os.environ.get("YUNSHU_PREFIX_HOT_LIMIT", "32"))
-            self._text_kv_prefix_cache = KVPrefixCache(
-                max_entries=_pc_max, hot_limit=_pc_hot, min_prefix_length=32
-            )
-            if os.environ.get("YUNSHU_SSD_CACHE", "").strip() in ("1", "true", "yes"):
-                try:
-                    ssd_dir = os.environ.get(
-                        "YUNSHU_SSD_CACHE_DIR", "~/.cache/yunshu/kv-ssd-vlm"
-                    )
-                    _ssd_gb = int(
-                        float(os.environ.get("YUNSHU_SSD_CACHE_MAX_GB", "10"))
-                    )
-                    self._text_kv_prefix_cache.enable_ssd_cache(
-                        cache_dir=ssd_dir,
-                        max_size_bytes=_ssd_gb * 1024**3,
-                        model_name=os.path.basename(model_path.rstrip("/")),
-                    )
-                except Exception:
-                    logger.debug("VLM text KV SSD tier init failed", exc_info=True)
-        # Memoized backbone serving capabilities (see model_backend.py); decides
-        # whether cross-request KV prefix reuse is lossless for this model.
+        # Memoized backbone serving capabilities (see model_backend.py).
         self._backend_caps: Any = None
-        # Memoized empirical reuse-losslessness probe verdict (None = not run).
-        self._reuse_probe_ok: bool | None = None
-        # HYBRID VLM backbones (Qwen3.5/3.6-VL: KVCache +
-        # GatedDeltaNet ArraysCache) reuse text prefixes via boundary snapshots
-        # (no_trim) — the recurrent state can't be sliced, but a trim=0 snapshot
-        # at a block boundary IS losslessly resumable (verified). Mirrors the LLM
-        # fast path's YUNSHU_HYBRID_PREFIX. Opt-out via YUNSHU_VLM_HYBRID_PREFIX=0.
-        self._text_hybrid_prefix_enabled = os.environ.get(
-            "YUNSHU_VLM_HYBRID_PREFIX", "1"
-        ).strip() in ("1", "true", "yes")
-        self._text_hybrid_block = max(
-            1, int(os.environ.get("YUNSHU_VLM_HYBRID_PREFIX_BLOCK", "128"))
-        )
-        self._hybrid_reuse_probe_ok: bool | None = None
-
-        # VLM cache stats (vision feature cache + KV prefix reuse)
-        self._vlm_vision_hits = 0
-        self._vlm_vision_misses = 0
-        self._vlm_kv_prefix_hits = 0
-        self._vlm_kv_prefix_misses = 0
-
-        # SpecPrefill for VLM text portion (opt-in via YUNSHU_VLM_SPEC_PREFILL)
-        self._spec_prefill_enabled = False
-        if os.environ.get("YUNSHU_VLM_SPEC_PREFILL", "").strip() in (
-            "1",
-            "true",
-            "yes",
-        ):
-            self._spec_prefill_enabled = True
-            logger.info("VLM SpecPrefill enabled")
+        self._mx_large_model = False
 
         from .mlx_executor import get_mlx_executor
 
@@ -986,9 +418,6 @@ class VLMEngine:
 
         self._pipeline = MultimodalPipelineCoordinator()
         self._register_pipeline_processors()
-
-        # Async concurrent VLM engine (opt-in via YUNSHU_VLM_ASYNC=1)
-        self._async_core = None
 
     @property
     def model_name(self) -> str:
@@ -1060,10 +489,11 @@ class VLMEngine:
         )
 
     def load(self) -> None:
-        """Load model and tokenizer with mlx-lm/mlx-vlm fallback.
+        """Load the model, tokenizer and processor with mlx_vlm.
 
-        For mlx-vlm models, MUST run on the MLX executor thread so weights
-        and compute share the same GPU stream.
+        Runs on the MLX executor thread so weights and compute share the same
+        GPU stream. A model mlx_vlm cannot load is an error: text-only models
+        belong to BatchedEngine, not here.
         """
         from mlx_lm.utils import load_config, load_tokenizer
 
@@ -1077,86 +507,35 @@ class VLMEngine:
 
         self._config = load_config(model_path)
 
-        # Check vision support
         thinker_cfg = self._config.get("thinker_config", {})
         self._has_vision = bool(
             self._config.get("vision_config") or thinker_cfg.get("vision_config")
         )
-
-        # For vision models, use mlx_vlm's loader (handles nested config properly)
-        if self._has_vision:
-            try:
-                with _quantize_shape_safety_patch():
-                    self._model = self._load_vision_model(model_path)
-                self._tokenizer = load_tokenizer(model_path)
-                from .text_utils import cache_tokenizer_vocab
-
-                cache_tokenizer_vocab(
-                    self._tokenizer
-                )  # avoid ~98ms/req get_vocab rebuild
-                self._resolve_reasoning_channel_ids()
-                self._is_vlm = _is_mlx_vlm_model(self._model)
-                logger.info(f"Loaded vision model via mlx_vlm: _is_vlm={self._is_vlm}")
-                self._finish_vlm_load(model_path)
-                return
-            except Exception as e:
-                err_str = str(e)
-                # Quantization-shape failures (e.g. Qwen3-Omni 4-bit, where a
-                # weight has last-dim 4304 which is not divisible by group 64)
-                # indicate the published quant artefact is incompatible with
-                # mlx_vlm's quantize layout. The mlx_lm text-only fallback
-                # cannot rescue this — the same weights will misbehave during
-                # forward and (on macOS) tend to crash the entire process with
-                # no Python traceback. Surface a precise error instead.
-                if "needs to be divisible by the quantization group size" in err_str:
-                    raise RuntimeError(
-                        f"VLM/Omni model {model_path.name} cannot be loaded: "
-                        f"mlx_vlm quantization rejected weight shape "
-                        f"({err_str.split('shape')[-1].strip().rstrip(').')} - "
-                        f"last dim not divisible by group size 64). "
-                        "The mlx_lm text-only fallback is unsafe for this "
-                        "model because forward-pass quantize math will hit "
-                        "the same shape constraint and crash the engine. "
-                        "Use a bf16 build of this model, or a 4-bit quant "
-                        "produced with group_size matching the weight shapes."
-                    ) from e
-                logger.warning(
-                    f"mlx_vlm load failed ({e}), falling back to mlx_lm (text-only)"
-                )
-                # mlx_vlm failed → no processor will be set up. Mark as
-                # text-only so image/audio requests fail loudly rather than
-                # crashing later in apply_chat_template (processor=None).
-                self._has_vision = False
-
-        # Load model with mlx-lm fallback (text-only or failed mlx-vlm)
-        from mlx_lm.utils import load_model
-
-        model, config = load_model(
-            model_path,
-            get_model_classes=_get_model_classes_with_vlm_fallback,
-        )
+        try:
+            with _quantize_shape_safety_patch():
+                self._model = self._load_vision_model(model_path)
+        except Exception as e:
+            err_str = str(e)
+            if "needs to be divisible by the quantization group size" in err_str:
+                raise RuntimeError(
+                    f"VLM/Omni model {model_path.name} cannot be loaded: "
+                    f"mlx_vlm quantization rejected weight shape "
+                    f"({err_str.split('shape')[-1].strip().rstrip(').')} - "
+                    f"last dim not divisible by group size 64). "
+                    "Use a bf16 build of this model, or a 4-bit quant "
+                    "produced with group_size matching the weight shapes."
+                ) from e
+            raise RuntimeError(
+                f"mlx_vlm could not load {model_path.name}: {e}. Text-only models "
+                "are served by the LLM engine (BatchedEngine), not VLMEngine."
+            ) from e
         self._tokenizer = load_tokenizer(model_path)
         from .text_utils import cache_tokenizer_vocab
 
         cache_tokenizer_vocab(self._tokenizer)  # avoid ~98ms/req get_vocab rebuild
         self._resolve_reasoning_channel_ids()
-
-        # Adapter: when an mlx_vlm model class was loaded via mlx_lm's loader,
-        # mlx_vlm's __call__ returns a LanguageModelOutput dataclass (not raw
-        # mx.array logits) and may also try to unpack an InputEmbeddingsFeatures
-        # dataclass into a 3-tuple (broken in upstream mlx_vlm). Both crash
-        # mlx_lm's generate_step. Wrap the model to (1) coerce the return value
-        # to raw logits, and (2) monkey-patch get_input_embeddings on the
-        # thinker (if present) so the tuple-unpack on the model's own __call__
-        # does not raise. Falls through cleanly for mlx_lm-native models.
-        if _is_mlx_vlm_model(model):
-            model = _wrap_mlx_vlm_for_mlx_lm(model)
-
-        self._model = model
-        # Even though the model class may originate from mlx_vlm.models.*,
-        # without mlx_vlm's processor the VLM code paths cannot work.
-        # Treat as non-VLM regardless of model-class module origin.
-        self._is_vlm = False
+        self._is_vlm = True
+        logger.info("Loaded model via mlx_vlm (vision=%s)", self._has_vision)
         self._finish_vlm_load(model_path)
 
     def _load_vision_model(self, model_path):
@@ -1287,37 +666,19 @@ class VLMEngine:
         except Exception as e:
             logger.warning(f"Could not apply mlx-vlm patches: {e}")
 
-        # Load processor for VLM vision input
-        if self._has_vision and self._is_vlm:
-            try:
-                from pathlib import Path
+        # The processor prepares image/audio/video inputs and renders media
+        # chat templates; every mlx_vlm model needs it for media requests.
+        try:
+            from mlx_vlm.utils import load_processor
 
-                from mlx_vlm.utils import load_processor
+            self._processor = load_processor(Path(model_path))
+        except Exception as e:
+            logger.warning(f"Could not load VLM processor: {e}")
 
-                self._processor = load_processor(Path(model_path))
-            except Exception as e:
-                logger.warning(f"Could not load VLM processor: {e}")
-
-        # Detect mRoPE support
-        from .mrope import BatchRopeDeltaManager, detect_mrope
-
-        self._mrope_info = detect_mrope(self._config)
-        if self._mrope_info.enabled:
-            self._rope_delta_manager = BatchRopeDeltaManager()
-            logger.info(
-                f"mRoPE detected: sections={self._mrope_info.sections}, "
-                f"source={self._mrope_info.source_key}"
-            )
-
-        # Perf/stability: large VLMs (e.g. 30B-MoE) GPU-hang under
-        # sustained load because — unlike BatchedEngine — the VLM paths never
-        # released the MLX buffer pool between requests, so it grew until OOM/hang.
-        # Flag large models so generation clears the cache + raises the wired
-        # limit (prevents weight swap), mirroring BatchedEngine's _wired_limit_ctx.
-        # Use the on-disk weight size (robust — an MoE's .parameters() can
-        # undercount lazily-structured experts; recommended_max varies). >10GB →
-        # large enough that the buffer pool must be released per request.
-        self._mx_large_model = False
+        # Large VLMs (e.g. 30B-MoE) GPU-hang under sustained load unless the MLX
+        # buffer pool is released between requests. Use the on-disk weight size
+        # (an MoE's .parameters() can undercount lazily-structured experts);
+        # the runner clears the pool whenever its batch drains.
         try:
             import glob as _glob
 
@@ -1328,7 +689,7 @@ class VLMEngine:
             _thresh = int(os.environ.get("YUNSHU_VLM_LARGE_MODEL_GB", "10")) * 1024**3
             self._mx_large_model = _bytes > _thresh
             logger.info(
-                "VLM model ~%.1fGB on disk, large=%s (per-request mem hygiene %s)",
+                "VLM model ~%.1fGB on disk, large=%s (clear buffer pool on idle %s)",
                 _bytes / 1e9,
                 self._mx_large_model,
                 "ON" if self._mx_large_model else "off",
@@ -1336,116 +697,12 @@ class VLMEngine:
         except Exception:
             logger.debug("VLM model-size probe failed", exc_info=True)
 
-        # shrink the text KV-prefix cache for large models. Each entry
-        # holds the full prompt KV (~0.1GB/1.2k-tok on a 30B), so the default
-        # 128-entry/32-hot cache could add ~6GB on top of a ~22GB-resident model
-        # and push a 36GB Mac toward OOM/GPU-hang. Cap it tighter for big models.
-        if self._mx_large_model and self._text_kv_prefix_cache is not None:
-            try:
-                self._text_kv_prefix_cache._max_entries = int(
-                    os.environ.get("YUNSHU_VLM_LARGE_PREFIX_MAX", "24")
-                )
-                self._text_kv_prefix_cache._hot_limit = int(
-                    os.environ.get("YUNSHU_VLM_LARGE_PREFIX_HOT", "8")
-                )
-                logger.info(
-                    "VLM large-model KV prefix cache capped: hot=%d max=%d",
-                    self._text_kv_prefix_cache._hot_limit,
-                    self._text_kv_prefix_cache._max_entries,
-                )
-            except Exception:
-                logger.debug("VLM large-model cache cap failed", exc_info=True)
-
         logger.info(
-            f"VLM engine loaded: {self._model_path} "
-            f"(vision={self._has_vision}, vlm_model={self._is_vlm}, "
-            f"mrope={self._mrope_info.enabled})"
+            f"VLM engine loaded: {self._model_path} (vision={self._has_vision})"
         )
-
-        if self._is_vlm and os.environ.get(
-            "YUNSHU_VLM_RUNNER", "1"
-        ).strip().lower() not in (
-            "0",
-            "false",
-            "no",
-        ):
-            try:
-                self._batch_runner = self._build_batch_runner(str(model_path))
-            except Exception:
-                self._batch_runner = None
-                logger.warning(
-                    "VLM batch runner unavailable; using legacy text loop",
-                    exc_info=True,
-                )
-
-        # run the KV-reuse losslessness probe NOW (load runs on the
-        # MLX executor thread, so the probe's forwards land on the right GPU
-        # stream). Memoizes self._reuse_probe_ok so _text_prefix_reuse_safe is a
-        # pure memoized read on the hot path. Only probe reuse-capable caches.
-        # The batch runner owns prefix reuse (APC) when present; the probe only
-        # serves the legacy loop, so skip its ~2-3 s of load-time forwards.
-        if (
-            self._is_vlm
-            and self._text_kv_prefix_cache is not None
-            and self._batch_runner is None
-        ):
-            try:
-                lm = getattr(self._model, "language_model", None)
-                if lm is not None:
-                    caps = self.backend_capabilities(lm)
-                    if caps.supports_kv_prefix_reuse:
-                        self._probe_text_reuse_lossless(lm)
-                    elif (
-                        caps.cache.is_hybrid
-                        and not caps.cache.has_sliding_window
-                        and self._text_hybrid_prefix_enabled
-                    ):
-                        # hybrid backbones reuse via no_trim
-                        # boundary snapshots — probe that path instead.
-                        self._probe_hybrid_reuse(lm)
-            except Exception:
-                logger.debug("VLM reuse probe at load failed", exc_info=True)
-
-        # Create vision cache adapter now that model_name is known
-        if self._vision_cache is not None:
-            self._vlm_vision_cache_adapter = _MlxVlmVisionCacheAdapter(
-                self._vision_cache,
-                self.model_name,
-            )
-
-        # optional cross-request vision-feature cache (wraps the vision
-        # tower to skip re-encoding a repeated image).
-        # DEFAULT OFF. It proved to be a redundant LANDMINE — (1) its key
-        # collided for mlx-array pixel_values (returned the WRONG image; fixed), and
-        # (2) wrapping the Qwen3-Omni-30B vision tower HANGS its vision forward
-        # (Metal GPU Hang) while the model runs fine without it. And it's redundant:
-        # cross-request image reuse already works ~6x via the KV-prefix path
-        # (verified — the tower cache was shadowed, hits=0). So it stays OPT-IN
-        # (YUNSHU_VLM_VISION_CACHE=1) for experimentation only; production VLM image
-        # reuse is the KV path.
-        self._vision_tower_wrappers = []
-        if (
-            self._has_vision
-            and self._model is not None
-            and os.environ.get("YUNSHU_VLM_VISION_CACHE", "0")
-            not in ("0", "false", "no")
-        ):
-            try:
-                _max = int(os.environ.get("YUNSHU_VLM_VISION_CACHE_ENTRIES", "4"))
-                self._vision_tower_wrappers = _wrap_vision_towers(
-                    self._model, max_entries=_max
-                )
-                if self._vision_tower_wrappers:
-                    logger.info(
-                        "VLM vision-feature cache installed on %d tower(s)",
-                        len(self._vision_tower_wrappers),
-                    )
-                else:
-                    logger.debug(
-                        "VLM vision-feature cache: no vision tower found to wrap"
-                    )
-            except Exception:
-                logger.debug("vision tower cache install failed", exc_info=True)
+        # Every request goes through the runner; a model it cannot serve fails
+        # at load instead of silently taking another path.
+        self._batch_runner = self._build_batch_runner(str(model_path))
 
     async def start(self) -> None:
         if self._model is not None:
@@ -1490,39 +747,8 @@ class VLMEngine:
         self._processor = None
         self._running = False
 
-        # Clear per-model caches — stale entries from the old model would waste
-        # memory and could return incorrect features if model_name happened to
-        # collide.  The VisionFeatureCache itself is kept alive (its background
-        # writer thread is daemon and shared), but in-memory entries are evicted.
-        if self._vision_cache is not None:
-            try:
-                lock = getattr(self._vision_cache, "_memory_lock", None)
-                cache = getattr(self._vision_cache, "_memory_cache", None)
-                if lock is not None and cache is not None:
-                    with lock:
-                        cache.clear()
-            except Exception:
-                logger.debug("vision cache cleanup during stop failed", exc_info=True)
-        self._vlm_vision_cache_adapter = None
-        with self._kv_prefix_lock:
-            self._kv_prefix_states.clear()
-        self._encoder_cache.clear()
         self._text_prompt_cache.clear()
-        if self._text_kv_prefix_cache is not None:
-            try:
-                self._text_kv_prefix_cache.close()
-                self._text_kv_prefix_cache.clear()
-            except Exception:
-                logger.debug("VLM text KV prefix cache cleanup failed", exc_info=True)
         self._backend_caps = None
-        self._reuse_probe_ok = None
-        self._hybrid_reuse_probe_ok = None
-
-        # Reset stats counters
-        self._vlm_vision_hits = 0
-        self._vlm_vision_misses = 0
-        self._vlm_kv_prefix_hits = 0
-        self._vlm_kv_prefix_misses = 0
 
         gc.collect()
         loop = asyncio.get_running_loop()
@@ -1617,8 +843,6 @@ class VLMEngine:
         if kwargs.get("cancel_event") is None:
             kwargs["cancel_event"] = threading.Event()
 
-        t0 = time.monotonic()
-
         with self._active_count_lock:
             self._active_count += 1
         # Per-request temp-file tracking (identity-based, race-free). _register_temp_file
@@ -1632,342 +856,53 @@ class VLMEngine:
             audio_paths = await self._extract_audio(messages)
             video_frames = await self._extract_video_frames(messages)
             image_paths.extend(video_frames)
-            _enable_thinking = enable_thinking
-            # Gemma-4 default: its chat template enables thinking by default but
-            # emits inline `thought` tokens that don't auto-stop, producing
-            # output like "4thought\nThinking Process: …" for simple prompts.
-            # Default to False for gemma-4 unless caller passed something explicit.
-            if (
-                _enable_thinking is None
-                and isinstance(self.model_name, str)
-                and "gemma-4" in self.model_name.lower()
-            ):
-                _enable_thinking = False
-            # Run through MultimodalPipelineCoordinator for preprocessing tracking
-            try:
-                from .staged_pipeline import PipelineRequest
-
-                pipe_req = PipelineRequest(
-                    request_id=kwargs.get("request_id", ""),
-                    model_id=self.model_name,
-                    images=image_paths if image_paths else None,
-                    audio=audio_paths if audio_paths else None,
-                    params={"messages": messages},
-                )
-                self._pipeline.process(pipe_req)
-            except Exception:
-                logger.debug("pipeline tracking failed", exc_info=True)
-
-            # Extract advanced parameters from kwargs
-            stop_token_ids = kwargs.get("stop_token_ids") or []
-            thinking_budget = kwargs.get("thinking_budget")
-            reasoning_effort = kwargs.get("reasoning_effort")
-            xtc_probability = kwargs.get("xtc_probability", 0.0)
-            xtc_threshold = kwargs.get("xtc_threshold", 0.0)
-
-            # Resolve reasoning_effort → thinking_budget
-            if thinking_budget is None and reasoning_effort is not None:
-                thinking_budget = {"low": 2048, "medium": 8192, "high": 32768}.get(
-                    reasoning_effort, 8192
-                )
-
-            # logprobs is not supported by VLM engine (mlx_vlm.generate() and
-            # model.language_model don't expose per-token logprobs).
-            if (logprobs or top_logprobs) and getattr(
-                self, "_batch_runner", None
-            ) is None:
-                logger.warning(
-                    "logprobs need the VLM batch runner (Qwen3.5-family); "
-                    "parameter ignored on the legacy loop."
-                )
+            _enable_thinking = self._default_enable_thinking(enable_thinking)
+            self._track_pipeline(kwargs, messages, image_paths, audio_paths)
+            self._check_request_supported(image_paths, audio_paths, kwargs)
 
             _runner_extras: dict = {}
+            runner_params = self._runner_kwargs(
+                max_tokens=max(1, int(max_tokens)),
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
+                seed=seed,
+                stop=stop,
+                stop_token_ids=kwargs.get("stop_token_ids") or [],
+                repetition_penalty=repetition_penalty,
+                logprobs=logprobs,
+                top_logprobs=top_logprobs,
+                enable_thinking=_enable_thinking,
+                thinking_budget=kwargs.get("thinking_budget"),
+                cancel_event=kwargs["cancel_event"],
+                kwargs=kwargs,
+            )
 
-            def _generate_sync():
-                # NOTE: don't call mx.random.seed(seed) here — the actual
-                # sampling happens inside `with mx.stream(generation_stream)`
-                # in _generate_vlm_text / _generate_vlm_vision, which uses
-                # a separate stream PRNG. Setting seed outside that scope
-                # has no effect on stream-scoped categorical sampling.
-                # See _generate_vlm_text and _generate_vlm_vision below
-                # where mx.random.seed is called INSIDE the stream context.
-
-                if (
-                    image_paths
-                    and not audio_paths
-                    and self._has_vision
-                    and max_tokens > 0
-                    and self._runner_text_eligible(
-                        logprobs=logprobs, top_logprobs=top_logprobs, kwargs=kwargs
-                    )
-                ):
-                    prompt = self._apply_vlm_template_with_cache(
-                        messages,
-                        enable_thinking=_enable_thinking,
-                        num_audios=0,
-                        max_images=len(image_paths),
-                        template_extra=tpl_extra,
-                    )
-                    ids, pkw, salt = self._batch_runner.prepare_images(
-                        prompt, image_paths
-                    )
-                    return _RunnerCall(
-                        self._generate_vlm_runner_text,
-                        ids.tolist(),
-                        extras=_runner_extras,
-                        prompt_kwargs=pkw,
-                        apc_semantic_hash=salt,
-                        **self._runner_kwargs(
-                            max_tokens=max_tokens,
-                            temperature=temperature,
-                            top_p=top_p,
-                            top_k=top_k,
-                            min_p=min_p,
-                            seed=seed,
-                            stop=stop,
-                            stop_token_ids=stop_token_ids,
-                            repetition_penalty=repetition_penalty,
-                            logprobs=logprobs,
-                            top_logprobs=top_logprobs,
-                            enable_thinking=_enable_thinking,
-                            thinking_budget=thinking_budget,
-                            cancel_event=kwargs.get("cancel_event"),
-                            kwargs=kwargs,
-                        ),
-                    )
-                if (image_paths and self._has_vision and self._is_vlm) or (
-                    audio_paths and self._is_vlm
-                ):
-                    # The image/audio generation path can't yet apply grammar/JSON-schema
-                    # constraints (the constrained sampler is wired only on the text
-                    # paths). Reject loudly instead of silently returning free text that
-                    # ignores response_format.
-                    if kwargs.get("json_schema"):
-                        raise ValueError(
-                            "response_format / json_schema (structured output) is not "
-                            "supported together with image or audio inputs"
-                        )
-                    return self._generate_vlm_vision(
-                        messages,
-                        image_paths,
-                        max_tokens,
-                        temperature,
-                        top_p,
-                        top_k,
-                        stop,
-                        audio_paths=audio_paths,
-                        enable_thinking=_enable_thinking,
-                        thinking_budget=thinking_budget,
-                        seed=seed,
-                        min_p=min_p,
-                        template_extra=tpl_extra,
-                    )
-
-                if image_paths or audio_paths:
-                    raise RuntimeError(
-                        f"Multimodal input provided ({len(image_paths or [])} image(s), "
-                        f"{len(audio_paths or [])} audio) but model {self.model_name!r} loaded "
-                        f"as text-only (has_vision={self._has_vision}, is_vlm={self._is_vlm}). "
-                        f"This usually means mlx_vlm.load failed — check load-time logs. "
-                        f"Use a different VLM model or fix the load error."
-                    )
-
-                input_ids = self._tokenize_with_cache(
-                    messages, enable_thinking=_enable_thinking, template_extra=tpl_extra
+            def _prepare():
+                # Templating + media encoding on the MLX thread; generation is
+                # then consumed off it (the runner's driver needs that thread).
+                ids, pkw, salt = self._runner_input(
+                    messages, image_paths, audio_paths, _enable_thinking, tpl_extra
                 )
-
-                if self._is_vlm:
-                    if max_tokens > 0 and self._runner_text_eligible(
-                        logprobs=logprobs, top_logprobs=top_logprobs, kwargs=kwargs
-                    ):
-                        return _RunnerCall(
-                            self._generate_vlm_runner_text,
-                            input_ids.tolist(),
-                            extras=_runner_extras,
-                            **self._runner_kwargs(
-                                max_tokens=max_tokens,
-                                temperature=temperature,
-                                top_p=top_p,
-                                top_k=top_k,
-                                min_p=min_p,
-                                seed=seed,
-                                stop=stop,
-                                stop_token_ids=stop_token_ids,
-                                repetition_penalty=repetition_penalty,
-                                logprobs=logprobs,
-                                top_logprobs=top_logprobs,
-                                enable_thinking=_enable_thinking,
-                                thinking_budget=thinking_budget,
-                                cancel_event=kwargs.get("cancel_event"),
-                                kwargs=kwargs,
-                            ),
-                        )
-                    freq_p = kwargs.get("frequency_penalty", 0.0)
-                    pres_p = kwargs.get("presence_penalty", 0.0)
-                    lb = kwargs.get("logit_bias")
-                    js = kwargs.get("json_schema")
-                    # Fallback: if grammar was passed directly (not via _parse_response_format),
-                    # convert it to json_schema for the text generator.
-                    if js is None:
-                        js = kwargs.get("grammar")
-                    return self._generate_vlm_text(
-                        input_ids,
-                        max_tokens,
-                        temperature,
-                        top_p,
-                        top_k,
-                        min_p,
-                        stop,
-                        stop_token_ids=stop_token_ids,
-                        repetition_penalty=repetition_penalty,
-                        frequency_penalty=freq_p,
-                        presence_penalty=pres_p,
-                        logit_bias=lb,
-                        json_schema=js,
-                        enable_thinking=_enable_thinking,
-                        xtc_probability=xtc_probability,
-                        xtc_threshold=xtc_threshold,
-                        thinking_budget=thinking_budget,
-                        cancel_event=kwargs.get("cancel_event"),
-                        seed=seed,
-                    )
-
-                from mlx_lm.generate import generate_step, generation_stream
-
-                # Determine seed for THIS request. Each request must get a
-                # fresh PRNG state — calling mx.random.seed() once before
-                # the loop only seeds the first call's compiled graph; the
-                # second call reuses the same cached PRNG state because
-                # categorical_sampling is @mx.compile-wrapped with
-                # inputs=mx.random.state. Per-sample re-seed via a sampler
-                # wrapper (mirrors the BatchedEngine fix).
-                if seed is not None:
-                    _base_seed = int(seed) & ((1 << 63) - 1)
-                else:
-                    import time as _t
-
-                    _base_seed = _t.time_ns() & ((1 << 63) - 1)
-                with mx.stream(generation_stream):
-                    mx.random.seed(_base_seed)
-                logger.debug(f"VLM fallback path base_seed={_base_seed}")
-
-                sampler = _build_noncached_sampler(
-                    temperature, top_p, top_k, min_p, seed
+                return _RunnerCall(
+                    self._generate_vlm_runner_text,
+                    ids,
+                    extras=_runner_extras,
+                    prompt_kwargs=pkw,
+                    apc_semantic_hash=salt,
+                    **runner_params,
                 )
-                eos_ids = self._get_eos_ids()
-
-                # Build stop token IDs from string stop sequences + explicit stop_token_ids
-                stop_ids = set(eos_ids)
-                if stop:
-                    for s in stop:
-                        try:
-                            ids = self._tokenizer.encode(s)
-                            if len(ids) == 1:
-                                stop_ids.add(ids[0])
-                        except Exception:
-                            logger.debug("failed", exc_info=True)
-                if stop_token_ids:
-                    stop_ids.update(stop_token_ids)
-
-                tokens = []
-                _in_thinking = False
-                _thinking_tokens = 0
-                # Thinking token detection: only use token ID matching when
-                # "<think"/"</think" encode to a SINGLE token.  Multi-token
-                # encodings mean `encode(...)[-1]` picks a random last token,
-                # causing false positives (any token sharing that ID triggers
-                # a state transition).  Fall back to text-based suffix matching
-                # for multi-token vocabularies.
-                _think_single_token = False
-                try:
-                    _ts_ids = self._tokenizer.encode("<think")
-                    _te_ids = self._tokenizer.encode("</think")
-                    if len(_ts_ids) == 1 and len(_te_ids) == 1:
-                        think_start_id = _ts_ids[0]
-                        think_end_id = _te_ids[0]
-                        _think_single_token = True
-                    else:
-                        think_start_id = think_end_id = None
-                except Exception:
-                    logger.debug("operation failed", exc_info=True)
-                    think_start_id = think_end_id = None
-                    _think_single_token = False
-
-                _stop_hit = False
-                _budget_hit = False
-                _accumulated_text = ""  # for text-based thinking detection
-                for token_id, _ in generate_step(
-                    input_ids,
-                    self._model,
-                    max_tokens=max_tokens,
-                    sampler=sampler,
-                ):
-                    tokens.append(token_id)
-                    # Track thinking segment boundaries
-                    if _think_single_token and think_start_id is not None:
-                        if not _in_thinking and token_id == think_start_id:
-                            _in_thinking = True
-                        elif _in_thinking:
-                            if token_id == think_end_id:
-                                _in_thinking = False
-                            else:
-                                _thinking_tokens += 1
-                    elif not _think_single_token:
-                        # Text-based thinking detection for multi-token encodings
-                        _tok_text = self._tokenizer.decode([token_id])
-                        _accumulated_text += _tok_text
-                        if not _in_thinking and _accumulated_text.endswith("<think"):
-                            _in_thinking = True
-                        elif _in_thinking:
-                            if _accumulated_text.endswith("</think"):
-                                _in_thinking = False
-                            else:
-                                _thinking_tokens += 1
-                    if token_id in stop_ids:
-                        _stop_hit = True
-                        break
-                    # Thinking budget enforcement — cap thinking tokens, not total tokens
-                    if (
-                        thinking_budget is not None
-                        and _in_thinking
-                        and _thinking_tokens >= thinking_budget
-                    ):
-                        # Append closing tag to keep output well-formed
-                        if _think_single_token and think_end_id is not None:
-                            tokens.append(think_end_id)
-                        _budget_hit = True
-                        break
-
-                # Return (text, thinking, tokens, stop_hit, budget_hit, cached_tokens).
-                # total_token_count includes the stop token if present.
-                _decoded = self._decode_with_reasoning_channels(tokens)
-                return (
-                    _decoded,
-                    _thinking_tokens,
-                    len(tokens),
-                    _stop_hit,
-                    _budget_hit,
-                    0,
-                )  # non-VLM text path: no text-prefix reuse
 
             loop = asyncio.get_running_loop()
             try:
-                # Only a client-set timeout applies: requests serialize on the
-                # MLX thread, so a fixed default would also count queue time
-                # and fail requests that are merely waiting their turn.
+                # Only a client-set timeout applies: a fixed default would also
+                # count time spent waiting for a batch slot.
                 _timeout_seconds = kwargs.get("timeout_seconds") or None
-                _out = await asyncio.wait_for(
-                    loop.run_in_executor(
-                        self._executor, self._then_clear(_generate_sync)
-                    ),
+                call = await asyncio.wait_for(
+                    loop.run_in_executor(self._executor, _prepare),
                     timeout=_timeout_seconds,
                 )
-                if isinstance(_out, _RunnerCall):
-                    # Batched runner: wait for tokens off the MLX thread.
-                    _out = await asyncio.wait_for(
-                        loop.run_in_executor(self._runner_consumers(), _out),
-                        timeout=_timeout_seconds,
-                    )
                 (
                     result,
                     reasoning_tokens,
@@ -1975,7 +910,10 @@ class VLMEngine:
                     stop_hit,
                     budget_hit,
                     cached_token_count,
-                ) = _out
+                ) = await asyncio.wait_for(
+                    loop.run_in_executor(self._runner_consumers(), call),
+                    timeout=_timeout_seconds,
+                )
             except TimeoutError:
                 self._num_requests_processed += 1
                 kwargs["cancel_event"].set()
@@ -1995,39 +933,10 @@ class VLMEngine:
                 self._num_requests_processed += 1
                 raise
 
-            time.monotonic() - t0
             self._num_requests_processed += 1
             self._total_reasoning_tokens += reasoning_tokens
-
-            # Use VLM template for vision path (includes image placeholders),
-            # plain _format_prompt for text-only path
-            if _runner_extras.get("prompt_tokens"):
-                # The batch runner knows the exact prompt length (incl. image tokens).
-                prompt_tokens = int(_runner_extras["prompt_tokens"])
-            elif (image_paths and self._has_vision and self._is_vlm) or (
-                audio_paths and self._is_vlm
-            ):
-                # pass the SAME max_images/num_audios as the generation call
-                # (1979/2732) so prompt_tokens reflects the template the model actually
-                # saw — otherwise SINGLE_IMAGE_ONLY_MODELS (and video) count a template
-                # with a different placeholder count than was generated.
-                _vlm_prompt = self._apply_vlm_template_with_cache(
-                    messages,
-                    enable_thinking=_enable_thinking,
-                    num_audios=len(audio_paths) if audio_paths else 0,
-                    max_images=len(image_paths) if image_paths else None,
-                    template_extra=tpl_extra,
-                )
-                prompt_tokens = self._count_text_tokens(_vlm_prompt)
-                # Add per-image token estimate so prompt_tokens reflects the
-                # actual model input size (text + image embeddings).
-                if image_paths:
-                    prompt_tokens += self._estimate_image_tokens() * len(image_paths)
-            else:
-                prompt_text = self._format_prompt(
-                    messages, enable_thinking=_enable_thinking, template_extra=tpl_extra
-                )
-                prompt_tokens = self._count_text_tokens(prompt_text)
+            # The runner reports the exact prompt length (incl. media tokens).
+            prompt_tokens = int(_runner_extras.get("prompt_tokens") or 0)
             # Determine correct finish_reason based on exit condition
             _finish_reason = "stop" if stop_hit or budget_hit else "length"
             # record ServerMetrics for VLM NON-streaming. Only
@@ -2056,10 +965,6 @@ class VLMEngine:
                 "logprobs": _runner_extras.get("logprobs"),
             }
         finally:
-            # release the MLX buffer pool after each request on large
-            # models so it doesn't grow across requests → OOM/GPU-hang under
-            # sustained load (the Qwen3-Omni-30B hang). Done inside the
-            # generation job by _then_clear, not queued separately here.
             with self._active_count_lock:
                 self._active_count = max(0, self._active_count - 1)
             _request_temp_files.reset(_temp_token)
@@ -2106,12 +1011,8 @@ class VLMEngine:
             raise RuntimeError("Engine not started")
 
         tpl_extra = self._request_template_extra(kwargs)
-        # logprobs is not supported by VLM engine
-        if (logprobs or top_logprobs) and getattr(self, "_batch_runner", None) is None:
-            logger.warning(
-                "logprobs need the VLM batch runner (Qwen3.5-family); "
-                "parameter ignored on the legacy loop."
-            )
+        if cancel_event is None:
+            cancel_event = threading.Event()
 
         # Extract images/audio once, reuse for both pipeline and generation.
         # Per-request identity-based temp tracking (see generate()): avoids the
@@ -2123,20 +1024,9 @@ class VLMEngine:
         video_frames = await self._extract_video_frames(messages)
         image_paths.extend(video_frames)
 
-        # Pipeline tracking for streaming path
-        try:
-            from .staged_pipeline import PipelineRequest
-
-            pipe_req = PipelineRequest(
-                request_id=kwargs.get("request_id", ""),
-                model_id=self.model_name,
-                images=image_paths if image_paths else None,
-                audio=audio_paths if audio_paths else None,
-                params={"messages": messages},
-            )
-            self._pipeline.process(pipe_req)
-        except Exception:
-            logger.debug("pipeline tracking (stream) failed", exc_info=True)
+        enable_thinking = self._default_enable_thinking(enable_thinking)
+        self._track_pipeline(kwargs, messages, image_paths, audio_paths)
+        self._check_request_supported(image_paths, audio_paths, kwargs)
 
         import uuid
 
@@ -2144,44 +1034,10 @@ class VLMEngine:
 
         queue: asyncio.Queue[RequestOutput | None] = asyncio.Queue(maxsize=256)
 
-        # Use already-extracted images/audio for VLM vision path
-        has_images = bool(image_paths) and self._has_vision and self._is_vlm
-        has_audio = bool(audio_paths) and self._is_vlm
-
-        if (image_paths or audio_paths) and not (has_images or has_audio):
-            raise RuntimeError(
-                f"Multimodal input provided ({len(image_paths or [])} image(s), "
-                f"{len(audio_paths or [])} audio) but model {self.model_name!r} loaded "
-                f"as text-only (has_vision={self._has_vision}, is_vlm={self._is_vlm}). "
-                f"This usually means mlx_vlm.load failed — check load-time logs."
-            )
-
         # Capture event loop for thread-safe queue writes from executor thread.
         # asyncio.Queue.put_nowait() is NOT thread-safe — must schedule puts
         # via call_soon_threadsafe (same pattern as batched_engine.py).
         _loop_for_queue = asyncio.get_running_loop()
-
-        # Eagerly resolve detokenizer availability so the error handler can
-        # safely reference it even if the try-block fails before the point
-        # where it was previously assigned inside _stream_sync.
-        _has_detokenizer = (
-            hasattr(self._tokenizer, "detokenizer") if self._tokenizer else False
-        )
-
-        # Thread-safe cancel check: wraps asyncio.Event so the executor
-        # thread can read it without asyncio-specific thread-safety issues.
-        # Reading ._value is a simple bool attribute read, GIL-protected.
-        def _is_cancelled():
-            if cancel_event is None:
-                return False
-            if isinstance(cancel_event, asyncio.Event):
-                return cancel_event._value
-            return cancel_event.is_set()
-
-        # Thread-safe queue put for executor thread — asyncio.Queue is NOT
-        # safe to call from non-event-loop threads.  Wrap it so all
-        # put_nowait calls from the executor are routed through
-        # call_soon_threadsafe (same pattern as batched_engine.py).
 
         class _ThreadSafeQueue:
             """Wraps asyncio.Queue with thread-safe put_nowait."""
@@ -2197,7 +1053,7 @@ class VLMEngine:
                     self._loop.call_soon_threadsafe(self._q.put_nowait, item)
 
             def put_blocking(self, item, cancel):
-                """Bound APC's producer by the async consumer, including slow clients."""
+                """Bound the runner's producer by the async consumer, including slow clients."""
                 try:
                     future = asyncio.run_coroutine_threadsafe(
                         self._q.put(item), self._loop
@@ -2217,511 +1073,53 @@ class VLMEngine:
 
         _safe_queue = _ThreadSafeQueue(queue, _loop_for_queue)
 
-        _stream_ttft_t0 = [time.perf_counter()]
-        _stream_ttft_recorded = [False]
-        _stream_ttft_val = [0.0]
+        runner_params = self._runner_kwargs(
+            max_tokens=max(1, int(max_tokens)),
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            min_p=min_p,
+            seed=seed,
+            stop=stop,
+            stop_token_ids=stop_token_ids,
+            repetition_penalty=repetition_penalty,
+            logprobs=logprobs,
+            top_logprobs=top_logprobs,
+            enable_thinking=enable_thinking,
+            thinking_budget=kwargs.get("thinking_budget"),
+            cancel_event=cancel_event,
+            kwargs={
+                **kwargs,
+                "xtc_probability": xtc_probability,
+                "xtc_threshold": xtc_threshold,
+            },
+        )
 
-        deferred: list = [None]
-
-        def _stream_sync():
-            nonlocal _has_detokenizer
-            # Initialize eagerly so the error handler can reference it
-            # even if the exception fires before the point where it was
-            # previously assigned inside the try block.
-            has_detokenizer = _has_detokenizer
-            detokenizer = (
-                None  # Initialize before try so error handler can safely check
+        def _prepare():
+            ids, pkw, salt = self._runner_input(
+                messages, image_paths, audio_paths, enable_thinking, tpl_extra
             )
+            return _RunnerCall(
+                self._stream_vlm_runner_text,
+                ids,
+                req_id,
+                _safe_queue,
+                prompt_kwargs=pkw,
+                apc_semantic_hash=salt,
+                **runner_params,
+            )
+
+        with self._active_count_lock:
+            self._active_count += 1
+        loop = asyncio.get_running_loop()
+
+        async def _stream_job():
             try:
-                # NOTE: don't seed here — generation_stream has separate PRNG.
-                # Seed is forwarded to _stream_vlm_text / _stream_vlm_vision
-                # which set it inside their `with mx.stream()` block.
-
-                if (
-                    has_images
-                    and not has_audio
-                    and max_tokens > 0
-                    and self._runner_text_eligible(
-                        logprobs=logprobs, top_logprobs=top_logprobs, kwargs=kwargs
-                    )
-                ):
-                    prompt = self._apply_vlm_template_with_cache(
-                        messages,
-                        enable_thinking=enable_thinking,
-                        num_audios=0,
-                        max_images=len(image_paths),
-                        template_extra=tpl_extra,
-                    )
-                    ids, pkw, salt = self._batch_runner.prepare_images(
-                        prompt, image_paths
-                    )
-                    deferred[0] = _RunnerCall(
-                        self._stream_vlm_runner_text,
-                        ids.tolist(),
-                        req_id,
-                        _safe_queue,
-                        prompt_kwargs=pkw,
-                        apc_semantic_hash=salt,
-                        **self._runner_kwargs(
-                            max_tokens=max_tokens,
-                            temperature=temperature,
-                            top_p=top_p,
-                            top_k=top_k,
-                            min_p=min_p,
-                            seed=seed,
-                            stop=stop,
-                            stop_token_ids=stop_token_ids,
-                            repetition_penalty=repetition_penalty,
-                            logprobs=logprobs,
-                            top_logprobs=top_logprobs,
-                            enable_thinking=enable_thinking,
-                            thinking_budget=kwargs.get("thinking_budget"),
-                            cancel_event=cancel_event,
-                            kwargs=kwargs,
-                        ),
-                    )
-                    return
-                if has_images or has_audio:
-                    # Resolve reasoning_effort -> thinking_budget for VLM vision streaming
-                    _tb = kwargs.get("thinking_budget")
-                    if _tb is None:
-                        _re = kwargs.get("reasoning_effort")
-                        if _re is not None:
-                            _tb = {"low": 2048, "medium": 8192, "high": 32768}.get(
-                                _re, 8192
-                            )
-                    self._stream_vlm_vision(
-                        messages,
-                        image_paths,
-                        max_tokens,
-                        temperature,
-                        top_p,
-                        req_id,
-                        _safe_queue,
-                        top_k,
-                        min_p,
-                        stop,
-                        audio_paths=audio_paths,
-                        enable_thinking=enable_thinking,
-                        cancel_event=cancel_event,
-                        xtc_probability=xtc_probability,
-                        xtc_threshold=xtc_threshold,
-                        thinking_budget=_tb,
-                        _ttft_t0=_stream_ttft_t0,
-                        _ttft_recorded=_stream_ttft_recorded,
-                        _ttft_val=_stream_ttft_val,
-                        seed=seed,
-                        template_extra=tpl_extra,
-                    )
-                    return
-
-                input_ids = self._tokenize_with_cache(
-                    messages, enable_thinking=enable_thinking, template_extra=tpl_extra
-                )
-
-                if self._is_vlm:
-                    if max_tokens > 0 and self._runner_text_eligible(
-                        logprobs=logprobs, top_logprobs=top_logprobs, kwargs=kwargs
-                    ):
-                        deferred[0] = _RunnerCall(
-                            self._stream_vlm_runner_text,
-                            input_ids.tolist(),
-                            req_id,
-                            _safe_queue,
-                            **self._runner_kwargs(
-                                max_tokens=max_tokens,
-                                temperature=temperature,
-                                top_p=top_p,
-                                top_k=top_k,
-                                min_p=min_p,
-                                seed=seed,
-                                stop=stop,
-                                stop_token_ids=stop_token_ids,
-                                repetition_penalty=repetition_penalty,
-                                logprobs=logprobs,
-                                top_logprobs=top_logprobs,
-                                enable_thinking=enable_thinking,
-                                thinking_budget=kwargs.get("thinking_budget"),
-                                cancel_event=cancel_event,
-                                kwargs=kwargs,
-                            ),
-                        )
-                        return
-                    freq_p = kwargs.get("frequency_penalty", 0.0)
-                    pres_p = kwargs.get("presence_penalty", 0.0)
-                    lb = kwargs.get("logit_bias")
-                    js = kwargs.get("json_schema")
-                    # Fallback: if grammar was passed directly (not via _parse_response_format),
-                    # convert it to json_schema for the text generator.
-                    if js is None:
-                        js = kwargs.get("grammar")
-                    _tb = kwargs.get("thinking_budget")
-                    # Resolve reasoning_effort → thinking_budget
-                    if _tb is None:
-                        _re = kwargs.get("reasoning_effort")
-                        if _re is not None:
-                            _tb = {"low": 2048, "medium": 8192, "high": 32768}.get(
-                                _re, 8192
-                            )
-                    self._stream_vlm_text(
-                        input_ids,
-                        max_tokens,
-                        temperature,
-                        top_p,
-                        req_id,
-                        _safe_queue,
-                        top_k,
-                        min_p,
-                        stop,
-                        repetition_penalty,
-                        freq_p,
-                        pres_p,
-                        lb,
-                        json_schema=js,
-                        enable_thinking=enable_thinking,
-                        cancel_event=cancel_event,
-                        stop_token_ids=stop_token_ids,
-                        xtc_probability=xtc_probability,
-                        xtc_threshold=xtc_threshold,
-                        thinking_budget=_tb,
-                        _ttft_t0=_stream_ttft_t0,
-                        _ttft_recorded=_stream_ttft_recorded,
-                        _ttft_val=_stream_ttft_val,
-                        seed=seed,
-                    )
-                    return
-
-                from mlx_lm.generate import generate_step
-
-                sampler = _build_noncached_sampler(
-                    temperature, top_p, top_k, min_p, seed
-                )
-                eos_ids = self._get_eos_ids()
-
-                # Build stop token IDs from string sequences + explicit stop_token_ids
-                stop_ids = set(eos_ids)
-                if stop:
-                    for s in stop:
-                        try:
-                            ids = self._tokenizer.encode(s)
-                            if len(ids) == 1:
-                                stop_ids.add(ids[0])
-                        except Exception:
-                            logger.debug("failed", exc_info=True)
-                if stop_token_ids:
-                    stop_ids.update(stop_token_ids)
-                if has_detokenizer:
-                    detokenizer = self._tokenizer.detokenizer
-                    detokenizer.reset()
-
-                # Thinking state tracking for streaming fast path
-                _in_thinking = False
-                _thinking_tokens = 0
-                thinking_budget = kwargs.get("thinking_budget")
-                # Resolve reasoning_effort → thinking_budget
-                if thinking_budget is None:
-                    reasoning_effort = kwargs.get("reasoning_effort")
-                    if reasoning_effort is not None:
-                        thinking_budget = {
-                            "low": 2048,
-                            "medium": 8192,
-                            "high": 32768,
-                        }.get(reasoning_effort, 8192)
-                # Thinking token detection: only use token ID matching when
-                # "<think"/"</think" encode to a SINGLE token.  Multi-token
-                # encodings mean `encode(...)[-1]` picks a random last token,
-                # causing false positives.  Fall back to text-based detection.
-                _think_single_token = False
-                try:
-                    _ts_ids = self._tokenizer.encode("<think")
-                    _te_ids = self._tokenizer.encode("</think")
-                    if len(_ts_ids) == 1 and len(_te_ids) == 1:
-                        think_start_id = _ts_ids[0]
-                        think_end_id = _te_ids[0]
-                        _think_single_token = True
-                    else:
-                        think_start_id = think_end_id = None
-                except Exception:
-                    logger.debug("thinking token encode failed", exc_info=True)
-                    think_start_id = think_end_id = None
-                    _think_single_token = False
-
-                accumulated = ""
-                # Multi-token stop hold-back: withhold any streamed text that
-                # could be the start of a stop string so its prefix never leaks
-                # before the match completes. Previously this path emitted each
-                # token immediately and only trimmed the stop on the token that
-                # COMPLETED it — so the first token(s) of a multi-token stop
-                # (e.g. "\n\n" as two "\n" tokens) leaked into the stream
-                # (same class as the chat fast-path fix in).
-                from .text_utils import StopHoldbackBuffer
-
-                _hb = StopHoldbackBuffer([s for s in (stop or []) if s])
-                _thinking_text = ""  # for text-based thinking detection
-                token_count = 0
-                _num_prompt_tokens = len(input_ids)
-                _cur_state = "normal"  # Initialize before loop; referenced after loop if 0 iterations
-                for token_id, _ in generate_step(
-                    input_ids,
-                    self._model,
-                    max_tokens=max_tokens,
-                    sampler=sampler,
-                ):
-                    if _is_cancelled():
-                        # Flush remaining detokenizer bytes + any text held by the
-                        # stop buffer (no stop fired, so it's genuine output that
-                        # was already pulled out of the detokenizer).
-                        if has_detokenizer:
-                            try:
-                                detokenizer.finalize()
-                                remaining = (
-                                    _hb.feed(detokenizer.last_segment) + _hb.flush()
-                                )
-                                if remaining:
-                                    _cancel_state = (
-                                        "reasoning" if _in_thinking else "normal"
-                                    )
-                                    _safe_queue.put_nowait(
-                                        RequestOutput(
-                                            request_id=req_id,
-                                            new_text=remaining,
-                                            finish_reason=None,
-                                            finished=False,
-                                            current_state=_cancel_state,
-                                        )
-                                    )
-                            except Exception:
-                                logger.debug(
-                                    "detokenizer finalize in cancel handler failed",
-                                    exc_info=True,
-                                )
-                        _safe_queue.put_nowait(
-                            RequestOutput(
-                                request_id=req_id,
-                                new_text="",
-                                finish_reason="cancel",
-                                finished=True,
-                                completion_tokens=token_count,
-                                prompt_tokens=_num_prompt_tokens,
-                                reasoning_tokens=_thinking_tokens,
-                            )
-                        )
-                        return
-                    token_count += 1
-                    # Record TTFT on first token
-                    if not _stream_ttft_recorded[0]:
-                        _stream_ttft_recorded[0] = True
-                        _stream_ttft_val[0] = time.perf_counter() - _stream_ttft_t0[0]
-                    is_eos = token_id in stop_ids
-
-                    # Track thinking segment boundaries
-                    if _think_single_token and think_start_id is not None:
-                        if not _in_thinking and token_id == think_start_id:
-                            _in_thinking = True
-                        elif _in_thinking:
-                            if token_id == think_end_id:
-                                _in_thinking = False
-                            else:
-                                _thinking_tokens += 1
-                    elif not _think_single_token:
-                        # Text-based thinking detection for multi-token encodings
-                        _tok_text = self._tokenizer.decode([token_id])
-                        _thinking_text += _tok_text
-                        if not _in_thinking and _thinking_text.endswith("<think"):
-                            _in_thinking = True
-                        elif _in_thinking:
-                            if _thinking_text.endswith("</think"):
-                                _in_thinking = False
-                            else:
-                                _thinking_tokens += 1
-
-                    # Thinking budget enforcement
-                    if (
-                        thinking_budget is not None
-                        and _in_thinking
-                        and _thinking_tokens >= thinking_budget
-                        and (think_end_id is not None or not _think_single_token)
-                    ):
-                        # Budget exceeded — stop generation (flush detok + buffered tail)
-                        if has_detokenizer:
-                            detokenizer.finalize()
-                            remaining = _hb.feed(detokenizer.last_segment) + _hb.flush()
-                            if remaining:
-                                _safe_queue.put_nowait(
-                                    RequestOutput(
-                                        request_id=req_id,
-                                        new_text=remaining,
-                                        finish_reason=None,
-                                        finished=False,
-                                        current_state="reasoning"
-                                        if _in_thinking
-                                        else "normal",
-                                    )
-                                )
-                        _safe_queue.put_nowait(
-                            RequestOutput(
-                                request_id=req_id,
-                                new_text="",
-                                finish_reason="stop",
-                                finished=True,
-                                completion_tokens=token_count,
-                                prompt_tokens=_num_prompt_tokens,
-                                current_state="reasoning" if _in_thinking else "normal",
-                                reasoning_tokens=_thinking_tokens,
-                            )
-                        )
-                        return
-
-                    if not is_eos:
-                        if has_detokenizer:
-                            detokenizer.add_token(token_id)
-                            token_text = detokenizer.last_segment
-                        else:
-                            token_text = self._tokenizer.decode(
-                                [token_id], skip_special_tokens=True
-                            )
-                    else:
-                        token_text = ""
-
-                    accumulated += token_text
-
-                    # Check multi-token stop suffixes (detection on full text)
-                    finish_reason = None
-                    _suffix_hit = False
-                    if is_eos:
-                        finish_reason = "stop"
-                        token_text = ""  # Don't emit EOS token text
-                    elif stop:
-                        for s in stop:
-                            if accumulated.endswith(s):
-                                accumulated = accumulated[: -len(s)]
-                                finish_reason = "stop"
-                                _suffix_hit = True
-                                break
-
-                    _cur_state = "reasoning" if _in_thinking else "normal"
-
-                    # Route text through the hold-back buffer so a multi-token
-                    # stop never leaks its prefix. On a string-stop the completing
-                    # token is fed in then take_stopped() drops the matched stop
-                    # (and any held prefix that belonged to it); on EOS the held
-                    # text is genuine output, so flush it.
-                    if _suffix_hit:
-                        # emit feed()'s pre-stop return too (else content fused with
-                        # the stop token is silently lost). See _stream_vlm_text.
-                        emit_text = _hb.feed(token_text) + _hb.take_stopped()
-                    elif is_eos:
-                        emit_text = _hb.flush()
-                    else:
-                        emit_text = _hb.feed(token_text)
-
-                    if emit_text or finish_reason:
-                        output = RequestOutput(
-                            request_id=req_id,
-                            new_text=emit_text,
-                            new_token_ids=[token_id],
-                            finish_reason=finish_reason,
-                            finished=finish_reason is not None,
-                            completion_tokens=token_count,
-                            prompt_tokens=_num_prompt_tokens,
-                            current_state=_cur_state,
-                            reasoning_tokens=_thinking_tokens,
-                            ttft_ms=round(_stream_ttft_val[0] * 1000, 1)
-                            if _stream_ttft_val[0] > 0
-                            else 0.0,
-                        )
-                        _safe_queue.put_nowait(output)
-
-                    if finish_reason:
-                        # Flush remaining detok bytes. On a string-stop the match
-                        # was already dropped, so skip (avoids re-leaking the stop
-                        # that finalize() may surface); on EOS emit the genuine tail.
-                        if has_detokenizer and not _suffix_hit:
-                            detokenizer.finalize()
-                            remaining = detokenizer.last_segment
-                            tail = (
-                                (_hb.feed(remaining) + _hb.flush()) if remaining else ""
-                            )
-                            if tail:
-                                _safe_queue.put_nowait(
-                                    RequestOutput(
-                                        request_id=req_id,
-                                        new_text=tail,
-                                        finish_reason=None,
-                                        finished=False,
-                                        current_state=_cur_state,
-                                    )
-                                )
-                        return
-
-                # Max tokens reached — finalize detokenizer and flush any text
-                # still held back by the stop buffer (no stop fired, so it's all
-                # genuine output).
-                if has_detokenizer:
-                    detokenizer.finalize()
-                    remaining = detokenizer.last_segment
-                    remaining = _hb.feed(remaining) + _hb.flush()
-                    if remaining:
-                        _safe_queue.put_nowait(
-                            RequestOutput(
-                                request_id=req_id,
-                                new_text=remaining,
-                                finish_reason=None,
-                                finished=False,
-                                current_state=_cur_state,
-                            )
-                        )
-                else:
-                    # No detokenizer: still flush any buffered tail.
-                    _flush_tail = _hb.flush()
-                    if _flush_tail:
-                        _safe_queue.put_nowait(
-                            RequestOutput(
-                                request_id=req_id,
-                                new_text=_flush_tail,
-                                finish_reason=None,
-                                finished=False,
-                                current_state=_cur_state,
-                            )
-                        )
-                _final_state = "reasoning" if _in_thinking else "normal"
-                output = RequestOutput(
-                    request_id=req_id,
-                    new_text="",
-                    finish_reason="length",
-                    finished=True,
-                    completion_tokens=token_count,
-                    prompt_tokens=_num_prompt_tokens,
-                    current_state=_final_state,
-                    reasoning_tokens=_thinking_tokens,
-                    ttft_ms=round(_stream_ttft_val[0] * 1000, 1)
-                    if _stream_ttft_val[0] > 0
-                    else 0.0,
-                )
-                _safe_queue.put_nowait(output)
-
+                # Templating + media encoding on the MLX thread; tokens are then
+                # consumed off it (the runner's driver needs that thread).
+                call = await loop.run_in_executor(self._executor, _prepare)
             except Exception as e:
                 logger.error(f"VLM stream error: {e}", exc_info=True)
-                # Flush remaining detokenizer bytes on error
-                if detokenizer is not None:
-                    try:
-                        detokenizer.finalize()
-                        remaining = detokenizer.last_segment
-                        if remaining:
-                            _safe_queue.put_nowait(
-                                RequestOutput(
-                                    request_id=req_id,
-                                    new_text=remaining,
-                                    finish_reason=None,
-                                    finished=False,
-                                )
-                            )
-                    except Exception:
-                        logger.debug(
-                            "detokenizer finalize in error handler failed",
-                            exc_info=True,
-                        )
-                # Emit error output so the consumer can distinguish error from normal end
                 _safe_queue.put_nowait(
                     RequestOutput(
                         request_id=req_id,
@@ -2731,28 +1129,17 @@ class VLMEngine:
                         error=str(e),
                     )
                 )
-            finally:
-                if deferred[0] is None:
+                _safe_queue.put_nowait(None)
+                return
+
+            def _consume():
+                try:
+                    call()
+                finally:
                     with contextlib.suppress(Exception):
                         _safe_queue.put_nowait(None)
 
-        with self._active_count_lock:
-            self._active_count += 1
-        loop = asyncio.get_running_loop()
-
-        async def _stream_job():
-            await loop.run_in_executor(self._executor, self._then_clear(_stream_sync))
-            call = deferred[0]
-            if call is not None:
-                # Batched runner: consume tokens off the MLX thread.
-                def _consume():
-                    try:
-                        call()
-                    finally:
-                        with contextlib.suppress(Exception):
-                            _safe_queue.put_nowait(None)
-
-                await loop.run_in_executor(self._runner_consumers(), _consume)
+            await loop.run_in_executor(self._runner_consumers(), _consume)
 
         stream_task = asyncio.ensure_future(_stream_job())
 
@@ -2785,19 +1172,8 @@ class VLMEngine:
                     logger.warning(
                         f"VLM stream timeout: no token for {_timeout_seconds}s"
                     )
-                    # signal the GPU loop to STOP. stream_task.cancel() in the
-                    # finally can't interrupt the executor thread running _stream_sync;
-                    # the VLM decode loops (_stream_vlm_text/_stream_vlm_vision) only stop
-                    # when they observe cancel_event. Without this the executor kept
-                    # decoding to max_tokens, pinning the single VLM executor (                    # class — the BatchedEngine text path sets _timeout_cancel here).
-                    try:
-                        if cancel_event is not None:
-                            cancel_event.set()
-                    except Exception:
-                        logger.debug(
-                            "VLM stream timeout: cancel_event.set() failed",
-                            exc_info=True,
-                        )
+                    # Stop the runner row; it only stops when it sees the event.
+                    cancel_event.set()
                     yield RequestOutput(
                         request_id=req_id,
                         new_text="",
@@ -2812,25 +1188,22 @@ class VLMEngine:
                     _prompt_tokens_count = output.prompt_tokens
                 if output.completion_tokens > 0:
                     _completion_tokens_count = output.completion_tokens
-                # Record TTFT in Prometheus on first token
-                if output.ttft_ms > 0 and _stream_ttft_recorded[0]:
+                # Record TTFT in Prometheus on the first token
+                if output.ttft_ms > 0:
                     try:
                         from yunshu_gateway.middleware.prometheus_exporter import (
                             get_prometheus_metrics,
                         )
 
-                        pm = get_prometheus_metrics()
-                        pm.observe_histogram(
+                        get_prometheus_metrics().observe_histogram(
                             "ttft_seconds",
-                            _stream_ttft_val[0],
+                            output.ttft_ms / 1000.0,
                             labels={"model_id": self.model_name},
                         )
                     except Exception:
                         pass
-                    _stream_ttft_recorded[0] = False
                 yield output
         finally:
-            # The MLX buffer pool is bounded inside the stream job (_then_clear).
             # Record in ServerMetrics for VLM streaming
             try:
                 from .server_metrics import get_server_metrics
@@ -2843,8 +1216,7 @@ class VLMEngine:
             except Exception:
                 pass
             if not stream_task.done():
-                if cancel_event is not None:
-                    cancel_event.set()
+                cancel_event.set()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await asyncio.shield(stream_task)
             # Drain remaining queue items to unblock the executor thread
@@ -2871,253 +1243,10 @@ class VLMEngine:
                         ]
             self._cleanup_temp_files(_mine)
 
-    def _generate_vlm_vision(
-        self,
-        messages: list[dict],
-        image_paths: list[str],
-        max_tokens: int,
-        temperature: float,
-        top_p: float,
-        top_k: int = 0,
-        stop: list[str] | None = None,
-        audio_paths: list[str] | None = None,
-        enable_thinking: bool | None = None,
-        thinking_budget: int | None = None,
-        seed: int | None = None,
-        min_p: float = 0.0,
-        template_extra: dict | None = None,
-    ) -> str:
-        """Vision + text generation using mlx_vlm.generate().
-
-        Passes vision_cache and prompt_cache_state to mlx_vlm so that:
-        1. Image features are cached and reused when the same image appears again
-        2. KV cache is reused for common prefix across conversations with same image
-        """
-        from mlx_vlm.generate import generate as vlm_generate
-
-        # Apply chat template with caching to skip re-processing for repeated messages
-        num_audios = len(audio_paths) if audio_paths else 0
-        prompt = self._apply_vlm_template_with_cache(
-            messages,
-            enable_thinking=enable_thinking,
-            num_audios=num_audios,
-            max_images=len(image_paths) if image_paths else None,
-            template_extra=template_extra,
-        )
-
-        # Compute image hash for KV prefix cache lookup
-        image_hash = self._compute_image_hash(image_paths) if image_paths else None
-
-        # Look up existing KV prefix state for this image
-        kv_prefix_state = self._get_kv_prefix_state(image_hash) if image_hash else None
-        if kv_prefix_state is not None:
-            logger.debug(
-                "VLM KV prefix cache hit for image %s (cache has %d tokens)",
-                image_hash[:8],
-                len(kv_prefix_state.token_ids) if kv_prefix_state.token_ids else 0,
-            )
-
-        # Track vision feature cache hits/misses via adapter stats
-        vc_stats_before = self._vision_cache.stats if self._vision_cache else {}
-
-        # Encoder cache key for post-generation storage. We don't look up
-        # here because the actual encoder output reuse happens through the
-        # vision_cache adapter (passed via gen_kwargs["vision_cache"]).
-        # The encoder cache stores the raw encoder_outputs from vlm_generate's
-        # result object when available.
-        _encoder_cache_key = None
-        if image_hash is not None:
-            _encoder_cache_key = f"vlm-{image_hash}"
-
-        # Seed the stream PRNG inside the generation_stream context. mlx_vlm's
-        # vlm_generate uses generation_stream internally, so seeding here
-        # (default stream) is insufficient; we set it here as best-effort.
-        # See _generate_vlm_text for the proper stream-scoped seed pattern.
-        if seed is not None:
-            from mlx_lm.generate import generation_stream
-
-            with mx.stream(generation_stream):
-                mx.random.seed(int(seed) & ((1 << 63) - 1))
-
-        # Build the full sampler (temperature + top_p/top_k/min_p + seed) so the
-        # non-stream vision path honors the same sampling controls as the streaming
-        # path (stream_vlm_vision) — previously only `temperature` was passed, so
-        # top_p/top_k/min_p were silently ignored on non-streaming vision requests.
-        sampler = _build_noncached_sampler(temperature, top_p, top_k, min_p, seed)
-        gen_kwargs: dict = {
-            "max_tokens": max_tokens,
-            "sampler": sampler,
-            "verbose": False,
-        }
-        if image_paths:
-            gen_kwargs["image"] = (
-                image_paths if len(image_paths) > 1 else image_paths[0]
-            )
-        if audio_paths:
-            gen_kwargs["audio"] = self._audio_arg(audio_paths)
-
-        # NOTE : the installed mlx_vlm has NO `vision_cache` parameter,
-        # so this kwarg is IGNORED — it never drove any caching. The real
-        # cross-request vision-feature cache is now the _CachingVisionTower
-        # wrapper installed on the model's vision tower(s) at load. Kept here
-        # (harmless) only for forward-compat if a future mlx_vlm adds the hook;
-        # the VisionFeatureCache SSD tier remains available behind the adapter.
-        if self._vlm_vision_cache_adapter is not None:
-            gen_kwargs["vision_cache"] = self._vlm_vision_cache_adapter
-
-        # Pass KV prefix state for reuse across conversations with same image
-        if kv_prefix_state is not None:
-            gen_kwargs["prompt_cache_state"] = kv_prefix_state
-
-        result = vlm_generate(
-            self._model,
-            self._processor,
-            prompt=prompt,
-            **gen_kwargs,
-        )
-
-        # Track vision feature cache stats
-        if self._vision_cache is not None:
-            vc_stats_after = self._vision_cache.stats
-            new_hits = max(
-                0, vc_stats_after.get("hits", 0) - vc_stats_before.get("hits", 0)
-            )
-            if new_hits > 0:
-                self._vlm_vision_hits += new_hits
-                logger.debug("VLM vision feature cache hit: reused encoded image")
-            # count misses PER IMAGE (was +1 for any multi-image miss, which
-            # skewed the hit rate vs the per-image hit count).
-            _misses = max(0, (len(image_paths) if image_paths else 0) - new_hits)
-            if _misses > 0:
-                self._vlm_vision_misses += _misses
-
-        # Store encoder output in encoder cache for future reuse.
-        # Only store actual encoder_outputs from the result object.
-        # Do NOT store placeholder markers (True) — the vision_cache adapter
-        # already handles image feature caching, and storing fake markers
-        # wastes memory and creates misleading cache hit stats.
-        if _encoder_cache_key is not None:
-            encoder_output = getattr(result, "encoder_outputs", None)
-            if encoder_output is not None:
-                self._encoder_cache.put(_encoder_cache_key, encoder_output)
-
-        # After generation, save KV prefix state for this image (first time or
-        # update with new state). stream_generate already called update() on the
-        # prompt_cache_state if provided. For first-time images, create a state.
-        if image_hash is not None:
-            try:
-                if kv_prefix_state is not None:
-                    # State was already updated by stream_generate
-                    pass
-                else:
-                    # First time seeing this image — create a state entry so the
-                    # next conversation with this image can reuse the KV cache.
-                    # We don't have the KV cache here (it's inside vlm_generate),
-                    # but we store the state entry so the next call will create one.
-                    self._ensure_kv_prefix_state(image_hash)
-            except Exception:
-                logger.warning("KV prefix state management failed", exc_info=True)
-
-        # Extract text from result object and trim at stop sequences
-        _result_text = result.text if hasattr(result, "text") else str(result)
-        _stop_hit = False
-        if stop:
-            for s in stop:
-                idx = _result_text.find(s)
-                if idx >= 0:
-                    _result_text = _result_text[:idx]
-                    _stop_hit = True
-                    break
-
-        # Enforce thinking budget if provided
-        # thinking_budget is a TOKEN count, not a character count.
-        # Since vlm_generate doesn't expose raw tokens, tokenize the thinking
-        # content to get an accurate token count for budget comparison.
-        _budget_hit = False
-        _thinking_tokens = 0
-        # count reasoning tokens whenever the output HAS a think
-        # block — not only when a thinking_budget was passed. The old code nested the
-        # count inside `if thinking_budget is not None`, so a non-streaming vision
-        # response with <think>…</think> but no explicit budget returned
-        # reasoning_tokens=0 (the text path counts unconditionally; this was an
-        # asymmetric undercount). _find_think_tag avoids <thinking>/<think_more> matches.
-        if self._tokenizer is not None:
-            think_start = self._find_think_tag(_result_text, "<think")
-            if think_start >= 0:
-                think_end = self._find_think_tag(
-                    _result_text, "</think", search_start=think_start + 1
-                )
-                # if generation hit max_tokens while STILL inside the
-                # thinking block (no closing tag), think_end < 0 and the whole
-                # output is reasoning — count from the open tag to the end, else
-                # _thinking_tokens stayed 0 (asymmetric undercount vs the streaming
-                # and text paths, which count incrementally).
-                _think_seg = (
-                    _result_text[think_start:think_end]
-                    if think_end >= 0
-                    else _result_text[think_start:]
-                )
-                if think_end >= 0 or _think_seg:
-                    think_content = _think_seg
-                    try:
-                        _thinking_tokens = len(self._tokenizer.encode(think_content))
-                    except Exception:
-                        # Fallback: rough character-to-token ratio (~4 chars/token)
-                        _thinking_tokens = len(think_content) // 4
-                    if (
-                        think_end >= 0
-                        and thinking_budget is not None
-                        and _thinking_tokens > thinking_budget
-                    ):
-                        # Budget exceeded — truncate thinking content.
-                        # Estimate character cutoff from token budget using
-                        # the actual ratio observed in this thinking segment.
-                        if _thinking_tokens > 0:
-                            chars_per_token = len(think_content) / _thinking_tokens
-                            max_chars = int(thinking_budget * chars_per_token)
-                        else:
-                            max_chars = thinking_budget * 4
-                        _result_text = (
-                            _result_text[:think_start]
-                            + _result_text[think_start : think_start + max_chars]
-                            + _result_text[think_end:]
-                        )
-                        _budget_hit = True
-
-        # Capture mRoPE deltas after vision prefill
-        if self._mrope_info and self._mrope_info.enabled:
-            from .mrope import capture_rope_deltas
-
-            delta = capture_rope_deltas(self._model)
-            if delta is not None:
-                logger.debug(f"mRoPE delta captured: {delta:.4f}")
-
-        # Return 6-tuple: (text, thinking, tokens, stop_hit, budget_hit, cached_tokens)
-        _est_tokens = getattr(result, "generation_tokens", 0) or 0
-        if _stop_hit and _result_text and self._tokenizer:
-            _corrected = len(self._tokenizer.encode(_result_text))
-            if isinstance(_est_tokens, int) and _corrected < _est_tokens:
-                _est_tokens = _corrected
-        elif _est_tokens == 0 and _result_text and self._tokenizer:
-            _est_tokens = len(self._tokenizer.encode(_result_text))
-        return (
-            _result_text,
-            _thinking_tokens,
-            _est_tokens,
-            _stop_hit,
-            _budget_hit,
-            0,
-        )  # vision: no text-prefix reuse
-
-    # ── VLM text generation (for mlx-vlm models) ──
-
     def backend_capabilities(self, lm: Any = None) -> Any:
-        """Derive this VLM backbone's serving capabilities via the shared,
-        backbone-agnostic `model_backend` layer (Part 2/3). Memoized.
-
-        Used to decide whether cross-request KV prefix reuse is lossless — the
-        same classification logic BatchedEngine can adopt — instead of
-        per-engine hard-coding. See docs/VLM_TEXT_KV_PREFIX.md."""
+        """This backbone's cache layout via the shared ``model_backend`` layer
+        (memoized); the runner build uses it to skip APC for sliding-window
+        caches."""
         if self._backend_caps is not None:
             return self._backend_caps
         from .model_backend import BackendKind, derive_capabilities
@@ -3131,1105 +1260,18 @@ class VLMEngine:
             layers = make_prompt_cache(lm)
         except Exception:
             logger.debug("VLM cache probe failed; assuming non-reusable", exc_info=True)
-        # mRoPE detection: config (detect_mrope) is unreliable — Qwen3-Omni
-        # nests rope_scaling under thinker_config.text_config, which detect_mrope
-        # misses. Broaden with model introspection: a get_rope_index / _rope_deltas
-        # method means position lives outside the cache (mRoPE-style), so the
-        # caller must supply explicit positions for reuse.
-        is_mrope = bool(
-            (
-                self._mrope_info is not None
-                and getattr(self._mrope_info, "enabled", False)
-            )
-            or hasattr(lm, "get_rope_index")
-            or hasattr(lm, "_rope_deltas")
-        )
+        # A get_rope_index / _rope_deltas method means position lives outside
+        # the cache (mRoPE-style).
+        is_mrope = hasattr(lm, "get_rope_index") or hasattr(lm, "_rope_deltas")
         caps = derive_capabilities(BackendKind.VLM, layers, is_mrope=is_mrope)
         self._backend_caps = caps
-        if not caps.supports_kv_prefix_reuse:
-            logger.info(
-                "VLM text KV prefix cache: %s bypassing prefix reuse — %s (layers=%s)",
-                self.model_name,
-                caps.bypass_reason(),
-                ",".join(sorted(set(caps.cache.layer_types))) or "?",
-            )
         return caps
-
-    def _text_prefix_reuse_safe(self, lm: Any) -> bool:
-        """Whether cross-request text-prefix KV reuse is LOSSLESS for this model.
-
-        Two gates: (1) the shared capability layer (cache must be resumable —
-        bypasses sliding-window / hybrid), and (2) an EMPIRICAL load-time probe
-        that runs the actual reuse path vs a full prefill and requires identical
-        logits. The probe is the robust guard: it empirically confirms the
-        model-native rope-state priming (_prime_mrope_reuse_state) reproduces a
-        full prefill for THIS backbone, regardless of mRoPE variant. Runs ONCE at
-        load (executor thread); this method is a pure memoized read — no GPU work
-        — safe to call from any thread."""
-        if self._text_kv_prefix_cache is None:
-            return False
-        if not self.backend_capabilities(lm).supports_kv_prefix_reuse:
-            return False
-        # Probe ran at load on the executor. None = not probed → bypass.
-        return bool(self._reuse_probe_ok)
-
-    def _probe_text_reuse_lossless(self, lm: Any) -> bool:
-        """One-shot empirical check (memoized): does the reuse path produce the
-        SAME GREEDY OUTPUT as a full prefill on this model? Compares argmax TOKEN
-        SEQUENCES over several decode steps — the actual definition of lossless
-        for greedy serving — rather than a single-prefill logit delta (too strict
-        for MoE routing noise that never flips the greedy token). Runs on the
-        executor thread. Conservative: any error → not safe (bypass)."""
-        if self._reuse_probe_ok is not None:
-            return self._reuse_probe_ok
-        ok = False
-        try:
-            import mlx.core as mx
-            from mlx_lm.generate import generation_stream
-            from mlx_vlm.models.cache import make_prompt_cache
-
-            txt = "The quick brown fox jumps over the lazy dog. " * 48
-            ids = mx.array(self._tokenizer.encode(txt))
-            if int(ids.shape[0]) < 64:
-                ids = mx.concatenate([ids, ids])
-            n = int(ids.shape[0])
-            half = n // 2
-            STEPS = 12
-            needs_pos = bool(self.backend_capabilities(lm).requires_explicit_positions)
-
-            def _greedy(cache, first_ids):
-                cur = mx.argmax(
-                    lm(first_ids[None], cache=cache).logits[:, -1, :], axis=-1
-                )
-                out = [int(cur.item())]
-                for _ in range(STEPS - 1):
-                    cur = mx.argmax(
-                        lm(cur[None], cache=cache).logits[:, -1, :], axis=-1
-                    )
-                    out.append(int(cur.item()))
-                return out
-
-            with mx.stream(generation_stream):
-                # Reference: full prefill + greedy.
-                ref = _greedy(make_prompt_cache(lm), ids)
-                # Reuse: prefill prefix, snapshot at the boundary, prime native
-                # rope state, prefill the suffix on the snapshot + greedy.
-                cW = make_prompt_cache(lm)
-                lm(ids[:half][None], cache=cW)
-                snap = self._text_kv_prefix_cache._snapshot_cache(cW, trim=0)
-                if needs_pos:
-                    self._prime_mrope_reuse_state(lm)
-                got = _greedy(snap, ids[half:])
-                ok = bool(ref == got)
-            logger.info(
-                "VLM text KV reuse probe for %s: %s (greedy %d-step match=%s, needs_pos=%s)",
-                self.model_name,
-                "LOSSLESS" if ok else "NOT lossless — bypassing",
-                STEPS,
-                ok,
-                needs_pos,
-            )
-        except Exception:
-            logger.warning(
-                "VLM text KV reuse probe failed — bypassing reuse", exc_info=True
-            )
-            ok = False
-        self._reuse_probe_ok = ok
-        return ok
-
-    def _text_reuse_needs_positions(self, lm: Any = None) -> bool:
-        """True when this backbone needs its native rope state primed for lossless
-        text-prefix reuse (mRoPE models — position lives outside the cache)."""
-        return bool(self.backend_capabilities(lm).requires_explicit_positions)
-
-    @staticmethod
-    def _prime_mrope_reuse_state(lm: Any) -> None:
-        """Prime an mRoPE language model's NATIVE rope state for prefix reuse.
-
-        mRoPE models (GLM-OCR, Qwen-VL, Qwen3-Omni) compute the suffix's positions
-        from ``cache_offset + self._rope_deltas`` — BUT only when ``_rope_deltas``
-        is not None; after clear_rope_state() it's None, so they instead recompute
-        from 0 (wrong context). Setting it to the TEXT-ONLY delta (0) makes the
-        model's own logic produce cache_offset-based positions for the suffix and
-        every decode step. This is model-native, so it works for BOTH simple
-        (GLM-OCR) and interleaved (Qwen3-Omni) mRoPE — supplying our own
-        position_ids only worked for the simple variant. No-op on a cold full
-        prefill (offset 0 → the model's get_rope_index overwrites this). The
-        empirical probe validates it per model; unsupported layouts just bypass."""
-        try:
-            lm._rope_deltas = mx.zeros((1, 1), dtype=mx.float32)
-        except Exception:
-            logger.debug("prime mRoPE reuse state failed", exc_info=True)
-
-    def _text_hybrid_reuse_safe(self, lm: Any) -> bool:
-        """Whether a HYBRID VLM backbone (Qwen3.5/3.6-VL: KVCache
-        + non-sliceable GatedDeltaNet ArraysCache) can reuse text prefixes via
-        boundary snapshots (no_trim mode). The recurrent state can't be trimmed,
-        but a trim=0 snapshot at a block boundary IS losslessly resumable —
-        verified by `_probe_hybrid_reuse`. Distinct from the standard (trimmable)
-        reuse gate; only fires when the standard gate has declined for hybrid."""
-        if self._text_kv_prefix_cache is None or not self._text_hybrid_prefix_enabled:
-            return False
-        caps = self.backend_capabilities(lm)
-        if not caps.cache.is_hybrid or caps.cache.has_sliding_window:
-            return False  # only pure hybrid (not sliding-window hybrid)
-        return bool(self._hybrid_reuse_probe_ok)
-
-    def _probe_hybrid_reuse(self, lm: Any) -> bool:
-        """One-shot greedy probe (memoized): does no_trim boundary-snapshot reuse
-        reproduce a full prefill for this hybrid model? Run at load on executor."""
-        if self._hybrid_reuse_probe_ok is not None:
-            return self._hybrid_reuse_probe_ok
-        ok = False
-        try:
-            import mlx.core as mx
-            from mlx_lm.generate import generation_stream
-            from mlx_vlm.models.cache import make_prompt_cache
-
-            txt = "The quick brown fox jumps over the lazy dog. " * 60
-            ids = mx.array(self._tokenizer.encode(txt))
-            n = int(ids.shape[0])
-            blk = self._text_hybrid_block
-            half = max(blk, (n // 2 // blk) * blk)
-            if half >= n:
-                half = blk
-            STEPS = 12
-            needs_pos = bool(self.backend_capabilities(lm).requires_explicit_positions)
-
-            def _greedy(cache, first_ids):
-                cur = mx.argmax(
-                    lm(first_ids[None], cache=cache).logits[:, -1, :], axis=-1
-                )
-                out = [int(cur.item())]
-                for _ in range(STEPS - 1):
-                    cur = mx.argmax(
-                        lm(cur[None], cache=cache).logits[:, -1, :], axis=-1
-                    )
-                    out.append(int(cur.item()))
-                return out
-
-            with mx.stream(generation_stream):
-                ref = _greedy(make_prompt_cache(lm), ids)
-                cW = make_prompt_cache(lm)
-                lm(ids[:half][None], cache=cW)  # prefill to the boundary
-                snap = self._text_kv_prefix_cache._snapshot_cache(cW, trim=0)
-                if needs_pos:
-                    self._prime_mrope_reuse_state(lm)
-                got = _greedy(snap, ids[half:])  # resume from boundary
-                ok = bool(ref == got)
-            logger.info(
-                "VLM HYBRID reuse probe for %s: %s (boundary=%d, greedy %d-step match=%s)",
-                self.model_name,
-                "LOSSLESS" if ok else "NOT lossless — bypassing",
-                half,
-                STEPS,
-                ok,
-            )
-        except Exception:
-            logger.warning("VLM hybrid reuse probe failed — bypassing", exc_info=True)
-            ok = False
-        self._hybrid_reuse_probe_ok = ok
-        return ok
-
-    def _capture_vlm_hybrid_prefix(self, lm, full_ids, cache, pc, start_offset, block):
-        """Port of BatchedEngine._capture_hybrid_prefix for the VLM text path:
-        advance `cache` through full_ids[start_offset:-1] in block chunks, storing
-        a trim=0 boundary snapshot into `pc` at each boundary (so a later request
-        sharing that N-token prefix reuses the EXACT recurrent state, no slicing).
-        Leaves the final token for the caller to prefill. Returns tokens resident."""
-        n = int(full_ids.shape[0])
-        if n <= 1:
-            return start_offset
-        p = int(start_offset)
-        end = n - 1
-        if n > 8192:
-            # Full hybrid snapshots grow with context length. Capturing every
-            # boundary at 32K retained tens of GiB, so keep only the latest
-            # useful boundary and prefill the earlier span in larger chunks.
-            boundary = (end // block) * block
-            while p < boundary:
-                q = min(p + max(block, 512), boundary)
-                lm(full_ids[p:q][None], cache=cache)
-                p = q
-            if p == boundary and start_offset < boundary and p >= pc._min_prefix:
-                pc.clear()
-                pc.add(full_ids[:p], cache)
-            if p < end:
-                lm(full_ids[p:end][None], cache=cache)
-                p = end
-            return p
-        while p < end:
-            chunk = full_ids[p : min(p + block, end)]
-            cn = int(chunk.shape[0])
-            if cn == 0:
-                break
-            lm(chunk[None], cache=cache)
-            p += cn
-            if p % block == 0 and p >= pc._min_prefix:
-                try:
-                    pc.add(full_ids[:p], cache)
-                except Exception:
-                    logger.debug(
-                        "VLM hybrid boundary snapshot add failed", exc_info=True
-                    )
-        return p
-
-    def _prefill_vlm_ar_text(self, lm, input_ids, cache, cancel_event):
-        """Opt-in, bounded text prefill for the Qwen hybrid AR fallback.
-
-        Leave the last token for the first logits, as upstream mlx-vlm does.
-        Cache state is evaluated after every chunk so cancellation has a real
-        Metal completion boundary rather than waiting on one giant forward.
-        """
-        try:
-            step = int(os.environ.get("YUNSHU_VLM_AR_PREFILL_CHUNK_TOKENS", "0"))
-        except ValueError:
-            step = 0
-        text_config = self._config.get("text_config", {})
-        if (
-            step <= 0
-            or text_config.get("model_type") != "qwen3_5_text"
-            or len(input_ids) <= step + 1
-        ):
-            return lm(input_ids[None], cache=cache)
-        step = max(16, step)
-        offset = 0
-        last = len(input_ids) - 1
-        while offset < last:
-            if cancel_event is not None and cancel_event.is_set():
-                return None
-            n = min(step, last - offset)
-            output = lm(
-                input_ids[offset : offset + n][None],
-                cache=cache,
-                skip_logits=True,
-            )
-            del output
-            mx.eval([entry.state for entry in cache])
-            mx.clear_cache()
-            offset += n
-        if cancel_event is not None and cancel_event.is_set():
-            return None
-        return lm(input_ids[last:][None], cache=cache)
-
-    def _generate_vlm_text(
-        self,
-        input_ids: mx.array,
-        max_tokens: int,
-        temperature: float,
-        top_p: float,
-        top_k: int = 0,
-        min_p: float = 0.0,
-        stop: list[str] | None = None,
-        stop_token_ids: list[int] | None = None,
-        repetition_penalty: float = 1.0,
-        frequency_penalty: float = 0.0,
-        presence_penalty: float = 0.0,
-        logit_bias: dict[int, float] | None = None,
-        json_schema: dict | None = None,
-        enable_thinking: bool | None = None,
-        xtc_probability: float = 0.0,
-        xtc_threshold: float = 0.0,
-        thinking_budget: int | None = None,
-        cancel_event: Any = None,
-        seed: int | None = None,
-    ) -> str:
-        """Text generation for VLM models using model.language_model."""
-        from mlx_lm.generate import generation_stream
-        from mlx_vlm.models.cache import make_prompt_cache
-
-        # Clear mRoPE state to prevent contamination from prior VLM request
-        if self._mrope_info and self._mrope_info.enabled:
-            from .mrope import clear_rope_state
-
-            clear_rope_state(self._model)
-
-        lm = self._model.language_model
-        cache = make_prompt_cache(lm)
-        sampler = _build_noncached_sampler(temperature, top_p, top_k, min_p, seed)
-        eos_ids = self._get_eos_ids()
-
-        # opt-in 4-tier KV prefix cache for the VLM TEXT path (text-only
-        # by construction). Bypassed for backbones that can't reuse losslessly.
-        _text_pc = (
-            self._text_kv_prefix_cache if self._text_prefix_reuse_safe(lm) else None
-        )
-        # HYBRID backbones (Qwen3.5/3.6-VL) reuse via no_trim
-        # boundary snapshots instead of bypassing. Same cache object, no_trim mode.
-        _hybrid_mode = False
-        if _text_pc is None and self._text_hybrid_reuse_safe(lm):
-            _text_pc = self._text_kv_prefix_cache
-            _text_pc._no_trim_mode = True
-            _hybrid_mode = True
-
-        # JSON schema / grammar constraint
-        json_constraint = None
-        if json_schema is not None:
-            try:
-                if isinstance(json_schema, dict) and json_schema.get("type") in (
-                    "regex",
-                    "choice",
-                    "cfg",
-                ):
-                    # Non-JSON grammar type — use ConstraintFactory dispatch
-                    from .grammar_constraint import ConstraintFactory
-
-                    gtype = json_schema["type"]
-                    if gtype == "regex":
-                        grammar = json_schema.get("pattern", "")
-                    elif gtype == "choice":
-                        grammar = json_schema.get("choices", [])
-                    elif gtype == "cfg":
-                        grammar = json_schema.get("grammar", "")
-                    else:
-                        grammar = None
-                    if grammar is not None:
-                        json_constraint = ConstraintFactory.create(
-                            gtype, grammar, self._tokenizer
-                        )
-                elif isinstance(json_schema, str) and json_schema == "json_object":
-                    from .json_schema import JsonSchemaConstraint
-
-                    json_constraint = JsonSchemaConstraint(None)
-                else:
-                    from .json_schema import JsonSchemaConstraint
-
-                    json_constraint = JsonSchemaConstraint(json_schema)
-            except Exception as exc:
-                raise ValueError("Grammar constraint initialization failed") from exc
-
-        has_penalty = (
-            repetition_penalty != 1.0
-            or frequency_penalty != 0.0
-            or presence_penalty != 0.0
-            or logit_bias
-        )
-
-        # Build stop IDs from string sequences + explicit stop_token_ids
-        stop_ids = set(eos_ids)
-        stop_suffixes = []
-        if stop:
-            for s in stop:
-                try:
-                    ids = self._tokenizer.encode(s)
-                    if len(ids) == 1:
-                        stop_ids.add(ids[0])
-                    else:
-                        stop_suffixes.append(s)
-                except Exception:
-                    logger.debug("failed", exc_info=True)
-        if stop_token_ids:
-            stop_ids.update(stop_token_ids)
-
-        def _is_cancelled() -> bool:
-            if cancel_event is None:
-                return False
-            if isinstance(cancel_event, asyncio.Event):
-                return cancel_event._value
-            return cancel_event.is_set()
-
-        with mx.stream(generation_stream):
-            # IMPORTANT: seed must be set INSIDE the stream context — the
-            # generation_stream has a separate PRNG state from the default
-            # stream. Setting mx.random.seed() outside this `with` block has
-            # no effect on stream-scoped categorical sampling, which produces
-            # identical output across requests / seeds (⚠️ A).
-            if seed is not None:
-                _eff_seed = int(seed) & ((1 << 63) - 1)
-                mx.random.seed(_eff_seed)
-                logger.debug(f"VLM _generate_vlm_text: seed={_eff_seed}")
-            else:
-                # No explicit seed — derive a per-call seed from current time
-                # so successive requests don't repeat the same trajectory.
-                _eff_seed = time.time_ns() & ((1 << 63) - 1)
-                mx.random.seed(_eff_seed)
-                logger.debug(f"VLM _generate_vlm_text: time-derived seed={_eff_seed}")
-
-            # SpecPrefill: for long text prompts, use attention-based sparse
-            # scoring to prioritize which tokens get prefill attention.
-            # NOTE: We do NOT truncate input_ids — that would permanently
-            # lose context. SpecPrefill is a no-op placeholder until proper
-            # attention-weighted prefill is implemented.
-            if self._spec_prefill_enabled and input_ids.shape[0] > 8192:
-                logger.info(
-                    f"SpecPrefill: input has {input_ids.shape[0]} tokens (>8192 threshold). "
-                    "Full prefill will be used — sparse attention prefill not yet implemented."
-                )
-
-            # KV prefix cache lookup — reuse a cached prefix's KV and
-            # prefill only the suffix. Lossless: the cached layers are exact
-            # KV for the matched tokens (hybrid models reuse only on a trim=0
-            # boundary). Falls back to full prefill on any miss/error.
-            _prefill_ids = input_ids
-            _pc_matched = 0
-            if _text_pc is not None and len(input_ids) >= 32:
-                try:
-                    _cached_kv, _, _pc_matched = _text_pc.get(input_ids)
-                    if _cached_kv is not None and _pc_matched > 0:
-                        cache = _cached_kv
-                        _prefill_ids = input_ids[_pc_matched:]
-                        # On a FULL exact match the cache holds every prompt
-                        # token, leaving nothing to prefill. A single-token
-                        # re-feed is NOT numerically equal to the full prefill
-                        # (a 1-token attention computes in a different context
-                        # and flips the greedy argmax), so re-prefill the last
-                        # BLOCK as a multi-token call — matching the LLM fast
-                        # path's block-aligned reuse (verified bit-identical).
-                        # Full exact match (empty suffix) — must still feed ≥1 token
-                        # to get the first decode logits, else lm([]) → logits[:,-1]
-                        # squeezes a 0-length axis and crashes.
-                        if len(_prefill_ids) == 0:
-                            if _hybrid_mode:
-                                # ArraysCache can't be trimmed back a token; discard the
-                                # full-match snapshot and cold-prefill (the hybrid capture
-                                # below then re-stores boundaries + leaves the last token).
-                                cache = make_prompt_cache(lm)
-                                _prefill_ids = input_ids
-                                _pc_matched = 0
-                            else:
-                                _refeed = min(len(input_ids) - 1, 128)
-                                cache = _text_pc._snapshot_cache(cache, trim=_refeed)
-                                _prefill_ids = input_ids[-_refeed:]
-                                _pc_matched = len(input_ids) - _refeed
-                        logger.debug(
-                            "VLM text KV prefix hit: matched=%d/%d hybrid=%s",
-                            _pc_matched,
-                            len(input_ids),
-                            _hybrid_mode,
-                        )
-                except Exception:
-                    logger.warning(
-                        "VLM text KV prefix get failed — full prefill", exc_info=True
-                    )
-                    cache = make_prompt_cache(lm)
-                    _prefill_ids = input_ids
-                    _pc_matched = 0
-
-            # mRoPE backbones track token position OUTSIDE the KV
-            # cache, and clear_rope_state() reset it to None — so on a reused
-            # prefix the model recomputes the suffix's positions from 0 (wrong
-            # context). FIX: prime the model's native rope state to the text-only
-            # delta (0) so its OWN position logic computes cache_offset-based
-            # positions for the suffix and every decode step. This is model-
-            # native (works for BOTH simple GLM-OCR mRoPE and interleaved
-            # Qwen3-Omni mRoPE, unlike supplying our own position_ids) and is a
-            # no-op on a cold full prefill (offset 0 → the model's get_rope_index
-            # overwrites it). Non-mRoPE backbones derive from cache.offset anyway.
-            if _text_pc is not None and self._text_reuse_needs_positions(lm):
-                self._prime_mrope_reuse_state(lm)
-
-            # Prefill. HYBRID: chunk-prefill storing trim=0 boundary snapshots so
-            # future shared-prefix requests reuse the exact recurrent state, then
-            # prefill the final token for the first logits.
-            if _hybrid_mode and _text_pc is not None and int(_prefill_ids.shape[0]) > 1:
-                try:
-                    _resident = self._capture_vlm_hybrid_prefix(
-                        lm,
-                        input_ids,
-                        cache,
-                        _text_pc,
-                        _pc_matched,
-                        self._text_hybrid_block,
-                    )
-                    _prefill_ids = input_ids[_resident:]
-                except Exception:
-                    logger.warning(
-                        "VLM hybrid prefix capture failed — full prefill", exc_info=True
-                    )
-            _pf_t0 = time.perf_counter()
-            output = self._prefill_vlm_ar_text(lm, _prefill_ids, cache, cancel_event)
-            if output is None:
-                return "", 0, 0, False, False, int(_pc_matched)
-            logits = output.logits[:, -1, :]
-            if json_constraint is not None:
-                from .json_schema import apply_json_constraint
-
-                allowed = json_constraint.get_allowed_tokens(self._tokenizer, [])
-                if not allowed:
-                    raise ValueError("JSON constraint has no valid first token")
-                logits = apply_json_constraint(logits, allowed)
-            current = sampler(logits)
-            mx.eval(current)
-            if json_constraint is not None:
-                json_constraint.advance(self._tokenizer.decode([int(current.item())]))
-            # Feed cold-prefill throughput to the text KV cache so its SSD tier can
-            # auto-gate fast-prefill VLMs : GLM-OCR prefills ~6300 t/s,
-            # for which restoring a prefix from disk is SLOWER than re-prefilling
-            # (F-SSD 0.93×). Only on a cold prefill (matched==0) of a real prompt.
-            if _text_pc is not None and _pc_matched == 0:
-                try:
-                    _n_pf = int(_prefill_ids.shape[0])
-                    _pf_dt = time.perf_counter() - _pf_t0
-                    if _n_pf >= 256 and _pf_dt > 0:
-                        _text_pc.note_prefill_tps(_n_pf / _pf_dt)
-                except Exception:
-                    pass
-
-            # store the prompt-boundary KV snapshot NOW, before the
-            # decode loop pollutes the cache. CRITICAL for sliding-window models
-            # (gemma RotatingKVCache): once generation rotates the window, the
-            # prompt's tail KV is evicted and trimming back to prompt length
-            # cannot restore it — a post-generation add() would store a corrupt
-            # entry (verified: lossless for short answers, wrong for long ones).
-            # add() makes a detached copy (trim=0 here since offset==prompt_len),
-            # so subsequent decode on the live `cache` doesn't touch the entry.
-            # A full-length hybrid snapshot cannot yield first logits on an
-            # exact repeat without replay, and ArraysCache cannot trim it.
-            # Keep the earlier no-trim boundary checkpoints instead.
-            if _text_pc is not None and not _hybrid_mode:
-                try:
-                    _text_pc.add(input_ids, cache)
-                except Exception:
-                    logger.debug("VLM text KV prefix add failed", exc_info=True)
-
-            tokens = [current.item()]
-            if current.item() in stop_ids:
-                return (
-                    self._tokenizer.decode(tokens, skip_special_tokens=True),
-                    0,
-                    len(tokens),
-                    True,
-                    False,
-                    int(_pc_matched),
-                )
-
-            _in_thinking = False
-            _thinking_tokens = 0
-            _stop_hit = False
-            _budget_hit = False
-            _think_single_token = False
-            try:
-                _ts_ids = self._tokenizer.encode("<think")
-                _te_ids = self._tokenizer.encode("</think")
-                if len(_ts_ids) == 1 and len(_te_ids) == 1:
-                    think_start_id = _ts_ids[0]
-                    think_end_id = _te_ids[0]
-                    _think_single_token = True
-                else:
-                    think_start_id = think_end_id = None
-            except Exception:
-                logger.debug("operation failed", exc_info=True)
-                think_start_id = think_end_id = None
-                _think_single_token = False
-
-            _thinking_text = ""  # for text-based thinking detection
-            for _step_idx in range(max_tokens - 1):
-                # Check cancellation every 16 steps to reduce overhead
-                if _step_idx % 16 == 0 and _is_cancelled():
-                    break
-
-                output = lm(current[None], cache=cache)
-                logits = output.logits[:, -1, :]
-
-                if has_penalty:
-                    if repetition_penalty != 1.0:
-                        ctx = list(set(tokens))
-                        sel = logits[..., ctx]
-                        sel = mx.where(
-                            sel < 0, sel * repetition_penalty, sel / repetition_penalty
-                        )
-                        logits[..., mx.array(ctx)] = sel
-                    if frequency_penalty != 0.0:
-                        for tid in set(tokens):
-                            logits = logits.at[..., tid].add(
-                                -frequency_penalty * tokens.count(tid)
-                            )
-                    if presence_penalty != 0.0:
-                        for tid in set(tokens):
-                            logits = logits.at[..., tid].add(-presence_penalty)
-                    if logit_bias:
-                        for tid, bias in logit_bias.items():
-                            logits = logits.at[..., tid].add(bias)
-
-                # JSON schema constraint masking
-                if json_constraint is not None and tokens:
-                    allowed = json_constraint.get_allowed_tokens(
-                        self._tokenizer, tokens
-                    )
-                    if not allowed:
-                        raise ValueError("JSON constraint has no valid next token")
-                    from .json_schema import apply_json_constraint
-
-                    logits = apply_json_constraint(logits, allowed)
-
-                current = sampler(logits)
-                mx.eval(current)
-                tok_id = current.item()
-                tokens.append(tok_id)
-
-                # Advance JSON constraint state with the new token text
-                if json_constraint is not None:
-                    token_text = self._tokenizer.decode([tok_id])
-                    json_constraint.advance(token_text)
-                # Track thinking segment boundaries
-                if _think_single_token and think_start_id is not None:
-                    if not _in_thinking and tok_id == think_start_id:
-                        _in_thinking = True
-                    elif _in_thinking:
-                        if tok_id == think_end_id:
-                            _in_thinking = False
-                        else:
-                            _thinking_tokens += 1
-                elif not _think_single_token:
-                    # Text-based thinking detection for multi-token encodings
-                    _tok_text = self._tokenizer.decode([tok_id])
-                    _thinking_text += _tok_text
-                    if not _in_thinking and _thinking_text.endswith("<think"):
-                        _in_thinking = True
-                    elif _in_thinking:
-                        if _thinking_text.endswith("</think"):
-                            _in_thinking = False
-                        else:
-                            _thinking_tokens += 1
-                # Thinking budget enforcement — cap thinking tokens
-                if (
-                    thinking_budget is not None
-                    and _in_thinking
-                    and _thinking_tokens >= thinking_budget
-                ):
-                    # Append closing tag to keep output well-formed
-                    if _think_single_token and think_end_id is not None:
-                        tokens.append(think_end_id)
-                    _budget_hit = True
-                    break
-                if tok_id in stop_ids:
-                    _stop_hit = True
-                    break
-
-        text = self._decode_with_reasoning_channels(tokens)
-        # Handle multi-token stop sequences: check if decoded text ends with any suffix
-        if stop_suffixes and not _stop_hit:
-            for s in stop_suffixes:
-                if text.endswith(s):
-                    text = text[: -len(s)]
-                    _stop_hit = True
-                    break
-        return (
-            text,
-            _thinking_tokens,
-            len(tokens),
-            _stop_hit,
-            _budget_hit,
-            int(_pc_matched),
-        )
-
-    def _stream_vlm_vision(
-        self,
-        messages: list[dict],
-        image_paths: list[str],
-        max_tokens: int,
-        temperature: float,
-        top_p: float,
-        req_id: str,
-        queue: asyncio.Queue,
-        top_k: int = 0,
-        min_p: float = 0.0,
-        stop: list[str] | None = None,
-        audio_paths: list[str] | None = None,
-        enable_thinking: bool | None = None,
-        cancel_event: Any = None,
-        xtc_probability: float = 0.0,
-        xtc_threshold: float = 0.0,
-        thinking_budget: int | None = None,
-        _ttft_t0: list | None = None,
-        _ttft_recorded: list | None = None,
-        _ttft_val: list | None = None,
-        seed: int | None = None,
-        template_extra: dict | None = None,
-    ) -> None:
-        """Streaming vision + text generation using mlx_vlm.stream_generate().
-
-        Passes vision_cache and prompt_cache_state to mlx_vlm so that:
-        1. Image features are cached and reused when the same image appears again
-        2. KV cache is reused for common prefix across conversations with same image
-        """
-        from mlx_vlm.generate import stream_generate as vlm_stream_generate
-
-        # Apply chat template with caching to skip re-processing for repeated messages
-        num_audios = len(audio_paths) if audio_paths else 0
-        prompt = self._apply_vlm_template_with_cache(
-            messages,
-            enable_thinking=enable_thinking,
-            num_audios=num_audios,
-            max_images=len(image_paths) if image_paths else None,
-            template_extra=template_extra,
-        )
-
-        # Compute image hash for KV prefix cache lookup
-        image_hash = self._compute_image_hash(image_paths) if image_paths else None
-
-        # Look up existing KV prefix state for this image
-        kv_prefix_state = self._get_kv_prefix_state(image_hash) if image_hash else None
-        if kv_prefix_state is not None:
-            logger.debug(
-                "VLM stream KV prefix cache hit for image %s (cache has %d tokens)",
-                image_hash[:8],
-                len(kv_prefix_state.token_ids) if kv_prefix_state.token_ids else 0,
-            )
-
-        # Track vision feature cache hits/misses via adapter stats
-        vc_stats_before = self._vision_cache.stats if self._vision_cache else {}
-
-        # Encoder cache lookup for streaming vision path
-        _encoder_cache_key = None
-        if image_hash is not None:
-            _encoder_cache_key = f"vlm-{image_hash}"
-
-        sampler = _build_noncached_sampler(temperature, top_p, top_k, min_p, seed)
-        stop_suffixes = stop or []
-        token_count = 0
-        accumulated = ""  # Accumulate text for multi-token stop suffix matching
-        _emitted_pos = 0  # Track how much of accumulated has been emitted
-        _in_thinking = False  # Track thinking state for current_state routing
-        _thinking_token_count = 0  # Count tokens generated while in thinking state
-        _think_scan_pos = 0  # Cursor for scanning thinking tags (avoids re-scanning already-seen text)
-        _num_prompt_tokens = 0
-        # Estimate prompt tokens for output metadata.
-        # VLM models receive both text tokens and image placeholder tokens,
-        # so we add a per-image estimate from the vision config (if available)
-        # to avoid severely undercounting prompt_tokens when images are present.
-        if self._tokenizer is not None:
-            try:
-                _num_prompt_tokens = len(self._tokenizer.encode(prompt))
-            except Exception:
-                logger.debug(
-                    "prompt token estimation failed in stream_vlm_vision", exc_info=True
-                )
-        if image_paths:
-            _tokens_per_image = self._estimate_image_tokens()
-            _num_prompt_tokens += _tokens_per_image * len(image_paths)
-        _cached_tokens = 0
-        if (
-            kv_prefix_state is not None
-            and kv_prefix_state.token_ids is not None
-            and self._tokenizer is not None
-        ):
-            try:
-                _cached_tokens = kv_prefix_state.find_prefix_length(
-                    self._tokenizer.encode(prompt)
-                )
-            except Exception:
-                logger.debug("KV prefix length computation failed", exc_info=True)
-        try:
-            stream_kwargs: dict = {
-                "max_tokens": max_tokens,
-                "sampler": sampler,
-            }
-            if image_paths:
-                stream_kwargs["image"] = (
-                    image_paths if len(image_paths) > 1 else image_paths[0]
-                )
-            if audio_paths:
-                stream_kwargs["audio"] = self._audio_arg(audio_paths)
-
-            # Pass vision_cache adapter for image feature caching
-            if self._vlm_vision_cache_adapter is not None:
-                stream_kwargs["vision_cache"] = self._vlm_vision_cache_adapter
-
-            # Pass KV prefix state for reuse across conversations with same image
-            if kv_prefix_state is not None:
-                stream_kwargs["prompt_cache_state"] = kv_prefix_state
-
-            for result in vlm_stream_generate(
-                self._model,
-                self._processor,
-                prompt=prompt,
-                **stream_kwargs,
-            ):
-                if cancel_event is not None and (
-                    cancel_event._value
-                    if isinstance(cancel_event, asyncio.Event)
-                    else cancel_event.is_set()
-                ):
-                    queue.put_nowait(
-                        RequestOutput(
-                            request_id=req_id,
-                            new_text="",
-                            finish_reason="cancel",
-                            finished=True,
-                            completion_tokens=token_count,
-                            prompt_tokens=_num_prompt_tokens,
-                            current_state="reasoning" if _in_thinking else "normal",
-                            reasoning_tokens=_thinking_token_count,
-                        )
-                    )
-                    return
-                token_count += 1
-                # Record TTFT on first token
-                if (
-                    _ttft_t0 is not None
-                    and _ttft_recorded is not None
-                    and not _ttft_recorded[0]
-                ):
-                    _ttft_recorded[0] = True
-                    _ttft_val[0] = time.perf_counter() - _ttft_t0[0]
-                text = result.text if hasattr(result, "text") else ""
-                accumulated += text
-                # Track thinking state from text markers — scan only the
-                # newly-appended portion to avoid permanent matches on tags
-                # that appeared earlier in the accumulated text.
-                _prev_in_thinking = _in_thinking
-                _scan = accumulated[_think_scan_pos:]
-                while _scan:
-                    if _in_thinking:
-                        # use _find_think_tag (guards the following
-                        # char) so the streaming scanner doesn't false-match <thinking>/
-                        # <think_more> like the raw .find did — matching the non-streaming
-                        # vision path and avoiding spurious reasoning state.
-                        idx = self._find_think_tag(_scan, "</think")
-                        if idx >= 0:
-                            _in_thinking = False
-                            _scan = _scan[idx + len("</think") :]
-                            _think_scan_pos = len(accumulated) - len(_scan)
-                        else:
-                            break
-                    else:
-                        idx = self._find_think_tag(_scan, "<think")
-                        if idx >= 0:
-                            _in_thinking = True
-                            _scan = _scan[idx + len("<think") :]
-                            _think_scan_pos = len(accumulated) - len(_scan)
-                        else:
-                            break
-                _think_scan_pos = len(accumulated) - len(_scan)
-                _cur_state = "reasoning" if _in_thinking else "normal"
-                # Count tokens generated while in thinking state.
-                # Skip counting on the token that triggered a state transition
-                # (<think/</think tags themselves are not reasoning content).
-                if _in_thinking and _prev_in_thinking:
-                    _thinking_token_count += 1
-                # Thinking budget enforcement — stop generation when the budget
-                # is exceeded while in a thinking segment.  Flush held-back
-                # text before emitting the terminal output.
-                if (
-                    thinking_budget is not None
-                    and _in_thinking
-                    and _thinking_token_count >= thinking_budget
-                ):
-                    _budget_state = "reasoning" if _in_thinking else "normal"
-                    # Flush any held-back text before the terminal output
-                    _held_budget_text = accumulated[_emitted_pos:]
-                    # force-close the <think> tag so the truncated reasoning
-                    # terminates cleanly (the text path injects </think> on budget exhaustion;
-                    # the VLM path returned mid-<think> with no answer and no closing marker).
-                    _budget_close = "</think>" if _budget_state == "reasoning" else ""
-                    if _held_budget_text or _budget_close:
-                        queue.put_nowait(
-                            RequestOutput(
-                                request_id=req_id,
-                                new_text=_held_budget_text + _budget_close,
-                                finish_reason=None,
-                                finished=False,
-                                prompt_tokens=_num_prompt_tokens,
-                                current_state=_budget_state,
-                            )
-                        )
-                    queue.put_nowait(
-                        RequestOutput(
-                            request_id=req_id,
-                            new_text="",
-                            # budget exhaustion is a LENGTH limit, not a natural stop —
-                            # match the text path (was "stop", inconsistent across modalities).
-                            finish_reason="length",
-                            finished=True,
-                            completion_tokens=token_count,
-                            prompt_tokens=_num_prompt_tokens,
-                            current_state=_budget_state,
-                            reasoning_tokens=_thinking_token_count,
-                        )
-                    )
-                    return
-                finish_reason = None
-                if hasattr(result, "finish_reason") and result.finish_reason:
-                    finish_reason = result.finish_reason
-                elif token_count >= max_tokens:
-                    finish_reason = "length"
-                # Check multi-token stop suffixes against accumulated text.
-                # Search from a position that accounts for the longest suffix
-                # length — a stop suffix may straddle the emit boundary (part
-                # in already-emitted text, part in held-back text), so we must
-                # look back far enough to catch it.
-                if not finish_reason and stop_suffixes:
-                    _max_suffix_len = max(len(s) for s in stop_suffixes)
-                    _search_start = max(0, _emitted_pos - _max_suffix_len + 1)
-                    _search_region = accumulated[_search_start:]
-                    for s in stop_suffixes:
-                        if s in _search_region:
-                            # Full stop sequence found — trim it and everything after
-                            idx = accumulated.find(s, _search_start)
-                            # Don't trim into already-emitted text; only trim if
-                            # the suffix starts at or after the emit boundary.
-                            if idx < _emitted_pos:
-                                # Suffix straddles emit boundary — clamp to avoid
-                                # losing already-emitted text. The suffix itself is
-                                # still detected and generation stops.
-                                idx = _emitted_pos
-                            accumulated = accumulated[:idx]
-                            finish_reason = "stop"
-                            # Reset thinking scan cursor since accumulated text
-                            # was trimmed — old cursor may point into deleted
-                            # portion where a partial <think or </think fragment
-                            # was being tracked. Force a full rescan from the
-                            # new end of the string.
-                            _think_scan_pos = len(accumulated)
-                            break
-
-                # Compute the safe-to-emit text: everything up to _emitted_pos
-                if finish_reason == "stop":
-                    # Emit all held-back text up to the stop position.
-                    # accumulated has already been trimmed (stop suffix removed),
-                    # so everything from _emitted_pos to end is safe to emit.
-                    _emit_text = accumulated[_emitted_pos:]
-                    _emitted_pos = len(accumulated)
-                else:
-                    # Compute safe emit boundary — don't emit text that could be
-                    # a partial prefix of a stop sequence.
-                    _safe_end = len(accumulated)
-                    _pending = accumulated[_emitted_pos:]
-                    for s2 in stop_suffixes:
-                        _max_hold = min(len(s2) - 1, len(_pending))
-                        for _hold_len in range(1, _max_hold + 1):
-                            if s2.startswith(_pending[-_hold_len:]):
-                                _safe_end = min(_safe_end, len(accumulated) - _hold_len)
-                                break
-                    _emit_text = (
-                        accumulated[_emitted_pos:_safe_end] if accumulated else ""
-                    )
-                    _emitted_pos = _safe_end
-
-                _reasoning_tok = _thinking_token_count
-                queue.put_nowait(
-                    RequestOutput(
-                        request_id=req_id,
-                        new_text=_emit_text,
-                        finish_reason=finish_reason,
-                        finished=finish_reason is not None,
-                        completion_tokens=token_count,
-                        prompt_tokens=_num_prompt_tokens,
-                        current_state=_cur_state,
-                        reasoning_tokens=_reasoning_tok,
-                        cached_tokens=_cached_tokens if token_count == 1 else 0,
-                        ttft_ms=round(_ttft_val[0] * 1000, 1)
-                        if _ttft_val is not None and _ttft_val[0] > 0
-                        else 0.0,
-                    )
-                )
-                if finish_reason:
-                    return
-
-            # Generator exhausted without a finish_reason — emit finished output.
-            # This handles the case where vlm_stream_generate stops yielding
-            # without setting result.finish_reason and token_count < max_tokens.
-            # Always emit finished=True so the consumer never hangs waiting for
-            # a final output, even when zero tokens were generated.
-            #
-            # Flush any held-back text (from stop suffix prefix detection)
-            # before emitting the terminal output so text isn't lost.
-            _exhausted_state = "reasoning" if _in_thinking else "normal"
-            _held_text = accumulated[_emitted_pos:]
-            if _held_text:
-                queue.put_nowait(
-                    RequestOutput(
-                        request_id=req_id,
-                        new_text=_held_text,
-                        finish_reason=None,
-                        finished=False,
-                        prompt_tokens=_num_prompt_tokens,
-                        current_state=_exhausted_state,
-                    )
-                )
-            queue.put_nowait(
-                RequestOutput(
-                    request_id=req_id,
-                    new_text="",
-                    finish_reason="length" if token_count > 0 else "stop",
-                    finished=True,
-                    completion_tokens=token_count,
-                    prompt_tokens=_num_prompt_tokens,
-                    current_state=_exhausted_state,
-                    reasoning_tokens=_thinking_token_count,
-                )
-            )
-            # Post-streaming bookkeeping (cache stats, encoder cache, KV prefix).
-            # Note: this only runs on the generator-exhausted path.  The
-            # finally block below handles bookkeeping for ALL exit paths
-            # (cancel, stop, budget, error).
-        except Exception as e:
-            _error_state = "reasoning" if _in_thinking else "normal"
-            # Flush any held-back accumulated text before emitting the error
-            # output. Without this, text that was buffered for stop suffix
-            # prefix detection is silently lost on error.
-            _held_error_text = accumulated[_emitted_pos:] if accumulated else ""
-            if _held_error_text:
-                # queue full or closed — best effort flush
-                with contextlib.suppress(Exception):
-                    queue.put_nowait(
-                        RequestOutput(
-                            request_id=req_id,
-                            new_text=_held_error_text,
-                            finish_reason=None,
-                            finished=False,
-                            prompt_tokens=_num_prompt_tokens,
-                            current_state=_error_state,
-                        )
-                    )
-            queue.put_nowait(
-                RequestOutput(
-                    request_id=req_id,
-                    new_text="",
-                    finish_reason="error",
-                    finished=True,
-                    completion_tokens=token_count,
-                    prompt_tokens=_num_prompt_tokens,
-                    error=str(e),
-                    current_state=_error_state,
-                    reasoning_tokens=_thinking_token_count,
-                )
-            )
-        finally:
-            # Always run bookkeeping regardless of how the stream ended:
-            # cancel, stop suffix, thinking budget, error, or exhaustion.
-            # This ensures vision cache stats, encoder cache entries, and KV
-            # prefix states are updated even when the loop exits early.
-            try:
-                if self._vision_cache is not None:
-                    vc_stats_after = self._vision_cache.stats
-                    new_hits = max(
-                        0,
-                        vc_stats_after.get("hits", 0) - vc_stats_before.get("hits", 0),
-                    )
-                    if new_hits > 0:
-                        self._vlm_vision_hits += new_hits
-                        logger.debug(
-                            "VLM stream vision feature cache hit: reused encoded image"
-                        )
-                    # per-image miss count (was +1 for any multi-image miss).
-                    _misses = max(
-                        0, (len(image_paths) if image_paths else 0) - new_hits
-                    )
-                    if _misses > 0:
-                        self._vlm_vision_misses += _misses
-
-                # Encoder cache: only store real encoder outputs, not markers.
-                # The vision_cache adapter already handles image feature caching.
-                # Do NOT store True markers — they waste memory and mislead stats.
-                # (Actual encoder_outputs would be captured from stream results
-                # if vlm_stream_generate exposed them.)
-
-                # After streaming, save KV prefix state for this image
-                if image_hash is not None:
-                    if kv_prefix_state is not None:
-                        # State was already updated by stream_generate
-                        pass
-                    else:
-                        # First time seeing this image — create a state entry
-                        self._ensure_kv_prefix_state(image_hash)
-            except Exception:
-                logger.debug("post-stream bookkeeping failed", exc_info=True)
 
     # ── Unified BatchGenerator text path (APC + MTP + sampling + constraints) ──
 
-    _RUNNER_MODEL_TYPES = ("qwen3_5", "qwen3_6", "qwen3_5_moe")
+    # Checkpoints whose speculative decoding (MTP / DFlash draft, verify and
+    # batch-invariant kernels) is validated. Every family uses the runner.
+    _SPEC_MODEL_TYPES = ("qwen3_5", "qwen3_6", "qwen3_5_moe")
 
     def _apc_disk_tier(self):
         """Optional APC disk tier (``YUNSHU_VLM_APC_DISK_DIR``), off by default.
@@ -4262,18 +1304,18 @@ class VLMEngine:
         return disk
 
     def _build_batch_runner(self, model_path: str):
-        """Build the unified runner for model families validated on it.
+        """Build the runner that serves every request of this model.
 
         APC is on by default with a bounded byte budget
         (``YUNSHU_VLM_APC_MEMORY_GB``, default 8; ``YUNSHU_VLM_UPSTREAM_APC=0``
-        disables it). The MTP draft attaches when the checkpoint really ships
-        MTP weights (``YUNSHU_MTP=0`` disables it). Other families keep the
-        legacy loop until they pass the same matrix.
+        disables it) for every family whose cache has no sliding window.
+        Speculative decoding (checkpoint MTP head, or ``YUNSHU_VLM_DRAFT``) and
+        its verify / batch-invariant kernels are Qwen3.5-family only
+        (``_SPEC_MODEL_TYPES``); ``YUNSHU_MTP=0`` disables the MTP draft.
         """
         from .vlm_batch_runner import VLMBatchRunner
 
-        if self._config.get("model_type") not in self._RUNNER_MODEL_TYPES:
-            return None
+        spec_family = self._config.get("model_type") in self._SPEC_MODEL_TYPES
         lm = self._model.language_model
         if self._apc_backend is None and os.environ.get(
             "YUNSHU_VLM_UPSTREAM_APC", "1"
@@ -4281,7 +1323,12 @@ class VLMEngine:
             from mlx_vlm.apc import APCManager, semantic_extra_hash
 
             budget = float(os.environ.get("YUNSHU_VLM_APC_MEMORY_GB", "8"))
-            if budget > 0 and self.backend_capabilities(lm).cache.is_hybrid:
+            # Sliding-window (rotating) caches cannot be checkpointed at a
+            # prefix boundary, so those families decode without APC.
+            if (
+                budget > 0
+                and not self.backend_capabilities(lm).cache.has_sliding_window
+            ):
                 self._apc_backend = APCManager(
                     num_blocks=512,
                     block_size=16,
@@ -4297,7 +1344,7 @@ class VLMEngine:
         drafter = None
         draft_kind = "mtp"
         external = os.environ.get("YUNSHU_VLM_DRAFT", "").strip()
-        if drafter is None and external:
+        if spec_family and external:
             # External drafter directory, e.g. incoai/Qwen3.8-27B-DFlash2.
             from mlx_vlm.speculative.drafters import (
                 load_drafter,
@@ -4306,12 +1353,15 @@ class VLMEngine:
 
             drafter, draft_kind = load_drafter(external)
             validate_drafter_compatibility(self._model, drafter, draft_kind)
-        if drafter is None and os.environ.get(
-            "YUNSHU_MTP", "1"
-        ).strip().lower() not in (
-            "0",
-            "false",
-            "no",
+        if (
+            spec_family
+            and drafter is None
+            and os.environ.get("YUNSHU_MTP", "1").strip().lower()
+            not in (
+                "0",
+                "false",
+                "no",
+            )
         ):
             from mlx_vlm.speculative.drafters import validate_drafter_compatibility
 
@@ -4411,17 +1461,6 @@ class VLMEngine:
     # (spec_decode is accepted and ignored: the runner drafts on its own.)
     _RUNNER_UNSUPPORTED_KWARGS = ("logits_processors", "lora_adapter")
 
-    def _runner_text_eligible(self, *, logprobs: bool, top_logprobs, kwargs) -> bool:
-        """Every text request goes through the runner unless it needs a knob the
-        runner does not implement (those keep the legacy loop, never silently
-        dropped)."""
-        # logprobs are not returned by any VLM path yet (generate() already
-        # warns); they no longer push a request onto the slow legacy loop.
-        return bool(
-            getattr(self, "_batch_runner", None) is not None
-            and not any(kwargs.get(k) for k in self._RUNNER_UNSUPPORTED_KWARGS)
-        )
-
     def _build_text_constraint(self, json_schema):
         if json_schema is None:
             return None
@@ -4448,19 +1487,29 @@ class VLMEngine:
         except Exception as exc:
             raise ValueError("Grammar constraint initialization failed") from exc
 
-    def _think_token_ids(self) -> tuple[int | None, int | None]:
-        cached = getattr(self, "_think_ids_cache", None)
+    def _reasoning_markers(self) -> tuple[int | None, int | None, str, str, bool]:
+        """Single-token reasoning open/close ids for this tokenizer.
+
+        ``<think>`` / ``</think>`` (Qwen, most models) or Gemma-4's
+        ``<|channel>`` / ``<channel|>`` (whose reasoning starts with a
+        ``thought`` channel label). Returns ``(open_id, close_id, open_text,
+        close_text, channel)``; ids are None when the model has neither."""
+        cached = getattr(self, "_reasoning_markers_cache", None)
         if cached is None:
             try:
                 ts = self._tokenizer.encode("<think>", add_special_tokens=False)
                 te = self._tokenizer.encode("</think>", add_special_tokens=False)
-                cached = (
-                    ts[0] if len(ts) == 1 else None,
-                    te[0] if len(te) == 1 else None,
-                )
             except Exception:
-                cached = (None, None)
-            self._think_ids_cache = cached
+                ts = te = []
+            if len(ts) == 1 and len(te) == 1:
+                cached = (ts[0], te[0], "<think>", "</think>", False)
+            else:
+                co, cc = getattr(self, "_reasoning_channel_ids", (None, None))
+                if co is not None and cc is not None:
+                    cached = (co, cc, "<|channel>", "<channel|>", True)
+                else:
+                    cached = (None, None, "<think>", "</think>", False)
+            self._reasoning_markers_cache = cached
         return cached
 
     def _runner_events(
@@ -4533,11 +1582,15 @@ class VLMEngine:
         holdback = StopHoldbackBuffer(stop_strings)
         detok = self._tokenizer.detokenizer
         detok.reset()
-        think_start, think_end = self._think_token_ids()
+        think_start, think_end, open_text, close_text, channel = (
+            self._reasoning_markers()
+        )
         # Qwen3.x templates open <think> at the end of the prompt when thinking
         # is on, so generation starts inside the reasoning block; streaming
         # clients rely on current_state to split reasoning from content.
         in_think = False
+        # Gemma channel reasoning begins with a "thought" label line.
+        label_buf: str | None = None
         if think_start is not None:
             tail = list(input_ids[-64:])
             if think_start in tail:
@@ -4560,8 +1613,14 @@ class VLMEngine:
             stats=stats,
             logprobs=bool(logprobs),
             top_logprobs=int(top_logprobs or 0),
-            thinking_budget=thinking_budget if enable_thinking is not False else None,
+            thinking_budget=(
+                thinking_budget
+                if enable_thinking is not False and think_start is not None
+                else None
+            ),
             prompt_preopens_thinking=in_think,
+            thinking_start_token=open_text,
+            thinking_end_token=close_text,
             xtc_probability=xtc_probability,
             xtc_threshold=xtc_threshold,
             xtc_special_tokens=list(self._get_eos_ids()),
@@ -4573,9 +1632,10 @@ class VLMEngine:
                 tail = holdback.feed(detok.last_segment) + holdback.flush()
                 yield tail, token, "normal", "stop", thinking_tokens, lp
                 return
-            if token in (think_start, think_end):
+            if think_start is not None and token in (think_start, think_end):
                 # The tags only switch state; they are never shown as text.
                 in_think = token == think_start
+                label_buf = "" if (channel and in_think) else None
                 state = "reasoning" if in_think else "normal"
                 if count >= max_tokens:
                     detok.finalize()
@@ -4602,6 +1662,16 @@ class VLMEngine:
                     return
             else:
                 text = segment
+            if label_buf is not None and in_think:
+                # Hold the channel label back until its line ends, then drop it.
+                label_buf += text
+                if "\n" not in label_buf and len(label_buf) < 32:
+                    text = ""
+                else:
+                    head = label_buf.lstrip()
+                    if head.startswith("thought"):
+                        head = head[len("thought") :].lstrip("\n")
+                    text, label_buf = head, None
             if count >= max_tokens:
                 detok.finalize()
                 tail = holdback.feed(detok.last_segment) + holdback.flush()
@@ -4621,6 +1691,85 @@ class VLMEngine:
             thinking_tokens,
             None,
         )
+
+    # Request knobs no VLM path implements. They are rejected (400 at the
+    # gateway) instead of being accepted and silently ignored.
+    _UNSUPPORTED_KWARGS = ("lora_adapter", "logits_processors")
+
+    def _default_enable_thinking(self, enable_thinking: bool | None) -> bool | None:
+        """Gemma-4's template enables thinking by default but emits inline
+        ``thought`` tokens that don't auto-stop; default it off unless the
+        caller asked. Applied to streaming and non-streaming alike."""
+        if enable_thinking is not None:
+            return enable_thinking
+        model_type = str(self._config.get("model_type", "")).lower()
+        if model_type.startswith("gemma4") or "gemma-4" in self.model_name.lower():
+            return False
+        return None
+
+    def _track_pipeline(self, kwargs, messages, image_paths, audio_paths) -> None:
+        try:
+            from .staged_pipeline import PipelineRequest
+
+            self._pipeline.process(
+                PipelineRequest(
+                    request_id=kwargs.get("request_id", ""),
+                    model_id=self.model_name,
+                    images=image_paths or None,
+                    audio=audio_paths or None,
+                    params={"messages": messages},
+                )
+            )
+        except Exception:
+            logger.debug("pipeline tracking failed", exc_info=True)
+
+    def _check_request_supported(self, image_paths, audio_paths, kwargs) -> None:
+        unsupported = [k for k in self._UNSUPPORTED_KWARGS if kwargs.get(k)]
+        if unsupported:
+            raise ValueError(
+                f"{', '.join(unsupported)} is not supported for multimodal (VLM) models"
+            )
+        if self._batch_runner is None:
+            raise RuntimeError("VLM engine has no batch runner (model not loaded)")
+        if image_paths and not self._has_vision:
+            raise ValueError(
+                f"model {self.model_name!r} has no vision encoder; image input is "
+                "not supported"
+            )
+        if (image_paths or audio_paths) and self._processor is None:
+            raise RuntimeError(
+                f"model {self.model_name!r} has no mlx_vlm processor; media input "
+                "cannot be prepared (see load-time logs)"
+            )
+
+    def _runner_input(
+        self,
+        messages: list[dict],
+        image_paths: list[str],
+        audio_paths: list[str],
+        enable_thinking: bool | None,
+        template_extra: dict | None,
+    ):
+        """Template + tokenize (and encode media) for one request on the MLX
+        thread. Returns ``(token_ids, prompt_kwargs, apc_semantic_hash)``."""
+        if image_paths or audio_paths:
+            prompt = self._apply_vlm_template_with_cache(
+                messages,
+                enable_thinking=enable_thinking,
+                num_audios=len(audio_paths),
+                max_images=len(image_paths) if image_paths else None,
+                template_extra=template_extra,
+            )
+            ids, pkw, salt = self._batch_runner.prepare_media(
+                prompt,
+                image_paths=image_paths,
+                audio=self._audio_arg(audio_paths) if audio_paths else None,
+            )
+            return ids.tolist(), pkw, salt
+        ids = self._tokenize_with_cache(
+            messages, enable_thinking=enable_thinking, template_extra=template_extra
+        )
+        return ids.tolist(), None, None
 
     def _runner_kwargs(self, **params) -> dict:
         kwargs = params.pop("kwargs")
@@ -4750,616 +1899,6 @@ class VLMEngine:
                 stats.finish_reason,
             )
 
-    def _stream_vlm_text(
-        self,
-        input_ids: mx.array,
-        max_tokens: int,
-        temperature: float,
-        top_p: float,
-        req_id: str,
-        queue: asyncio.Queue,
-        top_k: int = 0,
-        min_p: float = 0.0,
-        stop: list[str] | None = None,
-        repetition_penalty: float = 1.0,
-        frequency_penalty: float = 0.0,
-        presence_penalty: float = 0.0,
-        logit_bias: dict[int, float] | None = None,
-        json_schema: dict | None = None,
-        enable_thinking: bool | None = None,
-        cancel_event: asyncio.Event | None = None,
-        stop_token_ids: list[int] | None = None,
-        xtc_probability: float = 0.0,
-        xtc_threshold: float = 0.0,
-        thinking_budget: int | None = None,
-        _ttft_t0: list | None = None,
-        _ttft_recorded: list | None = None,
-        _ttft_val: list | None = None,
-        seed: int | None = None,
-    ) -> None:
-        """Streaming text generation for VLM models."""
-        from mlx_lm.generate import generation_stream
-        from mlx_vlm.models.cache import make_prompt_cache
-
-        # Clear mRoPE state to prevent contamination from prior VLM request
-        if self._mrope_info and self._mrope_info.enabled:
-            from .mrope import clear_rope_state
-
-            clear_rope_state(self._model)
-
-        lm = self._model.language_model
-        cache = make_prompt_cache(lm)
-        sampler = _build_noncached_sampler(temperature, top_p, top_k, min_p, seed)
-        eos_ids = self._get_eos_ids()
-        has_penalty = (
-            repetition_penalty != 1.0
-            or frequency_penalty != 0.0
-            or presence_penalty != 0.0
-            or logit_bias
-        )
-
-        # Reuse the same capability gates as non-streaming generation. Hybrid
-        # recurrent layers need no-trim boundary snapshots, not sliced KV.
-        _text_pc = (
-            self._text_kv_prefix_cache if self._text_prefix_reuse_safe(lm) else None
-        )
-        _hybrid_mode = False
-        if _text_pc is None and self._text_hybrid_reuse_safe(lm):
-            _text_pc = self._text_kv_prefix_cache
-            _text_pc._no_trim_mode = True
-            _hybrid_mode = True
-
-        # JSON schema / grammar constraint (streaming path)
-        json_constraint = None
-        if json_schema is not None:
-            try:
-                if isinstance(json_schema, dict) and json_schema.get("type") in (
-                    "regex",
-                    "choice",
-                    "cfg",
-                ):
-                    from .grammar_constraint import ConstraintFactory
-
-                    gtype = json_schema["type"]
-                    if gtype == "regex":
-                        grammar = json_schema.get("pattern", "")
-                    elif gtype == "choice":
-                        grammar = json_schema.get("choices", [])
-                    elif gtype == "cfg":
-                        grammar = json_schema.get("grammar", "")
-                    else:
-                        grammar = None
-                    if grammar is not None:
-                        json_constraint = ConstraintFactory.create(
-                            gtype, grammar, self._tokenizer
-                        )
-                elif isinstance(json_schema, str) and json_schema == "json_object":
-                    from .json_schema import JsonSchemaConstraint
-
-                    json_constraint = JsonSchemaConstraint(None)
-                else:
-                    from .json_schema import JsonSchemaConstraint
-
-                    json_constraint = JsonSchemaConstraint(json_schema)
-            except Exception as exc:
-                raise ValueError("Grammar constraint initialization failed") from exc
-
-        # Build stop IDs + explicit stop_token_ids
-        stop_ids = set(eos_ids)
-        stop_suffixes = []
-        if stop:
-            for s in stop:
-                try:
-                    ids = self._tokenizer.encode(s)
-                    if len(ids) == 1:
-                        stop_ids.add(ids[0])
-                    else:
-                        stop_suffixes.append(s)
-                except Exception:
-                    logger.debug("failed", exc_info=True)
-        if stop_token_ids:
-            stop_ids.update(stop_token_ids)
-
-        # Multi-token stop hold-back: withhold any streamed text that could be
-        # the start of a (multi-token) stop string so its prefix never leaks
-        # before the match completes. This is the real VLM text path; without
-        # the buffer it emitted each token immediately and only trimmed the stop
-        # on the COMPLETING token, leaking the earlier tokens' prefix
-        # (same class as the chat fast-path fix). single-token stops
-        # are handled via stop_ids (caught before emit), so the buffer only
-        # needs the multi-token stop_suffixes; empty → pure passthrough.
-        from .text_utils import StopHoldbackBuffer
-
-        _hb = StopHoldbackBuffer(stop_suffixes)
-
-        has_detokenizer = hasattr(self._tokenizer, "detokenizer")
-        detokenizer = None
-        if has_detokenizer:
-            detokenizer = self._tokenizer.detokenizer
-            detokenizer.reset()
-
-        _num_prompt_tokens = len(input_ids)
-
-        with mx.stream(generation_stream):
-            # Seed stream PRNG inside the stream context — see _generate_vlm_text
-            if seed is not None:
-                mx.random.seed(int(seed) & ((1 << 63) - 1))
-
-            # KV prefix lookup (gated). Reuse a cached prefix's KV.
-            _prefill_ids = input_ids
-            _pc_matched = 0
-            if _text_pc is not None and len(input_ids) >= 32:
-                try:
-                    _cached_kv, _, _pc_matched = _text_pc.get(input_ids)
-                    if _cached_kv is not None and _pc_matched > 0:
-                        cache = _cached_kv
-                        _prefill_ids = input_ids[_pc_matched:]
-                        if len(_prefill_ids) == 0:
-                            if _hybrid_mode:
-                                # ArraysCache cannot be trimmed. Cold-prefill a
-                                # full match, recording resumable boundaries.
-                                cache = make_prompt_cache(lm)
-                                _prefill_ids = input_ids
-                                _pc_matched = 0
-                            else:
-                                _refeed = min(len(input_ids) - 1, 128)
-                                cache = _text_pc._snapshot_cache(cache, trim=_refeed)
-                                _prefill_ids = input_ids[-_refeed:]
-                                _pc_matched = len(input_ids) - _refeed
-                        logger.debug(
-                            "VLM stream text KV prefix hit: matched=%d/%d hybrid=%s",
-                            _pc_matched,
-                            len(input_ids),
-                            _hybrid_mode,
-                        )
-                    else:
-                        _pc_matched = 0
-                except Exception:
-                    logger.warning(
-                        "VLM stream text KV prefix get failed — full prefill",
-                        exc_info=True,
-                    )
-                    cache = make_prompt_cache(lm)
-                    _prefill_ids = input_ids
-                    _pc_matched = 0
-
-            # prime mRoPE native rope state for reuse (see _generate_vlm_text).
-            if _text_pc is not None and self._text_reuse_needs_positions(lm):
-                self._prime_mrope_reuse_state(lm)
-
-            # Capture exact recurrent state at block boundaries before the
-            # final prefill token. The next request can resume after a shared
-            # boundary without replaying the whole text prompt.
-            _pf_t0 = time.perf_counter()
-            if _hybrid_mode and _text_pc is not None and int(_prefill_ids.shape[0]) > 1:
-                try:
-                    _resident = self._capture_vlm_hybrid_prefix(
-                        lm,
-                        input_ids,
-                        cache,
-                        _text_pc,
-                        _pc_matched,
-                        self._text_hybrid_block,
-                    )
-                    _prefill_ids = input_ids[_resident:]
-                except Exception:
-                    logger.warning(
-                        "VLM stream hybrid prefix capture failed — full prefill",
-                        exc_info=True,
-                    )
-                    cache = make_prompt_cache(lm)
-                    _prefill_ids = input_ids
-                    _pc_matched = 0
-            output = self._prefill_vlm_ar_text(lm, _prefill_ids, cache, cancel_event)
-            if output is None:
-                return
-            logits = output.logits[:, -1, :]
-            if json_constraint is not None:
-                from .json_schema import apply_json_constraint
-
-                allowed = json_constraint.get_allowed_tokens(self._tokenizer, [])
-                if not allowed:
-                    raise ValueError("JSON constraint has no valid first token")
-                logits = apply_json_constraint(logits, allowed)
-            current = sampler(logits)
-            mx.eval(current)
-            if json_constraint is not None:
-                json_constraint.advance(self._tokenizer.decode([int(current.item())]))
-            # Cold-prefill throughput → SSD auto-gate (see _generate_vlm_text)
-            if _text_pc is not None and _pc_matched == 0:
-                try:
-                    _n_pf = int(_prefill_ids.shape[0])
-                    _pf_dt = time.perf_counter() - _pf_t0
-                    if _n_pf >= 256 and _pf_dt > 0:
-                        _text_pc.note_prefill_tps(_n_pf / _pf_dt)
-                except Exception:
-                    pass
-            token_count = 1
-
-            # store the prompt-boundary snapshot NOW (before decode
-            # pollutes the rotating window) — see _generate_vlm_text. This is
-            # what makes streaming reuse lossless for long generations too.
-            # See the non-streaming path: a full hybrid snapshot would win
-            # lookup over every reusable boundary but force a cold prefill.
-            if _text_pc is not None and not _hybrid_mode:
-                try:
-                    _text_pc.add(input_ids, cache)
-                except Exception:
-                    logger.debug("VLM stream text KV prefix add failed", exc_info=True)
-
-            # Record TTFT on first token (prefill complete)
-            if (
-                _ttft_t0 is not None
-                and _ttft_recorded is not None
-                and not _ttft_recorded[0]
-            ):
-                _ttft_recorded[0] = True
-                _ttft_val[0] = time.perf_counter() - _ttft_t0[0]
-
-            _in_thinking = False
-            _thinking_tokens = 0
-            _think_single_token = False
-            try:
-                _ts_ids = self._tokenizer.encode("<think")
-                _te_ids = self._tokenizer.encode("</think")
-                if len(_ts_ids) == 1 and len(_te_ids) == 1:
-                    think_start_id = _ts_ids[0]
-                    think_end_id = _te_ids[0]
-                    _think_single_token = True
-                else:
-                    think_start_id = think_end_id = None
-            except Exception:
-                logger.debug("operation failed", exc_info=True)
-                think_start_id = think_end_id = None
-                _think_single_token = False
-
-            _thinking_text = ""  # for text-based thinking detection
-            token_id = current.item()
-            is_eos = token_id in stop_ids
-            finish_reason = "stop" if is_eos else None
-
-            _seg = ""
-            _suffix_hit = False
-            if not is_eos:
-                if has_detokenizer:
-                    detokenizer.add_token(token_id)
-                    _seg = detokenizer.last_segment
-                    if stop_suffixes and any(
-                        detokenizer.text.endswith(s) for s in stop_suffixes
-                    ):
-                        _suffix_hit = True
-                else:
-                    _seg = self._tokenizer.decode([token_id], skip_special_tokens=True)
-
-            # Track thinking state for gateway routing
-            # If the first token is the think-start token, mark _in_thinking so the
-            # loop's thinking budget and state tracking work correctly.
-            if (
-                _think_single_token
-                and think_start_id is not None
-                and token_id == think_start_id
-            ):
-                _in_thinking = True
-            elif not _think_single_token:
-                # Text-based thinking detection for multi-token encodings
-                _thinking_text += self._tokenizer.decode([token_id])
-                if _thinking_text.endswith("<think"):
-                    _in_thinking = True
-            _state = "reasoning" if _in_thinking else "normal"
-
-            finish_reason = "stop" if (is_eos or _suffix_hit) else None
-            # Route text through the hold-back buffer (multi-token stop prefixes
-            # are withheld; on a string-stop the matched stop is dropped).
-            if _suffix_hit:
-                # feed() RELEASES the text before the stop and removes it from the
-                # buffer; take_stopped() returns only what remains up to the stop. When the
-                # stop completes INSIDE a content-bearing token (e.g. "goodbyeEND" with stop
-                # "END"), feed() returns "goodbye" — discarding it permanently lost it from
-                # the append-only SSE stream. Emit BOTH (the text engine does this correctly).
-                token_text = _hb.feed(_seg) + _hb.take_stopped()
-            elif is_eos:
-                token_text = _hb.flush()
-            else:
-                token_text = _hb.feed(_seg)
-
-            if token_text or finish_reason:
-                queue.put_nowait(
-                    RequestOutput(
-                        request_id=req_id,
-                        new_text=token_text,
-                        new_token_ids=[token_id],
-                        finish_reason=finish_reason,
-                        finished=finish_reason is not None,
-                        completion_tokens=token_count,
-                        prompt_tokens=_num_prompt_tokens,
-                        cached_tokens=int(_pc_matched),
-                        current_state=_state,
-                        reasoning_tokens=_thinking_tokens,
-                        ttft_ms=round(_ttft_val[0] * 1000, 1)
-                        if _ttft_val is not None and _ttft_val[0] > 0
-                        else 0.0,
-                    )
-                )
-            if finish_reason:
-                return
-
-            tokens_list = [
-                token_id
-            ]  # Include the first prefill token for JSON constraint
-            try:
-                for _ in range(max_tokens - 1):
-                    if cancel_event is not None and (
-                        cancel_event._value
-                        if isinstance(cancel_event, asyncio.Event)
-                        else cancel_event.is_set()
-                    ):
-                        # Flush remaining detokenizer bytes + buffered tail before cancelling
-                        if has_detokenizer:
-                            detokenizer.finalize()
-                            remaining = _hb.feed(detokenizer.last_segment) + _hb.flush()
-                            if remaining:
-                                queue.put_nowait(
-                                    RequestOutput(
-                                        request_id=req_id,
-                                        new_text=remaining,
-                                        finish_reason=None,
-                                        finished=False,
-                                        prompt_tokens=_num_prompt_tokens,
-                                    )
-                                )
-                        queue.put_nowait(
-                            RequestOutput(
-                                request_id=req_id,
-                                new_text="",
-                                finish_reason="cancel",
-                                finished=True,
-                                completion_tokens=token_count,
-                                prompt_tokens=_num_prompt_tokens,
-                                cached_tokens=int(_pc_matched),
-                                reasoning_tokens=_thinking_tokens,
-                            )
-                        )
-                        return
-                    output = lm(current[None], cache=cache)
-                    logits = output.logits[:, -1, :]
-
-                    if has_penalty:
-                        if repetition_penalty != 1.0:
-                            ctx = list(set(tokens_list))
-                            sel = logits[..., ctx]
-                            sel = mx.where(
-                                sel < 0,
-                                sel * repetition_penalty,
-                                sel / repetition_penalty,
-                            )
-                            logits[..., mx.array(ctx)] = sel
-                        if frequency_penalty != 0.0:
-                            for tid in set(tokens_list):
-                                logits = logits.at[..., tid].add(
-                                    -frequency_penalty * tokens_list.count(tid)
-                                )
-                        if presence_penalty != 0.0:
-                            for tid in set(tokens_list):
-                                logits = logits.at[..., tid].add(-presence_penalty)
-                        if logit_bias:
-                            for tid, bias in logit_bias.items():
-                                logits = logits.at[..., tid].add(bias)
-
-                    # JSON schema constraint masking
-                    if json_constraint is not None:
-                        allowed = json_constraint.get_allowed_tokens(
-                            self._tokenizer, tokens_list
-                        )
-                        if not allowed:
-                            raise ValueError("JSON constraint has no valid next token")
-                        from .json_schema import apply_json_constraint
-
-                        logits = apply_json_constraint(logits, allowed)
-
-                    current = sampler(logits)
-                    mx.eval(current)
-                    token_count += 1
-
-                    token_id = current.item()
-                    tokens_list.append(token_id)
-
-                    # Advance JSON constraint state with the new token text
-                    if json_constraint is not None:
-                        _tok_text = self._tokenizer.decode([token_id])
-                        json_constraint.advance(_tok_text)
-                    # Track thinking segment boundaries in VLM streaming
-                    if _think_single_token and think_start_id is not None:
-                        if not _in_thinking and token_id == think_start_id:
-                            _in_thinking = True
-                        elif _in_thinking:
-                            if token_id == think_end_id:
-                                _in_thinking = False
-                            else:
-                                _thinking_tokens += 1
-                    elif not _think_single_token:
-                        # Text-based thinking detection for multi-token encodings
-                        _tok_text_vlm = self._tokenizer.decode([token_id])
-                        _thinking_text += _tok_text_vlm
-                        if not _in_thinking and _thinking_text.endswith("<think"):
-                            _in_thinking = True
-                        elif _in_thinking:
-                            if _thinking_text.endswith("</think"):
-                                _in_thinking = False
-                            else:
-                                _thinking_tokens += 1
-                    # Thinking budget enforcement in VLM streaming
-                    if (
-                        thinking_budget is not None
-                        and _in_thinking
-                        and _thinking_tokens >= thinking_budget
-                    ):
-                        _state = "reasoning" if _in_thinking else "normal"
-                        if has_detokenizer:
-                            detokenizer.finalize()
-                            remaining = _hb.feed(detokenizer.last_segment) + _hb.flush()
-                            if remaining:
-                                queue.put_nowait(
-                                    RequestOutput(
-                                        request_id=req_id,
-                                        new_text=remaining,
-                                        finish_reason=None,
-                                        finished=False,
-                                        current_state=_state,
-                                        prompt_tokens=_num_prompt_tokens,
-                                    )
-                                )
-                        queue.put_nowait(
-                            RequestOutput(
-                                request_id=req_id,
-                                new_text="",
-                                finish_reason="stop",
-                                finished=True,
-                                completion_tokens=token_count,
-                                current_state=_state,
-                                prompt_tokens=_num_prompt_tokens,
-                                cached_tokens=int(_pc_matched),
-                                reasoning_tokens=_thinking_tokens,
-                            )
-                        )
-                        return
-                    is_eos = token_id in stop_ids
-                    _seg = ""
-                    suffix_hit = False
-                    if not is_eos:
-                        if has_detokenizer:
-                            detokenizer.add_token(token_id)
-                            _seg = detokenizer.last_segment
-                            # Detect stop on the full decoded text (a multi-token
-                            # stop only completes once all its tokens have arrived).
-                            if stop_suffixes and any(
-                                detokenizer.text.endswith(s) for s in stop_suffixes
-                            ):
-                                suffix_hit = True
-                        else:
-                            _seg = self._tokenizer.decode(
-                                [token_id], skip_special_tokens=True
-                            )
-
-                    finish_reason = "stop" if (is_eos or suffix_hit) else None
-                    _state = "reasoning" if _in_thinking else "normal"
-
-                    # Route this token's text through the hold-back buffer so a
-                    # multi-token stop never leaks its prefix. On a string-stop
-                    # the completing token is fed then take_stopped() drops the
-                    # matched stop (and any held prefix that belonged to it); on
-                    # an EOS token the held text is genuine output → flush it.
-                    if suffix_hit:
-                        # emit feed()'s pre-stop return too (else content fused with
-                        # the stop token, e.g. "goodbyeEND", is silently lost). See first site.
-                        token_text = _hb.feed(_seg) + _hb.take_stopped()
-                    elif is_eos:
-                        token_text = _hb.flush()
-                    else:
-                        token_text = _hb.feed(_seg)
-
-                    if token_text or finish_reason:
-                        queue.put_nowait(
-                            RequestOutput(
-                                request_id=req_id,
-                                new_text=token_text,
-                                new_token_ids=[token_id],
-                                finish_reason=finish_reason,
-                                finished=finish_reason is not None,
-                                completion_tokens=token_count,
-                                prompt_tokens=_num_prompt_tokens,
-                                cached_tokens=int(_pc_matched),
-                                current_state=_state,
-                                reasoning_tokens=_thinking_tokens,
-                            )
-                        )
-
-                    if finish_reason:
-                        # On a string-stop the match was already dropped; only an
-                        # EOS-terminated stream may have genuine trailing bytes.
-                        if has_detokenizer and not suffix_hit:
-                            detokenizer.finalize()
-                            remaining = detokenizer.last_segment
-                            tail = (
-                                (_hb.feed(remaining) + _hb.flush()) if remaining else ""
-                            )
-                            if tail:
-                                queue.put_nowait(
-                                    RequestOutput(
-                                        request_id=req_id,
-                                        new_text=tail,
-                                        finish_reason=None,
-                                        finished=False,
-                                        prompt_tokens=_num_prompt_tokens,
-                                    )
-                                )
-                        return
-
-                # Max tokens reached — finalize detokenizer + flush buffered tail
-                _final_state = "reasoning" if _in_thinking else "normal"
-                if has_detokenizer:
-                    detokenizer.finalize()
-                    remaining = _hb.feed(detokenizer.last_segment) + _hb.flush()
-                    if remaining:
-                        queue.put_nowait(
-                            RequestOutput(
-                                request_id=req_id,
-                                new_text=remaining,
-                                finish_reason=None,
-                                finished=False,
-                                prompt_tokens=_num_prompt_tokens,
-                                current_state=_final_state,
-                            )
-                        )
-                queue.put_nowait(
-                    RequestOutput(
-                        request_id=req_id,
-                        new_text="",
-                        finish_reason="length",
-                        finished=True,
-                        completion_tokens=token_count,
-                        prompt_tokens=_num_prompt_tokens,
-                        cached_tokens=int(_pc_matched),
-                        current_state=_final_state,
-                        reasoning_tokens=_thinking_tokens,
-                    )
-                )
-            except Exception as e:
-                logger.error(f"VLM text streaming error: {e}", exc_info=True)
-                _error_state = "reasoning" if _in_thinking else "normal"
-                # Flush remaining detokenizer bytes before reporting error
-                if has_detokenizer and detokenizer is not None:
-                    try:
-                        detokenizer.finalize()
-                        remaining = detokenizer.last_segment
-                        if remaining:
-                            queue.put_nowait(
-                                RequestOutput(
-                                    request_id=req_id,
-                                    new_text=remaining,
-                                    finish_reason=None,
-                                    finished=False,
-                                    prompt_tokens=_num_prompt_tokens,
-                                    current_state=_error_state,
-                                )
-                            )
-                    except Exception:
-                        logger.debug(
-                            "detokenizer finalize in error handler failed",
-                            exc_info=True,
-                        )
-                queue.put_nowait(
-                    RequestOutput(
-                        request_id=req_id,
-                        new_text="",
-                        finish_reason="error",
-                        finished=True,
-                        error=str(e),
-                        prompt_tokens=_num_prompt_tokens,
-                        current_state=_error_state,
-                        reasoning_tokens=_thinking_tokens,
-                    )
-                )
-
     # ── Prompt Formatting ──
 
     def _build_vlm_messages(
@@ -5476,27 +2015,6 @@ class VLMEngine:
                 )
             patched.append(tc)
         return patched
-
-    def _then_clear(self, fn):
-        """Run ``fn`` on the MLX thread, then release the buffer pool for large
-        models in the same executor job. A separately queued clear would wait
-        behind every other queued request, holding this one's response until
-        they all finish."""
-
-        def run():
-            try:
-                return fn()
-            finally:
-                runner = getattr(self, "_batch_runner", None)
-                busy = runner is not None and runner.busy()
-                if getattr(self, "_mx_large_model", False) and not busy:
-                    try:
-                        mx.synchronize()
-                        mx.clear_cache()
-                    except Exception:
-                        logger.debug("post-gen mx.clear_cache failed", exc_info=True)
-
-        return run
 
     def _runner_consumers(self):
         """Threads that wait for batched-runner tokens (never MLX work)."""
@@ -5881,62 +2399,6 @@ class VLMEngine:
         return paths
 
     # ── Image Hash ──
-
-    def _compute_image_hash(self, image_paths: list[str]) -> str | None:
-        """Compute a content hash for image paths (vision feature cache key)."""
-        if not image_paths:
-            return None
-        import hashlib
-
-        h = hashlib.sha256()
-        for path in image_paths:
-            h.update(path.encode())
-            try:
-                if os.path.exists(path):
-                    with open(path, "rb") as f:
-                        for chunk in iter(lambda: f.read(8192), b""):
-                            h.update(chunk)
-            except Exception:
-                logger.debug("failed", exc_info=True)
-        return h.hexdigest()[:16]
-
-    def _get_kv_prefix_state(self, image_hash: str) -> Any | None:
-        """Get or create a PromptCacheState for per-image KV prefix reuse.
-
-        Returns the PromptCacheState if one exists for this image, or None
-        if this is the first time the image is seen. The caller should pass
-        the state to mlx_vlm's stream_generate which will populate it.
-        Thread-safe: acquires _kv_prefix_lock.
-        """
-        if image_hash is None:
-            return None
-
-        with self._kv_prefix_lock:
-            state = self._kv_prefix_states.get(image_hash)
-        if state is not None:
-            self._vlm_kv_prefix_hits += 1
-            return state
-
-        self._vlm_kv_prefix_misses += 1
-        return None
-
-    def _ensure_kv_prefix_state(self, image_hash: str) -> Any:
-        """Create a new PromptCacheState entry for this image hash.
-
-        Thread-safe: acquires _kv_prefix_lock to protect concurrent
-        reads/writes/evictions from the MLX executor thread.
-        """
-        from mlx_vlm.generate import PromptCacheState
-
-        state = PromptCacheState()
-        with self._kv_prefix_lock:
-            # Evict old entries if over limit
-            if len(self._kv_prefix_states) >= self._kv_prefix_max_entries:
-                keys = list(self._kv_prefix_states.keys())
-                for k in keys[:8]:
-                    del self._kv_prefix_states[k]
-            self._kv_prefix_states[image_hash] = state
-        return state
 
     # ── Audio Extraction ──
 
@@ -6463,113 +2925,6 @@ class VLMEngine:
                 close_id,
             )
 
-    def _decode_with_reasoning_channels(self, tokens: list[int]) -> str:
-        """Decode, normalizing Gemma channel reasoning into standard
-        ``<think>…</think>`` so the existing reasoning split handles it.
-
-        Order-agnostic token-level segmentation: text inside ``<|channel>…
-        <channel|>`` blocks is reasoning, everything else is content. No-op
-        (plain decode) for models without channel tokens, so it's safe to call
-        on every decode site."""
-        open_id, close_id = getattr(self, "_reasoning_channel_ids", (None, None))
-        if open_id is None or open_id not in tokens:
-            return self._tokenizer.decode(tokens, skip_special_tokens=True)
-        content_ids: list[int] = []
-        reason_ids: list[int] = []
-        in_channel = False
-        for t in tokens:
-            if t == open_id:
-                in_channel = True
-            elif t == close_id:
-                in_channel = False
-            elif in_channel:
-                reason_ids.append(t)
-            else:
-                content_ids.append(t)
-        content = self._tokenizer.decode(content_ids, skip_special_tokens=True)
-        reasoning = self._tokenizer.decode(reason_ids, skip_special_tokens=True)
-        # Drop the leading channel-name line ("thought\n") — it labels the
-        # channel, it isn't reasoning content.
-        _r = reasoning.lstrip()
-        if _r.startswith("thought"):
-            _r = _r[len("thought") :].lstrip("\n").lstrip()
-        if not _r:
-            return content
-        # Normalize to the canonical reasoning-then-answer <think> form the
-        # downstream reasoning parser already splits correctly.
-        return f"<think>{_r}</think>{content}"
-
-    @staticmethod
-    def _find_think_tag(text: str, tag: str, search_start: int = 0) -> int:
-        """Find a thinking tag (<think or </think) avoiding false positives.
-
-        Matches the tag only when followed by a non-alphanumeric character
-        (>, whitespace, newline, or end-of-string).  This prevents false
-        matches on <thinking>, <think_more>, etc.
-        """
-        idx = search_start
-        while True:
-            pos = text.find(tag, idx)
-            if pos < 0:
-                return -1
-            end = pos + len(tag)
-            if end >= len(text) or not text[end].isalnum():
-                return pos
-            # False positive (e.g. <thinking>) — keep searching
-            idx = end
-
-    def _count_text_tokens(self, text: str) -> int:
-        """Count tokens in a chat-template-rendered prompt WITHOUT double-counting
-        BOS. The text came from apply_chat_template(tokenize=False),
-        which already injected the literal bos_token for BOS-prepending models; a
-        plain encode() defaults to add_special_tokens=True and prepends BOS again,
-        inflating the billed prompt_tokens by 1. Mirrors BatchedEngine._encode_prompt."""
-        if not self._tokenizer:
-            return 0
-        bos = getattr(self._tokenizer, "bos_token", None)
-        add_special = not (isinstance(bos, str) and bos and text.startswith(bos))
-        try:
-            return len(self._tokenizer.encode(text, add_special_tokens=add_special))
-        except TypeError:
-            return len(self._tokenizer.encode(text))
-
-    def _estimate_image_tokens(self) -> int:
-        """Estimate the number of vision tokens per image for this model.
-
-        Reads the vision config to get an accurate estimate when available,
-        otherwise uses a conservative default.  This is used to adjust
-        prompt_tokens in usage stats so they reflect the actual model input
-        (text tokens + image placeholder tokens).
-        """
-        if not self._config:
-            return 576  # conservative default (24x24 grid)
-        vision_cfg = self._config.get("vision_config", {})
-        if not vision_cfg:
-            thinker_cfg = self._config.get("thinker_config", {})
-            vision_cfg = thinker_cfg.get("vision_config", {})
-        # spatial_merge_size (Qwen-VL etc.) merges merge×merge patches into ONE vision
-        # token, so the patch-grid count must be divided by merge². : this was
-        # ignored for the image_size paths (the spatial_merge branch below was dead
-        # because they returned first), overcounting Qwen3-VL by ~4× (729 vs ~182).
-        spatial_merge = vision_cfg.get("spatial_merge_size", 1)
-        _merge_div = max(1, spatial_merge**2)
-        # Common config keys for image token count
-        for key in ("image_size", "image_resolution"):
-            size = vision_cfg.get(key)
-            if isinstance(size, (list, tuple)) and len(size) >= 2:
-                # Approximate: (H/patch_size) * (W/patch_size) / merge²
-                patch_size = vision_cfg.get("patch_size", 14)
-                return ((size[0] // patch_size) * (size[1] // patch_size)) // _merge_div
-        # If image_size is a single int
-        size = vision_cfg.get("image_size")
-        if isinstance(size, int):
-            patch_size = vision_cfg.get("patch_size", 14)
-            return ((size // patch_size) ** 2) // _merge_div
-        # Qwen-style models that only declare spatial_merge_size (no image_size)
-        if spatial_merge > 1:
-            return 256 // (spatial_merge**2)
-        return 576  # default: 24x24 patch grid
-
     def _get_eos_ids(self) -> list[int]:
         from .text_utils import get_eos_token_ids
 
@@ -6579,9 +2934,6 @@ class VLMEngine:
 
     def get_stats(self) -> dict:
         uptime = time.monotonic() - self._start_time if self._start_time else 0.0
-        total_vision = self._vlm_vision_hits + self._vlm_vision_misses
-        total_kv = self._vlm_kv_prefix_hits + self._vlm_kv_prefix_misses
-
         stats = {
             "model": self._model_path,
             "loaded": self.is_loaded,
@@ -6591,56 +2943,17 @@ class VLMEngine:
             "num_requests_processed": self._num_requests_processed,
             "reasoning_tokens": self._total_reasoning_tokens,
             "uptime_seconds": uptime,
-            # Vision feature cache (image encoder output reuse)
-            "vision_cache_enabled": self._vision_cache is not None,
-            "vlm_vision_feature_hits": self._vlm_vision_hits,
-            "vlm_vision_feature_misses": self._vlm_vision_misses,
-            "vlm_vision_feature_hit_rate": self._vlm_vision_hits / total_vision
-            if total_vision > 0
-            else 0.0,
-            # KV prefix cache (per-image KV state reuse)
-            "vlm_kv_prefix_entries": len(self._kv_prefix_states),
-            "vlm_kv_prefix_hits": self._vlm_kv_prefix_hits,
-            "vlm_kv_prefix_misses": self._vlm_kv_prefix_misses,
-            "vlm_kv_prefix_hit_rate": self._vlm_kv_prefix_hits / total_kv
-            if total_kv > 0
-            else 0.0,
+            "text_prompt_cache": self._text_prompt_cache.stats,
         }
-
-        # Merge underlying VisionFeatureCache stats if available
-        if self._vision_cache is not None:
-            vc_stats = self._vision_cache.stats
-            stats["vision_cache_memory_hits"] = vc_stats.get("hits", 0)
-            stats["vision_cache_ssd_loads"] = vc_stats.get("ssd_loads", 0)
-            stats["vision_cache_saves"] = vc_stats.get("saves", 0)
-            stats["vision_cache_errors"] = vc_stats.get("errors", 0)
-
-        # Merge encoder cache stats (encoder hidden-state cache)
-        stats["encoder_cache"] = self._encoder_cache.get_stats()
-        # cross-request vision-feature cache (the one that actually runs).
-        if self._vision_tower_wrappers:
-            _vh = sum(
-                w.cache_stats()["vision_tower_cache_hits"]
-                for w in self._vision_tower_wrappers
-            )
-            _vm = sum(
-                w.cache_stats()["vision_tower_cache_misses"]
-                for w in self._vision_tower_wrappers
-            )
-            stats["vision_tower_cache"] = {
-                "towers_wrapped": len(self._vision_tower_wrappers),
-                "hits": _vh,
-                "misses": _vm,
-                "hit_rate": (_vh / (_vh + _vm)) if (_vh + _vm) else 0.0,
-            }
-
-        # Merge text prompt tokenization cache stats
-        stats["text_prompt_cache"] = self._text_prompt_cache.stats
-
-        # Merge MultimodalPipelineCoordinator stats
+        apc = self._apc_backend
+        if apc is not None:
+            with contextlib.suppress(Exception):
+                stats["apc"] = {
+                    "memory_max_bytes": apc.memory_max_bytes,
+                    "matched_tokens": apc.stats.matched_tokens,
+                }
         try:
             stats["pipeline"] = self._pipeline.get_stats()
         except Exception:
             logger.debug("operation failed", exc_info=True)
-
         return stats
