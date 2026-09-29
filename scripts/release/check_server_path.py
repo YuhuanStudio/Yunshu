@@ -131,7 +131,9 @@ def main() -> int:
                             k = next(
                                 (
                                     i
-                                    for i, (x, y) in enumerate(zip(t, inproc_text))
+                                    for i, (x, y) in enumerate(
+                                        zip(t, inproc_text, strict=False)
+                                    )
                                     if x != y
                                 ),
                                 min(len(t), len(inproc_text)),
