@@ -167,3 +167,45 @@ def test_mtp_greedy_equals_plain_greedy(engine, lane_widths, context):
             None,
         )
         assert spec == plain, f"block {block}: first difference at token {first}"
+
+
+@pytest.mark.parametrize("context", [0, 1500])
+def test_mtp_lane_rounds_equal_plain_greedy(engine, monkeypatch, context):
+    """The lane's own MTP rounds (early absorb, fused layers) commit the same tokens as plain decode."""
+    from yunshu_engine import mtp_lane
+    from yunshu_engine.kernels import lane_layers
+
+    model, _processor, drafter = engine
+    assert mtp_lane.install() and lane_layers.install()
+    calls: list[int] = []
+    orig_rounds = mtp_lane.rounds
+
+    def spy(*a, **k):
+        calls.append(1)
+        return orig_rounds(*a, **k)
+
+    monkeypatch.setattr(mtp_lane, "rounds", spy)
+    tok = engine[1].tokenizer
+    prompt = "Explain in detail how a refrigerator works."
+    if context:
+        filler = tok.encode(FILLER, add_special_tokens=False)[:context]
+        prompt = tok.decode(filler) + "\n\nSummarize the readings above, then " + prompt
+    mtp_lane.set_enabled(False)
+    try:
+        plain = _generate(engine, prompt, 96, 0)
+        for block in (3, 6):
+            mtp_lane.set_enabled(True)
+            calls.clear()
+            spec = _generate(engine, prompt, 96, block)
+            assert calls, "the lane rounds did not serve the request"
+            first = next(
+                (
+                    i
+                    for i, (a, b) in enumerate(zip(spec, plain, strict=False))
+                    if a != b
+                ),
+                None,
+            )
+            assert spec == plain, f"block {block}: first difference at token {first}"
+    finally:
+        mtp_lane.set_enabled(False)

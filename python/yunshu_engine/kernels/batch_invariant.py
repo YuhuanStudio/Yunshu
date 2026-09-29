@@ -96,6 +96,20 @@ def invariant_linear(linear: Any, x: mx.array, exact_fallback) -> mx.array:
     return exact_fallback(linear, x)
 
 
+_ZERO_ROWS: dict = {}
+
+
+def _zero_row(x: mx.array) -> mx.array:
+    """A cached all-zero row shaped like ``x`` (one launch fewer than
+    ``zeros_like`` per padded projection)."""
+    key = (tuple(x.shape), x.dtype)
+    z = _ZERO_ROWS.get(key)
+    if z is None:
+        z = _ZERO_ROWS[key] = mx.zeros(x.shape, dtype=x.dtype)
+        mx.eval(z)
+    return z
+
+
 def _install_packed(model: Any) -> int:
     """Repack eligible 4-bit target projections for the M5 tensor unit and pad
     single-row calls to 2 rows: the packed tensor-unit kernel is row-invariant
@@ -110,7 +124,7 @@ def _install_packed(model: Any) -> int:
 
         def call(self, x):
             if _STATE["active"] and x.ndim == 3 and x.shape[0] * x.shape[1] == 1:
-                pad = mx.concatenate([x, mx.zeros_like(x)], axis=1)
+                pad = mx.concatenate([x, _zero_row(x)], axis=1)
                 return orig(self, pad)[:, :1]
             return orig(self, x)
 

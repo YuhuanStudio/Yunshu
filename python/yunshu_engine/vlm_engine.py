@@ -1433,6 +1433,22 @@ class VLMEngine:
                 from .kernels.verify_select import install as install_streamed5
 
                 kernels["streamed5"] = install_streamed5()
+            if draft_kind == "mtp" and invariant:
+                if settings.get_bool("YUNSHU_MTP_LANE"):
+                    from . import mtp_lane
+
+                    kernels["mtp_lane"] = mtp_lane.install()
+                    from .kernels import lane_layers
+
+                    kernels["lane_layers"] = lane_layers.install()
+                    vocab_n = settings.get("YUNSHU_DRAFT_VOCAB")
+                    if vocab_n:
+                        from .draft_vocab import install as install_draft_vocab
+
+                        found = install_draft_vocab(
+                            drafter, self._model.language_model, vocab_n
+                        )
+                        kernels["draft_vocab"] = vocab_n if found else None
             # Invariant kernels cost little per extra verify row and peak at 6
             # for MTP; exact kernels peak at 3: at 5 rows a cycle jumps to
             # ~108 ms. A DFlash drafter proposes a whole block in one forward

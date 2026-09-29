@@ -368,10 +368,28 @@ def _ksplit(tiles: int, units: int) -> int:
     return best
 
 
+# Geometry of the small-row kernel: "few" gives each threadgroup a long K range
+# (few threadgroups, K split only until ``_FEW_TGS`` exist); "target" splits K
+# until ~1400 threadgroups exist. Timed at the 27B projection shapes for 2..8 rows
+# (scripts/research/bench_packed_tune.py): "few" streams weights 10-20% faster.
+# Either is a function of the weight's shape alone, so a row's bits do not
+# depend on how many rows share the call.
+GEOMETRY = "target"
+_FEW_TGS = 128
+
+
 def _small_geometry(K: int, N: int) -> tuple[int, int]:
     """(K splits across threadgroups, partitions inside one) for 2..8 rows."""
     steps = K // 256
     tiles = N // TILE_N
+    if GEOMETRY == "few":
+        ksplit = next(
+            (d for d in range(1, steps + 1) if steps % d == 0 and tiles * d >= _FEW_TGS),
+            steps,
+        )
+        groups_per_split = (K // 64) // ksplit
+        parts = 2 if ksplit == 1 and (groups_per_split // 2) % 4 == 0 else 1
+        return ksplit, parts
     ksplit = _ksplit(tiles, steps)
     parts = 2 if tiles < 256 and (steps // ksplit) % 2 == 0 else 1
     return ksplit, parts
