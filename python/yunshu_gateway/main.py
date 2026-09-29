@@ -892,7 +892,9 @@ def create_app() -> FastAPI:
     app.include_router(omni_mod.router)
 
     # Routes — L1 Gateway Monitoring (system, models, requests, prometheus)
-    app.include_router(gw_monitoring.router, prefix="/api/v1")
+    app.include_router(gw_monitoring.metrics_router)
+    if settings.get_bool("YUNSHU_DEBUG_ROUTES"):
+        app.include_router(gw_monitoring.router)
 
     def _safe_memory_usage(manager):
         if manager is None:
