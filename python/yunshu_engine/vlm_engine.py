@@ -2169,10 +2169,28 @@ class VLMEngine:
                 isinstance(t, str) and "reasoning_effort" in t for t in texts
             )
             self._template_has_effort = supported
+            from .model_card import reasoning_levels
+
+            self._template_effort_levels = next(
+                (
+                    lv
+                    for t in texts
+                    if isinstance(t, str) and (lv := reasoning_levels(t)[0])
+                ),
+                [],
+            )
         if not supported:
             return None
         kwargs.pop("reasoning_effort", None)
-        return {"reasoning_effort": str(effort)}
+        # The template rejects levels it does not list (Qwen3.8 has no "high"): map the
+        # OpenAI ladder onto the template's own.
+        from .model_card import normalize_effort
+
+        return {
+            "reasoning_effort": normalize_effort(
+                str(effort), getattr(self, "_template_effort_levels", [])
+            )
+        }
 
     def _format_prompt(
         self,
