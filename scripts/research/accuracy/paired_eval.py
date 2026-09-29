@@ -233,13 +233,12 @@ class IFEval(Bench):
 
 def ifeval_score_file(path: Path) -> None:
     """Fill correct / correct_loose in place using lm_eval's IFEval checker."""
+    os.environ.setdefault("NLTK_DATA", "/Volumes/P5Plus/yunshu-test-cache/nltk")
     from lm_eval.tasks.ifeval import utils as ifeval_utils  # noqa: PLC0415
 
     ds = {
         f"ifeval-{r['key']}": r
-        for r in map(
-            json.loads, (DATASETS / "ifeval/input_data.jsonl").read_text().split("\n")
-        )
+        for r in read_jsonl(DATASETS / "ifeval/input_data.jsonl")
     }
     rows = read_jsonl(path)
     for r in rows:
