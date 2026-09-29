@@ -1481,6 +1481,7 @@ class VLMEngine:
                 self._model,
                 drafter=drafter if draft_kind == "mtp" else None,
                 stop_tokens=runner.stop_tokens,
+                chunk=settings.get("YUNSHU_ROUND_PREFILL_CHUNK"),
             )
         logger.info(
             "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s",

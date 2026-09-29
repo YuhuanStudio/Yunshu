@@ -3,12 +3,12 @@
 See docs/guides/ROUND_DRIVER.md. Each step is one packed forward of one kind:
 
 - a **decode step**: every decoding row's window (pending token + drafts);
-- a **prefill step**: fixed ``CHUNK``-token chunks of waiting prompts —
-  several prompts in one forward — up to ``IDLE_BUDGET`` tokens when no row
-  decodes, ``DECODE_BUDGET`` while rows decode.
+- a **prefill step**: fixed ``chunk``-token spans of waiting prompts —
+  several prompts in one forward — up to ``idle_budget`` tokens when no row
+  decodes, one span while rows decode.
 
 While rows decode and prompts wait, prefill and decode steps alternate
-one-to-one, so ``DECODE_BUDGET`` sets the trade between the waiting prompt's
+one-to-one, so the chunk size sets the trade between the waiting prompt's
 TTFT and the decoding rows' rate (27B, 4 rows + a 16K prompt: decode rows and
 a prefill chunk packed into one forward measured no better than alternating
 separate forwards at the same chunk size, docs/research/runs/
@@ -45,9 +45,10 @@ from .forward import MAX_DECODE_TOKENS, Segment, forward, logits
 
 logger = logging.getLogger(__name__)
 
-CHUNK = 512  # prefill chunk: fixed spans from the prompt start
-DECODE_BUDGET = 512  # prefill tokens per prefill step while rows decode
-IDLE_BUDGET = 2048  # prefill tokens per prefill step when no row decodes
+CHUNK = 512  # default prefill chunk: fixed spans from the prompt start
+IDLE_BUDGET = (
+    2048  # prefill tokens per prefill step when no row decodes (at least one chunk)
+)
 ACCEPT_PRIOR = 0.7  # per-depth draft acceptance before a row has history
 ACCEPT_EMA = 0.15
 
@@ -121,8 +122,21 @@ class _Item:
 class RoundDriver:
     """Rows of one Qwen3.5-family target (projections converted to lane)."""
 
-    def __init__(self, model: Any, *, drafter: Any = None, stop_tokens=None):
+    def __init__(
+        self,
+        model: Any,
+        *,
+        drafter: Any = None,
+        stop_tokens=None,
+        chunk: int | None = None,
+    ):
         from .mtp import MTPHead
+
+        # Fixed prefill span per prompt (YUNSHU_ROUND_PREFILL_CHUNK). While rows
+        # decode a prefill step is one span, so this is also the longest a
+        # decoding row waits behind a prompt.
+        self.chunk = int(chunk or CHUNK)
+        self.idle_budget = max(IDLE_BUDGET, self.chunk)
 
         self.model = model
         self.lm = model.language_model if hasattr(model, "language_model") else model
@@ -211,11 +225,11 @@ class RoundDriver:
                 items.append(_Item("d", r, Segment(r.cache, window, decode=True)))
             return self._place(items)
         self._prefilled_last = True
-        budget = DECODE_BUDGET if decoding else IDLE_BUDGET
+        budget = self.chunk if decoding else self.idle_budget
         for r in waiting:
             ids = r.req.ids
             while budget > 0 and r.done < len(ids):
-                start, end = r.done, min(r.done + CHUNK, len(ids))
+                start, end = r.done, min(r.done + self.chunk, len(ids))
                 chunk = mx.array(ids[start:end], dtype=mx.int32)
                 items.append(_Item("p", r, Segment(r.cache, chunk, False), start, end))
                 r.done = end
