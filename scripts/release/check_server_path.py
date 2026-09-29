@@ -65,6 +65,17 @@ def inprocess_run(engine, msgs, max_tokens: int) -> tuple[float | None, str]:
     return ((len(times) - 1) / span if span else None), text
 
 
+def _inprocess_spec_kind(engine) -> str:
+    """The spec method the in-process engine selected (same code as the server)."""
+    from yunshu_engine import spec_select
+    from yunshu_engine.mlxvlm_mtp import is_mtp_capable
+
+    choice = spec_select.choose(
+        engine._config, spec_family=True, mtp_capable=is_mtp_capable(engine._model_path)
+    )
+    return choice.kind
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -80,6 +91,12 @@ def main() -> int:
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--min-ratio", type=float, default=0.95)
     ap.add_argument("--output", type=Path)
+    ap.add_argument(
+        "--server-log",
+        type=Path,
+        help="server log; its 'Speculative decoding: <kind>' line must match "
+        "the in-process selection (same env => same path)",
+    )
     a = ap.parse_args()
 
     from yunshu_engine.vlm_engine import VLMEngine
@@ -88,6 +105,15 @@ def main() -> int:
     loop = asyncio.new_event_loop()
     loop.run_until_complete(engine.start())
     cases = []
+    spec, spec_ok = None, True
+    if a.server_log:
+        import re
+
+        m = re.findall(r"Speculative decoding: (\w+)", a.server_log.read_text())
+        srv = m[-1] if m else "none"
+        loc = _inprocess_spec_kind(engine)
+        spec = f"server={srv} inprocess={loc}"
+        spec_ok = srv == loc
     try:
         for ctx in a.contexts:
             for task in a.tasks:
@@ -127,6 +153,8 @@ def main() -> int:
         "worst_ratio": worst,
         "min_ratio": a.min_ratio,
         "same_text": all_same,
+        "spec": spec,
+        "spec_match": spec_ok,
         "cases": cases,
     }
     if a.output:

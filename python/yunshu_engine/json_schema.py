@@ -27,6 +27,7 @@ where the sampler is invoked per-token.
 import copy
 import json
 import logging
+import re
 import weakref
 from collections.abc import Callable
 from enum import Enum, auto
@@ -325,6 +326,15 @@ _WHITESPACE_CHARS = {" ", "\t", "\n", "\r"}
 # swapped in after a model reload never reads another tokenizer's entries.
 _TAB_CR_IDS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _STRING_PARTITION: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_WS_MERGED: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+# One structural whitespace run: nothing, one space, or a newline + indentation.
+_WS_RUN = re.compile(r" ?|\n {0,16}")
+
+
+def _trailing_ws(text: str) -> str:
+    return text[len(text.rstrip()) :] if text else ""
+
+
 _ALL_IDS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
@@ -1888,6 +1898,15 @@ class JsonSchemaConstraint:
         # That neutered schema enforcement (arbitrary keys/values leaked). A
         # token is allowed only if advancing through its ENTIRE text stays valid.
         candidates = self._find_tokens_for_chars(tokenizer, expected_chars)
+        # Tokens that merge structural whitespace with what follows (BPE's
+        # ' "', ' {', ' 5', ...) are the model's natural tokenization; leaving
+        # them out forces odd whitespace-only + bare-token spellings. They are
+        # candidates by their first NON-whitespace char and, like every other
+        # multi-char token, must replay cleanly through the whole text.
+        if expected_chars & _WHITESPACE_CHARS:
+            candidates = candidates + self._ws_merged_candidates(
+                tokenizer, expected_chars
+            )
         allowed = self._filter_fully_valid(tokenizer, candidates)
         # A top-level scalar number is already a complete document once it has
         # a digit, but has no terminating structural char — so without this EOS would
@@ -1897,16 +1916,21 @@ class JsonSchemaConstraint:
         if self.can_terminate():
             allowed = allowed + self._eos_ids(tokenizer)
         # A JSON grammar permits arbitrary insignificant whitespace, but a
-        # greedy model can prefer whitespace-only tokens forever. Bound only
-        # structural whitespace; string values remain untouched. A token that
-        # advances the structure after leading whitespace stays eligible.
-        if len(self._text_buffer) >= 8 and self._text_buffer[-8:].isspace():
-            text_map = self._token_text_map(tokenizer)
-            allowed = [
-                token_id
-                for token_id in allowed
-                if not (text_map.get(token_id) or "").isspace()
-            ]
+        # greedy model can prefer whitespace forever and small models emit odd
+        # runs (' \n  ', two spaces after a colon). Like outlines, allow only one
+        # space, or a newline plus indentation, as a structural whitespace run;
+        # string contents are untouched.
+        text_map = self._token_text_map(tokenizer)
+        run = _trailing_ws(self._text_buffer)
+        kept = []
+        for token_id in allowed:
+            text = text_map.get(token_id) or ""
+            if text and text[0].isspace():
+                lead = text[: len(text) - len(text.lstrip())]
+                if not _WS_RUN.fullmatch(run + lead):
+                    continue
+            kept.append(token_id)
+        allowed = kept or allowed
         # Raw tab / carriage return can only be insignificant whitespace (JSON
         # strings must escape them), so keep output to spaces and newlines.
         # Qwen3.8 otherwise emitted tab/CR indentation in schema answers.
@@ -1965,6 +1989,26 @@ class JsonSchemaConstraint:
             cached = (safe, exiting)
             _STRING_PARTITION[tokenizer] = cached
         return cached
+
+    def _ws_merged_candidates(
+        self, tokenizer: Any, expected_chars: set[str]
+    ) -> list[int]:
+        """Whitespace-leading tokens that also carry content, keyed by the first
+        non-whitespace char (built once per tokenizer)."""
+        index = _WS_MERGED.get(tokenizer)
+        if index is None:
+            index = {}
+            for tid, text in self._token_text_map(tokenizer).items():
+                if text and text[0].isspace() and not text.isspace():
+                    lead = len(text) - len(text.lstrip())
+                    if lead <= 17:
+                        index.setdefault(text[lead], []).append(tid)
+            _WS_MERGED[tokenizer] = index
+        out: list[int] = []
+        for ch in expected_chars:
+            if not ch.isspace():
+                out.extend(index.get(ch, ()))
+        return out
 
     def _tab_cr_token_ids(self, tokenizer: Any) -> frozenset:
         cached = _TAB_CR_IDS.get(tokenizer)
