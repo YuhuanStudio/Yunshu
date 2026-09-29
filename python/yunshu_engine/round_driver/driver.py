@@ -54,6 +54,11 @@ IDLE_BUDGET = 2048  # prefill tokens per prefill step when no row decodes
 ACCEPT_PRIOR = 0.7  # per-depth draft acceptance before a row has history
 ACCEPT_EMA = 0.15
 LANE_ROWS = 128  # rows one lane-matmul call keeps row-invariant
+# MLX's freed-buffer cache: long prompts allocate transient buffers of ever
+# new sizes (KV growth, attention scores), and left unbounded the cache grew
+# to ~95 GiB in a 4 x 32K run, after which every step took 5-10x as long
+# (docs/guides/ROUND_DRIVER.md). The driver keeps it under this bound.
+CACHE_LIMIT = 8 * 2**30
 
 
 def cache_buffers(cache: list) -> list:
@@ -150,6 +155,9 @@ class RoundDriver:
             if drafter is not None
             else None
         )
+        prev = mx.set_cache_limit(CACHE_LIMIT)
+        if prev < CACHE_LIMIT:
+            mx.set_cache_limit(prev)  # a tighter limit set by the host stays
         self.batch = DecodeBatch(self.lm)
         self.rows: list[_Row] = []
         self.cost = CostCurve()
@@ -271,13 +279,20 @@ class RoundDriver:
     def step(self) -> list[Event]:
         if not self.rows:
             return []
-        decoding = self.batch.rows
-        waiting = [r for r in self.rows if r.pending is None]
-        if decoding and (not waiting or self._prefilled_last):
+        if self._will_decode():
             self._prefilled_last = False
             return self._decode_step()
         self._prefilled_last = True
-        return self._prefill_step(waiting, bool(decoding))
+        return self._prefill_step(
+            [r for r in self.rows if r.pending is None], bool(self.batch.rows)
+        )
+
+    def _will_decode(self) -> bool:
+        """Whether the next step is a decode step: rows decode and either no
+        prompt waits or the last step was a prefill."""
+        if not self.batch.rows:
+            return False
+        return self._prefilled_last or all(r.pending is not None for r in self.rows)
 
     def _prefill_step(self, waiting: list[_Row], decoding: bool) -> list[Event]:
         items: list[_Item] = []

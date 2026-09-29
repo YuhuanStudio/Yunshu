@@ -38,6 +38,9 @@ PROMPTS = [
 ]
 
 
+WARM: dict = {}
+
+
 def load(ckpt: str, quantize: bool):
     import mlx.nn as nn
     from mlx_vlm import load as vlm_load
@@ -98,6 +101,12 @@ def run(model, drafter, prompts, tokens, stop, stagger=False):
     from yunshu_engine.round_driver.driver import Request, RoundDriver
 
     d = RoundDriver(model, drafter=drafter, stop_tokens=stop)
+    # a server's driver lives across requests: its measured step-cost curve
+    # and draft cost carry over (kernel compiles and the cost curve would
+    # otherwise dominate a 256-token run)
+    if drafter is not None and WARM:
+        d.cost.points = dict(WARM["points"])
+        d.chain_ms = WARM["chain_ms"]
     out = {i: [] for i in range(len(prompts))}
     first = {}
     todo = list(range(len(prompts)))
@@ -119,6 +128,8 @@ def run(model, drafter, prompts, tokens, stop, stagger=False):
             first.setdefault(e.handle, time.perf_counter() - t0)
         steps += 1
     wall = time.perf_counter() - t0
+    if drafter is not None:
+        WARM.update(points=dict(d.cost.points), chain_ms=d.chain_ms)
     return [out[i] for i in range(len(prompts))], d, wall, first
 
 
@@ -175,6 +186,9 @@ def main():
             }
         )
         n = a.parity_rows or max(a.rows)
+        for rows in sorted({1, 2, 4, 8, max(a.rows)}):  # compiles + cost curve
+            if rows <= len(prompts):
+                run(model, drafter, prompts[:rows], 48, stop)
         if a.phase != "rows":
             ref = [run(model, None, [p], a.tokens, stop)[0][0] for p in prompts[:n]]
             checks = {
