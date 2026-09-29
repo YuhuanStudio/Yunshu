@@ -726,7 +726,12 @@ def cmd_run(a) -> int:
                 t1 = time.perf_counter()
                 try:
                     resp = chat(
-                        srv.url, bench, item, a.model_name, max(60, hard - time.time())
+                        srv.url,
+                        bench,
+                        item,
+                        # stock mlx_vlm.server loads whatever path the request names
+                        a.model if a.arm.startswith("ref") else a.model_name,
+                        max(60, hard - time.time()),
                     )
                 except Exception as e:  # noqa: BLE001
                     resp = {"error": repr(e)[:300]}
