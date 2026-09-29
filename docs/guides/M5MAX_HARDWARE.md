@@ -13,7 +13,7 @@ LPDDR5X memory system and one run disturbs another.
 | Memory bandwidth (spec 614 GB/s) | GPU read 560 GB/s (91%), copy 530, write 450; SLC-resident 1-64 MB buffers re-read at 500-850 GB/s; CPU read 37 GB/s, copy 140 GB/s | Decode streams 15.7 GB of weights per step | Stock decode reads 507 GB/s (91% of the best read kernel): the floor is 28 ms and the step is 31 ms |
 | GPU tensor units (NAX) | 65 TFLOPS half/bf16, 119 TOPS int8 (raw matmul2d); MLX dense bf16 62 TFLOPS, qmm 4-bit 58 TFLOPS at M>=512; without NAX 15.6 TFLOPS | NAX qmm in MLX (prefill), NAX-packed 4-bit kernel for decode and verify | Prefill at ~750 tok/s is 27B x 2 FLOP x 750 = 40 TFLOPS: 65% of the qmm peak. int8 tensor path has 2x headroom and is unused |
 | GPU launch / sync | eval round trip 105-150 us; 2-4 us per dependent kernel inside one eval; encode 1 us/op | ~2500 graph nodes, 500 quantized matmuls, 80 custom kernels per decode step | Launch cost is hidden: see mx.compile below |
-| ANE | 39-op 27B block, hidden 5120: 6.4 ms (T=64), 118 ms fp16 / 31 ms 4-bit palettized (T=512), 63 ms 4-bit (T=1024); see ANE section | Embedding co-processor only (`ane_embedding.py`) | Prefill on ANE: see verdict |
+| ANE | 39-op 27B block, hidden 5120: 6.4 ms (T=64), 118 ms fp16 / 31 ms 4-bit palettized (T=512), 63 ms 4-bit (T=1024); see ANE section | Embedding co-processor only (`ane_embedding.py`) | Prefill on ANE beside decode: 250 tok/s at -8..11% decode; see ANE prefill section |
 | CPU | 6 super + 12 perf cores, SME2 (svl 64 B); Accelerate sgemm 2.5-2.7 TFLOPS fp32 (M>=128) but 28 GB/s at M=2..8 and 265 GB/s at M=1; argmax over 248K vocab 76 us, top-50 1.4 ms, softmax 0.33 ms; thread hand-off 7 us | Detokenize, grammar, sampling glue | Nothing in decode is CPU-bound |
 | Wired memory | `iogpu.wired_limit_mb` = 124518 (default policy); `mx.set_wired_limit` changes no step time or variance | `set_wired_limit` when the model is over half of the recommended set | Nothing to gain: no page faults observed (0 major) |
 | Power | `lowpowermode 0`, AC power, no thermal or performance warning recorded; 8 s decode loops hold 22.3 ms +-0.3 ms | none | Nothing measured to gain |
@@ -180,7 +180,10 @@ Each has a one-line roofline argument; proposals that fail it are listed last.
    Effort high, lossy.
 5. **Batched sequence mixers in the round driver.** Per-row attention/GDN launches at 8 rows are ~2.5
    us/kernel x 100 x rows: 2 ms at 8 rows against a 40-ms step (5%). Effort medium.
-6. **Sampling glue: leave on GPU.** argmax over 248K is 76 us on CPU and fully hidden; top-k/sort at
+6. **ANE prefill beside GPU decode (lossy option).** Measured above: 250 tok/s prefill for the whole
+   model while decode keeps 89-92%; roofline holds only for prompts arriving during a stream, and the
+   numerics differ from MLX 4-bit. Effort very high.
+7. **Sampling glue: leave on GPU.** argmax over 248K is 76 us on CPU and fully hidden; top-k/sort at
    16 rows costs 19-44 ms on CPU, so it stays GPU-side (`YUNSHU_GPU_SAMPLER`). No action.
 
 Dropped, with the reason:
@@ -188,8 +191,6 @@ Dropped, with the reason:
 - **MTP/DFlash drafter on the ANE overlapped with GPU verify.** Round n+1's drafts depend on round n's
   accepted tokens, so drafting and verify are sequentially dependent; and the ANE call streams
   170-1500 MB of weights, taking 11-23% of GPU decode bandwidth (measured above). Fails both tests.
-- **ANE prefill next to GPU decode.** See the verdict in the next section; only survives if the measured
-  interference is small.
 - **`mx.compile` on decode layers.** 2% at best on a GDN layer, 0% on attention and MLP: the MLX graph
   is already fused where it matters and dispatch hides behind GPU time. Fails the roofline: the 3 ms
   above the 28 ms floor is 10% at most.
@@ -202,4 +203,27 @@ Dropped, with the reason:
 
 ## ANE prefill next to GPU decode
 
-(Measured results appended below once the locked run finishes; see the verdict.)
+A 27B-shaped block (hidden 5120, 39 ops) on the ANE at prefill sizes, in a separate process, while the GPU
+runs the 22.3 ms/step decode proxy (`session_ane_prefill.sh`, `bg_gpu_concurrency.py`, 8 s each, under the lock):
+
+| ANE block | ANE rate alone -> with GPU decode | GPU decode step alone -> with ANE |
+|---|---|---|
+| T=512, palettized 4-bit | 16.3 -> 16.0 K tok/s per layer (-1.6%) | 22.36 -> 24.31 ms (-7.7%) |
+| T=1024, palettized 4-bit | 16.0 -> 15.8 K (-1.3%) | 22.29 -> 25.10 ms (-10.7%) |
+| T=1024, fp16 | 4.2 -> 4.2 K (0%) | 22.27 -> 25.46 ms (-11.1%) |
+
+Read as a whole model: 64 layers at 16 K tok/s per layer is ~250 tok/s of prefill on the ANE (~4 s per
+1K tokens; an 8K prompt ~33 s) while decode keeps ~89-92% of its rate. The GPU-chunked alternative
+(proposal 1) prefills the same 8K prompt in 15.5 s but leaves decode at 24 tok/s of 129 (19%).
+
+Verdict: the ANE is the only unit that prefills while decode keeps almost its full rate, so it is a
+real, if narrow, opportunity: a long prompt arriving while another request streams (agent loops).
+It is not free (the ANE's weight streaming costs the GPU ~8-11%), it is 3x slower than the idle GPU
+(so never for a cold prompt on an idle engine), and the block measured here is only a shape proxy. A real
+path needs Core ML per-layer packages for the full-attention and GDN layers with KV / recurrent state
+in and out, fp16 activations and palettized weights that differ numerically from the MLX 4-bit affine
+weights the decode uses (so the prompt's KV would not match GPU prefill: a lossy user option, not a
+default). Effort very high; ranked last among the survivors.
+
+Roofline: ANE prefill rate = 16 K tok/s-layers / 64 = 250 tok/s, decode loses the ~0.1 of bandwidth the
+ANE streams; gain exists only when decode and a prompt are concurrent.
