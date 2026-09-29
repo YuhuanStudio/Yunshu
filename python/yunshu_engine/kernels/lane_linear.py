@@ -82,6 +82,19 @@ class LaneLinear(nn.Module):
             linear.get("bias"),
         )
 
+    def quantized_rows(self, ids: mx.array):
+        """MLX-layout (weight, scales, biases) of the rows ``ids`` (draft vocabulary)."""
+        n, kg = self.output_dims, self.input_dims // self.group_size
+        if self.tiled:
+            nt = lane_qmm.NT
+            w = self.weight.reshape(n // nt, kg, nt, -1)
+            rows = w[ids // nt, :, ids % nt, :]
+            rows = rows.reshape(int(ids.shape[0]), -1)
+        else:
+            rows = mx.take(self.weight, ids, axis=0)
+        sb = mx.take(self.sbt, ids, axis=1)  # (KG, n_ids, 2)
+        return rows, sb[..., 0].T, sb[..., 1].T
+
     def _extra_repr(self) -> str:
         return (
             f"input_dims={self.input_dims}, output_dims={self.output_dims}, "
