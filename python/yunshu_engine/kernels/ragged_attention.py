@@ -1,3 +1,5 @@
+# Upstream (derived): jundot/omlx (Apache-2.0) omlx/patches/qwen35_verify_sdpa_split.py @ a98d8c8c
+# Upstream (inspired): ashhart/TensorFold (MIT) src/tensorfold/kernels/qwen/dense/v1/lane_attention.py @ 34bae79a
 """Decode/verify attention over per-row key lengths (ragged batch KV).
 
 Keys and values live in one buffer per layer, ``[S, HKV, CAP, D]``; query row

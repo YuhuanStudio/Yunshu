@@ -1,3 +1,5 @@
+# Upstream (inspired): vllm-project/vllm (Apache-2.0) vllm/v1/spec_decode/ngram_proposer.py @ 924707f1
+# Upstream (inspired): ggml-org/llama.cpp (MIT) common/ngram-mod.h @ dc9879cf
 from __future__ import annotations
 
 from collections import OrderedDict

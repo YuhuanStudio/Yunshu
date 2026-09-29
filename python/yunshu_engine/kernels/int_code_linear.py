@@ -1,3 +1,4 @@
+# Upstream (derived): ashhart/TensorFold (MIT) src/tensorfold/kernels/qwen/dense/v1/lane_qmm.py, src/tensorfold/kernels/qwen/dense/v1/lane_widen.py @ 34bae79a
 """5/6/8-bit projections on the M5 tensor units via integer codes (TensorFold's method).
 
 The tensor unit (MetalPerformancePrimitives ``matmul2d``) has no 5-bit format,

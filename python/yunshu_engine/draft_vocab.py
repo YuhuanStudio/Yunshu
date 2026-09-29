@@ -1,3 +1,4 @@
+# Upstream (inspired): ashhart/TensorFold (MIT) src/tensorfold/drafters/dflash_drafter.py @ 34bae79a
 """A reduced-vocabulary greedy readout for the MTP head's drafts.
 
 Every MTP draft is an argmax over the whole vocabulary: on Qwen3.8-27B the

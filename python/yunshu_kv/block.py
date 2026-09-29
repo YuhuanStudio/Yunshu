@@ -1,3 +1,4 @@
+# Upstream (inspired): vllm-project/vllm (Apache-2.0) vllm/v1/core/block_pool.py @ 924707f1
 from __future__ import annotations
 
 """Yunshu KV Cache Block Pool — UMA-resident PagedAttention.

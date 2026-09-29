@@ -1,3 +1,5 @@
+# Upstream (inspired): jundot/omlx (Apache-2.0) omlx/patches/qwen35_verify_qmm.py @ a98d8c8c
+# Patches upstream mlx-vlm symbols (see vendor.json kind=patches; `just vendor-check` flags source changes)
 """Fused residual + norm and early submission for the speculative lane's forward.
 
 The lane's target forward (upstream's ``Qwen3_5BatchInvariantForward``) runs each

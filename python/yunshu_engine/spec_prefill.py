@@ -1,3 +1,4 @@
+# Upstream (inspired): jundot/omlx (Apache-2.0) omlx/patches/specprefill.py @ deb9f00a
 from __future__ import annotations
 
 """Yunshu SpecPrefill — attention-based sparse prefill for long prompts.

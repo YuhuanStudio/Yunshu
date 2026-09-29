@@ -1,3 +1,5 @@
+# Upstream (inspired): Blaizzy/mlx-vlm (MIT) mlx_vlm/tools/registry.py @ v0.7.3
+# Upstream (inspired): ml-explore/mlx-lm (MIT) mlx_lm/tool_parsers @ v0.31.3
 """Tool-call formats: which one a model speaks, and how to read it.
 
 A model's tool-call format is a property of the model, read from its chat

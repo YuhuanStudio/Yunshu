@@ -1,3 +1,4 @@
+# Patches upstream mlx-vlm symbols (see vendor.json kind=patches; `just vendor-check` flags source changes)
 """Runtime monkeypatches for the Qwen3-Omni audio path.
 
 STATUS: the upstream PR (yuhuanowo → Blaizzy/mlx-vlm, commit
