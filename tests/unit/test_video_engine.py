@@ -178,67 +178,6 @@ class TestVideoEngineFallback:
         engine.stop()
 
 
-# ── Gateway endpoint tests ──
-
-
-class TestVideoEndpoint:
-    @pytest.fixture
-    def client(self):
-        from fastapi.testclient import TestClient
-
-        from yunshu_gateway.main import create_app
-
-        app = create_app()
-        return TestClient(app)
-
-    def test_video_no_model(self, client):
-        """When no real video backend is available the engine degrades to the
-        fallback (placeholder) path; the endpoint must signal this clearly with
-        503 rather than returning a misleading 200 + placeholder frames.
-        """
-        resp = client.post(
-            "/v1/video/generations",
-            json={
-                "prompt": "a beautiful sunset",
-                "width": 64,
-                "height": 64,
-                "num_frames": 9,
-                "response_format": "frames",
-            },
-        )
-        assert resp.status_code == 503
-        detail = str(resp.json()).lower()
-        assert "fallback" in detail or "unavailable" in detail
-
-    def test_video_invalid_image(self, client):
-        resp = client.post(
-            "/v1/video/generations",
-            json={
-                "prompt": "test",
-                "image": "not-valid-base64!!!",
-            },
-        )
-        assert resp.status_code == 400
-
-    def test_video_request_model(self):
-        from yunshu_gateway.routers.video import VideoGenerateRequest
-
-        req = VideoGenerateRequest(
-            prompt="a mountain scene",
-            width=640,
-            height=480,
-            num_frames=41,
-            num_inference_steps=10,
-            guide_scale=7.0,
-            fps=24,
-            seed=42,
-            scheduler="euler",
-        )
-        assert req.width == 640
-        assert req.num_frames == 41
-        assert req.scheduler == "euler"
-
-
 # ── Model manager integration ──
 
 

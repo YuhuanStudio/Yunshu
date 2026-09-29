@@ -629,51 +629,6 @@ def create_app() -> FastAPI:
                 )
         return await call_next(request)
 
-    # Sleep middleware: reject inference requests while sleeping
-    @app.middleware("http")
-    async def sleep_guard(request: Request, call_next):
-        from .routers.sleep import is_sleeping
-
-        path = request.url.path
-        if is_sleeping() and not path.startswith(
-            (
-                "/sleep",
-                "/wake-up",
-                "/v1/sleep",
-                "/v1/wake-up",  # canonical /v1/* aliases
-                "/health",
-            )
-        ):
-            # include Retry-After so clients back off intelligently.
-            # 30s is a reasonable poll cadence — most sleep→wake cycles
-            # complete in single-digit seconds.
-            retry_headers = {"Retry-After": "30"}
-            # Anthropic endpoints: return Anthropic error format
-            if path in _ANTHROPIC_PATHS:
-                return JSONResponse(
-                    status_code=503,
-                    content={
-                        "type": "error",
-                        "error": {
-                            "type": "overloaded_error",
-                            "message": "Server is sleeping. POST /wake-up to resume.",
-                        },
-                    },
-                    headers=retry_headers,
-                )
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "error": {
-                        "message": "Server is sleeping. POST /wake-up to resume.",
-                        "type": "server_error",
-                        "code": "server_sleeping",
-                    }
-                },
-                headers=retry_headers,
-            )
-        return await call_next(request)
-
     # Active request tracking for graceful shutdown drain
     _INFERENCE_PATHS = (
         "/v1/chat/completions",
@@ -697,18 +652,8 @@ def create_app() -> FastAPI:
         "/v1/ocr",
         "/v1/audio/translations",
         "/v1/audio/speech/stream",
-        "/v1/audio/speech-to-speech",
-        "/v1/audio/voice-pipeline",
-        "/v1/images/inpaint",
-        "/v1/images/controlnet",
-        "/v1/images/depth-guided",
-        "/v1/video/generations",
     )
 
-    # profile-capture guard — when Metal capture is active, inference
-    # serializes against the GPU and stalls the event loop. agent saw
-    # HTTP 000 (connection drop) for a second concurrent request. Return 503
-    # with a Retry-After hint instead of letting the second request hang.
     @app.middleware("http")
     async def profile_capture_guard(request: Request, call_next):
         path = request.url.path
@@ -887,7 +832,7 @@ def create_app() -> FastAPI:
         )
     elif not settings.get("YUNSHU_AUTH_TOKEN"):
         logger.warning(
-            "SECURITY: No YUNSHU_AUTH_TOKEN set — admin endpoints (profiling, sleep/wake, "
+            "SECURITY: No YUNSHU_AUTH_TOKEN set — admin endpoints ("
             "model load/unload, benchmarks, dashboard) are DENIED by default. "
             "Inference endpoints (chat/completions) remain accessible without auth. "
             "Set YUNSHU_AUTH_TOKEN=<secret> to enable full Bearer token auth."
@@ -897,15 +842,12 @@ def create_app() -> FastAPI:
     from .routers import (
         anthropic,
         audio,
-        batch_inference,
-        bench,
         chat,
         completions,
         embeddings,
         images,
         mcp,
         models,
-        profiling,
         realtime,
         scoring,
         tokenize,
@@ -930,13 +872,10 @@ def create_app() -> FastAPI:
     from .routers import cancel as cancel_mod
     from .routers import ocr as ocr_mod
     from .routers import responses as responses_mod
-    from .routers import sleep as sleep_mod
 
     app.include_router(chat.router, prefix="/v1")
-    from .routers import cached_contents as cached_contents_mod
     from .routers import omni as omni_mod
 
-    app.include_router(cached_contents_mod.router, prefix="/v1")
     app.include_router(completions.router, prefix="/v1")
     app.include_router(responses_mod.router, prefix="/v1")
     app.include_router(embeddings.router, prefix="/v1")
@@ -945,25 +884,12 @@ def create_app() -> FastAPI:
     app.include_router(audio.router, prefix="/v1")
     app.include_router(images.router, prefix="/v1")
     app.include_router(tokenize.router, prefix="/v1")
-    app.include_router(batch_inference.router, prefix="/v1")
     app.include_router(mcp.router, prefix="/v1")
     app.include_router(scoring.router, prefix="/v1")
     app.include_router(cancel_mod.router, prefix="/v1")
     app.include_router(ocr_mod.router)
-    app.include_router(profiling.router, prefix="/v1")
     app.include_router(realtime.router)
     app.include_router(omni_mod.router)
-    app.include_router(bench.router)
-
-    from .routers import video as video_mod
-
-    app.include_router(video_mod.router, prefix="/v1")
-    # Mount sleep/wake-up at both /<path> (legacy) and /v1/<path> (canonical,
-    # matches the OpenAI-style /v1/... convention used elsewhere). SDK
-    # clients hitting /v1/sleep should find it; existing callers on /sleep
-    # keep working.
-    app.include_router(sleep_mod.router)
-    app.include_router(sleep_mod.router, prefix="/v1")
 
     # Routes — L1 Gateway Monitoring (system, models, requests, prometheus)
     app.include_router(gw_monitoring.router, prefix="/api/v1")
@@ -1001,24 +927,14 @@ def create_app() -> FastAPI:
                     _loaded = True
             except Exception:
                 pass
-        try:
-            from .routers.sleep import get_sleep_state, is_sleeping
-
-            _sleeping = is_sleeping()
-            _sleep_info = get_sleep_state() if _sleeping else None
-        except Exception:
-            _sleeping = False
-            _sleep_info = None
         result = {
-            "status": "sleeping" if _sleeping else "ok",
+            "status": "ok",
             "engine": {"loaded": _loaded},
-            "server_state": "sleeping" if _sleeping else _server_state,
+            "server_state": _server_state,
             "uptime_seconds": round(time.monotonic() - _startup_time, 1)
             if _startup_time > 0
             else 0,
         }
-        if _sleep_info is not None:
-            result["sleep"] = _sleep_info
         return result
 
     @app.get("/health/ready")

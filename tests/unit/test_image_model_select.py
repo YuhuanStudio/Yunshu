@@ -92,4 +92,4 @@ def test_all_image_routes_use_selector():
     # no route still grabs the first-of-type engine
     assert "img_engine = entry.engine" not in src
     # every route resolves through the shared selector
-    assert src.count("_select_image_engine(manager, req.model)") >= 7
+    assert src.count("_select_image_engine(manager, req.model)") >= 4

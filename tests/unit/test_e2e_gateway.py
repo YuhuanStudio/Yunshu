@@ -191,27 +191,6 @@ class TestE2EGateway:
         )
         assert resp.status_code == 404
 
-    def test_batch_empty_400(self, app_client):
-        """Batch endpoint returns 400 for empty batch."""
-        resp = app_client.post(
-            "/v1/batch",
-            json={"requests": []},
-        )
-        assert resp.status_code == 400
-
-    def test_batch_too_large_400(self, app_client):
-        """Batch endpoint returns 400 for too large batch."""
-        resp = app_client.post(
-            "/v1/batch",
-            json={
-                "requests": [
-                    {"custom_id": f"r{i}", "body": {"model": "test"}}
-                    for i in range(501)
-                ]
-            },
-        )
-        assert resp.status_code == 400
-
     def test_metrics_endpoint(self, app_client):
         """Metrics endpoint returns Prometheus format."""
         resp = app_client.get("/metrics")
