@@ -36,6 +36,7 @@ the same alone, in any batch, with any draft depth (row-invariant forward).
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from dataclasses import dataclass, field
@@ -86,6 +87,8 @@ class Request:
     draft: bool = True  # greedy without processors / logprobs may draft
     budget: Any = None  # mlx_vlm ThinkingBudgetCriteria (forces "\n</think>")
     handle: Any = None
+    extra_hash: int = 0  # APC salt (model / processor identity)
+    use_apc: bool = True  # the runner's capacity check for this prompt
 
 
 @dataclass
@@ -116,6 +119,9 @@ class _Row:
     hslot: int | None = None  # KV slot in the MTP head's batch
     hn: int = 0  # positions absorbed by the MTP head (after joining)
     drafting: bool = False  # the row has an MTP head (prefill or batch)
+    hit: int = 0  # prompt tokens restored from the APC prefix cache
+    ckpts: list = field(default_factory=list)  # APC checkpoint lengths ahead
+    salt: int = 0  # APC key of this row's cache layout
 
 
 @dataclass
@@ -139,6 +145,7 @@ class RoundDriver:
         drafter: Any = None,
         stop_tokens=None,
         chunk: int | None = None,
+        apc: Any = None,
     ):
         from .mtp import MTPHead
 
@@ -160,6 +167,17 @@ class RoundDriver:
         if prev < CACHE_LIMIT:
             mx.set_cache_limit(prev)  # a tighter limit set by the host stays
         self.batch = DecodeBatch(self.lm)
+        # APC prefix cache (mlx_vlm ``APCManager``): a prompt starts from the
+        # longest stored checkpoint (target KV + GDN state, plus the MTP
+        # head's KV for rows that draft) and stores checkpoints at chunk
+        # boundaries while it prefills.
+        self.apc = None
+        if apc is not None:
+            from mlx_vlm.apc_coordinator import APCCoordinator
+
+            coordinator = APCCoordinator(apc, self.lm)
+            if coordinator.enabled and coordinator.is_checkpoint:
+                self.apc = coordinator
         self.rows: list[_Row] = []
         self.cost = CostCurve()
         self.steps = 0
@@ -172,7 +190,8 @@ class RoundDriver:
         self.depth_landed = [0] * (MAX_DECODE_TOKENS - 1)
 
     # ── rows ─────────────────────────────────────────────────────────────
-    def add(self, req: Request) -> None:
+    def add(self, req: Request) -> int:
+        """Queue a row; returns the prompt tokens restored from the APC."""
         if len(req.ids) < 1:
             raise ValueError("round driver: empty prompt")
         draft = bool(req.draft and self.head is not None and req.sampling is None)
@@ -187,7 +206,82 @@ class RoundDriver:
         seed = getattr(req.sampling, "seed", None)
         if seed is not None:
             row.key = mx.random.key(int(seed))
+        self._restore(row)
         self.rows.append(row)
+        return row.hit
+
+    # ── APC prefix cache ─────────────────────────────────────────────────
+    def _restore(self, row: _Row) -> None:
+        """Start ``row`` from the longest stored checkpoint of its prompt and
+        plan the checkpoints it stores on the way."""
+        if self.apc is None or not row.req.use_apc:
+            return
+        ids = row.req.ids
+        # Entries carry the head's KV only for rows that draft, and come from
+        # this driver's numerics: keep them apart from other users of the
+        # manager (the upstream runner's entries) and between layouts.
+        mix = f"{int(row.req.extra_hash)}:round-driver:{int(row.mtp_cache is not None)}"
+        row.salt = (
+            int.from_bytes(hashlib.blake2b(mix.encode(), digest_size=8).digest(), "big")
+            >> 1
+        )
+        try:
+            hit = self.apc.lookup(
+                ids,
+                extra_hash=row.salt,
+                safe_lookup_min=0,
+                suffix_is_text_only=lambda _n: True,
+                prefix_has_media=lambda _n: False,
+            )
+            n = len(row.cache)
+            want = n + (len(row.mtp_cache) if row.mtp_cache is not None else 0)
+            warm = hit.get("warm_cache") if hit else None
+            prefix = int(hit["prefix_len"]) if hit else 0
+            if warm is not None and len(warm) == want and 0 < prefix < len(ids):
+                row.cache = list(warm[:n])
+                if row.mtp_cache is not None:
+                    row.mtp_cache = list(warm[n:])
+                row.done = row.hit = prefix
+                with self.apc.manager.lock:
+                    self.apc.manager.stats.restored_tokens += prefix
+            self.apc.prepare_prefill(
+                [len(ids)], prefill_step_size=self.chunk, prefix_lengths=[row.hit]
+            )
+            floor = self.apc.manager.exact_cache_min_tokens
+            row.ckpts = [
+                c
+                for c in self.apc.checkpoint_lengths(ids, set())
+                if row.hit < c < len(ids) and c >= floor
+            ]
+        except Exception:
+            logger.warning("APC lookup failed; prefilling from scratch", exc_info=True)
+            if row.hit == 0:
+                row.cache = self.lm.make_cache()
+                if row.mtp_cache is not None:
+                    row.mtp_cache = self.head.make_cache()
+            row.ckpts = []
+
+    def _span_end(self, row: _Row, start: int) -> int:
+        """End of the prompt span that starts at ``start``: the next multiple
+        of ``chunk``, cut at the row's next APC checkpoint and at the prompt's
+        end. The plan depends on the prompt alone (grid plus its
+        checkpoints), so a row restored at a checkpoint on the grid continues
+        with the spans a cold prefill would have run."""
+        end = min((start // self.chunk + 1) * self.chunk, len(row.req.ids))
+        for c in row.ckpts:
+            if start < c < end:
+                end = c
+                break
+        return end
+
+    def _store_checkpoint(self, row: _Row, end: int) -> None:
+        caches = list(row.cache)
+        if row.mtp_cache is not None:
+            caches += row.mtp_cache
+        try:
+            self.apc.store_checkpoint(row.req.ids[:end], caches, extra_hash=row.salt)
+        except Exception:
+            logger.warning("APC checkpoint store failed", exc_info=True)
 
     def remove(self, handle: Any) -> None:
         gone = [r for r in self.rows if r.req.handle is handle]
@@ -302,7 +396,8 @@ class RoundDriver:
         for r in waiting:
             ids = r.req.ids
             while budget > 0 and r.done < len(ids):
-                start, end = r.done, min(r.done + self.chunk, len(ids))
+                start = r.done
+                end = self._span_end(r, start)
                 chunk = mx.array(ids[start:end], dtype=mx.int32)
                 items.append(
                     _Item("p", r, Segment(r.cache, chunk), start, end, at, end - start)
@@ -310,6 +405,8 @@ class RoundDriver:
                 r.done = end
                 at += end - start
                 budget -= end - start
+                if end in r.ckpts:
+                    break  # the checkpoint is stored after this span
         if not items:
             return []
         hidden = forward(self.lm, [it.seg for it in items])
@@ -346,6 +443,9 @@ class RoundDriver:
                 [(r, t, mx.concatenate(h, axis=0)) for r, t, h in live]
             )
             heads = {id(r): o for (r, _, _), o in zip(live, outs, strict=True)}
+        for it in items:
+            if it.end in it.row.ckpts and not it.row.finished:
+                self._store_checkpoint(it.row, it.end)
         self.rows = [r for r in self.rows if not r.finished]
         joined = [
             r
