@@ -2351,8 +2351,11 @@ async def _handle_vlm_chat(
                 detail=f"Model '{req.model}' failed to load: {load_error}",
             )
         raise HTTPException(
-            status_code=404,
-            detail=f"VLM model '{req.model}' not registered or not loaded",
+            status_code=400,
+            detail=(
+                f"Model '{req.model}' does not accept image/audio/video input "
+                "(it is not a vision-language model)"
+            ),
         )
 
     # No VLM path implements LoRA adapters or custom logits processors; say so

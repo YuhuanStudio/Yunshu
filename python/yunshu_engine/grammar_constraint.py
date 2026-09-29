@@ -309,13 +309,14 @@ class _RegexDFA:
         # If we accumulated any _ExceptChars, combine with the explicit set.
         # The final semantics: match chars NOT in (explicit ∪ exclusions).
         if except_accum is not None:
-            except_accum.excluded.update(char_set)
+            # The class is (explicit chars) UNION (everything except E), so a char is
+            # excluded only when it is in E and NOT in the explicit set: [\\s\\S] matches
+            # every character, including whitespace.
+            remaining = except_accum.excluded - char_set
             if negate:
-                # Double-negate: [^[:^digit:]] = [[:digit:]].
-                # Expand against a limited range to avoid huge sets.
-                limited = set(range(0, 0x10000))
-                return limited - except_accum.excluded
-            return except_accum
+                # [^...] of that union is exactly the excluded-but-not-explicit chars.
+                return set(remaining)
+            return _ExceptChars(remaining)
 
         if negate:
             # Return compact "except" representation instead of expanding
@@ -446,6 +447,56 @@ class _RegexDFA:
                 if next_dfa not in visited:
                     worklist.append(next_dfa)
 
+    @property
+    def has_dfa(self) -> bool:
+        return bool(self._dfa_transitions)
+
+    def step(self, state: frozenset[int] | None, text: str) -> frozenset[int] | None:
+        """Advance ``state`` over ``text``; None when a character has no transition."""
+        if state is None:
+            return None
+        transitions = self._dfa_transitions
+        for ch in text:
+            trans = transitions.get(state)
+            if trans is None:
+                return None
+            state = trans.get(ord(ch))
+            if state is None:
+                return None
+        return state
+
+    def is_accepting(self, state: frozenset[int] | None) -> bool:
+        return state is not None and state in self._dfa_accept_states
+
+    def is_live(self, state: frozenset[int] | None) -> bool:
+        """True when an accept state is reachable from ``state`` (computed once, linear)."""
+        if state is None:
+            return False
+        live = self.__dict__.get("_live_states")
+        if live is None:
+            reverse: dict[frozenset[int], list[frozenset[int]]] = {}
+            for src, trans in self._dfa_transitions.items():
+                for dst in trans.values():
+                    reverse.setdefault(dst, []).append(src)
+            live = set(self._dfa_accept_states)
+            stack = list(live)
+            while stack:
+                node = stack.pop()
+                for prev in reverse.get(node, ()):
+                    if prev not in live:
+                        live.add(prev)
+                        stack.append(prev)
+            self._live_states = live
+        return state in live
+
+    def valid_next_chars_from(
+        self, state: frozenset[int] | None, char_range: list[int]
+    ) -> set[int]:
+        if state is None:
+            return set()
+        trans = self._dfa_transitions.get(state, {})
+        return {cp for cp in char_range if cp in trans}
+
     def is_prefix_valid(self, text: str) -> bool:
         """Check if text is a valid prefix of some string matching the pattern.
 
@@ -454,35 +505,7 @@ class _RegexDFA:
         if not self._dfa_transitions:
             # DFA construction failed — fall back to regex-based check
             return self._fallback_prefix_check(text)
-
-        state = self._dfa_start
-        for ch in text:
-            code = ord(ch)
-            trans = self._dfa_transitions.get(state, {})
-            if code not in trans:
-                return False
-            state = trans[code]
-
-        # After consuming all characters, we're in a valid state.
-        # The text is a valid prefix if the current state is an accept
-        # state OR if there's any path from this state to an accept state.
-        # A state is a dead-end if no accept state is reachable from it.
-        if state in self._dfa_accept_states:
-            return True
-        # Check reachability: BFS from current state to any accept state
-        visited = set()
-        queue = [state]
-        while queue:
-            s = queue.pop(0)
-            if s in visited:
-                continue
-            visited.add(s)
-            trans = self._dfa_transitions.get(s, {})
-            for target in trans.values():
-                if target in self._dfa_accept_states:
-                    return True
-                queue.append(target)
-        return False
+        return self.is_live(self.step(self._dfa_start, text))
 
     def is_full_match(self, text: str) -> bool:
         """Check if text fully matches the pattern."""
@@ -609,7 +632,14 @@ class RegexConstraint:
         # keeps the buffer on a valid DFA path. This is the correct prefix
         # check for multi-character tokens (single-char check via
         # _valid_next_chars is insufficient — see Bug-1 fix).
-        self._valid_tokens_cache: dict[str, list[int]] = {}
+        self._valid_tokens_cache: dict[Any, list[int]] = {}
+        # Incremental DFA position: every step costs O(len(token)), never O(len(buffer)),
+        # and the caches are keyed by DFA state so a long free-text tail (``[\\s\\S]*``)
+        # stays one cache entry instead of a miss (and a full vocab scan) per token.
+        self._dfa_state = self._dfa._dfa_start if self._dfa.has_dfa else None
+
+    def _cache_key(self) -> Any:
+        return self._dfa_state if self._dfa.has_dfa else self._text_buffer
 
     @property
     def state(self) -> str:
@@ -623,6 +653,15 @@ class RegexConstraint:
         if self._done:
             return
         self._text_buffer += token_text
+        if self._dfa.has_dfa:
+            self._dfa_state = self._dfa.step(self._dfa_state, token_text)
+            if self._dfa.is_accepting(self._dfa_state):
+                extendable = self._dfa.valid_next_chars_from(
+                    self._dfa_state, self._probe_codepoints()
+                )
+                if not extendable:
+                    self._done = True
+            return
         # Only mark done if the buffer is a full match AND no further
         # characters can extend the match. For unbounded patterns (e.g.,
         # \d+, a*, [a-z]+) a partial buffer like "1" already fully matches,
@@ -642,12 +681,14 @@ class RegexConstraint:
         return {
             "text_buffer": self._text_buffer,
             "done": self._done,
+            "dfa_state": self._dfa_state,
         }
 
     def rollback(self, saved: dict[str, Any]) -> None:
         """Restore state from a checkpoint."""
         self._text_buffer = saved["text_buffer"]
         self._done = saved["done"]
+        self._dfa_state = saved.get("dfa_state", self._dfa_state)
         # Clear cache since text_buffer changed — old cache entries are stale
         self._valid_chars_cache.clear()
 
@@ -695,7 +736,7 @@ class RegexConstraint:
         # Cache hit: same accumulated text always produces the same valid set.
         # Cap cache size to prevent unbounded growth during long generations.
         _MAX_CACHE_SIZE = 256
-        cache_key = self._text_buffer
+        cache_key = self._cache_key()
         if cache_key in self._valid_chars_cache:
             return self._valid_chars_cache[cache_key]
         if len(self._valid_chars_cache) >= _MAX_CACHE_SIZE:
@@ -706,7 +747,12 @@ class RegexConstraint:
         total_tested = len(char_range)
 
         # Use DFA to find valid next character codepoints
-        valid_codepoints = self._dfa.valid_next_chars(self._text_buffer, char_range)
+        if self._dfa.has_dfa:
+            valid_codepoints = self._dfa.valid_next_chars_from(
+                self._dfa_state, char_range
+            )
+        else:
+            valid_codepoints = self._dfa.valid_next_chars(self._text_buffer, char_range)
 
         # Convert codepoints back to characters
         valid = {chr(cp) for cp in valid_codepoints}
@@ -764,7 +810,12 @@ class RegexConstraint:
         # legitimate stop, so add it alongside the continuation tokens. (The
         # `valid_chars is None` permissive branch above already returns the whole
         # vocab incl. EOS, so it is unaffected.)
-        if self._dfa.is_full_match(self._text_buffer):
+        _full = (
+            self._dfa.is_accepting(self._dfa_state)
+            if self._dfa.has_dfa
+            else self._dfa.is_full_match(self._text_buffer)
+        )
+        if _full:
             eos_ids = []
             if hasattr(tokenizer, "eos_token_ids"):
                 eos_ids = list(tokenizer.eos_token_ids)
@@ -812,7 +863,7 @@ class RegexConstraint:
         """
         # Cache per-buffer state. _text_buffer is the key — same buffer
         # always yields the same allowed-token set.
-        cache_key = self._text_buffer
+        cache_key = self._cache_key()
         cached = self._valid_tokens_cache.get(cache_key)
         if cached is not None:
             return cached
@@ -832,6 +883,9 @@ class RegexConstraint:
 
         filtered: list[int] = []
         buf = self._text_buffer
+        dfa = self._dfa
+        fast = dfa.has_dfa
+        state = self._dfa_state
         for tid in candidates:
             text = text_map.get(tid)
             if not text:
@@ -839,7 +893,10 @@ class RegexConstraint:
                 filtered.append(tid)
                 continue
             try:
-                if self._dfa.is_prefix_valid(buf + text):
+                if fast:
+                    if dfa.is_live(dfa.step(state, text)):
+                        filtered.append(tid)
+                elif dfa.is_prefix_valid(buf + text):
                     filtered.append(tid)
             except Exception:
                 # On any DFA error, fall back to keeping the candidate
@@ -851,6 +908,7 @@ class RegexConstraint:
     def reset(self) -> None:
         self._text_buffer = ""
         self._done = False
+        self._dfa_state = self._dfa._dfa_start if self._dfa.has_dfa else None
         self._valid_chars_cache.clear()
         self._valid_tokens_cache.clear()
 
