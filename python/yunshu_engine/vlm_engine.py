@@ -1383,11 +1383,13 @@ class VLMEngine:
 
             drafter, draft_kind = load_drafter(external)
             validate_drafter_compatibility(self._model, drafter, draft_kind)
-            if draft_kind == "dflash" and settings.get("YUNSHU_DRAFTER_BITS"):
+            if draft_kind == "dflash":
+                # 8-bit drafter: drafts are verified, so this only trades a
+                # little acceptance for half the drafter bytes per cycle
+                # (27B server: faster than the shipped weights at 1K-32K).
                 from .dflash_tree import quantize_drafter
 
-                quantize_drafter(drafter, settings.get("YUNSHU_DRAFTER_BITS"))
-            if draft_kind == "dflash":
+                quantize_drafter(drafter, 8)
                 # Project only the context window the drafter attends to.
                 from .dflash_context import install as install_dflash_context
 
@@ -1447,16 +1449,16 @@ class VLMEngine:
                     block = int(getattr(drafter.config, "block_size", 0)) or None
                 else:
                     block = 6 if invariant else 3
-        spec_mode = settings.get("YUNSHU_SPEC_TREE")
-        if drafter is not None and spec_mode != "off":
-            # Cost-aware chain depth (DFlash) and, for "tree", tree drafts through
-            # the tree verify (single greedy row, batch-invariant kernels only;
-            # every other round keeps upstream's loop).
-            if draft_kind == "dflash":
-                from .spec_schedule import install_chain_budget
+        if drafter is not None and draft_kind == "dflash":
+            # Cost-aware chain depth from measured cycle costs (27B server:
+            # 57/48/46 vs upstream adaptive 46/38/38 tok/s at 1K/8K/32K).
+            from .spec_schedule import install_chain_budget
 
-                install_chain_budget()
-            if spec_mode == "tree":
+            install_chain_budget()
+        if drafter is not None:
+            # Tree drafts through the tree verify (single greedy row,
+            # batch-invariant kernels only; every other round keeps the loop).
+            if settings.get("YUNSHU_SPEC_TREE") == "tree":
                 if draft_kind == "dflash":
                     from .dflash_tree import install as install_tree
                 else:
