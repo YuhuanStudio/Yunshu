@@ -145,7 +145,9 @@ def _anthropic_client(http: httpx.AsyncClient):
         http2 = httpx2.AsyncClient(
             transport=httpx2.ASGITransport(app=_app()), base_url="http://t"
         )
-        return anthropic.AsyncAnthropic(api_key="k", base_url="http://t", http_client=http2)
+        return anthropic.AsyncAnthropic(
+            api_key="k", base_url="http://t", http_client=http2
+        )
     return anthropic.AsyncAnthropic(api_key="k", base_url="http://t", http_client=http)
 
 

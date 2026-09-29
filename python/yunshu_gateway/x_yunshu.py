@@ -577,7 +577,9 @@ class YunshuExtensionsMiddleware:
                 if not part:
                     continue
                 lines = part.split("\n")
-                di = next((i for i, ln in enumerate(lines) if ln.startswith("data:")), -1)
+                di = next(
+                    (i for i, ln in enumerate(lines) if ln.startswith("data:")), -1
+                )
                 if di >= 0 and lines[di][5:].strip() != "[DONE]":
                     try:
                         obj = json.loads(lines[di][5:])
@@ -666,11 +668,14 @@ class YunshuExtensionsMiddleware:
                 except ValueError:
                     obj = None
                 if kind == "chat":
-                    ok = isinstance(obj, dict) and (obj.get("usage") or obj.get("choices"))
+                    ok = isinstance(obj, dict) and (
+                        obj.get("usage") or obj.get("choices")
+                    )
                 else:
                     ok = (
                         isinstance(obj, dict)
-                        and obj.get("type", obj.get("object")) in ("message", "response")
+                        and obj.get("type", obj.get("object"))
+                        in ("message", "response")
                         and isinstance(obj.get("usage"), dict)
                     )
                 if ok:

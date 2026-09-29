@@ -68,7 +68,10 @@ def rounds(
     eos_token_ids: set | None,
 ) -> Generator[tuple[list, dict | None]]:
     import mlx_vlm.speculative.mtp as mtp
-    from mlx_vlm.speculative.common import _dflash_block_total, _record_speculative_round
+    from mlx_vlm.speculative.common import (
+        _dflash_block_total,
+        _record_speculative_round,
+    )
 
     lm = model.language_model if hasattr(model, "language_model") else model
     block_total = _dflash_block_total(draft_model, draft_block_size)

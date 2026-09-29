@@ -19,6 +19,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -105,6 +106,56 @@ def _owns_stored(request, payload: dict) -> bool:
     if _is_admin(request):
         return True
     return owner == _resolve_owner(request)
+
+
+def _config_echo(req: ResponsesRequest) -> dict:
+    """The request's configuration as the Response object echoes it (OpenAI shape)."""
+    reasoning = dict(req.reasoning) if isinstance(req.reasoning, dict) else {}
+    if req.reasoning_effort and "effort" not in reasoning:
+        reasoning["effort"] = req.reasoning_effort
+    text = dict(req.text) if isinstance(req.text, dict) else {}
+    text.setdefault("format", {"type": "text"})
+    return {
+        "instructions": req.instructions,
+        "temperature": req.temperature,
+        "top_p": req.top_p,
+        "max_output_tokens": req.max_output_tokens,
+        "tools": [t.model_dump(exclude_none=True) for t in (req.tools or [])],
+        "tool_choice": req.tool_choice or "auto",
+        "parallel_tool_calls": req.parallel_tool_calls,
+        "text": text,
+        "reasoning": {"effort": reasoning.get("effort"), "summary": None}
+        if reasoning
+        else {"effort": None, "summary": None},
+        "truncation": req.truncation or "disabled",
+        "store": bool(req.store),
+        "background": bool(req.background),
+        "previous_response_id": req.previous_response_id,
+        "service_tier": req.service_tier or "default",
+        "user": req.user,
+        "top_logprobs": req.top_logprobs or 0,
+        "max_tool_calls": req.max_tool_calls,
+        "prompt_cache_key": req.prompt_cache_key,
+        "safety_identifier": req.safety_identifier,
+        "metadata": req.metadata,
+    }
+
+
+def _auto_truncate(messages: list, tokens: int, limit: int, count) -> tuple[list, int]:
+    """``truncation="auto"``: drop the oldest non-system messages (and the tool results
+    that would be left without their call) until the prompt fits, keeping the last one."""
+    msgs = list(messages)
+    while tokens > limit:
+        idx = next(
+            (i for i, m in enumerate(msgs[:-1]) if m.get("role") != "system"), None
+        )
+        if idx is None:
+            break
+        del msgs[idx]
+        while idx < len(msgs) - 1 and msgs[idx].get("role") == "tool":
+            del msgs[idx]
+        tokens = count(msgs)
+    return msgs, tokens
 
 
 def _public_stored(payload: dict) -> dict:
@@ -245,6 +296,7 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
     payload = {
         "id": response_id,
         "object": "response",
+        **_config_echo(req),
         "created_at": int(time.time()),
         "completed_at": int(time.time()),
         "model": req.model,
@@ -554,6 +606,18 @@ class ResponsesRequest(BaseModel):
     # (Pydantic extra="ignore"), and every payload echoed {"user_id": user} instead — a
     # client using metadata for request correlation got nothing back. Now echoed.
     metadata: dict | None = None
+    # OpenAI Responses fields that used to be dropped silently. ``truncation="auto"``
+    # drops the oldest input items when the prompt would overflow the context window
+    # (``"disabled"``, the default, answers 400); ``max_tool_calls`` caps the function
+    # calls of one response; the rest are echoed on the Response object.
+    truncation: Literal["auto", "disabled"] | None = None
+    max_tool_calls: int | None = Field(default=None, ge=1)
+    include: list[str] | None = None
+    conversation: str | dict | None = None
+    service_tier: str | None = None
+    prompt_cache_key: str | None = None
+    prompt_cache_retention: str | None = None
+    safety_identifier: str | None = None
     priority: int = Field(default=0, ge=0, le=100)
     logits_processors: list | None = None  # User-provided custom logits processors
     timeout: float | None = Field(
@@ -784,6 +848,7 @@ async def _start_background_response(req: ResponsesRequest, request: Request):
     queued_payload = {
         "id": response_id,
         "object": "response",
+        **_config_echo(req),
         "created_at": int(time.time()),
         "model": req.model,
         "status": "queued",
@@ -847,6 +912,17 @@ async def _start_background_response(req: ResponsesRequest, request: Request):
 async def create_response(req: ResponsesRequest, request: Request):
     """OpenAI Responses API endpoint."""
     _check_permission(request, "can_infer")
+    if req.conversation is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "conversation is not supported: chain turns with previous_response_id "
+                "(the server stores responses when store is true)"
+            ),
+        )
+    from ..streaming import RESPONSES_ECHO
+
+    RESPONSES_ECHO.set(_config_echo(req))
     # OpenAI background mode: return a queued response immediately and run the
     # full (non-stream) generation asynchronously under the same id. Streaming +
     # background is not supported here (would require resumable SSE), so it only
@@ -1053,6 +1129,18 @@ async def create_response(req: ResponsesRequest, request: Request):
 
         _tok = getattr(engine, "_tokenizer", None) or getattr(engine, "tokenizer", None)
         _est = count_message_tokens(messages, _tok)
+        if req.truncation == "auto":
+            from ..streaming import get_max_context_window
+
+            _ctx = get_max_context_window(req.model, engine)
+            if _ctx and _est > _ctx:
+                _room = _ctx - min(req.max_output_tokens, _ctx // 4)
+                messages, _est = _auto_truncate(
+                    messages,
+                    _est,
+                    _room,
+                    lambda ms: count_message_tokens(ms, _tok),
+                )
         validate_context_window(_est, req.model, engine)
         validate_prefill_memory(_est)
     except HTTPException:
@@ -1463,6 +1551,8 @@ async def create_response(req: ResponsesRequest, request: Request):
                 tool_calls, _clean = parse_tool_output(
                     _parse_text, tool_formats(engine), req.tools
                 )
+                if tool_calls and req.max_tool_calls:
+                    tool_calls = tool_calls[: req.max_tool_calls]
                 if tool_calls:
                     text = _clean
                     finish_reason = "tool_calls"
@@ -1587,6 +1677,7 @@ async def create_response(req: ResponsesRequest, request: Request):
         _response_payload = {
             "id": response_id,
             "object": "response",
+            **_config_echo(req),
             "created_at": int(time.time()),
             "completed_at": int(time.time()),
             "model": req.model,
@@ -1829,6 +1920,7 @@ async def _stream_response(
             tool_formats(engine),
             forced_tool_name=_tc_forced,
             allow_parallel=req.parallel_tool_calls,
+            max_calls=req.max_tool_calls,
             tools=req.tools,
         )
 
@@ -2257,6 +2349,8 @@ async def _stream_response(
                 tool_calls, _clean = parse_tool_output(
                     accumulated_text, tool_formats(engine), req.tools
                 )
+                if tool_calls and req.max_tool_calls:
+                    tool_calls = tool_calls[: req.max_tool_calls]
                 if tool_calls:
                     clean_text = _clean
 
@@ -2487,6 +2581,7 @@ async def _stream_response(
                         {
                             "id": response_id,
                             "object": "response",
+                            **_config_echo(req),
                             "created_at": int(time.time()),
                             "completed_at": int(time.time()),
                             "model": req.model,

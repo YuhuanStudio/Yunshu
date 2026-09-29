@@ -46,7 +46,9 @@ def _now() -> str:
 def _client(request: Request) -> httpx.AsyncClient:
     headers = {}
     rid = getattr(request.state, "request_id", None)
-    if rid:  # same id on the loopback call: cancel / DELETE /v1/requests/{id} still work
+    if (
+        rid
+    ):  # same id on the loopback call: cancel / DELETE /v1/requests/{id} still work
         headers["X-Request-Id"] = rid
     if request.headers.get("authorization"):
         headers["Authorization"] = request.headers["authorization"]
@@ -379,7 +381,10 @@ async def _run_chat(request: Request, body: dict, *, generate: bool):
                     if ch.get("finish_reason"):
                         finish = ch["finish_reason"]
             tcs = _tool_calls_out([tool_acc[k] for k in sorted(tool_acc)])
-            extra = {"done_reason": _done_reason(finish), **_timing(t0, usage, t_first, xy)}
+            extra = {
+                "done_reason": _done_reason(finish),
+                **_timing(t0, usage, t_first, xy),
+            }
             yield _ndjson(shape("", "", tcs, True, extra))
         except Exception as e:  # noqa: BLE001
             yield _ndjson({"error": str(e)})

@@ -9,6 +9,7 @@ All methods are cheap and never raise (they run on the GPU thread inside the tok
 
 from __future__ import annotations
 
+import contextlib
 import time
 from typing import Any
 
@@ -23,10 +24,9 @@ class FastPathStats:
         self.stats.prompt_tokens = prompt_tokens
         self.stats.t_submit = time.perf_counter()
         if cancel_event is not None:
-            try:
-                cancel_event.run_stats = self.stats  # what RequestTracker.stats reads
-            except Exception:  # noqa: BLE001 - slotted event objects: stats stay local
-                pass
+            # what RequestTracker.stats reads; slotted event objects keep stats local
+            with contextlib.suppress(Exception):
+                cancel_event.run_stats = self.stats
 
     def admit(self, cached_tokens: int, to_prefill: int) -> None:
         """The request left the queue and its prefill starts now."""
