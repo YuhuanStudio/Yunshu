@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import settings
+from .fast_path_stats import FastPathStats
 from .text_utils import StopHoldbackBuffer
 
 logger = logging.getLogger(__name__)
@@ -3622,6 +3623,8 @@ class BatchedEngine:
         # release-triggered _restore_base can never mutate the shared model while another
         # request's generation reads it (the cross-thread race the concurrency audit found).
 
+        _fp_stats = FastPathStats(cancel_event, prompt_tokens)
+
         def _run():
             import mlx.core as mx
 
@@ -3906,6 +3909,7 @@ class BatchedEngine:
                     )
 
             _timeout_check_interval = 32
+            _fp_stats.admit(cached_tokens, len(ids_to_prefill))
             with _wired_limit_ctx(model):
                 for token, logits in generate_step(
                     ids_to_prefill,
@@ -3915,6 +3919,7 @@ class BatchedEngine:
                     prompt_cache=cache,
                     logits_processors=_lprocs,
                     prefill_step_size=_prefill_step_size(),
+                    prompt_progress_callback=_fp_stats.progress,
                 ):
                     if first:
                         ttft_s = time.perf_counter() - gen_t0
@@ -3953,6 +3958,7 @@ class BatchedEngine:
                         if _itl > 0 and _itl < 10:
                             _itl_samples.append(_itl)
                     tokens.append(token)
+                    _fp_stats.token(len(tokens))
                     # Request-level timeout: check every N tokens
                     if len(tokens) % _timeout_check_interval == 0:
                         if time.perf_counter() > _timeout_deadline:
@@ -4195,6 +4201,7 @@ class BatchedEngine:
                     output_text = output_text[:_cut]
                     _stopped_by_suffix = True
             mx.synchronize()
+            _fp_stats.finish("stop")
 
             # Unregister from inflight prefix tracker
             try:
@@ -5377,6 +5384,7 @@ class BatchedEngine:
                 )
 
         _stream_gen_t0 = time.perf_counter()  # TTFT timing for streaming fast path
+        _fp_stats = FastPathStats(cancel_event, prompt_tokens)
         # a TOTAL-generation deadline for the streaming path. The consumer's
         # asyncio.wait_for(_q.get(), timeout_seconds) only catches an INACTIVITY gap
         # (no token for timeout_seconds); a stream that keeps emitting tokens steadily
@@ -5595,6 +5603,7 @@ class BatchedEngine:
                         _stream_kv_bits = None
                 except Exception:
                     pass
+            _fp_stats.admit(_stream_cached_tokens, len(ids_to_prefill))
             with _wired_limit_ctx(model):
                 for token, logits in generate_step(
                     ids_to_prefill,
@@ -5604,6 +5613,7 @@ class BatchedEngine:
                     prompt_cache=cache,
                     logits_processors=_lprocs,
                     prefill_step_size=_prefill_step_size(),
+                    prompt_progress_callback=_fp_stats.progress,
                     # the streaming path had NO KV-quant — mlx-lm
                     # quantizes the cache per-step internally, but only when these
                     # are passed, so YUNSHU_KV_QUANT_BITS gave zero in-flight memory
@@ -5613,6 +5623,7 @@ class BatchedEngine:
                     quantized_kv_start=self._kv_quant_start,
                 ):
                     n_tok += 1
+                    _fp_stats.token(n_tok)
                     # Check stop_ids BEFORE adding to detokenizer to avoid emitting stop text
                     stop_hit = token in stop_ids
                     suffix_hit = False
@@ -6343,6 +6354,7 @@ class BatchedEngine:
                 if done:
                     break
         finally:
+            _fp_stats.finish("stop")
             # LoRA release+restore happens inside _run_with_lora on the executor .
             # Record in ServerMetrics for streaming fast path (consistency)
             if n_tok > 0:
