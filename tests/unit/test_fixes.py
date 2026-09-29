@@ -216,12 +216,11 @@ class TestWave45ModelsCreatedTimestamp:
     """11. Models API created timestamp is not 0."""
 
     def test_uses_load_time(self):
-        import inspect
+        """A card's `created` is never 0 (load time, else the checkpoint's timestamp, else now)."""
+        from yunshu_engine.model_card import build_model_card
 
-        from yunshu_gateway.routers.models import list_models
-
-        src = inspect.getsource(list_models)
-        assert "load_time" in src and "time.time()" in src
+        assert build_model_card("/nonexistent/model-dir").created > 0
+        assert build_model_card("/nonexistent/model-dir", created=123).created == 123
 
 
 # ── ──────────────────────────────────────────────────────────────

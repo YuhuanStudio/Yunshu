@@ -24,7 +24,7 @@ multi-model mode (`--models-dir`) an unknown model is a 404 `model_not_found`.
 | `GET/DELETE /v1/responses/{id}`, `POST /v1/responses/{id}/cancel` | kept | unit + SDK. |
 | `POST /v1/responses/input_tokens` | added | Counts the input tokens a request would use. |
 | `POST /v1/embeddings` | kept | SDK + unit. `dimensions`, `encoding_format=base64`, token-id input, L2-normalised, empty input 400. Multimodal (`Qwen3-VL-Embedding`) as an extension. |
-| `GET /v1/models`, `GET /v1/models/{id}` | kept, fixed | SDK. Works for LLM and non-LLM engines (was a 500 for ASR/TTS/OCR). Carries the Anthropic fields too (`type`, `display_name`, `created_at`, `has_more`, `first_id`, `last_id`). |
+| `GET /v1/models`, `GET /v1/models/{id}` | kept, extended | SDK (openai + anthropic, real server). Works for every modality. Each item is the model's card in every dialect: OpenAI spec, Anthropic `ModelInfo`, OpenRouter, vLLM, LM Studio, plus the full card under `yunshu`. See [Model cards](#model-cards). |
 | `POST /v1/audio/transcriptions`, `/v1/audio/translations` | kept | SDK. Translation needs a Whisper model (other ASR models answer 501 with the reason). |
 | `POST /v1/audio/speech`, `/v1/audio/speech/stream` | kept | SDK. WAV out. |
 | `GET /v1/audio/voices` | kept | Used by `yunshu voices`. |
@@ -55,10 +55,59 @@ multi-model mode (`--models-dir`) an unknown model is a 404 `model_not_found`.
 |---|---|---|
 | `POST /v1/messages` (and `/messages`) | kept, fixed | SDK + unit. `system` (string or blocks with `cache_control`), `tools`, `tool_choice` (`auto`, `any`, `tool`, `none`), `thinking` (`budget_tokens` must be < `max_tokens`), `stop_sequences` (`stop_reason: stop_sequence` and the matched string, streaming and not), `metadata`, `top_k`, `tool_use` / `tool_result` / `image` (base64; a 400 on a text-only model, like OpenAI `image_url`) / `document` (text source) blocks. Streaming: `message_start`, `content_block_start/delta/stop` (`text_delta`, `thinking_delta`, `input_json_delta`), `message_delta`, `message_stop`. Usage includes `cache_read_input_tokens` and `cache_creation_input_tokens`. |
 | `POST /v1/messages/count_tokens` | kept | SDK + unit. Counts system, messages, tools, images. |
-| `GET /v1/models` | kept | Same route as OpenAI; the payload carries `display_name` and `created_at`. |
+| `GET /v1/models`, `GET /v1/models/{id}` | kept, extended | Same route as OpenAI. `ModelInfo` is complete: `display_name`, `created_at`, `max_input_tokens`, `max_tokens` and the `capabilities` object (`thinking`, `effort.{low,medium,high,xhigh,max}`, `image_input`, `structured_outputs`, ...). Verified with `anthropic.models.list/retrieve`. |
 | Errors `{type:"error", error:{type,message}}` | implemented | `invalid_request_error`, `authentication_error`, `permission_error`, `not_found_error`, `request_too_large`, `rate_limit_error`, `api_error`, `overloaded_error`. |
 | `x-api-key`, `anthropic-version`, `anthropic-beta` headers | accepted | `x-api-key` is honoured as the bearer token when `YUNSHU_AUTH_TOKEN` is set. |
 | Message Batches, Files API, server tools (web search, code execution), citations | not applicable | Hosted services. |
+
+## Model cards
+
+`/v1/models` returns more than an id. Every field is derived from the checkpoint files (`config.json`, the chat
+template, `generation_config.json`, safetensors headers, `model_index.json`) or from the engine's own routing tables
+(`spec_select` for speculative decoding); nothing is guessed from the name except the same embedding / reranker name
+rule the engine's own detector uses. Code: `python/yunshu_engine/model_card.py` (card), `python/yunshu_gateway/model_card_formats.py`
+(wire formats), `python/yunshu_gateway/model_cards.py` (registry lookup).
+
+One item carries every dialect, since the field names do not collide:
+
+| Dialect | Fields |
+|---|---|
+| OpenAI | `id`, `object`, `created`, `owned_by` |
+| Anthropic | `type: "model"`, `display_name`, `created_at`, `max_input_tokens`, `max_tokens`, `capabilities` (object form; flat LM Studio / vLLM booleans `vision`, `trained_for_tool_use`, `tools`, `function_calling`, `reasoning`, `embedding` ride inside it) |
+| OpenRouter | `name`, `canonical_slug`, `description`, `context_length`, `architecture.{modality,input_modalities,output_modalities,tokenizer}`, `pricing` (all `"0"`), `top_provider.{context_length,max_completion_tokens}`, `supported_parameters`, `default_parameters` |
+| vLLM | `root`, `parent`, `max_model_len`, `task` (`generate`, `embed`, `score`, `transcription`, `speech`, `image_generation`, `ocr`) |
+| LM Studio | `arch`, `quantization` (`4bit`, `mixed-4/5bit`), `state` (`loaded` / `not-loaded`), `max_context_length`, `publisher`, `compatibility_type: "mlx"`, `model_type` |
+| Ollama (`/api/show`) | `capabilities`, `model_info`, `details` (see above) |
+| Yunshu | everything else, nested under `yunshu` so strict parsers ignore it |
+
+The `yunshu` block (the ModelCard):
+
+| Field | Meaning |
+|---|---|
+| `kind` | `chat`, `vlm`, `omni`, `embedding`, `reranker`, `asr`, `tts`, `sts`, `image`, `ocr`, `video` |
+| `family`, `architecture`, `parameters` | config `model_type`, `architectures[0]`, parameter count from the safetensors headers (quantized words unpacked at each layer's own bit width, scales skipped) |
+| `quantization` | `bits`, `group_size`, `mode`, `layer_groups` (`{bits: layers}` for mixed-precision checkpoints), `skip_components` (diffusion) |
+| `input_modalities`, `output_modalities` | `text`, `image`, `video`, `audio`, `embedding`, `score` |
+| `context` | `length`, `native`, `effective`, `source`, `rope_scaling` (from `max_position_embeddings`; the engine adds no tighter cap) |
+| `max_output_tokens` | `min(131072, context)`, the largest `max_tokens` the chat routes accept |
+| `reasoning` | `supported`, `toggle` (`enable_thinking`), `default_enabled`, `effort_levels` and `default_effort` (parsed from the chat template: Qwen3.8 is `xhigh` / `medium` / `low`), `effort_aliases` (OpenAI `high` maps to `xhigh`, `minimal` to `low`), `budget_field`, `output_field` |
+| `tools`, `structured_output`, `logprobs` | tool support and `tool_choice` values, `json_object` / `json_schema` / `regex` / `grammar` / `choice`, `max_top_logprobs` |
+| `embeddings` | `dimensions`, `pooling`, `normalized` |
+| `audio`, `image` | ASR languages, Whisper translation and window; TTS languages, voices, `voice_design`; diffusion pipeline and components |
+| `speculative` | from `spec_select`: `method` (`mtp`, `dflash2`), `mtp_head`, `drafter`, `block_size`, `lossless` |
+| `prefix_cache` | `supported`, `kind` (`apc`), `hybrid_checkpoints`, `media_keyed`; false for sliding-window models |
+| `state`, `memory` | `loaded`, `loading`, `pinned`, `error`; `weights_bytes` and `estimated_bytes` |
+| `api` | `endpoints`, `formats` (`chat_completions`, `responses`, `messages`, `completions`), `ollama` |
+| `supported_parameters` | request fields the chat routes accept for this model (checked against `ChatCompletionRequest` by a test) |
+| `generation_defaults` | `generation_config.json` sampling defaults |
+
+Anonymous callers never see filesystem paths; authenticated callers also get `loaded`, `size_gb`, `stats` and `yunshu.path`.
+`reasoning_effort` values outside the template's own list are mapped (`high` becomes `xhigh`) instead of failing the template.
+
+**Yunxin.** Its `vllm` adapter reads `max_model_len`, `task`, `capabilities`; its `lmstudio` adapter reads `max_context_length`,
+`type` / `capabilities` (`vision`, `trained_for_tool_use`, `reasoning`); its `openrouter` adapter reads `context_length`,
+`architecture.*_modalities`, `top_provider.max_completion_tokens`. All are present, so a Yunshu server registered under any of
+the three needs no custom code.
 
 ## Ollama-compatible (`/api/*`)
 
@@ -70,7 +119,7 @@ Streaming is NDJSON. Auth follows the app-wide token.
 | `POST /api/chat` | implemented | `messages` with `images`, `tools` (arguments are objects), `tool` role, `format` (`"json"` or a schema; on a VLM thinking defaults to off when `format` is set, because the constraint masks the output from the first token), `think`, `options` (`temperature`, `top_p`, `top_k`, `min_p`, `seed`, `num_predict`, `stop`, `repeat_penalty`, `presence_penalty`, `frequency_penalty`; `num_ctx` and `keep_alive` are accepted and ignored), timing and token counts in the final chunk. |
 | `POST /api/generate` | implemented | Verified on the VLM runner too (with `think` the reasoning arrives in `thinking`). Errors from the OpenAI routes pass through: images on a text-only model and chat on an embedding model are 400s. `prompt`, `system`, `images`, `format`, `options`; an empty prompt answers `done_reason: load`. `raw`, `suffix`, `template`, `context` are not supported. |
 | `POST /api/embed`, `POST /api/embeddings` | implemented | |
-| `GET /api/tags`, `GET /api/ps`, `POST /api/show`, `GET /api/version` | implemented | Sizes are 0 (unknown); `show` 404s for an unknown model. |
+| `GET /api/tags`, `GET /api/ps`, `POST /api/show`, `GET /api/version` | implemented | Built from the model card: `size` is the weight bytes, `details` has family / parameter size / quantization, `show` returns `capabilities` (`completion`, `tools`, `vision`, `thinking`, `embedding`) and `model_info` (`general.architecture`, `general.parameter_count`, `<arch>.context_length`, `<arch>.embedding_length`). `show` 404s for an unknown model. |
 | `POST /api/pull`, `/api/push`, `/api/create`, `/api/copy`, `DELETE /api/delete` | not applicable | 501 with a message: models are managed with `yunshu pull` / `yunshu model`. |
 
 ## Tokenizer (vLLM schema)
