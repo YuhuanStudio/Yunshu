@@ -1446,19 +1446,21 @@ class VLMEngine:
             if invariant:
                 from .kernels.batch_invariant import install as install_invariant
                 from .kernels.batch_invariant import set_active
-                from .kernels.omlx import is_nax_available
 
-                lane_proj = settings.get_bool("YUNSHU_LANE_LINEAR") and not use_driver
-                if lane_proj:
+                # Target projections run TensorFold's row-invariant lane matmul
+                # (M5-class tensor ops; sg8 elsewhere). 27B, in-process vs the
+                # NAX packed kernel: MTP / DFlash2 decode +0..+17% at 1K-131K
+                # with identical tokens, and 0.6 GiB less memory (no repacked copy).
+                from .kernels.ragged_attention import tile_ready
+
+                if tile_ready():
                     from .kernels import lane_linear
 
                     kernels["lane_linear"] = lane_linear.convert(
                         self._model.language_model
                     )["converted"]
                 kernels["invariant"] = install_invariant(
-                    self._model.language_model,
-                    model=self._model,
-                    packed=is_nax_available() and not lane_proj,
+                    self._model.language_model, model=self._model, packed=False
                 )
                 # The runner turns them on only while its speculative lane steps.
                 set_active(False)

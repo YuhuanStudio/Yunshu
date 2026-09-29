@@ -12,6 +12,7 @@ cold. Reports decode tok/s, first-token latency and token parity against AR.
         [--draft-window=N]  # with --mtp-lane: the head absorbs only the last N prompt positions
         [--lane-profile]    # with --mtp-lane: per-phase host time per cycle
         [--lane-layers]     # fused add+norm and early submission in the lane's forward
+        [--dflash-served]   # with --dflash: 8-bit drafter + chain budget as the server
         [--dflash=DRAFTER_DIR]   # DFlash drafter instead of the MTP head; sizes are block ceilings
 """
 
@@ -176,6 +177,13 @@ if _dflash:
     # As served: per-row prefill with capture, the shared verify head, and
     # the drafter's context window (python/yunshu_engine/dflash_context.py).
     install_dflash(model.language_model)
+    if "--dflash-served" in sys.argv:
+        # as the server builds it: 8-bit drafter and cost-aware chain depth
+        from yunshu_engine.dflash_tree import quantize_drafter  # noqa: E402
+        from yunshu_engine.spec_schedule import install_chain_budget  # noqa: E402
+
+        quantize_drafter(drafter, 8)
+        install_chain_budget()
 else:
     drafter, draft_kind = _load_drafter_in_memory(model_dir), "mtp"
 print(
@@ -242,7 +250,7 @@ _context = int(
     next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--context=")), "0")
 )
 _FILLER = "".join(
-    f"Log line {i}: sensor {i % 17} reading {i * 37 % 1000}.\n" for i in range(8000)
+    f"Log line {i}: sensor {i % 17} reading {i * 37 % 1000}.\n" for i in range(20000)
 )
 
 
