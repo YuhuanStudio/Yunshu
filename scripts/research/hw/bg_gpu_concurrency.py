@@ -4,13 +4,15 @@ GPU decode proxy (27B-like ~14 GB/step, pipelined) alone; the background load al
 both together. Reports decode step time change and background call-rate change.
 
     PYTHONPATH=scripts/research/hw python scripts/research/hw/bg_gpu_concurrency.py \
-        --kind ane --model /Volumes/P5Plus/yunshu-test-cache/ane/layer_x1_M8_fp16.mlpackage
+        --kind ane --model $YUNSHU_ANE_WORK/layer_x1_M8_fp16.mlpackage
     ... --kind cpu_gemv --procs 4
 """
 
 import argparse
 import json
+import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -18,8 +20,8 @@ from _common import Out
 from _proxy import DecodeProxy, stats
 
 HERE = Path(__file__).parent
-ANE_PY = "/Volumes/P5Plus/yunshu-test-envs/ane/bin/python"
-MAIN_PY = "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python"
+ANE_PY = os.environ.get("YUNSHU_ANE_PY", sys.executable)
+MAIN_PY = os.environ.get("YUNSHU_PY", sys.executable)
 
 
 def spawn(kind, model, procs):

@@ -4,6 +4,7 @@ plus the wire formats built from it."""
 from __future__ import annotations
 
 import json
+import os
 import struct
 from pathlib import Path
 
@@ -18,7 +19,7 @@ from yunshu_engine.model_card import (
 )
 from yunshu_gateway.model_card_formats import ollama_show, openai_model
 
-MODELS = Path("/Volumes/P5Plus/models")
+MODELS = Path(os.environ.get("YUNSHU_TEST_MODELS", "~/.yunshu/models")).expanduser()
 
 
 def _card(name: str, **kw):

@@ -4,6 +4,7 @@ python scripts/research/hw/pick_best_ane.py 2 [layer27_x1]
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -11,7 +12,7 @@ RUNS = (
     Path(__file__).resolve().parents[3]
     / "docs/research/runs/2026-09-29-m5max-hw/ane_probe.jsonl"
 )
-WORK = Path("/Volumes/P5Plus/yunshu-test-cache/ane")
+WORK = Path(os.environ.get("YUNSHU_ANE_WORK", "~/.cache/yunshu/ane")).expanduser()
 
 
 def main():

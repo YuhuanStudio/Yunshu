@@ -16,13 +16,13 @@ cd "$(dirname "$0")/../.."
 ROOT=$PWD
 [ -f scripts/research/local.env ] && source scripts/research/local.env
 
-GATE_ROOT=${GATE_ROOT:-/Volumes/P5Plus/yunshu-build/gate}
+GATE_ROOT=${GATE_ROOT:-$HOME/.cache/yunshu/gate}
 OUT=${OUT:-docs/research/runs/$(date +%Y-%m-%d)-release-gate}
 STAGE=${STAGE:-install,serve-27b,families,soak}
 PORT=${PORT:-18764}
 URL=http://127.0.0.1:$PORT
 PY=${PY:-$ROOT/.venv/bin/python}           # harness interpreter (the repo venv)
-MODELS_DIR=${GATE_MODELS_DIR:-/Volumes/P5Plus/models}
+MODELS_DIR=${GATE_MODELS_DIR:-$HOME/.yunshu/models}
 PULL_REPO=${PULL_REPO:-Jundot/Qwen3.8-27B-oQ4e-mtp}   # already in MODELS_DIR: must not download
 SOAK_MINUTES=${SOAK_MINUTES:-30}
 MMLU_BASELINE=${MMLU_BASELINE:-249}        # 27B MMLU-Pro 300 b8, 2026-09-29 (ragged default)

@@ -68,7 +68,7 @@ dispatches could help, at most 10%, and MLX gives no mechanism for it beyond han
 
 ### ANE
 
-Built with coremltools 9 in an isolated venv (`/Volumes/P5Plus/yunshu-test-envs/ane`); the ANE ran the
+Built with coremltools 9 in an isolated venv (`~/.cache/yunshu/ane-venv`); the ANE ran the
 whole block (`MLComputePlan`: 36-39 of 39 ops on the ANE) for fp16, int8 and 4-bit palettized weights.
 Int4 linear-quantized weights fall back to the GPU; palettization is the 4-bit format the ANE takes.
 

@@ -5,7 +5,7 @@ checkpoint), then checks list / retrieve / a chat request that loads the LLM / t
 state, and the Ollama /api/show layer. Run with a python that has `openai` and `anthropic`
 installed; the server itself runs with YUNSHU_PYTHON (default: this interpreter).
 
-    YUNSHU_PYTHON=.venv/bin/python /Volumes/P5Plus/yunshu-test-envs/sdk-clients/bin/python \
+    YUNSHU_PYTHON=.venv/bin/python $SDK_VENV/bin/python \
         scripts/verify/verify_model_cards.py
 """
 
@@ -23,7 +23,7 @@ import httpx
 
 PORT = 18997
 BASE = f"http://127.0.0.1:{PORT}"
-MODELS = Path(os.environ.get("YUNSHU_TEST_MODELS", "/Volumes/P5Plus/models"))
+MODELS = Path(os.environ.get("YUNSHU_TEST_MODELS", "~/.yunshu/models")).expanduser()
 LLM = os.environ.get("YUNSHU_SMOKE_LLM", "Qwen2.5-3B-Instruct-4bit")
 
 

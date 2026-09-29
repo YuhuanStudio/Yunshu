@@ -1,3 +1,5 @@
 #!/bin/sh
-# GPU job queue CLI; see scripts/dev/gpuq.py.
-exec /usr/bin/env python3 "$(dirname "$0")/gpuq.py" "$@"
+# GPU job queue CLI; see scripts/dev/gpuq.py. Reads scripts/research/local.env (GPUQ_DIR etc.).
+D="$(dirname "$0")"
+if [ -f "$D/../research/local.env" ]; then set -a; . "$D/../research/local.env"; set +a; fi
+exec /usr/bin/env python3 "$D/gpuq.py" "$@"
