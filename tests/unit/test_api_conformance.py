@@ -116,3 +116,19 @@ def test_staged_media_lives_under_media_dir(tmp_path, monkeypatch):
     f.write(b"x")
     f.close()
     assert _VALIDATE_LOCAL_PATH(f.name)
+
+
+def test_responses_text_format_maps_to_response_format():
+    from yunshu_gateway.routers.responses import ResponsesRequest
+
+    schema = {"type": "object", "properties": {"a": {"type": "integer"}}}
+    req = ResponsesRequest(
+        model="m",
+        input="x",
+        text={"format": {"type": "json_schema", "name": "n", "schema": schema}},
+    )
+    assert req.response_format["json_schema"]["schema"] == schema
+    req = ResponsesRequest(
+        model="m", input="x", text={"format": {"type": "json_object"}}
+    )
+    assert req.response_format == {"type": "json_object"}

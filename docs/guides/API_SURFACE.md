@@ -7,8 +7,7 @@ API) and has a unit test plus a smoke test against a real model.
 How each row was checked: **SDK** = the official `openai` / `anthropic` / `ollama` Python SDK against a
 real model (Qwen3.5-0.8B via the VLM runner, Qwen2.5-3B-Instruct-4bit via the mlx-lm fast path,
 Qwen3-Embedding-0.6B, Qwen3-ASR-1.7B, whisper-large-v3-mlx, Qwen3-TTS, Z-Image-Turbo, GLM-OCR).
-**unit** = a test in `tests/unit` that needs no model. The suites are `/tmp`-style scripts run through
-the GPU queue during the audit; the checks that matter are also unit tests (`test_api_conformance.py`,
+**unit** = a test in `tests/unit` that needs no model. The smoke scripts ran through the GPU queue during the audit (about 80 checks per chat model); the checks that matter are also unit tests (`test_api_conformance.py`,
 `test_ollama_api.py`, `test_tokenize.py`, `test_regex_constraint_linear.py`, `test_anthropic.py`).
 
 `model` is advisory in single-model mode (`yunshu serve -m`): the loaded model answers under any name
@@ -21,7 +20,7 @@ multi-model mode (`--models-dir`) an unknown model is a 404 `model_not_found`.
 |---|---|---|
 | `POST /v1/chat/completions` | kept, fixed | SDK + unit. All params below verified. `stop` accepts a string or a list. `usage.prompt_tokens_details.cached_tokens` and `completion_tokens_details.reasoning_tokens` are always present. Context overflow is 400 `context_length_exceeded`. Images on a text-only model are a 400. |
 | `POST /v1/completions` | kept | SDK + unit. `echo`, `logprobs` (int), `n`, `stop`, `seed`, `stream_options.include_usage`, prompt as string / list / token ids. |
-| `POST /v1/responses` | kept, fixed | SDK + unit. `instructions`, input items, `previous_response_id` / `store`, `function_call` and `function_call_output`, `text.format` json_schema, `reasoning`, streaming event types (created, in_progress, output_item, content_part, output_text delta/done, completed). Usage details always present. |
+| `POST /v1/responses` | kept, fixed | SDK + unit. `text.format` (`json_schema`, `json_object`) now maps to constrained decoding (it was ignored). `instructions`, input items, `previous_response_id` / `store`, `function_call` and `function_call_output`, `text.format` json_schema, `reasoning`, streaming event types (created, in_progress, output_item, content_part, output_text delta/done, completed). Usage details always present. |
 | `GET/DELETE /v1/responses/{id}`, `POST /v1/responses/{id}/cancel` | kept | unit + SDK. |
 | `POST /v1/responses/input_tokens` | added | Counts the input tokens a request would use. |
 | `POST /v1/embeddings` | kept | SDK + unit. `dimensions`, `encoding_format=base64`, token-id input, L2-normalised, empty input 400. Multimodal (`Qwen3-VL-Embedding`) as an extension. |
@@ -38,14 +37,14 @@ multi-model mode (`--models-dir`) an unknown model is a 404 `model_not_found`.
 
 | Item | Status |
 |---|---|
-| `messages` (system, developer, user, assistant, tool; content parts; `image_url`; `input_audio`) | implemented (image needs a VLM) |
+| `messages` (system, developer, user, assistant, tool; content parts; `image_url`) | implemented (image needs a VLM; audio input on omni models) |
 | `temperature`, `top_p`, `max_tokens`, `max_completion_tokens`, `n`, `seed`, `stop`, `presence_penalty`, `frequency_penalty`, `logit_bias`, `user` | implemented |
 | `logprobs`, `top_logprobs` (also streamed) | implemented |
 | `tools`, `tool_choice` (`auto`, `none`, `required`, named function), `parallel_tool_calls`, tool result messages | implemented; streamed `tool_calls` deltas |
 | `response_format` `json_object`, `json_schema` (strict) | implemented (constrained decoding) |
 | `stream`, `stream_options.include_usage` | implemented; the usage chunk has empty `choices` |
 | `reasoning_effort`, `enable_thinking` | implemented; `reasoning_content` carries the reasoning |
-| `store`, `metadata`, `service_tier`, `modalities` (text), `prediction`, `web_search_options` | accepted and ignored (no meaning locally) |
+| `store`, `metadata`, `service_tier`, `modalities` (text), `prediction` | accepted and ignored (no meaning locally) |
 | `audio` output modality | not applicable here (use `/v1/audio/speech` or Realtime) |
 | Finish reasons `stop`, `length`, `tool_calls` | implemented |
 | Errors `{error:{message,type,param,code}}`, 400 / 401 / 404 / 429 / 500 / 503 | implemented, also for streaming errors before the first chunk and for malformed JSON |
@@ -54,7 +53,7 @@ multi-model mode (`--models-dir`) an unknown model is a 404 `model_not_found`.
 
 | Route | Status | Notes |
 |---|---|---|
-| `POST /v1/messages` (and `/messages`) | kept, fixed | SDK + unit. `system` (string or blocks with `cache_control`), `tools`, `tool_choice` (`auto`, `any`, `tool`, `none`), `thinking` (`budget_tokens` must be < `max_tokens`), `stop_sequences` (`stop_reason: stop_sequence` and the matched string, streaming and not), `metadata`, `top_k`, `tool_use` / `tool_result` / `image` (base64) / `document` (text source) blocks. Streaming: `message_start`, `content_block_start/delta/stop` (`text_delta`, `thinking_delta`, `input_json_delta`), `message_delta`, `message_stop`, `ping`. Usage includes `cache_read_input_tokens` and `cache_creation_input_tokens`. |
+| `POST /v1/messages` (and `/messages`) | kept, fixed | SDK + unit. `system` (string or blocks with `cache_control`), `tools`, `tool_choice` (`auto`, `any`, `tool`, `none`), `thinking` (`budget_tokens` must be < `max_tokens`), `stop_sequences` (`stop_reason: stop_sequence` and the matched string, streaming and not), `metadata`, `top_k`, `tool_use` / `tool_result` / `image` (base64) / `document` (text source) blocks. Streaming: `message_start`, `content_block_start/delta/stop` (`text_delta`, `thinking_delta`, `input_json_delta`), `message_delta`, `message_stop`. Usage includes `cache_read_input_tokens` and `cache_creation_input_tokens`. |
 | `POST /v1/messages/count_tokens` | kept | SDK + unit. Counts system, messages, tools, images. |
 | `GET /v1/models` | kept | Same route as OpenAI; the payload carries `display_name` and `created_at`. |
 | Errors `{type:"error", error:{type,message}}` | implemented | `invalid_request_error`, `authentication_error`, `permission_error`, `not_found_error`, `request_too_large`, `rate_limit_error`, `api_error`, `overloaded_error`. |
@@ -128,3 +127,13 @@ in `python/yunshu_engine/` and unreachable from HTTP; it is a follow-up to delet
 | `complete`, `embed`, `tokenize`, `detokenize`, `rerank`, `score`, `classify`, `transcribe`, `speak`, `ocr`, `image`, `image-edit`, `image-variations`, `voices`, `cancel` | kept | Talk to a running server. |
 | `bench roofline`, `latency`, `throughput`, `memory`, `inference`, `eval` | kept | |
 | `image-inpaint`, `image-controlnet`, `image-depth`, `video`, `audio-enhance`, `audio-separate`, `audio-transform`, `voice-pipeline` | removed | Their routes are gone. |
+
+## Known gaps
+
+| Item | State |
+|---|---|
+| Unknown `model` in single-model mode | Served, not 404 (deliberate, see the top). |
+| Anthropic `image` block sent to a text-only model | Ignored silently; OpenAI `image_url` on a text-only model is a 400. |
+| `/v1/completions` `logprobs` on VLM-runner models | Not returned. |
+| Tool calling on tiny models with thinking off | Qwen3.5-0.8B without thinking emits malformed `<tool_call>` markup; the 27B and thinking-on paths pass the release gate. |
+| Sending a chat request to an embedding-only model | Produces garbage text instead of a 400. |

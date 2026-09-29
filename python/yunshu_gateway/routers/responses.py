@@ -494,6 +494,7 @@ class ResponsesRequest(BaseModel):
     tool_choice: str | dict | None = None
     parallel_tool_calls: bool = True
     response_format: dict | None = None
+    text: dict | None = None  # Responses API: {format: {type, name, schema, strict}}
     seed: int | None = None
     enable_thinking: bool | None = None
     thinking_budget: int | None = Field(default=None, ge=1, le=32768)
@@ -558,6 +559,32 @@ class ResponsesRequest(BaseModel):
     timeout: float | None = Field(
         default=None, ge=1.0, le=600.0
     )  # Request timeout in seconds
+
+    @model_validator(mode="before")
+    @classmethod
+    def _text_format_to_response_format(cls, data):
+        """Responses API structured output: ``text.format`` -> the chat-style field."""
+        if isinstance(data, dict) and data.get("response_format") is None:
+            fmt = (
+                (data.get("text") or {}).get("format")
+                if isinstance(data.get("text"), dict)
+                else None
+            )
+            if isinstance(fmt, dict):
+                if fmt.get("type") == "json_schema":
+                    data = dict(data)
+                    data["response_format"] = {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": fmt.get("name", "response"),
+                            "schema": fmt.get("schema", {}),
+                            "strict": fmt.get("strict", True),
+                        },
+                    }
+                elif fmt.get("type") == "json_object":
+                    data = dict(data)
+                    data["response_format"] = {"type": "json_object"}
+        return data
 
     @model_validator(mode="after")
     def validate_request(self):
