@@ -161,11 +161,20 @@ async def ga_text(client, model: str) -> None:
         )
 
         # cancel mid-response
-        await conn.response.create(
-            response={
-                "instructions": "Count from 1 to 5000, one number per line, never stop."
+        await conn.conversation.item.create(
+            item={
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "Write a 3000 word essay about the history of the ocean.",
+                    }
+                ],
             }
         )
+        await collect_until(conn, {"conversation.item.done", "error"})
+        await conn.response.create()
         got = 0
 
         async def cancel_soon():
@@ -182,7 +191,7 @@ async def ga_text(client, model: str) -> None:
         check(
             "ga: response.cancel -> response.done(cancelled)",
             done.response.status in ("cancelled", "incomplete"),
-            str(done.response.status),
+            f"{done.response.status} after {got} deltas",
         )
 
         # tool round-trip declared via session tools
@@ -267,7 +276,7 @@ async def ga_audio(client, model: str) -> None:
                 audio=base64.b64encode(pcm[i : i + step]).decode()
             )
         await conn.input_audio_buffer.commit()
-        evs = await collect_until(conn, {"conversation.item.done", "error"}, 120)
+        evs = await collect_until(conn, {"input_audio_buffer.committed", "error"}, 120)
         types = [e.type for e in evs]
         check(
             "ga-audio: input_audio_buffer.committed",
@@ -279,7 +288,16 @@ async def ga_audio(client, model: str) -> None:
             "error" not in types,
             str([getattr(e, "error", None) for e in evs if e.type == "error"]),
         )
-        await conn.input_audio_buffer.clear()
+        await conn.response.create()
+        evs = await collect_until(conn, {"response.done", "error"}, 180)
+        types = [e.type for e in evs]
+        check(
+            "ga-audio: response.create after committed audio -> response.done",
+            types[-1] == "response.done" and "error" not in types,
+            str(sorted(set(types))),
+        )
+        text = "".join(e.delta for e in evs if e.type == "response.output_text.delta")
+        check("ga-audio: reply text non-empty", bool(text.strip()), repr(text[:60]))
 
 
 async def main(args) -> int:

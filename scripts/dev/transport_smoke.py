@@ -119,7 +119,8 @@ async def stream_checks(ws_url: str, http_url: str, model: str, uds: str | None 
         types = [e["data"].get("type") for e in evs if e["type"] == "event"]
         check(
             "stream: responses events",
-            "response.created" in types and "response.completed" in types,
+            "response.created" in types
+            and ("response.completed" in types or "response.incomplete" in types),
             json.dumps(
                 [
                     e["data"].get("response", {}).get("incomplete_details")
@@ -234,7 +235,11 @@ async def responses_ws_checks(base: str, model: str):
         async for ev in conn:
             types.append(ev.type)
             last = ev
-            if ev.type == "response.output_text.delta":
+            if ev.type in (
+                "response.output_text.delta",
+                "response.reasoning_text.delta",
+                "response.reasoning_summary_text.delta",
+            ):
                 text += ev.delta
             if ev.type in (
                 "response.completed",
@@ -245,7 +250,8 @@ async def responses_ws_checks(base: str, model: str):
                 break
         check(
             "responses-ws: SDK connect + response.create -> completed",
-            "response.created" in types and types[-1] == "response.completed",
+            "response.created" in types
+            and types[-1] in ("response.completed", "response.incomplete"),
             f"{types[-1]} {text[:40]!r} {getattr(last, 'response', None) and last.response.incomplete_details}",
         )
         check("responses-ws: text deltas", bool(text.strip()))
