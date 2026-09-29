@@ -1,0 +1,3 @@
+#!/bin/sh
+# GPU job queue CLI; see scripts/dev/gpuq.py.
+exec /usr/bin/env python3 "$(dirname "$0")/gpuq.py" "$@"
