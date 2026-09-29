@@ -20,6 +20,8 @@ maintainer.
 # 1. Start from a green main.
 git switch main && git pull
 just test && just lint
+# ... and a passing release gate on this commit (docs/guides/RELEASE_GATE.md):
+zsh scripts/release/gate.sh
 
 # 2. Bump the version in pyproject.toml (one place; the CLI, /version and
 #    MCP read it from the installed package metadata).
