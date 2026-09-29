@@ -1,16 +1,16 @@
 # Prompt-caching APIs — the three vendor paradigms
 
 There are three distinct ways the major API vendors expose prompt caching. Yunshu
-now implements all three on top of the same underlying KV machinery (the 4-tier
+implements the first two on top of the same underlying KV machinery (the 4-tier
 `KVPrefixCache` + the fast-path prefix reuse — see `KV_CACHE_MATRIX.md`).
 
 | paradigm | vendor | client surface | who decides what's cached |
 |---|---|---|---|
 | **Automatic / implicit** | OpenAI | none — just resend the prefix | the server (prefix match) |
 | **Explicit hints (breakpoints)** | Anthropic | `cache_control: {type: ephemeral}` | client marks, server caches |
-| **Explicit named objects** | Google Gemini | `POST /v1/cachedContents` → handle | client creates + references |
+| **Explicit named objects** | Google Gemini | not offered | client creates + references |
 
-All three READ the same automatic `KVPrefixCache`; they differ only in the WRITE
+Both offered paradigms READ the same automatic `KVPrefixCache`; they differ only in the WRITE
 surface and the usage accounting.
 
 ---
@@ -55,40 +55,11 @@ Response usage splits the prompt into written-vs-read:
 - **Verified live:** `cache_read_input_tokens` populated on a repeat with the same
   `cache_control` block.
 
-## 3. Google Gemini — explicit named context cache (NEW)
+## 3. Google Gemini — explicit named context cache (removed)
 
-The client explicitly **WRITES** a cache object and **READS** it by reference.
-
-**Write** — create a handle (warms the KV prefix cache):
-```
-POST /v1/cachedContents
-{ "model": "...", "system_instruction": "<long doc>", "ttl_seconds": 3600 }
-→ { "name": "cachedContents/<id>", "usageMetadata": {"totalTokenCount": 3253},
-    "expireTime": "...", "ttl": "3600.0s" }
-```
-(Also accepts OpenAI-style `messages` or Gemini-style `contents`.)
-
-**Read** — reference the handle in a chat request; its stored content is prepended
-so the automatic KVPrefixCache serves the warmed prefix:
-```
-POST /v1/chat/completions
-{ "model":"...", "cached_content":"cachedContents/<id>",
-  "messages":[{"role":"user","content":"..."}] }
-→ usage.prompt_tokens_details.cached_tokens ≈ the cached doc length
-```
-
-**Manage:** `GET /v1/cachedContents` (list), `GET/PATCH/DELETE
-/v1/cachedContents/{id}` (get / update-TTL / delete).
-
-- Store: `explicit_cache.py::ExplicitContextCache` (name→content+TTL, thread-safe,
-  TTL + capacity eviction, read-count). Router: `routers/cached_contents.py`.
-  Read wiring: `routers/chat.py::_prepend_cached_content`.
-- The handle governs *validity/TTL*; the KV tier governs *residency* — if the KV
-  was LRU-evicted before a read it transparently re-prefills once.
-- **Verified live (Qwen2.5-3B):** WRITE → handle (3253 tok); READ via
-  `cached_content` → `cached_tokens=3200/3267` reused; GET/LIST/PATCH/DELETE work.
-
----
+Yunshu no longer offers the `/v1/cachedContents` handle API or the `cached_content` request
+field. The automatic prefix cache (section 1) and Anthropic `cache_control` (section 2)
+cover the same reuse without a separate write/read protocol.
 
 ## Design note — why one engine, three surfaces
 
@@ -98,8 +69,5 @@ accounting** over it:
 - OpenAI = no control surface (resend prefix).
 - Anthropic = hint where the durable breakpoints are (so they survive eviction
   preferentially).
-- Gemini = a named, TTL'd handle the client manages explicitly.
 
 So adding a new vendor's caching API is a thin gateway layer, not new engine work.
-Tests: `tests/unit/test_explicit_cache.py`; live verification scripts use the
-gateway on `:8011`.
