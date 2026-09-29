@@ -21,7 +21,7 @@ from __future__ import annotations
 
 EMA = 0.2  # weight of the newest round in the node-landing estimates
 COST_EMA = 0.3  # weight of the newest round in the cycle-time estimates
-EXPLORE_EVERY = 24  # rounds between neighbour probes once settled
+EXPLORE_EVERY = 32  # rounds between neighbour probes once settled
 WARMUP = 3  # rounds at the full budget before any probing
 
 
@@ -111,3 +111,55 @@ class NodeBudget:
 
 
 __all__ = ["NodeBudget"]
+
+
+# -- chain depth ---------------------------------------------------------------------
+
+# landing probability of the i-th draft of a chain before the round history says otherwise
+CHAIN_PRIOR = [0.74, 0.49, 0.29, 0.19, 0.12, 0.09, 0.08]
+
+
+def install_chain_budget() -> bool:
+    """Choose upstream's DFlash chain depth by expected tokens per millisecond
+    (``NodeBudget`` over depths) instead of its acceptance-rate heuristic, which
+    collapses to two drafts on prose and keeps the block wide at long context
+    where wide verifies cost more than they land. Idempotent."""
+    import time
+
+    from mlx_vlm.speculative import dflash as dflash_mod
+
+    if getattr(dflash_mod._dflash_next_block_size, "_yunshu_budget", False):
+        return True
+    state: dict[int, list] = {}
+
+    def next_block(
+        draft_model, requested_block_total, remaining_budget, initial_block_size=None
+    ):
+        block_total = min(requested_block_total, remaining_budget)
+        if block_total <= 2:
+            return block_total
+        now = time.perf_counter()
+        rounds = len(getattr(draft_model, "accept_lens", []) or [])
+        st = state.get(id(draft_model))
+        if st is None or rounds == 0:
+            st = state[id(draft_model)] = [
+                NodeBudget(min(7, requested_block_total - 1), prior=CHAIN_PRIOR),
+                None,
+                None,
+            ]
+        budget, last_time, last_n = st
+        if last_n is not None and rounds:
+            accepted = int(draft_model.accept_lens[-1])
+            budget.observe(
+                last_n,
+                range(min(accepted, last_n)),
+                (now - last_time) * 1e3,
+                first=rounds == 1,
+            )
+        n = max(1, min(budget.choose(block_total - 1), block_total - 1))
+        st[1], st[2] = now, n
+        return n + 1
+
+    next_block._yunshu_budget = True
+    dflash_mod._dflash_next_block_size = next_block
+    return True

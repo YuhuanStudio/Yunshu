@@ -1447,14 +1447,21 @@ class VLMEngine:
                     block = int(getattr(drafter.config, "block_size", 0)) or None
                 else:
                     block = 6 if invariant else 3
-        if drafter is not None and settings.get_bool("YUNSHU_SPEC_TREE"):
-            # Tree drafts through the tree verify (single greedy row, batch-invariant
-            # kernels only; every other round keeps upstream's loop).
+        spec_mode = settings.get("YUNSHU_SPEC_TREE")
+        if drafter is not None and spec_mode != "off":
+            # Cost-aware chain depth (DFlash) and, for "tree", tree drafts through
+            # the tree verify (single greedy row, batch-invariant kernels only;
+            # every other round keeps upstream's loop).
             if draft_kind == "dflash":
-                from .dflash_tree import install as install_tree
-            else:
-                from .mtp_tree import install as install_tree
-            install_tree()
+                from .spec_schedule import install_chain_budget
+
+                install_chain_budget()
+            if spec_mode == "tree":
+                if draft_kind == "dflash":
+                    from .dflash_tree import install as install_tree
+                else:
+                    from .mtp_tree import install as install_tree
+                install_tree()
         runner = VLMBatchRunner(
             self._model,
             self._processor,
