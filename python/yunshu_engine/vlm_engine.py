@@ -1170,6 +1170,8 @@ class VLMEngine:
         _completion_tokens_count = 0
         _model_id = self.model_name
 
+        _ended_normally = False
+
         try:
             while True:
                 try:
@@ -1191,7 +1193,10 @@ class VLMEngine:
                     )
                     break
                 if output is None:
+                    _ended_normally = True
                     break
+                if output.finished and output.finish_reason != "error":
+                    _ended_normally = True
                 if output.prompt_tokens > 0:
                     _prompt_tokens_count = output.prompt_tokens
                 if output.completion_tokens > 0:
@@ -1224,7 +1229,12 @@ class VLMEngine:
             except Exception:
                 pass
             if not stream_task.done():
-                cancel_event.set()
+                # Only an abnormal exit (client gone, error, timeout) cancels. The
+                # cancel event is shared with the router, which reads it after the
+                # stream ends: setting it on a normal finish (runner still winding
+                # down) reported a spurious "cancelled".
+                if not _ended_normally:
+                    cancel_event.set()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await asyncio.shield(stream_task)
             # Drain remaining queue items to unblock the executor thread
