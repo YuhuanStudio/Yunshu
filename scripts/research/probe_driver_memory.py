@@ -61,7 +61,7 @@ def main():
     ap.add_argument("ckpt")
     ap.add_argument("--rows", type=int, default=8)
     ap.add_argument("--context", type=int, default=1024)
-    ap.add_argument("--tokens", type=int, default=64)
+    ap.add_argument("--tokens", type=int, default=200)
     a = ap.parse_args()
     from yunshu_engine.round_driver.driver import Request
     from yunshu_engine.vlm_engine import VLMEngine
@@ -84,8 +84,8 @@ def main():
     while d.busy():
         d.step()
         steps += 1
-        if steps == 10:
-            mem("after 10 steps")
+        if steps == 40:
+            mem("after 40 steps")
             parts(eng, d)
     mem("done")
     parts(eng, d)
