@@ -3,6 +3,7 @@ render the combined length / cache-hit-ratio / concurrency dataset + dump JSON.
 
 Run: PYTHONPATH=. uv run python scripts/bench/bench_comprehensive_all.py
 """
+
 import json
 import os
 import re
@@ -25,8 +26,14 @@ MODELS = [
 def run(model):
     env = dict(os.environ, PYTHONPATH="reference/mlx-vlm:.", YUNSHU_BENCH_MODEL=model)
     try:
-        p = subprocess.run([sys.executable, "scripts/bench/bench_comprehensive.py"],
-                           env=env, cwd=REPO, capture_output=True, text=True, timeout=2400)
+        p = subprocess.run(
+            [sys.executable, "scripts/bench/bench_comprehensive.py"],
+            env=env,
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            timeout=2400,
+        )
     except subprocess.TimeoutExpired:
         return {"status": "TIMEOUT"}
     m = re.search(r"@@COMPREHENSIVE@@ (\{.*\})", p.stdout + p.stderr)
@@ -55,27 +62,45 @@ def main():
 
     # ── render ──
     def tbl(title, rows_key, cols):
-        print(f"\n{'='*100}\n{title}\n{'='*100}")
+        print(f"\n{'=' * 100}\n{title}\n{'=' * 100}")
         for r in results:
             if rows_key not in r:
                 continue
-            print(f"\n### {r['model']} ({r.get('engine','?')})")
+            print(f"\n### {r['model']} ({r.get('engine', '?')})")
             print(" ".join(h.ljust(w) for h, w, _ in cols))
             for row in r[rows_key]:
-                print(" ".join(str(row.get(k, '-')).ljust(w) for _, w, k in cols))
+                print(" ".join(str(row.get(k, "-")).ljust(w) for _, w, k in cols))
 
-    tbl("PROMPT-LENGTH sweep — TTFT + prefill tok/s + pure decode tok/s (cold, single-req)",
+    tbl(
+        "PROMPT-LENGTH sweep — TTFT + prefill tok/s + pure decode tok/s (cold, single-req)",
         "length_sweep",
-        [("prompt_tok", 11, "prompt_tok"), ("TTFT_ms", 9, "ttft_ms"),
-         ("prefill_t/s", 12, "prefill_tps"), ("decode_t/s", 11, "decode_tps")])
-    tbl("CACHE-HIT-RATIO sweep — reuse benefit vs shared-prefix fraction",
+        [
+            ("prompt_tok", 11, "prompt_tok"),
+            ("TTFT_ms", 9, "ttft_ms"),
+            ("prefill_t/s", 12, "prefill_tps"),
+            ("decode_t/s", 11, "decode_tps"),
+        ],
+    )
+    tbl(
+        "CACHE-HIT-RATIO sweep — reuse benefit vs shared-prefix fraction",
         "hit_ratio_sweep",
-        [("hit_ratio", 10, "hit_ratio"), ("prompt_tok", 11, "prompt_tok"),
-         ("cached", 8, "cached"), ("TTFT_ms", 9, "ttft_ms"),
-         ("speedup", 9, "speedup_vs_cold_base")])
-    tbl("CONCURRENCY sweep — fast path aggregate tok/s (serialises; engine-loop batching in bench_matrix.py)",
+        [
+            ("hit_ratio", 10, "hit_ratio"),
+            ("prompt_tok", 11, "prompt_tok"),
+            ("cached", 8, "cached"),
+            ("TTFT_ms", 9, "ttft_ms"),
+            ("speedup", 9, "speedup_vs_cold_base"),
+        ],
+    )
+    tbl(
+        "CONCURRENCY sweep — fast path aggregate tok/s (serialises; engine-loop batching in bench_matrix.py)",
         "concurrency_sweep",
-        [("N", 5, "N"), ("agg_tok/s", 10, "agg_tps"), ("mean_TTFT_ms", 13, "mean_ttft_ms")])
+        [
+            ("N", 5, "N"),
+            ("agg_tok/s", 10, "agg_tps"),
+            ("mean_TTFT_ms", 13, "mean_ttft_ms"),
+        ],
+    )
     print(f"\nfull json -> /tmp/bench_comprehensive.json")
 
 

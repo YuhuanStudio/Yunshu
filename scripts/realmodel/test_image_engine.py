@@ -1,4 +1,5 @@
 """Test ImageGenEngine with real Z-Image-Turbo-MLX-4bit model."""
+
 import asyncio
 import sys
 import time
@@ -51,13 +52,17 @@ async def main():
         seed=123,
     ):
         chunks.append(chunk)
-        print(f"  Step {chunk['step']}/{chunk['total_steps']}: progress={chunk['progress']:.0%}")
+        print(
+            f"  Step {chunk['step']}/{chunk['total_steps']}: progress={chunk['progress']:.0%}"
+        )
     stream_time = time.monotonic() - t0
     final = chunks[-1]
     assert final["is_final"], "Last chunk should be final"
     assert final["image"] is not None, "Final image should not be None"
     assert final["image"][:4] == b"\x89PNG", "Final chunk should be valid PNG"
-    print(f"  Streaming done in {stream_time:.2f}s, {len(chunks)} chunks, {len(final['image'])} bytes")
+    print(
+        f"  Streaming done in {stream_time:.2f}s, {len(chunks)} chunks, {len(final['image'])} bytes"
+    )
 
     out_path2 = "test_output_mountain.png"
     with open(out_path2, "wb") as f:

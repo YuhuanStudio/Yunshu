@@ -8,6 +8,7 @@ several prompts (including adversarial ones that invite prose).
 
 Run: PYTHONPATH=. uv run python scripts/verify_structured_output.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -66,7 +67,9 @@ async def main() -> int:
         for i, prompt in enumerate(PROMPTS):
             o = await eng.chat(
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=220, temperature=0.0, json_schema=SCHEMA,
+                max_tokens=220,
+                temperature=0.0,
+                json_schema=SCHEMA,
                 enable_thinking=False,  # reasoning preamble bypasses the JSON constraint
             )
             text = o["text"] if isinstance(o, dict) else o.text
@@ -77,13 +80,19 @@ async def main() -> int:
         # Strict mode (additionalProperties:false): a prompt that strongly invites
         # extra keys must still yield ONLY the declared keys. Guards the         # fix (inside-string tokens slipping a comma + extra key past strict masking).
         strict = dict(SCHEMA, additionalProperties=False)
-        for j, prompt in enumerate([
-            "Make a software engineer record in Berlin with a job title and salary.",
-            "Describe a teacher: name, age, city, school, subject, and years of experience.",
-        ]):
+        for j, prompt in enumerate(
+            [
+                "Make a software engineer record in Berlin with a job title and salary.",
+                "Describe a teacher: name, age, city, school, subject, and years of experience.",
+            ]
+        ):
             o = await eng.chat(
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=220, temperature=0.0, json_schema=strict, enable_thinking=False)
+                max_tokens=220,
+                temperature=0.0,
+                json_schema=strict,
+                enable_thinking=False,
+            )
             text = o["text"] if isinstance(o, dict) else o.text
             try:
                 obj = json.loads(text)
@@ -91,19 +100,31 @@ async def main() -> int:
             except Exception:
                 obj, extra = None, ["<invalid JSON>"]
             ok = _ok(text) and not extra
-            print(f"  [strict {j}] {'OK ' if ok else 'BAD'}: extra={extra} text={text[:70]!r}")
+            print(
+                f"  [strict {j}] {'OK ' if ok else 'BAD'}: extra={extra} text={text[:70]!r}"
+            )
             if not ok:
                 fails += 1
         # enum/const: the value must be one of the declared options (guards the
         # fix — first-char-only enforcement let off-option strings through).
-        enum_schema = {"type": "object",
-                       "properties": {"status": {"enum": ["active", "inactive", "pending"]}},
-                       "required": ["status"]}
-        for k, prompt in enumerate(["Is the account currently working? status.",
-                                    "The task hasn't started yet. status."]):
-            o = await eng.chat(messages=[{"role": "user", "content": prompt}],
-                               max_tokens=24, temperature=0.0, json_schema=enum_schema,
-                               enable_thinking=False)
+        enum_schema = {
+            "type": "object",
+            "properties": {"status": {"enum": ["active", "inactive", "pending"]}},
+            "required": ["status"],
+        }
+        for k, prompt in enumerate(
+            [
+                "Is the account currently working? status.",
+                "The task hasn't started yet. status.",
+            ]
+        ):
+            o = await eng.chat(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=24,
+                temperature=0.0,
+                json_schema=enum_schema,
+                enable_thinking=False,
+            )
             text = o["text"] if isinstance(o, dict) else o.text
             try:
                 val = json.loads(text).get("status")

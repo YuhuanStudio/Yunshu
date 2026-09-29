@@ -50,7 +50,9 @@ COPY = r"""
 
 
 def kern(name, src, ins):
-    return mx.fast.metal_kernel(name=name, input_names=ins, output_names=["out"], source=src)
+    return mx.fast.metal_kernel(
+        name=name, input_names=ins, output_names=["out"], source=src
+    )
 
 
 def main():
@@ -71,9 +73,14 @@ def main():
 
                 def call(k, ins):
                     return lambda: mx.eval(
-                        k(inputs=ins, template=[("N", n16)], grid=(total, 1, 1),
-                          threadgroup=(tg, 1, 1), output_shapes=[(total,)],
-                          output_dtypes=[mx.uint32])[0]
+                        k(
+                            inputs=ins,
+                            template=[("N", n16)],
+                            grid=(total, 1, 1),
+                            threadgroup=(tg, 1, 1),
+                            output_shapes=[(total,)],
+                            output_dtypes=[mx.uint32],
+                        )[0]
                     )
 
                 for nm, fn, mult in (
@@ -90,17 +97,32 @@ def main():
         # buffer that fits the SLC is re-read from cache.
         tg, total = 1024, min(2**18, max(1024, n16 // 1024 * 1024))
         outs = lambda: [  # noqa: E731
-            kr(inputs=[src], template=[("N", n16)], grid=(total, 1, 1),
-               threadgroup=(tg, 1, 1), output_shapes=[(total,)],
-               output_dtypes=[mx.uint32])[0]
+            kr(
+                inputs=[src],
+                template=[("N", n16)],
+                grid=(total, 1, 1),
+                threadgroup=(tg, 1, 1),
+                output_shapes=[(total,)],
+                output_dtypes=[mx.uint32],
+            )[0]
             for _ in range(32)
         ]
         t, _ = timeit(lambda: mx.eval(outs()), max(4, iters // 3))
         best["read_batched32"] = (32 * nb / t / 1e9, tg, total, t / 32)
         t, _ = timeit(lambda: mx.eval(src + 1), iters)
         best["mlx_add_rw"] = (2 * nb / t / 1e9, 0, 0, 0)
-        out(mb=mb, **{k: {"GBps": round(v[0], 1), "tg": v[1], "threads": v[2],
-                          "min_ms": round(v[3] * 1e3, 4)} for k, v in best.items()})
+        out(
+            mb=mb,
+            **{
+                k: {
+                    "GBps": round(v[0], 1),
+                    "tg": v[1],
+                    "threads": v[2],
+                    "min_ms": round(v[3] * 1e3, 4),
+                }
+                for k, v in best.items()
+            },
+        )
         src = dst = None
 
 

@@ -44,13 +44,23 @@ def run(name, dt, in_t, acc_t, ntg, iters=2000):
     a = mx.ones((64, 64), dtype=dt)
     b = mx.ones((64, 64), dtype=dt)
     mx.eval(a, b)
-    k = mx.fast.metal_kernel(name=f"tu_{name}", input_names=["a", "b"], output_names=["out"],
-                             source=SRC, header=HEADER)
+    k = mx.fast.metal_kernel(
+        name=f"tu_{name}",
+        input_names=["a", "b"],
+        output_names=["out"],
+        source=SRC,
+        header=HEADER,
+    )
 
     def call():
-        return k(inputs=[a, b], template=[("IN_T", dt), ("ACC_T", acc_t), ("ITERS", iters)],
-                 grid=(ntg * 128, 1, 1), threadgroup=(128, 1, 1),
-                 output_shapes=[(ntg * 128,)], output_dtypes=[mx.float32])[0]
+        return k(
+            inputs=[a, b],
+            template=[("IN_T", dt), ("ACC_T", acc_t), ("ITERS", iters)],
+            grid=(ntg * 128, 1, 1),
+            threadgroup=(128, 1, 1),
+            output_shapes=[(ntg * 128,)],
+            output_dtypes=[mx.float32],
+        )[0]
 
     t, _ = timeit(lambda: mx.eval(call()), 5, 2)
     flops = 2 * 64 * 64 * 64 * iters * ntg
@@ -67,8 +77,13 @@ def main():
         for ntg in (40, 160, 640, 2560):
             try:
                 t, tf = run(name, dt, in_t, acc_t, ntg)
-                out(kind="tensor_unit", dtype=name, threadgroups=ntg, ms=round(t * 1e3, 2),
-                    TFLOPS_or_TOPS=round(tf, 1))
+                out(
+                    kind="tensor_unit",
+                    dtype=name,
+                    threadgroups=ntg,
+                    ms=round(t * 1e3, 2),
+                    TFLOPS_or_TOPS=round(tf, 1),
+                )
             except Exception as e:  # noqa: BLE001
                 out(kind="tensor_unit", dtype=name, threadgroups=ntg, err=str(e)[:300])
                 break

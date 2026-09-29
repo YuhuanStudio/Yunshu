@@ -158,7 +158,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     def __init__(self, app, rpm: int | None = None):
         super().__init__(app)
-        rpm = rpm or settings.get("YUNSHU_RATE_LIMIT_RPM")
+        rpm = rpm or settings.get("YUNSHU_RATE_LIMIT_RPM") or 120
         self._rpm = rpm
         self._bucket_cache = _LRUBucketCache(
             rate=rpm / 60.0,

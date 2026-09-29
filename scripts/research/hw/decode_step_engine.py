@@ -47,8 +47,12 @@ def main():
     decode_steps(lm, cache, y, 10)
     t, y = decode_steps(lm, cache, y, a.steps)
     weights_gb = sum(v.nbytes for _, v in nn.utils.tree_flatten(lm.parameters())) / 1e9
-    out(kind="decode_stock", ms_median=round(pct(t, 0.5) * 1e3, 2), weight_GB=round(weights_gb, 2),
-        GBps=round(weights_gb / pct(t, 0.5), 1))
+    out(
+        kind="decode_stock",
+        ms_median=round(pct(t, 0.5) * 1e3, 2),
+        weight_GB=round(weights_gb, 2),
+        GBps=round(weights_gb / pct(t, 0.5), 1),
+    )
 
     from yunshu_engine.kernels.batch_invariant import install, set_active
     from yunshu_engine.kernels.omlx import apply, is_nax_available
@@ -64,8 +68,12 @@ def main():
         set_active(active)
         decode_steps(lm, cache, y, 10)
         t, y = decode_steps(lm, cache, y, a.steps)
-        out(kind="decode_installed", invariant_active=active,
-            ms_median=round(pct(t, 0.5) * 1e3, 2), ms_p95=round(pct(t, 0.95) * 1e3, 2))
+        out(
+            kind="decode_installed",
+            invariant_active=active,
+            ms_median=round(pct(t, 0.5) * 1e3, 2),
+            ms_p95=round(pct(t, 0.95) * 1e3, 2),
+        )
     set_active(True)
 
     # per-projection efficiency at 1..16 rows
@@ -82,8 +90,14 @@ def main():
         mixes[cls] += len(mods)
         use = mods[:: max(1, len(mods) // 24)][:24]
         gb = sum(nbytes(m) for m in use) / len(use)
-        row = {"cls": cls, "bits": bits, "K": k, "N": n, "count": len(mods),
-               "MB_each": round(gb / 1e6, 1)}
+        row = {
+            "cls": cls,
+            "bits": bits,
+            "K": k,
+            "N": n,
+            "count": len(mods),
+            "MB_each": round(gb / 1e6, 1),
+        }
         for rows in (1, 2, 4, 8, 16):
             x = mx.random.normal((1, rows, k)).astype(mx.bfloat16)
             mx.eval(x)

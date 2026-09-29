@@ -7,6 +7,7 @@ diffusion-LoRA loader added.
 
 Run: PYTHONPATH=. uv run python scripts/verify_image_lora.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -42,8 +43,13 @@ async def main() -> int:
 
     eng = ImageGenEngine(MODEL)
     await eng.start()
-    P = dict(prompt="a woman in a bright cozy living room, portrait, detailed",
-             width=512, height=512, num_inference_steps=8, seed=42)
+    P = dict(
+        prompt="a woman in a bright cozy living room, portrait, detailed",
+        width=512,
+        height=512,
+        num_inference_steps=8,
+        seed=42,
+    )
     a = arr(await eng.generate_image(**P))
     loaded = eng.load_diffusion_lora(lora, strength=1.0)
     applied = len(getattr(eng, "_diff_lora_restore", []))
@@ -52,9 +58,9 @@ async def main() -> int:
     c = arr(await eng.generate_image(**P))
     await eng.stop()
 
-    diff_on = float(np.abs(a - b).mean())       # LoRA must change output
-    var_on = float(b.var())                      # must be a real image
-    diff_restore = float(np.abs(a - c).mean())   # unload must restore
+    diff_on = float(np.abs(a - b).mean())  # LoRA must change output
+    var_on = float(b.var())  # must be a real image
+    diff_restore = float(np.abs(a - c).mean())  # unload must restore
 
     checks = {
         "loaded": loaded and applied > 0,
@@ -64,8 +70,10 @@ async def main() -> int:
     }
     for k, v in checks.items():
         print(f"  {'OK ' if v else 'BAD'} {k}")
-    print(f"RESULT: applied={applied} diff_on={diff_on:.2f} var={var_on:.0f} "
-          f"diff_restore={diff_restore:.3f}")
+    print(
+        f"RESULT: applied={applied} diff_on={diff_on:.2f} var={var_on:.0f} "
+        f"diff_restore={diff_restore:.3f}"
+    )
     ok = all(checks.values())
     print("PASS" if ok else "FAIL")
     return 0 if ok else 1

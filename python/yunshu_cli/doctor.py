@@ -309,6 +309,39 @@ def check_models_dir(base: Path) -> list[Check]:
     return checks
 
 
+def check_speculative(model: str) -> list[Check]:
+    """Which speculative path serving ``model`` will use."""
+    import json
+
+    from yunshu_engine import model_discovery, spec_select
+    from yunshu_engine.mlxvlm_mtp import is_mtp_capable
+
+    resolved = model_discovery.resolve_model_ref(model)
+    cfg_path = Path(resolved or model).expanduser() / "config.json"
+    try:
+        cfg = json.loads(cfg_path.read_text())
+    except (OSError, ValueError):
+        return []
+    family = cfg.get("model_type") in ("qwen3_5", "qwen3_6", "qwen3_5_moe")
+    choice = spec_select.choose(
+        cfg,
+        spec_family=family,
+        mtp_capable=family and is_mtp_capable(str(cfg_path.parent)),
+    )
+    if choice.kind == "dflash":
+        detail = f"DFlash2 drafter: {choice.drafter} ({choice.reason})"
+        return [Check("speculative", "ok", detail)]
+    if choice.kind == "mtp":
+        hint = ""
+        if spec_select.is_27b_class(cfg):
+            hint = (
+                "`yunshu pull incoai/Qwen3.8-27B-DFlash2` enables the faster "
+                "DFlash2 drafter."
+            )
+        return [Check("speculative", "ok", f"MTP head ({choice.reason})", hint)]
+    return [Check("speculative", "ok", f"none ({choice.reason})")]
+
+
 def check_port(host: str, port: int) -> Check:
     probe_host = "127.0.0.1" if host in ("0.0.0.0", "", "localhost") else host
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -377,6 +410,7 @@ def run_checks(model: str | None, host: str, port: int) -> list[Check]:
     checks += check_models_dir(paths.models_dir())
     if model:
         checks += check_model(model, info)
+        checks += check_speculative(model)
     checks.append(check_port(host, port))
     checks.append(check_service())
     return checks

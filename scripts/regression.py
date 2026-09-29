@@ -21,6 +21,7 @@ Run:
   PYTHONPATH=. uv run python scripts/regression.py --tier smoke
   PYTHONPATH=. OMLX_PYTHON=.venvs/omlx/bin/python uv run python scripts/regression.py --tier full
 """
+
 import argparse
 import json
 import os
@@ -43,16 +44,22 @@ def _p_pytest(out, rc):
         return ("FAIL", "no pass line", {}) if m2 else ("FAIL", "no result", {})
     passed, _skip, failed = m.group(1), m.group(2), m.group(3)
     failed = int(failed or 0)
-    return ("PASS" if failed == 0 and rc == 0 else "FAIL",
-            f"{passed} passed, {failed} failed", {"passed": int(passed), "failed": failed})
+    return (
+        "PASS" if failed == 0 and rc == 0 else "FAIL",
+        f"{passed} passed, {failed} failed",
+        {"passed": int(passed), "failed": failed},
+    )
 
 
 def _p_verify(out, rc):
     m = re.search(r"RESULT:\s*(\d+) passed,\s*(\d+) failed", out)
     if m:
         f = int(m.group(2))
-        return ("PASS" if f == 0 else "FAIL", f"{m.group(1)} passed, {f} failed",
-                {"passed": int(m.group(1)), "failed": f})
+        return (
+            "PASS" if f == 0 else "FAIL",
+            f"{m.group(1)} passed, {f} failed",
+            {"passed": int(m.group(1)), "failed": f},
+        )
     return ("PASS" if rc == 0 else "FAIL", f"exit {rc}", {})
 
 
@@ -71,8 +78,11 @@ def _p_mmlu(out, rc):
     m = re.search(r"RESULT:\s*(\d+)/(\d+)\s*=\s*([\d.]+)%", out)
     if m:
         acc = float(m.group(3))
-        return ("PASS" if rc == 0 else "FAIL", f"{m.group(1)}/{m.group(2)} = {acc:.1f}%",
-                {"accuracy": acc, "correct": int(m.group(1)), "total": int(m.group(2))})
+        return (
+            "PASS" if rc == 0 else "FAIL",
+            f"{m.group(1)}/{m.group(2)} = {acc:.1f}%",
+            {"accuracy": acc, "correct": int(m.group(1)), "total": int(m.group(2))},
+        )
     return ("FAIL", "no MMLU result", {})
 
 
@@ -81,18 +91,27 @@ def _p_modalities(out, rc):
     # Keep the per-modality summary + any signal-crash lines so a FAIL is never a
     # black box (which modality, signal-vs-logic) — the section's full stdout is
     # captured but not echoed; surface the salient tail here.
-    tail = "\n".join(ln for ln in out.splitlines()
-                     if any(s in ln for s in ("✓", "✗", "died with signal",
-                                              "GPU Hang", "tests passed", "FAIL:")))[-2000:]
+    tail = "\n".join(
+        ln
+        for ln in out.splitlines()
+        if any(
+            s in ln
+            for s in ("✓", "✗", "died with signal", "GPU Hang", "tests passed", "FAIL:")
+        )
+    )[-2000:]
     if m:
         p, t = int(m.group(1)), int(m.group(2))
-        return ("PASS" if p == t and rc == 0 else "FAIL", f"{p}/{t} modalities",
-                {"passed": p, "total": t, "detail": tail})
+        return (
+            "PASS" if p == t and rc == 0 else "FAIL",
+            f"{p}/{t} modalities",
+            {"passed": p, "total": t, "detail": tail},
+        )
     return ("PASS" if rc == 0 else "FAIL", f"exit {rc}", {"detail": tail})
 
 
 def _p_metrics(tag):
     """Capture @@TAG@@ json lines (per-model) into a metrics dict."""
+
     def parse(out, rc):
         rows = {}
         for m in re.finditer(rf"@@{tag}@@ (\{{.*\}})", out):
@@ -102,8 +121,12 @@ def _p_metrics(tag):
             except Exception:
                 pass
         n = len(rows)
-        return ("PASS" if (rc == 0 and n) else ("PARTIAL" if n else "FAIL"),
-                f"{n} models", {"rows": rows})
+        return (
+            "PASS" if (rc == 0 and n) else ("PARTIAL" if n else "FAIL"),
+            f"{n} models",
+            {"rows": rows},
+        )
+
     return parse
 
 
@@ -139,131 +162,477 @@ def _p_table(out, rc):
             art = json.load(open(m.group(1).strip()))
         except Exception:
             art = None
-    return ("PASS" if rc == 0 else "FAIL", f"exit {rc}",
-            {"table_tail": "\n".join(out.splitlines()[-60:]), "artifact": art})
+    return (
+        "PASS" if rc == 0 else "FAIL",
+        f"exit {rc}",
+        {"table_tail": "\n".join(out.splitlines()[-60:]), "artifact": art},
+    )
 
 
 # ── section catalogue: (name, tier, gate, cmd, extra_env, parser) ──
 def _sections():
     return [
-        ("unit-tests", "smoke", True,
-         [PY, "-m", "pytest", "tests/", "-q"], {}, _p_pytest),
-        ("cache-lossless: engine-loop", "smoke", True,
-         [PY, "scripts/verify/verify_engine_loop.py"], {}, _p_verify),
-        ("modalities (6-modality smoke)", "smoke", True,
-         [PY, "scripts/realmodel/test_all_modalities.py",
-          "--settle", "30", "--crash-cooldown", "180"], {"PYTHONPATH": VLM_PP}, _p_modalities),
-        ("structured output (json_schema enforced)", "smoke", True,
-         [PY, "scripts/verify/verify_structured_output.py"], {}, _p_verify),
-        ("tool-call parsing (formats + brace-in-string)", "smoke", True,
-         [PY, "scripts/verify/verify_tool_calls.py"], {}, _p_verify),
-        ("reasoning parser (<think> split, no leak)", "smoke", True,
-         [PY, "scripts/verify/verify_reasoning_parser.py"], {}, _p_verify),
-        ("sampling (temp0 determinism + seed repro/vary)", "smoke", True,
-         [PY, "scripts/verify/verify_sampling.py"], {}, _p_passfail_skip),
-        ("grammar constraints (choice + regex)", "smoke", True,
-         [PY, "scripts/verify/verify_grammar_constraints.py"], {}, _p_verify),
-        ("embeddings + scoring (embed/rerank/classify/pool semantics)", "smoke", True,
-         [PY, "scripts/verify/verify_embeddings_scoring.py"], {}, _p_passfail_skip),
-        ("logprobs + stop sequences (generation contract)", "smoke", True,
-         [PY, "scripts/verify/verify_logprobs_stop.py"], {}, _p_passfail_skip),
-        ("n>1 parallel sampling (gateway choice/usage contract)", "smoke", True,
-         [PY, "scripts/verify/verify_n_choices.py"], {}, _p_passfail_skip),
-        ("streaming SSE (chunk contract + assembled==non-stream)", "smoke", True,
-         [PY, "scripts/verify/verify_streaming_sse.py"], {}, _p_passfail_skip),
-        ("Anthropic /v1/messages (envelope + streaming events)", "smoke", True,
-         [PY, "scripts/verify/verify_anthropic_messages.py"], {}, _p_passfail_skip),
-        ("tool-calling E2E (assembly + selection + envelope)", "smoke", True,
-         [PY, "scripts/verify/verify_tool_calls_e2e.py"], {}, _p_passfail_skip),
-        ("HTTP error contract (4xx validation + 404 unknown model)", "smoke", True,
-         [PY, "scripts/verify/verify_error_contract.py"], {}, _p_verify),
-        ("Responses API /v1/responses (envelope + streaming lifecycle)", "smoke", True,
-         [PY, "scripts/verify/verify_responses_api.py"], {}, _p_passfail_skip),
-        ("Anthropic tool_use E2E (block + stop_reason + selection)", "smoke", True,
-         [PY, "scripts/verify/verify_anthropic_tools.py"], {}, _p_passfail_skip),
-        ("scoring endpoints HTTP (embeddings/score/rerank/classify)", "smoke", True,
-         [PY, "scripts/verify/verify_scoring_endpoints.py"], {}, _p_passfail_skip),
-        ("core endpoints (/v1/models + /v1/completions)", "smoke", True,
-         [PY, "scripts/verify/verify_core_endpoints.py"], {}, _p_passfail_skip),
-        ("logit_bias effect + out-of-vocab guard", "smoke", True,
-         [PY, "scripts/verify/verify_logit_bias.py"], {}, _p_passfail_skip),
-        ("multi-turn context (threaded history recall)", "smoke", True,
-         [PY, "scripts/verify/verify_multiturn.py"], {}, _p_passfail_skip),
-        ("streaming tool_calls (delta reassembly + JSON args)", "smoke", True,
-         [PY, "scripts/verify/verify_streaming_tool_calls.py"], {}, _p_passfail_skip),
-        ("freq/presence penalties (reduce repetition)", "smoke", True,
-         [PY, "scripts/verify/verify_penalties.py"], {}, _p_passfail_skip),
-        ("JSON mode (response_format json_object)", "smoke", True,
-         [PY, "scripts/verify/verify_json_mode.py"], {}, _p_passfail_skip),
-        ("Anthropic count_tokens (matches usage + monotonic)", "smoke", True,
-         [PY, "scripts/verify/verify_count_tokens.py"], {}, _p_passfail_skip),
-        ("gateway sampling forwarding (seed/stop/max_tokens)", "smoke", True,
-         [PY, "scripts/verify/verify_gateway_sampling.py"], {}, _p_passfail_skip),
-        ("sampling constraints (top_k/top_p/min_p collapse)", "smoke", True,
-         [PY, "scripts/verify/verify_sampling_constraints.py"], {}, _p_passfail_skip),
-        ("concurrent requests (serialization, no cross-talk)", "smoke", True,
-         [PY, "scripts/verify/verify_concurrent.py"], {}, _p_passfail_skip),
-        ("priority/FAIR scheduling (policy plumbed + ordering)", "smoke", True,
-         [PY, "scripts/verify/verify_priority_scheduling.py"], {}, _p_passfail_skip),
-        ("KV-cache quant round-trip (4/8-bit bounded + compression)", "smoke", True,
-         [PY, "scripts/verify/verify_kv_quant.py"], {}, _p_passfail_skip),
-        ("sampling extras (XTC removes tokens + thinking_budget caps)", "smoke", True,
-         [PY, "scripts/verify/verify_sampling_extras.py"], {}, _p_passfail_skip),
-        ("embeddings dimensions (Matryoshka truncation)", "smoke", True,
-         [PY, "scripts/verify/verify_embeddings_dimensions.py"], {}, _p_passfail_skip),
-        ("streaming logprobs (per-chunk entries)", "smoke", True,
-         [PY, "scripts/verify/verify_streaming_logprobs.py"], {}, _p_passfail_skip),
-        ("usage accounting (exact prompt_tokens + stream==non-stream)", "smoke", True,
-         [PY, "scripts/verify/verify_usage_accounting.py"], {}, _p_passfail_skip),
-        ("batch inference API (/v1/batch custom_id mapping)", "smoke", True,
-         [PY, "scripts/verify/verify_batch_api.py"], {}, _p_passfail_skip),
-        ("quality: MMLU (Qwen3.5-9B)", "standard", True,
-         [PY, "scripts/bench/bench_mmlu_quick.py"], {}, _p_mmlu),
-        ("quality vs mlx-lm baseline", "standard", True,
-         [PY, "scripts/tools/quality_comparison.py", "--quick", "--model-path",
-          "models/Qwen2.5-3B-Instruct-bf16"], {}, _p_quality),
-        ("spec-decode lossless (gemma-4)", "standard", True,
-         [PY, "scripts/validate/validate_gemma4_spec_decode.py"], {"PYTHONPATH": "python"}, _p_passfail_skip),
-        ("n-gram spec (hybrid guard==greedy + dense non-degenerate)", "smoke", True,
-         [PY, "scripts/verify/verify_ngram_spec.py"], {}, _p_passfail_skip),
-        ("ASR transcription quality", "standard", True,
-         [PY, "scripts/verify/verify_asr_quality.py"], {}, _p_passfail_skip),
-        ("TTS VoiceDesign (instruct steers voice)", "standard", True,
-         [PY, "scripts/verify/verify_voicedesign.py"], {}, _p_passfail_skip),
-        ("TTS→ASR round-trip (end-to-end audio fidelity)", "standard", True,
-         [PY, "scripts/verify/verify_tts_asr_roundtrip.py"], {}, _p_passfail_skip),
-        ("VLM OCR (discriminative image reading)", "standard", True,
-         [PY, "scripts/verify/verify_vlm_ocr.py"], {}, _p_passfail_skip),
-        ("image t2i (prompt drives pixels, discriminative)", "standard", True,
-         [PY, "scripts/verify/verify_image_t2i.py"], {}, _p_passfail_skip),
-        ("image-gen HTTP route (/v1/images/generations b64_json)", "standard", True,
-         [PY, "scripts/verify/verify_image_http.py"], {}, _p_passfail_skip),
-        ("VLM image-chat HTTP route (base64 image_url → OCR)", "standard", True,
-         [PY, "scripts/verify/verify_vlm_http.py"], {}, _p_passfail_skip),
-        ("context-window overflow (clean 400, not crash)", "standard", True,
-         [PY, "scripts/verify/verify_context_overflow.py"], {}, _p_passfail_skip),
-        ("prefill-memory guard (chat/Anthropic/Responses → 413)", "smoke", True,
-         [PY, "scripts/verify/verify_prefill_guard.py"], {}, _p_passfail_skip),
-        ("image diffusion-LoRA (load/effect/restore)", "standard", True,
-         [PY, "scripts/verify/verify_image_lora.py"], {}, _p_passfail_skip),
-        ("prompt weighting (word:weight emphasis)", "standard", True,
-         [PY, "scripts/verify/verify_prompt_weighting.py"], {}, _p_passfail_skip),
-        ("ControlNet structural following (Z-Image)", "standard", True,
-         [PY, "scripts/verify/verify_controlnet.py"], {}, _p_passfail_skip),
-        ("cache-tier matrix (all models)", "standard", False,
-         [PY, "scripts/bench/bench_all.py"], {}, _p_table),
-        ("realistic cache rate", "standard", False,
-         [PY, "scripts/bench/bench_realistic_cache.py"], {"PYTHONPATH": VLM_PP,
-          "YUNSHU_BENCH_MODEL": "./models/Qwen2.5-3B-Instruct-bf16"}, _p_metrics("REALISTIC")),
-        ("MTP spec decode (Qwen3.6-27B production path, coherent)", "full", True,
-         [PY, "scripts/verify/verify_mtp_spec.py"], {"YUNSHU_SPEC_UNVERIFIED": "mlxvlm_mtp", "PYTHONPATH": VLM_PP}, _p_passfail_skip),
+        (
+            "unit-tests",
+            "smoke",
+            True,
+            [PY, "-m", "pytest", "tests/", "-q"],
+            {},
+            _p_pytest,
+        ),
+        (
+            "cache-lossless: engine-loop",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_engine_loop.py"],
+            {},
+            _p_verify,
+        ),
+        (
+            "modalities (6-modality smoke)",
+            "smoke",
+            True,
+            [
+                PY,
+                "scripts/realmodel/test_all_modalities.py",
+                "--settle",
+                "30",
+                "--crash-cooldown",
+                "180",
+            ],
+            {"PYTHONPATH": VLM_PP},
+            _p_modalities,
+        ),
+        (
+            "structured output (json_schema enforced)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_structured_output.py"],
+            {},
+            _p_verify,
+        ),
+        (
+            "tool-call parsing (formats + brace-in-string)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_tool_calls.py"],
+            {},
+            _p_verify,
+        ),
+        (
+            "reasoning parser (<think> split, no leak)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_reasoning_parser.py"],
+            {},
+            _p_verify,
+        ),
+        (
+            "sampling (temp0 determinism + seed repro/vary)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_sampling.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "grammar constraints (choice + regex)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_grammar_constraints.py"],
+            {},
+            _p_verify,
+        ),
+        (
+            "embeddings + scoring (embed/rerank/classify/pool semantics)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_embeddings_scoring.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "logprobs + stop sequences (generation contract)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_logprobs_stop.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "n>1 parallel sampling (gateway choice/usage contract)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_n_choices.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "streaming SSE (chunk contract + assembled==non-stream)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_streaming_sse.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "Anthropic /v1/messages (envelope + streaming events)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_anthropic_messages.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "tool-calling E2E (assembly + selection + envelope)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_tool_calls_e2e.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "HTTP error contract (4xx validation + 404 unknown model)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_error_contract.py"],
+            {},
+            _p_verify,
+        ),
+        (
+            "Responses API /v1/responses (envelope + streaming lifecycle)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_responses_api.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "Anthropic tool_use E2E (block + stop_reason + selection)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_anthropic_tools.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "scoring endpoints HTTP (embeddings/score/rerank/classify)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_scoring_endpoints.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "core endpoints (/v1/models + /v1/completions)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_core_endpoints.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "logit_bias effect + out-of-vocab guard",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_logit_bias.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "multi-turn context (threaded history recall)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_multiturn.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "streaming tool_calls (delta reassembly + JSON args)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_streaming_tool_calls.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "freq/presence penalties (reduce repetition)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_penalties.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "JSON mode (response_format json_object)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_json_mode.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "Anthropic count_tokens (matches usage + monotonic)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_count_tokens.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "gateway sampling forwarding (seed/stop/max_tokens)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_gateway_sampling.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "sampling constraints (top_k/top_p/min_p collapse)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_sampling_constraints.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "concurrent requests (serialization, no cross-talk)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_concurrent.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "priority/FAIR scheduling (policy plumbed + ordering)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_priority_scheduling.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "KV-cache quant round-trip (4/8-bit bounded + compression)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_kv_quant.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "sampling extras (XTC removes tokens + thinking_budget caps)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_sampling_extras.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "embeddings dimensions (Matryoshka truncation)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_embeddings_dimensions.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "streaming logprobs (per-chunk entries)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_streaming_logprobs.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "usage accounting (exact prompt_tokens + stream==non-stream)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_usage_accounting.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "batch inference API (/v1/batch custom_id mapping)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_batch_api.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "quality: MMLU (Qwen3.5-9B)",
+            "standard",
+            True,
+            [PY, "scripts/bench/bench_mmlu_quick.py"],
+            {},
+            _p_mmlu,
+        ),
+        (
+            "quality vs mlx-lm baseline",
+            "standard",
+            True,
+            [
+                PY,
+                "scripts/tools/quality_comparison.py",
+                "--quick",
+                "--model-path",
+                "models/Qwen2.5-3B-Instruct-bf16",
+            ],
+            {},
+            _p_quality,
+        ),
+        (
+            "spec-decode lossless (gemma-4)",
+            "standard",
+            True,
+            [PY, "scripts/validate/validate_gemma4_spec_decode.py"],
+            {"PYTHONPATH": "python"},
+            _p_passfail_skip,
+        ),
+        (
+            "n-gram spec (hybrid guard==greedy + dense non-degenerate)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_ngram_spec.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "ASR transcription quality",
+            "standard",
+            True,
+            [PY, "scripts/verify/verify_asr_quality.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "TTS VoiceDesign (instruct steers voice)",
+            "standard",
+            True,
+            [PY, "scripts/verify/verify_voicedesign.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "TTS→ASR round-trip (end-to-end audio fidelity)",
+            "standard",
+            True,
+            [PY, "scripts/verify/verify_tts_asr_roundtrip.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "VLM OCR (discriminative image reading)",
+            "standard",
+            True,
+            [PY, "scripts/verify/verify_vlm_ocr.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "image t2i (prompt drives pixels, discriminative)",
+            "standard",
+            True,
+            [PY, "scripts/verify/verify_image_t2i.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "image-gen HTTP route (/v1/images/generations b64_json)",
+            "standard",
+            True,
+            [PY, "scripts/verify/verify_image_http.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "VLM image-chat HTTP route (base64 image_url → OCR)",
+            "standard",
+            True,
+            [PY, "scripts/verify/verify_vlm_http.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "context-window overflow (clean 400, not crash)",
+            "standard",
+            True,
+            [PY, "scripts/verify/verify_context_overflow.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "prefill-memory guard (chat/Anthropic/Responses → 413)",
+            "smoke",
+            True,
+            [PY, "scripts/verify/verify_prefill_guard.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "image diffusion-LoRA (load/effect/restore)",
+            "standard",
+            True,
+            [PY, "scripts/verify/verify_image_lora.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "prompt weighting (word:weight emphasis)",
+            "standard",
+            True,
+            [PY, "scripts/verify/verify_prompt_weighting.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "ControlNet structural following (Z-Image)",
+            "standard",
+            True,
+            [PY, "scripts/verify/verify_controlnet.py"],
+            {},
+            _p_passfail_skip,
+        ),
+        (
+            "cache-tier matrix (all models)",
+            "standard",
+            False,
+            [PY, "scripts/bench/bench_all.py"],
+            {},
+            _p_table,
+        ),
+        (
+            "realistic cache rate",
+            "standard",
+            False,
+            [PY, "scripts/bench/bench_realistic_cache.py"],
+            {
+                "PYTHONPATH": VLM_PP,
+                "YUNSHU_BENCH_MODEL": "./models/Qwen2.5-3B-Instruct-bf16",
+            },
+            _p_metrics("REALISTIC"),
+        ),
+        (
+            "MTP spec decode (Qwen3.6-27B production path, coherent)",
+            "full",
+            True,
+            [PY, "scripts/verify/verify_mtp_spec.py"],
+            {"YUNSHU_SPEC_UNVERIFIED": "mlxvlm_mtp", "PYTHONPATH": VLM_PP},
+            _p_passfail_skip,
+        ),
         # (methodology): the PRIMARY cross-framework comparison is ALL-EXTERNAL
         # (server bench below) — only real HTTP servers are a fair, production-truthful
         # measure. This in-process bench is the OTHER half: EVERY framework measured
         # internally too, so the report computes each one's internal-vs-external parity
         # (gateway efficiency → surfaces middle-layer bugs per framework).
-        ("framework internal (in-process; internal-vs-external parity input)", "full", False,
-         [PY, "scripts/bench/bench_frameworks.py"], {}, _p_table),
+        (
+            "framework internal (in-process; internal-vs-external parity input)",
+            "full",
+            False,
+            [PY, "scripts/bench/bench_frameworks.py"],
+            {},
+            _p_table,
+        ),
         # PRIMARY framework comparison: each framework's REAL OpenAI HTTP server, one
         # at a time, GPU cooled to a matched thermal state between them. This is the
         # fair production comparison; feeds the serve/ + gpu_tflops trend. Multiple
@@ -274,26 +643,70 @@ def _sections():
         # not ours. Its launcher branch stays in bench_serve for when that's fixed; we
         # don't fall back to its (unfair) in-process numbers. yunshu/mlx-lm/oMLX serve
         # cleanly → the fair all-external comparison.
-        ("server bench (real OpenAI HTTP — PRIMARY framework comparison)", "full", False,
-         [PY, "scripts/bench/bench_serve.py",
-          "--models", "./models/Qwen2.5-3B-Instruct-bf16,./models/Qwen3.5-2B-MLX-bf16",
-          "--frameworks", "yunshu,mlx-lm,oMLX", "--concurrency", "8,16,32",
-          "--cooldown-sec", "60", "--wait-tflops", "9"], {}, _p_table),
-        ("sustained-decode thermal decay (cool/ trend)", "full", False,
-         [PY, "scripts/bench/bench_sustained_decode.py"], {}, _p_table),
-        ("model breadth sweep (all LLMs × core correctness, isolated)", "full", True,
-         [PY, "scripts/bench/sweep_models.py"], {"PYTHONPATH": VLM_PP}, _p_passfail),
-        ("per-model perf sweep (TTFT/decode/peak-RSS, isolated)", "full", False,
-         [PY, "scripts/bench/sweep_perf.py"], {}, _p_table),
-        ("comprehensive sweeps (length/hitratio/concurrency)", "full", False,
-         [PY, "scripts/bench/bench_comprehensive_all.py"], {}, _p_table),
+        (
+            "server bench (real OpenAI HTTP — PRIMARY framework comparison)",
+            "full",
+            False,
+            [
+                PY,
+                "scripts/bench/bench_serve.py",
+                "--models",
+                "./models/Qwen2.5-3B-Instruct-bf16,./models/Qwen3.5-2B-MLX-bf16",
+                "--frameworks",
+                "yunshu,mlx-lm,oMLX",
+                "--concurrency",
+                "8,16,32",
+                "--cooldown-sec",
+                "60",
+                "--wait-tflops",
+                "9",
+            ],
+            {},
+            _p_table,
+        ),
+        (
+            "sustained-decode thermal decay (cool/ trend)",
+            "full",
+            False,
+            [PY, "scripts/bench/bench_sustained_decode.py"],
+            {},
+            _p_table,
+        ),
+        (
+            "model breadth sweep (all LLMs × core correctness, isolated)",
+            "full",
+            True,
+            [PY, "scripts/bench/sweep_models.py"],
+            {"PYTHONPATH": VLM_PP},
+            _p_passfail,
+        ),
+        (
+            "per-model perf sweep (TTFT/decode/peak-RSS, isolated)",
+            "full",
+            False,
+            [PY, "scripts/bench/sweep_perf.py"],
+            {},
+            _p_table,
+        ),
+        (
+            "comprehensive sweeps (length/hitratio/concurrency)",
+            "full",
+            False,
+            [PY, "scripts/bench/bench_comprehensive_all.py"],
+            {},
+            _p_table,
+        ),
     ]
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tier", choices=["smoke", "standard", "full"], default="smoke")
-    ap.add_argument("--only", nargs="*", help="run only sections whose name contains these substrings")
+    ap.add_argument(
+        "--only",
+        nargs="*",
+        help="run only sections whose name contains these substrings",
+    )
     args = ap.parse_args()
     budget = _TIER_ORDER[args.tier]
 
@@ -323,17 +736,25 @@ def main():
             # it a longer settle to recover, AND adaptively wait until the GPU is
             # responsive again (a tiny matmul that confirms the driver isn't hung)
             # before starting — more reliable than a fixed sleep.
-            print("    (GPU recovery before heavy 30B-loading modality smoke)", flush=True)
+            print(
+                "    (GPU recovery before heavy 30B-loading modality smoke)", flush=True
+            )
             time.sleep(60)
             try:
                 import importlib
+
                 _ph = importlib.import_module("perf_history")
                 for _i in range(6):
                     _tf = _ph._gpu_tflops(1.0)
                     if _tf and _tf >= 8.0:
-                        print(f"    GPU responsive ({_tf} TFLOP/s) — starting modalities", flush=True)
+                        print(
+                            f"    GPU responsive ({_tf} TFLOP/s) — starting modalities",
+                            flush=True,
+                        )
                         break
-                    print(f"    GPU still recovering ({_tf} TFLOP/s) — +20s", flush=True)
+                    print(
+                        f"    GPU still recovering ({_tf} TFLOP/s) — +20s", flush=True
+                    )
                     time.sleep(20)
             except Exception:
                 time.sleep(30)
@@ -379,14 +800,20 @@ def main():
             # cleanly capped and `--tier full` had to be unblocked by hand. With
             # a process group we can os.killpg the entire subtree.
             proc = subprocess.Popen(
-                cmd, env=env, cwd=REPO, stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT, text=True, start_new_session=True,
+                cmd,
+                env=env,
+                cwd=REPO,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                start_new_session=True,
             )
             try:
                 out, _ = proc.communicate(timeout=_sec_timeout)
                 rc = proc.returncode
             except subprocess.TimeoutExpired:
                 import signal as _sig
+
                 try:
                     os.killpg(os.getpgid(proc.pid), _sig.SIGKILL)
                 except Exception:
@@ -402,7 +829,10 @@ def main():
             if rc < 0 and gate and attempts <= len(_COOLDOWNS):
                 retried = True
                 cd = _COOLDOWNS[attempts - 1]
-                print(f"    crashed (signal {-rc}) — GPU cooldown {cd}s, retry {attempts}/{len(_COOLDOWNS)} ...", flush=True)
+                print(
+                    f"    crashed (signal {-rc}) — GPU cooldown {cd}s, retry {attempts}/{len(_COOLDOWNS)} ...",
+                    flush=True,
+                )
                 time.sleep(cd)
                 continue
             break
@@ -411,8 +841,17 @@ def main():
         if retried:
             summary += " (retried after transient crash)"
             metrics["retried"] = True
-        results.append({"name": name, "tier": tier, "gate": gate, "status": status,
-                        "summary": summary, "seconds": round(dt, 1), "metrics": metrics})
+        results.append(
+            {
+                "name": name,
+                "tier": tier,
+                "gate": gate,
+                "status": status,
+                "summary": summary,
+                "seconds": round(dt, 1),
+                "metrics": metrics,
+            }
+        )
         print(f"    {status}  ({summary}, {dt:.0f}s)")
         # On a FAILED section, echo the salient captured detail so the failure is
         # never a black box (esp. the modality smoke: which modality, signal-vs-logic).
@@ -428,7 +867,8 @@ def main():
     # skipped inside snapshot(). Never let this break the regression verdict.
     try:
         from perf_history import snapshot as _perf_snapshot, trend as _perf_trend
-        if _perf_snapshot():        # returns None / skips when no perf metrics
+
+        if _perf_snapshot():  # returns None / skips when no perf metrics
             _perf_trend()
     except Exception as _e:
         print(f"(perf-history skipped: {_e})")
@@ -436,11 +876,16 @@ def main():
     # Markdown deliverable (docs/reports/REPORT.md). Best-effort; never blocks GO.
     try:
         import report as _report
+
         _report.main()
     except Exception as _e:
         print(f"(unified report skipped: {_e})")
-    print(f"\n{'='*70}\n{'GO ✅' if go else 'NO-GO ❌'} — {sum(1 for r in gated if r['status']=='PASS')}/{len(gated)} gates passed")
-    print(f"report -> docs/reports/REGRESSION_REPORT.md (gates) + docs/reports/REPORT.md (unified)")
+    print(
+        f"\n{'=' * 70}\n{'GO ✅' if go else 'NO-GO ❌'} — {sum(1 for r in gated if r['status'] == 'PASS')}/{len(gated)} gates passed"
+    )
+    print(
+        f"report -> docs/reports/REGRESSION_REPORT.md (gates) + docs/reports/REPORT.md (unified)"
+    )
     sys.exit(0 if go else 1)
 
 
@@ -523,20 +968,32 @@ def _fmt_realistic(rows):
         lines += ["", f"**{mdl}**"]
         mt = d.get("multi_turn") or []
         if mt:
-            lines += ["", "_multi-turn chat (KV prefix grows each turn):_", "",
-                      "| turn | prompt_tok | cached | hit % | TTFT ms |",
-                      "|---|---|---|---|---|"]
+            lines += [
+                "",
+                "_multi-turn chat (KV prefix grows each turn):_",
+                "",
+                "| turn | prompt_tok | cached | hit % | TTFT ms |",
+                "|---|---|---|---|---|",
+            ]
             for t in mt:
-                lines.append(f"| {t['turn']} | {t['prompt_tok']} | {t['cached']} | "
-                             f"{t['hit_pct']:.1f} | {t['ttft_ms']:.0f} |")
+                lines.append(
+                    f"| {t['turn']} | {t['prompt_tok']} | {t['cached']} | "
+                    f"{t['hit_pct']:.1f} | {t['ttft_ms']:.0f} |"
+                )
         rag = d.get("rag") or []
         if rag:
-            lines += ["", "_RAG (shared long context, varying question):_", "",
-                      "| q | prompt_tok | cached | hit % | TTFT ms | speedup vs q1 |",
-                      "|---|---|---|---|---|---|"]
+            lines += [
+                "",
+                "_RAG (shared long context, varying question):_",
+                "",
+                "| q | prompt_tok | cached | hit % | TTFT ms | speedup vs q1 |",
+                "|---|---|---|---|---|---|",
+            ]
             for q in rag:
-                lines.append(f"| {q['q']} | {q['prompt_tok']} | {q['cached']} | "
-                             f"{q['hit_pct']:.1f} | {q['ttft_ms']:.0f} | {q['speedup_vs_q1']:.2f}× |")
+                lines.append(
+                    f"| {q['q']} | {q['prompt_tok']} | {q['cached']} | "
+                    f"{q['hit_pct']:.1f} | {q['ttft_ms']:.0f} | {q['speedup_vs_q1']:.2f}× |"
+                )
     return lines
 
 
@@ -545,63 +1002,97 @@ def _fmt_comprehensive(art):
     per model) as full markdown tables — the 40-line ASCII tail loses the top."""
     lines = []
     for m in art:
-        lines += ["", f"**{m['model']}** ({m.get('engine', '?')}) — "
-                  f"cold base {m.get('cold_base_tok', '?')} tok / {m.get('cold_base_ttft_ms', 0):.0f} ms TTFT"]
+        lines += [
+            "",
+            f"**{m['model']}** ({m.get('engine', '?')}) — "
+            f"cold base {m.get('cold_base_tok', '?')} tok / {m.get('cold_base_ttft_ms', 0):.0f} ms TTFT",
+        ]
         ls = m.get("length_sweep") or []
         if ls:
-            lines += ["", "_length sweep (cache off):_", "",
-                      "| target | prompt_tok | TTFT ms | prefill t/s | decode t/s |",
-                      "|---|---|---|---|---|"]
+            lines += [
+                "",
+                "_length sweep (cache off):_",
+                "",
+                "| target | prompt_tok | TTFT ms | prefill t/s | decode t/s |",
+                "|---|---|---|---|---|",
+            ]
             for x in ls:
-                lines.append(f"| {x['target']} | {x['prompt_tok']} | {x['ttft_ms']:.0f} | "
-                             f"{x['prefill_tps']:.0f} | {x['decode_tps']:.1f} |")
+                lines.append(
+                    f"| {x['target']} | {x['prompt_tok']} | {x['ttft_ms']:.0f} | "
+                    f"{x['prefill_tps']:.0f} | {x['decode_tps']:.1f} |"
+                )
         hr = m.get("hit_ratio_sweep") or []
         if hr:
-            lines += ["", "_hit-ratio sweep (reuse vs cold-prefill of the SAME prompt):_", "",
-                      "| suffix_words | prompt_tok | cached | hit ratio | cold ms | reuse ms | speedup |",
-                      "|---|---|---|---|---|---|---|"]
+            lines += [
+                "",
+                "_hit-ratio sweep (reuse vs cold-prefill of the SAME prompt):_",
+                "",
+                "| suffix_words | prompt_tok | cached | hit ratio | cold ms | reuse ms | speedup |",
+                "|---|---|---|---|---|---|---|",
+            ]
             for x in hr:
                 # tolerate old (speedup_vs_cold_base) and new (speedup_vs_same_cold) keys
                 sp = x.get("speedup_vs_same_cold", x.get("speedup_vs_cold_base", 0))
                 cold = x.get("cold_same_ms", "—")
                 cold_s = f"{cold:.0f}" if isinstance(cold, (int, float)) else cold
-                lines.append(f"| {x['suffix_words']} | {x['prompt_tok']} | {x['cached']} | "
-                             f"{x['hit_ratio']:.3f} | {cold_s} | {x['ttft_ms']:.0f} | {sp:.2f}× |")
+                lines.append(
+                    f"| {x['suffix_words']} | {x['prompt_tok']} | {x['cached']} | "
+                    f"{x['hit_ratio']:.3f} | {cold_s} | {x['ttft_ms']:.0f} | {sp:.2f}× |"
+                )
         cc = m.get("concurrency_sweep") or []
         ccl = m.get("concurrency_sweep_loop") or []
         if cc:
             loop_by_n = {x["N"]: x for x in ccl}
             has_loop = bool(ccl)
-            hdr = ("| N | fast agg t/s | fast TTFT ms | loop agg t/s | loop TTFT ms |"
-                   if has_loop else "| N | agg t/s | mean TTFT ms | total_tok | wall s |")
+            hdr = (
+                "| N | fast agg t/s | fast TTFT ms | loop agg t/s | loop TTFT ms |"
+                if has_loop
+                else "| N | agg t/s | mean TTFT ms | total_tok | wall s |"
+            )
             sep = "|---|---|---|---|---|" if has_loop else "|---|---|---|---|---|"
-            lines += ["", "_concurrency sweep"
-                      + (" (fast path vs engine-loop):_" if has_loop else " (fast path):_"),
-                      "", hdr, sep]
+            lines += [
+                "",
+                "_concurrency sweep"
+                + (" (fast path vs engine-loop):_" if has_loop else " (fast path):_"),
+                "",
+                hdr,
+                sep,
+            ]
             for x in cc:
                 if has_loop:
                     lx = loop_by_n.get(x["N"], {})
-                    lines.append(f"| {x['N']} | {x['agg_tps']:.1f} | {x['mean_ttft_ms']:.0f} | "
-                                 f"{lx.get('agg_tps', '—')} | {lx.get('mean_ttft_ms', '—')} |")
+                    lines.append(
+                        f"| {x['N']} | {x['agg_tps']:.1f} | {x['mean_ttft_ms']:.0f} | "
+                        f"{lx.get('agg_tps', '—')} | {lx.get('mean_ttft_ms', '—')} |"
+                    )
                 else:
-                    lines.append(f"| {x['N']} | {x['agg_tps']:.1f} | {x['mean_ttft_ms']:.0f} | "
-                                 f"{x['total_tok']} | {x['wall_s']:.1f} |")
+                    lines.append(
+                        f"| {x['N']} | {x['agg_tps']:.1f} | {x['mean_ttft_ms']:.0f} | "
+                        f"{x['total_tok']} | {x['wall_s']:.1f} |"
+                    )
     return lines
 
 
 def _write_report(tier, results, go):
     gated = [r for r in results if r["gate"]]
     n_pass = sum(1 for r in gated if r["status"] == "PASS")
-    lines = ["# Regression report", "",
-             f"- tier: **{tier}**",
-             f"- verdict: **{'GO ✅' if go else 'NO-GO ❌'}** ({n_pass}/{len(gated)} gates passed)",
-             f"- total wall time: **{sum(r['seconds'] for r in results)/60:.0f} min**", "",
-             "## Section status", "",
-             "| section | gate | status | summary | time |",
-             "|---|---|---|---|---|"]
+    lines = [
+        "# Regression report",
+        "",
+        f"- tier: **{tier}**",
+        f"- verdict: **{'GO ✅' if go else 'NO-GO ❌'}** ({n_pass}/{len(gated)} gates passed)",
+        f"- total wall time: **{sum(r['seconds'] for r in results) / 60:.0f} min**",
+        "",
+        "## Section status",
+        "",
+        "| section | gate | status | summary | time |",
+        "|---|---|---|---|---|",
+    ]
     for r in results:
-        lines.append(f"| {r['name']} | {'gate' if r['gate'] else 'metric'} | "
-                     f"{r['status']} | {r['summary']} | {r['seconds']:.0f}s |")
+        lines.append(
+            f"| {r['name']} | {'gate' if r['gate'] else 'metric'} | "
+            f"{r['status']} | {r['summary']} | {r['seconds']:.0f}s |"
+        )
 
     # ── full metric data — the whole point of the report ──
     lines += ["", "## Metrics — full data", ""]
@@ -636,14 +1127,21 @@ def _write_report(tier, results, go):
             lines += ["```", tail.strip("\n"), "```"]
         lines.append("")
 
-    lines += ["", "## Known limitations & how to read the numbers", "", _KNOWN_LIMITATIONS.strip()]
+    lines += [
+        "",
+        "## Known limitations & how to read the numbers",
+        "",
+        _KNOWN_LIMITATIONS.strip(),
+    ]
 
     # docs reorg: machine-generated reports live under docs/reports/.
     _rep_dir = os.path.join(REPO, "docs", "reports")
     os.makedirs(_rep_dir, exist_ok=True)
     path = os.path.join(_rep_dir, "REGRESSION_REPORT.md")
     open(path, "w").write("\n".join(lines) + "\n")
-    json.dump(results, open(os.path.join(_rep_dir, "regression_report.json"), "w"), indent=2)
+    json.dump(
+        results, open(os.path.join(_rep_dir, "regression_report.json"), "w"), indent=2
+    )
 
 
 if __name__ == "__main__":

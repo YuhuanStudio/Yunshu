@@ -17,6 +17,7 @@ Run (one model):
   PYTHONPATH=. YUNSHU_BENCH_MODEL=./models/Qwen2.5-3B-Instruct-bf16 \
     uv run python scripts/bench_4tier.py
 """
+
 import asyncio
 import logging
 import os
@@ -45,6 +46,7 @@ def _is_vlm_model(path: str) -> bool:
     qwen3_omni_moe, qwen2_5_vl, …) are absent from mlx_lm → VLMEngine."""
     import importlib.util
     import json
+
     try:
         cfg = json.loads(open(os.path.join(path, "config.json")).read())
     except Exception:
@@ -64,6 +66,7 @@ _IS_VLM = _is_vlm_model(MODEL)
 class _Out:
     """Uniform accessor over BatchedEngine GenerationOutput (attrs) and VLMEngine
     generate() dict, so the rest of the bench reads .text/.prompt_tokens/etc."""
+
     __slots__ = ("text", "prompt_tokens", "completion_tokens", "cached_tokens")
 
     def __init__(self, raw):
@@ -76,23 +79,28 @@ class _Out:
 
 def _doc(tag, n=110):
     return f"Reference document {tag}. " + (
-        "Photosynthesis converts sunlight into chemical energy stored in glucose. " * n)
+        "Photosynthesis converts sunlight into chemical energy stored in glucose. " * n
+    )
 
 
 async def _chat(engine, system, user, max_tokens=1):
     msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     t0 = time.perf_counter()
     if _IS_VLM:
-        raw = await engine.generate(messages=msgs, max_tokens=max_tokens,
-                                    temperature=0.0, enable_thinking=False)
+        raw = await engine.generate(
+            messages=msgs, max_tokens=max_tokens, temperature=0.0, enable_thinking=False
+        )
     else:
-        raw = await engine.chat(messages=msgs, max_tokens=max_tokens,
-                                temperature=0.0, enable_thinking=False)
+        raw = await engine.chat(
+            messages=msgs, max_tokens=max_tokens, temperature=0.0, enable_thinking=False
+        )
     return time.perf_counter() - t0, _Out(raw)
 
 
 def _pc(engine):
-    return getattr(engine, "_kv_prefix_cache", None) or getattr(engine, "_text_kv_prefix_cache", None)
+    return getattr(engine, "_kv_prefix_cache", None) or getattr(
+        engine, "_text_kv_prefix_cache", None
+    )
 
 
 def _entry_bytes(cache_layers):
@@ -153,6 +161,7 @@ async def _timed_reuse(engine, sysprompt, n=3):
 
 async def main():
     import shutil
+
     shutil.rmtree(os.environ["YUNSHU_SSD_CACHE_DIR"], ignore_errors=True)
     os.makedirs(os.environ["YUNSHU_SSD_CACHE_DIR"], exist_ok=True)
     name = os.path.basename(MODEL.rstrip("/"))
@@ -160,15 +169,21 @@ async def main():
     if _IS_VLM:
         from yunshu_engine.types import EngineConfig
         from yunshu_engine.vlm_engine import VLMEngine
-        print("║ path: VLMEngine (batch runner APC; the 4-tier KVPrefixCache is LLM-only)")
+
+        print(
+            "║ path: VLMEngine (batch runner APC; the 4-tier KVPrefixCache is LLM-only)"
+        )
         engine = VLMEngine(MODEL, EngineConfig())
     else:
         from yunshu_engine.batched_engine import BatchedEngine
-        print("║ path: default fast path (_generate_fast) | KVPrefixCache 4-tier | ssd=1")
+
+        print(
+            "║ path: default fast path (_generate_fast) | KVPrefixCache 4-tier | ssd=1"
+        )
         engine = BatchedEngine(model_name=MODEL)
     t0 = time.perf_counter()
     await engine.start()
-    print(f"║ model loaded in {time.perf_counter()-t0:.1f}s")
+    print(f"║ model loaded in {time.perf_counter() - t0:.1f}s")
     pc = _pc(engine)
     # Reuse may be bypassed for correctness (VLM sliding-window / interleaved-mRoPE
     # / hybrid). Report that honestly instead of running empty tiers.
@@ -176,10 +191,24 @@ async def main():
     _bypass_why = "no prefix cache"
     if _bypassed:
         print(f"║ reuse BYPASSED ({_bypass_why}) — correct for this backbone")
-        print("@@RESULT4T@@ " + __import__("json").dumps({
-            "model": name, "prompt_tok": 0, "prefill_tps": 0, "decode_tps": 0,
-            "cold_ms": 0, "hot_entry_mb": 0, "warm_entry_mb": 0, "ssd_disk_mb": 0,
-            "tiers": {}, "bypassed": True, "bypass_reason": _bypass_why}))
+        print(
+            "@@RESULT4T@@ "
+            + __import__("json").dumps(
+                {
+                    "model": name,
+                    "prompt_tok": 0,
+                    "prefill_tps": 0,
+                    "decode_tps": 0,
+                    "cold_ms": 0,
+                    "hot_entry_mb": 0,
+                    "warm_entry_mb": 0,
+                    "ssd_disk_mb": 0,
+                    "tiers": {},
+                    "bypassed": True,
+                    "bypass_reason": _bypass_why,
+                }
+            )
+        )
         try:
             await engine.stop()
         except Exception:
@@ -209,7 +238,18 @@ async def main():
     decode_tps = _dec_steps / (_t41 - _t1) if _t41 > _t1 else 0
 
     rows = []  # (tier, ttft_ms, speedup, cached, prefilled, coherent, exact, note)
-    rows.append(("COLD", cold_dt * 1000, 1.0, 0, prompt_tok, True, True, "full prefill baseline"))
+    rows.append(
+        (
+            "COLD",
+            cold_dt * 1000,
+            1.0,
+            0,
+            prompt_tok,
+            True,
+            True,
+            "full prefill baseline",
+        )
+    )
 
     # NB: reuse uses a DIFFERENT user than the prime, so the cached prefix is the
     # long SYSTEM doc (the realistic shared-context case). Priming + reusing with
@@ -227,24 +267,38 @@ async def main():
     _cfg(64, 64)
     pc.clear()
     await _chat(engine, P, PRIME_USER, 8)  # prime → saves the P-based prefix
-    hot_entry_bytes = _entry_bytes(pc._caches[_first_hot_idx(pc)])[0] if pc._caches else 0
+    hot_entry_bytes = (
+        _entry_bytes(pc._caches[_first_hot_idx(pc)])[0] if pc._caches else 0
+    )
     hot_dt, hot_out = await _timed_reuse(engine, P, 3)
     _, hot_txt_out = await _chat(engine, P, QUERY, 24)
     hot_txt = (getattr(hot_txt_out, "text", "") or "").strip()
     hot_cached = getattr(hot_out, "cached_tokens", 0)
     hot_pref = max(0, getattr(hot_out, "prompt_tokens", 0) - hot_cached)
-    rows.append(("HOT", hot_dt * 1000, cold_dt / hot_dt if hot_dt else 0, hot_cached, hot_pref,
-                 bool(hot_txt), hot_txt == ref_text, "GPU-resident full precision"))
+    rows.append(
+        (
+            "HOT",
+            hot_dt * 1000,
+            cold_dt / hot_dt if hot_dt else 0,
+            hot_cached,
+            hot_pref,
+            bool(hot_txt),
+            hot_txt == ref_text,
+            "GPU-resident full precision",
+        )
+    )
 
     # ── WARM: hot_limit=1 so priming P then 1 distinct prefix demotes P to 4-bit;
     #    max_entries large so no eviction churn destroys the WARM entry. ──
     _cfg(1, 64)
     pc.clear()
-    await _chat(engine, P, PRIME_USER, 8)       # prime P (oldest, becomes WARM)
+    await _chat(engine, P, PRIME_USER, 8)  # prime P (oldest, becomes WARM)
     await _chat(engine, _doc("WFLOOD0"), "q0", 4)  # 2nd hot entry → P demoted to WARM
     await asyncio.sleep(0.2)
     widx = _first_warm_idx(pc)
-    warm_entry_bytes, warm_is_quant = (_entry_bytes(pc._caches[widx]) if widx >= 0 else (0, False))
+    warm_entry_bytes, warm_is_quant = (
+        _entry_bytes(pc._caches[widx]) if widx >= 0 else (0, False)
+    )
     st = pc.get_stats().get("prefix_cache", pc.get_stats())
     warm_n = st.get("warm_entries", "?")
     warm_dt, warm_out = await _timed_reuse(engine, P, 3)
@@ -252,23 +306,36 @@ async def main():
     warm_txt = (getattr(warm_txt_out, "text", "") or "").strip()
     warm_cached = getattr(warm_out, "cached_tokens", 0)
     warm_pref = max(0, getattr(warm_out, "prompt_tokens", 0) - warm_cached)
-    rows.append(("WARM", warm_dt * 1000, cold_dt / warm_dt if warm_dt else 0, warm_cached, warm_pref,
-                 bool(warm_txt), warm_txt == ref_text,
-                 f"warm_entries={warm_n} 4bit={warm_is_quant}"))
+    rows.append(
+        (
+            "WARM",
+            warm_dt * 1000,
+            cold_dt / warm_dt if warm_dt else 0,
+            warm_cached,
+            warm_pref,
+            bool(warm_txt),
+            warm_txt == ref_text,
+            f"warm_entries={warm_n} 4bit={warm_is_quant}",
+        )
+    )
 
     # ── SSD: max_entries=4 so priming P then overflowing evicts P to disk. The
     #    FIRST reuse (n=1) is the genuine SSD restore (later reuses hit the
     #    re-added RAM entry). Hybrid models decline (linear-attn not on disk). ──
     _cfg(64, 4)
     pc.clear()
-    await _chat(engine, P, PRIME_USER, 8)       # prime P (oldest)
+    await _chat(engine, P, PRIME_USER, 8)  # prime P (oldest)
     for i in range(6):
-        await _chat(engine, _doc(f"SFLOOD{i}"), f"q{i}", 4)  # overflow → P spills to SSD
+        await _chat(
+            engine, _doc(f"SFLOOD{i}"), f"q{i}", 4
+        )  # overflow → P spills to SSD
     await asyncio.sleep(0.5)
     ssd_after_flood = _ssd_bytes()
     ram_entries = len(pc._prompts)  # capped at max_entries=4; P (oldest) spilled to SSD
     ssd_dt, ssd_out = await _timed_reuse(engine, P, 1)  # first reuse = real SSD restore
-    ssd_txt = (getattr(ssd_out, "text", "") or "").strip()  # n=1, max_tokens=1 → no text
+    ssd_txt = (
+        getattr(ssd_out, "text", "") or ""
+    ).strip()  # n=1, max_tokens=1 → no text
     ssd_cached = getattr(ssd_out, "cached_tokens", 0)
     ssd_pref = max(0, getattr(ssd_out, "prompt_tokens", 0) - ssd_cached)
     # coherence on a fresh overflow so the text call is itself the SSD restore
@@ -280,28 +347,45 @@ async def main():
     _, ssd_txt_out = await _chat(engine, P, QUERY, 24)
     ssd_txt = (getattr(ssd_txt_out, "text", "") or "").strip()
     ssd_restored = getattr(ssd_txt_out, "cached_tokens", 0) > 0
-    rows.append(("SSD", ssd_dt * 1000, cold_dt / ssd_dt if ssd_dt else 0, ssd_cached, ssd_pref,
-                 bool(ssd_txt), ssd_txt == ref_text,
-                 f"ram={ram_entries}/4 disk={ssd_after_flood/1e6:.0f}MB restored={ssd_restored}"))
+    rows.append(
+        (
+            "SSD",
+            ssd_dt * 1000,
+            cold_dt / ssd_dt if ssd_dt else 0,
+            ssd_cached,
+            ssd_pref,
+            bool(ssd_txt),
+            ssd_txt == ref_text,
+            f"ram={ram_entries}/4 disk={ssd_after_flood / 1e6:.0f}MB restored={ssd_restored}",
+        )
+    )
 
     # ── REPORT ──
     print(f"╠══ MODEL: {name}  (prompt≈{prompt_tok} tok)")
     print(f"║  prefill {prefill_tps:6.0f} tok/s   decode {decode_tps:6.1f} tok/s")
     print(f"║  ref greedy output: {ref_text[:42]!r}")
     print("╠══ PER-TIER RE-REQUEST OF THE SAME PREFIX ══")
-    print(f"║  {'tier':5} {'TTFT(ms)':>9} {'speedup':>8} {'cached':>7} {'prefil':>7}  {'coh':>3} {'exact':>5}  note")
-    for (tier, ttft, sp, ca, pr, coh, ex, note) in rows:
-        print(f"║  {tier:5} {ttft:9.1f} {sp:7.2f}x {ca:7} {pr:7}  {'YES' if coh else 'no ':>3} "
-              f"{'Y' if ex else 'n':>5}  {note}")
+    print(
+        f"║  {'tier':5} {'TTFT(ms)':>9} {'speedup':>8} {'cached':>7} {'prefil':>7}  {'coh':>3} {'exact':>5}  note"
+    )
+    for tier, ttft, sp, ca, pr, coh, ex, note in rows:
+        print(
+            f"║  {tier:5} {ttft:9.1f} {sp:7.2f}x {ca:7} {pr:7}  {'YES' if coh else 'no ':>3} "
+            f"{'Y' if ex else 'n':>5}  {note}"
+        )
     print("╠══ PER-ENTRY MEMORY (UMA RAM per cached prefix) ══")
     if hot_entry_bytes and warm_entry_bytes:
-        print(f"║  HOT  entry: {hot_entry_bytes/1e6:7.2f} MB (full precision)")
-        print(f"║  WARM entry: {warm_entry_bytes/1e6:7.2f} MB (4-bit)   "
-              f"=> {hot_entry_bytes/max(1,warm_entry_bytes):.2f}x smaller")
+        print(f"║  HOT  entry: {hot_entry_bytes / 1e6:7.2f} MB (full precision)")
+        print(
+            f"║  WARM entry: {warm_entry_bytes / 1e6:7.2f} MB (4-bit)   "
+            f"=> {hot_entry_bytes / max(1, warm_entry_bytes):.2f}x smaller"
+        )
     else:
-        print(f"║  HOT={hot_entry_bytes/1e6:.2f}MB WARM={warm_entry_bytes/1e6:.2f}MB (one not captured)")
-    print(f"║  SSD on disk after overflow: {ssd_after_flood/1e6:.1f} MB")
-    print(f"╚{'═'*54}")
+        print(
+            f"║  HOT={hot_entry_bytes / 1e6:.2f}MB WARM={warm_entry_bytes / 1e6:.2f}MB (one not captured)"
+        )
+    print(f"║  SSD on disk after overflow: {ssd_after_flood / 1e6:.1f} MB")
+    print(f"╚{'═' * 54}")
     # AUTHORITATIVE lossless verdict: for VLM the engine ran an empirical reuse
     # probe at load (full prefill vs reuse-path, bit-identical) — that is ground
     # truth, unlike the per-tier text exact-match which is noisy for short
@@ -310,12 +394,23 @@ async def main():
     print(f"║  reuse probe (authoritative lossless): {probe_lossless}")
     # Machine-readable summary (consumed by scripts/bench_all.py).
     import json
-    rd = {r[0]: {"ttft_ms": round(r[1], 1), "speedup": round(r[2], 2),
-                 "cached": r[3], "prefilled": r[4], "lossless": bool(r[6]),
-                 "note": r[7]} for r in rows}
+
+    rd = {
+        r[0]: {
+            "ttft_ms": round(r[1], 1),
+            "speedup": round(r[2], 2),
+            "cached": r[3],
+            "prefilled": r[4],
+            "lossless": bool(r[6]),
+            "note": r[7],
+        }
+        for r in rows
+    }
     summary = {
-        "model": name, "prompt_tok": prompt_tok,
-        "prefill_tps": round(prefill_tps), "decode_tps": round(decode_tps, 1),
+        "model": name,
+        "prompt_tok": prompt_tok,
+        "prefill_tps": round(prefill_tps),
+        "decode_tps": round(decode_tps, 1),
         "cold_ms": round(cold_dt * 1000, 1),
         "hot_entry_mb": round(hot_entry_bytes / 1e6, 2),
         "warm_entry_mb": round(warm_entry_bytes / 1e6, 2),

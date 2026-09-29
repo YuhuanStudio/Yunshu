@@ -790,7 +790,27 @@ class RegexConstraint:
 
         valid_chars = self._valid_next_chars()
         if valid_chars is None:
-            return self._get_all_token_ids(tokenizer)
+            everything = self._get_all_token_ids(tokenizer)
+            # Special tokens (EOS included) are excluded from the permissive vocab, so a
+            # pattern with an unbounded tail (``[\\s\\S]*``) could never stop before
+            # max_tokens: add EOS back whenever the buffer already fully matches.
+            if (
+                self._dfa.is_accepting(self._dfa_state)
+                if self._dfa.has_dfa
+                else (self._dfa.is_full_match(self._text_buffer))
+            ):
+                eos = getattr(tokenizer, "eos_token_ids", None)
+                if eos is None:
+                    eos = [getattr(tokenizer, "eos_token_id", None)]
+                eos = [
+                    e
+                    for e in (eos if isinstance(eos, (list, tuple, set)) else [eos])
+                    if e is not None
+                ]
+                everything = list(everything) + [
+                    e for e in eos if e not in set(everything)
+                ]
+            return everything
         if not valid_chars:
             return []
 
@@ -828,10 +848,12 @@ class RegexConstraint:
         return allowed
 
     def _get_all_token_ids(self, tokenizer: Any) -> list[int]:
+        from .json_schema import without_special_ids
+
         if hasattr(tokenizer, "get_vocab"):
-            return list(tokenizer.get_vocab().values())
+            return without_special_ids(tokenizer, tokenizer.get_vocab().values())
         if hasattr(tokenizer, "vocab") and isinstance(tokenizer.vocab, dict):
-            return list(tokenizer.vocab.values())
+            return without_special_ids(tokenizer, tokenizer.vocab.values())
         vocab_size = getattr(tokenizer, "vocab_size", 32000)
         return list(range(vocab_size))
 
@@ -1417,10 +1439,12 @@ def _build_token_text_map(tokenizer: Any) -> dict[int, str]:
 
 
 def _get_all_token_ids(tokenizer: Any) -> list[int]:
+    from .json_schema import without_special_ids
+
     if hasattr(tokenizer, "get_vocab"):
-        return list(tokenizer.get_vocab().values())
+        return without_special_ids(tokenizer, tokenizer.get_vocab().values())
     if hasattr(tokenizer, "vocab") and isinstance(tokenizer.vocab, dict):
-        return list(tokenizer.vocab.values())
+        return without_special_ids(tokenizer, tokenizer.vocab.values())
     return list(range(getattr(tokenizer, "vocab_size", 32000)))
 
 

@@ -2,6 +2,7 @@
 """Performance benchmark: Yunshu vs mlx-lm vs vllm-mlx vs omlx.
 Metrics: throughput (tok/s), TTFT, prefill latency, memory.
 """
+
 import asyncio
 import gc
 import sys
@@ -27,6 +28,7 @@ def log(msg):
 def get_rss_mb():
     try:
         import psutil
+
         return psutil.Process().memory_info().rss / 1048576
     except Exception:
         return 0.0
@@ -35,6 +37,7 @@ def get_rss_mb():
 def cleanup():
     gc.collect()
     import mlx.core as mx
+
     mx.synchronize()
     mx.clear_cache()
 
@@ -62,7 +65,9 @@ def bench_mlxlm():
         ("long_prompt_long_gen", PROMPT_LONG, 512),
     ]:
         # Warmup
-        for _ in stream_generate(model, tokenizer, prompt, max_tokens=32, sampler=sampler):
+        for _ in stream_generate(
+            model, tokenizer, prompt, max_tokens=32, sampler=sampler
+        ):
             pass
 
         # TTFT + throughput
@@ -73,7 +78,9 @@ def bench_mlxlm():
             t0 = time.perf_counter()
             first_tok_time = None
             n_tok = 0
-            for _resp in stream_generate(model, tokenizer, prompt, max_tokens=max_tok, sampler=sampler):
+            for _resp in stream_generate(
+                model, tokenizer, prompt, max_tokens=max_tok, sampler=sampler
+            ):
                 if first_tok_time is None:
                     first_tok_time = time.perf_counter()
                 n_tok += 1
@@ -85,13 +92,17 @@ def bench_mlxlm():
             total_times.append(gen_time)
 
         avg_ttft = sum(ttfts) / len(ttfts) * 1000  # ms
-        avg_tps = sum(t / s for t, s in zip(total_toks, total_times, strict=False)) / len(total_toks)
+        avg_tps = sum(
+            t / s for t, s in zip(total_toks, total_times, strict=False)
+        ) / len(total_toks)
         results[label] = {
             "ttft_ms": round(avg_ttft, 1),
             "tok_per_s": round(avg_tps, 1),
             "avg_tokens": round(sum(total_toks) / len(total_toks)),
         }
-        log(f"    {label}: TTFT={avg_ttft:.1f}ms, {avg_tps:.1f} tok/s, avg {sum(total_toks)//len(total_toks)} tok")
+        log(
+            f"    {label}: TTFT={avg_ttft:.1f}ms, {avg_tps:.1f} tok/s, avg {sum(total_toks) // len(total_toks)} tok"
+        )
 
     del model, tokenizer
     cleanup()
@@ -125,7 +136,9 @@ async def bench_yunshu():
             t0 = time.perf_counter()
             first_tok_time = None
             n_tok = 0
-            async for _chunk in engine.stream_generate(prompt=prompt, max_tokens=max_tok, temperature=0.0):
+            async for _chunk in engine.stream_generate(
+                prompt=prompt, max_tokens=max_tok, temperature=0.0
+            ):
                 if first_tok_time is None:
                     first_tok_time = time.perf_counter()
                 n_tok += 1
@@ -137,13 +150,17 @@ async def bench_yunshu():
             total_times.append(gen_time)
 
         avg_ttft = sum(ttfts) / len(ttfts) * 1000
-        avg_tps = sum(t / s for t, s in zip(total_toks, total_times, strict=False)) / len(total_toks)
+        avg_tps = sum(
+            t / s for t, s in zip(total_toks, total_times, strict=False)
+        ) / len(total_toks)
         results[label] = {
             "ttft_ms": round(avg_ttft, 1),
             "tok_per_s": round(avg_tps, 1),
             "avg_tokens": round(sum(total_toks) / len(total_toks)),
         }
-        log(f"    {label}: TTFT={avg_ttft:.1f}ms, {avg_tps:.1f} tok/s, avg {sum(total_toks)//len(total_toks)} tok")
+        log(
+            f"    {label}: TTFT={avg_ttft:.1f}ms, {avg_tps:.1f} tok/s, avg {sum(total_toks) // len(total_toks)} tok"
+        )
 
     await engine.stop()
     cleanup()
@@ -179,7 +196,9 @@ async def bench_vllm_mlx():
             t0 = time.perf_counter()
             first_tok_time = None
             n_tok = 0
-            async for _chunk in engine.stream_generate(prompt=prompt, max_tokens=max_tok, temperature=0.0):
+            async for _chunk in engine.stream_generate(
+                prompt=prompt, max_tokens=max_tok, temperature=0.0
+            ):
                 if first_tok_time is None:
                     first_tok_time = time.perf_counter()
                 n_tok += 1
@@ -191,13 +210,17 @@ async def bench_vllm_mlx():
             total_times.append(gen_time)
 
         avg_ttft = sum(ttfts) / len(ttfts) * 1000
-        avg_tps = sum(t / s for t, s in zip(total_toks, total_times, strict=False)) / len(total_toks)
+        avg_tps = sum(
+            t / s for t, s in zip(total_toks, total_times, strict=False)
+        ) / len(total_toks)
         results[label] = {
             "ttft_ms": round(avg_ttft, 1),
             "tok_per_s": round(avg_tps, 1),
             "avg_tokens": round(sum(total_toks) / len(total_toks)),
         }
-        log(f"    {label}: TTFT={avg_ttft:.1f}ms, {avg_tps:.1f} tok/s, avg {sum(total_toks)//len(total_toks)} tok")
+        log(
+            f"    {label}: TTFT={avg_ttft:.1f}ms, {avg_tps:.1f} tok/s, avg {sum(total_toks) // len(total_toks)} tok"
+        )
 
     await engine.stop()
     cleanup()
@@ -232,7 +255,9 @@ async def bench_omlx():
             t0 = time.perf_counter()
             first_tok_time = None
             n_tok = 0
-            async for _chunk in engine.stream_generate(prompt=prompt, max_tokens=max_tok, temperature=0.0):
+            async for _chunk in engine.stream_generate(
+                prompt=prompt, max_tokens=max_tok, temperature=0.0
+            ):
                 if first_tok_time is None:
                     first_tok_time = time.perf_counter()
                 n_tok += 1
@@ -244,13 +269,17 @@ async def bench_omlx():
             total_times.append(gen_time)
 
         avg_ttft = sum(ttfts) / len(ttfts) * 1000
-        avg_tps = sum(t / s for t, s in zip(total_toks, total_times, strict=False)) / len(total_toks)
+        avg_tps = sum(
+            t / s for t, s in zip(total_toks, total_times, strict=False)
+        ) / len(total_toks)
         results[label] = {
             "ttft_ms": round(avg_ttft, 1),
             "tok_per_s": round(avg_tps, 1),
             "avg_tokens": round(sum(total_toks) / len(total_toks)),
         }
-        log(f"    {label}: TTFT={avg_ttft:.1f}ms, {avg_tps:.1f} tok/s, avg {sum(total_toks)//len(total_toks)} tok")
+        log(
+            f"    {label}: TTFT={avg_ttft:.1f}ms, {avg_tps:.1f} tok/s, avg {sum(total_toks) // len(total_toks)} tok"
+        )
 
     await engine.stop()
     cleanup()
@@ -297,7 +326,11 @@ async def main():
     log("  SUMMARY")
     log("=" * 70)
 
-    for scenario in ["short_prompt_short_gen", "medium_prompt_medium_gen", "long_prompt_long_gen"]:
+    for scenario in [
+        "short_prompt_short_gen",
+        "medium_prompt_medium_gen",
+        "long_prompt_long_gen",
+    ]:
         log(f"\n  ── {scenario} ──")
         log(f"  {'Framework':<12} {'TTFT':>10} {'tok/s':>10} {'Memory':>10}")
         log(f"  {'─' * 12} {'─' * 10} {'─' * 10} {'─' * 10}")

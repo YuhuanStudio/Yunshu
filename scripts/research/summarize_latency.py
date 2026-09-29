@@ -40,11 +40,20 @@ def main():
                     "case": case,
                     "requests": len(rows),
                     "task_ok": sum(row.get("task_ok") is True for row in rows),
-                    "http_ok": sum(row.get("http_status") == 200 and row.get("done_received") for row in rows),
+                    "http_ok": sum(
+                        row.get("http_status") == 200 and row.get("done_received")
+                        for row in rows
+                    ),
                     "first_content": metric(rows, "first_content_s"),
                     "first_reasoning": metric(rows, "first_reasoning_s"),
                     "complete": metric(rows, "wall_s"),
-                    "cached_tokens": [row.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens") for row in rows if isinstance(row.get("usage"), dict)],
+                    "cached_tokens": [
+                        row.get("usage", {})
+                        .get("prompt_tokens_details", {})
+                        .get("cached_tokens")
+                        for row in rows
+                        if isinstance(row.get("usage"), dict)
+                    ],
                 },
                 ensure_ascii=False,
             )

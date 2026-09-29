@@ -15,6 +15,7 @@ round-trip with a real engine, this asserts:
 
 Run: PYTHONPATH=. uv run python scripts/verify_streaming_sse.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -47,16 +48,30 @@ async def main() -> int:
     detail: list[str] = []
     try:
         transport = httpx.ASGITransport(app=create_app())
-        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=120) as client:
-            msgs = [{"role": "user", "content": "Name three primary colors in one short line."}]
-            base = {"model": MODEL, "messages": msgs, "max_tokens": 40,
-                    "temperature": 0.0, "enable_thinking": False}
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test", timeout=120
+        ) as client:
+            msgs = [
+                {
+                    "role": "user",
+                    "content": "Name three primary colors in one short line.",
+                }
+            ]
+            base = {
+                "model": MODEL,
+                "messages": msgs,
+                "max_tokens": 40,
+                "temperature": 0.0,
+                "enable_thinking": False,
+            }
 
             # ── streamed ────────────────────────────────────────────────────
             sse_lines: list[str] = []
-            async with client.stream("POST", "/v1/chat/completions",
-                                     json=dict(base, stream=True,
-                                               stream_options={"include_usage": True})) as resp:
+            async with client.stream(
+                "POST",
+                "/v1/chat/completions",
+                json=dict(base, stream=True, stream_options={"include_usage": True}),
+            ) as resp:
                 checks["stream: HTTP 200"] = resp.status_code == 200
                 async for line in resp.aiter_lines():
                     if line.startswith("data: "):
@@ -64,10 +79,18 @@ async def main() -> int:
 
             done = sse_lines and sse_lines[-1].strip() == "[DONE]"
             checks["stream: ends with [DONE]"] = bool(done)
-            payloads = [json.loads(x) for x in sse_lines if x.strip() and x.strip() != "[DONE]"]
+            payloads = [
+                json.loads(x) for x in sse_lines if x.strip() and x.strip() != "[DONE]"
+            ]
 
-            envelope_ok = all(p.get("object") == "chat.completion.chunk" for p in payloads if p.get("choices"))
-            checks["stream: chunk object == chat.completion.chunk"] = bool(payloads) and envelope_ok
+            envelope_ok = all(
+                p.get("object") == "chat.completion.chunk"
+                for p in payloads
+                if p.get("choices")
+            )
+            checks["stream: chunk object == chat.completion.chunk"] = (
+                bool(payloads) and envelope_ok
+            )
 
             # first delta with content/role
             first_role = None
@@ -88,15 +111,26 @@ async def main() -> int:
             checks["stream: first delta role == assistant"] = first_role == "assistant"
             checks["stream: exactly one finish_reason chunk"] = fr_count == 1
             checks["stream: include_usage yields usage"] = (
-                isinstance(usage_obj, dict) and usage_obj.get("completion_tokens", 0) > 0)
+                isinstance(usage_obj, dict)
+                and usage_obj.get("completion_tokens", 0) > 0
+            )
             checks["stream: assembled text non-empty"] = bool(assembled.strip())
-            detail.append(f"chunks={len(payloads)} fr_count={fr_count} usage={usage_obj} role={first_role}")
+            detail.append(
+                f"chunks={len(payloads)} fr_count={fr_count} usage={usage_obj} role={first_role}"
+            )
 
             # ── non-streamed comparison (correctness at temp 0) ──────────────
-            r2 = await client.post("/v1/chat/completions", json=dict(base, stream=False))
-            ns_text = (r2.json()["choices"][0]["message"]["content"]) if r2.status_code == 200 else None
+            r2 = await client.post(
+                "/v1/chat/completions", json=dict(base, stream=False)
+            )
+            ns_text = (
+                (r2.json()["choices"][0]["message"]["content"])
+                if r2.status_code == 200
+                else None
+            )
             checks["stream: assembled == non-stream text (temp0)"] = (
-                ns_text is not None and assembled == ns_text)
+                ns_text is not None and assembled == ns_text
+            )
             detail.append(f"streamed={assembled[:55]!r}")
             detail.append(f"nonstrm ={(ns_text or '')[:55]!r}")
     finally:

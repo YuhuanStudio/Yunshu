@@ -91,7 +91,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_AUTH_TOKEN` | str | unset | Bearer token. When set, every request except health/version/docs needs it; unset: inference is open and operational endpoints are denied. |
 | `YUNSHU_AUTH_DISABLED` | bool | off | Disable auth entirely (operational endpoints open too). Local development only. |
 | `YUNSHU_ACTOR_IDENTITY` | str | owner | Identity recorded for authenticated requests in the audit log. |
-| `YUNSHU_RATE_LIMIT_RPM` | int | 120 | Per-client request rate limit (requests per minute) when rate limiting is enabled. |
+| `YUNSHU_RATE_LIMIT_RPM` | int | 0 | Per-client request rate limit in requests per minute; 0 (default) turns rate limiting off. A local single-user engine has no need for it; set it when the server is exposed to other machines. |
 | `YUNSHU_TRUSTED_PROXIES` | list | unset | Comma-separated proxy IPs whose X-Forwarded-For header is trusted. |
 
 ### memory
@@ -131,7 +131,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `YUNSHU_MTP` | bool | on | Qwen3.5-family VLMs: draft with the checkpoint's MTP head (batch-invariant, spec on == spec off). |
-| `YUNSHU_VLM_DRAFT` | path | unset | Qwen3.5-family VLMs: external DFlash drafter directory; replaces the MTP draft (batch-invariant verify, spec on == spec off). |
+| `YUNSHU_VLM_DRAFT` | path | unset | Qwen3.5-family VLMs: speculative draft override. A DFlash drafter directory; 'mtp' forces the checkpoint MTP head; 'off' disables drafting. Unset: a DFlash2 drafter matching the model is used automatically when it is in the models dir or the Hugging Face cache, else the MTP head (batch-invariant verify, spec on == spec off). |
 | `YUNSHU_MTP_BLOCK_SIZE` | int | unset | Draft block size (DFlash: the ceiling its acceptance-driven depth stays under). Unset: 6 for MTP, the drafter's trained block for DFlash. |
 | `YUNSHU_NGRAM_DEFAULT` | bool | off | Text models: lossless n-gram speculation on greedy requests by default (per-request spec_decode also enables it). Wins on repetitive output. |
 | `YUNSHU_SPEC_PROPOSER` | `ngram` \| `suffix` | ngram | Text models: speculative proposer family for n-gram speculation. |

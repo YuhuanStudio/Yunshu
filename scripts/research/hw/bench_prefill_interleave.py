@@ -26,7 +26,9 @@ from sweep_round_driver import PROMPTS, encode, load  # noqa: E402
 def one(model, drafter, stop, a_ids, b_ids, tokens, drafts, chunk=None):
     from yunshu_engine.round_driver.driver import Request, RoundDriver
 
-    d = RoundDriver(model, drafter=drafter if drafts else None, stop_tokens=stop, chunk=chunk)
+    d = RoundDriver(
+        model, drafter=drafter if drafts else None, stop_tokens=stop, chunk=chunk
+    )
     d.add(Request(a_ids, tokens, handle="a"))
     a_times, a_tokens, b_first, b_added = [], [], None, None
     b_tokens = []
@@ -89,11 +91,19 @@ def main():
         )
         before = [t for t in at if t < b_added]
         during = [t for t in at if b_added <= t <= b_first]
-        r_before = (len(before) - 1) / (before[-1] - before[0]) if len(before) > 2 else None
+        r_before = (
+            (len(before) - 1) / (before[-1] - before[0]) if len(before) > 2 else None
+        )
         r_during = len(during) / (b_first - b_added)
-        gaps = sorted(y - x for x, y in zip(at[:-1], at[1:], strict=True) if x >= b_added
-                      and y <= b_first + 0.5)
-        out(kind="interleave", chunk=chunk, prompt=len(b_ids),
+        gaps = sorted(
+            y - x
+            for x, y in zip(at[:-1], at[1:], strict=True)
+            if x >= b_added and y <= b_first + 0.5
+        )
+        out(
+            kind="interleave",
+            chunk=chunk,
+            prompt=len(b_ids),
             decode_tok_s_before=round(r_before, 1) if r_before else None,
             decode_tok_s_during_prefill=round(r_during, 2),
             decode_gap_ms_median=round(gaps[len(gaps) // 2] * 1e3, 1) if gaps else None,
@@ -104,7 +114,9 @@ def main():
             prompt_alone_tok_s=round(len(b_ids) / solo_first, 0),
             b_tokens_equal_alone=btok == solo_tokens,
             b_tokens_equal_chunk_first=(btok == ref_b) if ref_b else None,
-            drafted=d.drafted, accepted=d.accepted)
+            drafted=d.drafted,
+            accepted=d.accepted,
+        )
         ref_b = ref_b or btok
     _ = ref_b
 

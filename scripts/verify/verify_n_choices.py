@@ -19,6 +19,7 @@ tearing the engine_core task down).
 
 Run: PYTHONPATH=. uv run python scripts/verify_n_choices.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -50,10 +51,17 @@ async def main() -> int:
     detail: list[str] = []
     try:
         transport = httpx.ASGITransport(app=create_app())
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
             body = {
                 "model": MODEL,
-                "messages": [{"role": "user", "content": "Write a short, vivid sentence about the ocean."}],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Write a short, vivid sentence about the ocean.",
+                    }
+                ],
                 "max_tokens": 32,
                 "temperature": 1.0,
                 "n": 3,
@@ -69,18 +77,33 @@ async def main() -> int:
                 idxs = [c.get("index") for c in ch]
                 frs = [c.get("finish_reason") for c in ch]
                 usage = d.get("usage") or {}
-                p, comp, tot = usage.get("prompt_tokens"), usage.get("completion_tokens"), usage.get("total_tokens")
+                p, comp, tot = (
+                    usage.get("prompt_tokens"),
+                    usage.get("completion_tokens"),
+                    usage.get("total_tokens"),
+                )
 
                 checks["n=3: exactly 3 choices"] = len(ch) == 3
                 checks["n=3: contiguous indices 0,1,2"] = idxs == [0, 1, 2]
-                checks["n=3: ≥2 distinct texts (independent sampling)"] = len(set(texts)) >= 2
-                checks["n=3: all choices have finish_reason + content"] = all(frs) and all(t.strip() for t in texts)
+                checks["n=3: ≥2 distinct texts (independent sampling)"] = (
+                    len(set(texts)) >= 2
+                )
+                checks["n=3: all choices have finish_reason + content"] = all(
+                    frs
+                ) and all(t.strip() for t in texts)
                 checks["n=3: total == prompt + completion"] = (
-                    isinstance(p, int) and isinstance(comp, int) and isinstance(tot, int) and tot == p + comp)
+                    isinstance(p, int)
+                    and isinstance(comp, int)
+                    and isinstance(tot, int)
+                    and tot == p + comp
+                )
                 # completion summed across 3 choices → clearly more than a single choice's worth
                 checks["n=3: completion summed across choices (>1.5× a single)"] = (
-                    isinstance(comp, int) and comp > 0)
-                detail.append(f"n=3 idx={idxs} fr={frs} distinct={len(set(texts))}/3 usage p={p} c={comp} t={tot}")
+                    isinstance(comp, int) and comp > 0
+                )
+                detail.append(
+                    f"n=3 idx={idxs} fr={frs} distinct={len(set(texts))}/3 usage p={p} c={comp} t={tot}"
+                )
                 detail.append(f"   sample[0]={texts[0][:50]!r}")
                 detail.append(f"   sample[1]={texts[1][:50]!r}")
 

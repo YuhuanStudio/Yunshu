@@ -17,6 +17,7 @@ This script is part of Phase 0 platform validation. It measures:
 For GPU workloads, it uses mx.array operations directly. For ANE estimates,
 it uses CoreML compilation where possible and analytical estimation otherwise.
 """
+
 from __future__ import annotations
 
 import json
@@ -143,10 +144,14 @@ class ANEBenchmark:
         if device == "ane":
             if self._coreml_available:
                 return self._bench_embedding_ane_coreml(
-                    model_size_m, seq_length, result,
+                    model_size_m,
+                    seq_length,
+                    result,
                 )
             return self._bench_embedding_ane_estimated(
-                model_size_m, seq_length, result,
+                model_size_m,
+                seq_length,
+                result,
             )
 
         result["status"] = f"unknown_device_{device}"
@@ -263,7 +268,13 @@ class ANEBenchmark:
 
             # Warmup
             for _ in range(self.config.num_warmup):
-                coreml_model.predict({"input": np.random.randn(1, seq_length, hidden_dim).astype(np.float32)})
+                coreml_model.predict(
+                    {
+                        "input": np.random.randn(1, seq_length, hidden_dim).astype(
+                            np.float32
+                        )
+                    }
+                )
 
             # Timed iterations
             latencies = []
@@ -282,10 +293,13 @@ class ANEBenchmark:
 
         except Exception as exc:
             logger.warning(
-                "CoreML ANE benchmark failed, falling back to estimation: %s", exc,
+                "CoreML ANE benchmark failed, falling back to estimation: %s",
+                exc,
             )
             return self._bench_embedding_ane_estimated(
-                model_size_m, seq_length, result,
+                model_size_m,
+                seq_length,
+                result,
             )
 
     def _bench_embedding_ane_estimated(
@@ -311,13 +325,17 @@ class ANEBenchmark:
 
         base_latency_ms = 0.5  # ms for 10M model at seq_len=32 on GPU
         # Scale by model size and sequence length
-        gpu_estimated_ms = base_latency_ms * (model_size_m / 10.0) * (seq_length / 32.0) ** 0.7
+        gpu_estimated_ms = (
+            base_latency_ms * (model_size_m / 10.0) * (seq_length / 32.0) ** 0.7
+        )
 
         speedup = estimate_ane_speedup(float(model_size_m), seq_length)
         ane_latency_ms = gpu_estimated_ms / speedup
 
         result["latency_ms"] = round(ane_latency_ms, 3)
-        result["throughput_seq_per_s"] = round(1000.0 / ane_latency_ms, 2) if ane_latency_ms > 0 else 0
+        result["throughput_seq_per_s"] = (
+            round(1000.0 / ane_latency_ms, 2) if ane_latency_ms > 0 else 0
+        )
         result["status"] = "estimated"
         return result
 
@@ -389,10 +407,16 @@ class ANEBenchmark:
         if device == "ane":
             if self._coreml_available:
                 return self._bench_linear_ane_coreml(
-                    in_dim, out_dim, seq_length, result,
+                    in_dim,
+                    out_dim,
+                    seq_length,
+                    result,
                 )
             return self._bench_linear_ane_estimated(
-                in_dim, out_dim, seq_length, result,
+                in_dim,
+                out_dim,
+                seq_length,
+                result,
             )
 
         result["status"] = f"unknown_device_{device}"
@@ -413,6 +437,7 @@ class ANEBenchmark:
 
             class LinearModule:
                 """Minimal linear model for CoreML tracing."""
+
                 pass
 
             import torch  # type: ignore[import-untyped]
@@ -438,7 +463,11 @@ class ANEBenchmark:
 
             for _ in range(self.config.num_warmup):
                 coreml_model.predict(
-                    {"input": np.random.randn(1, seq_length, in_dim).astype(np.float32)},
+                    {
+                        "input": np.random.randn(1, seq_length, in_dim).astype(
+                            np.float32
+                        )
+                    },
                 )
 
             latencies = []
@@ -460,10 +489,14 @@ class ANEBenchmark:
 
         except Exception as exc:
             logger.warning(
-                "CoreML ANE linear bench failed, falling back: %s", exc,
+                "CoreML ANE linear bench failed, falling back: %s",
+                exc,
             )
             return self._bench_linear_ane_estimated(
-                in_dim, out_dim, seq_length, result,
+                in_dim,
+                out_dim,
+                seq_length,
+                result,
             )
 
     def _bench_linear_ane_estimated(
@@ -527,7 +560,9 @@ class ANEBenchmark:
             qkv_weight = mx.random.normal(shape=(hidden_dim, hidden_dim * 3)) * 0.01
             out_weight = mx.random.normal(shape=(hidden_dim, hidden_dim)) * 0.01
             ffn_up_weight = mx.random.normal(shape=(hidden_dim, hidden_dim * 4)) * 0.01
-            ffn_down_weight = mx.random.normal(shape=(hidden_dim * 4, hidden_dim)) * 0.01
+            ffn_down_weight = (
+                mx.random.normal(shape=(hidden_dim * 4, hidden_dim)) * 0.01
+            )
 
             input_x = mx.random.normal(shape=(1, seq_length, hidden_dim))
 
@@ -577,10 +612,14 @@ class ANEBenchmark:
         if device == "ane":
             if self._coreml_available:
                 return self._bench_transformer_ane_coreml(
-                    hidden_dim, seq_length, result,
+                    hidden_dim,
+                    seq_length,
+                    result,
                 )
             return self._bench_transformer_ane_estimated(
-                hidden_dim, seq_length, result,
+                hidden_dim,
+                seq_length,
+                result,
             )
 
         result["status"] = f"unknown_device_{device}"
@@ -640,7 +679,11 @@ class ANEBenchmark:
 
             for _ in range(self.config.num_warmup):
                 coreml_model.predict(
-                    {"input": np.random.randn(1, seq_length, hidden_dim).astype(np.float32)},
+                    {
+                        "input": np.random.randn(1, seq_length, hidden_dim).astype(
+                            np.float32
+                        )
+                    },
                 )
 
             latencies = []
@@ -659,10 +702,13 @@ class ANEBenchmark:
 
         except Exception as exc:
             logger.warning(
-                "CoreML ANE transformer bench failed, falling back: %s", exc,
+                "CoreML ANE transformer bench failed, falling back: %s",
+                exc,
             )
             return self._bench_transformer_ane_estimated(
-                hidden_dim, seq_length, result,
+                hidden_dim,
+                seq_length,
+                result,
             )
 
     def _bench_transformer_ane_estimated(
@@ -681,7 +727,9 @@ class ANEBenchmark:
         estimated_ms = flops / (ane_tops * 1e12 / 1e3) + num_ops * 0.05
 
         result["latency_ms"] = round(estimated_ms, 3)
-        result["throughput_seq_per_s"] = round(1000.0 / estimated_ms, 2) if estimated_ms > 0 else 0
+        result["throughput_seq_per_s"] = (
+            round(1000.0 / estimated_ms, 2) if estimated_ms > 0 else 0
+        )
         result["status"] = "estimated"
         return result
 
@@ -704,16 +752,27 @@ class ANEBenchmark:
         # 1. Embedding inference benchmarks
         for model_size in self.config.model_sizes:
             for seq_len in self.config.seq_lengths:
-                logger.info("  Embedding: %dM params, seq=%d, GPU...", model_size, seq_len)
-                gpu_result = self.bench_embedding_inference(model_size, seq_len, device="gpu")
+                logger.info(
+                    "  Embedding: %dM params, seq=%d, GPU...", model_size, seq_len
+                )
+                gpu_result = self.bench_embedding_inference(
+                    model_size, seq_len, device="gpu"
+                )
                 results.append(gpu_result)
 
-                logger.info("  Embedding: %dM params, seq=%d, ANE...", model_size, seq_len)
-                ane_result = self.bench_embedding_inference(model_size, seq_len, device="ane")
+                logger.info(
+                    "  Embedding: %dM params, seq=%d, ANE...", model_size, seq_len
+                )
+                ane_result = self.bench_embedding_inference(
+                    model_size, seq_len, device="ane"
+                )
                 results.append(ane_result)
 
         if self.config.quick:
-            logger.info("Benchmark complete (quick mode, embedding-only): %d results", len(results))
+            logger.info(
+                "Benchmark complete (quick mode, embedding-only): %d results",
+                len(results),
+            )
             return results
 
         # 2. Linear layer benchmarks (select subset of sizes)
@@ -735,12 +794,20 @@ class ANEBenchmark:
         # 3. Transformer layer benchmarks (select hidden dims)
         for hidden_dim in [128, 256, 512]:
             for seq_len in [32, 128, 512]:
-                logger.info("  Transformer: hidden=%d, seq=%d, GPU...", hidden_dim, seq_len)
-                gpu_result = self.bench_transformer_layer(hidden_dim, seq_len, device="gpu")
+                logger.info(
+                    "  Transformer: hidden=%d, seq=%d, GPU...", hidden_dim, seq_len
+                )
+                gpu_result = self.bench_transformer_layer(
+                    hidden_dim, seq_len, device="gpu"
+                )
                 results.append(gpu_result)
 
-                logger.info("  Transformer: hidden=%d, seq=%d, ANE...", hidden_dim, seq_len)
-                ane_result = self.bench_transformer_layer(hidden_dim, seq_len, device="ane")
+                logger.info(
+                    "  Transformer: hidden=%d, seq=%d, ANE...", hidden_dim, seq_len
+                )
+                ane_result = self.bench_transformer_layer(
+                    hidden_dim, seq_len, device="ane"
+                )
                 results.append(ane_result)
 
         logger.info("Benchmark complete: %d results", len(results))
@@ -776,7 +843,9 @@ class ANEBenchmark:
                 f"  {'Model (M)':>10s} {'Seq Len':>8s} "
                 f"{'GPU (ms)':>10s} {'ANE (ms)':>10s} {'Speedup':>8s} {'Status':>12s}"
             )
-            lines.append(f"  {'-' * 10} {'-' * 8} {'-' * 10} {'-' * 10} {'-' * 8} {'-' * 12}")
+            lines.append(
+                f"  {'-' * 10} {'-' * 8} {'-' * 10} {'-' * 10} {'-' * 8} {'-' * 12}"
+            )
 
             # Group by model_size + seq_length
             grouped: dict[tuple, dict[str, dict]] = {}
@@ -852,7 +921,9 @@ class ANEBenchmark:
                 f"  {'Hidden':>8s} {'Seq Len':>8s} "
                 f"{'GPU (ms)':>10s} {'ANE (ms)':>10s} {'Speedup':>8s} {'Status':>12s}"
             )
-            lines.append(f"  {'-' * 8} {'-' * 8} {'-' * 10} {'-' * 10} {'-' * 8} {'-' * 12}")
+            lines.append(
+                f"  {'-' * 8} {'-' * 8} {'-' * 10} {'-' * 10} {'-' * 8} {'-' * 12}"
+            )
 
             grouped_tf: dict[tuple, dict[str, dict]] = {}
             for r in tf_results:
@@ -897,7 +968,8 @@ def main() -> None:
         description="ANE vs GPU Micro-Benchmark for Phase 0 Platform Validation",
     )
     parser.add_argument(
-        "--output", "-o",
+        "--output",
+        "-o",
         type=Path,
         default=None,
         help="Save results as JSON to this file",

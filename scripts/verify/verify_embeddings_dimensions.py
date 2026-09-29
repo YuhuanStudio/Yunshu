@@ -12,6 +12,7 @@ the /v1/embeddings route honors it.
 
 Run: PYTHONPATH=. uv run python scripts/verify_embeddings_dimensions.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -53,9 +54,15 @@ async def main() -> int:
     detail: list[str] = []
     try:
         transport = httpx.ASGITransport(app=create_app())
-        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=120) as client:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test", timeout=120
+        ) as client:
+
             async def emb(**kw):
-                r = await client.post("/v1/embeddings", json={"model": MODEL, "input": "the sky is blue", **kw})
+                r = await client.post(
+                    "/v1/embeddings",
+                    json={"model": MODEL, "input": "the sky is blue", **kw},
+                )
                 return r
 
             full_r = await emb()
@@ -68,11 +75,17 @@ async def main() -> int:
             if trunc_r.status_code == 200:
                 trunc = trunc_r.json()["data"][0]["embedding"]
                 checks["dimensions=256: returns exactly 256 floats"] = len(trunc) == 256
-                checks["dimensions=256: L2-normalized (norm~1)"] = abs(_norm(trunc) - 1.0) < 0.05
+                checks["dimensions=256: L2-normalized (norm~1)"] = (
+                    abs(_norm(trunc) - 1.0) < 0.05
+                )
                 # Matryoshka: truncated ~ normalized leading slice of full
                 lead = full[:256]
-                checks["dimensions=256: aligns with full[:256] (cos>0.99)"] = _cos(trunc, lead) > 0.99
-                detail.append(f"full_dim={full_dim} trunc_norm={_norm(trunc):.3f} cos(trunc,full[:256])={_cos(trunc, lead):.4f}")
+                checks["dimensions=256: aligns with full[:256] (cos>0.99)"] = (
+                    _cos(trunc, lead) > 0.99
+                )
+                detail.append(
+                    f"full_dim={full_dim} trunc_norm={_norm(trunc):.3f} cos(trunc,full[:256])={_cos(trunc, lead):.4f}"
+                )
 
             # oversize dimensions must not 500
             over_r = await emb(dimensions=full_dim + 100000)

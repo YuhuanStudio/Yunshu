@@ -17,6 +17,7 @@ Run:
   PYTHONPATH=. uv run python scripts/perf_history.py trend
   PYTHONPATH=. uv run python scripts/perf_history.py both       # snapshot then trend
 """
+
 from __future__ import annotations
 
 import datetime as _dt
@@ -34,8 +35,16 @@ TREND_MD = os.path.join(REPO, "docs", "reports", "PERF_TREND.md")
 
 # KPI direction: True = higher is better, False = lower is better.
 # Matched by substring on the KPI key.
-_HIGHER_BETTER = ("decode_tps", "prefill_tps", "/batch", "agg_tps", "_pct", "gates_pass",
-                  "/sys", "tflops")
+_HIGHER_BETTER = (
+    "decode_tps",
+    "prefill_tps",
+    "/batch",
+    "agg_tps",
+    "_pct",
+    "gates_pass",
+    "/sys",
+    "tflops",
+)
 _LOWER_BETTER = ("ttft_ms", "cold_ms", "_mb", "_seconds", "/lat")
 
 
@@ -47,13 +56,16 @@ def _git_sha() -> str:
     try:
         return subprocess.check_output(
             ["git", "-C", REPO, "rev-parse", "--short", "HEAD"],
-            text=True, stderr=subprocess.DEVNULL).strip()
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
     except Exception:
         return "unknown"
 
 
 def _pct(s: str):
     import re
+
     m = re.search(r"([\d.]+)%", str(s))
     return float(m.group(1)) if m else None
 
@@ -74,6 +86,7 @@ def _gpu_tflops(seconds: float = 2.0) -> float | None:
         import time as _t
 
         import mlx.core as mx
+
         N = 8192
         a = mx.random.normal((N, N), dtype=mx.float16)
         b = mx.random.normal((N, N), dtype=mx.float16)
@@ -86,12 +99,13 @@ def _gpu_tflops(seconds: float = 2.0) -> float | None:
         dt = _t.perf_counter() - t0
         del a, b
         mx.clear_cache()
-        return round((2 * N ** 3 * iters) / dt / 1e12, 1)
+        return round((2 * N**3 * iters) / dt / 1e12, 1)
     except Exception:
         return None
 
 
 # ── KPI extraction from a regression_report.json ──────────────────────────────
+
 
 def extract_kpis(results: list) -> dict:
     """Flatten the ABSOLUTE numbers out of a regression result list."""
@@ -112,7 +126,9 @@ def extract_kpis(results: list) -> dict:
                     if isinstance(row.get("ttft_ms"), (int, float)):
                         kpis[f"fw/{model}/{fw}/ttft_ms"] = round(row["ttft_ms"], 1)
                     if isinstance(row.get("decode_tps"), (int, float)):
-                        kpis[f"fw/{model}/{fw}/decode_tps"] = round(row["decode_tps"], 1)
+                        kpis[f"fw/{model}/{fw}/decode_tps"] = round(
+                            row["decode_tps"], 1
+                        )
                     for b, v in (row.get("batch") or {}).items():
                         if isinstance(v, (int, float)):
                             kpis[f"fw/{model}/{fw}/batch{b}"] = round(v, 1)
@@ -122,8 +138,14 @@ def extract_kpis(results: list) -> dict:
             for entry in art:
                 model = _short(entry.get("name", "?"))
                 ft = entry.get("ft") or {}
-                for k in ("prefill_tps", "decode_tps", "cold_ms",
-                          "hot_entry_mb", "warm_entry_mb", "ssd_disk_mb"):
+                for k in (
+                    "prefill_tps",
+                    "decode_tps",
+                    "cold_ms",
+                    "hot_entry_mb",
+                    "warm_entry_mb",
+                    "ssd_disk_mb",
+                ):
                     if isinstance(ft.get(k), (int, float)):
                         kpis[f"cache/{model}/{k}"] = round(ft[k], 2)
                 # per-model thermal tag (measured right after THIS model's cache
@@ -133,7 +155,9 @@ def extract_kpis(results: list) -> dict:
                     kpis[f"cache/{model}/_gpu_tflops"] = round(ft["_gpu_tflops"], 1)
                 for tier, td in (ft.get("tiers") or {}).items():
                     if isinstance((td or {}).get("ttft_ms"), (int, float)):
-                        kpis[f"cache/{model}/tier_{tier}_ttft_ms"] = round(td["ttft_ms"], 1)
+                        kpis[f"cache/{model}/tier_{tier}_ttft_ms"] = round(
+                            td["ttft_ms"], 1
+                        )
 
         # quality KPIs
         if name.startswith("quality: MMLU"):
@@ -155,6 +179,7 @@ def extract_kpis(results: list) -> dict:
 
 # ── snapshot ──────────────────────────────────────────────────────────────────
 
+
 def snapshot(report_json: str = REPORT_JSON) -> str | None:
     if not os.path.exists(report_json):
         print(f"SKIP snapshot: {report_json} not found")
@@ -175,17 +200,32 @@ def snapshot(report_json: str = REPORT_JSON) -> str | None:
         print(f"  thermal tag: {_tf} TFLOP/s (cool ceiling ≈9.5 on this M3 Max)")
     ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     tier = "unknown"
-    go = all(r.get("status") == "PASS" for r in results if str(r.get("gate")) in ("True", True))
-    snap = {"timestamp": ts, "git_sha": _git_sha(), "tier": tier, "go": go,
-            "n_kpis": len(kpis), "has_perf": has_perf, "kpis": kpis}
+    go = all(
+        r.get("status") == "PASS"
+        for r in results
+        if str(r.get("gate")) in ("True", True)
+    )
+    snap = {
+        "timestamp": ts,
+        "git_sha": _git_sha(),
+        "tier": tier,
+        "go": go,
+        "n_kpis": len(kpis),
+        "has_perf": has_perf,
+        "kpis": kpis,
+    }
     os.makedirs(HIST_DIR, exist_ok=True)
     path = os.path.join(HIST_DIR, f"perf_{ts}.json")
     json.dump(snap, open(path, "w"), indent=2)
-    print(f"snapshot -> {os.path.relpath(path, REPO)}  ({len(kpis)} KPIs, has_perf={has_perf})")
+    print(
+        f"snapshot -> {os.path.relpath(path, REPO)}  ({len(kpis)} KPIs, has_perf={has_perf})"
+    )
     return path
 
 
-def snapshot_from_kpis(kpis: dict, source: str = "bench_serve", extra: dict | None = None) -> str | None:
+def snapshot_from_kpis(
+    kpis: dict, source: str = "bench_serve", extra: dict | None = None
+) -> str | None:
     """Append a time-named perf-history snapshot from an arbitrary absolute-KPI
     dict (e.g. bench_serve's server-based numbers). Same append-only file format
     as snapshot(), so these feed the same PERF_TREND.md evolution view.
@@ -193,18 +233,28 @@ def snapshot_from_kpis(kpis: dict, source: str = "bench_serve", extra: dict | No
     if not kpis:
         return None
     ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    snap = {"timestamp": ts, "git_sha": _git_sha(), "tier": source, "go": True,
-            "n_kpis": len(kpis), "has_perf": True, "kpis": kpis}
+    snap = {
+        "timestamp": ts,
+        "git_sha": _git_sha(),
+        "tier": source,
+        "go": True,
+        "n_kpis": len(kpis),
+        "has_perf": True,
+        "kpis": kpis,
+    }
     if extra:
         snap.update(extra)
     os.makedirs(HIST_DIR, exist_ok=True)
     path = os.path.join(HIST_DIR, f"perf_{ts}.json")
     json.dump(snap, open(path, "w"), indent=2)
-    print(f"snapshot -> {os.path.relpath(path, REPO)}  ({len(kpis)} KPIs, source={source})")
+    print(
+        f"snapshot -> {os.path.relpath(path, REPO)}  ({len(kpis)} KPIs, source={source})"
+    )
     return path
 
 
 # ── trend ───────────────────────────────────────────────────────────────────
+
 
 def _load_snaps() -> list[dict]:
     snaps = []
@@ -231,7 +281,11 @@ def _arrow(delta: float, key: str) -> str:
     if d == 0:
         return "↑" if delta > 0 else "↓"
     improved = (delta > 0) if d == 1 else (delta < 0)
-    return "🟢" + ("↑" if delta > 0 else "↓") if improved else "🔴" + ("↑" if delta > 0 else "↓")
+    return (
+        "🟢" + ("↑" if delta > 0 else "↓")
+        if improved
+        else "🔴" + ("↑" if delta > 0 else "↓")
+    )
 
 
 def trend() -> str | None:
@@ -243,23 +297,34 @@ def trend() -> str | None:
     keys = sorted({k for s in snaps for k in s.get("kpis", {})})
     cols = [s["timestamp"][:13] for s in snaps]  # YYYYMMDDTHH
 
-    lines = ["# Performance trend (absolute, append-only)", "",
-             f"_{len(snaps)} snapshot(s); newest = rightmost. Absolute values — NOT ratios "
-             "(baselines shift between runs). 🟢 = improved vs first run, 🔴 = regressed._", ""]
-    lines.append(f"Snapshots: " + ", ".join(
-        f"`{s['timestamp']}`({s.get('git_sha','?')})" for s in snaps))
+    lines = [
+        "# Performance trend (absolute, append-only)",
+        "",
+        f"_{len(snaps)} snapshot(s); newest = rightmost. Absolute values — NOT ratios "
+        "(baselines shift between runs). 🟢 = improved vs first run, 🔴 = regressed._",
+        "",
+    ]
+    lines.append(
+        f"Snapshots: "
+        + ", ".join(f"`{s['timestamp']}`({s.get('git_sha', '?')})" for s in snaps)
+    )
     lines.append("")
 
     # group keys by area prefix
     def area(k):
         return k.split("/")[0]
+
     groups: dict[str, list[str]] = {}
     for k in keys:
         groups.setdefault(area(k), []).append(k)
 
     for g in sorted(groups):
-        lines += [f"## {g}", "", "| metric | " + " | ".join(cols)
-                  + " | Δ first→last |", "|---|" + "---|" * (len(cols) + 1)]
+        lines += [
+            f"## {g}",
+            "",
+            "| metric | " + " | ".join(cols) + " | Δ first→last |",
+            "|---|" + "---|" * (len(cols) + 1),
+        ]
         for k in groups[g]:
             series = [s.get("kpis", {}).get(k) for s in snaps]
             cells = []
@@ -279,12 +344,22 @@ def trend() -> str | None:
                 delta = f"{_arrow(d, k)} {d:+g} ({pct:+.0f}%)"
             else:
                 delta = "—"
-            lines.append("| " + k.split("/", 1)[-1] + " | " + " | ".join(cells) + " | " + delta + " |")
+            lines.append(
+                "| "
+                + k.split("/", 1)[-1]
+                + " | "
+                + " | ".join(cells)
+                + " | "
+                + delta
+                + " |"
+            )
         lines.append("")
 
     os.makedirs(os.path.dirname(TREND_MD), exist_ok=True)
     open(TREND_MD, "w").write("\n".join(lines) + "\n")
-    print(f"trend -> {os.path.relpath(TREND_MD, REPO)}  ({len(snaps)} snapshots, {len(keys)} KPIs)")
+    print(
+        f"trend -> {os.path.relpath(TREND_MD, REPO)}  ({len(snaps)} snapshots, {len(keys)} KPIs)"
+    )
     return TREND_MD
 
 

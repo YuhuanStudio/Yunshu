@@ -15,6 +15,7 @@ Usage:
     .venv/bin/python3 scripts/bench_mtp_cooldown.py --model Qwen3.5-9B-MLX-4bit
     .venv/bin/python3 scripts/bench_mtp_cooldown.py --max-tokens 128
 """
+
 from __future__ import annotations
 
 import argparse
@@ -35,7 +36,7 @@ def _greedy(logits: mx.array) -> int:
 
 def _get_eos_ids(tokenizer) -> set:
     eos_ids = set()
-    if hasattr(tokenizer, 'eos_token_id'):
+    if hasattr(tokenizer, "eos_token_id"):
         eid = tokenizer.eos_token_id
         if isinstance(eid, (list, tuple)):
             eos_ids.update(eid)
@@ -46,18 +47,22 @@ def _get_eos_ids(tokenizer) -> set:
 
 def _snap(cache):
     return [
-        (('arrays', list(c.cache)) if hasattr(c, 'cache') and isinstance(c.cache, list)
-         else ('kv', c.offset) if hasattr(c, 'offset')
-         else (None, None))
+        (
+            ("arrays", list(c.cache))
+            if hasattr(c, "cache") and isinstance(c.cache, list)
+            else ("kv", c.offset)
+            if hasattr(c, "offset")
+            else (None, None)
+        )
         for c in cache
     ]
 
 
 def _restore(cache, snapshot):
     for i, (kind, state) in enumerate(snapshot):
-        if kind == 'arrays':
+        if kind == "arrays":
             cache[i].cache = state
-        elif kind == 'kv':
+        elif kind == "kv":
             cache[i].offset = state
 
 
@@ -107,7 +112,9 @@ def bench_mtp_no_cooldown(model, tokenizer, prompt, max_tokens):
         draft = _greedy(mtp_out[0, -1, :])
 
         verify_out, verify_h = model(
-            mx.array([[primary, draft]]), cache=cache, return_hidden=True,
+            mx.array([[primary, draft]]),
+            cache=cache,
+            return_hidden=True,
         )
         mx.synchronize()
         v0 = _greedy(verify_out[0, 0, :])
@@ -155,10 +162,14 @@ def bench_mtp_cooldown(model, tokenizer, prompt, max_tokens):
     """
     from yunshu_engine.mtp_decoder import MTPConfig, MTPDecoder
 
-    decoder = MTPDecoder(model, tokenizer, MTPConfig(
-        max_tokens=max_tokens,
-        cooldown_on_reject=True,
-    ))
+    decoder = MTPDecoder(
+        model,
+        tokenizer,
+        MTPConfig(
+            max_tokens=max_tokens,
+            cooldown_on_reject=True,
+        ),
+    )
 
     t0 = time.perf_counter()
     tokens = decoder.generate(prompt, max_tokens=max_tokens)
@@ -200,7 +211,7 @@ def main():
         "The capital of France is",
         "In machine learning, gradient descent works by",
         "The key difference between TCP and UDP is that",
-    ][:args.num_prompts]
+    ][: args.num_prompts]
 
     results = {}
     for prompt in prompts:
@@ -211,17 +222,21 @@ def main():
         print(f"  Baseline:      {r_base['tok_s']} tok/s ({r_base['n']} tok)")
 
         r_no_cd = bench_mtp_no_cooldown(model, tokenizer, prompt, args.max_tokens)
-        su_no = r_no_cd['tok_s'] / r_base['tok_s'] if r_base['tok_s'] else 0
-        print(f"  MTP (no cool): {r_no_cd['tok_s']} tok/s ({su_no:.2f}x, "
-              f"accept={r_no_cd['acceptance']:.1%}, "
-              f"{r_no_cd['accepts']}/{r_no_cd['rejects']} a/r)")
+        su_no = r_no_cd["tok_s"] / r_base["tok_s"] if r_base["tok_s"] else 0
+        print(
+            f"  MTP (no cool): {r_no_cd['tok_s']} tok/s ({su_no:.2f}x, "
+            f"accept={r_no_cd['acceptance']:.1%}, "
+            f"{r_no_cd['accepts']}/{r_no_cd['rejects']} a/r)"
+        )
 
         r_cd = bench_mtp_cooldown(model, tokenizer, prompt, args.max_tokens)
-        su_cd = r_cd['tok_s'] / r_base['tok_s'] if r_base['tok_s'] else 0
-        print(f"  MTP (cool):    {r_cd['tok_s']} tok/s ({su_cd:.2f}x, "
-              f"accept={r_cd['acceptance']:.1%}, "
-              f"{r_cd['accepts']}/{r_cd['rejects']} a/r, "
-              f"{r_cd['cooldowns']} cooldowns)")
+        su_cd = r_cd["tok_s"] / r_base["tok_s"] if r_base["tok_s"] else 0
+        print(
+            f"  MTP (cool):    {r_cd['tok_s']} tok/s ({su_cd:.2f}x, "
+            f"accept={r_cd['acceptance']:.1%}, "
+            f"{r_cd['accepts']}/{r_cd['rejects']} a/r, "
+            f"{r_cd['cooldowns']} cooldowns)"
+        )
 
         results[label] = {
             "baseline": r_base,
@@ -249,8 +264,8 @@ def main():
     print(f"{'Method':<22} {'tok/s':>8} {'Speedup':>8} {'Accept':>8}")
     print("-" * 50)
     print(f"{'Baseline':<22} {ab:>8.1f} {'1.00x':>8} {'N/A':>8}")
-    print(f"{'MTP (no cooldown)':<22} {a_no:>8.1f} {a_no/ab:>7.2f}x {ar_no:>7.1%}")
-    print(f"{'MTP (cooldown)':<22} {a_cd:>8.1f} {a_cd/ab:>7.2f}x {ar_cd:>7.1%}")
+    print(f"{'MTP (no cooldown)':<22} {a_no:>8.1f} {a_no / ab:>7.2f}x {ar_no:>7.1%}")
+    print(f"{'MTP (cooldown)':<22} {a_cd:>8.1f} {a_cd / ab:>7.2f}x {ar_cd:>7.1%}")
 
     out = {
         "model": args.model,

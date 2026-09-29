@@ -22,29 +22,57 @@ from _common import Out, timeit  # noqa: E402
 
 
 def sysctl(k):
-    return subprocess.run(["sysctl", "-n", k], capture_output=True, text=True).stdout.strip()
+    return subprocess.run(
+        ["sysctl", "-n", k], capture_output=True, text=True
+    ).stdout.strip()
 
 
 def main():
     out = Out("cpu_probe")
-    out(kind="topology", **{k: sysctl(k) for k in (
-        "hw.perflevel0.physicalcpu", "hw.perflevel0.name", "hw.perflevel1.physicalcpu",
-        "hw.perflevel1.name", "hw.perflevel0.l2cachesize", "hw.perflevel1.l2cachesize",
-        "hw.optional.arm.FEAT_SME2", "hw.optional.arm.sme_max_svl_b")}, numpy=np.__version__)
+    out(
+        kind="topology",
+        **{
+            k: sysctl(k)
+            for k in (
+                "hw.perflevel0.physicalcpu",
+                "hw.perflevel0.name",
+                "hw.perflevel1.physicalcpu",
+                "hw.perflevel1.name",
+                "hw.perflevel0.l2cachesize",
+                "hw.perflevel1.l2cachesize",
+                "hw.optional.arm.FEAT_SME2",
+                "hw.optional.arm.sme_max_svl_b",
+            )
+        },
+        numpy=np.__version__,
+    )
 
     for n in (1024, 2048, 4096):
         a = np.random.rand(n, n).astype(np.float32)
         b = np.random.rand(n, n).astype(np.float32)
         t, _ = timeit(lambda: a @ b, 10, 2)
-        out(kind="sgemm_square", n=n, ms=round(t * 1e3, 2), TFLOPS=round(2 * n**3 / t / 1e12, 3))
+        out(
+            kind="sgemm_square",
+            n=n,
+            ms=round(t * 1e3, 2),
+            TFLOPS=round(2 * n**3 / t / 1e12, 3),
+        )
 
     for K, N, name in ((5120, 5120, "attn_proj"), (5120, 17408, "mlp_up")):
         w = np.random.rand(K, N).astype(np.float32)
         for M in (1, 2, 4, 8, 16):
             x = np.random.rand(M, K).astype(np.float32)
             t, _ = timeit(lambda: x @ w, 20, 3)
-            out(kind="skinny_sgemm", shape=name, M=M, K=K, N=N, us=round(t * 1e6, 1),
-                weight_GBps=round(K * N * 4 / t / 1e9, 1), GFLOPS=round(2 * M * K * N / t / 1e9, 1))
+            out(
+                kind="skinny_sgemm",
+                shape=name,
+                M=M,
+                K=K,
+                N=N,
+                us=round(t * 1e6, 1),
+                weight_GBps=round(K * N * 4 / t / 1e9, 1),
+                GFLOPS=round(2 * M * K * N / t / 1e9, 1),
+            )
 
     big = np.random.rand(2**29).astype(np.float32)  # 2 GiB
     t, _ = timeit(lambda: big.sum(), 5, 1)

@@ -29,22 +29,65 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from process_memory import process_tree_memory  # noqa: E402
 
-CODES = ["AMBER", "BIRCH", "CEDAR", "DELTA", "EMBER", "FROST", "GLINT", "HAZEL",
-         "IVORY", "JADE", "KOALA", "LUNAR", "MAPLE", "NOVA", "ONYX", "PRISM"]
-TOOL = {"type": "function", "function": {"name": "get_weather", "description": "Weather forecast",
-        "parameters": {"type": "object", "properties": {"city": {"type": "string"},
-                       "days": {"type": "integer"}}, "required": ["city", "days"]}}}
-SCHEMA = {"type": "object", "properties": {"city": {"type": "string"}, "population_millions": {"type": "number"},
-          "is_capital": {"type": "boolean"}}, "required": ["city", "population_millions", "is_capital"],
-          "additionalProperties": False}
-CITIES = [("Tokyo", True), ("Osaka", False), ("Paris", True), ("Lyon", False), ("Berlin", True), ("Munich", False)]
+CODES = [
+    "AMBER",
+    "BIRCH",
+    "CEDAR",
+    "DELTA",
+    "EMBER",
+    "FROST",
+    "GLINT",
+    "HAZEL",
+    "IVORY",
+    "JADE",
+    "KOALA",
+    "LUNAR",
+    "MAPLE",
+    "NOVA",
+    "ONYX",
+    "PRISM",
+]
+TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Weather forecast",
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}, "days": {"type": "integer"}},
+            "required": ["city", "days"],
+        },
+    },
+}
+SCHEMA = {
+    "type": "object",
+    "properties": {
+        "city": {"type": "string"},
+        "population_millions": {"type": "number"},
+        "is_capital": {"type": "boolean"},
+    },
+    "required": ["city", "population_millions", "is_capital"],
+    "additionalProperties": False,
+}
+CITIES = [
+    ("Tokyo", True),
+    ("Osaka", False),
+    ("Paris", True),
+    ("Lyon", False),
+    ("Berlin", True),
+    ("Munich", False),
+]
 
 
 def image_url(red_left, size):
     from PIL import Image, ImageDraw
 
     im = Image.new("RGB", (size, size // 2), "blue")
-    box = (0, 0, size // 2 - 1, size // 2 - 1) if red_left else (size // 2, 0, size - 1, size // 2 - 1)
+    box = (
+        (0, 0, size // 2 - 1, size // 2 - 1)
+        if red_left
+        else (size // 2, 0, size - 1, size // 2 - 1)
+    )
     ImageDraw.Draw(im).rectangle(box, fill="red")
     buf = BytesIO()
     im.save(buf, format="PNG")
@@ -64,19 +107,43 @@ def document(idx, lines):
 class Client:
     def __init__(self, url, model, timeout):
         u = urllib.parse.urlparse(url)
-        self.host, self.port, self.model, self.timeout = u.hostname, u.port or 80, model, timeout
+        self.host, self.port, self.model, self.timeout = (
+            u.hostname,
+            u.port or 80,
+            model,
+            timeout,
+        )
 
     def chat(self, messages, max_tokens, *, think=False, abort_after=None, **extra):
-        body = {"model": self.model, "messages": messages, "max_tokens": max_tokens, "stream": True,
-                "stream_options": {"include_usage": True}, "enable_thinking": think,
-                "chat_template_kwargs": {"enable_thinking": think}}
+        body = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "enable_thinking": think,
+            "chat_template_kwargs": {"enable_thinking": think},
+        }
         body.setdefault("temperature", 0)
         body.update(extra)
-        r = {"content": "", "reasoning": "", "tools": {}, "finish": None, "usage": None, "first": None, "chunks": 0}
+        r = {
+            "content": "",
+            "reasoning": "",
+            "tools": {},
+            "finish": None,
+            "usage": None,
+            "first": None,
+            "chunks": 0,
+        }
         t0 = time.perf_counter()
         conn = http.client.HTTPConnection(self.host, self.port, timeout=self.timeout)
         try:
-            conn.request("POST", "/v1/chat/completions", json.dumps(body), {"Content-Type": "application/json"})
+            conn.request(
+                "POST",
+                "/v1/chat/completions",
+                json.dumps(body),
+                {"Content-Type": "application/json"},
+            )
             resp = conn.getresponse()
             r["status"] = resp.status
             if resp.status != 200:
@@ -97,9 +164,13 @@ class Client:
                     if (d.get("content") or d.get("tool_calls")) and r["first"] is None:
                         r["first"] = time.perf_counter() - t0
                     r["content"] += d.get("content") or ""
-                    r["reasoning"] += d.get("reasoning_content") or d.get("reasoning") or ""
+                    r["reasoning"] += (
+                        d.get("reasoning_content") or d.get("reasoning") or ""
+                    )
                     for tc in d.get("tool_calls") or []:
-                        slot = r["tools"].setdefault(tc.get("index", 0), {"name": "", "arguments": ""})
+                        slot = r["tools"].setdefault(
+                            tc.get("index", 0), {"name": "", "arguments": ""}
+                        )
                         fn = tc.get("function") or {}
                         slot["name"] += fn.get("name") or ""
                         slot["arguments"] += fn.get("arguments") or ""
@@ -119,7 +190,9 @@ class Client:
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--url", required=True)
     ap.add_argument("--model", required=True)
     ap.add_argument("--pid", type=int, required=True)
@@ -159,11 +232,30 @@ def main():
     docs = [document(i, rnd.choice([80, 160, 320, 640, 960])) for i in range(12)]
     threads = [[{"role": "system", "content": "You are concise."}] for _ in range(3)]
     thread_codes = [None, None, None]
-    kinds = ["doc"] * 25 + ["chat"] * 20 + ["image"] * 12 + ["tool"] * 10 + ["schema"] * 8 + \
-        ["think"] * 10 + ["disconnect"] * 7 + ["long"] * 8
+    kinds = (
+        ["doc"] * 25
+        + ["chat"] * 20
+        + ["image"] * 12
+        + ["tool"] * 10
+        + ["schema"] * 8
+        + ["think"] * 10
+        + ["disconnect"] * 7
+        + ["long"] * 8
+    )
     start_mem = mem()
-    emit({"kind": "meta", "url": a.url, "model": a.model, "pid": a.pid, "minutes": a.minutes, "seed": a.seed,
-          "note": a.note, "start_footprint_gib": start_mem, "started": time.strftime("%Y-%m-%dT%H:%M:%S")})
+    emit(
+        {
+            "kind": "meta",
+            "url": a.url,
+            "model": a.model,
+            "pid": a.pid,
+            "minutes": a.minutes,
+            "seed": a.seed,
+            "note": a.note,
+            "start_footprint_gib": start_mem,
+            "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+    )
     threading.Thread(target=sampler, daemon=True).start()
     t_end = time.time() + a.minutes * 60
     next_idle = time.time() + a.idle_every_min * 60
@@ -178,8 +270,17 @@ def main():
         if kind == "doc":
             i = rnd.randrange(len(docs))
             body, code = docs[i]
-            r = cli.chat([{"role": "user", "content": body + f"\nThe access code for this archive is {code}. "
-                           "What is the access code? Reply with the code only."}], 16)
+            r = cli.chat(
+                [
+                    {
+                        "role": "user",
+                        "content": body
+                        + f"\nThe access code for this archive is {code}. "
+                        "What is the access code? Reply with the code only.",
+                    }
+                ],
+                16,
+            )
             expect, ok = code, code in r["content"].upper()
         elif kind == "chat":
             j = rnd.randrange(3)
@@ -190,7 +291,12 @@ def main():
                 r = cli.chat(threads[j], 40)
                 ok = r.get("status") == 200 and bool(r["content"].strip())
             else:
-                threads[j].append({"role": "user", "content": "What is my locker code? Reply with the code only."})
+                threads[j].append(
+                    {
+                        "role": "user",
+                        "content": "What is my locker code? Reply with the code only.",
+                    }
+                )
                 r = cli.chat(threads[j], 16)
                 expect, ok = thread_codes[j], thread_codes[j] in r["content"].upper()
             threads[j].append({"role": "assistant", "content": r["content"] or "OK"})
@@ -199,75 +305,173 @@ def main():
         elif kind == "image":
             left = rnd.random() < 0.5
             size = rnd.choice([256, 512, 768, 1024])
-            r = cli.chat([{"role": "user", "content": [
-                {"type": "image_url", "image_url": {"url": image_url(left, size)}},
-                {"type": "text", "text": "Which half is red? Reply with exactly one word: left or right."}]}], 8)
+            r = cli.chat(
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": image_url(left, size)},
+                            },
+                            {
+                                "type": "text",
+                                "text": "Which half is red? Reply with exactly one word: left or right.",
+                            },
+                        ],
+                    }
+                ],
+                8,
+            )
             expect = "left" if left else "right"
             ok = r["content"].strip(" .\n").lower() == expect
         elif kind == "tool":
             city, days = rnd.choice(CITIES)[0], rnd.randint(1, 7)
-            r = cli.chat([{"role": "user", "content": f"Get the weather for {city} for {days} days."}], 256,
-                         tools=[TOOL], tool_choice="auto")
+            r = cli.chat(
+                [
+                    {
+                        "role": "user",
+                        "content": f"Get the weather for {city} for {days} days.",
+                    }
+                ],
+                256,
+                tools=[TOOL],
+                tool_choice="auto",
+            )
             calls = list(r["tools"].values())
             try:
                 args = json.loads(calls[0]["arguments"]) if calls else {}
             except Exception:  # noqa: BLE001
                 args = {}
-            ok = bool(calls) and args.get("city", "").lower() == city.lower() and args.get("days") == days
+            ok = (
+                bool(calls)
+                and args.get("city", "").lower() == city.lower()
+                and args.get("days") == days
+            )
         elif kind == "schema":
             city, cap = rnd.choice(CITIES)
-            r = cli.chat([{"role": "user", "content": f"Give facts about {city} as JSON."}], 200,
-                         response_format={"type": "json_schema", "json_schema": {"name": "c", "schema": SCHEMA}})
+            r = cli.chat(
+                [{"role": "user", "content": f"Give facts about {city} as JSON."}],
+                200,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {"name": "c", "schema": SCHEMA},
+                },
+            )
             try:
                 obj = json.loads(r["content"])
-                ok = obj.get("city", "").lower() == city.lower() and obj.get("is_capital") is cap
+                ok = (
+                    obj.get("city", "").lower() == city.lower()
+                    and obj.get("is_capital") is cap
+                )
             except Exception:  # noqa: BLE001
                 ok = False
         elif kind == "think":
             x, y = rnd.randint(11, 99), rnd.randint(11, 99)
-            r = cli.chat([{"role": "user", "content": f"What is {x}*{y}? Answer with just the number."}], 1500,
-                         think=True, temperature=0.6, top_p=0.95, top_k=20)
+            r = cli.chat(
+                [
+                    {
+                        "role": "user",
+                        "content": f"What is {x}*{y}? Answer with just the number.",
+                    }
+                ],
+                1500,
+                think=True,
+                temperature=0.6,
+                top_p=0.95,
+                top_k=20,
+            )
             expect = str(x * y)
             ok = expect in r["content"].replace(",", "")
         elif kind == "disconnect":
-            r = cli.chat([{"role": "user", "content": "Write a very long story about a lighthouse."}], 2000,
-                         abort_after=rnd.randint(2, 30))
+            r = cli.chat(
+                [
+                    {
+                        "role": "user",
+                        "content": "Write a very long story about a lighthouse.",
+                    }
+                ],
+                2000,
+                abort_after=rnd.randint(2, 30),
+            )
             ok = r.get("aborted", False) or r.get("status") == 200
         else:  # long
-            r = cli.chat([{"role": "user", "content": "Write a detailed technical article about how SSDs work."}],
-                         1024)
+            r = cli.chat(
+                [
+                    {
+                        "role": "user",
+                        "content": "Write a detailed technical article about how SSDs work.",
+                    }
+                ],
+                1024,
+            )
             ok = r.get("status") == 200 and len(r["content"]) > 1000
         n += 1
         u = r.get("usage") or {}
-        emit({"kind": "req", "n": n, "type": kind, "ok": bool(ok), "expect": expect,
-              "got": (r["content"] or "")[:80], "status": r.get("status"), "error": r.get("error"),
-              "first_s": r.get("first") and round(r["first"], 3), "wall_s": round(r.get("wall", 0), 3),
-              "prompt_tokens": u.get("prompt_tokens"), "completion_tokens": u.get("completion_tokens"),
-              "cached_tokens": (u.get("prompt_tokens_details") or {}).get("cached_tokens"),
-              "finish": r.get("finish"), "footprint_gib": mem()})
+        emit(
+            {
+                "kind": "req",
+                "n": n,
+                "type": kind,
+                "ok": bool(ok),
+                "expect": expect,
+                "got": (r["content"] or "")[:80],
+                "status": r.get("status"),
+                "error": r.get("error"),
+                "first_s": r.get("first") and round(r["first"], 3),
+                "wall_s": round(r.get("wall", 0), 3),
+                "prompt_tokens": u.get("prompt_tokens"),
+                "completion_tokens": u.get("completion_tokens"),
+                "cached_tokens": (u.get("prompt_tokens_details") or {}).get(
+                    "cached_tokens"
+                ),
+                "finish": r.get("finish"),
+                "footprint_gib": mem(),
+            }
+        )
         fp = mem()
         if fp is not None and fp > a.footprint_stop_gib:
-            emit({"kind": "abort", "reason": f"footprint {fp} GiB > {a.footprint_stop_gib}"})
+            emit(
+                {
+                    "kind": "abort",
+                    "reason": f"footprint {fp} GiB > {a.footprint_stop_gib}",
+                }
+            )
             break
     time.sleep(a.final_idle_s)
     stop.set()
-    rows = [json.loads(line) for line in a.output.read_text().splitlines() if line.strip()]
+    rows = [
+        json.loads(line) for line in a.output.read_text().splitlines() if line.strip()
+    ]
     reqs = [r for r in rows if r.get("kind") == "req"]
-    mems = [r["footprint_gib"] for r in rows if r.get("kind") == "mem" and r.get("footprint_gib")]
+    mems = [
+        r["footprint_gib"]
+        for r in rows
+        if r.get("kind") == "mem" and r.get("footprint_gib")
+    ]
     by = {}
     for r in reqs:
         by.setdefault(r["type"], []).append(r)
-    summary = {"kind": "summary", "requests": len(reqs), "ok": sum(r["ok"] for r in reqs),
-               "errors": sum(1 for r in reqs if r.get("error") and r["type"] != "disconnect"),
-               "start_footprint_gib": start_mem, "max_footprint_gib": max(mems) if mems else None,
-               "end_footprint_gib": mem(), "per_type": {}}
+    summary = {
+        "kind": "summary",
+        "requests": len(reqs),
+        "ok": sum(r["ok"] for r in reqs),
+        "errors": sum(1 for r in reqs if r.get("error") and r["type"] != "disconnect"),
+        "start_footprint_gib": start_mem,
+        "max_footprint_gib": max(mems) if mems else None,
+        "end_footprint_gib": mem(),
+        "per_type": {},
+    }
     for k, rs in by.items():
         walls = sorted(r["wall_s"] for r in rs)
         firsts = sorted(r["first_s"] for r in rs if r.get("first_s"))
-        summary["per_type"][k] = {"n": len(rs), "ok": sum(r["ok"] for r in rs),
-                                  "wall_p50": round(statistics.median(walls), 3),
-                                  "wall_p95": round(walls[int(0.95 * (len(walls) - 1))], 3),
-                                  "first_p50": round(statistics.median(firsts), 3) if firsts else None}
+        summary["per_type"][k] = {
+            "n": len(rs),
+            "ok": sum(r["ok"] for r in rs),
+            "wall_p50": round(statistics.median(walls), 3),
+            "wall_p95": round(walls[int(0.95 * (len(walls) - 1))], 3),
+            "first_p50": round(statistics.median(firsts), 3) if firsts else None,
+        }
     emit(summary)
     print(json.dumps(summary, ensure_ascii=False, indent=1))
 

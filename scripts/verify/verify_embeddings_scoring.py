@@ -15,6 +15,7 @@ shape:
 
 Run: PYTHONPATH=. uv run python scripts/verify_embeddings_scoring.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -37,6 +38,7 @@ async def main() -> int:
         print("SKIP: model not mounted")
         return 0
     from yunshu_engine.batched_engine import BatchedEngine
+
     eng = BatchedEngine(model_name=MODEL)
     await eng.start()
 
@@ -45,16 +47,17 @@ async def main() -> int:
     try:
         # ── embed: similar pair vs dissimilar pair ──────────────────────────
         texts = [
-            "The cat sat on the warm windowsill in the sun.",   # 0
-            "A feline rested by the sunny window.",             # 1  ~ 0
+            "The cat sat on the warm windowsill in the sun.",  # 0
+            "A feline rested by the sunny window.",  # 1  ~ 0
             "Quarterly tax filings are due at the end of June.",  # 2  ≠ 0/1
         ]
-        embs = await asyncio.get_running_loop().run_in_executor(
-            None, eng.embed, texts)
-        sim = _cos(embs[0], embs[1])      # near-paraphrase
-        dis = _cos(embs[0], embs[2])      # unrelated
+        embs = await asyncio.get_running_loop().run_in_executor(None, eng.embed, texts)
+        sim = _cos(embs[0], embs[1])  # near-paraphrase
+        dis = _cos(embs[0], embs[2])  # unrelated
         checks["embed: paraphrase cos > unrelated cos"] = sim > dis + 1e-3
-        detail.append(f"embed sim={sim:.4f} dis={dis:.4f} (Δ={sim - dis:+.4f}) dim={len(embs[0])}")
+        detail.append(
+            f"embed sim={sim:.4f} dis={dis:.4f} (Δ={sim - dis:+.4f}) dim={len(embs[0])}"
+        )
 
         # ── rerank: on-topic doc out-ranks off-topic ────────────────────────
         query = "What is the capital city of France?"
@@ -62,10 +65,10 @@ async def main() -> int:
             "Paris is the capital and most populous city of France.",  # on-topic
             "Photosynthesis converts sunlight into chemical energy.",  # off-topic
         ]
-        q_emb = (await asyncio.get_running_loop().run_in_executor(
-            None, eng.embed, [query]))[0]
-        d_embs = await asyncio.get_running_loop().run_in_executor(
-            None, eng.embed, docs)
+        q_emb = (
+            await asyncio.get_running_loop().run_in_executor(None, eng.embed, [query])
+        )[0]
+        d_embs = await asyncio.get_running_loop().run_in_executor(None, eng.embed, docs)
         r_on, r_off = _cos(q_emb, d_embs[0]), _cos(q_emb, d_embs[1])
         checks["rerank: on-topic doc ranks above off-topic"] = r_on > r_off
         detail.append(f"rerank on={r_on:.4f} off={r_off:.4f}")
@@ -73,23 +76,35 @@ async def main() -> int:
         # ── classify: pick correct sentiment label ──────────────────────────
         inp = "Absolutely loved it — best purchase I've made all year!"
         labels = ["a positive, happy review", "a negative, angry complaint"]
-        i_emb = (await asyncio.get_running_loop().run_in_executor(
-            None, eng.embed, [inp]))[0]
+        i_emb = (
+            await asyncio.get_running_loop().run_in_executor(None, eng.embed, [inp])
+        )[0]
         l_embs = await asyncio.get_running_loop().run_in_executor(
-            None, eng.embed, labels)
+            None, eng.embed, labels
+        )
         s_pos, s_neg = _cos(i_emb, l_embs[0]), _cos(i_emb, l_embs[1])
         checks["classify: positive label wins for positive text"] = s_pos > s_neg
         detail.append(f"classify pos={s_pos:.4f} neg={s_neg:.4f}")
 
         # ── pool: MEAN / CLS / LAST distinct + right dim ────────────────────
         t = ["The quick brown fox jumps over the lazy dog."]
-        pm = (await asyncio.get_running_loop().run_in_executor(None, eng.pool, t, "MEAN"))[0]
-        pc = (await asyncio.get_running_loop().run_in_executor(None, eng.pool, t, "CLS"))[0]
-        pl = (await asyncio.get_running_loop().run_in_executor(None, eng.pool, t, "LAST"))[0]
+        pm = (
+            await asyncio.get_running_loop().run_in_executor(None, eng.pool, t, "MEAN")
+        )[0]
+        pc = (
+            await asyncio.get_running_loop().run_in_executor(None, eng.pool, t, "CLS")
+        )[0]
+        pl = (
+            await asyncio.get_running_loop().run_in_executor(None, eng.pool, t, "LAST")
+        )[0]
         same_dim = len(pm) == len(pc) == len(pl) == len(embs[0])
-        distinct = _cos(pm, pc) < 0.999 and _cos(pm, pl) < 0.999 and _cos(pc, pl) < 0.999
+        distinct = (
+            _cos(pm, pc) < 0.999 and _cos(pm, pl) < 0.999 and _cos(pc, pl) < 0.999
+        )
         checks["pool: MEAN/CLS/LAST distinct + same dim"] = same_dim and distinct
-        detail.append(f"pool dim={len(pm)} cos(M,C)={_cos(pm, pc):.3f} cos(M,L)={_cos(pm, pl):.3f}")
+        detail.append(
+            f"pool dim={len(pm)} cos(M,C)={_cos(pm, pc):.3f} cos(M,L)={_cos(pm, pl):.3f}"
+        )
     finally:
         await eng.stop()
 

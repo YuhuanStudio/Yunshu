@@ -55,7 +55,9 @@ async def main(model: str) -> int:
             finish = out.finish_reason
             break
     format_openai_done()
-    print(f"\n      finish={finish} first_token={first or 0:.3f}s total={time.time() - t0:.1f}s")
+    print(
+        f"\n      finish={finish} first_token={first or 0:.3f}s total={time.time() - t0:.1f}s"
+    )
 
     print("[3/3] Non-streaming chat...")
     t0 = time.time()
@@ -64,7 +66,9 @@ async def main(model: str) -> int:
         max_tokens=20,
         temperature=0.0,
     )
-    print(f"      {out.text!r} finish={out.finish_reason} tokens={out.completion_tokens}")
+    print(
+        f"      {out.text!r} finish={out.finish_reason} tokens={out.completion_tokens}"
+    )
     print(f"      Time: {time.time() - t0:.1f}s")
 
     await engine.stop()

@@ -1,4 +1,5 @@
 """Real model test for GLM-OCR-bf16 — with high-res document image."""
+
 import asyncio
 import os
 import sys
@@ -6,9 +7,7 @@ import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python"))
 
-MODEL_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "models", "GLM-OCR-bf16"
-)
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "models", "GLM-OCR-bf16")
 
 
 def _create_document_image():

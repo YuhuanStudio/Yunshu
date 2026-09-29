@@ -7,6 +7,7 @@ compression ratio (32/bits). Deterministic input → no flakiness, no model load
 
 Run: PYTHONPATH=. uv run python scripts/verify_kv_quant.py
 """
+
 from __future__ import annotations
 
 import math
@@ -15,8 +16,16 @@ import sys
 
 def _make_kv(L=2, H=4, S=8, D=16):
     """Deterministic [L,H,S,D] tensor (smooth values, no RNG)."""
-    return [[[[math.sin(0.1 * (l + h + s + d)) * 2.0
-              for d in range(D)] for s in range(S)] for h in range(H)] for l in range(L)]
+    return [
+        [
+            [
+                [math.sin(0.1 * (l + h + s + d)) * 2.0 for d in range(D)]
+                for s in range(S)
+            ]
+            for h in range(H)
+        ]
+        for l in range(L)
+    ]
 
 
 def _flat(x):
@@ -48,7 +57,7 @@ def main() -> int:
             "rel_err": _rel_err(kv, deq),
             "shape_ok": meta.get("shape") == [2, 4, 8, 16],
             "compress": meta.get("config", {}).get("compression_ratio")
-                        or (32.0 / bits),
+            or (32.0 / bits),
             "nbytes": len(packed),
         }
 
@@ -62,8 +71,10 @@ def main() -> int:
     }
     for k, v in checks.items():
         print(f"  {'OK ' if v else 'BAD'} {k}")
-    print(f"  · 4-bit rel_err={r4['rel_err']:.4f} ({r4['nbytes']}B)  "
-          f"8-bit rel_err={r8['rel_err']:.4f} ({r8['nbytes']}B)")
+    print(
+        f"  · 4-bit rel_err={r4['rel_err']:.4f} ({r4['nbytes']}B)  "
+        f"8-bit rel_err={r8['rel_err']:.4f} ({r8['nbytes']}B)"
+    )
     ok = all(checks.values())
     print(f"RESULT: {sum(checks.values())}/{len(checks)}")
     print("PASS" if ok else "FAIL")

@@ -18,6 +18,7 @@ Usage:
     .venv/bin/python3 scripts/bench_mtp.py --model Qwen3.5-4B-MLX-bf16
     .venv/bin/python3 scripts/bench_mtp.py --model Qwen3.5-9B-MLX-4bit --max-tokens 128
 """
+
 from __future__ import annotations
 
 import argparse
@@ -34,7 +35,7 @@ import mlx.core as mx
 
 def _get_eos_ids(tokenizer) -> set:
     eos_ids = set()
-    if hasattr(tokenizer, 'eos_token_id'):
+    if hasattr(tokenizer, "eos_token_id"):
         eid = tokenizer.eos_token_id
         if isinstance(eid, (list, tuple)):
             eos_ids.update(eid)
@@ -45,18 +46,22 @@ def _get_eos_ids(tokenizer) -> set:
 
 def _snap(cache):
     return [
-        (('arrays', list(c.cache)) if hasattr(c, 'cache') and isinstance(c.cache, list)
-         else ('kv', c.offset) if hasattr(c, 'offset')
-         else (None, None))
+        (
+            ("arrays", list(c.cache))
+            if hasattr(c, "cache") and isinstance(c.cache, list)
+            else ("kv", c.offset)
+            if hasattr(c, "offset")
+            else (None, None)
+        )
         for c in cache
     ]
 
 
 def _restore(cache, snapshot):
     for i, (kind, state) in enumerate(snapshot):
-        if kind == 'arrays':
+        if kind == "arrays":
             cache[i].cache = state
-        elif kind == 'kv':
+        elif kind == "kv":
             cache[i].offset = state
 
 
@@ -66,6 +71,7 @@ def run_mtp(model, tokenizer, prompt, max_tokens):
     eos_ids = _get_eos_ids(tokenizer)
 
     from mlx_lm.models.cache import make_prompt_cache
+
     cache = make_prompt_cache(model)
 
     out, hidden = model(ids, cache=cache, return_hidden=True)
@@ -86,7 +92,9 @@ def run_mtp(model, tokenizer, prompt, max_tokens):
         draft = int(mx.argmax(mtp_out[0, -1, :]).item())
 
         verify_out, verify_h = model(
-            mx.array([[primary, draft]]), cache=cache, return_hidden=True,
+            mx.array([[primary, draft]]),
+            cache=cache,
+            return_hidden=True,
         )
         mx.synchronize()
         v0 = int(mx.argmax(verify_out[0, 0, :]).item())
@@ -148,7 +156,7 @@ def main():
         "The capital of France is",
         "In machine learning, gradient descent works by",
         "The key difference between TCP and UDP is that",
-    ][:args.num_prompts]
+    ][: args.num_prompts]
 
     sampler = make_sampler(temp=0.0)
 
@@ -159,13 +167,15 @@ def main():
         ids = mx.array(tokenizer.encode(prompt))
         tokens = []
         t0 = time.perf_counter()
-        for tok, _ in generate_step(ids, model, max_tokens=args.max_tokens, sampler=sampler):
+        for tok, _ in generate_step(
+            ids, model, max_tokens=args.max_tokens, sampler=sampler
+        ):
             tokens.append(tok)
         mx.synchronize()
         elapsed = time.perf_counter() - t0
         tps = len(tokens) / elapsed if elapsed > 0 else 0
         baseline.append({"n": len(tokens), "tps": round(tps, 1)})
-        print(f"  [{i+1}] {len(tokens)} tok, {tps:.1f} tok/s")
+        print(f"  [{i + 1}] {len(tokens)} tok, {tps:.1f} tok/s")
 
     ab = sum(r["tps"] for r in baseline) / len(baseline)
 
@@ -174,22 +184,28 @@ def main():
     mtp_results = []
     for i, prompt in enumerate(prompts):
         result = run_mtp(model, tokenizer, prompt, args.max_tokens)
-        print(f"  [{i+1}] {result['n']} tok, {result['tps']:.1f} tok/s, "
-              f"accept={result['acceptance']:.1%} ({result['accepts']}/{result['cycles']})")
+        print(
+            f"  [{i + 1}] {result['n']} tok, {result['tps']:.1f} tok/s, "
+            f"accept={result['acceptance']:.1%} ({result['accepts']}/{result['cycles']})"
+        )
         mtp_results.append(result)
 
     am = sum(r["tps"] for r in mtp_results) / len(mtp_results)
     ar = sum(r["acceptance"] for r in mtp_results) / len(mtp_results)
     su = am / ab if ab > 0 else 0
 
-    print(f"\n{'='*50}")
+    print(f"\n{'=' * 50}")
     print(f"  Baseline: {ab:.1f} tok/s")
     print(f"  MTP:      {am:.1f} tok/s ({su:.2f}x, accept={ar:.1%})")
 
     out = {
         "model": args.model,
         "baseline_avg": round(ab, 1),
-        "mtp": {"avg_tps": round(am, 1), "speedup": round(su, 2), "acceptance": round(ar, 3)},
+        "mtp": {
+            "avg_tps": round(am, 1),
+            "speedup": round(su, 2),
+            "acceptance": round(ar, 3),
+        },
     }
     p = ROOT / "bench" / "mtp_results.json"
     p.parent.mkdir(exist_ok=True)

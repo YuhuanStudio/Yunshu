@@ -33,6 +33,7 @@ ROOT = Path(os.environ.get("GPUQ_DIR", "/Volumes/P5Plus/yunshu-gpuq"))
 JOBS = ROOT / "jobs"
 LOGS = ROOT / "logs"
 IDLE_EXIT_S = 600
+STALL_S = 600  # a job whose log stops growing this long is stopped as "stalled"
 POLL_S = 2.0
 
 
@@ -119,7 +120,13 @@ def _ensure_daemon() -> None:
     )
 
 
-def submit(cmd: list[str], label: str, timeout_min: float, priority: int) -> str:
+def submit(
+    cmd: list[str],
+    label: str,
+    timeout_min: float,
+    priority: int,
+    stall_min: float = STALL_S / 60,
+) -> str:
     JOBS.mkdir(parents=True, exist_ok=True)
     LOGS.mkdir(parents=True, exist_ok=True)
     jid = _new_id(label)
@@ -132,6 +139,7 @@ def submit(cmd: list[str], label: str, timeout_min: float, priority: int) -> str
             "cwd": os.getcwd(),
             "env": dict(os.environ),
             "timeout_s": timeout_min * 60,
+            "stall_s": stall_min * 60,
             "priority": priority,
             "submitted": _now(),
             "state": "pending",
@@ -164,14 +172,21 @@ def _run_one(job: dict, path: Path) -> None:
     _write(path, job)
     deadline = job["started"] + job["timeout_s"]
     rc, why = None, None
+    last_size, last_growth = -1, _now()
     while rc is None:
         try:
             rc = proc.wait(timeout=POLL_S)
         except subprocess.TimeoutExpired:
+            log_path = LOGS / f"{job['id']}.log"
+            size = log_path.stat().st_size if log_path.exists() else 0
+            if size != last_size:
+                last_size, last_growth = size, _now()
             if _read(path).get("cancel"):
                 why = "cancelled"
             elif _now() > deadline:
                 why = "timeout"
+            elif _now() - last_growth > job.get("stall_s", STALL_S):
+                why = "stalled"
             if why:
                 os.killpg(proc.pid, signal.SIGINT)
                 try:
@@ -255,7 +270,7 @@ def daemon() -> None:
         idle_since = _now()
 
 
-FINAL = {"done", "failed", "timeout", "cancelled", "lost"}
+FINAL = {"done", "failed", "timeout", "stalled", "cancelled", "lost"}
 
 
 def wait(ids: list[str]) -> int:
@@ -301,6 +316,12 @@ def main() -> int:
             "--timeout", type=float, default=20.0, help="minutes (default 20)"
         )
         p.add_argument("--priority", type=int, default=0, help="higher runs first")
+        p.add_argument(
+            "--stall",
+            type=float,
+            default=STALL_S / 60,
+            help="minutes without log output before stopping (default 10)",
+        )
         p.add_argument("cmd", nargs=argparse.REMAINDER)
     sub.add_parser("wait").add_argument("ids", nargs="+")
     sub.add_parser("status")
@@ -312,7 +333,7 @@ def main() -> int:
         cmd = a.cmd[1:] if a.cmd[:1] == ["--"] else a.cmd
         if not cmd:
             ap.error("missing command after --")
-        jid = submit(cmd, a.label, a.timeout, a.priority)
+        jid = submit(cmd, a.label, a.timeout, a.priority, a.stall)
         print(jid, flush=True)
         return wait([jid]) if a.op == "run" else 0
     if a.op == "wait":

@@ -18,6 +18,7 @@ Usage:
     PYTHONPATH=. uv run python scripts/bench_unified.py --bench mmlu_pro --samples 200
     PYTHONPATH=. uv run python scripts/bench_unified.py --framework mlx-lm yunshu --batch-size 8
 """
+
 from __future__ import annotations
 
 import argparse
@@ -64,7 +65,9 @@ def _cache_key(framework: str, benchmark: str, n_samples: int, max_tokens: int) 
     return CACHE_DIR / f"{framework}_{benchmark}_n{n_samples}_mt{max_tokens}.json"
 
 
-def load_cached(framework: str, benchmark: str, n_samples: int, max_tokens: int) -> BenchResult | None:
+def load_cached(
+    framework: str, benchmark: str, n_samples: int, max_tokens: int
+) -> BenchResult | None:
     p = _cache_key(framework, benchmark, n_samples, max_tokens)
     if p.exists():
         data = json.loads(p.read_text())
@@ -75,7 +78,11 @@ def load_cached(framework: str, benchmark: str, n_samples: int, max_tokens: int)
 def save_cached(result: BenchResult, n_samples: int, max_tokens: int):
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     p = _cache_key(result.framework, result.benchmark, n_samples, max_tokens)
-    data = {k: v for k, v in result.__dict__.items() if v is not None and v != {} and v != []}
+    data = {
+        k: v
+        for k, v in result.__dict__.items()
+        if v is not None and v != {} and v != []
+    }
     p.write_text(json.dumps(data, indent=2, default=str))
 
 
@@ -104,6 +111,7 @@ def cleanup():
 def get_rss_mb() -> float:
     try:
         import psutil
+
         return psutil.Process().memory_info().rss / 1048576
     except Exception:
         return 0.0
@@ -128,6 +136,7 @@ class BenchResult:
 # ══════════════════════════════════════════════════════════════════
 # MMLU-PRO: lm-evaluation-harness compatible
 # ══════════════════════════════════════════════════════════════════
+
 
 def build_mmlu_fewshots_by_category(val_ds, n_shot: int = 5) -> dict[str, str]:
     """Build per-category few-shot prompts from validation split (lm-eval-harness compatible)."""
@@ -162,9 +171,13 @@ def get_fewshot_rows_by_category(val_ds, n_shot: int = 5) -> dict[str, list]:
 
 def build_mmlu_messages(fewshot_rows: list[dict], test_row: dict) -> list[dict]:
     """Build chat messages: system + few-shot as user/assistant turns + test question."""
-    messages = [{"role": "system", "content":
-        "You are an expert at answering multiple choice questions. "
-        "Think step by step, then answer with 'answer is (X)' where X is the letter."}]
+    messages = [
+        {
+            "role": "system",
+            "content": "You are an expert at answering multiple choice questions. "
+            "Think step by step, then answer with 'answer is (X)' where X is the letter.",
+        }
+    ]
     for row in fewshot_rows:
         user = "Question:\n" + row["question"] + "\nOptions:\n"
         for j, opt in enumerate(row["options"]):
@@ -221,6 +234,7 @@ _STOP_PATTERNS = ["Question:"]
 # OTHER DATASETS
 # ══════════════════════════════════════════════════════════════════
 
+
 def extract_letter(text: str, max_option: int = 10) -> str:
     text = re.sub(r"<think[^>]*>.*?</think[^>]*>", "", text, flags=re.DOTALL)
     text = re.sub(r"<think[^>]*>.*", "", text, flags=re.DOTALL)
@@ -265,8 +279,14 @@ def extract_number(text: str) -> float | None:
 # ══════════════════════════════════════════════════════════════════
 
 
-
-def _generate_with_thinking(model, tokenizer, prompt: str, max_tokens: int, sampler, _think_budget: int | None = None) -> tuple[str, int]:
+def _generate_with_thinking(
+    model,
+    tokenizer,
+    prompt: str,
+    max_tokens: int,
+    sampler,
+    _think_budget: int | None = None,
+) -> tuple[str, int]:
     """Two-phase generation: thinking then answer, with force-close for 4-bit."""
     from mlx_lm import stream_generate
     from mlx_lm.sample_utils import make_sampler as _make_sampler
@@ -275,7 +295,9 @@ def _generate_with_thinking(model, tokenizer, prompt: str, max_tokens: int, samp
 
     text = ""
     n_tok = 0
-    for resp in stream_generate(model, tokenizer, prompt, max_tokens=THINK_BUDGET, sampler=sampler):
+    for resp in stream_generate(
+        model, tokenizer, prompt, max_tokens=THINK_BUDGET, sampler=sampler
+    ):
         text += resp.text
         n_tok += 1
         if "</think" in text:
@@ -295,7 +317,9 @@ def _generate_with_thinking(model, tokenizer, prompt: str, max_tokens: int, samp
         clean_sampler = _make_sampler(temp=0.0)
         post_text = ""
         post_n = 0
-        for resp in stream_generate(model, tokenizer, new_prompt, max_tokens=256, sampler=clean_sampler):
+        for resp in stream_generate(
+            model, tokenizer, new_prompt, max_tokens=256, sampler=clean_sampler
+        ):
             post_text += resp.text
             post_n += 1
             if _ANSWER_RE.search(post_text) or "Question:" in post_text:
@@ -305,6 +329,7 @@ def _generate_with_thinking(model, tokenizer, prompt: str, max_tokens: int, samp
         return text + close_tag + post_text, n_tok + post_n
 
     return text, n_tok
+
 
 def run_mmlu_pro_mlxlm(
     model,
@@ -333,7 +358,9 @@ def run_mmlu_pro_mlxlm(
         rng.shuffle(sampled)
         questions = sampled[:n_samples]
 
-    P(f"    MMLU-Pro: {len(questions)} questions, chat_template, max_tokens={max_tokens}")
+    P(
+        f"    MMLU-Pro: {len(questions)} questions, chat_template, max_tokens={max_tokens}"
+    )
 
     from mlx_lm import stream_generate
 
@@ -342,10 +369,14 @@ def run_mmlu_pro_mlxlm(
         fewshot_rows_by_cat.get(questions[0]["category"], [])[:5], questions[0]
     )
     warmup_prompt = tokenizer.apply_chat_template(
-        warmup_msgs, tokenize=False, add_generation_prompt=True,
+        warmup_msgs,
+        tokenize=False,
+        add_generation_prompt=True,
         enable_thinking=False,
     )
-    for _ in stream_generate(model, tokenizer, warmup_prompt, max_tokens=32, sampler=sampler):
+    for _ in stream_generate(
+        model, tokenizer, warmup_prompt, max_tokens=32, sampler=sampler
+    ):
         pass
     P("    Warmup done")
 
@@ -358,17 +389,19 @@ def run_mmlu_pro_mlxlm(
     t_start = time.perf_counter()
     for i, q in enumerate(questions):
         cat = q["category"]
-        msgs = build_mmlu_messages(
-            fewshot_rows_by_cat.get(cat, [])[:5], q
-        )
+        msgs = build_mmlu_messages(fewshot_rows_by_cat.get(cat, [])[:5], q)
         prompt = tokenizer.apply_chat_template(
-            msgs, tokenize=False, add_generation_prompt=True,
+            msgs,
+            tokenize=False,
+            add_generation_prompt=True,
             enable_thinking=False,
         )
         t0 = time.perf_counter()
         text = ""
         n_tok = 0
-        for resp in stream_generate(model, tokenizer, prompt, max_tokens=max_tokens, sampler=sampler):
+        for resp in stream_generate(
+            model, tokenizer, prompt, max_tokens=max_tokens, sampler=sampler
+        ):
             text += resp.text
             n_tok += 1
             if _ANSWER_RE.search(text):
@@ -388,20 +421,31 @@ def run_mmlu_pro_mlxlm(
             cat_correct[cat] += 1
         cat_total[cat] += 1
 
-        P(f"    [{i+1}/{len(questions)}] {cat}: pred={predicted} ans={answer} {'✓' if is_correct else '✗'} "
-          f"| {dt:.1f}s {n_tok}tok")
+        P(
+            f"    [{i + 1}/{len(questions)}] {cat}: pred={predicted} ans={answer} {'✓' if is_correct else '✗'} "
+            f"| {dt:.1f}s {n_tok}tok"
+        )
 
         if (i + 1) % 5 == 0 or (i + 1) == len(questions):
             avg = sum(times) / len(times)
-            P(f"    ── {i+1}/{len(questions)} — {correct}/{total} = {correct/total*100:.1f}% "
-              f"avg {avg:.1f}s/q")
+            P(
+                f"    ── {i + 1}/{len(questions)} — {correct}/{total} = {correct / total * 100:.1f}% "
+                f"avg {avg:.1f}s/q"
+            )
 
     elapsed = time.perf_counter() - t_start
     accuracy = correct / total * 100 if total else 0
     stderr = math.sqrt(accuracy * (100 - accuracy) / total) if total > 0 else 0
-    per_cat = {cat: {"correct": cat_correct.get(cat, 0), "total": cat_total[cat],
-                      "accuracy": cat_correct.get(cat, 0) / cat_total[cat] * 100 if cat_total[cat] else 0}
-               for cat in cat_total}
+    per_cat = {
+        cat: {
+            "correct": cat_correct.get(cat, 0),
+            "total": cat_total[cat],
+            "accuracy": cat_correct.get(cat, 0) / cat_total[cat] * 100
+            if cat_total[cat]
+            else 0,
+        }
+        for cat in cat_total
+    }
 
     return BenchResult(
         framework="mlx-lm",
@@ -409,7 +453,8 @@ def run_mmlu_pro_mlxlm(
         accuracy=accuracy,
         accuracy_stderr=stderr,
         extra={
-            "correct": correct, "total": total,
+            "correct": correct,
+            "total": total,
             "avg_time_per_q": round(sum(times) / len(times), 2),
             "total_time": round(elapsed, 1),
             "max_tokens": max_tokens,
@@ -423,6 +468,7 @@ def run_mmlu_pro_mlxlm(
 # ══════════════════════════════════════════════════════════════════
 # YUNSHU BATCHED RUNNER
 # ══════════════════════════════════════════════════════════════════
+
 
 async def run_mmlu_pro_yunshu(
     test_ds,
@@ -450,14 +496,19 @@ async def run_mmlu_pro_yunshu(
         rng.shuffle(sampled)
         questions = sampled[:n_samples]
 
-    P(f"    MMLU-Pro (Yunshu): {len(questions)} questions, chat_template + generate_until")
+    P(
+        f"    MMLU-Pro (Yunshu): {len(questions)} questions, chat_template + generate_until"
+    )
 
     warmup_msgs = build_mmlu_messages(
         fewshot_rows_by_cat.get(questions[0]["category"], [])[:5],
         questions[0],
     )
     warmup_prompt = tokenizer.apply_chat_template(
-        warmup_msgs, tokenize=False, add_generation_prompt=True, enable_thinking=False,
+        warmup_msgs,
+        tokenize=False,
+        add_generation_prompt=True,
+        enable_thinking=False,
     )
     await engine.generate(prompt=warmup_prompt, max_tokens=64, temperature=0.0)
     P("    Warmup done")
@@ -476,7 +527,10 @@ async def run_mmlu_pro_yunshu(
             q,
         )
         prompt = tokenizer.apply_chat_template(
-            msgs, tokenize=False, add_generation_prompt=True, enable_thinking=False,
+            msgs,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
         )
         t0 = time.perf_counter()
         r = await engine.generate(prompt=prompt, max_tokens=max_tokens, temperature=0.0)
@@ -497,17 +551,26 @@ async def run_mmlu_pro_yunshu(
 
         if (i + 1) % 5 == 0 or (i + 1) == len(questions):
             avg = sum(times) / len(times)
-            P(f"    {i+1}/{len(questions)} — {correct}/{total} = {correct/total*100:.1f}% "
-              f"| {dt:.1f}s avg {avg:.1f}s/q")
+            P(
+                f"    {i + 1}/{len(questions)} — {correct}/{total} = {correct / total * 100:.1f}% "
+                f"| {dt:.1f}s avg {avg:.1f}s/q"
+            )
 
     await engine.stop()
 
     elapsed = time.perf_counter() - t_start
     accuracy = correct / total * 100 if total else 0
     stderr = math.sqrt(accuracy * (100 - accuracy) / total) if total > 0 else 0
-    per_cat = {cat: {"correct": cat_correct.get(cat, 0), "total": cat_total[cat],
-                      "accuracy": cat_correct.get(cat, 0) / cat_total[cat] * 100 if cat_total[cat] else 0}
-               for cat in cat_total}
+    per_cat = {
+        cat: {
+            "correct": cat_correct.get(cat, 0),
+            "total": cat_total[cat],
+            "accuracy": cat_correct.get(cat, 0) / cat_total[cat] * 100
+            if cat_total[cat]
+            else 0,
+        }
+        for cat in cat_total
+    }
 
     return BenchResult(
         framework="yunshu",
@@ -515,7 +578,8 @@ async def run_mmlu_pro_yunshu(
         accuracy=accuracy,
         accuracy_stderr=stderr,
         extra={
-            "correct": correct, "total": total,
+            "correct": correct,
+            "total": total,
             "avg_time_per_q": round(sum(times) / len(times), 2),
             "total_time": round(elapsed, 1),
             "max_tokens": max_tokens,
@@ -528,6 +592,7 @@ async def run_mmlu_pro_yunshu(
 # ══════════════════════════════════════════════════════════════════
 # VLLM-MLX RUNNER
 # ══════════════════════════════════════════════════════════════════
+
 
 async def run_mmlu_pro_vllm_mlx(
     test_ds,
@@ -565,7 +630,10 @@ async def run_mmlu_pro_vllm_mlx(
         fewshot_rows_by_cat.get(questions[0]["category"], [])[:5], questions[0]
     )
     warmup_prompt = tokenizer.apply_chat_template(
-        warmup_msgs, tokenize=False, add_generation_prompt=True, enable_thinking=False,
+        warmup_msgs,
+        tokenize=False,
+        add_generation_prompt=True,
+        enable_thinking=False,
     )
     await engine.generate(warmup_prompt, max_tokens=32, temperature=0.0)
     P("    Warmup done")
@@ -581,7 +649,10 @@ async def run_mmlu_pro_vllm_mlx(
         cat = q["category"]
         msgs = build_mmlu_messages(fewshot_rows_by_cat.get(cat, [])[:5], q)
         prompt = tokenizer.apply_chat_template(
-            msgs, tokenize=False, add_generation_prompt=True, enable_thinking=False,
+            msgs,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
         )
         t0 = time.perf_counter()
         result = await engine.generate(prompt, max_tokens=max_tokens, temperature=0.0)
@@ -600,20 +671,31 @@ async def run_mmlu_pro_vllm_mlx(
         cat_total[cat] += 1
         n_tok = getattr(result, "completion_tokens", "?")
 
-        P(f"    [{i+1}/{len(questions)}] {cat}: pred={predicted} ans={answer} "
-          f"{'✓' if is_correct else '✗'} | {dt:.1f}s {n_tok}tok")
+        P(
+            f"    [{i + 1}/{len(questions)}] {cat}: pred={predicted} ans={answer} "
+            f"{'✓' if is_correct else '✗'} | {dt:.1f}s {n_tok}tok"
+        )
 
         if (i + 1) % 5 == 0 or (i + 1) == len(questions):
             avg = sum(times) / len(times)
-            P(f"    ── {i+1}/{len(questions)} — {correct}/{total} = {correct/total*100:.1f}% "
-              f"avg {avg:.1f}s/q")
+            P(
+                f"    ── {i + 1}/{len(questions)} — {correct}/{total} = {correct / total * 100:.1f}% "
+                f"avg {avg:.1f}s/q"
+            )
 
     elapsed = time.perf_counter() - t_start
     accuracy = correct / total * 100 if total else 0
     stderr = math.sqrt(accuracy * (100 - accuracy) / total) if total > 0 else 0
-    per_cat = {cat: {"correct": cat_correct.get(cat, 0), "total": cat_total[cat],
-                      "accuracy": cat_correct.get(cat, 0) / cat_total[cat] * 100 if cat_total[cat] else 0}
-               for cat in cat_total}
+    per_cat = {
+        cat: {
+            "correct": cat_correct.get(cat, 0),
+            "total": cat_total[cat],
+            "accuracy": cat_correct.get(cat, 0) / cat_total[cat] * 100
+            if cat_total[cat]
+            else 0,
+        }
+        for cat in cat_total
+    }
 
     await engine.stop()
     cleanup()
@@ -624,7 +706,8 @@ async def run_mmlu_pro_vllm_mlx(
         accuracy=accuracy,
         accuracy_stderr=stderr,
         extra={
-            "correct": correct, "total": total,
+            "correct": correct,
+            "total": total,
             "avg_time_per_q": round(sum(times) / len(times), 2),
             "total_time": round(elapsed, 1),
             "max_tokens": max_tokens,
@@ -638,6 +721,7 @@ async def run_mmlu_pro_vllm_mlx(
 # ══════════════════════════════════════════════════════════════════
 # OMLX RUNNER
 # ══════════════════════════════════════════════════════════════════
+
 
 async def run_mmlu_pro_omlx(
     test_ds,
@@ -674,7 +758,10 @@ async def run_mmlu_pro_omlx(
         fewshot_rows_by_cat.get(questions[0]["category"], [])[:5], questions[0]
     )
     warmup_prompt = tokenizer.apply_chat_template(
-        warmup_msgs, tokenize=False, add_generation_prompt=True, enable_thinking=False,
+        warmup_msgs,
+        tokenize=False,
+        add_generation_prompt=True,
+        enable_thinking=False,
     )
     await engine.generate(warmup_prompt, max_tokens=32, temperature=0.0)
     P("    Warmup done")
@@ -690,7 +777,10 @@ async def run_mmlu_pro_omlx(
         cat = q["category"]
         msgs = build_mmlu_messages(fewshot_rows_by_cat.get(cat, [])[:5], q)
         prompt = tokenizer.apply_chat_template(
-            msgs, tokenize=False, add_generation_prompt=True, enable_thinking=False,
+            msgs,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
         )
         t0 = time.perf_counter()
         result = await engine.generate(prompt, max_tokens=max_tokens, temperature=0.0)
@@ -709,20 +799,31 @@ async def run_mmlu_pro_omlx(
         cat_total[cat] += 1
         n_tok = getattr(result, "completion_tokens", "?")
 
-        P(f"    [{i+1}/{len(questions)}] {cat}: pred={predicted} ans={answer} "
-          f"{'✓' if is_correct else '✗'} | {dt:.1f}s {n_tok}tok")
+        P(
+            f"    [{i + 1}/{len(questions)}] {cat}: pred={predicted} ans={answer} "
+            f"{'✓' if is_correct else '✗'} | {dt:.1f}s {n_tok}tok"
+        )
 
         if (i + 1) % 5 == 0 or (i + 1) == len(questions):
             avg = sum(times) / len(times)
-            P(f"    ── {i+1}/{len(questions)} — {correct}/{total} = {correct/total*100:.1f}% "
-              f"avg {avg:.1f}s/q")
+            P(
+                f"    ── {i + 1}/{len(questions)} — {correct}/{total} = {correct / total * 100:.1f}% "
+                f"avg {avg:.1f}s/q"
+            )
 
     elapsed = time.perf_counter() - t_start
     accuracy = correct / total * 100 if total else 0
     stderr = math.sqrt(accuracy * (100 - accuracy) / total) if total > 0 else 0
-    per_cat = {cat: {"correct": cat_correct.get(cat, 0), "total": cat_total[cat],
-                      "accuracy": cat_correct.get(cat, 0) / cat_total[cat] * 100 if cat_total[cat] else 0}
-               for cat in cat_total}
+    per_cat = {
+        cat: {
+            "correct": cat_correct.get(cat, 0),
+            "total": cat_total[cat],
+            "accuracy": cat_correct.get(cat, 0) / cat_total[cat] * 100
+            if cat_total[cat]
+            else 0,
+        }
+        for cat in cat_total
+    }
 
     await engine.stop()
     cleanup()
@@ -733,7 +834,8 @@ async def run_mmlu_pro_omlx(
         accuracy=accuracy,
         accuracy_stderr=stderr,
         extra={
-            "correct": correct, "total": total,
+            "correct": correct,
+            "total": total,
             "avg_time_per_q": round(sum(times) / len(times), 2),
             "total_time": round(elapsed, 1),
             "max_tokens": max_tokens,
@@ -747,6 +849,7 @@ async def run_mmlu_pro_omlx(
 # ══════════════════════════════════════════════════════════════════
 # SEQUENTIAL RUNNER (fallback, oMLX, and other benchmarks)
 # ══════════════════════════════════════════════════════════════════
+
 
 def run_sequential_benchmark(
     generate_fn,
@@ -786,15 +889,24 @@ def run_sequential_benchmark(
         cat_total[cat] += 1
         if (i + 1) % 5 == 0 or (i + 1) == len(questions):
             avg = sum(times) / len(times)
-            P(f"    {i+1}/{len(questions)} — {correct}/{total} = {correct/total*100:.1f}% "
-              f"| {dt:.1f}s/q (avg {avg:.1f}s)")
+            P(
+                f"    {i + 1}/{len(questions)} — {correct}/{total} = {correct / total * 100:.1f}% "
+                f"| {dt:.1f}s/q (avg {avg:.1f}s)"
+            )
 
     elapsed = time.perf_counter() - bench_start
     accuracy = correct / total * 100 if total else 0
     stderr = math.sqrt(accuracy * (100 - accuracy) / total) if total > 0 else 0
-    per_cat = {cat: {"correct": cat_correct.get(cat, 0), "total": cat_total[cat],
-                      "accuracy": cat_correct.get(cat, 0) / cat_total[cat] * 100 if cat_total[cat] else 0}
-               for cat in cat_total}
+    per_cat = {
+        cat: {
+            "correct": cat_correct.get(cat, 0),
+            "total": cat_total[cat],
+            "accuracy": cat_correct.get(cat, 0) / cat_total[cat] * 100
+            if cat_total[cat]
+            else 0,
+        }
+        for cat in cat_total
+    }
 
     return BenchResult(
         framework="sequential",
@@ -802,7 +914,8 @@ def run_sequential_benchmark(
         accuracy=accuracy,
         accuracy_stderr=stderr,
         extra={
-            "correct": correct, "total": total,
+            "correct": correct,
+            "total": total,
             "avg_time_per_q": round(sum(times) / len(times), 2) if times else 0,
             "total_time": round(elapsed, 1),
         },
@@ -814,8 +927,10 @@ def run_sequential_benchmark(
 # DATASET LOADERS
 # ══════════════════════════════════════════════════════════════════
 
+
 def load_dataset_samples(dataset_name: str, split: str, n_samples: int = 0):
     from datasets import load_dataset
+
     ds = load_dataset(dataset_name, split=split)
     items = list(ds)
     if 0 < n_samples < len(items):
@@ -829,6 +944,7 @@ def load_dataset_samples(dataset_name: str, split: str, n_samples: int = 0):
 # THROUGHPUT BENCHMARK
 # ══════════════════════════════════════════════════════════════════
 
+
 def run_throughput_mlxlm(model, tokenizer, n_runs: int, max_tokens: int) -> BenchResult:
     from mlx_lm import generate
     from mlx_lm.sample_utils import make_sampler
@@ -836,22 +952,35 @@ def run_throughput_mlxlm(model, tokenizer, n_runs: int, max_tokens: int) -> Benc
     sampler = make_sampler(temp=0.0)
     prompt = "Write a detailed essay about the history of computing. " * 5
 
-    generate(model, tokenizer, prompt=prompt, max_tokens=16, sampler=sampler, verbose=False)
+    generate(
+        model, tokenizer, prompt=prompt, max_tokens=16, sampler=sampler, verbose=False
+    )
 
     speeds = []
     for _ in range(n_runs):
         t0 = time.perf_counter()
-        text = generate(model, tokenizer, prompt=prompt, max_tokens=max_tokens,
-                        sampler=sampler, verbose=False)
+        text = generate(
+            model,
+            tokenizer,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            sampler=sampler,
+            verbose=False,
+        )
         elapsed = time.perf_counter() - t0
         n_tok = len(tokenizer.encode(text))
         speeds.append(n_tok / elapsed if elapsed > 0 else 0)
 
     mean = sum(speeds) / len(speeds)
     std = (sum((s - mean) ** 2 for s in speeds) / len(speeds)) ** 0.5
-    return BenchResult(framework="mlx-lm", benchmark="throughput",
-                       throughput=mean, throughput_std=std, memory_mb=get_rss_mb(),
-                       extra={"n_runs": n_runs, "max_tokens": max_tokens})
+    return BenchResult(
+        framework="mlx-lm",
+        benchmark="throughput",
+        throughput=mean,
+        throughput_std=std,
+        memory_mb=get_rss_mb(),
+        extra={"n_runs": n_runs, "max_tokens": max_tokens},
+    )
 
 
 async def run_throughput_yunshu(n_runs: int, max_tokens: int) -> BenchResult:
@@ -875,14 +1004,20 @@ async def run_throughput_yunshu(n_runs: int, max_tokens: int) -> BenchResult:
     await engine.stop()
     mean = sum(speeds) / len(speeds)
     std = (sum((s - mean) ** 2 for s in speeds) / len(speeds)) ** 0.5
-    return BenchResult(framework="yunshu", benchmark="throughput",
-                       throughput=mean, throughput_std=std, memory_mb=get_rss_mb(),
-                       extra={"n_runs": n_runs, "max_tokens": max_tokens})
+    return BenchResult(
+        framework="yunshu",
+        benchmark="throughput",
+        throughput=mean,
+        throughput_std=std,
+        memory_mb=get_rss_mb(),
+        extra={"n_runs": n_runs, "max_tokens": max_tokens},
+    )
 
 
 # ══════════════════════════════════════════════════════════════════
 # SUMMARY REPORTING
 # ══════════════════════════════════════════════════════════════════
+
 
 def print_summary(all_results: list[BenchResult]):
     P(f"\n{'═' * 90}")
@@ -911,7 +1046,9 @@ def print_summary(all_results: list[BenchResult]):
 
         elif bench_name == "mmlu_pro":
             base = next((r for r in results if r.framework == "mlx-lm"), None)
-            P(f"  {'Framework':<12} {'Accuracy':>10} {'±stderr':>8} {'Correct':>10} {'Time':>10} {'vs Base':>8}")
+            P(
+                f"  {'Framework':<12} {'Accuracy':>10} {'±stderr':>8} {'Correct':>10} {'Time':>10} {'vs Base':>8}"
+            )
             P(f"  {'─' * 12} {'─' * 10} {'─' * 8} {'─' * 10} {'─' * 10} {'─' * 8}")
             for r in results:
                 acc = f"{r.accuracy:.1f}%" if r.accuracy is not None else "N/A"
@@ -930,7 +1067,9 @@ def print_summary(all_results: list[BenchResult]):
                     P(f"\n  Per-category ({r.framework}):")
                     for cat in sorted(r.per_category):
                         pc = r.per_category[cat]
-                        P(f"    {cat:<22} {pc['correct']:>4}/{pc['total']:<4} = {pc['accuracy']:.1f}%")
+                        P(
+                            f"    {cat:<22} {pc['correct']:>4}/{pc['total']:<4} = {pc['accuracy']:.1f}%"
+                        )
                     break
         else:
             for r in results:
@@ -943,15 +1082,19 @@ def print_summary(all_results: list[BenchResult]):
 # MULTIMODAL BENCHMARK (VLM, TTS, ASR, Image)
 # ══════════════════════════════════════════════════════════════════
 
+
 async def bench_vlm() -> dict:
     """VLM: text generation speed + throughput."""
     from yunshu_engine.vlm_engine import VLMEngine
+
     engine = VLMEngine(model_path("vlm"))
     await engine.start()
     rss = get_rss_mb()
 
     # Text-only warmup
-    await engine.generate(messages=[{"role": "user", "content": "Hello"}], max_tokens=16, temperature=0.0)
+    await engine.generate(
+        messages=[{"role": "user", "content": "Hello"}], max_tokens=16, temperature=0.0
+    )
 
     # Text-only benchmark
     prompts = [
@@ -965,7 +1108,7 @@ async def bench_vlm() -> dict:
         r = await engine.generate(messages=msgs, max_tokens=64, temperature=0.0)
         dt = time.perf_counter() - t0
         # VLM returns dict with "text", not GenerationOutput
-        text = r.get("text", "") if isinstance(r, dict) else getattr(r, 'text', '')
+        text = r.get("text", "") if isinstance(r, dict) else getattr(r, "text", "")
         # Estimate tokens from text (rough: ~4 chars per token)
         n_tok = max(1, len(text) // 4)
         times.append({"dt": dt, "tokens": n_tok, "text_len": len(text)})
@@ -975,7 +1118,8 @@ async def bench_vlm() -> dict:
     tok_s = avg_tok / avg_dt if avg_dt > 0 else 0
 
     result = {
-        "modality": "VLM (text-only)", "rss_mb": round(rss, 0),
+        "modality": "VLM (text-only)",
+        "rss_mb": round(rss, 0),
         "avg_latency_ms": round(avg_dt * 1000, 0),
         "avg_tokens": round(avg_tok, 1),
         "tok_per_s": round(tok_s, 1),
@@ -987,6 +1131,7 @@ async def bench_vlm() -> dict:
 async def bench_tts() -> dict:
     """TTS: synthesis speed + RTF (Real-Time Factor)."""
     from yunshu_engine.audio_engine import TTSEngine
+
     engine = TTSEngine(model_path("tts"))
     await engine.start()
     rss = get_rss_mb()
@@ -1008,18 +1153,28 @@ async def bench_tts() -> dict:
         # Estimate audio duration (16kHz, 16-bit mono = 32000 bytes/s)
         audio_duration = len(wav_bytes) / 32000
         rtf = dt / audio_duration if audio_duration > 0 else 0
-        durations.append({"gen_s": dt, "audio_s": audio_duration, "rtf": rtf, "bytes": len(wav_bytes)})
+        durations.append(
+            {
+                "gen_s": dt,
+                "audio_s": audio_duration,
+                "rtf": rtf,
+                "bytes": len(wav_bytes),
+            }
+        )
 
     avg_gen = sum(d["gen_s"] for d in durations) / len(durations)
     avg_audio = sum(d["audio_s"] for d in durations) / len(durations)
     avg_rtf = sum(d["rtf"] for d in durations) / len(durations)
 
     result = {
-        "modality": "TTS", "rss_mb": round(rss, 0),
+        "modality": "TTS",
+        "rss_mb": round(rss, 0),
         "avg_latency_ms": round(avg_gen * 1000, 0),
         "avg_audio_s": round(avg_audio, 2),
         "rtf": round(avg_rtf, 3),
-        "avg_output_bytes": round(sum(d["bytes"] for d in durations) / len(durations), 0),
+        "avg_output_bytes": round(
+            sum(d["bytes"] for d in durations) / len(durations), 0
+        ),
     }
     await engine.stop()
     return result
@@ -1028,18 +1183,20 @@ async def bench_tts() -> dict:
 async def bench_asr() -> dict:
     """ASR: transcription speed."""
     from yunshu_engine.audio_engine import ASREngine
+
     engine = ASREngine(model_path("asr"))
     await engine.start()
     rss = get_rss_mb()
 
     # Create a test WAV file (1s silence at 16kHz, 16-bit mono)
     import wave
+
     tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-    with wave.open(tmp.name, 'w') as wf:
+    with wave.open(tmp.name, "w") as wf:
         wf.setnchannels(1)
         wf.setsampwidth(2)
         wf.setframerate(16000)
-        wf.writeframes(b'\x00\x00' * 16000)  # 1s silence
+        wf.writeframes(b"\x00\x00" * 16000)  # 1s silence
     tmp.close()
 
     # Warmup
@@ -1055,7 +1212,8 @@ async def bench_asr() -> dict:
     avg_dt = dt / 3
 
     result_data = {
-        "modality": "ASR", "rss_mb": round(rss, 0),
+        "modality": "ASR",
+        "rss_mb": round(rss, 0),
         "avg_latency_ms": round(avg_dt * 1000, 0),
         "transcription": str(result_text)[:100] if result_text else "",
     }
@@ -1066,17 +1224,21 @@ async def bench_asr() -> dict:
 async def bench_image() -> dict:
     """Image: generation speed + step latency."""
     from yunshu_engine.image_engine import ImageGenEngine
+
     engine = ImageGenEngine(model_path("image"))
     await engine.start()
     rss = get_rss_mb()
 
     # Benchmark
     t0 = time.perf_counter()
-    img_bytes = await engine.generate_image("A cat sitting on a windowsill at sunset.", num_steps=4)
+    img_bytes = await engine.generate_image(
+        "A cat sitting on a windowsill at sunset.", num_steps=4
+    )
     dt = time.perf_counter() - t0
 
     result_data = {
-        "modality": "Image", "rss_mb": round(rss, 0),
+        "modality": "Image",
+        "rss_mb": round(rss, 0),
         "latency_ms": round(dt * 1000, 0),
         "output_bytes": len(img_bytes) if img_bytes else 0,
         "steps": 4,
@@ -1093,10 +1255,14 @@ async def run_multimodal_benchmarks() -> list[dict]:
         try:
             r = await bench_vlm()
             results.append(r)
-            P(f"    {r['tok_per_s']:.1f} tok/s, {r['avg_latency_ms']:.0f}ms avg, {r['rss_mb']:.0f}MB")
+            P(
+                f"    {r['tok_per_s']:.1f} tok/s, {r['avg_latency_ms']:.0f}ms avg, {r['rss_mb']:.0f}MB"
+            )
         except Exception as e:
             P(f"    VLM FAILED: {e}")
-            import traceback; traceback.print_exc()
+            import traceback
+
+            traceback.print_exc()
         cleanup()
 
     if model_exists("tts"):
@@ -1104,10 +1270,14 @@ async def run_multimodal_benchmarks() -> list[dict]:
         try:
             r = await bench_tts()
             results.append(r)
-            P(f"    RTF={r['rtf']:.3f}, {r['avg_latency_ms']:.0f}ms, {r['avg_audio_s']:.2f}s audio, {r['rss_mb']:.0f}MB")
+            P(
+                f"    RTF={r['rtf']:.3f}, {r['avg_latency_ms']:.0f}ms, {r['avg_audio_s']:.2f}s audio, {r['rss_mb']:.0f}MB"
+            )
         except Exception as e:
             P(f"    TTS FAILED: {e}")
-            import traceback; traceback.print_exc()
+            import traceback
+
+            traceback.print_exc()
         cleanup()
 
     if model_exists("asr"):
@@ -1118,7 +1288,9 @@ async def run_multimodal_benchmarks() -> list[dict]:
             P(f"    {r['avg_latency_ms']:.0f}ms, {r['rss_mb']:.0f}MB")
         except Exception as e:
             P(f"    ASR FAILED: {e}")
-            import traceback; traceback.print_exc()
+            import traceback
+
+            traceback.print_exc()
         cleanup()
 
     if model_exists("image"):
@@ -1126,15 +1298,21 @@ async def run_multimodal_benchmarks() -> list[dict]:
         try:
             r = await bench_image()
             results.append(r)
-            P(f"    {r['latency_ms']:.0f}ms ({r['steps']} steps), {r['output_bytes']}B, {r['rss_mb']:.0f}MB")
+            P(
+                f"    {r['latency_ms']:.0f}ms ({r['steps']} steps), {r['output_bytes']}B, {r['rss_mb']:.0f}MB"
+            )
         except Exception as e:
             P(f"    Image FAILED: {e}")
-            import traceback; traceback.print_exc()
+            import traceback
+
+            traceback.print_exc()
         cleanup()
 
     if results:
         P("\n  ── MULTIMODAL SUMMARY ──")
-        P(f"    {'Modality':<16} {'Latency':>10} {'Speed':>12} {'Output':>12} {'Memory':>10}")
+        P(
+            f"    {'Modality':<16} {'Latency':>10} {'Speed':>12} {'Output':>12} {'Memory':>10}"
+        )
         P(f"    {'─' * 16} {'─' * 10} {'─' * 12} {'─' * 12} {'─' * 10}")
         for r in results:
             mod = r["modality"]
@@ -1145,7 +1323,7 @@ async def run_multimodal_benchmarks() -> list[dict]:
             elif "Image" in mod:
                 latency = f"{r['latency_ms']:.0f}ms"
                 speed = f"{r['steps']} steps"
-                output = f"{r['output_bytes']/1024:.0f}KB"
+                output = f"{r['output_bytes'] / 1024:.0f}KB"
             elif "ASR" in mod:
                 latency = f"{r['avg_latency_ms']:.0f}ms"
                 speed = "—"
@@ -1154,7 +1332,9 @@ async def run_multimodal_benchmarks() -> list[dict]:
                 latency = f"{r['avg_latency_ms']:.0f}ms"
                 speed = f"{r['tok_per_s']:.1f} tok/s"
                 output = f"{r['avg_tokens']:.0f} tok"
-            P(f"    {mod:<16} {latency:>10} {speed:>12} {output:>12} {r['rss_mb']:>8.0f}MB")
+            P(
+                f"    {mod:<16} {latency:>10} {speed:>12} {output:>12} {r['rss_mb']:>8.0f}MB"
+            )
 
     return results
 
@@ -1171,14 +1351,17 @@ BENCHMARKS = ["mmlu_pro", "throughput", "perf", "multimodal"]
 # ══════════════════════════════════════════════════════════════════
 
 PERF_SCENARIOS = [
-    ("short_prompt_short_gen",   5, 128),
+    ("short_prompt_short_gen", 5, 128),
     ("medium_prompt_medium_gen", 20, 256),
-    ("long_prompt_long_gen",     80, 512),
+    ("long_prompt_long_gen", 80, 512),
 ]
 
 
 def _build_perf_prompt(n_repeats: int) -> str:
-    return "Write a detailed essay about the history of computing from the 1940s to present day. " * n_repeats
+    return (
+        "Write a detailed essay about the history of computing from the 1940s to present day. "
+        * n_repeats
+    )
 
 
 def run_perf_mlxlm(model, tokenizer) -> list[dict]:
@@ -1213,9 +1396,15 @@ def run_perf_mlxlm(model, tokenizer) -> list[dict]:
                 ttft = time.perf_counter() - t0
                 first = False
             tokens.append(int(token))
-            if hasattr(tokenizer, 'eos_token_id') and int(token) == tokenizer.eos_token_id:
+            if (
+                hasattr(tokenizer, "eos_token_id")
+                and int(token) == tokenizer.eos_token_id
+            ):
                 break
-            if hasattr(tokenizer, 'eos_token_ids') and int(token) in tokenizer.eos_token_ids:
+            if (
+                hasattr(tokenizer, "eos_token_ids")
+                and int(token) in tokenizer.eos_token_ids
+            ):
                 break
         dt = time.perf_counter() - t0
         mx.synchronize()
@@ -1223,19 +1412,26 @@ def run_perf_mlxlm(model, tokenizer) -> list[dict]:
 
         gen_time = dt - (ttft or 0)
         tok_s = len(tokens) / gen_time if gen_time > 0 else 0
-        results.append({
-            "scenario": name, "ttft_ms": round((ttft or 0) * 1000, 1),
-            "tok_per_s": round(tok_s, 1), "tokens": len(tokens),
-            "prompt_tokens": prompt_toks, "total_s": round(dt, 2),
-            "rss_mb": round(rss, 0),
-        })
+        results.append(
+            {
+                "scenario": name,
+                "ttft_ms": round((ttft or 0) * 1000, 1),
+                "tok_per_s": round(tok_s, 1),
+                "tokens": len(tokens),
+                "prompt_tokens": prompt_toks,
+                "total_s": round(dt, 2),
+                "rss_mb": round(rss, 0),
+            }
+        )
 
         # Streaming (stream_generate — end-to-end TTFT)
         t0 = time.perf_counter()
         ttft_s = None
         n_tok = 0
         text = ""
-        for resp in mlx_stream_gen(model, tokenizer, prompt, max_tokens=max_tok, sampler=sampler):
+        for resp in mlx_stream_gen(
+            model, tokenizer, prompt, max_tokens=max_tok, sampler=sampler
+        ):
             if ttft_s is None and resp.text:
                 ttft_s = time.perf_counter() - t0
             text += resp.text
@@ -1245,12 +1441,17 @@ def run_perf_mlxlm(model, tokenizer) -> list[dict]:
         mx.clear_cache()
         gen_time = dt - (ttft_s or 0)
         tok_s = n_tok / gen_time if gen_time > 0 else 0
-        results.append({
-            "scenario": name + "_stream", "ttft_ms": round((ttft_s or 0) * 1000, 1),
-            "tok_per_s": round(tok_s, 1), "tokens": n_tok,
-            "prompt_tokens": prompt_toks, "total_s": round(dt, 2),
-            "rss_mb": round(rss, 0),
-        })
+        results.append(
+            {
+                "scenario": name + "_stream",
+                "ttft_ms": round((ttft_s or 0) * 1000, 1),
+                "tok_per_s": round(tok_s, 1),
+                "tokens": n_tok,
+                "prompt_tokens": prompt_toks,
+                "total_s": round(dt, 2),
+                "rss_mb": round(rss, 0),
+            }
+        )
 
     return results
 
@@ -1270,21 +1471,28 @@ async def run_perf_yunshu() -> list[dict]:
         prompt_toks = len(input_ids)
 
         # Warmup
-        await engine.generate(prompt=_build_perf_prompt(1), max_tokens=16, temperature=0.0)
+        await engine.generate(
+            prompt=_build_perf_prompt(1), max_tokens=16, temperature=0.0
+        )
 
         t0 = time.perf_counter()
         r = await engine.generate(prompt=prompt, max_tokens=max_tok, temperature=0.0)
         dt = time.perf_counter() - t0
 
-        ttft_ms = r.ttft_ms if hasattr(r, 'ttft_ms') else 0
+        ttft_ms = r.ttft_ms if hasattr(r, "ttft_ms") else 0
         gen_time = (dt - ttft_ms / 1000) if ttft_ms > 0 else dt
         tok_s = r.completion_tokens / gen_time if gen_time > 0 else 0
-        results.append({
-            "scenario": name, "ttft_ms": ttft_ms,
-            "tok_per_s": round(tok_s, 1), "tokens": r.completion_tokens,
-            "prompt_tokens": prompt_toks, "total_s": round(dt, 2),
-            "rss_mb": round(rss, 0),
-        })
+        results.append(
+            {
+                "scenario": name,
+                "ttft_ms": ttft_ms,
+                "tok_per_s": round(tok_s, 1),
+                "tokens": r.completion_tokens,
+                "prompt_tokens": prompt_toks,
+                "total_s": round(dt, 2),
+                "rss_mb": round(rss, 0),
+            }
+        )
 
     # Streaming TTFT measurement
     stream_results = []
@@ -1296,33 +1504,46 @@ async def run_perf_yunshu() -> list[dict]:
         t0 = time.perf_counter()
         ttft = None
         total_tokens = 0
-        async for chunk in engine.stream_generate(prompt=prompt, max_tokens=max_tok, temperature=0.0):
+        async for chunk in engine.stream_generate(
+            prompt=prompt, max_tokens=max_tok, temperature=0.0
+        ):
             if ttft is None and chunk.new_text:
                 ttft = time.perf_counter() - t0
             total_tokens = chunk.completion_tokens
         dt = time.perf_counter() - t0
         gen_time = dt - (ttft or 0)
         tok_s = total_tokens / gen_time if gen_time > 0 else 0
-        stream_results.append({
-            "scenario": name + "_stream", "ttft_ms": round((ttft or 0) * 1000, 1),
-            "tok_per_s": round(tok_s, 1), "tokens": total_tokens,
-            "prompt_tokens": prompt_toks, "total_s": round(dt, 2),
-            "rss_mb": round(rss, 0),
-        })
+        stream_results.append(
+            {
+                "scenario": name + "_stream",
+                "ttft_ms": round((ttft or 0) * 1000, 1),
+                "tok_per_s": round(tok_s, 1),
+                "tokens": total_tokens,
+                "prompt_tokens": prompt_toks,
+                "total_s": round(dt, 2),
+                "rss_mb": round(rss, 0),
+            }
+        )
 
     await engine.stop()
     return results + stream_results
 
 
-async def _perf_stream_any(engine, prompt: str, max_tokens: int, temperature: float = 0.0) -> tuple[float, float, int, float]:
+async def _perf_stream_any(
+    engine, prompt: str, max_tokens: int, temperature: float = 0.0
+) -> tuple[float, float, int, float]:
     """Run streaming generation and measure TTFT, tok/s, token count, total time."""
     t0 = time.perf_counter()
     ttft = None
     total_tokens = 0
-    async for chunk in engine.stream_generate(prompt=prompt, max_tokens=max_tokens, temperature=temperature):
-        if ttft is None and getattr(chunk, 'new_text', getattr(chunk, 'text', '')):
+    async for chunk in engine.stream_generate(
+        prompt=prompt, max_tokens=max_tokens, temperature=temperature
+    ):
+        if ttft is None and getattr(chunk, "new_text", getattr(chunk, "text", "")):
             ttft = time.perf_counter() - t0
-        total_tokens = max(total_tokens, getattr(chunk, 'completion_tokens', total_tokens + 1))
+        total_tokens = max(
+            total_tokens, getattr(chunk, "completion_tokens", total_tokens + 1)
+        )
     dt = time.perf_counter() - t0
     gen_time = dt - (ttft or 0)
     tok_s = total_tokens / gen_time if gen_time > 0 else 0
@@ -1352,23 +1573,35 @@ async def run_perf_vllm_mlx() -> list[dict]:
         t0 = time.perf_counter()
         r = await engine.generate(prompt, max_tokens=max_tok, temperature=0.0)
         dt_ns = time.perf_counter() - t0
-        n_tok = getattr(r, 'completion_tokens', 0) or len(tokenizer.encode(getattr(r, 'text', '')))
+        n_tok = getattr(r, "completion_tokens", 0) or len(
+            tokenizer.encode(getattr(r, "text", ""))
+        )
         tok_s_ns = n_tok / dt_ns if dt_ns > 0 else 0
-        results.append({
-            "scenario": name, "ttft_ms": 0,
-            "tok_per_s": round(tok_s_ns, 1), "tokens": n_tok,
-            "prompt_tokens": prompt_toks, "total_s": round(dt_ns, 2),
-            "rss_mb": round(rss, 0),
-        })
+        results.append(
+            {
+                "scenario": name,
+                "ttft_ms": 0,
+                "tok_per_s": round(tok_s_ns, 1),
+                "tokens": n_tok,
+                "prompt_tokens": prompt_toks,
+                "total_s": round(dt_ns, 2),
+                "rss_mb": round(rss, 0),
+            }
+        )
 
         # Streaming (has TTFT)
         ttft_ms, tok_s, tokens, dt = await _perf_stream_any(engine, prompt, max_tok)
-        results.append({
-            "scenario": name + "_stream", "ttft_ms": round(ttft_ms, 1),
-            "tok_per_s": round(tok_s, 1), "tokens": tokens,
-            "prompt_tokens": prompt_toks, "total_s": round(dt, 2),
-            "rss_mb": round(rss, 0),
-        })
+        results.append(
+            {
+                "scenario": name + "_stream",
+                "ttft_ms": round(ttft_ms, 1),
+                "tok_per_s": round(tok_s, 1),
+                "tokens": tokens,
+                "prompt_tokens": prompt_toks,
+                "total_s": round(dt, 2),
+                "rss_mb": round(rss, 0),
+            }
+        )
 
     await engine.stop()
     cleanup()
@@ -1396,23 +1629,35 @@ async def run_perf_omlx() -> list[dict]:
         t0 = time.perf_counter()
         r = await engine.generate(prompt, max_tokens=max_tok, temperature=0.0)
         dt_ns = time.perf_counter() - t0
-        n_tok = getattr(r, 'completion_tokens', 0) or len(tokenizer.encode(getattr(r, 'text', '')))
+        n_tok = getattr(r, "completion_tokens", 0) or len(
+            tokenizer.encode(getattr(r, "text", ""))
+        )
         tok_s_ns = n_tok / dt_ns if dt_ns > 0 else 0
-        results.append({
-            "scenario": name, "ttft_ms": 0,
-            "tok_per_s": round(tok_s_ns, 1), "tokens": n_tok,
-            "prompt_tokens": prompt_toks, "total_s": round(dt_ns, 2),
-            "rss_mb": round(rss, 0),
-        })
+        results.append(
+            {
+                "scenario": name,
+                "ttft_ms": 0,
+                "tok_per_s": round(tok_s_ns, 1),
+                "tokens": n_tok,
+                "prompt_tokens": prompt_toks,
+                "total_s": round(dt_ns, 2),
+                "rss_mb": round(rss, 0),
+            }
+        )
 
         # Streaming
         ttft_ms, tok_s, tokens, dt = await _perf_stream_any(engine, prompt, max_tok)
-        results.append({
-            "scenario": name + "_stream", "ttft_ms": round(ttft_ms, 1),
-            "tok_per_s": round(tok_s, 1), "tokens": tokens,
-            "prompt_tokens": prompt_toks, "total_s": round(dt, 2),
-            "rss_mb": round(rss, 0),
-        })
+        results.append(
+            {
+                "scenario": name + "_stream",
+                "ttft_ms": round(ttft_ms, 1),
+                "tok_per_s": round(tok_s, 1),
+                "tokens": tokens,
+                "prompt_tokens": prompt_toks,
+                "total_s": round(dt, 2),
+                "rss_mb": round(rss, 0),
+            }
+        )
 
     await engine.stop()
     cleanup()
@@ -1429,9 +1674,9 @@ def print_perf_summary(perf_data: dict[str, list[dict]]):
         for scenario_name, _, _ in PERF_SCENARIOS:
             key = scenario_name + suffix
             rows = []
-            best_ttft = float('inf')
+            best_ttft = float("inf")
             best_tps = 0
-            best_mem = float('inf')
+            best_mem = float("inf")
             for fw, results in perf_data.items():
                 for r in results:
                     if r["scenario"] == key:
@@ -1445,21 +1690,35 @@ def print_perf_summary(perf_data: dict[str, list[dict]]):
                 continue
 
             P(f"\n    {scenario_name}:")
-            P(f"    {'Framework':<14} {'TTFT':>10} {'tok/s':>10} {'Tokens':>8} {'Memory':>10}")
+            P(
+                f"    {'Framework':<14} {'TTFT':>10} {'tok/s':>10} {'Tokens':>8} {'Memory':>10}"
+            )
             P(f"    {'─' * 14} {'─' * 10} {'─' * 10} {'─' * 8} {'─' * 10}")
 
             for fw, r in sorted(rows, key=lambda x: -x[1]["tok_per_s"]):
-                ttft_str = f"{r['ttft_ms']:.1f}ms" if r['ttft_ms'] > 0 else "—"
+                ttft_str = f"{r['ttft_ms']:.1f}ms" if r["ttft_ms"] > 0 else "—"
                 tps = r["tok_per_s"]
                 mem = r["rss_mb"]
-                ttft_mark = " ★" if r["ttft_ms"] > 0 and best_ttft < float('inf') and r["ttft_ms"] <= best_ttft * 1.02 else ""
+                ttft_mark = (
+                    " ★"
+                    if r["ttft_ms"] > 0
+                    and best_ttft < float("inf")
+                    and r["ttft_ms"] <= best_ttft * 1.02
+                    else ""
+                )
                 tps_mark = " ★" if tps >= best_tps * 0.98 else ""
-                mem_mark = " ★" if best_mem < float('inf') and mem <= best_mem * 1.02 else ""
-                P(f"    {fw:<14} {ttft_str:>10}{ttft_mark} {tps:>10.1f}{tps_mark} {r['tokens']:>8} {mem:>8.0f}MB{mem_mark}")
+                mem_mark = (
+                    " ★" if best_mem < float("inf") and mem <= best_mem * 1.02 else ""
+                )
+                P(
+                    f"    {fw:<14} {ttft_str:>10}{ttft_mark} {tps:>10.1f}{tps_mark} {r['tokens']:>8} {mem:>8.0f}MB{mem_mark}"
+                )
 
     # Grand summary: best per metric across all scenarios
     P("\n  ── GRAND SUMMARY (best per framework across all scenarios) ──")
-    P(f"    {'Framework':<14} {'TTFT best':>12} {'tok/s best':>12} {'tok/s avg':>12} {'Memory':>10}")
+    P(
+        f"    {'Framework':<14} {'TTFT best':>12} {'tok/s best':>12} {'tok/s avg':>12} {'Memory':>10}"
+    )
     P(f"    {'─' * 14} {'─' * 12} {'─' * 12} {'─' * 12} {'─' * 10}")
 
     for fw in ["mlx-lm", "yunshu", "vllm-mlx", "omlx"]:
@@ -1470,10 +1729,11 @@ def print_perf_summary(perf_data: dict[str, list[dict]]):
         all_tps = [r["tok_per_s"] for r in results]
         all_mem = [r["rss_mb"] for r in results]
         best_ttft_str = f"{min(all_ttft):.0f}ms" if all_ttft else "—"
-        P(f"    {fw:<14} {best_ttft_str:>12} {max(all_tps):>10.1f}  {sum(all_tps)/len(all_tps):>10.1f}  {min(all_mem):>8.0f}MB")
+        P(
+            f"    {fw:<14} {best_ttft_str:>12} {max(all_tps):>10.1f}  {sum(all_tps) / len(all_tps):>10.1f}  {min(all_mem):>8.0f}MB"
+        )
 
     P(f"\n{'═' * 100}")
-
 
 
 async def main_async(args):
@@ -1511,49 +1771,66 @@ async def main_async(args):
 
     # Load datasets
     from datasets import load_dataset
+
     P("Loading datasets...")
     val_ds = load_dataset("TIGER-Lab/MMLU-Pro", split="validation")
     test_ds = load_dataset("TIGER-Lab/MMLU-Pro", split="test")
     fewshot_rows_by_cat = get_fewshot_rows_by_category(val_ds, n_shot=5)
     P(f"  MMLU-Pro: {len(test_ds)} test, {len(val_ds)} validation (few-shot)")
-    P(f"  Few-shot: {len(fewshot_rows_by_cat)} categories, "
-      f"5 examples each")
+    P(f"  Few-shot: {len(fewshot_rows_by_cat)} categories, 5 examples each")
     P("")
 
     # ── mlx-lm ──
     if "mlx-lm" in frameworks and "mmlu_pro" in benchmarks:
-        cached = None if args.no_cache else load_cached("mlx-lm", "mmlu_pro", samples, 4096)
+        cached = (
+            None if args.no_cache else load_cached("mlx-lm", "mmlu_pro", samples, 4096)
+        )
         if cached:
-            P(f"\n  MMLU-PRO (mlx-lm): CACHED — {cached.accuracy:.1f}% "
-              f"({cached.extra['correct']}/{cached.extra['total']})")
+            P(
+                f"\n  MMLU-PRO (mlx-lm): CACHED — {cached.accuracy:.1f}% "
+                f"({cached.extra['correct']}/{cached.extra['total']})"
+            )
             all_results.append(cached)
         else:
             P(f"{'─' * 90}")
             P("  Framework: MLX-LM (stream_generate + generate_until)")
             P(f"{'─' * 90}")
             from mlx_lm import load
+
             P("  Loading model...")
             model, tokenizer = load(model_path("llm"))
             P("  Model loaded")
             P("\n  MMLU-PRO (5-shot CoT + chat_template):")
             result = await asyncio.to_thread(
-                run_mmlu_pro_mlxlm, model, tokenizer, test_ds, fewshot_rows_by_cat, samples, max_tokens=4096,
+                run_mmlu_pro_mlxlm,
+                model,
+                tokenizer,
+                test_ds,
+                fewshot_rows_by_cat,
+                samples,
+                max_tokens=4096,
             )
             result.framework = "mlx-lm"
             all_results.append(result)
             save_cached(result, samples, 4096)
-            P(f"  → {result.accuracy:.1f}% ±{result.accuracy_stderr:.1f}% "
-              f"({result.extra['correct']}/{result.extra['total']}) "
-              f"[{result.extra['avg_time_per_q']}s/q, {result.extra['total_time']}s total]")
+            P(
+                f"  → {result.accuracy:.1f}% ±{result.accuracy_stderr:.1f}% "
+                f"({result.extra['correct']}/{result.extra['total']}) "
+                f"[{result.extra['avg_time_per_q']}s/q, {result.extra['total_time']}s total]"
+            )
             del model, tokenizer
             cleanup()
 
     # ── Yunshu ──
     if "yunshu" in frameworks and "mmlu_pro" in benchmarks:
-        cached = None if args.no_cache else load_cached("yunshu", "mmlu_pro", samples, 4096)
+        cached = (
+            None if args.no_cache else load_cached("yunshu", "mmlu_pro", samples, 4096)
+        )
         if cached:
-            P(f"\n  MMLU-PRO (yunshu): CACHED — {cached.accuracy:.1f}% "
-              f"({cached.extra['correct']}/{cached.extra['total']})")
+            P(
+                f"\n  MMLU-PRO (yunshu): CACHED — {cached.accuracy:.1f}% "
+                f"({cached.extra['correct']}/{cached.extra['total']})"
+            )
             all_results.append(cached)
         else:
             P(f"\n{'─' * 90}")
@@ -1561,21 +1838,32 @@ async def main_async(args):
             P(f"{'─' * 90}")
             P("\n  MMLU-PRO (5-shot CoT + chat_template):")
             result = await run_mmlu_pro_yunshu(
-                test_ds, fewshot_rows_by_cat, samples, max_tokens=4096,
+                test_ds,
+                fewshot_rows_by_cat,
+                samples,
+                max_tokens=4096,
             )
             all_results.append(result)
             save_cached(result, samples, 4096)
-            P(f"  → {result.accuracy:.1f}% ±{result.accuracy_stderr:.1f}% "
-              f"({result.extra['correct']}/{result.extra['total']}) "
-              f"[{result.extra['avg_time_per_q']}s/q, {result.extra['total_time']}s total]")
+            P(
+                f"  → {result.accuracy:.1f}% ±{result.accuracy_stderr:.1f}% "
+                f"({result.extra['correct']}/{result.extra['total']}) "
+                f"[{result.extra['avg_time_per_q']}s/q, {result.extra['total_time']}s total]"
+            )
             cleanup()
 
     # ── vllm-mlx ──
     if "vllm-mlx" in frameworks and "mmlu_pro" in benchmarks:
-        cached = None if args.no_cache else load_cached("vllm-mlx", "mmlu_pro", samples, 4096)
+        cached = (
+            None
+            if args.no_cache
+            else load_cached("vllm-mlx", "mmlu_pro", samples, 4096)
+        )
         if cached:
-            P(f"\n  MMLU-PRO (vllm-mlx): CACHED — {cached.accuracy:.1f}% "
-              f"({cached.extra['correct']}/{cached.extra['total']})")
+            P(
+                f"\n  MMLU-PRO (vllm-mlx): CACHED — {cached.accuracy:.1f}% "
+                f"({cached.extra['correct']}/{cached.extra['total']})"
+            )
             all_results.append(cached)
         else:
             P(f"\n{'─' * 90}")
@@ -1583,21 +1871,30 @@ async def main_async(args):
             P(f"{'─' * 90}")
             P("\n  MMLU-PRO (5-shot CoT + chat_template):")
             result = await run_mmlu_pro_vllm_mlx(
-                test_ds, fewshot_rows_by_cat, samples, max_tokens=4096,
+                test_ds,
+                fewshot_rows_by_cat,
+                samples,
+                max_tokens=4096,
             )
             all_results.append(result)
             save_cached(result, samples, 4096)
-            P(f"  → {result.accuracy:.1f}% ±{result.accuracy_stderr:.1f}% "
-              f"({result.extra['correct']}/{result.extra['total']}) "
-              f"[{result.extra['avg_time_per_q']}s/q, {result.extra['total_time']}s total]")
+            P(
+                f"  → {result.accuracy:.1f}% ±{result.accuracy_stderr:.1f}% "
+                f"({result.extra['correct']}/{result.extra['total']}) "
+                f"[{result.extra['avg_time_per_q']}s/q, {result.extra['total_time']}s total]"
+            )
             cleanup()
 
     # ── omlx ──
     if "omlx" in frameworks and "mmlu_pro" in benchmarks:
-        cached = None if args.no_cache else load_cached("omlx", "mmlu_pro", samples, 4096)
+        cached = (
+            None if args.no_cache else load_cached("omlx", "mmlu_pro", samples, 4096)
+        )
         if cached:
-            P(f"\n  MMLU-PRO (omlx): CACHED — {cached.accuracy:.1f}% "
-              f"({cached.extra['correct']}/{cached.extra['total']})")
+            P(
+                f"\n  MMLU-PRO (omlx): CACHED — {cached.accuracy:.1f}% "
+                f"({cached.extra['correct']}/{cached.extra['total']})"
+            )
             all_results.append(cached)
         else:
             P(f"\n{'─' * 90}")
@@ -1605,13 +1902,18 @@ async def main_async(args):
             P(f"{'─' * 90}")
             P("\n  MMLU-PRO (5-shot CoT + chat_template):")
             result = await run_mmlu_pro_omlx(
-                test_ds, fewshot_rows_by_cat, samples, max_tokens=4096,
+                test_ds,
+                fewshot_rows_by_cat,
+                samples,
+                max_tokens=4096,
             )
             all_results.append(result)
             save_cached(result, samples, 4096)
-            P(f"  → {result.accuracy:.1f}% ±{result.accuracy_stderr:.1f}% "
-              f"({result.extra['correct']}/{result.extra['total']}) "
-              f"[{result.extra['avg_time_per_q']}s/q, {result.extra['total_time']}s total]")
+            P(
+                f"  → {result.accuracy:.1f}% ±{result.accuracy_stderr:.1f}% "
+                f"({result.extra['correct']}/{result.extra['total']}) "
+                f"[{result.extra['avg_time_per_q']}s/q, {result.extra['total_time']}s total]"
+            )
             cleanup()
 
     # ── Performance (TTFT, tok/s, Memory) ──
@@ -1623,13 +1925,16 @@ async def main_async(args):
             P("  Performance: MLX-LM")
             P(f"{'─' * 90}")
             from mlx_lm import load
+
             P("  Loading model...")
             model, tokenizer = load(model_path("llm"))
             P(f"  Model loaded. RSS: {get_rss_mb():.0f} MB")
             # Run directly — generate_step must run on main thread for mlx-lm
             perf_data["mlx-lm"] = run_perf_mlxlm(model, tokenizer)
             for r in perf_data["mlx-lm"]:
-                P(f"    {r['scenario']}: TTFT={r['ttft_ms']:.1f}ms, {r['tok_per_s']:.1f} tok/s, {r['tokens']}tok, {r['rss_mb']:.0f}MB")
+                P(
+                    f"    {r['scenario']}: TTFT={r['ttft_ms']:.1f}ms, {r['tok_per_s']:.1f} tok/s, {r['tokens']}tok, {r['rss_mb']:.0f}MB"
+                )
             del model, tokenizer
             cleanup()
 
@@ -1641,7 +1946,9 @@ async def main_async(args):
             get_rss_mb()
             perf_data["yunshu"] = await run_perf_yunshu()
             for r in perf_data["yunshu"]:
-                P(f"    {r['scenario']}: TTFT={r['ttft_ms']:.1f}ms, {r['tok_per_s']:.1f} tok/s, {r['tokens']}tok, {r['rss_mb']:.0f}MB")
+                P(
+                    f"    {r['scenario']}: TTFT={r['ttft_ms']:.1f}ms, {r['tok_per_s']:.1f} tok/s, {r['tokens']}tok, {r['rss_mb']:.0f}MB"
+                )
             cleanup()
 
         if "vllm-mlx" in frameworks:
@@ -1652,7 +1959,9 @@ async def main_async(args):
                 P("  Loading model...")
                 perf_data["vllm-mlx"] = await run_perf_vllm_mlx()
                 for r in perf_data["vllm-mlx"]:
-                    P(f"    {r['scenario']}: {r['tok_per_s']:.1f} tok/s, {r['tokens']}tok, {r['rss_mb']:.0f}MB")
+                    P(
+                        f"    {r['scenario']}: {r['tok_per_s']:.1f} tok/s, {r['tokens']}tok, {r['rss_mb']:.0f}MB"
+                    )
                 cleanup()
             except Exception as e:
                 P(f"  vllm-mlx SKIPPED: {e}")
@@ -1665,7 +1974,9 @@ async def main_async(args):
                 P("  Loading model...")
                 perf_data["omlx"] = await run_perf_omlx()
                 for r in perf_data["omlx"]:
-                    P(f"    {r['scenario']}: {r['tok_per_s']:.1f} tok/s, {r['tokens']}tok, {r['rss_mb']:.0f}MB")
+                    P(
+                        f"    {r['scenario']}: {r['tok_per_s']:.1f} tok/s, {r['tokens']}tok, {r['rss_mb']:.0f}MB"
+                    )
                 cleanup()
             except Exception as e:
                 P(f"    omlx SKIPPED: {e}")
@@ -1681,7 +1992,9 @@ async def main_async(args):
         mm_results = await run_multimodal_benchmarks()
         if mm_results:
             # Save multimodal results
-            out_path = ROOT / "bench" / "results" / f"multimodal_{int(time.time())}.json"
+            out_path = (
+                ROOT / "bench" / "results" / f"multimodal_{int(time.time())}.json"
+            )
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(json.dumps(mm_results, indent=2, default=str))
             P(f"\n  Results saved to {out_path}")
@@ -1691,8 +2004,14 @@ async def main_async(args):
         print_summary(all_results)
         out_path = ROOT / "bench" / "results" / f"bench_{int(time.time())}.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        json_data = [{k: v for k, v in r.__dict__.items() if v is not None and v != {} and v != []}
-                     for r in all_results]
+        json_data = [
+            {
+                k: v
+                for k, v in r.__dict__.items()
+                if v is not None and v != {} and v != []
+            }
+            for r in all_results
+        ]
         out_path.write_text(json.dumps(json_data, indent=2, default=str))
         P(f"\n  Results saved to {out_path}")
     elif "mmlu_pro" in benchmarks:
@@ -1732,6 +2051,7 @@ def main_sync(args):
     all_results: list[BenchResult] = []
 
     from datasets import load_dataset
+
     P("Loading datasets...")
     val_ds = load_dataset("TIGER-Lab/MMLU-Pro", split="validation")
     test_ds = load_dataset("TIGER-Lab/MMLU-Pro", split="test")
@@ -1745,23 +2065,32 @@ def main_sync(args):
     P(f"{'─' * 90}")
 
     from mlx_lm import load
+
     P("  Loading model...")
     rss_before = get_rss_mb()
     model, tokenizer = load(model_path("llm"))
     rss_after = get_rss_mb()
-    P(f"  Model loaded. RSS: {rss_before:.0f} → {rss_after:.0f} MB (+{rss_after - rss_before:.0f} MB)")
+    P(
+        f"  Model loaded. RSS: {rss_before:.0f} → {rss_after:.0f} MB (+{rss_after - rss_before:.0f} MB)"
+    )
 
     if "mmlu_pro" in benchmarks:
         P("\n  MMLU-PRO (5-shot CoT + chat_template):")
         result = run_mmlu_pro_mlxlm(
-            model, tokenizer, test_ds, fewshot_rows_by_cat, samples,
+            model,
+            tokenizer,
+            test_ds,
+            fewshot_rows_by_cat,
+            samples,
             max_tokens=4096,
         )
         result.framework = "mlx-lm"
         all_results.append(result)
-        P(f"  → {result.accuracy:.1f}% ±{result.accuracy_stderr:.1f}% "
-          f"({result.extra['correct']}/{result.extra['total']}) "
-          f"[{result.extra['avg_time_per_q']}s/q, {result.extra['total_time']}s total]")
+        P(
+            f"  → {result.accuracy:.1f}% ±{result.accuracy_stderr:.1f}% "
+            f"({result.extra['correct']}/{result.extra['total']}) "
+            f"[{result.extra['avg_time_per_q']}s/q, {result.extra['total_time']}s total]"
+        )
 
     if "throughput" in benchmarks:
         n_runs = 3 if args.quick else 5
@@ -1777,22 +2106,40 @@ def main_sync(args):
         print_summary(all_results)
         out_path = ROOT / "bench" / "results" / f"bench_{int(time.time())}.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        json_data = [{k: v for k, v in r.__dict__.items() if v is not None and v != {} and v != []}
-                     for r in all_results]
+        json_data = [
+            {
+                k: v
+                for k, v in r.__dict__.items()
+                if v is not None and v != {} and v != []
+            }
+            for r in all_results
+        ]
         out_path.write_text(json.dumps(json_data, indent=2, default=str))
         P(f"\n  Results saved to {out_path}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Yunshu Benchmark — lm-eval-harness compatible")
+    parser = argparse.ArgumentParser(
+        description="Yunshu Benchmark — lm-eval-harness compatible"
+    )
     parser.add_argument("--quick", action="store_true", help="3 runs, 50 samples")
     parser.add_argument("--no-cache", action="store_true", help="Ignore cached results")
-    parser.add_argument("--full", action="store_true", help="Full dataset (12,032 questions)")
+    parser.add_argument(
+        "--full", action="store_true", help="Full dataset (12,032 questions)"
+    )
     parser.add_argument("--samples", type=int, default=200, help="Samples (0=full)")
-    parser.add_argument("--batch-size", type=int, default=8, help="Batch size for parallel inference")
-    parser.add_argument("--bench", nargs="+", choices=BENCHMARKS + ["all"], default=["all"])
-    parser.add_argument("--framework", nargs="+",
-                        choices=["mlx-lm", "yunshu", "vllm-mlx", "omlx", "all"], default=["all"])
+    parser.add_argument(
+        "--batch-size", type=int, default=8, help="Batch size for parallel inference"
+    )
+    parser.add_argument(
+        "--bench", nargs="+", choices=BENCHMARKS + ["all"], default=["all"]
+    )
+    parser.add_argument(
+        "--framework",
+        nargs="+",
+        choices=["mlx-lm", "yunshu", "vllm-mlx", "omlx", "all"],
+        default=["all"],
+    )
     args = parser.parse_args()
     if args.quick:
         args.samples = min(args.samples, 50)

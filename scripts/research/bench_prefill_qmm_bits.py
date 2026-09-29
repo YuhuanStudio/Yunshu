@@ -31,7 +31,11 @@ for name, (k, n) in SHAPES.items():
     flops = 2 * M * k * n
     dense = nn.Linear(k, n, bias=False)
     dense.weight = dense.weight.astype(mx.bfloat16)
-    row = {"shape": name, "M": M, "bf16_tflops": round(flops / amort(lambda: dense(x)) / 1e12, 1)}
+    row = {
+        "shape": name,
+        "M": M,
+        "bf16_tflops": round(flops / amort(lambda: dense(x)) / 1e12, 1),
+    }
     for bits in (4, 5, 6, 8):
         lin = nn.QuantizedLinear(k, n, bias=False, group_size=64, bits=bits)
         lin.scales = lin.scales.astype(mx.bfloat16)

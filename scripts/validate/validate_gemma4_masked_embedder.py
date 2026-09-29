@@ -37,7 +37,9 @@ def main() -> int:
     vocab = tcfg["vocab_size"]
     num_centroids = cfg["num_centroids"]
     top_k = cfg["centroid_intermediate_top_k"]
-    print(f"config: hidden={hidden} vocab={vocab} centroids={num_centroids} top_k={top_k}")
+    print(
+        f"config: hidden={hidden} vocab={vocab} centroids={num_centroids} top_k={top_k}"
+    )
 
     weights = mx.load(str(MODEL / "model.safetensors"))
     centroids_w = weights["masked_embedding.centroids.weight"].astype(mx.float32)
@@ -61,8 +63,10 @@ def main() -> int:
     sparse_logits, indices = emb._select_and_score(h, lm_head)
     mx.eval(sparse_logits, indices)
     assert sparse_logits.shape == (t, emb.num_selected), sparse_logits.shape
-    print(f"sparse: scored {emb.num_selected}/{vocab} tokens per position "
-          f"({vocab / emb.num_selected:.0f}x reduction)")
+    print(
+        f"sparse: scored {emb.num_selected}/{vocab} tokens per position "
+        f"({vocab / emb.num_selected:.0f}x reduction)"
+    )
 
     # Dense reference over the full real vocabulary.
     dense = h @ lm_head.T  # (t, vocab)
@@ -78,7 +82,9 @@ def main() -> int:
         # token IDs valid
         assert int(mx.min(idx_row).item()) >= 0
         assert int(mx.max(idx_row).item()) < vocab
-    print(f"[1] sparse logits match dense at selected IDs: max_abs_err={max_abs_err:.2e}")
+    print(
+        f"[1] sparse logits match dense at selected IDs: max_abs_err={max_abs_err:.2e}"
+    )
     assert max_abs_err < 1e-2, f"sparse/dense mismatch {max_abs_err}"
 
     # get_top_tokens == argmax over the selected set.
@@ -94,9 +100,11 @@ def main() -> int:
     # How often is the sparse top-token also the GLOBAL dense argmax?
     global_argmax = mx.argmax(dense, axis=-1)
     hits = int(mx.sum(top == global_argmax).item())
-    print(f"[3] sparse top == global dense argmax: {hits}/{t} "
-          f"(approximation; misses are expected when the true argmax's centroid "
-          f"isn't in the top-{top_k})")
+    print(
+        f"[3] sparse top == global dense argmax: {hits}/{t} "
+        f"(approximation; misses are expected when the true argmax's centroid "
+        f"isn't in the top-{top_k})"
+    )
 
     print("\nPASS — Gemma4MTPMaskedEmbedder validated against REAL drafter weights.")
     return 0

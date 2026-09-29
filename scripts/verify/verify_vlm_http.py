@@ -12,6 +12,7 @@ model manager, so a pre-loaded VLMEngine is injected as a manager entry.
 
 Run: PYTHONPATH=. uv run python scripts/verify_vlm_http.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -26,6 +27,7 @@ MODEL_ID = "GLM-OCR-bf16"
 
 def _img_data_url(word: str) -> str:
     from PIL import Image, ImageDraw, ImageFont
+
     img = Image.new("RGB", (380, 140), "white")
     d = ImageDraw.Draw(img)
     try:
@@ -66,29 +68,57 @@ async def main() -> int:
     detail: list[str] = []
     try:
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=180) as client:
-            r = await client.post("/v1/chat/completions", json={
-                "model": MODEL_ID, "max_tokens": 40, "temperature": 0.0,
-                "messages": [{"role": "user", "content": [
-                    {"type": "text", "text": "What word is written in this image? Reply with just the word."},
-                    {"type": "image_url", "image_url": {"url": _img_data_url("BANANA")}},
-                ]}],
-            })
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test", timeout=180
+        ) as client:
+            r = await client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": MODEL_ID,
+                    "max_tokens": 40,
+                    "temperature": 0.0,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "What word is written in this image? Reply with just the word.",
+                                },
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": _img_data_url("BANANA")},
+                                },
+                            ],
+                        }
+                    ],
+                },
+            )
             checks["VLM chat HTTP: 200"] = r.status_code == 200
             if r.status_code != 200:
                 detail.append(f"status={r.status_code} body={r.text[:200]}")
             else:
-                txt = (r.json()["choices"][0]["message"]["content"] or "")
+                txt = r.json()["choices"][0]["message"]["content"] or ""
                 checks["assistant content non-empty"] = bool(txt.strip())
                 checks["VLM reads the image word (BANANA)"] = "banana" in txt.lower()
                 detail.append(f"image answer={txt[:50]!r}")
 
             # text-only on the same route still works
-            r2 = await client.post("/v1/chat/completions", json={
-                "model": MODEL_ID, "max_tokens": 16, "temperature": 0.0,
-                "messages": [{"role": "user", "content": "Reply with the single word: hello"}]})
+            r2 = await client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": MODEL_ID,
+                    "max_tokens": 16,
+                    "temperature": 0.0,
+                    "messages": [
+                        {"role": "user", "content": "Reply with the single word: hello"}
+                    ],
+                },
+            )
             checks["text-only request on VLM route works"] = (
-                r2.status_code == 200 and bool((r2.json()["choices"][0]["message"]["content"] or "").strip()))
+                r2.status_code == 200
+                and bool((r2.json()["choices"][0]["message"]["content"] or "").strip())
+            )
     finally:
         entry.is_loaded = False
         entry.engine = None

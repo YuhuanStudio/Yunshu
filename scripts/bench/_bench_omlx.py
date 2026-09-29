@@ -7,6 +7,7 @@ SchedulerConfig.paged_ssd_cache_dir is set. Same cold/reuse protocol as ours.
 
 Run:  PYTHONPATH=.:./reference/omlx OMLX_MODEL=... OMLX_SSD=... uv run python scripts/_bench_omlx.py
 """
+
 import asyncio
 import importlib.abc
 import importlib.util
@@ -26,7 +27,9 @@ _STUB_PREFIXES = ("openai_harmony",)
 def _mk(name):
     m = types.ModuleType(name)
     m.__path__ = []
-    m.__getattr__ = lambda n: (type(n, (), {}) if n[:1].isupper() else (lambda *a, **k: None))
+    m.__getattr__ = lambda n: (
+        type(n, (), {}) if n[:1].isupper() else (lambda *a, **k: None)
+    )
     return m
 
 
@@ -58,7 +61,10 @@ def _ensure(modname, attrs):
 
 
 _s = lambda *a, **k: None  # noqa: E731
-_ensure("mlx_vlm.speculative", {"load_drafter": _s, "_mtp_rounds": _s, "_mtp_rounds_batch": _s})
+_ensure(
+    "mlx_vlm.speculative",
+    {"load_drafter": _s, "_mtp_rounds": _s, "_mtp_rounds_batch": _s},
+)
 _ensure("mlx_vlm.speculative.utils", {"_mtp_rounds": _s, "_mtp_rounds_batch": _s})
 
 MODEL = os.environ["OMLX_MODEL"]
@@ -67,7 +73,9 @@ QUERY = "List the first 6 even numbers, comma separated."
 
 def _doc(t):
     return f"Reference document {t}. " + (
-        "Photosynthesis converts sunlight into chemical energy stored in glucose. " * 110)
+        "Photosynthesis converts sunlight into chemical energy stored in glucose. "
+        * 110
+    )
 
 
 async def main():
@@ -75,21 +83,31 @@ async def main():
     try:
         from omlx.engine.batched import BatchedEngine
         from omlx.scheduler import SchedulerConfig
+
         sc = SchedulerConfig()
         sc.paged_ssd_cache_dir = os.environ.get("OMLX_SSD", "/tmp/omlx_pc")
         sc.paged_cache_block_size = 128
         e = BatchedEngine(model_name=MODEL, scheduler_config=sc)
         await e.start()
     except Exception as ex:
-        print("@@RESULTOMLX@@ " + json.dumps(
-            {"model": name, "status": f"LOAD FAILED: {type(ex).__name__}: {str(ex)[:80]}"}))
+        print(
+            "@@RESULTOMLX@@ "
+            + json.dumps(
+                {
+                    "model": name,
+                    "status": f"LOAD FAILED: {type(ex).__name__}: {str(ex)[:80]}",
+                }
+            )
+        )
         return
 
     async def chat(s, u, mt):
         t = time.perf_counter()
-        o = await e.chat(messages=[{"role": "system", "content": s},
-                                   {"role": "user", "content": u}],
-                         max_tokens=mt, temperature=0.0)
+        o = await e.chat(
+            messages=[{"role": "system", "content": s}, {"role": "user", "content": u}],
+            max_tokens=mt,
+            temperature=0.0,
+        )
         return time.perf_counter() - t, o
 
     try:
@@ -117,9 +135,13 @@ async def main():
             "status": "ok",
         }
     except Exception as ex:
-        res = {"model": name, "status": f"RUN FAILED: {type(ex).__name__}: {str(ex)[:80]}"}
+        res = {
+            "model": name,
+            "status": f"RUN FAILED: {type(ex).__name__}: {str(ex)[:80]}",
+        }
     print("@@RESULTOMLX@@ " + json.dumps(res))
     import contextlib
+
     with contextlib.suppress(Exception):
         await e.stop()
 

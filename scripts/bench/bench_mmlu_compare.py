@@ -2,6 +2,7 @@
 """MMLU-Pro cross-framework comparison: mlx-lm vs vllm-mlx vs omlx.
 42 questions (14 categories × 3), max_tokens=4096, temp=0.0.
 """
+
 import asyncio
 import gc
 import math
@@ -45,9 +46,13 @@ def extract_answer(text):
 
 
 def build_mmlu_messages(fewshot_rows, test_q):
-    msgs = [{"role": "system", "content":
-        "You are an expert at answering multiple choice questions. "
-        "Think step by step, then answer with 'answer is (X)' where X is the letter."}]
+    msgs = [
+        {
+            "role": "system",
+            "content": "You are an expert at answering multiple choice questions. "
+            "Think step by step, then answer with 'answer is (X)' where X is the letter.",
+        }
+    ]
     for row in fewshot_rows:
         user = "Question:\n" + row["question"] + "\nOptions:\n"
         for j, opt in enumerate(row["options"]):
@@ -70,6 +75,7 @@ def build_mmlu_messages(fewshot_rows, test_q):
 
 def load_data():
     from datasets import load_dataset
+
     val_ds = load_dataset("TIGER-Lab/MMLU-Pro", split="validation")
     test_ds = load_dataset("TIGER-Lab/MMLU-Pro", split="test")
     fewshot_by_cat = defaultdict(list)
@@ -92,6 +98,7 @@ def cleanup():
     gc.collect()
     try:
         import mlx.core as mx
+
         mx.synchronize()
         mx.clear_cache()
     except Exception:
@@ -100,12 +107,15 @@ def cleanup():
 
 def apply_template(tokenizer, msgs):
     return tokenizer.apply_chat_template(
-        msgs, tokenize=False, add_generation_prompt=True,
+        msgs,
+        tokenize=False,
+        add_generation_prompt=True,
         enable_thinking=False,
     )
 
 
 # ─── MLX-LM (baseline, sync) ───
+
 
 def run_mlxlm(questions, fewshot_by_cat):
     from mlx_lm import load, stream_generate
@@ -117,9 +127,15 @@ def run_mlxlm(questions, fewshot_by_cat):
     log("  Model loaded")
 
     # Warmup
-    warmup_prompt = apply_template(tokenizer, build_mmlu_messages(
-        fewshot_by_cat.get(questions[0]["category"], [])[:5], questions[0]))
-    for _ in stream_generate(model, tokenizer, warmup_prompt, max_tokens=32, sampler=sampler):
+    warmup_prompt = apply_template(
+        tokenizer,
+        build_mmlu_messages(
+            fewshot_by_cat.get(questions[0]["category"], [])[:5], questions[0]
+        ),
+    )
+    for _ in stream_generate(
+        model, tokenizer, warmup_prompt, max_tokens=32, sampler=sampler
+    ):
         pass
     log("  Warmup done")
 
@@ -134,7 +150,9 @@ def run_mlxlm(questions, fewshot_by_cat):
         t0 = time.perf_counter()
         text = ""
         n_tok = 0
-        for resp in stream_generate(model, tokenizer, prompt, max_tokens=4096, sampler=sampler):
+        for resp in stream_generate(
+            model, tokenizer, prompt, max_tokens=4096, sampler=sampler
+        ):
             text += resp.text
             n_tok += 1
             if ANSWER_RE.search(text):
@@ -150,8 +168,10 @@ def run_mlxlm(questions, fewshot_by_cat):
         if ok:
             correct += 1
         total += 1
-        log(f"  [{i+1}/{len(questions)}] {cat}: pred={predicted} ans={answer} "
-            f"{'✓' if ok else '✗'} | {dt:.1f}s {n_tok}tok")
+        log(
+            f"  [{i + 1}/{len(questions)}] {cat}: pred={predicted} ans={answer} "
+            f"{'✓' if ok else '✗'} | {dt:.1f}s {n_tok}tok"
+        )
 
     acc = correct / total * 100 if total else 0
     se = math.sqrt(acc * (100 - acc) / total) if total else 0
@@ -160,11 +180,18 @@ def run_mlxlm(questions, fewshot_by_cat):
 
     del model, tokenizer
     cleanup()
-    return {"framework": "mlx-lm", "correct": correct, "total": total,
-            "accuracy": acc, "stderr": se, "avg_time": avg}
+    return {
+        "framework": "mlx-lm",
+        "correct": correct,
+        "total": total,
+        "accuracy": acc,
+        "stderr": se,
+        "avg_time": avg,
+    }
 
 
 # ─── VLLM-MLX ───
+
 
 async def run_vllm_mlx(questions, fewshot_by_cat):
     sys.path.insert(0, str(REF_DIR / "vllm-mlx"))
@@ -179,8 +206,12 @@ async def run_vllm_mlx(questions, fewshot_by_cat):
     log(f"  Model loaded. tokenizer={type(tokenizer).__name__}")
 
     # Warmup
-    warmup_prompt = apply_template(tokenizer, build_mmlu_messages(
-        fewshot_by_cat.get(questions[0]["category"], [])[:5], questions[0]))
+    warmup_prompt = apply_template(
+        tokenizer,
+        build_mmlu_messages(
+            fewshot_by_cat.get(questions[0]["category"], [])[:5], questions[0]
+        ),
+    )
     await engine.generate(warmup_prompt, max_tokens=32, temperature=0.0)
     log("  Warmup done")
 
@@ -194,7 +225,8 @@ async def run_vllm_mlx(questions, fewshot_by_cat):
         prompt = apply_template(tokenizer, msgs)
         t0 = time.perf_counter()
         result = await engine.generate(
-            prompt, max_tokens=4096, temperature=0.0, stop=["Question:"])
+            prompt, max_tokens=4096, temperature=0.0, stop=["Question:"]
+        )
         dt = time.perf_counter() - t0
         times.append(dt)
 
@@ -206,8 +238,10 @@ async def run_vllm_mlx(questions, fewshot_by_cat):
             correct += 1
         total += 1
         n_tok = getattr(result, "completion_tokens", "?")
-        log(f"  [{i+1}/{len(questions)}] {cat}: pred={predicted} ans={answer} "
-            f"{'✓' if ok else '✗'} | {dt:.1f}s {n_tok}tok")
+        log(
+            f"  [{i + 1}/{len(questions)}] {cat}: pred={predicted} ans={answer} "
+            f"{'✓' if ok else '✗'} | {dt:.1f}s {n_tok}tok"
+        )
 
     acc = correct / total * 100 if total else 0
     se = math.sqrt(acc * (100 - acc) / total) if total else 0
@@ -216,11 +250,18 @@ async def run_vllm_mlx(questions, fewshot_by_cat):
 
     await engine.stop()
     cleanup()
-    return {"framework": "vllm-mlx", "correct": correct, "total": total,
-            "accuracy": acc, "stderr": se, "avg_time": avg}
+    return {
+        "framework": "vllm-mlx",
+        "correct": correct,
+        "total": total,
+        "accuracy": acc,
+        "stderr": se,
+        "avg_time": avg,
+    }
 
 
 # ─── OMLX ───
+
 
 async def run_omlx(questions, fewshot_by_cat):
     sys.path.insert(0, str(REF_DIR / "omlx"))
@@ -233,8 +274,12 @@ async def run_omlx(questions, fewshot_by_cat):
     log(f"  Model loaded. tokenizer={type(tokenizer).__name__}")
 
     # Warmup
-    warmup_prompt = apply_template(tokenizer, build_mmlu_messages(
-        fewshot_by_cat.get(questions[0]["category"], [])[:5], questions[0]))
+    warmup_prompt = apply_template(
+        tokenizer,
+        build_mmlu_messages(
+            fewshot_by_cat.get(questions[0]["category"], [])[:5], questions[0]
+        ),
+    )
     await engine.generate(warmup_prompt, max_tokens=32, temperature=0.0)
     log("  Warmup done")
 
@@ -248,7 +293,8 @@ async def run_omlx(questions, fewshot_by_cat):
         prompt = apply_template(tokenizer, msgs)
         t0 = time.perf_counter()
         result = await engine.generate(
-            prompt, max_tokens=4096, temperature=0.0, stop=["Question:"])
+            prompt, max_tokens=4096, temperature=0.0, stop=["Question:"]
+        )
         dt = time.perf_counter() - t0
         times.append(dt)
 
@@ -260,8 +306,10 @@ async def run_omlx(questions, fewshot_by_cat):
             correct += 1
         total += 1
         n_tok = getattr(result, "completion_tokens", "?")
-        log(f"  [{i+1}/{len(questions)}] {cat}: pred={predicted} ans={answer} "
-            f"{'✓' if ok else '✗'} | {dt:.1f}s {n_tok}tok")
+        log(
+            f"  [{i + 1}/{len(questions)}] {cat}: pred={predicted} ans={answer} "
+            f"{'✓' if ok else '✗'} | {dt:.1f}s {n_tok}tok"
+        )
 
     acc = correct / total * 100 if total else 0
     se = math.sqrt(acc * (100 - acc) / total) if total else 0
@@ -270,8 +318,14 @@ async def run_omlx(questions, fewshot_by_cat):
 
     await engine.stop()
     cleanup()
-    return {"framework": "omlx", "correct": correct, "total": total,
-            "accuracy": acc, "stderr": se, "avg_time": avg}
+    return {
+        "framework": "omlx",
+        "correct": correct,
+        "total": total,
+        "accuracy": acc,
+        "stderr": se,
+        "avg_time": avg,
+    }
 
 
 async def main():
@@ -314,14 +368,18 @@ async def main():
     log("=" * 70)
     log("  SUMMARY")
     log("=" * 70)
-    log(f"  {'Framework':<12} {'Accuracy':>10} {'Correct':>10} {'Avg s/q':>10} {'vs mlx-lm':>10}")
+    log(
+        f"  {'Framework':<12} {'Accuracy':>10} {'Correct':>10} {'Avg s/q':>10} {'vs mlx-lm':>10}"
+    )
     log(f"  {'─' * 12} {'─' * 10} {'─' * 10} {'─' * 10} {'─' * 10}")
     base_acc = results[0]["accuracy"] if results else 0
     for r in results:
         diff = r["accuracy"] - base_acc if r["framework"] != "mlx-lm" else 0
         diff_str = "BASELINE" if r["framework"] == "mlx-lm" else f"{diff:+.1f}%"
-        log(f"  {r['framework']:<12} {r['accuracy']:>9.1f}% {r['correct']:>5}/{r['total']:<4} "
-            f"{r['avg_time']:>9.1f}s {diff_str:>10}")
+        log(
+            f"  {r['framework']:<12} {r['accuracy']:>9.1f}% {r['correct']:>5}/{r['total']:<4} "
+            f"{r['avg_time']:>9.1f}s {diff_str:>10}"
+        )
     log("\nDONE")
 
 

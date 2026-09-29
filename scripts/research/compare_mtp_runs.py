@@ -27,7 +27,10 @@ def median(values):
 def memory_peak(rows):
     return round(
         max(
-            (row.get("process_memory", {}).get("physical_footprint_sum_bytes", 0) for row in rows),
+            (
+                row.get("process_memory", {}).get("physical_footprint_sum_bytes", 0)
+                for row in rows
+            ),
             default=0,
         )
         / 1024**3,
@@ -38,8 +41,13 @@ def memory_peak(rows):
 def parse_mtp_log(path):
     if path is None:
         return None
-    pattern = re.compile(r"MTP\[[^]]+\] finish=\S+ tokens=(\d+) cycles=(\d+) tok/cycle=([0-9.]+) accept=(\d+)/(\d+)")
-    records = [tuple(map(float, match.groups())) for match in pattern.finditer(path.read_text(errors="replace"))]
+    pattern = re.compile(
+        r"MTP\[[^]]+\] finish=\S+ tokens=(\d+) cycles=(\d+) tok/cycle=([0-9.]+) accept=(\d+)/(\d+)"
+    )
+    records = [
+        tuple(map(float, match.groups()))
+        for match in pattern.finditer(path.read_text(errors="replace"))
+    ]
     accepted = sum(row[3] for row in records)
     drafted = sum(row[4] for row in records)
     return {
@@ -61,7 +69,10 @@ def main():
     args = parser.parse_args()
     off_data, off_start, off_rows, off_mem = load(args.off)
     on_data, on_start, on_rows, on_mem = load(args.on)
-    if off_data["sha256"] != on_data["sha256"] or off_data["sample_ids"] != on_data["sample_ids"]:
+    if (
+        off_data["sha256"] != on_data["sha256"]
+        or off_data["sample_ids"] != on_data["sample_ids"]
+    ):
         parser.error("Dataset hash or sampled question order differs")
     off_args = off_start["arguments"]
     on_args = on_start["arguments"]
@@ -146,18 +157,34 @@ def main():
         "paired_median_speedup": median([a / b for a, b in timings if b > 0]),
         "both_completed_answer_count": len(completed_answer_pairs),
         "both_completed_answer_median_speedup": median(
-            [a["wall_s"] / b["wall_s"] for a, b in completed_answer_pairs if b["wall_s"] > 0]
+            [
+                a["wall_s"] / b["wall_s"]
+                for a, b in completed_answer_pairs
+                if b["wall_s"] > 0
+            ]
         ),
-        "off_empty_final_count": sum(not row.get("output", "").strip() for row in off_rows),
-        "on_empty_final_count": sum(not row.get("output", "").strip() for row in on_rows),
-        "off_length_count": sum(row.get("finish_reason") == "length" for row in off_rows),
+        "off_empty_final_count": sum(
+            not row.get("output", "").strip() for row in off_rows
+        ),
+        "on_empty_final_count": sum(
+            not row.get("output", "").strip() for row in on_rows
+        ),
+        "off_length_count": sum(
+            row.get("finish_reason") == "length" for row in off_rows
+        ),
         "on_length_count": sum(row.get("finish_reason") == "length" for row in on_rows),
         "off_median_first_content_s": median([a for a, _ in first_text]),
         "on_median_first_content_s": median([b for _, b in first_text]),
-        "off_median_server_first_visible_token_s": median([a for a, _ in first_visible]),
+        "off_median_server_first_visible_token_s": median(
+            [a for a, _ in first_visible]
+        ),
         "on_median_server_first_visible_token_s": median([b for _, b in first_visible]),
-        "off_median_reported_generation_tps": median([a for a, _ in token_rates if isinstance(a, (int, float))]),
-        "on_median_reported_generation_tps": median([b for _, b in token_rates if isinstance(b, (int, float))]),
+        "off_median_reported_generation_tps": median(
+            [a for a, _ in token_rates if isinstance(a, (int, float))]
+        ),
+        "on_median_reported_generation_tps": median(
+            [b for _, b in token_rates if isinstance(b, (int, float))]
+        ),
         "off_peak_phys_footprint_gib": memory_peak(off_mem),
         "on_peak_phys_footprint_gib": memory_peak(on_mem),
         "mtp_runtime_evidence": parse_mtp_log(args.mtp_server_log),

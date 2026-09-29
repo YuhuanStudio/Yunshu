@@ -11,6 +11,7 @@ Usage:
     PYTHONPATH=. uv run python scripts/quality_comparison.py --model-path models/Qwen3-0.6B-FP16
     PYTHONPATH=. uv run python scripts/quality_comparison.py --quick  # Fewer prompts
 """
+
 from __future__ import annotations
 
 import argparse
@@ -21,34 +22,84 @@ from pathlib import Path
 
 PROMPTS = [
     # Factual / knowledge
-    {"messages": [{"role": "user", "content": "What is the capital of France? Answer in one word."}],
-     "check": lambda r: "paris" in r.lower()},
-    {"messages": [{"role": "user", "content": "What is 2 + 3? Answer with just the number."}],
-     "check": lambda r: "5" in r.strip()[:3]},
-    {"messages": [{"role": "user", "content": "What is the chemical symbol for water?"}],
-     "check": lambda r: "H2O" in r.upper() or "h2o" in r.lower()},
+    {
+        "messages": [
+            {
+                "role": "user",
+                "content": "What is the capital of France? Answer in one word.",
+            }
+        ],
+        "check": lambda r: "paris" in r.lower(),
+    },
+    {
+        "messages": [
+            {"role": "user", "content": "What is 2 + 3? Answer with just the number."}
+        ],
+        "check": lambda r: "5" in r.strip()[:3],
+    },
+    {
+        "messages": [
+            {"role": "user", "content": "What is the chemical symbol for water?"}
+        ],
+        "check": lambda r: "H2O" in r.upper() or "h2o" in r.lower(),
+    },
     # Reasoning
-    {"messages": [{"role": "user", "content": "If a shirt costs $25 and is on sale for 20% off, what is the sale price?"}],
-     "check": lambda r: "20" in r},
-    {"messages": [{"role": "user", "content": "What comes next in the sequence: 2, 4, 6, 8, ?"}],
-     "check": lambda r: "10" in r},
+    {
+        "messages": [
+            {
+                "role": "user",
+                "content": "If a shirt costs $25 and is on sale for 20% off, what is the sale price?",
+            }
+        ],
+        "check": lambda r: "20" in r,
+    },
+    {
+        "messages": [
+            {
+                "role": "user",
+                "content": "What comes next in the sequence: 2, 4, 6, 8, ?",
+            }
+        ],
+        "check": lambda r: "10" in r,
+    },
     # Multi-turn
-    {"messages": [
-        {"role": "user", "content": "My name is Alice."},
-        {"role": "assistant", "content": "Nice to meet you, Alice!"},
-        {"role": "user", "content": "What is my name?"},
-    ], "check": lambda r: "alice" in r.lower()},
+    {
+        "messages": [
+            {"role": "user", "content": "My name is Alice."},
+            {"role": "assistant", "content": "Nice to meet you, Alice!"},
+            {"role": "user", "content": "What is my name?"},
+        ],
+        "check": lambda r: "alice" in r.lower(),
+    },
     # Instruction following
-    {"messages": [{"role": "user", "content": "Write a haiku about coding. Follow the 5-7-5 syllable pattern exactly."}],
-     "check": lambda r: len(r.strip().split("\n")) >= 2},
+    {
+        "messages": [
+            {
+                "role": "user",
+                "content": "Write a haiku about coding. Follow the 5-7-5 syllable pattern exactly.",
+            }
+        ],
+        "check": lambda r: len(r.strip().split("\n")) >= 2,
+    },
     # Format compliance
-    {"messages": [{"role": "user", "content": "List 3 colors separated by commas."}],
-     "check": lambda r: r.count(",") >= 2},
+    {
+        "messages": [{"role": "user", "content": "List 3 colors separated by commas."}],
+        "check": lambda r: r.count(",") >= 2,
+    },
     # Longer generation
-    {"messages": [{"role": "user", "content": "Explain what a variable is in programming in 2-3 sentences."}],
-     "check": lambda r: len(r.split()) >= 10},
-    {"messages": [{"role": "user", "content": "Translate 'hello world' to French."}],
-     "check": lambda r: "bonjour" in r.lower() or "monde" in r.lower()},
+    {
+        "messages": [
+            {
+                "role": "user",
+                "content": "Explain what a variable is in programming in 2-3 sentences.",
+            }
+        ],
+        "check": lambda r: len(r.split()) >= 10,
+    },
+    {
+        "messages": [{"role": "user", "content": "Translate 'hello world' to French."}],
+        "check": lambda r: "bonjour" in r.lower() or "monde" in r.lower(),
+    },
 ]
 
 QUICK_PROMPTS = PROMPTS[:5]
@@ -65,7 +116,9 @@ def run_mlx_lm_baseline(model_path: str, prompts: list[dict]) -> list[str]:
     results = []
     for prompt in prompts:
         text = tokenizer.apply_chat_template(
-            prompt["messages"], tokenize=False, add_generation_prompt=True,
+            prompt["messages"],
+            tokenize=False,
+            add_generation_prompt=True,
         ) or "\n".join(m["content"] for m in prompt["messages"])
 
         token_ids = mx.array(tokenizer.encode(text))
@@ -97,7 +150,7 @@ def run_yunshu_engine(model_path: str, prompts: list[dict]) -> list[str]:
                 max_tokens=128,
                 temperature=0.0,
             )
-            results.append(result.text if hasattr(result, 'text') else str(result))
+            results.append(result.text if hasattr(result, "text") else str(result))
         await engine.stop()
         return results
 
@@ -149,13 +202,15 @@ def compare_outputs(
         else:
             report["neither_correct"] += 1
 
-        report["details"].append({
-            "index": i,
-            "baseline_pass": bl_pass,
-            "engine_pass": eng_pass,
-            "baseline_output": bl[:200],
-            "engine_output": eng[:200],
-        })
+        report["details"].append(
+            {
+                "index": i,
+                "baseline_pass": bl_pass,
+                "engine_pass": eng_pass,
+                "baseline_output": bl[:200],
+                "engine_output": eng[:200],
+            }
+        )
 
     report["baseline_accuracy"] = report["baseline_correct"] / report["total"]
     report["engine_accuracy"] = report["engine_correct"] / report["total"]

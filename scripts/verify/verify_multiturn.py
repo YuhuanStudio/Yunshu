@@ -11,6 +11,7 @@ Deterministic at temp 0 (probed 3/3 recall).
 
 Run: PYTHONPATH=. uv run python scripts/verify_multiturn.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -42,23 +43,41 @@ async def main() -> int:
     detail: list[str] = []
     try:
         transport = httpx.ASGITransport(app=create_app())
-        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=120) as client:
-            r = await client.post("/v1/chat/completions", json={
-                "model": MODEL,
-                "temperature": 0.0, "max_tokens": 40, "enable_thinking": False,
-                "messages": [
-                    {"role": "system", "content": "You are concise."},
-                    {"role": "user", "content": "My name is Marvin and my favorite number is 47. Just acknowledge."},
-                    {"role": "assistant", "content": "Got it, Marvin. Your favorite number is 47."},
-                    {"role": "user", "content": "What is my name and my favorite number?"},
-                ],
-            })
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test", timeout=120
+        ) as client:
+            r = await client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": MODEL,
+                    "temperature": 0.0,
+                    "max_tokens": 40,
+                    "enable_thinking": False,
+                    "messages": [
+                        {"role": "system", "content": "You are concise."},
+                        {
+                            "role": "user",
+                            "content": "My name is Marvin and my favorite number is 47. Just acknowledge.",
+                        },
+                        {
+                            "role": "assistant",
+                            "content": "Got it, Marvin. Your favorite number is 47.",
+                        },
+                        {
+                            "role": "user",
+                            "content": "What is my name and my favorite number?",
+                        },
+                    ],
+                },
+            )
             checks["HTTP 200"] = r.status_code == 200
             if r.status_code != 200:
                 detail.append(f"status={r.status_code} body={r.text[:200]}")
             else:
                 txt = r.json()["choices"][0]["message"]["content"] or ""
-                checks["recalls name from 2 turns earlier (Marvin)"] = "marvin" in txt.lower()
+                checks["recalls name from 2 turns earlier (Marvin)"] = (
+                    "marvin" in txt.lower()
+                )
                 checks["recalls number from 2 turns earlier (47)"] = "47" in txt
                 detail.append(f"answer={txt[:80]!r}")
     finally:

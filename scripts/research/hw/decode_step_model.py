@@ -80,8 +80,11 @@ def main():
     model, proc = load(a.model)
     lm = model.language_model
     mx.eval(lm.parameters())
-    out(kind="post_load", wired_GB=round(vm_wired_gb(), 1),
-        active_GB=round(mx.get_active_memory() / 2**30, 2))
+    out(
+        kind="post_load",
+        wired_GB=round(vm_wired_gb(), 1),
+        active_GB=round(mx.get_active_memory() / 2**30, 2),
+    )
 
     cache = lm.make_cache()
     ids = mx.array([[(i * 7919) % 200000 + 1000 for i in range(a.prefill)]])
@@ -93,8 +96,12 @@ def main():
     # ---- 1. baseline decode step
     decode_steps(lm, cache, y, 10)
     t, y = decode_steps(lm, cache, y, a.steps)
-    out(kind="decode_pipelined", ms_median=round(pct(t, 0.5) * 1e3, 2),
-        ms_p95=round(pct(t, 0.95) * 1e3, 2), ms_max=round(max(t) * 1e3, 2))
+    out(
+        kind="decode_pipelined",
+        ms_median=round(pct(t, 0.5) * 1e3, 2),
+        ms_p95=round(pct(t, 0.95) * 1e3, 2),
+        ms_max=round(max(t) * 1e3, 2),
+    )
     t2, y = decode_steps(lm, cache, y, 40, pipelined=False)
     out(kind="decode_sync", ms_median=round(pct(t2, 0.5) * 1e3, 2))
 
@@ -111,26 +118,38 @@ def main():
         out(kind="ablation", stub=name, ms_median=round(pct(tt, 0.5) * 1e3, 2))
 
     orig_gdn, orig_sdpa, orig_ql = (
-        qlang.gated_delta_update, qlang.scaled_dot_product_attention, nn.QuantizedLinear.__call__)
+        qlang.gated_delta_update,
+        qlang.scaled_dot_product_attention,
+        nn.QuantizedLinear.__call__,
+    )
 
     def stub_gdn(q, k, v, *a, **kw):
         return mx.zeros_like(v) + q[..., :1, :1].sum() * 0, None
 
-    ablate("gated_delta_kernel",
-           lambda: setattr(qlang, "gated_delta_update", stub_gdn),
-           lambda: setattr(qlang, "gated_delta_update", orig_gdn))
-    ablate("attention_sdpa",
-           lambda: setattr(qlang, "scaled_dot_product_attention",
-                           lambda q, k, v, cache=None, scale=1.0, mask=None: mx.zeros_like(q)),
-           lambda: setattr(qlang, "scaled_dot_product_attention", orig_sdpa))
+    ablate(
+        "gated_delta_kernel",
+        lambda: setattr(qlang, "gated_delta_update", stub_gdn),
+        lambda: setattr(qlang, "gated_delta_update", orig_gdn),
+    )
+    ablate(
+        "attention_sdpa",
+        lambda: setattr(
+            qlang,
+            "scaled_dot_product_attention",
+            lambda q, k, v, cache=None, scale=1.0, mask=None: mx.zeros_like(q),
+        ),
+        lambda: setattr(qlang, "scaled_dot_product_attention", orig_sdpa),
+    )
 
     def stub_ql(self, x):
         n = self.scales.shape[0]
         return mx.broadcast_to(x[..., :1], (*x.shape[:-1], n)) + 0
 
-    ablate("all_quantized_matmuls",
-           lambda: setattr(nn.QuantizedLinear, "__call__", stub_ql),
-           lambda: setattr(nn.QuantizedLinear, "__call__", orig_ql))
+    ablate(
+        "all_quantized_matmuls",
+        lambda: setattr(nn.QuantizedLinear, "__call__", stub_ql),
+        lambda: setattr(nn.QuantizedLinear, "__call__", orig_ql),
+    )
     t3, y = decode_steps(lm, cache, y, 40)
     out(kind="ablation", stub="none_again", ms_median=round(pct(t3, 0.5) * 1e3, 2))
 
@@ -146,8 +165,13 @@ def main():
     logits = lm(y, cache=cache).logits[:, -1, :]
     txt, labels = graph_ops(logits)
     hist = collections.Counter(labels)
-    out(kind="graph", build_ms_median=round(pct(tb, 0.5) * 1e3, 2), nodes=len(labels),
-        edges=txt.count(" -> "), top=hist.most_common(14))
+    out(
+        kind="graph",
+        build_ms_median=round(pct(tb, 0.5) * 1e3, 2),
+        nodes=len(labels),
+        edges=txt.count(" -> "),
+        top=hist.most_common(14),
+    )
     mx.eval(logits)
 
     # ---- 3. mx.compile on decoder layers (functional cache wrapper)
@@ -161,7 +185,11 @@ def main():
         def eager():
             h = x0
             for _ in range(R):
-                h = layer(h, None, c) if layer.is_linear else layer(h, mask=None, cache=c)
+                h = (
+                    layer(h, None, c)
+                    if layer.is_linear
+                    else layer(h, mask=None, cache=c)
+                )
             return h
 
         def timed(fn, n=15):
@@ -223,10 +251,17 @@ def main():
         ru0 = resource.getrusage(resource.RUSAGE_SELF)
         tt, _ = decode_steps(lm, cache, y, 300)
         ru1 = resource.getrusage(resource.RUSAGE_SELF)
-        out(kind="variance", tag=tag, ms_median=round(pct(tt, 0.5) * 1e3, 2),
-            ms_p95=round(pct(tt, 0.95) * 1e3, 2), ms_p99=round(pct(tt, 0.99) * 1e3, 2),
-            ms_max=round(max(tt) * 1e3, 2), majflt=ru1.ru_majflt - ru0.ru_majflt,
-            minflt=ru1.ru_minflt - ru0.ru_minflt, wired_GB=round(vm_wired_gb(), 1))
+        out(
+            kind="variance",
+            tag=tag,
+            ms_median=round(pct(tt, 0.5) * 1e3, 2),
+            ms_p95=round(pct(tt, 0.95) * 1e3, 2),
+            ms_p99=round(pct(tt, 0.99) * 1e3, 2),
+            ms_max=round(max(tt) * 1e3, 2),
+            majflt=ru1.ru_majflt - ru0.ru_majflt,
+            minflt=ru1.ru_minflt - ru0.ru_minflt,
+            wired_GB=round(vm_wired_gb(), 1),
+        )
 
     variance("default")
     info = mx.device_info()

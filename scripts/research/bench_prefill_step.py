@@ -33,17 +33,33 @@ def prompt_ids(n_tokens, salt):
     body, i = "", 0
     ids = []
     while len(ids) < n_tokens:
-        body += "".join(line.format(i=i + j, b=salt * 7 + (i + j) % 31) for j in range(200))
+        body += "".join(
+            line.format(i=i + j, b=salt * 7 + (i + j) % 31) for j in range(200)
+        )
         i += 200
-        msgs = [{"role": "user", "content": body + "\nWhat is the last section number? Reply with the number only."}]
-        text = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True, enable_thinking=False)
+        msgs = [
+            {
+                "role": "user",
+                "content": body
+                + "\nWhat is the last section number? Reply with the number only.",
+            }
+        ]
+        text = tok.apply_chat_template(
+            msgs, tokenize=False, add_generation_prompt=True, enable_thinking=False
+        )
         ids = tok.encode(text, add_special_tokens=False)
     return ids
 
 
 def ttft(ids, step):
-    gen = BatchGenerator(lm, processor, max_tokens=1, greedy_sampling=True,
-                         compute_logprobs=False, prefill_step_size=step)
+    gen = BatchGenerator(
+        lm,
+        processor,
+        max_tokens=1,
+        greedy_sampling=True,
+        compute_logprobs=False,
+        prefill_step_size=step,
+    )
     clear_rope_state(model)
     kw = model.get_input_embeddings(mx.array(ids)[None], None, mask=None).to_dict()
     mx.reset_peak_memory()
@@ -66,6 +82,16 @@ for n in lengths:
         salt += 1
         ids = prompt_ids(n, salt)
         dt, peak = ttft(ids, step)
-        print(json.dumps({"tokens": len(ids), "prefill_step": step, "ttft_s": round(dt, 3),
-                          "prefill_tps": round(len(ids) / dt, 1), "peak_gib": round(peak, 2)}), flush=True)
+        print(
+            json.dumps(
+                {
+                    "tokens": len(ids),
+                    "prefill_step": step,
+                    "ttft_s": round(dt, 3),
+                    "prefill_tps": round(len(ids) / dt, 1),
+                    "peak_gib": round(peak, 2),
+                }
+            ),
+            flush=True,
+        )
         mx.clear_cache()

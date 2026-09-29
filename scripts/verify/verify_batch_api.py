@@ -12,6 +12,7 @@ results map back to their custom_ids correctly.
 
 Run: PYTHONPATH=. uv run python scripts/verify_batch_api.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -58,17 +59,30 @@ async def main() -> int:
     detail: list[str] = []
     try:
         transport = httpx.ASGITransport(app=create_app())
-        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=180) as client:
-            def item(cid, prompt):
-                return {"custom_id": cid, "method": "POST", "url": "/v1/chat/completions",
-                        "body": {"messages": [{"role": "user", "content": prompt}],
-                                 "max_tokens": 16, "temperature": 0.0}}
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test", timeout=180
+        ) as client:
 
-            body = {"model": MODEL, "requests": [
-                item("req-france", "Capital of France? One word."),
-                item("req-math", "What is 8 plus 5? Just the number."),
-                item("req-japan", "Capital of Japan? One word."),
-            ]}
+            def item(cid, prompt):
+                return {
+                    "custom_id": cid,
+                    "method": "POST",
+                    "url": "/v1/chat/completions",
+                    "body": {
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": 16,
+                        "temperature": 0.0,
+                    },
+                }
+
+            body = {
+                "model": MODEL,
+                "requests": [
+                    item("req-france", "Capital of France? One word."),
+                    item("req-math", "What is 8 plus 5? Just the number."),
+                    item("req-japan", "Capital of Japan? One word."),
+                ],
+            }
             r = await client.post("/v1/batch", json=body)
             checks["/v1/batch: HTTP 200"] = r.status_code == 200
             if r.status_code != 200:
@@ -76,27 +90,48 @@ async def main() -> int:
             else:
                 d = r.json()
                 results = d.get("results") or []
-                checks["batch: object + status present"] = bool(d.get("status")) and d.get("object") == "batch"
+                checks["batch: object + status present"] = (
+                    bool(d.get("status")) and d.get("object") == "batch"
+                )
                 got_ids = [x.get("custom_id") for x in results]
                 want_ids = ["req-france", "req-math", "req-japan"]
-                checks["batch: all custom_ids returned exactly once"] = sorted(got_ids) == sorted(want_ids)
+                checks["batch: all custom_ids returned exactly once"] = sorted(
+                    got_ids
+                ) == sorted(want_ids)
                 # each maps to a usable completion
                 texts = {x.get("custom_id"): _result_text(x) for x in results}
-                checks["batch: results carry completions"] = all(texts.get(c, "").strip() for c in want_ids)
+                checks["batch: results carry completions"] = all(
+                    texts.get(c, "").strip() for c in want_ids
+                )
                 detail.append(f"status={d.get('status')} ids={got_ids}")
                 for c in want_ids:
                     detail.append(f"  {c} → {texts.get(c, '')[:40]!r}")
 
             # malformed item must not sink the whole batch
-            r2 = await client.post("/v1/batch", json={"model": MODEL, "requests": [
-                item("ok-1", "Say hi."),
-                {"custom_id": "bad-1", "method": "POST", "url": "/v1/chat/completions", "body": {}},  # no messages
-            ]})
+            r2 = await client.post(
+                "/v1/batch",
+                json={
+                    "model": MODEL,
+                    "requests": [
+                        item("ok-1", "Say hi."),
+                        {
+                            "custom_id": "bad-1",
+                            "method": "POST",
+                            "url": "/v1/chat/completions",
+                            "body": {},
+                        },  # no messages
+                    ],
+                },
+            )
             if r2.status_code == 200:
                 res2 = {x.get("custom_id"): x for x in (r2.json().get("results") or [])}
                 ok_good = bool(_result_text(res2.get("ok-1", {})).strip())
-                bad_flagged = "bad-1" in res2  # present (likely with an error), didn't crash batch
-                checks["batch: malformed item isolated (good item still ok)"] = ok_good and bad_flagged
+                bad_flagged = (
+                    "bad-1" in res2
+                )  # present (likely with an error), didn't crash batch
+                checks["batch: malformed item isolated (good item still ok)"] = (
+                    ok_good and bad_flagged
+                )
             else:
                 checks["batch: malformed item isolated (good item still ok)"] = False
     finally:

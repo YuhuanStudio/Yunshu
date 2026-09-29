@@ -13,6 +13,7 @@ auth, response envelopes — for /v1/embeddings, /v1/score, /v1/rerank,
 
 Run: PYTHONPATH=. uv run python scripts/verify_scoring_endpoints.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -44,40 +45,69 @@ async def main() -> int:
     detail: list[str] = []
     try:
         transport = httpx.ASGITransport(app=create_app())
-        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=120) as client:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test", timeout=120
+        ) as client:
             # ── /v1/embeddings ───────────────────────────────────────────────
-            r = await client.post("/v1/embeddings", json={
-                "model": MODEL, "input": ["hello world", "goodbye world"]})
+            r = await client.post(
+                "/v1/embeddings",
+                json={"model": MODEL, "input": ["hello world", "goodbye world"]},
+            )
             ok200 = r.status_code == 200
             checks["/v1/embeddings: HTTP 200"] = ok200
             if ok200:
                 d = r.json()
                 data = d.get("data") or []
-                vecs_ok = (d.get("object") == "list" and len(data) == 2
-                           and all(isinstance(x.get("embedding"), list) and x["embedding"] for x in data))
+                vecs_ok = (
+                    d.get("object") == "list"
+                    and len(data) == 2
+                    and all(
+                        isinstance(x.get("embedding"), list) and x["embedding"]
+                        for x in data
+                    )
+                )
                 checks["/v1/embeddings: 2 float vectors"] = vecs_ok
-                detail.append(f"embeddings: n={len(data)} dim={len(data[0]['embedding']) if data else 0}")
+                detail.append(
+                    f"embeddings: n={len(data)} dim={len(data[0]['embedding']) if data else 0}"
+                )
                 # base64 format
-                rb = await client.post("/v1/embeddings", json={
-                    "model": MODEL, "input": "hi", "encoding_format": "base64"})
+                rb = await client.post(
+                    "/v1/embeddings",
+                    json={"model": MODEL, "input": "hi", "encoding_format": "base64"},
+                )
                 b64_ok = rb.status_code == 200 and isinstance(
-                    (rb.json().get("data") or [{}])[0].get("embedding"), str)
+                    (rb.json().get("data") or [{}])[0].get("embedding"), str
+                )
                 checks["/v1/embeddings: base64 format"] = b64_ok
 
             # ── /v1/score ────────────────────────────────────────────────────
-            r = await client.post("/v1/score", json={
-                "model": MODEL, "text_1": "a cat on a mat", "text_2": "a feline on a rug"})
+            r = await client.post(
+                "/v1/score",
+                json={
+                    "model": MODEL,
+                    "text_1": "a cat on a mat",
+                    "text_2": "a feline on a rug",
+                },
+            )
             ok200 = r.status_code == 200
             checks["/v1/score: HTTP 200 + numeric score"] = ok200 and isinstance(
-                (r.json().get("data") or [{}])[0].get("score"), (int, float))
+                (r.json().get("data") or [{}])[0].get("score"), (int, float)
+            )
             if ok200:
-                detail.append(f"score={ (r.json().get('data') or [{}])[0].get('score')}")
+                detail.append(f"score={(r.json().get('data') or [{}])[0].get('score')}")
 
             # ── /v1/rerank ───────────────────────────────────────────────────
-            r = await client.post("/v1/rerank", json={
-                "model": MODEL, "query": "What is the capital of France?",
-                "documents": ["Paris is the capital of France.",
-                              "Photosynthesis happens in plant leaves."]})
+            r = await client.post(
+                "/v1/rerank",
+                json={
+                    "model": MODEL,
+                    "query": "What is the capital of France?",
+                    "documents": [
+                        "Paris is the capital of France.",
+                        "Photosynthesis happens in plant leaves.",
+                    ],
+                },
+            )
             ok200 = r.status_code == 200
             checks["/v1/rerank: HTTP 200"] = ok200
             if ok200:
@@ -85,20 +115,33 @@ async def main() -> int:
                 # sorted descending + top result is the on-topic (index 0) doc
                 scores = [x.get("relevance_score") for x in res]
                 checks["/v1/rerank: sorted desc + on-topic first"] = (
-                    bool(res) and scores == sorted(scores, reverse=True) and res[0].get("index") == 0)
-                detail.append(f"rerank top_index={res[0].get('index') if res else None} scores={[round(s,3) for s in scores]}")
+                    bool(res)
+                    and scores == sorted(scores, reverse=True)
+                    and res[0].get("index") == 0
+                )
+                detail.append(
+                    f"rerank top_index={res[0].get('index') if res else None} scores={[round(s, 3) for s in scores]}"
+                )
 
             # ── /v1/classify ─────────────────────────────────────────────────
-            r = await client.post("/v1/classify", json={
-                "model": MODEL, "input": "I absolutely loved this, fantastic!",
-                "labels": ["positive sentiment", "negative sentiment"]})
+            r = await client.post(
+                "/v1/classify",
+                json={
+                    "model": MODEL,
+                    "input": "I absolutely loved this, fantastic!",
+                    "labels": ["positive sentiment", "negative sentiment"],
+                },
+            )
             ok200 = r.status_code == 200
             checks["/v1/classify: HTTP 200"] = ok200
             if ok200:
                 res = r.json().get("results") or []
                 checks["/v1/classify: correct label on top"] = (
-                    bool(res) and res[0].get("label") == "positive sentiment")
-                detail.append(f"classify top={res[0].get('label')!r} score={round(res[0].get('score',0),3) if res else None}")
+                    bool(res) and res[0].get("label") == "positive sentiment"
+                )
+                detail.append(
+                    f"classify top={res[0].get('label')!r} score={round(res[0].get('score', 0), 3) if res else None}"
+                )
     finally:
         set_engine(None)
         await eng.stop()

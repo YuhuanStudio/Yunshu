@@ -12,6 +12,7 @@ Usage:
     .venv/bin/python3 scripts/bench_mtp_horizontal.py --model Qwen3.5-4B-MLX-bf16
     .venv/bin/python3 scripts/bench_mtp_horizontal.py --max-tokens 128
 """
+
 from __future__ import annotations
 
 import argparse
@@ -125,8 +126,9 @@ def bench_mtp(model, tokenizer, prompt: str, max_tokens: int, model_name: str) -
     }
 
 
-def bench_cross_model_spec(target_model, draft_model, tokenizer, prompt: str,
-                           max_tokens: int, K: int = 4) -> dict:
+def bench_cross_model_spec(
+    target_model, draft_model, tokenizer, prompt: str, max_tokens: int, K: int = 4
+) -> dict:
     """Cross-model speculative decoding (draft → target verify)."""
     from mlx_lm.models.cache import make_prompt_cache
 
@@ -175,19 +177,19 @@ def bench_cross_model_spec(target_model, draft_model, tokenizer, prompt: str,
     def _snapshot(cache):
         snap = []
         for c in cache:
-            if hasattr(c, 'cache') and isinstance(getattr(c, 'cache', None), list):
-                snap.append(('arrays', list(c.cache)))
-            elif hasattr(c, 'offset'):
-                snap.append(('kv', c.offset))
+            if hasattr(c, "cache") and isinstance(getattr(c, "cache", None), list):
+                snap.append(("arrays", list(c.cache)))
+            elif hasattr(c, "offset"):
+                snap.append(("kv", c.offset))
             else:
                 snap.append((None, None))
         return snap
 
     def _restore(cache, snapshot):
         for i, (kind, state) in enumerate(snapshot):
-            if kind == 'arrays':
+            if kind == "arrays":
                 cache[i].cache = state
-            elif kind == 'kv':
+            elif kind == "kv":
                 cache[i].offset = state
 
     t0 = time.perf_counter()
@@ -233,7 +235,7 @@ def bench_cross_model_spec(target_model, draft_model, tokenizer, prompt: str,
 
         if accepted < K:
             _restore(draft_cache, draft_snap)
-            refeed = [generated[-(accepted + 1) - 1]] + generated[-(accepted + 1):]
+            refeed = [generated[-(accepted + 1) - 1]] + generated[-(accepted + 1) :]
             for tok in refeed:
                 draft_model(mx.array([[tok]]), cache=draft_cache)
 
@@ -280,7 +282,7 @@ def main():
         "The capital of France is",
         "In machine learning, gradient descent works by",
         "The key difference between TCP and UDP is that",
-    ][:args.num_prompts]
+    ][: args.num_prompts]
 
     all_results = {}
 
@@ -290,23 +292,30 @@ def main():
 
         # 1. Baseline
         r_base = bench_baseline(model, tokenizer, prompt, args.max_tokens)
-        print(f"  Baseline: {r_base['tok_s']} tok/s ({r_base['n_tokens']} tok, {r_base['time_s']}s)")
+        print(
+            f"  Baseline: {r_base['tok_s']} tok/s ({r_base['n_tokens']} tok, {r_base['time_s']}s)"
+        )
 
         # 2. MTP
         r_mtp = bench_mtp(model, tokenizer, prompt, args.max_tokens, args.model)
         if "error" not in r_mtp:
             su = r_mtp["tok_s"] / r_base["tok_s"] if r_base["tok_s"] > 0 else 0
-            print(f"  MTP:      {r_mtp['tok_s']} tok/s ({su:.2f}x, accept={r_mtp['acceptance']:.1%}, "
-                  f"mtp={r_mtp['pct_mtp']}% verify={r_mtp['pct_verify']}%)")
+            print(
+                f"  MTP:      {r_mtp['tok_s']} tok/s ({su:.2f}x, accept={r_mtp['acceptance']:.1%}, "
+                f"mtp={r_mtp['pct_mtp']}% verify={r_mtp['pct_verify']}%)"
+            )
         else:
             print(f"  MTP:      SKIP ({r_mtp['error']})")
 
         # 3. Cross-model
-        r_cross = bench_cross_model_spec(model, draft_model, tokenizer, prompt,
-                                         args.max_tokens, K=args.K)
+        r_cross = bench_cross_model_spec(
+            model, draft_model, tokenizer, prompt, args.max_tokens, K=args.K
+        )
         su_cross = r_cross["tok_s"] / r_base["tok_s"] if r_base["tok_s"] > 0 else 0
-        print(f"  Cross K{args.K}:  {r_cross['tok_s']} tok/s ({su_cross:.2f}x, "
-              f"accept={r_cross['acceptance']:.1%}, {r_cross['steps']} steps)")
+        print(
+            f"  Cross K{args.K}:  {r_cross['tok_s']} tok/s ({su_cross:.2f}x, "
+            f"accept={r_cross['acceptance']:.1%}, {r_cross['steps']} steps)"
+        )
 
         all_results[label] = {
             "baseline": r_base,
@@ -344,8 +353,12 @@ def main():
     print("-" * 48)
     print(f"{'Baseline':<20} {avg_base:>8.1f} {'1.00x':>8} {'N/A':>8}")
     if mtp_tps:
-        print(f"{'MTP (same-model)':<20} {avg_mtp:>8.1f} {avg_mtp/avg_base:>7.2f}x {avg_mtp_ar:>7.1%}")
-    print(f"{f'Cross K{args.K}':<20} {avg_cross:>8.1f} {avg_cross/avg_base:>7.2f}x {avg_cross_ar:>7.1%}")
+        print(
+            f"{'MTP (same-model)':<20} {avg_mtp:>8.1f} {avg_mtp / avg_base:>7.2f}x {avg_mtp_ar:>7.1%}"
+        )
+    print(
+        f"{f'Cross K{args.K}':<20} {avg_cross:>8.1f} {avg_cross / avg_base:>7.2f}x {avg_cross_ar:>7.1%}"
+    )
 
     # Save
     out_data = {
