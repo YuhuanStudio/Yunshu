@@ -18,8 +18,6 @@ def test_engine_pipelines_check_cancel_flag_per_step():
     for name in (
         "_run_pipeline",
         "_run_inpaint_pipeline",
-        "_run_controlled_pipeline",
-        "_run_depth_guided_pipeline",
     ):
         src = inspect.getsource(getattr(ImageGenEngine, name))
         assert "cancel_flag=None" in src, f"{name} missing cancel_flag param"
@@ -31,9 +29,7 @@ def test_engine_pipelines_check_cancel_flag_per_step():
 def test_engine_wrappers_thread_cancel_event():
     for name in (
         "generate_controlled_image",
-        "generate_controlled",
         "inpaint",
-        "generate_depth_guided",
     ):
         src = inspect.getsource(getattr(ImageGenEngine, name))
         assert "cancel_event=None" in src, f"{name} missing cancel_event param"

@@ -66,3 +66,24 @@ def test_echo_without_prompt_logprobs_falls_back_to_offset_shift():
     out = _format_logprobs(state, _Tok(), top_logprobs=0, echo=True, prompt="abc")
     assert out["tokens"] == ["X"]
     assert out["text_offset"] == [3]  # shifted past the (absent-token) prompt
+
+
+def test_vlm_runner_dict_result_yields_logprobs():
+    # The VLM runner returns a plain dict, not an object.
+    state = {
+        "text": "X",
+        "logprobs": [
+            {
+                "token_id": 10,
+                "logprob": -0.3,
+                "top_logprobs": [
+                    {"token_id": 10, "logprob": -0.3},
+                    {"token_id": 11, "logprob": -1.2},
+                ],
+            }
+        ],
+    }
+    out = _format_logprobs(state, _Tok(), top_logprobs=2, echo=False, prompt="abc")
+    assert out["tokens"] == ["X"]
+    assert out["token_logprobs"] == [-0.3]
+    assert out["top_logprobs"] == [{"X": -0.3, "Y": -1.2}]
