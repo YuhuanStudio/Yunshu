@@ -61,6 +61,13 @@ class IntCodeLinear(nn.Module):
         self.biases = linear.biases
         # Group-major (scale, bias) bf16 pairs: (K/64, N, 2).
         self.lane_sbt = lane_qmm.pack_scales(linear.scales, linear.biases)
+        # 32-column-tiled copy of the codes for the lane kernel (contiguous
+        # weight reads: 10-25% faster than MLX's layout at 2..8 rows,
+        # scripts/research/bench_intcode_tune.py). Prompt chunks keep ``weight``.
+        self.tiled = self.output_dims % lane_qmm.NT == 0
+        if self.tiled:
+            self.lane_weight = lane_qmm.tile_weight(self.weight, bits=bits)
+            mx.eval(self.lane_weight)
         self.freeze()
 
     def _extra_repr(self) -> str:
@@ -92,7 +99,12 @@ class IntCodeLinear(nn.Module):
             )
         dtype = x.dtype
         x2 = x.reshape(-1, self.input_dims).astype(mx.bfloat16)
-        y = lane_qmm.lane_matmul(x2, self.weight, self.lane_sbt, tiled=False)
+        y = lane_qmm.lane_matmul(
+            x2,
+            self.lane_weight if self.tiled else self.weight,
+            self.lane_sbt,
+            tiled=self.tiled,
+        )
         return y.reshape(*x.shape[:-1], self.output_dims).astype(dtype)
 
     def quantized_rows(self, ids: mx.array):
