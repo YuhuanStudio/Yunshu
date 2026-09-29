@@ -12,7 +12,8 @@ Using it:
 - [CONFIGURATION.md](CONFIGURATION.md): every `YUNSHU_*` setting (generated)
 - [BENCHMARKS.md](BENCHMARKS.md): where each published number comes from and how to reproduce it
 
-Maintaining it: [RELEASING.md](../RELEASING.md) (cutting a release) and
+Maintaining it: [RELEASING.md](../RELEASING.md) (cutting a release),
+[guides/RELEASE_GATE.md](guides/RELEASE_GATE.md) (the end-to-end acceptance run a release must pass) and
 [guides/RELEASE_READINESS.md](guides/RELEASE_READINESS.md) (the outward-facing checklist).
 
 ```
@@ -22,7 +23,7 @@ docs/
     perf_history/       ← time-named KPI snapshots (perf_<UTC>.json)
     img/                ← trend charts
   guides/               # hand-written guides and reference notes
-    CLIENTS.md, SERVICE.md, TROUBLESHOOTING.md, RELEASE_READINESS.md
+    CLIENTS.md, SERVICE.md, TROUBLESHOOTING.md, RELEASE_READINESS.md, RELEASE_GATE.md
     KV_CACHE_MATRIX.md, PROMPT_CACHING_APIS.md, ROUND_DRIVER.md
   results/              # raw bench JSON artifacts (historical; framework_comparison etc.)
   archive/
