@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from yunshu_engine.version import yunshu_version
 from yunshu_gateway import model_guards
 from yunshu_gateway.routers import anthropic, chat, completions
+from yunshu_gateway.routers import responses as responses_mod
 
 
 class _TextEngine:
@@ -62,7 +63,8 @@ def _client(monkeypatch, engine):
     app.include_router(chat.router, prefix="/v1")
     app.include_router(completions.router, prefix="/v1")
     app.include_router(anthropic.router, prefix="/v1")
-    for mod in (chat, completions):
+    app.include_router(responses_mod.router, prefix="/v1")
+    for mod in (chat, completions, responses_mod):
         monkeypatch.setattr(mod, "get_engine", lambda: engine)
     monkeypatch.setattr(chat, "get_model_manager", lambda: None)
     monkeypatch.setattr(anthropic, "get_engine", lambda: engine)
@@ -130,3 +132,12 @@ def test_anthropic_image_block_on_text_model_is_400(monkeypatch):
 
 def test_version_reads_pyproject_in_a_checkout():
     assert yunshu_version() == "0.1.1"
+
+
+def test_responses_on_embedding_model_is_400(monkeypatch, tmp_path):
+    c = _client(monkeypatch, _embedder(tmp_path))
+    for stream in (False, True):
+        r = c.post(
+            "/v1/responses", json={"model": "m", "input": "hi", "stream": stream}
+        )
+        assert r.status_code == 400 and "/v1/embeddings" in r.text
