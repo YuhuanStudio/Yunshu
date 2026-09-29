@@ -18,8 +18,8 @@ multi-model mode (`--models-dir`) an unknown model is a 404 `model_not_found`.
 
 | Route | Status | Notes |
 |---|---|---|
-| `POST /v1/chat/completions` | kept, fixed | SDK + unit. All params below verified. `stop` accepts a string or a list. `usage.prompt_tokens_details.cached_tokens` and `completion_tokens_details.reasoning_tokens` are always present. Context overflow is 400 `context_length_exceeded`. Images on a text-only model are a 400. |
-| `POST /v1/completions` | kept | SDK + unit. `echo`, `logprobs` (int), `n`, `stop`, `seed`, `stream_options.include_usage`, prompt as string / list / token ids. |
+| `POST /v1/chat/completions` | kept, fixed | SDK + unit. All params below verified. `stop` accepts a string or a list. `usage.prompt_tokens_details.cached_tokens` and `completion_tokens_details.reasoning_tokens` are always present. Context overflow is 400 `context_length_exceeded`. Images on a text-only model are a 400. An embedding-only model (sentence-transformers export) answers a 400 that points to `/v1/embeddings`. |
+| `POST /v1/completions` | kept | SDK + unit. `echo`, `logprobs` (int; also on the VLM runner, streamed and not), `n`, `stop`, `seed`, `stream_options.include_usage`, prompt as string / list / token ids. |
 | `POST /v1/responses` | kept, fixed | SDK + unit. `text.format` (`json_schema`, `json_object`) now maps to constrained decoding (it was ignored). `instructions`, input items, `previous_response_id` / `store`, `function_call` and `function_call_output`, `text.format` json_schema, `reasoning`, streaming event types (created, in_progress, output_item, content_part, output_text delta/done, completed). Usage details always present. |
 | `GET/DELETE /v1/responses/{id}`, `POST /v1/responses/{id}/cancel` | kept | unit + SDK. |
 | `POST /v1/responses/input_tokens` | added | Counts the input tokens a request would use. |
@@ -53,7 +53,7 @@ multi-model mode (`--models-dir`) an unknown model is a 404 `model_not_found`.
 
 | Route | Status | Notes |
 |---|---|---|
-| `POST /v1/messages` (and `/messages`) | kept, fixed | SDK + unit. `system` (string or blocks with `cache_control`), `tools`, `tool_choice` (`auto`, `any`, `tool`, `none`), `thinking` (`budget_tokens` must be < `max_tokens`), `stop_sequences` (`stop_reason: stop_sequence` and the matched string, streaming and not), `metadata`, `top_k`, `tool_use` / `tool_result` / `image` (base64) / `document` (text source) blocks. Streaming: `message_start`, `content_block_start/delta/stop` (`text_delta`, `thinking_delta`, `input_json_delta`), `message_delta`, `message_stop`. Usage includes `cache_read_input_tokens` and `cache_creation_input_tokens`. |
+| `POST /v1/messages` (and `/messages`) | kept, fixed | SDK + unit. `system` (string or blocks with `cache_control`), `tools`, `tool_choice` (`auto`, `any`, `tool`, `none`), `thinking` (`budget_tokens` must be < `max_tokens`), `stop_sequences` (`stop_reason: stop_sequence` and the matched string, streaming and not), `metadata`, `top_k`, `tool_use` / `tool_result` / `image` (base64; a 400 on a text-only model, like OpenAI `image_url`) / `document` (text source) blocks. Streaming: `message_start`, `content_block_start/delta/stop` (`text_delta`, `thinking_delta`, `input_json_delta`), `message_delta`, `message_stop`. Usage includes `cache_read_input_tokens` and `cache_creation_input_tokens`. |
 | `POST /v1/messages/count_tokens` | kept | SDK + unit. Counts system, messages, tools, images. |
 | `GET /v1/models` | kept | Same route as OpenAI; the payload carries `display_name` and `created_at`. |
 | Errors `{type:"error", error:{type,message}}` | implemented | `invalid_request_error`, `authentication_error`, `permission_error`, `not_found_error`, `request_too_large`, `rate_limit_error`, `api_error`, `overloaded_error`. |
@@ -67,8 +67,8 @@ Streaming is NDJSON. Auth follows the app-wide token.
 
 | Route | Status | Notes |
 |---|---|---|
-| `POST /api/chat` | implemented | `messages` with `images`, `tools` (arguments are objects), `tool` role, `format` (`"json"` or a schema), `think`, `options` (`temperature`, `top_p`, `top_k`, `min_p`, `seed`, `num_predict`, `stop`, `repeat_penalty`, `presence_penalty`, `frequency_penalty`; `num_ctx` and `keep_alive` are accepted and ignored), timing and token counts in the final chunk. |
-| `POST /api/generate` | implemented | `prompt`, `system`, `images`, `format`, `options`; an empty prompt answers `done_reason: load`. `raw`, `suffix`, `template`, `context` are not supported. |
+| `POST /api/chat` | implemented | `messages` with `images`, `tools` (arguments are objects), `tool` role, `format` (`"json"` or a schema; on a VLM thinking defaults to off when `format` is set, because the constraint masks the output from the first token), `think`, `options` (`temperature`, `top_p`, `top_k`, `min_p`, `seed`, `num_predict`, `stop`, `repeat_penalty`, `presence_penalty`, `frequency_penalty`; `num_ctx` and `keep_alive` are accepted and ignored), timing and token counts in the final chunk. |
+| `POST /api/generate` | implemented | Verified on the VLM runner too (with `think` the reasoning arrives in `thinking`). Errors from the OpenAI routes pass through: images on a text-only model and chat on an embedding model are 400s. `prompt`, `system`, `images`, `format`, `options`; an empty prompt answers `done_reason: load`. `raw`, `suffix`, `template`, `context` are not supported. |
 | `POST /api/embed`, `POST /api/embeddings` | implemented | |
 | `GET /api/tags`, `GET /api/ps`, `POST /api/show`, `GET /api/version` | implemented | Sizes are 0 (unknown); `show` 404s for an unknown model. |
 | `POST /api/pull`, `/api/push`, `/api/create`, `/api/copy`, `DELETE /api/delete` | not applicable | 501 with a message: models are managed with `yunshu pull` / `yunshu model`. |
@@ -115,8 +115,9 @@ Streaming is NDJSON. Auth follows the app-wide token.
 | `/v1/token_count` | Replaced by `/tokenize` (`count`) and Anthropic `count_tokens`. |
 | `scripts/audit_closure.py` | A self-grading endpoint tracker. |
 
-Engine code that only the removed routes used (video engine, ControlNet engine, STS engine) is still
-in `python/yunshu_engine/` and unreachable from HTTP; it is a follow-up to delete, not part of the API.
+The engine code only those routes used (video engine and pipeline, ControlNet block engine, STS engine) is deleted too. Loading a
+video or speech-to-speech checkpoint fails with a clear message; image generation, including the real
+Z-Image ControlNet through `control_image`, is unchanged.
 
 ## CLI
 
@@ -133,7 +134,4 @@ in `python/yunshu_engine/` and unreachable from HTTP; it is a follow-up to delet
 | Item | State |
 |---|---|
 | Unknown `model` in single-model mode | Served, not 404 (deliberate, see the top). |
-| Anthropic `image` block sent to a text-only model | Ignored silently; OpenAI `image_url` on a text-only model is a 400. |
-| `/v1/completions` `logprobs` on VLM-runner models | Not returned. |
 | Tool calling on tiny models with thinking off | Qwen3.5-0.8B without thinking emits malformed `<tool_call>` markup; the 27B and thinking-on paths pass the release gate. |
-| Sending a chat request to an embedding-only model | Produces garbage text instead of a 400. |

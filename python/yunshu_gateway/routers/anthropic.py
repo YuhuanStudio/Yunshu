@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 _MAX_STREAMING_TEXT_BUFFER = 1 * 1024 * 1024
 _TRUNCATE_KEEP = 512 * 1024
 import contextlib
+import os
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -1111,6 +1112,23 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
                     else "overloaded_error",
                     "message": e.detail,
                 },
+            },
+        )
+
+    from ..model_guards import reject_embedding_only, reject_images_for_text_model
+
+    try:
+        reject_embedding_only(engine, req.model)
+        reject_images_for_text_model(engine, has_images)
+    except HTTPException as e:
+        for _tf_path in _temp_files:
+            with contextlib.suppress(OSError):
+                os.unlink(_tf_path)
+        return JSONResponse(
+            status_code=e.status_code,
+            content={
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": e.detail},
             },
         )
 
