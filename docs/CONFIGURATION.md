@@ -170,8 +170,6 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `YUNSHU_DIFFUSION_SCHEDULER` | `''` \| `ddim` \| `dpm_plus_plus` \| `euler` \| `euler_ancestral` \| `lms` | unset | Image generation sampler override ('' uses the pipeline's own). |
-| `YUNSHU_VIDEO_LORA` | path | unset | LoRA adapter directory loaded with the video model. |
-| `YUNSHU_LTX_TEXT_ENCODER_REPO` | path | unset | LTX video: text-encoder repo when the model folder does not bundle one. |
 
 ### embeddings
 
