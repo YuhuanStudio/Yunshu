@@ -543,6 +543,7 @@ class VLMBatchRunner:
             job.stats.used_draft = False
         else:
             job.stats.spec_mode = _spec_mode(self.drafter)
+            job.spec_base = _spec_counters(self.drafter)
         pkw = job.prompt_kwargs
         if pkw is None:
             if alone:
@@ -709,6 +710,9 @@ class VLMBatchRunner:
                 lm._rope_deltas = mx.array([[job.rope_delta]], dtype=mx.float32)
         prompt_progress, responses = group.gen.next()
         self._note_prefill(group)
+        if group.spec:
+            for job in group.jobs.values():
+                _note_spec(self.drafter, job)
         if self.ragged_kv and not self._ragged_logged and not group.spec:
             # Engagement proof in the server log (a no-op path once cost a
             # full MMLU run to notice). Joins build the ragged caches
@@ -860,6 +864,29 @@ class VLMBatchRunner:
                 mx.clear_cache()
 
 
+def _spec_counters(drafter: Any) -> tuple | None:
+    """(rounds, accepted, drafted) lifetime counters the round loops keep on the drafter."""
+    if drafter is None:
+        return None
+    return (
+        getattr(drafter, "speculative_total_rounds", 0),
+        float(getattr(drafter, "speculative_total_accepted", 0.0)),
+        getattr(drafter, "speculative_total_drafted", 0),
+    )
+
+
+def _note_spec(drafter: Any, job: _Job) -> None:
+    """Per-request drafted / accepted draft tokens of the single-row speculative lane: the
+    drafter's counters (bumped by mtp_lane, mtp_tree, dflash_tree and upstream's loops)
+    minus their value at admission. The lane serves one request at a time, so the diff
+    belongs to ``job``."""
+    now, base = _spec_counters(drafter), job.spec_base
+    if now is None or base is None:
+        return
+    job.stats.spec_drafted = max(int(now[2] - base[2]), 0)
+    job.stats.spec_accepted = max(int(round(now[1] - base[1])), 0)
+
+
 def _spec_mode(drafter: Any) -> str:
     name = type(drafter).__name__.lower() if drafter is not None else ""
     if "dflash" in name:
@@ -1008,6 +1035,8 @@ class _Job:
     budget: Any = None
     rope_delta: float = 0.0
     allow_draft: bool = False
+    # drafter lifetime counters at admission (rounds, accepted, drafted); diffed per step
+    spec_base: tuple | None = None
 
 
 @dataclass
