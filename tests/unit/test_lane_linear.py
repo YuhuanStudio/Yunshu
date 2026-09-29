@@ -50,3 +50,27 @@ def test_convert_swaps_eligible_layers():
     assert isinstance(m.b, lane_linear.LaneLinear)
     assert isinstance(m.c, nn.QuantizedLinear)
     assert out["skipped"] == ["c"]
+
+
+@pytest.mark.parametrize("n", [3072, 48])
+def test_quantized_rows_are_mlx_layout_rows(n):
+    from yunshu_engine.draft_vocab import DraftVocab
+
+    mx.random.seed(2)
+    lin = nn.Linear(512, n, bias=False)
+    lin.set_dtype(mx.bfloat16)
+    q = nn.QuantizedLinear.from_linear(lin, group_size=64, bits=4)
+    lane = lane_linear.LaneLinear.from_quantized(q)
+    ids = mx.array([0, 5, 31, 32, 33, n - 1], dtype=mx.uint32)
+    for got, want in zip(
+        lane.quantized_rows(ids),
+        (q.weight[ids], q.scales[ids], q.biases[ids]),
+        strict=True,
+    ):
+        assert mx.array_equal(got, want).item()
+    # the draft vocabulary over a lane head drafts what it drafts over the original
+    x = mx.random.normal((3, 512)).astype(mx.bfloat16)
+    a, b = DraftVocab(q, n // 2), DraftVocab(lane, n // 2)
+    for v in (a, b):
+        v.set_context([n // 2 + 1, n - 2] * 10)
+    assert mx.array_equal(a.argmax(x), b.argmax(x)).item()

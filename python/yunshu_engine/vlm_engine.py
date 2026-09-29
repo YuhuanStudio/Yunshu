@@ -1448,10 +1448,17 @@ class VLMEngine:
                 from .kernels.batch_invariant import set_active
                 from .kernels.omlx import is_nax_available
 
+                lane_proj = settings.get_bool("YUNSHU_LANE_LINEAR") and not use_driver
+                if lane_proj:
+                    from .kernels import lane_linear
+
+                    kernels["lane_linear"] = lane_linear.convert(
+                        self._model.language_model
+                    )["converted"]
                 kernels["invariant"] = install_invariant(
                     self._model.language_model,
                     model=self._model,
-                    packed=is_nax_available(),
+                    packed=is_nax_available() and not lane_proj,
                 )
                 # The runner turns them on only while its speculative lane steps.
                 set_active(False)
