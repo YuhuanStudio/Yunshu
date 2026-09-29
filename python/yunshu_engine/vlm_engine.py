@@ -1373,16 +1373,36 @@ class VLMEngine:
                 )
         drafter = None
         draft_kind = "mtp"
-        external = settings.get("YUNSHU_VLM_DRAFT")
-        if spec_family and external:
-            # External drafter directory, e.g. incoai/Qwen3.8-27B-DFlash2.
+        from . import spec_select
+        from .mlxvlm_mtp import is_mtp_capable
+
+        choice = spec_select.choose(
+            self._config,
+            spec_family=spec_family,
+            mtp_capable=spec_family and is_mtp_capable(model_path),
+        )
+        external = choice.drafter
+        if choice.kind != "none":
+            logger.info("Speculative decoding: %s (%s)", choice.kind, choice.reason)
+        if external:
+            # DFlash drafter directory, e.g. incoai/Qwen3.8-27B-DFlash2.
             from mlx_vlm.speculative.drafters import (
                 load_drafter,
                 validate_drafter_compatibility,
             )
 
-            drafter, draft_kind = load_drafter(external)
-            validate_drafter_compatibility(self._model, drafter, draft_kind)
+            try:
+                drafter, draft_kind = load_drafter(external)
+                validate_drafter_compatibility(self._model, drafter, draft_kind)
+            except Exception:
+                if not choice.automatic:
+                    raise
+                logger.warning(
+                    "DFlash drafter %s is not usable; falling back to MTP",
+                    external,
+                    exc_info=True,
+                )
+                drafter, draft_kind = None, "mtp"
             if draft_kind == "dflash":
                 # 8-bit drafter: drafts are verified, so this only trades a
                 # little acceptance for half the drafter bytes per cycle
@@ -1394,10 +1414,11 @@ class VLMEngine:
                 from .dflash_context import install as install_dflash_context
 
                 install_dflash_context(self._model.language_model)
-        if spec_family and drafter is None and settings.get_bool("YUNSHU_MTP"):
+        if drafter is None and choice.kind in ("mtp", "dflash"):
+            # "dflash" here means the automatic drafter failed to load.
             from mlx_vlm.speculative.drafters import validate_drafter_compatibility
 
-            from .mlxvlm_mtp import _load_drafter_in_memory, is_mtp_capable
+            from .mlxvlm_mtp import _load_drafter_in_memory
 
             if is_mtp_capable(model_path):
                 drafter = _load_drafter_in_memory(model_path)

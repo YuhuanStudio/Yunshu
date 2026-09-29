@@ -32,6 +32,8 @@ from starlette.responses import StreamingResponse
 from yunshu_engine import settings
 from yunshu_engine.tool_arguments import arguments_json
 
+from .middleware.disconnect import client_disconnected
+
 # ── Sentinel for _safe_anext ──
 
 _KEEPALIVE_SENTINEL = object()
@@ -121,7 +123,7 @@ async def with_sse_keepalive(
                 # Check for client disconnect
                 if http_request is not None:
                     try:
-                        disconnected = await http_request.is_disconnected()
+                        disconnected = await client_disconnected(http_request)
                         if disconnected:
                             # Signal the engine to stop GPU work immediately
                             if cancel_event is not None:
@@ -206,7 +208,7 @@ async def run_with_disconnect_guard(
         if done:
             break
         try:
-            if await http_request.is_disconnected():
+            if await client_disconnected(http_request):
                 if cancel_event is not None:
                     try:
                         cancel_event.set()

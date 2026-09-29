@@ -27,7 +27,13 @@ def _mm(x, w):
 class DecodeProxy:
     def __init__(self, layers=64, stream=None):
         self.stream = stream
-        base = [_qw(INTER, K, 1), _qw(INTER, K, 2), _qw(K, INTER, 3), _qw(K, K, 4), _qw(K, K, 5)]
+        base = [
+            _qw(INTER, K, 1),
+            _qw(INTER, K, 2),
+            _qw(K, INTER, 3),
+            _qw(K, K, 4),
+            _qw(K, K, 5),
+        ]
         # distinct buffers per layer (cheap copies, so DRAM traffic is not SLC-resident)
         self.layers = []
         for i in range(layers):
@@ -79,7 +85,9 @@ class PrefillProxy:
 
     def __init__(self, M=512, layers=8, stream=None):
         self.M, self.layers, self.stream = M, layers, stream
-        self.w = [[_qw(INTER, K, 11), _qw(INTER, K, 12), _qw(K, INTER, 13)] for _ in range(1)]
+        self.w = [
+            [_qw(INTER, K, 11), _qw(INTER, K, 12), _qw(K, INTER, 13)] for _ in range(1)
+        ]
         self.x = mx.random.normal((M, K)).astype(mx.bfloat16)
         mx.eval(self.x)
         self.flops = 2 * M * K * INTER * 3 * layers
@@ -109,6 +117,10 @@ def stats(times):
     if not times:
         return {}
     n = len(times)
-    return {"steps": n, "ms_median": round(times[n // 2] * 1e3, 2),
-            "ms_p95": round(times[int(n * 0.95)] * 1e3, 2), "ms_max": round(times[-1] * 1e3, 2),
-            "tok_s": round(n / sum(times), 2)}
+    return {
+        "steps": n,
+        "ms_median": round(times[n // 2] * 1e3, 2),
+        "ms_p95": round(times[int(n * 0.95)] * 1e3, 2),
+        "ms_max": round(times[-1] * 1e3, 2),
+        "tok_s": round(n / sum(times), 2),
+    }

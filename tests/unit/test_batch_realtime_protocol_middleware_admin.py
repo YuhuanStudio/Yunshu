@@ -32,15 +32,18 @@ def test_function_call_emits_output_item_added_with_own_id():
     )
 
 
-def test_metrics_middleware_is_outermost():
+def test_metrics_middleware_is_outermost(monkeypatch):
     """MetricsMiddleware must wrap auth/rate-limit so it records their rejections
-    (401/429/413/503) — it was innermost and saw none of them."""
+    (401/429/413/503) — it was innermost and saw none of them. Only the pure-ASGI
+    disconnect watcher sits outside it."""
     from yunshu_gateway.main import create_app
 
+    monkeypatch.setenv("YUNSHU_RATE_LIMIT_RPM", "60")
     app = create_app()
     names = [m.cls.__name__ for m in app.user_middleware]
     # outermost is index 0 (Starlette wraps in order); Metrics must precede AuthMiddleware
-    assert names[0] == "MetricsMiddleware"
+    assert names[0] == "DisconnectWatchMiddleware"
+    assert names[1] == "MetricsMiddleware"
     assert names.index("MetricsMiddleware") < names.index("AuthMiddleware")
     assert names.index("MetricsMiddleware") < names.index("RateLimitMiddleware")
 

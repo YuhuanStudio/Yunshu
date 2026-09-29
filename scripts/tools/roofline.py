@@ -6,6 +6,7 @@ Usage:
     uv run python scripts/roofline.py --plot roofline.png
     uv run python scripts/roofline.py --chip M3_Max --model Qwen2.5-7B --context 2048
 """
+
 from __future__ import annotations
 
 import argparse
@@ -65,7 +66,7 @@ def cmd_decode(args: argparse.Namespace) -> None:
 
     # Per-op breakdown (group by layer type, not every single op)
     print(f"\n  {'Op':<30s} {'FLOPs':>10s} {'Bytes':>10s} {'OI':>10s} {'Bound':>8s}")
-    print(f"  {'-'*30} {'-'*10} {'-'*10} {'-'*10} {'-'*8}")
+    print(f"  {'-' * 30} {'-' * 10} {'-' * 10} {'-' * 10} {'-' * 8}")
     for op in result.ops:
         print(
             f"  {op.label:<30s} "
@@ -96,11 +97,14 @@ def cmd_list_models(_: argparse.Namespace) -> None:
 
 def cmd_list_chips(_: argparse.Namespace) -> None:
     from yunshu_engine.roofline import CHIP_PARAMS
+
     print("\nKnown chip configurations:")
     print(f"  {'Chip':<12s} {'BW (GB/s)':>10s} {'FP16 TFLOP/s':>14s}")
-    print(f"  {'-'*12} {'-'*10} {'-'*14}")
+    print(f"  {'-' * 12} {'-' * 10} {'-' * 14}")
     for name, params in sorted(CHIP_PARAMS.items()):
-        print(f"  {name:<12s} {params['bandwidth_gbps']:>10.0f} {params['compute_tflops_fp16']:>14.1f}")
+        print(
+            f"  {name:<12s} {params['bandwidth_gbps']:>10.0f} {params['compute_tflops_fp16']:>14.1f}"
+        )
     print()
 
 
@@ -109,7 +113,8 @@ def main() -> None:
         description="Apple Silicon roofline analysis for LLM inference",
     )
     parser.add_argument(
-        "--chip", default=None,
+        "--chip",
+        default=None,
         help="Chip name (e.g. M3_Max, M4_Pro). Auto-detects if omitted.",
     )
 
@@ -118,7 +123,9 @@ def main() -> None:
     # estimate
     p_est = sub.add_parser("estimate", help="Estimate max tokens/sec for a model")
     p_est.add_argument("model", help="Model name (e.g. Qwen2.5-9B)")
-    p_est.add_argument("--context", type=int, default=0, help="Context length (default: 0)")
+    p_est.add_argument(
+        "--context", type=int, default=0, help="Context length (default: 0)"
+    )
     p_est.add_argument("--json", action="store_true", help="Print JSON output")
 
     # decode
@@ -135,8 +142,12 @@ def main() -> None:
     sub.add_parser("list-chips", help="List known chip configurations")
 
     # Convenience: --plot as top-level flag
-    parser.add_argument("--plot", default=None, help="Generate roofline plot (shortcut)")
-    parser.add_argument("--model", default=None, help="Model name (shortcut for estimate)")
+    parser.add_argument(
+        "--plot", default=None, help="Generate roofline plot (shortcut)"
+    )
+    parser.add_argument(
+        "--model", default=None, help="Model name (shortcut for estimate)"
+    )
     parser.add_argument("--context", type=int, default=0, help="Context length")
 
     args = parser.parse_args()

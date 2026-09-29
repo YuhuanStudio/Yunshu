@@ -249,13 +249,15 @@ def test_doctor_port_in_use():
 # ── serve pre-flight ──────────────────────────────────────────────────────
 
 
-def test_serve_stops_before_loading_a_missing_model(tmp_path, monkeypatch):
+def test_serve_reports_a_missing_model_but_still_starts(tmp_path, monkeypatch):
     import uvicorn
 
-    monkeypatch.setattr(uvicorn, "run", _no_download)
+    started = []
+    monkeypatch.setattr(uvicorn, "run", lambda *a, **k: started.append(1))
     r = runner.invoke(app, ["serve", "-m", str(tmp_path / "missing")])
-    assert r.exit_code == 2
     assert "no such directory" in r.output
+    assert "not ready" in r.output
+    assert started
 
 
 def test_serve_defaults_to_localhost():
@@ -337,3 +339,13 @@ def test_parse_launchctl_print():
         "state": "running",
         "last_exit_code": "(never exited)",
     }
+
+
+def test_serve_bounds_graceful_shutdown_by_the_drain_timeout(tmp_path, monkeypatch):
+    import uvicorn
+
+    seen = {}
+    monkeypatch.setattr(uvicorn, "run", lambda *a, **k: seen.update(k))
+    monkeypatch.setenv("YUNSHU_DRAIN_TIMEOUT", "7")
+    runner.invoke(app, ["serve", "-m", str(tmp_path / "missing")])
+    assert seen["timeout_graceful_shutdown"] == 7

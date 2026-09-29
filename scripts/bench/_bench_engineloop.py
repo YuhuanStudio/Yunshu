@@ -3,6 +3,7 @@
 Same cold/reuse protocol as the other benches so numbers are comparable.
 Run via scripts/bench_all.py (sequentially, never concurrently).
 """
+
 import asyncio
 import json
 import logging
@@ -19,20 +20,26 @@ QUERY = "List the first 6 even numbers, comma separated."
 
 def _doc(t):
     return f"Reference document {t}. " + (
-        "Photosynthesis converts sunlight into chemical energy stored in glucose. " * 110)
+        "Photosynthesis converts sunlight into chemical energy stored in glucose. "
+        * 110
+    )
 
 
 async def main():
     from yunshu_engine.batched_engine import BatchedEngine
+
     e = BatchedEngine(model_name=MODEL)
     await e.start()
     P = _doc("PRIMARY")
 
     async def chat(s, u, mt):
         t = time.perf_counter()
-        o = await e.chat(messages=[{"role": "system", "content": s},
-                                   {"role": "user", "content": u}],
-                         max_tokens=mt, temperature=0.0, enable_thinking=False)
+        o = await e.chat(
+            messages=[{"role": "system", "content": s}, {"role": "user", "content": u}],
+            max_tokens=mt,
+            temperature=0.0,
+            enable_thinking=False,
+        )
         return time.perf_counter() - t, o
 
     await chat(_doc("W"), "hi", 2)
@@ -61,6 +68,7 @@ async def main():
     }
     print("@@RESULTEL@@ " + json.dumps(res))
     import contextlib
+
     with contextlib.suppress(Exception):
         await e.stop()
 

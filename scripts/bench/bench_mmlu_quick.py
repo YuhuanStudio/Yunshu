@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Quick plain text baseline: 14 questions (1 per category)."""
+
 import math
 import random
 import re
@@ -22,20 +23,25 @@ from mlx_lm.sample_utils import make_sampler
 LETTERS = "ABCDEFGHIJ"
 VALID = set(LETTERS)
 
+
 def log(msg):
     with open(LOG, "a") as f:
         f.write(msg + "\n")
         f.flush()
     print(msg, flush=True)
 
+
 def extract(text):
     m = re.search(r"answer is \(?([A-J])\)?", text, re.IGNORECASE)
-    if m: return m.group(1).upper()
+    if m:
+        return m.group(1).upper()
     cleaned = re.sub(r"<think[^>]*>.*?</think[^>]*>", "", text, flags=re.DOTALL)
     m = re.search(r"answer is \(?([A-J])\)?", cleaned, re.IGNORECASE)
-    if m: return m.group(1).upper()
+    if m:
+        return m.group(1).upper()
     ls = re.findall(r"\b([A-J])\b", cleaned)
     return ls[-1] if ls else None
+
 
 def main():
     LOG.parent.mkdir(parents=True, exist_ok=True)
@@ -58,7 +64,8 @@ def main():
         for row in rows[:5]:
             s += "Question:\n" + row["question"] + "\nOptions:\n"
             for j, opt in enumerate(row["options"]):
-                if j >= 10: break
+                if j >= 10:
+                    break
                 s += f"{LETTERS[j]}. {opt.strip()}\n"
             cot = row["cot_content"].replace(
                 "A: Let's think step by step.", "Answer: Let's think step by step."
@@ -88,33 +95,41 @@ def main():
         cat = q["category"]
         prompt = fewshots.get(cat, "") + "Question:\n" + q["question"] + "\nOptions:\n"
         for j, opt in enumerate(q["options"]):
-            if j >= 10: break
+            if j >= 10:
+                break
             prompt += f"{LETTERS[j]}. {opt.strip()}\n"
         prompt += "Answer: Let's think step by step."
 
         t0 = time.perf_counter()
         text = ""
         n_tok = 0
-        for resp in stream_generate(model, tokenizer, prompt, max_tokens=2048, sampler=sampler):
+        for resp in stream_generate(
+            model, tokenizer, prompt, max_tokens=2048, sampler=sampler
+        ):
             text += resp.text
             n_tok += 1
             if re.search(r"answer is \(?([A-J])\)?", text, re.IGNORECASE):
                 break
-            if n_tok >= 2048: break
+            if n_tok >= 2048:
+                break
         dt = time.perf_counter() - t0
 
         predicted = extract(text)
         answer = q["answer"]
         ok = predicted == answer and predicted in VALID
-        if ok: correct += 1
+        if ok:
+            correct += 1
         total += 1
-        log(f"  {i+1}/{len(questions)} {cat}: pred={predicted} ans={answer} "
-            f"{'✓' if ok else '✗'} | {dt:.1f}s {n_tok}tok")
+        log(
+            f"  {i + 1}/{len(questions)} {cat}: pred={predicted} ans={answer} "
+            f"{'✓' if ok else '✗'} | {dt:.1f}s {n_tok}tok"
+        )
 
-    acc = correct/total*100 if total else 0
-    se = math.sqrt(acc*(100-acc)/total) if total else 0
+    acc = correct / total * 100 if total else 0
+    se = math.sqrt(acc * (100 - acc) / total) if total else 0
     log(f"\n  RESULT: {correct}/{total} = {acc:.1f}% ±{se:.1f}%")
     log("DONE")
+
 
 if __name__ == "__main__":
     main()

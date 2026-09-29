@@ -8,6 +8,7 @@ magnitude-scaling would silently make weighting a no-op and fail this gate.
 
 Run: PYTHONPATH=. uv run python scripts/verify_prompt_weighting.py
 """
+
 from __future__ import annotations
 
 import asyncio

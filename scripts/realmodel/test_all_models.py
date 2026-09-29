@@ -59,7 +59,9 @@ def test_llm_chat(models):
         f"{BASE_URL}/v1/chat/completions",
         json={
             "model": llm_model,
-            "messages": [{"role": "user", "content": "What is 2+2? Answer in one word."}],
+            "messages": [
+                {"role": "user", "content": "What is 2+2? Answer in one word."}
+            ],
             "max_tokens": 20,
             "temperature": 0.0,
         },

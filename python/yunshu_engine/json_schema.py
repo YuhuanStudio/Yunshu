@@ -326,6 +326,31 @@ _WHITESPACE_CHARS = {" ", "\t", "\n", "\r"}
 _TAB_CR_IDS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _STRING_PARTITION: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _ALL_IDS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def without_special_ids(tokenizer: Any, ids) -> list[int]:
+    """Vocabulary ids minus the tokenizer's special tokens.
+
+    A special token such as ``<|im_end|>`` decodes to plain text with no quote
+    or control character, so inside a JSON string it looked like ordinary
+    content; a model that chose it ended the request mid-string (Qwen3.5-0.8B
+    stopped at ``{"name": "Alice``). End-of-sequence ids are added back by the
+    callers only where the output may end.
+    """
+    special: set[int] = set()
+    try:
+        special.update(int(t) for t in getattr(tokenizer, "all_special_ids", ()) or ())
+    except Exception:  # noqa: BLE001 - a tokenizer without the attribute
+        logger.debug("special-token ids unavailable", exc_info=True)
+    for name in ("eos_token_ids", "eos_token_id"):
+        eos = getattr(tokenizer, name, None)
+        if isinstance(eos, int):
+            special.add(eos)
+        elif eos:
+            special.update(int(t) for t in eos)
+    return [t for t in ids if t not in special]
+
+
 _STRING_MASKS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _DIGIT_CHARS = set("0123456789")
 _HEX_CHARS = set("0123456789abcdefABCDEF")
@@ -2056,11 +2081,11 @@ class JsonSchemaConstraint:
     def _compute_all_token_ids(self, tokenizer: Any) -> list[int]:
         if hasattr(tokenizer, "get_vocab"):
             vocab = tokenizer.get_vocab()
-            return list(vocab.values())
+            return without_special_ids(tokenizer, vocab.values())
         if hasattr(tokenizer, "vocab"):
             vocab = tokenizer.vocab
             if isinstance(vocab, dict):
-                return list(vocab.values())
+                return without_special_ids(tokenizer, vocab.values())
             return list(range(len(vocab)))
         # Fallback: try to determine vocab size from tokenizer config
         vocab_size = getattr(tokenizer, "vocab_size", None)

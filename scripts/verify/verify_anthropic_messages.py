@@ -16,6 +16,7 @@ ASGI round-trip with a real engine, asserts:
 
 Run: PYTHONPATH=. uv run python scripts/verify_anthropic_messages.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -49,13 +50,17 @@ async def main() -> int:
     detail: list[str] = []
     try:
         transport = httpx.ASGITransport(app=create_app())
-        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=120) as client:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test", timeout=120
+        ) as client:
             # ── non-streaming envelope ───────────────────────────────────────
             body = {
                 "model": MODEL,
                 "max_tokens": 40,
                 "system": "You are a concise assistant. Answer in one short sentence.",
-                "messages": [{"role": "user", "content": "What color is a clear daytime sky?"}],
+                "messages": [
+                    {"role": "user", "content": "What color is a clear daytime sky?"}
+                ],
                 "temperature": 0.0,
             }
             r = await client.post("/v1/messages", json=body)
@@ -65,23 +70,34 @@ async def main() -> int:
             else:
                 d = r.json()
                 content = d.get("content")
-                text_blocks = [b for b in (content or []) if isinstance(b, dict) and b.get("type") == "text"]
+                text_blocks = [
+                    b
+                    for b in (content or [])
+                    if isinstance(b, dict) and b.get("type") == "text"
+                ]
                 usage = d.get("usage") or {}
                 checks["msg: type==message, role==assistant"] = (
-                    d.get("type") == "message" and d.get("role") == "assistant")
-                checks["msg: content has non-empty text block"] = (
-                    bool(text_blocks) and bool((text_blocks[0].get("text") or "").strip()))
+                    d.get("type") == "message" and d.get("role") == "assistant"
+                )
+                checks["msg: content has non-empty text block"] = bool(
+                    text_blocks
+                ) and bool((text_blocks[0].get("text") or "").strip())
                 checks["msg: stop_reason valid"] = d.get("stop_reason") in _VALID_STOP
                 checks["msg: usage input/output tokens > 0"] = (
-                    usage.get("input_tokens", 0) > 0 and usage.get("output_tokens", 0) > 0)
-                detail.append(f"stop={d.get('stop_reason')} usage={usage} "
-                              f"text={(text_blocks[0].get('text') if text_blocks else '')[:50]!r}")
+                    usage.get("input_tokens", 0) > 0
+                    and usage.get("output_tokens", 0) > 0
+                )
+                detail.append(
+                    f"stop={d.get('stop_reason')} usage={usage} "
+                    f"text={(text_blocks[0].get('text') if text_blocks else '')[:50]!r}"
+                )
 
             # ── streaming event protocol ─────────────────────────────────────
             events: list[str] = []
             stream_text = ""
-            async with client.stream("POST", "/v1/messages",
-                                     json=dict(body, stream=True)) as resp:
+            async with client.stream(
+                "POST", "/v1/messages", json=dict(body, stream=True)
+            ) as resp:
                 etype = None
                 async for line in resp.aiter_lines():
                     if line.startswith("event: "):
@@ -99,8 +115,10 @@ async def main() -> int:
             checks["stream: has content_block_delta"] = "content_block_delta" in events
             checks["stream: has message_stop"] = "message_stop" in events
             checks["stream: text_delta content non-empty"] = bool(stream_text.strip())
-            detail.append(f"events={events[:8]}{'…' if len(events) > 8 else ''} "
-                          f"stream_text={stream_text[:50]!r}")
+            detail.append(
+                f"events={events[:8]}{'…' if len(events) > 8 else ''} "
+                f"stream_text={stream_text[:50]!r}"
+            )
     finally:
         set_engine(None)
         await eng.stop()

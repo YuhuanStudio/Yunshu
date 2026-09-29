@@ -24,7 +24,11 @@ def gib(value):
 
 def series_summary(rows, get_value):
     points = [(r.get("elapsed_s"), get_value(r)) for r in rows]
-    points = [(t, v) for t, v in points if isinstance(t, (int, float)) and isinstance(v, (int, float))]
+    points = [
+        (t, v)
+        for t, v in points
+        if isinstance(t, (int, float)) and isinstance(v, (int, float))
+    ]
     if not points:
         return None
     return {
@@ -50,22 +54,34 @@ def summarize(path):
         and not row.get("error")
         and not row.get("stream_error")
     ]
-    lengths = [row.get("wall_s") for row in requests if isinstance(row.get("wall_s"), (int, float))]
-    arguments = next((row.get("arguments", {}) for row in rows if row.get("event") == "start"), {})
+    lengths = [
+        row.get("wall_s")
+        for row in requests
+        if isinstance(row.get("wall_s"), (int, float))
+    ]
+    arguments = next(
+        (row.get("arguments", {}) for row in rows if row.get("event") == "start"), {}
+    )
     workload = arguments.get("workload")
     planned_requests = arguments.get("requests")
     result = {
         "path": str(path),
         "workload": workload,
-        "complete": bool(events["idle_end"]) and len(requests) == planned_requests and not events["stopped"],
+        "complete": bool(events["idle_end"])
+        and len(requests) == planned_requests
+        and not events["stopped"],
         "planned_requests": planned_requests,
         "terminated_by_guard": bool(events["stopped"]),
         "events": dict(events),
         "request_count": len(requests),
         "success_count": len(successful),
         "http_statuses": dict(Counter(str(row.get("http_status")) for row in requests)),
-        "finish_reasons": dict(Counter(str(row.get("finish_reason")) for row in requests)),
-        "error_count": sum(bool(row.get("error") or row.get("stream_error")) for row in requests),
+        "finish_reasons": dict(
+            Counter(str(row.get("finish_reason")) for row in requests)
+        ),
+        "error_count": sum(
+            bool(row.get("error") or row.get("stream_error")) for row in requests
+        ),
         "guard_count": sum(bool(row.get("guard_triggered")) for row in memory),
         "request_wall_s": {
             "median": round(statistics.median(lengths), 3) if lengths else None,
@@ -77,36 +93,61 @@ def summarize(path):
         ),
         "process_tree_phys_footprint": series_summary(
             memory,
-            lambda row: row.get("process_memory", {}).get("physical_footprint_sum_bytes"),
+            lambda row: row.get("process_memory", {}).get(
+                "physical_footprint_sum_bytes"
+            ),
         ),
         "engine_current": series_summary(
             memory,
-            lambda row: row.get("engine_status", {}).get("memory_actual", {}).get("current_bytes"),
+            lambda row: (
+                row.get("engine_status", {})
+                .get("memory_actual", {})
+                .get("current_bytes")
+            ),
         ),
     }
     if workload == "mixed":
-        result["exact_output_count"] = sum(row.get("exact_match") is True for row in requests)
+        result["exact_output_count"] = sum(
+            row.get("exact_match") is True for row in requests
+        )
     elif workload == "mmlu-pro":
         answers = [
-            row for row in successful if row.get("finish_reason") == "stop" and row.get("output", "").strip() in set("ABCDEFGHIJ")
+            row
+            for row in successful
+            if row.get("finish_reason") == "stop"
+            and row.get("output", "").strip() in set("ABCDEFGHIJ")
         ]
         result["single_letter_output_count"] = len(answers)
         result["sampled_letter_match_count"] = sum(
             row["output"].strip() == row.get("expected_answer") for row in answers
         )
-        result["length_limited_count"] = sum(row.get("finish_reason") == "length" for row in requests)
-        result["sampled_letter_match_warning"] = "Exploratory output check only; not official MMLU-Pro accuracy."
-    idle_start = next((row["elapsed_s"] for row in rows if row.get("event") == "idle_start"), None)
+        result["length_limited_count"] = sum(
+            row.get("finish_reason") == "length" for row in requests
+        )
+        result["sampled_letter_match_warning"] = (
+            "Exploratory output check only; not official MMLU-Pro accuracy."
+        )
+    idle_start = next(
+        (row["elapsed_s"] for row in rows if row.get("event") == "idle_start"), None
+    )
     if idle_start is not None:
         idle_rows = [row for row in memory if row.get("elapsed_s", 0) >= idle_start]
-        result["idle_duration_observed_s"] = round(memory[-1]["elapsed_s"] - idle_start, 2) if idle_rows else 0
+        result["idle_duration_observed_s"] = (
+            round(memory[-1]["elapsed_s"] - idle_start, 2) if idle_rows else 0
+        )
         result["idle_engine_current"] = series_summary(
             idle_rows,
-            lambda row: row.get("engine_status", {}).get("memory_actual", {}).get("current_bytes"),
+            lambda row: (
+                row.get("engine_status", {})
+                .get("memory_actual", {})
+                .get("current_bytes")
+            ),
         )
         result["idle_phys_footprint"] = series_summary(
             idle_rows,
-            lambda row: row.get("process_memory", {}).get("physical_footprint_sum_bytes"),
+            lambda row: row.get("process_memory", {}).get(
+                "physical_footprint_sum_bytes"
+            ),
         )
     return result
 

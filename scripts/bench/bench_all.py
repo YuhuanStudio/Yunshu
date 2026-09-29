@@ -11,6 +11,7 @@ Run:
   PYTHONPATH=. uv run python scripts/bench_all.py
   PYTHONPATH=. uv run python scripts/bench_all.py ./models/Qwen3.5-2B-MLX-bf16 ...
 """
+
 import json
 import os
 import re
@@ -34,7 +35,9 @@ DEFAULT_MODELS = [
 def _run(cmd, env, tag):
     """Run a sub-bench to completion (blocking) and parse its @@tag@@ json line."""
     try:
-        p = subprocess.run(cmd, env=env, cwd=REPO, capture_output=True, text=True, timeout=1200)
+        p = subprocess.run(
+            cmd, env=env, cwd=REPO, capture_output=True, text=True, timeout=1200
+        )
     except subprocess.TimeoutExpired:
         return {"status": "TIMEOUT"}
     out = p.stdout + p.stderr
@@ -52,6 +55,7 @@ def _is_vlm_path(path):
     """Route to VLMEngine iff mlx-lm lacks the model_type (the resolver's rule).
     A vision_config stub alone is NOT enough (Qwen3.5 has one but is a text LLM)."""
     import importlib.util
+
     try:
         cfg = json.loads(open(os.path.join(REPO, path, "config.json")).read())
     except Exception:
@@ -77,29 +81,57 @@ def bench_model(path, arch):
     ssd = f"/tmp/benchall_{name}"
     subprocess.run(["rm", "-rf", ssd], cwd=REPO)
 
-    print(f"  [{name}] {'1/1' if is_vlm else '1/3'} {'VLM ' if is_vlm else 'fast-path '}4-tier ...", flush=True)
-    r4 = _run([sys.executable, "scripts/bench/bench_4tier.py"],
-              dict(base, YUNSHU_BENCH_MODEL=path, YUNSHU_SSD_CACHE_DIR=ssd + "_ft"), "RESULT4T")
+    print(
+        f"  [{name}] {'1/1' if is_vlm else '1/3'} {'VLM ' if is_vlm else 'fast-path '}4-tier ...",
+        flush=True,
+    )
+    r4 = _run(
+        [sys.executable, "scripts/bench/bench_4tier.py"],
+        dict(base, YUNSHU_BENCH_MODEL=path, YUNSHU_SSD_CACHE_DIR=ssd + "_ft"),
+        "RESULT4T",
+    )
     if is_vlm:
         subprocess.run(["rm", "-rf", ssd + "_ft"], cwd=REPO)
-        return {"name": name, "arch": arch, "ft": r4,
-                "el": {"status": "n/a (VLM)"}, "omlx": {"status": "n/a (VLM)"}}
+        return {
+            "name": name,
+            "arch": arch,
+            "ft": r4,
+            "el": {"status": "n/a (VLM)"},
+            "omlx": {"status": "n/a (VLM)"},
+        }
     print(f"  [{name}] 2/3 engine-loop radix ...", flush=True)
-    rel = _run([sys.executable, "scripts/bench/_bench_engineloop.py"],
-               dict(base, YBENCH_MODEL=path, YUNSHU_SSD_CACHE_DIR=ssd + "_el"), "RESULTEL")
+    rel = _run(
+        [sys.executable, "scripts/bench/_bench_engineloop.py"],
+        dict(base, YBENCH_MODEL=path, YUNSHU_SSD_CACHE_DIR=ssd + "_el"),
+        "RESULTEL",
+    )
     print(f"  [{name}] 3/3 oMLX head-to-head ...", flush=True)
     # Prefer oMLX's NATIVE venv (its exact pinned mlx-lm/mlx-vlm) for a correct,
     # artifact-free comparison: set OMLX_PYTHON=/path/to/omlxenv/bin/python and
     # the no-stub native bench is used. Falls back to the in-env stubbed bench.
     omlx_py = os.environ.get("OMLX_PYTHON")
     if omlx_py:
-        romlx = _run([omlx_py, "scripts/bench/_bench_omlx_native.py"],
-                     dict(base, PYTHONPATH="./reference/omlx", OMLX_MODEL=path,
-                          OMLX_SSD=ssd + "_omlx"), "RESULTOMLX")
+        romlx = _run(
+            [omlx_py, "scripts/bench/_bench_omlx_native.py"],
+            dict(
+                base,
+                PYTHONPATH="./reference/omlx",
+                OMLX_MODEL=path,
+                OMLX_SSD=ssd + "_omlx",
+            ),
+            "RESULTOMLX",
+        )
     else:
-        romlx = _run([sys.executable, "scripts/bench/_bench_omlx.py"],
-                     dict(base, PYTHONPATH=".:./reference/omlx", OMLX_MODEL=path,
-                          OMLX_SSD=ssd + "_omlx"), "RESULTOMLX")
+        romlx = _run(
+            [sys.executable, "scripts/bench/_bench_omlx.py"],
+            dict(
+                base,
+                PYTHONPATH=".:./reference/omlx",
+                OMLX_MODEL=path,
+                OMLX_SSD=ssd + "_omlx",
+            ),
+            "RESULTOMLX",
+        )
     subprocess.run(["rm", "-rf", ssd + "_ft", ssd + "_el", ssd + "_omlx"], cwd=REPO)
     return {"name": name, "arch": arch, "ft": r4, "el": rel, "omlx": romlx}
 
@@ -112,8 +144,21 @@ def _tier(ft, t, k, fmt, default="—"):
 
 
 def render(rows):
-    H = ["Model", "Arch", "pTok", "pf t/s", "dec t/s", "COLD ms",
-         "F-HOT", "F-WARM", "F-SSD", "WARMram", "LOOP", "oMLX", "loss/note"]
+    H = [
+        "Model",
+        "Arch",
+        "pTok",
+        "pf t/s",
+        "dec t/s",
+        "COLD ms",
+        "F-HOT",
+        "F-WARM",
+        "F-SSD",
+        "WARMram",
+        "LOOP",
+        "oMLX",
+        "loss/note",
+    ]
     W = [30, 10, 5, 6, 7, 8, 7, 7, 8, 7, 7, 8, 20]
 
     def fmt_row(cells):
@@ -129,42 +174,110 @@ def render(rows):
         # Reuse intentionally bypassed (VLM sliding-window / interleaved-mRoPE / hybrid).
         if ft.get("bypassed"):
             why = ft.get("bypass_reason", "bypassed")[:30]
-            print(fmt_row([r["name"], r["arch"][:9], "", "", "", "bypass",
-                           "—", "—", "—", "—", "—", "—", why]))
+            print(
+                fmt_row(
+                    [
+                        r["name"],
+                        r["arch"][:9],
+                        "",
+                        "",
+                        "",
+                        "bypass",
+                        "—",
+                        "—",
+                        "—",
+                        "—",
+                        "—",
+                        "—",
+                        why,
+                    ]
+                )
+            )
             continue
         if "tiers" not in ft:
-            print(fmt_row([r["name"], r["arch"][:9], "", "", "", ft.get("status", "ERR"),
-                           "", "", "", "", "", "", ""]))
+            print(
+                fmt_row(
+                    [
+                        r["name"],
+                        r["arch"][:9],
+                        "",
+                        "",
+                        "",
+                        ft.get("status", "ERR"),
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                    ]
+                )
+            )
             continue
         hotx = _tier(ft, "HOT", "speedup", lambda v: f"{v:.2f}x")
         warmx = _tier(ft, "WARM", "speedup", lambda v: f"{v:.2f}x")
         ssdx = _tier(ft, "SSD", "speedup", lambda v: f"{v:.2f}x")
-        ssd_restored = _tier(ft, "SSD", "note", lambda v: "✓" if "restored=True" in v else "✗", "?")
-        warmram = (f"{ft['hot_entry_mb']/ft['warm_entry_mb']:.2f}x"
-                   if ft.get("warm_entry_mb") else "1.0x")
-        loopx = f"{el['speedup']:.2f}x" if "speedup" in el else el.get("status", "?")[:6]
-        omx = (f"{om['speedup']:.2f}x" if om.get("status") == "ok" else om.get("status", "?")[:8])
+        ssd_restored = _tier(
+            ft, "SSD", "note", lambda v: "✓" if "restored=True" in v else "✗", "?"
+        )
+        warmram = (
+            f"{ft['hot_entry_mb'] / ft['warm_entry_mb']:.2f}x"
+            if ft.get("warm_entry_mb")
+            else "1.0x"
+        )
+        loopx = (
+            f"{el['speedup']:.2f}x" if "speedup" in el else el.get("status", "?")[:6]
+        )
+        omx = (
+            f"{om['speedup']:.2f}x"
+            if om.get("status") == "ok"
+            else om.get("status", "?")[:8]
+        )
         # VLM: the engine's empirical reuse probe is authoritative (the per-tier
         # text exact-match is noisy for short cross-prompt answers). LLM: per-tier.
         if ft.get("engine") == "vlm" and ft.get("probe_lossless") is not None:
             lossless = bool(ft["probe_lossless"])
         else:
-            lossless = all(ft["tiers"][t].get("lossless") for t in ft["tiers"]
-                           if t in ("HOT", "WARM", "SSD"))
-        print(fmt_row([
-            r["name"], r["arch"][:9], ft["prompt_tok"], ft["prefill_tps"], ft["decode_tps"],
-            f"{ft['cold_ms']:.0f}", hotx, warmx, f"{ssdx}{ssd_restored}", warmram,
-            loopx, omx, "Y" if lossless else "n",
-        ]))
+            lossless = all(
+                ft["tiers"][t].get("lossless")
+                for t in ft["tiers"]
+                if t in ("HOT", "WARM", "SSD")
+            )
+        print(
+            fmt_row(
+                [
+                    r["name"],
+                    r["arch"][:9],
+                    ft["prompt_tok"],
+                    ft["prefill_tps"],
+                    ft["decode_tps"],
+                    f"{ft['cold_ms']:.0f}",
+                    hotx,
+                    warmx,
+                    f"{ssdx}{ssd_restored}",
+                    warmram,
+                    loopx,
+                    omx,
+                    "Y" if lossless else "n",
+                ]
+            )
+        )
     print("=" * 130)
-    print("F-* = Yunshu fast path (default). LOOP = Yunshu engine-loop (radix, opt-in, HOT only).")
-    print("oMLX = reference/omlx live head-to-head (prefix cache on, block=128). loss = all Yunshu tiers lossless.")
-    print("F-SSD trailing ✓/✗ = whether the SSD tier actually restored (vs full-prefill fallback).")
+    print(
+        "F-* = Yunshu fast path (default). LOOP = Yunshu engine-loop (radix, opt-in, HOT only)."
+    )
+    print(
+        "oMLX = reference/omlx live head-to-head (prefix cache on, block=128). loss = all Yunshu tiers lossless."
+    )
+    print(
+        "F-SSD trailing ✓/✗ = whether the SSD tier actually restored (vs full-prefill fallback)."
+    )
     print("WARMram = HOT-entry / WARM-entry RAM ratio (4-bit saving).")
 
 
 def main():
-    models = ([(m, "?") for m in sys.argv[1:]] if len(sys.argv) > 1 else DEFAULT_MODELS)
+    models = [(m, "?") for m in sys.argv[1:]] if len(sys.argv) > 1 else DEFAULT_MODELS
     # Per-MODEL thermal tag: the cache benches run sequentially (~15-20 min) so the
     # LAST model runs much hotter than the first. The regression snapshot's single
     # end-of-run gpu_tflops can't reflect that → a model benched hot looks like a
@@ -172,6 +285,7 @@ def main():
     # and stash it in that model's ft, so the report can thermal-discount per model.
     try:
         import sys as _sys
+
         _sys.path.insert(0, os.path.join(REPO, "scripts"))
         from perf_history import _gpu_tflops
     except Exception:

@@ -36,8 +36,13 @@ def main():
     out = Out(f"gpu_compute_{a.tag}")
     from yunshu_engine.kernels.omlx import is_nax_available
 
-    out(kind="env", nax_available=is_nax_available(), tag=a.tag, mlx=mx.__version__,
-        arch=mx.device_info()["architecture"])
+    out(
+        kind="env",
+        nax_available=is_nax_available(),
+        tag=a.tag,
+        mlx=mx.__version__,
+        arch=mx.device_info()["architecture"],
+    )
 
     # Dense square matmul peak
     for dt in (mx.float32, mx.float16, mx.bfloat16):
@@ -47,8 +52,13 @@ def main():
             mx.eval(x, y)
             reps = 8 if n >= 8192 else 24
             s = sync_loop(lambda i, x=x, y=y: x @ y, reps)
-            out(kind="dense_square", dtype=str(dt).split(".")[-1], n=n, ms=round(s * 1e3, 3),
-                TFLOPS=round(2 * n**3 / s / 1e12, 2))
+            out(
+                kind="dense_square",
+                dtype=str(dt).split(".")[-1],
+                n=n,
+                ms=round(s * 1e3, 3),
+                TFLOPS=round(2 * n**3 / s / 1e12, 2),
+            )
 
     # Dense bf16 skinny (decode-like) M sweep with an unquantized MLP-size weight
     K, N = 5120, 17408
@@ -60,15 +70,20 @@ def main():
         x = mx.random.normal((M, K)).astype(mx.bfloat16)
         mx.eval(x)
         s = sync_loop(lambda i, x=x: x @ ws[i % NC], 24)
-        out(kind="dense_bf16_mlp", M=M, us=round(s * 1e6, 1),
+        out(
+            kind="dense_bf16_mlp",
+            M=M,
+            us=round(s * 1e6, 1),
             TFLOPS=round(2 * M * K * N / s / 1e12, 2),
-            weight_GBps=round(K * N * 2 / s / 1e9, 1))
+            weight_GBps=round(K * N * 2 / s / 1e9, 1),
+        )
 
     # Quantized matmul, weight-stationary decode shapes and prefill shapes
     for bits in (4, 5, 8):
         gs = 64
-        wq, sc, bi = mx.quantize(w.T.astype(mx.float32).astype(mx.bfloat16), group_size=gs,
-                                 bits=bits)  # (N, K)
+        wq, sc, bi = mx.quantize(
+            w.T.astype(mx.float32).astype(mx.bfloat16), group_size=gs, bits=bits
+        )  # (N, K)
         cp = [(wq + j * 0, sc + j * 0, bi + j * 0) for j in range(8)]
         mx.eval(cp)
         wbytes = wq.nbytes + sc.nbytes + bi.nbytes
@@ -77,11 +92,21 @@ def main():
             mx.eval(x)
             reps = 32 if M <= 64 else 8
             s = sync_loop(
-                lambda i, x=x: mx.quantized_matmul(x, *cp[i % 8], transpose=True, group_size=gs,
-                                                   bits=bits), reps)
-            out(kind="qmm", bits=bits, M=M, K=K, N=N, us=round(s * 1e6, 1),
+                lambda i, x=x: mx.quantized_matmul(
+                    x, *cp[i % 8], transpose=True, group_size=gs, bits=bits
+                ),
+                reps,
+            )
+            out(
+                kind="qmm",
+                bits=bits,
+                M=M,
+                K=K,
+                N=N,
+                us=round(s * 1e6, 1),
                 TFLOPS=round(2 * M * K * N / s / 1e12, 2),
-                weight_GBps=round(wbytes / s / 1e9, 1))
+                weight_GBps=round(wbytes / s / 1e9, 1),
+            )
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ content path end-to-end through VLMEngine.generate.
 
 Run: PYTHONPATH=. uv run python scripts/verify_vlm_ocr.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -25,6 +26,7 @@ WORDS = ["BANANA", "QUASAR"]
 
 def _img_data_url(word: str) -> str:
     from PIL import Image, ImageDraw, ImageFont
+
     img = Image.new("RGB", (380, 140), "white")
     d = ImageDraw.Draw(img)
     try:
@@ -43,6 +45,7 @@ async def main() -> int:
         return 0
 
     from yunshu_engine.vlm_engine import VLMEngine
+
     eng = VLMEngine(MODEL)
     await eng.start()
 
@@ -51,12 +54,25 @@ async def main() -> int:
     try:
         reads = []
         for word in WORDS:
-            msgs = [{"role": "user", "content": [
-                {"type": "text", "text": "What word is written in this image? Reply with just the word."},
-                {"type": "image_url", "image_url": {"url": _img_data_url(word)}},
-            ]}]
+            msgs = [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "What word is written in this image? Reply with just the word.",
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": _img_data_url(word)},
+                        },
+                    ],
+                }
+            ]
             o = await eng.generate(messages=msgs, max_tokens=40, temperature=0.0)
-            txt = (o.get("text") if isinstance(o, dict) else getattr(o, "text", str(o))) or ""
+            txt = (
+                o.get("text") if isinstance(o, dict) else getattr(o, "text", str(o))
+            ) or ""
             reads.append(txt.upper())
             detail.append(f"{word} → {txt.strip()[:40]!r}")
 

@@ -15,6 +15,7 @@ at temperature 0 (probed: a clear weather query emits the call 3/3 times).
 
 Run: PYTHONPATH=. uv run python scripts/verify_tool_calls_e2e.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -26,9 +27,14 @@ MODEL = os.environ.get("YUNSHU_BENCH_MODEL", "./models/Qwen3.5-0.8B-MLX-bf16")
 
 
 def _tool(name, desc, props, required):
-    return {"type": "function", "function": {
-        "name": name, "description": desc,
-        "parameters": {"type": "object", "properties": props, "required": required}}}
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": desc,
+            "parameters": {"type": "object", "properties": props, "required": required},
+        },
+    }
 
 
 async def main() -> int:
@@ -50,23 +56,43 @@ async def main() -> int:
     set_engine(eng)
 
     tools = [
-        _tool("get_weather", "Get current weather for a city",
-              {"city": {"type": "string"}}, ["city"]),
-        _tool("send_email", "Send an email to a recipient",
-              {"to": {"type": "string"}, "body": {"type": "string"}}, ["to", "body"]),
+        _tool(
+            "get_weather",
+            "Get current weather for a city",
+            {"city": {"type": "string"}},
+            ["city"],
+        ),
+        _tool(
+            "send_email",
+            "Send an email to a recipient",
+            {"to": {"type": "string"}, "body": {"type": "string"}},
+            ["to", "body"],
+        ),
     ]
 
     checks: dict[str, bool] = {}
     detail: list[str] = []
     try:
         transport = httpx.ASGITransport(app=create_app())
-        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=120) as client:
-            r = await client.post("/v1/chat/completions", json={
-                "model": MODEL,
-                "messages": [{"role": "user", "content": "What's the weather in Tokyo right now? Use the tool."}],
-                "tools": tools, "tool_choice": "auto",
-                "temperature": 0.0, "max_tokens": 80,
-            })
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test", timeout=120
+        ) as client:
+            r = await client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": MODEL,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "What's the weather in Tokyo right now? Use the tool.",
+                        }
+                    ],
+                    "tools": tools,
+                    "tool_choice": "auto",
+                    "temperature": 0.0,
+                    "max_tokens": 80,
+                },
+            )
             checks["HTTP 200"] = r.status_code == 200
             if r.status_code != 200:
                 detail.append(f"status={r.status_code} body={r.text[:200]}")
@@ -75,7 +101,9 @@ async def main() -> int:
                 ch = d["choices"][0]
                 msg = ch.get("message") or {}
                 tcs = msg.get("tool_calls") or []
-                checks["finish_reason == tool_calls"] = ch.get("finish_reason") == "tool_calls"
+                checks["finish_reason == tool_calls"] = (
+                    ch.get("finish_reason") == "tool_calls"
+                )
                 checks["tool_calls present"] = len(tcs) >= 1
                 if tcs:
                     tc = tcs[0]
@@ -83,20 +111,34 @@ async def main() -> int:
                     args_str = fn.get("arguments")
                     parsed = None
                     try:
-                        parsed = json.loads(args_str) if isinstance(args_str, str) else None
+                        parsed = (
+                            json.loads(args_str) if isinstance(args_str, str) else None
+                        )
                     except Exception:
                         parsed = None
                     checks["call envelope (id/type/function name)"] = (
-                        bool(tc.get("id")) and tc.get("type") == "function" and bool(fn.get("name")))
-                    checks["arguments is a JSON string"] = isinstance(args_str, str) and parsed is not None
+                        bool(tc.get("id"))
+                        and tc.get("type") == "function"
+                        and bool(fn.get("name"))
+                    )
+                    checks["arguments is a JSON string"] = (
+                        isinstance(args_str, str) and parsed is not None
+                    )
                     checks["correct tool selected (get_weather, city~Tokyo)"] = (
                         fn.get("name") == "get_weather"
                         and isinstance(parsed, dict)
-                        and "tokyo" in str(parsed.get("city", "")).lower())
-                    detail.append(f"call={fn.get('name')}({args_str!r}) id={tc.get('id')!r}")
+                        and "tokyo" in str(parsed.get("city", "")).lower()
+                    )
+                    detail.append(
+                        f"call={fn.get('name')}({args_str!r}) id={tc.get('id')!r}"
+                    )
                 # content must be null/empty when tool_calls present
-                checks["content empty when tool_calls present"] = not (msg.get("content") or "").strip()
-                detail.append(f"fr={ch.get('finish_reason')} n_calls={len(tcs)} content={ (msg.get('content') or '')[:30]!r}")
+                checks["content empty when tool_calls present"] = not (
+                    msg.get("content") or ""
+                ).strip()
+                detail.append(
+                    f"fr={ch.get('finish_reason')} n_calls={len(tcs)} content={(msg.get('content') or '')[:30]!r}"
+                )
     finally:
         set_engine(None)
         await eng.stop()

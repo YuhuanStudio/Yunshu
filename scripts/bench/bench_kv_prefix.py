@@ -10,6 +10,7 @@ Usage:
     PYTHONPATH=. .venv/bin/python3 scripts/bench_kv_prefix.py
     PYTHONPATH=. .venv/bin/python3 scripts/bench_kv_prefix.py --model Qwen2.5-0.5B-Instruct-4bit
 """
+
 from __future__ import annotations
 
 import argparse
@@ -58,15 +59,15 @@ def main():
         "Tell me about Brazil.",
         "What about Australia?",
     ]
-    turns = turns[:args.turns]
+    turns = turns[: args.turns]
 
     sampler = make_sampler(temp=0.0)
     prefix_cache = KVPrefixCache(max_entries=32, min_prefix_length=16)
 
     results = {
-        "cold": [],       # TTFT without cache
-        "cached": [],     # TTFT with cache
-        "speedup": [],    # ratio
+        "cold": [],  # TTFT without cache
+        "cached": [],  # TTFT with cache
+        "speedup": [],  # ratio
     }
 
     conversation_text = f"<|im_start|>system\n{system_prompt}<|im_end|>\n"
@@ -75,7 +76,9 @@ def main():
     print("\n=== Cold Start (no cache) ===")
     full_prompt = conversation_text
     for i, user_msg in enumerate(turns):
-        full_prompt += f"<|im_start|>user\n{user_msg}<|im_end|>\n<|im_start|>assistant\n"
+        full_prompt += (
+            f"<|im_start|>user\n{user_msg}<|im_end|>\n<|im_start|>assistant\n"
+        )
         ids = mx.array(tokenizer.encode(full_prompt))
 
         cache = make_prompt_cache(model)
@@ -84,7 +87,10 @@ def main():
         ttft = 0.0
         tok_count = 0
         for token, _logits in generate_step(
-            ids, model, max_tokens=args.max_tokens, sampler=sampler,
+            ids,
+            model,
+            max_tokens=args.max_tokens,
+            sampler=sampler,
             prompt_cache=cache,
         ):
             if first:
@@ -99,19 +105,25 @@ def main():
         response = tokenizer.decode([token])
         full_prompt += response + "<|im_end|>\n"
 
-        results["cold"].append({
-            "turn": i + 1,
-            "prompt_tokens": len(ids),
-            "ttft_ms": round(ttft * 1000, 1),
-            "tok_count": tok_count,
-        })
-        print(f"  Turn {i+1}: {len(ids)} prompt tokens, TTFT={ttft*1000:.1f}ms, {tok_count} tokens")
+        results["cold"].append(
+            {
+                "turn": i + 1,
+                "prompt_tokens": len(ids),
+                "ttft_ms": round(ttft * 1000, 1),
+                "tok_count": tok_count,
+            }
+        )
+        print(
+            f"  Turn {i + 1}: {len(ids)} prompt tokens, TTFT={ttft * 1000:.1f}ms, {tok_count} tokens"
+        )
 
     # ── Cached pass: with KV prefix cache ──
     print("\n=== Cached (with KV prefix cache) ===")
     full_prompt = conversation_text
     for i, user_msg in enumerate(turns):
-        full_prompt += f"<|im_start|>user\n{user_msg}<|im_end|>\n<|im_start|>assistant\n"
+        full_prompt += (
+            f"<|im_start|>user\n{user_msg}<|im_end|>\n<|im_start|>assistant\n"
+        )
         ids = mx.array(tokenizer.encode(full_prompt))
 
         cached_kv, remaining, matched = prefix_cache.get(ids)
@@ -127,7 +139,10 @@ def main():
         ttft = 0.0
         tok_count = 0
         for token, _logits in generate_step(
-            ids_to_prefill, model, max_tokens=args.max_tokens, sampler=sampler,
+            ids_to_prefill,
+            model,
+            max_tokens=args.max_tokens,
+            sampler=sampler,
             prompt_cache=cache,
         ):
             if first:
@@ -145,24 +160,28 @@ def main():
         full_prompt += response + "<|im_end|>\n"
 
         cached_tokens = matched if cached_kv is not None else 0
-        results["cached"].append({
-            "turn": i + 1,
-            "prompt_tokens": len(ids),
-            "cached_tokens": cached_tokens,
-            "remaining_tokens": remaining if cached_kv is not None else len(ids),
-            "ttft_ms": round(ttft * 1000, 1),
-            "tok_count": tok_count,
-            "cache_hit": cached_kv is not None,
-        })
+        results["cached"].append(
+            {
+                "turn": i + 1,
+                "prompt_tokens": len(ids),
+                "cached_tokens": cached_tokens,
+                "remaining_tokens": remaining if cached_kv is not None else len(ids),
+                "ttft_ms": round(ttft * 1000, 1),
+                "tok_count": tok_count,
+                "cache_hit": cached_kv is not None,
+            }
+        )
         print(
-            f"  Turn {i+1}: {len(ids)} prompt tokens, "
+            f"  Turn {i + 1}: {len(ids)} prompt tokens, "
             f"cached={cached_tokens}/{len(ids)}, "
-            f"TTFT={ttft*1000:.1f}ms, {tok_count} tokens"
+            f"TTFT={ttft * 1000:.1f}ms, {tok_count} tokens"
         )
 
     # ── Summary ──
     print("\n=== Summary ===")
-    print(f"{'Turn':<6} {'Cold TTFT':<12} {'Cached TTFT':<12} {'Speedup':<10} {'Cached Tokens':<15}")
+    print(
+        f"{'Turn':<6} {'Cold TTFT':<12} {'Cached TTFT':<12} {'Speedup':<10} {'Cached Tokens':<15}"
+    )
     print("-" * 55)
 
     for i in range(len(turns)):
@@ -174,7 +193,7 @@ def main():
 
         results["speedup"].append(speedup)
         print(
-            f"{i+1:<6} {cold_ttft:<12.1f} {cached_ttft:<12.1f} "
+            f"{i + 1:<6} {cold_ttft:<12.1f} {cached_ttft:<12.1f} "
             f"{speedup:<10.2f}x {cached_tokens}/{prompt_tokens}"
         )
 
@@ -182,10 +201,14 @@ def main():
     avg_cached = sum(r["ttft_ms"] for r in results["cached"]) / len(results["cached"])
     avg_speedup = avg_cold / avg_cached if avg_cached > 0 else float("inf")
 
-    print(f"\nAverage TTFT: cold={avg_cold:.1f}ms, cached={avg_cached:.1f}ms, speedup={avg_speedup:.2f}x")
+    print(
+        f"\nAverage TTFT: cold={avg_cold:.1f}ms, cached={avg_cached:.1f}ms, speedup={avg_speedup:.2f}x"
+    )
 
     stats = prefix_cache.get_stats()
-    print(f"Cache stats: {stats['entries']} entries, {stats['total_cached_tokens']} total tokens")
+    print(
+        f"Cache stats: {stats['entries']} entries, {stats['total_cached_tokens']} total tokens"
+    )
 
     # Save results
     output = {

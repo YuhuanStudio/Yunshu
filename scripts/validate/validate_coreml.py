@@ -18,6 +18,7 @@ Usage:
     PYTHONPATH=. uv run python scripts/validate_coreml.py --verbose
     PYTHONPATH=. uv run python scripts/validate_coreml.py --output /tmp/coreml_validation.json
 """
+
 from __future__ import annotations
 
 import json
@@ -194,12 +195,14 @@ def main() -> None:
         description="CoreML Model Compilation Validation for Phase 0",
     )
     parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         help="Print detailed information",
     )
     parser.add_argument(
-        "--output", "-o",
+        "--output",
+        "-o",
         type=Path,
         default=None,
         help="Save validation report as JSON",

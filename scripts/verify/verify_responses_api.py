@@ -18,6 +18,7 @@ Anthropic. Through an in-process ASGI round-trip with a real engine, asserts:
 
 Run: PYTHONPATH=. uv run python scripts/verify_responses_api.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -60,7 +61,9 @@ async def main() -> int:
     detail: list[str] = []
     try:
         transport = httpx.ASGITransport(app=create_app())
-        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=120) as client:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test", timeout=120
+        ) as client:
             body = {
                 "model": MODEL,
                 "instructions": "You are concise. Answer in one short sentence.",
@@ -77,17 +80,26 @@ async def main() -> int:
                 d = r.json()
                 txt = _find_output_text(d.get("output"))
                 usage = d.get("usage") or {}
-                checks["resp: object==response, status valid"] = (
-                    d.get("object") == "response" and d.get("status") in ("completed", "incomplete"))
-                checks["resp: output has assistant output_text"] = bool(txt and txt.strip())
+                checks["resp: object==response, status valid"] = d.get(
+                    "object"
+                ) == "response" and d.get("status") in ("completed", "incomplete")
+                checks["resp: output has assistant output_text"] = bool(
+                    txt and txt.strip()
+                )
                 checks["resp: usage input/output tokens > 0"] = (
-                    usage.get("input_tokens", 0) > 0 and usage.get("output_tokens", 0) > 0)
-                detail.append(f"status={d.get('status')} usage={usage} text={(txt or '')[:50]!r}")
+                    usage.get("input_tokens", 0) > 0
+                    and usage.get("output_tokens", 0) > 0
+                )
+                detail.append(
+                    f"status={d.get('status')} usage={usage} text={(txt or '')[:50]!r}"
+                )
 
             # ── streaming lifecycle ──────────────────────────────────────────
             events: list[str] = []
             stream_text = ""
-            async with client.stream("POST", "/v1/responses", json=dict(body, stream=True)) as resp:
+            async with client.stream(
+                "POST", "/v1/responses", json=dict(body, stream=True)
+            ) as resp:
                 async for line in resp.aiter_lines():
                     if line.startswith("event: "):
                         events.append(line[7:].strip())
@@ -100,11 +112,15 @@ async def main() -> int:
                             stream_text += obj.get("delta", "")
             terminal = {"response.completed", "response.incomplete"} & set(events)
             checks["stream: response.created"] = "response.created" in events
-            checks["stream: response.output_text.delta"] = "response.output_text.delta" in events
+            checks["stream: response.output_text.delta"] = (
+                "response.output_text.delta" in events
+            )
             checks["stream: terminal event (completed|incomplete)"] = bool(terminal)
             checks["stream: output_text delta non-empty"] = bool(stream_text.strip())
-            detail.append(f"events={events[:6]}{'…' if len(events) > 6 else ''} terminal={sorted(terminal)} "
-                          f"stream_text={stream_text[:40]!r}")
+            detail.append(
+                f"events={events[:6]}{'…' if len(events) > 6 else ''} terminal={sorted(terminal)} "
+                f"stream_text={stream_text[:40]!r}"
+            )
     finally:
         set_engine(None)
         await eng.stop()

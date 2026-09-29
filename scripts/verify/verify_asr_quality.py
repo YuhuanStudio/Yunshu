@@ -7,6 +7,7 @@ crashing. Reference says: "你好，这是一段用于测试语音辨识系统�
 
 Run: PYTHONPATH=. uv run python scripts/verify_asr_quality.py
 """
+
 from __future__ import annotations
 
 import os
@@ -24,6 +25,7 @@ def main() -> int:
         print(f"SKIP: model or audio not available ({MODEL}, {AUDIO})")
         return 0
     from mlx_audio.stt import load
+
     model = load(MODEL)
     r = model.generate(AUDIO)
     text = (r.text if hasattr(r, "text") else str(r)).strip()

@@ -14,6 +14,7 @@ Usage:
     .venv/bin/python3 scripts/bench_n_confirmed.py --model Qwen3.5-9B-MLX-4bit
     .venv/bin/python3 scripts/bench_n_confirmed.py --max-tokens 128
 """
+
 from __future__ import annotations
 
 import argparse
@@ -34,7 +35,7 @@ def _greedy(logits: mx.array) -> int:
 
 def _get_eos_ids(tokenizer) -> set:
     eos_ids = set()
-    if hasattr(tokenizer, 'eos_token_id'):
+    if hasattr(tokenizer, "eos_token_id"):
         eid = tokenizer.eos_token_id
         if isinstance(eid, (list, tuple)):
             eos_ids.update(eid)
@@ -119,7 +120,7 @@ def main():
         "The capital of France is",
         "In machine learning, gradient descent works by",
         "The key difference between TCP and UDP is that",
-    ][:args.num_prompts]
+    ][: args.num_prompts]
 
     results = {}
     for prompt in prompts:
@@ -133,20 +134,28 @@ def main():
         r_base = bench_baseline(model, tokenizer, prompt, args.max_tokens)
         print(f"  Baseline:       {r_base['tok_s']:>6.1f} tok/s ({r_base['n']} tok)")
 
-        r_old = bench_mtp(model, tokenizer, prompt, args.max_tokens, use_n_confirmed=False)
-        su_old = r_old['tok_s'] / r_base['tok_s'] if r_base['tok_s'] else 0
-        print(f"  MTP (old):      {r_old['tok_s']:>6.1f} tok/s ({su_old:.2f}x, "
-              f"accept={r_old['acceptance']:.1%}, "
-              f"{r_old['accepts']}/{r_old['rejects']} a/r)")
+        r_old = bench_mtp(
+            model, tokenizer, prompt, args.max_tokens, use_n_confirmed=False
+        )
+        su_old = r_old["tok_s"] / r_base["tok_s"] if r_base["tok_s"] else 0
+        print(
+            f"  MTP (old):      {r_old['tok_s']:>6.1f} tok/s ({su_old:.2f}x, "
+            f"accept={r_old['acceptance']:.1%}, "
+            f"{r_old['accepts']}/{r_old['rejects']} a/r)"
+        )
 
-        r_new = bench_mtp(model, tokenizer, prompt, args.max_tokens, use_n_confirmed=True)
-        su_new = r_new['tok_s'] / r_base['tok_s'] if r_base['tok_s'] else 0
-        print(f"  MTP (n_conf):   {r_new['tok_s']:>6.1f} tok/s ({su_new:.2f}x, "
-              f"accept={r_new['acceptance']:.1%}, "
-              f"{r_new['accepts']}/{r_new['rejects']} a/r)")
+        r_new = bench_mtp(
+            model, tokenizer, prompt, args.max_tokens, use_n_confirmed=True
+        )
+        su_new = r_new["tok_s"] / r_base["tok_s"] if r_base["tok_s"] else 0
+        print(
+            f"  MTP (n_conf):   {r_new['tok_s']:>6.1f} tok/s ({su_new:.2f}x, "
+            f"accept={r_new['acceptance']:.1%}, "
+            f"{r_new['accepts']}/{r_new['rejects']} a/r)"
+        )
 
         # Token consistency check (greedy should produce same tokens)
-        if r_old['n'] != r_new['n']:
+        if r_old["n"] != r_new["n"]:
             print(f"  ⚠ Token count mismatch: old={r_old['n']} new={r_new['n']}")
 
         results[label] = {
@@ -175,15 +184,21 @@ def main():
     print(f"{'Method':<24} {'tok/s':>8} {'Speedup':>8} {'Accept':>8}")
     print("-" * 52)
     print(f"{'Baseline':<24} {ab:>8.1f} {'1.00x':>8} {'N/A':>8}")
-    print(f"{'MTP (restore+refeed)':<24} {a_old:>8.1f} {a_old/ab:>7.2f}x {ar_old:>7.1%}")
-    print(f"{'MTP (n_confirmed=1)':<24} {a_new:>8.1f} {a_new/ab:>7.2f}x {ar_new:>7.1%}")
+    print(
+        f"{'MTP (restore+refeed)':<24} {a_old:>8.1f} {a_old / ab:>7.2f}x {ar_old:>7.1%}"
+    )
+    print(
+        f"{'MTP (n_confirmed=1)':<24} {a_new:>8.1f} {a_new / ab:>7.2f}x {ar_new:>7.1%}"
+    )
 
     # Theoretical prediction
     if ab > 0:
         print(f"\nTheoretical (p={ar_new:.1%}):")
-        print(f"  Old: (1+{ar_new:.2f}) / (1.15 + (1-{ar_new:.2f})*1.0) = "
-              f"{(1+ar_new) / (1.15 + (1-ar_new)*1.0):.2f}x")
-        print(f"  New: (1+{ar_new:.2f}) / 1.15 = {(1+ar_new) / 1.15:.2f}x")
+        print(
+            f"  Old: (1+{ar_new:.2f}) / (1.15 + (1-{ar_new:.2f})*1.0) = "
+            f"{(1 + ar_new) / (1.15 + (1 - ar_new) * 1.0):.2f}x"
+        )
+        print(f"  New: (1+{ar_new:.2f}) / 1.15 = {(1 + ar_new) / 1.15:.2f}x")
 
     out = {
         "model": args.model,

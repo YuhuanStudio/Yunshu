@@ -1,13 +1,13 @@
 """Dispatch / sync overhead of the MLX Metal backend.
 
-  * mx.eval round trip on a trivial op (host -> GPU -> host)
-  * async_eval submit cost vs completion
-  * per-kernel cost of a long dependent chain of tiny kernels in ONE eval
-    (encode + GPU launch gap), under different MLX_MAX_OPS_PER_BUFFER values
-  * how much mx.compile fuses an elementwise chain (kernel count via graph size + time)
+* mx.eval round trip on a trivial op (host -> GPU -> host)
+* async_eval submit cost vs completion
+* per-kernel cost of a long dependent chain of tiny kernels in ONE eval
+  (encode + GPU launch gap), under different MLX_MAX_OPS_PER_BUFFER values
+* how much mx.compile fuses an elementwise chain (kernel count via graph size + time)
 
-    PYTHONPATH=scripts/research/hw python scripts/research/hw/launch_overhead.py --tag default
-    MLX_MAX_OPS_PER_BUFFER=8 ... --tag ops8
+  PYTHONPATH=scripts/research/hw python scripts/research/hw/launch_overhead.py --tag default
+  MLX_MAX_OPS_PER_BUFFER=8 ... --tag ops8
 """
 
 import argparse
@@ -38,7 +38,12 @@ def main():
     x = mx.ones((64,))
     mx.eval(x)
     t, tmin = timeit(lambda: mx.eval(x + 1), 300, 20)
-    out(kind="eval_roundtrip_tiny", us_median=round(t * 1e6, 1), us_min=round(tmin * 1e6, 1), **env)
+    out(
+        kind="eval_roundtrip_tiny",
+        us_median=round(t * 1e6, 1),
+        us_min=round(tmin * 1e6, 1),
+        **env,
+    )
 
     # async_eval: time to return vs time until ready
     subs, waits = [], []
@@ -53,8 +58,12 @@ def main():
         waits.append(t2 - t1)
     subs.sort()
     waits.sort()
-    out(kind="async_eval_tiny", submit_us=round(subs[100] * 1e6, 1),
-        wait_us=round(waits[100] * 1e6, 1), **env)
+    out(
+        kind="async_eval_tiny",
+        submit_us=round(subs[100] * 1e6, 1),
+        wait_us=round(waits[100] * 1e6, 1),
+        **env,
+    )
 
     # dependent chain of N tiny kernels in one eval
     for n in (10, 100, 500, 2000):
@@ -72,8 +81,15 @@ def main():
             y = build()
             tb = time.perf_counter() - tb0
             t, _ = timeit(lambda: mx.eval(build()), 10, 2)
-            out(kind="chain_add", n=n, elems=size, total_ms=round(t * 1e3, 3),
-                per_kernel_us=round(t / n * 1e6, 2), graph_build_ms=round(tb * 1e3, 3), **env)
+            out(
+                kind="chain_add",
+                n=n,
+                elems=size,
+                total_ms=round(t * 1e3, 3),
+                per_kernel_us=round(t / n * 1e6, 2),
+                graph_build_ms=round(tb * 1e3, 3),
+                **env,
+            )
 
     # mx.compile fusion on an elementwise chain
     def f(x, y):
@@ -91,10 +107,15 @@ def main():
     reps = 64
     t0b, _ = timeit(lambda: mx.eval([f(xx, yy) for _ in range(reps)]), 10)
     t1b, _ = timeit(lambda: mx.eval([fc(xx, yy) for _ in range(reps)]), 10)
-    out(kind="compile_elementwise", nodes_uncompiled=graph_nodes(f(xx, yy)),
-        us_eager=round(t0 * 1e6, 1), us_compiled=round(t1 * 1e6, 1),
+    out(
+        kind="compile_elementwise",
+        nodes_uncompiled=graph_nodes(f(xx, yy)),
+        us_eager=round(t0 * 1e6, 1),
+        us_compiled=round(t1 * 1e6, 1),
         us_eager_batched=round(t0b / reps * 1e6, 1),
-        us_compiled_batched=round(t1b / reps * 1e6, 1), **env)
+        us_compiled_batched=round(t1b / reps * 1e6, 1),
+        **env,
+    )
 
 
 if __name__ == "__main__":

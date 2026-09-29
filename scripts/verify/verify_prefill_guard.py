@@ -16,6 +16,7 @@ exceeds it — the cap rejects (413) before any prefill, so the test is fast.
 
 Run: PYTHONPATH=. uv run python scripts/verify_prefill_guard.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -32,7 +33,9 @@ async def main() -> int:
 
     os.environ["YUNSHU_AUTH_DISABLED"] = "true"
     os.environ["YUNSHU_DRAIN_TIMEOUT"] = "0"
-    os.environ["YUNSHU_MAX_PREFILL_TOKENS"] = "12"  # tiny cap → small prompt trips it, no OOM
+    os.environ["YUNSHU_MAX_PREFILL_TOKENS"] = (
+        "12"  # tiny cap → small prompt trips it, no OOM
+    )
 
     import httpx
 
@@ -51,25 +54,50 @@ async def main() -> int:
     detail: list[str] = []
     try:
         transport = httpx.ASGITransport(app=create_app())
-        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=60) as client:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test", timeout=60
+        ) as client:
+
             async def chat(text):
-                return await client.post("/v1/chat/completions", json={
-                    "model": MODEL, "messages": [{"role": "user", "content": text}], "max_tokens": 8})
+                return await client.post(
+                    "/v1/chat/completions",
+                    json={
+                        "model": MODEL,
+                        "messages": [{"role": "user", "content": text}],
+                        "max_tokens": 8,
+                    },
+                )
 
             async def anthropic(text):
-                return await client.post("/v1/messages", json={
-                    "model": MODEL, "max_tokens": 8, "messages": [{"role": "user", "content": text}]})
+                return await client.post(
+                    "/v1/messages",
+                    json={
+                        "model": MODEL,
+                        "max_tokens": 8,
+                        "messages": [{"role": "user", "content": text}],
+                    },
+                )
 
             async def responses(text):
-                return await client.post("/v1/responses", json={
-                    "model": MODEL, "input": text, "max_output_tokens": 8})
+                return await client.post(
+                    "/v1/responses",
+                    json={"model": MODEL, "input": text, "max_output_tokens": 8},
+                )
 
-            for name, fn in (("chat", chat), ("Anthropic", anthropic), ("Responses", responses)):
+            for name, fn in (
+                ("chat", chat),
+                ("Anthropic", anthropic),
+                ("Responses", responses),
+            ):
                 over = await fn(BIG)
                 under = await fn(SMALL)
                 checks[f"{name}: over-cap → 413"] = over.status_code == 413
-                checks[f"{name}: under-cap → 200 (not over-eager)"] = under.status_code == 200
-                detail.append(f"{name}: over={over.status_code} under={under.status_code}")
+                checks[f"{name}: under-cap → 200 (not over-eager)"] = (
+                    under.status_code == 200
+                )
+                detail.append(
+                    f"{name}: over={over.status_code} under={under.status_code}"
+                )
     finally:
         set_engine(None)
         await eng.stop()

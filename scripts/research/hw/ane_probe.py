@@ -43,8 +43,10 @@ def w(rng, *shape, scale=0.02):
 
 
 def build_linear(M, K, N, rng):
-    @mb.program(input_specs=[mb.TensorSpec(shape=(1, M, K), dtype=types.fp16)],
-              opset_version=ct.target.iOS18)
+    @mb.program(
+        input_specs=[mb.TensorSpec(shape=(1, M, K), dtype=types.fp16)],
+        opset_version=ct.target.iOS18,
+    )
     def prog(x):
         return mb.linear(x=x, weight=w(rng, N, K), name="y")
 
@@ -77,10 +79,14 @@ def attention(x, rng, i, M, L):
     k = mb.transpose(x=mb.reshape(x=k, shape=[1, M, NKV, HD]), perm=[0, 2, 1, 3])
     v = mb.transpose(x=mb.reshape(x=v, shape=[1, M, NKV, HD]), perm=[0, 2, 1, 3])
     rep = NH // NKV
-    k = mb.reshape(x=mb.tile(x=mb.expand_dims(x=k, axes=[2]), reps=[1, 1, rep, 1, 1]),
-                   shape=[1, NH, M, HD])
-    v = mb.reshape(x=mb.tile(x=mb.expand_dims(x=v, axes=[2]), reps=[1, 1, rep, 1, 1]),
-                   shape=[1, NH, M, HD])
+    k = mb.reshape(
+        x=mb.tile(x=mb.expand_dims(x=k, axes=[2]), reps=[1, 1, rep, 1, 1]),
+        shape=[1, NH, M, HD],
+    )
+    v = mb.reshape(
+        x=mb.tile(x=mb.expand_dims(x=v, axes=[2]), reps=[1, 1, rep, 1, 1]),
+        shape=[1, NH, M, HD],
+    )
     o = mb.scaled_dot_product_attention(query=q, key=k, value=v)
     o = mb.reshape(x=mb.transpose(x=o, perm=[0, 2, 1, 3]), shape=[1, M, NH * HD])
     if gate is not None:
@@ -89,8 +95,10 @@ def attention(x, rng, i, M, L):
 
 
 def build_layers(M, n_layers, rng):
-    @mb.program(input_specs=[mb.TensorSpec(shape=(1, M, H), dtype=types.fp16)],
-              opset_version=ct.target.iOS18)
+    @mb.program(
+        input_specs=[mb.TensorSpec(shape=(1, M, H), dtype=types.fp16)],
+        opset_version=ct.target.iOS18,
+    )
     def prog(x):
         for i in range(n_layers):
             g1 = np.ones(H, dtype=np.float16)
@@ -102,23 +110,36 @@ def build_layers(M, n_layers, rng):
 
 
 def convert(prog):
-    return ct.convert(prog, convert_to="mlprogram", compute_precision=ct.precision.FLOAT16,
-                      minimum_deployment_target=ct.target.iOS18)
+    return ct.convert(
+        prog,
+        convert_to="mlprogram",
+        compute_precision=ct.precision.FLOAT16,
+        minimum_deployment_target=ct.target.iOS18,
+    )
 
 
 def quantize(ml, bits, block=0):
     import coremltools.optimize.coreml as cto
 
     if bits == "pal4":
-        return cto.palettize_weights(ml, cto.OptimizationConfig(
-            global_config=cto.OpPalettizerConfig(nbits=4, mode="uniform")))
+        return cto.palettize_weights(
+            ml,
+            cto.OptimizationConfig(
+                global_config=cto.OpPalettizerConfig(nbits=4, mode="uniform")
+            ),
+        )
 
     if bits == 8:
-        cfg = cto.OpLinearQuantizerConfig(mode="linear_symmetric", dtype="int8",
-                                          granularity="per_channel")
+        cfg = cto.OpLinearQuantizerConfig(
+            mode="linear_symmetric", dtype="int8", granularity="per_channel"
+        )
     else:
-        cfg = cto.OpLinearQuantizerConfig(mode="linear_symmetric", dtype="int4",
-                                          granularity="per_block", block_size=block or 32)
+        cfg = cto.OpLinearQuantizerConfig(
+            mode="linear_symmetric",
+            dtype="int4",
+            granularity="per_block",
+            block_size=block or 32,
+        )
     return cto.linear_quantize_weights(ml, cto.OptimizationConfig(global_config=cfg))
 
 
@@ -128,7 +149,9 @@ def ane_placement(path):
         from coremltools.models.compute_plan import MLComputePlan
 
         compiled = ct.utils.compile_model(str(path))
-        plan = MLComputePlan.load_from_path(path=compiled, compute_units=ct.ComputeUnit.CPU_AND_NE)
+        plan = MLComputePlan.load_from_path(
+            path=compiled, compute_units=ct.ComputeUnit.CPU_AND_NE
+        )
         prog = plan.model_structure.program
         counts = {"ane": 0, "gpu": 0, "cpu": 0}
         for fn in prog.functions.values():
@@ -139,7 +162,9 @@ def ane_placement(path):
                 if usage is None:
                     continue
                 name = type(usage.preferred_compute_device).__name__.lower()
-                counts["ane" if "neural" in name else "gpu" if "gpu" in name else "cpu"] += 1
+                counts[
+                    "ane" if "neural" in name else "gpu" if "gpu" in name else "cpu"
+                ] += 1
         return counts
     except Exception as e:  # noqa: BLE001
         return {"err": str(e)[:120]}
@@ -177,14 +202,24 @@ def main():
     set_arch(a.arch)
     work = Path(a.work)
     work.mkdir(parents=True, exist_ok=True)
-    U = {"ne": ct.ComputeUnit.CPU_AND_NE, "gpu": ct.ComputeUnit.CPU_AND_GPU,
-         "cpu": ct.ComputeUnit.CPU_ONLY}
+    U = {
+        "ne": ct.ComputeUnit.CPU_AND_NE,
+        "gpu": ct.ComputeUnit.CPU_AND_GPU,
+        "cpu": ct.ComputeUnit.CPU_ONLY,
+    }
     rng = np.random.default_rng(0)
     cases = a.cases.split(",")
     for M in [int(v) for v in a.ms.split(",")]:
         specs = []
         if "linear" in cases:
-            specs.append(("linear_5120x17408", lambda M=M: build_linear(M, H, INTER, rng), 2 * M * H * INTER, H * INTER))
+            specs.append(
+                (
+                    "linear_5120x17408",
+                    lambda M=M: build_linear(M, H, INTER, rng),
+                    2 * M * H * INTER,
+                    H * INTER,
+                )
+            )
         if "layer" in cases:
             tag = "layer_x1" if a.arch == "dflash" else "layer27_x1"
             specs.append((tag, lambda M=M: build_layers(M, 1, rng), None, None))
@@ -208,11 +243,24 @@ def main():
                     row = {}
                     for u in a.units.split(","):
                         ld, med, mn = bench(pth, M, U[u], a.iters)
-                        row[u] = {"load_s": round(ld, 1), "ms_median": round(med * 1e3, 3),
-                                  "ms_min": round(mn * 1e3, 3)}
-                    size_mb = sum(f.stat().st_size for f in pth.rglob("*") if f.is_file()) / 2**20
-                    out(kind="ane", case=name, M=M, weights=prec, pkg_MB=round(size_mb, 1),
-                        placement=placement, **row)
+                        row[u] = {
+                            "load_s": round(ld, 1),
+                            "ms_median": round(med * 1e3, 3),
+                            "ms_min": round(mn * 1e3, 3),
+                        }
+                    size_mb = (
+                        sum(f.stat().st_size for f in pth.rglob("*") if f.is_file())
+                        / 2**20
+                    )
+                    out(
+                        kind="ane",
+                        case=name,
+                        M=M,
+                        weights=prec,
+                        pkg_MB=round(size_mb, 1),
+                        placement=placement,
+                        **row,
+                    )
                 except Exception as e:  # noqa: BLE001
                     out(kind="ane", case=name, M=M, weights=prec, err=str(e)[:300])
 

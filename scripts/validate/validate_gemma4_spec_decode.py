@@ -81,7 +81,12 @@ def main() -> int:
     )
 
     prompt = tok.apply_chat_template(
-        [{"role": "user", "content": "Explain how photosynthesis works, step by step."}],
+        [
+            {
+                "role": "user",
+                "content": "Explain how photosynthesis works, step by step.",
+            }
+        ],
         add_generation_prompt=True,
         tokenize=True,
     )
@@ -105,7 +110,9 @@ def main() -> int:
             break
     speedup = t_greedy / t_spec
     print(f"greedy:  {n} tok in {t_greedy:.2f}s  ({n / t_greedy:.1f} tok/s)")
-    print(f"spec(k={k}): {len(spec_out)} tok in {t_spec:.2f}s  ({len(spec_out) / t_spec:.1f} tok/s)")
+    print(
+        f"spec(k={k}): {len(spec_out)} tok in {t_spec:.2f}s  ({len(spec_out) / t_spec:.1f} tok/s)"
+    )
     print(f"speedup: {speedup:.2f}x")
     print(f"greedy-prefix match: {prefix}/{n} tokens exact before first divergence")
     # Correctness invariant — MACHINE-CHECKED, not asserted as "noise":
@@ -116,22 +123,31 @@ def main() -> int:
     # token; that would be a real acceptance/bookkeeping bug. So we require: if spec
     # diverges within n, greedy's top-2 gap at that position is a near-tie.
     TIE_GAP = 0.3
-    div_gap = greedy_margins[prefix] if prefix < n and prefix < len(greedy_margins) else None
+    div_gap = (
+        greedy_margins[prefix] if prefix < n and prefix < len(greedy_margins) else None
+    )
     div_ok = (div_gap is None) or (div_gap < TIE_GAP)
     ok = speedup > 1.0 and prefix >= 16 and div_ok
     print(f"peak mem GB: {mx.get_peak_memory() / 1e9:.1f}")
     if div_gap is not None:
-        print(f"divergence-is-a-near-tie: gap={div_gap:.4f} logprob "
-              f"({'OK <%.1f' % TIE_GAP if div_ok else 'FAIL — confident flip = acceptance bug'})")
+        print(
+            f"divergence-is-a-near-tie: gap={div_gap:.4f} logprob "
+            f"({'OK <%.1f' % TIE_GAP if div_ok else 'FAIL — confident flip = acceptance bug'})"
+        )
     print(
         f"\nPASS — dual-load spec decode works ({speedup:.2f}x, {prefix}-token exact "
         f"greedy prefix; "
-        + ("byte-exact" if div_gap is None
-           else f"divergence is a near-tie gap={div_gap:.3f}, not a bug") + ")."
-        if ok else
-        f"\nFAIL — spec diverged from greedy at a CONFIDENT token "
+        + (
+            "byte-exact"
+            if div_gap is None
+            else f"divergence is a near-tie gap={div_gap:.3f}, not a bug"
+        )
+        + ")."
+        if ok
+        else f"\nFAIL — spec diverged from greedy at a CONFIDENT token "
         f"(gap={div_gap:.3f} >= {TIE_GAP}) = real acceptance bug"
-        if div_gap is not None and not div_ok else "\nFAIL"
+        if div_gap is not None and not div_ok
+        else "\nFAIL"
     )
     return 0 if ok else 1
 

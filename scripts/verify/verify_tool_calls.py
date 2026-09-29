@@ -7,6 +7,7 @@ in one response. Guards the tool-calling protocol surface.
 
 Run: PYTHONPATH=. uv run python scripts/verify_tool_calls.py
 """
+
 from __future__ import annotations
 
 import json
@@ -17,8 +18,11 @@ from yunshu_engine.tool_format import fallback_formats, parse_tool_output
 
 def _name_args(c):
     name = getattr(c, "name", None) or (c.get("name") if isinstance(c, dict) else None)
-    args = (getattr(c, "arguments", None) or getattr(c, "args", None)
-            or (c.get("arguments") if isinstance(c, dict) else None))
+    args = (
+        getattr(c, "arguments", None)
+        or getattr(c, "args", None)
+        or (c.get("arguments") if isinstance(c, dict) else None)
+    )
     if isinstance(args, str):
         try:
             args = json.loads(args)
@@ -28,20 +32,26 @@ def _name_args(c):
 
 
 CASES = [
-    ("hermes single",
-     '<tool_call>\n{"name": "get_weather", "arguments": {"city": "Paris"}}\n</tool_call>',
-     "Qwen2.5-3B",
-     lambda n, a: n == "get_weather" and a.get("city") == "Paris"),
+    (
+        "hermes single",
+        '<tool_call>\n{"name": "get_weather", "arguments": {"city": "Paris"}}\n</tool_call>',
+        "Qwen2.5-3B",
+        lambda n, a: n == "get_weather" and a.get("city") == "Paris",
+    ),
     # structural }{ AND escaped quotes inside the arg string must survive
-    ("brace-in-string",
-     '<tool_call>{"name": "echo", "arguments": {"text": "use }{ and \\"quotes\\""}}</tool_call>',
-     "Qwen2.5-3B",
-     lambda n, a: n == "echo" and "}{" in a.get("text", "")),
-    ("multiple calls",
-     '<tool_call>{"name":"a","arguments":{}}</tool_call>'
-     '<tool_call>{"name":"b","arguments":{"x":1}}</tool_call>',
-     "Qwen2.5-3B",
-     None),  # checked by count below
+    (
+        "brace-in-string",
+        '<tool_call>{"name": "echo", "arguments": {"text": "use }{ and \\"quotes\\""}}</tool_call>',
+        "Qwen2.5-3B",
+        lambda n, a: n == "echo" and "}{" in a.get("text", ""),
+    ),
+    (
+        "multiple calls",
+        '<tool_call>{"name":"a","arguments":{}}</tool_call>'
+        '<tool_call>{"name":"b","arguments":{"x":1}}</tool_call>',
+        "Qwen2.5-3B",
+        None,
+    ),  # checked by count below
 ]
 
 
@@ -53,8 +63,10 @@ def main() -> int:
             ok = len(calls) == 2 and {_name_args(c)[0] for c in calls} == {"a", "b"}
         else:
             ok = bool(calls) and check(*_name_args(calls[0]))
-        print(f"  {'OK ' if ok else 'BAD'} {label}: {len(calls)} call(s)"
-              + (f" → {_name_args(calls[0])}" if calls else ""))
+        print(
+            f"  {'OK ' if ok else 'BAD'} {label}: {len(calls)} call(s)"
+            + (f" → {_name_args(calls[0])}" if calls else "")
+        )
         if not ok:
             fails += 1
     print(f"RESULT: {len(CASES) - fails} passed, {fails} failed")

@@ -4,6 +4,7 @@ for a long prompt that exceeds the threshold.
 
 Run: PYTHONPATH=. uv run python scripts/bench/bench_kv_quant_longctx.py
 """
+
 import asyncio
 import os
 import time
@@ -18,6 +19,7 @@ async def _run(auto_quant: str) -> dict:
     # "1": 8-bit KV regardless of size (what the auto gate picks at long context); else off.
     os.environ["YUNSHU_KV_QUANT_BITS"] = "8" if auto_quant == "1" else "off"
     from yunshu_engine.batched_engine import BatchedEngine
+
     eng = BatchedEngine(MODEL)
     await eng.start()
     ntok = len(eng._tokenizer.encode(LONG_PROMPT))
@@ -29,8 +31,13 @@ async def _run(auto_quant: str) -> dict:
     dt = time.perf_counter() - t0
     await eng.stop()
     tps = r.completion_tokens / dt if dt > 0 else 0.0
-    return {"prompt_tokens": ntok, "kv_bits": eff, "gen": r.completion_tokens,
-            "secs": round(dt, 2), "tok_s": round(tps, 1)}
+    return {
+        "prompt_tokens": ntok,
+        "kv_bits": eff,
+        "gen": r.completion_tokens,
+        "secs": round(dt, 2),
+        "tok_s": round(tps, 1),
+    }
 
 
 async def main():
@@ -41,8 +48,10 @@ async def main():
     print(f"[auto-quant OFF] {off}")
     if off["tok_s"] > 0:
         ratio = on["tok_s"] / off["tok_s"]
-        print(f"\ndecode speedup (ON/OFF) = {ratio:.2f}x  "
-              f"(ON kv_bits={on['kv_bits']}, OFF kv_bits={off['kv_bits']})")
+        print(
+            f"\ndecode speedup (ON/OFF) = {ratio:.2f}x  "
+            f"(ON kv_bits={on['kv_bits']}, OFF kv_bits={off['kv_bits']})"
+        )
 
 
 if __name__ == "__main__":

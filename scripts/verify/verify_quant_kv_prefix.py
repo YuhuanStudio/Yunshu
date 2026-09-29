@@ -23,6 +23,7 @@ Greedy (temp 0, seed 0). CTX-sharing prompts so the warm run reuses a long prefi
 Usage: PYTHONPATH=python uv run python scripts/verify_quant_kv_prefix.py \
            models/Qwen2.5-3B-Instruct-4bit
 """
+
 import asyncio
 import os
 import sys
@@ -31,7 +32,8 @@ import time
 sys.path.insert(0, os.path.abspath("python"))
 
 CTX = "You are a helpful assistant.\n\n" + "".join(
-    f"Fact {i}: city-{i:03d} has population {i * 1234 % 99999}.\n" for i in range(40))
+    f"Fact {i}: city-{i:03d} has population {i * 1234 % 99999}.\n" for i in range(40)
+)
 P1 = CTX + "\n\nWrite a detailed multi-paragraph summary of the facts above."
 P2 = CTX + "\n\nList the three largest cities by population, in detail."
 
@@ -40,8 +42,14 @@ TIE_GAP = 0.3  # cold top-2 logprob gap below this = a genuine near-tie (benign 
 
 
 async def run(eng, prompt, mt=120):
-    out = await eng.generate(prompt=prompt, max_tokens=mt, temperature=0.0, seed=0,
-                             logprobs=True, top_logprobs=3)
+    out = await eng.generate(
+        prompt=prompt,
+        max_tokens=mt,
+        temperature=0.0,
+        seed=0,
+        logprobs=True,
+        top_logprobs=3,
+    )
     return out
 
 
@@ -55,8 +63,14 @@ def _faithful(cold, warm):
             top = cl[i].get("top_logprobs") or []
             gap = (top[0]["logprob"] - top[1]["logprob"]) if len(top) >= 2 else 99.0
             if gap < TIE_GAP:
-                return True, f"faithful: 1st flip at pos {i} is a near-tie (cold gap {gap:.3f})"
-            return False, f"CORRUPT: 1st flip at pos {i} cold gap {gap:.3f} >= {TIE_GAP} (not a tie)"
+                return (
+                    True,
+                    f"faithful: 1st flip at pos {i} is a near-tie (cold gap {gap:.3f})",
+                )
+            return (
+                False,
+                f"CORRUPT: 1st flip at pos {i} cold gap {gap:.3f} >= {TIE_GAP} (not a tie)",
+            )
     return True, "byte-lossless (token-aligned)"
 
 
@@ -67,6 +81,7 @@ async def fresh(model, kv_quant=None):
     else:
         os.environ.pop("YUNSHU_KV_QUANT_BITS", None)
     from yunshu_engine.batched_engine import BatchedEngine
+
     eng = BatchedEngine(model)
     await eng.start()
     return eng
@@ -91,19 +106,23 @@ async def check(model, kv_quant=None):
 
     dec = (w2.completion_tokens) / max(wall - w2.ttft_ms / 1000, 1e-6)
     faithful, why = _faithful(c2, w2)
-    print(f"  [{tag}] faithful={faithful} ({why}) | warm_cached_tokens={w2.cached_tokens} "
-          f"hits={hits} | decode={dec:.1f} tok/s")
+    print(
+        f"  [{tag}] faithful={faithful} ({why}) | warm_cached_tokens={w2.cached_tokens} "
+        f"hits={hits} | decode={dec:.1f} tok/s"
+    )
     return faithful and w2.cached_tokens > 0
 
 
 async def main():
     model = sys.argv[1] if len(sys.argv) > 1 else "models/Qwen2.5-3B-Instruct-4bit"
     print(f"model: {model}")
-    a = await check(model, kv_quant=None)   # A: 4-bit weights, standard KV
-    b = await check(model, kv_quant=8)      # B: 4-bit weights + int8 KV-cache quant
+    a = await check(model, kv_quant=None)  # A: 4-bit weights, standard KV
+    b = await check(model, kv_quant=8)  # B: 4-bit weights + int8 KV-cache quant
     ok = a and b
-    print(f"\n{'PASS' if ok else 'FAIL'}: quantized-model KV prefix cache "
-          f"(weights={'OK' if a else 'FAIL'}, kv-quant={'OK' if b else 'FAIL'})")
+    print(
+        f"\n{'PASS' if ok else 'FAIL'}: quantized-model KV prefix cache "
+        f"(weights={'OK' if a else 'FAIL'}, kv-quant={'OK' if b else 'FAIL'})"
+    )
     sys.exit(0 if ok else 1)
 
 

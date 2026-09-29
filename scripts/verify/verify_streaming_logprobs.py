@@ -11,6 +11,7 @@ checks the streamed logprobs contract.
 
 Run: PYTHONPATH=. uv run python scripts/verify_streaming_logprobs.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -43,13 +44,24 @@ async def main() -> int:
     detail: list[str] = []
     try:
         transport = httpx.ASGITransport(app=create_app())
-        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=120) as client:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test", timeout=120
+        ) as client:
             entries = []
-            async with client.stream("POST", "/v1/chat/completions", json={
-                "model": MODEL, "messages": [{"role": "user", "content": "Name three colors."}],
-                "max_tokens": 16, "temperature": 0.0, "enable_thinking": False,
-                "logprobs": True, "top_logprobs": 3, "stream": True,
-            }) as resp:
+            async with client.stream(
+                "POST",
+                "/v1/chat/completions",
+                json={
+                    "model": MODEL,
+                    "messages": [{"role": "user", "content": "Name three colors."}],
+                    "max_tokens": 16,
+                    "temperature": 0.0,
+                    "enable_thinking": False,
+                    "logprobs": True,
+                    "top_logprobs": 3,
+                    "stream": True,
+                },
+            ) as resp:
                 async for line in resp.aiter_lines():
                     if not line.startswith("data: ") or "[DONE]" in line:
                         continue
@@ -61,14 +73,19 @@ async def main() -> int:
 
             checks["streamed logprobs present"] = len(entries) > 0
             if entries:
-                lp_ok = all(isinstance(e.get("logprob"), (int, float)) and e["logprob"] <= 1e-6 for e in entries)
+                lp_ok = all(
+                    isinstance(e.get("logprob"), (int, float)) and e["logprob"] <= 1e-6
+                    for e in entries
+                )
                 tok_ok = all(e.get("token") is not None for e in entries)
                 top_ok = all(len(e.get("top_logprobs") or []) == 3 for e in entries)
                 checks["every entry: logprob <= 0"] = lp_ok
                 checks["every entry: has token"] = tok_ok
                 checks["every entry: top_logprobs length 3"] = top_ok
-                detail.append(f"n_entries={len(entries)} first_token={entries[0].get('token')!r} "
-                              f"lp={entries[0].get('logprob'):.3f}")
+                detail.append(
+                    f"n_entries={len(entries)} first_token={entries[0].get('token')!r} "
+                    f"lp={entries[0].get('logprob'):.3f}"
+                )
     finally:
         set_engine(None)
         await eng.stop()

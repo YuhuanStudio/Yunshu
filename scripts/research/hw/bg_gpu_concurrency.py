@@ -29,7 +29,9 @@ def spawn(kind, model, procs):
         cmd = [py, str(HERE / "_bg_worker.py"), "--kind", kind]
         if model:
             cmd += ["--model", model]
-        p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        p = subprocess.Popen(
+            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True
+        )
         ps.append(p)
     for p in ps:
         assert p.stdout.readline().strip() == "READY"
@@ -51,8 +53,10 @@ def rate(calls, t0, t1):
     if not inside:
         return {}
     d = sorted(b - a for a, b in inside)
-    return {"calls_per_s": round(len(inside) / (t1 - t0), 1),
-            "ms_median": round(d[len(d) // 2] * 1e3, 3)}
+    return {
+        "calls_per_s": round(len(inside) / (t1 - t0), 1),
+        "ms_median": round(d[len(d) // 2] * 1e3, 3),
+    }
 
 
 def main():
@@ -60,12 +64,20 @@ def main():
     ap.add_argument("--kind", required=True)
     ap.add_argument("--model")
     ap.add_argument("--procs", type=int, default=1)
-    ap.add_argument("--tokens-per-call", type=int, default=0,
-                    help="prompt tokens one ANE call covers (reports background tok/s)")
+    ap.add_argument(
+        "--tokens-per-call",
+        type=int,
+        default=0,
+        help="prompt tokens one ANE call covers (reports background tok/s)",
+    )
     ap.add_argument("--seconds", type=float, default=10)
     a = ap.parse_args()
     out = Out("bg_gpu_concurrency")
-    label = {"bg_kind": a.kind, "procs": a.procs, "model": Path(a.model).name if a.model else None}
+    label = {
+        "bg_kind": a.kind,
+        "procs": a.procs,
+        "model": Path(a.model).name if a.model else None,
+    }
 
     dec = DecodeProxy()
     dec.run(2)  # warm
@@ -88,10 +100,18 @@ def main():
         label["tokens_per_call"] = a.tokens_per_call
         for r in (bg_alone, bg_both):
             r["tok_s"] = round(r.get("calls_per_s", 0) * a.tokens_per_call, 1)
-    out(kind="concurrency", **label, gpu_alone=alone, gpu_with_bg=both, bg_alone=bg_alone,
+    out(
+        kind="concurrency",
+        **label,
+        gpu_alone=alone,
+        gpu_with_bg=both,
+        bg_alone=bg_alone,
         bg_with_gpu=bg_both,
         gpu_tok_s_ratio=round(both["tok_s"] / alone["tok_s"], 3),
-        bg_rate_ratio=round(bg_both.get("calls_per_s", 0) / max(bg_alone.get("calls_per_s", 1), 1e-9), 3))
+        bg_rate_ratio=round(
+            bg_both.get("calls_per_s", 0) / max(bg_alone.get("calls_per_s", 1), 1e-9), 3
+        ),
+    )
 
 
 if __name__ == "__main__":

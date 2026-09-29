@@ -3,6 +3,7 @@
 Tests that invert_state(forward_state) ≈ original_state for both
 scalar and vectorized gating.
 """
+
 import sys
 from pathlib import Path
 
@@ -34,7 +35,11 @@ def test_scalar_g():
     # Invert
     inverter = DeltaNetInverter()
     entry = DeltaNetInversionEntry(
-        gate=g, beta=beta, key=k, value=v, state_after=state_new,
+        gate=g,
+        beta=beta,
+        key=k,
+        value=v,
+        state_after=state_new,
     )
     recovered = inverter.invert_state(entry)
 
@@ -69,7 +74,11 @@ def test_vectorized_g():
     # Invert
     inverter = DeltaNetInverter()
     entry = DeltaNetInversionEntry(
-        gate=g, beta=beta, key=k, value=v, state_after=state_new,
+        gate=g,
+        beta=beta,
+        key=k,
+        value=v,
+        state_after=state_new,
     )
     recovered = inverter.invert_state(entry)
 
@@ -104,7 +113,11 @@ def test_high_beta():
 
     inverter = DeltaNetInverter()
     entry = DeltaNetInversionEntry(
-        gate=g, beta=beta, key=k, value=v, state_after=state_new,
+        gate=g,
+        beta=beta,
+        key=k,
+        value=v,
+        state_after=state_new,
     )
     recovered = inverter.invert_state(entry)
 
@@ -139,7 +152,11 @@ def test_bf16():
     # Invert (upcasts to f32 internally)
     inverter = DeltaNetInverter()
     entry = DeltaNetInversionEntry(
-        gate=g, beta=beta, key=k, value=v, state_after=state_new,
+        gate=g,
+        beta=beta,
+        key=k,
+        value=v,
+        state_after=state_new,
     )
     recovered = inverter.invert_state(entry)
 
@@ -156,7 +173,10 @@ def test_bf16():
 
     roundtrip_err = mx.abs(state_new2 - state_new).max().item()
 
-    print(f"BF16:       direct_err={direct_err:.6e}  roundtrip_err={roundtrip_err:.6e}", end="")
+    print(
+        f"BF16:       direct_err={direct_err:.6e}  roundtrip_err={roundtrip_err:.6e}",
+        end="",
+    )
     # BF16 has 7-bit mantissa. Roundtrip error of ~0.016 (=2^-6) is the
     # BF16 precision floor. This is too high for speculative decoding
     # where exact token reproduction is required. The inversion is

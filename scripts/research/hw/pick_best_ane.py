@@ -1,13 +1,16 @@
 """Print `path tokens` for the fastest ANE layer packages (tokens per second) from ane_probe rows.
 
-    python scripts/research/hw/pick_best_ane.py 2 [layer27_x1]
+python scripts/research/hw/pick_best_ane.py 2 [layer27_x1]
 """
 
 import json
 import sys
 from pathlib import Path
 
-RUNS = Path(__file__).resolve().parents[3] / "docs/research/runs/2026-09-29-m5max-hw/ane_probe.jsonl"
+RUNS = (
+    Path(__file__).resolve().parents[3]
+    / "docs/research/runs/2026-09-29-m5max-hw/ane_probe.jsonl"
+)
 WORK = Path("/Volumes/P5Plus/yunshu-test-cache/ane")
 
 

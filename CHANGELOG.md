@@ -56,8 +56,37 @@ match.
   multi-prompt prefill; being measured.
 - `YUNSHU_LOG_LEVEL`; `scripts/research/` benchmark matrix, realistic soak and MMLU-Pro soak.
 
+- Automatic speculative path: a DFlash2 drafter that matches the served model (Qwen3.8-27B:
+  `incoai/Qwen3.8-27B-DFlash2`, in the models directory or the Hugging Face cache) is used without
+  a flag, with the cost-aware chain depth and 8-bit drafter weights. Qwen3.8-27B server, novel_en
+  1K/8K/32K/131K 57.1 / 48.2 / 46.1 / 32.9 tok/s (MTP 47.5 at 1K), code corpus 82.0 / 89.1 / 70.5 /
+  79.9, 34/34 checks, TTFT about 207 s at 131K; lossless (spec on == off). `YUNSHU_VLM_DRAFT=mtp`
+  forces the MTP head, `=off` disables drafting, a path picks a drafter; `yunshu doctor` prints the
+  path that will be used.
+- `/health/ready` returns a `reason` when the model failed to load.
+- `scripts/dev/robustness.py`: black-box probe (load failure, disconnect during prefill and
+  streaming, limits, mixed concurrent features, 500-request memory, SIGTERM / SIGINT with requests
+  in flight).
+
+### Fixed
+
+- A non-streaming request whose client disconnected kept the GPU busy to the end of its prefill or
+  `max_tokens`: Starlette's `is_disconnected()` never fires behind `BaseHTTPMiddleware`. A
+  pure-ASGI watcher now records the disconnect and the request's row is dropped at the next chunk
+  (prefill of a 60K-token prompt: next request waited 4.0 s before, 0.8 s after, on a 0.8B model).
+- JSON-schema, regex and grammar constraints no longer allow special tokens (`<|im_end|>`) inside
+  a string: a model that chose one ended the response mid-string (Qwen3.5-0.8B stopped at
+  `{"name": "Alice`).
+- Ctrl-C / SIGTERM with streams in flight waited for them forever (a 27B stream takes minutes);
+  connections are now cut after `YUNSHU_DRAIN_TIMEOUT` (default 30 s) and the server exits.
+
 ### Changed
 
+- A model that fails to load (missing path, truncated weights, out of memory) no longer stops
+  `yunshu serve`: the server stays up, `/health/ready` answers 503 with the reason and chat requests
+  get a 503. `yunshu serve` still prints the problem and its fix first.
+- Rate limiting is off by default (`YUNSHU_RATE_LIMIT_RPM=0`; the old 120 per minute rejected a
+  local client's 500 sequential requests with 429). Set it above 0 to enable it.
 - `yunshu serve` binds `127.0.0.1` by default (was `0.0.0.0`) and warns when it serves the network
   without `--auth-token`. It checks the model before loading and stops with a fix when the path
   does not exist, a download is incomplete, or the weights exceed memory.

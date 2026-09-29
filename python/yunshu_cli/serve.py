@@ -293,6 +293,10 @@ def serve(
         reload=reload,
         factory=False,
         timeout_keep_alive=settings.get("YUNSHU_KEEP_ALIVE_TIMEOUT"),
+        # Ctrl-C / SIGTERM: in-flight requests get this long to finish, then
+        # their connections are cancelled (which stops their GPU work) and the
+        # server exits. Without it uvicorn waits for open streams forever.
+        timeout_graceful_shutdown=int(settings.get("YUNSHU_DRAIN_TIMEOUT")) or None,
         # NB: uvicorn.run has no request-size limit kwarg; the limit is enforced
         # by the gateway middleware via YUNSHU_MAX_REQUEST_SIZE (set above).
         server_header="Yunshu" if server_header else None,
@@ -300,8 +304,11 @@ def serve(
 
 
 def _preflight_model(model: str) -> None:
-    """Stop before loading when the model cannot work: a path that does not
-    exist, a half-finished download, weights larger than memory."""
+    """Say so before loading when the model cannot work (a path that does not
+    exist, a half-finished download, weights larger than memory). The server
+    still starts and ``/health/ready`` reports why it is not ready, so a
+    supervisor (launchd, Docker) does not restart-loop and a client gets a
+    503 with the reason."""
     from .doctor import check_model
 
     info: dict = {}
@@ -313,8 +320,10 @@ def _preflight_model(model: str) -> None:
         pass
     for c in check_model(model, info):
         if c.status == "fail":
-            console.print(f"[red]Error:[/] {c.detail}\n  {c.fix}")
-            raise typer.Exit(2)
+            console.print(
+                f"[red]Error:[/] {c.detail}\n  {c.fix}\n"
+                "  The server starts anyway; /health/ready reports it as not ready."
+            )
         if c.status == "warn":
             console.print(f"[yellow]Warning:[/] {c.detail}. {c.fix}")
 

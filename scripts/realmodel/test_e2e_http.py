@@ -27,23 +27,24 @@ BASE_URL = "http://127.0.0.1:8901"
 def _make_wav_silence(duration=1.0, sample_rate=16000) -> bytes:
     """Generate a WAV file with silence for ASR testing."""
     import numpy as np
+
     samples = np.zeros(int(sample_rate * duration), dtype=np.float32)
     buf = io.BytesIO()
     pcm = (samples * 32767).astype(np.int16)
     n = len(pcm)
-    buf.write(b'RIFF')
-    buf.write(struct.pack('<I', 36 + n * 2))
-    buf.write(b'WAVE')
-    buf.write(b'fmt ')
-    buf.write(struct.pack('<I', 16))
-    buf.write(struct.pack('<H', 1))
-    buf.write(struct.pack('<H', 1))
-    buf.write(struct.pack('<I', sample_rate))
-    buf.write(struct.pack('<I', sample_rate * 2))
-    buf.write(struct.pack('<H', 2))
-    buf.write(struct.pack('<H', 16))
-    buf.write(b'data')
-    buf.write(struct.pack('<I', n * 2))
+    buf.write(b"RIFF")
+    buf.write(struct.pack("<I", 36 + n * 2))
+    buf.write(b"WAVE")
+    buf.write(b"fmt ")
+    buf.write(struct.pack("<I", 16))
+    buf.write(struct.pack("<H", 1))
+    buf.write(struct.pack("<H", 1))
+    buf.write(struct.pack("<I", sample_rate))
+    buf.write(struct.pack("<I", sample_rate * 2))
+    buf.write(struct.pack("<H", 2))
+    buf.write(struct.pack("<H", 16))
+    buf.write(b"data")
+    buf.write(struct.pack("<I", n * 2))
     buf.write(pcm.tobytes())
     return buf.getvalue()
 
@@ -99,7 +100,9 @@ async def test_chat_llm(client, model_id):
     text = data["choices"][0]["message"]["content"]
     usage = data.get("usage", {})
     print(f"  Non-stream: {repr(text[:100])}")
-    print(f"  Usage: prompt={usage.get('prompt_tokens')}, completion={usage.get('completion_tokens')}")
+    print(
+        f"  Usage: prompt={usage.get('prompt_tokens')}, completion={usage.get('completion_tokens')}"
+    )
 
     # Streaming
     resp = await client.post(
@@ -148,7 +151,7 @@ async def test_tts(client, model_id):
     )
     assert resp.status_code == 200, f"Status {resp.status_code}: {resp.text}"
     audio = resp.content
-    assert audio[:4] == b'RIFF', f"Not WAV: {audio[:4]}"
+    assert audio[:4] == b"RIFF", f"Not WAV: {audio[:4]}"
     print(f"  Audio: {len(audio)} bytes (WAV)")
     print("  PASS")
 
@@ -191,8 +194,9 @@ async def test_image_gen(client, model_id):
     images = data.get("data", [])
     assert len(images) > 0, "No images returned"
     import base64
+
     img_data = base64.b64decode(images[0]["b64_json"])
-    assert img_data[:4] == b'\x89PNG', "Not PNG"
+    assert img_data[:4] == b"\x89PNG", "Not PNG"
     print(f"  Image: {len(img_data)} bytes (PNG, 256x256)")
     print("  PASS")
 
@@ -200,6 +204,7 @@ async def test_image_gen(client, model_id):
 async def main():
     # Start server as subprocess
     import subprocess
+
     env = os.environ.copy()
     env["YUNSHU_MULTI_MODEL"] = "1"
     env["YUNSHU_MODELS_DIR"] = os.path.abspath("models")
@@ -216,8 +221,18 @@ async def main():
     # PYTHONPATH so the subprocess can find it.
     env.setdefault("PYTHONPATH", os.path.abspath("python"))
     proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "yunshu_gateway.main:app",
-         "--host", "127.0.0.1", "--port", "8901", "--log-level", "warning"],
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "yunshu_gateway.main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8901",
+            "--log-level",
+            "warning",
+        ],
         env=env,
     )
 

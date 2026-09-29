@@ -10,6 +10,7 @@ end-to-end via the gateway.
 
 Run: PYTHONPATH=. uv run python scripts/verify_json_mode.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -42,14 +43,24 @@ async def main() -> int:
     detail: list[str] = []
     try:
         transport = httpx.ASGITransport(app=create_app())
-        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=120) as client:
-            r = await client.post("/v1/chat/completions", json={
-                "model": MODEL,
-                "messages": [{"role": "user", "content":
-                              "Give me a JSON object describing a person with a name and an age."}],
-                "response_format": {"type": "json_object"},
-                "temperature": 0.0, "max_tokens": 80,
-            })
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test", timeout=120
+        ) as client:
+            r = await client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": MODEL,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Give me a JSON object describing a person with a name and an age.",
+                        }
+                    ],
+                    "response_format": {"type": "json_object"},
+                    "temperature": 0.0,
+                    "max_tokens": 80,
+                },
+            )
             checks["json_object: HTTP 200"] = r.status_code == 200
             if r.status_code != 200:
                 detail.append(f"status={r.status_code} body={r.text[:200]}")
@@ -63,15 +74,24 @@ async def main() -> int:
                 checks["json_object: output parses as JSON"] = parsed is not None
                 checks["json_object: result is an object"] = isinstance(parsed, dict)
                 checks["json_object: no prose wrapper (starts { ends })"] = (
-                    content.startswith("{") and content.endswith("}"))
+                    content.startswith("{") and content.endswith("}")
+                )
                 detail.append(f"content={content[:70]!r}")
 
             # control: plain request still works (no response_format)
-            r2 = await client.post("/v1/chat/completions", json={
-                "model": MODEL, "messages": [{"role": "user", "content": "Say hello."}],
-                "temperature": 0.0, "max_tokens": 16})
+            r2 = await client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": MODEL,
+                    "messages": [{"role": "user", "content": "Say hello."}],
+                    "temperature": 0.0,
+                    "max_tokens": 16,
+                },
+            )
             checks["control: plain request unaffected"] = (
-                r2.status_code == 200 and bool((r2.json()["choices"][0]["message"]["content"] or "").strip()))
+                r2.status_code == 200
+                and bool((r2.json()["choices"][0]["message"]["content"] or "").strip())
+            )
     finally:
         set_engine(None)
         await eng.stop()
