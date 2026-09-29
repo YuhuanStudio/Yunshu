@@ -203,3 +203,36 @@ def test_every_step_evaluates_the_caches_it_advanced(tiny, monkeypatch):
             for buf in drv.cache_buffers(row.cache) + drv.cache_buffers(row.mtp_cache):
                 assert id(buf) in seen[-1]
     assert prefill_steps >= 2
+
+
+def test_prefill_chunk_sets_the_span_a_decoding_row_waits_behind(tiny, monkeypatch):
+    """While a row decodes, a prefill step is one span of the configured chunk; a
+    smaller chunk means more, shorter prefill steps (decode steps in between)."""
+    from yunshu_engine.round_driver import driver as drv
+
+    lm, _ = tiny
+    steps: list[list[int]] = []
+    real_forward = drv.forward
+
+    def spy(model, segs):
+        steps.append([s.length for s in segs if not s.decode])
+        return real_forward(model, segs)
+
+    monkeypatch.setattr(drv, "forward", spy)
+
+    def prefill_spans(chunk):
+        d = drv.RoundDriver(lm, stop_tokens=set(), chunk=chunk)
+        d.add(drv.Request([1, 2, 3], 200, handle="decoding"))
+        while d.rows[0].pending is None:
+            d.step()
+        steps.clear()
+        d.add(drv.Request([(7 * i + 1) % 500 for i in range(300)], 1, handle="prompt"))
+        while len(d.rows) > 1 or d.rows[0].req.handle == "prompt":
+            d.step()
+            if d.rows[0].req.handle == "prompt" and d.rows[0].pending is not None:
+                break
+        return [sum(x) for x in steps if x]
+
+    small, large = prefill_spans(32), prefill_spans(128)
+    assert max(small) <= 32 and max(large) <= 128
+    assert len(small) > len(large)
