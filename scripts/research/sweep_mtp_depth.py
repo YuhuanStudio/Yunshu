@@ -224,6 +224,11 @@ tasks = [
         "List ten European capitals with their countries and approximate populations as a markdown table.",
         256,
     ),
+    (
+        "zh",
+        "請詳細說明冰箱的運作原理，包括冷媒循環、壓縮機、冷凝器與蒸發器，並用繁體中文回答。",
+        384,
+    ),
 ]
 
 

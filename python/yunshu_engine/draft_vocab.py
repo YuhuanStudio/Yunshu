@@ -20,6 +20,8 @@ from typing import Any
 import mlx.core as mx
 import mlx.nn as nn
 
+DRAFT_VOCAB = 65536  # ids searched besides the prompt's (27B: 95.5 vs 86.5 tok/s, code)
+
 
 class DraftVocab:
     def __init__(self, head: Any, keep: int):
