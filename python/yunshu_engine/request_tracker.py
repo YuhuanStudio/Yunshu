@@ -20,6 +20,16 @@ logger = logging.getLogger(__name__)
 # cancel guard stays permissive there (admin can always cancel), never a regression.
 current_actor: ContextVar[str | None] = ContextVar("yunshu_current_actor", default=None)
 
+# Set by the gateway's request-id middleware: the client-facing X-Request-Id of the
+# HTTP request being served, and the per-request info box (``RequestInfo``). register()
+# links the generation to both so /v1/requests/{id} and cancel-by-X-Request-Id work.
+current_request_id: ContextVar[str | None] = ContextVar(
+    "yunshu_current_request_id", default=None
+)
+current_request_info: ContextVar[object | None] = ContextVar(
+    "yunshu_current_request_info", default=None
+)
+
 
 @dataclass
 class ActiveGeneration:
@@ -30,6 +40,14 @@ class ActiveGeneration:
     created_at: float
     cancel_event: threading.Event
     owner: str | None = None  # actor/key that started it (for per-request cancel auth)
+    client_request_id: str | None = None  # X-Request-Id of the HTTP request
+    priority: int = 0
+
+    @property
+    def stats(self):
+        """Live engine ``RunStats`` of this generation (None until the engine
+        attaches one; the runner attaches it to the cancel event it is handed)."""
+        return getattr(self.cancel_event, "run_stats", None)
 
     @property
     def elapsed_s(self) -> float:
@@ -41,6 +59,8 @@ class RequestTracker:
 
     def __init__(self):
         self._active: dict[str, ActiveGeneration] = {}
+        # client X-Request-Id -> engine request id (completion id)
+        self._aliases: dict[str, str] = {}
         self._lock = threading.Lock()
 
     def register(
@@ -53,10 +73,41 @@ class RequestTracker:
             created_at=time.monotonic(),
             cancel_event=threading.Event(),
             owner=owner if owner is not None else current_actor.get(),
+            client_request_id=current_request_id.get(),
         )
         with self._lock:
             self._active[request_id] = gen
+            if gen.client_request_id and gen.client_request_id != request_id:
+                self._aliases[gen.client_request_id] = request_id
+        info = current_request_info.get()
+        if info is not None:
+            try:
+                info.gen = gen  # type: ignore[attr-defined]
+                info.engine_request_id = request_id  # type: ignore[attr-defined]
+                if getattr(info, "cancel_requested", False):
+                    gen.cancel_event.set()  # cancelled before it reached the engine
+            except Exception:
+                logger.debug("request info link failed", exc_info=True)
         return gen
+
+    def resolve(self, request_id: str) -> str:
+        """Map a client X-Request-Id to the engine request id (identity when none)."""
+        with self._lock:
+            return self._aliases.get(request_id, request_id)
+
+    def get(self, request_id: str) -> ActiveGeneration | None:
+        """Look a generation up by its engine id or the client's X-Request-Id."""
+        with self._lock:
+            return self._active.get(self._aliases.get(request_id, request_id))
+
+    def all_active(self) -> list[ActiveGeneration]:
+        """Every user-facing in-flight generation (oldest first)."""
+        with self._lock:
+            gens = list(self._active.values())
+        return sorted(
+            (g for g in gens if not g.request_id.startswith("stream-")),
+            key=lambda g: g.created_at,
+        )
 
     def get_owner(self, request_id: str) -> str | None:
         """Return the actor/key that started a request (for per-request cancel auth).
@@ -67,18 +118,21 @@ class RequestTracker:
         makes the guard live.
         """
         with self._lock:
-            gen = self._active.get(request_id)
+            gen = self._active.get(self._aliases.get(request_id, request_id))
         return gen.owner if gen is not None else None
 
     def unregister(self, request_id: str) -> None:
         """Remove a completed generation from the registry."""
         with self._lock:
-            self._active.pop(request_id, None)
+            gen = self._active.pop(request_id, None)
+            if gen is not None and gen.client_request_id:
+                self._aliases.pop(gen.client_request_id, None)
 
     def cancel(self, request_id: str) -> bool:
-        """Signal cancellation for a specific request. Returns True if found."""
+        """Signal cancellation for a request (engine id or client X-Request-Id).
+        Returns True if found."""
         with self._lock:
-            gen = self._active.get(request_id)
+            gen = self._active.get(self._aliases.get(request_id, request_id))
         if gen is None:
             return False
         gen.cancel_event.set()
@@ -118,6 +172,7 @@ class RequestTracker:
         return [
             {
                 "request_id": gen.request_id,
+                "client_request_id": gen.client_request_id,
                 "model": gen.model,
                 "elapsed_s": round(gen.elapsed_s, 2),
             }

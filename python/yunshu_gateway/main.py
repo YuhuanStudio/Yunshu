@@ -23,6 +23,7 @@ from yunshu_engine.paths import models_dir
 from yunshu_engine.version import yunshu_version
 
 from .engine import get_engine, get_model_manager, init_model_manager
+from .error_hints import add_hint
 
 # Default model (YUNSHU_MODEL) or None (requires explicit load via API). A name
 # under the models directory or a repo id already in the Hugging Face cache
@@ -271,6 +272,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.info(
                 "ProcessMemoryEnforcer started (limit=%.1fGB)", max_bytes / 1024**3
             )
+        else:
+            # No memory limit: still honor keep_alive / YUNSHU_MODEL_TTL_SECONDS.
+            manager.ttl_seconds = settings.get("YUNSHU_MODEL_TTL_SECONDS")
+
+            async def _keep_alive_sweep() -> None:
+                while True:
+                    await asyncio.sleep(5.0)
+                    with suppress(Exception):
+                        await manager.check_ttl()
+
+            _background_tasks.append(asyncio.create_task(_keep_alive_sweep()))
 
         logger.info(
             "Startup complete: multi-model mode, %d models registered (%.1fs)",
@@ -477,12 +489,16 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=400,
             content={
-                "error": {
-                    "message": detail,
-                    "type": "invalid_request_error",
-                    "param": param,
-                    "code": "validation_error",
-                }
+                "error": add_hint(
+                    {
+                        "message": detail,
+                        "type": "invalid_request_error",
+                        "param": param,
+                        "code": "validation_error",
+                    },
+                    400,
+                    getattr(request.state, "request_id", None),
+                )
             },
         )
 
@@ -537,13 +553,18 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=exc.status_code,
             content={
-                "error": {
-                    "message": str(exc.detail),
-                    "type": error_type,
-                    "param": None,
-                    "code": error_code,
-                }
+                "error": add_hint(
+                    {
+                        "message": str(exc.detail),
+                        "type": error_type,
+                        "param": None,
+                        "code": error_code,
+                    },
+                    exc.status_code,
+                    getattr(request.state, "request_id", None),
+                )
             },
+            headers=getattr(exc, "headers", None),
         )
 
     @app.exception_handler(Exception)
@@ -578,12 +599,16 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=500,
             content={
-                "error": {
-                    "message": "Internal server error",
-                    "type": "server_error",
-                    "param": None,
-                    "code": "internal_error",
-                }
+                "error": add_hint(
+                    {
+                        "message": "Internal server error",
+                        "type": "server_error",
+                        "param": None,
+                        "code": "internal_error",
+                    },
+                    500,
+                    getattr(request.state, "request_id", None),
+                )
             },
         )
 
@@ -849,6 +874,11 @@ def create_app() -> FastAPI:
     if settings.get("YUNSHU_RATE_LIMIT_RPM") > 0:
         app.add_middleware(RateLimitMiddleware)
     app.add_middleware(AuthMiddleware)
+    # Request ids, queue headers, prefill progress, per-response x_yunshu stats (outside
+    # auth, so even a 401 carries X-Request-Id).
+    from .x_yunshu import YunshuExtensionsMiddleware
+
+    app.add_middleware(YunshuExtensionsMiddleware)
     # OUTERMOST — added last so it wraps auth/rate-limit and records their
     # rejections (401/429/413/503) into the metrics, which it could not see when innermost.
     app.add_middleware(MetricsMiddleware)
@@ -943,6 +973,9 @@ def create_app() -> FastAPI:
     app.include_router(mcp.router, prefix="/v1")
     app.include_router(scoring.router, prefix="/v1")
     app.include_router(cancel_mod.router, prefix="/v1")
+    from .routers import yunshu as yunshu_mod
+
+    app.include_router(yunshu_mod.router, prefix="/v1")  # status, requests, warmup
     app.include_router(ocr_mod.router)
     app.include_router(realtime.router)
     from .routers import ollama as ollama_mod

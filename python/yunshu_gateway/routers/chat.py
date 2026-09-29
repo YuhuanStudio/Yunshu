@@ -43,6 +43,7 @@ from ..streaming import (
     validate_prefill_memory,
     with_sse_keepalive,
 )
+from ..x_yunshu import apply_keep_alive
 from .models import _check_permission
 
 logger = logging.getLogger(__name__)
@@ -358,6 +359,8 @@ class StreamOptions(BaseModel):
 class ChatCompletionRequest(BaseModel):
     model: str
     messages: list[ChatMessage]
+    # Ollama-style: how long the model stays loaded after this request ("5m", 300, -1, 0).
+    keep_alive: str | int | float | None = None
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
     top_k: int = Field(default=0, ge=0)
@@ -1578,6 +1581,7 @@ async def _build_multi_choice(
 @router.post("/chat/completions", response_model=None)
 async def create_chat_completion(req: ChatCompletionRequest, request: Request):
     _check_permission(request, "can_infer")
+    apply_keep_alive(req.model, req.keep_alive)
     _validate_sampling_params(req.temperature, req.effective_max_tokens(), req.top_p)
 
     # Fast path: max_tokens=0 returns prompt_tokens only (OpenAI API behavior).
