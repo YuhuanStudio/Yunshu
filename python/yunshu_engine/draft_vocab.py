@@ -8,9 +8,14 @@ the drafter may search a smaller vocabulary without changing any output: a draft
 outside the searched set is simply a miss the target corrects.
 
 ``DraftVocab`` keeps the rows of the quantized head for the ``keep`` first ids
-(byte-pair ids follow merge order, so the low ids are the frequent tokens) plus the
-token ids each request's prompt contains. The readout is one ``quantized_matmul``
-over that subset and an argmax, mapped back to full-vocabulary ids.
+(byte-pair ids follow merge order, so the low ids are the frequent tokens) plus a
+small per-request extension: the ids the request's prompt contains and every id
+the target has committed so far. The extension is what keeps other scripts fast —
+Chinese and Japanese text lives mostly above id 65536, so a fixed prefix drafted
+it poorly (zh 1K: 38.5 vs 53.6 tok/s on the full vocabulary); once the target has
+committed a few of a script's tokens the drafts find them. The readout is a
+``quantized_matmul`` over the base rows and one over the extension, an argmax of
+each, and the better of the two mapped back to full-vocabulary ids.
 """
 
 from __future__ import annotations
@@ -20,7 +25,9 @@ from typing import Any
 import mlx.core as mx
 import mlx.nn as nn
 
-DRAFT_VOCAB = 65536  # ids searched besides the prompt's (27B: 95.5 vs 86.5 tok/s, code)
+DRAFT_VOCAB = (
+    65536  # ids searched besides the request's own (27B: 95.5 vs 86.5 tok/s, code)
+)
 
 
 class DraftVocab:
@@ -41,6 +48,9 @@ class DraftVocab:
         self._base = self._rows(self._base_ids)
         mx.eval(self._base, self._base_ids)
         self.ids, self.rows = self._base_ids, self._base
+        self.extra_ids: mx.array | None = None
+        self.extra_rows: tuple | None = None
+        self._seen: set[int] = set()
 
     def _rows(self, ids: mx.array) -> tuple:
         if hasattr(self.head, "quantized_rows"):  # packed layouts
@@ -52,29 +62,44 @@ class DraftVocab:
             mx.take(h.biases, ids, axis=0),
         )
 
-    def set_context(self, token_ids: list[int]) -> int:
-        """Add the ids a request's prompt uses that the base set lacks; returns
-        how many. Call before the request's first draft (host thread)."""
-        seen = sorted({int(t) for t in token_ids if self.keep <= int(t) < self.vocab})
-        if not seen:
-            self.ids, self.rows = self._base_ids, self._base
+    def _add(self, wanted: list[int]) -> int:
+        new = sorted(t for t in set(wanted) if self.keep <= t < self.vocab)
+        new = [t for t in new if t not in self._seen]
+        if not new:
             return 0
-        extra_ids = mx.array(seen, dtype=mx.uint32)
-        extra = self._rows(extra_ids)
-        self.ids = mx.concatenate([self._base_ids, extra_ids])
-        self.rows = tuple(
-            mx.concatenate([b, x]) for b, x in zip(self._base, extra, strict=True)
-        )
-        mx.eval(self.ids, *self.rows)
-        return len(seen)
+        ids = mx.array(new, dtype=mx.uint32)
+        rows = self._rows(ids)
+        if self.extra_ids is None:
+            self.extra_ids, self.extra_rows = ids, rows
+        else:
+            self.extra_ids = mx.concatenate([self.extra_ids, ids])
+            self.extra_rows = tuple(
+                mx.concatenate([a, b])
+                for a, b in zip(self.extra_rows, rows, strict=True)
+            )
+        self._seen.update(new)
+        return len(new)
 
-    def argmax(self, hidden: mx.array) -> mx.array:
-        """Greedy token ids for ``hidden`` [..., D], shaped like an argmax over
-        full-vocabulary logits [..., V]."""
-        lead = hidden.shape[:-1]
-        w, s, b = self.rows
-        logits = mx.quantized_matmul(
-            hidden.reshape(-1, hidden.shape[-1]),
+    def set_context(self, token_ids: list[int]) -> int:
+        """Start a request: the extension holds the ids its prompt uses that the
+        base set lacks; returns how many. Call before the request's first draft
+        (host thread)."""
+        self.extra_ids = None
+        self.extra_rows = None
+        self._seen = set()
+        count = self._add([int(t) for t in token_ids])
+        if count:
+            mx.eval(self.extra_ids, *self.extra_rows)
+        return count
+
+    def learn(self, token_ids: list[int]) -> int:
+        """Add ids the target committed (lazy: built with the next draft's graph)."""
+        return self._add([int(t) for t in token_ids])
+
+    def _matmul(self, x: mx.array, rows: tuple) -> mx.array:
+        w, s, b = rows
+        return mx.quantized_matmul(
+            x,
             w,
             s,
             b,
@@ -82,8 +107,24 @@ class DraftVocab:
             group_size=self.group_size,
             bits=self.bits,
         )
+
+    def argmax(self, hidden: mx.array) -> mx.array:
+        """Greedy token ids for ``hidden`` [..., D], shaped like an argmax over
+        full-vocabulary logits [..., V]."""
+        lead = hidden.shape[:-1]
+        x = hidden.reshape(-1, hidden.shape[-1])
+        logits = self._matmul(x, self.rows)
         pick = mx.argmax(logits, axis=-1)
-        return mx.take(self.ids, pick).astype(mx.int32).reshape(lead)
+        best = mx.take(self.ids, pick).astype(mx.int32)
+        if self.extra_ids is not None:
+            top = mx.max(logits, axis=-1)
+            x_logits = self._matmul(x, self.extra_rows)
+            x_top = mx.max(x_logits, axis=-1)
+            x_best = mx.take(self.extra_ids, mx.argmax(x_logits, axis=-1)).astype(
+                mx.int32
+            )
+            best = mx.where(x_top > top, x_best, best)
+        return best.reshape(lead)
 
 
 def install(drafter: Any, target_language_model: Any, keep: int) -> DraftVocab | None:

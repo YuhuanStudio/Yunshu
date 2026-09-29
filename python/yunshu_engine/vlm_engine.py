@@ -1434,20 +1434,24 @@ class VLMEngine:
 
                 kernels["streamed5"] = install_streamed5()
             if draft_kind == "mtp" and invariant:
-                if settings.get_bool("YUNSHU_MTP_LANE"):
-                    from . import mtp_lane
+                # The lane's own MTP rounds (one host read per cycle, the head
+                # run over every verify row inside the verify's graph), fused
+                # residual+norm layers and a reduced draft vocabulary. Same
+                # tokens as upstream's loop; Qwen3.8-27B, single requests, HTTP
+                # decode tok/s 1K/8K/32K/131K: code_python 45.8/68.6/53.4/55.9
+                # -> 55.2/69.5/62.5/59.7, novel_en 48.5/42.2/43.3/32.7 ->
+                # 55.3/49.9/44.5/35.0 (docs/research/runs/2026-09-29-step-efficiency).
+                from . import mtp_lane
+                from .draft_vocab import DRAFT_VOCAB
+                from .draft_vocab import install as install_draft_vocab
+                from .kernels import lane_layers
 
-                    kernels["mtp_lane"] = mtp_lane.install()
-                    from .kernels import lane_layers
-
-                    kernels["lane_layers"] = lane_layers.install()
-                    from .draft_vocab import DRAFT_VOCAB
-                    from .draft_vocab import install as install_draft_vocab
-
-                    found = install_draft_vocab(
-                        drafter, self._model.language_model, DRAFT_VOCAB
-                    )
-                    kernels["draft_vocab"] = DRAFT_VOCAB if found else None
+                kernels["mtp_lane"] = mtp_lane.install()
+                kernels["lane_layers"] = lane_layers.install()
+                found = install_draft_vocab(
+                    drafter, self._model.language_model, DRAFT_VOCAB
+                )
+                kernels["draft_vocab"] = DRAFT_VOCAB if found else None
             # Invariant kernels cost little per extra verify row and peak at 6
             # for MTP; exact kernels peak at 3: at 5 rows a cycle jumps to
             # ~108 ms. A DFlash drafter proposes a whole block in one forward

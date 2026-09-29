@@ -98,6 +98,7 @@ def rounds(
                 greedy=True,
             )
     readout = draft_model._greedy_token
+    vocab = getattr(draft_model, "_draft_vocab", None)
     seed_tok, seed_h = draft_model._seed_token, draft_model._seed_hidden
     draft_model._seed_token = draft_model._seed_hidden = None
     if seed_tok is None:  # no prompt tokens to absorb: seed from the last hidden
@@ -181,6 +182,8 @@ def rounds(
                 draft_model._next_position = draft_model._next_position - rejected
             seed_tok = mx.array([[next_seed[accepted]]], dtype=token_dtype)
             seed_h = head_out[:, accepted : accepted + 1, :]
+            if vocab is not None:  # the reduced draft readout follows the script
+                vocab.learn(new_tokens)
             t = mark("walk", t)
             # The next chain is queued before the rollback is built.
             nb = min(block_total, max_tokens - (emitted + len(new_tokens)) + 1)
