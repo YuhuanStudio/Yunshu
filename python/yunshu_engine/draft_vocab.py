@@ -13,9 +13,14 @@ small per-request extension: the ids the request's prompt contains and every id
 the target has committed so far. The extension is what keeps other scripts fast —
 Chinese and Japanese text lives mostly above id 65536, so a fixed prefix drafted
 it poorly (zh 1K: 38.5 vs 53.6 tok/s on the full vocabulary); once the target has
-committed a few of a script's tokens the drafts find them. The readout is a
-``quantized_matmul`` over the base rows and one over the extension, an argmax of
-each, and the better of the two mapped back to full-vocabulary ids.
+committed a few of a script's tokens the drafts find them (zh 1K: 49.7). The
+readout is a ``quantized_matmul`` over the base rows and one over the extension,
+an argmax of each, and the better of the two mapped back to full-vocabulary ids.
+
+When half or more of a request's prompt (16+ ids) or of its committed tokens
+(24+) lie above the base set, the request is in such a script and the extension
+would grow without bound: the readout goes back to the full vocabulary for the
+rest of the request (zh 1K: 53.5, same as no reduction).
 """
 
 from __future__ import annotations
@@ -25,6 +30,8 @@ from typing import Any
 import mlx.core as mx
 import mlx.nn as nn
 
+PROMPT_MIN = 16  # prompt ids before its script is judged
+COMMITTED_MIN = 24  # committed tokens before the output's script is judged
 DRAFT_VOCAB = (
     65536  # ids searched besides the request's own (27B: 95.5 vs 86.5 tok/s, code)
 )
@@ -51,6 +58,10 @@ class DraftVocab:
         self.extra_ids: mx.array | None = None
         self.extra_rows: tuple | None = None
         self._seen: set[int] = set()
+        self.fallback: Any = None  # the drafter's own full-vocabulary readout
+        self.full = False
+        self._high = 0
+        self._total = 0
 
     def _rows(self, ids: mx.array) -> tuple:
         if hasattr(self.head, "quantized_rows"):  # packed layouts
@@ -87,14 +98,38 @@ class DraftVocab:
         self.extra_ids = None
         self.extra_rows = None
         self._seen = set()
-        count = self._add([int(t) for t in token_ids])
+        self.full = False
+        self._high = self._total = 0
+        ids = [int(t) for t in token_ids]
+        if len(ids) >= PROMPT_MIN and self._mostly_high(ids):
+            self.full = self.fallback is not None
+        if self.full:
+            return 0
+        count = self._add(ids)
         if count:
             mx.eval(self.extra_ids, *self.extra_rows)
         return count
 
+    def _mostly_high(self, ids: list[int]) -> bool:
+        high = sum(1 for t in ids if self.keep <= t < self.vocab)
+        return high * 2 >= len(ids)
+
     def learn(self, token_ids: list[int]) -> int:
         """Add ids the target committed (lazy: built with the next draft's graph)."""
-        return self._add([int(t) for t in token_ids])
+        if self.full:
+            return 0
+        ids = [int(t) for t in token_ids]
+        self._total += len(ids)
+        self._high += sum(1 for t in ids if self.keep <= t < self.vocab)
+        if (
+            self.fallback is not None
+            and self._total >= COMMITTED_MIN
+            and self._high * 2 >= self._total
+        ):
+            self.full = True  # a non-Latin script: search everything
+            self.extra_ids = self.extra_rows = None
+            return 0
+        return self._add(ids)
 
     def _matmul(self, x: mx.array, rows: tuple) -> mx.array:
         w, s, b = rows
@@ -111,6 +146,8 @@ class DraftVocab:
     def argmax(self, hidden: mx.array) -> mx.array:
         """Greedy token ids for ``hidden`` [..., D], shaped like an argmax over
         full-vocabulary logits [..., V]."""
+        if self.full:
+            return self.fallback(hidden)
         lead = hidden.shape[:-1]
         x = hidden.reshape(-1, hidden.shape[-1])
         logits = self._matmul(x, self.rows)
@@ -141,6 +178,8 @@ def install(drafter: Any, target_language_model: Any, keep: int) -> DraftVocab |
         return None
     if vocab.bits != 4 or getattr(head, "mode", "affine") != "affine":
         return None
+
+    vocab.fallback = drafter._greedy_token
 
     def _greedy_token(hidden: mx.array) -> mx.array:
         return vocab.argmax(hidden)

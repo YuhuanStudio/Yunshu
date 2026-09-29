@@ -302,6 +302,18 @@ def run(name, prompt, max_tokens, block):
         )
         lane_prof.clear()
         lane_prof["cycles"] = 0
+    if draft_vocab is not None and block:
+        print(
+            json.dumps(
+                {
+                    "draft_vocab_state": {
+                        "full": draft_vocab.full,
+                        "extra_ids": len(draft_vocab._seen),
+                    }
+                }
+            ),
+            flush=True,
+        )
     wall = time.perf_counter() - t0
     return {
         "task": name,

@@ -85,3 +85,40 @@ def test_ids_beyond_the_vocabulary_are_ignored():
     assert vocab.learn([V, V + 5, -1]) == 0
     x = mx.random.normal((2, K))
     assert vocab.argmax(x).shape == (2,)
+
+
+def test_a_non_latin_prompt_or_output_falls_back_to_the_full_readout():
+    head = _head(4)
+    x = mx.random.normal((3, K))
+    full = mx.argmax(_full_logits(head, x), axis=-1).tolist()
+    calls = []
+
+    def fallback(hidden):
+        calls.append(1)
+        return mx.argmax(_full_logits(head, hidden.reshape(-1, K)), axis=-1)
+
+    vocab = DraftVocab(head, KEEP)
+    vocab.fallback = fallback
+    high = [KEEP + i for i in range(20)]
+
+    # prompt: half or more of 16+ ids above the base set
+    vocab.set_context(high + list(range(10)))
+    assert vocab.full and vocab.argmax(x).tolist() == full and calls
+
+    # a Latin prompt keeps the reduced readout ...
+    vocab.set_context(list(range(40)))
+    assert not vocab.full
+    # ... until the committed tokens turn out to be in another script
+    vocab.learn(list(range(20)))
+    assert not vocab.full
+    vocab.learn(high[:8])  # 8 of 28: still Latin-like
+    assert not vocab.full
+    vocab.learn(high[8:14])  # 14 of 34
+    assert not vocab.full
+    vocab.learn(high + high)  # 54 of 74
+    assert vocab.full and vocab.extra_ids is None
+    assert vocab.learn([KEEP + 50]) == 0
+
+    # the next request starts reduced again
+    vocab.set_context([1, 2, 3])
+    assert not vocab.full
