@@ -20,7 +20,6 @@ from typing import Any
 import mlx.core as mx
 import mlx.nn as nn
 
-
 EVAL_EVERY = 4  # layers between evaluations of a prefill forward
 
 
