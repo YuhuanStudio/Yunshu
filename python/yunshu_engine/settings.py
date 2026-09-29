@@ -124,6 +124,7 @@ _add("YUNSHU_STARTUP_TIMEOUT", "float", 300.0, "Seconds to wait for the model to
 _add("YUNSHU_DRAIN_TIMEOUT", "float", 30.0, "Seconds to wait for in-flight requests on shutdown.", "server", minimum=0.0)
 _add("YUNSHU_KEEP_ALIVE_TIMEOUT", "int", 5, "Seconds an idle HTTP connection stays open.", "server", minimum=0)
 _add("YUNSHU_MAX_REQUEST_SIZE", "int", 10 * 1024 * 1024, "Maximum request body size in bytes.", "server", minimum=1)
+_add("YUNSHU_PROGRESS_INTERVAL_S", "float", 2.0, "Streaming chat/completions: seconds between `: yunshu-progress` SSE comments (queue / prefill progress, ETA) before the first token; 0 turns them off. Strict SSE clients ignore comment lines.", "server", minimum=0.0)
 _add("YUNSHU_SLOW_REQUEST_THRESHOLD", "float", 30.0, "Log a warning for requests slower than this many seconds.", "server", minimum=0.0)
 _add("YUNSHU_CORS_ORIGINS", "str", "http://localhost:3000,http://localhost:8000", "Comma-separated allowed CORS origins ('*' for any). Also checked for the Realtime WebSocket Origin header.", "server")
 _add("YUNSHU_RESPONSE_CACHE", "bool", False, "Cache identical non-streaming responses in memory.", "server")

@@ -84,7 +84,9 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         request_id = (
-            request.headers.get("X-Request-ID") or f"req_{uuid.uuid4().hex[:24]}"
+            getattr(request.state, "request_id", None)
+            or request.headers.get("X-Request-ID")
+            or f"req_{uuid.uuid4().hex[:24]}"
         )
         request.state.request_id = request_id
 
