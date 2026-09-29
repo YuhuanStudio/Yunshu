@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
@@ -354,3 +355,83 @@ async def test_append_applies_noise_reduction_when_configured():
     denoised = np.frombuffer(bytes(s._audio_buffer), dtype="<i2")
     assert len(denoised) * 2 == len(pcm)
     assert _rms(denoised[-4800:]) < 0.5 * _rms(np.frombuffer(pcm, dtype="<i2")[-4800:])
+
+
+# ── full response flow with a fake engine and a fake TTS ──
+
+
+class _FakeEngine:
+    is_loaded = True
+
+    async def generate_stream(self, prompt=None, cancel_event=None, **kw):
+        self.prompt = prompt
+        for w in ("Hello", " there", "."):
+            yield SimpleNamespace(
+                token_text=w, finish_reason=None, prompt_tokens=7, completion_tokens=1
+            )
+        yield SimpleNamespace(
+            token_text="", finish_reason="stop", prompt_tokens=7, completion_tokens=3
+        )
+
+
+@pytest.mark.asyncio
+async def test_spoken_response_flow_ga():
+    s, sent = _session("ga")
+    engine = _FakeEngine()
+    s._resolve_engine = lambda: engine  # type: ignore[method-assign]
+
+    async def fake_tts(text, response_id, item_id, voice=None, out_fmt=None):
+        delta = base64.b64encode(b"\0" * 4800).decode()
+        await s.send_event(
+            {"type": "response.audio.delta", "response_id": response_id, "delta": delta}
+        )
+        await s.send_event({"type": "response.audio.done", "response_id": response_id})
+
+    s._synthesize_audio_response = fake_tts  # type: ignore[method-assign]
+    s.conversation.add_item(
+        rt.ConversationItem(
+            "u1", "message", "user", [{"type": "input_text", "text": "hi"}]
+        )
+    )
+    await s._handle_response_create(
+        {"type": "response.create", "response": {"modalities": ["audio"]}}
+    )
+    await s._active_response
+    types = _types(sent)
+    parts = [e["part"] for e in sent if e["type"].startswith("response.content_part")]
+    assert parts and all(p["type"] == "output_audio" for p in parts)
+    assert parts[-1]["transcript"].strip() == "Hello there."
+    assert "output_audio_buffer.started" in types
+    assert types.index("output_audio_buffer.stopped") > types.index(
+        "response.output_audio.done"
+    )
+    assert types.index("rate_limits.updated") == types.index("response.created") + 1
+    done = next(e for e in sent if e["type"] == "response.done")
+    assert done["response"]["status"] == "completed"
+    item_done = next(e for e in sent if e["type"] == "response.output_item.done")
+    assert item_done["item"]["content"][0]["type"] == "output_audio"
+
+
+@pytest.mark.asyncio
+async def test_response_input_reaches_the_prompt_and_is_out_of_band():
+    s, sent = _session("ga")
+    engine = _FakeEngine()
+    s._resolve_engine = lambda: engine  # type: ignore[method-assign]
+    s.conversation.add_item(
+        rt.ConversationItem(
+            "u1", "message", "user", [{"type": "input_text", "text": "BANANA"}]
+        )
+    )
+    await s._handle_response_create(
+        {
+            "type": "response.create",
+            "response": {
+                "conversation": "none",
+                "input": [_item("PINEAPPLE")],
+                "modalities": ["text"],
+            },
+        }
+    )
+    await s._active_response
+    assert "PINEAPPLE" in str(engine.prompt) and "BANANA" not in str(engine.prompt)
+    assert len(s.conversation.items) == 1  # out of band: nothing appended

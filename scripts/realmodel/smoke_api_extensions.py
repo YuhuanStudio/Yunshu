@@ -134,6 +134,13 @@ def run_checks() -> None:
         json.dumps(xy)[:300],
     )
     check(
+        "engine-side prefill timings (fast path and runner)",
+        xy.get("prefill_ms") is not None and xy.get("queue_wait_ms") is not None,
+        json.dumps(
+            {k: xy.get(k) for k in ("queue_wait_ms", "prefill_ms", "prefill_tps")}
+        ),
+    )
+    check(
         "X-Yunshu-* headers",
         raw.headers.get("x-yunshu-decode-tps") is not None
         and raw.headers.get("x-yunshu-queue-position") == "0",
@@ -148,6 +155,13 @@ def run_checks() -> None:
         check(
             "speculative stats on an MTP model",
             spec.get("mode") in ("mtp", "dflash"),
+            json.dumps(spec),
+        )
+        check(
+            "speculative drafted / accepted / acceptance_rate are filled",
+            bool(spec.get("drafted"))
+            and spec.get("accepted") is not None
+            and spec.get("acceptance_rate") is not None,
             json.dumps(spec),
         )
 
@@ -309,6 +323,8 @@ def run_checks() -> None:
     )
     check("ollama chat stream", len(parts) > 1 and parts[-1].done)
 
+    more_checks(oa, an, ol, served)
+
     # 7. Warmup.
     w = httpx.post(
         f"{BASE}/v1/yunshu/warmup",
@@ -337,6 +353,297 @@ def run_checks() -> None:
             "error x_yunshu.request_id",
             (body.get("x_yunshu") or {}).get("request_id") == "smoke-err-1",
             str(body)[:200],
+        )
+
+
+def tee_client(mod, sink: list):
+    """An ``mod.Client`` (httpx or httpx2) whose response bodies are also copied to ``sink``."""
+
+    class Tee(mod.SyncByteStream):
+        def __init__(self, inner):
+            self.inner = inner
+
+        def __iter__(self):
+            for chunk in self.inner:
+                sink.append(chunk)
+                yield chunk
+
+        def close(self):
+            self.inner.close()
+
+    class Transport(mod.BaseTransport):
+        def __init__(self):
+            self.inner = mod.HTTPTransport()
+
+        def handle_request(self, request):
+            r = self.inner.handle_request(request)
+            return mod.Response(
+                r.status_code,
+                headers=r.headers,
+                stream=Tee(r.stream),
+                extensions=r.extensions,
+            )
+
+    return mod.Client(transport=Transport(), timeout=None)
+
+
+def anthropic_http_module(anthropic):
+    try:
+        import httpx2
+
+        if hasattr(anthropic._base_client, "httpx2"):
+            return httpx2
+    except ImportError:
+        pass
+    return httpx
+
+
+def more_checks(oa, an, ol, served: str) -> None:
+    """The 0.1.2 API gaps: Ollama ids/keep_alive/durations, x_yunshu on Messages and
+    Responses, progress comments with the Anthropic SDK, Responses fields."""
+    import anthropic
+    import openai
+
+    # ── Ollama: X-Request-Id, keep_alive, per-response stats in Ollama's own fields ──
+    r = httpx.post(
+        f"{BASE}/api/chat",
+        json={
+            "model": served,
+            "stream": False,
+            "keep_alive": "5m",
+            "messages": [{"role": "user", "content": "Say hi in three words."}],
+            "options": {"num_predict": 24, "temperature": 0},
+        },
+        headers={"X-Request-Id": "smoke-ollama-1"},
+        timeout=120,
+    )
+    j = r.json()
+    check(
+        "ollama echoes X-Request-Id and accepts keep_alive",
+        r.status_code == 200 and r.headers.get("x-request-id") == "smoke-ollama-1",
+        f"{r.status_code} {r.headers.get('x-request-id')}",
+    )
+    keys = (
+        "total_duration",
+        "load_duration",
+        "prompt_eval_count",
+        "prompt_eval_duration",
+        "eval_count",
+        "eval_duration",
+    )
+    check(
+        "ollama durations (ns) and counts from engine stats",
+        all(isinstance(j.get(k), int) for k in keys)
+        and j["eval_count"] > 0
+        and j["eval_duration"] > 0
+        and j["prompt_eval_count"] > 0
+        and j["prompt_eval_duration"] > 0
+        and j["total_duration"] >= j["eval_duration"],
+        json.dumps({k: j.get(k) for k in keys}),
+    )
+    sdk = ol.chat(
+        model=served,
+        messages=[{"role": "user", "content": "Say hi."}],
+        options={"num_predict": 16},
+        keep_alive=0,
+    )
+    check(
+        "ollama SDK: eval_duration / prompt_eval_duration / total_duration",
+        bool(sdk.eval_duration and sdk.prompt_eval_duration and sdk.total_duration),
+        f"{sdk.eval_duration} {sdk.prompt_eval_duration} {sdk.total_duration}",
+    )
+    got = {"n": 0, "done": False}
+
+    def consume() -> None:
+        with httpx.stream(
+            "POST",
+            f"{BASE}/api/chat",
+            json={
+                "model": served,
+                "messages": [{"role": "user", "content": "Write a long story."}],
+                "options": {"num_predict": 4000},
+            },
+            headers={"X-Request-Id": "smoke-ollama-cancel"},
+            timeout=None,
+        ) as resp:
+            for line in resp.iter_lines():
+                if line:
+                    got["n"] += 1
+        got["done"] = True
+
+    t = threading.Thread(target=consume, daemon=True)
+    t.start()
+    seen = None
+    for _ in range(100):
+        time.sleep(0.1)
+        rr = httpx.get(f"{BASE}/v1/requests/smoke-ollama-cancel")
+        if rr.status_code == 200:
+            seen = rr.json()
+            break
+    check("ollama request id reaches /v1/requests/{id}", seen is not None, str(seen))
+    httpx.delete(f"{BASE}/v1/requests/smoke-ollama-cancel")
+    t.join(timeout=30)
+    check("cancel by id stops an Ollama stream", got["done"] and got["n"] < 3000)
+
+    # ── Anthropic: x_yunshu in usage (non-stream + message_delta) ──
+    msg = an.messages.create(
+        model=served, max_tokens=24, messages=[{"role": "user", "content": "Say hi."}]
+    )
+    axy = (msg.usage.model_extra or {}).get("x_yunshu") or {}
+    check(
+        "anthropic message usage.x_yunshu",
+        axy.get("ttft_ms") is not None and axy.get("decode_tps") is not None,
+        json.dumps(axy)[:240],
+    )
+    delta_xy = None
+    with an.messages.stream(
+        model=served, max_tokens=24, messages=[{"role": "user", "content": "Say hi."}]
+    ) as st:
+        for ev in st:
+            if ev.type == "message_delta":
+                delta_xy = (ev.usage.model_extra or {}).get("x_yunshu")
+        final = st.get_final_message()
+    check(
+        "anthropic stream: message_delta usage.x_yunshu, SDK final message intact",
+        bool(delta_xy and delta_xy.get("ttft_ms")) and final.usage.output_tokens > 0,
+        json.dumps(delta_xy)[:240],
+    )
+
+    # ── Anthropic SDK on a long prompt: progress comments arrive, the SDK ignores them ──
+    words = int(os.environ.get("YUNSHU_SMOKE_LONG_WORDS", "24000"))
+    sink: list[bytes] = []
+    mod = anthropic_http_module(anthropic)
+    tee = anthropic.Anthropic(
+        base_url=BASE,
+        api_key="x",
+        max_retries=0,
+        http_client=tee_client(mod, sink),
+    )
+    with tee.messages.stream(
+        model=served,
+        max_tokens=8,
+        messages=[{"role": "user", "content": long_prompt(words) + "\nOne word."}],
+        extra_headers={"X-Request-Id": "smoke-anthropic-long"},
+    ) as st:
+        list(st)
+        fin = st.get_final_message()
+    raw = b"".join(sink).decode("utf-8", "replace")
+    prog = [
+        json.loads(ln[len(": yunshu-progress ") :])
+        for ln in raw.splitlines()
+        if ln.startswith(": yunshu-progress ")
+    ]
+    check(
+        "anthropic SDK long prompt: progress comments, message parsed",
+        len(prog) >= 1 and fin.usage.output_tokens > 0,
+        f"{len(prog)} comments, last={prog[-1] if prog else None}",
+    )
+    pref = [p for p in prog if p.get("phase") == "prefill"]
+    if pref:
+        check(
+            "anthropic progress has percent/eta",
+            "percent" in pref[-1] and "eta_s" in pref[-1],
+            str(pref[-1]),
+        )
+
+    # ── Responses: x_yunshu in usage, echoed config, max_tool_calls, conversation ──
+    resp = oa.responses.create(
+        model=served,
+        input="Say hi in three words.",
+        instructions="Be brief.",
+        max_output_tokens=32,
+        temperature=0,
+        truncation="auto",
+        max_tool_calls=1,
+        extra_headers={"X-Request-Id": "smoke-resp-1"},
+    )
+    rxy = (resp.usage.model_extra or {}).get("x_yunshu") or {}
+    check(
+        "responses usage.x_yunshu",
+        rxy.get("ttft_ms") is not None and rxy.get("decode_tps") is not None,
+        json.dumps(rxy)[:240],
+    )
+    check(
+        "responses echoes instructions / truncation / max_output_tokens / max_tool_calls",
+        resp.instructions == "Be brief."
+        and resp.truncation == "auto"
+        and resp.max_output_tokens == 32
+        and resp.max_tool_calls == 1,
+        f"{resp.instructions!r} {resp.truncation} {resp.max_output_tokens} {resp.max_tool_calls}",
+    )
+    events = list(
+        oa.responses.create(
+            model=served, input="Say hi.", max_output_tokens=32, stream=True
+        )
+    )
+    created = next(e for e in events if e.type == "response.created")
+    last = events[-1]
+    check(
+        "responses stream: created carries config, terminal usage.x_yunshu",
+        created.response.truncation == "disabled"
+        and last.type in ("response.completed", "response.incomplete")
+        and bool(
+            ((last.response.usage.model_extra or {}).get("x_yunshu") or {}).get(
+                "ttft_ms"
+            )
+        ),
+        f"{created.response.truncation} {last.type}",
+    )
+    tools = [
+        {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Weather for a city",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+        }
+    ]
+    tr = oa.responses.create(
+        model=served,
+        input="Call get_weather for Paris and also for Tokyo.",
+        tools=tools,
+        max_tool_calls=1,
+        max_output_tokens=256,
+        temperature=0,
+    )
+    calls = [o for o in tr.output if o.type == "function_call"]
+    check("responses max_tool_calls=1 caps the calls", len(calls) <= 1, f"{len(calls)}")
+    try:
+        oa.responses.create(model=served, input="x", conversation="conv_1")
+        check("responses conversation rejected", False)
+    except openai.BadRequestError as e:
+        check(
+            "responses conversation rejected with a pointer",
+            "previous_response_id" in str(e),
+            str(e)[:160],
+        )
+    trunc_words = int(os.environ.get("YUNSHU_SMOKE_TRUNC_WORDS", "0"))
+    if trunc_words:
+        items = []
+        for i in range(12):
+            role = "user" if i % 2 == 0 else "assistant"
+            items.append(
+                {"role": role, "content": long_prompt(trunc_words) + f" turn{i}"}
+            )
+        items.append({"role": "user", "content": "Say hi."})
+        try:
+            oa.responses.create(model=served, input=items, max_output_tokens=8)
+            check("truncation disabled overflows", False)
+        except openai.BadRequestError as e:
+            check(
+                "truncation disabled -> 400 context overflow",
+                "too long" in str(e).lower(),
+            )
+        ok = oa.responses.create(
+            model=served, input=items, max_output_tokens=8, truncation="auto"
+        )
+        check(
+            "truncation auto drops the oldest input items",
+            ok.status in ("completed", "incomplete") and ok.usage.input_tokens > 0,
+            f"{ok.status} input_tokens={ok.usage.input_tokens}",
         )
 
 

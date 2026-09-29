@@ -351,7 +351,7 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
         spec = {
             "mode": st.spec_mode,
             "drafted": st.spec_drafted or None,
-            "accepted": st.spec_accepted or None,
+            "accepted": st.spec_accepted if st.spec_drafted else None,
             "acceptance_rate": (
                 round(st.spec_accepted / st.spec_drafted, 3)
                 if st.spec_drafted

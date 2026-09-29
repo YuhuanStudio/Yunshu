@@ -300,6 +300,179 @@ async def ga_audio(client, model: str) -> None:
         check("ga-audio: reply text non-empty", bool(text.strip()), repr(text[:60]))
 
 
+async def ga_gaps(client, model: str, content: bool = False) -> None:
+    """GA features that used to be missing: noise_reduction, idle_timeout_ms,
+    response.create.input, rate_limits.updated."""
+    async with client.realtime.connect(model=model) as conn:
+        await conn.recv()
+        await conn.session.update(
+            session={
+                "type": "realtime",
+                "output_modalities": ["text"],
+                "audio": {
+                    "input": {
+                        "noise_reduction": {"type": "near_field"},
+                        "turn_detection": {
+                            "type": "server_vad",
+                            "idle_timeout_ms": 1500,
+                        },
+                    }
+                },
+            }
+        )
+        ups = await collect_until(conn, {"session.updated", "error"})
+        upd = ups[-1]
+        inp = upd.session.audio.input if upd.type == "session.updated" else None
+        nr = getattr(inp, "noise_reduction", None)
+        td = getattr(inp, "turn_detection", None)
+        check(
+            "ga-gaps: noise_reduction echoed in session.updated",
+            nr is not None and nr.type == "near_field",
+            str(nr),
+        )
+        check(
+            "ga-gaps: idle_timeout_ms echoed in session.updated",
+            getattr(td, "idle_timeout_ms", None) == 1500,
+            str(td),
+        )
+        ask = "Reply with exactly the single word PINEAPPLE."
+        await conn.response.create(
+            response={
+                "conversation": "none",
+                "output_modalities": ["text"],
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": ask}],
+                    }
+                ],
+            }
+        )
+        evs = await collect_until(conn, {"response.done", "error"}, 180)
+        types = [e.type for e in evs]
+        check(
+            "ga-gaps: response.create.input accepted -> response.done",
+            types[-1] == "response.done" and "error" not in types,
+            str(sorted(set(types))),
+        )
+        check(
+            "ga-gaps: rate_limits.updated after response.created",
+            "rate_limits.updated" in types
+            and types.index("rate_limits.updated") > types.index("response.created"),
+            str(types[:4]),
+        )
+        rl = next((e for e in evs if e.type == "rate_limits.updated"), None)
+        check(
+            "ga-gaps: rate_limits has requests + tokens",
+            rl is not None
+            and {r.name for r in rl.rate_limits} == {"requests", "tokens"},
+        )
+        if content:
+            text = "".join(
+                e.delta for e in evs if e.type == "response.output_text.delta"
+            )
+            check(
+                "ga-gaps: response.input is the context (out of band)",
+                "PINEAPPLE" in text.upper(),
+                repr(text[:60]),
+            )
+        # idle timeout: nothing said after the reply -> the server answers on its own
+        evs = await collect_until(
+            conn, {"input_audio_buffer.timeout_triggered", "error"}, 30
+        )
+        trig = evs[-1]
+        check(
+            "ga-gaps: idle_timeout_ms -> input_audio_buffer.timeout_triggered",
+            trig.type == "input_audio_buffer.timeout_triggered"
+            and bool(trig.item_id)
+            and trig.audio_start_ms is not None,
+            trig.type,
+        )
+        evs = await collect_until(conn, {"response.created", "error"}, 30)
+        check(
+            "ga-gaps: idle timeout then starts a response",
+            evs[-1].type == "response.created",
+            str([e.type for e in evs]),
+        )
+        await conn.response.cancel()
+
+
+async def ga_audio_out(client, model: str) -> None:
+    """Spoken reply: audio content_part shape and the output audio buffer events."""
+    async with client.realtime.connect(model=model) as conn:
+        await conn.recv()
+        await conn.session.update(
+            session={"type": "realtime", "output_modalities": ["audio"]}
+        )
+        await collect_until(conn, {"session.updated", "error"})
+        await conn.conversation.item.create(
+            item={
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Say hi."}],
+            }
+        )
+        await collect_until(conn, {"conversation.item.done", "error"})
+        await conn.response.create()
+        evs = await collect_until(conn, {"response.done", "error"}, 180)
+        types = [e.type for e in evs]
+        parts = [e.part for e in evs if e.type.startswith("response.content_part.")]
+        check(
+            "ga-audio-out: content_part is output_audio with a transcript",
+            bool(parts) and all(p.type == "output_audio" for p in parts),
+            str([p.type for p in parts]),
+        )
+        check(
+            "ga-audio-out: output_audio_buffer started/stopped",
+            in_order(
+                types,
+                [
+                    "output_audio_buffer.started",
+                    "response.output_audio.done",
+                    "output_audio_buffer.stopped",
+                ],
+            ),
+            str(types),
+        )
+
+
+async def beta_gaps(client, model: str) -> None:
+    async with client.beta.realtime.connect(model=model) as conn:
+        await conn.recv()
+        await conn.recv()
+        await conn.session.update(
+            session={
+                "modalities": ["text"],
+                "turn_detection": None,
+                "input_audio_noise_reduction": {"type": "far_field"},
+            }
+        )
+        ups = await collect_until(conn, {"session.updated", "error"})
+        nr = getattr(ups[-1].session, "input_audio_noise_reduction", None)
+        check(
+            "beta-gaps: input_audio_noise_reduction echoed",
+            ups[-1].type == "session.updated"
+            and nr is not None
+            and nr.type == "far_field",
+            str(nr),
+        )
+        await conn.conversation.item.create(
+            item={
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Say hi."}],
+            }
+        )
+        await collect_until(conn, {"conversation.item.created", "error"})
+        await conn.response.create()
+        evs = await collect_until(conn, {"response.done", "error"})
+        check(
+            "beta-gaps: rate_limits.updated",
+            "rate_limits.updated" in [e.type for e in evs],
+        )
+
+
 async def main(args) -> int:
     from openai import AsyncOpenAI
 
@@ -318,8 +491,12 @@ async def main(args) -> int:
     )
     await ga_text(client, args.model)
     await beta_text(client, args.model)
+    await ga_gaps(client, args.model, content=args.content)
+    await beta_gaps(client, args.model)
     if args.audio:
         await ga_audio(client, args.model)
+    if args.audio_out:
+        await ga_audio_out(client, args.model)
     bad = [r for r in RESULTS if not r[1]]
     print(f"\n{len(RESULTS) - len(bad)}/{len(RESULTS)} checks passed")
     return 1 if bad else 0
@@ -331,5 +508,9 @@ if __name__ == "__main__":
     ap.add_argument("--model", default="default")
     ap.add_argument("--api-key", default="x")
     ap.add_argument("--audio", action="store_true")
+    ap.add_argument("--audio-out", action="store_true")
+    ap.add_argument(
+        "--content", action="store_true", help="real model: check reply content"
+    )
     ap.add_argument("--uds", default=None)
     sys.exit(asyncio.run(main(ap.parse_args())))
