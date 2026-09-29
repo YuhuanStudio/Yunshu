@@ -86,10 +86,11 @@ def _random_dflash2(target_config) -> object:
 
 
 class _Oracle:
-    """Replace the drafter's tree with one built from the plain run's tokens:
-    the true continuation as a chain, wrong siblings before it and wrong
-    branches off it, with the chain cut at a varying depth (full, partial and
-    zero acceptance; accepted paths that are not row prefixes)."""
+    """Replace the drafter's tree tokens with ones built from the plain run's
+    continuation: nodes whose rank path is all zeros follow the true tokens
+    (cut at a varying depth), every other node is a wrong sibling — full,
+    partial and zero acceptance, with accepted paths that are not row
+    prefixes."""
 
     def __init__(self):
         from yunshu_engine import dflash_tree
@@ -98,44 +99,42 @@ class _Oracle:
         self.ref: list[int] = []
         self.pos: int | None = None
         self.round = 0
-        self.kinds: set = set()
-        real_lattice = dflash_tree.compute_lattice
+        self.shapes: set = set()
+        real_lattice = dflash_tree.compute_lattice_gpu
 
         def lattice(drafter, anchor, hidden, cache, positions):
             lat = real_lattice(
                 drafter, anchor, hidden, cache, positions
             )  # the real drafter runs
+            mx.eval(lat.cands)
             self.pos = 1 if self.pos is None else self.pos + int(hidden.shape[1])
             return lat
 
-        def tree(lat, nodes, *a, **k):
+        def build(lat, topo, *a, **k):
             r = self.round
             self.round += 1
-            truth = [
-                self.ref[min(self.pos + i, len(self.ref) - 1)] if self.ref else 0
-                for i in range(nodes)
-            ]
-            depth = 1 + r % min(5, nodes)
-            toks, pars = [], []
-            wrong = lambda t: (t + 1 + r) % 248000  # noqa: E731
-            # a wrong sibling first (with a child), then the true chain
-            if r % 3 != 0 and nodes >= 5:
-                toks += [wrong(truth[0]), wrong(truth[1])]
-                pars += [-1, 0]
-            prev = -1
-            for d in range(min(depth, nodes - len(toks))):
-                t = truth[d] if not (r % 4 == 3 and d == depth - 1) else wrong(truth[d])
-                toks.append(t)
-                pars.append(prev)
-                prev = len(toks) - 1
-                if r % 2 and d == 1 and len(toks) < nodes:
-                    toks.append(wrong(truth[d]))  # wrong sibling after the true node
-                    pars.append(pars[-2])
-            self.kinds.add(tuple(pars))
-            return toks[:nodes], pars[:nodes]
+            self.shapes.add(tuple(topo.window_parents))
+            cut = 1 + r % 5  # depth at which the true chain is broken (r % 4 == 3)
+            toks = []
+            for path in topo.paths:
+                d = len(path)
+                true = (
+                    self.ref[min(self.pos + d - 1, len(self.ref) - 1)]
+                    if self.ref
+                    else 0
+                )
+                if (
+                    all(x == 0 for x in path)
+                    and not (r % 4 == 3 and d >= cut)
+                    and d <= cut + 1
+                ):
+                    toks.append(true)
+                else:
+                    toks.append((true + 1 + sum(path) + 7 * d + r) % 248000)
+            return mx.array(toks, dtype=mx.int32)
 
-        dflash_tree.compute_lattice = lattice
-        dflash_tree.best_first_tree = tree
+        dflash_tree.compute_lattice_gpu = lattice
+        dflash_tree.build_tokens = build
         dflash_tree.install()
 
     def reset(self, ref: list[int]) -> None:

@@ -3,9 +3,12 @@
 The checkpoint's MTP head predicts one token per step from ``(embed(token),
 target hidden)``; upstream chains it (each step feeds the previous draft), so a
 wrong early draft wastes the whole tail. This module keeps the head's top-k at
-every step and grows a *tree* best-first by summed log-probability, a batch of
-nodes per head call (the head is one layer, so a batch costs about one step).
-``tree_verify`` checks the tree in one forward; the walk keeps the longest root
+every step and fills a *tree* of fixed shape (``spec_topology``: node ``(0, 1)``
+is the second-ranked child of the top-ranked child of the pending token), one
+head call per tree level (the head is one layer, so a level costs about one
+step). Everything is computed on the GPU without a host round trip, so the
+verify graph can be built while the head runs. ``tree_verify`` checks the tree
+in one forward; the walk keeps the longest root
 path equal to the target's greedy tokens, so the output is the plain greedy
 decode's.
 
@@ -16,7 +19,6 @@ buffers and are dropped after the round.
 
 from __future__ import annotations
 
-import heapq
 import logging
 from typing import Any
 
@@ -25,43 +27,25 @@ import numpy as np
 
 from . import tree_verify as tv
 from .dflash_tree import walk
+from .spec_topology import Topology
 
 logger = logging.getLogger(__name__)
 
-NODES = 7  # draft nodes per round (window = pending token + nodes <= 8 rows)
-KIDS = 3  # candidates kept per expanded node
-BATCH = 3  # nodes forwarded per head call
-
-
-class _Node:
-    __slots__ = ("token", "parent", "depth", "logp", "ancestors")
-
-    def __init__(self, token, parent, depth, logp, ancestors):
-        self.token, self.parent, self.depth, self.logp = token, parent, depth, logp
-        self.ancestors = (
-            ancestors  # tree indices visible to the node (its path incl. itself)
-        )
-
-
-def _head_layers(head):
-    return head.layers
+# Rank paths of the draft tree, most valuable first (see spec_topology), chosen
+# from the measured frequency with which the target's continuation follows each
+# rank path of the head's top-k.
+TOPOLOGY = [(0,), (1,), (2,), (0, 0), (0, 1), (0, 0, 0), (1, 0)]
 
 
 def _forward_level(
-    head,
-    lm,
-    nodes: list[_Node],
-    first: int,
-    hidden_in: mx.array,
-    base_pos: int,
-    tree_kv,
+    head, tokens, hidden_in, depth, tree_mask, n_prefix, base_pos, tree_kv
 ):
-    """Head forward for ``nodes`` (tree indices ``first ..``): returns their
-    outputs [B, D]. ``hidden_in`` [B, D] is each node's parent output; ``tree_kv``
-    holds every earlier tree node's keys/values per layer (appended here)."""
-    count = len(nodes)
-    tokens = mx.array([n.token for n in nodes], dtype=mx.int32)[None]
-    emb = head._input_embed(tokens) * head._input_embed_scale
+    """Head forward for one level's nodes: ``tokens`` [B], ``hidden_in`` [B, D]
+    (each node's parent output). ``tree_mask`` [B, earlier + B] says which tree
+    entries each node sees (its ancestors and itself); the head's own KV prefix
+    is visible to all. Appends the level's keys/values to ``tree_kv``."""
+    count = int(tokens.shape[0])
+    emb = head._input_embed(tokens[None]) * head._input_embed_scale
     h = head.fc(
         mx.concatenate(
             [
@@ -71,20 +55,20 @@ def _forward_level(
             axis=-1,
         )
     )
-    pos = mx.array([[base_pos + n.depth - 1 for n in nodes]], dtype=mx.int32)
-    total_prev = first
+    pos = mx.full((1, count), base_pos + depth, dtype=mx.int32)
+    mask = mx.concatenate(
+        [mx.ones((count, n_prefix), dtype=mx.bool_), tree_mask], axis=1
+    )[None, None]
     for li, layer in enumerate(head.layers):
         cache = head._cache[li]
-        n_prefix = int(cache.offset)
         xn = layer.input_layernorm(h)
         at = layer.self_attn
         q, k, v = at.q_proj(xn), at.k_proj(xn), at.v_proj(xn)
         queries, keys, values, gate, _ = at._prepare_projected_qkv(
             q, k, v, None, pos, None, None
         )
-        pk = cache.keys[..., :n_prefix, :]
-        pv = cache.values[..., :n_prefix, :]
-        parts_k, parts_v = [pk], [pv]
+        parts_k = [cache.keys[..., :n_prefix, :]]
+        parts_v = [cache.values[..., :n_prefix, :]]
         if tree_kv[li] is not None:
             parts_k.append(tree_kv[li][0])
             parts_v.append(tree_kv[li][1])
@@ -92,81 +76,88 @@ def _forward_level(
         parts_v.append(values)
         all_k = mx.concatenate(parts_k, axis=2)
         all_v = mx.concatenate(parts_v, axis=2)
-        # mask: the whole prefix, plus the node's own ancestors among tree entries
-        allow = np.zeros((count, n_prefix + total_prev + count), dtype=bool)
-        allow[:, :n_prefix] = True
-        for i, node in enumerate(nodes):
-            for a in node.ancestors:
-                allow[i, n_prefix + a] = True
-        mask = mx.array(allow)[None, None]
         out = mx.fast.scaled_dot_product_attention(
             queries, all_k, all_v, scale=at.scale, mask=mask
         )
         out = out.transpose(0, 2, 1, 3).reshape(1, count, -1) * mx.sigmoid(gate)
         hh = h + at.o_proj(out)
         h = hh + layer.mlp(layer.post_attention_layernorm(hh))
-        if tree_kv[li] is None:
-            tree_kv[li] = (keys, values)
-        else:
-            tree_kv[li] = (
+        tree_kv[li] = (
+            (keys, values)
+            if tree_kv[li] is None
+            else (
                 mx.concatenate([tree_kv[li][0], keys], axis=2),
                 mx.concatenate([tree_kv[li][1], values], axis=2),
             )
+        )
     return head.norm(h)[0]
 
 
-def _topk(lm, hidden: mx.array, k: int):
-    """Log-probabilities and ids of each row's top ``k`` next tokens (host)."""
-    logits = lm.speculative_logits_from_hidden(hidden).astype(mx.float32)
-    logp = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
-    idx = mx.argpartition(-logp, k - 1, axis=-1)[..., :k]
-    vals = mx.take_along_axis(logp, idx, axis=-1)
-    mx.eval(idx, vals)
-    return np.array(vals), np.array(idx)
+def _ranked(logits, rows, ranks):
+    """Token of rank ``ranks[i]`` in row ``rows[i]`` of ``logits`` [R, V]."""
+    kmax = max(ranks) + 1
+    idx = mx.argpartition(-logits, kmax - 1, axis=-1)[..., :kmax]
+    vals = mx.take_along_axis(logits, idx, axis=-1)
+    idx = mx.take_along_axis(idx, mx.argsort(-vals, axis=-1), axis=-1)
+    picked = mx.take(idx, mx.array(rows, dtype=mx.int32), axis=0)
+    return mx.take_along_axis(picked, mx.array(ranks, dtype=mx.int32)[:, None], axis=1)[
+        :, 0
+    ]
 
 
-def draft_tree(
-    head, lm, root_hidden: mx.array, nodes: int, *, kids: int = KIDS, batch: int = BATCH
-):
-    """Best-first tree of up to ``nodes`` draft tokens from the head's output at
-    the last committed position (``root_hidden`` [1, D]). Returns
-    ``(tokens, parents)`` with parents in draft space (-1 = the pending token)."""
+def _tree_masks(topo):
+    """Per level: [B, earlier + B] bool of the tree entries each node sees."""
+    levels = topo.levels()
+    order = [i for nodes, _, _ in levels for i in nodes]
+    at = {node: k for k, node in enumerate(order)}
+    out, first = [], 0
+    for nodes, _, _ in levels:
+        mask = np.zeros((len(nodes), first + len(nodes)), dtype=bool)
+        for row, node in enumerate(nodes):
+            cur = node
+            while cur >= 0:
+                mask[row, at[cur]] = True
+                cur = topo.parents[cur]
+        out.append(mx.array(mask))
+        first += len(nodes)
+    return out
+
+
+_MASKS: dict = {}
+
+
+def draft_tokens(head, lm, root_hidden: mx.array, topo) -> mx.array:
+    """The tokens of ``topo`` (rank ``r`` among the head's next-token logits
+    given the parent's token), in the topology's node order [n]; all lazy."""
+    cached = _MASKS.get(id(topo))
+    if cached is None or cached[0] is not topo:
+        cached = _MASKS[id(topo)] = (topo, _tree_masks(topo))
+    masks = cached[1]
+    n_prefix = int(head._cache[0].offset)
     base_pos = int(head._next_position)
-    tree: list[_Node] = []
-    outputs: list[mx.array] = []  # head output per tree node (None until forwarded)
     tree_kv: list = [None] * len(head.layers)
-    heap: list = []  # (-cum logp, seq, parent index, token, depth)
-    seq = 0
-
-    def push(parent, cum, vals, ids, depth):
-        nonlocal seq
-        for lp, tk in zip(vals, ids, strict=True):
-            heapq.heappush(heap, (-(cum + float(lp)), seq, parent, int(tk), depth))
-            seq += 1
-
-    vals, ids = _topk(lm, root_hidden, kids)
-    push(-1, 0.0, vals[0], ids[0], 1)
-    forwarded = 0
-    while heap and len(tree) < nodes:
-        take = min(batch, nodes - len(tree), len(heap))
-        first = len(tree)
-        for _ in range(take):
-            neg, _, parent, tk, depth = heapq.heappop(heap)
-            anc = ([*tree[parent].ancestors] if parent >= 0 else []) + [len(tree)]
-            tree.append(_Node(tk, parent, depth, -neg, anc))
-        if len(tree) >= nodes:
-            break  # the last batch's children would not fit
-        new = tree[first:]
-        hid_in = mx.stack(
-            [root_hidden[0] if n.parent < 0 else outputs[n.parent] for n in new]
+    levels = topo.levels()
+    logits = lm.speculative_logits_from_hidden(root_hidden).astype(mx.float32)  # [1, V]
+    prev_out = None
+    level_tokens = []
+    for depth, (_, parent_pos, ranks) in enumerate(levels):
+        rows = parent_pos if depth else [0] * len(ranks)
+        tokens = _ranked(logits, rows, ranks).astype(mx.int32)
+        level_tokens.append(tokens)
+        if depth + 1 == len(levels):
+            break
+        hid_in = (
+            mx.broadcast_to(root_hidden, (len(ranks), root_hidden.shape[-1]))
+            if depth == 0
+            else mx.take(prev_out, mx.array(parent_pos, dtype=mx.int32), axis=0)
         )
-        out = _forward_level(head, lm, new, forwarded, hid_in, base_pos, tree_kv)
-        forwarded += len(new)
-        outputs.extend(out[i] for i in range(len(new)))
-        vals, ids = _topk(lm, out, kids)
-        for i, node in enumerate(new):
-            push(first + i, node.logp, vals[i], ids[i], node.depth + 1)
-    return [n.token for n in tree], [n.parent for n in tree]
+        prev_out = _forward_level(
+            head, tokens, hid_in, depth, masks[depth], n_prefix, base_pos, tree_kv
+        )
+        logits = lm.speculative_logits_from_hidden(prev_out).astype(mx.float32)
+    return mx.take(
+        mx.concatenate(level_tokens), mx.array(topo.permutation(), dtype=mx.int32)
+    )
 
 
 def supported(model: Any, draft_model: Any) -> bool:
@@ -202,28 +193,26 @@ def _rounds(
     root = draft_model._seed_hidden[
         :, -1
     ]  # head output at the last committed position [1, D]
+    full = Topology(TOPOLOGY)
     b = int(first_bonus)
     emitted = 1
     while emitted < max_tokens:
-        nodes = min(NODES, max_tokens - emitted)
-        if nodes < 1:
-            return
-        toks, pars = draft_tree(draft_model, lm, root, nodes)
-        window = [b, *toks]
-        parents = [-1] + [0 if p < 0 else p + 1 for p in pars]
-        shape = tv.TreeShape(parents)
-        res = tv.tree_forward(
-            lm, mx.array([window], dtype=token_dtype), shape, prompt_cache
-        )
+        topo = full.prefix(min(full.size, max_tokens - emitted))
+        window = mx.concatenate(
+            [mx.array([b], dtype=mx.int32), draft_tokens(draft_model, lm, root, topo)]
+        )[None]
+        res = tv.tree_forward(lm, window, topo.shape(), prompt_cache)
         target = lm.speculative_argmax_from_hidden(res.hidden)
         try:
+            mx.async_eval(target, window)
             row_tokens = [int(t) for t in target.reshape(-1).tolist()]
+            tokens = [int(t) for t in window.reshape(-1).tolist()]
         except BaseException:
             tv.tree_abort(prompt_cache, res)
             raise
-        path = walk(window, parents, row_tokens)
-        new_tokens = [window[r] for r in path[1:]] + [row_tokens[path[-1]]]
-        _record_speculative_round(draft_model, len(path) - 1, len(toks))
+        path = walk(tokens, topo.window_parents, row_tokens)
+        new_tokens = [tokens[r] for r in path[1:]] + [row_tokens[path[-1]]]
+        _record_speculative_round(draft_model, len(path) - 1, topo.size)
         tv.tree_commit(lm, prompt_cache, res, path)
         # the head absorbs the kept positions: position j pairs the token after
         # row j with that row's target hidden
@@ -322,4 +311,4 @@ def install() -> bool:
     return True
 
 
-__all__ = ["draft_tree", "install", "mtp_tree_rounds_batch"]
+__all__ = ["draft_tokens", "install", "mtp_tree_rounds_batch"]

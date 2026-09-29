@@ -470,7 +470,7 @@ class RoundContext:
         self.ntail = (n0 + shape.max_depth - self.tail_start) // CK + 1
         self.nc_total = self.cstar + self.ntail
         self.m = n0 - self.tail_start
-        self.win_idx = (shape.path_table() + n0).reshape(-1)
+        self.win_idx = shape.path_table().reshape(-1)
         local = [n0 + dep + 1 - self.tail_start for dep in shape.depths]
         self.local_arr = mx.array(local, dtype=mx.int32)
         self.slots_b = mx.arange(w, dtype=mx.int32)
@@ -539,12 +539,12 @@ def tree_attention(
     hkv_keys = keys[0]  # [HKV, CAP, D]
     hkv_vals = values[0]
     win_k = (
-        mx.take(hkv_keys, rc.win_idx, axis=1)
+        mx.take(hkv_keys[:, n0 : n0 + w], rc.win_idx, axis=1)
         .reshape(hkv, w, shape.max_depth + 1, d)
         .transpose(1, 0, 2, 3)
     )
     win_v = (
-        mx.take(hkv_vals, rc.win_idx, axis=1)
+        mx.take(hkv_vals[:, n0 : n0 + w], rc.win_idx, axis=1)
         .reshape(hkv, w, shape.max_depth + 1, d)
         .transpose(1, 0, 2, 3)
     )

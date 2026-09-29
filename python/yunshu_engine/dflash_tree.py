@@ -3,119 +3,33 @@
 DFlash2 proposes, for a block of positions after the pending token, the top-K
 candidate tokens per position (``candidate_selector``) with a unary score and a
 pairwise (predecessor -> successor) score. Upstream's greedy round follows one
-argmax path (a chain). This module keeps the whole lattice: a best-first search
-over ``score = unary + edge * pairwise`` (log-softmax per depth, summed along
-the path) picks the ``nodes`` most probable prefixes as a draft *tree*, which
-``tree_verify`` checks in one forward. The walk keeps the longest root path
-whose tokens equal the target's greedy tokens, so the output is the plain greedy
-decode's (``tree_verify`` gives every row single-step arithmetic).
+argmax path (a chain). This module keeps the whole lattice: the ``r``-th best
+candidate under ``(unary + 0.6 * pairwise) / 1.5`` given the parent's token fills
+each node of a fixed-shape draft *tree* (``spec_topology``), on the GPU, and
+``tree_verify`` checks the tree in one forward. The walk keeps the longest root
+path whose tokens equal the target's greedy tokens, so the output is the plain
+greedy decode's (``tree_verify`` gives every row single-step arithmetic).
 
-The best-first search follows TensorFold's (``drafters/dflash_tree.py``, MIT):
-per-depth log-softmax of ``(unary + 0.6 * pairwise) / 1.5``. On Qwen3.8-27B
-prose, 7 tree nodes commit ~3.7 tokens per cycle where upstream's adaptive chain
-commits ~2.3 (docs/reports/PERF_TREND.md).
+The lattice scoring follows TensorFold's draft-tree search
+(``drafters/dflash_tree.py``, MIT): per-position scores ``unary + edge *
+pairwise`` softened by ``tau``. TensorFold grows the tree best-first on the CPU;
+here the shape is fixed (a rank-path topology) so no host round trip sits
+between the drafter and the verify.
 """
 
 from __future__ import annotations
 
-import heapq
 import logging
 from typing import Any
 
 import mlx.core as mx
-import numpy as np
 
 from . import tree_verify as tv
 
 logger = logging.getLogger(__name__)
 
-NODES = 7  # draft nodes per round (window = pending token + nodes <= 8 rows)
-CHILDREN = 4  # candidates expanded under each node
 EDGE = 0.6  # weight of the pairwise score
 TAU = 1.5  # softmax temperature of the node scores
-
-
-class Lattice:
-    """Candidate tokens, scores and codebook rows of one drafter forward."""
-
-    __slots__ = ("cands", "unary", "hproj", "succ", "pred", "anchor")
-
-    def __init__(self, cands, unary, hproj, succ, pred, anchor):
-        self.cands = cands  # [D, K] int64 token ids
-        self.unary = unary  # [D, K] float64
-        self.hproj = hproj  # [D, R]
-        self.succ = succ  # [D, K, R] successor codebook rows of the candidates
-        self.pred = pred  # [D, K, R] predecessor codebook rows of the candidates
-        self.anchor = anchor  # [R] predecessor row of the pending token
-
-
-def compute_lattice(
-    drafter, anchor: int, hidden: mx.array, cache, positions: int
-) -> Lattice:
-    """One drafter forward over ``positions`` masked slots after ``anchor``."""
-    sel = drafter.candidate_selector
-    block = positions + 1
-    inputs = mx.array(
-        [[int(anchor)] + [int(drafter.config.mask_token_id)] * positions],
-        dtype=mx.int32,
-    )
-    dh = drafter._hidden(inputs, hidden, cache)[:, 1:]
-    logits = drafter._logits(dh)
-    cands = mx.argpartition(logits, -sel.top_k, axis=-1)[..., -sel.top_k :]
-    unary = mx.take_along_axis(logits, cands, axis=-1).astype(mx.float32)
-    hproj = sel.hidden_projection(dh).astype(mx.float32)
-    succ = sel.successor_codebook(cands).astype(mx.float32)
-    pred = sel.predecessor_codebook(cands).astype(mx.float32)
-    anchor_row = sel.predecessor_codebook(mx.array([int(anchor)])).astype(mx.float32)
-    mx.eval(cands, unary, hproj, succ, pred, anchor_row)
-    del block
-    return Lattice(
-        np.array(cands[0]).astype(np.int64),
-        np.array(unary[0]).astype(np.float64),
-        np.array(hproj[0]).astype(np.float64),
-        np.array(succ[0]),
-        np.array(pred[0]),
-        np.array(anchor_row[0]),
-    )
-
-
-def best_first_tree(
-    lat: Lattice,
-    nodes: int,
-    children: int = CHILDREN,
-    edge: float = EDGE,
-    tau: float = TAU,
-) -> tuple[list[int], list[int]]:
-    """Up to ``nodes`` draft tokens by summed path log-probability, as
-    ``(tokens, parents)`` in pop order (parents before children, -1 = root)."""
-    depth_count = int(lat.cands.shape[0])
-
-    def scores(depth: int, pred_row) -> np.ndarray:
-        edges = lat.succ[depth].astype(np.float64) @ (
-            pred_row.astype(np.float64) * lat.hproj[depth]
-        )
-        s = (lat.unary[depth] + edge * edges) / tau
-        s = s - s.max()
-        return s - np.log(np.exp(s).sum())
-
-    tokens: list[int] = []
-    parents: list[int] = []
-    cand_of: list[int] = []
-    heap: list[tuple[float, int, int, int]] = []
-    root = scores(0, lat.anchor)
-    for i in np.argsort(-root)[:children]:
-        heapq.heappush(heap, (-float(root[i]), -1, 0, int(i)))
-    while heap and len(tokens) < nodes:
-        neg, parent, depth, i = heapq.heappop(heap)
-        tokens.append(int(lat.cands[depth][i]))
-        parents.append(parent)
-        cand_of.append(i)
-        me = len(tokens) - 1
-        if depth + 1 < depth_count:
-            ls = scores(depth + 1, lat.pred[depth][i])
-            for j in np.argsort(-ls)[:children]:
-                heapq.heappush(heap, (neg - float(ls[j]), me, depth + 1, int(j)))
-    return tokens, parents
 
 
 def walk(window: list[int], parents: list[int], target: list[int]) -> list[int]:
@@ -133,9 +47,95 @@ def walk(window: list[int], parents: list[int], target: list[int]) -> list[int]:
         path.append(nxt)
 
 
+class GpuLattice:
+    """A drafter forward's candidates and scores, still on the GPU."""
+
+    __slots__ = ("cands", "unary", "hproj", "succ", "pred", "anchor")
+
+    def __init__(self, cands, unary, hproj, succ, pred, anchor):
+        self.cands, self.unary, self.hproj = cands, unary, hproj
+        self.succ, self.pred, self.anchor = succ, pred, anchor
+
+
+def compute_lattice_gpu(
+    drafter, anchor: int, hidden: mx.array, cache, positions: int
+) -> GpuLattice:
+    """``compute_lattice`` without the host round trip (nothing is evaluated)."""
+    sel = drafter.candidate_selector
+    inputs = mx.array(
+        [[int(anchor)] + [int(drafter.config.mask_token_id)] * positions],
+        dtype=mx.int32,
+    )
+    dh = drafter._hidden(inputs, hidden, cache)[:, 1:]
+    logits = drafter._logits(dh)
+    cands = mx.argpartition(logits, -sel.top_k, axis=-1)[0, ..., -sel.top_k :]  # [D, K]
+    unary = mx.take_along_axis(logits[0], cands, axis=-1).astype(mx.float32)
+    hproj = sel.hidden_projection(dh)[0].astype(mx.float32)
+    succ = sel.successor_codebook(cands).astype(mx.float32)  # [D, K, R]
+    pred = sel.predecessor_codebook(cands).astype(mx.float32)
+    anchor_row = sel.predecessor_codebook(mx.array([int(anchor)]))[0].astype(mx.float32)
+    return GpuLattice(cands, unary, hproj, succ, pred, anchor_row)
+
+
+def build_tokens(
+    lat: GpuLattice, topo, edge: float = EDGE, tau: float = TAU
+) -> mx.array:
+    """The draft tokens of ``topo`` (rank ``r`` = the ``r``-th best-scoring
+    candidate given the parent's token), in the topology's node order [n].
+    Scores follow the best-first search: ``(unary + edge * pairwise) / tau``."""
+    level_tokens = []
+    prev_idx = None
+    for depth, (_, parent_pos, ranks) in enumerate(topo.levels()):
+        ranks_a = mx.array(ranks, dtype=mx.int32)
+        if depth == 0:
+            pr = mx.broadcast_to(lat.anchor[None], (len(ranks), lat.anchor.shape[0]))
+        else:
+            par_idx = mx.take(prev_idx, mx.array(parent_pos, dtype=mx.int32))
+            pr = mx.take(lat.pred[depth - 1], par_idx, axis=0)  # [n, R]
+        edges = (pr * lat.hproj[depth][None]) @ lat.succ[depth].T  # [n, K]
+        score = (lat.unary[depth][None] + edge * edges) / tau
+        order = mx.argsort(-score, axis=-1)
+        idx = mx.take_along_axis(order, ranks_a[:, None], axis=1)[:, 0]
+        level_tokens.append(mx.take(lat.cands[depth], idx))
+        prev_idx = idx
+    tokens = mx.concatenate(level_tokens)
+    return mx.take(tokens, mx.array(topo.permutation(), dtype=mx.int32))
+
+
+def quantize_drafter(drafter: Any, bits: int = 8, group_size: int = 64) -> int:
+    """Quantize the drafter's projections in place (before ``bind``): drafts are
+    verified, so this changes only how often they land, and the drafter reads
+    ``bits / 16`` of the bytes per cycle. Returns the layers converted."""
+    import mlx.nn as nn
+
+    before = sum(
+        1 for _, m in drafter.named_modules() if isinstance(m, nn.QuantizedLinear)
+    )
+    nn.quantize(
+        drafter,
+        group_size=group_size,
+        bits=bits,
+        class_predicate=lambda _p, m: (
+            isinstance(m, nn.Linear) and m.weight.shape[-1] % group_size == 0
+        ),
+    )
+    mx.eval(drafter.parameters())
+    return (
+        sum(1 for _, m in drafter.named_modules() if isinstance(m, nn.QuantizedLinear))
+        - before
+    )
+
+
 def supported(model: Any, draft_model: Any) -> bool:
     lm = model.language_model if hasattr(model, "language_model") else model
     return hasattr(draft_model, "candidate_selector") and tv.supported(lm)
+
+
+# Rank paths of the draft tree, most valuable first (parents before children);
+# see spec_topology. Chosen from the measured frequency with which the target's
+# continuation follows each rank path of the DFlash2 lattice.
+TOPOLOGY = [(0,), (1,), (0, 0), (0, 1), (0, 0, 0), (2,), (0, 0, 0, 0)]
+POSITIONS = 7  # masked positions the drafter fills (its trained block minus one)
 
 
 def dflash_tree_rounds(
@@ -156,6 +156,8 @@ def dflash_tree_rounds(
     """Drop-in for upstream ``_dflash_rounds`` (single row): tree drafts."""
     from mlx_vlm.speculative.common import _record_speculative_round
 
+    from .spec_topology import Topology
+
     lm = model.language_model if hasattr(model, "language_model") else model
     if not greedy_sampling or not supported(model, draft_model):
         yield from _original(
@@ -174,29 +176,29 @@ def dflash_tree_rounds(
         return
     target_ids = list(draft_model.config.target_layer_ids)
     draft_cache = draft_model.reset(model)
+    full = Topology(TOPOLOGY)
     b = int(first_bonus)
     emitted = 1
     while emitted < max_tokens:
-        nodes = min(NODES, max_tokens - emitted)
-        if nodes < 1:
-            break
-        lat = compute_lattice(draft_model, b, hidden, draft_cache, min(nodes, 15))
-        toks, pars = best_first_tree(lat, nodes)
-        window = [b, *toks]
-        parents = [-1] + [0 if p < 0 else p + 1 for p in pars]
-        shape = tv.TreeShape(parents)
-        res = tv.tree_forward(
-            lm, mx.array([window], dtype=token_dtype), shape, prompt_cache, target_ids
+        topo = full.prefix(min(full.size, max_tokens - emitted))
+        lat = compute_lattice_gpu(
+            draft_model, b, hidden, draft_cache, max(POSITIONS, topo.max_depth)
         )
+        window = mx.concatenate(
+            [mx.array([b], dtype=mx.int32), build_tokens(lat, topo).astype(mx.int32)]
+        )[None]
+        res = tv.tree_forward(lm, window, topo.shape(), prompt_cache, target_ids)
         target = lm.speculative_argmax_from_hidden(res.hidden)
         try:
+            mx.async_eval(target, window)
             row_tokens = [int(t) for t in target.reshape(-1).tolist()]
+            tokens = [int(t) for t in window.reshape(-1).tolist()]
         except BaseException:
             tv.tree_abort(prompt_cache, res)
             raise
-        path = walk(window, parents, row_tokens)
-        new_tokens = [window[r] for r in path[1:]] + [row_tokens[path[-1]]]
-        _record_speculative_round(draft_model, len(path) - 1, len(toks))
+        path = walk(tokens, topo.window_parents, row_tokens)
+        new_tokens = [tokens[r] for r in path[1:]] + [row_tokens[path[-1]]]
+        _record_speculative_round(draft_model, len(path) - 1, topo.size)
         tv.tree_commit(lm, prompt_cache, res, path)
         hidden = mx.concatenate(res.captured, axis=-1)[
             :, mx.array(path, dtype=mx.int32)
@@ -230,7 +232,5 @@ def install() -> bool:
 __all__ = [
     "dflash_tree_rounds",
     "install",
-    "best_first_tree",
-    "compute_lattice",
     "walk",
 ]
