@@ -50,8 +50,60 @@ TRACKED_PATHS = frozenset(
 )
 # Endpoints whose JSON / SSE bodies get the ``x_yunshu`` object.
 STATS_PATHS = frozenset(
-    {"/v1/chat/completions", "/chat/completions", "/v1/completions", "/completions"}
+    {
+        "/v1/chat/completions",
+        "/chat/completions",
+        "/v1/completions",
+        "/completions",
+        "/v1/messages",
+        "/messages",
+        "/v1/responses",
+    }
 )
+_RESPONSES_TERMINAL = frozenset(
+    {"response.completed", "response.incomplete", "response.failed"}
+)
+_RESPONSES_DELTAS = frozenset(
+    {
+        "response.output_text.delta",
+        "response.reasoning_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.function_call_arguments.delta",
+        "response.refusal.delta",
+    }
+)
+
+
+def dialect(path: str) -> str:
+    """Which wire format a tracked path speaks: chat (OpenAI chat / completions),
+    anthropic (Messages) or responses (OpenAI Responses)."""
+    if path.endswith("/messages"):
+        return "anthropic"
+    if path.endswith("/responses"):
+        return "responses"
+    return "chat"
+
+
+def normalize_usage(usage: dict | None) -> dict:
+    """Any dialect's usage object as chat-style ``prompt_tokens`` / ``completion_tokens`` /
+    ``prompt_tokens_details.cached_tokens`` (what build_stats reads); ``{}`` when empty."""
+    if not isinstance(usage, dict):
+        return {}
+    out: dict[str, Any] = {}
+    prompt = usage.get("prompt_tokens", usage.get("input_tokens"))
+    completion = usage.get("completion_tokens", usage.get("output_tokens"))
+    if prompt is not None:
+        out["prompt_tokens"] = prompt
+    if completion is not None:
+        out["completion_tokens"] = completion
+    cached = (
+        (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
+        or (usage.get("input_tokens_details") or {}).get("cached_tokens")
+        or usage.get("cache_read_input_tokens")
+    )
+    if cached:
+        out["prompt_tokens_details"] = {"cached_tokens": cached}
+    return out
 
 
 def sanitize_request_id(raw: str | bytes | None) -> str | None:
@@ -439,6 +491,7 @@ class YunshuExtensionsMiddleware:
         }
         rid_header = (REQUEST_ID_HEADER.lower().encode(), info.request_id.encode())
         stats_path = info.path in STATS_PATHS
+        kind = dialect(info.path)
 
         async def emit(message) -> None:
             async with send_lock:
@@ -466,6 +519,48 @@ class YunshuExtensionsMiddleware:
                 except Exception:
                     return
 
+        def attach(obj: dict, usage: dict) -> None:
+            """Put ``x_yunshu`` inside a usage object (extra fields there are tolerated
+            by the OpenAI / Anthropic SDK models)."""
+            norm = normalize_usage(usage)
+            if kind != "chat" and info.stats is not None:
+                norm.pop("prompt_tokens", None)  # the engine's own count is exact
+            info.usage = norm or info.usage
+            info.t_done = time.perf_counter()
+            usage["x_yunshu"] = build_stats(info, norm)
+            state["sent_stats"] = True
+
+        def handle_event(obj: dict) -> bool:
+            """First-token detection and stats injection for one SSE event; True if changed."""
+            t = obj.get("type")
+            if kind == "chat":
+                if info.t_first_chunk is None and _has_content(obj):
+                    info.t_first_chunk = time.perf_counter()
+                if _is_usage_event(obj):
+                    attach_chat(obj)
+                    return True
+            elif kind == "anthropic":
+                if info.t_first_chunk is None and t == "content_block_delta":
+                    info.t_first_chunk = time.perf_counter()
+                if t == "message_delta" and isinstance(obj.get("usage"), dict):
+                    attach(obj, obj["usage"])
+                    return True
+            else:
+                if info.t_first_chunk is None and t in _RESPONSES_DELTAS:
+                    info.t_first_chunk = time.perf_counter()
+                if t in _RESPONSES_TERMINAL:
+                    u = (obj.get("response") or {}).get("usage")
+                    if isinstance(u, dict):
+                        attach(obj, u)
+                        return True
+            return False
+
+        def attach_chat(obj: dict) -> None:
+            info.usage = obj["usage"]
+            info.t_done = time.perf_counter()
+            obj["x_yunshu"] = build_stats(info, obj["usage"])
+            state["sent_stats"] = True
+
         def rewrite_sse(chunk: bytes) -> bytes:
             """Stats injection + first-token detection; cheap checks first."""
             need_parse = info.t_first_chunk is None or b'"usage"' in chunk
@@ -481,31 +576,28 @@ class YunshuExtensionsMiddleware:
             for part in text.split("\n\n"):
                 if not part:
                     continue
-                if part.startswith("data:") and part[5:].strip() != "[DONE]":
+                lines = part.split("\n")
+                di = next((i for i, ln in enumerate(lines) if ln.startswith("data:")), -1)
+                if di >= 0 and lines[di][5:].strip() != "[DONE]":
                     try:
-                        obj = json.loads(part[5:])
+                        obj = json.loads(lines[di][5:])
                     except ValueError:
                         out.append(part)
                         continue
-                    if isinstance(obj, dict):
-                        if info.t_first_chunk is None and _has_content(obj):
-                            info.t_first_chunk = time.perf_counter()
-                        if _is_usage_event(obj):
-                            info.usage = obj["usage"]
-                            info.t_done = time.perf_counter()
-                            obj["x_yunshu"] = build_stats(info, obj["usage"])
-                            state["sent_stats"] = True
-                            out.append("data: " + json.dumps(obj, ensure_ascii=False))
-                            changed = True
-                            continue
-                elif part.strip() == "data: [DONE]" and not state["sent_stats"]:
-                    info.t_done = time.perf_counter()
-                    out.append(
-                        ": yunshu-stats "
-                        + json.dumps(build_stats(info), separators=(",", ":"))
-                    )
-                    state["sent_stats"] = True
-                    changed = True
+                    if isinstance(obj, dict) and handle_event(obj):
+                        lines[di] = "data: " + json.dumps(obj, ensure_ascii=False)
+                        out.append("\n".join(lines))
+                        changed = True
+                        continue
+                elif kind == "chat" and part.strip() == "data: [DONE]":
+                    if not state["sent_stats"]:
+                        info.t_done = time.perf_counter()
+                        out.append(
+                            ": yunshu-stats "
+                            + json.dumps(build_stats(info), separators=(",", ":"))
+                        )
+                        state["sent_stats"] = True
+                        changed = True
                 out.append(part)
             if not changed:
                 return chunk
@@ -573,11 +665,23 @@ class YunshuExtensionsMiddleware:
                     obj = json.loads(body)
                 except ValueError:
                     obj = None
-                if isinstance(obj, dict) and (obj.get("usage") or obj.get("choices")):
-                    info.usage = obj.get("usage")
-                    info.t_done = time.perf_counter()
-                    stats = build_stats(info, obj.get("usage"))
-                    obj["x_yunshu"] = stats
+                if kind == "chat":
+                    ok = isinstance(obj, dict) and (obj.get("usage") or obj.get("choices"))
+                else:
+                    ok = (
+                        isinstance(obj, dict)
+                        and obj.get("type", obj.get("object")) in ("message", "response")
+                        and isinstance(obj.get("usage"), dict)
+                    )
+                if ok:
+                    if kind == "chat":
+                        info.usage = obj.get("usage")
+                        info.t_done = time.perf_counter()
+                        stats = build_stats(info, obj.get("usage"))
+                        obj["x_yunshu"] = stats
+                    else:
+                        attach(obj, obj["usage"])
+                        stats = obj["usage"]["x_yunshu"]
                     body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
                     headers.extend(stats_headers(stats, info))
                 headers.extend(queue_headers(info))
