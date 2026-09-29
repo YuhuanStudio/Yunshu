@@ -1,3 +1,4 @@
+# Upstream (derived): ashhart/TensorFold (MIT) src/tensorfold/kernels/qwen/dense/v1/lane_qmm.py @ 34bae79a
 """Row-invariant quantized projections for the round driver (any row count).
 
 TensorFold's lane matmul (``kernels.tensorfold.lane_qmm``, MIT) multiplies bf16

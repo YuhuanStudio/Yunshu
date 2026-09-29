@@ -1,5 +1,23 @@
 # Third-party code
 
+`vendor.json` lists every piece of code Yunshu copied (`vendored`), rewrote from specific upstream files
+(`derived`), reimplemented from an upstream idea (`inspired`) or monkeypatches at runtime (`patches`), with the
+upstream repo, paths, base commit and license; `just vendor-check` reports what changed upstream since
+(see `docs/guides/UPSTREAM_TRACKING.md`). Each such source file starts with an `# Upstream` / `# Patches upstream`
+comment. Summary of upstreams and licenses:
+
+| Upstream | License | Used as |
+|---|---|---|
+| jundot/omlx | Apache-2.0 | vendored `kernels/omlx/`; derived `ragged_attention.py` tile kernel, `mtp_patch.py`; inspired `spec_prefill.py`, `lane_layers.py` |
+| ashhart/TensorFold | MIT | vendored `kernels/tensorfold/`; derived `lane_linear.py`, `int_code_linear.py`, `round_driver/allocate.py`; inspired draft vocabulary, DFlash/tree drafting, tree verify, round driver, ordered chunk merge |
+| Blaizzy/mlx-vlm | MIT | patched (speculative verifier, DFlash/MTP rounds, batch generator, audio patches); derived `dflash_context.py`, `mtp_lane.py`, `mtp_tree.py`; tool-format registry |
+| ml-explore/mlx-lm | MIT | patched Qwen3.5 GatedDeltaNet (`n_confirmed_patch.py`); tool parsers |
+| ml-explore/mlx | MIT | patched `nn.QuantizedLinear.__call__` for batch-invariant decode |
+| vllm-project/vllm, vllm-omni | Apache-2.0 | derived `gemma4_assistant.py`; inspired n-gram / suffix proposers, block pool, TeaCache |
+| ggml-org/llama.cpp | MIT | inspired n-gram hash pool |
+| incoai/splash | Apache-2.0 | inspired lossless (batch-invariant) speculative decoding; credited inside the vendored oMLX kernels |
+| bstnxbt/dflash-mlx, youssofal/MTPLX | Apache-2.0 | credited inside the vendored oMLX kernels |
+
 ## oMLX — `python/yunshu_engine/kernels/omlx/`
 
 Qwen3.5-family MTP verify kernels (`qwen35_verify_qmm.py`, `qwen35_gdn_prework.py`,

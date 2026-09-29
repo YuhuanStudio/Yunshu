@@ -1,3 +1,4 @@
+# Upstream (derived): ashhart/TensorFold (MIT) src/tensorfold/engine/allocate.py @ 34bae79a
 """Cost-aware draft allocation across rows (TensorFold's rule, MIT).
 
 Adapted from TensorFold ``engine/allocate.py`` (https://github.com/ashhart/

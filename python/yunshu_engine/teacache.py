@@ -1,3 +1,4 @@
+# Upstream (inspired): vllm-project/vllm-omni (Apache-2.0) vllm_omni/diffusion/cache/teacache @ 1b97ff11
 from __future__ import annotations
 
 """TeaCache — Timestep Embedding Aware Cache for diffusion acceleration.

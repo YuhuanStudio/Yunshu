@@ -1,3 +1,4 @@
+# Upstream (inspired): vllm-project/vllm (Apache-2.0) vllm/v1/spec_decode/suffix_decoding.py @ 924707f1
 from __future__ import annotations
 
 """Suffix-based Speculative Decoding — pattern reuse from own generation.

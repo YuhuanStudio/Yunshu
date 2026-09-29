@@ -1,3 +1,4 @@
+# Upstream (inspired): ashhart/TensorFold (MIT) src/tensorfold/engine/lane_engine.py, src/tensorfold/engine/lane_family.py @ 34bae79a
 """Round driver: rows advance in packed forwards, prefill and decode interleaved.
 
 See docs/guides/ROUND_DRIVER.md. Each step is one packed forward of one kind:

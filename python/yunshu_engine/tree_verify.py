@@ -1,3 +1,4 @@
+# Upstream (inspired): ashhart/TensorFold (MIT) src/tensorfold/kernels/qwen/dense/v1/lane_tree.py @ 34bae79a
 """Tree-shaped speculative verify for the Qwen3.5 family (bit-exact per path).
 
 A *window* is the pending token (row 0, the root) plus draft nodes whose

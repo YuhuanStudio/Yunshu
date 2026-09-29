@@ -1,3 +1,4 @@
+# Patches upstream mlx-vlm symbols (see vendor.json kind=patches; `just vendor-check` flags source changes)
 """Per-row-length batch KV cache for the VLM runner's shared decode batch.
 
 Replaces upstream ``BatchKVCache`` (one left-padded ``[B, H, L_max, D]`` array)

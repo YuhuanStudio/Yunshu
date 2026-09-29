@@ -1,3 +1,5 @@
+# Upstream (inspired): incoai/splash (Apache-2.0) runtime/metal/kernels/common/paged_attention_tile.h @ c64a578f
+# Patches upstream mlx, mlx-vlm symbols (see vendor.json kind=patches; `just vendor-check` flags source changes)
 """Batch-invariant decode for Qwen3.5-family targets (Splash-style lossless spec).
 
 Every target matmul for decode (1 row) and speculative verify (2-8 rows) goes

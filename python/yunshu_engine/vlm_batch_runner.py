@@ -1,3 +1,4 @@
+# Patches upstream mlx-vlm symbols (see vendor.json kind=patches; `just vendor-check` flags source changes)
 """VLM text runner on upstream mlx-vlm ``BatchGenerator`` with shared batching.
 
 One decode path for a loaded VLM target that combines, per request:

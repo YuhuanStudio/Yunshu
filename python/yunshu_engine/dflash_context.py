@@ -1,3 +1,5 @@
+# Upstream (derived): Blaizzy/mlx-vlm (MIT) mlx_vlm/speculative/utils.py, mlx_vlm/models/qwen3_5/language.py, mlx_vlm/speculative/drafters/qwen3_dflash/dflash.py @ v0.7.3
+# Patches upstream mlx-vlm symbols (see vendor.json kind=patches; `just vendor-check` flags source changes)
 """DFlash speculative decoding on Qwen3.5: lossless prefill, verify head, and
 the drafter's context window.
 

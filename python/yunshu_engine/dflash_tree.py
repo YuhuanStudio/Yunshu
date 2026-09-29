@@ -1,3 +1,5 @@
+# Upstream (inspired): ashhart/TensorFold (MIT) src/tensorfold/drafters/dflash_tree.py @ 34bae79a
+# Patches upstream mlx-vlm symbols (see vendor.json kind=patches; `just vendor-check` flags source changes)
 """DFlash2 draft trees for the single-request speculative lane.
 
 DFlash2 proposes, for a block of positions after the pending token, the top-K

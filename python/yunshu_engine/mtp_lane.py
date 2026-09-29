@@ -1,3 +1,5 @@
+# Upstream (derived): Blaizzy/mlx-vlm (MIT) mlx_vlm/speculative/mtp.py @ v0.7.3
+# Patches upstream mlx-vlm symbols (see vendor.json kind=patches; `just vendor-check` flags source changes)
 """MTP rounds for the speculative lane's single greedy request.
 
 Same contract as ``mlx_vlm.speculative.mtp._mtp_rounds_batch`` for one row

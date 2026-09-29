@@ -1,3 +1,4 @@
+# Upstream (derived): vllm-project/vllm (Apache-2.0) vllm/model_executor/models/gemma4_mtp.py @ 924707f1
 """Gemma-4 MTP assistant drafter — centroid-based sparse logit masking (MLX).
 
 Port of vLLM's ``Gemma4MTPMaskedEmbedder`` (see

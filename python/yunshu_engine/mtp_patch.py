@@ -1,3 +1,4 @@
+# Upstream (derived): jundot/omlx (Apache-2.0) omlx/patches/mlx_lm_mtp @ deb9f00a
 # DEPRECATED : home-grown Qwen3.5 MTP — superseded by mlx-vlm's
 # native MTP (see mlxvlm_mtp.py + YUNSHU_SPEC_UNVERIFIED=mlxvlm_mtp; ~1.82x in a proof script, not served/gated — experimental).
 # This lacked mlx-vlm's GatedDeltaNet intermediate-state capture (garbage on 27B,

@@ -1,3 +1,4 @@
+# Upstream (inspired): ashhart/TensorFold (MIT) src/tensorfold/kernels/qwen/dense/v1/lane_multi.py, src/tensorfold/kernels/qwen/dense/v1/lane_glue.py @ 34bae79a
 """One packed forward over independent row segments (Qwen3.5 dense family).
 
 A segment is one row's tokens for this step with that row's own caches:
