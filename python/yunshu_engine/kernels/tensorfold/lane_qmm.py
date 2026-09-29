@@ -265,7 +265,7 @@ def supports(weight: mx.array, scales: mx.array, x: mx.array, bits: int, group_s
 
 
 def lane_matmul(x: mx.array, weight: mx.array, sbt: mx.array, *, tiled: bool = False,
-                sk: int | None = None, nt: int = NT, group: int = 64) -> mx.array:
+                sk: int | None = None, nt: int = NT, group: int = 64, row_block: int | None = None) -> mx.array:
     """x (..., K) bf16 times the packed ``weight`` (N, K*bits/32) transposed, rows <= MAX_ROWS, tiled or not."""
 
     K = int(x.shape[-1])
@@ -303,7 +303,7 @@ def lane_matmul(x: mx.array, weight: mx.array, sbt: mx.array, *, tiled: bool = F
             _xs_cache.pop(next(iter(_xs_cache)))
     sk = int(sk) if sk else split_k(N, K)       # a column's bits follow K and sk (lane_fuse's stacks)
     nt = int(nt) if tiled else NT
-    block = MP if MP <= ROW_BLOCK else ROW_BLOCK
+    block = int(row_block) if row_block else (MP if MP <= ROW_BLOCK else ROW_BLOCK)
     edge = int(MP % block != 0)     # a bound check only where the last block passes MP (33-48, 65-80, 97-112 rows)
     if bits != 4:
         if tiled and N % NT:

@@ -89,8 +89,18 @@ class LaneLinear(nn.Module):
         )
 
     def _rows(self, x2: mx.array) -> mx.array:
+        # 17..48 rows: 16-row threadgroup blocks (same bits per row as the
+        # default 32-row block, 10-35% faster on projections up to ~20K wide;
+        # the 248K-wide LM head is slower that way)
+        m = int(x2.shape[0])
+        block = 16 if 16 < m <= 48 and self.output_dims < 100_000 else None
         return lane_qmm.lane_matmul(
-            x2, self.weight, self.sbt, tiled=self.tiled, group=self.group_size
+            x2,
+            self.weight,
+            self.sbt,
+            tiled=self.tiled,
+            group=self.group_size,
+            row_block=block,
         )
 
     def stock(self) -> tuple[mx.array, mx.array, mx.array]:
