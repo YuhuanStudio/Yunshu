@@ -1,0 +1,167 @@
+"""MTP *tree* speculative greedy output == plain greedy output, bit-exact, with
+the speculative lane's decode attention on the ragged kernels.
+
+Small real model (Qwen3.5-0.8B with its MTP head), quantized to 4 bits in
+memory so the batch-invariant projections apply; ``ragged_kv.set_dense_lane``
+routes decode (T=1) and verify (T<=8) attention through the same per-row
+kernel. Prompts: a short one and one with >1024 tokens of context (past MLX's
+first SDPA plan switch). Point ``YUNSHU_PARITY_MODEL`` at another Qwen3.5
+checkpoint with an MTP head to run elsewhere.
+
+    uv run pytest tests/integration/test_ragged_spec_parity.py -q
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+import pytest
+
+mx = pytest.importorskip("mlx.core")
+
+# A local Qwen3.5 checkpoint (e.g. Qwen3.5-0.8B-MLX-bf16); the test skips
+# when YUNSHU_PARITY_MODEL is unset.
+MODEL = Path(os.environ.get("YUNSHU_PARITY_MODEL", "")).expanduser()
+
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.slow,
+    pytest.mark.skipif(not mx.metal.is_available(), reason="needs an Apple GPU"),
+    pytest.mark.skipif(
+        not (MODEL / "config.json").exists(),
+        reason="set YUNSHU_PARITY_MODEL to a local Qwen3.5 checkpoint directory",
+    ),
+]
+
+FILLER = "".join(
+    f"Log line {i}: sensor {i % 17} reading {i * 37 % 1000}.\n" for i in range(4000)
+)
+
+
+def _drafter(path: Path):
+    """The checkpoint's MTP head: from the shards when indexed, else from a
+    separate ``mtp-weights.safetensors``."""
+    import yunshu_engine.mlxvlm_mtp as m
+
+    extra = path / "mtp-weights.safetensors"
+    if not extra.exists():
+        return m._load_drafter_in_memory(str(path))
+    weights = mx.load(str(extra))
+    orig = m._load_mtp_head_tensors
+    m._load_mtp_head_tensors = lambda _p: {
+        k.removeprefix("mtp."): v for k, v in weights.items()
+    }
+    try:
+        return m._load_drafter_in_memory(str(path))
+    finally:
+        m._load_mtp_head_tensors = orig
+
+
+@pytest.fixture(scope="module")
+def engine():
+    import mlx.nn as nn
+    from mlx_vlm import load
+
+    from yunshu_engine.kernels import batch_invariant, omlx, ragged_kv
+
+    omlx.apply()
+    model, processor = load(str(MODEL))
+    lm = model.language_model
+    nn.quantize(
+        lm,
+        group_size=64,
+        bits=4,
+        class_predicate=lambda _p, mod: (
+            isinstance(mod, nn.Linear) and mod.weight.shape[-1] % 64 == 0
+        ),
+    )
+    batch_invariant.install(lm, model=model, packed=False)
+    batch_invariant.set_active(True)
+    ragged_kv.install()
+    ragged_kv.set_dense_lane(True)
+    try:
+        yield model, processor, _drafter(MODEL)
+    finally:
+        ragged_kv.set_dense_lane(False)
+        batch_invariant.set_active(False)
+
+
+def _generate(engine, prompt: str, max_tokens: int, block: int) -> list[int]:
+    from mlx_vlm.generate.ar import BatchGenerator
+
+    from yunshu_engine.mrope import clear_rope_state
+
+    model, processor, drafter = engine
+    tok = processor.tokenizer
+    text = tok.apply_chat_template(
+        [{"role": "user", "content": prompt}],
+        tokenize=False,
+        add_generation_prompt=True,
+        enable_thinking=False,
+    )
+    ids = tok.encode(text, add_special_tokens=False)
+    gen = BatchGenerator(
+        model.language_model,
+        processor,
+        max_tokens=max_tokens,
+        draft_model=drafter if block else None,
+        draft_kind="mtp" if block else None,
+        draft_block_size=block or None,
+        greedy_sampling=True,
+        compute_logprobs=False,
+    )
+    clear_rope_state(model)
+    kw = model.get_input_embeddings(mx.array(ids)[None], None, mask=None).to_dict()
+    (uid,) = gen.insert([ids], max_tokens=max_tokens, prompt_kwargs=[kw])
+    out: list[int] = []
+    try:
+        while True:
+            _, responses = gen.next()
+            done = False
+            for r in responses:
+                if r.uid != uid:
+                    continue
+                if r.token is not None:
+                    out.append(int(r.token))
+                done = done or r.finish_reason is not None
+            if done:
+                return out
+    finally:
+        gen.close()
+
+
+@pytest.fixture
+def tree_widths(monkeypatch):
+    """Branching tree windows the tree verify served (proof the path engaged)."""
+    from yunshu_engine import mtp_tree, tree_verify
+
+    mtp_tree.install()
+    seen: list[int] = []
+    orig = tree_verify.tree_forward
+
+    def spy(lm, tokens, shape, cache, capture_ids=()):
+        if not shape.is_chain:
+            seen.append(int(shape.width))
+        return orig(lm, tokens, shape, cache, capture_ids)
+
+    monkeypatch.setattr(tree_verify, "tree_forward", spy)
+    return seen
+
+
+@pytest.mark.parametrize("context", [0, 1500])
+def test_mtp_tree_greedy_equals_plain_greedy(engine, tree_widths, context):
+    tok = engine[1].tokenizer
+    prompt = "Explain in detail how a refrigerator works."
+    if context:
+        filler = tok.encode(FILLER, add_special_tokens=False)[:context]
+        prompt = tok.decode(filler) + "\n\nSummarize the readings above, then " + prompt
+    plain = _generate(engine, prompt, 96, 0)
+    assert len(plain) > 16
+    spec = _generate(engine, prompt, 96, 6)
+    assert tree_widths  # branching trees ran through the tree verify
+    first = next(
+        (i for i, (a, b) in enumerate(zip(spec, plain, strict=False)) if a != b),
+        None,
+    )
+    assert spec == plain, f"first difference at token {first}"
