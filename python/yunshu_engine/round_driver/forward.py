@@ -1,20 +1,14 @@
-"""One packed forward over independent row segments (Qwen3.5 dense family).
+"""Prefill: one packed forward over prompt chunks of several rows.
 
-A segment is one row's tokens for this step with that row's own caches:
-
-- ``decode``: the pending token plus drafts (1..8 tokens). Attention runs the
-  ragged token-tile kernel over the row's ``KVCache`` (per-token bits
-  independent of the window length); the step runs under an upstream
-  speculative cache transaction so the row can keep any prefix of its window
-  (``Segment.commit``).
-- prefill: a fixed chunk of a prompt. Attention is causal SDPA over the row's
-  cache; the GDN recurrence runs on the chunk.
-
+A segment is one row's chunk (a fixed span of its prompt) with that row's own
+caches (a ``KVCache`` per attention layer, an ``ArraysCache`` per GDN layer).
 Every weight-bearing op runs once over the packed tokens of all segments
 (norms, GDN / attention in and out projections, MLP): with the target's
-projections converted to ``LaneLinear`` those are row-invariant, so each
-segment's hidden states have the bits it would get in a forward of its own.
-Only the sequence mixers run per segment, on the row's caches.
+projections converted to ``LaneLinear`` those are row-invariant, so a chunk's
+hidden states have the bits it would get in a forward of its own. Only the
+sequence mixers run per segment, on the row's caches: attention is causal SDPA
+over the row's keys, the GDN conv + recurrence run on the chunk. Decoding rows
+run in ``batch.DecodeBatch``, not here.
 """
 
 from __future__ import annotations
@@ -25,33 +19,17 @@ from typing import Any
 import mlx.core as mx
 import mlx.nn as nn
 
-MAX_DECODE_TOKENS = 8  # the tile kernel's token window
-
 
 @dataclass
 class Segment:
-    """One row's tokens for this step."""
+    """One row's prompt chunk for this step."""
 
     cache: list
     tokens: mx.array  # [T] int32
-    decode: bool
-    transaction: Any = None
 
     @property
     def length(self) -> int:
         return int(self.tokens.shape[0])
-
-    def commit(self, keep: int) -> None:
-        """Keep the first ``keep`` positions of a decode window (KV trimmed,
-        GDN state at that position); the rest are rolled back."""
-        if self.transaction is not None:
-            self.transaction.commit(int(keep))
-            self.transaction = None
-
-    def abort(self) -> None:
-        if self.transaction is not None:
-            self.transaction.abort()
-            self.transaction = None
 
 
 def supports(language_model: Any) -> bool:
@@ -70,44 +48,14 @@ def supports(language_model: Any) -> bool:
     return True
 
 
-def _row_attention(queries: mx.array, cache: Any, scale: float) -> mx.array:
-    """Decode / verify attention of one row over its ``KVCache`` (keys at
-    ``0 .. offset - 1`` after this step's write) on the token-tile kernel."""
-    from ..kernels import ragged_attention as ra
-    from ..kernels.ragged_kv import _round_up
-
-    keys, values = cache.keys, cache.values
-    n = int(cache.offset)
-    if keys.shape[2] % 64:
-        # the tile kernel reads 64-key windows at absolute positions; a
-        # capacity that is not a multiple of 64 would move the last window
-        pad = [(0, 0), (0, 0), (0, _round_up(keys.shape[2]) - keys.shape[2]), (0, 0)]
-        cache.keys = keys = mx.pad(keys, pad)
-        cache.values = values = mx.pad(values, pad)
-    tile = queries.shape[1] // keys.shape[1] <= 8 and ra.tile_ready()
-    return ra.ragged_decode_attention(
-        queries,
-        keys,
-        values,
-        mx.array([n], dtype=mx.int32),
-        scale,
-        max_length=n,
-        row_lengths=(n,),
-        impl="tile" if tile else "auto",
-    )
-
-
 def _attention_mix(attn, q, k, v, seg: Segment, cache) -> mx.array:
     T = seg.length
     queries, keys, values, gate, _ = attn._prepare_projected_qkv(
         q, k, v, cache, None, None, None
     )
-    if seg.decode:
-        out = _row_attention(queries, cache, attn.scale)
-    else:
-        out = mx.fast.scaled_dot_product_attention(
-            queries, keys, values, scale=attn.scale, mask="causal" if T > 1 else None
-        )
+    out = mx.fast.scaled_dot_product_attention(
+        queries, keys, values, scale=attn.scale, mask="causal" if T > 1 else None
+    )
     out = out.transpose(0, 2, 1, 3).reshape(1, T, -1)
     return out * mx.sigmoid(gate)
 
@@ -154,56 +102,34 @@ def _slices(segments: list[Segment]) -> list[tuple[int, int]]:
 
 
 def forward(language_model: Any, segments: list[Segment]) -> mx.array:
-    """Run ``segments`` through the decoder in one packed forward; returns the
-    final-norm hidden states ``[N, D]`` in segment order. Decode segments get a
-    speculative cache transaction (``Segment.commit`` / ``abort``)."""
-    from mlx_vlm.speculative.cache_state import start_speculative_cache
-
+    """Run prompt ``segments`` through the decoder in one packed forward;
+    returns the final-norm hidden states ``[N, D]`` in segment order."""
     model = language_model.model
     spans = _slices(segments)
-    for seg in segments:
-        if seg.decode:
-            if seg.length > MAX_DECODE_TOKENS:
-                raise ValueError("decode segment longer than the tile window")
-            seg.transaction = start_speculative_cache(seg.cache, seg.length)
-    try:
-        tokens = mx.concatenate([s.tokens for s in segments]).astype(mx.int32)
-        x = model.embed_tokens(tokens)[None]
-        for i, layer in enumerate(model.layers):
-            xn = layer.input_layernorm(x)
-            if layer.is_linear:
-                g = layer.linear_attn
-                qkv, z = g.in_proj_qkv(xn), g.in_proj_z(xn)
-                b, a = g.in_proj_b(xn), g.in_proj_a(xn)
-                parts = [
-                    _gdn_mix(
-                        g,
-                        qkv[:, s:e],
-                        z[:, s:e],
-                        b[:, s:e],
-                        a[:, s:e],
-                        seg.cache[i],
-                    )
-                    for seg, (s, e) in zip(segments, spans, strict=True)
-                ]
-                r = g.out_proj(mx.concatenate(parts, axis=1))
-            else:
-                at = layer.self_attn
-                q, k, v = at.q_proj(xn), at.k_proj(xn), at.v_proj(xn)
-                parts = [
-                    _attention_mix(
-                        at, q[:, s:e], k[:, s:e], v[:, s:e], seg, seg.cache[i]
-                    )
-                    for seg, (s, e) in zip(segments, spans, strict=True)
-                ]
-                r = at.o_proj(mx.concatenate(parts, axis=1))
-            h = x + r
-            x = h + layer.mlp(layer.post_attention_layernorm(h))
-        return model.norm(x)[0]
-    except BaseException:
-        for seg in segments:
-            seg.abort()
-        raise
+    tokens = mx.concatenate([s.tokens for s in segments]).astype(mx.int32)
+    x = model.embed_tokens(tokens)[None]
+    for i, layer in enumerate(model.layers):
+        xn = layer.input_layernorm(x)
+        if layer.is_linear:
+            g = layer.linear_attn
+            qkv, z = g.in_proj_qkv(xn), g.in_proj_z(xn)
+            b, a = g.in_proj_b(xn), g.in_proj_a(xn)
+            parts = [
+                _gdn_mix(g, qkv[:, s:e], z[:, s:e], b[:, s:e], a[:, s:e], seg.cache[i])
+                for seg, (s, e) in zip(segments, spans, strict=True)
+            ]
+            r = g.out_proj(mx.concatenate(parts, axis=1))
+        else:
+            at = layer.self_attn
+            q, k, v = at.q_proj(xn), at.k_proj(xn), at.v_proj(xn)
+            parts = [
+                _attention_mix(at, q[:, s:e], k[:, s:e], v[:, s:e], seg, seg.cache[i])
+                for seg, (s, e) in zip(segments, spans, strict=True)
+            ]
+            r = at.o_proj(mx.concatenate(parts, axis=1))
+        h = x + r
+        x = h + layer.mlp(layer.post_attention_layernorm(h))
+    return model.norm(x)[0]
 
 
 def logits(language_model: Any, hidden: mx.array) -> mx.array:
@@ -217,4 +143,4 @@ def logits(language_model: Any, hidden: mx.array) -> mx.array:
     return language_model.lm_head(hidden)
 
 
-__all__ = ["MAX_DECODE_TOKENS", "Segment", "forward", "logits", "supports"]
+__all__ = ["Segment", "forward", "logits", "supports"]

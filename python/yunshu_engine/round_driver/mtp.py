@@ -22,6 +22,9 @@ from __future__ import annotations
 from typing import Any
 
 import mlx.core as mx
+import numpy as np
+
+from .batch import KVPlan, Slots, attend
 
 
 class MTPHead:
@@ -32,6 +35,8 @@ class MTPHead:
         self.lm = language_model
         self.embed = language_model.model.embed_tokens
         self.logits = logits_fn
+        self.slots = Slots(len(drafter.layers))
+        self.rows: list = []  # rows in the slot buffers
 
     def make_cache(self) -> list:
         from mlx_vlm.models.cache import KVCache
@@ -88,23 +93,16 @@ class MTPHead:
             s += n
         return res
 
-    # ── row bookkeeping ──────────────────────────────────────────────────
-    @staticmethod
-    def _trim(cache: list, n: int) -> None:
-        if n > 0:
-            for c in cache:
-                c.trim(n)
-
-    def absorb(self, rows: list[tuple[Any, list[int], mx.array]]) -> list[mx.array]:
-        """``rows``: (row state with ``mtp_cache`` / ``mtp_temp``, next tokens,
-        target hidden [n, D]) — position ``p`` pairs token ``p + 1`` with hidden
-        ``p``. Drops each row's temporary chain entries first; returns each
-        row's head output at its last absorbed position [D]."""
+    # ── prompt chunks: per row, on the row's own KV ─────────────────────
+    def absorb_prompt(
+        self, rows: list[tuple[Any, list[int], mx.array]]
+    ) -> list[mx.array]:
+        """``rows``: (row state with ``mtp_cache``, next tokens, target hidden
+        [n, D]) of prompt chunks — position ``p`` pairs token ``p + 1`` with
+        hidden ``p``. Returns each row's head output at its last absorbed
+        position [D]."""
         if not rows:
             return []
-        for row, _, _ in rows:
-            self._trim(row.mtp_cache, row.mtp_temp)
-            row.mtp_temp = 0
         outs = self._forward(
             [r.mtp_cache for r, _, _ in rows],
             [mx.array(t, dtype=mx.int32) for _, t, _ in rows],
@@ -112,44 +110,97 @@ class MTPHead:
         )
         return [o[-1] for o in outs]
 
-    def draft(self, rows: list[tuple[Any, mx.array, int]]) -> list[list[int]]:
-        """``rows``: (row state, head output at the last absorbed position [D],
-        depth). Returns each row's ``depth`` greedy drafts."""
-        live = [(r, h, d) for r, h, d in rows if d > 0]
-        drafts: dict[int, list] = {id(r): [] for r, _, _ in rows}
+    # ── decoding rows: shared slot buffers, one launch per layer ─────────
+    def join(self, rows: list) -> None:
+        """Move rows whose prompt is absorbed (``mtp_cache`` holds ``hn``
+        positions) into the slot buffers."""
+        slots = self.slots
+        for row in rows:
+            row.hslot = slots.alloc()
+            row.hn = int(row.mtp_cache[0].offset)
+        slots.reserve(max(r.hn for r in rows) + 16)
+        for row in rows:
+            for li, c in enumerate(row.mtp_cache):
+                slots.write_prefix(li, row.hslot, c.keys, c.values, row.hn)
+            row.mtp_cache = None
+        self.rows.extend(rows)
+
+    def leave(self, gone: list) -> None:
+        ids = {id(r) for r in gone}
+        for r in self.rows:
+            if id(r) in ids:
+                self.slots.release(r.hslot)
+                r.hslot = None
+        self.rows = [r for r in self.rows if id(r) not in ids]
+
+    def _run(self, rows: list, T: int, emb: mx.array, hid: mx.array) -> mx.array:
+        """Head forward over the rows' ``T`` padded tokens (``emb`` / ``hid``
+        [B * T, D]); keys go to positions ``hn .. hn + T - 1``. [B, T, D]."""
+        d = self.drafter
+        self.slots.reserve(max(r.hn for r in rows) + T + 1)
+        plan = KVPlan.make([r.hslot for r in rows], [r.hn for r in rows], T)
+        h = mx.concatenate(
+            [d.pre_fc_norm_embedding(emb), d.pre_fc_norm_hidden(hid.astype(emb.dtype))],
+            axis=-1,
+        )
+        x = d.fc(h).reshape(len(rows), T, -1)
+        for li, layer in enumerate(d.layers):
+            xn = layer.input_layernorm(x)
+            hh = x + attend(layer.self_attn, xn, self.slots, li, plan)
+            x = hh + layer.mlp(layer.post_attention_layernorm(hh))
+        return d.norm(x)
+
+    def absorb(
+        self,
+        rows: list,
+        tokens: list[list[int]],
+        hidden: mx.array,
+        where: list[list[int]],
+    ) -> mx.array:
+        """Decoding rows absorb the positions they kept: ``tokens[b]`` (next
+        tokens) pair with ``hidden[where[b]]`` (the target's hidden states).
+        Returns each row's head output at its last absorbed position [B, D]."""
+        T = max(len(t) for t in tokens)
+        tok = np.array([t + [t[-1]] * (T - len(t)) for t in tokens], dtype=np.int32)
+        idx = np.array([w + [w[-1]] * (T - len(w)) for w in where], dtype=np.int32)
+        out = self._run(
+            rows,
+            T,
+            self.embed(mx.array(tok.reshape(-1))),
+            hidden[mx.array(idx.reshape(-1))],
+        )
+        last = out[mx.arange(len(rows)), mx.array([len(t) - 1 for t in tokens])]
+        for r, t in zip(rows, tokens, strict=True):
+            r.hn += len(t)
+        return last
+
+    def draft(self, rows: list, heads: mx.array, depths: list[int]) -> list[list[int]]:
+        """``heads`` [B, D]: each row's head output at its last absorbed
+        position. Returns each row's ``depth`` greedy drafts (chain entries are
+        written past ``hn`` and overwritten by the next absorb)."""
+        live = [b for b, d in enumerate(depths) if d > 0]
         if not live:
             return [[] for _ in rows]
-        hidden = mx.stack([h for _, h, _ in live])
-        tok = mx.argmax(self.logits(hidden), axis=-1).astype(mx.int32)
+        sel = mx.array(live, dtype=mx.int32)
+        lrows = [rows[b] for b in live]
+        hid = heads[sel]
+        tok = mx.argmax(self.logits(hid), axis=-1).astype(mx.int32)
         steps = [tok]
-        depth = max(d for _, _, d in live)
-        active = list(range(len(live)))
-        prev_h = hidden
-        for step in range(1, depth):
-            active = [i for i in active if live[i][2] > step]
-            if not active:
-                break
-            idx = mx.array(active, dtype=mx.int32)
-            outs = self._forward(
-                [live[i][0].mtp_cache for i in active],
-                [steps[-1][idx][j : j + 1] for j in range(len(active))],
-                [prev_h[idx][j : j + 1] for j in range(len(active))],
-            )
-            for i in active:
-                live[i][0].mtp_temp += 1
-            h_new = mx.concatenate(outs, axis=0)
-            t_new = mx.argmax(self.logits(h_new), axis=-1).astype(mx.int32)
-            full_t = mx.zeros_like(steps[-1])
-            full_h = mx.zeros_like(prev_h)
-            full_t[idx] = t_new
-            full_h[idx] = h_new
-            steps.append(full_t)
-            prev_h = full_h
+        for j in range(1, max(depths[b] for b in live)):
+            saved = [r.hn for r in lrows]
+            for r in lrows:
+                r.hn += j - 1
+            hid = self._run(lrows, 1, self.embed(tok), hid)[:, 0]
+            for r, n in zip(lrows, saved, strict=True):
+                r.hn = n
+            tok = mx.argmax(self.logits(hid), axis=-1).astype(mx.int32)
+            steps.append(tok)
         mx.eval(*steps)
         table = [s.tolist() for s in steps]
-        for i, (r, _, d) in enumerate(live):
-            drafts[id(r)] = [table[j][i] for j in range(d)]
-        return [drafts[id(r)] for r, _, _ in rows]
+        out: list[list[int]] = [[] for _ in rows]
+        for i, b in enumerate(live):
+            out[b] = [table[j][i] for j in range(depths[b])]
+        return out
 
 
 __all__ = ["MTPHead"]

@@ -118,17 +118,24 @@ class _Budget:
         return f
 
 
-def _run(lm, drafter, prompts, *, stagger=False, oracle=None, budget=False):
+def _run(
+    lm, drafter, prompts, *, stagger=False, oracle=None, budget=False, wrong=False
+):
     from yunshu_engine.round_driver.driver import Request, RoundDriver
 
     d = RoundDriver(lm, drafter=drafter, stop_tokens=set())
     if oracle is not None:
         # drafts that are always right: the reference continuation
-        def draft(rows):
+        def draft(rows, heads, depths):
             out = []
-            for row, _, depth in rows:
+            for row, depth in zip(rows, depths, strict=True):
                 ref = oracle[row.req.handle]
-                out.append(ref[row.generated : row.generated + depth])
+                got = list(ref[row.generated : row.generated + depth])
+                if wrong and got:
+                    # right up to a position that varies by row and step
+                    j = (row.generated + row.req.handle) % len(got)
+                    got[j] = (got[j] + 1) % 500
+                out.append(got)
             return out
 
         d.head.draft = draft
@@ -163,6 +170,24 @@ def test_greedy_rows_invariant(tiny):
     assert got == ref
     # oracle drafts land: far fewer steps than tokens
     assert d.accepted > N and d.steps < N + 6
+
+
+def test_partially_accepted_windows_invariant(tiny):
+    """Rows keep different prefixes of windows of different lengths: KV
+    lengths, GDN state and conv window continue from the kept position."""
+    lm, drafter = tiny
+    ref = [_run(lm, None, [p])[0][0] for p in PROMPTS]
+    for stagger in (False, True):
+        got, d = _run(
+            lm,
+            drafter,
+            PROMPTS,
+            stagger=stagger,
+            oracle=dict(enumerate(ref)),
+            wrong=True,
+        )
+        assert got == ref
+        assert 0 < d.accepted < d.drafted
 
 
 def test_thinking_budget_forcing_invariant(tiny):
