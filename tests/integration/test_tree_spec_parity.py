@@ -227,10 +227,10 @@ def lane_widths(monkeypatch):
     seen: list[int] = []
     orig = tree_verify.tree_attention
 
-    def spy(queries, cache, scale, shape, n0):
+    def spy(queries, cache, scale, shape, n0, *rest):
         if not shape.is_chain:
             seen.append(int(shape.width))
-        return orig(queries, cache, scale, shape, n0)
+        return orig(queries, cache, scale, shape, n0, *rest)
 
     monkeypatch.setattr(tree_verify, "tree_attention", spy)
     return seen

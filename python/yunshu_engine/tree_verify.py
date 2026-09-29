@@ -191,6 +191,86 @@ def _gdn_kernel():
     return kernel
 
 
+_REPLAY_PATH = (
+    gv._PROLOGUE
+    + """
+    {
+        int keep = count[0];
+        float lane_g = 0.0f, lane_b = 0.0f;
+        if (int(lane) < keep) {
+            int gi = (b_idx * P + path[lane]) * Hv + hv;
+            lane_g = gdn_decay(pa[gi], dtb, neg_a);
+            lane_b = gdn_beta(pb[gi]);
+        }
+        for (int t = 0; t < keep; ++t) {
+            int row = path[t];
+            float gt = simd_shuffle(lane_g, ushort(t));
+            float bt = simd_shuffle(lane_b, ushort(t));
+            auto kp = pk + ((b_idx * P + row) * Hk + hk) * Dk + lane * NK;
+            float kv = 0.0f;
+            for (int i = 0; i < NK; ++i) {
+                st[i] = st[i] * gt;
+                kv += st[i] * kp[i];
+            }
+            kv = simd_sum(kv);
+            float delta = (pv[((b_idx * P + row) * Hv + hv) * Dv + dv] - kv) * bt;
+            for (int i = 0; i < NK; ++i)
+                st[i] = st[i] + kp[i] * delta;
+        }
+        auto o = state_out + (n * Dv + dv) * Dk + lane * NK;
+        for (int i = 0; i < NK; ++i)
+            o[i] = st[i];
+    }
+"""
+)
+
+
+def _replay_kernel():
+    kernel = _KERNELS.get("replay")
+    if kernel is None:
+        kernel = _KERNELS["replay"] = mx.fast.metal_kernel(
+            name="yunshu_gdn_replay_path",
+            input_names=[
+                "state_in",
+                "A_log",
+                "dt_bias",
+                "pk",
+                "pv",
+                "pa",
+                "pb",
+                "path",
+                "count",
+            ],
+            output_names=["state_out"],
+            source=_REPLAY_PATH,
+            header=gv._HELPERS,
+        )
+    return kernel
+
+
+def replay_path(layer, state, rows, path_arr, count_arr):
+    """The state after the window rows ``path_arr[:count]`` in order, from
+    ``state`` (the verify kernel's per-step arithmetic, rows read in place)."""
+    pk, pv, pa, pb = rows
+    geo = gv._geometry(layer, 1)
+    (out,) = _replay_kernel()(
+        inputs=[state, layer.A_log, layer.dt_bias, pk, pv, pa, pb, path_arr, count_arr],
+        template=[
+            ("InT", pk.dtype),
+            ("Hk", geo["Hk"]),
+            ("Hv", geo["Hv"]),
+            ("Dk", geo["Dk"]),
+            ("Dv", geo["Dv"]),
+            ("P", pk.shape[1]),
+        ],
+        grid=geo["grid"],
+        threadgroup=(32, 4, 1),
+        output_shapes=[state.shape],
+        output_dtypes=[mx.float32],
+    )
+    return out
+
+
 def _gdn_layer(verifier, layer, x, cache, shape: TreeShape):
     """One GDN layer over the window; returns the out-projection output and
     the record ``tree_commit`` needs."""
@@ -319,17 +399,14 @@ def _merge_kernel():
     return kernel
 
 
-def _tile_partials(
-    q_fused, keys, values, lengths, slots, scale, row_lengths, t_tokens, nc
-):
+def _tile_partials(q_fused, keys, values, lengths, slots, scale, plan, t_tokens, nc):
     """The tile kernel's partial launch (``ragged_decode_attention``'s tile
-    branch): returns PO, PM, PL and the per-(row, token) first slot."""
+    branch) on a work list ``plan`` = ``ra._work_list(...)``: returns PO, PM,
+    PL and the per-(row, token) first slot."""
     hkv, cap, d = int(keys.shape[1]), int(keys.shape[2]), int(keys.shape[3])
     h = int(q_fused.shape[2]) // 8 * hkv
     g = h // hkv
-    work, wstart, nslot = ra._work_list(
-        tuple(int(n) for n in row_lengths), t_tokens, nc, True
-    )
+    work, wstart, nslot = plan
     po, pm, pl = ra._kernel("tile")(
         inputs=[q_fused, keys, values, lengths, slots, scale, work, wstart],
         template=[
@@ -360,13 +437,69 @@ def _fuse_tokens(q, hkv, g, tokens):
     return mx.contiguous(f.reshape(bsz, hkv, 8 * g, d))
 
 
+_SCALES: dict = {}
+_ZEROS: dict = {}
+
+
+def _scale_array(scale: float) -> mx.array:
+    arr = _SCALES.get(scale)
+    if arr is None:
+        arr = _SCALES[scale] = mx.array([float(scale)], dtype=mx.float32)
+    return arr
+
+
+def _zeros(shape, dtype):
+    key = (shape, dtype)
+    arr = _ZEROS.get(key)
+    if arr is None:
+        if len(_ZEROS) > 32:
+            _ZEROS.clear()
+        arr = _ZEROS[key] = mx.zeros(shape, dtype=dtype)
+    return arr
+
+
+class RoundContext:
+    """Host-side tables of one window at one position, built once and shared
+    by every attention layer of the forward."""
+
+    def __init__(self, shape: TreeShape, n0: int):
+        w = shape.width
+        self.shape, self.n0 = shape, n0
+        self.cstar = n0 // CK
+        self.tail_start = self.cstar * CK
+        self.ntail = (n0 + shape.max_depth - self.tail_start) // CK + 1
+        self.nc_total = self.cstar + self.ntail
+        self.m = n0 - self.tail_start
+        self.win_idx = (shape.path_table() + n0).reshape(-1)
+        local = [n0 + dep + 1 - self.tail_start for dep in shape.depths]
+        self.local_arr = mx.array(local, dtype=mx.int32)
+        self.slots_b = mx.arange(w, dtype=mx.int32)
+        self.abs_lengths = mx.array(
+            [n0 + dep + 1 for dep in shape.depths], dtype=mx.int32
+        )
+        self.plan_b = ra._work_list(tuple(local), 1, self.ntail, True)
+        if self.cstar:
+            self.len_a = self.tail_start + w - 1
+            self.len_a_arr = mx.array([self.len_a], dtype=mx.int32)
+            self.slot0 = mx.array([0], dtype=mx.int32)
+            self.nc_a = -(-self.len_a // CK)
+            self.plan_a = ra._work_list((self.len_a,), w, self.nc_a, True)
+        self.pos = None
+
+
 def tree_attention(
-    queries: mx.array, cache: Any, scale: float, shape: TreeShape, n0: int
+    queries: mx.array,
+    cache: Any,
+    scale: float,
+    shape: TreeShape,
+    n0: int,
+    rc: RoundContext | None = None,
 ) -> mx.array:
     """Attention of the window's rows (``queries`` [1, H, W, D], keys already
     appended at ``n0 + row``) with each row seeing the prefix and its own
     ancestors at logical positions ``n0 + j``. Returns [1, H, W, D] bf16."""
     w = shape.width
+    rc = rc or RoundContext(shape, n0)
     keys, values = cache.keys, cache.values
     if keys.shape[2] % 64:
         pad = [
@@ -380,64 +513,58 @@ def tree_attention(
     _, h, _, d = (int(s) for s in queries.shape)
     hkv = int(keys.shape[1])
     g = h // hkv
-    cstar = n0 // CK
-    tail_start = cstar * CK
-    last = n0 + shape.max_depth
-    ntail = (last - tail_start) // CK + 1
-    nc_total = cstar + ntail
-    scale_arr = mx.array([float(scale)], dtype=mx.float32)
+    cstar, tail_start, ntail, m = rc.cstar, rc.tail_start, rc.ntail, rc.m
+    scale_arr = _scale_array(scale)
     q_fused = _fuse_tokens(queries, hkv, g, w)
 
     # shared chunks 0 .. cstar - 1: every row sees them whole
     if cstar:
-        len_a = tail_start + w - 1
         po_a, pm_a, pl_a, starts_a = _tile_partials(
             q_fused,
             keys,
             values,
-            mx.array([len_a], dtype=mx.int32),
-            mx.array([0], dtype=mx.int32),
+            rc.len_a_arr,
+            rc.slot0,
             scale_arr,
-            (len_a,),
+            rc.plan_a,
             w,
-            -(-len_a // CK),
+            rc.nc_a,
         )
     else:
-        po_a = pm_a = pl_a = mx.zeros((1,), dtype=mx.float32)
-        starts_a = mx.zeros((w,), dtype=mx.int32)
+        po_a = pm_a = pl_a = _zeros((1,), mx.float32)
+        starts_a = _zeros((w,), mx.int32)
 
     # window chunk(s): one row per node over a gathered copy of the tail
     cap2 = ntail * CK
-    m = n0 - tail_start
     hkv_keys = keys[0]  # [HKV, CAP, D]
     hkv_vals = values[0]
-    idx = (shape.path_table() + n0).reshape(-1)
     win_k = (
-        mx.take(hkv_keys, idx, axis=1)
+        mx.take(hkv_keys, rc.win_idx, axis=1)
         .reshape(hkv, w, shape.max_depth + 1, d)
         .transpose(1, 0, 2, 3)
     )
     win_v = (
-        mx.take(hkv_vals, idx, axis=1)
+        mx.take(hkv_vals, rc.win_idx, axis=1)
         .reshape(hkv, w, shape.max_depth + 1, d)
         .transpose(1, 0, 2, 3)
     )
     parts_k, parts_v = [], []
     if m:
-        pre_k = mx.broadcast_to(hkv_keys[None, :, tail_start:n0], (w, hkv, m, d))
-        pre_v = mx.broadcast_to(hkv_vals[None, :, tail_start:n0], (w, hkv, m, d))
-        parts_k.append(pre_k)
-        parts_v.append(pre_v)
+        parts_k.append(
+            mx.broadcast_to(hkv_keys[None, :, tail_start:n0], (w, hkv, m, d))
+        )
+        parts_v.append(
+            mx.broadcast_to(hkv_vals[None, :, tail_start:n0], (w, hkv, m, d))
+        )
     parts_k.append(win_k)
     parts_v.append(win_v)
     fill = cap2 - m - (shape.max_depth + 1)
     if fill:
-        z = mx.zeros((w, hkv, fill, d), dtype=keys.dtype)
+        z = _zeros((w, hkv, fill, d), keys.dtype)
         parts_k.append(z)
         parts_v.append(z)
     tail_k = mx.concatenate(parts_k, axis=2)
     tail_v = mx.concatenate(parts_v, axis=2)
-    local = [n0 + dep + 1 - tail_start for dep in shape.depths]
     q_b = queries[0].reshape(hkv, g, w, d).transpose(2, 0, 1, 3)  # [W, HKV, G, D]
     q_b = q_b[:, :, None]  # [W, HKV, 1, G, D]
     q_b = mx.pad(q_b, [(0, 0), (0, 0), (0, 7), (0, 0), (0, 0)]).reshape(
@@ -447,21 +574,20 @@ def tree_attention(
         mx.contiguous(q_b),
         tail_k,
         tail_v,
-        mx.array(local, dtype=mx.int32),
-        mx.arange(w, dtype=mx.int32),
+        rc.local_arr,
+        rc.slots_b,
         scale_arr,
-        tuple(local),
+        rc.plan_b,
         1,
         ntail,
     )
-    lengths = mx.array([n0 + dep + 1 for dep in shape.depths], dtype=mx.int32)
     (out,) = _merge_kernel()(
-        inputs=[po_a, pm_a, pl_a, po_b, pm_b, pl_b, starts_a, starts_b, lengths],
+        inputs=[po_a, pm_a, pl_a, po_b, pm_b, pl_b, starts_a, starts_b, rc.abs_lengths],
         template=[
             ("D", d),
             ("H", h),
             ("W", w),
-            ("NC", nc_total),
+            ("NC", rc.nc_total),
             ("CK", CK),
             ("CS", cstar),
         ],
@@ -526,6 +652,7 @@ def tree_forward(
     pos = mx.array([[[base + d for d in shape.depths]]] * 3, dtype=mx.int32).reshape(
         3, 1, w
     )
+    rc = RoundContext(shape, n0)
     h = model.embed_tokens(tokens)
     res = TreeResult(shape=shape, n0=n0, hidden=h)
     capture = set(capture_ids)
@@ -539,7 +666,7 @@ def tree_forward(
             queries, _k, _v, gate, _ = at._prepare_projected_qkv(
                 q, k, v, c, pos, None, None
             )
-            out = tree_attention(queries, c, at.scale, shape, n0)
+            out = tree_attention(queries, c, at.scale, shape, n0, rc)
             out = out.transpose(0, 2, 1, 3).reshape(1, w, -1)
             r = verifier._linear(at.o_proj, out * mx.sigmoid(gate))
             rec = ("kv",)
@@ -558,8 +685,9 @@ def tree_commit(lm, cache: list, res: TreeResult, path: list[int]) -> None:
     from mlx_vlm.models.qwen3_5 import language as q35
 
     w, n0, m = res.shape.width, res.n0, len(path)
-    idx = mx.array(path, dtype=mx.int32)
-    keep = mx.full((1,), m, dtype=mx.int32)
+    path_arr = mx.array(path + [0] * (w - m), dtype=mx.int32)
+    count_arr = mx.array([m], dtype=mx.int32)
+    conv_idx = mx.array(([0, 1, 2] + [3 + r for r in path])[-3:], dtype=mx.int32)
     compact = path != list(range(m))
     if compact:
         src = mx.array([n0 + r for r in path[1:]], dtype=mx.int32)
@@ -572,10 +700,10 @@ def tree_commit(lm, cache: list, res: TreeResult, path: list[int]) -> None:
             c.trim(w - m)
         else:
             _, layer, state, conv_prev, mixed, (k, v, a, b) = rec
-            rows = tuple(t[:, idx] for t in (k, v, a, b))
-            c[1] = gv.replay_state(layer, state, rows, keep)
+            c[1] = replay_path(layer, state, (k, v, a, b), path_arr, count_arr)
             c._omlx_gdn_pending = None
-            c[0] = mx.concatenate([conv_prev, mixed[:, idx]], axis=1)[:, -3:]
+            seq = mx.concatenate([conv_prev, mixed], axis=1)[0]
+            c[0] = mx.take(seq, conv_idx, axis=0)[None]
             if hasattr(c, "advance"):
                 c.advance(m)
                 q35._qwen3_5_advance_left_padding_info(c, m)
