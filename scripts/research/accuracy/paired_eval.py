@@ -36,6 +36,7 @@ import os
 import random
 import re
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -529,6 +530,9 @@ BENCHES: dict[str, Bench] = {
 class Server:
     def __init__(self, arm: str, model: str, port: int, env: dict[str, str], log: Path):
         self.arm, self.model, self.port = arm, model, port
+        with socket.socket() as probe:
+            if probe.connect_ex(("127.0.0.1", port)) == 0:
+                raise RuntimeError(f"port {port} already in use; refusing to start")
         self.url = f"http://127.0.0.1:{port}"
         e = {k: v for k, v in os.environ.items() if not k.startswith("YUNSHU_")}
         e["HF_HUB_OFFLINE"] = "1"
