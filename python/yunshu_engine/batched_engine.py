@@ -4665,9 +4665,16 @@ class BatchedEngine:
         try:
             from .request_tracker import get_request_tracker
 
-            _tracker = get_request_tracker()
-            _active_gen = _tracker.register(_stream_req_id, self.model_name or "")
-            _cancel_event = _active_gen.cancel_event
+            if cancel_event is not None:
+                # The gateway already registered this request (its event carries the
+                # live RunStats and the client's request id); a second registration
+                # would take over both. Cancellation is the gateway's event alone.
+                _tracker = None
+                _cancel_event = cancel_event
+            else:
+                _tracker = get_request_tracker()
+                _active_gen = _tracker.register(_stream_req_id, self.model_name or "")
+                _cancel_event = _active_gen.cancel_event
         except Exception:
             logger.debug("request tracker registration failed", exc_info=True)
             _cancel_event = None
@@ -4675,7 +4682,7 @@ class BatchedEngine:
 
         # If the gateway passes an external cancel_event, wrap both events
         # so that checking .is_set() on the wrapper detects either source.
-        if cancel_event is not None:
+        if cancel_event is not None and _tracker is not None:
             _internal = _cancel_event
             _external = cancel_event
 

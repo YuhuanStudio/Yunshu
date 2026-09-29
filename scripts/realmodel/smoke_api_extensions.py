@@ -258,13 +258,15 @@ def run_checks() -> None:
     t = threading.Thread(target=consume, daemon=True)
     t.start()
     seen = None
+    last_poll = ""
     for _ in range(100):
         time.sleep(0.1)
         rr = httpx.get(f"{BASE}/v1/requests/smoke-cancel-1")
+        last_poll = rr.text[:200]
         if rr.status_code == 200 and rr.json().get("phase") == "decode":
             seen = rr.json()
             break
-    check("GET /v1/requests/{id} sees the live request", seen is not None, str(seen))
+    check("GET /v1/requests/{id} sees the live request", seen is not None, str(seen or last_poll))
     listing = httpx.get(f"{BASE}/v1/requests").json()
     check(
         "GET /v1/requests lists it",
