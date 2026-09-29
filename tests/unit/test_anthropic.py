@@ -1014,3 +1014,47 @@ class TestDetectMatchedStopEOS:
         f = self._f()
         # No flag surfaced (legacy path) → keep the lone-stop fallback.
         assert f("the answer", ["<<<"], "stop") == "<<<"
+
+
+class TestAnthropicStreamingStopSequence:
+    def test_stream_reports_stop_sequence_and_completes(self, _setup_engine):
+        """A user stop sequence that the engine already trimmed must still surface as
+        stop_reason=stop_sequence, and the stream must run to message_stop."""
+        from yunshu_engine.batched_engine import GenerationOutput
+
+        engine = _setup_engine
+
+        async def _gen(*args, **kwargs):
+            yield GenerationOutput(
+                text="1 2 3 4 ",
+                new_text="1 2 3 4 ",
+                prompt_tokens=5,
+                completion_tokens=4,
+                finished=False,
+            )
+            yield GenerationOutput(
+                text="1 2 3 4 ",
+                new_text="",
+                prompt_tokens=5,
+                completion_tokens=4,
+                finished=True,
+                finish_reason="stop",
+                stopped_by_stop_sequence=True,
+            )
+
+        with patch.object(engine, "stream_chat", _gen):
+            resp = _client().post(
+                "/v1/messages",
+                json={
+                    "model": "claude-3",
+                    "messages": [{"role": "user", "content": "count"}],
+                    "stream": True,
+                    "max_tokens": 20,
+                    "stop_sequences": ["5"],
+                },
+            )
+        assert resp.status_code == 200, resp.text
+        assert "event: message_stop" in resp.text
+        assert "event: error" not in resp.text
+        assert '"stop_reason": "stop_sequence"' in resp.text
+        assert '"stop_sequence": "5"' in resp.text

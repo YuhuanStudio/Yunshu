@@ -1931,7 +1931,7 @@ async def _stream_anthropic(
             _message_start_emitted, \
             _streaming_finish_reason, \
             reasoning_tok
-        nonlocal _has_tool_calls
+        nonlocal _has_tool_calls, _stream_stop_hit
         # these were assigned inside _token_source WITHOUT a
         # nonlocal, so they shadowed the enclosing scope's copies (which stayed 0). The
         # *_started flags ARE nonlocal, so the error/MemoryError handlers in the outer

@@ -530,6 +530,8 @@ def create_app() -> FastAPI:
             503: "service_unavailable",
         }
         error_code = _code_map.get(exc.status_code)
+        if exc.status_code == 404 and str(exc.detail) == "Not Found":
+            error_code = "not_found"  # unknown route, not an unknown model
         if exc.status_code == 400 and "exceeds max context window" in str(exc.detail):
             error_code = "context_length_exceeded"
         return JSONResponse(
