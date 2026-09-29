@@ -24,7 +24,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from yunshu_engine import settings
 from yunshu_engine.tool_call_streamer import ToolCallStreamer
@@ -371,6 +371,12 @@ class ChatCompletionRequest(BaseModel):
     stream: bool = False
     stream_options: StreamOptions | None = None
     stop: list[str] | None = None
+
+    @field_validator("stop", mode="before")
+    @classmethod
+    def _stop_str_to_list(cls, v):
+        return [v] if isinstance(v, str) else v
+
     enable_thinking: bool | None = None
     tools: list[ToolDefinition] | None = None
     tool_choice: str | ToolChoiceFunction | None = None

@@ -190,15 +190,13 @@ def tokenize(
         False, "--ids", help="Return token IDs (/v1/tokenize) instead of just a count."
     ),
 ):
-    """Count tokens, or with --ids return token IDs (POST /v1/token_count | /v1/tokenize)."""
+    """Count tokens, or with --ids return token IDs (POST /v1/tokenize)."""
+    resp = _post(url, "/v1/tokenize", json={"model": model, "prompt": text})
+    d = _body(resp)
     if ids:
-        resp = _post(url, "/v1/tokenize", json={"model": model, "text": text})
-        d = _body(resp)
         emit(d, human=lambda: console.print(str(d.get("tokens"))))
         return
-    resp = _post(url, "/v1/token_count", json={"model": model, "prompt": text})
-    d = _body(resp)
-    count = d.get("token_count", d.get("count"))
+    count = d.get("count")
     emit(d, human=lambda: console.print(f"tokens: [bold]{count}[/]"))
 
 
@@ -210,7 +208,7 @@ def detokenize(
     """Decode token IDs back to text (POST /v1/detokenize)."""
     resp = _post(url, "/v1/detokenize", json={"model": model, "tokens": list(tokens)})
     d = _body(resp)
-    emit(d, human=lambda: console.print(d.get("text", "")))
+    emit(d, human=lambda: console.print(d.get("prompt", "")))
 
 
 def embed(
@@ -281,7 +279,7 @@ def transcribe(
             data=data,
         )
     d = _body(resp)
-    emit(d, human=lambda: console.print(d.get("text", "")))
+    emit(d, human=lambda: console.print(d.get("prompt", "")))
 
 
 def speak(
@@ -321,7 +319,7 @@ def ocr(
             data={"model": model},
         )
     d = _body(resp)
-    emit(d, human=lambda: console.print(d.get("text", "")))
+    emit(d, human=lambda: console.print(d.get("prompt", "")))
 
 
 def image(

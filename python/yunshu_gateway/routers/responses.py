@@ -22,7 +22,7 @@ from collections import OrderedDict
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from yunshu_engine import settings
 
@@ -514,6 +514,12 @@ class ResponsesRequest(BaseModel):
     min_p: float = Field(default=0.0, ge=0.0, le=1.0)
     top_n_sigma: float = Field(default=0.0, ge=0.0, le=10.0)
     stop: list[str] | None = None
+
+    @field_validator("stop", mode="before")
+    @classmethod
+    def _stop_str_to_list(cls, v):
+        return [v] if isinstance(v, str) else v
+
     stop_token_ids: list[int] | None = None
     logprobs: bool = False
     top_logprobs: int | None = Field(default=None, ge=0, le=20)

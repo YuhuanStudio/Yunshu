@@ -412,6 +412,10 @@ def create_app() -> FastAPI:
         Anthropic endpoints (/v1/messages, /messages) get Anthropic format instead.
         """
         errors = exc.errors()
+        first_loc = [str(x) for x in (errors[0].get("loc", []) if errors else [])]
+        if first_loc and first_loc[0] == "body":
+            first_loc = first_loc[1:]
+        param = ".".join(first_loc) or None
         messages = []
         for err in errors:
             loc = ".".join(str(x) for x in err.get("loc", []))
@@ -440,6 +444,7 @@ def create_app() -> FastAPI:
                 "error": {
                     "message": detail,
                     "type": "invalid_request_error",
+                    "param": param,
                     "code": "validation_error",
                 }
             },
@@ -452,13 +457,16 @@ def create_app() -> FastAPI:
 
         # Anthropic endpoints: return Anthropic error format
         if path in _ANTHROPIC_PATHS:
-            error_type = "invalid_request_error"
-            if exc.status_code == 404:
-                error_type = "not_found_error"
-            elif exc.status_code == 503:
-                error_type = "overloaded_error"
-            elif exc.status_code == 500:
-                error_type = "api_error"
+            error_type = {
+                401: "authentication_error",
+                403: "permission_error",
+                404: "not_found_error",
+                413: "request_too_large",
+                429: "rate_limit_error",
+                500: "api_error",
+                503: "overloaded_error",
+                529: "overloaded_error",
+            }.get(exc.status_code, "invalid_request_error")
             return JSONResponse(
                 status_code=exc.status_code,
                 content={
@@ -486,12 +494,15 @@ def create_app() -> FastAPI:
             503: "service_unavailable",
         }
         error_code = _code_map.get(exc.status_code)
+        if exc.status_code == 400 and "exceeds max context window" in str(exc.detail):
+            error_code = "context_length_exceeded"
         return JSONResponse(
             status_code=exc.status_code,
             content={
                 "error": {
                     "message": str(exc.detail),
                     "type": error_type,
+                    "param": None,
                     "code": error_code,
                 }
             },
@@ -532,6 +543,7 @@ def create_app() -> FastAPI:
                 "error": {
                     "message": "Internal server error",
                     "type": "server_error",
+                    "param": None,
                     "code": "internal_error",
                 }
             },
@@ -884,6 +896,7 @@ def create_app() -> FastAPI:
     app.include_router(audio.router, prefix="/v1")
     app.include_router(images.router, prefix="/v1")
     app.include_router(tokenize.router, prefix="/v1")
+    app.include_router(tokenize.router)  # vLLM-native /tokenize, /detokenize
     app.include_router(mcp.router, prefix="/v1")
     app.include_router(scoring.router, prefix="/v1")
     app.include_router(cancel_mod.router, prefix="/v1")
