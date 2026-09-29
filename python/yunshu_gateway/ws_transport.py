@@ -29,6 +29,8 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from yunshu_engine import settings
 
+from .x_yunshu import sanitize_request_id
+
 logger = logging.getLogger(__name__)
 
 API_PATHS = {
@@ -168,6 +170,9 @@ class AsgiCall:
                     await self._task
 
 
+COMMENT = "\x00comment"
+
+
 class SSEParser:
     """Incremental text/event-stream parser -> (event, data-string) frames."""
 
@@ -182,7 +187,12 @@ class SSEParser:
             event = None
             data: list[str] = []
             for line in raw.split("\n"):
-                if not line or line.startswith(":"):
+                if line.startswith(":"):
+                    text = line[1:].strip()
+                    if text.startswith("yunshu-"):
+                        frames.append((COMMENT, text))
+                    continue
+                if not line:
                     continue
                 name, _, value = line.partition(":")
                 value = value[1:] if value.startswith(" ") else value
@@ -228,6 +238,7 @@ class Job:
         self.max_tokens: int | None = None
         self.deltas = 0
         self.events = 0
+        self.request_id: str | None = None
 
 
 class Connection:
@@ -450,12 +461,33 @@ class Connection:
 
     # ── one request ──
 
+    async def _x_yunshu(self, job: Job, comment: str) -> None:
+        """``: yunshu-progress {...}`` / ``: yunshu-stats {...}`` SSE comments
+        (see x_yunshu.py) become ``progress`` / ``stats`` messages, same fields."""
+        if self.dialect != "yunshu":
+            return  # OpenAI's Responses WS has no place for extension events
+        name, _, payload = comment.partition(" ")
+        kind = {"yunshu-progress": "progress", "yunshu-stats": "stats"}.get(name)
+        if kind is None:
+            return
+        try:
+            body = json.loads(payload)
+        except ValueError:
+            return
+        if isinstance(body, dict):
+            await self.emit({**body, "type": kind, "id": job.id})
+
     def _headers(self, job: Job) -> list[tuple[bytes, bytes]]:
         h = [
             (b"content-type", b"application/json"),
             (b"accept", b"text/event-stream"),
-            (b"x-request-id", job.id.encode()),
         ]
+        # Same request-id contract as HTTP: a header-safe client id is kept
+        # (and cancellable via DELETE /v1/requests/{id}); otherwise the
+        # handler generates one, reported back as request_id in `done`.
+        rid = sanitize_request_id(job.id)
+        if rid:
+            h.append((b"x-request-id", rid.encode()))
         src = {k.lower(): v for k, v in self.ws.headers.items()}
         for name in _FORWARD_HEADERS:
             if name in src:
@@ -511,9 +543,13 @@ class Connection:
                 else:
                     await self.emit(self._wrap(job, None, payload))
             else:
+                job.request_id = job.call.headers.get("x-request-id")
                 parser = SSEParser()
                 async for chunk in job.call.chunks():
                     for event, data in parser.feed(chunk):
+                        if event == COMMENT:
+                            await self._x_yunshu(job, data)
+                            continue
                         if data.strip() == "[DONE]":
                             continue
                         try:
@@ -552,6 +588,7 @@ class Connection:
                     "type": "done",
                     "id": job.id,
                     "reason": status,
+                    "request_id": job.request_id,
                     "stats": {
                         "ttft_ms": None if ttft is None else round(ttft * 1000, 1),
                         "duration_ms": round((time.perf_counter() - t0) * 1000, 1),

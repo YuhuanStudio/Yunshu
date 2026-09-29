@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 import signal
@@ -48,10 +49,8 @@ def start_server(model: str, args: list[str]) -> subprocess.Popen:
 
 
 def kill9(p: subprocess.Popen) -> None:
-    try:
+    with contextlib.suppress(ProcessLookupError):
         os.killpg(p.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
     p.wait()
 
 
@@ -266,7 +265,7 @@ async def realtime_checks(base: str, model: str, audio: bool):
     A.audio = audio
     rc.RESULTS.clear()
     await rc.main(A)
-    for name, ok, detail in rc.RESULTS:
+    for name, ok, _detail in rc.RESULTS:
         if not ok:
             FAILS.append("realtime: " + name)
 
@@ -400,10 +399,8 @@ def mode_uds(a):
         )
     finally:
         kill9(p)
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(sock)
-        except OSError:
-            pass
 
 
 if __name__ == "__main__":

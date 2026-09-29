@@ -53,6 +53,9 @@ def make_app() -> FastAPI:
             done = False
             try:
                 yield ": keep-alive\n\n"
+                if body.get("emit_x"):
+                    yield ': yunshu-progress {"phase":"prefill","percent":50.0}\n\n'
+                    yield ': yunshu-stats {"ttft_ms":12.5,"decode_tps":99.0}\n\n'
                 for i in range(n):
                     chunk = {
                         "object": "chat.completion.chunk",
@@ -143,6 +146,30 @@ def test_stream_basic_and_request_id(client):
     assert done["type"] == "done" and done["reason"] == "completed"
     assert done["stats"]["deltas"] == 3 and done["stats"]["ttft_ms"] is not None
     assert STATE["seen_ids"] == ["a"]  # client id is the HTTP request id
+
+
+def test_progress_and_stats_comments_become_events(client):
+    with client.websocket_connect("/v1/stream") as ws:
+        ws.receive_text()
+        ws.send_text(req("x1", n_tokens=2, emit_x=True))
+        msgs = collect(ws, "x1")
+    prog = [m for m in msgs if m["type"] == "progress"]
+    stats = [m for m in msgs if m["type"] == "stats"]
+    assert prog == [
+        {"type": "progress", "id": "x1", "phase": "prefill", "percent": 50.0}
+    ]
+    assert stats[0]["decode_tps"] == 99.0 and stats[0]["id"] == "x1"
+    # comments are never delivered as `event` messages
+    assert all(m["type"] != "event" or isinstance(m["data"], dict) for m in msgs)
+
+
+def test_unsafe_client_id_is_not_forwarded_as_header(client):
+    with client.websocket_connect("/v1/stream") as ws:
+        ws.receive_text()
+        ws.send_text(req("has space/ok?", n_tokens=1))
+        msgs = collect(ws, "has space/ok?")
+    assert msgs[-1]["type"] == "done"
+    assert STATE["seen_ids"][-1] is None  # handler generates its own id
 
 
 def test_upstream_error_becomes_error_message(client):

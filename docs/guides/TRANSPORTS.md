@@ -77,12 +77,17 @@ Server to client:
 | `{"type":"error","id"?,"status":404,"error":{message,type,...}}` | request-scoped (with `id`) or connection-scoped error. Upstream HTTP errors keep their status/body |
 | `{"type":"ping","t":...}` | heartbeat every `YUNSHU_WS_PING_INTERVAL` s (default 15) |
 | `{"type":"updated","id","max_tokens"}` | ack of `update` |
+| `{"type":"progress","id",...}` | queue / prefill progress: the fields of the SSE `: yunshu-progress` comment ([API_EXTENSIONS.md](API_EXTENSIONS.md)): `phase`, `percent`, `processed_tokens`, `tokens_per_second`, `eta_s`, `queue_position`, ... |
+| `{"type":"stats","id",...}` | per-response stats: the fields of the `x_yunshu` object / `: yunshu-stats` comment (`ttft_ms`, `decode_tps`, cache hits, ...). The chat usage chunk still carries `x_yunshu` inside its `event` data |
 
 Any progress / stats SSE events the HTTP handlers emit flow through as ordinary `event` messages, with no
 change to the transport.
 
 Rules:
-- `id` is the client request id and is also sent to the handler as `X-Request-ID`.
+- `id` is the client request id. When it is header-safe (1-128 of `A-Za-z0-9._:-`) it is also the HTTP `X-Request-Id`, so
+  `GET/DELETE /v1/requests/{id}`, logs and error hints use the same id; otherwise the handler generates one, reported as
+  `request_id` in `done`. `cancel` takes the same path as an SSE client disconnect (the handler's disconnect abort).
+  Progress and stats events are not emitted in the Responses-WS dialect (OpenAI's protocol has no slot for them).
 - At most `YUNSHU_WS_MAX_INFLIGHT` (16) concurrent requests; more get `429 too_many_requests`. Reusing an
   active id is `409`. Requests sharing a `stream_id` run FIFO; at most 32 stream ids.
 - **Backpressure**: the per-connection outbound queue is bounded (`YUNSHU_WS_SEND_QUEUE`, 256 events) and the

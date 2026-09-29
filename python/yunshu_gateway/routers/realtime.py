@@ -1975,7 +1975,10 @@ class RealtimeSession:
                         "id": response_id,
                         "object": "realtime.response",
                         "status": "cancelled"
-                        if (self._cancel_event is not None and self._cancel_event.is_set())
+                        if (
+                            self._cancel_event is not None
+                            and self._cancel_event.is_set()
+                        )
                         else "completed",
                         "output": [assistant_item.to_dict()]
                         + [fi.to_dict() for fi in _fc_items],
@@ -2401,7 +2404,10 @@ class RealtimeSession:
                         "id": response_id,
                         "object": "realtime.response",
                         "status": "cancelled"
-                        if (self._cancel_event is not None and self._cancel_event.is_set())
+                        if (
+                            self._cancel_event is not None
+                            and self._cancel_event.is_set()
+                        )
                         else "completed",
                         "output": [assistant_item.to_dict()]
                         + [fi.to_dict() for fi in _fc_items],
