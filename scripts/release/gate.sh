@@ -126,9 +126,11 @@ if has serve-27b; then
         --note "release gate" --output $OUT/27b-concurrency.jsonl > /dev/null 2>&1
       qa=$(jget $OUT/27b-concurrency.jsonl "f\"{qa_concurrent_ok}/{qa_n} agg {aggregate_tps} tok/s\"")
       [[ $qa == 8/8* ]] && rec serve-27b.concurrency PASS "$qa" || rec serve-27b.concurrency FAIL "${qa:-no summary}"
+      # In-process side runs on the INSTALLED tool interpreter: the repo venv can pin different
+      # mlx / mlx-vlm builds, and a different build shifts greedy near-ties (same text fails).
       # The server must decode as fast as the engine in-process on the same prompt
       # (same greedy tokens); a per-token serving overhead fails the gate.
-      sp=$(${YENV[@]} $PY scripts/release/check_server_path.py --url $URL \
+      sp=$(${YENV[@]} $GATE_ROOT/tool-vision/yunshu/bin/python scripts/release/check_server_path.py --url $URL \
         --model $M --server-log $OUT/27b-server.log --output $OUT/27b-server-path.json 2> $OUT/27b-server-path.log | tail -1)
       spd=$($PY -c "import json,sys; d=json.loads(sys.argv[1]); print(f\"server/in-process worst {d['worst_ratio']} (min {d['min_ratio']}), same text {d['same_text']}, spec {d['spec']}: \" + ', '.join(f\"{c['task']}@{c['context']} {c['server_tps']}/{c['inprocess_tps']}\" for c in d['cases']))" "$sp" 2>/dev/null)
       [[ $sp == *'"status": "PASS"'* ]] && rec serve-27b.server_path PASS "$spd" \

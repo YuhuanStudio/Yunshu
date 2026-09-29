@@ -120,12 +120,31 @@ def main() -> int:
                 msgs = messages_for(task, ctx)
                 inproc_text = inprocess_run(engine, msgs, a.max_tokens)[1]  # warm-up
                 run_http(a.url, a.served_name, msgs, a.max_tokens)  # warm-up
-                ip, sv, same = [], [], True
+                ip, sv, same, diffs = [], [], True, []
                 for _ in range(a.repeats):
                     rate, text = inprocess_run(engine, msgs, a.max_tokens)
                     ip.append(rate or 0.0)
                     r = run_http(a.url, a.served_name, msgs, a.max_tokens)
                     sv.append(r["decode_tps"] or 0.0)
+                    for who, t in (("inprocess", text), ("server", r["text"])):
+                        if t != inproc_text:
+                            k = next(
+                                (
+                                    i
+                                    for i, (x, y) in enumerate(zip(t, inproc_text))
+                                    if x != y
+                                ),
+                                min(len(t), len(inproc_text)),
+                            )
+                            diffs.append(
+                                {
+                                    "side": who,
+                                    "first_diff_char": k,
+                                    "len": [len(t), len(inproc_text)],
+                                    "got": t[max(0, k - 20) : k + 40],
+                                    "ref": inproc_text[max(0, k - 20) : k + 40],
+                                }
+                            )
                     same = same and text == inproc_text and r["text"] == inproc_text
                 ip_m, sv_m = statistics.median(ip), statistics.median(sv)
                 cases.append(
@@ -136,6 +155,7 @@ def main() -> int:
                         "server_tps": round(sv_m, 2),
                         "ratio": round(sv_m / ip_m, 3) if ip_m else None,
                         "same_text": same,
+                        "diffs": diffs,
                     }
                 )
     finally:
