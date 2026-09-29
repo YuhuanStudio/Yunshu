@@ -190,6 +190,20 @@ def test_partially_accepted_windows_invariant(tiny):
         assert 0 < d.accepted < d.drafted
 
 
+def test_slots_grow_and_recycle(tiny):
+    """Ten rows join over time (slots double, keys cross the buffer capacity,
+    early finishers free slots for later joins): each row's tokens equal its
+    solo run."""
+    lm, drafter = tiny
+    prompts = [
+        [(11 * i + 3 * j + 1) % 500 for j in range(n)]
+        for i, n in enumerate([30, 500, 12, 505, 60, 20, 300, 8, 480, 45])
+    ]
+    ref = [_run(lm, None, [p])[0][0] for p in prompts]
+    got, _ = _run(lm, drafter, prompts, stagger=True)
+    assert got == ref
+
+
 def test_thinking_budget_forcing_invariant(tiny):
     lm, drafter = tiny
     ref = [_run(lm, None, [p], budget=True)[0][0] for p in PROMPTS]

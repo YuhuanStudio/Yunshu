@@ -1,79 +1,110 @@
 #!/bin/zsh
-# 27B validation of the round driver (YUNSHU_ROUND_DRIVER) on an idle GPU.
+# 27B validation of the round driver (YUNSHU_ROUND_DRIVER), in jobs of at most
+# ~20 minutes each so every one can run under a GPU lock.
 #
-#   zsh scripts/research/validate_round_driver.sh            # every phase
-#   PHASE=inprocess|server|mmlu zsh scripts/research/validate_round_driver.sh
+#   zsh scripts/research/validate_round_driver.sh                 # list the phases
+#   PHASE=parity-1k zsh scripts/research/validate_round_driver.sh # one phase
+#   PHASE=all zsh scripts/research/validate_round_driver.sh       # every phase in order
 #
-# inprocess: sweep_round_driver.py parity (alone / batch / staggered, MTP on
-#            and off must match token for token) and rows 1/2/4/8 throughput,
-#            at 1K and 32K context.
-# server:    off vs on, port 18764: probe_concurrency n=8, bench_engine_matrix,
-#            bench_context_batch (1K/32K/131K, b2/b4/b8), bench_mixed_load
-#            (4 streams + 16K / 32K prompt). The "on" server log must show
-#            "Round driver: N lane projections".
-# mmlu:      MMLU-Pro 300 b8 (16384, medium) with the driver on.
+# GPU_RUN: a command that serializes GPU users, prefixed to every phase when
+# PHASE=all (e.g. GPU_RUN="gpu_run.sh rd" runs `gpu_run.sh rd-<phase> zsh <this> `).
+#
+# In-process (scripts/research/sweep_round_driver.py; parity and rows apart):
+#   parity-1k      alone / batch / staggered, MTP on and off token for token
+#   rows-1k        rows 1 2 4 8, with and without drafts
+#   parity-32k     the same at 32K context (two prompts)
+#   rows-32k-a     rows 1 4 at 32K
+#   rows-32k-b     rows 8 at 32K
+#   decode-anatomy per-step time split at 1 / 8 rows (probe_driver_decode.py)
+# Server (port 18990..; YUNSHU_ROUND_DRIVER=0 / 1):
+#   server-rd{0,1}-probe    probe_concurrency n=8 + bench_engine_matrix (34/34)
+#   server-rd{0,1}-context  bench_context_batch b2 b4 b8 at 1K and 32K
+#   server-rd{0,1}-mixed    bench_mixed_load (4 streams + a 16K prompt)
+# Accuracy:
+#   mmlu-<k>   MMLU-Pro slice k (0..2 = questions 100k .. 100k+99), b8, driver on
 #
 # M (the Qwen3.8-27B checkpoint dir) comes from the environment or
-# scripts/research/local.env (gitignored).
+# scripts/research/local.env (gitignored). Results go to $OUT.
 set -u
 cd "$(dirname "$0")/../.."
 [ -f scripts/research/local.env ] && source scripts/research/local.env
 M=${M:?set M to the Qwen3.8-27B checkpoint directory}
-PORT=${PORT:-18764}
-OUT=${OUT:-docs/research/runs/$(date +%Y-%m-%d)-round-driver}
-PHASE=${PHASE:-all}
-URL=http://127.0.0.1:$PORT
-PY=.venv/bin/python
+PY=${PY:-.venv/bin/python}
+BASE_PORT=${BASE_PORT:-18990}
+OUT=${OUT:-docs/research/runs/$(date +%Y-%m-%d)-round-driver-packed}
+PHASE=${PHASE:-list}
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 mkdir -p $OUT
 log(){ echo "$(date +%H:%M:%S) $*"; }
+
+PHASES=(parity-1k rows-1k parity-32k rows-32k-a rows-32k-b decode-anatomy
+  server-rd0-probe server-rd1-probe server-rd0-context server-rd1-context
+  server-rd0-mixed server-rd1-mixed mmlu-0 mmlu-1 mmlu-2)
+
 wait_ready(){ for i in $(seq 1 300); do curl -s -m 2 $URL/health/ready 2>/dev/null | grep -q '"ready":true' && return 0; kill -0 $1 2>/dev/null || return 1; sleep 2; done; return 1; }
 stop(){ kill -INT $1 2>/dev/null; for i in $(seq 1 30); do kill -0 $1 2>/dev/null || return; sleep 1; done; kill $1 2>/dev/null; }
-serve(){  # $1 = 0|1; sets YP
+serve(){  # $1 = 0|1 ; sets YP, URL
+  URL=http://127.0.0.1:$BASE_PORT
   YUNSHU_ROUND_DRIVER=$1 YUNSHU_MODEL=$M YUNSHU_AUTH_DISABLED=1 \
-    $PY -m uvicorn yunshu_gateway.main:app --host 127.0.0.1 --port $PORT > $OUT/server-rd$1.log 2>&1 &
+    $PY -m uvicorn yunshu_gateway.main:app --host 127.0.0.1 --port $BASE_PORT > $OUT/server-rd$1-$PHASE.log 2>&1 &
   YP=$!
-  wait_ready $YP
+  wait_ready $YP || return 1
+  if [ $1 = 1 ]; then
+    grep -q "Round driver: [0-9]* lane projections" $OUT/server-rd1-$PHASE.log && log "round driver engaged" || log "ROUND DRIVER NOT ENGAGED"
+  fi
+}
+sweep(){ $PY scripts/research/sweep_round_driver.py $M --tokens 256 "$@"; }
+
+run_phase(){
+  case $1 in
+    parity-1k)  sweep --phase parity --rows 4 --parity-rows 8 --output $OUT/parity-1k.jsonl ;;
+    rows-1k)    sweep --phase rows --rows 1 2 4 8 --output $OUT/rows-1k.jsonl ;;
+    parity-32k) sweep --phase parity --rows 2 --parity-rows 2 --context 32768 --output $OUT/parity-32k.jsonl ;;
+    rows-32k-a) sweep --phase rows --rows 1 4 --context 32768 --output $OUT/rows-32k.jsonl ;;
+    rows-32k-b) sweep --phase rows --rows 8 --context 32768 --output $OUT/rows-32k.jsonl ;;
+    decode-anatomy)
+      for r in 1 8; do
+        $PY scripts/research/probe_driver_decode.py $M --rows $r --no-mtp --output $OUT/anatomy.jsonl
+        $PY scripts/research/probe_driver_decode.py $M --rows $r --output $OUT/anatomy.jsonl
+      done ;;
+    server-rd?-*)
+      rd=${1#server-rd}; rd=${rd%%-*}; what=${1##*-}
+      PHASE=$1
+      serve $rd || { log "server rd=$rd failed"; stop $YP; return 1; }
+      case $what in
+        probe)
+          $PY scripts/research/probe_concurrency.py --url $URL --model Qwen3.8-27B --n 8 \
+            --note "round driver=$rd" --output $OUT/concurrency.jsonl > /dev/null 2>&1 || log "concurrency FAILED"
+          $PY scripts/research/bench_engine_matrix.py --url $URL --model Qwen3.8-27B --engine yunshu-rd$rd \
+            --checkpoint $M --pid $YP --note "round driver=$rd" --output $OUT/matrix.jsonl > /dev/null 2>&1 || log "matrix FAILED" ;;
+        context)
+          $PY scripts/research/bench_context_batch.py --url $URL --model Qwen3.8-27B --tokenizer $M --pid $YP \
+            --lengths 1024 32768 --batches 2 4 8 --note "round driver=$rd" \
+            --output $OUT/context-batch.jsonl > /dev/null 2>&1 || log "context FAILED" ;;
+        mixed)
+          $PY scripts/research/bench_mixed_load.py --url $URL --model Qwen3.8-27B --tokenizer $M \
+            --streams 4 --pp 16384 --label rd$rd --output $OUT/mixed-load.jsonl > /dev/null 2>&1 || log "mixed FAILED" ;;
+      esac
+      stop $YP ;;
+    mmlu-?)
+      k=${1#mmlu-}
+      PHASE=$1
+      serve 1 || { log "mmlu server failed"; stop $YP; return 1; }
+      $PY scripts/research/soak_mmlu_pro.py --url $URL --model Qwen3.8-27B --pid $YP \
+        --start $((100 * k)) --n 100 --final-idle-s 15 \
+        --note "Yunshu round driver, slice $k" --output $OUT/mmlu-$k.jsonl > $OUT/mmlu-$k.log 2>&1 || log "mmlu FAILED"
+      stop $YP ;;
+    *) echo "unknown phase $1"; return 2 ;;
+  esac
 }
 
-if [ $PHASE = all -o $PHASE = inprocess ]; then
-  log "in-process sweep 1K"
-  $PY scripts/research/sweep_round_driver.py $M --rows 1 2 4 8 --tokens 256 \
-    --output $OUT/sweep.jsonl > $OUT/sweep-1k.log 2>&1 || log "sweep 1K FAILED"
-  log "in-process sweep 32K"
-  $PY scripts/research/sweep_round_driver.py $M --rows 1 4 --tokens 256 --context 32768 \
-    --output $OUT/sweep.jsonl > $OUT/sweep-32k.log 2>&1 || log "sweep 32K FAILED"
-  grep '"kind": "parity"' $OUT/sweep.jsonl
-fi
-
-if [ $PHASE = all -o $PHASE = server ]; then
-  for rd in 0 1; do
-    if serve $rd; then
-      [ $rd = 0 ] || grep -q "Round driver: [0-9]* lane projections" $OUT/server-rd1.log \
-        && log "rd=$rd up" || log "ROUND DRIVER NOT ENGAGED"
-      $PY scripts/research/probe_concurrency.py --url $URL --model Qwen3.8-27B --n 8 \
-        --note "round driver=$rd" --output $OUT/concurrency.jsonl > /dev/null 2>&1 || log "concurrency rd=$rd FAILED"
-      $PY scripts/research/bench_engine_matrix.py --url $URL --model Qwen3.8-27B --engine yunshu-rd$rd \
-        --checkpoint $M --pid $YP --note "round driver=$rd" --output $OUT/matrix.jsonl > /dev/null 2>&1 || log "matrix rd=$rd FAILED"
-      $PY scripts/research/bench_context_batch.py --url $URL --model Qwen3.8-27B --tokenizer $M --pid $YP \
-        --lengths 1024 32768 131072 --batches 2 4 8 --note "round driver=$rd" \
-        --output $OUT/context-batch.jsonl > /dev/null 2>&1 || log "context rd=$rd FAILED"
-      for pp in 16384 32768; do
-        $PY scripts/research/bench_mixed_load.py --url $URL --model Qwen3.8-27B --tokenizer $M \
-          --streams 4 --pp $pp --label rd$rd --output $OUT/mixed-load.jsonl > /dev/null 2>&1 || log "mixed rd=$rd pp=$pp FAILED"
-      done
-      log "rd=$rd server done"
-    else log "rd=$rd server failed"; fi
-    stop $YP; sleep 5
-  done
-fi
-
-if [ $PHASE = all -o $PHASE = mmlu ]; then
-  if serve 1; then
-    log "mmlu rd=1"
-    $PY scripts/research/soak_mmlu_pro.py --url $URL --model Qwen3.8-27B --pid $YP \
-      --note "Yunshu round driver" --output $OUT/mmlu-soak.jsonl > $OUT/mmlu-soak.log 2>&1 || log "mmlu FAILED"
-  else log "mmlu server failed"; fi
-  stop $YP
-fi
-log "round driver validation done"
+case $PHASE in
+  list) printf '%s\n' $PHASES ;;
+  all)
+    for p in $PHASES; do
+      log "phase $p"
+      if [ -n "${GPU_RUN:-}" ]; then ${=GPU_RUN}-$p env PHASE=$p zsh $0; else run_phase $p; fi
+    done ;;
+  *) run_phase $PHASE ;;
+esac
+log "round driver validation: $PHASE done"

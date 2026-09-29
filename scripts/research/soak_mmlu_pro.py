@@ -77,6 +77,12 @@ def main():
         help="result JSON whose question ids to reuse",
     )
     ap.add_argument("--n", type=int, default=300)
+    ap.add_argument(
+        "--start",
+        type=int,
+        default=0,
+        help="first question (with --n: run a slice, e.g. 100-question jobs)",
+    )
     # Defaults match the user's oMLX MMLU-Pro run: 16384 max output, medium
     # reasoning effort, 8 questions in flight.
     ap.add_argument("--max-tokens", type=int, default=16384)
@@ -95,7 +101,9 @@ def main():
             continue
         item = json.loads(line)
         data[item["id"]] = item
-    ids = [q["id"] for q in json.loads(a.ids.read_text())["questions"]][: a.n]
+    ids = [q["id"] for q in json.loads(a.ids.read_text())["questions"]][
+        a.start : a.start + a.n
+    ]
     think = not a.no_thinking
     u = urllib.parse.urlparse(a.url)
     out = a.output.open("a")
@@ -235,7 +243,7 @@ def main():
         return row
 
     with concurrent.futures.ThreadPoolExecutor(a.concurrency) as pool:
-        futures = [pool.submit(run_one, qi, qid) for qi, qid in enumerate(ids)]
+        futures = [pool.submit(run_one, qi, qid) for qi, qid in enumerate(ids, a.start)]
         for fut in concurrent.futures.as_completed(futures):
             row = fut.result()
             if row is not None:

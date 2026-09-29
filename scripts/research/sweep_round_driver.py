@@ -137,6 +137,12 @@ def main():
         default=None,
         help="prompts in the parity check (default: max --rows); each runs 5 ways",
     )
+    ap.add_argument(
+        "--phase",
+        choices=["both", "parity", "rows"],
+        default="both",
+        help="run only the parity check or only the rows sweep (separate locked jobs)",
+    )
     ap.add_argument("--output", type=Path, required=True)
     a = ap.parse_args()
     model, processor, drafter, lanes = load(a.ckpt, a.quantize)
@@ -169,36 +175,37 @@ def main():
             }
         )
         n = a.parity_rows or max(a.rows)
-        ref = [run(model, None, [p], a.tokens, stop)[0][0] for p in prompts[:n]]
-        checks = {
-            "alone_mtp": [
-                run(model, drafter, [p], a.tokens, stop)[0][0] for p in prompts[:n]
-            ],
-            "batch_mtp": run(model, drafter, prompts[:n], a.tokens, stop)[0],
-            "stagger_mtp": run(
-                model, drafter, prompts[:n], a.tokens, stop, stagger=True
-            )[0],
-            "batch_ar": run(model, None, prompts[:n], a.tokens, stop)[0],
-        }
-        put(
-            {
-                "kind": "parity",
-                **{k: v == ref for k, v in checks.items()},
-                "first_diff": {
-                    k: next(
-                        (
-                            (i, j)
-                            for i, (x, y) in enumerate(zip(v, ref, strict=True))
-                            for j, (p, q) in enumerate(zip(x, y, strict=False))
-                            if p != q
-                        ),
-                        None,
-                    )
-                    for k, v in checks.items()
-                },
+        if a.phase != "rows":
+            ref = [run(model, None, [p], a.tokens, stop)[0][0] for p in prompts[:n]]
+            checks = {
+                "alone_mtp": [
+                    run(model, drafter, [p], a.tokens, stop)[0][0] for p in prompts[:n]
+                ],
+                "batch_mtp": run(model, drafter, prompts[:n], a.tokens, stop)[0],
+                "stagger_mtp": run(
+                    model, drafter, prompts[:n], a.tokens, stop, stagger=True
+                )[0],
+                "batch_ar": run(model, None, prompts[:n], a.tokens, stop)[0],
             }
-        )
-        for rows in a.rows:
+            put(
+                {
+                    "kind": "parity",
+                    **{k: v == ref for k, v in checks.items()},
+                    "first_diff": {
+                        k: next(
+                            (
+                                (i, j)
+                                for i, (x, y) in enumerate(zip(v, ref, strict=True))
+                                for j, (p, q) in enumerate(zip(x, y, strict=False))
+                                if p != q
+                            ),
+                            None,
+                        )
+                        for k, v in checks.items()
+                    },
+                }
+            )
+        for rows in [] if a.phase == "parity" else a.rows:
             for drafts in (False, True):
                 outs, d, wall, first = run(
                     model, drafter if drafts else None, prompts[:rows], a.tokens, stop

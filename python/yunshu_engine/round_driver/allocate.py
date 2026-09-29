@@ -81,7 +81,13 @@ class CostCurve:
 
     def observe(self, rows: int, ms: float, weight: float = 0.2) -> None:
         old = self.points.get(rows)
-        self.points[rows] = ms if old is None else old + weight * (ms - old)
+        if old is None:
+            # a first sample at a new width often carries one-time costs
+            # (kernel compiles): bound it by what the curve predicts
+            ms = min(ms, 2.0 * self(rows)) if self.points else ms
+            self.points[rows] = ms
+        else:
+            self.points[rows] = old + weight * (ms - old)
 
     def __call__(self, rows: int) -> float:
         if not self.points:

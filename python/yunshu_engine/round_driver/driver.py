@@ -358,17 +358,17 @@ class RoundDriver:
         windows = [[r.pending, *([] if r.force else r.drafts)] for r in rows]
         T = max(len(w) for w in windows)
         hidden = self.batch.forward(windows)
-        items = [
-            _Item("d", r, None, 0, 0, b * T, len(w))
-            for b, (r, w) in enumerate(zip(rows, windows, strict=True))
-        ]
+        items, at = [], 0
+        for r, w in zip(rows, windows, strict=True):
+            items.append(_Item("d", r, None, 0, 0, at, len(w)))
+            at += len(w)
         draws = self._draw(items, hidden)
         mx.eval(
             *[d[1] for d in draws],
             *[a for d in draws if d[2] for a in d[2]],
             *self.batch.arrays(),
         )
-        self.cost.observe(len(rows) * T, (time.perf_counter() - started) * 1e3)
+        self.cost.observe(at, (time.perf_counter() - started) * 1e3)
 
         events: list[Event] = []
         used_all: list[int] = []
@@ -401,7 +401,7 @@ class RoundDriver:
                     [r for _, r in alive],
                     [toks_all[b] for b, _ in alive],
                     hidden,
-                    [[b * T + j for j in range(used_all[b])] for b, _ in alive],
+                    [[items[b].at + j for j in range(used_all[b])] for b, _ in alive],
                 )
                 self._draft([r for _, r in alive], heads)
                 mx.eval(*self.head.slots.arrays())
@@ -475,8 +475,8 @@ class RoundDriver:
             row.rates[j] += ACCEPT_EMA * (hit - row.rates[j])
 
     def _depths(self, ready: list[_Row]) -> list[int]:
-        """Next step's drafts per ready row (cost-aware allocation). Windows
-        are padded to the deepest, so a step costs ``rows x (1 + deepest)``."""
+        """Next step's drafts per ready row (cost-aware allocation over the
+        packed rows of the step)."""
         if not ready:
             return []
         fixed = len(self.batch.rows)

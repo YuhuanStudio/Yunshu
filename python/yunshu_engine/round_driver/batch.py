@@ -144,12 +144,48 @@ class KVPlan:
         return hit
 
 
-def attend(at: Any, xn: mx.array, slots: Slots, i: int, plan: KVPlan) -> mx.array:
-    """One full-attention layer over the rows' windows ``xn`` [B, T, D]: keys
-    are written to the row's slot at ``n0 .. n0 + T - 1`` and the ragged
-    kernel reads ``0 .. n0 + t`` for window token ``t``."""
+class Pack:
+    """Rows' windows as ``N = sum(w_b)`` packed tokens (projections, MLP and
+    norms run on real tokens only) and as ``[B, T]`` right-padded tokens (the
+    sequence mixers). ``pad`` / ``unpad`` convert; identity when every window
+    has the same length."""
+
+    def __init__(self, lens: list[int], T: int):
+        self.B, self.T = len(lens), T
+        self.uniform = all(w == T for w in lens)
+        if not self.uniform:
+            cum = np.concatenate([[0], np.cumsum(lens)[:-1]])
+            pad = cum[:, None] + np.minimum(
+                np.arange(T)[None, :], np.asarray(lens)[:, None] - 1
+            )
+            real = np.arange(T)[None, :] < np.asarray(lens)[:, None]
+            self.pad_idx = mx.array(pad.reshape(-1), dtype=mx.int32)
+            self.unpad_idx = mx.array(np.flatnonzero(real.reshape(-1)), dtype=mx.int32)
+
+    def pad(self, a: mx.array) -> mx.array:
+        """[N, W] -> [B, T, W] (padding repeats each row's last token)."""
+        if not self.uniform:
+            a = mx.take(a, self.pad_idx, axis=0)
+        return a.reshape(self.B, self.T, -1)
+
+    def unpad(self, a: mx.array) -> mx.array:
+        """[B, T, ...] -> [N, W]."""
+        a = a.reshape(self.B * self.T, -1)
+        return a if self.uniform else mx.take(a, self.unpad_idx, axis=0)
+
+
+def attend(
+    at: Any, xn: mx.array, slots: Slots, i: int, plan: KVPlan, pack: Pack | None = None
+) -> mx.array:
+    """One full-attention layer over the rows' windows: keys are written to
+    the row's slot at ``n0 .. n0 + T - 1`` and the ragged kernel reads
+    ``0 .. n0 + t`` for window token ``t``. ``xn``: [N, D] packed tokens with
+    ``pack``, else [B, T, D]."""
+    q, k, v = at.q_proj(xn), at.k_proj(xn), at.v_proj(xn)
+    if pack is not None:
+        q, k, v = pack.pad(q), pack.pad(k), pack.pad(v)
     queries, keys, values, gate, _ = at._prepare_projected_qkv(
-        at.q_proj(xn), at.k_proj(xn), at.v_proj(xn), None, plan.positions, None, None
+        q, k, v, None, plan.positions, None, None
     )
     B, H, T, D = (int(s) for s in queries.shape)
     HKV = int(keys.shape[1])
@@ -169,8 +205,8 @@ def attend(at: Any, xn: mx.array, slots: Slots, i: int, plan: KVPlan) -> mx.arra
         slots=plan.slot_ids,
         impl="tile" if tile else "auto",
     )
-    out = out.transpose(0, 2, 1, 3).reshape(B, T, -1)
-    return at.o_proj(out * mx.sigmoid(gate))
+    out = out.transpose(0, 2, 1, 3).reshape(B, T, -1) * mx.sigmoid(gate)
+    return at.o_proj(out if pack is None else pack.unpad(out))
 
 
 class DecodeBatch:
@@ -249,8 +285,7 @@ class DecodeBatch:
     def forward(self, windows: list[list[int]]) -> mx.array:
         """Run every row's window (``windows[b]`` = the row's pending token and
         drafts) through the decoder; returns final-norm hidden states
-        ``[B * T, D]`` (row ``b`` at ``b * T``; positions past ``len(windows[b])``
-        are padding). KV is appended and the GDN state advanced optimistically
+        ``[N, D]`` (the rows' tokens back to back, ``N = sum(len(w))``). KV is appended and the GDN state advanced optimistically
         (all of every window kept); ``commit`` corrects rows that keep less."""
         model = self.lm.model
         B = len(self.rows)
@@ -261,31 +296,31 @@ class DecodeBatch:
         n0 = [r.n for r in self.rows]
         self.slots.reserve(max(n0) + T + 1)
         plan = KVPlan.make([r.slot for r in self.rows], n0, T)
-        toks = np.array([w + [w[-1]] * (T - len(w)) for w in windows], dtype=np.int32)
-        uniform = all(w == T for w in lens)
+        pack = Pack(lens, T)
         lens_arr = mx.array(lens, dtype=mx.int32)
-        x = model.embed_tokens(mx.array(toks.reshape(-1))).reshape(B, T, -1)
+        toks = np.array([t for w in windows for t in w], dtype=np.int32)
+        x = model.embed_tokens(mx.array(toks))
         hist: dict[int, tuple] = {}
         for i, layer in enumerate(model.layers):
             xn = layer.input_layernorm(x)
             if self.linear[i]:
-                r = self._gdn(layer.linear_attn, xn, i, lens, lens_arr, uniform, hist)
+                r = self._gdn(layer.linear_attn, xn, i, lens, lens_arr, pack, hist)
             else:
-                r = attend(layer.self_attn, xn, self.slots, i, plan)
+                r = attend(layer.self_attn, xn, self.slots, i, plan, pack)
             h = x + r
             x = h + layer.mlp(layer.post_attention_layernorm(h))
         self._last = {"hist": hist, "lens": lens, "T": T}
-        return model.norm(x).reshape(B * T, -1)
+        return model.norm(x)
 
-    def _gdn(self, g, xn, i, lens, lens_arr, uniform, hist) -> mx.array:
+    def _gdn(self, g, xn, i, lens, lens_arr, pack, hist) -> mx.array:
         from mlx_vlm.models.qwen3_5.gated_delta import _compute_g_beta
 
-        B, T, _ = xn.shape
+        B, T = pack.B, pack.T
         K1 = g.conv_kernel_size - 1
-        qkv, z = g.in_proj_qkv(xn), g.in_proj_z(xn)
-        b, a = g.in_proj_b(xn), g.in_proj_a(xn)
+        qkv, z = pack.pad(g.in_proj_qkv(xn)), pack.pad(g.in_proj_z(xn))
+        b, a = pack.pad(g.in_proj_b(xn)), pack.pad(g.in_proj_a(xn))
         conv_in = mx.concatenate([self.conv[i], qkv], axis=1)  # [B, K-1+T, C]
-        if uniform:
+        if pack.uniform:
             self.conv[i] = conv_in[:, T:]
         else:
             pos = np.asarray(lens)[:, None] + np.arange(K1)[None, :]
@@ -310,7 +345,7 @@ class DecodeBatch:
         if h is not None:
             hist[i] = (h, conv_in)
         z = z.reshape(B, T, -1, g.head_v_dim)
-        return g.out_proj(g.norm(y, z).reshape(B, T, -1))
+        return g.out_proj(pack.unpad(g.norm(y, z).reshape(B, T, -1)))
 
     def commit(self, used: list[int]) -> None:
         """Rows keep their first ``used[b]`` window positions (``1 <= used <=
