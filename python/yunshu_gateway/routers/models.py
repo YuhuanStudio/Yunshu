@@ -9,6 +9,8 @@ import time
 from fastapi import APIRouter, HTTPException, Request
 
 logger = logging.getLogger(__name__)
+from datetime import UTC
+
 from pydantic import BaseModel, model_validator
 
 from yunshu_control.audit_log import log_operation, resolve_actor
@@ -74,12 +76,12 @@ def _check_permission(request: Request, permission: str) -> None:
 
 def _anthropic_fields(model_id: str, created: int) -> dict:
     """Extra fields so the Anthropic SDK's models.list()/retrieve() parse the same payload."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     return {
         "type": "model",
         "display_name": model_id,
-        "created_at": datetime.fromtimestamp(created, timezone.utc)
+        "created_at": datetime.fromtimestamp(created, UTC)
         .isoformat()
         .replace("+00:00", "Z"),
     }
@@ -240,9 +242,8 @@ async def get_model(model_id: str, request: Request) -> dict:
     served = get_display_model_id() or getattr(engine, "model_name", None)
     resolver = getattr(engine, "resolve_model_id", None)
     known = bool(engine) and (
-        bool(resolver(model_id))
-        if callable(resolver)
-        else model_id in (served, str(served).rsplit("/", 1)[-1])
+        (callable(resolver) and bool(resolver(model_id)))
+        or model_id in (served, str(served).rsplit("/", 1)[-1])
     )
     if not known:
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")

@@ -118,7 +118,7 @@ def test_no_reasoning_detail_when_no_thinking():
     usage = body["usage"]
     assert usage["completion_tokens"] == 5
     assert usage["total_tokens"] == 15
-    assert "completion_tokens_details" not in usage
+    assert usage["completion_tokens_details"] == {"reasoning_tokens": 0}
 
 
 def test_reconciled_reasoning_capped_at_completion():

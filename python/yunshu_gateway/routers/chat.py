@@ -1623,10 +1623,8 @@ async def _build_multi_choice(
         "completion_tokens": completion_tok,
         "total_tokens": prompt_tok + completion_tok,
     }
-    if reasoning_tok > 0:
-        usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tok}
-    if cached_tok > 0:
-        usage["prompt_tokens_details"] = {"cached_tokens": cached_tok}
+    usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tok}
+    usage["prompt_tokens_details"] = {"cached_tokens": cached_tok}
 
     return JSONResponse(
         {
@@ -2240,14 +2238,12 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                     response_body["choices"][0]["prompt_logprobs"] = _n1_prompt_lp
 
             # Attach reasoning_tokens and cached_tokens to usage
-            if _reasoning_tok:
-                response_body.setdefault("usage", {})["completion_tokens_details"] = {
-                    "reasoning_tokens": _reasoning_tok,
-                }
-            if _cached_tok:
-                response_body.setdefault("usage", {})["prompt_tokens_details"] = {
-                    "cached_tokens": _cached_tok,
-                }
+            response_body.setdefault("usage", {})["completion_tokens_details"] = {
+                "reasoning_tokens": _reasoning_tok or 0,
+            }
+            response_body.setdefault("usage", {})["prompt_tokens_details"] = {
+                "cached_tokens": _cached_tok or 0,
+            }
 
             # Attach MCP tool execution results (if any were executed)
             if mcp_results:
@@ -2689,12 +2685,8 @@ async def _handle_vlm_chat(
         "completion_tokens": total_completion_tok,
         "total_tokens": prompt_tok + total_completion_tok,
     }
-    if total_reasoning_tok > 0:
-        vlm_usage["completion_tokens_details"] = {
-            "reasoning_tokens": total_reasoning_tok
-        }
-    if vlm_cached_tok > 0:
-        vlm_usage["prompt_tokens_details"] = {"cached_tokens": vlm_cached_tok}
+    vlm_usage["completion_tokens_details"] = {"reasoning_tokens": total_reasoning_tok}
+    vlm_usage["prompt_tokens_details"] = {"cached_tokens": vlm_cached_tok}
 
     # Record metrics for VLM non-streaming path
     if prompt_tok > 0 or total_completion_tok > 0 or total_reasoning_tok > 0:

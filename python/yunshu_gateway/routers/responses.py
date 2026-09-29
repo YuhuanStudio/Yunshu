@@ -255,12 +255,8 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
             "input_tokens": pt,
             "output_tokens": ct,
             "total_tokens": pt + ct,
-            **({"output_tokens_details": {"reasoning_tokens": rt}} if rt > 0 else {}),
-            **(
-                {"input_tokens_details": {"cached_tokens": cached}}
-                if cached > 0
-                else {}
-            ),
+            "output_tokens_details": {"reasoning_tokens": rt},
+            "input_tokens_details": {"cached_tokens": cached},
         },
     }
     if req.store:
@@ -1572,20 +1568,8 @@ async def create_response(req: ResponsesRequest, request: Request):
                 # reasoning is the detail subset below (was double-added).
                 "output_tokens": total_ct,
                 "total_tokens": total_pt + total_ct,
-                **(
-                    {
-                        "output_tokens_details": {
-                            "reasoning_tokens": total_reasoning_tokens
-                        }
-                    }
-                    if total_reasoning_tokens > 0
-                    else {}
-                ),
-                **(
-                    {"input_tokens_details": {"cached_tokens": max_cached_tokens}}
-                    if max_cached_tokens > 0
-                    else {}
-                ),
+                "output_tokens_details": {"reasoning_tokens": total_reasoning_tokens},
+                "input_tokens_details": {"cached_tokens": max_cached_tokens},
             },
         }
         # Persist when the client requested storage so it can be retrieved
@@ -2462,12 +2446,10 @@ async def _stream_response(
                     "output_tokens": _total_output_tok,
                     "total_tokens": prompt_tok + _total_output_tok,
                 }
-                if reasoning_tok > 0:
-                    _usage_dict["output_tokens_details"] = {
-                        "reasoning_tokens": reasoning_tok
-                    }
-                if cached_tok > 0:
-                    _usage_dict["input_tokens_details"] = {"cached_tokens": cached_tok}
+                _usage_dict["output_tokens_details"] = {
+                    "reasoning_tokens": reasoning_tok
+                }
+                _usage_dict["input_tokens_details"] = {"cached_tokens": cached_tok}
                 try:
                     _store_response(
                         response_id,
@@ -2869,3 +2851,44 @@ async def cancel_response(response_id: str, request: Request):
             "output": [],
         }
     )
+
+
+def _input_text(inp) -> str:
+    if inp is None:
+        return ""
+    if isinstance(inp, str):
+        return inp
+    parts: list[str] = []
+    for item in inp if isinstance(inp, list) else [inp]:
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, dict):
+            c = item.get("content")
+            if isinstance(c, str):
+                parts.append(c)
+            elif isinstance(c, list):
+                parts += [
+                    p.get("text", "")
+                    for p in c
+                    if isinstance(p, dict) and p.get("text")
+                ]
+            for k in ("arguments", "output", "text"):
+                if isinstance(item.get(k), str):
+                    parts.append(item[k])
+    return "\n".join(parts)
+
+
+@router.post("/responses/input_tokens", response_model=None)
+async def count_input_tokens(request: Request):
+    """Count the input tokens a `/v1/responses` request would use (OpenAI input_tokens API)."""
+    from .tokenize import _resolve_tokenizer
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON body") from None
+    tok = _resolve_tokenizer(str(body.get("model") or ""))
+    text = "\n".join(
+        t for t in (body.get("instructions"), _input_text(body.get("input"))) if t
+    )
+    return {"object": "response.input_tokens", "input_tokens": len(tok.encode(text))}

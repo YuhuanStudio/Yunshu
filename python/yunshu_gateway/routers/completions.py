@@ -926,12 +926,10 @@ async def create_completion(req: CompletionRequest, request: Request):
             "completion_tokens": total_completion_tokens,
             "total_tokens": prompt_tokens + total_completion_tokens,
         }
-        if total_reasoning_tokens:
-            usage["completion_tokens_details"] = {
-                "reasoning_tokens": total_reasoning_tokens
-            }
-        if max_cached_tokens > 0:
-            usage["prompt_tokens_details"] = {"cached_tokens": max_cached_tokens}
+        usage["completion_tokens_details"] = {
+            "reasoning_tokens": total_reasoning_tokens
+        }
+        usage["prompt_tokens_details"] = {"cached_tokens": max_cached_tokens}
 
         return JSONResponse(
             {

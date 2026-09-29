@@ -794,7 +794,9 @@ async def _fallback_embeddings(
     tokenizer = getattr(engine, "_tokenizer", None)
     model = getattr(engine, "_model", None)
     if tokenizer is None or model is None:
-        raise RuntimeError("Engine does not support embedding generation")
+        raise ValueError(
+            "This model cannot produce embeddings; load an embedding model for /v1/score, /v1/rerank, /v1/pooling and /v1/classify"
+        )
 
     loop = asyncio.get_running_loop()
 
