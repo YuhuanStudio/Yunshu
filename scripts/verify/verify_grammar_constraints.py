@@ -7,6 +7,7 @@ regex, across a few prompts.
 
 Run: PYTHONPATH=. uv run python scripts/verify_grammar_constraints.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,26 +23,36 @@ async def main() -> int:
         print("SKIP: model not mounted")
         return 0
     from yunshu_engine.batched_engine import BatchedEngine
+
     eng = BatchedEngine(model_name=MODEL)
     await eng.start()
 
     async def gen(prompt, schema, mt=16):
-        o = await eng.chat(messages=[{"role": "user", "content": prompt}],
-                           max_tokens=mt, temperature=0.0, enable_thinking=False,
-                           json_schema=schema)
+        o = await eng.chat(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=mt,
+            temperature=0.0,
+            enable_thinking=False,
+            json_schema=schema,
+        )
         return (o["text"] if isinstance(o, dict) else o.text).strip()
+
     fails = 0
     try:
         # choice
-        for prompt, choices in [("Is the sky blue? Answer.", ["yes", "no"]),
-                                ("Pick a primary color.", ["red", "green", "blue"])]:
+        for prompt, choices in [
+            ("Is the sky blue? Answer.", ["yes", "no"]),
+            ("Pick a primary color.", ["red", "green", "blue"]),
+        ]:
             out = await gen(prompt, {"type": "choice", "choices": choices})
             ok = out in choices
             print(f"  {'OK ' if ok else 'BAD'} choice {choices}: {out!r}")
             fails += not ok
         # regex
-        for prompt, pat in [("Give a phone number.", r"\d{3}-\d{4}"),
-                            ("Output a 2-letter uppercase code.", r"[A-Z]{2}")]:
+        for prompt, pat in [
+            ("Give a phone number.", r"\d{3}-\d{4}"),
+            ("Output a 2-letter uppercase code.", r"[A-Z]{2}"),
+        ]:
             out = await gen(prompt, {"type": "regex", "pattern": pat})
             ok = bool(re.fullmatch(pat, out))
             print(f"  {'OK ' if ok else 'BAD'} regex /{pat}/: {out!r}")

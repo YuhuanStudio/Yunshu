@@ -16,6 +16,7 @@ Both use small models (the user confirmed small models are fine for checks).
 
 Run: PYTHONPATH=. uv run python scripts/verify_ngram_spec.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -26,15 +27,34 @@ HYBRID = os.environ.get("YUNSHU_NGRAM_HYBRID_MODEL", "./models/Qwen3.5-0.8B-MLX-
 DENSE = os.environ.get("YUNSHU_NGRAM_DENSE_MODEL", "./models/Qwen2.5-3B-Instruct-4bit")
 
 _KW = dict(
-    max_tokens=120, temperature=0.0, top_p=1.0, top_k=0, min_p=0.0,
-    repetition_penalty=1.0, frequency_penalty=0.0, presence_penalty=0.0,
-    logit_bias=None, stop=None, stop_token_ids=None, seed=None,
-    enable_thinking=False, logprobs=False, top_logprobs=None, thinking_budget=None,
-    xtc_probability=0.0, xtc_threshold=0.0, json_schema=None, cancel_event=None,
-    logits_processors=None, timeout_seconds=300.0, lora_adapter=None,
+    max_tokens=120,
+    temperature=0.0,
+    top_p=1.0,
+    top_k=0,
+    min_p=0.0,
+    repetition_penalty=1.0,
+    frequency_penalty=0.0,
+    presence_penalty=0.0,
+    logit_bias=None,
+    stop=None,
+    stop_token_ids=None,
+    seed=None,
+    enable_thinking=False,
+    logprobs=False,
+    top_logprobs=None,
+    thinking_budget=None,
+    xtc_probability=0.0,
+    xtc_threshold=0.0,
+    json_schema=None,
+    cancel_event=None,
+    logits_processors=None,
+    timeout_seconds=300.0,
+    lora_adapter=None,
 )
-PROMPT = ("Output the following line exactly 30 times, each on its own line:\n"
-          "the quick brown fox jumps over the lazy dog 1234567890\n/no_think")
+PROMPT = (
+    "Output the following line exactly 30 times, each on its own line:\n"
+    "the quick brown fox jumps over the lazy dog 1234567890\n/no_think"
+)
 
 
 def _text(r):
@@ -61,6 +81,7 @@ def _common_prefix_tokens(a: str, b: str) -> int:
 
 async def _run(model: str):
     from yunshu_engine.batched_engine import BatchedEngine
+
     eng = BatchedEngine(model_name=model)
     await eng.start()
     try:
@@ -78,8 +99,8 @@ async def main() -> int:
     # (1) Non-trimmable hybrid cache → guard delegates → bit-identical to greedy.
     if os.path.exists(HYBRID):
         g, s = await _run(HYBRID)
-        checks["hybrid guard → spec == greedy (no corruption)"] = (g == s)
-        checks["hybrid output non-degenerate"] = (not _degenerate(s))
+        checks["hybrid guard → spec == greedy (no corruption)"] = g == s
+        checks["hybrid output non-degenerate"] = not _degenerate(s)
         detail.append(f"hybrid greedy[:46]={g[:46]!r}")
         detail.append(f"hybrid spec  [:46]={s[:46]!r}")
     else:
@@ -89,7 +110,7 @@ async def main() -> int:
     # (2) Trimmable dense cache → real spec path runs, non-degenerate, shares prefix.
     if os.path.exists(DENSE):
         g, s = await _run(DENSE)
-        checks["dense spec non-degenerate (verify-trim works)"] = (not _degenerate(s))
+        checks["dense spec non-degenerate (verify-trim works)"] = not _degenerate(s)
         checks["dense spec shares real prefix with greedy (≥3 words)"] = (
             _common_prefix_tokens(g, s) >= 3
         )

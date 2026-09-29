@@ -9,6 +9,7 @@ noise_refiner ordering) — a regression makes control a no-op and fails this.
 
 Run: PYTHONPATH=. uv run python scripts/verify_controlnet.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -21,7 +22,9 @@ MODEL = os.environ.get("YUNSHU_IMAGE_MODEL", "./models/Z-Image-Turbo-MLX-4bit")
 
 def _has_controlnet() -> bool:
     return os.path.isdir("models") and any(
-        p.endswith(".safetensors") and "controlnet" in p.lower() for p in os.listdir("models"))
+        p.endswith(".safetensors") and "controlnet" in p.lower()
+        for p in os.listdir("models")
+    )
 
 
 async def main() -> int:
@@ -34,12 +37,16 @@ async def main() -> int:
     from yunshu_engine.image_engine import ImageGenEngine
 
     def edges_gray(b):
-        return np.asarray(Image.open(io.BytesIO(b)).convert("L").filter(ImageFilter.FIND_EDGES),
-                          dtype=np.float32)
+        return np.asarray(
+            Image.open(io.BytesIO(b)).convert("L").filter(ImageFilter.FIND_EDGES),
+            dtype=np.float32,
+        )
 
     def edge_bytes(b):
         g = Image.open(io.BytesIO(b)).convert("L").filter(ImageFilter.FIND_EDGES)
-        buf = io.BytesIO(); Image.merge("RGB", (g, g, g)).save(buf, "PNG"); return buf.getvalue()
+        buf = io.BytesIO()
+        Image.merge("RGB", (g, g, g)).save(buf, "PNG")
+        return buf.getvalue()
 
     def corr(a, c):
         a, c = a.ravel() - a.mean(), c.ravel() - c.mean()
@@ -49,11 +56,14 @@ async def main() -> int:
     eng = ImageGenEngine(MODEL)
     await eng.start()
     P = dict(width=512, height=512, num_inference_steps=8, seed=5)
-    bottle = await eng.generate_image(prompt="a tall slim glass bottle standing upright, centered", **P)
+    bottle = await eng.generate_image(
+        prompt="a tall slim glass bottle standing upright, centered", **P
+    )
     ctrl_map = edge_bytes(bottle)
     ctrl_gray = edges_gray(ctrl_map)
-    controlled = await eng.generate_controlled_image("a red apple", ctrl_map,
-                                                     control_scale=1.0, **P)
+    controlled = await eng.generate_controlled_image(
+        "a red apple", ctrl_map, control_scale=1.0, **P
+    )
     free = await eng.generate_image(prompt="a red apple", **P)
     await eng.stop()
 

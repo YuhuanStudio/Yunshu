@@ -27,14 +27,23 @@ def main():
     out(kind="proxy", weight_GB=round(dec.nbytes / 1e9, 2))
 
     base = stats(dec.run(a.seconds))
-    out(kind="decode_alone", GBps=round(dec.nbytes / (base["ms_median"] / 1e3) / 1e9, 1), **base)
+    out(
+        kind="decode_alone",
+        GBps=round(dec.nbytes / (base["ms_median"] / 1e3) / 1e9, 1),
+        **base,
+    )
 
     for M, layers in ((128, 4), (512, 8), (2048, 8), (2048, 32)):
         pa = PrefillProxy(M, layers)
         n, dt = pa.run(a.seconds / 2)
         pre_tps = n * M / dt
-        out(kind="prefill_alone", M=M, layers=layers, chunk_ms=round(dt / n * 1e3, 1),
-            TFLOPS=round(pa.flops * n / dt / 1e12, 1))
+        out(
+            kind="prefill_alone",
+            M=M,
+            layers=layers,
+            chunk_ms=round(dt / n * 1e3, 1),
+            TFLOPS=round(pa.flops * n / dt / 1e12, 1),
+        )
 
         # (a) two threads, two streams
         pre = PrefillProxy(M, layers)
@@ -49,9 +58,15 @@ def main():
         time.sleep(0.5)
         d = stats(dec.run(a.seconds - 1))
         th.join()
-        out(kind="decode_plus_prefill", mode="two_streams_two_threads", M=M, layers=layers,
+        out(
+            kind="decode_plus_prefill",
+            mode="two_streams_two_threads",
+            M=M,
+            layers=layers,
             decode_tok_s_ratio=round(d["tok_s"] / base["tok_s"], 3),
-            prefill_tok_s_ratio=round(res["n"] * M / res["dt"] / pre_tps, 3), **d)
+            prefill_tok_s_ratio=round(res["n"] * M / res["dt"] / pre_tps, 3),
+            **d,
+        )
 
         # (b) same thread: one decode step then one prefill chunk, repeated
         pre = PrefillProxy(M, layers)
@@ -69,9 +84,15 @@ def main():
                 chunks += 1
                 last = time.perf_counter()
         d = stats(times)
-        out(kind="decode_plus_prefill", mode="interleaved_single_queue", M=M, layers=layers,
+        out(
+            kind="decode_plus_prefill",
+            mode="interleaved_single_queue",
+            M=M,
+            layers=layers,
             decode_tok_s_ratio=round(len(times) / a.seconds / base["tok_s"], 3),
-            prefill_tok_s_ratio=round(chunks * M / a.seconds / pre_tps, 3), **d)
+            prefill_tok_s_ratio=round(chunks * M / a.seconds / pre_tps, 3),
+            **d,
+        )
 
 
 if __name__ == "__main__":

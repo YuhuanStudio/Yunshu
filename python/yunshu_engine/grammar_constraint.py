@@ -777,10 +777,12 @@ class RegexConstraint:
         return allowed
 
     def _get_all_token_ids(self, tokenizer: Any) -> list[int]:
+        from .json_schema import without_special_ids
+
         if hasattr(tokenizer, "get_vocab"):
-            return list(tokenizer.get_vocab().values())
+            return without_special_ids(tokenizer, tokenizer.get_vocab().values())
         if hasattr(tokenizer, "vocab") and isinstance(tokenizer.vocab, dict):
-            return list(tokenizer.vocab.values())
+            return without_special_ids(tokenizer, tokenizer.vocab.values())
         vocab_size = getattr(tokenizer, "vocab_size", 32000)
         return list(range(vocab_size))
 
@@ -1359,10 +1361,12 @@ def _build_token_text_map(tokenizer: Any) -> dict[int, str]:
 
 
 def _get_all_token_ids(tokenizer: Any) -> list[int]:
+    from .json_schema import without_special_ids
+
     if hasattr(tokenizer, "get_vocab"):
-        return list(tokenizer.get_vocab().values())
+        return without_special_ids(tokenizer, tokenizer.get_vocab().values())
     if hasattr(tokenizer, "vocab") and isinstance(tokenizer.vocab, dict):
-        return list(tokenizer.vocab.values())
+        return without_special_ids(tokenizer, tokenizer.vocab.values())
     return list(range(getattr(tokenizer, "vocab_size", 32000)))
 
 

@@ -20,6 +20,7 @@ guarantee is determinism + effect, which is what we check.
 
 Run: PYTHONPATH=. uv run python scripts/verify_sampling_constraints.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -39,15 +40,24 @@ async def main() -> int:
         print("SKIP: model not mounted")
         return 0
     from yunshu_engine.batched_engine import BatchedEngine
+
     eng = BatchedEngine(model_name=MODEL)
     await eng.start()
 
     checks: dict[str, bool] = {}
     detail: list[str] = []
     try:
+
         async def gen(**kw):
-            return _txt(await eng.chat(messages=MSGS, max_tokens=24, temperature=2.0,
-                                       enable_thinking=False, **kw))
+            return _txt(
+                await eng.chat(
+                    messages=MSGS,
+                    max_tokens=24,
+                    temperature=2.0,
+                    enable_thinking=False,
+                    **kw,
+                )
+            )
 
         # control: high temp is genuinely random (different seeds → different)
         u1 = await gen(seed=1)
@@ -65,7 +75,9 @@ async def main() -> int:
         checks["top_p=0.02 @ temp2: reproducible under same seed"] = tp_a == tp_b
 
         detail.append(f"unconstrained: {u1[:30]!r} vs {u2[:30]!r}")
-        detail.append(f"top_k=1: {tk_a[:30]!r} | min_p=1: {mp_a[:30]!r} | top_p=.02: {tp_a[:30]!r}")
+        detail.append(
+            f"top_k=1: {tk_a[:30]!r} | min_p=1: {mp_a[:30]!r} | top_p=.02: {tp_a[:30]!r}"
+        )
     finally:
         await eng.stop()
 

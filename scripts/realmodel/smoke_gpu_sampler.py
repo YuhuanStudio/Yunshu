@@ -2,12 +2,16 @@
 coherent output, no n>1 collapse, and faster (removes the per-token GPU sync).
 Run: PYTHONPATH=. uv run python scripts/realmodel/smoke_gpu_sampler.py
 """
+
 import asyncio, os, time
+
 MODEL = "mlx-community/Qwen2.5-0.5B-Instruct-4bit"
+
 
 async def _gen(gpu: bool, seed):
     os.environ["YUNSHU_GPU_SAMPLER"] = "1" if gpu else "0"
     from yunshu_engine.batched_engine import BatchedEngine
+
     eng = BatchedEngine(MODEL)
     await eng.start()
     msgs = [{"role": "user", "content": "Write one sentence about the ocean."}]
@@ -20,6 +24,7 @@ async def _gen(gpu: bool, seed):
     await eng.stop()
     return txt, round(tps, 1)
 
+
 async def main():
     g_txt, g_tps = await _gen(True, 1)
     n_txt, n_tps = await _gen(False, 1)
@@ -31,7 +36,8 @@ async def main():
     b, _ = await _gen(True, 22)
     print(f"[GPU n>1 distinct] seed11!=seed22: {a != b}")
     assert a != b, "GPU sampler collapsed (different seeds gave identical text)"
-    print(f"\nspeedup (GPU/numpy) = {g_tps/n_tps:.2f}x")
+    print(f"\nspeedup (GPU/numpy) = {g_tps / n_tps:.2f}x")
     print("GPU sampler smoke: PASS")
+
 
 asyncio.run(main())

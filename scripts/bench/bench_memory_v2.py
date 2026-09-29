@@ -1,4 +1,5 @@
 """Independent process memory benchmark v2 — with warmup for Yunshu."""
+
 import json
 import subprocess
 
@@ -101,35 +102,39 @@ asyncio.run(main())
 """,
 }
 
-print(f"{'='*75}")
+print(f"{'=' * 75}")
 print("  MEMORY BENCHMARK (independent processes, warmup for all)")
-print(f"{'='*75}")
+print(f"{'=' * 75}")
 
 results = {}
 for name, script in SCRIPTS.items():
     print(f"  {name}...", end=" ", flush=True)
     proc = subprocess.run(
         ["uv", "run", "python", "-c", script],
-        capture_output=True, text=True, timeout=300,
+        capture_output=True,
+        text=True,
+        timeout=300,
         cwd=".",
     )
     try:
         output = proc.stdout.strip().split("\n")[-1]  # was literal \n
         data = json.loads(output)
         results[name] = data
-        print(f"{data.get('rss_gen','?')}MB | {data.get('tok_s','?')} tok/s")
+        print(f"{data.get('rss_gen', '?')}MB | {data.get('tok_s', '?')} tok/s")
     except Exception as e:
         print(f"FAILED: {e}")
         if proc.stderr:
             print(f"  stderr: {proc.stderr[-200:]}")
 
-print(f"\n{'─'*75}")
+print(f"\n{'─' * 75}")
 print(f"  {'Framework':<14} {'RSS warmup':>12} {'RSS gen':>10} {'tok/s':>10}")
-print(f"  {'─'*14} {'─'*12} {'─'*10} {'─'*10}")
+print(f"  {'─' * 14} {'─' * 12} {'─' * 10} {'─' * 10}")
 for name in ["yunshu", "mlx-lm", "vllm-mlx", "omlx"]:
     d = results.get(name, {})
     if not d:
         print(f"  {name:<14} FAILED")
         continue
-    print(f"  {name:<14} {d.get('rss_warmup','?'):>10}MB {d.get('rss_gen','?'):>8}MB {d.get('tok_s','?'):>10}")
-print(f"{'─'*75}")
+    print(
+        f"  {name:<14} {d.get('rss_warmup', '?'):>10}MB {d.get('rss_gen', '?'):>8}MB {d.get('tok_s', '?'):>10}"
+    )
+print(f"{'─' * 75}")

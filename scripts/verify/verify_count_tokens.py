@@ -11,6 +11,7 @@ agrees with the input_tokens a real /v1/messages call reports for the same input
 
 Run: PYTHONPATH=. uv run python scripts/verify_count_tokens.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -42,10 +43,24 @@ async def main() -> int:
     detail: list[str] = []
     try:
         transport = httpx.ASGITransport(app=create_app())
-        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=120) as client:
-            short = {"model": MODEL, "messages": [{"role": "user", "content": "Hello there."}]}
-            long = {"model": MODEL, "messages": [{"role": "user", "content":
-                    "Hello there. " + "Please summarize the history of computing in great detail. " * 6}]}
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test", timeout=120
+        ) as client:
+            short = {
+                "model": MODEL,
+                "messages": [{"role": "user", "content": "Hello there."}],
+            }
+            long = {
+                "model": MODEL,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Hello there. "
+                        + "Please summarize the history of computing in great detail. "
+                        * 6,
+                    }
+                ],
+            }
 
             rc = await client.post("/v1/messages/count_tokens", json=short)
             checks["count_tokens: HTTP 200"] = rc.status_code == 200
@@ -53,19 +68,29 @@ async def main() -> int:
                 detail.append(f"status={rc.status_code} body={rc.text[:200]}")
             else:
                 n_short = rc.json().get("input_tokens")
-                checks["count_tokens: input_tokens > 0"] = isinstance(n_short, int) and n_short > 0
+                checks["count_tokens: input_tokens > 0"] = (
+                    isinstance(n_short, int) and n_short > 0
+                )
 
                 # actual message call usage for the SAME short input
                 rm = await client.post("/v1/messages", json=dict(short, max_tokens=4))
-                actual = (rm.json().get("usage") or {}).get("input_tokens") if rm.status_code == 200 else None
+                actual = (
+                    (rm.json().get("usage") or {}).get("input_tokens")
+                    if rm.status_code == 200
+                    else None
+                )
                 checks["count_tokens: matches real usage (±2)"] = (
-                    isinstance(actual, int) and abs(actual - n_short) <= 2)
+                    isinstance(actual, int) and abs(actual - n_short) <= 2
+                )
 
                 # longer prompt → strictly larger count (not a constant)
                 rl = await client.post("/v1/messages/count_tokens", json=long)
-                n_long = rl.json().get("input_tokens") if rl.status_code == 200 else None
+                n_long = (
+                    rl.json().get("input_tokens") if rl.status_code == 200 else None
+                )
                 checks["count_tokens: monotonic (longer > shorter)"] = (
-                    isinstance(n_long, int) and n_long > n_short)
+                    isinstance(n_long, int) and n_long > n_short
+                )
                 detail.append(f"short={n_short} actual={actual} long={n_long}")
     finally:
         set_engine(None)

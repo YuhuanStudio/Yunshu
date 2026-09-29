@@ -7,6 +7,7 @@ compute-utilization (step vs idle), and a cProfile of the top time consumers.
 Run: PYTHONPATH=. YBENCH_MODEL=./models/Qwen3.5-2B-MLX-bf16 \
        uv run python scripts/profile_engine_loop.py
 """
+
 import asyncio
 import cProfile
 import io
@@ -23,8 +24,13 @@ GEN = int(os.environ.get("PROF_GEN", "120"))
 
 async def _one(engine, i):
     o = await engine.chat(
-        messages=[{"role": "user", "content": f"Write a detailed paragraph about topic {i}."}],
-        max_tokens=GEN, temperature=0.0, enable_thinking=False)
+        messages=[
+            {"role": "user", "content": f"Write a detailed paragraph about topic {i}."}
+        ],
+        max_tokens=GEN,
+        temperature=0.0,
+        enable_thinking=False,
+    )
     return getattr(o, "completion_tokens", 0)
 
 
@@ -37,10 +43,13 @@ async def run(engine):
 
 async def main():
     from yunshu_engine.batched_engine import BatchedEngine
+
     engine = BatchedEngine(model_name=MODEL)
     await engine.start()
     # warmup
-    await engine.chat(messages=[{"role": "user", "content": "hi"}], max_tokens=8, temperature=0.0)
+    await engine.chat(
+        messages=[{"role": "user", "content": "hi"}], max_tokens=8, temperature=0.0
+    )
 
     core = getattr(engine, "_engine_core", None)
     # reset util counters if possible
@@ -60,8 +69,12 @@ async def main():
     idle_ms = getattr(core, "_total_idle_time_ms", 0) if core else 0
     print(f"\n== ENGINE-LOOP PROFILE: {os.path.basename(MODEL)} N={N} gen={GEN} ==")
     print(f"  aggregate: {agg:.1f} tok/s ({total_tok} tok in {wall:.2f}s)")
-    print(f"  GPU compute-utilization: {util:.1f}%  (step {step_ms:.0f}ms / idle {idle_ms:.0f}ms)")
-    print(f"  => ~{100-util:.0f}% of wall is NON-GPU orchestration (the reclaimable gap)\n")
+    print(
+        f"  GPU compute-utilization: {util:.1f}%  (step {step_ms:.0f}ms / idle {idle_ms:.0f}ms)"
+    )
+    print(
+        f"  => ~{100 - util:.0f}% of wall is NON-GPU orchestration (the reclaimable gap)\n"
+    )
 
     s = io.StringIO()
     ps = pstats.Stats(pr, stream=s).sort_stats("cumulative")
@@ -71,9 +84,21 @@ async def main():
     print("== top cumulative (filtered to our code + asyncio/detok) ==")
     shown = 0
     for ln in lines:
-        if any(k in ln for k in ("yunshu_engine", "detoken", "scheduler", "asyncio",
-                                 "queue", "run_in_executor", "generate_step", "sample")):
-            print(" ", ln.strip()[:160]); shown += 1
+        if any(
+            k in ln
+            for k in (
+                "yunshu_engine",
+                "detoken",
+                "scheduler",
+                "asyncio",
+                "queue",
+                "run_in_executor",
+                "generate_step",
+                "sample",
+            )
+        ):
+            print(" ", ln.strip()[:160])
+            shown += 1
         if shown >= 22:
             break
     await engine.stop()

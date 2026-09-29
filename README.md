@@ -20,7 +20,8 @@ already paid for. The first fully tuned model is **Qwen3.8-27B**.
 
 ## What it does differently
 
-- **Lossless speculative decode.** MTP (the checkpoint's own head) or an external DFlash drafter.
+- **Lossless speculative decode.** A DFlash2 drafter when one is installed for the model (picked
+  automatically), else MTP (the checkpoint's own head).
   Every decode and verify matmul of a drafting request goes through one batch-invariant kernel, so
   greedy output with speculation on is token-identical to speculation off — the guarantee Splash
   calls lossless.
@@ -59,6 +60,24 @@ Other ways to install: `pipx install "yunshu[vision]"`, Homebrew
 `yunshu serve -m org/name` uses a model already in the models directory or the Hugging Face cache
 and downloads only when neither has it. Models live in `~/.yunshu/models`; to keep them elsewhere,
 run `yunshu config set models_dir /path/to/models` (saved in `~/.yunshu/config.toml`).
+
+### Qwen3.8-27B (the tuned model)
+
+Measured memory footprint is about 21 GiB at a 1K prompt and 29 GiB at 32K (weights, drafter and
+KV), so use a Mac with 32 GB or more; 131K context needs more.
+
+```bash
+yunshu pull Jundot/Qwen3.8-27B-oQ4e-mtp            # the model: 4-bit, ships an MTP head
+yunshu pull incoai/Qwen3.8-27B-DFlash2             # the drafter: faster than MTP
+yunshu doctor -m Jundot/Qwen3.8-27B-oQ4e-mtp       # "speculative" row shows the path in use
+yunshu serve -m Jundot/Qwen3.8-27B-oQ4e-mtp
+```
+
+With the drafter in the models directory or the Hugging Face cache, `yunshu serve` finds and uses
+it; no flag is needed. The startup log says `Speculative decoding: dflash`. To choose yourself:
+`YUNSHU_VLM_DRAFT=mtp` forces the checkpoint's MTP head, `YUNSHU_VLM_DRAFT=off` disables drafting,
+`YUNSHU_VLM_DRAFT=/path/to/drafter` picks a specific drafter. Every path is lossless: with
+speculation on, greedy output equals speculation off.
 
 The server listens on `http://127.0.0.1:8000`. Any OpenAI client works unchanged:
 
@@ -137,7 +156,40 @@ long-run soak; same settings for every engine):
 With `YUNSHU_KV_PRECISION=int8` (lossy, opt-in) Yunshu scored 251 / 300 at a 28.1 GiB peak (measured
 on an earlier build of the ragged cache, 34.6 min).
 
-Speed sweep (unique prompts, no cache hits; 128 generated tokens; tok/s unless noted):
+**Default speculative path on Qwen3.8-27B: DFlash2 drafter** (cost-aware chain depth, 8-bit drafter
+weights), server, greedy, 128 generated tokens, one request, unique prompts, tok/s. Two corpora: novel
+prose (`novel_en`, hard to draft) and Python code (`code_python`, easy):
+
+| Context | novel_en | code_python |
+|---|---|---|
+| 1K | 57.1 | 82.0 |
+| 8K | 48.2 | 89.1 |
+| 32K | 46.1 | 70.5 |
+| 131K | 32.9 | 79.9 |
+
+TTFT at 131K is about 207 s (cold prefill, ~640 tok/s, at the hardware ceiling); the capability
+matrix is 34/34. Against the checkpoint's MTP head on the same server, novel_en at 1K is 57.1
+versus 47.5 tok/s. The numbers move a few tok/s from run to run because acceptance depends on the
+text.
+
+Same-corpus comparison (novel_en, single request, tok/s; the quantization may differ between
+engines; both measured 2026-09-29):
+
+| Context | Yunshu (DFlash2) | TensorFold 0.3.6.1 (DFlash2) |
+|---|---|---|
+| 1K | 57.1 | 76.4 |
+| 8K | 48.2 | 67.2 |
+| 32K | 46.1 | 63.4 |
+| 131K | 32.9 | 38.9 |
+| TTFT at 131K | 207 s | 280 s |
+
+TensorFold decodes novel prose faster than Yunshu at every context here (about 1.2x at 131K, 1.3-1.4x
+at 1K-32K); Yunshu's prefill is faster (207 vs 280 s at 131K). Splash and oMLX were not run on this
+corpus; their figures in the next table come from an earlier, different prompt set and should not be
+read against the columns above.
+
+Earlier speed sweep with the MTP draft (unique prompts, no cache hits; 128 generated tokens; tok/s
+unless noted):
 
 | | Yunshu | oMLX | Splash | TensorFold (MTP) |
 |---|---|---|---|---|

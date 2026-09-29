@@ -14,6 +14,7 @@ temp 0.
 
 Run: PYTHONPATH=. uv run python scripts/verify_streaming_tool_calls.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -46,13 +47,34 @@ async def main() -> int:
     detail: list[str] = []
     try:
         transport = httpx.ASGITransport(app=create_app())
-        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=120) as client:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test", timeout=120
+        ) as client:
             body = {
-                "model": MODEL, "stream": True, "temperature": 0.0, "max_tokens": 80,
-                "tools": [{"type": "function", "function": {
-                    "name": "get_weather", "description": "Get current weather for a city",
-                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}}],
-                "messages": [{"role": "user", "content": "What's the weather in Tokyo right now? Use the tool."}],
+                "model": MODEL,
+                "stream": True,
+                "temperature": 0.0,
+                "max_tokens": 80,
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "description": "Get current weather for a city",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"city": {"type": "string"}},
+                                "required": ["city"],
+                            },
+                        },
+                    }
+                ],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "What's the weather in Tokyo right now? Use the tool.",
+                    }
+                ],
             }
             name = ""
             args = ""
@@ -92,7 +114,9 @@ async def main() -> int:
             checks["stream emits delta.tool_calls"] = saw_tc
             checks["reassembled function name == get_weather"] = name == "get_weather"
             checks["reassembled arguments parse to {city~Tokyo}"] = (
-                isinstance(parsed, dict) and "tokyo" in str(parsed.get("city", "")).lower())
+                isinstance(parsed, dict)
+                and "tokyo" in str(parsed.get("city", "")).lower()
+            )
             checks["terminal finish_reason == tool_calls"] = final_fr == "tool_calls"
             checks["stream ends with [DONE]"] = done
             detail.append(f"name={name!r} args={args!r} fr={final_fr} done={done}")

@@ -28,9 +28,20 @@ def turn(url, payload, timeout=600):
     u = urllib.parse.urlparse(url)
     conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=timeout)
     t0 = time.perf_counter()
-    out = {"text": "", "first_text_s": None, "first_audio_s": None, "audio_samples": 0, "done": None}
+    out = {
+        "text": "",
+        "first_text_s": None,
+        "first_audio_s": None,
+        "audio_samples": 0,
+        "done": None,
+    }
     try:
-        conn.request("POST", "/v1/omni/speech/stream", json.dumps(payload), {"Content-Type": "application/json"})
+        conn.request(
+            "POST",
+            "/v1/omni/speech/stream",
+            json.dumps(payload),
+            {"Content-Type": "application/json"},
+        )
         resp = conn.getresponse()
         out["status"] = resp.status
         if resp.status != 200:
@@ -63,7 +74,9 @@ def turn(url, payload, timeout=600):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--url", required=True)
     ap.add_argument("--audio", nargs="*", default=[])
     ap.add_argument("--rounds", type=int, default=2)
@@ -76,21 +89,74 @@ def main():
             for prompt, expect in TEXT_TURNS:
                 r = turn(a.url, {"text": prompt})
                 n += 1
-                row = {"turn": n, "input": "text", "prompt": prompt, "expect": expect,
-                       "ok": expect in r["text"].lower() and r["audio_samples"] > 0
-                       and not r["text"].strip().startswith("!!"), **r}
+                row = {
+                    "turn": n,
+                    "input": "text",
+                    "prompt": prompt,
+                    "expect": expect,
+                    "ok": expect in r["text"].lower()
+                    and r["audio_samples"] > 0
+                    and not r["text"].strip().startswith("!!"),
+                    **r,
+                }
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
-                print(json.dumps({k: row[k] for k in ("turn", "input", "ok", "text", "first_text_s",
-                                                       "first_audio_s", "total_s", "audio_s")}, ensure_ascii=False), flush=True)
+                print(
+                    json.dumps(
+                        {
+                            k: row[k]
+                            for k in (
+                                "turn",
+                                "input",
+                                "ok",
+                                "text",
+                                "first_text_s",
+                                "first_audio_s",
+                                "total_s",
+                                "audio_s",
+                            )
+                        },
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
             for path in a.audio:
-                r = turn(a.url, {"text": "Answer the spoken question in a few words.", "audio_path": str(Path(path).resolve())})
+                r = turn(
+                    a.url,
+                    {
+                        "text": "Answer the spoken question in a few words.",
+                        "audio_path": str(Path(path).resolve()),
+                    },
+                )
                 n += 1
-                row = {"turn": n, "input": f"audio:{Path(path).name}",
-                       "ok": r.get("status") == 200 and r["audio_samples"] > 0 and bool(r["text"].strip())
-                       and not r["text"].strip().startswith("!!"), **r}
+                row = {
+                    "turn": n,
+                    "input": f"audio:{Path(path).name}",
+                    "ok": r.get("status") == 200
+                    and r["audio_samples"] > 0
+                    and bool(r["text"].strip())
+                    and not r["text"].strip().startswith("!!"),
+                    **r,
+                }
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
-                print(json.dumps({k: row[k] for k in ("turn", "input", "ok", "text", "first_text_s",
-                                                       "first_audio_s", "total_s", "audio_s")}, ensure_ascii=False), flush=True)
+                print(
+                    json.dumps(
+                        {
+                            k: row[k]
+                            for k in (
+                                "turn",
+                                "input",
+                                "ok",
+                                "text",
+                                "first_text_s",
+                                "first_audio_s",
+                                "total_s",
+                                "audio_s",
+                            )
+                        },
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
 
 
 if __name__ == "__main__":

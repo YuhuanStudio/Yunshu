@@ -12,6 +12,7 @@ temperature 0.
 
 Run: PYTHONPATH=. uv run python scripts/verify_anthropic_tools.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -43,21 +44,30 @@ async def main() -> int:
     detail: list[str] = []
     try:
         transport = httpx.ASGITransport(app=create_app())
-        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=120) as client:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test", timeout=120
+        ) as client:
             body = {
                 "model": MODEL,
                 "max_tokens": 80,
                 "temperature": 0.0,
-                "tools": [{
-                    "name": "get_weather",
-                    "description": "Get current weather for a city",
-                    "input_schema": {
-                        "type": "object",
-                        "properties": {"city": {"type": "string"}},
-                        "required": ["city"],
-                    },
-                }],
-                "messages": [{"role": "user", "content": "What's the weather in Tokyo right now? Use the tool."}],
+                "tools": [
+                    {
+                        "name": "get_weather",
+                        "description": "Get current weather for a city",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {"city": {"type": "string"}},
+                            "required": ["city"],
+                        },
+                    }
+                ],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "What's the weather in Tokyo right now? Use the tool.",
+                    }
+                ],
             }
             r = await client.post("/v1/messages", json=body)
             checks["HTTP 200"] = r.status_code == 200
@@ -66,20 +76,32 @@ async def main() -> int:
             else:
                 d = r.json()
                 content = d.get("content") or []
-                tu = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_use"]
+                tu = [
+                    b
+                    for b in content
+                    if isinstance(b, dict) and b.get("type") == "tool_use"
+                ]
                 checks["stop_reason == tool_use"] = d.get("stop_reason") == "tool_use"
                 checks["tool_use block present"] = bool(tu)
                 if tu:
                     b = tu[0]
                     inp = b.get("input")
                     checks["tool_use block well-formed (id/name/input dict)"] = (
-                        bool(b.get("id")) and bool(b.get("name")) and isinstance(inp, dict))
+                        bool(b.get("id"))
+                        and bool(b.get("name"))
+                        and isinstance(inp, dict)
+                    )
                     checks["correct tool + args (get_weather, city~Tokyo)"] = (
                         b.get("name") == "get_weather"
                         and isinstance(inp, dict)
-                        and "tokyo" in str(inp.get("city", "")).lower())
-                    detail.append(f"tool_use name={b.get('name')!r} input={inp} id={b.get('id')!r}")
-                detail.append(f"stop_reason={d.get('stop_reason')} n_blocks={len(content)}")
+                        and "tokyo" in str(inp.get("city", "")).lower()
+                    )
+                    detail.append(
+                        f"tool_use name={b.get('name')!r} input={inp} id={b.get('id')!r}"
+                    )
+                detail.append(
+                    f"stop_reason={d.get('stop_reason')} n_blocks={len(content)}"
+                )
     finally:
         set_engine(None)
         await eng.stop()

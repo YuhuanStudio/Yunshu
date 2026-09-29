@@ -8,6 +8,7 @@ Usage:
     .venv/bin/python3 scripts/extract_mtp_weights.py --all
     .venv/bin/python3 scripts/extract_mtp_weights.py --model Qwen3.5-0.8B-MLX-bf16
 """
+
 from __future__ import annotations
 
 import argparse
@@ -100,6 +101,7 @@ def extract_mtp_weights(model_name: str, force: bool = False) -> bool:
 
     # List safetensors files in the repo
     from huggingface_hub import list_repo_files
+
     repo_files = list_repo_files(hf_repo)
     sf_files = [f for f in repo_files if f.endswith(".safetensors")]
 
@@ -120,7 +122,7 @@ def extract_mtp_weights(model_name: str, force: bool = False) -> bool:
             # Strip the HF prefix: language_model.model.mtp.xxx -> mtp.xxx
             short_key = key
             if key.startswith("language_model.model.mtp."):
-                short_key = key[len("language_model.model."):]
+                short_key = key[len("language_model.model.") :]
             all_mtp_weights[short_key] = data[key]
         del data
 
@@ -154,9 +156,17 @@ def extract_mtp_weights(model_name: str, force: bool = False) -> bool:
 
 def main():
     parser = argparse.ArgumentParser(description="Extract MTP weights from HuggingFace")
-    parser.add_argument("--all", action="store_true", help="Extract for all Qwen3.5 models")
-    parser.add_argument("--model", help="Specific model dir name (e.g. Qwen3.5-0.8B-MLX-bf16)")
-    parser.add_argument("--force", action="store_true", help="Overwrite existing mtp-weights.safetensors")
+    parser.add_argument(
+        "--all", action="store_true", help="Extract for all Qwen3.5 models"
+    )
+    parser.add_argument(
+        "--model", help="Specific model dir name (e.g. Qwen3.5-0.8B-MLX-bf16)"
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing mtp-weights.safetensors",
+    )
     args = parser.parse_args()
 
     if args.all:

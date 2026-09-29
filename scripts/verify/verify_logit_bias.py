@@ -12,6 +12,7 @@ exactly and deterministically, using logprobs to identify the chosen token:
 
 Run: PYTHONPATH=. uv run python scripts/verify_logit_bias.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -19,7 +20,12 @@ import os
 import sys
 
 MODEL = os.environ.get("YUNSHU_BENCH_MODEL", "./models/Qwen3.5-0.8B-MLX-bf16")
-MSGS = [{"role": "user", "content": "What color is a clear daytime sky? Answer in one word."}]
+MSGS = [
+    {
+        "role": "user",
+        "content": "What color is a clear daytime sky? Answer in one word.",
+    }
+]
 
 
 def _txt(o):
@@ -36,15 +42,23 @@ async def main() -> int:
         print("SKIP: model not mounted")
         return 0
     from yunshu_engine.batched_engine import BatchedEngine
+
     eng = BatchedEngine(model_name=MODEL)
     await eng.start()
 
     checks: dict[str, bool] = {}
     detail: list[str] = []
     try:
+
         async def gen(bias=None):
-            return await eng.chat(messages=MSGS, max_tokens=8, temperature=0.0,
-                                  enable_thinking=False, logprobs=True, logit_bias=bias)
+            return await eng.chat(
+                messages=MSGS,
+                max_tokens=8,
+                temperature=0.0,
+                enable_thinking=False,
+                logprobs=True,
+                logit_bias=bias,
+            )
 
         base0 = await gen()
         base1 = await gen()
@@ -54,14 +68,18 @@ async def main() -> int:
         # suppress the chosen first token hard
         biased = await gen({t0: -100.0}) if t0 is not None else base0
         t1 = _first_tok(biased)
-        checks["logit_bias -100 suppresses chosen token (id changes)"] = (t0 is not None and t1 != t0)
+        checks["logit_bias -100 suppresses chosen token (id changes)"] = (
+            t0 is not None and t1 != t0
+        )
         checks["logit_bias -100 changes output text"] = _txt(biased) != _txt(base0)
 
         # an out-of-vocab / negative token id must be IGNORED, not crash the
         # request (regression guard for the unguarded-index bug).
         try:
             oov = await gen({999999: 50.0, -3: 50.0})
-            checks["out-of-vocab/negative id ignored (no crash)"] = _txt(oov) == _txt(base0)
+            checks["out-of-vocab/negative id ignored (no crash)"] = _txt(oov) == _txt(
+                base0
+            )
         except Exception as e:
             checks["out-of-vocab/negative id ignored (no crash)"] = False
             detail.append(f"OOV crash: {type(e).__name__}: {e}")

@@ -13,6 +13,7 @@ Qwen3.5-0.8B ships mtp-weights.safetensors, so MTP is testable on a SMALL model
 
 Run: PYTHONPATH=.:reference/mlx-vlm YUNSHU_SPEC_UNVERIFIED=mlxvlm_mtp uv run python scripts/verify_mtp_spec.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -42,12 +43,15 @@ async def main() -> int:
         print("SKIP: model not mounted")
         return 0
     from yunshu_engine.batched_engine import BatchedEngine
+
     eng = BatchedEngine(model_name=MODEL)
     await eng.start()
 
     if getattr(eng, "_mlxvlm_mtp", None) is None:
         await eng.stop()
-        print("SKIP: MTP backend not loaded (model not MTP-capable or YUNSHU_SPEC_UNVERIFIED unset)")
+        print(
+            "SKIP: MTP backend not loaded (model not MTP-capable or YUNSHU_SPEC_UNVERIFIED unset)"
+        )
         return 0
 
     # The MTP backend IS the model (it skips the standard dual-load), so a
@@ -57,14 +61,28 @@ async def main() -> int:
     # documented property + covered by the gemma4-spec gate + unit tests).
     msgs = [{"role": "user", "content": "In one sentence, what lives in the ocean?"}]
     try:
-        mtp_out = _text(await eng.chat(messages=msgs, max_tokens=48, temperature=0.0,
-                                       enable_thinking=False))
+        mtp_out = _text(
+            await eng.chat(
+                messages=msgs, max_tokens=48, temperature=0.0, enable_thinking=False
+            )
+        )
     finally:
         await eng.stop()
 
     low = mtp_out.lower()
-    on_topic = any(w in low for w in
-                   ("ocean", "sea", "fish", "water", "marine", "whale", "coral", "creature"))
+    on_topic = any(
+        w in low
+        for w in (
+            "ocean",
+            "sea",
+            "fish",
+            "water",
+            "marine",
+            "whale",
+            "coral",
+            "creature",
+        )
+    )
     checks = {
         "MTP path runs + non-empty": (len(mtp_out) > 0),
         "MTP output non-degenerate": (not _degenerate(mtp_out)),

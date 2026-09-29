@@ -4,6 +4,7 @@ streaming and non-streaming), after the temp-position fix.
 
 Run isolated: PYTHONPATH=. uv run python scripts/realmodel/smoke_sampler.py
 """
+
 import asyncio
 
 MODEL = "mlx-community/Qwen2.5-0.5B-Instruct-4bit"
@@ -24,14 +25,18 @@ async def main():
 
     # Streaming, same params (exercises make_sampler streaming path).
     chunks = []
-    async for o in eng.stream_chat(msgs, max_tokens=40, temperature=0.8, top_p=0.9, seed=42):
+    async for o in eng.stream_chat(
+        msgs, max_tokens=40, temperature=0.8, top_p=0.9, seed=42
+    ):
         chunks.append(o.new_text or "")
     st_text = "".join(chunks)
     print("[stream     temp=0.8 top_p=0.9]:", repr(st_text[:120]))
     assert st_text.strip(), "streaming produced empty output"
 
     # Combined top_k + top_p + temp (the precise trigger).
-    out2 = await eng.chat(msgs, max_tokens=40, temperature=1.3, top_p=0.8, top_k=40, seed=7)
+    out2 = await eng.chat(
+        msgs, max_tokens=40, temperature=1.3, top_p=0.8, top_k=40, seed=7
+    )
     print("[non-stream temp=1.3 top_p=0.8 top_k=40]:", repr(out2.text[:120]))
     assert out2.text.strip(), "combined-filter sampling produced empty output"
 

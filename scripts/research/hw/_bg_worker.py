@@ -42,12 +42,17 @@ def main():
     ap.add_argument("--kind", required=True)
     ap.add_argument("--model")
     a = ap.parse_args()
-    fn = {"ane": lambda: make_ane(a.model), "cpu_gemv": make_cpu_gemv,
-          "cpu_gemm": make_cpu_gemm}[a.kind]()
+    fn = {
+        "ane": lambda: make_ane(a.model),
+        "cpu_gemv": make_cpu_gemv,
+        "cpu_gemm": make_cpu_gemm,
+    }[a.kind]()
     for _ in range(5):
         fn()
     stop = threading.Event()
-    threading.Thread(target=lambda: (sys.stdin.readline(), stop.set()), daemon=True).start()
+    threading.Thread(
+        target=lambda: (sys.stdin.readline(), stop.set()), daemon=True
+    ).start()
     print("READY", flush=True)
     calls = []
     while not stop.is_set():

@@ -38,9 +38,32 @@ prints both numbers.
 **`port ... is used by another program`.** Pick another port with `--port`. If the program on the
 port is Yunshu (for example the background service), `yunshu status` reports it.
 
-**The server starts but `/health/ready` returns 503.** The model failed to load, or memory use is
-above 95%. The reason is in the server log: the terminal, or `yunshu service logs` for the
-service. Look for `FATAL: model ... load failed`.
+**The server starts but `/health/ready` returns 503.** When a model fails to load (wrong path,
+truncated or damaged weights, not enough memory) the server stays up instead of exiting, so a
+supervisor does not restart-loop. `curl http://127.0.0.1:8000/health/ready` returns 503 with a
+`reason` field, for example `weights are damaged or incomplete; run yunshu pull again`; chat
+requests get a 503 `No model loaded` until you fix it and restart. The full traceback is in the
+server log (the terminal, or `yunshu service logs`); look for `FATAL: model ... load failed`. The
+probe also returns 503 while shutting down or when GPU memory use is above 95%.
+
+**Which speculative path is in use.** `yunshu doctor -m <model>` prints a `speculative` row, and the
+startup log has a `Speculative decoding:` line. A DFlash2 drafter that matches the model (for
+Qwen3.8-27B: `yunshu pull incoai/Qwen3.8-27B-DFlash2`) is picked up automatically from the models
+directory or the Hugging Face cache. `YUNSHU_VLM_DRAFT=mtp` forces the checkpoint's MTP head,
+`YUNSHU_VLM_DRAFT=off` turns drafting off, and a directory path picks a specific drafter. If an
+automatic drafter cannot be loaded, the server logs a warning and falls back to MTP.
+
+**A request returns 400 about the prompt or `max_tokens`.** The prompt is longer than the model's
+context window, or `max_tokens` is above the server's limit (131072). Shorten the prompt or lower
+`max_tokens`; the message states both numbers.
+
+**Stopping the server.** Ctrl-C or `kill` (SIGINT / SIGTERM) stops accepting new requests, lets
+running ones finish for up to the shutdown grace period, then exits. A client that disconnects
+mid-request cancels its generation at the next chunk (during prefill, at most about 2 s of work on a
+27B model).
+
+**429 `Rate limit exceeded`.** Rate limiting is off by default. It is on only if
+`YUNSHU_RATE_LIMIT_RPM` is set above 0.
 
 **A bad setting stops startup.** `yunshu config` shows every effective value and where it came
 from. A misspelled `YUNSHU_*` name only produces a warning with the closest match.

@@ -17,6 +17,7 @@ Usage:
     # Baseline only
     PYTHONPATH=python .venv/bin/python3 scripts/bench_spec_decode.py --baseline-only
 """
+
 from __future__ import annotations
 
 import argparse
@@ -37,17 +38,17 @@ def _greedy(logits: mx.array) -> int:
 
 def _call(model, token_id: int, cache) -> mx.array:
     out = model(mx.array([[token_id]]), cache=cache)
-    logits = out if not hasattr(out, 'logits') else out.logits
+    logits = out if not hasattr(out, "logits") else out.logits
     return logits[0, -1, :]
 
 
 def _snapshot_cache(cache: list) -> list:
     snap = []
     for c in cache:
-        if hasattr(c, 'cache') and isinstance(getattr(c, 'cache', None), list):
-            snap.append(('arrays', list(c.cache)))
-        elif hasattr(c, 'offset'):
-            snap.append(('kv', c.offset))
+        if hasattr(c, "cache") and isinstance(getattr(c, "cache", None), list):
+            snap.append(("arrays", list(c.cache)))
+        elif hasattr(c, "offset"):
+            snap.append(("kv", c.offset))
         else:
             snap.append((None, None))
     return snap
@@ -55,9 +56,9 @@ def _snapshot_cache(cache: list) -> list:
 
 def _restore_cache(cache: list, snapshot: list) -> None:
     for i, (kind, state) in enumerate(snapshot):
-        if kind == 'arrays':
+        if kind == "arrays":
             cache[i].cache = state
-        elif kind == 'kv':
+        elif kind == "kv":
             cache[i].offset = state
 
 
@@ -70,11 +71,12 @@ def run_cross_model(target_model, draft_model, tokenizer, prompt, K, max_tokens)
     prompt_t = mx.array(prompt_ids).reshape(1, -1)
 
     from mlx_lm.models.cache import make_prompt_cache
+
     target_cache = make_prompt_cache(target_model)
     draft_cache = make_prompt_cache(draft_model)
 
     t_out = target_model(prompt_t, cache=target_cache)
-    t_logits = t_out if not hasattr(t_out, 'logits') else t_out.logits
+    t_logits = t_out if not hasattr(t_out, "logits") else t_out.logits
     first = _greedy(t_logits[0, -1, :])
     draft_model(prompt_t, cache=draft_cache)
 
@@ -134,7 +136,7 @@ def run_cross_model(target_model, draft_model, tokenizer, prompt, K, max_tokens)
             tr0 = time.perf_counter()
             _restore_cache(draft_cache, draft_snap)
             refeed = [generated[-(accepted + 1) - 1]]
-            refeed += generated[-(accepted + 1):]
+            refeed += generated[-(accepted + 1) :]
             for tok in refeed:
                 draft_model(mx.array([[tok]]), cache=draft_cache)
             mx.synchronize()
@@ -158,7 +160,9 @@ def run_cross_model(target_model, draft_model, tokenizer, prompt, K, max_tokens)
         "t_rollback_s": round(t_rollback, 3),
         "pct_draft": round(t_draft / total_time * 100, 1) if total_time > 0 else 0,
         "pct_verify": round(t_verify / total_time * 100, 1) if total_time > 0 else 0,
-        "pct_rollback": round(t_rollback / total_time * 100, 1) if total_time > 0 else 0,
+        "pct_rollback": round(t_rollback / total_time * 100, 1)
+        if total_time > 0
+        else 0,
     }
 
 
@@ -173,7 +177,6 @@ def run_mtp(model, tokenizer, prompt, max_tokens):
     When MTP matches, we get 2 tokens per backbone step.
     """
     from mlx_lm.models.cache import make_prompt_cache
-
 
     inner = getattr(model, "language_model", model)
     if not hasattr(inner, "mtp"):
@@ -248,7 +251,7 @@ def run_mtp(model, tokenizer, prompt, max_tokens):
 
 def _get_eos_ids(tokenizer) -> set:
     eos_ids = set()
-    if hasattr(tokenizer, 'eos_token_id'):
+    if hasattr(tokenizer, "eos_token_id"):
         eid = tokenizer.eos_token_id
         if isinstance(eid, (list, tuple)):
             eos_ids.update(eid)
@@ -263,11 +266,19 @@ def _get_eos_ids(tokenizer) -> set:
 def main():
     parser = argparse.ArgumentParser(description="Speculative Decoding Benchmark")
     parser.add_argument("--target", default="Qwen3.5-4B-MLX-bf16", help="Target model")
-    parser.add_argument("--draft", default=None, help="Draft model for cross-model mode")
+    parser.add_argument(
+        "--draft", default=None, help="Draft model for cross-model mode"
+    )
     parser.add_argument("--mtp", action="store_true", help="Use same-model MTP head")
     parser.add_argument("--max-tokens", type=int, default=64)
-    parser.add_argument("-K", "--draft-lengths", type=int, nargs="+", default=[4],
-                        help="Draft lengths for cross-model mode (space-separated)")
+    parser.add_argument(
+        "-K",
+        "--draft-lengths",
+        type=int,
+        nargs="+",
+        default=[4],
+        help="Draft lengths for cross-model mode (space-separated)",
+    )
     parser.add_argument("--num-prompts", type=int, default=3)
     parser.add_argument("--baseline-only", action="store_true")
     args = parser.parse_args()
@@ -318,7 +329,7 @@ def main():
         "The capital of France is",
         "In machine learning, gradient descent works by",
         "The key difference between TCP and UDP is that",
-    ][:args.num_prompts]
+    ][: args.num_prompts]
 
     sampler = make_sampler(temp=0.0)
 
@@ -329,14 +340,23 @@ def main():
         ids = mx.array(tokenizer.encode(prompt))
         tokens = []
         t0 = time.perf_counter()
-        for tok, _ in generate_step(ids, target_model, max_tokens=args.max_tokens, sampler=sampler):
+        for tok, _ in generate_step(
+            ids, target_model, max_tokens=args.max_tokens, sampler=sampler
+        ):
             tokens.append(tok)
         mx.synchronize()
         elapsed = time.perf_counter() - t0
         tps = len(tokens) / elapsed if elapsed > 0 else 0
         text = tokenizer.decode(tokens, skip_special_tokens=True)
-        baseline.append({"n": len(tokens), "s": round(elapsed, 3), "tps": round(tps, 1), "text": text[:100]})
-        print(f"  [{i+1}] {len(tokens)} tok, {elapsed:.3f}s, {tps:.1f} tok/s")
+        baseline.append(
+            {
+                "n": len(tokens),
+                "s": round(elapsed, 3),
+                "tps": round(tps, 1),
+                "text": text[:100],
+            }
+        )
+        print(f"  [{i + 1}] {len(tokens)} tok, {elapsed:.3f}s, {tps:.1f} tok/s")
 
     if args.baseline_only:
         return
@@ -354,10 +374,12 @@ def main():
             b_text = baseline[i]["text"]
             match = text[:100] == b_text[:100]
 
-            print(f"  [{i+1}] {result['n']} tok, {result['total_s']:.3f}s, {result['tps']:.1f} tok/s, "
-                  f"accept={result['ar']:.1%}, {result['mtp_calls']} calls "
-                  f"[mtp={result['pct_mtp']}% verify={result['pct_verify']}%] "
-                  f"{'MATCH' if match else 'DIFF'}")
+            print(
+                f"  [{i + 1}] {result['n']} tok, {result['total_s']:.3f}s, {result['tps']:.1f} tok/s, "
+                f"accept={result['ar']:.1%}, {result['mtp_calls']} calls "
+                f"[mtp={result['pct_mtp']}% verify={result['pct_verify']}%] "
+                f"{'MATCH' if match else 'DIFF'}"
+            )
             mtp_results.append(result)
 
         am_tps = sum(r["tps"] for r in mtp_results) / len(mtp_results)
@@ -373,7 +395,10 @@ def main():
             "speedup": round(su, 2),
             "acceptance": round(am_ar, 3),
             "avg_tps": round(am_tps, 1),
-            "time_split": {"mtp_pct": round(avg_mtp, 1), "verify_pct": round(avg_verify, 1)},
+            "time_split": {
+                "mtp_pct": round(avg_mtp, 1),
+                "verify_pct": round(avg_verify, 1),
+            },
         }
 
     # ── Cross-model ──
@@ -382,15 +407,19 @@ def main():
             print(f"\n=== Cross-model ({args.draft}→{args.target}, K={K}) ===")
             spec = []
             for i, prompt in enumerate(prompts):
-                result = run_cross_model(target_model, draft_model, tokenizer, prompt, K, args.max_tokens)
+                result = run_cross_model(
+                    target_model, draft_model, tokenizer, prompt, K, args.max_tokens
+                )
                 text = tokenizer.decode(result["tokens"], skip_special_tokens=True)
                 b_text = baseline[i]["text"]
                 match = text[:100] == b_text[:100]
 
-                print(f"  [{i+1}] {result['n']} tok, {result['total_s']:.3f}s, {result['tps']:.1f} tok/s, "
-                      f"accept={result['ar']:.1%}, {result['steps']} steps "
-                      f"[draft={result['pct_draft']}% verify={result['pct_verify']}% rollback={result['pct_rollback']}%] "
-                      f"{'MATCH' if match else 'DIFF'}")
+                print(
+                    f"  [{i + 1}] {result['n']} tok, {result['total_s']:.3f}s, {result['tps']:.1f} tok/s, "
+                    f"accept={result['ar']:.1%}, {result['steps']} steps "
+                    f"[draft={result['pct_draft']}% verify={result['pct_verify']}% rollback={result['pct_rollback']}%] "
+                    f"{'MATCH' if match else 'DIFF'}"
+                )
                 spec.append(result)
 
             asp = sum(r["tps"] for r in spec) / len(spec)
@@ -401,14 +430,19 @@ def main():
             avg_rollback = sum(r["pct_rollback"] for r in spec) / len(spec)
 
             print(f"  → Speedup: {su:.2f}x, Acceptance: {aa:.1%}")
-            print(f"    Time split: draft={avg_draft:.1f}% verify={avg_verify:.1f}% rollback={avg_rollback:.1f}%")
+            print(
+                f"    Time split: draft={avg_draft:.1f}% verify={avg_verify:.1f}% rollback={avg_rollback:.1f}%"
+            )
 
             all_results[f"cross_K{K}"] = {
                 "speedup": round(su, 2),
                 "acceptance": round(aa, 3),
                 "avg_tps": round(asp, 1),
-                "time_split": {"draft_pct": round(avg_draft, 1), "verify_pct": round(avg_verify, 1),
-                               "rollback_pct": round(avg_rollback, 1)},
+                "time_split": {
+                    "draft_pct": round(avg_draft, 1),
+                    "verify_pct": round(avg_verify, 1),
+                    "rollback_pct": round(avg_rollback, 1),
+                },
             }
 
     # ── Summary ──
@@ -416,12 +450,16 @@ def main():
     print(f"Baseline: {ab:.1f} tok/s ({args.target})")
     for mode, res in all_results.items():
         if mode == "mtp":
-            print(f"  MTP: {res['avg_tps']:.1f} tok/s ({res['speedup']:.2f}x, accept={res['acceptance']:.1%}, "
-                  f"mtp={res['time_split']['mtp_pct']}% verify={res['time_split']['verify_pct']}%)")
+            print(
+                f"  MTP: {res['avg_tps']:.1f} tok/s ({res['speedup']:.2f}x, accept={res['acceptance']:.1%}, "
+                f"mtp={res['time_split']['mtp_pct']}% verify={res['time_split']['verify_pct']}%)"
+            )
         else:
-            print(f"  {mode}: {res['avg_tps']:.1f} tok/s ({res['speedup']:.2f}x, accept={res['acceptance']:.1%}, "
-                  f"draft={res['time_split']['draft_pct']}% verify={res['time_split']['verify_pct']}% "
-                  f"rollback={res['time_split']['rollback_pct']}%)")
+            print(
+                f"  {mode}: {res['avg_tps']:.1f} tok/s ({res['speedup']:.2f}x, accept={res['acceptance']:.1%}, "
+                f"draft={res['time_split']['draft_pct']}% verify={res['time_split']['verify_pct']}% "
+                f"rollback={res['time_split']['rollback_pct']}%)"
+            )
 
     out = {
         "target": args.target,

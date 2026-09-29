@@ -14,6 +14,7 @@ Loads the TTS model, synthesizes, frees it, then loads ASR — never both at onc
 
 Run: PYTHONPATH=. uv run python scripts/verify_tts_asr_roundtrip.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,7 +23,9 @@ import re
 import sys
 import tempfile
 
-TTS = os.environ.get("YUNSHU_TTS_MODEL", "./models/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16")
+TTS = os.environ.get(
+    "YUNSHU_TTS_MODEL", "./models/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16"
+)
 ASR = os.environ.get("YUNSHU_ASR_MODEL", "./models/Qwen3-ASR-1.7B-bf16")
 
 PHRASES = [
@@ -68,12 +71,15 @@ async def main() -> int:
 
     checks: dict[str, bool] = {}
     detail: list[str] = []
-    valid_wav = all(open(p, "rb").read(4) == b"RIFF" for p in wav_paths) and all(d > 0.3 for d in durations)
+    valid_wav = all(open(p, "rb").read(4) == b"RIFF" for p in wav_paths) and all(
+        d > 0.3 for d in durations
+    )
     checks["TTS: valid non-trivial WAV for each phrase"] = valid_wav
 
     # ── transcribe back (ASR loaded after TTS freed) ─────────────────────────
     try:
         from mlx_audio.stt import load
+
         model = load(ASR)
         overlaps = []
         for ph, p in zip(PHRASES, wav_paths):
@@ -82,7 +88,9 @@ async def main() -> int:
             ov = _overlap(ph, txt)
             overlaps.append(ov)
             detail.append(f"ov={ov:.2f} :: {txt[:60]!r}")
-        checks["round-trip: >=0.8 word overlap (both phrases)"] = all(o >= 0.8 for o in overlaps)
+        checks["round-trip: >=0.8 word overlap (both phrases)"] = all(
+            o >= 0.8 for o in overlaps
+        )
     finally:
         for p in wav_paths:
             try:

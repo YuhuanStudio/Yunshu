@@ -1,4 +1,5 @@
 """Independent process memory benchmark — one framework per subprocess."""
+
 import json
 import subprocess
 
@@ -131,25 +132,32 @@ for name, script in SCRIPTS.items():
     try:
         proc = subprocess.run(
             ["uv", "run", "python", "-c", script],
-            capture_output=True, text=True, timeout=300,
+            capture_output=True,
+            text=True,
+            timeout=300,
             cwd=".",
         )
         output = proc.stdout.strip().split("\n")[-1]
         data = json.loads(output)
         results[name] = data
-        print(f"    RSS: {data['rss_load']}MB (load) → {data['rss_warmup']}MB (warmup) → {data['rss_gen']}MB (gen) | {data['tok_s']} tok/s", flush=True)
+        print(
+            f"    RSS: {data['rss_load']}MB (load) → {data['rss_warmup']}MB (warmup) → {data['rss_gen']}MB (gen) | {data['tok_s']} tok/s",
+            flush=True,
+        )
     except Exception as e:
         print(f"    FAILED: {e}", flush=True)
         if proc:
             print(f"    stderr: {proc.stderr[-200:]}", flush=True)
 
-print(f"\n{'='*80}")
+print(f"\n{'=' * 80}")
 print("  MEMORY BENCHMARK (independent processes, fair comparison)")
-print(f"{'='*80}")
-print(f"  {'Framework':<14} {'RSS load':>10} {'RSS warmup':>12} {'RSS gen':>10} {'tok/s':>10}")
-print(f"  {'─'*14} {'─'*10} {'─'*12} {'─'*10} {'─'*10}")
+print(f"{'=' * 80}")
+print(
+    f"  {'Framework':<14} {'RSS load':>10} {'RSS warmup':>12} {'RSS gen':>10} {'tok/s':>10}"
+)
+print(f"  {'─' * 14} {'─' * 10} {'─' * 12} {'─' * 10} {'─' * 10}")
 
-best_mem = float('inf')
+best_mem = float("inf")
 for name in ["mlx-lm", "yunshu", "vllm-mlx", "omlx"]:
     d = results.get(name, {})
     rss_gen = d.get("rss_gen", 0)
@@ -168,4 +176,4 @@ for name in ["mlx-lm", "yunshu", "vllm-mlx", "omlx"]:
     mark = " ★" if rss_g and rss_g <= best_mem * 1.02 else ""
     print(f"  {name:<14} {rss_l:>8}MB {rss_w:>10}MB {rss_g:>8}MB{mark} {tps:>10}")
 
-print(f"{'='*80}")
+print(f"{'=' * 80}")

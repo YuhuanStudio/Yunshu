@@ -12,6 +12,7 @@ engine — a frequent source of param-dropping regressions.
 
 Run: PYTHONPATH=. uv run python scripts/verify_gateway_sampling.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -43,11 +44,23 @@ async def main() -> int:
     detail: list[str] = []
     try:
         transport = httpx.ASGITransport(app=create_app())
-        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=120) as client:
-            msgs = [{"role": "user", "content": "Write one short sentence about a mountain."}]
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test", timeout=120
+        ) as client:
+            msgs = [
+                {
+                    "role": "user",
+                    "content": "Write one short sentence about a mountain.",
+                }
+            ]
 
             async def chat(**kw):
-                body = {"model": MODEL, "messages": msgs, "enable_thinking": False, **kw}
+                body = {
+                    "model": MODEL,
+                    "messages": msgs,
+                    "enable_thinking": False,
+                    **kw,
+                }
                 r = await client.post("/v1/chat/completions", json=body)
                 return r
 
@@ -69,9 +82,15 @@ async def main() -> int:
             if stop_word:
                 cut = await chat(temperature=0.0, max_tokens=60, stop=[stop_word])
                 cj = cut.json()["choices"][0]
-                checks["stop forwarded: finish_reason==stop"] = cj.get("finish_reason") == "stop"
-                checks["stop forwarded: output truncated"] = len(cj["message"]["content"]) < len(base_txt)
-                detail.append(f"stop={stop_word!r} base_len={len(base_txt)} cut_len={len(cj['message']['content'])}")
+                checks["stop forwarded: finish_reason==stop"] = (
+                    cj.get("finish_reason") == "stop"
+                )
+                checks["stop forwarded: output truncated"] = len(
+                    cj["message"]["content"]
+                ) < len(base_txt)
+                detail.append(
+                    f"stop={stop_word!r} base_len={len(base_txt)} cut_len={len(cj['message']['content'])}"
+                )
             else:
                 checks["stop forwarded: usable stop word"] = False
 
@@ -80,9 +99,13 @@ async def main() -> int:
             cj = cap.json()
             ch = cj["choices"][0]
             ct = (cj.get("usage") or {}).get("completion_tokens", 999)
-            checks["max_tokens forwarded: finish_reason==length"] = ch.get("finish_reason") == "length"
+            checks["max_tokens forwarded: finish_reason==length"] = (
+                ch.get("finish_reason") == "length"
+            )
             checks["max_tokens forwarded: completion_tokens <= cap"] = ct <= 3
-            detail.append(f"max_tokens=3 → fr={ch.get('finish_reason')} completion_tokens={ct}")
+            detail.append(
+                f"max_tokens=3 → fr={ch.get('finish_reason')} completion_tokens={ct}"
+            )
     finally:
         set_engine(None)
         await eng.stop()

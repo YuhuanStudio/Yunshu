@@ -13,6 +13,7 @@ complete correctly and independently.
 
 Run: PYTHONPATH=. uv run python scripts/verify_concurrent.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -37,6 +38,7 @@ QUESTIONS = [
 def _norm(s: str) -> str:
     """Lowercase + strip unicode subscripts/spaces for robust substring match."""
     import unicodedata
+
     s = unicodedata.normalize("NFKD", s)
     return "".join(ch for ch in s if not unicodedata.combining(ch)).lower()
 
@@ -63,11 +65,21 @@ async def main() -> int:
     detail: list[str] = []
     try:
         transport = httpx.ASGITransport(app=create_app())
-        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=180) as client:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test", timeout=180
+        ) as client:
+
             async def ask(q):
-                return await client.post("/v1/chat/completions", json={
-                    "model": MODEL, "messages": [{"role": "user", "content": q}],
-                    "temperature": 0.0, "max_tokens": 24, "enable_thinking": False})
+                return await client.post(
+                    "/v1/chat/completions",
+                    json={
+                        "model": MODEL,
+                        "messages": [{"role": "user", "content": q}],
+                        "temperature": 0.0,
+                        "max_tokens": 24,
+                        "enable_thinking": False,
+                    },
+                )
 
             # fire ALL concurrently
             responses = await asyncio.gather(*[ask(q) for q, _ in QUESTIONS])
@@ -82,10 +94,12 @@ async def main() -> int:
                     contents.append(f"[{r.status_code}]")
                     continue
                 d = r.json()
-                c = (d["choices"][0]["message"]["content"] or "")
+                c = d["choices"][0]["message"]["content"] or ""
                 contents.append(c[:24])
                 u = d.get("usage") or {}
-                if not (u.get("prompt_tokens", 0) > 0 and u.get("completion_tokens", 0) >= 0):
+                if not (
+                    u.get("prompt_tokens", 0) > 0 and u.get("completion_tokens", 0) >= 0
+                ):
                     usage_ok = False
                 if _norm(want) in _norm(c):
                     correct += 1
@@ -93,7 +107,9 @@ async def main() -> int:
             checks["usage well-formed on every response"] = usage_ok
             # each answer correct for ITS OWN question → no cross-talk under
             # concurrency. Allow 1 small-model slip; the mapping must clearly hold.
-            checks["answers correct for own question (≥5/6, no cross-talk)"] = correct >= 5
+            checks["answers correct for own question (≥5/6, no cross-talk)"] = (
+                correct >= 5
+            )
             detail.append(f"correct={correct}/{len(QUESTIONS)}")
             for (q, _), c in zip(QUESTIONS, contents):
                 detail.append(f"  {q[:34]:34s} → {c!r}")

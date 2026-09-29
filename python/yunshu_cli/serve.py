@@ -300,8 +300,11 @@ def serve(
 
 
 def _preflight_model(model: str) -> None:
-    """Stop before loading when the model cannot work: a path that does not
-    exist, a half-finished download, weights larger than memory."""
+    """Say so before loading when the model cannot work (a path that does not
+    exist, a half-finished download, weights larger than memory). The server
+    still starts and ``/health/ready`` reports why it is not ready, so a
+    supervisor (launchd, Docker) does not restart-loop and a client gets a
+    503 with the reason."""
     from .doctor import check_model
 
     info: dict = {}
@@ -313,8 +316,10 @@ def _preflight_model(model: str) -> None:
         pass
     for c in check_model(model, info):
         if c.status == "fail":
-            console.print(f"[red]Error:[/] {c.detail}\n  {c.fix}")
-            raise typer.Exit(2)
+            console.print(
+                f"[red]Error:[/] {c.detail}\n  {c.fix}\n"
+                "  The server starts anyway; /health/ready reports it as not ready."
+            )
         if c.status == "warn":
             console.print(f"[yellow]Warning:[/] {c.detail}. {c.fix}")
 

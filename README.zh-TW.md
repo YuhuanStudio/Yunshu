@@ -19,7 +19,7 @@
 
 ## 與眾不同之處
 
-- **無損推測解碼。** 使用 checkpoint 自帶的 MTP 頭,或外部 DFlash drafter。會推測的請求,其所有
+- **無損推測解碼。** 優先使用已安裝的 DFlash2 drafter(自動選用),否則用 checkpoint 自帶的 MTP 頭。會推測的請求,其所有
   解碼與驗證矩陣乘都走同一顆 batch-invariant kernel,所以 greedy 下開推測與不開推測的輸出逐 token
   相同 —— 即 Splash 所說的無損。
 - **並發請求各列獨立的 KV。** 共用批次裡每一列保有自己的 KV 長度,短請求不會讀到長請求的補齊
@@ -53,6 +53,23 @@ yunshu serve -m mlx-community/Qwen3.5-9B-MLX-4bit
 `yunshu serve -m org/name` 會直接使用模型目錄或 Hugging Face 快取裡已有的模型,兩邊都沒有才下載。
 模型預設放在 `~/.yunshu/models`;要放到別處,執行 `yunshu config set models_dir /path/to/models`
 (存在 `~/.yunshu/config.toml`)。
+
+### Qwen3.8-27B(已調校的模型)
+
+實測記憶體佔用約 21 GiB(1K prompt)、29 GiB(32K),包含權重、drafter 與 KV,建議 32 GB 以上的
+Mac;131K 上下文需要更多。
+
+```bash
+yunshu pull Jundot/Qwen3.8-27B-oQ4e-mtp            # 模型:4-bit,自帶 MTP 頭
+yunshu pull incoai/Qwen3.8-27B-DFlash2             # drafter:比 MTP 更快
+yunshu doctor -m Jundot/Qwen3.8-27B-oQ4e-mtp       # 「speculative」一列顯示將使用的推測路徑
+yunshu serve -m Jundot/Qwen3.8-27B-oQ4e-mtp
+```
+
+drafter 放在模型目錄或 Hugging Face 快取時,`yunshu serve` 會自動找到並使用,不需任何旗標;啟動日誌會
+印出 `Speculative decoding: dflash`。要自行指定:`YUNSHU_VLM_DRAFT=mtp` 強制使用 checkpoint 的 MTP 頭,
+`YUNSHU_VLM_DRAFT=off` 關閉推測,`YUNSHU_VLM_DRAFT=/path/to/drafter` 指定某個 drafter。每條路徑都是無損的:
+greedy 下開推測與不開推測的輸出相同。
 
 伺服器監聽 `http://127.0.0.1:8000`,任何 OpenAI 用戶端都能直接使用:
 
@@ -128,7 +145,35 @@ MMLU-Pro,300 題,8 路並行,上限 16384 token,`reasoning_effort=medium`(同時
 開啟 `YUNSHU_KV_PRECISION=int8`(有損,需手動開啟)時 Yunshu 答對 251 / 300,峰值 28.1 GiB
 (在較早版本的 ragged 快取上量測,34.6 分)。
 
-速度掃描(每個 prompt 都不同,不命中快取;生成 128 token;未註明單位者為 tok/s):
+**Qwen3.8-27B 的預設推測路徑:DFlash2 drafter**(成本感知的鏈深度、8-bit drafter 權重),server、greedy、
+生成 128 token、單一請求、prompt 各不相同,tok/s。兩種語料:小說散文(`novel_en`,難以草擬)與 Python
+程式碼(`code_python`,容易草擬):
+
+| 上下文 | novel_en | code_python |
+|---|---|---|
+| 1K | 57.1 | 82.0 |
+| 8K | 48.2 | 89.1 |
+| 32K | 46.1 | 70.5 |
+| 131K | 32.9 | 79.9 |
+
+131K 的 TTFT 約 207 s(冷 prefill,約 640 tok/s,已在硬體上限);能力矩陣 34/34。同一 server 上對照 checkpoint
+自帶的 MTP 頭,novel_en 在 1K 為 57.1 對 47.5 tok/s。數字每次執行會有數 tok/s 的浮動,因為接受率取決於文字。
+
+同語料對照(novel_en,單一請求,tok/s;各引擎的量化可能不同;兩者皆於 2026-09-29 量測):
+
+| 上下文 | Yunshu(DFlash2) | TensorFold 0.3.6.1(DFlash2) |
+|---|---|---|
+| 1K | 57.1 | 76.4 |
+| 8K | 48.2 | 67.2 |
+| 32K | 46.1 | 63.4 |
+| 131K | 32.9 | 38.9 |
+| 131K 的 TTFT | 207 s | 280 s |
+
+在這組小說散文上,TensorFold 每個上下文的解碼都比 Yunshu 快(131K 約 1.2 倍,1K–32K 約 1.3–1.4 倍);
+Yunshu 的 prefill 較快(131K:207 對 280 s)。Splash 與 oMLX 沒有在這組語料上跑過;下表中它們的數字來自較早、
+不同的 prompt 集合,不能與上面各欄直接比較。
+
+較早、使用 MTP 草稿的速度掃描(每個 prompt 都不同,不命中快取;生成 128 token;未註明單位者為 tok/s):
 
 | | Yunshu | oMLX | Splash | TensorFold(MTP) |
 |---|---|---|---|---|

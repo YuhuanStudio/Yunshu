@@ -13,6 +13,7 @@ This checks the remap on the actual on-disk adapter keys WITHOUT loading the
 
 Run: PYTHONPATH=. uv run python scripts/verify/verify_image_lora_remap.py
 """
+
 import glob
 import sys
 
@@ -20,8 +21,16 @@ from python.yunshu_engine.image_engine import ImageGenEngine
 
 
 def _module_of(k: str) -> str:
-    for suf in (".lora_down.weight", ".lora_up.weight", ".lora_A.weight",
-                ".lora_B.weight", ".lora_down", ".lora_up", ".alpha", ".weight"):
+    for suf in (
+        ".lora_down.weight",
+        ".lora_up.weight",
+        ".lora_A.weight",
+        ".lora_B.weight",
+        ".lora_down",
+        ".lora_up",
+        ".alpha",
+        ".weight",
+    ):
         if k.endswith(suf):
             return k[: -len(suf)]
     return k
@@ -57,14 +66,18 @@ def main() -> int:
         print(f"  remapped:{remapped_to_out[0]}")
 
     if dead:
-        print(f"FAIL: {len(dead)} to_out/adaLN paths still end in '.0' (would be SKIPPED)")
+        print(
+            f"FAIL: {len(dead)} to_out/adaLN paths still end in '.0' (would be SKIPPED)"
+        )
         return 1
     if to_out_raw and not all(r.endswith("to_out") for r in remapped_to_out):
         print("FAIL: some to_out paths not collapsed to flat Linear")
         return 1
 
-    print(f"PASS: all {len(to_out_raw)} to_out projections remap to a resolvable "
-          f"flat-Linear path.")
+    print(
+        f"PASS: all {len(to_out_raw)} to_out projections remap to a resolvable "
+        f"flat-Linear path."
+    )
     return 0
 
 

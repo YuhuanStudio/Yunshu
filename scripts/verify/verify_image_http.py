@@ -12,6 +12,7 @@ manager entry with a pre-loaded ImageGenEngine.
 
 Run: PYTHONPATH=. uv run python scripts/verify_image_http.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -57,27 +58,42 @@ async def main() -> int:
     detail: list[str] = []
     try:
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=180) as client:
-            r = await client.post("/v1/images/generations", json={
-                "model": MODEL_ID, "prompt": "a vivid red apple on a white table",
-                "size": "512x512", "num_inference_steps": 8, "response_format": "b64_json",
-            })
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test", timeout=180
+        ) as client:
+            r = await client.post(
+                "/v1/images/generations",
+                json={
+                    "model": MODEL_ID,
+                    "prompt": "a vivid red apple on a white table",
+                    "size": "512x512",
+                    "num_inference_steps": 8,
+                    "response_format": "b64_json",
+                },
+            )
             checks["/v1/images/generations: HTTP 200"] = r.status_code == 200
             if r.status_code != 200:
                 detail.append(f"status={r.status_code} body={r.text[:200]}")
             else:
                 data = r.json().get("data") or []
-                checks["response has data[0].b64_json"] = bool(data) and bool(data[0].get("b64_json"))
+                checks["response has data[0].b64_json"] = bool(data) and bool(
+                    data[0].get("b64_json")
+                )
                 if data and data[0].get("b64_json"):
                     png = base64.b64decode(data[0]["b64_json"])
-                    im = np.asarray(Image.open(io.BytesIO(png)).convert("RGB"), dtype=np.float32)
+                    im = np.asarray(
+                        Image.open(io.BytesIO(png)).convert("RGB"), dtype=np.float32
+                    )
                     checks["decodes to valid 512x512 non-blank PNG"] = (
-                        im.shape == (512, 512, 3) and im.var() > 100)
+                        im.shape == (512, 512, 3) and im.var() > 100
+                    )
                     detail.append(f"img shape={im.shape} var={im.var():.0f}")
 
             # invalid response_format → 4xx
-            rb = await client.post("/v1/images/generations", json={
-                "model": MODEL_ID, "prompt": "x", "response_format": "bogus"})
+            rb = await client.post(
+                "/v1/images/generations",
+                json={"model": MODEL_ID, "prompt": "x", "response_format": "bogus"},
+            )
             checks["invalid response_format → 4xx"] = 400 <= rb.status_code < 500
             detail.append(f"bad response_format status={rb.status_code}")
     finally:

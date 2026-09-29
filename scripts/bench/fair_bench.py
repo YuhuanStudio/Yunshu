@@ -12,6 +12,7 @@ Usage:
     PYTHONPATH=. uv run python scripts/fair_bench.py --model models/Qwen3.5-9B-MLX-4bit
     PYTHONPATH=. uv run python scripts/fair_bench.py --model models/Qwen3.5-9B-MLX-4bit --quick
 """
+
 from __future__ import annotations
 
 import argparse
@@ -76,7 +77,8 @@ def bench_mlx_lm(model_path: str, prompts: list[dict]) -> dict:
     for i, prompt in enumerate(prompts):
         text = tokenizer.apply_chat_template(
             [{"role": "user", "content": prompt["q"]}],
-            tokenize=False, add_generation_prompt=True,
+            tokenize=False,
+            add_generation_prompt=True,
         )
         # 1D input — generate_step adds batch dim internally
         token_ids = mx.array(tokenizer.encode(text))
@@ -91,9 +93,9 @@ def bench_mlx_lm(model_path: str, prompts: list[dict]) -> dict:
                 first_token = False
             tokens.append(token)
 
-            if hasattr(tokenizer, 'eos_token_id') and token == tokenizer.eos_token_id:
+            if hasattr(tokenizer, "eos_token_id") and token == tokenizer.eos_token_id:
                 break
-            if hasattr(tokenizer, 'eos_token_ids') and token in tokenizer.eos_token_ids:
+            if hasattr(tokenizer, "eos_token_ids") and token in tokenizer.eos_token_ids:
                 break
 
         elapsed = time.perf_counter() - t0
@@ -114,16 +116,18 @@ def bench_mlx_lm(model_path: str, prompts: list[dict]) -> dict:
         total_gen_time.append(gen_time)
         total_tokens.append(len(tokens))
 
-        results["runs"].append({
-            "prompt": prompt["q"],
-            "expected": prompt["a"],
-            "output": output[:100],
-            "correct": is_correct,
-            "ttft_ms": round((ttft or 0) * 1000, 1),
-            "tokens": len(tokens),
-            "gen_tok_s": round(len(tokens) / gen_time, 1) if gen_time > 0 else 0,
-            "mem_peak_mb": round(mem_peak / 1024**2, 1),
-        })
+        results["runs"].append(
+            {
+                "prompt": prompt["q"],
+                "expected": prompt["a"],
+                "output": output[:100],
+                "correct": is_correct,
+                "ttft_ms": round((ttft or 0) * 1000, 1),
+                "tokens": len(tokens),
+                "gen_tok_s": round(len(tokens) / gen_time, 1) if gen_time > 0 else 0,
+                "mem_peak_mb": round(mem_peak / 1024**2, 1),
+            }
+        )
 
         if (i + 1) % 5 == 0:
             print(f"    mlx-lm: {i + 1}/{len(prompts)}")
@@ -132,11 +136,23 @@ def bench_mlx_lm(model_path: str, prompts: list[dict]) -> dict:
     results["mem_after_load_mb"] = round(mem_after_load / 1024**2, 1)
     results["summary"] = {
         "ttft_p50_ms": round(statistics.median(total_ttft) * 1000, 1),
-        "gen_tok_s": round(statistics.mean(
-            [t / g for t, g in zip(total_tokens, total_gen_time, strict=False) if g > 0]
-        ), 1),
-        "e2e_mean_ms": round(statistics.mean(total_ttft) * 1000 + statistics.mean(total_gen_time) * 1000, 1),
-        "mem_peak_avg_mb": round(statistics.mean([r["mem_peak_mb"] for r in results["runs"]]), 1),
+        "gen_tok_s": round(
+            statistics.mean(
+                [
+                    t / g
+                    for t, g in zip(total_tokens, total_gen_time, strict=False)
+                    if g > 0
+                ]
+            ),
+            1,
+        ),
+        "e2e_mean_ms": round(
+            statistics.mean(total_ttft) * 1000 + statistics.mean(total_gen_time) * 1000,
+            1,
+        ),
+        "mem_peak_avg_mb": round(
+            statistics.mean([r["mem_peak_mb"] for r in results["runs"]]), 1
+        ),
     }
     return results
 
@@ -166,7 +182,9 @@ def bench_yunshu(model_path: str, prompts: list[dict]) -> dict:
             messages = [{"role": "user", "content": prompt["q"]}]
 
             t0 = time.perf_counter()
-            result = await engine.generate(prompt=messages, max_tokens=64, temperature=0.0)
+            result = await engine.generate(
+                prompt=messages, max_tokens=64, temperature=0.0
+            )
             elapsed = time.perf_counter() - t0
 
             try:
@@ -175,8 +193,10 @@ def bench_yunshu(model_path: str, prompts: list[dict]) -> dict:
             except Exception:
                 mem_peak = 0
 
-            output = result.text if hasattr(result, 'text') else str(result)
-            output_tokens = result.completion_tokens if hasattr(result, 'completion_tokens') else 0
+            output = result.text if hasattr(result, "text") else str(result)
+            output_tokens = (
+                result.completion_tokens if hasattr(result, "completion_tokens") else 0
+            )
 
             is_correct = check_answer(output, prompt["a"])
             if is_correct:
@@ -185,16 +205,20 @@ def bench_yunshu(model_path: str, prompts: list[dict]) -> dict:
             total_gen_time.append(elapsed)
             total_tokens.append(output_tokens)
 
-            results["runs"].append({
-                "prompt": prompt["q"],
-                "expected": prompt["a"],
-                "output": output[:100],
-                "correct": is_correct,
-                "e2e_ms": round(elapsed * 1000, 1),
-                "tokens": output_tokens,
-                "gen_tok_s": round(output_tokens / elapsed, 1) if elapsed > 0 else 0,
-                "mem_peak_mb": round(mem_peak / 1024**2, 1),
-            })
+            results["runs"].append(
+                {
+                    "prompt": prompt["q"],
+                    "expected": prompt["a"],
+                    "output": output[:100],
+                    "correct": is_correct,
+                    "e2e_ms": round(elapsed * 1000, 1),
+                    "tokens": output_tokens,
+                    "gen_tok_s": round(output_tokens / elapsed, 1)
+                    if elapsed > 0
+                    else 0,
+                    "mem_peak_mb": round(mem_peak / 1024**2, 1),
+                }
+            )
 
             if (i + 1) % 5 == 0:
                 print(f"    yunshu: {i + 1}/{len(prompts)}")
@@ -205,10 +229,19 @@ def bench_yunshu(model_path: str, prompts: list[dict]) -> dict:
         results["mem_after_load_mb"] = round(mem_after_load / 1024**2, 1)
         results["summary"] = {
             "e2e_mean_ms": round(statistics.mean(total_gen_time) * 1000, 1),
-            "gen_tok_s": round(statistics.mean(
-                [t / g for t, g in zip(total_tokens, total_gen_time, strict=False) if g > 0]
-            ), 1),
-            "mem_peak_avg_mb": round(statistics.mean([r["mem_peak_mb"] for r in results["runs"]]), 1),
+            "gen_tok_s": round(
+                statistics.mean(
+                    [
+                        t / g
+                        for t, g in zip(total_tokens, total_gen_time, strict=False)
+                        if g > 0
+                    ]
+                ),
+                1,
+            ),
+            "mem_peak_avg_mb": round(
+                statistics.mean([r["mem_peak_mb"] for r in results["runs"]]), 1
+            ),
         }
         return results
 
@@ -216,10 +249,10 @@ def bench_yunshu(model_path: str, prompts: list[dict]) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Fair benchmark: Yunshu vs mlx-lm"
+    parser = argparse.ArgumentParser(description="Fair benchmark: Yunshu vs mlx-lm")
+    parser.add_argument(
+        "--model", default="models/Qwen3.5-9B-MLX-4bit", help="Model path"
     )
-    parser.add_argument("--model", default="models/Qwen3.5-9B-MLX-4bit", help="Model path")
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
@@ -265,7 +298,11 @@ def main():
     mem_load_ys = yunshu_results.get("mem_after_load_mb", 0)
 
     acc_diff = acc_ys - acc_mlx
-    acc_verdict = "SAME" if abs(acc_diff) < 0.01 else ("DEGRADATION" if acc_diff < 0 else "IMPROVED")
+    acc_verdict = (
+        "SAME"
+        if abs(acc_diff) < 0.01
+        else ("DEGRADATION" if acc_diff < 0 else "IMPROVED")
+    )
 
     speed_ratio = speed_ys / speed_mlx if speed_mlx > 0 else 0
     speed_verdict = "SAME" if abs(speed_ratio - 1.0) < 0.05 else f"{speed_ratio:.2f}x"
@@ -273,19 +310,35 @@ def main():
     print("\n  ┌──────────┬───────────────┬───────────────┬──────────────┐")
     print("  │ Metric   │ mlx-lm/oMLX   │ Yunshu        │ Verdict      │")
     print("  ├──────────┼───────────────┼───────────────┼──────────────┤")
-    print(f"  │ Accuracy │ {acc_mlx:>10.0%}    │ {acc_ys:>10.0%}    │ {acc_verdict:<12} │")
-    print(f"  │ Speed    │ {speed_mlx:>8} t/s  │ {speed_ys:>8} t/s  │ {speed_verdict:<12} │")
-    print(f"  │ Mem load │ {mem_load_mlx:>8} MB  │ {mem_load_ys:>8} MB  │ {'OK' if mem_load_ys <= mem_load_mlx * 1.1 else 'HIGH':<12} │")
-    print(f"  │ Mem peak │ {mem_mlx:>8} MB  │ {mem_ys:>8} MB  │ {'OK' if mem_ys <= mem_mlx * 1.1 else 'HIGH':<12} │")
+    print(
+        f"  │ Accuracy │ {acc_mlx:>10.0%}    │ {acc_ys:>10.0%}    │ {acc_verdict:<12} │"
+    )
+    print(
+        f"  │ Speed    │ {speed_mlx:>8} t/s  │ {speed_ys:>8} t/s  │ {speed_verdict:<12} │"
+    )
+    print(
+        f"  │ Mem load │ {mem_load_mlx:>8} MB  │ {mem_load_ys:>8} MB  │ {'OK' if mem_load_ys <= mem_load_mlx * 1.1 else 'HIGH':<12} │"
+    )
+    print(
+        f"  │ Mem peak │ {mem_mlx:>8} MB  │ {mem_ys:>8} MB  │ {'OK' if mem_ys <= mem_mlx * 1.1 else 'HIGH':<12} │"
+    )
     print("  └──────────┴───────────────┴───────────────┴──────────────┘")
 
     # Per-prompt comparison
     print("\n  Per-prompt detail:")
-    for i, (mlx_r, ys_r) in enumerate(zip(mlx_results["runs"], yunshu_results["runs"], strict=False)):
-        match = "ok" if mlx_r["correct"] == ys_r["correct"] else ("!" if not ys_r["correct"] else "+")
-        print(f"    [{match}] Q{i}: mlx={'Y' if mlx_r['correct'] else 'N'} ys={'Y' if ys_r['correct'] else 'N'} "
-              f"speed={ys_r.get('gen_tok_s', '?')} t/s "
-              f"mlx_out='{mlx_r['output'][:40]}' ys_out='{ys_r['output'][:40]}'")
+    for i, (mlx_r, ys_r) in enumerate(
+        zip(mlx_results["runs"], yunshu_results["runs"], strict=False)
+    ):
+        match = (
+            "ok"
+            if mlx_r["correct"] == ys_r["correct"]
+            else ("!" if not ys_r["correct"] else "+")
+        )
+        print(
+            f"    [{match}] Q{i}: mlx={'Y' if mlx_r['correct'] else 'N'} ys={'Y' if ys_r['correct'] else 'N'} "
+            f"speed={ys_r.get('gen_tok_s', '?')} t/s "
+            f"mlx_out='{mlx_r['output'][:40]}' ys_out='{ys_r['output'][:40]}'"
+        )
 
     # Final verdict
     print("\n  VERDICT:")
@@ -294,15 +347,23 @@ def main():
     elif acc_ys < acc_mlx:
         print(f"  ACCURACY REGRESSION: Yunshu is {abs(acc_diff):.0%} below baseline.")
     elif speed_ys < speed_mlx * 0.9:
-        print(f"  SPEED REGRESSION: Yunshu is {1/speed_ratio:.2f}x slower than baseline.")
+        print(
+            f"  SPEED REGRESSION: Yunshu is {1 / speed_ratio:.2f}x slower than baseline."
+        )
     else:
         print("  Mixed results. See details above.")
 
     if args.json:
-        print(json.dumps({
-            "mlx_lm": mlx_results,
-            "yunshu": yunshu_results,
-        }, indent=2, default=str))
+        print(
+            json.dumps(
+                {
+                    "mlx_lm": mlx_results,
+                    "yunshu": yunshu_results,
+                },
+                indent=2,
+                default=str,
+            )
+        )
 
 
 if __name__ == "__main__":

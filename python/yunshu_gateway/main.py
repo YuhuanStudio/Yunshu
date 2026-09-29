@@ -5,6 +5,7 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 
 from starlette.requests import Request
 
@@ -106,6 +107,33 @@ def _get_memory_limit_bytes() -> int:
         return 0  # unlimited
 
 
+def describe_load_error(model: str, exc: BaseException) -> str:
+    """One readable line saying why ``model`` did not load."""
+    text = str(exc).strip().splitlines()[0] if str(exc).strip() else ""
+    name = type(exc).__name__
+    lowered = f"{name} {text}".lower()
+    if (
+        isinstance(exc, FileNotFoundError)
+        or "no such file" in lowered
+        or (model.startswith(("/", ".", "~")) and not Path(model).expanduser().exists())
+    ):
+        return (
+            f"{model}: model path not found; check the path, list local models "
+            "with `yunshu model list`, or download it with `yunshu pull`"
+        )
+    elif (
+        "out of memory" in lowered
+        or "insufficient memory" in lowered
+        or (isinstance(exc, MemoryError))
+    ):
+        hint = "not enough memory for this model; use a smaller or more quantized one"
+    elif "safetensors" in lowered or "header" in lowered or "truncated" in lowered:
+        hint = "weights are damaged or incomplete; run `yunshu pull` again"
+    else:
+        hint = "see the server log for the traceback"
+    return f"{model}: {name}: {text[:300]} ({hint})"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Startup/shutdown lifecycle with production hardening.
@@ -129,6 +157,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Store state on app for middleware to read (avoids stale module-level
     # state when TestClient doesn't trigger lifespan in Starlette 1.0+)
     app.state.server_state = ServerState.RUNNING
+    app.state.load_error = None
 
     # ── Startup validation ──
     env_warnings = _validate_settings()
@@ -204,7 +233,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # No engine was bound (wait_for cancelled instantiate_engine), so
             # there is nothing to stop. Server starts; /health/ready reports
             # not-ready.
-        except Exception as e:
+            app.state.load_error = (
+                f"model load timed out after {startup_timeout:.0f}s "
+                "(raise YUNSHU_STARTUP_TIMEOUT)"
+            )
+        except BaseException as e:
+            if isinstance(e, asyncio.CancelledError | KeyboardInterrupt):
+                raise
+            app.state.load_error = describe_load_error(DEFAULT_MODEL, e)
             logger.error(
                 "FATAL: model '%s' load failed: %s — server not ready",
                 DEFAULT_MODEL,
@@ -851,11 +887,16 @@ def create_app() -> FastAPI:
         return await call_next(request)
 
     app.add_middleware(RequestLoggingMiddleware)
-    app.add_middleware(RateLimitMiddleware)
+    if settings.get("YUNSHU_RATE_LIMIT_RPM") > 0:
+        app.add_middleware(RateLimitMiddleware)
     app.add_middleware(AuthMiddleware)
     # OUTERMOST — added last so it wraps auth/rate-limit and records their
     # rejections (401/429/413/503) into the metrics, which it could not see when innermost.
     app.add_middleware(MetricsMiddleware)
+    # Outermost: sees the client's disconnect (BaseHTTPMiddleware hides it).
+    from .middleware.disconnect import DisconnectWatchMiddleware
+
+    app.add_middleware(DisconnectWatchMiddleware)
 
     # ── Gateway optimizer wiring ──
     from yunshu_engine.gateway_optimizer import (
@@ -1081,10 +1122,11 @@ def create_app() -> FastAPI:
         # traffic to a dead/OOM/shutting-down node. Return 503 when not ready.
         from fastapi.responses import JSONResponse as _JSONResponse
 
-        return _JSONResponse(
-            status_code=200 if ready else 503,
-            content={"ready": ready, "checks": checks},
-        )
+        content: dict = {"ready": ready, "checks": checks}
+        load_error = getattr(request.app.state, "load_error", None)
+        if not ready and not has_loaded_model and load_error:
+            content["reason"] = load_error
+        return _JSONResponse(status_code=200 if ready else 503, content=content)
 
     @app.get("/health/live")
     async def liveness(request: Request) -> dict:

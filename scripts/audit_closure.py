@@ -18,6 +18,7 @@ Verdicts:
   todo      — not yet given a focused default-path audit
   deferred  — known-limited opt-in/edge behaviour, intentionally NOT fixed (documented)
 """
+
 from __future__ import annotations
 
 import re
@@ -26,7 +27,9 @@ import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ROUTERS = ROOT / "python" / "yunshu_gateway" / "routers"
-_RX = re.compile(r'@router\.(get|post|put|delete|patch|websocket)\(\s*["\']([^"\']+)["\']')
+_RX = re.compile(
+    r'@router\.(get|post|put|delete|patch|websocket)\(\s*["\']([^"\']+)["\']'
+)
 
 
 def discover() -> list[tuple[str, str, str, str]]:
@@ -41,7 +44,7 @@ def discover() -> list[tuple[str, str, str, str]]:
             method, path = m.group(1).upper(), m.group(2)
             fn = ""
             for j in range(i + 1, min(i + 6, len(src))):
-                dm = re.search(r'(?:async\s+)?def\s+(\w+)', src[j])
+                dm = re.search(r"(?:async\s+)?def\s+(\w+)", src[j])
                 if dm:
                     fn = dm.group(1)
                     break
@@ -54,15 +57,36 @@ def discover() -> list[tuple[str, str, str, str]]:
 # passes that fixed real bugs there; it is NOT an exhaustive changelog.
 STATUS: dict[str, tuple[str, str]] = {
     # ── Core inference: the default serving hot paths (highest value) ──
-    "chat:POST:/chat/completions": ("hardened", "— tool-parse, CoT-leak, TPM, GLM stream"),
-    "completions:POST:/completions": ("hardened", "— param parity, disconnect, FIM-suffix leak"),
-    "responses:POST:/responses": ("hardened", "— bg, multimodal, tool-markup, cancel-queued"),
-    "responses:GET:/responses/{response_id}": ("hardened", "cross-tenant IDOR; ownership enforced"),
+    "chat:POST:/chat/completions": (
+        "hardened",
+        "— tool-parse, CoT-leak, TPM, GLM stream",
+    ),
+    "completions:POST:/completions": (
+        "hardened",
+        "— param parity, disconnect, FIM-suffix leak",
+    ),
+    "responses:POST:/responses": (
+        "hardened",
+        "— bg, multimodal, tool-markup, cancel-queued",
+    ),
+    "responses:GET:/responses/{response_id}": (
+        "hardened",
+        "cross-tenant IDOR; ownership enforced",
+    ),
     "responses:DELETE:/responses/{response_id}": ("hardened", "ownership"),
-    "responses:POST:/responses/{response_id}/cancel": ("hardened", "cancel-during-queued"),
-    "anthropic:POST:/messages": ("hardened", "— markers, tool_result-image, multi-tool, tool_choice"),
+    "responses:POST:/responses/{response_id}/cancel": (
+        "hardened",
+        "cancel-during-queued",
+    ),
+    "anthropic:POST:/messages": (
+        "hardened",
+        "— markers, tool_result-image, multi-tool, tool_choice",
+    ),
     "anthropic:POST:/messages/count_tokens": ("hardened", "temp-file leak"),
-    "embeddings:POST:/embeddings": ("clean", "— finite guard, ANE mean-pool, length cap"),
+    "embeddings:POST:/embeddings": (
+        "clean",
+        "— finite guard, ANE mean-pool, length cap",
+    ),
     "scoring:POST:/pooling": ("hardened", "NaN guard, length cap"),
     "scoring:POST:/score": ("hardened", "— metric, length cap"),
     "scoring:POST:/rerank": ("clean", "NaN-sort, length cap"),
@@ -86,7 +110,10 @@ STATUS: dict[str, tuple[str, str]] = {
     "images:POST:/images/controlnet": ("hardened", "stop-leak, cancel"),
     "images:POST:/images/depth-guided": ("hardened", "cancel"),
     # ── Other modalities ──
-    "video:POST:/video/generations": ("hardened", "— model-iso, native-fail-loud; _denoise cancel deferred"),
+    "video:POST:/video/generations": (
+        "hardened",
+        "— model-iso, native-fail-loud; _denoise cancel deferred",
+    ),
     "ocr:POST:/v1/ocr": ("hardened", "— model-iso, think-strip, native key"),
     # ── MCP ──
     "mcp:POST:/mcp": ("hardened", "— envelope, lock, handshake, generate-iso"),
@@ -101,7 +128,10 @@ STATUS: dict[str, tuple[str, str]] = {
     "models:GET:/models": ("hardened", "— info-iso, static auth"),
     "models:GET:/models/{model_id:path}": ("hardened", "info-iso"),
     "models:POST:/models/load": ("hardened", "legacy-tenant privesc"),
-    "models:POST:/models/unload/{model_id:path}": ("hardened", "— in-use, false-success"),
+    "models:POST:/models/unload/{model_id:path}": (
+        "hardened",
+        "— in-use, false-success",
+    ),
     "sleep:POST:/sleep": ("hardened", "— consistency, drain, engine-leak"),
     "sleep:POST:/wake-up": ("hardened", "rebuild"),
     "sleep:GET:/sleep/status": ("clean", "gated"),
@@ -110,7 +140,10 @@ STATUS: dict[str, tuple[str, str]] = {
     "cached_contents:POST:/cachedContents": ("hardened", "per-owner evict"),
     "cached_contents:GET:/cachedContents": ("clean", "ownership"),
     "cached_contents:GET:/cachedContents/{cid}": ("clean", "ownership"),
-    "cached_contents:PATCH:/cachedContents/{cid}": ("clean", "audit — can_infer + _owns 404 IDOR guard + TTL bounds"),
+    "cached_contents:PATCH:/cachedContents/{cid}": (
+        "clean",
+        "audit — can_infer + _owns 404 IDOR guard + TTL bounds",
+    ),
     "cached_contents:DELETE:/cachedContents/{cid}": ("clean", "ownership"),
     # ── Tokenize (audit: CLEAN — auth+model-iso on all 3, fallback + decode
     #    overflow→422 + per-prompt ctx; inputs bounded by the global 10MB body cap,
@@ -126,18 +159,39 @@ STATUS: dict[str, tuple[str, str]] = {
     # ── Batch inference (audit: no HIGH/IDOR/isolation — auth+model-iso+ownership all
     #    gated, size/timeout/cancel bounded; 3 LOW fixed) ──
     "batch_inference:POST:/batch": ("hardened", "model-iso per item, sampling bounds"),
-    "batch_inference:GET:/batch/{batch_id}/status": ("clean", "can_infer + _owns_batch IDOR guard"),
-    "batch_inference:GET:/batch/{batch_id}/results": ("clean", "ownership + 409-in-progress"),
-    "batch_inference:GET:/batch/{batch_id}/results.csv": ("hardened", "CSV-injection hardening"),
-    "batch_inference:POST:/batch/upload/csv": ("hardened", "max_concurrent bound + UTF-8 guard"),
+    "batch_inference:GET:/batch/{batch_id}/status": (
+        "clean",
+        "can_infer + _owns_batch IDOR guard",
+    ),
+    "batch_inference:GET:/batch/{batch_id}/results": (
+        "clean",
+        "ownership + 409-in-progress",
+    ),
+    "batch_inference:GET:/batch/{batch_id}/results.csv": (
+        "hardened",
+        "CSV-injection hardening",
+    ),
+    "batch_inference:POST:/batch/upload/csv": (
+        "hardened",
+        "max_concurrent bound + UTF-8 guard",
+    ),
 }
 
 # Per-file default verdict for routers audited as a whole class (an endpoint not listed
 # individually in STATUS inherits its file's default; absent → "todo").
 FILE_DEFAULT: dict[str, tuple[str, str]] = {
-    "monitoring": ("clean", "class audit — uniform can_view_system gate, None-safe, no div0"),
-    "profiling": ("clean", "class audit — can_admin gate, path-traversal blocked, lock-safe"),
-    "bench": ("hardened", "class audit — can_benchmark gate, SSRF-defended, lock-serialized, param bounds"),
+    "monitoring": (
+        "clean",
+        "class audit — uniform can_view_system gate, None-safe, no div0",
+    ),
+    "profiling": (
+        "clean",
+        "class audit — can_admin gate, path-traversal blocked, lock-safe",
+    ),
+    "bench": (
+        "hardened",
+        "class audit — can_benchmark gate, SSRF-defended, lock-serialized, param bounds",
+    ),
 }
 
 _VERDICT_ORDER = ["todo", "deferred", "hardened", "clean"]
@@ -163,9 +217,11 @@ def main() -> int:
     total = len(rows)
     audited = counts.get("clean", 0) + counts.get("hardened", 0)
     print("═" * 78)
-    print(f" Gateway endpoint audit closure — {audited}/{total} default paths closed "
-          f"({counts['clean']} clean + {counts['hardened']} hardened), "
-          f"{counts['todo']} todo, {counts['deferred']} deferred")
+    print(
+        f" Gateway endpoint audit closure — {audited}/{total} default paths closed "
+        f"({counts['clean']} clean + {counts['hardened']} hardened), "
+        f"{counts['todo']} todo, {counts['deferred']} deferred"
+    )
     print("═" * 78)
     for s in sorted(by_file):
         eps = by_file[s]
@@ -187,10 +243,14 @@ def main() -> int:
             print(f"      {k}")
 
     print()
-    print(f"  Remaining worklist (todo): {counts['todo']} endpoints — "
-          f"mostly read-only observability/bench/profiling GETs.")
-    print(f"  Default-serving inference surface (chat/completions/responses/anthropic/"
-          f"embeddings/scoring/audio/images/mcp/realtime): formally closed.")
+    print(
+        f"  Remaining worklist (todo): {counts['todo']} endpoints — "
+        f"mostly read-only observability/bench/profiling GETs."
+    )
+    print(
+        f"  Default-serving inference surface (chat/completions/responses/anthropic/"
+        f"embeddings/scoring/audio/images/mcp/realtime): formally closed."
+    )
     return 0
 
 

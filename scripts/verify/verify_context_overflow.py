@@ -12,6 +12,7 @@ covered separately + cheaply by verify_prefill_guard.py (across all protocols).
 
 Run: PYTHONPATH=. uv run python scripts/verify_context_overflow.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -46,11 +47,19 @@ async def main() -> int:
     detail: list[str] = []
     try:
         transport = httpx.ASGITransport(app=create_app())
-        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=120) as client:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test", timeout=120
+        ) as client:
             # over the window: ~1.2x max_ctx tokens ("word " ~= 1 token each)
             over = "word " * int(max_ctx * 1.2)
-            r = await client.post("/v1/chat/completions", json={
-                "model": MODEL, "messages": [{"role": "user", "content": over}], "max_tokens": 4})
+            r = await client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": MODEL,
+                    "messages": [{"role": "user", "content": over}],
+                    "max_tokens": 4,
+                },
+            )
             checks["over-context → HTTP 400 (not 5xx/crash)"] = r.status_code == 400
             msg = ""
             try:
@@ -58,14 +67,25 @@ async def main() -> int:
             except Exception:
                 msg = r.text
             checks["400 message mentions length/context"] = any(
-                k in msg.lower() for k in ("too long", "context", "exceed", "max"))
-            detail.append(f"max_ctx={max_ctx} over_status={r.status_code} msg={msg[:90]!r}")
+                k in msg.lower() for k in ("too long", "context", "exceed", "max")
+            )
+            detail.append(
+                f"max_ctx={max_ctx} over_status={r.status_code} msg={msg[:90]!r}"
+            )
 
             # control: a normal prompt is fine
-            r2 = await client.post("/v1/chat/completions", json={
-                "model": MODEL, "messages": [{"role": "user", "content": "Say hi."}],
-                "max_tokens": 8, "temperature": 0.0})
-            checks["normal prompt → HTTP 200 (guard not over-eager)"] = r2.status_code == 200
+            r2 = await client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": MODEL,
+                    "messages": [{"role": "user", "content": "Say hi."}],
+                    "max_tokens": 8,
+                    "temperature": 0.0,
+                },
+            )
+            checks["normal prompt → HTTP 200 (guard not over-eager)"] = (
+                r2.status_code == 200
+            )
     finally:
         set_engine(None)
         await eng.stop()

@@ -1,4 +1,5 @@
 """Test VLMEngine with real Qwen3-Omni-30B-A3B-Instruct-4bit model."""
+
 import asyncio
 import sys
 import time
@@ -23,7 +24,9 @@ async def main():
     print("\n[2/4] Text-only generation...")
     t0 = time.monotonic()
     result = await engine.generate(
-        messages=[{"role": "user", "content": "What is 2+3? Answer with just the number."}],
+        messages=[
+            {"role": "user", "content": "What is 2+3? Answer with just the number."}
+        ],
         max_tokens=32,
         temperature=0.0,
     )
@@ -52,18 +55,24 @@ async def main():
 
     # Test 3: Vision (using the cat image we generated earlier)
     import os
+
     img_path = "test_output_cat.png"
     if os.path.exists(img_path):
         print(f"\n[4/4] Vision generation with {img_path}...")
         t0 = time.monotonic()
         result = await engine.generate(
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "Describe this image in one sentence."},
-                    {"type": "image_url", "image_url": {"url": img_path}},
-                ],
-            }],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Describe this image in one sentence.",
+                        },
+                        {"type": "image_url", "image_url": {"url": img_path}},
+                    ],
+                }
+            ],
             max_tokens=64,
             temperature=0.0,
         )
@@ -76,6 +85,7 @@ async def main():
         print(f"  This is NOT a full pass — vision validation requires {img_path}")
         # Exit non-zero so CI / validation reports do not mistake this for a full pass
         import sys
+
         sys.exit(2)
 
     await engine.stop()

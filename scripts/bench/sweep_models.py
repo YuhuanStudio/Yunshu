@@ -15,6 +15,7 @@ reported as FAIL (not a silent skip) unless its weights are absent (real SKIP).
 Run:  PYTHONPATH=. uv run python scripts/sweep_models.py
 Child: PYTHONPATH=. uv run python scripts/sweep_models.py --child <model_path>
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -47,12 +48,22 @@ async def _child(model: str) -> int:
         print(json.dumps({"model": model, "skip": True}))
         return 0
     from yunshu_engine.batched_engine import BatchedEngine
+
     eng = BatchedEngine(model_name=model)
     await eng.start()
     try:
+
         async def chat(msgs, **kw):
-            return _text(await eng.chat(messages=msgs, max_tokens=40, temperature=0.0,
-                                        enable_thinking=False, **kw))
+            return _text(
+                await eng.chat(
+                    messages=msgs,
+                    max_tokens=40,
+                    temperature=0.0,
+                    enable_thinking=False,
+                    **kw,
+                )
+            )
+
         q = [{"role": "user", "content": "Name one planet in our solar system."}]
         d0 = await chat(q)
         d1 = await chat(q)
@@ -60,9 +71,11 @@ async def _child(model: str) -> int:
         # yield a coherent reply. (We assert ENGINE correctness — template
         # threading — not model intelligence like fact-recall, which a 0.8B model
         # may lack and which is not Yunshu's responsibility.)
-        turn = [{"role": "user", "content": "My favorite number is 42. Reply OK."},
-                {"role": "assistant", "content": "OK."},
-                {"role": "user", "content": "Say one more short sentence."}]
+        turn = [
+            {"role": "user", "content": "My favorite number is 42. Reply OK."},
+            {"role": "assistant", "content": "OK."},
+            {"role": "user", "content": "Say one more short sentence."},
+        ]
         mt = await chat(turn)
     finally:
         await eng.stop()
@@ -71,8 +84,17 @@ async def _child(model: str) -> int:
         "non_degenerate": not _degenerate(d0),
         "multiturn_template_coherent": len(mt) > 0 and not _degenerate(mt),
     }
-    print(json.dumps({"model": model, "checks": checks, "ok": all(checks.values()),
-                      "sample": d0[:40], "mt": mt[:40]}))
+    print(
+        json.dumps(
+            {
+                "model": model,
+                "checks": checks,
+                "ok": all(checks.values()),
+                "sample": d0[:40],
+                "mt": mt[:40],
+            }
+        )
+    )
     return 0 if all(checks.values()) else 1
 
 
@@ -86,17 +108,28 @@ def _parent() -> int:
         try:
             p = subprocess.run(
                 [sys.executable, __file__, "--child", m],
-                capture_output=True, text=True, timeout=420, env=env,
+                capture_output=True,
+                text=True,
+                timeout=420,
+                env=env,
             )
             line = [l for l in p.stdout.splitlines() if l.startswith("{")]
             data = json.loads(line[-1]) if line else {}
             if data.get("skip"):
                 results.append({"model": m, "status": "SKIP (absent)"})
             elif data.get("ok"):
-                results.append({"model": m, "status": "PASS", "sample": data.get("sample")})
+                results.append(
+                    {"model": m, "status": "PASS", "sample": data.get("sample")}
+                )
             else:
-                results.append({"model": m, "status": "FAIL", "checks": data.get("checks"),
-                                "stderr_tail": p.stderr.strip()[-160:]})
+                results.append(
+                    {
+                        "model": m,
+                        "status": "FAIL",
+                        "checks": data.get("checks"),
+                        "stderr_tail": p.stderr.strip()[-160:],
+                    }
+                )
         except subprocess.TimeoutExpired:
             results.append({"model": m, "status": "FAIL (timeout)"})
         except Exception as e:
@@ -105,11 +138,17 @@ def _parent() -> int:
     tested = [r for r in results if "SKIP" not in r["status"]]
     passed = [r for r in tested if r["status"] == "PASS"]
     for r in results:
-        mark = {"PASS": "OK ", }.get(r["status"], "BAD" if "FAIL" in r["status"] else "·· ")
-        print(f"  {mark} {os.path.basename(r['model']):32s} {r['status']}"
-              + (f"  {r.get('sample','')!r}" if r.get("sample") else ""))
-    print(f"RESULT: {len(passed)}/{len(tested)} models pass core correctness "
-          f"({len(results)-len(tested)} skipped)")
+        mark = {
+            "PASS": "OK ",
+        }.get(r["status"], "BAD" if "FAIL" in r["status"] else "·· ")
+        print(
+            f"  {mark} {os.path.basename(r['model']):32s} {r['status']}"
+            + (f"  {r.get('sample', '')!r}" if r.get("sample") else "")
+        )
+    print(
+        f"RESULT: {len(passed)}/{len(tested)} models pass core correctness "
+        f"({len(results) - len(tested)} skipped)"
+    )
     ok = len(tested) > 0 and len(passed) == len(tested)
     print("PASS" if ok else "FAIL")
     return 0 if ok else 1

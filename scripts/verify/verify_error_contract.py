@@ -13,6 +13,7 @@ fully deterministic, instant, and runs even when the model drive is absent.
 
 Run: PYTHONPATH=. uv run python scripts/verify_error_contract.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -21,6 +22,7 @@ import sys
 
 async def main() -> int:
     import os
+
     os.environ["YUNSHU_AUTH_DISABLED"] = "true"
     os.environ["YUNSHU_DRAIN_TIMEOUT"] = "0"
 
@@ -34,20 +36,28 @@ async def main() -> int:
         "empty messages": {"model": "m", "messages": []},
         "missing model": {"messages": [{"role": "user", "content": "hi"}]},
         "bad role": {"model": "m", "messages": [{"role": "alien", "content": "hi"}]},
-        "negative max_tokens": {"model": "m", "messages": [{"role": "user", "content": "hi"}], "max_tokens": -5},
+        "negative max_tokens": {
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": -5,
+        },
         "n=0": {"model": "m", "messages": [{"role": "user", "content": "hi"}], "n": 0},
     }
 
     checks: dict[str, bool] = {}
     detail: list[str] = []
     transport = httpx.ASGITransport(app=create_app())  # NO engine set
-    async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=30) as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test", timeout=30
+    ) as client:
         for name, body in bad_bodies.items():
             r = await client.post("/v1/chat/completions", json=body)
             is_4xx = 400 <= r.status_code < 500
             json_err = False
             try:
-                json_err = isinstance(r.json().get("error") or r.json().get("detail"), (str, dict, list))
+                json_err = isinstance(
+                    r.json().get("error") or r.json().get("detail"), (str, dict, list)
+                )
             except Exception:
                 json_err = False
             checks[f"reject: {name} → 4xx"] = is_4xx
@@ -55,11 +65,14 @@ async def main() -> int:
             detail.append(f"{name}: {r.status_code}")
 
         # Well-formed request, unknown model, no engine → 404 (not 500/200).
-        r = await client.post("/v1/chat/completions", json={
-            "model": "definitely-not-loaded",
-            "messages": [{"role": "user", "content": "hi"}],
-            "max_tokens": 4,
-        })
+        r = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "definitely-not-loaded",
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 4,
+            },
+        )
         checks["unknown model (no engine) → 404"] = r.status_code == 404
         detail.append(f"unknown-model: {r.status_code}")
 

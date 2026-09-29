@@ -8,6 +8,7 @@ Usage:
     PYTHONPATH=. uv run python scripts/bench_throughput.py --quick
     PYTHONPATH=. uv run python scripts/bench_throughput.py --framework mlx-lm
 """
+
 from __future__ import annotations
 
 import argparse
@@ -29,7 +30,9 @@ def P(msg):
 
 
 def cleanup():
-    gc.collect(); mx.synchronize(); mx.clear_cache()
+    gc.collect()
+    mx.synchronize()
+    mx.clear_cache()
 
 
 def bench_mlx_lm(n_runs, max_tokens):
@@ -40,7 +43,8 @@ def bench_mlx_lm(n_runs, max_tokens):
     model, tokenizer = load(MODEL)
     text = tokenizer.apply_chat_template(
         [{"role": "user", "content": PROMPT[:500]}],
-        tokenize=False, add_generation_prompt=True,
+        tokenize=False,
+        add_generation_prompt=True,
     )
     ids = mx.array(tokenizer.encode(text))
 
@@ -62,9 +66,10 @@ def bench_mlx_lm(n_runs, max_tokens):
         elapsed = time.perf_counter() - t0
         speeds.append(len(tokens) / elapsed)
         if (i + 1) % 5 == 0:
-            P(f"  Run {i+1}/{n_runs}: {len(tokens)} tok, {speeds[-1]:.1f} tok/s")
+            P(f"  Run {i + 1}/{n_runs}: {len(tokens)} tok, {speeds[-1]:.1f} tok/s")
 
-    del model, tokenizer; cleanup()
+    del model, tokenizer
+    cleanup()
     return speeds, ttfts
 
 
@@ -76,7 +81,9 @@ def bench_yunshu(n_runs, max_tokens):
         await engine.start()
 
         # Warmup
-        await engine.generate(prompt=[{"role": "user", "content": "hi"}], max_tokens=10, temperature=0.0)
+        await engine.generate(
+            prompt=[{"role": "user", "content": "hi"}], max_tokens=10, temperature=0.0
+        )
 
         speeds = []
         ttfts = []
@@ -84,21 +91,24 @@ def bench_yunshu(n_runs, max_tokens):
             t0 = time.perf_counter()
             r = await engine.generate(
                 prompt=[{"role": "user", "content": PROMPT[:500]}],
-                max_tokens=max_tokens, temperature=0.0, enable_thinking=False,
+                max_tokens=max_tokens,
+                temperature=0.0,
+                enable_thinking=False,
             )
             elapsed = time.perf_counter() - t0
-            n_tok = r.completion_tokens if hasattr(r, 'completion_tokens') else 0
+            n_tok = r.completion_tokens if hasattr(r, "completion_tokens") else 0
             speeds.append(n_tok / elapsed if elapsed > 0 else 0)
             # Approximate TTFT from total time minus generation time
             gen_time = n_tok / speeds[-1] if speeds[-1] > 0 else 0
             ttfts.append(elapsed - gen_time)
             if (i + 1) % 5 == 0:
-                P(f"  Run {i+1}/{n_runs}: {n_tok} tok, {speeds[-1]:.1f} tok/s")
+                P(f"  Run {i + 1}/{n_runs}: {n_tok} tok, {speeds[-1]:.1f} tok/s")
 
         await engine.stop()
         return speeds, ttfts
 
-    r = asyncio.run(_run()); cleanup()
+    r = asyncio.run(_run())
+    cleanup()
     return r
 
 
@@ -119,14 +129,15 @@ def bench_omlx(n_runs, max_tokens):
         t0 = time.perf_counter()
         r = llm.generate(PROMPT[:500], max_tokens=max_tokens, temperature=0.0)
         elapsed = time.perf_counter() - t0
-        n_tok = len(r.tokens) if hasattr(r, 'tokens') else 0
+        n_tok = len(r.tokens) if hasattr(r, "tokens") else 0
         speeds.append(n_tok / elapsed if elapsed > 0 else 0)
         gen_time = n_tok / speeds[-1] if speeds[-1] > 0 else 0
         ttfts.append(elapsed - gen_time)
         if (i + 1) % 5 == 0:
-            P(f"  Run {i+1}/{n_runs}: {n_tok} tok, {speeds[-1]:.1f} tok/s")
+            P(f"  Run {i + 1}/{n_runs}: {n_tok} tok, {speeds[-1]:.1f} tok/s")
 
-    del llm; cleanup()
+    del llm
+    cleanup()
     return speeds, ttfts
 
 
@@ -145,7 +156,8 @@ def bench_vllm_mlx(n_runs, max_tokens):
 
         text = tokenizer.apply_chat_template(
             [{"role": "user", "content": PROMPT[:500]}],
-            tokenize=False, add_generation_prompt=True,
+            tokenize=False,
+            add_generation_prompt=True,
         )
 
         # Warmup
@@ -160,15 +172,19 @@ def bench_vllm_mlx(n_runs, max_tokens):
             try:
                 out = await core.generate(prompt=text, sampling_params=sp)
                 elapsed = time.perf_counter() - t0
-                n_tok = out.completion_tokens if hasattr(out, 'completion_tokens') else max_tokens
+                n_tok = (
+                    out.completion_tokens
+                    if hasattr(out, "completion_tokens")
+                    else max_tokens
+                )
                 speeds.append(n_tok / elapsed if elapsed > 0 else 0)
                 gen_time = n_tok / speeds[-1] if speeds[-1] > 0 else 0
                 ttfts.append(elapsed - gen_time)
             except Exception as e:
-                P(f"  Run {i+1}: ERROR {e}")
+                P(f"  Run {i + 1}: ERROR {e}")
                 continue
             if (i + 1) % 5 == 0:
-                P(f"  Run {i+1}/{n_runs}: {n_tok} tok, {speeds[-1]:.1f} tok/s")
+                P(f"  Run {i + 1}/{n_runs}: {n_tok} tok, {speeds[-1]:.1f} tok/s")
 
         await core.stop()
         return speeds, ttfts
@@ -187,9 +203,15 @@ RUNNERS = {
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Throughput benchmark: 4-framework speed comparison")
+    parser = argparse.ArgumentParser(
+        description="Throughput benchmark: 4-framework speed comparison"
+    )
     parser.add_argument("--quick", action="store_true", help="3 runs instead of 10")
-    parser.add_argument("--framework", choices=["all", "mlx-lm", "yunshu", "omlx", "vllm-mlx"], default="all")
+    parser.add_argument(
+        "--framework",
+        choices=["all", "mlx-lm", "yunshu", "omlx", "vllm-mlx"],
+        default="all",
+    )
     parser.add_argument("--max-tokens", type=int, default=128)
     args = parser.parse_args()
 
@@ -208,9 +230,9 @@ def main():
     all_results = {}
 
     for fw in fws:
-        P(f"\n{'='*60}")
+        P(f"\n{'=' * 60}")
         P(f"  {fw.upper()} — Throughput Benchmark")
-        P(f"{'='*60}")
+        P(f"{'=' * 60}")
         try:
             speeds, ttfts = RUNNERS[fw](n_runs, args.max_tokens)
             avg_speed = sum(speeds) / len(speeds) if speeds else 0
@@ -222,23 +244,28 @@ def main():
                 "avg_ttft_ms": avg_ttft,
                 "runs": len(speeds),
             }
-            P(f"\n  RESULT: {avg_speed:.1f} tok/s (TTFT ≈ {avg_ttft:.0f}ms, n={len(speeds)})")
+            P(
+                f"\n  RESULT: {avg_speed:.1f} tok/s (TTFT ≈ {avg_ttft:.0f}ms, n={len(speeds)})"
+            )
         except Exception as e:
             import traceback
+
             P(f"  FAILED: {e}")
             traceback.print_exc()
 
     # Summary
     if len(all_results) >= 2:
-        P(f"\n{'='*60}")
+        P(f"\n{'=' * 60}")
         P(f"  THROUGHPUT COMPARISON (max_tokens={args.max_tokens})")
-        P(f"{'='*60}")
+        P(f"{'=' * 60}")
         P(f"  {'Framework':<12} {'tok/s':>10} {'TTFT ms':>10} {'Runs':>6}")
-        P(f"  {'─'*12} {'─'*10} {'─'*10} {'─'*6}")
+        P(f"  {'─' * 12} {'─' * 10} {'─' * 10} {'─' * 6}")
         for fw in fws:
             if fw in all_results:
                 r = all_results[fw]
-                P(f"  {fw:<12} {r['avg_tok_s']:>9.1f} {r['avg_ttft_ms']:>9.0f} {r['runs']:>6}")
+                P(
+                    f"  {fw:<12} {r['avg_tok_s']:>9.1f} {r['avg_ttft_ms']:>9.0f} {r['runs']:>6}"
+                )
 
         # Relative speed
         baseline = all_results.get("mlx-lm", {}).get("avg_tok_s", 0)

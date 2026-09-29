@@ -13,6 +13,7 @@ or a prompt-independent constant.
 
 Run: PYTHONPATH=. uv run python scripts/verify_image_t2i.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -42,10 +43,18 @@ async def main() -> int:
     detail: list[str] = []
     try:
         common = dict(width=512, height=512, num_inference_steps=8, seed=7)
-        red = arr(await eng.generate_image(
-            prompt="a solid bright red apple filling the frame, vivid scarlet red", **common))
-        green = arr(await eng.generate_image(
-            prompt="a lush deep green forest of leaves, vivid emerald green", **common))
+        red = arr(
+            await eng.generate_image(
+                prompt="a solid bright red apple filling the frame, vivid scarlet red",
+                **common,
+            )
+        )
+        green = arr(
+            await eng.generate_image(
+                prompt="a lush deep green forest of leaves, vivid emerald green",
+                **common,
+            )
+        )
     finally:
         await eng.stop()
 
@@ -55,8 +64,11 @@ async def main() -> int:
     rr, rg, rb = channels(red)
     gr, gg, gb = channels(green)
     checks["both images valid + non-blank"] = (
-        red.shape == (512, 512, 3) and green.shape == (512, 512, 3)
-        and red.var() > 100 and green.var() > 100)
+        red.shape == (512, 512, 3)
+        and green.shape == (512, 512, 3)
+        and red.var() > 100
+        and green.var() > 100
+    )
     # red prompt's red-dominance (R-G) exceeds green prompt's
     checks["red prompt → more red than green prompt"] = (rr - rg) > (gr - gg)
     # green prompt's green-dominance (G-R) exceeds red prompt's

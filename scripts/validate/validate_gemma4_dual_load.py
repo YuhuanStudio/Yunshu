@@ -118,8 +118,11 @@ def main() -> int:
     rate = total_hits / total_positions if total_positions else 0.0
     print(f"\nOVERALL acceptance: {total_hits}/{total_positions} = {rate:.1%}")
     print(f"peak mem GB: {mx.get_peak_memory() / 1e9:.1f}")
-    print("\nPASS — dual-load runs end-to-end on real weights." if rate > 0
-          else "\nWARN — zero acceptance; check wiring.")
+    print(
+        "\nPASS — dual-load runs end-to-end on real weights."
+        if rate > 0
+        else "\nWARN — zero acceptance; check wiring."
+    )
     return 0
 
 

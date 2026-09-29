@@ -136,7 +136,7 @@ _add("YUNSHU_MEDIA_DIR", "path", None, "Directory local media paths must live un
 _add("YUNSHU_AUTH_TOKEN", "str", None, "Bearer token. When set, every request except health/version/docs needs it; unset: inference is open and operational endpoints are denied.", "auth", secret=True)
 _add("YUNSHU_AUTH_DISABLED", "bool", False, "Disable auth entirely (operational endpoints open too). Local development only.", "auth")
 _add("YUNSHU_ACTOR_IDENTITY", "str", "owner", "Identity recorded for authenticated requests in the audit log.", "auth")
-_add("YUNSHU_RATE_LIMIT_RPM", "int", 120, "Per-client request rate limit (requests per minute) when rate limiting is enabled.", "auth", minimum=1)
+_add("YUNSHU_RATE_LIMIT_RPM", "int", 0, "Per-client request rate limit in requests per minute; 0 (default) turns rate limiting off. A local single-user engine has no need for it; set it when the server is exposed to other machines.", "auth", minimum=0)
 _add("YUNSHU_TRUSTED_PROXIES", "list", (), "Comma-separated proxy IPs whose X-Forwarded-For header is trusted.", "auth")
 
 # ── memory ─────────────────────────────────────────────────────────────

@@ -34,31 +34,66 @@ def make_cases():
     long_prefix = "The archive record is a neutral entry with no code.\n" * 480
     history = []
     for turn in range(10):
-        history.append({"role": "user", "content": f"Progress note {turn}: continue tracking the room code ORCHID."})
-        history.append({"role": "assistant", "content": "The room code remains ORCHID."})
+        history.append(
+            {
+                "role": "user",
+                "content": f"Progress note {turn}: continue tracking the room code ORCHID.",
+            }
+        )
+        history.append(
+            {"role": "assistant", "content": "The room code remains ORCHID."}
+        )
     return [
-        ("short", [{"role": "user", "content": "Reply with only ORCHID."}], 24, "ORCHID"),
+        (
+            "short",
+            [{"role": "user", "content": "Reply with only ORCHID."}],
+            24,
+            "ORCHID",
+        ),
         (
             "code",
-            [{"role": "user", "content": "Write a Python function named sum_even that sums even integers from a list. Return code only."}],
+            [
+                {
+                    "role": "user",
+                    "content": "Write a Python function named sum_even that sums even integers from a list. Return code only.",
+                }
+            ],
             256,
             "def sum_even",
         ),
         (
             "long_cold",
-            [{"role": "user", "content": long_prefix + "\nThe final code is ALPHA. What is the final code? Reply with the code only."}],
+            [
+                {
+                    "role": "user",
+                    "content": long_prefix
+                    + "\nThe final code is ALPHA. What is the final code? Reply with the code only.",
+                }
+            ],
             32,
             "ALPHA",
         ),
         (
             "long_repeat",
-            [{"role": "user", "content": long_prefix + "\nThe final code is ALPHA. What is the final code? Reply with the code only."}],
+            [
+                {
+                    "role": "user",
+                    "content": long_prefix
+                    + "\nThe final code is ALPHA. What is the final code? Reply with the code only.",
+                }
+            ],
             32,
             "ALPHA",
         ),
         (
             "long_edited_tail",
-            [{"role": "user", "content": long_prefix + "\nThe final code is COBALT. What is the final code? Reply with the code only."}],
+            [
+                {
+                    "role": "user",
+                    "content": long_prefix
+                    + "\nThe final code is COBALT. What is the final code? Reply with the code only.",
+                }
+            ],
             32,
             "COBALT",
         ),
@@ -67,32 +102,69 @@ def make_cases():
             [
                 {"role": "user", "content": "Remember that the room code is ORCHID."},
                 {"role": "assistant", "content": "I will remember the room code."},
-                {"role": "user", "content": "A visitor first said BLUE, then corrected themselves. The room code remains unchanged. What is the room code? Reply with just the code."},
+                {
+                    "role": "user",
+                    "content": "A visitor first said BLUE, then corrected themselves. The room code remains unchanged. What is the room code? Reply with just the code.",
+                },
             ],
             32,
             "ORCHID",
         ),
         (
             "history_20",
-            history + [{"role": "user", "content": "What is the current room code? Reply with only the code."}],
+            history
+            + [
+                {
+                    "role": "user",
+                    "content": "What is the current room code? Reply with only the code.",
+                }
+            ],
             32,
             "ORCHID",
         ),
         (
             "history_20_edited_tail",
-            history + [{"role": "user", "content": "The room code changed to COBALT. What is the current room code? Reply with only the code."}],
+            history
+            + [
+                {
+                    "role": "user",
+                    "content": "The room code changed to COBALT. What is the current room code? Reply with only the code.",
+                }
+            ],
             32,
             "COBALT",
         ),
         (
             "vision_left",
-            [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": image_data(True)}}, {"type": "text", "text": "Which half is red? Reply left or right."}]}],
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": image_data(True)}},
+                        {
+                            "type": "text",
+                            "text": "Which half is red? Reply left or right.",
+                        },
+                    ],
+                }
+            ],
             32,
             "left",
         ),
         (
             "vision_right",
-            [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": image_data(False)}}, {"type": "text", "text": "Which half is red? Reply left or right."}]}],
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": image_data(False)}},
+                        {
+                            "type": "text",
+                            "text": "Which half is red? Reply left or right.",
+                        },
+                    ],
+                }
+            ],
             32,
             "right",
         ),
@@ -112,7 +184,9 @@ def run_request(url, model, messages, max_tokens, raw_path):
     }
     started = time.perf_counter()
     result = {
-        "input_sha256": hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest(),
+        "input_sha256": hashlib.sha256(
+            json.dumps(body, sort_keys=True).encode()
+        ).hexdigest(),
         "first_content_s": None,
         "first_reasoning_s": None,
         "first_event_s": None,
@@ -127,7 +201,10 @@ def run_request(url, model, messages, max_tokens, raw_path):
         data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=600) as response, raw_path.open("wb") as raw:
+    with (
+        urllib.request.urlopen(req, timeout=600) as response,
+        raw_path.open("wb") as raw,
+    ):
         result["http_status"] = response.status
         for line in response:
             raw.write(line)
@@ -193,7 +270,11 @@ def main():
             try:
                 row.update(run_request(args.url, args.model, messages, limit, raw_path))
                 out = row["content"].strip()
-                row["task_ok"] = expected in out if name == "code" else out.lower() == expected.lower()
+                row["task_ok"] = (
+                    expected in out
+                    if name == "code"
+                    else out.lower() == expected.lower()
+                )
             except Exception as exc:
                 row["error"] = repr(exc)
                 if hasattr(exc, "read"):
@@ -201,7 +282,13 @@ def main():
                 row["task_ok"] = False
             with args.output.open("a") as file:
                 file.write(json.dumps(row, ensure_ascii=False) + "\n")
-            print(json.dumps({k: v for k, v in row.items() if k not in ("content", "reasoning")}, ensure_ascii=False), flush=True)
+            print(
+                json.dumps(
+                    {k: v for k, v in row.items() if k not in ("content", "reasoning")},
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
 
 
 if __name__ == "__main__":

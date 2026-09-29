@@ -64,3 +64,21 @@ def test_structural_whitespace_is_spaces_and_newlines_only():
     allowed = _texts(tok, c.get_allowed_tokens(tok, []))
     assert "\t" not in allowed and "\r" not in allowed
     assert " " in allowed and '"' in allowed
+
+
+class _SpecialTok(_Tok):
+    all_special_ids = (len(PIECES),)
+    eos_token_ids = [len(PIECES)]
+
+    def __init__(self):
+        super().__init__([*PIECES, "<|im_end|>"])
+
+
+def test_string_state_never_admits_special_tokens():
+    """A model that picked <|im_end|> inside a string ended the JSON mid-string."""
+    tok = _SpecialTok()
+    c = JsonSchemaConstraint(SCHEMA)
+    c.advance('{"city": "a')
+    ids = c.get_allowed_tokens(tok, [])
+    assert PIECES.index("a") in ids
+    assert len(PIECES) not in ids

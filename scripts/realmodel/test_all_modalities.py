@@ -22,10 +22,10 @@ import traceback
 MODELS_DIR = "models"
 
 MODELS = {
-    "llm":   f"{MODELS_DIR}/Qwen3.5-9B-MLX-4bit",
-    "vlm":   f"{MODELS_DIR}/Qwen3-Omni-30B-A3B-Instruct-4bit",
-    "tts":   f"{MODELS_DIR}/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16",
-    "asr":   f"{MODELS_DIR}/Qwen3-ASR-1.7B-bf16",
+    "llm": f"{MODELS_DIR}/Qwen3.5-9B-MLX-4bit",
+    "vlm": f"{MODELS_DIR}/Qwen3-Omni-30B-A3B-Instruct-4bit",
+    "tts": f"{MODELS_DIR}/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16",
+    "asr": f"{MODELS_DIR}/Qwen3-ASR-1.7B-bf16",
     "image": f"{MODELS_DIR}/Z-Image-Turbo-MLX-4bit",
 }
 
@@ -42,13 +42,17 @@ def test_llm():
 
     t0 = time.time()
     model, tokenizer = load(MODELS["llm"])
-    print(f"Model loaded in {time.time()-t0:.1f}s")
+    print(f"Model loaded in {time.time() - t0:.1f}s")
 
     sampler = make_sampler(temp=0.0)
     bg = BatchGenerator(
-        model, max_tokens=64, sampler=sampler,
-        prefill_batch_size=4, completion_batch_size=32,
-        prefill_step_size=2048, stream=generation_stream,
+        model,
+        max_tokens=64,
+        sampler=sampler,
+        prefill_batch_size=4,
+        completion_batch_size=32,
+        prefill_step_size=2048,
+        stream=generation_stream,
     )
 
     prompt_tokens = tokenizer.encode(
@@ -58,7 +62,9 @@ def test_llm():
     print(f"Prompt: {len(prompt_tokens)} tokens")
 
     bg.insert(
-        prompts=[prompt_tokens], max_tokens=[32], samplers=[sampler],
+        prompts=[prompt_tokens],
+        max_tokens=[32],
+        samplers=[sampler],
     )
     prompt_res, gen_res = bg.next()
     print(f"Prefill done: {len(prompt_res)} responses")
@@ -80,7 +86,9 @@ def test_llm():
                 detok.finalize()
                 text = detok.last_segment
                 tok_s = len(all_tokens) / elapsed if elapsed > 0 else 0
-                print(f"Generated {len(all_tokens)} tokens in {elapsed:.2f}s ({tok_s:.1f} tok/s)")
+                print(
+                    f"Generated {len(all_tokens)} tokens in {elapsed:.2f}s ({tok_s:.1f} tok/s)"
+                )
                 print(f"Text: {repr(text[:200])}")
                 print(f"Finish: {r.finish_reason}")
                 break
@@ -103,7 +111,7 @@ def test_tts():
 
     t0 = time.time()
     model = tts_load(MODELS["tts"])
-    print(f"TTS model loaded in {time.time()-t0:.1f}s")
+    print(f"TTS model loaded in {time.time() - t0:.1f}s")
 
     text = "Hello, this is a test of text to speech synthesis."
     instruct = "A warm female voice with clear pronunciation"
@@ -115,6 +123,7 @@ def test_tts():
     audio_chunks = []
     for result in results:
         import numpy as np
+
         audio_chunks.append(np.array(result.audio))
     elapsed = time.time() - t0
 
@@ -126,7 +135,7 @@ def test_tts():
     sample_rate = getattr(model, "sample_rate", 24000)
     duration = len(audio) / sample_rate
     print(f"Audio: {duration:.2f}s, {len(audio)} samples, {sample_rate}Hz")
-    print(f"Generation time: {elapsed:.2f}s (RTF: {elapsed/duration:.2f}x)")
+    print(f"Generation time: {elapsed:.2f}s (RTF: {elapsed / duration:.2f}x)")
 
     print("PASS: TTS\n")
     return True
@@ -147,7 +156,7 @@ def test_asr():
 
     t0 = time.time()
     model = stt_load(MODELS["asr"])
-    print(f"ASR model loaded in {time.time()-t0:.1f}s")
+    print(f"ASR model loaded in {time.time() - t0:.1f}s")
 
     # Generate a simple WAV file with silence for testing
     sample_rate = 16000
@@ -157,19 +166,19 @@ def test_asr():
     buf = io.BytesIO()
     pcm = (samples * 32767).astype(np.int16)
     num_frames = len(pcm)
-    buf.write(b'RIFF')
-    buf.write(struct.pack('<I', 36 + num_frames * 2))
-    buf.write(b'WAVE')
-    buf.write(b'fmt ')
-    buf.write(struct.pack('<I', 16))
-    buf.write(struct.pack('<H', 1))
-    buf.write(struct.pack('<H', 1))
-    buf.write(struct.pack('<I', sample_rate))
-    buf.write(struct.pack('<I', sample_rate * 2))
-    buf.write(struct.pack('<H', 2))
-    buf.write(struct.pack('<H', 16))
-    buf.write(b'data')
-    buf.write(struct.pack('<I', num_frames * 2))
+    buf.write(b"RIFF")
+    buf.write(struct.pack("<I", 36 + num_frames * 2))
+    buf.write(b"WAVE")
+    buf.write(b"fmt ")
+    buf.write(struct.pack("<I", 16))
+    buf.write(struct.pack("<H", 1))
+    buf.write(struct.pack("<H", 1))
+    buf.write(struct.pack("<I", sample_rate))
+    buf.write(struct.pack("<I", sample_rate * 2))
+    buf.write(struct.pack("<H", 2))
+    buf.write(struct.pack("<H", 16))
+    buf.write(b"data")
+    buf.write(struct.pack("<I", num_frames * 2))
     buf.write(pcm.tobytes())
     wav_bytes = buf.getvalue()
 
@@ -182,11 +191,12 @@ def test_asr():
     result = model.generate(tmp.name)
     elapsed = time.time() - t0
 
-    text = result.text if hasattr(result, 'text') else str(result)
+    text = result.text if hasattr(result, "text") else str(result)
     print(f"Transcription: {repr(text[:200])}")
     print(f"Time: {elapsed:.2f}s")
 
     import os
+
     os.unlink(tmp.name)
 
     print("PASS: ASR\n")
@@ -208,7 +218,9 @@ def test_vlm():
     async def _test():
         t0 = time.time()
         await engine.start()
-        print(f"VLM engine loaded in {time.time()-t0:.1f}s (vision={engine.has_vision})")
+        print(
+            f"VLM engine loaded in {time.time() - t0:.1f}s (vision={engine.has_vision})"
+        )
 
         # Text-only generation
         t0 = time.time()
@@ -240,17 +252,21 @@ def test_vlm():
             # URL needs no filesystem access and exercises the real inline path.
             _buf = io.BytesIO()
             img.save(_buf, format="PNG")
-            _data_url = "data:image/png;base64," + base64.b64encode(_buf.getvalue()).decode()
+            _data_url = (
+                "data:image/png;base64," + base64.b64encode(_buf.getvalue()).decode()
+            )
 
             t0 = time.time()
             result = await engine.generate(
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Describe this image briefly."},
-                        {"type": "image_url", "image_url": {"url": _data_url}},
-                    ],
-                }],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Describe this image briefly."},
+                            {"type": "image_url", "image_url": {"url": _data_url}},
+                        ],
+                    }
+                ],
                 max_tokens=64,
                 temperature=0.5,
             )
@@ -294,7 +310,7 @@ def test_image():
     async def _test():
         t0 = time.time()
         await engine.start()
-        print(f"Image pipeline loaded in {time.time()-t0:.1f}s")
+        print(f"Image pipeline loaded in {time.time() - t0:.1f}s")
 
     import asyncio
 
@@ -314,7 +330,7 @@ def test_image():
         print("Steps: 4, Size: 512x512")
 
         # Verify it's a valid PNG
-        assert png_bytes[:4] == b'\x89PNG', "Not a valid PNG"
+        assert png_bytes[:4] == b"\x89PNG", "Not a valid PNG"
         print("Valid PNG confirmed")
 
         await engine.stop()
@@ -338,7 +354,7 @@ def test_llm_engine():
         engine = BatchedEngine(MODELS["llm"])
         t0 = time.time()
         await engine.start()
-        print(f"Engine loaded in {time.time()-t0:.1f}s")
+        print(f"Engine loaded in {time.time() - t0:.1f}s")
 
         # Non-streaming
         t0 = time.time()
@@ -350,7 +366,9 @@ def test_llm_engine():
         elapsed = time.time() - t0
         print(f"Generate: {elapsed:.2f}s")
         print(f"Text: {repr(out.text[:200])}")
-        print(f"Finish: {out.finish_reason}, Prompt: {out.prompt_tokens}, Output: {out.completion_tokens}")
+        print(
+            f"Finish: {out.finish_reason}, Prompt: {out.prompt_tokens}, Output: {out.completion_tokens}"
+        )
         assert out.text.strip(), "empty completion"
 
         # Streaming
@@ -377,17 +395,30 @@ def test_llm_engine():
 
 def main():
     parser = argparse.ArgumentParser(description="Test all modalities")
-    parser.add_argument("--only", nargs="+", help="Only test these modalities", default=None)
-    parser.add_argument("--no-isolate", action="store_true",
-                        help="Run all modalities in ONE process (legacy; can OOM/crash "
-                             "a 36GB Mac when co-loading 30B/diffusion models)")
+    parser.add_argument(
+        "--only", nargs="+", help="Only test these modalities", default=None
+    )
+    parser.add_argument(
+        "--no-isolate",
+        action="store_true",
+        help="Run all modalities in ONE process (legacy; can OOM/crash "
+        "a 36GB Mac when co-loading 30B/diffusion models)",
+    )
     parser.add_argument("--_child", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--settle", type=float, default=20.0,
-                        help="Seconds to wait between isolated modalities (GPU/mem settle)")
-    parser.add_argument("--crash-cooldown", type=float, default=150.0,
-                        help="GPU cooldown (s) before retrying a modality that died with "
-                             "a native signal. The 30B-Omni Metal driver hang can persist "
-                             "past 75s in back-to-back runs, so default 150s.")
+    parser.add_argument(
+        "--settle",
+        type=float,
+        default=20.0,
+        help="Seconds to wait between isolated modalities (GPU/mem settle)",
+    )
+    parser.add_argument(
+        "--crash-cooldown",
+        type=float,
+        default=150.0,
+        help="GPU cooldown (s) before retrying a modality that died with "
+        "a native signal. The 30B-Omni Metal driver hang can persist "
+        "past 75s in back-to-back runs, so default 150s.",
+    )
     args = parser.parse_args()
 
     tests = {
@@ -419,8 +450,16 @@ def main():
         results = {}
         names = list(tests.keys())
         for i, name in enumerate(names):
-            print(f"\n{'#'*60}\n# isolated modality {i+1}/{len(names)}: {name}\n{'#'*60}")
-            _cmd = [sys.executable, os.path.abspath(__file__), "--only", name, "--_child"]
+            print(
+                f"\n{'#' * 60}\n# isolated modality {i + 1}/{len(names)}: {name}\n{'#' * 60}"
+            )
+            _cmd = [
+                sys.executable,
+                os.path.abspath(__file__),
+                "--only",
+                name,
+                "--_child",
+            ]
             _env = {**os.environ, "PYTHONPATH": os.environ.get("PYTHONPATH", ".")}
             rc = subprocess.run(_cmd, env=_env).returncode
             # a NATIVE-SIGNAL death (rc < 0, e.g. signal-6 from a Metal
@@ -431,12 +470,19 @@ def main():
             # 180s retry recovered it in one run but not another (the driver sometimes
             # needs longer), so try up to 3 times (e.g. 180s, 300s, 420s) before recording
             # a failure. Logic exits (rc>0) are NEVER retried.
-            _retry_cds = [args.crash_cooldown, args.crash_cooldown + 120, args.crash_cooldown + 240]
+            _retry_cds = [
+                args.crash_cooldown,
+                args.crash_cooldown + 120,
+                args.crash_cooldown + 240,
+            ]
             for _attempt, _cd in enumerate(_retry_cds, 1):
                 if rc >= 0:
                     break
-                print(f"  modality {name} died with signal {-rc} (Metal GPU hang) — "
-                      f"cooldown {_cd:.0f}s + retry {_attempt}/{len(_retry_cds)}", flush=True)
+                print(
+                    f"  modality {name} died with signal {-rc} (Metal GPU hang) — "
+                    f"cooldown {_cd:.0f}s + retry {_attempt}/{len(_retry_cds)}",
+                    flush=True,
+                )
                 time.sleep(_cd)
                 rc = subprocess.run(_cmd, env=_env).returncode
             results[name] = "PASS" if rc == 0 else f"FAIL (exit {rc})"
@@ -454,9 +500,10 @@ def main():
 
     results = {}
     for name, (desc, test_fn) in tests.items():
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         # Force GC between tests to free memory for large models
         import gc
+
         gc.collect()
         try:
             ok = test_fn()
