@@ -6,7 +6,7 @@ comments, x_yunshu stats, queue headers, /v1/requests, cancel-by-id, warmup and 
 show up. Run it through the GPU queue with the SDK venv:
 
     scripts/dev/gpuq run --priority 1 --timeout 5 --stall 2 --label api-ext-smoke -- \
-        /Volumes/P5Plus/yunshu-test-cache/api-ext/sdkvenv/bin/python \
+        $SDK_VENV/bin/python \
         scripts/realmodel/smoke_api_extensions.py
 
 The server is always killed with SIGKILL on exit.
@@ -28,10 +28,11 @@ import httpx
 ROOT = Path(__file__).resolve().parents[2]
 PY = os.environ.get(
     "YUNSHU_SMOKE_SERVER_PY",
-    "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python",
+    str(ROOT / ".venv/bin/python"),
 )
 MODEL = os.environ.get(
-    "YUNSHU_SMOKE_MODEL", "/Volumes/P5Plus/models/Qwen3.5-0.8B-MLX-bf16"
+    "YUNSHU_SMOKE_MODEL",
+    str(Path("~/.yunshu/models/Qwen3.5-0.8B-MLX-bf16").expanduser()),
 )
 PORT = 18991
 BASE = f"http://127.0.0.1:{PORT}"

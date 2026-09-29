@@ -1,6 +1,7 @@
 #!/bin/zsh
 # GPU capability microbenchmarks in one locked session (run via gpu_run.sh from the repo root).
-PY=/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python
+[ -f scripts/research/local.env ] && source scripts/research/local.env
+PY=${YUNSHU_PY:-$PWD/.venv/bin/python}
 export PYTHONPATH=$PWD/python:$PWD/scripts/research/hw
 H=scripts/research/hw
 $PY $H/gpu_compute.py --tag nax

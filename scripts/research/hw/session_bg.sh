@@ -1,10 +1,11 @@
 #!/bin/zsh
 # ANE / CPU probes and their interference with GPU decode, in one locked session.
-PY=/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python
-ANE=/Volumes/P5Plus/yunshu-test-envs/ane/bin/python
+[ -f scripts/research/local.env ] && source scripts/research/local.env
+PY=${YUNSHU_PY:-$PWD/.venv/bin/python}
+ANE=${YUNSHU_ANE_PY:?set YUNSHU_ANE_PY in scripts/research/local.env}
 export PYTHONPATH=$PWD/python:$PWD/scripts/research/hw
 H=scripts/research/hw
-W=/Volumes/P5Plus/yunshu-test-cache/ane
+W=${YUNSHU_ANE_WORK:-$HOME/.cache/yunshu/ane}
 $PY $H/cpu_probe.py
 $ANE $H/ane_probe.py --cases linear,layer --units ne,cpu --iters 30 --ms 1,8,16 --precs fp16,int8,pal4
 $ANE $H/ane_probe.py --cases layers5 --units ne --iters 20 --ms 8 --precs int8,pal4
