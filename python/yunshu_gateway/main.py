@@ -905,6 +905,7 @@ def create_app() -> FastAPI:
         models,
         realtime,
         scoring,
+        stream_ws,
         tokenize,
     )
     from .routers import monitoring as gw_monitoring
@@ -945,6 +946,7 @@ def create_app() -> FastAPI:
     app.include_router(cancel_mod.router, prefix="/v1")
     app.include_router(ocr_mod.router)
     app.include_router(realtime.router)
+    app.include_router(stream_ws.router)
     from .routers import ollama as ollama_mod
 
     app.include_router(ollama_mod.router)  # Ollama-compatible /api/*

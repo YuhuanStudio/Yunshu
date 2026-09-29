@@ -65,6 +65,12 @@ def serve(
         "network (set --auth-token then).",
     ),
     port: int = typer.Option(8000, "--port", "-p", help="Bind port."),
+    uds: str | None = typer.Option(
+        None,
+        "--uds",
+        help="Serve on this Unix domain socket instead of TCP (same app; "
+        "curl --unix-socket PATH http://localhost/v1/models). --host/--port are ignored.",
+    ),
     workers: int = typer.Option(1, "--workers", "-w", help="Number of workers."),
     max_memory: str | None = typer.Option(
         None,
@@ -185,6 +191,7 @@ def serve(
         ("YUNSHU_DRAIN_TIMEOUT", drain_timeout),
         ("YUNSHU_KEEP_ALIVE_TIMEOUT", keep_alive_timeout),
         ("YUNSHU_MAX_REQUEST_SIZE", max_request_size),
+        ("YUNSHU_UDS", os.path.abspath(os.path.expanduser(uds)) if uds else None),
     ):
         if value is not None:
             overrides[key] = value
@@ -284,10 +291,19 @@ def serve(
         )
         workers = 1
 
+    uds_path = settings.get("YUNSHU_UDS")
+    if uds_path:
+        console.print(f"[bold]Unix socket:[/] {uds_path}")
+        # A stale socket file from a crashed run would make bind fail.
+        import contextlib
+        import stat
+
+        with contextlib.suppress(OSError):
+            if stat.S_ISSOCK(os.stat(uds_path).st_mode):
+                os.unlink(uds_path)
     uvicorn.run(
         "yunshu_gateway.main:app",
-        host=host,
-        port=port,
+        **({"uds": uds_path} if uds_path else {"host": host, "port": port}),
         workers=workers,
         log_level=log_level,
         reload=reload,
@@ -355,7 +371,8 @@ def _print_startup_banner(
         table.add_row("Model", model)
     if models_dir:
         table.add_row("Models Dir", models_dir)
-    table.add_row("Address", f"http://{host}:{port}")
+    _uds = settings.get("YUNSHU_UDS")
+    table.add_row("Address", f"unix:{_uds}" if _uds else f"http://{host}:{port}")
     table.add_row("Completion Batch", str(completion_batch))
     if voice_on:
         table.add_row("Voice", "[bold green]native speech-to-speech (omni) ON[/]")

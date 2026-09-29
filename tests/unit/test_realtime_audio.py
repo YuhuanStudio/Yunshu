@@ -339,6 +339,8 @@ class TestSessionConfig:
         config = SessionConfig()
         d = config.to_dict()
         expected_keys = {
+            "id",
+            "object",
             "model",
             "modalities",
             "voice",
