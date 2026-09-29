@@ -527,16 +527,15 @@ class VLMBatchRunner:
         job.stats.t_admit = time.perf_counter()
         job.stats.prefill_total = len(job.ids)
 
-        if self.driver is not None and job.prompt_kwargs is None:
-            self._admit_driver(job)
-            return
-
         use_apc = self.apc_manager is not None
         if use_apc and self._apc_admit is not None:
             try:
                 use_apc = bool(self._apc_admit(mx.array(job.ids)))
             except Exception:
                 logger.debug("APC admission check failed; using APC", exc_info=True)
+        if self.driver is not None and job.prompt_kwargs is None:
+            self._admit_driver(job, use_apc)
+            return
         job.stats.used_apc = use_apc
         spec = job.use_draft and alone and self._spec is None
         if not spec:
@@ -595,10 +594,10 @@ class VLMBatchRunner:
             group.sampler.add(uid, job.sampling)
 
     # ── round driver ────────────────────────────────────────────────────
-    def _admit_driver(self, job: _Job) -> None:
+    def _admit_driver(self, job: _Job, use_apc: bool) -> None:
         from .round_driver.driver import Request
 
-        self.driver.add(
+        hit = self.driver.add(
             Request(
                 ids=job.ids,
                 max_tokens=job.max_tokens,
@@ -609,11 +608,15 @@ class VLMBatchRunner:
                 draft=job.allow_draft,
                 budget=job.budget,
                 handle=job,
+                extra_hash=self.apc_semantic_hash or 0,
+                use_apc=use_apc,
             )
         )
         job.start = job.stats.t_admit = time.perf_counter()
-        job.stats.prefill_total = len(job.ids)
-        job.stats.used_apc = False
+        hit = int(hit or 0)
+        job.stats.cached_tokens = hit
+        job.stats.prefill_total = len(job.ids) - hit
+        job.stats.used_apc = use_apc
         job.stats.used_draft = bool(job.allow_draft and self.driver.head is not None)
         if job.stats.used_draft:
             job.stats.spec_mode = "mtp"
@@ -759,7 +762,7 @@ class VLMBatchRunner:
             for row in self.driver.rows:
                 st = row.req.handle.stats
                 if st.t_first == 0.0:
-                    st.prefill_done = min(row.done, st.prefill_total)
+                    st.prefill_done = min(row.done - row.hit, st.prefill_total)
         except Exception:
             logger.debug("driver prefill progress unavailable", exc_info=True)
 

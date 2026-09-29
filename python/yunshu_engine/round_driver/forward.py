@@ -20,6 +20,8 @@ from typing import Any
 import mlx.core as mx
 import mlx.nn as nn
 
+EVAL_EVERY = 4  # layers between evaluations of a prefill forward
+
 
 @dataclass
 class Segment:
@@ -102,9 +104,32 @@ def _slices(segments: list[Segment]) -> list[tuple[int, int]]:
     return out
 
 
+def _project(lin, x: mx.array, spans: list[tuple[int, int]]) -> mx.array:
+    """``lin`` over the packed tokens, one matmul per segment: a segment's
+    result is what it would be as the only segment of a step. Lane projections
+    run MLX's quantized matmul on a transient stock-layout weight
+    (``LaneLinear.prefill``); anything else is called per segment."""
+    parts = [x[:, s:e] for s, e in spans]
+    if hasattr(lin, "prefill"):
+        return mx.concatenate(lin.prefill(parts), axis=1)
+    return mx.concatenate([lin(p) for p in parts], axis=1)
+
+
+def _mlp(mlp, x: mx.array, spans: list[tuple[int, int]]) -> mx.array:
+    from mlx_vlm.models.qwen3_5.language import swiglu
+
+    h = swiglu(_project(mlp.gate_proj, x, spans), _project(mlp.up_proj, x, spans))
+    return _project(mlp.down_proj, h, spans)
+
+
 def forward(language_model: Any, segments: list[Segment]) -> mx.array:
     """Run prompt ``segments`` through the decoder in one packed forward;
-    returns the final-norm hidden states ``[N, D]`` in segment order."""
+    returns the final-norm hidden states ``[N, D]`` in segment order.
+
+    Every weight-bearing op runs once per segment, so a segment's hidden
+    states depend only on its own tokens and caches (never on which prompts
+    share the step); the layer loop stays outside so a lane projection
+    untiles its weight once for all segments of the step."""
     model = language_model.model
     spans = _slices(segments)
     tokens = mx.concatenate([s.tokens for s in segments]).astype(mx.int32)
@@ -113,23 +138,31 @@ def forward(language_model: Any, segments: list[Segment]) -> mx.array:
         xn = layer.input_layernorm(x)
         if layer.is_linear:
             g = layer.linear_attn
-            qkv, z = g.in_proj_qkv(xn), g.in_proj_z(xn)
-            b, a = g.in_proj_b(xn), g.in_proj_a(xn)
+            qkv, z = (
+                _project(g.in_proj_qkv, xn, spans),
+                _project(g.in_proj_z, xn, spans),
+            )
+            b, a = _project(g.in_proj_b, xn, spans), _project(g.in_proj_a, xn, spans)
             parts = [
                 _gdn_mix(g, qkv[:, s:e], z[:, s:e], b[:, s:e], a[:, s:e], seg.cache[i])
                 for seg, (s, e) in zip(segments, spans, strict=True)
             ]
-            r = g.out_proj(mx.concatenate(parts, axis=1))
+            r = _project(g.out_proj, mx.concatenate(parts, axis=1), spans)
         else:
             at = layer.self_attn
-            q, k, v = at.q_proj(xn), at.k_proj(xn), at.v_proj(xn)
+            q = _project(at.q_proj, xn, spans)
+            k, v = _project(at.k_proj, xn, spans), _project(at.v_proj, xn, spans)
             parts = [
                 _attention_mix(at, q[:, s:e], k[:, s:e], v[:, s:e], seg, seg.cache[i])
                 for seg, (s, e) in zip(segments, spans, strict=True)
             ]
-            r = at.o_proj(mx.concatenate(parts, axis=1))
+            r = _project(at.o_proj, mx.concatenate(parts, axis=1), spans)
         h = x + r
-        x = h + layer.mlp(layer.post_attention_layernorm(h))
+        x = h + _mlp(layer.mlp, layer.post_attention_layernorm(h), spans)
+        # transient stock weights are freed every few layers (the graph would
+        # otherwise hold every layer's)
+        if i % EVAL_EVERY == EVAL_EVERY - 1:
+            mx.eval(x)
     return model.norm(x)[0]
 
 

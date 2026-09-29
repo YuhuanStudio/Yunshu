@@ -230,7 +230,9 @@ def test_every_step_evaluates_the_caches_it_advanced(tiny, monkeypatch):
 
     monkeypatch.setattr(drv.mx, "eval", spy)
     d = drv.RoundDriver(lm, drafter=drafter, stop_tokens=set())
-    long_prompt = [(3 * i + 1) % 500 for i in range(5 * drv.CHUNK + 7)]
+    long_prompt = [
+        (3 * i + 1) % 500 for i in range(drv.IDLE_BUDGET + 3 * drv.CHUNK + 7)
+    ]
     d.add(drv.Request(long_prompt, 2, handle=0))
     row = d.rows[0]
     prefill_steps = 0
