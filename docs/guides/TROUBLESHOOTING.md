@@ -57,10 +57,11 @@ automatic drafter cannot be loaded, the server logs a warning and falls back to 
 context window, or `max_tokens` is above the server's limit (131072). Shorten the prompt or lower
 `max_tokens`; the message states both numbers.
 
-**Stopping the server.** Ctrl-C or `kill` (SIGINT / SIGTERM) stops accepting new requests, lets
-running ones finish for up to the shutdown grace period, then exits. A client that disconnects
-mid-request cancels its generation at the next chunk (during prefill, at most about 2 s of work on a
-27B model).
+**Stopping the server.** Ctrl-C or `kill` (SIGINT / SIGTERM) stops accepting new requests and lets
+running ones finish for `YUNSHU_DRAIN_TIMEOUT` seconds (default 30); after that the remaining
+connections are cut, their generation stops and the server exits. A client that disconnects
+mid-request, streaming or not, cancels its generation at the next chunk: during prefill the next
+request waited 0.8 s on a 0.8B model and 1.9 s on Qwen3.8-27B (one 2048-token chunk).
 
 **429 `Rate limit exceeded`.** Rate limiting is off by default. It is on only if
 `YUNSHU_RATE_LIMIT_RPM` is set above 0.

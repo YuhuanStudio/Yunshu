@@ -339,3 +339,13 @@ def test_parse_launchctl_print():
         "state": "running",
         "last_exit_code": "(never exited)",
     }
+
+
+def test_serve_bounds_graceful_shutdown_by_the_drain_timeout(tmp_path, monkeypatch):
+    import uvicorn
+
+    seen = {}
+    monkeypatch.setattr(uvicorn, "run", lambda *a, **k: seen.update(k))
+    monkeypatch.setenv("YUNSHU_DRAIN_TIMEOUT", "7")
+    runner.invoke(app, ["serve", "-m", str(tmp_path / "missing")])
+    assert seen["timeout_graceful_shutdown"] == 7

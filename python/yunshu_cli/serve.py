@@ -293,6 +293,10 @@ def serve(
         reload=reload,
         factory=False,
         timeout_keep_alive=settings.get("YUNSHU_KEEP_ALIVE_TIMEOUT"),
+        # Ctrl-C / SIGTERM: in-flight requests get this long to finish, then
+        # their connections are cancelled (which stops their GPU work) and the
+        # server exits. Without it uvicorn waits for open streams forever.
+        timeout_graceful_shutdown=int(settings.get("YUNSHU_DRAIN_TIMEOUT")) or None,
         # NB: uvicorn.run has no request-size limit kwarg; the limit is enforced
         # by the gateway middleware via YUNSHU_MAX_REQUEST_SIZE (set above).
         server_header="Yunshu" if server_header else None,

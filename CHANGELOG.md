@@ -68,6 +68,18 @@ match.
   streaming, limits, mixed concurrent features, 500-request memory, SIGTERM / SIGINT with requests
   in flight).
 
+### Fixed
+
+- A non-streaming request whose client disconnected kept the GPU busy to the end of its prefill or
+  `max_tokens`: Starlette's `is_disconnected()` never fires behind `BaseHTTPMiddleware`. A
+  pure-ASGI watcher now records the disconnect and the request's row is dropped at the next chunk
+  (prefill of a 60K-token prompt: next request waited 4.0 s before, 0.8 s after, on a 0.8B model).
+- JSON-schema, regex and grammar constraints no longer allow special tokens (`<|im_end|>`) inside
+  a string: a model that chose one ended the response mid-string (Qwen3.5-0.8B stopped at
+  `{"name": "Alice`).
+- Ctrl-C / SIGTERM with streams in flight waited for them forever (a 27B stream takes minutes);
+  connections are now cut after `YUNSHU_DRAIN_TIMEOUT` (default 30 s) and the server exits.
+
 ### Changed
 
 - A model that fails to load (missing path, truncated weights, out of memory) no longer stops

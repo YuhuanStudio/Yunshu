@@ -455,7 +455,7 @@ def shutdown(model: str, sig, name):
     t0 = time.time()
     s.proc.send_signal(sig)
     try:
-        code = s.proc.wait(45)
+        code = s.proc.wait(80)
     except subprocess.TimeoutExpired:
         code = None
         s.proc.kill()
@@ -540,6 +540,12 @@ def main():
             if not s.wait_ready():
                 record("main/start", False, log=s.tail())
             else:
+                line = [
+                    ln
+                    for ln in Path(s.log.name).read_text().splitlines()
+                    if "Speculative decoding" in ln or "batch runner" in ln
+                ]
+                record("main/speculative_path", True, log=line[-2:])
                 for name, fn in (
                     ("disconnect", disconnect),
                     ("limits", limits),
