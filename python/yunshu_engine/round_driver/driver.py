@@ -371,7 +371,6 @@ class RoundDriver:
         started = time.perf_counter()
         rows = list(self.batch.rows)
         windows = [[r.pending, *([] if r.force else r.drafts)] for r in rows]
-        T = max(len(w) for w in windows)
         hidden = self.batch.forward(windows)
         items, at = [], 0
         for r, w in zip(rows, windows, strict=True):

@@ -288,7 +288,6 @@ class DecodeBatch:
         ``[N, D]`` (the rows' tokens back to back, ``N = sum(len(w))``). KV is appended and the GDN state advanced optimistically
         (all of every window kept); ``commit`` corrects rows that keep less."""
         model = self.lm.model
-        B = len(self.rows)
         lens = [len(w) for w in windows]
         T = max(lens)
         if T > MAX_WINDOW:

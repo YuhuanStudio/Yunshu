@@ -254,7 +254,7 @@ def test_prefill_chunk_sets_the_span_a_decoding_row_waits_behind(tiny, monkeypat
     real_forward = drv.forward
 
     def spy(model, segs):
-        steps.append([s.length for s in segs if not s.decode])
+        steps.append([s.length for s in segs])
         return real_forward(model, segs)
 
     monkeypatch.setattr(drv, "forward", spy)
