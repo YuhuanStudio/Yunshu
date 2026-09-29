@@ -206,8 +206,8 @@ def _detect_model_type(model_path: str) -> ModelType:
     ) or model_type in ("ti2v", "t2v", "i2v", "wan", "ltx", "ltxv"):
         # Wan / LTX video diffusion: config model_type is the TASK (ti2v/t2v/i2v),
         # not an engine name, and the dir name (Wan2.2-TI2V-5B) lacks the literal
-        # "video" — so match the task codes too. VideoEngine._detect_model_type
-        # then maps them to its wan_2_2 / ltx_2 dispatch.
+        # "video" — so match the task codes too. Video is not served; the model is
+        # recognised so loading it fails with a clear message.
         return ModelType.VIDEO
     if any(k in name_lower for k in ("wan2.", "-wan-", "ltx-video", "ltxvideo")):
         return ModelType.VIDEO
@@ -312,7 +312,7 @@ async def instantiate_engine(
 ) -> Any:
     """Create AND start the engine matching ``model_type``. Shared by multi-model
     loading and single-model serving so every modality (TTS / ASR / VLM / IMAGE_GEN /
-    EMBEDDING / RERANKER / STS / VIDEO / OCR / LLM) is built with the right engine
+    EMBEDDING / RERANKER / OCR / LLM) is built with the right engine
     class — not just the few the single-model startup used to special-case."""
     if model_type == ModelType.TTS:
         from .audio_engine import TTSEngine
@@ -344,18 +344,12 @@ async def instantiate_engine(
         engine = VLEmbeddingEngine(model_path, config)
         await engine.start()
         return engine
-    if model_type == ModelType.STS:
-        from .sts_engine import STSEngine
-
-        engine = STSEngine(model_path, config)
-        engine.start()
-        return engine
-    if model_type == ModelType.VIDEO:
-        from .video_engine import VideoEngine
-
-        engine = VideoEngine(model_path, config)
-        engine.start()
-        return engine
+    if model_type in (ModelType.STS, ModelType.VIDEO):
+        raise RuntimeError(
+            f"'{model_path}' is a {model_type.name.lower()} model; speech-to-speech and "
+            "video generation are not supported (image generation, LLM, VLM, ASR, TTS, "
+            "OCR and embedding models are)."
+        )
     if model_type == ModelType.OCR:
         from .ocr_engine import OCREngine
 

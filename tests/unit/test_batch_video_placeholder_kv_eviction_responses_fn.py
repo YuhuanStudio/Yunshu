@@ -15,28 +15,6 @@ from __future__ import annotations
 import inspect
 
 
-def test_placeholder_tagged_fallback():
-    from yunshu_engine import video_pipeline
-
-    src = inspect.getsource(video_pipeline)
-    assert "_has_real_model = self._model is not None and callable(self._model)" in src
-    assert "_placeholder_fallback" in src
-
-
-def test_native_method_trips_503_guard():
-    # the fallback method must contain "fallback" so the router's `"fallback" in method` 503
-    # guard fires; and still start with wan_native (existing test contract).
-    m = "wan_native_euler_placeholder_fallback"
-    assert "fallback" in m and m.startswith("wan_native") and "euler" in m
-
-
-def test_stream_native_falls_back_on_non_callable():
-    from yunshu_engine import video_engine
-
-    src = inspect.getsource(video_engine)
-    assert 'not callable(getattr(self._native_pipeline, "_model", None))' in src
-
-
 def test_evict_under_pressure_passes_exclude():
     from yunshu_engine import kv_prefix_cache
 

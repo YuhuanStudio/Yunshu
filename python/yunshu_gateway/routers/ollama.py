@@ -91,6 +91,18 @@ def _details(model_id: str) -> dict:
     }
 
 
+def _card_details(m: dict) -> tuple[dict, int]:
+    """(details, size in bytes) from a `/v1/models` item; name heuristics when it has no card."""
+    card = m.get("yunshu")
+    if not isinstance(card, dict):
+        return _details(m["id"]), 0
+    from ..model_card_formats import ollama_show
+
+    return ollama_show(card)["details"], int(
+        (card.get("memory") or {}).get("weights_bytes") or 0
+    )
+
+
 def _digest(model_id: str) -> str:
     return hashlib.sha256(model_id.encode()).hexdigest()
 
@@ -441,6 +453,7 @@ async def tags(request: Request):
     out = []
     for m in await _list_models(request):
         mid = m["id"]
+        details, size = _card_details(m)
         out.append(
             {
                 "name": mid,
@@ -450,9 +463,9 @@ async def tags(request: Request):
                 )
                 .isoformat()
                 .replace("+00:00", "Z"),
-                "size": 0,
+                "size": size,
                 "digest": _digest(mid),
-                "details": _details(mid),
+                "details": details,
             }
         )
     return {"models": out}
@@ -463,18 +476,19 @@ async def tags(request: Request):
 async def ps(request: Request):
     out = []
     for m in await _list_models(request):
-        if m.get("loaded") is False:
+        if m.get("loaded") is False or m.get("state") == "not-loaded":
             continue
         mid = m["id"]
+        details, size = _card_details(m)
         out.append(
             {
                 "name": mid,
                 "model": mid,
-                "size": 0,
+                "size": size,
                 "digest": _digest(mid),
-                "details": _details(mid),
+                "details": details,
                 "expires_at": "0001-01-01T00:00:00Z",
-                "size_vram": 0,
+                "size_vram": size,
             }
         )
     return {"models": out}
@@ -490,18 +504,22 @@ async def show(request: Request):
     if not found:
         raise OllamaError(404, f"model '{model}' not found")
     mid = found[0]["id"]
-    caps = ["completion"]
-    if "embed" in mid.lower():
-        caps = ["embedding"]
-    return {
-        "modelfile": f"FROM {mid}\n",
-        "parameters": "",
-        "template": "",
-        "details": _details(mid),
-        "model_info": {"general.architecture": _details(mid)["family"]},
-        "capabilities": caps,
-        "modified_at": _now(),
-    }
+    card = found[0].get("yunshu")
+    if not isinstance(card, dict):  # upstream without model cards
+        return {
+            "modelfile": f"FROM {mid}\n",
+            "parameters": "",
+            "template": "",
+            "details": _details(mid),
+            "model_info": {"general.architecture": _details(mid)["family"]},
+            "capabilities": ["embedding"] if "embed" in mid.lower() else ["completion"],
+            "modified_at": _now(),
+        }
+    from ..model_card_formats import ollama_show
+
+    out = ollama_show(card)
+    out["modified_at"] = _now()
+    return out
 
 
 @router.get("/version")

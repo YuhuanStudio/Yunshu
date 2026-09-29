@@ -11,6 +11,7 @@ Supports:
 import json
 import logging
 import time
+import types
 import uuid
 from collections.abc import AsyncIterator
 
@@ -436,6 +437,10 @@ async def create_completion(req: CompletionRequest, request: Request):
             raise HTTPException(
                 status_code=404, detail=f"Model '{req.model}' not found"
             ) from None
+
+    from ..model_guards import reject_embedding_only
+
+    reject_embedding_only(engine, req.model)
 
     # OpenAI accepts str | list[str] | list[int] | list[list[int]] for prompt.
     # Normalize into a list of string prompts; each becomes its own choice.
@@ -1529,7 +1534,12 @@ def _format_logprobs(
         echo: Whether echo mode is enabled (shifts text_offset by prompt length).
         prompt: The prompt text, used for text_offset shift when echo=True.
     """
-    raw_logprobs = getattr(state, "logprobs", None)
+    # The VLM runner returns a plain dict, the other engines an object.
+    if isinstance(state, dict):
+        raw_logprobs = state.get("logprobs")
+        state = types.SimpleNamespace(**state)
+    else:
+        raw_logprobs = getattr(state, "logprobs", None)
     # Guard on type/length, not truthiness: the engine-loop/legacy paths can hand
     # back a raw mx.array, and `not <multi-element array>` raises ValueError.
     # Non-list formats → no logprobs rather than a 500.

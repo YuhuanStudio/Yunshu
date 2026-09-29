@@ -203,10 +203,8 @@ _add("YUNSHU_REALTIME_VAD_MODEL", "str", "mlx-community/silero-vad", "Silero VAD
 _add("YUNSHU_REALTIME_MAX_INPUT_AUDIO_BYTES", "int", 10 * 1024 * 1024, "Realtime: largest buffered input audio, in bytes.", "voice", minimum=1)
 _add("YUNSHU_REALTIME_MAX_CONVERSATION_ITEMS", "int", 1000, "Realtime: conversation items kept per session.", "voice", minimum=1)
 
-# ── image / video ──────────────────────────────────────────────────────
+# ── image ──────────────────────────────────────────────────────
 _add("YUNSHU_DIFFUSION_SCHEDULER", "enum", "", "Image generation sampler override ('' uses the pipeline's own).", "image-video", choices=("", "ddim", "dpm_plus_plus", "euler", "euler_ancestral", "lms"))
-_add("YUNSHU_VIDEO_LORA", "path", None, "LoRA adapter directory loaded with the video model.", "image-video")
-_add("YUNSHU_LTX_TEXT_ENCODER_REPO", "path", None, "LTX video: text-encoder repo when the model folder does not bundle one.", "image-video")
 
 # ── embeddings ─────────────────────────────────────────────────────────
 _add("YUNSHU_ANE_EMBEDDINGS", "bool", False, "Compute embeddings on the Apple Neural Engine via CoreML when available.", "embeddings")

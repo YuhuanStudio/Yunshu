@@ -1773,6 +1773,10 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                 status_code=404, detail=f"Model '{req.model}' not found"
             ) from None
 
+    from ..model_guards import reject_embedding_only
+
+    reject_embedding_only(engine, req.model)
+
     # Engines without a chat interface (OCR, ASR, TTS, image/video generation,
     # embeddings) get a clear 400 instead of an AttributeError mid-stream.
     if not any(

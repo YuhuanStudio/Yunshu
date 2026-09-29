@@ -113,6 +113,22 @@ class ConstraintProcessor:
         return self._mask(logits)
 
 
+class Fp32LogitsProcessor:
+    """Upcast logits to float32 so reported logprobs are exact.
+
+    ``logprobs = logits - logsumexp(logits)`` is computed in the model's dtype. In bf16
+    the logsumexp is rounded to about 0.1, so a near-certain token reads exactly 0.0
+    while its alternatives read -4.25 in the same row. Appended last, only for requests
+    that ask for logprobs (those already leave the fused greedy step).
+    """
+
+    def __call__(self, tokens: mx.array, logits: mx.array) -> mx.array:
+        return logits.astype(mx.float32)
+
+    def process_last_token(self, token: int, logits: mx.array) -> mx.array:
+        return logits.astype(mx.float32)
+
+
 def build_sampler(temperature: float, top_p: float, top_k: int, min_p: float):
     from mlx_lm.sample_utils import make_sampler
 
@@ -386,6 +402,8 @@ class VLMBatchRunner:
             and not logprobs
             and thinking_budget is None
         )
+        if logprobs:
+            processors.append(Fp32LogitsProcessor())
         budget = None
         if thinking_budget is not None:
             from mlx_vlm.utils import ThinkingBudgetCriteria

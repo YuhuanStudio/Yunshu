@@ -22,7 +22,6 @@ import warnings
 import numpy as np
 
 from yunshu_engine import audio_engine
-from yunshu_engine.sts_engine import STSEngine
 
 
 def _wav(data: bytes, sr=16000, ch=1, bps=16) -> bytes:
@@ -46,29 +45,6 @@ def test_audio_to_wav_bytes_guards_nan_inf():
             np.array([0.5, np.nan, np.inf, -np.inf, -0.5], dtype=np.float32), 16000
         )
     assert len(out) > 44  # valid WAV (header + data)
-
-
-def test_sts_load_audio_odd_length_no_crash():
-    e = STSEngine.__new__(STSEngine)
-    # 3-byte data chunk is odd for int16 — used to raise ValueError from frombuffer
-    samples, sr = e._load_audio(_wav(b"\x01\x02\x03"))
-    assert sr == 16000
-    assert len(samples) == 1  # truncated to the 2-byte boundary
-
-
-def test_sts_load_audio_misaligned_stereo_no_crash():
-    e = STSEngine.__new__(STSEngine)
-    # stereo (2ch) 16-bit: 6 bytes = 3 int16 = 1.5 frames → trailing partial frame dropped
-    samples, sr = e._load_audio(_wav(b"\x01\x02\x03\x04\x05\x06", ch=2))
-    assert len(samples) == 1  # 1 complete stereo frame after trimming
-
-
-def test_sts_encode_wav_guards_nan():
-    e = STSEngine.__new__(STSEngine)
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        out = e._encode_wav([0.5, float("nan"), float("inf"), -0.5], 16000)
-    assert len(out) > 44
 
 
 def test_vad_uses_32767_not_32768():

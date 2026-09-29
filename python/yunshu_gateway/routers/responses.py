@@ -1040,6 +1040,10 @@ async def create_response(req: ResponsesRequest, request: Request):
                 status_code=404, detail=f"Model '{req.model}' not found"
             ) from None
 
+    from ..model_guards import reject_embedding_only
+
+    reject_embedding_only(engine, req.model)
+
     # Reject prompts over the context window (400) or too large to prefill (413),
     # before generation (see chat.py).
     try:
