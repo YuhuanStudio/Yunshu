@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import httpx
@@ -14,7 +15,7 @@ from yunshu_gateway.main import create_app
 from yunshu_gateway.routers import models as models_router
 from yunshu_gateway.routers import ollama
 
-MODELS = Path("/Volumes/P5Plus/models")
+MODELS = Path(os.environ.get("YUNSHU_TEST_MODELS", "~/.yunshu/models")).expanduser()
 
 
 @pytest.fixture

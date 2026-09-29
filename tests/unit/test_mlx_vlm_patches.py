@@ -28,7 +28,7 @@ def test_fix1_audio_mask_key_accepted():
     assert getattr(omni.Model, "_yunshu_audio_mask_patched", False) is True
 
 
-def test_fix2_formatter_inserts_audio_token():
+def test_upstream_formatter_inserts_audio_token():
     """LIST_WITH_IMAGE_FIRST formatter must insert an audio placeholder."""
     apply_mlx_vlm_patches()
     from mlx_vlm.prompt_utils import MessageFormatter
@@ -41,7 +41,7 @@ def test_fix2_formatter_inserts_audio_token():
     assert "audio" in types
 
 
-def test_fix2_no_op_without_audio():
+def test_upstream_formatter_no_op_without_audio():
     """No audio token when num_audios == 0 (text/image-only unaffected)."""
     apply_mlx_vlm_patches()
     from mlx_vlm.prompt_utils import MessageFormatter
@@ -54,7 +54,7 @@ def test_fix2_no_op_without_audio():
     assert "audio" not in types
 
 
-def test_fix2_no_op_when_skip_audio_token():
+def test_upstream_formatter_no_op_when_skip_audio_token():
     apply_mlx_vlm_patches()
     from mlx_vlm.prompt_utils import MessageFormatter
 

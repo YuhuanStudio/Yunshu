@@ -14,7 +14,6 @@ actually landed on the ANE.
 
 import argparse
 import statistics
-import os
 import sys
 import time
 from pathlib import Path
@@ -191,12 +190,7 @@ def bench(model_path, M, units, iters):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument(
-        "--work",
-        default=os.path.expanduser(
-            os.environ.get("YUNSHU_ANE_WORK", "~/.cache/yunshu/ane")
-        ),
-    )
+    ap.add_argument("--work", default=os.environ.get("YUNSHU_ANE_WORK", "~/.cache/yunshu/ane"))
     ap.add_argument("--cases", default="linear,mlp,layer")
     ap.add_argument("--iters", type=int, default=30)
     ap.add_argument("--units", default="ne,gpu,cpu")

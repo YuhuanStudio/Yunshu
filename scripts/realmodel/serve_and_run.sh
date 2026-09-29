@@ -9,7 +9,7 @@ M=$1; P=$2; S=$3; shift 3
 ROOT=${0:A:h:h:h}
 cd "$ROOT" || exit 2
 export PYTHONPATH=$ROOT/python${OLLAMA_PYLIBS:+:$OLLAMA_PYLIBS}
-PY=${YUNSHU_PY:-/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python}
+PY=${YUNSHU_PY:-$ROOT/.venv/bin/python}
 LOG=${TMPDIR:-/tmp}/serve_and_run_$P.log
 $PY -m yunshu_cli serve -m "$M" -p "$P" > "$LOG" 2>&1 &
 SP=$!

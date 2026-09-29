@@ -8,7 +8,7 @@ source inspection and SKIPS — so this module is now a no-op there, and only st
 applies on an older mlx-vlm release that predates the merge (defence in depth).
 Remove the module entirely once the pinned/installed mlx-vlm is past the merge.
 
-Carries two fixes for the Qwen3-Omni audio path. Without them, any Omni call with
+Carries the fixes for the Qwen3-Omni audio path. Without them, any Omni call with
 audio input crashes in the audio tower / masked_scatter. Both patches are
 idempotent and no-ops for non-audio / non-Omni requests, so applying them globally
 is safe.
@@ -18,11 +18,8 @@ Bug #1 — qwen3_omni_moe.Model.get_input_embeddings reads only
 as `feature_attention_mask`. The mask is dropped, get_audio_features skips its
 2-D reshape, and the audio tower gets a 4-D input it can't broadcast.
 
-Bug #2 — qwen3_omni_moe uses MessageFormat.LIST_WITH_IMAGE_FIRST, whose
-formatter (`MessageFormatter._format_list_with_image`) inserts image tokens but
-not audio ones. `{"type": "audio"}` is dropped, the prompt has zero audio
-tokens, and masked_scatter fails ((N) vs (0)). The sibling
-`_format_list_with_image_type` already does this insertion; we mirror it.
+Former bug #2 (the LIST_WITH_IMAGE_FIRST formatter dropping the audio placeholder) is
+fixed upstream as of mlx-vlm 0.7.4; its patch was deleted.
 
 Remove this module once the upstream fix ships in a released mlx-vlm.
 """
@@ -42,7 +39,6 @@ def apply_mlx_vlm_patches() -> list[str]:
 
     applied: list[str] = []
     applied += _patch_qwen3_omni_audio_mask()
-    applied += _patch_formatter_audio_token()
     applied += _patch_nemotron_omni_model_type_remap()
     _APPLIED = True
 
@@ -114,67 +110,3 @@ def _patch_qwen3_omni_audio_mask() -> list[str]:
     Model.get_input_embeddings = patched
     Model._yunshu_audio_mask_patched = True
     return ["qwen3_omni audio-mask key"]
-
-
-def _patch_formatter_audio_token() -> list[str]:
-    """Bug #2: insert audio placeholder in the LIST_WITH_IMAGE_FIRST formatter."""
-    try:
-        from mlx_vlm import prompt_utils as pu
-    except Exception:
-        return []
-
-    MF = pu.MessageFormatter
-    if getattr(MF, "_yunshu_audio_token_patched", False):
-        return []
-
-    # Upstream merged: the formatter already inserts the audio placeholder. Detect
-    # BEHAVIOURALLY (source contains "audio" via param names even when unfixed) —
-    # call it with one audio and check the output. If already inserted → skip, so
-    # we don't double-insert over the upstream code.
-    try:
-        _probe = MF("qwen3_omni_moe")._format_list_with_image(
-            "x", "user", False, False, num_images=0, num_audios=1, image_first=True
-        )
-        if "audio" in [
-            c.get("type") for c in _probe.get("content", []) if isinstance(c, dict)
-        ]:
-            MF._yunshu_audio_token_patched = True
-            return []
-    except Exception:
-        pass
-
-    orig = MF._format_list_with_image
-
-    def patched(
-        self,
-        prompt,
-        role,
-        skip_image_token,
-        skip_audio_token,
-        num_images,
-        num_audios,
-        image_first=False,
-        use_image_url=False,
-        **kwargs,
-    ):
-        msg = orig(
-            self,
-            prompt,
-            role,
-            skip_image_token,
-            skip_audio_token,
-            num_images,
-            num_audios,
-            image_first=image_first,
-            use_image_url=use_image_url,
-            **kwargs,
-        )
-        if role == "user" and not skip_audio_token and num_audios > 0:
-            msg["content"] = (
-                msg["content"] + [pu.MessageBuilder.audio_message()] * num_audios
-            )
-        return msg
-
-    MF._format_list_with_image = patched
-    MF._yunshu_audio_token_patched = True
-    return ["formatter audio token"]

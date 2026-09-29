@@ -4,7 +4,7 @@ Same in-memory drafter as probe_apc_mtp_batchgen.py; no APC so every request is
 cold. Reports decode tok/s, first-token latency and token parity against AR.
 
     HF_HUB_OFFLINE=1 .venv/bin/python scripts/research/sweep_mtp_depth.py MODEL_DIR [sizes...] \
-        [--yunshu-kernels=exact] [--invariant [--invariant-packed]] [--ragged-lane] [--context=N] [--tasks=code,prose,json_like]
+        [--yunshu-kernels=exact] [--invariant [--invariant-packed]] [--ragged-lane] [--context=N] [--tasks=code,prose,json_like] [--tokens=N] [--skip-ar]
         [--packed-geometry=few]  # K-split geometry of the packed small-row kernel (default: target)
         [--draft-vocab=N]   # MTP drafts search the N first ids plus the prompt's ids
         [--lane-linear]     # TensorFold lane matmul for every projection (instead of packed / int-code)
@@ -12,6 +12,7 @@ cold. Reports decode tok/s, first-token latency and token parity against AR.
         [--draft-window=N]  # with --mtp-lane: the head absorbs only the last N prompt positions
         [--lane-profile]    # with --mtp-lane: per-phase host time per cycle
         [--lane-layers]     # fused add+norm and early submission in the lane's forward
+        [--dflash-served]   # with --dflash: 8-bit drafter + chain budget as the server
         [--dflash=DRAFTER_DIR]   # DFlash drafter instead of the MTP head; sizes are block ceilings
 """
 
@@ -176,6 +177,13 @@ if _dflash:
     # As served: per-row prefill with capture, the shared verify head, and
     # the drafter's context window (python/yunshu_engine/dflash_context.py).
     install_dflash(model.language_model)
+    if "--dflash-served" in sys.argv:
+        # as the server builds it: 8-bit drafter and cost-aware chain depth
+        from yunshu_engine.dflash_tree import quantize_drafter  # noqa: E402
+        from yunshu_engine.spec_schedule import install_chain_budget  # noqa: E402
+
+        quantize_drafter(drafter, 8)
+        install_chain_budget()
 else:
     drafter, draft_kind = _load_drafter_in_memory(model_dir), "mtp"
 print(
@@ -242,7 +250,7 @@ _context = int(
     next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--context=")), "0")
 )
 _FILLER = "".join(
-    f"Log line {i}: sensor {i % 17} reading {i * 37 % 1000}.\n" for i in range(8000)
+    f"Log line {i}: sensor {i % 17} reading {i * 37 % 1000}.\n" for i in range(20000)
 )
 
 
@@ -325,17 +333,24 @@ def run(name, prompt, max_tokens, block):
     }
 
 
+# --tokens=N overrides every task's length; --skip-ar drops the AR reference run
+# (speed A/B only: parity is then not checked).
+_tok_override = int(
+    next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--tokens=")), "0")
+)
+_skip_ar = "--skip-ar" in sys.argv
 ref = {}
 for name, prompt, mt in tasks:
-    run(name, prompt, 16, 0)  # warm kernels for this shape
-    for block in [0] + sizes:
+    mt = _tok_override or mt
+    run(name, prompt, 16, sizes[0] if _skip_ar else 0)  # warm kernels for this shape
+    for block in ([] if _skip_ar else [0]) + sizes:
         r = run(name, prompt, mt, block)
         r["omlx_kernels"] = sorted(omlx_set) if use_omlx else []
 
         if block == 0:
             ref[name] = r["tokens"]
-        r["parity"] = r["tokens"] == ref[name]
-        if not r["parity"]:
+        r["parity"] = r["tokens"] == ref[name] if name in ref else None
+        if r["parity"] is False:
             r["first_diff"] = next(
                 (
                     i

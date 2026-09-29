@@ -22,15 +22,20 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "python"))
-MAIN = Path(
-    os.environ.get("YUNSHU_MAIN", "/Users/yuhuan/Documents/YuhuanStudio/Yunshu")
-)
+MAIN = Path(os.environ.get("YUNSHU_MAIN", str(ROOT)))
 DATA = (
     MAIN / "docs/research/accuracy"
 )  # private, gitignored; the main checkout keeps it
-CACHE = Path("/Volumes/P5Plus/yunshu-test-cache/accuracy")
+CACHE = Path(
+    os.environ.get("YUNSHU_ACCURACY_CACHE", "~/.cache/yunshu/accuracy")
+).expanduser()
 EVAL_DATA = MAIN / "reference/omlx/omlx/eval/data"
-CN_JSONL = Path("/Volumes/P5Plus/train_3.5M_CN.jsonl")
+CN_JSONL = Path(os.environ.get("YUNSHU_CN_JSONL", "train_CN.jsonl")).expanduser()
+if not CN_JSONL.exists():
+    print(
+        f"note: CN corpus {CN_JSONL} not found; set YUNSHU_CN_JSONL to the jsonl path",
+        file=sys.stderr,
+    )
 CODE_PIN = "7a6d3e2a"  # git commit the code corpus is read from
 
 # A corpus is defined by this builder plus the pinned inputs above; bump the

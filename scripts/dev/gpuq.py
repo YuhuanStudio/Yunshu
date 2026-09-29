@@ -14,7 +14,7 @@ without polling anything else.
     gpuq log ID                  # print a job's log
     gpuq cancel ID               # drop a pending job or stop a running one
 
-State lives in $GPUQ_DIR (default /Volumes/P5Plus/yunshu-gpuq). Jobs keep the
+State lives in $GPUQ_DIR (default ~/.cache/yunshu/gpuq). Jobs keep the
 submitter's cwd and environment.
 """
 
@@ -29,7 +29,7 @@ import sys
 import time
 from pathlib import Path
 
-ROOT = Path(os.environ.get("GPUQ_DIR", "/Volumes/P5Plus/yunshu-gpuq"))
+ROOT = Path(os.environ.get("GPUQ_DIR", "~/.cache/yunshu/gpuq")).expanduser()
 JOBS = ROOT / "jobs"
 LOGS = ROOT / "logs"
 IDLE_EXIT_S = 600

@@ -1,3 +1,9 @@
 #!/bin/sh
-# GPU job queue CLI; see scripts/dev/gpuq.py.
-exec /usr/bin/env python3 "$(dirname "$0")/gpuq.py" "$@"
+# GPU job queue CLI; see scripts/dev/gpuq.py. Takes GPUQ_DIR from scripts/research/local.env if set there
+# (only that variable: local.env also defines short names like M / D that must not leak into jobs).
+_gpuq_here="$(cd "$(dirname "$0")" && pwd)"
+if [ -z "$GPUQ_DIR" ] && [ -f "$_gpuq_here/../research/local.env" ]; then
+  GPUQ_DIR="$(sed -n 's/^GPUQ_DIR=//p' "$_gpuq_here/../research/local.env" | tail -1)"
+  [ -n "$GPUQ_DIR" ] && export GPUQ_DIR
+fi
+exec /usr/bin/env python3 "$_gpuq_here/gpuq.py" "$@"

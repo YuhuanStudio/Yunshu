@@ -115,7 +115,8 @@
       "commit": "34bae79a",
       "license": "MIT",
       "local_changes": [
-        "imports point at yunshu_engine.kernels.tensorfold (inputs, lane_widen)"
+        "imports point at yunshu_engine.kernels.tensorfold (inputs, lane_widen)",
+        "lane_matmul takes row_block (rows per threadgroup; bit-identical to the default block, faster at 17-48 rows on wide projections)"
       ],
       "why": "integer-code tensor-unit matmul (5/6/8-bit via uint8 widening), used by kernels/int_code_linear.py",
       "kind": "vendored"
@@ -476,7 +477,7 @@
       "commit": "v0.7.3",
       "why": "ragged attention routing",
       "source_sha256": "f90d80c414d62ac133195825e32266e20635d87ac7caa4e1267f59d995db0293",
-      "installed_version": "0.7.3"
+      "installed_version": "0.7.4"
     },
     {
       "kind": "patches",
@@ -491,7 +492,7 @@
       "commit": "v0.7.3",
       "why": "ragged attention in the spec verifier",
       "source_sha256": "0c8e3b361ee34362c2f2b0291024fec9a0061894558f9b37bc2e2aaa993e50c8",
-      "installed_version": "0.7.3"
+      "installed_version": "0.7.4"
     },
     {
       "kind": "patches",
@@ -506,7 +507,7 @@
       "commit": "v0.7.3",
       "why": "generation-batch merge builds ragged caches",
       "source_sha256": "a81722233487c0d63b34d3d389704af5de8172a61700316aaa85d2fc090b6746",
-      "installed_version": "0.7.3"
+      "installed_version": "0.7.4"
     },
     {
       "kind": "patches",
@@ -521,7 +522,7 @@
       "commit": "v0.7.3",
       "why": "fused add+norm wrapper",
       "source_sha256": "142df8a42c27c4f78b367e9b118b55c1bdddd26bac0dd8ceb01f009610fb18f7",
-      "installed_version": "0.7.3"
+      "installed_version": "0.7.4"
     },
     {
       "kind": "patches",
@@ -536,7 +537,7 @@
       "commit": "v0.7.3",
       "why": "fused add+norm layer body; calls self._gated_delta/_attention/_feed_forward",
       "source_sha256": "f3f59ff9d0b68a50ad505bff837ed9f7dcba1fbd01646c4fbbd902af00f4fd60",
-      "installed_version": "0.7.3"
+      "installed_version": "0.7.4"
     },
     {
       "kind": "patches",
@@ -551,7 +552,7 @@
       "commit": "v0.7.3",
       "why": "batch-invariant projections",
       "source_sha256": "6e38296bd3f89d5a5e2a225d7b8c30cd275906a064415de0c462aa68c778e25e",
-      "installed_version": "0.7.3"
+      "installed_version": "0.7.4"
     },
     {
       "kind": "patches",
@@ -566,7 +567,7 @@
       "commit": "v0.7.3",
       "why": "batch-invariant projections",
       "source_sha256": "1f44efb5714938afee3c700508cafd98770f1e6ab1a84718ef59fdf444ca782b",
-      "installed_version": "0.7.3"
+      "installed_version": "0.7.4"
     },
     {
       "kind": "patches",
@@ -581,7 +582,7 @@
       "commit": "v0.7.3",
       "why": "batch-invariant projections",
       "source_sha256": "18c3380506f39d86f0d1e93166e91c9eff77902dfd34a657028a8868eae89487",
-      "installed_version": "0.7.3"
+      "installed_version": "0.7.4"
     },
     {
       "kind": "patches",
@@ -596,7 +597,7 @@
       "commit": "v0.7.3",
       "why": "batch-invariant greedy head",
       "source_sha256": "54d9a28b49104ea6fe9e1219e779aed6314aa78ba52211a23688fd44952c1c8f",
-      "installed_version": "0.7.3"
+      "installed_version": "0.7.4"
     },
     {
       "kind": "patches",
@@ -611,7 +612,7 @@
       "commit": "v0.7.3",
       "why": "module-level verify projection hook",
       "source_sha256": "190517e318ba4d7b78e1c4b14c40917a76ce72803bdb6aca1563e86c396d6701",
-      "installed_version": "0.7.3"
+      "installed_version": "0.7.4"
     },
     {
       "kind": "patches",
@@ -626,7 +627,7 @@
       "commit": "v0.7.3",
       "why": "module-level verify projection hook",
       "source_sha256": "2d4c9adbc50be66e97bb64250c496b240660e805d6426b489caff26d51a503cc",
-      "installed_version": "0.7.3"
+      "installed_version": "0.7.4"
     },
     {
       "kind": "patches",
@@ -641,7 +642,7 @@
       "commit": "v0.7.3",
       "why": "module-level verify projection hook",
       "source_sha256": "539dce1a6026f87e7cc6310d615e5d00782128489cd4f270a4edd6a14f990209",
-      "installed_version": "0.7.3"
+      "installed_version": "0.7.4"
     },
     {
       "kind": "patches",
@@ -656,7 +657,7 @@
       "commit": "",
       "why": "marked layers take the row-invariant path",
       "source_sha256": "ca5cafb6d038d955031dfc277ea4a33066c643345d29531f1e15a3ca727971b3",
-      "installed_version": "0.32.2"
+      "installed_version": "0.32.3"
     },
     {
       "kind": "patches",
@@ -671,7 +672,7 @@
       "commit": "v0.7.3",
       "why": "one-row capture keeps the hidden sink",
       "source_sha256": "70aaa49ac3c48311e46c18f2486c733f469d5013d029fa59d94a05c0f4af0234",
-      "installed_version": "0.7.3"
+      "installed_version": "0.7.4"
     },
     {
       "kind": "patches",
@@ -686,7 +687,7 @@
       "commit": "v0.7.3",
       "why": "drafter context window",
       "source_sha256": "f4a3723d47494a59341fef6b52672c582b7e3c85bbdce95e80efcb01a0af9298",
-      "installed_version": "0.7.3"
+      "installed_version": "0.7.4"
     },
     {
       "kind": "patches",
@@ -701,7 +702,7 @@
       "commit": "v0.7.3",
       "why": "drafter context window",
       "source_sha256": "8f2f017bc46bdf0e18734023dd978eb00f99e8f9c4253b184362f46523dddaed",
-      "installed_version": "0.7.3"
+      "installed_version": "0.7.4"
     },
     {
       "kind": "patches",
@@ -716,7 +717,7 @@
       "commit": "v0.7.3",
       "why": "drafter context window; reads self.chunks",
       "source_sha256": "100db78da92c99113e5185f29e181bbf71b29c2e0d8d93bc6639dffa0f0edfaf",
-      "installed_version": "0.7.3"
+      "installed_version": "0.7.4"
     },
     {
       "kind": "patches",
@@ -732,7 +733,7 @@
       "why": "DFlash tree rounds replace the single-row loop",
       "source_sha256": "4c118d1ddc2f65fd1c82a6038224c6f44dba30fd0359c6b69955220f54ad4b35",
       "binding": "rebound in mlx_vlm.speculative.utils",
-      "installed_version": "0.7.3"
+      "installed_version": "0.7.4"
     },
     {
       "kind": "patches",
@@ -748,7 +749,7 @@
       "why": "MTP tree rounds replace the server loop",
       "source_sha256": "b3d90cbca4403f6b285c0d4161665bdf889799ebcb73433e960dadcd9de06021",
       "binding": "rebound in mlx_vlm.speculative.utils",
-      "installed_version": "0.7.3"
+      "installed_version": "0.7.4"
     },
     {
       "kind": "patches",
@@ -764,7 +765,7 @@
       "why": "own MTP lane for one greedy row",
       "source_sha256": "f8daeca6474acf220603d35cd1918807b7ea4932a0daf0ab376f954b9fee6811",
       "binding": "rebound in mlx_vlm.generate.ar and mlx_vlm.speculative.utils",
-      "installed_version": "0.7.3"
+      "installed_version": "0.7.4"
     },
     {
       "kind": "patches",
@@ -779,7 +780,7 @@
       "commit": "v0.7.3",
       "why": "reads self.uids for per-row sampling",
       "source_sha256": "f4aa6a2b6644c0875f1bbb240ad1676e873bdd12c2396c3388caf5e50b8d180d",
-      "installed_version": "0.7.3"
+      "installed_version": "0.7.4"
     },
     {
       "kind": "patches",
@@ -794,7 +795,7 @@
       "commit": "v0.7.3",
       "why": "reads self.uids for per-row sampling",
       "source_sha256": "19431a686e73fbca71c41af6d3662b7b4c4a84c07880cd69ab2e0febf16fd136",
-      "installed_version": "0.7.3"
+      "installed_version": "0.7.4"
     },
     {
       "kind": "patches",
@@ -809,22 +810,7 @@
       "commit": "v0.7.3",
       "why": "audio mask key (fixed upstream; patch self-disables)",
       "source_sha256": "50f36cc0e406eef871e9c5e2346481bea8170d9cca072dfe0af1cf8991ca59cb",
-      "installed_version": "0.7.3"
-    },
-    {
-      "kind": "patches",
-      "path": "python/yunshu_engine/mlx_vlm_patches.py",
-      "repo": "https://github.com/Blaizzy/mlx-vlm",
-      "clone": "reference/mlx-vlm",
-      "package": "mlx-vlm",
-      "module": "mlx_vlm.prompt_utils",
-      "symbol": "MessageFormatter._format_list_with_image",
-      "signature": "(self, prompt, role, skip_image_token, skip_audio_token, num_images, num_audios, image_first=False, use_image_url=False, **kwargs)",
-      "license": "MIT",
-      "commit": "v0.7.3",
-      "why": "audio token in user messages",
-      "source_sha256": "354a235542acec40b84a19a483b36d72b0eef758cd650d1ce13179210e18f09b",
-      "installed_version": "0.7.3"
+      "installed_version": "0.7.4"
     },
     {
       "kind": "patches",

@@ -20,6 +20,7 @@
 #   server-rd{0,1}-probe    probe_concurrency n=8 + bench_engine_matrix (34/34)
 #   server-rd{0,1}-context  bench_context_batch b2 b4 b8 at 1K and 32K
 #   server-rd{0,1}-mixed    bench_mixed_load (4 streams + a 16K prompt)
+#   server-rd{0,1}-repeat   probe_repeat_doc: the same 8K / 32K prompt cold, repeated, and with another question
 # Accuracy:
 #   mmlu-<k>   MMLU-Pro slice k (0..2 = questions 100k .. 100k+99), b8, driver on
 #
@@ -39,7 +40,7 @@ log(){ echo "$(date +%H:%M:%S) $*"; }
 
 PHASES=(parity-1k rows-1k parity-32k rows-32k-a rows-32k-b decode-anatomy
   server-rd0-probe server-rd1-probe server-rd0-context server-rd1-context
-  server-rd0-mixed server-rd1-mixed mmlu-0 mmlu-1 mmlu-2)
+  server-rd0-mixed server-rd1-mixed server-rd0-repeat server-rd1-repeat mmlu-0 mmlu-1 mmlu-2)
 
 wait_ready(){ for i in $(seq 1 300); do curl -s -m 2 $URL/health/ready 2>/dev/null | grep -q '"ready":true' && return 0; kill -0 $1 2>/dev/null || return 1; sleep 2; done; return 1; }
 stop(){ kill -INT $1 2>/dev/null; for i in $(seq 1 30); do kill -0 $1 2>/dev/null || return; sleep 1; done; kill $1 2>/dev/null; }
@@ -81,6 +82,11 @@ run_phase(){
           $PY scripts/research/bench_context_batch.py --url $URL --model Qwen3.8-27B --tokenizer $M --pid $YP \
             --lengths 1024 32768 --batches 2 4 8 --note "round driver=$rd" \
             --output $OUT/context-batch.jsonl > /dev/null 2>&1 || log "context FAILED" ;;
+        repeat)
+          for n in 8192 32768; do
+            $PY scripts/research/probe_repeat_doc.py --url $URL --model Qwen3.8-27B --tokenizer $M \
+              --tokens $n --output $OUT/repeat-doc-rd$rd.jsonl > /dev/null 2>&1 || log "repeat FAILED"
+          done ;;
         mixed)
           $PY scripts/research/bench_mixed_load.py --url $URL --model Qwen3.8-27B --tokenizer $M \
             --streams 4 --pp 16384 --label rd$rd --output $OUT/mixed-load.jsonl > /dev/null 2>&1 || log "mixed FAILED" ;;

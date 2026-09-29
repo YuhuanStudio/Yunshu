@@ -61,6 +61,7 @@ def main():
                 if tiled and mods[0][1] is None:
                     continue
                 for sk in (1, 2, 4, 8):
+
                     def run():
                         return [
                             lane_qmm.lane_matmul(
@@ -77,12 +78,23 @@ def main():
                         mx.eval(run())
                         best = min(best, (time.perf_counter() - t) / len(mods))
                     rows.append(
-                        {"tiled": tiled, "sk": sk, "us": round(best * 1e6, 1),
-                         "GBps": round(nbytes / best / 1e9, 1)}
+                        {
+                            "tiled": tiled,
+                            "sk": sk,
+                            "us": round(best * 1e6, 1),
+                            "GBps": round(nbytes / best / 1e9, 1),
+                        }
                     )
             rows.sort(key=lambda r: r["us"])
-            row = {"shape": name, "bits": a.bits, "rows": m, "MB": round(nbytes / 1e6, 1),
-                   "default_sk": default, "best": rows[:4], "worst_us": rows[-1]["us"]}
+            row = {
+                "shape": name,
+                "bits": a.bits,
+                "rows": m,
+                "MB": round(nbytes / 1e6, 1),
+                "default_sk": default,
+                "best": rows[:4],
+                "worst_us": rows[-1]["us"],
+            }
             with a.output.open("a") as f:
                 f.write(json.dumps(row) + "\n")
             print(json.dumps(row), flush=True)

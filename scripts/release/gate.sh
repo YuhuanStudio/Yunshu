@@ -16,13 +16,13 @@ cd "$(dirname "$0")/../.."
 ROOT=$PWD
 [ -f scripts/research/local.env ] && source scripts/research/local.env
 
-GATE_ROOT=${GATE_ROOT:-/Volumes/P5Plus/yunshu-build/gate}
+GATE_ROOT=${GATE_ROOT:-$HOME/.cache/yunshu/gate}
 OUT=${OUT:-docs/research/runs/$(date +%Y-%m-%d)-release-gate}
 STAGE=${STAGE:-install,serve-27b,families,soak}
 PORT=${PORT:-18764}
 URL=http://127.0.0.1:$PORT
 PY=${PY:-$ROOT/.venv/bin/python}           # harness interpreter (the repo venv)
-MODELS_DIR=${GATE_MODELS_DIR:-/Volumes/P5Plus/models}
+MODELS_DIR=${GATE_MODELS_DIR:-$HOME/.yunshu/models}
 PULL_REPO=${PULL_REPO:-Jundot/Qwen3.8-27B-oQ4e-mtp}   # already in MODELS_DIR: must not download
 SOAK_MINUTES=${SOAK_MINUTES:-30}
 MMLU_BASELINE=${MMLU_BASELINE:-249}        # 27B MMLU-Pro 300 b8, 2026-09-29 (ragged default)
@@ -126,11 +126,13 @@ if has serve-27b; then
         --note "release gate" --output $OUT/27b-concurrency.jsonl > /dev/null 2>&1
       qa=$(jget $OUT/27b-concurrency.jsonl "f\"{qa_concurrent_ok}/{qa_n} agg {aggregate_tps} tok/s\"")
       [[ $qa == 8/8* ]] && rec serve-27b.concurrency PASS "$qa" || rec serve-27b.concurrency FAIL "${qa:-no summary}"
+      # In-process side runs on the INSTALLED tool interpreter: the repo venv can pin different
+      # mlx / mlx-vlm builds, and a different build shifts greedy near-ties (same text fails).
       # The server must decode as fast as the engine in-process on the same prompt
       # (same greedy tokens); a per-token serving overhead fails the gate.
-      sp=$(env HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 $PY scripts/release/check_server_path.py --url $URL \
-        --model $M --output $OUT/27b-server-path.json 2> $OUT/27b-server-path.log | tail -1)
-      spd=$($PY -c "import json,sys; d=json.loads(sys.argv[1]); print(f\"server/in-process worst {d['worst_ratio']} (min {d['min_ratio']}), same text {d['same_text']}: \" + ', '.join(f\"{c['task']}@{c['context']} {c['server_tps']}/{c['inprocess_tps']}\" for c in d['cases']))" "$sp" 2>/dev/null)
+      sp=$(${YENV[@]} $GATE_ROOT/tool-vision/yunshu/bin/python scripts/release/check_server_path.py --url $URL \
+        --model $M --server-log $OUT/27b-server.log --output $OUT/27b-server-path.json 2> $OUT/27b-server-path.log | tail -1)
+      spd=$($PY -c "import json,sys; d=json.loads(sys.argv[1]); print(f\"server/in-process worst {d['worst_ratio']} (min {d['min_ratio']}), same text {d['same_text']}, spec {d['spec']}: \" + ', '.join(f\"{c['task']}@{c['context']} {c['server_tps']}/{c['inprocess_tps']}\" for c in d['cases']))" "$sp" 2>/dev/null)
       [[ $sp == *'"status": "PASS"'* ]] && rec serve-27b.server_path PASS "$spd" \
         || rec serve-27b.server_path FAIL "${spd:-could not measure (27b-server-path.log)}"
     else rec serve-27b.boot FAIL "server did not become ready (27b-server.log)"; fi
