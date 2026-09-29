@@ -34,7 +34,7 @@ Each **step** is one forward of one kind:
   matmuls are flat in the row count up to 128 rows), padded positions carry a copy of the row's last
   token and write keys past its length / are skipped by the recurrence;
 - **prefill step**: fixed 512-token chunks of waiting prompts (absolute spans from the prompt
-  start), several prompts in one forward, up to 2048 tokens when no row decodes and 512 while rows
+  start), several prompts in one forward, up to 4096 tokens when no row decodes and 512 while rows
   decode.
 
 While rows decode and prompts wait, prefill and decode steps alternate one-to-one; the prefill

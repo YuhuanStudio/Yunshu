@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 MAX_DECODE_TOKENS = MAX_WINDOW  # pending token + up to 7 drafts
 CHUNK = 512  # default prefill chunk: fixed spans from the prompt start
-IDLE_BUDGET = 2048  # prefill tokens per prefill step when no row decodes
+IDLE_BUDGET = 4096  # prefill tokens per prefill step when no row decodes
 ACCEPT_PRIOR = 0.7  # per-depth draft acceptance before a row has history
 ACCEPT_EMA = 0.15
 LANE_ROWS = 128  # rows one lane-matmul call keeps row-invariant
@@ -60,7 +60,7 @@ LANE_ROWS = 128  # rows one lane-matmul call keeps row-invariant
 # new sizes (KV growth, attention scores), and left unbounded the cache grew
 # to ~95 GiB in a 4 x 32K run, after which every step took 5-10x as long
 # (docs/guides/ROUND_DRIVER.md). The driver keeps it under this bound.
-CACHE_LIMIT = 8 * 2**30
+CACHE_LIMIT = 2 * 2**30
 
 
 def cache_buffers(cache: list) -> list:

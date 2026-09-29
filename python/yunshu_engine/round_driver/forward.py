@@ -21,6 +21,9 @@ import mlx.core as mx
 import mlx.nn as nn
 
 
+EVAL_EVERY = 4  # layers between evaluations of a prefill forward
+
+
 @dataclass
 class Segment:
     """One row's prompt chunk for this step."""
@@ -157,9 +160,10 @@ def forward(language_model: Any, segments: list[Segment]) -> mx.array:
             r = _project(at.o_proj, mx.concatenate(parts, axis=1), spans)
         h = x + r
         x = h + _mlp(layer.mlp, layer.post_attention_layernorm(h), spans)
-        # the layer's transient stock weights are freed before the next
-        # layer's are built (the graph would otherwise hold every layer's)
-        mx.eval(x)
+        # transient stock weights are freed every few layers (the graph would
+        # otherwise hold every layer's)
+        if i % EVAL_EVERY == EVAL_EVERY - 1:
+            mx.eval(x)
     return model.norm(x)[0]
 
 
