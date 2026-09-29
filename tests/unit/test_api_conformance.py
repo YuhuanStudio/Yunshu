@@ -103,3 +103,16 @@ def test_removed_surfaces_are_gone(client):
         ("post", "/v1/token_count"),
     ]:
         assert getattr(client, method)(path).status_code in (404, 405), path
+
+
+def test_staged_media_lives_under_media_dir(tmp_path, monkeypatch):
+    """Anthropic base64 images are staged to disk; the VLM path only reads under the media dir."""
+    from yunshu_engine.paths import stage_media_file
+    from yunshu_engine.vlm_engine import _VALIDATE_LOCAL_PATH
+
+    monkeypatch.setenv("YUNSHU_MEDIA_DIR", str(tmp_path / "media"))
+    monkeypatch.delenv("YUNSHU_ALLOW_LOCAL_FILES", raising=False)
+    f = stage_media_file(".png")
+    f.write(b"x")
+    f.close()
+    assert _VALIDATE_LOCAL_PATH(f.name)

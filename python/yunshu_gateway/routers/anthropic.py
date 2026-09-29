@@ -30,6 +30,7 @@ import contextlib
 
 from pydantic import BaseModel, Field, model_validator
 
+from yunshu_engine.paths import stage_media_file
 from yunshu_engine.tool_arguments import coerce_tool_calls
 from yunshu_engine.tool_call_streamer import ToolCallStreamer
 from yunshu_engine.tool_format import parse_tool_output, tool_formats
@@ -595,7 +596,6 @@ def _convert_anthropic_messages(
                     data = source.get("data")
                     if data and source_type == "base64":
                         import base64 as _b64
-                        import tempfile as _tf
 
                         try:
                             raw = _b64.b64decode(data, validate=False)
@@ -614,7 +614,7 @@ def _convert_anthropic_messages(
                         ext = ext_map.get(media_type, "png")
                         # delete=False is intentional — file must outlive function for
                         # downstream image inference; cleanup via temp_files registry.
-                        tmp = _tf.NamedTemporaryFile(suffix=f".{ext}", delete=False)  # noqa: SIM115
+                        tmp = stage_media_file(f".{ext}")
                         try:
                             tmp.write(raw)
                             tmp.close()
@@ -673,7 +673,6 @@ def _convert_image_block(
     data = source.get("data")
     if data and source_type == "base64":
         import base64 as _b64
-        import tempfile as _tf
 
         try:
             raw = _b64.b64decode(data, validate=False)
@@ -688,7 +687,7 @@ def _convert_image_block(
         ext = ext_map.get(media_type, "png")
         # delete=False is intentional — file must outlive function for downstream
         # image inference; cleanup via temp_files registry.
-        tmp = _tf.NamedTemporaryFile(suffix=f".{ext}", delete=False)  # noqa: SIM115
+        tmp = stage_media_file(f".{ext}")
         try:
             tmp.write(raw)
             tmp.close()

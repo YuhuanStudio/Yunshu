@@ -34,3 +34,22 @@ def log_dir() -> Path:
 
 def launch_agent_plist() -> Path:
     return Path.home() / "Library" / "LaunchAgents" / f"{SERVICE_LABEL}.plist"
+
+
+def media_dir() -> str:
+    """Directory local media paths must live under (also where the gateway stages uploads)."""
+    import os
+
+    return settings.get("YUNSHU_MEDIA_DIR") or os.path.join(
+        os.environ.get("TMPDIR", "/tmp"), "yunshu_media"
+    )
+
+
+def stage_media_file(suffix: str):
+    """A NamedTemporaryFile(delete=False) inside the media dir, so the VLM path accepts it."""
+    import os
+    import tempfile
+
+    d = media_dir()
+    os.makedirs(d, exist_ok=True)
+    return tempfile.NamedTemporaryFile(suffix=suffix, dir=d, delete=False)  # noqa: SIM115
