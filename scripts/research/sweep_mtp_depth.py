@@ -5,6 +5,13 @@ cold. Reports decode tok/s, first-token latency and token parity against AR.
 
     HF_HUB_OFFLINE=1 .venv/bin/python scripts/research/sweep_mtp_depth.py MODEL_DIR [sizes...] \
         [--yunshu-kernels=exact] [--invariant [--invariant-packed]] [--ragged-lane] [--context=N] [--tasks=code,prose,json_like]
+        [--packed-geometry=few]  # K-split geometry of the packed small-row kernel (default: target)
+        [--draft-vocab=N]   # MTP drafts search the N first ids plus the prompt's ids
+        [--lane-linear]     # TensorFold lane matmul for every projection (instead of packed / int-code)
+        [--mtp-lane]        # yunshu_engine.mtp_lane rounds instead of upstream's loop
+        [--draft-window=N]  # with --mtp-lane: the head absorbs only the last N prompt positions
+        [--lane-profile]    # with --mtp-lane: per-phase host time per cycle
+        [--lane-layers]     # fused add+norm and early submission in the lane's forward
         [--dflash=DRAFTER_DIR]   # DFlash drafter instead of the MTP head; sizes are block ceilings
 """
 
@@ -96,6 +103,23 @@ if "--streamed5" in sys.argv:
 
 model, processor = load(model_dir)
 tok = processor.tokenizer
+_geom = next(
+    (a.split("=", 1)[1] for a in sys.argv if a.startswith("--packed-geometry=")), None
+)
+if _geom:
+    from yunshu_engine.kernels.omlx import qwen35_packed_linear  # noqa: E402
+
+    qwen35_packed_linear.GEOMETRY = _geom
+    print(json.dumps({"packed_geometry": _geom}), flush=True)
+if "--lane-linear" in sys.argv:
+    from yunshu_engine.kernels import lane_linear  # noqa: E402
+
+    print(
+        json.dumps(
+            {"lane_linear": lane_linear.convert(model.language_model)["converted"]}
+        ),
+        flush=True,
+    )
 if "--invariant" in sys.argv:
     from yunshu_engine.kernels.batch_invariant import (
         install as install_invariant,  # noqa: E402
@@ -107,7 +131,8 @@ if "--invariant" in sys.argv:
                 "batch_invariant": install_invariant(
                     model.language_model,
                     model=model,
-                    packed="--invariant-packed" in sys.argv,
+                    packed="--invariant-packed" in sys.argv
+                    and "--lane-linear" not in sys.argv,
                 )
             }
         ),
@@ -157,6 +182,31 @@ print(
     json.dumps({"draft_kind": draft_kind, "draft": _dflash or "mtp-head"}), flush=True
 )
 lm = model.language_model
+_dv = next(
+    (int(a.split("=", 1)[1]) for a in sys.argv if a.startswith("--draft-vocab=")), 0
+)
+draft_vocab = None
+if _dv and draft_kind == "mtp":
+    from yunshu_engine.draft_vocab import install as install_draft_vocab  # noqa: E402
+
+    draft_vocab = install_draft_vocab(drafter, lm, _dv)
+    print(json.dumps({"draft_vocab": _dv if draft_vocab else None}), flush=True)
+if "--mtp-lane" in sys.argv and draft_kind == "mtp":
+    from yunshu_engine import mtp_lane  # noqa: E402
+
+    print(json.dumps({"mtp_lane": mtp_lane.install()}), flush=True)
+    _win = next(
+        (int(a.split("=", 1)[1]) for a in sys.argv if a.startswith("--draft-window=")),
+        0,
+    )
+    mtp_lane.set_window(_win)
+    lane_prof = mtp_lane.set_profile("--lane-profile" in sys.argv)
+else:
+    lane_prof = None
+if "--lane-layers" in sys.argv:
+    from yunshu_engine.kernels import lane_layers  # noqa: E402
+
+    print(json.dumps({"lane_layers": lane_layers.install()}), flush=True)
 
 tasks = [
     (
@@ -173,6 +223,11 @@ tasks = [
         "json_like",
         "List ten European capitals with their countries and approximate populations as a markdown table.",
         256,
+    ),
+    (
+        "zh",
+        "請詳細說明冰箱的運作原理，包括冷媒循環、壓縮機、冷凝器與蒸發器，並用繁體中文回答。",
+        384,
     ),
 ]
 
@@ -200,6 +255,8 @@ def run(name, prompt, max_tokens, block):
         msgs, tokenize=False, add_generation_prompt=True, enable_thinking=False
     )
     ids = tok.encode(text, add_special_tokens=False)
+    if draft_vocab is not None:
+        draft_vocab.set_context(ids)
     gen = BatchGenerator(
         lm,
         processor,
@@ -228,6 +285,35 @@ def run(name, prompt, max_tokens, block):
                 break
     finally:
         gen.close()
+    if lane_prof is not None and lane_prof.get("cycles"):
+        n = lane_prof.pop("cycles")
+        tokens = lane_prof.pop("tokens", 0)
+        print(
+            json.dumps(
+                {
+                    "lane_cycle_ms": {
+                        k: round(v / n * 1e3, 2) for k, v in lane_prof.items()
+                    },
+                    "cycles": n,
+                    "tokens_per_cycle": round(tokens / n, 2),
+                }
+            ),
+            flush=True,
+        )
+        lane_prof.clear()
+        lane_prof["cycles"] = 0
+    if draft_vocab is not None and block:
+        print(
+            json.dumps(
+                {
+                    "draft_vocab_state": {
+                        "full": draft_vocab.full,
+                        "extra_ids": len(draft_vocab._seen),
+                    }
+                }
+            ),
+            flush=True,
+        )
     wall = time.perf_counter() - t0
     return {
         "task": name,

@@ -507,6 +507,9 @@ class VLMBatchRunner:
         rd = pkw.get("rope_deltas")
         job.rope_delta = float(rd.reshape(-1)[0].item()) if rd is not None else 0.0
         if spec:
+            vocab = getattr(self.drafter, "_draft_vocab", None)
+            if vocab is not None:  # the reduced draft readout covers this prompt's ids
+                vocab.set_context(job.ids)
             group = self._spec = _Group(
                 gen=self._new_generator(
                     spec=True, use_apc=use_apc, top_logprobs=0, sampler=None
