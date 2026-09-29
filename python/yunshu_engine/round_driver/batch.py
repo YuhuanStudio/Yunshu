@@ -58,7 +58,10 @@ class Slots:
 
     def alloc(self) -> int:
         if not self.free:
-            S2 = max(1, self.S * 2)
+            # doubling while buffers are small; one slot at a time once a
+            # slot is large (every slot is as long as the longest row)
+            big = self.cap > 4096
+            S2 = self.S + 1 if big else max(1, self.S * 2)
             self._resize(S2, self.cap)
             self.free = list(range(self.S, S2))[::-1]
             self.S = S2
@@ -267,6 +270,9 @@ class DecodeBatch:
         if not keep:
             self.state = [None] * len(self.linear)
             self.conv = [None] * len(self.linear)
+            # an idle batch holds no KV: the next rows size the buffers to
+            # themselves, not to the longest row ever served
+            self.slots = Slots(len(self.linear))
             return
         sel = mx.array(keep, dtype=mx.int32)
         for i, lin in enumerate(self.linear):
