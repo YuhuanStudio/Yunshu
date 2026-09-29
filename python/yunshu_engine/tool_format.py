@@ -134,14 +134,27 @@ def _upstream(name: str) -> ToolFormat | None:
 
 
 def _unwrap_doubled_braces(body: str) -> str:
-    """Small models copy a prompt-template's escaped braces and emit ``{{"name": ...}}``;
-    strip that one extra layer when (and only when) the text is exactly so wrapped."""
+    """Repair the common small-model malformation of a JSON tool call.
+
+    Small models copy a prompt-template's escaped braces and emit
+    ``{{"name": ...}}`` (sometimes with a stray trailing ``)``). Try dropping the
+    stray ``)`` and one brace layer; accept only a candidate that parses as JSON
+    when the original does not."""
     t = body.strip()
-    if t.startswith("{{") and t.endswith("}}"):
+    try:
+        json.loads(t)
+        return body
+    except ValueError:
+        pass
+    if not t.startswith("{{"):
+        return body
+    core = t[:-1].rstrip() if t.endswith(")") else t
+    for cand in (core[1:-1], core[1:], core):
         try:
-            json.loads(t)
+            if isinstance(json.loads(cand), dict):
+                return cand
         except ValueError:
-            return t[1:-1]
+            continue
     return body
 
 
