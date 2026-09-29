@@ -72,10 +72,10 @@ def _global_options(
     # local fallback (e.g. `yunshu model list --dir /path` should scan
     # disk, not query http://localhost:8000).
     try:
-        from click.core import ParameterSource
-
+        # Compare by name: typer >= 0.27 vendors its own click, so the enum class
+        # differs from click.core.ParameterSource.
         src = ctx.get_parameter_source("url")
-        if src in (ParameterSource.COMMANDLINE, ParameterSource.ENVIRONMENT):
+        if getattr(src, "name", None) in ("COMMANDLINE", "ENVIRONMENT"):
             os.environ["YUNSHU_GATEWAY_URL"] = url
     except Exception:
         # Click/Typer version without parameter-source introspection —
@@ -136,16 +136,19 @@ def main() -> None:
 
     import json as _json
 
-    import click
+    try:  # typer >= 0.27 vendors its own click; older releases use the real one
+        from typer._click import exceptions as click_exc
+    except ImportError:
+        from click import exceptions as click_exc
 
     try:
         rv = app(standalone_mode=False)
-    except click.exceptions.ClickException as e:
+    except click_exc.ClickException as e:
         # sys.__stdout__ (not sys.stdout, which --json has swapped to stderr) is the real
         # stdout — the group callback that swaps it runs before subcommand arg validation.
         print(_json.dumps({"error": e.format_message()}), file=sys.__stdout__)
         raise SystemExit(e.exit_code or 2) from None
-    except click.exceptions.Abort:
+    except click_exc.Abort:
         raise SystemExit(1) from None
     # typer.Exit(code) from a command surfaces as the return value under standalone_mode=False
     if isinstance(rv, int) and rv != 0:
