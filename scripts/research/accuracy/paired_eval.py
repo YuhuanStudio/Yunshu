@@ -49,7 +49,13 @@ DATASETS = Path(os.environ.get("DATASETS", "/Volumes/P5Plus/datasets"))
 OUT = Path(
     os.environ.get("PAIRED_OUT", "/Volumes/P5Plus/yunshu-test-cache/paired-eval")
 )
-MAIN_PY = Path("/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python")
+# Dedicated env pinned to the released lock so both arms keep the same mlx / mlx-vlm for
+# the whole evaluation (the main .venv moves with development).
+MAIN_PY = Path(
+    os.environ.get(
+        "PAIRED_PY", "/Volumes/P5Plus/yunshu-test-envs/paired-eval/bin/python"
+    )
+)
 DEPS_PY = Path("/Volumes/P5Plus/yunshu-test-envs/paired-eval-deps/bin/python")
 BOOKS = Path("/Volumes/P5Plus/yunshu-test-cache/accuracy")
 SEED = 20260930
