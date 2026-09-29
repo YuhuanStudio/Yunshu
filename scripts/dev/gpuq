@@ -1,9 +1,16 @@
 #!/bin/sh
-# GPU job queue CLI; see scripts/dev/gpuq.py. Takes GPUQ_DIR from scripts/research/local.env if set there
-# (only that variable: local.env also defines short names like M / D that must not leak into jobs).
+# GPU job queue CLI; see scripts/dev/gpuq.py. Every checkout of the repo (main and its worktrees) must share
+# one queue, so GPUQ_DIR comes from the environment, else from scripts/research/local.env next to this script,
+# else from the main checkout's local.env (found through git's common dir). Only that variable is read:
+# local.env also defines short names like M / D that must not leak into jobs.
 _gpuq_here="$(cd "$(dirname "$0")" && pwd)"
-if [ -z "$GPUQ_DIR" ] && [ -f "$_gpuq_here/../research/local.env" ]; then
-  GPUQ_DIR="$(sed -n 's/^GPUQ_DIR=//p' "$_gpuq_here/../research/local.env" | tail -1)"
+_gpuq_env() { [ -f "$1" ] && sed -n 's/^GPUQ_DIR=//p' "$1" | tail -1; }
+if [ -z "$GPUQ_DIR" ]; then
+  GPUQ_DIR="$(_gpuq_env "$_gpuq_here/../research/local.env")"
+  if [ -z "$GPUQ_DIR" ]; then
+    _gpuq_common="$(git -C "$_gpuq_here" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+    [ -n "$_gpuq_common" ] && GPUQ_DIR="$(_gpuq_env "$(dirname "$_gpuq_common")/scripts/research/local.env")"
+  fi
   [ -n "$GPUQ_DIR" ] && export GPUQ_DIR
 fi
 exec /usr/bin/env python3 "$_gpuq_here/gpuq.py" "$@"
