@@ -70,6 +70,7 @@ class TreeShape:
         self.paths = paths
         self.max_depth = max(depths)
         self.is_chain = self.parents == tuple(range(-1, w - 1))
+        self.dynamic = False
         self._arrays: dict[str, mx.array] = {}
 
     def _const(self, name, make):
@@ -90,6 +91,9 @@ class TreeShape:
 
         return self._const("paths", make)
 
+    def depth_array(self) -> mx.array:
+        return self._const("depth", lambda: mx.array(self.depths, dtype=mx.int32))
+
     def conv_index(self) -> mx.array:
         """[W * 3]: per row, its last three conv inputs in ``[state (3); window (W)]``."""
 
@@ -101,6 +105,58 @@ class TreeShape:
             return mx.array(out, dtype=mx.int32)
 
         return self._const("conv", make)
+
+
+class DynamicShape:
+    """A window whose parents are only known on the GPU (``parents`` [W] int32,
+    root -1, parents before children): the index tables are computed by array
+    ops, so the verify graph builds before the draft tree is read back.
+    ``max_depth`` bounds the tree's depth (host side, sizes the tail gather)."""
+
+    dynamic = True
+    is_chain = False
+
+    def __init__(self, parents: mx.array, max_depth: int):
+        self.width = int(parents.shape[0])
+        self.max_depth = int(max_depth)
+        self._parents = parents.astype(mx.int32)
+        w = self.width
+        up = mx.maximum(self._parents, 0)  # the root points at itself
+        anc = [mx.arange(w, dtype=mx.int32)]
+        for _ in range(self.max_depth):
+            anc.append(mx.take(up, anc[-1]))
+        self._anc = mx.stack(anc)  # [maxd + 1, W]: k-th ancestor of each row
+        depth = mx.zeros((w,), dtype=mx.int32)
+        cur = mx.arange(w, dtype=mx.int32)
+        for _ in range(self.max_depth):
+            step = (mx.take(self._parents, cur) >= 0).astype(mx.int32)
+            depth = depth + step
+            cur = mx.take(up, cur)
+        self._depth = depth
+        self.depths = None
+
+    def parents_array(self) -> mx.array:
+        return self._parents
+
+    def depth_array(self) -> mx.array:
+        return self._depth
+
+    def path_table(self) -> mx.array:
+        """[W, max_depth + 1]: row ``r``'s ``j``-th ancestor (``j <= depth``)."""
+        j = mx.arange(self.max_depth + 1, dtype=mx.int32)[None]  # [1, M]
+        k = mx.maximum(self._depth[:, None] - j, 0)  # [W, M]
+        rows = mx.arange(self.width, dtype=mx.int32)[:, None]
+        return self._anc[k, rows]
+
+    def conv_index(self) -> mx.array:
+        """[W * 3] as ``TreeShape.conv_index``."""
+        out = []
+        for m in (3, 2, 1):  # oldest to newest of the last three inputs
+            from_window = 3 + self._anc[min(m, self.max_depth)]
+            from_state = 3 + self._depth - m
+            use_window = self._depth >= m
+            out.append(mx.where(use_window, from_window, from_state))
+        return mx.stack(out, axis=1).reshape(-1)
 
 
 @dataclass
@@ -459,10 +515,12 @@ def _zeros(shape, dtype):
 
 
 class RoundContext:
-    """Host-side tables of one window at one position, built once and shared
-    by every attention layer of the forward."""
+    """Tables of one window at one position, built once and shared by every
+    attention layer of the forward. A dynamic shape sizes its work lists for
+    the deepest possible row (rows shorter than that skip their empty chunks
+    from their true lengths, which are arrays)."""
 
-    def __init__(self, shape: TreeShape, n0: int):
+    def __init__(self, shape, n0: int):
         w = shape.width
         self.shape, self.n0 = shape, n0
         self.cstar = n0 // CK
@@ -471,13 +529,20 @@ class RoundContext:
         self.nc_total = self.cstar + self.ntail
         self.m = n0 - self.tail_start
         self.win_idx = shape.path_table().reshape(-1)
-        local = [n0 + dep + 1 - self.tail_start for dep in shape.depths]
-        self.local_arr = mx.array(local, dtype=mx.int32)
         self.slots_b = mx.arange(w, dtype=mx.int32)
-        self.abs_lengths = mx.array(
-            [n0 + dep + 1 for dep in shape.depths], dtype=mx.int32
-        )
-        self.plan_b = ra._work_list(tuple(local), 1, self.ntail, True)
+        if shape.dynamic:
+            depth = shape.depth_array()
+            worst = n0 + shape.max_depth + 1 - self.tail_start
+            self.local_arr = n0 + depth + 1 - self.tail_start
+            self.abs_lengths = n0 + depth + 1
+            self.plan_b = ra._work_list((worst,) * w, 1, self.ntail, True)
+        else:
+            local = [n0 + dep + 1 - self.tail_start for dep in shape.depths]
+            self.local_arr = mx.array(local, dtype=mx.int32)
+            self.abs_lengths = mx.array(
+                [n0 + dep + 1 for dep in shape.depths], dtype=mx.int32
+            )
+            self.plan_b = ra._work_list(tuple(local), 1, self.ntail, True)
         if self.cstar:
             self.len_a = self.tail_start + w - 1
             self.len_a_arr = mx.array([self.len_a], dtype=mx.int32)
@@ -658,9 +723,12 @@ def tree_forward(
     if n0 is None:
         raise ValueError("tree verify needs the single-row lane cache")
     base = n0 + _rope_delta(lm)
-    pos = mx.array([[[base + d for d in shape.depths]]] * 3, dtype=mx.int32).reshape(
-        3, 1, w
-    )
+    if shape.dynamic:
+        pos = mx.broadcast_to((base + shape.depth_array())[None, None], (3, 1, w))
+    else:
+        pos = mx.array(
+            [[[base + d for d in shape.depths]]] * 3, dtype=mx.int32
+        ).reshape(3, 1, w)
     rc = RoundContext(shape, n0)
     h = model.embed_tokens(tokens)
     res = TreeResult(shape=shape, n0=n0, hidden=h)
