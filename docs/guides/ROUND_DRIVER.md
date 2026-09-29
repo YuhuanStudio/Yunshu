@@ -50,6 +50,25 @@ depend on the window length, `lengths = n + T` so a shorter window's padded tail
 it never returns); the GDN conv is one batched conv and the recurrence one launch
 (`kernels/gdn_rows.py`, upstream's step kernel per (row, head, value dim) with a per-row length).
 
+## APC prefix cache
+
+The driver uses the same `APCManager` as the default runner, through mlx-vlm's `APCCoordinator`
+(checkpoint strategy: hybrid GDN + KV state cannot be sliced, so the reuse unit is a snapshot at a
+prefix boundary). A row looks up the longest stored checkpoint of its prompt when it is added and
+starts from the restored caches (`row.done` = the restored length); while it prefills it stores
+snapshots at the coordinator's checkpoint lengths (every 2048 tokens up to the resident entry budget,
+and the prompt minus its last token, so a repeated prompt recomputes one token). Rows that draft
+also snapshot the MTP head's KV (appended to the cache list) so a restored row drafts from the first
+step; those entries are keyed apart (`extra_hash` salt) from rows without a head, and from the
+upstream runner's entries.
+
+Prefill numerics depend on the span a matmul sees, so the span plan is a function of the prompt alone:
+fixed `chunk`-token spans on the grid from position 0, cut at the prompt's own checkpoints. A row
+restored at a checkpoint on the grid continues with the spans a cold prefill runs, and a repeated
+prompt has the same plan both times, so hit == miss token for token
+(`tests/unit/test_round_driver_apc.py`). A checkpoint from a prompt with a different plan (a prefix
+that ends off the grid) is still valid state; the continuation just follows this prompt's own plan.
+
 ## Lossless: what holds per row
 
 A row's arithmetic does not depend on which rows share the step, how many drafts the others
@@ -65,8 +84,10 @@ verify, or whether it drafts at all:
   for its own tokens. The kernel also writes the state after each real token but the last
   (`hist`); a row that keeps only part of its window continues from `hist[kept - 1]` and the conv
   window from its position `kept` (`DecodeBatch.commit`); KV needs only its length set.
-- **Prefill**: fixed chunks, each its own segment, so a prompt's bits do not depend on what it was
-  packed with.
+- **Prefill**: fixed spans (see the APC section), each its own segment with its own matmul calls, so a
+  prompt's bits do not depend on what it was packed with. Projections run MLX's stock quantized
+  matmul on the layer's weight untiled from the lane layout (`LaneLinear.prefill`, transient: one
+  layer's copy at a time), not the 128-row lane pieces (~25% slower at prefill sizes).
 - Norms, activations, embedding: per token.
 
 For greedy rows: **spec on == spec off, and a row alone == the same row in any batch or join
@@ -91,7 +112,6 @@ it lands — no row-count thresholds.
 
 ## Not yet
 
-- APC prefix reuse and checkpoints, image / audio prompts (mRoPE), int8 KV, MoE: those requests stay
-  on the upstream path.
+- Image / audio prompts (mRoPE), int8 KV, MoE: those requests stay on the upstream path.
 - DFlash2 drafting (block drafts from the target's layer taps; same allocation).
 - Tree drafts.
