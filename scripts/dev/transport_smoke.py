@@ -73,7 +73,10 @@ async def stream_checks(ws_url: str, http_url: str, model: str, uds: str | None 
     from yunshu_client import YunshuStream
 
     async with YunshuStream(ws_url, uds=uds) as conn:
-        check("stream: session.created limits", conn.session["limits"]["max_inflight"] >= 1)
+        check(
+            "stream: session.created limits",
+            conn.session["limits"]["max_inflight"] >= 1,
+        )
 
         async def run(api, body, **kw):
             evs = []
@@ -81,7 +84,12 @@ async def stream_checks(ws_url: str, http_url: str, model: str, uds: str | None 
                 evs.append(m)
             return evs
 
-        chat = {"model": model, "max_tokens": 24, "messages": [{"role": "user", "content": "Say hello in five words."}]}
+        chat = {
+            "model": model,
+            "max_tokens": 400,
+            "chat_template_kwargs": {"enable_thinking": False},
+            "messages": [{"role": "user", "content": "Say hello in five words."}],
+        }
         evs = await run("chat.completions", chat, id="chat1")
         deltas = "".join(
             (e["data"]["choices"] or [{}])[0].get("delta", {}).get("content") or ""
@@ -89,22 +97,73 @@ async def stream_checks(ws_url: str, http_url: str, model: str, uds: str | None 
             if e["type"] == "event" and e["data"].get("choices")
         )
         done = evs[-1]
-        check("stream: chat.completions text + done", bool(deltas) and done["type"] == "done" and done["reason"] == "completed", repr(deltas[:50]))
-        check("stream: stats ttft/duration", done["stats"]["ttft_ms"] is not None, str(done["stats"]))
-        check("stream: usage chunk delivered", any(e["type"] == "event" and e["data"].get("usage") for e in evs))
+        check(
+            "stream: chat.completions text + done",
+            bool(deltas) and done["type"] == "done" and done["reason"] == "completed",
+            repr(deltas[:50]),
+        )
+        check(
+            "stream: stats ttft/duration",
+            done["stats"]["ttft_ms"] is not None,
+            str(done["stats"]),
+        )
+        check(
+            "stream: usage chunk delivered",
+            any(e["type"] == "event" and e["data"].get("usage") for e in evs),
+        )
 
-        evs = await run("responses", {"model": model, "input": "Say hi.", "max_output_tokens": 24}, id="resp1")
+        evs = await run(
+            "responses",
+            {"model": model, "input": "Say hi.", "max_output_tokens": 400},
+            id="resp1",
+        )
         types = [e["data"].get("type") for e in evs if e["type"] == "event"]
-        check("stream: responses events", "response.created" in types and "response.completed" in types, str(sorted(set(types)))[:200])
+        check(
+            "stream: responses events",
+            "response.created" in types and "response.completed" in types,
+            json.dumps(
+                [
+                    e["data"].get("response", {}).get("incomplete_details")
+                    for e in evs
+                    if e["type"] == "event"
+                    and e["data"].get("type") == "response.incomplete"
+                ]
+            ),
+        )
 
-        evs = await run("messages", {"model": model, "max_tokens": 24, "messages": [{"role": "user", "content": "Say hi."}]}, id="msg1")
+        evs = await run(
+            "messages",
+            {
+                "model": model,
+                "max_tokens": 400,
+                "messages": [{"role": "user", "content": "Say hi."}],
+            },
+            id="msg1",
+        )
         types = [e["data"].get("type") for e in evs if e["type"] == "event"]
-        check("stream: messages events", "message_start" in types and "message_stop" in types, str(sorted(set(types)))[:200])
+        check(
+            "stream: messages events",
+            "message_start" in types and "message_stop" in types,
+            str(sorted(set(types)))[:200],
+        )
 
         # multiplex: two concurrent chats on one socket
-        long = {"model": model, "max_tokens": 300, "messages": [{"role": "user", "content": "Write a long story about a dragon."}]}
-        a, b = await asyncio.gather(run("chat.completions", chat, id="ma"), run("chat.completions", chat, id="mb"))
-        check("stream: 2 concurrent requests complete", a[-1]["reason"] == "completed" and b[-1]["reason"] == "completed")
+        long = {
+            "model": model,
+            "max_tokens": 300,
+            "chat_template_kwargs": {"enable_thinking": False},
+            "messages": [
+                {"role": "user", "content": "Write a long story about a dragon."}
+            ],
+        }
+        a, b = await asyncio.gather(
+            run("chat.completions", chat, id="ma"),
+            run("chat.completions", chat, id="mb"),
+        )
+        check(
+            "stream: 2 concurrent requests complete",
+            a[-1]["reason"] == "completed" and b[-1]["reason"] == "completed",
+        )
 
         # cancel mid-generation, then a fresh request must be quick (GPU freed)
         got = 0
@@ -117,10 +176,18 @@ async def stream_checks(ws_url: str, http_url: str, model: str, uds: str | None 
                     await conn.cancel("cx")
             elif m["type"] == "done":
                 cancel_done = m
-        check("stream: cancel -> done(cancelled)", cancel_done and cancel_done["reason"] == "cancelled", str(cancel_done and cancel_done["stats"]))
+        check(
+            "stream: cancel -> done(cancelled)",
+            cancel_done and cancel_done["reason"] == "cancelled",
+            str(cancel_done and cancel_done["stats"]),
+        )
         t0 = time.perf_counter()
         evs = await run("chat.completions", {**chat, "max_tokens": 4}, id="after")
-        check("stream: request after cancel completes promptly", evs[-1]["reason"] == "completed", f"{time.perf_counter() - t0:.2f}s (cancel->done {time.perf_counter() - t_cancel:.2f}s incl. this)")
+        check(
+            "stream: request after cancel completes promptly",
+            evs[-1]["reason"] == "completed",
+            f"{time.perf_counter() - t0:.2f}s (cancel->done {time.perf_counter() - t_cancel:.2f}s incl. this)",
+        )
 
         # update max_tokens mid-flight
         n = 0
@@ -132,7 +199,11 @@ async def stream_checks(ws_url: str, http_url: str, model: str, uds: str | None 
                     await conn.set_max_tokens("up", 10)
             elif m["type"] == "done":
                 upd = m
-        check("stream: update max_tokens stops early", upd and upd["reason"] == "max_tokens" and upd["stats"]["deltas"] <= 40, str(upd and upd["stats"]))
+        check(
+            "stream: update max_tokens stops early",
+            upd and upd["reason"] == "max_tokens" and upd["stats"]["deltas"] <= 40,
+            str(upd and upd["stats"]),
+        )
 
         # error path
         try:
@@ -140,24 +211,44 @@ async def stream_checks(ws_url: str, http_url: str, model: str, uds: str | None 
                 pass
             check("stream: invalid body -> error", False)
         except Exception as exc:  # noqa: BLE001
-            check("stream: invalid body -> error", getattr(exc, "status", 0) in (400, 422), str(exc)[:100])
+            check(
+                "stream: invalid body -> error",
+                getattr(exc, "status", 0) in (400, 422),
+                str(exc)[:100],
+            )
 
 
 async def responses_ws_checks(base: str, model: str):
     from openai import AsyncOpenAI
 
-    client = AsyncOpenAI(base_url=base + "/v1", api_key="x", websocket_base_url=base.replace("http", "ws", 1) + "/v1")
+    client = AsyncOpenAI(
+        base_url=base + "/v1",
+        api_key="x",
+        websocket_base_url=base.replace("http", "ws", 1) + "/v1",
+    )
     async with client.responses.connect() as conn:
-        await conn.response.create(model=model, input="Say hello in three words.", max_output_tokens=24)
+        await conn.response.create(
+            model=model, input="Say hello in three words.", max_output_tokens=400
+        )
         types = []
         text = ""
         async for ev in conn:
             types.append(ev.type)
+            last = ev
             if ev.type == "response.output_text.delta":
                 text += ev.delta
-            if ev.type in ("response.completed", "response.failed", "response.incomplete", "error"):
+            if ev.type in (
+                "response.completed",
+                "response.failed",
+                "response.incomplete",
+                "error",
+            ):
                 break
-        check("responses-ws: SDK connect + response.create -> completed", "response.created" in types and types[-1] == "response.completed", f"{types[-1]} {text[:40]!r}")
+        check(
+            "responses-ws: SDK connect + response.create -> completed",
+            "response.created" in types and types[-1] == "response.completed",
+            f"{types[-1]} {text[:40]!r} {getattr(last, 'response', None) and last.response.incomplete_details}",
+        )
         check("responses-ws: text deltas", bool(text.strip()))
         # continuation on the same socket with previous_response_id
         # (server-stored response)
@@ -181,7 +272,9 @@ async def realtime_checks(base: str, model: str, audio: bool):
 
 
 def http_ready(url):
-    return lambda: urllib.request.urlopen(url + "/health/ready", timeout=3).status == 200
+    return lambda: (
+        urllib.request.urlopen(url + "/health/ready", timeout=3).status == 200
+    )
 
 
 def mode_tcp(a):
@@ -204,29 +297,107 @@ def mode_uds(a):
     sock = tempfile.mkdtemp(prefix="ys", dir="/tmp") + "/y.sock"
     p = start_server(a.model, ["--uds", sock])
     try:
+
         def ready():
-            out = sp.run(["curl", "-s", "--unix-socket", sock, "-o", "/dev/null", "-w", "%{http_code}", "http://localhost/health/ready"], capture_output=True, text=True)
+            out = sp.run(
+                [
+                    "curl",
+                    "-s",
+                    "--unix-socket",
+                    sock,
+                    "-o",
+                    "/dev/null",
+                    "-w",
+                    "%{http_code}",
+                    "http://localhost/health/ready",
+                ],
+                capture_output=True,
+                text=True,
+            )
             return out.stdout == "200"
 
         wait_ready(ready, p)
-        out = sp.run(["curl", "-s", "--unix-socket", sock, "http://localhost/v1/models"], capture_output=True, text=True)
+        out = sp.run(
+            ["curl", "-s", "--unix-socket", sock, "http://localhost/v1/models"],
+            capture_output=True,
+            text=True,
+        )
         model = json.loads(out.stdout)["data"][0]["id"]
         check("uds: curl --unix-socket /v1/models", bool(model), model)
-        body = json.dumps({"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": "Say hi."}]})
-        out = sp.run(["curl", "-s", "--unix-socket", sock, "-H", "content-type: application/json", "-d", body, "http://localhost/v1/chat/completions"], capture_output=True, text=True)
-        check("uds: curl chat completion", bool(json.loads(out.stdout)["choices"][0]["message"]["content"]))
-        out = sp.run(["curl", "-sN", "--unix-socket", sock, "-H", "content-type: application/json", "-d", body.replace("}]}", "}],\"stream\":true}"), "http://localhost/v1/chat/completions"], capture_output=True, text=True)
+        body = json.dumps(
+            {
+                "model": model,
+                "max_tokens": 300,
+                "chat_template_kwargs": {"enable_thinking": False},
+                "messages": [{"role": "user", "content": "Say hi."}],
+            }
+        )
+        out = sp.run(
+            [
+                "curl",
+                "-s",
+                "--unix-socket",
+                sock,
+                "-H",
+                "content-type: application/json",
+                "-d",
+                body,
+                "http://localhost/v1/chat/completions",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        check(
+            "uds: curl chat completion",
+            bool(json.loads(out.stdout)["choices"][0]["message"]["content"]),
+        )
+        out = sp.run(
+            [
+                "curl",
+                "-sN",
+                "--unix-socket",
+                sock,
+                "-H",
+                "content-type: application/json",
+                "-d",
+                body.replace("}]}", '}],"stream":true}'),
+                "http://localhost/v1/chat/completions",
+            ],
+            capture_output=True,
+            text=True,
+        )
         check("uds: curl SSE stream", "data: [DONE]" in out.stdout)
 
         import httpx
         from openai import OpenAI
 
-        oa = OpenAI(base_url="http://yunshu/v1", api_key="x", http_client=httpx.Client(transport=httpx.HTTPTransport(uds=sock)))
-        r = oa.chat.completions.create(model=model, max_tokens=16, messages=[{"role": "user", "content": "Say hi."}])
-        check("uds: openai SDK over httpx uds transport", bool(r.choices[0].message.content))
-        chunks = list(oa.chat.completions.create(model=model, max_tokens=16, stream=True, messages=[{"role": "user", "content": "Say hi."}]))
+        oa = OpenAI(
+            base_url="http://yunshu/v1",
+            api_key="x",
+            http_client=httpx.Client(transport=httpx.HTTPTransport(uds=sock)),
+        )
+        r = oa.chat.completions.create(
+            model=model,
+            max_tokens=300,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+            messages=[{"role": "user", "content": "Say hi."}],
+        )
+        check(
+            "uds: openai SDK over httpx uds transport",
+            bool(r.choices[0].message.content),
+        )
+        chunks = list(
+            oa.chat.completions.create(
+                model=model,
+                max_tokens=300,
+                stream=True,
+                messages=[{"role": "user", "content": "Say hi."}],
+            )
+        )
         check("uds: openai SDK streaming over uds", len(chunks) > 2)
-        asyncio.run(stream_checks("ws://yunshu/v1/stream", "http://yunshu", model, uds=sock))
+        asyncio.run(
+            stream_checks("ws://yunshu/v1/stream", "http://yunshu", model, uds=sock)
+        )
     finally:
         kill9(p)
         try:

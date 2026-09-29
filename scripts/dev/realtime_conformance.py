@@ -162,7 +162,9 @@ async def ga_text(client, model: str) -> None:
 
         # cancel mid-response
         await conn.response.create(
-            response={"instructions": "Count from 1 to 200, one number per line."}
+            response={
+                "instructions": "Count from 1 to 5000, one number per line, never stop."
+            }
         )
         got = 0
 

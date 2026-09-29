@@ -78,7 +78,7 @@ class AsgiCall:
         self._started = asyncio.Event()
         scope: dict[str, Any] = {
             "type": "http",
-            "asgi": {"version": "3.0", "spec_version": "2.4"},
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
             "http_version": "1.1",
             "method": method,
             "scheme": "http",
@@ -106,9 +106,9 @@ class AsgiCall:
 
     async def _send(self, message) -> None:
         if self._closed:
-            # What a server does when the peer is gone: the app's streaming
-            # response stops (and closes its generator, releasing the engine).
-            raise OSError("client disconnected")
+            # Peer gone (like uvicorn): drop output. The app learns of the
+            # disconnect through receive() and stops its generator.
+            return
         if message["type"] == "http.response.start":
             self.status = message["status"]
             self.headers = {

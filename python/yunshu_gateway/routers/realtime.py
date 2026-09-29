@@ -1974,7 +1974,9 @@ class RealtimeSession:
                     response={
                         "id": response_id,
                         "object": "realtime.response",
-                        "status": "completed",
+                        "status": "cancelled"
+                        if (self._cancel_event is not None and self._cancel_event.is_set())
+                        else "completed",
                         "output": [assistant_item.to_dict()]
                         + [fi.to_dict() for fi in _fc_items],
                         "usage": {
@@ -2297,6 +2299,19 @@ class RealtimeSession:
                     full_text, _snap_tools, _snap_tool_choice, _snap_model, _oob
                 )
 
+            if "text" in modalities:
+                # the cascade path always closed the text stream; the omni
+                # path forgot, so a text-modality client never saw text.done.
+                await self.send_event(
+                    _event(
+                        RealtimeEvent.RESPONSE_TEXT_DONE,
+                        response_id=response_id,
+                        item_id=item_id,
+                        output_index=0,
+                        content_index=0,
+                        text=_visible_text,
+                    )
+                )
             if "audio" in modalities:
                 await self.send_event(
                     _event(
@@ -2385,7 +2400,9 @@ class RealtimeSession:
                     response={
                         "id": response_id,
                         "object": "realtime.response",
-                        "status": "completed",
+                        "status": "cancelled"
+                        if (self._cancel_event is not None and self._cancel_event.is_set())
+                        else "completed",
                         "output": [assistant_item.to_dict()]
                         + [fi.to_dict() for fi in _fc_items],
                         "usage": {
