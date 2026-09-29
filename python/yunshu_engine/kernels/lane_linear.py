@@ -89,9 +89,65 @@ class LaneLinear(nn.Module):
         )
 
     def _rows(self, x2: mx.array) -> mx.array:
+        # 17..48 rows: 16-row threadgroup blocks (same bits per row as the
+        # default 32-row block, 10-35% faster on projections up to ~20K wide;
+        # the 248K-wide LM head is slower that way)
+        m = int(x2.shape[0])
+        block = 16 if 16 < m <= 48 and self.output_dims < 100_000 else None
         return lane_qmm.lane_matmul(
-            x2, self.weight, self.sbt, tiled=self.tiled, group=self.group_size
+            x2,
+            self.weight,
+            self.sbt,
+            tiled=self.tiled,
+            group=self.group_size,
+            row_block=block,
         )
+
+    def stock(self) -> tuple[mx.array, mx.array, mx.array]:
+        """The projection in MLX's own layout (weight, scales, biases): the
+        tiling undone, the pairs split. Fresh buffers, meant to live for one
+        layer of a prefill forward (``prefill``)."""
+        weight = (
+            lane_qmm.untile_weight(
+                self.weight, lane_qmm.NT, self.group_size, bits=self.bits
+            )
+            if self.tiled
+            else self.weight
+        )
+        scales = mx.contiguous(self.sbt[..., 0].T)
+        biases = mx.contiguous(self.sbt[..., 1].T)
+        return weight, scales, biases
+
+    def prefill(self, xs: list[mx.array]) -> list[mx.array]:
+        """Each of ``xs`` through MLX's quantized matmul, one call per array.
+
+        Prefill spans are large enough that the lane kernel (128 rows a call,
+        a weight read per piece, a per-group epilogue) runs at ~75% of stock
+        matmul speed. A stock call's bits depend on its own row count, so the
+        caller passes each prompt span as its own array: a prompt's prefill
+        never depends on what shares the step. The weight is untiled once for
+        all spans (a transient copy, not a second resident one)."""
+        weight, scales, biases = self.stock()
+        out = []
+        for x in xs:
+            lead = x.shape[:-1]
+            x2 = x.reshape(-1, self.input_dims)
+            dtype = x2.dtype
+            if dtype != mx.bfloat16:
+                x2 = x2.astype(mx.bfloat16)
+            y = mx.quantized_matmul(
+                x2,
+                weight,
+                scales,
+                biases,
+                transpose=True,
+                group_size=self.group_size,
+                bits=self.bits,
+            )
+            if "bias" in self:
+                y = y + self["bias"]
+            out.append(y.reshape(*lead, self.output_dims).astype(dtype))
+        return out
 
     def __call__(self, x: mx.array) -> mx.array:
         lead = x.shape[:-1]
