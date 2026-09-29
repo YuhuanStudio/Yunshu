@@ -234,6 +234,7 @@ round**, which covered LLM/VLM only.
 |---|---|---|---|
 | Native speech-to-speech (Qwen3-Omni Thinker→Talker, streaming) | `POST /v1/omni/speech/stream` | `mlx-vlm` | `omni` |
 | Realtime voice | `WS /v1/realtime` | omni, or ASR → LLM → TTS | `audio` |
+| Text over WebSocket (multiplexed, cancel by id) | `WS /v1/stream`, `WS /v1/responses` | any served model | -- |
 | ASR | `/v1/audio/transcriptions` | `mlx-audio` / Whisper | `audio` |
 | TTS | `/v1/audio/speech` | `mlx-audio` | `audio` |
 | Image generation | `/v1/images/generations` | diffusion | `generation` |
@@ -246,6 +247,12 @@ output correct (maintainer check, 2026-09-28); the server's Realtime path
 was not.
 
 Text-to-video generation is not offered over HTTP (the route was removed); video input to VLMs works.
+
+Transports beyond SSE ([docs/guides/TRANSPORTS.md](docs/guides/TRANSPORTS.md)): a multiplexed text WebSocket
+(`WS /v1/stream`: many requests on one socket, cancel / stop / `max_tokens` update by id, heartbeats,
+backpressure; client in `python/yunshu_client`, demo in `examples/ws_stream.py`), OpenAI's Responses WebSocket
+mode (`client.responses.connect()`), Realtime in the GA and beta schemas, and `yunshu serve --uds PATH` for a
+Unix socket (`curl --unix-socket`, OpenAI SDK over an httpx uds transport). WebRTC and HTTP/2 are not offered yet.
 
 Also: MCP server/client, an Anthropic-compatible `/v1/messages` surface and an Ollama-compatible `/api` layer (route status: [docs/guides/API_SURFACE.md](docs/guides/API_SURFACE.md)).
 

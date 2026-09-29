@@ -75,6 +75,10 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_STARTUP_TIMEOUT` | float | 300.0 | Seconds to wait for the model to load before startup fails. |
 | `YUNSHU_DRAIN_TIMEOUT` | float | 30.0 | Seconds to wait for in-flight requests on shutdown. |
 | `YUNSHU_KEEP_ALIVE_TIMEOUT` | int | 5 | Seconds an idle HTTP connection stays open. |
+| `YUNSHU_UDS` | path | unset | Serve on this Unix domain socket instead of a TCP port (same app; curl --unix-socket, httpx uds=). |
+| `YUNSHU_WS_MAX_INFLIGHT` | int | 16 | Text WebSocket (/v1/stream, wss /v1/responses): maximum concurrent requests per connection. |
+| `YUNSHU_WS_PING_INTERVAL` | float | 15.0 | Text WebSocket: seconds between server heartbeat pings (0 disables). |
+| `YUNSHU_WS_SEND_QUEUE` | int | 256 | Text WebSocket: outbound events buffered per connection before generation is paused (backpressure). |
 | `YUNSHU_MAX_REQUEST_SIZE` | int | 10485760 (10 MiB) | Maximum request body size in bytes. |
 | `YUNSHU_PROGRESS_INTERVAL_S` | float | 2.0 | Streaming chat/completions: seconds between `: yunshu-progress` SSE comments (queue / prefill progress, ETA) before the first token; 0 turns them off. Strict SSE clients ignore comment lines. |
 | `YUNSHU_SLOW_REQUEST_THRESHOLD` | float | 30.0 | Log a warning for requests slower than this many seconds. |

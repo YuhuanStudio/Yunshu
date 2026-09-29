@@ -30,7 +30,13 @@ multi-model mode (`--models-dir`) an unknown model is a 404 `model_not_found`.
 | `GET /v1/audio/voices` | kept | Used by `yunshu voices`. |
 | `POST /v1/images/generations` (+ `/stream`), `/v1/images/edits`, `/v1/images/variations` | kept | SDK for generations; edits and variations are unit-tested. |
 | `POST /v1/ocr` | kept, extension | GLM-OCR. Not an OpenAI route; kept because `yunshu ocr` and the release gate use it. |
-| `WS /v1/realtime` (and `/realtime`) | kept | OpenAI-Realtime event protocol. Unit tests; opens and answers `session.created`. |
+| `WS /v1/realtime` | kept | OpenAI Realtime, GA schema (what `client.realtime.connect()` speaks) or beta with `OpenAI-Beta: realtime=v1`. Checked with the official `openai` SDK (`scripts/dev/realtime_conformance.py`); differences listed in [TRANSPORTS.md](TRANSPORTS.md). |
+| `WS /realtime` | kept | Legacy path, beta schema. |
+| `POST /v1/realtime/calls` (WebRTC) | planned | Not implemented: needs `aiortc`; plan in [TRANSPORTS.md](TRANSPORTS.md). |
+| `WS /v1/responses` | kept | OpenAI Responses WebSocket mode (`client.responses.connect()`): `response.create` in, raw `response.*` events out, `stream_id` lanes. |
+| `WS /v1/stream` | kept, extension | Yunshu protocol: many chat.completions / completions / responses / messages requests on one socket, cancel / stop / max_tokens update by id, heartbeats, backpressure. Anthropic has no official WebSocket mode. |
+| Unix socket (`yunshu serve --uds PATH`) | kept | Same app; `curl --unix-socket`, httpx `uds=`. |
+| HTTP/2 (h2c) | not offered | uvicorn is HTTP/1.1 only; see [TRANSPORTS.md](TRANSPORTS.md). |
 | `/v1/files`, `/v1/batches`, `/v1/fine_tuning`, `/v1/moderations`, `/v1/assistants`, `/v1/vector_stores`, `/v1/uploads` | not applicable | Hosted-platform features with no local-engine meaning. |
 
 ### Chat completions: parameters and fields

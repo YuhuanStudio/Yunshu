@@ -21,6 +21,8 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from yunshu_engine import settings
 
+from .. import realtime_ga
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["realtime"])
@@ -464,6 +466,7 @@ class SessionConfig:
     SUPPORTED_AUDIO_FORMATS = {"pcm16", "g711_ulaw", "g711_alaw"}
 
     def __init__(self):
+        self.id = f"sess_{uuid.uuid4().hex[:16]}"
         self.model = "default"
         self.modalities = ["text"]
         self.voice = Voice.ALLOY
@@ -550,6 +553,8 @@ class SessionConfig:
 
     def to_dict(self) -> dict:
         return {
+            "id": self.id,
+            "object": "realtime.session",
             "model": self.model,
             "modalities": self.modalities,
             "voice": self.voice,
@@ -873,8 +878,11 @@ class RealtimeSession:
         )
         return pcm24, self._AUDIO_CHUNK_BYTES
 
-    def __init__(self, ws: WebSocket):
+    def __init__(self, ws: WebSocket, dialect: str = "beta"):
         self.ws = ws
+        # "ga": OpenAI Realtime GA schema (openai SDK client.realtime); "beta":
+        # the flat schema (OpenAI-Beta: realtime=v1, and the legacy /realtime path).
+        self.dialect = dialect
         self.session = SessionConfig()
         self.conversation = Conversation(f"conv_{uuid.uuid4().hex[:16]}")
         self._active_response: asyncio.Task | None = None
@@ -917,7 +925,11 @@ class RealtimeSession:
 
     async def send_event(self, event: dict) -> None:
         try:
-            await self.ws.send_json(event)
+            if self.dialect == "ga":
+                for ev in realtime_ga.to_ga(event):
+                    await self.ws.send_json(ev)
+            else:
+                await self.ws.send_json(event)
         except Exception as e:
             logger.warning(f"Failed to send realtime event: {e}")
 
@@ -1009,6 +1021,8 @@ class RealtimeSession:
 
     async def _handle_event(self, event: dict) -> None:
         """Dispatch incoming events to handlers."""
+        if self.dialect == "ga":
+            event = realtime_ga.from_ga(event)
         event_type = event.get("type", "")
         handler = _EVENT_HANDLERS.get(event_type)
         if handler is None:
@@ -1960,7 +1974,12 @@ class RealtimeSession:
                     response={
                         "id": response_id,
                         "object": "realtime.response",
-                        "status": "completed",
+                        "status": "cancelled"
+                        if (
+                            self._cancel_event is not None
+                            and self._cancel_event.is_set()
+                        )
+                        else "completed",
                         "output": [assistant_item.to_dict()]
                         + [fi.to_dict() for fi in _fc_items],
                         "usage": {
@@ -2283,6 +2302,19 @@ class RealtimeSession:
                     full_text, _snap_tools, _snap_tool_choice, _snap_model, _oob
                 )
 
+            if "text" in modalities:
+                # the cascade path always closed the text stream; the omni
+                # path forgot, so a text-modality client never saw text.done.
+                await self.send_event(
+                    _event(
+                        RealtimeEvent.RESPONSE_TEXT_DONE,
+                        response_id=response_id,
+                        item_id=item_id,
+                        output_index=0,
+                        content_index=0,
+                        text=_visible_text,
+                    )
+                )
             if "audio" in modalities:
                 await self.send_event(
                     _event(
@@ -2371,7 +2403,12 @@ class RealtimeSession:
                     response={
                         "id": response_id,
                         "object": "realtime.response",
-                        "status": "completed",
+                        "status": "cancelled"
+                        if (
+                            self._cancel_event is not None
+                            and self._cancel_event.is_set()
+                        )
+                        else "completed",
                         "output": [assistant_item.to_dict()]
                         + [fi.to_dict() for fi in _fc_items],
                         "usage": {
@@ -3262,19 +3299,16 @@ _EVENT_HANDLERS = {
 @router.websocket("/v1/realtime")
 @router.websocket("/realtime")
 async def realtime_endpoint(ws: WebSocket):
-    """OpenAI-compatible Realtime API WebSocket endpoint.
+    """OpenAI Realtime API WebSocket endpoint.
 
-    Exposed at both `/realtime` (legacy) and `/v1/realtime` (matches
-    the OpenAI SDK URL `wss://api.openai.com/v1/realtime`). Clients
-    using the official SDK will hit the /v1/ path; existing yunshu
-    callers keep working on the bare /realtime path.
+    ``/v1/realtime`` speaks the GA schema (what ``openai`` SDK ``client.realtime``
+    sends: no beta header) and the beta schema when ``OpenAI-Beta: realtime=v1``
+    is present; the legacy ``/realtime`` path is always beta. ``?model=`` picks
+    the session model. Origin and bearer checks run *before* the upgrade, so a
+    rejected client sees an HTTP 403 handshake failure like on api.openai.com.
     """
-    auth_token = settings.get("YUNSHU_AUTH_TOKEN")
+    import hmac
 
-    # Accept the WebSocket first — Starlette requires accept() before close().
-    await ws.accept()
-
-    # Origin validation: reject cross-origin WebSocket connections unless CORS is wildcard
     origin = ws.headers.get("origin", "")
     if origin:
         cors_origins_str = settings.get("YUNSHU_CORS_ORIGINS")
@@ -3282,35 +3316,33 @@ async def realtime_endpoint(ws: WebSocket):
             allowed = {
                 o.strip().rstrip("/") for o in cors_origins_str.split(",") if o.strip()
             }
-            origin_stripped = origin.rstrip("/")
-            if origin_stripped not in allowed:
-                await ws.close(code=4003, reason="Origin not allowed")
+            if origin.rstrip("/") not in allowed:
+                await ws.close(code=1008)
                 return
 
-    # Determine if auth is required (honor YUNSHU_AUTH_DISABLED, matching
-    # the REST middleware policy in main.py). Single-consumer model: only the
-    # static YUNSHU_AUTH_TOKEN gate is honored; the RBAC WebSocket path has
-    # been removed.
-    auth_disabled = settings.get_bool("YUNSHU_AUTH_DISABLED")
-
-    auth_required = bool(auth_token) and not auth_disabled
-
-    if auth_required:
-        import hmac
-
-        token = ws.headers.get("authorization", "").removeprefix("Bearer ")
+    auth_token = settings.get("YUNSHU_AUTH_TOKEN")
+    if auth_token and not settings.get_bool("YUNSHU_AUTH_DISABLED"):
+        token = ws.headers.get("authorization", "").removeprefix("Bearer ").strip()
         if not token:
-            token = ws.query_params.get("token")
+            # Browsers cannot set headers: OpenAI accepts the key as a
+            # "openai-insecure-api-key.<key>" subprotocol; also ?token=.
+            for proto in ws.scope.get("subprotocols", []):
+                if proto.startswith("openai-insecure-api-key."):
+                    token = proto.removeprefix("openai-insecure-api-key.")
         if not token:
-            await ws.close(code=4001, reason="Authentication required")
+            token = ws.query_params.get("token") or ""
+        if not (token and hmac.compare_digest(token, auth_token)):
+            await ws.close(code=1008)
             return
 
-        if not (auth_token and hmac.compare_digest(token, auth_token)):
-            await ws.close(code=4001, reason="Invalid token")
-            return
-        # Static-token holders are the single owner; no per-key model scoping.
-        session = RealtimeSession(ws)
-        await session.run()
-        return
-    session = RealtimeSession(ws)
+    protos = ws.scope.get("subprotocols", [])
+    accept_proto = "realtime" if "realtime" in protos else None
+    await ws.accept(subprotocol=accept_proto)
+
+    legacy = ws.scope.get("path", "").rstrip("/") == "/realtime"
+    dialect = "beta" if legacy or realtime_ga.wants_beta(ws.headers) else "ga"
+    session = RealtimeSession(ws, dialect=dialect)
+    model = ws.query_params.get("model")
+    if model:
+        session.session.model = model
     await session.run()
