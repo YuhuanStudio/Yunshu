@@ -41,12 +41,15 @@ def _check_permission(request: Request, permission: str) -> None:
     # When a token IS configured it gates everything, inference included.
     auth_token = settings.get("YUNSHU_AUTH_TOKEN")
     if auth_token is not None and auth_token:
-        auth = request.headers.get("Authorization", "")
-        if auth.startswith("Bearer "):
-            import hmac
+        import hmac
 
-            if hmac.compare_digest(auth[7:], auth_token):
-                return  # Valid static token
+        auth = request.headers.get("Authorization", "")
+        # Anthropic SDKs send the key as x-api-key instead of a bearer token.
+        presented = (
+            auth[7:] if auth.startswith("Bearer ") else request.headers.get("x-api-key")
+        )
+        if presented and hmac.compare_digest(presented, auth_token):
+            return  # Valid static token
         # Token is configured but request doesn't provide a valid one
         raise HTTPException(
             status_code=401,
@@ -67,6 +70,19 @@ def _check_permission(request: Request, permission: str) -> None:
         status_code=401,
         detail="No authentication configured. Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true.",
     )
+
+
+def _anthropic_fields(model_id: str, created: int) -> dict:
+    """Extra fields so the Anthropic SDK's models.list()/retrieve() parse the same payload."""
+    from datetime import datetime, timezone
+
+    return {
+        "type": "model",
+        "display_name": model_id,
+        "created_at": datetime.fromtimestamp(created, timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
+    }
 
 
 def _check_model_access(request: Request, model: str | None) -> None:
@@ -127,9 +143,10 @@ async def list_models(request: Request) -> dict:
                 else int(time.time()),
                 "owned_by": "yunshu",
             }
+            model_info.update(_anthropic_fields(entry.model_id, model_info["created"]))
             if _authenticated:
                 model_info["loaded"] = entry.is_loaded
-                model_info["type"] = entry.model_type.name
+                model_info["model_type"] = entry.model_type.name
                 model_info["size_gb"] = round(entry.estimated_bytes / 1e9, 1)
             if _authenticated and entry.is_loaded and entry.engine is not None:
                 try:
@@ -144,7 +161,13 @@ async def list_models(request: Request) -> dict:
                         f"failed to get stats for {entry.model_id}", exc_info=True
                     )
             models.append(model_info)
-        result = {"object": "list", "data": models}
+        result = {
+            "object": "list",
+            "data": models,
+            "has_more": False,
+            "first_id": models[0]["id"] if models else None,
+            "last_id": models[-1]["id"] if models else None,
+        }
         # Include model registry stats for debugging/monitoring — but NOT for an
         # unauthenticated caller (the public OpenAI-compat list must not leak
         # global total_entries/active_owners).
@@ -163,15 +186,24 @@ async def list_models(request: Request) -> dict:
         _load_time = getattr(engine, "_load_time", None) or getattr(
             engine, "load_time", None
         )
+        _mid = get_display_model_id() or engine.model_name
+        _created = int(_load_time) if _load_time else int(time.time())
         models.append(
             {
-                "id": get_display_model_id() or engine.model_name,
+                "id": _mid,
                 "object": "model",
-                "created": int(_load_time) if _load_time else int(time.time()),
+                "created": _created,
                 "owned_by": "yunshu",
+                **_anthropic_fields(_mid, _created),
             }
         )
-    return {"object": "list", "data": models}
+    return {
+        "object": "list",
+        "data": models,
+        "has_more": False,
+        "first_id": models[0]["id"] if models else None,
+        "last_id": models[-1]["id"] if models else None,
+    }
 
 
 @router.get("/models/{model_id:path}")
@@ -191,24 +223,37 @@ async def get_model(model_id: str, request: Request) -> dict:
             "object": "model",
             "owned_by": "yunshu",
             "loaded": entry.is_loaded,
-            "type": entry.model_type.name,
+            "model_type": entry.model_type.name,
             "size_gb": round(entry.estimated_bytes / 1e9, 1),
             # OpenAI spec: `created` is required int — fall back to wall-clock if model
             # hasn't been loaded yet so we never emit null for a required field.
             "created": int(entry.load_time)
             if entry.load_time > 0
             else int(time.time()),
+            **_anthropic_fields(
+                entry.model_id,
+                int(entry.load_time) if entry.load_time > 0 else int(time.time()),
+            ),
         }
 
     engine = get_engine()
-    if not engine or not engine.resolve_model_id(model_id):
+    served = get_display_model_id() or getattr(engine, "model_name", None)
+    resolver = getattr(engine, "resolve_model_id", None)
+    known = bool(engine) and (
+        bool(resolver(model_id))
+        if callable(resolver)
+        else model_id in (served, str(served).rsplit("/", 1)[-1])
+    )
+    if not known:
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
+    _created = int(time.time())
     return {
         "id": model_id,
         "object": "model",
         "owned_by": "yunshu",
         # OpenAI spec: `created` is a required int.
-        "created": int(time.time()),
+        "created": _created,
+        **_anthropic_fields(model_id, _created),
     }
 
 
