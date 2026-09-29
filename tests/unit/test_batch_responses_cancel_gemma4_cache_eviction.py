@@ -44,17 +44,3 @@ def test_gemma4_system_is_turn_boundary():
     assert roles.count("user") == 2, f"user turns merged across system: {roles}"
     # the second user turn is its own message, not concatenated into the first
     assert any(m["content"] == "second" for m in out)
-
-
-def test_explicit_cache_per_owner_eviction():
-    from yunshu_gateway.explicit_cache import ExplicitContextCache
-
-    c = ExplicitContextCache(max_entries=3)
-    for _ in range(3):
-        c.create("m", [{"role": "user", "content": "a"}], 1, owner="A")
-    for _ in range(6):
-        c.create("m", [{"role": "user", "content": "b"}], 1, owner="B")
-    owners = [e.owner for e in c._entries.values()]
-    # tenant A's 3 valid handles survive a flood from tenant B (no cross-tenant eviction)
-    assert owners.count("A") == 3
-    assert owners.count("B") <= 4  # B's own bucket is bounded (lazy cap)

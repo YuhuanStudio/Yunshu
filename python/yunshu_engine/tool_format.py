@@ -120,7 +120,7 @@ def _upstream(name: str) -> ToolFormat | None:
         return None
 
     def parse(body: str, tools: Any) -> list[Call]:
-        return _calls_from(module.parse_tool_call(body, tools))
+        return _calls_from(module.parse_tool_call(_unwrap_doubled_braces(body), tools))
 
     return ToolFormat(
         name=name,
@@ -133,8 +133,20 @@ def _upstream(name: str) -> ToolFormat | None:
 # ── Formats upstream lacks ──────────────────────────────────────────────────
 
 
+def _unwrap_doubled_braces(body: str) -> str:
+    """Small models copy a prompt-template's escaped braces and emit ``{{"name": ...}}``;
+    strip that one extra layer when (and only when) the text is exactly so wrapped."""
+    t = body.strip()
+    if t.startswith("{{") and t.endswith("}}"):
+        try:
+            json.loads(t)
+        except ValueError:
+            return t[1:-1]
+    return body
+
+
 def _parse_yunshu_json(body: str, _tools: Any) -> list[Call]:
-    return _calls_from(json.loads(body.strip()))
+    return _calls_from(json.loads(_unwrap_doubled_braces(body).strip()))
 
 
 INJECTED_JSON = ToolFormat(

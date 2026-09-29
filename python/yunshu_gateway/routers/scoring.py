@@ -794,7 +794,9 @@ async def _fallback_embeddings(
     tokenizer = getattr(engine, "_tokenizer", None)
     model = getattr(engine, "_model", None)
     if tokenizer is None or model is None:
-        raise RuntimeError("Engine does not support embedding generation")
+        raise ValueError(
+            "This model cannot produce embeddings; load an embedding model for /v1/score, /v1/rerank, /v1/pooling and /v1/classify"
+        )
 
     loop = asyncio.get_running_loop()
 
@@ -879,7 +881,14 @@ async def _fallback_embeddings(
             )
         return results
 
-    return await loop.run_in_executor(get_mlx_executor(), _compute_all)
+    try:
+        return await loop.run_in_executor(get_mlx_executor(), _compute_all)
+    except (AttributeError, TypeError) as e:
+        # e.g. hybrid / linear-attention backbones that need a decode cache to run.
+        raise ValueError(
+            "This model architecture cannot be used as a text embedder; load a dedicated "
+            f"embedding model ({type(e).__name__})"
+        ) from None
 
 
 def _compute_similarity(a: list[float], b: list[float], method: str) -> float:

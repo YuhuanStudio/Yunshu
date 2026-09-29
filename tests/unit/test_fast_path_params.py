@@ -218,17 +218,10 @@ class TestTokenizeRequest:
         from yunshu_gateway.routers.tokenize import TokenizeRequest
 
         req = TokenizeRequest(model="test", text="hello world")
-        assert req.text == "hello world"
-        assert req.add_special_tokens is True
+        assert req.prompt == "hello world"
 
     def test_detokenize_request(self):
         from yunshu_gateway.routers.tokenize import DetokenizeRequest
 
         req = DetokenizeRequest(model="test", tokens=[1, 2, 3])
         assert req.tokens == [1, 2, 3]
-
-    def test_token_count_request(self):
-        from yunshu_gateway.routers.tokenize import TokenCountRequest
-
-        req = TokenCountRequest(model="test", prompt="hello", max_tokens=100)
-        assert req.max_tokens == 100

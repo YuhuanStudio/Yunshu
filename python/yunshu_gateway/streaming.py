@@ -716,10 +716,8 @@ def format_openai_completion_usage_chunk(
         "completion_tokens": completion_tokens,
         "total_tokens": prompt_tokens + completion_tokens,
     }
-    if reasoning_tokens > 0:
-        usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
-    if cached_tokens > 0:
-        usage["prompt_tokens_details"] = {"cached_tokens": cached_tokens}
+    usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
+    usage["prompt_tokens_details"] = {"cached_tokens": cached_tokens}
     chunk = {
         "id": completion_id,
         "object": "text_completion",
@@ -755,10 +753,8 @@ def format_openai_usage_chunk(
         "completion_tokens": completion_tokens,
         "total_tokens": prompt_tokens + completion_tokens,
     }
-    if reasoning_tokens > 0:
-        usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
-    if cached_tokens > 0:
-        usage["prompt_tokens_details"] = {"cached_tokens": cached_tokens}
+    usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
+    usage["prompt_tokens_details"] = {"cached_tokens": cached_tokens}
     chunk = {
         "id": completion_id,
         "object": "chat.completion.chunk",
@@ -1070,10 +1066,8 @@ def format_responses_completed(
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,
     }
-    if reasoning_tokens > 0:
-        usage["output_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
-    if cached_tokens > 0:
-        usage["input_tokens_details"] = {"cached_tokens": cached_tokens}
+    usage["output_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
+    usage["input_tokens_details"] = {"cached_tokens": cached_tokens}
     completed_at = int(time.time())
     resp = _responses_base_response(
         response_id,
@@ -1144,10 +1138,8 @@ def format_responses_incomplete(
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,
     }
-    if reasoning_tokens > 0:
-        usage["output_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
-    if cached_tokens > 0:
-        usage["input_tokens_details"] = {"cached_tokens": cached_tokens}
+    usage["output_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
+    usage["input_tokens_details"] = {"cached_tokens": cached_tokens}
     incomplete_at = int(time.time())
     resp = _responses_base_response(
         response_id,

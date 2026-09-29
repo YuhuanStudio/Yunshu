@@ -111,27 +111,6 @@ def test_metrics_accepts_owner_role_from_middleware():
 # ── cachedContents IDOR ──
 
 
-def test_cached_contents_owner_isolation():
-    from yunshu_gateway.explicit_cache import ExplicitContextCache
-
-    store = ExplicitContextCache()
-    e = store.create(
-        model="m",
-        messages=[{"role": "user", "content": "x"}],
-        token_count=1,
-        owner="alice",
-    )
-    assert e.owner == "alice"
-
-    # mimic the router _owns() check
-    def owns(entry, actor):
-        o = getattr(entry, "owner", None)
-        return (not o or o == "anonymous") or actor == o
-
-    assert owns(e, "alice") is True
-    assert owns(e, "bob") is False  # bob cannot see alice's handle
-
-
 def test_batch_owner_isolation():
     # mirror _owns_batch logic
     def owns(info, actor):
@@ -141,73 +120,3 @@ def test_batch_owner_isolation():
     assert owns({"owner": "alice"}, "alice") is True
     assert owns({"owner": "alice"}, "bob") is False
     assert owns({"owner": "anonymous"}, "bob") is True  # permissive when unstamped
-
-
-class TestCachedContentReadPathIDOR:
-    """the cached_content READ/consumption path (prepending a handle's stored
-    context into a generation request) must enforce ownership too — not just the
-    management routes. Otherwise tenant B prepends tenant A's private context by guessing
-    the handle and exfiltrates it via the model output."""
-
-    def _fake_request(self):
-        import types
-
-        # Single-consumer model: every request resolves to the "owner" actor
-        # (per-key RBAC actor identity removed); resolve_actor ignores state.
-        return types.SimpleNamespace(state=types.SimpleNamespace(role="owner"))
-
-    def _entry(self, owner):
-        import types
-
-        return types.SimpleNamespace(
-            messages=[{"role": "system", "content": "SECRET CONTEXT"}],
-            model="m",
-            owner=owner,
-        )
-
-    def test_other_tenant_handle_is_ignored(self, monkeypatch):
-        from yunshu_gateway.routers import chat as chat_mod
-
-        store = type("S", (), {"use": lambda self, n: self._e})()
-        store._e = self._entry(owner="alice")
-        monkeypatch.setattr(
-            "yunshu_gateway.explicit_cache.get_store", lambda: store, raising=False
-        )
-        # a handle owned by someone other than the single owner → NOT prepended
-        msgs = [{"role": "user", "content": "hi"}]
-        out = chat_mod._prepend_cached_content(
-            list(msgs), "cachedContents/x", "m", self._fake_request()
-        )
-        assert out == msgs  # alice's SECRET CONTEXT not leaked into owner's prompt
-
-    def test_owner_can_use_own_handle(self, monkeypatch):
-        from yunshu_gateway.routers import chat as chat_mod
-
-        store = type("S", (), {"use": lambda self, n: self._e})()
-        store._e = self._entry(owner="owner")
-        monkeypatch.setattr(
-            "yunshu_gateway.explicit_cache.get_store", lambda: store, raising=False
-        )
-        out = chat_mod._prepend_cached_content(
-            [{"role": "user", "content": "hi"}],
-            "cachedContents/x",
-            "m",
-            self._fake_request(),
-        )
-        assert any(m.get("content") == "SECRET CONTEXT" for m in out)  # owner gets it
-
-    def test_anonymous_owner_allowed(self, monkeypatch):
-        from yunshu_gateway.routers import chat as chat_mod
-
-        store = type("S", (), {"use": lambda self, n: self._e})()
-        store._e = self._entry(owner="anonymous")
-        monkeypatch.setattr(
-            "yunshu_gateway.explicit_cache.get_store", lambda: store, raising=False
-        )
-        out = chat_mod._prepend_cached_content(
-            [{"role": "user", "content": "hi"}],
-            "cachedContents/x",
-            "m",
-            self._fake_request(),
-        )
-        assert any(m.get("content") == "SECRET CONTEXT" for m in out)

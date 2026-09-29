@@ -237,7 +237,6 @@ round**, which covered LLM/VLM only.
 | ASR | `/v1/audio/transcriptions` | `mlx-audio` / Whisper | `audio` |
 | TTS | `/v1/audio/speech` | `mlx-audio` | `audio` |
 | Image generation | `/v1/images/generations` | diffusion | `generation` |
-| Video generation (Wan 2.x / LTX-2) | `/v1/video/generations` | `mlx-video` | `video` |
 | Embeddings / rerank (text + multimodal) | `/v1/embeddings`, `/v1/rerank` | `mlx-lm` / `mlx-embeddings` | `embeddings` |
 
 For speech-to-speech, serve a Qwen3-Omni model (`uv sync --extra omni`) and try
@@ -246,12 +245,9 @@ For speech-to-speech, serve a Qwen3-Omni model (`uv sync --extra omni`) and try
 output correct (maintainer check, 2026-09-28); the server's Realtime path
 was not.
 
-Video generation needs `mlx-video` from git: the PyPI release (0.1.0) only has preprocessing, so
-`yunshu[video]` from PyPI installs an incomplete backend and `yunshu[all]` leaves video out. To add it:
-`uv tool install "yunshu[vision]" --with "mlx-video @ git+https://github.com/Blaizzy/mlx-video.git"`
-(a source checkout gets it with `uv sync --extra video`).
+Text-to-video generation is not offered over HTTP (the route was removed); video input to VLMs works.
 
-Also: MCP server/client and an Anthropic-compatible `/v1/messages` surface.
+Also: MCP server/client, an Anthropic-compatible `/v1/messages` surface and an Ollama-compatible `/api` layer (route status: [docs/guides/API_SURFACE.md](docs/guides/API_SURFACE.md)).
 
 ## Architecture
 
@@ -267,7 +263,7 @@ Also: MCP server/client and an Anthropic-compatible `/v1/messages` surface.
   │       Qwen3.5 family: MTP / DFlash + batch-invariant  │
   │   · LLM fast path (mlx-lm generate_step)              │
   │       KV prefix cache · constrained decoding          │
-  │   · other modalities: omni, ASR/TTS, image, video,    │
+  │   · other modalities: omni, ASR/TTS, image,           │
   │     embeddings                                        │
   └─────────────────────────────────────────────────────┘
         one MLX thread · runs on-device via Apple MLX

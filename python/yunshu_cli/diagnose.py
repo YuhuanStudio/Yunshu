@@ -46,12 +46,12 @@ def diagnose_gpu():
     for size in [256, 512, 1024, 2048, 4096]:
         a = mx.random.normal((size, size))
         b = mx.random.normal((size, size))
-        _ = a @ b
+        mx.eval(a, b, a @ b)
         mx.synchronize()
         iters = max(1, 2**24 // (size * size))
         t0 = time.perf_counter()
-        for _ in range(iters):
-            a @ b
+        outs = [a @ b for _ in range(iters)]
+        mx.eval(outs)
         mx.synchronize()
         elapsed = time.perf_counter() - t0
         gemm.append({"size": size, "tflops": 2.0 * size**3 * iters / elapsed / 1e12})

@@ -51,9 +51,8 @@ def test_run_cancellable_helper_present():
 
 def test_router_handlers_register_and_guard():
     for name in (
-        "create_image_inpaint",
-        "create_image_controlnet",
-        "create_image_depth_guided",
+        "create_image_edit",
+        "create_image_variation",
         "create_image",
     ):
         src = inspect.getsource(getattr(images, name))

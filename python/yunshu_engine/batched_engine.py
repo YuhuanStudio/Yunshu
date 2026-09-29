@@ -3294,6 +3294,8 @@ class BatchedEngine:
                 max_tokens = _room
 
         stop_ids = set()
+        _user_stop_ids: set[int] = set()  # ids of single-token USER stop strings
+        _user_stop_hit = [False]  # a user stop (not EOS) ended generation
         # eos_token_id / eos_token_ids may be a single int OR an
         # iterable depending on the tokenizer (Qwen3.6-27B exposes eos_token_ids
         # as a bare int, which crashed `stop_ids.update(...)` with "'int' object
@@ -3332,6 +3334,7 @@ class BatchedEngine:
                 ids = tokenizer.encode(s)
                 if len(ids) == 1:
                     stop_ids.add(ids[0])
+                    _user_stop_ids.add(ids[0])
                 stop_suffixes.append(s)
         if stop_token_ids:
             stop_ids.update(stop_token_ids)
@@ -3999,6 +4002,8 @@ class BatchedEngine:
                     if token in stop_ids:
                         tokens.pop()  # Exclude stop token from output
                         _stopped_by_stop_id = True
+                        if token in _user_stop_ids:
+                            _user_stop_hit[0] = True
                         break
                     # Always add token to detokenizer for incremental state
                     # consistency — previously only added when stop_suffixes
@@ -4538,7 +4543,7 @@ class BatchedEngine:
                 ttft_ms=_ttft_ms_val,
                 reasoning_tokens=_reasoning_tok,
                 # A user stop sequence fired (vs natural EOS) — both map to "stop".
-                stopped_by_stop_sequence=bool(_stopped_by_suffix),
+                stopped_by_stop_sequence=bool(_stopped_by_suffix or _user_stop_hit[0]),
             )
         finally:
             # LoRA release+restore now happens inside _run_with_lora on the executor
@@ -5107,6 +5112,8 @@ class BatchedEngine:
         # twin was missed → every streaming request on that tokenizer raised → client got
         # finish_reason="error", no content. Accept both shapes.
         stop_ids = set()
+        _user_stop_ids: set[int] = set()  # ids of single-token USER stop strings
+        _user_stop_hit = [False]  # a user stop (not EOS) ended generation
         # collect EOS separately (ignore_eos / min_tokens) — see _generate_fast.
         _eos_ids: set[int] = set()
         _eid = getattr(tokenizer, "eos_token_id", None)
@@ -5132,6 +5139,7 @@ class BatchedEngine:
                 ids = tokenizer.encode(s)
                 if len(ids) == 1:
                     stop_ids.add(ids[0])
+                    _user_stop_ids.add(ids[0])
                 stop_suffixes.append(s)
         if stop_token_ids:
             stop_ids.update(stop_token_ids)
@@ -5608,12 +5616,16 @@ class BatchedEngine:
                     # Check stop_ids BEFORE adding to detokenizer to avoid emitting stop text
                     stop_hit = token in stop_ids
                     suffix_hit = False
+                    if stop_hit and token in _user_stop_ids:
+                        _user_stop_hit[0] = True
                     if not stop_hit:
                         detokenizer.add_token(token)
                         if stop_suffixes:
                             suffix_hit = any(
                                 detokenizer.text.endswith(s) for s in stop_suffixes
                             )
+                            if suffix_hit:
+                                _user_stop_hit[0] = True
                     # Compute per-token logprobs (same pattern as _generate_fast)
                     _lp_entry = None
                     if logprobs and logits is not None:
@@ -6317,6 +6329,9 @@ class BatchedEngine:
                     completion_tokens=n_tok,
                     finished=done,
                     finish_reason=finish_reason,
+                    stopped_by_stop_sequence=bool(
+                        done and finish_reason == "stop" and _user_stop_hit[0]
+                    ),
                     reasoning_tokens=_reasoning_tokens,
                     logprobs=_lp_list,
                     cached_tokens=_cached_tokens_box[0],

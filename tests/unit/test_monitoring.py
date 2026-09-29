@@ -7,41 +7,23 @@ class TestMTPMonitoringEndpoint:
     """Verify MTP stats are exposed in /spec-decode monitoring endpoint."""
 
     @pytest.fixture
-    def client(self):
+    def client(self, monkeypatch):
         from fastapi.testclient import TestClient
 
         from yunshu_gateway.main import create_app
 
+        monkeypatch.setenv("YUNSHU_DEBUG_ROUTES", "1")
         app = create_app()
         return TestClient(app)
 
     def test_spec_decode_endpoint_includes_mtp_field(self, client):
-        resp = client.get("/api/v1/gw/monitoring/spec-decode")
+        resp = client.get("/debug/spec-decode")
         assert resp.status_code == 200
         data = resp.json()
         assert "models" in data
         # Each model should have mtp_enabled field
         for model_info in data["models"]:
             assert "mtp_enabled" in model_info
-
-
-class TestRadixTreeEndpoint:
-    """Verify RadixTree monitoring endpoint exists."""
-
-    @pytest.fixture
-    def client(self):
-        from fastapi.testclient import TestClient
-
-        from yunshu_gateway.main import create_app
-
-        app = create_app()
-        return TestClient(app)
-
-    def test_radix_tree_endpoint_exists(self, client):
-        resp = client.get("/api/v1/gw/monitoring/radix-tree")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "models" in data
 
 
 class TestCompletionsSpecDecode:
@@ -99,30 +81,40 @@ class TestMonitoringEndpointsComplete:
     """Verify all monitoring endpoints are accessible."""
 
     @pytest.fixture
-    def client(self):
+    def client(self, monkeypatch):
         from fastapi.testclient import TestClient
 
         from yunshu_gateway.main import create_app
 
+        monkeypatch.setenv("YUNSHU_DEBUG_ROUTES", "1")
         app = create_app()
         return TestClient(app)
 
     @pytest.mark.parametrize(
         "endpoint",
         [
-            "/api/v1/gw/monitoring/system",
-            "/api/v1/gw/monitoring/models",
-            "/api/v1/gw/monitoring/spec-decode",
-            "/api/v1/gw/monitoring/radix-tree",
-            "/api/v1/gw/monitoring/kv-cache",
-            "/api/v1/gw/monitoring/prefill-progress",
-            "/api/v1/gw/monitoring/memory-guard",
-            "/api/v1/gw/monitoring/ssd-cache",
-            "/api/v1/gw/monitoring/per-model",
-            "/api/v1/gw/monitoring/thinking-segments",
-            "/api/v1/gw/monitoring/prometheus",
+            "/debug/system",
+            "/debug/models",
+            "/debug/spec-decode",
+            "/debug/kv-cache",
+            "/debug/memory-guard",
+            "/debug/ssd-cache",
+            "/debug/per-model",
+            "/debug/prometheus",
+            "/metrics",
         ],
     )
     def test_endpoint_200(self, client, endpoint):
         resp = client.get(endpoint)
         assert resp.status_code == 200, f"{endpoint} returned {resp.status_code}"
+
+
+def test_debug_routes_off_by_default(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from yunshu_gateway.main import create_app
+
+    monkeypatch.delenv("YUNSHU_DEBUG_ROUTES", raising=False)
+    client = TestClient(create_app())
+    assert client.get("/debug/engine").status_code == 404
+    assert client.get("/metrics").status_code == 200

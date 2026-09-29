@@ -3,7 +3,8 @@
 Yunshu exposes an **OpenAI/Anthropic-compatible** HTTP API plus a few Yunshu-specific
 endpoints for the native-omni and retrieval surfaces. Base URL is `http://<host>:<port>/v1`
 (default port 8000). Auth: inference endpoints are open by default; admin endpoints are
-gated by `YUNSHU_AUTH_TOKEN` (see [CONFIGURATION.md](CONFIGURATION.md)).
+gated by `YUNSHU_AUTH_TOKEN` (see [CONFIGURATION.md](CONFIGURATION.md)). The complete route-by-route
+status, the parameter coverage and the removed list are in [guides/API_SURFACE.md](guides/API_SURFACE.md).
 
 For the standard OpenAI/Anthropic endpoints, use your existing SDK unchanged — the
 shapes match the upstream spec. This page documents the **full surface** and the
@@ -20,9 +21,14 @@ shapes match the upstream spec. This page documents the **full surface** and the
 | GET | `/v1/models`, `/v1/models/{id}` | List / describe loaded models. |
 | POST | `/v1/audio/transcriptions`, `/v1/audio/translations` | ASR (Whisper / mlx-audio). |
 | POST | `/v1/audio/speech` | TTS → audio. |
-| POST | `/v1/images/generations` | Diffusion image gen (+ `edits`, `variations`, `inpaint`, `controlnet`, `depth-guided`, `generations/stream`). The dedicated `controlnet`/`depth-guided` routes run the **trained** Z-Image Fun-Controlnet-Union when a `*controlnet*` weights file is present (preprocessing the input per `condition_type`), falling back to an approximate latent-guidance heuristic when it's absent. The trained ControlNet is also reachable via `generations` + a `control_image` field. Inline `<lora:name:weight>` applies on every image route. |
-| POST | `/v1/tokenize`, `/v1/detokenize`, `/v1/token_count` | Tokenizer utilities. |
-| POST | `/v1/batch` | Batch inference (+ `/v1/batch/{id}/status`, `/results`, `/results.csv`, `/v1/batch/upload/csv`). |
+| POST | `/v1/images/generations` | Diffusion image gen (+ `edits`, `variations`, `generations/stream`). Inline `<lora:name:weight>` applies on every image route. |
+| POST | `/tokenize`, `/detokenize` (also under `/v1`) | vLLM-schema tokenizer: `prompt` or chat `messages`; returns `count`, `max_model_len`, `tokens`. |
+| POST | `/v1/responses/input_tokens` | Input token count for a Responses request. |
+
+## Ollama-compatible
+
+`/api/chat`, `/api/generate`, `/api/embed`, `/api/tags`, `/api/show`, `/api/ps`, `/api/version` (NDJSON streaming),
+verified with the `ollama` SDK. `pull` / `create` / `copy` / `delete` answer 501.
 
 ## Anthropic-compatible
 
@@ -91,18 +97,15 @@ cross-modal vectors land in one shared space. Optional top-level `instruction`. 
 |---|---|---|
 | POST | `/v1/score`, `/v1/pooling`, `/v1/classify` | Similarity / pooled embeddings / zero-shot classification (`classify` is embedding-cosine + softmax, not a trained classifier). |
 | POST | `/v1/ocr` | OCR (GLM-OCR via mlx-vlm). |
-| POST | `/v1/video/generations` | Wan 2.x / LTX-2 text-to-video & image-to-video, via the `video` extra (`mlx-video`) + a converted Wan/LTX MLX model. Returns 503 when no video model is loaded (never fabricates frames). |
 | POST/GET | `/v1/mcp`, `/v1/mcp/sse`, `/v1/mcp/tools` | Model Context Protocol server + client surface. |
 
 ## Admin (token-gated)
 
-Denied unless `YUNSHU_AUTH_TOKEN` is set (or `YUNSHU_AUTH_DISABLED=1` locally). Includes
-model lifecycle (`POST /v1/models/load`, `/v1/models/unload/{id}`), sleep/wake
-(`/v1/sleep`, `/v1/wake-up`), and profiling/benchmark endpoints. These are operational,
-not part of the inference contract.
+Denied unless `YUNSHU_AUTH_TOKEN` is set (or `YUNSHU_AUTH_DISABLED=1` locally): model lifecycle
+(`POST /v1/models/load`, `/v1/models/unload/{id}`) and the `/debug/*` diagnostics, which are only
+mounted with `YUNSHU_DEBUG_ROUTES=1`.
 
 ---
 
-Health: `GET /health`. Prometheus metrics: `GET /api/v1/prometheus` (token-gated like the
-other admin endpoints). Endpoint shapes are verified against the routers in
-`python/yunshu_gateway/routers/`.
+Health: `GET /health`. Prometheus metrics: `GET /metrics`. Endpoint shapes are verified against the
+routers in `python/yunshu_gateway/routers/`.

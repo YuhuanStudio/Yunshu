@@ -25,11 +25,3 @@ def test_variations_edits_honor_response_format():
     assert bad not in src
     # Both endpoints now branch on response_format.
     assert src.count("honor response_format") == 2  # variations + edits
-
-
-def test_video_uses_shared_image_decoder():
-    root = pathlib.Path(__file__).resolve().parents[2]
-    src = (root / "python/yunshu_gateway/routers/video.py").read_text()
-    assert "_decode_image_b64(req.image)" in src
-    # the old prefix-rejecting inline decode is gone
-    assert "base64.b64decode(req.image, validate=True)" not in src

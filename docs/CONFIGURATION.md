@@ -191,6 +191,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
+| `YUNSHU_DEBUG_ROUTES` | bool | off | Mount the /debug/* diagnostic routes (engine, system, kv-cache, spec-decode, ...). They need the auth token or YUNSHU_AUTH_DISABLED. /metrics is always mounted. |
 | `YUNSHU_LOG_LEVEL` | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` | INFO | Log level for Yunshu's loggers (third-party loggers stay at WARNING). |
 | `YUNSHU_AUDIT_LOG_FILE` | path | unset | Also write the audit log to this file. |
 

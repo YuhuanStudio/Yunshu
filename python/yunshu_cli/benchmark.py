@@ -58,14 +58,14 @@ def bench_roofline(
             # Warmup
             a = mx.random.normal((size, size), dtype=mx_dtype)
             b = mx.random.normal((size, size), dtype=mx_dtype)
-            _ = a @ b
+            mx.eval(a, b, a @ b)
             mx.synchronize()
 
             # Benchmark
             num_iters = max(1, min(100, 2**20 // (size * size)))
             t0 = time.perf_counter()
-            for _ in range(num_iters):
-                a @ b
+            outs = [a @ b for _ in range(num_iters)]
+            mx.eval(outs)
             mx.synchronize()
             elapsed = time.perf_counter() - t0
 

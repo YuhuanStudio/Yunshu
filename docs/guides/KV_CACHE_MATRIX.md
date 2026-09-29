@@ -303,7 +303,7 @@ many requests).
 **Takeaway:** the realistic cache hit-rate is **97–99%** for the RAG/shared-context
 pattern (huge TTFT win) and **57–73%** for incremental multi-turn (modest win on
 short prefixes). See `docs/PROMPT_CACHING_APIS.md` for how clients drive this
-explicitly (OpenAI auto / Anthropic cache_control / Gemini cachedContents).
+explicitly (OpenAI auto / Anthropic cache_control).
 
 ## Cache-subsystem audit
 

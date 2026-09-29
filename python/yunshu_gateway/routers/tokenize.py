@@ -7,6 +7,8 @@ resolves tokenizer from loaded engine or model manager with
 case-insensitive and provider-prefix fallbacks.
 """
 
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, model_validator
 
@@ -16,146 +18,152 @@ router = APIRouter(tags=["tokenize"])
 
 
 class TokenizeRequest(BaseModel):
-    model: str
-    text: str | list[str]
-    add_special_tokens: bool = True
+    """vLLM `/tokenize` request: either `prompt` (raw text) or `messages` (chat template)."""
 
-    @model_validator(mode="after")
-    def _check_model(self):
-        if not self.model or not self.model.strip():
-            raise ValueError("model: field is required and cannot be empty")
-        return self
-
-
-class TokenCountRequest(BaseModel):
-    model: str
-    prompt: str | list[str]
-    max_tokens: int = 0
-    add_special_tokens: bool = True
+    model: str | None = None
+    prompt: str | list[str] | None = None
+    messages: list[dict[str, Any]] | None = None
+    add_special_tokens: bool | None = None
+    add_generation_prompt: bool = True
+    continue_final_message: bool = False
+    tools: list[dict[str, Any]] | None = None
+    chat_template_kwargs: dict[str, Any] | None = None
+    return_token_strs: bool = False
 
     @model_validator(mode="before")
     @classmethod
-    def _accept_input_alias(cls, data):
-        """Accept 'input' as an alias for 'prompt' (OpenAI embeddings/tokenize convention).
-
-        If both are provided, 'prompt' wins (explicit canonical name).
-        """
-        if isinstance(data, dict):
-            if data.get("prompt") is None and data.get("input") is not None:
-                data = dict(data)
-                data["prompt"] = data["input"]
+    def _legacy_text_alias(cls, data):
+        if isinstance(data, dict) and data.get("prompt") is None:
+            for alias in ("text", "input"):
+                if data.get(alias) is not None:
+                    data = dict(data)
+                    data["prompt"] = data[alias]
+                    break
         return data
 
     @model_validator(mode="after")
-    def _check_model(self):
-        if not self.model or not self.model.strip():
-            raise ValueError("model: field is required and cannot be empty")
+    def _one_of(self):
+        if (self.prompt is None) == (self.messages is None):
+            raise ValueError("provide exactly one of 'prompt' or 'messages'")
         return self
 
 
 class DetokenizeRequest(BaseModel):
-    model: str
+    model: str | None = None
     tokens: list[int]
     skip_special_tokens: bool = True
 
-    @model_validator(mode="after")
-    def _check_model(self):
-        if not self.model or not self.model.strip():
-            raise ValueError("model: field is required and cannot be empty")
-        return self
+
+def _flatten_content(content) -> str:
+    if isinstance(content, list):
+        return "".join(
+            p.get("text", "")
+            for p in content
+            if isinstance(p, dict) and p.get("type") in ("text", "input_text")
+        )
+    return (
+        content
+        if isinstance(content, str)
+        else ("" if content is None else str(content))
+    )
+
+
+def _encode(tokenizer, text: str, add_special_tokens: bool) -> list[int]:
+    if add_special_tokens:
+        return list(tokenizer.encode(text))
+    try:
+        return list(tokenizer.encode(text, add_special_tokens=False))
+    except TypeError:
+        return list(tokenizer.encode(text))
+
+
+def _token_strs(tokenizer, ids: list[int]) -> list[str]:
+    out = []
+    for i in ids:
+        try:
+            out.append(tokenizer.decode([i]))
+        except Exception:
+            out.append("")
+    return out
 
 
 @router.post("/tokenize", response_model=None)
 async def tokenize(req: TokenizeRequest, request: Request):
-    """Tokenize text into token IDs."""
+    """Tokenize a prompt or a chat conversation (vLLM `/tokenize` schema)."""
     from .models import _check_model_access, _check_permission
 
     _check_permission(request, "can_infer")
-    _check_model_access(request, req.model)
-    tokenizer = _resolve_tokenizer(req.model)
-    texts = req.text if isinstance(req.text, list) else [req.text]
-    all_tokens = []
-    for text in texts:
-        if req.add_special_tokens:
-            tokens = tokenizer.encode(text)
-        else:
-            try:
-                tokens = tokenizer.encode(text, add_special_tokens=False)
-            except TypeError:
-                tokens = tokenizer.encode(text)
-        all_tokens.append(tokens)
-
-    return {
-        "tokens": all_tokens if isinstance(req.text, list) else all_tokens[0],
-        "count": sum(len(t) for t in all_tokens),
-        "model": req.model,
+    model = req.model or ""
+    if model:
+        _check_model_access(request, model)
+    tokenizer = _resolve_tokenizer(model)
+    if req.messages is not None:
+        msgs = [
+            {**m, "content": _flatten_content(m.get("content"))} for m in req.messages
+        ]
+        kwargs = dict(req.chat_template_kwargs or {})
+        try:
+            text = tokenizer.apply_chat_template(
+                msgs,
+                tools=req.tools,
+                tokenize=False,
+                add_generation_prompt=req.add_generation_prompt
+                and not req.continue_final_message,
+                continue_final_message=req.continue_final_message,
+                **kwargs,
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=400, detail=f"chat template failed: {e}"
+            ) from None
+        ids = _encode(tokenizer, text, bool(req.add_special_tokens))
+        batches = [ids]
+        single = True
+    else:
+        prompts = req.prompt if isinstance(req.prompt, list) else [req.prompt]
+        add = True if req.add_special_tokens is None else req.add_special_tokens
+        batches = [_encode(tokenizer, p, add) for p in prompts]
+        single = not isinstance(req.prompt, list)
+    max_len = _resolve_context_limit(model) if model else 0
+    if not max_len:
+        eng = get_engine()
+        max_len = _resolve_context_limit(getattr(eng, "model_name", "") or "")
+    resp: dict[str, Any] = {
+        "count": sum(len(b) for b in batches),
+        "max_model_len": max_len or None,
+        "tokens": batches[0] if single else batches,
     }
+    if req.return_token_strs:
+        resp["token_strs"] = (
+            _token_strs(tokenizer, batches[0])
+            if single
+            else [_token_strs(tokenizer, b) for b in batches]
+        )
+    return resp
 
 
 @router.post("/detokenize", response_model=None)
 async def detokenize(req: DetokenizeRequest, request: Request):
-    """Convert token IDs back to text."""
+    """Convert token IDs back to text (vLLM `/detokenize` schema)."""
     from .models import _check_model_access, _check_permission
 
     _check_permission(request, "can_infer")
-    _check_model_access(request, req.model)
-    tokenizer = _resolve_tokenizer(req.model)
-    # A negative (or otherwise out-of-range) token id makes
-    # tokenizer.decode raise OverflowError → a bare 500. Shape it into a clean 422 for a
-    # malformed-but-typed input (embeddings.py guards the identical decode; tokenize didn't).
+    model = req.model or ""
+    if model:
+        _check_model_access(request, model)
+    tokenizer = _resolve_tokenizer(model)
     try:
-        if req.skip_special_tokens:
-            try:
-                text = tokenizer.decode(req.tokens, skip_special_tokens=True)
-            except TypeError:
-                text = tokenizer.decode(req.tokens)
-        else:
+        try:
+            text = tokenizer.decode(
+                req.tokens, skip_special_tokens=req.skip_special_tokens
+            )
+        except TypeError:
             text = tokenizer.decode(req.tokens)
     except (OverflowError, ValueError, IndexError, KeyError) as e:
         raise HTTPException(
             status_code=422, detail=f"Invalid token id in 'tokens': {e}"
         ) from None
-    return {"text": text, "model": req.model}
-
-
-@router.post("/token_count", response_model=None)
-async def token_count(req: TokenCountRequest, request: Request):
-    """Count tokens for a prompt."""
-    from .models import _check_model_access, _check_permission
-
-    _check_permission(request, "can_infer")
-    _check_model_access(request, req.model)
-    tokenizer = _resolve_tokenizer(req.model)
-    texts = req.prompt if isinstance(req.prompt, list) else [req.prompt]
-    counts = []
-    for t in texts:
-        if req.add_special_tokens:
-            counts.append(len(tokenizer.encode(t)))
-        else:
-            try:
-                counts.append(len(tokenizer.encode(t, add_special_tokens=False)))
-            except TypeError:
-                counts.append(len(tokenizer.encode(t)))
-    total = sum(counts)
-    # Resolve model context length: caller override > model config > 0.
-    # Previously this returned `req.max_tokens` (the request's max OUTPUT
-    # tokens, defaulting to 0) under the field name `max_context_tokens`,
-    # which is misleading — callers expect the model's CONTEXT window.
-    ctx_limit = (
-        req.max_tokens if req.max_tokens > 0 else _resolve_context_limit(req.model)
-    )
-    # A list `prompt` is a batch of INDEPENDENT prompts, each sent in its
-    # own request — so over_context_limit must be "does ANY single prompt overflow",
-    # not "does their SUM overflow" (the old `total > ctx_limit` falsely flagged e.g.
-    # 5×4k prompts against a 32k window though none individually overflows). For a
-    # string prompt, total == counts[0], so `any(...)` is equivalent.
-    over = any(c > ctx_limit for c in counts) if ctx_limit > 0 else False
-    return {
-        "token_count": total if isinstance(req.prompt, str) else counts,
-        "max_context_tokens": ctx_limit,
-        "over_context_limit": over,
-        "model": req.model,
-    }
+    return {"prompt": text}
 
 
 def _resolve_context_limit(model_id: str) -> int:

@@ -195,16 +195,14 @@ def _VALIDATE_LOCAL_PATH(path: str) -> str:
     Returns the resolved absolute path on success.
     Raises ValueError if the path escapes the allow-listed directory.
     """
-    import os as _os
     from pathlib import Path as _Path
 
     if settings.get_bool("YUNSHU_ALLOW_LOCAL_FILES"):
         return path
 
-    media_dir = settings.get("YUNSHU_MEDIA_DIR") or _os.path.join(
-        _os.environ.get("TMPDIR", "/tmp"), "yunshu_media"
-    )
-    media_root = _Path(media_dir).resolve()
+    from .paths import media_dir
+
+    media_root = _Path(media_dir()).resolve()
     resolved = _Path(path).resolve()
     try:
         resolved.relative_to(media_root)

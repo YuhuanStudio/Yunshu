@@ -22,7 +22,7 @@ from collections import OrderedDict
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from yunshu_engine import settings
 
@@ -255,12 +255,8 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
             "input_tokens": pt,
             "output_tokens": ct,
             "total_tokens": pt + ct,
-            **({"output_tokens_details": {"reasoning_tokens": rt}} if rt > 0 else {}),
-            **(
-                {"input_tokens_details": {"cached_tokens": cached}}
-                if cached > 0
-                else {}
-            ),
+            "output_tokens_details": {"reasoning_tokens": rt},
+            "input_tokens_details": {"cached_tokens": cached},
         },
     }
     if req.store:
@@ -498,6 +494,7 @@ class ResponsesRequest(BaseModel):
     tool_choice: str | dict | None = None
     parallel_tool_calls: bool = True
     response_format: dict | None = None
+    text: dict | None = None  # Responses API: {format: {type, name, schema, strict}}
     seed: int | None = None
     enable_thinking: bool | None = None
     thinking_budget: int | None = Field(default=None, ge=1, le=32768)
@@ -514,6 +511,12 @@ class ResponsesRequest(BaseModel):
     min_p: float = Field(default=0.0, ge=0.0, le=1.0)
     top_n_sigma: float = Field(default=0.0, ge=0.0, le=10.0)
     stop: list[str] | None = None
+
+    @field_validator("stop", mode="before")
+    @classmethod
+    def _stop_str_to_list(cls, v):
+        return [v] if isinstance(v, str) else v
+
     stop_token_ids: list[int] | None = None
     logprobs: bool = False
     top_logprobs: int | None = Field(default=None, ge=0, le=20)
@@ -556,6 +559,32 @@ class ResponsesRequest(BaseModel):
     timeout: float | None = Field(
         default=None, ge=1.0, le=600.0
     )  # Request timeout in seconds
+
+    @model_validator(mode="before")
+    @classmethod
+    def _text_format_to_response_format(cls, data):
+        """Responses API structured output: ``text.format`` -> the chat-style field."""
+        if isinstance(data, dict) and data.get("response_format") is None:
+            fmt = (
+                (data.get("text") or {}).get("format")
+                if isinstance(data.get("text"), dict)
+                else None
+            )
+            if isinstance(fmt, dict):
+                if fmt.get("type") == "json_schema":
+                    data = dict(data)
+                    data["response_format"] = {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": fmt.get("name", "response"),
+                            "schema": fmt.get("schema", {}),
+                            "strict": fmt.get("strict", True),
+                        },
+                    }
+                elif fmt.get("type") == "json_object":
+                    data = dict(data)
+                    data["response_format"] = {"type": "json_object"}
+        return data
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -1566,20 +1595,8 @@ async def create_response(req: ResponsesRequest, request: Request):
                 # reasoning is the detail subset below (was double-added).
                 "output_tokens": total_ct,
                 "total_tokens": total_pt + total_ct,
-                **(
-                    {
-                        "output_tokens_details": {
-                            "reasoning_tokens": total_reasoning_tokens
-                        }
-                    }
-                    if total_reasoning_tokens > 0
-                    else {}
-                ),
-                **(
-                    {"input_tokens_details": {"cached_tokens": max_cached_tokens}}
-                    if max_cached_tokens > 0
-                    else {}
-                ),
+                "output_tokens_details": {"reasoning_tokens": total_reasoning_tokens},
+                "input_tokens_details": {"cached_tokens": max_cached_tokens},
             },
         }
         # Persist when the client requested storage so it can be retrieved
@@ -2456,12 +2473,10 @@ async def _stream_response(
                     "output_tokens": _total_output_tok,
                     "total_tokens": prompt_tok + _total_output_tok,
                 }
-                if reasoning_tok > 0:
-                    _usage_dict["output_tokens_details"] = {
-                        "reasoning_tokens": reasoning_tok
-                    }
-                if cached_tok > 0:
-                    _usage_dict["input_tokens_details"] = {"cached_tokens": cached_tok}
+                _usage_dict["output_tokens_details"] = {
+                    "reasoning_tokens": reasoning_tok
+                }
+                _usage_dict["input_tokens_details"] = {"cached_tokens": cached_tok}
                 try:
                     _store_response(
                         response_id,
@@ -2863,3 +2878,44 @@ async def cancel_response(response_id: str, request: Request):
             "output": [],
         }
     )
+
+
+def _input_text(inp) -> str:
+    if inp is None:
+        return ""
+    if isinstance(inp, str):
+        return inp
+    parts: list[str] = []
+    for item in inp if isinstance(inp, list) else [inp]:
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, dict):
+            c = item.get("content")
+            if isinstance(c, str):
+                parts.append(c)
+            elif isinstance(c, list):
+                parts += [
+                    p.get("text", "")
+                    for p in c
+                    if isinstance(p, dict) and p.get("text")
+                ]
+            for k in ("arguments", "output", "text"):
+                if isinstance(item.get(k), str):
+                    parts.append(item[k])
+    return "\n".join(parts)
+
+
+@router.post("/responses/input_tokens", response_model=None)
+async def count_input_tokens(request: Request):
+    """Count the input tokens a `/v1/responses` request would use (OpenAI input_tokens API)."""
+    from .tokenize import _resolve_tokenizer
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON body") from None
+    tok = _resolve_tokenizer(str(body.get("model") or ""))
+    text = "\n".join(
+        t for t in (body.get("instructions"), _input_text(body.get("input"))) if t
+    )
+    return {"object": "response.input_tokens", "input_tokens": len(tok.encode(text))}

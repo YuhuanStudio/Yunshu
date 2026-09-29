@@ -30,6 +30,7 @@ import contextlib
 
 from pydantic import BaseModel, Field, model_validator
 
+from yunshu_engine.paths import stage_media_file
 from yunshu_engine.tool_arguments import coerce_tool_calls
 from yunshu_engine.tool_call_streamer import ToolCallStreamer
 from yunshu_engine.tool_format import parse_tool_output, tool_formats
@@ -218,9 +219,6 @@ class AnthropicMessagesRequest(BaseModel):
 
     # ── Yunshu-extended fields (forwarded to engine) ──
     lora_adapter: str | None = None
-    cached_content: str | None = (
-        None  # Gemini-style explicit context-cache handle to prepend
-    )
     min_p: float = Field(default=0.0, ge=0.0, le=1.0)
     repetition_penalty: float = Field(default=1.0, ge=0.0, le=2.0)
     frequency_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
@@ -598,7 +596,6 @@ def _convert_anthropic_messages(
                     data = source.get("data")
                     if data and source_type == "base64":
                         import base64 as _b64
-                        import tempfile as _tf
 
                         try:
                             raw = _b64.b64decode(data, validate=False)
@@ -617,7 +614,7 @@ def _convert_anthropic_messages(
                         ext = ext_map.get(media_type, "png")
                         # delete=False is intentional — file must outlive function for
                         # downstream image inference; cleanup via temp_files registry.
-                        tmp = _tf.NamedTemporaryFile(suffix=f".{ext}", delete=False)  # noqa: SIM115
+                        tmp = stage_media_file(f".{ext}")
                         try:
                             tmp.write(raw)
                             tmp.close()
@@ -676,7 +673,6 @@ def _convert_image_block(
     data = source.get("data")
     if data and source_type == "base64":
         import base64 as _b64
-        import tempfile as _tf
 
         try:
             raw = _b64.b64decode(data, validate=False)
@@ -691,7 +687,7 @@ def _convert_image_block(
         ext = ext_map.get(media_type, "png")
         # delete=False is intentional — file must outlive function for downstream
         # image inference; cleanup via temp_files registry.
-        tmp = _tf.NamedTemporaryFile(suffix=f".{ext}", delete=False)  # noqa: SIM115
+        tmp = stage_media_file(f".{ext}")
         try:
             tmp.write(raw)
             tmp.close()
@@ -882,68 +878,6 @@ def _try_parse_tool_call_delta(text: str) -> list[dict] | None:
     return calls or None
 
 
-def _resolve_cached_content_text(
-    cached_content, model, request, *, mutate: bool
-) -> str:
-    """Resolve a Gemini-style ``cached_content`` handle to its stored prefix text (or "").
-
-    Shared by create_message (mutate=True — marks a real READ, bumps last_used/read_count)
-    and count_tokens (mutate=False — a non-mutating estimation read). Enforces the
-    cross-tenant ownership guard (a handle owned by another tenant is ignored, not leaked)
-    and raises HTTPException(400) on a model mismatch (a handle is model-specific).
-
-    count_tokens previously had ZERO cached_content handling, so its input_tokens
-    omitted the entire cached prefix that generation prepends into the system prompt — a
-    silent undercount of a (by-design large) reusable prefix. Reuse the SAME resolver as
-    generation so the estimate matches the real prompt and the two can't drift.
-    """
-    if not cached_content:
-        return ""
-    from ..explicit_cache import get_store
-
-    _cc = cached_content
-    _key = _cc if _cc.startswith("cachedContents/") else f"cachedContents/{_cc}"
-    store = get_store()
-    entry = store.use(_key) if mutate else store.get(_key)
-    _cc_owner = getattr(entry, "owner", None) if entry is not None else None
-    if _cc_owner and _cc_owner != "anonymous":
-        from yunshu_control.audit_log import resolve_actor
-
-        if resolve_actor(request) != _cc_owner:
-            logger.warning(
-                "anthropic cached_content '%s' owned by another tenant — ignoring", _cc
-            )
-            entry = None
-    if entry is not None and getattr(entry, "model", None) and entry.model != model:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"cached_content '{_cc}' was created for model '{entry.model}' "
-                f"and cannot be used with '{model}'"
-            ),
-        )
-    if entry is not None and entry.messages:
-
-        def _cc_msg_text(_m):
-            _c = _m.get("content")
-            if isinstance(_c, str):
-                return _c
-            if isinstance(_c, list):
-                return " ".join(
-                    _b.get("text", "")
-                    for _b in _c
-                    if isinstance(_b, dict)
-                    and _b.get("type") in ("text", "input_text", "output_text")
-                )
-            return ""
-
-        return "\n".join(_cc_msg_text(m) for m in entry.messages).strip()
-    return ""
-
-
-# ── Endpoint ──
-
-
 @router.post("/messages", response_model=None)
 async def create_message(req: AnthropicMessagesRequest, request: Request):
     """Anthropic Messages API endpoint."""
@@ -952,28 +886,6 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     # any role="system" lifted from messages[]) is prepended once AFTER the lift
     # block below — do NOT add it here, or it gets lifted back out and the merge
     # duplicates it / leaves `messages` (what generation consumes) system-less.
-    # Gemini-style explicit context-cache READ: prepend the handle's stored text
-    # to the system prompt so the automatic KVPrefixCache serves the warmed prefix.
-    if req.cached_content:
-        try:
-            # shared resolver (mutate=True marks a real READ). Enforces the
-            # cross-tenant ownership guard + model-mismatch 400; flattens block content.
-            # count_tokens reuses the SAME resolver so the estimate can't drift.
-            _cc_text = _resolve_cached_content_text(
-                req.cached_content, req.model, request, mutate=True
-            )
-            if _cc_text:
-                if isinstance(req.system, str):
-                    req.system = _cc_text + "\n" + req.system
-                elif isinstance(req.system, list):
-                    req.system = [{"type": "text", "text": _cc_text}] + req.system
-                else:
-                    req.system = _cc_text
-        except HTTPException:
-            raise  # model-mismatch 400 must propagate, not be swallowed
-        except Exception:
-            logger.debug("anthropic cached_content prepend failed", exc_info=True)
-
     messages = []
     _temp_files: list[str] = []  # track temp files for cleanup
 
@@ -1946,6 +1858,7 @@ async def _stream_anthropic(
     _has_tool_calls = False  # persists across blocks (unlike tool_use_block_started)
     accumulated_text = ""  # for tool-call detection
     matched_stop: str | None = None
+    _stream_stop_hit = False
     _streaming_finish_reason: str | None = None
     reasoning_tok: int = 0  # reasoning tokens emitted as thinking_delta
     _token_boundaries: list[int] = []  # cumulative text length after each output token
@@ -2017,7 +1930,7 @@ async def _stream_anthropic(
             _message_start_emitted, \
             _streaming_finish_reason, \
             reasoning_tok
-        nonlocal _has_tool_calls
+        nonlocal _has_tool_calls, _stream_stop_hit
         # these were assigned inside _token_source WITHOUT a
         # nonlocal, so they shadowed the enclosing scope's copies (which stayed 0). The
         # *_started flags ARE nonlocal, so the error/MemoryError handlers in the outer
@@ -2077,6 +1990,8 @@ async def _stream_anthropic(
                 # because some engines set finish_reason without the finished flag.
                 if output.finish_reason is not None:
                     _streaming_finish_reason = output.finish_reason
+                    if getattr(output, "stopped_by_stop_sequence", False) and stop:
+                        _stream_stop_hit = True
 
                 # Emit message_start on first output with prompt_tokens.
                 # Deferred from the initial yield so that cache token counts
@@ -2362,6 +2277,8 @@ async def _stream_anthropic(
                     and output.finish_reason is not None
                 ):
                     _streaming_finish_reason = output.finish_reason
+                    if getattr(output, "stopped_by_stop_sequence", False) and stop:
+                        _stream_stop_hit = True
 
                 # Emit message_start on first output with prompt_tokens
                 # (deferred from the initial yield for accurate cache tokens).
@@ -2592,6 +2509,8 @@ async def _stream_anthropic(
         # and optionally output_tokens_details (reasoning_tokens).
         # cache_creation_input_tokens / cache_read_input_tokens are in message_start
         # (emitted deferred above when the first engine output arrives).
+        if not matched_stop and _stream_stop_hit and stop:
+            matched_stop = stop[0] if len(stop) == 1 else _UNKNOWN_STOP_SENTINEL
         stop_reason = _map_stop_reason(
             _streaming_finish_reason, matched_stop, has_tool_calls=_has_tool_calls
         )
@@ -2802,27 +2721,6 @@ async def count_tokens(req: AnthropicMessagesRequest, request: Request) -> dict:
     # Collect them all now (top-level first, then in-message order) and drop them from the
     # converted messages below.
     _sys_parts: list[str] = []
-    # include the cached_content prefix that generation prepends into the system
-    # prompt (anthropic create_message), so input_tokens isn't undercounted by the entire
-    # cached prefix. Same resolver as generation; mutate=False (estimation must not bump the
-    # cache's usage). Cached text comes FIRST, matching generation's prepend order.
-    if req.cached_content:
-        try:
-            _cc_text = _resolve_cached_content_text(
-                req.cached_content, req.model, request, mutate=False
-            )
-            if _cc_text:
-                _sys_parts.append(_cc_text)
-        except HTTPException as _cc_e:
-            return JSONResponse(
-                status_code=_cc_e.status_code,
-                content={
-                    "type": "error",
-                    "error": {"type": "invalid_request_error", "message": _cc_e.detail},
-                },
-            )
-        except Exception:
-            logger.debug("count_tokens cached_content resolve failed", exc_info=True)
     if req.system:
         _sys_parts.append(
             _extract_text_from_content(req.system)

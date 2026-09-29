@@ -53,7 +53,7 @@ def status(
     # System stats
     sys_data = {}
     try:
-        resp = httpx.get(f"{url}/api/v1/gw/monitoring/system", headers=_hdr, timeout=5)
+        resp = httpx.get(f"{url}/debug/system", headers=_hdr, timeout=5)
         if resp.status_code == 200:
             sys_data = resp.json()
     except Exception:
@@ -62,7 +62,7 @@ def status(
     # Engine stats
     eng_data = {}
     try:
-        resp = httpx.get(f"{url}/api/v1/gw/monitoring/engine", headers=_hdr, timeout=5)
+        resp = httpx.get(f"{url}/debug/engine", headers=_hdr, timeout=5)
         if resp.status_code == 200:
             eng_data = resp.json()
     except Exception:
@@ -94,7 +94,7 @@ def status(
     lines.append(f"URL: {url}")
 
     if sys_data:
-        # Keys match /api/v1/gw/monitoring/system: gpu.total_uma_bytes (unified memory),
+        # Keys match /debug/system: gpu.total_uma_bytes (unified memory),
         # cpu.percent (nested), mlx_version lives under gpu.
         gpu = sys_data.get("gpu", {})
         if gpu:

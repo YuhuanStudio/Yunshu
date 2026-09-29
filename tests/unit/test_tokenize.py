@@ -80,103 +80,120 @@ def _make_app(monkeypatch, *, register_model: str | None = "qwen-test"):
 class TestDetokenize:
     def test_detokenize_happy_path(self, monkeypatch):
         app, _ = _make_app(monkeypatch)
-        client = TestClient(app)
-        r = client.post(
-            "/v1/detokenize",
-            json={"model": "qwen-test", "tokens": [1, 2, 3]},
+        r = TestClient(app).post(
+            "/v1/detokenize", json={"model": "qwen-test", "tokens": [1, 2, 3]}
         )
         assert r.status_code == 200, r.text
-        body = r.json()
-        assert body["text"] == "decoded[3]"
-        assert body["model"] == "qwen-test"
+        assert r.json() == {"prompt": "decoded[3]"}
 
     def test_detokenize_empty_tokens(self, monkeypatch):
         app, _ = _make_app(monkeypatch)
-        client = TestClient(app)
-        r = client.post(
-            "/v1/detokenize",
-            json={"model": "qwen-test", "tokens": []},
+        r = TestClient(app).post(
+            "/v1/detokenize", json={"model": "qwen-test", "tokens": []}
         )
         assert r.status_code == 200, r.text
-        assert r.json()["text"] == "decoded[0]"
+        assert r.json()["prompt"] == "decoded[0]"
 
     def test_detokenize_unknown_model_404(self, monkeypatch):
         app, _ = _make_app(monkeypatch, register_model=None)
-        client = TestClient(app)
-        r = client.post(
-            "/v1/detokenize",
-            json={"model": "no-such-model", "tokens": [1, 2, 3]},
+        r = TestClient(app).post(
+            "/v1/detokenize", json={"model": "no-such-model", "tokens": [1, 2, 3]}
         )
         assert r.status_code == 404, r.text
         assert "no-such-model" in r.text
 
 
 class TestTokenize:
-    def test_tokenize_single_string(self, monkeypatch):
+    def test_prompt(self, monkeypatch):
         app, _ = _make_app(monkeypatch)
-        client = TestClient(app)
-        r = client.post(
-            "/v1/tokenize",
-            json={"model": "qwen-test", "text": "alpha beta gamma"},
+        r = TestClient(app).post(
+            "/v1/tokenize", json={"model": "qwen-test", "prompt": "alpha beta gamma"}
         )
         assert r.status_code == 200, r.text
         body = r.json()
-        # FakeTokenizer returns [10, 11, 12] for three whitespace-tokens
         assert body["tokens"] == [10, 11, 12]
         assert body["count"] == 3
-        assert body["model"] == "qwen-test"
+        assert "max_model_len" in body
+        assert "token_strs" not in body
 
-    def test_tokenize_unknown_model_404(self, monkeypatch):
-        app, _ = _make_app(monkeypatch, register_model=None)
-        client = TestClient(app)
-        r = client.post(
+    def test_legacy_text_alias_and_batch(self, monkeypatch):
+        app, _ = _make_app(monkeypatch)
+        r = TestClient(app).post(
+            "/v1/tokenize", json={"model": "qwen-test", "text": ["a b", "c"]}
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["tokens"] == [[10, 11], [10]]
+        assert r.json()["count"] == 3
+
+    def test_model_optional_and_root_path(self, monkeypatch):
+        import yunshu_gateway.routers.tokenize as tok_mod
+
+        app, mgr = _make_app(monkeypatch)
+        monkeypatch.setattr(
+            tok_mod, "get_engine", lambda: mgr.get_entry("qwen-test").engine
+        )
+        monkeypatch.setattr(tok_mod, "get_model_manager", lambda: None)
+        app.include_router(tok_mod.router)  # vLLM-native root path
+        r = TestClient(app).post("/tokenize", json={"prompt": "x y"})
+        assert r.status_code == 200, r.text
+        assert r.json()["count"] == 2
+
+    def test_token_strs(self, monkeypatch):
+        app, _ = _make_app(monkeypatch)
+        r = TestClient(app).post(
             "/v1/tokenize",
-            json={"model": "nope", "text": "hello"},
+            json={"model": "qwen-test", "prompt": "a b", "return_token_strs": True},
+        )
+        assert r.json()["token_strs"] == ["decoded[1]", "decoded[1]"]
+
+    def test_messages_use_chat_template(self, monkeypatch):
+        import yunshu_gateway.routers.tokenize as tok_mod
+
+        seen = {}
+
+        class ChatTok(FakeTokenizer):
+            def apply_chat_template(self, msgs, **kw):
+                seen["msgs"] = msgs
+                seen["kw"] = kw
+                return "<u> " + " ".join(m["content"] for m in msgs)
+
+        eng = FakeEngine()
+        eng._tokenizer = ChatTok()
+        app, mgr = _make_app(monkeypatch)
+        mgr.register("chat", eng)
+        r = TestClient(app).post(
+            "/v1/tokenize",
+            json={
+                "model": "chat",
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "hi there"}]}
+                ],
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["count"] == 3
+        assert seen["msgs"][0]["content"] == "hi there"
+        assert seen["kw"]["add_generation_prompt"] is True
+        assert tok_mod  # module imported
+
+    def test_prompt_and_messages_are_exclusive(self, monkeypatch):
+        app, _ = _make_app(monkeypatch)
+        c = TestClient(app)
+        assert c.post("/v1/tokenize", json={"model": "qwen-test"}).status_code in (
+            400,
+            422,
+        )
+        assert c.post(
+            "/v1/tokenize",
+            json={"model": "qwen-test", "prompt": "a", "messages": []},
+        ).status_code in (400, 422)
+
+    def test_unknown_model_404(self, monkeypatch):
+        app, _ = _make_app(monkeypatch, register_model=None)
+        r = TestClient(app).post(
+            "/v1/tokenize", json={"model": "nope", "prompt": "hello"}
         )
         assert r.status_code == 404, r.text
-
-
-class TestTokenCount:
-    def test_token_count_happy_path(self, monkeypatch):
-        app, _ = _make_app(monkeypatch)
-        client = TestClient(app)
-        r = client.post(
-            "/v1/token_count",
-            json={"model": "qwen-test", "prompt": "one two three four"},
-        )
-        assert r.status_code == 200, r.text
-        body = r.json()
-        # FakeTokenizer returns 4 ints for 4 whitespace-tokens.
-        assert body["token_count"] == 4
-        assert body["model"] == "qwen-test"
-        # Unknown model context -> 0, hence over_context_limit == False
-        assert body["max_context_tokens"] == 0
-        assert body["over_context_limit"] is False
-
-    def test_token_count_with_max_tokens_override(self, monkeypatch):
-        """Caller-supplied max_tokens > 0 should propagate as the limit."""
-        app, _ = _make_app(monkeypatch)
-        client = TestClient(app)
-        r = client.post(
-            "/v1/token_count",
-            json={"model": "qwen-test", "prompt": "a b c", "max_tokens": 128},
-        )
-        assert r.status_code == 200, r.text
-        body = r.json()
-        assert body["max_context_tokens"] == 128
-        # 3 tokens vs 128 limit -> not over
-        assert body["over_context_limit"] is False
-
-    def test_token_count_input_alias(self, monkeypatch):
-        """OpenAI-style 'input' alias should be accepted as 'prompt'."""
-        app, _ = _make_app(monkeypatch)
-        client = TestClient(app)
-        r = client.post(
-            "/v1/token_count",
-            json={"model": "qwen-test", "input": "a b"},
-        )
-        assert r.status_code == 200, r.text
-        assert r.json()["token_count"] == 2
 
 
 class TestResolveContextLimit:
