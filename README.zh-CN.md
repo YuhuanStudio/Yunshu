@@ -216,18 +216,12 @@ Yunshu 目前的位置:
 | ASR | `/v1/audio/transcriptions` | `mlx-audio` / Whisper | `audio` |
 | TTS | `/v1/audio/speech` | `mlx-audio` | `audio` |
 | 图像生成 | `/v1/images/generations` | 扩散模型 | `generation` |
-| 视频生成(Wan 2.x / LTX-2) | `/v1/video/generations` | `mlx-video` | `video` |
 | Embeddings / rerank(文本 + 多模态) | `/v1/embeddings`、`/v1/rerank` | `mlx-lm` / `mlx-embeddings` | `embeddings` |
 
 语音到语音:服务一个 Qwen3-Omni 模型(`uv sync --extra omni`),试试
 [`examples/talk.py`](examples/talk.py)(麦克风)或 [`examples/quickstart.py`](examples/quickstart.py)
 (输出 WAV,无需音频硬件)。已确认上游 `mlx-vlm` 0.7.3 多轮 omni 输出正确
 (维护者于 2026-09-28 确认);服务器的 Realtime 路径尚未确认。
-
-视频生成需要从 git 安装 `mlx-video`:PyPI 上的版本(0.1.0)只有预处理,所以从 PyPI 装
-`yunshu[video]` 会得到不完整的后端,`yunshu[all]` 也不含视频。要加上它:
-`uv tool install "yunshu[vision]" --with "mlx-video @ git+https://github.com/Blaizzy/mlx-video.git"`
-(源码 checkout 用 `uv sync --extra video` 即可)。
 
 另外:MCP 服务器/客户端,以及兼容 Anthropic 的 `/v1/messages`。
 

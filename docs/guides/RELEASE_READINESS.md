@@ -28,7 +28,6 @@ first public release, P2 = soon after, P3 = later or on request.
 | Homebrew | 🟡 P2 | Formula for the shared tap [YuhuanStudio/homebrew-tap](https://github.com/YuhuanStudio/homebrew-tap) (`brew install yuhuanstudio/tap/yunshu`) in `packaging/homebrew/`; added after the PyPI release ([steps](../../packaging/homebrew/README.md)) |
 | macOS app / menu bar / DMG | — | Not planned for now: CLI + launchd service (decided 2026-09-29) |
 | `curl … \| bash` installer with a model suggestion by RAM | ❌ P3 | Rapid-MLX has one; `uv tool install` + `yunshu doctor` covers most of it |
-| `[video]` extra from PyPI | 🟡 P2 | `mlx-video` is pinned to git in `[tool.uv.sources]`; a PyPI install resolves PyPI `mlx-video` 0.1.0, which is preprocessing-only |
 | Python versions | 🟡 P3 | 3.13 only (oMLX supports 3.11–3.13) |
 
 ## First run

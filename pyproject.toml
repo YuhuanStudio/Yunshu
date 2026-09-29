@@ -128,25 +128,13 @@ omni = [
 embeddings = [
     "mlx-embeddings>=0.1.0",
 ]
-# Image / video generation pipelines. Absent → /v1/images/generations and
-# /v1/video/generations return an honest 503 instead of placeholder bytes.
+# Image generation pipelines. Absent → /v1/images/generations returns an honest 503
+# instead of placeholder bytes.
 generation = [
     "diffusers>=0.37.1",
     "torch>=2.1.0",
     "torchvision>=0.16.0",
     "Pillow>=10.0.0",
-]
-# Native video generation (yunshu_engine.video_engine) — Wan 2.x / LTX-2 text-to-video
-# and image-to-video via mlx-video. Pinned to git below: the PyPI 0.1.0 release is
-# preprocessing-only (just _io/_transforms), while the full Wan/LTX generate pipeline
-# lives on main. The integration is verified live on Wan2.2-TI2V-5B.
-video = [
-    "mlx-video",
-    # mlx-video pulls librosa (LTX audio) → numba → llvmlite. Without these floors
-    # uv backtracks to llvmlite 0.36 (supports Python <=3.9 only) and the build hard-
-    # fails on 3.13. Pin to the py3.13-compatible line.
-    "numba>=0.60.0",
-    "llvmlite>=0.43.0",
 ]
 # KV-transfer wire compression (yunshu_engine.kv_transfer). Absent → transfers
 # fall back to uncompressed (the codec is now honestly recorded in the header).
@@ -154,8 +142,7 @@ compression = [
     "zstandard>=0.22.0",
     "lz4>=4.3.0",
 ]
-# Every modality except video: PyPI metadata can only name the incomplete PyPI
-# mlx-video 0.1.0; the working pipeline comes from git (see README).
+# Every optional modality.
 all = [
     "yunshu[vision]",
     "yunshu[audio]",
@@ -191,11 +178,6 @@ dev = [
     "pytest-timeout>=2.3.0",
     "ruff>=0.11.0",
 ]
-
-# mlx-vlm comes from PyPI: upstream now captures the Talker hidden states during
-# Thinker generation, which supersedes the fork's thinker early-exit branch.
-[tool.uv.sources]
-mlx-video = { git = "https://github.com/Blaizzy/mlx-video.git" }
 
 [tool.ruff]
 line-length = 88

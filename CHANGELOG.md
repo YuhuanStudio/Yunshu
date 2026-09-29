@@ -122,12 +122,6 @@ match.
 - A model served from the Hugging Face cache is listed under its repo id (`org/name`) in
   `/v1/models`, not the snapshot path.
 
-### Known limitations
-
-- Video generation (`/v1/video/generations`) needs `mlx-video` from git; the PyPI release (0.1.0) is
-  preprocessing-only, so `yunshu[video]` installed from PyPI is incomplete and `yunshu[all]` does not
-  include it. See the README's "Other modalities" section for the install command.
-
 ### Fixed
 
 - Streaming thinking on Qwen3.8 was sent as content; it is now sent as reasoning.
