@@ -16,12 +16,23 @@ cannot take joins, and MTP drafter state for one batch. Measured on 27B (M5 Max)
 
 ## Shape
 
-Every request is a **row** with its *own* single-row caches (a `KVCache` per attention layer, an
-`ArraysCache` per GatedDeltaNet layer, and a `KVCache` for its MTP head). Each **step** is one
-packed forward of one kind:
+Every request is a **row**. A row prefills on its own single-row caches (a `KVCache` per attention
+layer, an `ArraysCache` per GatedDeltaNet layer, a `KVCache` for its MTP head); when its prompt is
+done it **joins the decode batch**, where all decoding rows share slot buffers (`round_driver/
+batch.py`):
+
+- attention K/V: `[S, HKV, CAP, D]` per attention layer, the row owning slot `s`, keys `0 .. n - 1`
+  (the join copies the row's prefill keys in; `S` doubles and `CAP` grows in 512-key steps);
+- GDN state and conv window: batch arrays `[B, Hv, Dv, Dk]` / `[B, K - 1, C]` per layer in decode
+  order (a join concatenates, a finish takes; a step's kernel output is the next step's input);
+- the MTP head's KV: the same slot buffers, its own slot per drafting row.
+
+Each **step** is one forward of one kind:
 
 - **decode step**: every decoding row's window, `1 + d` tokens (the pending token plus `d >= 0`
-  drafts);
+  drafts), right-padded to the longest window `T`; every weight-bearing op sees `B * T` rows (lane
+  matmuls are flat in the row count up to 128 rows), padded positions carry a copy of the row's last
+  token and write keys past its length / are skipped by the recurrence;
 - **prefill step**: fixed 512-token chunks of waiting prompts (absolute spans from the prompt
   start), several prompts in one forward, up to 2048 tokens when no row decodes and 512 while rows
   decode.
@@ -32,10 +43,12 @@ decode rows *into* the prefill forward measured no better than alternating separ
 same chunk size on Qwen3.8-27B (2026-09-29) — because prefill is compute
 bound and the only shared saving is one weight read; so steps stay single-kind.)
 
-Per layer, everything with weights runs once over the packed tokens (norms, attention and GDN
-in/out projections, MLP, then one LM-head call over the rows that need logits); only the sequence
-mixers run per segment on the row's own caches (attention over its KV; the GDN conv + recurrence on
-its state).
+Per decode layer everything is one launch for all rows: norms, projections and MLP over the packed
+`B * T` rows; attention writes every row's keys with one scatter and reads them with one
+ragged-attention launch (`kernels/ragged_attention.py`, token-tile kernel: per-token bits do not
+depend on the window length, `lengths = n + T` so a shorter window's padded tail only reads garbage
+it never returns); the GDN conv is one batched conv and the recurrence one launch
+(`kernels/gdn_rows.py`, upstream's step kernel per (row, head, value dim) with a per-row length).
 
 ## Lossless: what holds per row
 
@@ -46,11 +59,12 @@ verify, or whether it drafts at all:
   (`kernels/tensorfold/lane_qmm.py`, MIT) — per-row bits follow the weight shape, not the row
   count, for 1..128 rows; wider calls are cut into 128-row pieces (`kernels/lane_linear.py`;
   tested 1..300 rows, 4/5/8-bit, including the narrow GDN `in_proj_a/b`).
-- **Decode / verify attention** (`T <= 8` tokens): the ragged token-tile kernel over the row's own
-  `KVCache` buffer, per-token bits independent of `T` (capacity padded to 64-key windows).
-- **GDN**: per row on its own state; every decode window runs under an upstream speculative cache
-  transaction, and a rejected suffix rolls back by the transaction's commit (KV trimmed, GDN state
-  at the kept length).
+- **Decode / verify attention** (`T <= 8` tokens): the ragged token-tile kernel over the row's slot,
+  per-token bits independent of `T` and of the other rows (capacity a multiple of 64 keys).
+- **GDN**: one launch over the rows' states, each row's arithmetic that of the upstream step kernel
+  for its own tokens. The kernel also writes the state after each real token but the last
+  (`hist`); a row that keeps only part of its window continues from `hist[kept - 1]` and the conv
+  window from its position `kept` (`DecodeBatch.commit`); KV needs only its length set.
 - **Prefill**: fixed chunks, each its own segment, so a prompt's bits do not depend on what it was
   packed with.
 - Norms, activations, embedding: per token.
@@ -75,11 +89,8 @@ tokens per `(forward ms at that many packed rows + chain ms x deepest chain)`, b
 Alone, a row drafts as deep as it pays; at 8 rows, drafts stop where a wider forward costs more than
 it lands — no row-count thresholds.
 
-## Not yet (stage 2)
+## Not yet
 
-- Batched mixers: decode rows' attention and GDN run one call per row per layer; one launch per
-  layer for all rows needs slot-buffer caches (the ragged KV cache's layout for rows' KV and GDN
-  state) — the main per-row overhead.
 - APC prefix reuse and checkpoints, image / audio prompts (mRoPE), int8 KV, MoE: those requests stay
   on the upstream path.
 - DFlash2 drafting (block drafts from the target's layer taps; same allocation).

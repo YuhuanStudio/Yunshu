@@ -23,12 +23,15 @@ def allocate(
     cost_ms,
     max_rows: int,
     chain_ms: float = 0.0,
+    padded: bool = False,
 ) -> list[int]:
     """Drafts per row. ``fixed_rows``: rows that run anyway (one pending
     token per decoding row); ``probs[s]``: row ``s``'s chance that its 1st,
     2nd, .. draft lands (at most its window); ``cost_ms(rows)``: step cost at
     ``rows`` packed rows; ``chain_ms``: drafting cost per chain depth (the
-    deepest row sets how many sequential head steps the drafts take)."""
+    deepest row sets how many sequential head steps the drafts take).
+    ``padded``: rows run right-padded to the deepest window, so a step costs
+    ``fixed_rows * (1 + deepest)`` packed rows and ``max_rows`` bounds that."""
     counts = [0] * len(probs)
     rows = int(fixed_rows)
     expected = float(sum(1 for _ in probs))  # every row commits >= 1 token
@@ -45,7 +48,9 @@ def allocate(
         neg, s = heapq.heappop(heap)
         counts[s] += 1
         deepest = max(deepest, counts[s])
-        rows += 1
+        rows = fixed_rows * (1 + deepest) if padded else rows + 1
+        if rows > max_rows:
+            break
         expected -= neg
         if counts[s] < len(probs[s]):
             heapq.heappush(heap, (-probs[s][counts[s]], s))
@@ -64,16 +69,27 @@ def chain(rates: Sequence[float], count: int) -> list[float]:
     return out
 
 
+SLOPE_PRIOR = 0.03  # extra cost per row, as a fraction of a lone measured step
+
+
 class CostCurve:
     """Step cost by packed rows: measured points, linear between them, the
-    per-row slope of the last two points beyond the widest one."""
+    per-row slope of the last two points beyond the widest one (with a single
+    point, ``SLOPE_PRIOR`` of it per row)."""
 
     def __init__(self, points: dict[int, float] | None = None):
         self.points: dict[int, float] = dict(points or {})
 
     def observe(self, rows: int, ms: float, weight: float = 0.2) -> None:
         old = self.points.get(rows)
-        self.points[rows] = ms if old is None else old + weight * (ms - old)
+        if old is None:
+            # a first sample at a new width often carries one-time costs
+            # (kernel compiles): bound it by what the curve predicts
+            ms = min(ms, 2.0 * self(rows)) if self.points else ms
+            self.points[rows] = ms
+        else:
+            # fall fast (one-time costs inflate early samples), rise slowly
+            self.points[rows] = old + (0.5 if ms < old else weight) * (ms - old)
 
     def __call__(self, rows: int) -> float:
         if not self.points:
@@ -93,7 +109,9 @@ class CostCurve:
             a, b = xs[-2], xs[-1]
             slope = max((self.points[b] - self.points[a]) / (b - a), 0.0)
         else:
-            slope = self.points[xs[-1]] / xs[-1]
+            # one point: rows beyond it cost a few percent each (decode is
+            # bandwidth-bound; wider windows get measured, then interpolated)
+            slope = self.points[xs[-1]] * SLOPE_PRIOR
         return self.points[xs[-1]] + slope * (rows - xs[-1])
 
 

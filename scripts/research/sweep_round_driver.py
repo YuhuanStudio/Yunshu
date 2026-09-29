@@ -38,6 +38,9 @@ PROMPTS = [
 ]
 
 
+WARM: dict = {}
+
+
 def load(ckpt: str, quantize: bool):
     import mlx.nn as nn
     from mlx_vlm import load as vlm_load
@@ -98,6 +101,12 @@ def run(model, drafter, prompts, tokens, stop, stagger=False):
     from yunshu_engine.round_driver.driver import Request, RoundDriver
 
     d = RoundDriver(model, drafter=drafter, stop_tokens=stop)
+    # a server's driver lives across requests: its measured step-cost curve
+    # and draft cost carry over (kernel compiles and the cost curve would
+    # otherwise dominate a 256-token run)
+    if drafter is not None and WARM:
+        d.cost.points = dict(WARM["points"])
+        d.chain_ms = WARM["chain_ms"]
     out = {i: [] for i in range(len(prompts))}
     first = {}
     todo = list(range(len(prompts)))
@@ -119,6 +128,8 @@ def run(model, drafter, prompts, tokens, stop, stagger=False):
             first.setdefault(e.handle, time.perf_counter() - t0)
         steps += 1
     wall = time.perf_counter() - t0
+    if drafter is not None:
+        WARM.update(points=dict(d.cost.points), chain_ms=d.chain_ms)
     return [out[i] for i in range(len(prompts))], d, wall, first
 
 
@@ -136,6 +147,12 @@ def main():
         type=int,
         default=None,
         help="prompts in the parity check (default: max --rows); each runs 5 ways",
+    )
+    ap.add_argument(
+        "--phase",
+        choices=["both", "parity", "rows"],
+        default="both",
+        help="run only the parity check or only the rows sweep (separate locked jobs)",
     )
     ap.add_argument("--output", type=Path, required=True)
     a = ap.parse_args()
@@ -169,36 +186,40 @@ def main():
             }
         )
         n = a.parity_rows or max(a.rows)
-        ref = [run(model, None, [p], a.tokens, stop)[0][0] for p in prompts[:n]]
-        checks = {
-            "alone_mtp": [
-                run(model, drafter, [p], a.tokens, stop)[0][0] for p in prompts[:n]
-            ],
-            "batch_mtp": run(model, drafter, prompts[:n], a.tokens, stop)[0],
-            "stagger_mtp": run(
-                model, drafter, prompts[:n], a.tokens, stop, stagger=True
-            )[0],
-            "batch_ar": run(model, None, prompts[:n], a.tokens, stop)[0],
-        }
-        put(
-            {
-                "kind": "parity",
-                **{k: v == ref for k, v in checks.items()},
-                "first_diff": {
-                    k: next(
-                        (
-                            (i, j)
-                            for i, (x, y) in enumerate(zip(v, ref, strict=True))
-                            for j, (p, q) in enumerate(zip(x, y, strict=False))
-                            if p != q
-                        ),
-                        None,
-                    )
-                    for k, v in checks.items()
-                },
+        for rows in sorted({1, 2, 4, 8, max(a.rows)}):  # compiles + cost curve
+            if rows <= len(prompts):
+                run(model, drafter, prompts[:rows], 48, stop)
+        if a.phase != "rows":
+            ref = [run(model, None, [p], a.tokens, stop)[0][0] for p in prompts[:n]]
+            checks = {
+                "alone_mtp": [
+                    run(model, drafter, [p], a.tokens, stop)[0][0] for p in prompts[:n]
+                ],
+                "batch_mtp": run(model, drafter, prompts[:n], a.tokens, stop)[0],
+                "stagger_mtp": run(
+                    model, drafter, prompts[:n], a.tokens, stop, stagger=True
+                )[0],
+                "batch_ar": run(model, None, prompts[:n], a.tokens, stop)[0],
             }
-        )
-        for rows in a.rows:
+            put(
+                {
+                    "kind": "parity",
+                    **{k: v == ref for k, v in checks.items()},
+                    "first_diff": {
+                        k: next(
+                            (
+                                (i, j)
+                                for i, (x, y) in enumerate(zip(v, ref, strict=True))
+                                for j, (p, q) in enumerate(zip(x, y, strict=False))
+                                if p != q
+                            ),
+                            None,
+                        )
+                        for k, v in checks.items()
+                    },
+                }
+            )
+        for rows in [] if a.phase == "parity" else a.rows:
             for drafts in (False, True):
                 outs, d, wall, first = run(
                     model, drafter if drafts else None, prompts[:rows], a.tokens, stop

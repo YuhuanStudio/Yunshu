@@ -1,32 +1,34 @@
 # Upstream (inspired): ashhart/TensorFold (MIT) src/tensorfold/engine/lane_engine.py, src/tensorfold/engine/lane_family.py @ 34bae79a
 """Round driver: rows advance in packed forwards, prefill and decode interleaved.
 
-See docs/guides/ROUND_DRIVER.md. Each step is one packed forward of one kind:
+See docs/guides/ROUND_DRIVER.md. Each step is one forward of one kind:
 
-- a **decode step**: every decoding row's window (pending token + drafts);
-- a **prefill step**: fixed ``chunk``-token spans of waiting prompts —
-  several prompts in one forward — up to ``idle_budget`` tokens when no row
-  decodes, one span while rows decode.
+- a **decode step**: every decoding row's window (pending token + drafts) in
+  one launch per layer (``batch.DecodeBatch``: shared KV slot buffers and GDN
+  state arrays);
+- a **prefill step**: fixed ``chunk``-token chunks of waiting prompts —
+  several prompts in one forward, each on its own caches — up to
+  ``idle_budget`` tokens when no row decodes, one chunk while rows
+  decode. A prompt that completes joins the decode batch.
 
 While rows decode and prompts wait, prefill and decode steps alternate
 one-to-one, so the chunk size sets the trade between the waiting prompt's
 TTFT and the decoding rows' rate (27B, 4 rows + a 16K prompt: decode rows and
 a prefill chunk packed into one forward measured no better than alternating
 separate forwards at the same chunk size, docs/research/runs/
-2026-09-29-fused-prefill/, so steps stay single-kind). A step:
+2026-09-29-fused-prefill/, so steps stay single-kind). A decode step:
 
-1. plans its segments;
-2. runs one packed forward (``forward.forward``) and one LM-head call over the
-   rows that need logits;
-3. samples: greedy rows take the argmax of every window position and keep the
+1. runs one forward over the rows' windows (right-padded to the longest) and
+   one LM-head call over the real window positions;
+2. samples: greedy rows take the argmax of every window position and keep the
    drafts up to the first mismatch plus the target's token there; sampled rows
    and rows with logits processors run one token a step through their own
    sampler / processors (never drafting);
-4. commits each window (``Segment.commit``: KV trimmed and GDN state rolled
-   back to the kept length), runs stop / length checks;
-5. keeps every draftable row's MTP head current with the kept positions (and
-   the prompt chunks just prefilled), then drafts for the next step with the
-   cost-aware allocation (``allocate``) over the measured step cost curve.
+3. commits each window (KV lengths advance, rows that kept part of a window
+   continue their GDN state from that position), runs stop / length checks;
+4. keeps every draftable row's MTP head current with the kept positions, then
+   drafts for the next step with the cost-aware allocation (``allocate``) over
+   the measured step cost curve.
 
 The driver never looks at other rows to decide a row's tokens: greedy output is
 the same alone, in any batch, with any draft depth (row-invariant forward).
@@ -42,16 +44,22 @@ from typing import Any
 import mlx.core as mx
 
 from .allocate import CostCurve, allocate, chain
-from .forward import MAX_DECODE_TOKENS, Segment, forward, logits
+from .batch import MAX_WINDOW, DecodeBatch
+from .forward import Segment, forward, logits
 
 logger = logging.getLogger(__name__)
 
+MAX_DECODE_TOKENS = MAX_WINDOW  # pending token + up to 7 drafts
 CHUNK = 512  # default prefill chunk: fixed spans from the prompt start
-IDLE_BUDGET = (
-    2048  # prefill tokens per prefill step when no row decodes (at least one chunk)
-)
+IDLE_BUDGET = 2048  # prefill tokens per prefill step when no row decodes
 ACCEPT_PRIOR = 0.7  # per-depth draft acceptance before a row has history
 ACCEPT_EMA = 0.15
+LANE_ROWS = 128  # rows one lane-matmul call keeps row-invariant
+# MLX's freed-buffer cache: long prompts allocate transient buffers of ever
+# new sizes (KV growth, attention scores), and left unbounded the cache grew
+# to ~95 GiB in a 4 x 32K run, after which every step took 5-10x as long
+# (docs/guides/ROUND_DRIVER.md). The driver keeps it under this bound.
+CACHE_LIMIT = 8 * 2**30
 
 
 def cache_buffers(cache: list) -> list:
@@ -92,7 +100,7 @@ class Event:
 @dataclass
 class _Row:
     req: Request
-    cache: list
+    cache: list | None  # prefill caches (None once the row joined the batch)
     mtp_cache: list | None
     done: int = 0  # prompt tokens prefilled
     pending: int | None = None  # committed token not yet in the cache
@@ -101,23 +109,24 @@ class _Row:
     rates: list = field(default_factory=list)
     key: Any = None
     context: list = field(default_factory=list)
-    mtp_temp: int = 0
     force: list = field(default_factory=list)  # the budget's next token
     finished: bool = False
-
-    @property
-    def draftable(self) -> bool:
-        return self.mtp_cache is not None
+    n: int = 0  # positions in the decode batch's KV (after joining)
+    slot: int | None = None  # KV slot in the decode batch
+    hslot: int | None = None  # KV slot in the MTP head's batch
+    hn: int = 0  # positions absorbed by the MTP head (after joining)
+    drafting: bool = False  # the row has an MTP head (prefill or batch)
 
 
 @dataclass
 class _Item:
     kind: str  # "d": decode window, "p": prefill chunk
     row: _Row
-    seg: Segment
+    seg: Segment | None = None
     start: int = 0
     end: int = 0
-    at: int = 0  # first packed row
+    at: int = 0  # first packed / padded position of the row's tokens
+    count: int = 0  # tokens of the row in the step
 
 
 class RoundDriver:
@@ -147,6 +156,10 @@ class RoundDriver:
             if drafter is not None
             else None
         )
+        prev = mx.set_cache_limit(CACHE_LIMIT)
+        if prev < CACHE_LIMIT:
+            mx.set_cache_limit(prev)  # a tighter limit set by the host stays
+        self.batch = DecodeBatch(self.lm)
         self.rows: list[_Row] = []
         self.cost = CostCurve()
         self.steps = 0
@@ -169,6 +182,7 @@ class RoundDriver:
             mtp_cache=self.head.make_cache() if draft else None,
             rates=[ACCEPT_PRIOR] * (MAX_DECODE_TOKENS - 1),
             context=list(req.ids),
+            drafting=draft,
         )
         seed = getattr(req.sampling, "seed", None)
         if seed is not None:
@@ -176,7 +190,16 @@ class RoundDriver:
         self.rows.append(row)
 
     def remove(self, handle: Any) -> None:
+        gone = [r for r in self.rows if r.req.handle is handle]
         self.rows = [r for r in self.rows if r.req.handle is not handle]
+        self._release(gone)
+
+    def _release(self, gone: list[_Row]) -> None:
+        """Drop rows' slots in the decode batch and the head's."""
+        if any(r.slot is not None for r in gone):
+            self.batch.leave([r for r in gone if r.slot is not None])
+        if self.head is not None and any(r.hslot is not None for r in gone):
+            self.head.leave([r for r in gone if r.hslot is not None])
 
     def busy(self) -> bool:
         return bool(self.rows)
@@ -213,59 +236,23 @@ class RoundDriver:
             return mx.random.categorical(x, key=sub)
         return mx.random.categorical(x)
 
-    # ── one step ─────────────────────────────────────────────────────────
-    def _plan(self) -> list[_Item]:
-        items: list[_Item] = []
-        decoding = [r for r in self.rows if r.pending is not None]
-        waiting = [r for r in self.rows if r.pending is None]
-        if decoding and (not waiting or self._prefilled_last):
-            self._prefilled_last = False
-            for r in decoding:
-                drafts = [] if r.force else r.drafts
-                window = mx.array([r.pending, *drafts], dtype=mx.int32)
-                items.append(_Item("d", r, Segment(r.cache, window, decode=True)))
-            return self._place(items)
-        self._prefilled_last = True
-        budget = self.chunk if decoding else self.idle_budget
-        for r in waiting:
-            ids = r.req.ids
-            while budget > 0 and r.done < len(ids):
-                start, end = r.done, min(r.done + self.chunk, len(ids))
-                chunk = mx.array(ids[start:end], dtype=mx.int32)
-                items.append(_Item("p", r, Segment(r.cache, chunk, False), start, end))
-                r.done = end
-                budget -= end - start
-        return self._place(items)
-
-    @staticmethod
-    def _place(items: list[_Item]) -> list[_Item]:
-        at = 0
-        for it in items:
-            it.at = at
-            at += it.seg.length
-        return items
-
-    def step(self) -> list[Event]:
-        if not self.rows:
-            return []
-        started = time.perf_counter()
-        items = self._plan()
-        if not items:
-            return []
-        hidden = forward(self.lm, [it.seg for it in items])
-        # logits: every decode window position; the last position of a prompt
-        # finished this step
+    def _draw(self, items: list[_Item], hidden: mx.array):
+        """Logits at every decode window position and the last position of a
+        prompt finished this step; the row's token(s) at each. Returns
+        ``[(item, token ids array, logprob arrays or None)]``."""
         pick, outs = [], []
         for it in items:
             if it.kind == "d":
-                outs.append((it, len(pick), it.seg.length))
-                pick.extend(range(it.at, it.at + it.seg.length))
+                outs.append((it, len(pick), it.count))
+                pick.extend(range(it.at, it.at + it.count))
             elif it.end == len(it.row.req.ids):
                 outs.append((it, len(pick), 1))
-                pick.append(it.at + it.seg.length - 1)
-        lg = logits(self.lm, hidden[mx.array(pick, dtype=mx.int32)]) if pick else None
-        greedy = mx.argmax(lg, axis=-1) if lg is not None else None
-        draws = []  # (item, token ids array, logprob arrays or None)
+                pick.append(it.at + it.count - 1)
+        if not pick:
+            return []
+        lg = logits(self.lm, hidden[mx.array(pick, dtype=mx.int32)])
+        greedy = mx.argmax(lg, axis=-1)
+        draws = []
         for it, off, n in outs:
             row = it.row
             req = row.req
@@ -287,79 +274,166 @@ class RoundDriver:
                     idx = mx.argsort(lp, axis=-1)[..., -req.top_logprobs :][..., ::-1]
                     extra += [idx, mx.take_along_axis(lp, idx, axis=-1)]
             draws.append((it, tok, extra))
+        return draws
+
+    # ── one step ─────────────────────────────────────────────────────────
+    def step(self) -> list[Event]:
+        if not self.rows:
+            return []
+        if self._will_decode():
+            self._prefilled_last = False
+            return self._decode_step()
+        self._prefilled_last = True
+        return self._prefill_step(
+            [r for r in self.rows if r.pending is None], bool(self.batch.rows)
+        )
+
+    def _will_decode(self) -> bool:
+        """Whether the next step is a decode step: rows decode and either no
+        prompt waits or the last step was a prefill."""
+        if not self.batch.rows:
+            return False
+        return self._prefilled_last or all(r.pending is not None for r in self.rows)
+
+    def _prefill_step(self, waiting: list[_Row], decoding: bool) -> list[Event]:
+        items: list[_Item] = []
+        budget = self.chunk if decoding else self.idle_budget
+        at = 0
+        for r in waiting:
+            ids = r.req.ids
+            while budget > 0 and r.done < len(ids):
+                start, end = r.done, min(r.done + self.chunk, len(ids))
+                chunk = mx.array(ids[start:end], dtype=mx.int32)
+                items.append(
+                    _Item("p", r, Segment(r.cache, chunk), start, end, at, end - start)
+                )
+                r.done = end
+                at += end - start
+                budget -= end - start
+        if not items:
+            return []
+        hidden = forward(self.lm, [it.seg for it in items])
+        draws = self._draw(items, hidden)
         # Evaluate every cache the step advanced, not only what feeds a token:
         # a prompt chunk that emits nothing would otherwise stay a lazy graph
         # on top of the previous chunk's, and a long prompt becomes one graph
         # holding every chunk's KV buffer version until its last chunk.
-        advanced = {id(it.row): it.row for it in items if it.kind == "p"}
+        advanced = {id(it.row): it.row for it in items}
         mx.eval(
             *[d[1] for d in draws],
             *[a for d in draws if d[2] for a in d[2]],
             *[a for r in advanced.values() for a in cache_buffers(r.cache)],
         )
-        self.cost.observe(
-            sum(it.seg.length for it in items), (time.perf_counter() - started) * 1e3
-        )
-
         events: list[Event] = []
-        absorb: dict[int, tuple] = {}  # row id -> (row, next tokens, [hidden])
         for it, tok, extra in draws:
-            row = it.row
-            toks = [int(t) for t in tok.tolist()]
-            if it.kind == "d":
-                window = [int(t) for t in it.seg.tokens.tolist()]
-                keep = 1
-                while keep < len(window) and window[keep] == toks[keep - 1]:
-                    keep += 1
-                if len(window) > 1:
-                    self._observe(row, len(window) - 1, keep - 1)
-                # a stop, the length limit or the thinking budget can cut the
-                # window short: the cache keeps what was emitted
-                used = self._emit(row, toks[:keep], extra, events)
-                it.seg.commit(used)
-                if row.draftable:
-                    absorb[id(row)] = (row, toks[:used], [hidden[it.at : it.at + used]])
-            else:
-                self._emit(row, toks[:1], extra, events)
+            self._emit(it.row, [int(tok.tolist()[0])], extra, events)
         # prompt chunks of draftable rows feed their MTP head, in order
+        absorb: dict[int, tuple] = {}
         for it in items:
             row = it.row
-            if it.kind != "p" or not row.draftable or row.finished:
+            if row.mtp_cache is None or row.finished:
                 continue
             ids = row.req.ids
             nxt = ids[it.start + 1 : it.end]
             nxt.append(ids[it.end] if it.end < len(ids) else row.pending)
-            h = hidden[it.at : it.at + it.seg.length]
             entry = absorb.setdefault(id(row), (row, [], []))
             entry[1].extend(nxt)
-            entry[2].append(h)
-        self.rows = [r for r in self.rows if not r.finished]
-        live = [e for e in absorb.values() if not e[0].finished]
-        if self.head is not None and live:
-            heads = self.head.absorb(
+            entry[2].append(hidden[it.at : it.at + it.count])
+        live = list(absorb.values())
+        heads = {}
+        if live:
+            outs = self.head.absorb_prompt(
                 [(r, t, mx.concatenate(h, axis=0)) for r, t, h in live]
             )
-            ready = [
-                (r, o)
-                for (r, _, _), o in zip(live, heads, strict=True)
-                if r.pending is not None
-            ]
-            depths = self._depths([r for r, _ in ready])
-            drafted_at = time.perf_counter()
-            drafts = self.head.draft(
-                [(r, o, d) for (r, o), d in zip(ready, depths, strict=True)]
-            )
-            deepest = max(depths, default=0)
-            if deepest:
-                ms = (time.perf_counter() - drafted_at) * 1e3 / deepest
-                self.chain_ms += ACCEPT_EMA * (ms - self.chain_ms)
-            for (r, _), d in zip(ready, drafts, strict=True):
-                r.drafts = d
-                self.drafted += len(d)
-            # the head caches of rows still prefilling (no drafts yet)
-            mx.eval(*[a for r, _, _ in live for a in cache_buffers(r.mtp_cache)])
+            heads = {id(r): o for (r, _, _), o in zip(live, outs, strict=True)}
+        self.rows = [r for r in self.rows if not r.finished]
+        joined = [
+            r
+            for r in advanced.values()
+            if r.pending is not None and not r.finished and r.done == len(r.req.ids)
+        ]
+        for r in joined:
+            r.n = len(r.req.ids)
+        self.batch.join(joined)
+        arrays = [a for r in self.rows if r.cache for a in cache_buffers(r.cache)]
+        arrays += [
+            a for r in self.rows if r.mtp_cache for a in cache_buffers(r.mtp_cache)
+        ]
+        ready = [r for r in joined if r.drafting]
+        if ready:
+            self.head.join(ready)
+            arrays += self.head.slots.arrays()
+            self._draft(ready, mx.stack([heads[id(r)] for r in ready]))
+        mx.eval(*arrays, *self.batch.arrays())
         self.steps += 1
         return events
+
+    def _decode_step(self) -> list[Event]:
+        started = time.perf_counter()
+        rows = list(self.batch.rows)
+        windows = [[r.pending, *([] if r.force else r.drafts)] for r in rows]
+        hidden = self.batch.forward(windows)
+        items, at = [], 0
+        for r, w in zip(rows, windows, strict=True):
+            items.append(_Item("d", r, None, 0, 0, at, len(w)))
+            at += len(w)
+        draws = self._draw(items, hidden)
+        mx.eval(
+            *[d[1] for d in draws],
+            *[a for d in draws if d[2] for a in d[2]],
+            *self.batch.arrays(),
+        )
+        self.cost.observe(at, (time.perf_counter() - started) * 1e3)
+
+        events: list[Event] = []
+        used_all: list[int] = []
+        toks_all: list[list[int]] = []
+        for (it, tok, extra), window in zip(draws, windows, strict=True):
+            row = it.row
+            toks = [int(t) for t in tok.tolist()]
+            keep = 1
+            while keep < len(window) and window[keep] == toks[keep - 1]:
+                keep += 1
+            if len(window) > 1:
+                self._observe(row, len(window) - 1, keep - 1)
+            # a stop, the length limit or the thinking budget can cut the
+            # window short: the cache keeps what was emitted
+            used = self._emit(row, toks[:keep], extra, events)
+            used_all.append(used)
+            toks_all.append(toks[:used])
+        self.batch.commit(used_all)
+        gone = [r for r in rows if r.finished]
+        self.rows = [r for r in self.rows if not r.finished]
+        self._release(gone)
+        if self.head is not None:
+            alive = [
+                (b, r)
+                for b, r in enumerate(rows)
+                if r.hslot is not None and not r.finished
+            ]
+            if alive:
+                heads = self.head.absorb(
+                    [r for _, r in alive],
+                    [toks_all[b] for b, _ in alive],
+                    hidden,
+                    [[items[b].at + j for j in range(used_all[b])] for b, _ in alive],
+                )
+                self._draft([r for _, r in alive], heads)
+                mx.eval(*self.head.slots.arrays())
+        self.steps += 1
+        return events
+
+    def _draft(self, rows: list[_Row], heads: mx.array) -> None:
+        depths = self._depths(rows)
+        drafted_at = time.perf_counter()
+        drafts = self.head.draft(rows, heads, depths)
+        deepest = max(depths, default=0)
+        if deepest:
+            ms = (time.perf_counter() - drafted_at) * 1e3 / deepest
+            self.chain_ms += ACCEPT_EMA * (ms - self.chain_ms)
+        for r, d in zip(rows, drafts, strict=True):
+            r.drafts = d
+            self.drafted += len(d)
 
     def _emit(self, row: _Row, committed: list[int], extra, out: list) -> int:
         """Emit ``committed`` in order until a stop, the length limit or the
@@ -420,17 +494,16 @@ class RoundDriver:
             row.rates[j] += ACCEPT_EMA * (hit - row.rates[j])
 
     def _depths(self, ready: list[_Row]) -> list[int]:
-        """Next step's drafts per ready row (cost-aware allocation)."""
+        """Next step's drafts per ready row (cost-aware allocation over the
+        packed rows of the step)."""
         if not ready:
             return []
-        fixed = sum(1 for r in self.rows if r.pending is not None)
+        fixed = len(self.batch.rows)
         probs = []
         for r in ready:
             room = min(MAX_DECODE_TOKENS - 1, r.req.max_tokens - r.generated - 1)
             probs.append(chain(r.rates, room) if room > 0 else [])
-        return allocate(
-            fixed, probs, self.cost, fixed + sum(len(p) for p in probs), self.chain_ms
-        )
+        return allocate(fixed, probs, self.cost, LANE_ROWS, self.chain_ms, padded=True)
 
 
 __all__ = ["CHUNK", "Event", "Request", "RoundDriver", "cache_buffers"]
