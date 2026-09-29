@@ -20,6 +20,7 @@ buffers and are dropped after the round.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 import mlx.core as mx
@@ -27,6 +28,7 @@ import numpy as np
 
 from . import tree_verify as tv
 from .dflash_tree import walk
+from .spec_schedule import NodeBudget
 from .spec_topology import Topology
 
 logger = logging.getLogger(__name__)
@@ -35,6 +37,8 @@ logger = logging.getLogger(__name__)
 # from the measured frequency with which the target's continuation follows each
 # rank path of the head's top-k.
 TOPOLOGY = [(0,), (1,), (2,), (0, 0), (0, 1), (0, 0, 0), (1, 0)]
+# landing probability of each node of TOPOLOGY before the round history says otherwise
+PRIOR = [0.75, 0.2, 0.1, 0.4, 0.1, 0.25, 0.1]
 
 
 def _forward_level(
@@ -194,13 +198,21 @@ def _rounds(
         :, -1
     ]  # head output at the last committed position [1, D]
     full = Topology(TOPOLOGY)
+    budget = NodeBudget(full.size, prior=PRIOR)
     b = int(first_bonus)
     emitted = 1
     while emitted < max_tokens:
-        topo = full.prefix(min(full.size, max_tokens - emitted))
-        window = mx.concatenate(
-            [mx.array([b], dtype=mx.int32), draft_tokens(draft_model, lm, root, topo)]
-        )[None]
+        started = time.perf_counter()
+        topo = full.prefix(budget.choose(max_tokens - emitted))
+        if topo.size:
+            window = mx.concatenate(
+                [
+                    mx.array([b], dtype=mx.int32),
+                    draft_tokens(draft_model, lm, root, topo),
+                ]
+            )[None]
+        else:
+            window = mx.array([[b]], dtype=mx.int32)
         res = tv.tree_forward(lm, window, topo.shape(), prompt_cache)
         target = lm.speculative_argmax_from_hidden(res.hidden)
         try:
@@ -212,7 +224,8 @@ def _rounds(
             raise
         path = walk(tokens, topo.window_parents, row_tokens)
         new_tokens = [tokens[r] for r in path[1:]] + [row_tokens[path[-1]]]
-        _record_speculative_round(draft_model, len(path) - 1, topo.size)
+        if topo.size:
+            _record_speculative_round(draft_model, len(path) - 1, topo.size)
         tv.tree_commit(lm, prompt_cache, res, path)
         # the head absorbs the kept positions: position j pairs the token after
         # row j with that row's target hidden
@@ -222,6 +235,12 @@ def _rounds(
         )
         root = h[:, -1]
         b = new_tokens[-1]
+        budget.observe(
+            topo.size,
+            [r - 1 for r in path[1:]],
+            (time.perf_counter() - started) * 1e3,
+            first=emitted == 1,
+        )
         emitted += len(new_tokens)
         yield new_tokens
 
@@ -251,6 +270,10 @@ def mtp_tree_rounds_batch(
         or not greedy_sampling
         or prompt_tokens is None
         or not supported(model, draft_model)
+        or not tv.lane_ready(
+            model.language_model if hasattr(model, "language_model") else model,
+            prompt_cache,
+        )
     ):
         yield from _original(
             model,

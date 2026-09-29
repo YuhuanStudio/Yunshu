@@ -256,3 +256,27 @@ def test_tree_greedy_equals_plain_greedy(engine, lane_widths, context):
             None,
         )
         assert spec == plain, f"block {block}: first difference at token {first}"
+
+
+def test_tree_budgets_cycle_through_sizes(engine, lane_widths, monkeypatch):
+    """Every budget from no drafts to the full tree, in a fixed rotation."""
+    from yunshu_engine import spec_schedule
+
+    sizes = [7, 0, 3, 5, 1, 7, 2, 4]
+
+    def choose(self, room):
+        n = min(sizes[self.rounds % len(sizes)], max(0, room))
+        self.last = n
+        return n
+
+    monkeypatch.setattr(spec_schedule.NodeBudget, "choose", choose)
+    oracle = engine[3]
+    prompt = "Explain in detail how a refrigerator works."
+    plain = _generate(engine, prompt, 96, 0)
+    oracle.reset(plain)
+    spec = _generate(engine, prompt, 96, 8)
+    assert lane_widths
+    first = next(
+        (i for i, (a, b) in enumerate(zip(spec, plain, strict=False)) if a != b), None
+    )
+    assert spec == plain, f"first difference at token {first}"

@@ -132,6 +132,8 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_MTP` | bool | on | Qwen3.5-family VLMs: draft with the checkpoint's MTP head (batch-invariant, spec on == spec off). |
 | `YUNSHU_VLM_DRAFT` | path | unset | Qwen3.5-family VLMs: external DFlash drafter directory; replaces the MTP draft (batch-invariant verify, spec on == spec off). |
 | `YUNSHU_MTP_BLOCK_SIZE` | int | unset | Draft block size (DFlash: the ceiling its acceptance-driven depth stays under). Unset: 6 for MTP, the drafter's trained block for DFlash. |
+| `YUNSHU_SPEC_TREE` | bool | on | Qwen3.5-family single-request speculative lane: verify a draft *tree* (MTP head or DFlash2 lattice, up to 8 rows) instead of a chain; each row gets single-step arithmetic, so spec on == spec off. Off: upstream's chain rounds. |
+| `YUNSHU_DRAFTER_BITS` | int | 0 | DFlash drafter weight bits (0: as shipped, 8 or 4: quantized at load). Drafts are verified, so this changes only how often they land and how many bytes the drafter reads per cycle. |
 | `YUNSHU_NGRAM_DEFAULT` | bool | off | Text models: lossless n-gram speculation on greedy requests by default (per-request spec_decode also enables it). Wins on repetitive output. |
 | `YUNSHU_SPEC_PROPOSER` | `ngram` \| `suffix` | ngram | Text models: speculative proposer family for n-gram speculation. |
 | `YUNSHU_GEMMA4_ASSISTANT` | path | unset | Text Gemma-4 models: assistant drafter directory (KV-shared speculative drafter). |

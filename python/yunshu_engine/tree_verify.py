@@ -612,6 +612,10 @@ def supported(language_model: Any) -> bool:
         return False
     if not gv._PATCHED:
         return False
+    from .kernels import batch_invariant
+
+    if not batch_invariant.is_installed():
+        return False
     for layer in inner.layers:
         if layer.is_linear:
             g = layer.linear_attn
@@ -625,6 +629,11 @@ def supported(language_model: Any) -> bool:
 
 
 # ── the forward ─────────────────────────────────────────────────────────────
+
+
+def lane_ready(lm: Any, cache: list) -> bool:
+    """The prompt cache is the single-row lane layout ``tree_forward`` reads."""
+    return ragged_kv._lane_length(cache[lm.model.fa_idx]) is not None
 
 
 def _rope_delta(lm) -> int:

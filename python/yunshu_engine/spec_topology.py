@@ -59,7 +59,7 @@ class Topology:
 
     def prefix(self, n: int) -> Topology:
         """The first ``n`` nodes as a topology of their own."""
-        n = max(1, min(int(n), self.size))
+        n = max(0, min(int(n), self.size))
         if n == self.size:
             return self
         top = self._prefixes.get(n)

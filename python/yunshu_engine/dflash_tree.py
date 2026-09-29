@@ -20,11 +20,13 @@ between the drafter and the verify.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 import mlx.core as mx
 
 from . import tree_verify as tv
+from .spec_schedule import NodeBudget
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +137,8 @@ def supported(model: Any, draft_model: Any) -> bool:
 # see spec_topology. Chosen from the measured frequency with which the target's
 # continuation follows each rank path of the DFlash2 lattice.
 TOPOLOGY = [(0,), (1,), (0, 0), (0, 1), (0, 0, 0), (2,), (0, 0, 0, 0)]
+# landing probability of each node of TOPOLOGY before the round history says otherwise
+PRIOR = [0.75, 0.25, 0.5, 0.2, 0.3, 0.1, 0.2]
 POSITIONS = 7  # masked positions the drafter fills (its trained block minus one)
 
 
@@ -159,7 +163,11 @@ def dflash_tree_rounds(
     from .spec_topology import Topology
 
     lm = model.language_model if hasattr(model, "language_model") else model
-    if not greedy_sampling or not supported(model, draft_model):
+    if (
+        not greedy_sampling
+        or not supported(model, draft_model)
+        or not tv.lane_ready(lm, prompt_cache)
+    ):
         yield from _original(
             model,
             draft_model,
@@ -177,16 +185,25 @@ def dflash_tree_rounds(
     target_ids = list(draft_model.config.target_layer_ids)
     draft_cache = draft_model.reset(model)
     full = Topology(TOPOLOGY)
+    budget = NodeBudget(full.size, prior=PRIOR)
     b = int(first_bonus)
     emitted = 1
     while emitted < max_tokens:
-        topo = full.prefix(min(full.size, max_tokens - emitted))
-        lat = compute_lattice_gpu(
-            draft_model, b, hidden, draft_cache, max(POSITIONS, topo.max_depth)
-        )
-        window = mx.concatenate(
-            [mx.array([b], dtype=mx.int32), build_tokens(lat, topo).astype(mx.int32)]
-        )[None]
+        started = time.perf_counter()
+        topo = full.prefix(budget.choose(max_tokens - emitted))
+        if topo.size:
+            lat = compute_lattice_gpu(
+                draft_model, b, hidden, draft_cache, max(POSITIONS, topo.max_depth)
+            )
+            window = mx.concatenate(
+                [
+                    mx.array([b], dtype=mx.int32),
+                    build_tokens(lat, topo).astype(mx.int32),
+                ]
+            )[None]
+            hidden = None  # the drafter has read the committed positions
+        else:
+            window = mx.array([[b]], dtype=mx.int32)
         res = tv.tree_forward(lm, window, topo.shape(), prompt_cache, target_ids)
         target = lm.speculative_argmax_from_hidden(res.hidden)
         try:
@@ -198,12 +215,19 @@ def dflash_tree_rounds(
             raise
         path = walk(tokens, topo.window_parents, row_tokens)
         new_tokens = [tokens[r] for r in path[1:]] + [row_tokens[path[-1]]]
-        _record_speculative_round(draft_model, len(path) - 1, topo.size)
+        if topo.size:
+            _record_speculative_round(draft_model, len(path) - 1, topo.size)
         tv.tree_commit(lm, prompt_cache, res, path)
-        hidden = mx.concatenate(res.captured, axis=-1)[
-            :, mx.array(path, dtype=mx.int32)
-        ]
+        kept = mx.concatenate(res.captured, axis=-1)[:, mx.array(path, dtype=mx.int32)]
+        # a round without drafts leaves the committed positions for the next draft
+        hidden = kept if hidden is None else mx.concatenate([hidden, kept], axis=1)
         b = new_tokens[-1]
+        budget.observe(
+            topo.size,
+            [r - 1 for r in path[1:]],
+            (time.perf_counter() - started) * 1e3,
+            first=emitted == 1,
+        )
         for tok in new_tokens:
             yield tok, None
             emitted += 1
