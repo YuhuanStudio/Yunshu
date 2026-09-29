@@ -67,7 +67,9 @@ DOC = [(7 * i + 11) % 500 for i in range(700)]
 def test_repeated_prompt_hits_and_matches(tiny, draft):
     lm, drafter = tiny
     dr = drafter if draft else None
-    ref = _run(lm, dr, [DOC])[0][0]
+    # a cold prefill with the cache on: the span plan (chunk grid plus the
+    # prompt's checkpoints) is what a warm run continues
+    ref = _run(lm, dr, [DOC], _manager())[0][0]
     apc = _manager()
     first, hits1, _ = _run(lm, dr, [DOC], apc)
     assert hits1 == [0] and first[0] == ref
@@ -81,7 +83,7 @@ def test_extension_of_a_stored_prefix_matches(tiny):
     lm, drafter = tiny
     short = DOC[:513]  # checkpoints at 256, 512
     long = DOC + [(3 * i + 1) % 500 for i in range(200)]
-    ref = _run(lm, drafter, [long])[0][0]
+    ref = _run(lm, drafter, [long], _manager())[0][0]
     apc = _manager()
     _run(lm, drafter, [short], apc)
     got, hits, _ = _run(lm, drafter, [long], apc)
@@ -94,7 +96,7 @@ def test_partial_prefix_and_other_layouts_do_not_mix(tiny):
     apc = _manager()
     _run(lm, drafter, [DOC], apc)
     other = DOC[:300] + [(5 * i + 2) % 500 for i in range(300)]
-    ref = _run(lm, drafter, [other])[0][0]
+    ref = _run(lm, drafter, [other], _manager())[0][0]
     got, hits, _ = _run(lm, drafter, [other], apc)
     assert got[0] == ref
     # rows without a head (sampled) keep their own entries
@@ -110,7 +112,7 @@ def test_batch_of_hit_and_cold_rows_matches(tiny):
 
     lm, drafter = tiny
     cold = [(13 * i + 5) % 500 for i in range(90)]
-    ref = [_run(lm, drafter, [p])[0][0] for p in (DOC, cold)]
+    ref = [_run(lm, drafter, [p], _manager())[0][0] for p in (DOC, cold)]
     apc = _manager()
     _run(lm, drafter, [DOC], apc)
     d = RoundDriver(lm, drafter=drafter, stop_tokens=set(), chunk=128, apc=apc)

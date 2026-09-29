@@ -30,6 +30,32 @@ def mem(tag):
     print(json.dumps(row), flush=True)
 
 
+def parts(eng, d):
+    """Resident bytes by owner (GiB): model parameters, the decode batch's
+    slot buffers / GDN state, the MTP head's slots and weights."""
+    from mlx.utils import tree_flatten
+
+    def nbytes(tree):
+        return sum(a.nbytes for _, a in tree_flatten(tree) if hasattr(a, "nbytes"))
+
+    lm = eng._model.language_model
+    row = {
+        "stage": "parts",
+        "lm_params": round(nbytes(lm.parameters()) / G, 2),
+        "model_params": round(nbytes(eng._model.parameters()) / G, 2),
+        "batch_slots": round(sum(a.nbytes for a in d.batch.slots.arrays()) / G, 2),
+        "batch_state": round(
+            sum(a.nbytes for a in d.batch.state + d.batch.conv if a is not None) / G, 2
+        ),
+        "S": d.batch.slots.S,
+        "cap": d.batch.slots.cap,
+    }
+    if d.head is not None:
+        row["head_slots"] = round(sum(a.nbytes for a in d.head.slots.arrays()) / G, 2)
+        row["drafter"] = round(nbytes(d.head.drafter.parameters()) / G, 2)
+    print(json.dumps(row), flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("ckpt")
@@ -60,7 +86,9 @@ def main():
         steps += 1
         if steps == 10:
             mem("after 10 steps")
+            parts(eng, d)
     mem("done")
+    parts(eng, d)
     print("wall", round(time.perf_counter() - t0, 1))
     mx.clear_cache()
     mem("after clear_cache")
