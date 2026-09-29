@@ -1946,6 +1946,7 @@ async def _stream_anthropic(
     _has_tool_calls = False  # persists across blocks (unlike tool_use_block_started)
     accumulated_text = ""  # for tool-call detection
     matched_stop: str | None = None
+    _stream_stop_hit = False
     _streaming_finish_reason: str | None = None
     reasoning_tok: int = 0  # reasoning tokens emitted as thinking_delta
     _token_boundaries: list[int] = []  # cumulative text length after each output token
@@ -2077,6 +2078,8 @@ async def _stream_anthropic(
                 # because some engines set finish_reason without the finished flag.
                 if output.finish_reason is not None:
                     _streaming_finish_reason = output.finish_reason
+                    if getattr(output, "stopped_by_stop_sequence", False) and stop:
+                        _stream_stop_hit = True
 
                 # Emit message_start on first output with prompt_tokens.
                 # Deferred from the initial yield so that cache token counts
@@ -2362,6 +2365,8 @@ async def _stream_anthropic(
                     and output.finish_reason is not None
                 ):
                     _streaming_finish_reason = output.finish_reason
+                    if getattr(output, "stopped_by_stop_sequence", False) and stop:
+                        _stream_stop_hit = True
 
                 # Emit message_start on first output with prompt_tokens
                 # (deferred from the initial yield for accurate cache tokens).
@@ -2592,6 +2597,8 @@ async def _stream_anthropic(
         # and optionally output_tokens_details (reasoning_tokens).
         # cache_creation_input_tokens / cache_read_input_tokens are in message_start
         # (emitted deferred above when the first engine output arrives).
+        if not matched_stop and _stream_stop_hit and stop:
+            matched_stop = stop[0] if len(stop) == 1 else _UNKNOWN_STOP_SENTINEL
         stop_reason = _map_stop_reason(
             _streaming_finish_reason, matched_stop, has_tool_calls=_has_tool_calls
         )
