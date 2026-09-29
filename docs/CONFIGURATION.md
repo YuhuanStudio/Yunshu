@@ -80,6 +80,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_WS_PING_INTERVAL` | float | 15.0 | Text WebSocket: seconds between server heartbeat pings (0 disables). |
 | `YUNSHU_WS_SEND_QUEUE` | int | 256 | Text WebSocket: outbound events buffered per connection before generation is paused (backpressure). |
 | `YUNSHU_MAX_REQUEST_SIZE` | int | 10485760 (10 MiB) | Maximum request body size in bytes. |
+| `YUNSHU_PROGRESS_INTERVAL_S` | float | 2.0 | Streaming chat/completions: seconds between `: yunshu-progress` SSE comments (queue / prefill progress, ETA) before the first token; 0 turns them off. Strict SSE clients ignore comment lines. |
 | `YUNSHU_SLOW_REQUEST_THRESHOLD` | float | 30.0 | Log a warning for requests slower than this many seconds. |
 | `YUNSHU_CORS_ORIGINS` | str | http://localhost:3000,http://localhost:8000 | Comma-separated allowed CORS origins ('*' for any). Also checked for the Realtime WebSocket Origin header. |
 | `YUNSHU_RESPONSE_CACHE` | bool | off | Cache identical non-streaming responses in memory. |
@@ -174,8 +175,6 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `YUNSHU_DIFFUSION_SCHEDULER` | `''` \| `ddim` \| `dpm_plus_plus` \| `euler` \| `euler_ancestral` \| `lms` | unset | Image generation sampler override ('' uses the pipeline's own). |
-| `YUNSHU_VIDEO_LORA` | path | unset | LoRA adapter directory loaded with the video model. |
-| `YUNSHU_LTX_TEXT_ENCODER_REPO` | path | unset | LTX video: text-encoder repo when the model folder does not bundle one. |
 
 ### embeddings
 

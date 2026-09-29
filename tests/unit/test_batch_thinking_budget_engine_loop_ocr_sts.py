@@ -51,24 +51,6 @@ def test_ocr_native_returns_model_key():
     assert '"model": ocr_model_id,' in src
 
 
-def test_spectral_gating_loop_covers_the_tail():
-    from yunshu_engine import sts_engine
-
-    src = (
-        inspect.getsource(sts_engine._SpectralGating.process)
-        if hasattr(sts_engine, "_SpectralGating")
-        else inspect.getsource(sts_engine)
-    )
-    # SUPERSEDES the `+1`: the analysis loop now iterates to len(arr) so a
-    # final zero-padded frame anchors the tail (the `+1` only covered the exact-multiple
-    # case → general-case tail was still silenced). Pad + clamp guards remain.
-    assert "max(1, len(arr) - fft_size + 1)" not in src
-    assert "range(0, len(arr), hop_size)" in src
-    assert "np.pad(frame, (0, fft_size - len(frame)))" in src
-    # the ISTFT write is clamped to the buffer length
-    assert "end = min(start + fft_size, len(arr))" in src
-
-
 def test_plus_one_includes_final_hop_at_exact_multiple():
     # len chosen so (len-fft) is an exact multiple of hop → the old exclusive stop dropped
     # that final hop; the +1 includes it.

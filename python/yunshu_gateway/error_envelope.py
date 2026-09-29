@@ -95,6 +95,9 @@ def format_error_response(
     err: dict = {"message": message, "type": o_type}
     if o_code is not None:
         err["code"] = o_code
+    from .error_hints import add_hint
+
+    add_hint(err, status_code)
     return JSONResponse(
         status_code=status_code, content={"error": err}, headers=headers
     )

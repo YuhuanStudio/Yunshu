@@ -4,19 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 
 from fastapi import APIRouter, HTTPException, Request
 
 logger = logging.getLogger(__name__)
-from datetime import UTC
 
 from pydantic import BaseModel, model_validator
 
 from yunshu_control.audit_log import log_operation, resolve_actor
 from yunshu_engine import settings
 
-from ..engine import get_display_model_id, get_engine, get_model_manager
+from ..engine import get_engine, get_model_manager
 
 router = APIRouter(tags=["models"])
 
@@ -74,19 +72,6 @@ def _check_permission(request: Request, permission: str) -> None:
     )
 
 
-def _anthropic_fields(model_id: str, created: int) -> dict:
-    """Extra fields so the Anthropic SDK's models.list()/retrieve() parse the same payload."""
-    from datetime import datetime
-
-    return {
-        "type": "model",
-        "display_name": model_id,
-        "created_at": datetime.fromtimestamp(created, UTC)
-        .isoformat()
-        .replace("+00:00", "Z"),
-    }
-
-
 def _check_model_access(request: Request, model: str | None) -> None:
     """No-op model-access gate (retained as a stable call seam).
 
@@ -120,142 +105,84 @@ class LoadModelRequest(BaseModel):
         return data
 
 
+def _model_payload(card, entry, authenticated: bool) -> dict:
+    """One ``/v1/models`` item: the card in every wire format, plus admin-only detail."""
+    from ..model_card_formats import openai_model
+
+    item = openai_model(card, detailed=authenticated)
+    if authenticated and entry is not None:
+        item["loaded"] = entry.is_loaded
+        item["size_gb"] = round(entry.estimated_bytes / 1e9, 1)
+        if entry.is_loaded and entry.engine is not None:
+            try:
+                stats = (
+                    entry.engine.get_stats()
+                    if hasattr(entry.engine, "get_stats")
+                    else {}
+                )
+                item["stats"] = stats
+            except Exception:
+                logger.debug(f"failed to get stats for {entry.model_id}", exc_info=True)
+    return item
+
+
 @router.get("/models")
 async def list_models(request: Request) -> dict:
-    """List available models (OpenAI-compatible).
+    """List available models (OpenAI + Anthropic compatible, with the full model card).
 
-    Public endpoint per OpenAI spec.  Detailed info (stats, sizes, loaded
-    status) is only included for authenticated requests.
+    Every item carries the OpenAI fields, the Anthropic ``ModelInfo`` fields, the OpenRouter /
+    vLLM / LM Studio metadata fields and the complete card under ``yunshu`` (see
+    ``yunshu_engine/model_card.py``). Loaded state, size and engine stats are only included for
+    authenticated requests.
     """
-    models = []
-    # A static-token holder authenticates with role="admin"; an authenticated
-    # request gets the detailed listing (loaded/type/size_gb/stats), the public
-    # OpenAI-compat list stays minimal.
-    _authenticated = getattr(request.state, "role", None) == "admin"
+    from ..model_cards import all_cards, entry_card
 
-    # Multi-model mode
+    # A static-token holder authenticates with role="admin".
+    _authenticated = getattr(request.state, "role", None) == "admin"
     manager = get_model_manager()
+    models = []
     if manager is not None:
         for entry in manager.list_entries():
-            model_info = {
-                "id": entry.model_id,
-                "object": "model",
-                "created": int(entry.load_time)
-                if entry.load_time > 0
-                else int(time.time()),
-                "owned_by": "yunshu",
-            }
-            model_info.update(_anthropic_fields(entry.model_id, model_info["created"]))
-            if _authenticated:
-                model_info["loaded"] = entry.is_loaded
-                model_info["model_type"] = entry.model_type.name
-                model_info["size_gb"] = round(entry.estimated_bytes / 1e9, 1)
-            if _authenticated and entry.is_loaded and entry.engine is not None:
-                try:
-                    stats = (
-                        entry.engine.get_stats()
-                        if hasattr(entry.engine, "get_stats")
-                        else {}
-                    )
-                    model_info["stats"] = stats
-                except Exception:
-                    logger.debug(
-                        f"failed to get stats for {entry.model_id}", exc_info=True
-                    )
-            models.append(model_info)
-        result = {
-            "object": "list",
-            "data": models,
-            "has_more": False,
-            "first_id": models[0]["id"] if models else None,
-            "last_id": models[-1]["id"] if models else None,
-        }
-        # Include model registry stats for debugging/monitoring — but NOT for an
-        # unauthenticated caller (the public OpenAI-compat list must not leak
-        # global total_entries/active_owners).
-        if _authenticated:
-            try:
-                from yunshu_engine.model_registry import get_registry
-
-                result["registry"] = get_registry().get_stats()
-            except Exception:
-                logger.debug("model_registry stats unavailable", exc_info=True)
-        return result
-
-    # Single-engine mode
-    engine = get_engine()
-    if engine and engine.is_loaded:
-        _load_time = getattr(engine, "_load_time", None) or getattr(
-            engine, "load_time", None
-        )
-        _mid = get_display_model_id() or engine.model_name
-        _created = int(_load_time) if _load_time else int(time.time())
-        models.append(
-            {
-                "id": _mid,
-                "object": "model",
-                "created": _created,
-                "owned_by": "yunshu",
-                **_anthropic_fields(_mid, _created),
-            }
-        )
-    return {
+            models.append(_model_payload(entry_card(entry), entry, _authenticated))
+    else:
+        models = [_model_payload(c, None, _authenticated) for c in all_cards()]
+    result = {
         "object": "list",
         "data": models,
         "has_more": False,
         "first_id": models[0]["id"] if models else None,
         "last_id": models[-1]["id"] if models else None,
     }
+    # Registry stats are not part of the public list (they would leak global counters).
+    if manager is not None and _authenticated:
+        try:
+            from yunshu_engine.model_registry import get_registry
+
+            result["registry"] = get_registry().get_stats()
+        except Exception:
+            logger.debug("model_registry stats unavailable", exc_info=True)
+    return result
 
 
 @router.get("/models/{model_id:path}")
 async def get_model(model_id: str, request: Request) -> dict:
-    """Get details for a specific model."""
-    _check_permission(request, "can_infer")
-    manager = get_model_manager()
-    if manager is not None:
-        # Resolve aliases / case / org-prefix the same way inference does,
-        # so an id that successfully runs chat/completions doesn't 404 here.
-        _resolved = manager.resolve_model_id(model_id) or model_id
-        entry = manager.get_entry(_resolved)
-        if entry is None:
-            raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
-        return {
-            "id": entry.model_id,
-            "object": "model",
-            "owned_by": "yunshu",
-            "loaded": entry.is_loaded,
-            "model_type": entry.model_type.name,
-            "size_gb": round(entry.estimated_bytes / 1e9, 1),
-            # OpenAI spec: `created` is required int — fall back to wall-clock if model
-            # hasn't been loaded yet so we never emit null for a required field.
-            "created": int(entry.load_time)
-            if entry.load_time > 0
-            else int(time.time()),
-            **_anthropic_fields(
-                entry.model_id,
-                int(entry.load_time) if entry.load_time > 0 else int(time.time()),
-            ),
-        }
+    """Get one model with its full card (404 when unknown)."""
+    from ..model_cards import find_card
 
-    engine = get_engine()
-    served = get_display_model_id() or getattr(engine, "model_name", None)
-    resolver = getattr(engine, "resolve_model_id", None)
-    known = bool(engine) and (
-        (callable(resolver) and bool(resolver(model_id)))
-        or model_id in (served, str(served).rsplit("/", 1)[-1])
-    )
-    if not known:
+    _check_permission(request, "can_infer")
+    card = find_card(model_id)
+    if card is None:
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
-    _created = int(time.time())
-    return {
-        "id": model_id,
-        "object": "model",
-        "owned_by": "yunshu",
-        # OpenAI spec: `created` is a required int.
-        "created": _created,
-        **_anthropic_fields(model_id, _created),
-    }
+    manager = get_model_manager()
+    entry = (
+        manager.get_entry(manager.resolve_model_id(model_id) or model_id)
+        if manager is not None
+        else None
+    )
+    item = _model_payload(card, entry, getattr(request.state, "role", None) == "admin")
+    if entry is not None:
+        item.pop("stats", None)  # detail view: the card is enough
+    return item
 
 
 @router.post("/models/load")

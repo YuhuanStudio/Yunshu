@@ -128,6 +128,7 @@ _add("YUNSHU_WS_MAX_INFLIGHT", "int", 16, "Text WebSocket (/v1/stream, wss /v1/r
 _add("YUNSHU_WS_PING_INTERVAL", "float", 15.0, "Text WebSocket: seconds between server heartbeat pings (0 disables).", "server", minimum=0.0)
 _add("YUNSHU_WS_SEND_QUEUE", "int", 256, "Text WebSocket: outbound events buffered per connection before generation is paused (backpressure).", "server", minimum=1)
 _add("YUNSHU_MAX_REQUEST_SIZE", "int", 10 * 1024 * 1024, "Maximum request body size in bytes.", "server", minimum=1)
+_add("YUNSHU_PROGRESS_INTERVAL_S", "float", 2.0, "Streaming chat/completions: seconds between `: yunshu-progress` SSE comments (queue / prefill progress, ETA) before the first token; 0 turns them off. Strict SSE clients ignore comment lines.", "server", minimum=0.0)
 _add("YUNSHU_SLOW_REQUEST_THRESHOLD", "float", 30.0, "Log a warning for requests slower than this many seconds.", "server", minimum=0.0)
 _add("YUNSHU_CORS_ORIGINS", "str", "http://localhost:3000,http://localhost:8000", "Comma-separated allowed CORS origins ('*' for any). Also checked for the Realtime WebSocket Origin header.", "server")
 _add("YUNSHU_RESPONSE_CACHE", "bool", False, "Cache identical non-streaming responses in memory.", "server")
@@ -206,10 +207,8 @@ _add("YUNSHU_REALTIME_VAD_MODEL", "str", "mlx-community/silero-vad", "Silero VAD
 _add("YUNSHU_REALTIME_MAX_INPUT_AUDIO_BYTES", "int", 10 * 1024 * 1024, "Realtime: largest buffered input audio, in bytes.", "voice", minimum=1)
 _add("YUNSHU_REALTIME_MAX_CONVERSATION_ITEMS", "int", 1000, "Realtime: conversation items kept per session.", "voice", minimum=1)
 
-# ── image / video ──────────────────────────────────────────────────────
+# ── image ──────────────────────────────────────────────────────
 _add("YUNSHU_DIFFUSION_SCHEDULER", "enum", "", "Image generation sampler override ('' uses the pipeline's own).", "image-video", choices=("", "ddim", "dpm_plus_plus", "euler", "euler_ancestral", "lms"))
-_add("YUNSHU_VIDEO_LORA", "path", None, "LoRA adapter directory loaded with the video model.", "image-video")
-_add("YUNSHU_LTX_TEXT_ENCODER_REPO", "path", None, "LTX video: text-encoder repo when the model folder does not bundle one.", "image-video")
 
 # ── embeddings ─────────────────────────────────────────────────────────
 _add("YUNSHU_ANE_EMBEDDINGS", "bool", False, "Compute embeddings on the Apple Neural Engine via CoreML when available.", "embeddings")

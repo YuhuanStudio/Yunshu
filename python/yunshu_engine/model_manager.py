@@ -206,8 +206,8 @@ def _detect_model_type(model_path: str) -> ModelType:
     ) or model_type in ("ti2v", "t2v", "i2v", "wan", "ltx", "ltxv"):
         # Wan / LTX video diffusion: config model_type is the TASK (ti2v/t2v/i2v),
         # not an engine name, and the dir name (Wan2.2-TI2V-5B) lacks the literal
-        # "video" — so match the task codes too. VideoEngine._detect_model_type
-        # then maps them to its wan_2_2 / ltx_2 dispatch.
+        # "video" — so match the task codes too. Video is not served; the model is
+        # recognised so loading it fails with a clear message.
         return ModelType.VIDEO
     if any(k in name_lower for k in ("wan2.", "-wan-", "ltx-video", "ltxvideo")):
         return ModelType.VIDEO
@@ -294,6 +294,9 @@ class ModelEntry:
     estimated_bytes: int = 0
     engine: Any = None  # Engine | TTSEngine | ASREngine | VLMEngine | ImageGenEngine
     last_access: float = 0.0
+    # Ollama-style keep_alive for this model, seconds after its last use: None = the
+    # server default (YUNSHU_MODEL_TTL_SECONDS), inf = keep loaded, 0 = unload when idle.
+    keep_alive_s: float | None = None
     is_loading: bool = False
     is_pinned: bool = False
     is_loaded: bool = False
@@ -309,7 +312,7 @@ async def instantiate_engine(
 ) -> Any:
     """Create AND start the engine matching ``model_type``. Shared by multi-model
     loading and single-model serving so every modality (TTS / ASR / VLM / IMAGE_GEN /
-    EMBEDDING / RERANKER / STS / VIDEO / OCR / LLM) is built with the right engine
+    EMBEDDING / RERANKER / OCR / LLM) is built with the right engine
     class — not just the few the single-model startup used to special-case."""
     if model_type == ModelType.TTS:
         from .audio_engine import TTSEngine
@@ -341,18 +344,12 @@ async def instantiate_engine(
         engine = VLEmbeddingEngine(model_path, config)
         await engine.start()
         return engine
-    if model_type == ModelType.STS:
-        from .sts_engine import STSEngine
-
-        engine = STSEngine(model_path, config)
-        engine.start()
-        return engine
-    if model_type == ModelType.VIDEO:
-        from .video_engine import VideoEngine
-
-        engine = VideoEngine(model_path, config)
-        engine.start()
-        return engine
+    if model_type in (ModelType.STS, ModelType.VIDEO):
+        raise RuntimeError(
+            f"'{model_path}' is a {model_type.name.lower()} model; speech-to-speech and "
+            "video generation are not supported (image generation, LLM, VLM, ASR, TTS, "
+            "OCR and embedding models are)."
+        )
     if model_type == ModelType.OCR:
         from .ocr_engine import OCREngine
 
@@ -1117,23 +1114,49 @@ class ModelManager:
             for e in self._entries.values()
         ]
 
-    async def check_ttl(self) -> list[str]:
-        """Unload models that exceeded their TTL. Returns unloaded model IDs."""
-        if self.ttl_seconds is None:
-            return []
+    def effective_keep_alive(self, entry: ModelEntry) -> float | None:
+        """Seconds a loaded model may sit idle: its own keep_alive, else the server TTL
+        (None or inf: never unloaded on idleness)."""
+        ka = entry.keep_alive_s if entry.keep_alive_s is not None else self.ttl_seconds
+        if ka is None or ka == float("inf"):
+            return None
+        return ka
 
+    def set_keep_alive(self, model_id: str, seconds: float | None) -> bool:
+        """Set a model's keep_alive (see ModelEntry.keep_alive_s); the idle clock
+        restarts now. Returns False for an unknown model."""
+        resolved = self.resolve_model_id(model_id)
+        entry = self._entries.get(resolved) if resolved else None
+        if entry is None:
+            return False
+        entry.keep_alive_s = seconds
+        entry.last_access = time.monotonic()
+        return True
+
+    def expires_in(self, entry: ModelEntry) -> float | None:
+        """Seconds until the idle unload of a loaded model (None: never)."""
+        ka = self.effective_keep_alive(entry)
+        if ka is None or not entry.is_loaded or entry.is_pinned:
+            return None
+        return max(entry.last_access + ka - time.monotonic(), 0.0)
+
+    async def check_ttl(self) -> list[str]:
+        """Unload models idle longer than their keep_alive / TTL. Returns unloaded IDs."""
         unloaded = []
-        now = time.monotonic()
-        cutoff = now - self.ttl_seconds
         async with self._lock:
+            now = time.monotonic()
             candidates = [
                 e
                 for e in self._entries.values()
-                if e.is_loaded and not e.is_pinned and e.last_access <= cutoff
+                if e.is_loaded
+                and not e.is_pinned
+                and (ka := self.effective_keep_alive(e)) is not None
+                and e.last_access <= now - ka
             ]
             for entry in candidates:
+                ka = self.effective_keep_alive(entry)
                 # Re-check: a concurrent access may have updated last_access
-                if entry.last_access > cutoff:
+                if ka is None or entry.last_access > time.monotonic() - ka:
                     continue
                 await self._unload_model_locked(entry.model_id)
                 unloaded.append(entry.model_id)

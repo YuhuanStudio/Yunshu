@@ -408,6 +408,10 @@ class RoundDriver:
     # ── drafting policy ──────────────────────────────────────────────────
     def _observe(self, row: _Row, drafted: int, landed: int) -> None:
         self.accepted += landed
+        st = getattr(row.req.handle, "stats", None)
+        if st is not None:
+            st.spec_drafted += drafted
+            st.spec_accepted += landed
         for j in range(drafted):
             self.depth_drafted[j] += 1
             self.depth_landed[j] += int(j < landed)

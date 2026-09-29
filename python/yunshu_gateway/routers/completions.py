@@ -11,6 +11,7 @@ Supports:
 import json
 import logging
 import time
+import types
 import uuid
 from collections.abc import AsyncIterator
 
@@ -42,6 +43,7 @@ from ..streaming import (
     validate_context_window,
     validate_prefill_memory,
 )
+from ..x_yunshu import apply_keep_alive
 from .chat import _validate_sampling_params
 from .models import _check_permission
 
@@ -151,6 +153,7 @@ class StreamOptions(BaseModel):
 
 class CompletionRequest(BaseModel):
     model: str
+    keep_alive: str | int | float | None = None  # Ollama-style, see chat
     # OpenAI Completions API permits prompt as: string, list[string], list[int],
     # or list[list[int]] (batched token-id prompts). Each list element becomes
     # its own choice in the response.
@@ -315,6 +318,7 @@ class CompletionRequest(BaseModel):
 async def create_completion(req: CompletionRequest, request: Request):
     """OpenAI-compatible text completion endpoint."""
     _check_permission(request, "can_infer")
+    apply_keep_alive(req.model, req.keep_alive)
     _validate_sampling_params(req.temperature, req.effective_max_tokens(), req.top_p)
 
     # Fast path: max_tokens=0 returns prompt_tokens only (OpenAI API behavior).
@@ -433,6 +437,10 @@ async def create_completion(req: CompletionRequest, request: Request):
             raise HTTPException(
                 status_code=404, detail=f"Model '{req.model}' not found"
             ) from None
+
+    from ..model_guards import reject_embedding_only
+
+    reject_embedding_only(engine, req.model)
 
     # OpenAI accepts str | list[str] | list[int] | list[list[int]] for prompt.
     # Normalize into a list of string prompts; each becomes its own choice.
@@ -1526,7 +1534,12 @@ def _format_logprobs(
         echo: Whether echo mode is enabled (shifts text_offset by prompt length).
         prompt: The prompt text, used for text_offset shift when echo=True.
     """
-    raw_logprobs = getattr(state, "logprobs", None)
+    # The VLM runner returns a plain dict, the other engines an object.
+    if isinstance(state, dict):
+        raw_logprobs = state.get("logprobs")
+        state = types.SimpleNamespace(**state)
+    else:
+        raw_logprobs = getattr(state, "logprobs", None)
     # Guard on type/length, not truthiness: the engine-loop/legacy paths can hand
     # back a raw mx.array, and `not <multi-element array>` raises ValueError.
     # Non-list formats → no logprobs rather than a 500.

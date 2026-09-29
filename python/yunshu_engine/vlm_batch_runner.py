@@ -52,6 +52,28 @@ class RunStats:
     # Per-token {"token_id", "logprob", "top_logprobs": [...]} when requested.
     last_logprob: dict | None = None
     extra: dict = field(default_factory=dict)
+    # Timing / progress (time.perf_counter() values; 0.0 = not reached yet). The
+    # gateway reads them live for prefill-progress events and the per-response
+    # ``x_yunshu`` stats.
+    t_submit: float = 0.0  # handed to the runner
+    t_admit: float = 0.0  # left the queue, prefill started
+    t_first: float = 0.0  # first generated token
+    t_last: float = 0.0  # latest generated token
+    prefill_done: int = 0  # prompt tokens computed so far (cache hits excluded)
+    prefill_total: int = 0  # prompt tokens to compute (cache hits excluded)
+    spec_mode: str | None = None  # "mtp" / "dflash" while a drafter is in use
+    spec_drafted: int = 0
+    spec_accepted: int = 0
+
+    @property
+    def phase(self) -> str:
+        if self.finish_reason is not None:
+            return "done"
+        if not self.t_admit:
+            return "queued"
+        if not self.t_first:
+            return "prefill"
+        return "decode"
 
 
 class ConstraintProcessor:
@@ -89,6 +111,22 @@ class ConstraintProcessor:
         self._generated.append(token)
         self._constraint.advance(self._tokenizer.decode([token]))
         return self._mask(logits)
+
+
+class Fp32LogitsProcessor:
+    """Upcast logits to float32 so reported logprobs are exact.
+
+    ``logprobs = logits - logsumexp(logits)`` is computed in the model's dtype. In bf16
+    the logsumexp is rounded to about 0.1, so a near-certain token reads exactly 0.0
+    while its alternatives read -4.25 in the same row. Appended last, only for requests
+    that ask for logprobs (those already leave the fused greedy step).
+    """
+
+    def __call__(self, tokens: mx.array, logits: mx.array) -> mx.array:
+        return logits.astype(mx.float32)
+
+    def process_last_token(self, token: int, logits: mx.array) -> mx.array:
+        return logits.astype(mx.float32)
 
 
 def build_sampler(temperature: float, top_p: float, top_k: int, min_p: float):
@@ -364,6 +402,8 @@ class VLMBatchRunner:
             and not logprobs
             and thinking_budget is None
         )
+        if logprobs:
+            processors.append(Fp32LogitsProcessor())
         budget = None
         if thinking_budget is not None:
             from mlx_vlm.utils import ThinkingBudgetCriteria
@@ -411,6 +451,10 @@ class VLMBatchRunner:
             allow_draft and greedy and not processors and not logprobs
         )
         stats.used_draft = use_draft
+        stats.t_submit = time.perf_counter()
+        with contextlib.suppress(Exception):
+            # The gateway reaches the live stats through the cancel event it owns.
+            cancel_event.run_stats = stats
         self._submit(job)
         try:
             while True:
@@ -480,6 +524,9 @@ class VLMBatchRunner:
     def _admit(self, job: _Job, alone: bool) -> None:
         from .mrope import clear_rope_state
 
+        job.stats.t_admit = time.perf_counter()
+        job.stats.prefill_total = len(job.ids)
+
         if self.driver is not None and job.prompt_kwargs is None:
             self._admit_driver(job)
             return
@@ -495,6 +542,8 @@ class VLMBatchRunner:
         if not spec:
             job.use_draft = False
             job.stats.used_draft = False
+        else:
+            job.stats.spec_mode = _spec_mode(self.drafter)
         pkw = job.prompt_kwargs
         if pkw is None:
             if alone:
@@ -562,9 +611,12 @@ class VLMBatchRunner:
                 handle=job,
             )
         )
-        job.start = time.perf_counter()
+        job.start = job.stats.t_admit = time.perf_counter()
+        job.stats.prefill_total = len(job.ids)
         job.stats.used_apc = False
         job.stats.used_draft = bool(job.allow_draft and self.driver.head is not None)
+        if job.stats.used_draft:
+            job.stats.spec_mode = "mtp"
         self._driver_jobs[id(job)] = job
 
     def _step_driver(self) -> None:
@@ -577,11 +629,17 @@ class VLMBatchRunner:
                 job.out.put(_DONE)
         if not self._driver_jobs:
             return
-        for event in self.driver.step():
+        events = self.driver.step()
+        self._note_driver_prefill()
+        for event in events:
             job = event.handle
             stats = job.stats
+            now = time.perf_counter()
             if stats.generated == 0:
-                stats.first_token_s = time.perf_counter() - job.start
+                stats.first_token_s = now - job.start
+                stats.t_first = now
+                stats.prefill_done = stats.prefill_total
+            stats.t_last = now
             stats.generated += 1
             job.out.put((int(event.token), event.logprob))
             if event.finish is not None:
@@ -647,6 +705,7 @@ class VLMBatchRunner:
             if hasattr(lm, "_rope_deltas"):
                 lm._rope_deltas = mx.array([[job.rope_delta]], dtype=mx.float32)
         prompt_progress, responses = group.gen.next()
+        self._note_prefill(group)
         if self.ragged_kv and not self._ragged_logged and not group.spec:
             # Engagement proof in the server log (a no-op path once cost a
             # full MMLU run to notice). Joins build the ragged caches
@@ -670,8 +729,12 @@ class VLMBatchRunner:
             if job is None:
                 continue
             stats = job.stats
+            now = time.perf_counter()
+            stats.t_last = now
             if stats.generated == 0:
-                stats.first_token_s = time.perf_counter() - job.start
+                stats.first_token_s = now - job.start
+                stats.t_first = now
+                stats.prefill_done = stats.prefill_total
             if response.token is None:
                 self._finish(group, response.uid, response.finish_reason or "stop")
                 continue
@@ -689,6 +752,46 @@ class VLMBatchRunner:
             job.out.put((int(response.token), lp))
             if response.finish_reason is not None:
                 self._finish(group, response.uid, response.finish_reason)
+
+    def _note_driver_prefill(self) -> None:
+        """Publish prefill progress of the round driver's rows."""
+        try:
+            for row in self.driver.rows:
+                st = row.req.handle.stats
+                if st.t_first == 0.0:
+                    st.prefill_done = min(row.done, st.prefill_total)
+        except Exception:
+            logger.debug("driver prefill progress unavailable", exc_info=True)
+
+    @staticmethod
+    def _note_prefill(group: _Group) -> None:
+        """Publish prefill progress (uncached tokens computed / to compute) for
+        the rows of the batch that is prefilling right now."""
+        gen = group.gen
+        pb = getattr(gen, "_prompt_batch", None)
+        try:
+            if pb is not None:
+                done = int(getattr(pb, "_processed_prompt_columns", 0))
+                rest = int(pb._input_ids.shape[1])
+                cached = list(getattr(pb, "_cached_tokens_per_row", []) or [])
+                for i, uid in enumerate(getattr(pb, "_prompt_uids", [])):
+                    job = group.jobs.get(uid)
+                    if job is None:
+                        continue
+                    hit = int(cached[i]) if i < len(cached) else 0
+                    if hit:
+                        job.stats.cached_tokens = max(job.stats.cached_tokens, hit)
+                    job.stats.prefill_total = max(len(job.ids) - hit, done + rest)
+                    job.stats.prefill_done = min(done, job.stats.prefill_total)
+                return
+            waiting = {s[0] for s in getattr(gen, "_unprocessed_sequences", [])}
+        except Exception:
+            logger.debug("prefill progress unavailable", exc_info=True)
+            return
+        for uid, job in group.jobs.items():
+            st = getattr(job, "stats", None)
+            if st is not None and uid not in waiting and st.t_first == 0.0:
+                st.prefill_done = st.prefill_total
 
     def _drive_slice(self, resubmit: bool = True) -> None:
         """One scheduling slice on the MLX thread."""
@@ -752,6 +855,15 @@ class VLMBatchRunner:
             with contextlib.suppress(Exception):
                 mx.synchronize()
                 mx.clear_cache()
+
+
+def _spec_mode(drafter: Any) -> str:
+    name = type(drafter).__name__.lower() if drafter is not None else ""
+    if "dflash" in name:
+        return "dflash"
+    if "mtp" in name:
+        return "mtp"
+    return name or "draft"
 
 
 # Uids of the rows the upstream batch is sampling right now (set by the
