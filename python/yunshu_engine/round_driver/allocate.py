@@ -87,7 +87,8 @@ class CostCurve:
             ms = min(ms, 2.0 * self(rows)) if self.points else ms
             self.points[rows] = ms
         else:
-            self.points[rows] = old + weight * (ms - old)
+            # fall fast (one-time costs inflate early samples), rise slowly
+            self.points[rows] = old + (0.5 if ms < old else weight) * (ms - old)
 
     def __call__(self, rows: int) -> float:
         if not self.points:
