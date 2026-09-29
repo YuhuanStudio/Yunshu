@@ -19,6 +19,7 @@ submitter's cwd and environment.
 """
 
 import argparse
+import contextlib
 import fcntl
 import json
 import os
@@ -57,6 +58,31 @@ def _jobs() -> list[dict]:
         (j for p in JOBS.glob("*.json") if (j := _read(p))),
         key=lambda j: (-j.get("priority", 0), j["submitted"], j["id"]),
     )
+
+
+def _owner(job: dict) -> str:
+    """Fair-share key: the agent worktree (or checkout) the job came from."""
+    cwd = job.get("cwd", "")
+    marker = "/.claude/worktrees/"
+    if marker in cwd:
+        return cwd.split(marker, 1)[1].split("/", 1)[0]
+    return job.get("env", {}).get("GPUQ_OWNER", "main")
+
+
+def _pick(jobs: list[dict]) -> dict | None:
+    """Highest priority first; within it, the owner that last ran longest ago
+    (round-robin across agents), then that owner's oldest job."""
+    pending = [j for j in jobs if j["state"] == "pending"]
+    if not pending:
+        return None
+    top = max(j.get("priority", 0) for j in pending)
+    pending = [j for j in pending if j.get("priority", 0) == top]
+    last: dict[str, float] = {}
+    for j in jobs:
+        if "started" in j:
+            o = _owner(j)
+            last[o] = max(last.get(o, 0.0), j["started"])
+    return min(pending, key=lambda j: (last.get(_owner(j), 0.0), j["submitted"]))
 
 
 def _new_id(label: str) -> str:
@@ -119,10 +145,11 @@ def _run_one(job: dict, path: Path) -> None:
     job.update(state="running", started=_now(), pid=None)
     log = open(LOGS / f"{job['id']}.log", "w")  # noqa: SIM115 - closed after the job ends
     try:
+        rc_file = LOGS / f"{job['id']}.rc"
         proc = subprocess.Popen(
-            job["cmd"],
+            ["/bin/sh", "-c", '"$@"; echo $? > "$GPUQ_RC"', "sh", *job["cmd"]],
             cwd=job["cwd"],
-            env=job["env"],
+            env={**job["env"], "GPUQ_RC": str(rc_file)},
             stdout=log,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
@@ -159,6 +186,44 @@ def _run_one(job: dict, path: Path) -> None:
     _write(path, job)
 
 
+def _alive(pid: int | None) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _adopt(job: dict, path: Path) -> None:
+    pid = job.get("pid")
+    deadline = job.get("started", _now()) + job.get("timeout_s", 1200)
+    why = None
+    while _alive(pid):
+        if not why and (_read(path).get("cancel") or _now() > deadline):
+            why = "cancelled" if _read(path).get("cancel") else "timeout"
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(pid, signal.SIGINT)
+        time.sleep(POLL_S)
+    rc_file = LOGS / f"{job['id']}.rc"
+    try:
+        rc = int(rc_file.read_text().strip())
+    except (OSError, ValueError):
+        rc = None
+    if rc is None and not why:
+        # Started by an older daemon without an rc file: judge by the log.
+        log = LOGS / f"{job['id']}.log"
+        text = log.read_text(errors="replace") if log.exists() else ""
+        state = "failed" if "Traceback" in text else "done"
+    else:
+        state = why or ("done" if rc == 0 else "failed")
+    job.update(state=state, rc=rc, ended=_now(), adopted=True)
+    _write(path, job)
+
+
 def daemon() -> None:
     ROOT.mkdir(parents=True, exist_ok=True)
     lock = open(ROOT / "daemon.lock", "a")  # noqa: SIM115 - held for the daemon's lifetime
@@ -168,18 +233,17 @@ def daemon() -> None:
         return
     idle_since = _now()
     while True:
-        # A running job left behind by a dead daemon is marked lost.
+        # A job left running by a previous daemon is adopted: wait for its
+        # process group to exit (still under timeout / cancel), then record it.
         for j in _jobs():
             if j["state"] == "running":
-                j.update(state="lost", ended=_now())
-                _write(JOBS / f"{j['id']}.json", j)
-        pending = [j for j in _jobs() if j["state"] == "pending"]
-        if not pending:
+                _adopt(j, JOBS / f"{j['id']}.json")
+        job = _pick(_jobs())
+        if job is None:
             if _now() - idle_since > IDLE_EXIT_S:
                 return
             time.sleep(POLL_S)
             continue
-        job = pending[0]
         path = JOBS / f"{job['id']}.json"
         if _read(path).get("cancel"):
             job.update(state="cancelled", ended=_now())
