@@ -2,17 +2,15 @@
 # (https://github.com/YuhuanStudio/homebrew-tap, file Formula/yunshu.rb).
 # Install: brew install yuhuanstudio/tap/yunshu
 #
-# The source is the PyPI sdist of the same version. The sha256 below is of a
-# local `uv build` of 0.1.1; the file PyPI serves is built by the release
-# workflow, so replace it after publishing (packaging/homebrew/README.md).
+# The source is the PyPI sdist of the same version; the sha256 is of the file PyPI serves.
 #
 # Background running is `yunshu service install` (one launchd agent for every
 # install method), so this formula has no `service do` block.
 class Yunshu < Formula
   desc "Fast local LLM/VLM inference engine for Apple Silicon (MLX)"
   homepage "https://github.com/YuhuanStudio/Yunshu"
-  url "https://files.pythonhosted.org/packages/source/y/yunshu/yunshu-0.1.1.tar.gz"
-  sha256 "01cfa3e9c80be6862e6c069bdbf0d5cfacde9add3cf7e5358ddd3c6e49ad7dd8"
+  url "https://files.pythonhosted.org/packages/f6/f4/c2bbf374ef0191d260e50ead818e7f1b3dbaec9aa717ab1f25195fa0fdfa/yunshu-0.1.1.tar.gz"
+  sha256 "f82f82b0608757e8ba60ffaa1ba92e418562249fa8ff8518b316c6491e05e054"
   license "Apache-2.0"
   head "https://github.com/YuhuanStudio/Yunshu.git", branch: "main"
 
