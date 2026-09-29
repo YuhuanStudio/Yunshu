@@ -855,7 +855,9 @@ class VLMEngine:
             audio_paths = await self._extract_audio(messages)
             video_frames = await self._extract_video_frames(messages)
             image_paths.extend(video_frames)
-            _enable_thinking = self._default_enable_thinking(enable_thinking)
+            _enable_thinking = self._default_enable_thinking(
+                enable_thinking, constrained=kwargs.get("json_schema") is not None
+            )
             self._track_pipeline(kwargs, messages, image_paths, audio_paths)
             self._check_request_supported(image_paths, audio_paths, kwargs)
 
@@ -1023,7 +1025,9 @@ class VLMEngine:
         video_frames = await self._extract_video_frames(messages)
         image_paths.extend(video_frames)
 
-        enable_thinking = self._default_enable_thinking(enable_thinking)
+        enable_thinking = self._default_enable_thinking(
+            enable_thinking, constrained=kwargs.get("json_schema") is not None
+        )
         self._track_pipeline(kwargs, messages, image_paths, audio_paths)
         self._check_request_supported(image_paths, audio_paths, kwargs)
 
@@ -1792,12 +1796,21 @@ class VLMEngine:
     # gateway) instead of being accepted and silently ignored.
     _UNSUPPORTED_KWARGS = ("lora_adapter", "logits_processors")
 
-    def _default_enable_thinking(self, enable_thinking: bool | None) -> bool | None:
+    def _default_enable_thinking(
+        self, enable_thinking: bool | None, constrained: bool = False
+    ) -> bool | None:
         """Gemma-4's template enables thinking by default but emits inline
         ``thought`` tokens that don't auto-stop; default it off unless the
-        caller asked. Applied to streaming and non-streaming alike."""
+        caller asked. Applied to streaming and non-streaming alike.
+
+        A JSON-schema / grammar constraint masks the output from its first token,
+        so a template that opens ``<think>`` would have the reasoning forced into
+        the schema and the content would come back empty. Constrained requests
+        therefore default to thinking off unless the caller asked for it."""
         if enable_thinking is not None:
             return enable_thinking
+        if constrained:
+            return False
         model_type = str(self._config.get("model_type", "")).lower()
         if model_type.startswith("gemma4") or "gemma-4" in self.model_name.lower():
             return False
