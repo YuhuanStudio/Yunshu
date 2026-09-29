@@ -4,7 +4,7 @@ Same in-memory drafter as probe_apc_mtp_batchgen.py; no APC so every request is
 cold. Reports decode tok/s, first-token latency and token parity against AR.
 
     HF_HUB_OFFLINE=1 .venv/bin/python scripts/research/sweep_mtp_depth.py MODEL_DIR [sizes...] \
-        [--yunshu-kernels=exact] [--invariant [--invariant-packed]] [--ragged-lane] [--context=N] [--tasks=code,prose,json_like]
+        [--yunshu-kernels=exact] [--invariant [--invariant-packed]] [--ragged-lane] [--context=N] [--tasks=code,prose,json_like] [--tokens=N] [--skip-ar]
         [--packed-geometry=few]  # K-split geometry of the packed small-row kernel (default: target)
         [--draft-vocab=N]   # MTP drafts search the N first ids plus the prompt's ids
         [--lane-linear]     # TensorFold lane matmul for every projection (instead of packed / int-code)
@@ -325,17 +325,24 @@ def run(name, prompt, max_tokens, block):
     }
 
 
+# --tokens=N overrides every task's length; --skip-ar drops the AR reference run
+# (speed A/B only: parity is then not checked).
+_tok_override = int(
+    next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--tokens=")), "0")
+)
+_skip_ar = "--skip-ar" in sys.argv
 ref = {}
 for name, prompt, mt in tasks:
-    run(name, prompt, 16, 0)  # warm kernels for this shape
-    for block in [0] + sizes:
+    mt = _tok_override or mt
+    run(name, prompt, 16, sizes[0] if _skip_ar else 0)  # warm kernels for this shape
+    for block in ([] if _skip_ar else [0]) + sizes:
         r = run(name, prompt, mt, block)
         r["omlx_kernels"] = sorted(omlx_set) if use_omlx else []
 
         if block == 0:
             ref[name] = r["tokens"]
-        r["parity"] = r["tokens"] == ref[name]
-        if not r["parity"]:
+        r["parity"] = r["tokens"] == ref[name] if name in ref else None
+        if r["parity"] is False:
             r["first_diff"] = next(
                 (
                     i
