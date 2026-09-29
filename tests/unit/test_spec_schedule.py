@@ -78,7 +78,7 @@ def test_chain_budget_replaces_dflash_block_size(monkeypatch):
             model = types.SimpleNamespace(accept_lens=[], draft_lens=[])
             rng = random.Random(0)
             sizes = []
-            for r in range(120):
+            for _r in range(120):
                 bs = choose(model, 8, 1000)
                 sizes.append(bs)
                 accepted = 0
