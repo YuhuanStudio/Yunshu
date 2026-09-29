@@ -69,11 +69,25 @@ def load(ckpt: str, quantize: bool):
     return model, processor, drafter, lanes
 
 
+def filler_text(tok, context: int) -> str:
+    """Filler of ``context`` tokens under ``tok`` (numbered notes, cut at the
+    token count). "note 1234." is several tokens, so sizing the filler by
+    characters or words overshoots: 32768 once meant ~76K-token prompts."""
+    if context <= 0:
+        return ""
+    words, ids = context, []
+    while len(ids) < context:
+        ids = tok.encode(
+            " ".join(f"note {i}." for i in range(words)), add_special_tokens=False
+        )
+        words *= 2
+    return tok.decode(ids[:context])
+
+
 def encode(tok, text, context):
     msgs = [{"role": "user", "content": text}]
     if context:
-        filler = " ".join(f"note {i}." for i in range(context // 3))
-        msgs[0]["content"] = filler + "\n\n" + text
+        msgs[0]["content"] = filler_text(tok, context) + "\n\n" + text
     text = tok.apply_chat_template(
         msgs, add_generation_prompt=True, enable_thinking=False, tokenize=False
     )
@@ -117,6 +131,12 @@ def main():
     ap.add_argument("--tokens", type=int, default=256)
     ap.add_argument("--context", type=int, default=0)
     ap.add_argument("--quantize", action="store_true")
+    ap.add_argument(
+        "--parity-rows",
+        type=int,
+        default=None,
+        help="prompts in the parity check (default: max --rows); each runs 5 ways",
+    )
     ap.add_argument("--output", type=Path, required=True)
     a = ap.parse_args()
     model, processor, drafter, lanes = load(a.ckpt, a.quantize)
@@ -124,6 +144,7 @@ def main():
     extra = getattr(tok, "eos_token_ids", None) or []
     stop = {tok.eos_token_id} | set([extra] if isinstance(extra, int) else extra)
     prompts = [encode(tok, p, a.context) for p in PROMPTS]
+    n_parity = a.parity_rows or max(a.rows)
     a.output.parent.mkdir(parents=True, exist_ok=True)
     with a.output.open("a") as f:
 
@@ -138,11 +159,16 @@ def main():
                 "ckpt": a.ckpt,
                 "tokens": a.tokens,
                 "context": a.context,
+                "prompt_tokens": [len(p) for p in prompts],
+                # prefill work of the whole sweep: parity (5 runs of n
+                # prompts) + each rows setting with and without drafts
+                "prefill_tokens_total": 5 * sum(len(p) for p in prompts[:n_parity])
+                + 2 * sum(sum(len(p) for p in prompts[:r]) for r in a.rows),
                 "lane_converted": lanes["converted"],
                 "lane_skipped": lanes["skipped"],
             }
         )
-        n = max(a.rows)
+        n = a.parity_rows or max(a.rows)
         ref = [run(model, None, [p], a.tokens, stop)[0][0] for p in prompts[:n]]
         checks = {
             "alone_mtp": [
