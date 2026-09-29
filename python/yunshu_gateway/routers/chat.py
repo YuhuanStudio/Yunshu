@@ -422,9 +422,6 @@ class ChatCompletionRequest(BaseModel):
     guided_grammar: str | None = Field(default=None, max_length=32768)  # EBNF/Lark CFG
     guided_json: dict | None = None  # JSON schema
     lora_adapter: str | None = None  # LoRA adapter ID to apply for this request
-    cached_content: str | None = (
-        None  # Gemini-style explicit context-cache handle to prepend (read)
-    )
     logits_processors: list | None = None  # User-provided custom logits processors
     timeout: float | None = Field(
         default=None, ge=1.0, le=600.0
@@ -645,69 +642,6 @@ def _vlm_tool_schema_conflict(
 ) -> bool:
     """Whether VLM cannot preserve both the tool and output-format contracts."""
     return json_schema is not None and bool(req.tools) and req.tool_choice != "none"
-
-
-def _prepend_cached_content(
-    messages: list[dict],
-    cached_content: str | None,
-    req_model: str | None = None,
-    request: Request | None = None,
-) -> list[dict]:
-    """Gemini-style READ: prepend an explicit context-cache handle's stored
-    messages so the automatic KVPrefixCache serves the warmed prefix. No-op if
-    the handle is unset/expired (the request still runs, just without reuse)."""
-    if not cached_content:
-        return messages
-    entry = None
-    try:
-        from ..explicit_cache import get_store
-
-        entry = get_store().use(
-            cached_content
-            if cached_content.startswith("cachedContents/")
-            else f"cachedContents/{cached_content}"
-        )
-    except Exception:
-        logger.debug("cached_content lookup failed", exc_info=True)
-        return messages
-    if entry is None or not entry.messages:
-        return messages
-    # SECURITY (cross-tenant IDOR): the management routes check ownership but
-    # this READ/consumption path didn't — so tenant B could prepend tenant A's private
-    # cached context (a proprietary system prompt/document) into its own generation just by
-    # guessing the handle, then exfiltrate it via the model output. Enforce ownership here
-    # too: a handle owned by someone else is treated as not-found (ignored).
-    if request is not None:
-        _owner = getattr(entry, "owner", None)
-        if _owner and _owner != "anonymous":
-            try:
-                from yunshu_control.audit_log import resolve_actor
-
-                if resolve_actor(request) != _owner:
-                    logger.warning(
-                        "cached_content '%s' owned by another tenant — ignoring",
-                        cached_content,
-                    )
-                    return messages
-            except Exception:
-                logger.debug(
-                    "cached_content ownership check failed — ignoring handle",
-                    exc_info=True,
-                )
-                return messages
-    # A cached_content handle is model-specific — it was created against one
-    # model's tokenizer and warmed into that model's KV prefix cache. Silently reusing it
-    # with a DIFFERENT model gets zero KV reuse and injects cross-tokenizer text. Reject the
-    # mismatch with a clear 400 instead of producing wrong/unwarmed output.
-    if req_model and getattr(entry, "model", None) and entry.model != req_model:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"cached_content '{cached_content}' was created for model "
-                f"'{entry.model}' and cannot be used with '{req_model}'"
-            ),
-        )
-    return list(entry.messages) + list(messages)
 
 
 def _normalize_image_part(part: dict) -> dict:
@@ -1650,9 +1584,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
     # Estimate prompt tokens from tokenizer if available.
     _effective_mt = req.effective_max_tokens()
     if _effective_mt == 0:
-        messages = _prepend_cached_content(
-            _extract_messages(req.messages), req.cached_content, req.model, request
-        )
+        messages = _extract_messages(req.messages)
         # Inject the tool system prompt BEFORE counting, so this prompt_tokens probe
         # matches what a real max_tokens>0 call reports (it injects at ~line 1241).
         # Without this, the documented "send max_tokens:0 to get prompt_tokens" probe
@@ -1782,9 +1714,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
         stream=req.stream,
     )
 
-    messages = _prepend_cached_content(
-        _extract_messages(req.messages), req.cached_content, req.model, request
-    )
+    messages = _extract_messages(req.messages)
     has_images = _has_images(messages)
     has_audio = _has_audio(messages)
     has_video = _has_video(messages)
