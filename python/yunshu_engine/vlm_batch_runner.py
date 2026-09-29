@@ -613,6 +613,7 @@ class VLMBatchRunner:
             )
         )
         job.start = job.stats.t_admit = time.perf_counter()
+        hit = int(hit or 0)
         job.stats.cached_tokens = hit
         job.stats.prefill_total = len(job.ids) - hit
         job.stats.used_apc = use_apc
