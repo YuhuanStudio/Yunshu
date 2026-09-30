@@ -1,0 +1,6 @@
+{
+  "id": "parser-conf",
+  "title": "Write a config-file parser from a written spec",
+  "prompt": "Implement the config format described in SPEC.md as a module `confparse.py` exposing `parse(text) -> dict` and `ParseError`. Follow the spec exactly, including the error cases. Add a small test file of your own (tests/test_confparse.py) and run it.",
+  "test": ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "_hidden_tests"]
+}

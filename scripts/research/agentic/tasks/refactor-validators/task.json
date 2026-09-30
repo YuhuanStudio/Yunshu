@@ -1,0 +1,6 @@
+{
+  "id": "refactor-validators",
+  "title": "Deduplicate validation helpers across three modules",
+  "prompt": "The modules app/users.py, app/orders.py and app/accounts.py each contain their own copy of the same three helpers (`_valid_email`, `_valid_phone`, `_normalize_name`). Refactor: create app/validation.py exposing public `is_valid_email`, `is_valid_phone` and `normalize_name` with exactly the current behaviour, make the three modules use them, and delete the private copies (and any regex or import that becomes unused). Public behaviour of UserStore, OrderBook and AccountService must not change. `python -m pytest -q tests` must stay green.",
+  "test": ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "_hidden_tests"]
+}

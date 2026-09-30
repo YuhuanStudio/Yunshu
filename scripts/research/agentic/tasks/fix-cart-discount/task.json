@@ -1,0 +1,6 @@
+{
+  "id": "fix-cart-discount",
+  "title": "Fix two bugs in a small shopping-cart package",
+  "prompt": "The `shop` package in this directory has two bugs.\n1. After removing every unit of an item from a Cart (Cart.remove), `cart.line_count()` still counts that item as a line.\n2. Discounted totals are wrong: `Cart.total_cents(code)` with a percentage code (for example SAVE10) truncates the fractional cent instead of rounding half up. For example a total of 5995 cents with SAVE10 must give 5396 (5395.5 rounded half up), not 5395.\nFind and fix the bugs in the package code (not in the tests), and make sure `python -m pytest -q tests` still passes.",
+  "test": ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "_hidden_tests"]
+}

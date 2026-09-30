@@ -166,6 +166,21 @@ def _record_metrics(prompt_tokens: int, completion_tokens: int) -> None:
 # ── Request / Response schemas ──
 
 
+def _thinking_flag(thinking):
+    """Anthropic ``thinking`` -> engine flag: enabled True, disabled False, else the model default.
+
+    ``adaptive`` (the model decides; sent by Claude Code 2.x) and an absent field keep the model default.
+    """
+    if not thinking:
+        return thinking  # None / {} : model default
+    t = thinking.get("type")
+    if t == "enabled":
+        return True
+    if t == "disabled":
+        return False
+    return None
+
+
 class AnthropicMessage(BaseModel):
     role: str
     content: str | list[dict] | None = None
@@ -284,11 +299,13 @@ class AnthropicMessagesRequest(BaseModel):
                         f"thinking.budget_tokens ({budget}) must be less than max_tokens "
                         f"({self.max_tokens})"
                     )
-            elif thinking_type == "disabled":
-                pass  # Explicitly disabling thinking is valid
+            elif thinking_type in ("disabled", "adaptive"):
+                # disabled: valid. adaptive: the model decides how much to think; Claude Code
+                # 2.x sends it on every request, and it takes no budget_tokens.
+                pass
             elif thinking_type is not None:
                 raise ValueError(
-                    f"thinking.type must be 'enabled' or 'disabled', got '{thinking_type}'"
+                    f"thinking.type must be 'enabled', 'disabled' or 'adaptive', got '{thinking_type}'"
                 )
         # Validate response_format type if provided
         if self.response_format is not None:
@@ -1340,7 +1357,7 @@ async def _non_stream_batched(
     """Non-streaming response via BatchedEngine."""
     from fastapi.responses import JSONResponse
 
-    enable_thinking = req.thinking and req.thinking.get("type") == "enabled"
+    enable_thinking = _thinking_flag(req.thinking)
     budget_tokens = req.thinking.get("budget_tokens") if req.thinking else None
     _logit_bias = _convert_logit_bias(req)
 
@@ -1597,7 +1614,7 @@ async def _non_stream_legacy(
     from fastapi.responses import JSONResponse
 
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
-    enable_thinking = req.thinking and req.thinking.get("type") == "enabled"
+    enable_thinking = _thinking_flag(req.thinking)
     budget_tokens = req.thinking.get("budget_tokens") if req.thinking else None
     _logit_bias = _convert_logit_bias(req)
     try:
@@ -1836,7 +1853,7 @@ async def _stream_anthropic(
     input_tokens = 0
     output_tokens = 0
     cached_tokens = 0
-    enable_thinking = req.thinking and req.thinking.get("type") == "enabled"
+    enable_thinking = _thinking_flag(req.thinking)
     budget_tokens = req.thinking.get("budget_tokens") if req.thinking else None
     _logit_bias = _convert_logit_bias(req)
     # tool_choice="none" sets _suppress_tools (see above): the model is told not to
