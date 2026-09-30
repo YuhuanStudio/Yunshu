@@ -616,3 +616,29 @@ def test_thinking_adaptive_and_extra_fields_validate():
         ],
     )
     assert r.tools[0].model_dump()["max_uses"] == 5 and r.tools[1].name == ""
+
+
+def test_blank_text_blocks_are_not_emitted(make):
+    """The template's newlines after </think> must not become text blocks or leading whitespace."""
+    search.set_provider_for_tests(FakeSearch())
+    c, _ = make(
+        [
+            (
+                [
+                    {"type": "thinking", "thinking": "hmm"},
+                    text("\n\n"),
+                    call("web_search", {"query": "q"}),
+                ],
+                "tool_use",
+            ),
+            ([text("\n\nAnswer [1].")], "end_turn"),
+        ]
+    )
+    m = c.post("/v1/messages", json=body([WS])).json()
+    assert [b["type"] for b in m["content"]] == [
+        "thinking",
+        "server_tool_use",
+        "web_search_tool_result",
+        "text",
+    ]
+    assert m["content"][-1]["text"] == "Answer [1]."

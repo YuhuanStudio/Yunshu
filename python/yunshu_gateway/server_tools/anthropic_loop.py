@@ -453,6 +453,7 @@ async def run_stream(req, request, inner: Inner, setup: _Setup) -> AsyncIterator
                 return
             blocks_map: dict[int, int] = {}
             text_acc: dict[int, str] = {}
+            text_pending: dict[int, str] = {}
             tool_blocks: dict[int, dict] = {}
             model_turn: list[
                 dict
@@ -486,6 +487,13 @@ async def run_stream(req, request, inner: Inner, setup: _Setup) -> AsyncIterator
                 elif t == "content_block_start":
                     cb = ev["content_block"]
                     i = ev["index"]
+                    if cb.get("type") == "text":
+                        # A text block is opened lazily, on its first non-blank text: the chat
+                        # template's "\n\n" after </think> must not become its own (or a leading)
+                        # part of the reply, the API never emits blank text blocks.
+                        text_acc[i] = ""
+                        text_pending[i] = ""
+                        continue
                     blocks_map[i] = out_index
                     if cb.get("type") == "tool_use" and cb.get("name") in rt.defs:
                         d = rt.defs[cb["name"]]
@@ -523,8 +531,6 @@ async def run_stream(req, request, inner: Inner, setup: _Setup) -> AsyncIterator
                     else:
                         if cb.get("type") == "tool_use":
                             tool_blocks[i] = {"server": False, "json": "", "block": cb}
-                        if cb.get("type") == "text":
-                            text_acc[i] = ""
                         yield _sse(
                             "content_block_start",
                             {
@@ -539,8 +545,27 @@ async def run_stream(req, request, inner: Inner, setup: _Setup) -> AsyncIterator
                     dl = ev["delta"]
                     if dl.get("type") == "text_delta" and i in text_acc:
                         text_acc[i] += dl.get("text", "")
+                        if i not in blocks_map:
+                            pend = text_pending.get(i, "") + dl.get("text", "")
+                            if not pend.strip():
+                                text_pending[i] = pend
+                                continue
+                            text_pending.pop(i, None)
+                            blocks_map[i] = out_index
+                            out_index += 1
+                            yield _sse(
+                                "content_block_start",
+                                {
+                                    "type": "content_block_start",
+                                    "index": blocks_map[i],
+                                    "content_block": {"type": "text", "text": ""},
+                                },
+                            )
+                            dl = {"type": "text_delta", "text": pend.lstrip()}
                     if dl.get("type") == "input_json_delta" and i in tool_blocks:
                         tool_blocks[i]["json"] += dl.get("partial_json", "")
+                    if i not in blocks_map:
+                        continue
                     yield _sse(
                         "content_block_delta",
                         {
@@ -551,6 +576,10 @@ async def run_stream(req, request, inner: Inner, setup: _Setup) -> AsyncIterator
                     )
                 elif t == "content_block_stop":
                     i = ev["index"]
+                    if i in text_acc and text_acc[i].strip():
+                        model_turn.append({"type": "text", "text": text_acc[i].strip()})
+                    if i not in blocks_map:
+                        continue  # a blank text block that was never opened
                     if i in text_acc and text_acc[i] and sources:
                         for c in _sources_for(text_acc[i], sources):
                             yield _sse(
@@ -561,8 +590,6 @@ async def run_stream(req, request, inner: Inner, setup: _Setup) -> AsyncIterator
                                     "delta": {"type": "citations_delta", "citation": c},
                                 },
                             )
-                    if i in text_acc:
-                        model_turn.append({"type": "text", "text": text_acc[i]})
                     yield _sse(
                         "content_block_stop",
                         {"type": "content_block_stop", "index": blocks_map[i]},

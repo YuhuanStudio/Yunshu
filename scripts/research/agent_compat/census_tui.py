@@ -22,7 +22,6 @@ import struct
 import subprocess
 import termios
 import time
-from pathlib import Path
 
 import census
 from census_server import Census
