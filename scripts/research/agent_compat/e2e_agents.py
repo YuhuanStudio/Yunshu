@@ -354,7 +354,7 @@ def main():
                     f"e2e_{name}",
                     srv.url,
                     model_id,
-                    6.0,
+                    8.0,
                     cfg_,
                     configure=(
                         (

@@ -20,10 +20,14 @@ import shutil
 import signal
 import struct
 import subprocess
+import sys
 import termios
 import time
 
 import census
+
+sys.path.insert(0, os.environ.get("YUNSHU_PYLIB", "/Volumes/P5Plus/yunshu-build/pylib"))
+import pyte  # noqa: E402  (terminal emulator: the TUIs redraw in place)
 from census_server import Census
 
 ANSI = re.compile(
@@ -90,6 +94,9 @@ def run_tui(
             os.execvpe(cmd[0], cmd, launch.env)
         fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 160, 0, 0))
         out = bytearray()
+        screen = pyte.Screen(160, 50)
+        vt = pyte.ByteStream(screen)
+        snaps: list[str] = []
 
         def pump(seconds: float):
             end = time.time() + seconds
@@ -103,6 +110,7 @@ def run_tui(
                     if not d:
                         return False
                     out.extend(d)
+                    vt.feed(d)
             return True
 
         pump(wait * 2)  # startup
@@ -120,8 +128,14 @@ def run_tui(
                 break
             pump(0.5)
             os.write(fd, b"\r")
-            if not pump(wait):
+            alive = pump(wait)
+            snaps.append(
+                f"===== screen after {text} =====\n"
+                + "\n".join(ln.rstrip() for ln in screen.display if ln.strip())
+            )
+            if not alive:
                 break
+        (run / "screens.txt").write_text("\n\n".join(snaps))
         marks.append(("<end>", len(out)))
         with __import__("contextlib").suppress(OSError):
             os.write(fd, b"\x03")
