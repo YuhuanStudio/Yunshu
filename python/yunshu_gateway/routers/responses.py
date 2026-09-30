@@ -537,6 +537,9 @@ class ResponsesRequest(BaseModel):
     # reasoning_effort); without this field Pydantic silently dropped it and reasoning
     # models were served without thinking.
     reasoning: dict | None = None
+    # WebSocket-mode prewarm (Codex): `generate: false` prefills the prompt prefix and
+    # returns a response id without producing output.
+    generate: bool | None = None
     # Fields real clients (Codex, the OpenAI SDK) send; ``include`` and ``max_tool_calls`` are
     # read by the server-tool loop, the rest are accepted for compatibility.
     include: list[str] | None = None
@@ -645,7 +648,12 @@ class ResponsesRequest(BaseModel):
         # Validate input: string must be non-empty, list must have elements
         if isinstance(self.input, str) and not self.input.strip():
             raise ValueError("input: cannot be empty or whitespace-only")
-        if isinstance(self.input, list) and not self.input:
+        # (a `generate: false` prewarm carries no input by design)
+        if (
+            isinstance(self.input, list)
+            and not self.input
+            and self.generate is not False
+        ):
             raise ValueError("input: cannot be an empty list")
         # Validate response_format type if provided
         if self.response_format is not None:
@@ -913,10 +921,100 @@ async def _start_background_response(req: ResponsesRequest, request: Request):
     return JSONResponse(_public_stored(queued_payload))
 
 
+async def _prewarm_response(req: ResponsesRequest, request: Request):
+    """``generate: false``: prefill the prompt prefix, return a response id, produce no output.
+
+    Codex opens its Responses WebSocket with a prewarm frame (``generate: false``, empty ``input``,
+    the full ``instructions`` and ``tools``), then sends the real request with ``previous_response_id``
+    set to the prewarm's id. The point is the cache: the stable prefix (instructions + tool schemas,
+    several thousand tokens) is prefilled before the user has typed anything. Here that is a real
+    1-token generation through the normal path, whose prompt lands in the prefix cache; the tokens it
+    produced are discarded. The stored response carries no input and no output, so chaining onto it
+    replays nothing.
+    """
+    messages_present = bool(req.input) and (
+        isinstance(req.input, str) or len(req.input) > 0
+    )
+    inner = req.model_copy(
+        update={
+            "generate": None,
+            "stream": False,
+            "background": False,
+            "max_output_tokens": 1,
+            "store": False,
+            # Qwen-style templates need a user turn to render; the real request replaces it.
+            "input": req.input
+            if messages_present
+            else [ResponseInputText(type="message", role="user", content="Hi")],
+        }
+    )
+    resp = await create_response(inner, request)
+    status_code = getattr(resp, "status_code", 200)
+    if status_code >= 400:
+        return resp
+    try:
+        prefilled = json.loads(bytes(resp.body))
+    except Exception:
+        prefilled = {}
+    rid = f"resp-{uuid.uuid4().hex[:24]}"
+    usage = prefilled.get("usage") or {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "input_tokens_details": {"cached_tokens": 0},
+        "output_tokens_details": {"reasoning_tokens": 0},
+    }
+    usage = dict(usage)
+    usage["output_tokens"] = 0
+    usage["total_tokens"] = usage.get("input_tokens", 0)
+    created = int(time.time())
+    obj = {
+        "id": rid,
+        "object": "response",
+        "created_at": created,
+        "status": "completed",
+        "model": req.model,
+        "output": [],
+        "usage": usage,
+        "previous_response_id": req.previous_response_id,
+        "store": bool(req.store),
+        "x_yunshu": {"prewarm": True},
+    }
+    _store_response(
+        rid,
+        {
+            **obj,
+            "_input_messages": [],
+            "_owner": _resolve_owner(request),
+        },
+    )
+    if not req.stream:
+        return JSONResponse(obj)
+
+    async def gen():
+        seq = 0
+        started = {**obj, "status": "in_progress", "usage": None}
+        for name, body in (
+            ("response.created", started),
+            ("response.in_progress", started),
+            ("response.completed", obj),
+        ):
+            yield (
+                f"event: {name}\ndata: "
+                + json.dumps({"type": name, "response": body, "sequence_number": seq})
+                + "\n\n"
+            ).encode()
+            seq += 1
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
 @router.post("/responses", response_model=None)
 async def create_response(req: ResponsesRequest, request: Request):
     """OpenAI Responses API endpoint."""
     _check_permission(request, "can_infer")
+    if req.generate is False:
+        return await _prewarm_response(req, request)
     # OpenAI background mode: return a queued response immediately and run the
     # full (non-stream) generation asynchronously under the same id. Streaming +
     # background is not supported here (would require resumable SSE), so it only
