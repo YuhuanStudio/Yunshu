@@ -76,3 +76,35 @@ def test_get_no_trim_still_fast_exits_with_no_hybrid_ssd():
     prompt = mx.arange(128, dtype=mx.int32)
     result, remaining, matched = c._get_no_trim_unlocked(prompt)
     assert result is None and matched == 0 and remaining == 128
+
+
+def test_ssd_longer_than_ram_hit_wins_and_short_ram_hit_does_not_hide_it():
+    class _SSD:
+        def __init__(self, blocks):
+            self.blocks = blocks
+
+        def has_block(self, key):
+            return key in self.blocks
+
+    c = _cache()
+    keys = [i.to_bytes(8, "little") for i in range(40)]
+    c._ssd_cache = _SSD(set(keys[:30]))  # 30 blocks = 1920 tokens on disk
+    seen = {}
+
+    def restore(qb):
+        seen["n"] = len(qb)
+        return ["RESTORED"], len(qb) * 64
+
+    c.restore_prefix_from_ssd = restore
+    query = list(range(40))
+    # RAM holds only a 256-token prefix: the disk run is much longer -> SSD wins
+    assert c._ssd_longer_than_ram(query, 256) == (["RESTORED"], 30 * 64)
+    assert seen["n"] == 30
+    # RAM hit within the minimum gain of the disk run: keep RAM
+    assert c._ssd_longer_than_ram(query, 30 * 64 - 100) is None
+    # prefill-speed gate: a fast model re-prefills instead
+    c._prefill_tps = 9000.0
+    assert c._ssd_longer_than_ram(query, 256) is None
+    # no SSD tier: nothing to do
+    c._ssd_cache = None
+    assert c._ssd_longer_than_ram(query, 256) is None
