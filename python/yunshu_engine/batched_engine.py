@@ -754,6 +754,14 @@ _REQUEST_TOOLS: contextvars.ContextVar[list | None] = contextvars.ContextVar(
 )
 
 
+# How the reply must use the request's native tools: {"tool_choice": ..., "parallel":
+# bool}. Set with _REQUEST_TOOLS (same task-side propagation); read by _generate_fast
+# to build the tool-call guide.
+_REQUEST_TOOL_USE: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "yunshu_request_tool_use", default=None
+)
+
+
 def _template_supports_tools(tokenizer) -> bool:
     """True if the tokenizer's chat template natively renders a ``tools`` variable
     (Qwen3, Llama-3.1, Hermes, Mistral, GLM, …). When False, callers fall back to the
@@ -3121,6 +3129,45 @@ class BatchedEngine:
                     logger.debug("hybrid boundary snapshot add failed", exc_info=True)
         return p
 
+    def _tool_call_processor(self, input_ids: list[int]):
+        """Structural-tag logits processor for the request's native tools (free until
+        the tool-call marker, then the call body is masked to this request's tool
+        grammar), or None: no native tools, ``YUNSHU_TOOL_GRAMMAR`` off, or a model /
+        tool set the grammar cannot cover."""
+        tools = _REQUEST_TOOLS.get()
+        if not tools or not settings.get_bool("YUNSHU_TOOL_GRAMMAR"):
+            return None
+        from . import tool_call_grammar as tcg
+
+        use = _REQUEST_TOOL_USE.get() or {}
+        choice = tcg.normalize_tool_choice(use.get("tool_choice"))
+        if choice == "none":
+            return None
+        parallel = use.get("parallel", True) is not False
+        cache = self.__dict__.setdefault("_tool_grammars", {})
+        key = tcg.grammar_key(tools, choice, parallel)
+        if key not in cache:
+            args = getattr(self._model, "args", None)
+            vocab = getattr(args, "vocab_size", None) or len(
+                getattr(self._tokenizer, "_tokenizer", self._tokenizer)
+            )
+            if len(cache) >= 8:
+                cache.pop(next(iter(cache)))
+            cache[key] = tcg.compile_tool_grammar(
+                tools,
+                self._tokenizer,
+                int(vocab),
+                tool_choice=choice,
+                parallel=parallel,
+            )
+        grammar = cache[key]
+        if grammar is None:
+            return None
+        guide = grammar.guide(
+            thinking_open=tcg.prompt_opens_thinking(input_ids, grammar, self._tokenizer)
+        )
+        return tcg.TokenStreamToolCallProcessor(guide)
+
     async def _generate_fast(
         self,
         prompt: str | list[dict],
@@ -3470,6 +3517,9 @@ class BatchedEngine:
         _req_kv_bits = self._effective_kv_quant_bits(prompt_tokens + max_tokens)
         _custom_logits_processors = logits_processors or []
         logits_processors = []
+        _tool_processor = (
+            self._tool_call_processor(input_ids) if json_schema is None else None
+        )
         if repetition_penalty != 1.0:
 
             def _rep_penalty(tokens, logits, rp=repetition_penalty, ctx=20):
@@ -3593,6 +3643,8 @@ class BatchedEngine:
             logits_processors.extend(
                 _wrap_custom_logits_processor(p) for p in _custom_logits_processors
             )
+        if _tool_processor is not None:
+            logits_processors.append(_tool_processor)
 
         # Convert KV cache breakpoint char offsets to token positions.
         _kv_breakpoint_token_positions: list[int] = []
@@ -5197,6 +5249,9 @@ class BatchedEngine:
         _req_kv_bits = self._effective_kv_quant_bits(prompt_tokens + max_tokens)
         _custom_logits_processors = logits_processors or []
         logits_processors = []
+        _tool_processor = (
+            self._tool_call_processor(input_ids) if json_schema is None else None
+        )
         if repetition_penalty != 1.0:
 
             def _repetition_penalty(tokens, logits, rp=repetition_penalty, ctx=20):
@@ -5313,6 +5368,8 @@ class BatchedEngine:
             logits_processors.extend(
                 _wrap_custom_logits_processor(p) for p in _custom_logits_processors
             )
+        if _tool_processor is not None:
+            logits_processors.append(_tool_processor)
 
         # Thread-safe bridge: executor puts via call_soon_threadsafe so the
         # event loop's async consumer is woken for every token.

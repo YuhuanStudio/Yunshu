@@ -380,6 +380,7 @@ class VLMBatchRunner:
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
         xtc_special_tokens: list | None = None,
+        guide: Any = None,
     ) -> Iterator[int]:
         """Yield generated token ids; ``stats`` is filled in as generation runs.
 
@@ -394,6 +395,9 @@ class VLMBatchRunner:
         # Upstream drops logprobs while drafting, so logprob requests decode AR.
         # A thinking budget forces "\n</think>" through upstream's
         # ThinkingBudgetCriteria, which only the non-speculative batch applies.
+        # A tool-call guide (structural-tag constrained decoding) is applied by
+        # the speculative lane itself when it can (greedy MTP rows that start
+        # unconstrained); every other row masks through a logits processor.
         use_draft = bool(
             allow_draft
             and self.drafter is not None
@@ -401,6 +405,7 @@ class VLMBatchRunner:
             and not processors
             and not logprobs
             and thinking_budget is None
+            and (guide is None or self._lane_takes_guide(guide))
         )
         if logprobs:
             processors.append(Fp32LogitsProcessor())
@@ -438,6 +443,7 @@ class VLMBatchRunner:
             logprobs=bool(logprobs),
             top_logprobs=int(top_logprobs or 0) if logprobs else 0,
             processors=processors,
+            guide=guide,
             prompt_kwargs=prompt_kwargs,
             salt=apc_semantic_hash,
             seed=seed,
@@ -448,7 +454,7 @@ class VLMBatchRunner:
         # The round driver drafts for any greedy row without logits
         # processors or logprobs (a thinking budget is fine there).
         job.allow_draft = bool(
-            allow_draft and greedy and not processors and not logprobs
+            allow_draft and greedy and not processors and not logprobs and guide is None
         )
         stats.used_draft = use_draft
         stats.t_submit = time.perf_counter()
@@ -475,6 +481,18 @@ class VLMBatchRunner:
             # A consumer that stops early (stop string, max length reached on
             # its side, disconnect) releases its row at the next slice.
             job.abandoned = True
+
+    def _lane_takes_guide(self, guide: Any) -> bool:
+        """The speculative lane masks a tool-call guide's verify window itself when the
+        row is greedy MTP and starts unconstrained (its first token is sampled
+        before the lane runs)."""
+        from . import mtp_lane
+
+        return (
+            self.draft_kind == "mtp"
+            and mtp_lane.can_guide(self.drafter)
+            and not guide.constrained
+        )
 
     def busy(self) -> bool:
         with self._lock:
@@ -526,6 +544,20 @@ class VLMBatchRunner:
 
         job.stats.t_admit = time.perf_counter()
         job.stats.prefill_total = len(job.ids)
+
+        if job.guide is not None:
+            lane = (
+                job.use_draft
+                and alone
+                and self._spec is None
+                and not (self.driver is not None and job.prompt_kwargs is None)
+            )
+            if not lane:
+                # Rows that decode one token at a time mask through a processor.
+                from .tool_call_grammar import ToolCallProcessor
+
+                job.use_draft = job.allow_draft = False
+                job.processors = [*job.processors, ToolCallProcessor(job.guide)]
 
         if self.driver is not None and job.prompt_kwargs is None:
             self._admit_driver(job)
@@ -704,7 +736,15 @@ class VLMBatchRunner:
             lm = self.model.language_model
             if hasattr(lm, "_rope_deltas"):
                 lm._rope_deltas = mx.array([[job.rope_delta]], dtype=mx.float32)
-        prompt_progress, responses = group.gen.next()
+        if group.spec:
+            from . import mtp_lane
+
+            mtp_lane.set_guide(job.guide)
+        try:
+            prompt_progress, responses = group.gen.next()
+        finally:
+            if group.spec:
+                mtp_lane.set_guide(None)
         self._note_prefill(group)
         if self.ragged_kv and not self._ragged_logged and not group.spec:
             # Engagement proof in the server log (a no-op path once cost a
@@ -1005,6 +1045,7 @@ class _Job:
     budget: Any = None
     rope_delta: float = 0.0
     allow_draft: bool = False
+    guide: Any = None
 
 
 @dataclass

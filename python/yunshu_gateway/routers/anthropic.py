@@ -997,8 +997,18 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
                 "pattern": r"<think>[\s\S]+?</think>[\s\S]*",
             }
 
-    # Inject tool definitions into system prompt if provided
+    # Tools go to the chat template natively when it renders them (Qwen3.x);
+    # otherwise a generic prompt is injected below.
+    req._native_tools = None
     if req.tools:
+        try:
+            _early_engine, _ = await _resolve_engine(req.model)
+        except Exception:
+            _early_engine = None
+        req._native_tools = _native_tool_plan(req, _early_engine)
+
+    # Inject tool definitions into system prompt if provided
+    if req.tools and req._native_tools is None:
         tool_prompt = (
             "\n\nYou have access to the following tools. When you need to call a tool, "
         )
@@ -1200,7 +1210,11 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     # commits the assistant turn to a tool call (continue_final_message); it's prepended
     # back before parsing in the non-stream handlers.
     req._tool_prefill = ""
-    if not getattr(req, "_suppress_tools", False) and req.tools:
+    if (
+        not getattr(req, "_suppress_tools", False)
+        and req.tools
+        and req._native_tools is None
+    ):
         _tc = req.tool_choice
         _tc_type = _tc.get("type") if isinstance(_tc, dict) else _tc
         # Force only the OPENING marker — the model then emits a complete, parseable
@@ -1261,6 +1275,83 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
         for _tf_path in _temp_files:
             with contextlib.suppress(OSError):
                 _os.unlink(_tf_path)
+
+
+def _native_tool_plan(req, engine) -> list[dict] | None:
+    """The request's tools as OpenAI function dicts when ``engine``'s chat template
+    renders tools itself (Qwen3.x: the model's own ``# Tools`` block and
+    ``<tool_call><function=..>`` call format), else None (generic injected prompt).
+
+    The template is what the checkpoint was trained on: tool definitions in its
+    ``<tools>`` block, calls in its own format, the same format the history
+    turns are rendered in. tool_choice ``none`` keeps the injected prompt (it
+    carries the "do not call" instruction); ``any`` / a named tool are native only
+    with tool-call grammar on, which is what enforces them."""
+    if engine is None or not req.tools:
+        return None
+    from yunshu_engine import settings
+    from yunshu_engine.tool_call_grammar import normalize_tool_choice
+
+    choice = normalize_tool_choice(req.tool_choice)
+    if choice == "none":
+        return None
+    if choice is not None and not settings.get_bool("YUNSHU_TOOL_GRAMMAR"):
+        return None
+    check = getattr(engine, "supports_native_tools", None)
+    if callable(check):
+        native = bool(check())
+    else:
+        try:
+            from yunshu_engine.batched_engine import (
+                BatchedEngine,
+                _template_supports_tools,
+            )
+
+            native = isinstance(engine, BatchedEngine) and _template_supports_tools(
+                getattr(engine, "_tokenizer", None)
+            )
+        except Exception:
+            native = False
+    if not native:
+        return None
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": t.name,
+                "description": t.description or "",
+                "parameters": t.input_schema or {"type": "object", "properties": {}},
+            },
+        }
+        for t in req.tools
+    ]
+
+
+def _set_request_tools(req) -> None:
+    """Hand native tools to a BatchedEngine's chat template (per-request contextvar)."""
+    from yunshu_engine.batched_engine import _REQUEST_TOOL_USE, _REQUEST_TOOLS
+
+    native = getattr(req, "_native_tools", None)
+    _REQUEST_TOOLS.set(native)
+    use = _native_tool_kwargs(req)
+    _REQUEST_TOOL_USE.set(
+        {"tool_choice": use["tool_choice"], "parallel": use["parallel_tool_calls"]}
+        if use
+        else None
+    )
+
+
+def _native_tool_kwargs(req) -> dict:
+    """Engine kwargs that carry native tools (and how the reply must use them)."""
+    native = getattr(req, "_native_tools", None)
+    if not native:
+        return {}
+    choice = req.tool_choice if isinstance(req.tool_choice, dict) else None
+    return {
+        "tools": native,
+        "tool_choice": req.tool_choice,
+        "parallel_tool_calls": not (choice or {}).get("disable_parallel_tool_use"),
+    }
 
 
 async def _resolve_engine(model_id: str):
@@ -1344,6 +1435,7 @@ async def _non_stream_batched(
     budget_tokens = req.thinking.get("budget_tokens") if req.thinking else None
     _logit_bias = _convert_logit_bias(req)
 
+    _set_request_tools(req)
     try:
         _chat_coro = engine.chat(
             messages=messages,
@@ -1602,6 +1694,7 @@ async def _non_stream_legacy(
     _logit_bias = _convert_logit_bias(req)
     try:
         _gen_coro = engine.generate(
+            **_native_tool_kwargs(req),
             prompt=messages,
             max_tokens=req.max_tokens,
             temperature=req.temperature,
@@ -1959,6 +2052,7 @@ async def _stream_anthropic(
         nonlocal _thinking_block_idx, _text_block_idx, _tool_block_idx
 
         if is_batched:
+            _set_request_tools(req)
             async for output in engine.stream_chat(
                 messages=messages,
                 max_tokens=req.max_tokens,
@@ -2246,6 +2340,7 @@ async def _stream_anthropic(
                             yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _token_text}})}\n\n"
         else:
             async for output in engine.generate_stream(
+                **_native_tool_kwargs(req),
                 prompt=messages,
                 max_tokens=req.max_tokens,
                 temperature=req.temperature,
