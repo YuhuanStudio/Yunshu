@@ -163,14 +163,16 @@ _add("YUNSHU_PREFIX_HOT_LIMIT", "int", 0, "Text engine: keep only this many pref
 _add("YUNSHU_SSD_CACHE", "bool", False, "Text engine: persist prefix KV to SSD.", "cache")
 _add("YUNSHU_SSD_CACHE_DIR", "path", "~/.cache/yunshu/kv-ssd", "Text engine: SSD prefix-cache directory.", "cache")
 _add("YUNSHU_SSD_CACHE_PRECISION", "enum", "native", "Text engine: SSD prefix-cache storage precision: 'native' (KV and recurrent state stored bit-exact; lossless) or 'int8' (per-tensor int8, about half the disk bytes of bf16; lossy on reuse; memory vs quality).", "cache", choices=("native", "int8"))
+_add("YUNSHU_SSD_CACHE_PREFILL_CEIL_TPS", "float", 20000.0, "Text engine: skip an SSD prefix restore when the model's observed prefill speed exceeds this (tokens/s): re-prefilling is then as fast as reading the KV back.", "cache", minimum=0.0)
 _add("YUNSHU_SSD_CACHE_MAX_GB", "float", 10.0, "Text engine: SSD prefix-cache size cap in GiB.", "cache", minimum=0.0)
 _add("YUNSHU_KV_QUANT_BITS", "enum", "off", "Text engine KV cache quantization (lossy; memory vs quality): 'off' (lossless), 'auto' (8-bit once the KV cache would exceed ~2 GiB), or 2/3/4/8 bits always.", "cache", choices=("auto", "off", "2", "3", "4", "8"))
 
 # ── VLM runner ─────────────────────────────────────────────────────────
 _add("YUNSHU_VLM_APC_MEMORY_GB", "float", None, "VLM runner prefix cache (APC) RAM budget in GiB; 0 disables the prefix cache. Unset: half of the memory left after the model weights and a 16 GiB reserve, between 4 and 32 GiB (128 GB machine, 27B model: 32). A 27B checkpoint costs about 130 KiB per cached token.", "vlm-runner", minimum=0.0)
-_add("YUNSHU_VLM_APC_DISK_DIR", "path", None, "Directory for the APC SSD tier; evicted prefixes reload from disk instead of re-prefilling.", "vlm-runner")
+_add("YUNSHU_VLM_APC_DISK", "bool", True, "APC SSD tier: prefix checkpoints that RAM evicts (and, at shutdown, those still resident) are written to disk and read back instead of re-prefilling (bit-exact states, lossless; a 27B checkpoint reloads about 20x faster than it prefills). Set 0 to keep the prefix cache in RAM only.", "vlm-runner")
+_add("YUNSHU_VLM_APC_DISK_DIR", "path", None, "Directory of the APC SSD tier. Unset: ~/.yunshu/cache/apc (internal disk). Put it on a fast volume to keep the internal disk clean.", "vlm-runner")
 _add("YUNSHU_KV_PRECISION", "enum", "bf16", "KV cache precision of the Qwen3.5-family runner's shared decode batch: 'bf16' (lossless) or 'int8' (int8 codes + one fp16 scale per 32-dim group: ~0.53x the KV memory and read bandwidth for a small attention error; memory vs quality). A lone request and the speculative lane stay bf16. Applies to models with Qwen3.5-family attention (the ragged KV layout).", "vlm-runner", choices=("bf16", "int8"))
-_add("YUNSHU_VLM_APC_DISK_GB", "float", 64.0, "Size cap of the APC SSD tier in GiB.", "vlm-runner", minimum=0.0)
+_add("YUNSHU_VLM_APC_DISK_GB", "float", 64.0, "Size cap of the APC SSD tier in GiB (oldest shards are deleted past it; 0 = uncapped). A 27B checkpoint costs about 130 KiB per token, so 64 GiB holds about 500K tokens.", "vlm-runner", minimum=0.0)
 _add("YUNSHU_VLM_MAX_IMAGE_BYTES", "int", 25 * 1024 * 1024, "Largest image a request may reference by URL, in bytes.", "vlm-runner", minimum=1)
 _add("YUNSHU_VLM_INSECURE_SSL", "bool", False, "Retry image downloads without TLS verification when verification fails.", "vlm-runner")
 

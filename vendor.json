@@ -258,6 +258,18 @@
   "inspired": [
     {
       "kind": "inspired",
+      "path": "python/yunshu_engine/keyed_sampling.py",
+      "repo": "https://github.com/ashhart/TensorFold",
+      "clone": "reference/TensorFold",
+      "upstream_paths": [
+        "src/tensorfold/engine/exact_sampling.py"
+      ],
+      "commit": "34bae79a",
+      "license": "MIT",
+      "why": "position-keyed Gumbel-max sampling, so a drafted token is accepted exactly when serial sampling would draw it"
+    },
+    {
+      "kind": "inspired",
       "path": "python/yunshu_engine/draft_vocab.py",
       "repo": "https://github.com/ashhart/TensorFold",
       "clone": "reference/TensorFold",

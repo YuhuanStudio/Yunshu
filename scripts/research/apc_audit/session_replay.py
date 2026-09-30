@@ -10,6 +10,8 @@ Scenarios
             between rounds, then each session sends one more request (revisit).
   tiers     for each --lengths: a cold request, then the same prompt + a small suffix
             (a cache hit: RAM, or SSD when the RAM tier is too small), greedy text saved.
+  restart   for each --lengths: a cold request, a graceful server stop (timed: the shutdown spill),
+            a new server on the same disk tier, then the same prompt + suffix (tier ssd).
   identity  the `tiers` requests only, for output comparison across server configurations.
 
     session_replay.py --checkpoint M --template body.json --scenario multi --sessions 3 \
@@ -171,7 +173,7 @@ def main():
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--template", required=True)
     ap.add_argument(
-        "--scenario", choices=["multi", "tiers", "identity"], default="multi"
+        "--scenario", choices=["multi", "tiers", "identity", "restart"], default="multi"
     )
     ap.add_argument("--sessions", type=int, default=3)
     ap.add_argument("--target", type=int, default=30000)
@@ -246,6 +248,31 @@ def main():
             for s in sess:  # and one more growth step
                 r = summarize(post(srv.url, s.body(steps + 1, a.max_new)))
                 emit(dict(kind="revisit+1", session=s.idx, step=steps + 1, **r))
+        elif a.scenario == "restart":
+            for L in [int(x) for x in a.lengths.split(",")]:
+                s = Session(
+                    200 + L // 1000,
+                    template,
+                    tok,
+                    0,
+                    L,
+                    sizes=[max(L - 8000, 500), 300],
+                )
+                cold = summarize(post(srv.url, s.body(1, 64)))
+                emit(dict(kind="cold", length=L, **cold))
+                t0 = time.time()
+                srv.proc.terminate()
+                with contextlib.suppress(Exception):
+                    srv.proc.wait(timeout=300)
+                emit(dict(kind="stop", length=L, stop_s=round(time.time() - t0, 1)))
+                srv.kill()
+                (port,) = free_ports(1)
+                srv = Server("yunshu", a.checkpoint, port, Path(a.log)).start()
+                pid = srv.proc.pid
+                hit = summarize(post(srv.url, s.body(2, 64)))
+                emit(dict(kind="hit-after-restart", length=L, **hit))
+                hit2 = summarize(post(srv.url, s.body(2, 64)))
+                emit(dict(kind="hit-repeat", length=L, **hit2))
         else:
             lengths = [int(x) for x in a.lengths.split(",")]
             for L in lengths:

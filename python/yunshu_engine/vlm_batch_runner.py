@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import queue
 import threading
 import time
@@ -32,6 +33,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import mlx.core as mx
+
+from . import keyed_sampling
 
 logger = logging.getLogger(__name__)
 
@@ -399,13 +402,22 @@ class VLMBatchRunner:
         # Upstream drops logprobs while drafting, so logprob requests decode AR.
         # A thinking budget forces "\n</think>" through upstream's
         # ThinkingBudgetCriteria, which only the non-speculative batch applies.
-        # A tool-call guide (structural-tag constrained decoding) is applied by
-        # the speculative lane itself when it can (greedy MTP rows that start
-        # unconstrained); every other row masks through a logits processor.
+        # Sampled requests draft too: their tokens are drawn by a position-keyed sampler, so
+        # accepting a draft equals what serial sampling would have produced (keyed_sampling).
+        keyed_ok = greedy or keyed_sampling.supports(
+            RowParams(
+                float(temperature),
+                float(top_p),
+                int(top_k),
+                float(min_p),
+                seed,
+                float(xtc_probability or 0.0),
+            )
+        )
         use_draft = bool(
             allow_draft
             and self.drafter is not None
-            and greedy
+            and keyed_ok
             and not processors
             and not logprobs
             and thinking_budget is None
@@ -465,6 +477,11 @@ class VLMBatchRunner:
         with contextlib.suppress(Exception):
             # The gateway reaches the live stats through the cancel event it owns.
             cancel_event.run_stats = stats
+        if not greedy and use_draft:
+            job.keyed = keyed_sampling.KeyedSampler(
+                job.sampling,
+                seed if seed is not None else int.from_bytes(os.urandom(8), "little"),
+            )
         self._submit(job)
         try:
             while True:
@@ -524,7 +541,9 @@ class VLMBatchRunner:
     def _active_jobs(self) -> int:
         return sum(len(g.jobs) for g in self._groups()) + len(self._driver_jobs)
 
-    def _new_generator(self, *, spec: bool, use_apc: bool, top_logprobs: int, sampler):
+    def _new_generator(
+        self, *, spec: bool, use_apc: bool, top_logprobs: int, sampler, greedy=True
+    ):
         from mlx_vlm.generate.ar import BatchGenerator
 
         gen = BatchGenerator(
@@ -536,7 +555,7 @@ class VLMBatchRunner:
             draft_model=self.drafter if spec else None,
             draft_kind=self.draft_kind if spec else None,
             draft_block_size=self.draft_block_size if spec else None,
-            greedy_sampling=spec,
+            greedy_sampling=spec and greedy,
             compute_logprobs=not spec,
             top_logprobs_k=top_logprobs,
             prefill_step_size=PREFILL_STEP,
@@ -604,7 +623,11 @@ class VLMBatchRunner:
                 vocab.set_context(job.ids)
             group = self._spec = _Group(
                 gen=self._new_generator(
-                    spec=True, use_apc=use_apc, top_logprobs=0, sampler=None
+                    spec=True,
+                    use_apc=use_apc,
+                    top_logprobs=0,
+                    sampler=job.keyed,
+                    greedy=job.keyed is None,
                 ),
                 spec=True,
             )
@@ -1101,6 +1124,9 @@ class _Job:
     rope_delta: float = 0.0
     allow_draft: bool = False
     guide: Any = None
+    keyed: Any = (
+        None  # KeyedSampler of a sampled request served by the speculative lane
+    )
     # drafter lifetime counters at admission (rounds, accepted, drafted); diffed per step
     spec_base: tuple | None = None
 

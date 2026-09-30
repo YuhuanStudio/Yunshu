@@ -15,8 +15,8 @@ Read this first: the "four tiers" exist on ONE of the serving paths.
 
 | Serving path | Serves | RAM, full precision (HOT) | RAM, 4-bit (WARM) | SSD | Nothing cached (COLD) |
 |---|---|---|---|---|---|
-| **VLM runner** (`VLMEngine` + `vlm_batch_runner.py`, mlx-vlm APC) | every mlx-vlm model, Qwen3.8-27B included; all `/v1/chat/completions`, `/v1/messages`, `/v1/responses` traffic for them | yes: exact checkpoints (KV + recurrent state), byte budget `YUNSHU_VLM_APC_MEMORY_GB` | **no** (would be lossy; not implemented here) | yes, lossless (bit-exact states): `YUNSHU_VLM_APC_DISK_DIR`, `YUNSHU_VLM_APC_DISK_GB` | full prefill |
-| **Text fast path** (`BatchedEngine._generate_fast`, mlx-lm `generate_step`) | text-only mlx-lm models (e.g. Qwen2.5-3B) | yes: `KVPrefixCache`, `YUNSHU_PREFIX_MAX_ENTRIES` entries | yes but **off by default** (`YUNSHU_PREFIX_HOT_LIMIT=0`; lossy on reuse) | yes but **off by default** (`YUNSHU_SSD_CACHE=1`; `native` precision is bit-exact) | full prefill |
+| **VLM runner** (`VLMEngine` + `vlm_batch_runner.py`, mlx-vlm APC) | every mlx-vlm model, Qwen3.8-27B included; all `/v1/chat/completions`, `/v1/messages`, `/v1/responses` traffic for them | yes: exact checkpoints (KV + recurrent state), byte budget `YUNSHU_VLM_APC_MEMORY_GB` | **no** (would be lossy; not implemented here) | **yes, on by default**, lossless (bit-exact states), `~/.yunshu/cache/apc`, 64 GiB cap: `YUNSHU_VLM_APC_DISK=0` opts out, `YUNSHU_VLM_APC_DISK_DIR` / `YUNSHU_VLM_APC_DISK_GB` | full prefill |
+| **Text fast path** (`BatchedEngine._generate_fast`, mlx-lm `generate_step`) | text-only mlx-lm models (e.g. Qwen2.5-3B) | yes: `KVPrefixCache`, `YUNSHU_PREFIX_MAX_ENTRIES` entries | yes but **off by default** (`YUNSHU_PREFIX_HOT_LIMIT=0`; lossy on reuse) | yes but **off by default** (`YUNSHU_SSD_CACHE=1`; `native` precision is bit-exact; skipped for models that prefill faster than `YUNSHU_SSD_CACHE_PREFILL_CEIL_TPS`) | full prefill |
 | Engine loop (`YUNSHU_ENGINE_LOOP=1`, legacy) | text models | radix cache (HOT only) | no | no | full prefill |
 
 `x_yunshu.cache` on every response says which tier served the request (additive; the SDK fields are
@@ -45,7 +45,43 @@ recurrent state at one token position, reusable only by a prompt that starts wit
   grew), so a long session holds one copy, not one per turn;
 - the end of the system turn (system prompt + tool list) is a checkpoint of its own, kept per distinct
   head: a new session in the same project reuses it;
-- the SSD tier receives a checkpoint when RAM evicts it (and resident ones at shutdown), not on every store.
+- the SSD tier receives a checkpoint when RAM evicts it (and resident ones at shutdown, newest first, within
+  20 s), not on every store. It is **on by default** (measured below: a reload is 15-40x faster than
+  re-prefilling; the cache also survives a restart). States are namespaced by the checkpoint's weights
+  (path, file sizes, mtimes), so replacing a model in place never reads old states. `yunshu doctor` prints
+  the directory, its size, the cap and the free space.
+
+### Text path SSD tier (opt-in)
+
+Qwen2.5-3B bf16 (prefills 7.7K tok/s), 3 sessions to 20K tokens, RAM limited to 2 entries: before, a short
+RAM hit (the shared system prompt) hid the conversation's much longer spilled prefix, so reuse was 44.8%
+and the SSD tier never served. Now the longer SSD prefix wins: reuse 84.6%, mean TTFT 1982 -> 1013 ms,
+revisit of a 20K session 2.35 s -> 0.70 s. The prefill-speed gate (`YUNSHU_SSD_CACHE_PREFILL_CEIL_TPS`) was
+4000 tok/s and blocked this model; measured reload still wins 3x at 7.7K tok/s, so the default is 20000.
+The tier stays opt-in (`YUNSHU_SSD_CACHE=1`): with the default 64 RAM entries the RAM tier already holds
+these sessions (84.7% reuse in RAM alone).
+
+### APC SSD tier: measured (Qwen3.8-27B oQ4e, M5 Max, greedy)
+
+TTFT of the same prompt + a 350-token suffix; cold = full prefill. Disk = TB4 enclosure (2.6 GiB/s measured
+sequential); the internal SSD of the same machine measured 8.4 GiB/s read / 9.9 GiB/s write, so an internal
+default directory reloads about 3x faster than these numbers.
+
+| Prompt | Cold prefill | RAM hit | SSD hit (RAM tier off) | SSD hit after a server restart | Shutdown spill |
+|---|---|---|---|---|---|
+| 10K | 12.4 s | 0.68 s | 1.30 s | 0.79 s | 1.3 s |
+| 30K | 41.0 s | 0.96 s | 2.14 s | 1.45 s | 2.3 s |
+| 60K | 91.0 s | 1.69 s | 6.55 s | 2.37 s | 7.2 s |
+
+An SSD hit is 10-40x faster than re-prefilling. The first read is lazy (mmap: `reload_ms` under-reports
+it; TTFT is the truth); under concurrent spills a 28K reload took up to 6.8 s, still 6x faster than the 40 s
+re-prefill. Greedy output of the SSD hit is token-identical to the RAM hit at 10K / 30K / 60K. (A cached
+run and a cold run differ at 60K for a different reason: prefill chunk boundaries move, which is drift, not
+a tier property.)
+
+Real agent sessions (Claude Code, Codex, opencode on the current code): reuse equals the achievable ceiling
+for the request stream (Claude Code 89-92%, Codex 80-88%, opencode 64-73%; the rest is each session's
+first, cold request, plus 0.3-3.7 points of generated tokens re-prefilled on the next turn).
 
 ## Result (latest run)
 
