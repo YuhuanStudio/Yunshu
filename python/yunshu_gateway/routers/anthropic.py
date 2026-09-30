@@ -225,6 +225,7 @@ class AnthropicMessagesRequest(BaseModel):
     mcp_servers: list[dict] | None = None
     # Sent by Claude Code and the SDKs; accepted so the request validates.
     output_config: dict | None = None
+    output_format: dict | None = None  # beta structured outputs (json_schema)
     context_management: dict | None = None
     service_tier: str | None = None
     container: str | dict | None = None
@@ -345,6 +346,13 @@ def _resolve_json_schema(req) -> dict | str | None:
     js = getattr(req, "json_schema", None)
     if js is not None:
         return js
+    # Anthropic structured outputs: output_config.format (GA) or output_format (beta
+    # structured-outputs-2025-11-13), both {"type": "json_schema", "schema": {...}}.
+    _of = (getattr(req, "output_config", None) or {}).get("format") or getattr(
+        req, "output_format", None
+    )
+    if isinstance(_of, dict) and _of.get("type") == "json_schema" and _of.get("schema"):
+        return _of["schema"]
     # Grammar constraint (regex, choice, CFG) — only if actually provided
     grammar = getattr(req, "grammar", None)
     if grammar is not None and isinstance(grammar, (dict, str)):

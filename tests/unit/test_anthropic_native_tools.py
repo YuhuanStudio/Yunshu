@@ -77,3 +77,22 @@ def test_only_auto_tool_choice_is_deferred():
     assert not anthropic._tool_choice_is_auto({"type": "any"})
     assert not anthropic._tool_choice_is_auto({"type": "tool", "name": "Bash"})
     assert not anthropic._tool_choice_is_auto("any")
+
+
+def test_structured_outputs_map_to_constrained_decoding():
+    schema = {"type": "object", "properties": {"a": {"type": "integer"}}}
+    base = {
+        "model": "m",
+        "max_tokens": 10,
+        "messages": [{"role": "user", "content": "x"}],
+    }
+    ga = anthropic.AnthropicMessagesRequest(
+        **base, output_config={"format": {"type": "json_schema", "schema": schema}}
+    )
+    assert anthropic._resolve_json_schema(ga) == schema
+    beta = anthropic.AnthropicMessagesRequest(
+        **base, output_format={"type": "json_schema", "schema": schema}
+    )
+    assert anthropic._resolve_json_schema(beta) == schema
+    plain = anthropic.AnthropicMessagesRequest(**base, output_config={"effort": "high"})
+    assert anthropic._resolve_json_schema(plain) is None
