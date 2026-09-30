@@ -131,3 +131,34 @@ def test_replay_title_failure_propagates_and_stops_server(
         replay.main()
     assert Server.killed
     assert not output.exists()
+
+
+def test_replay_digest_compares_complete_arguments_independent_of_chunks(
+    replay, monkeypatch
+):
+    def run(arguments, split):
+        pieces = [arguments[:split], arguments[split:]]
+        events = [
+            event(
+                {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "random-id",
+                            "function": {"name": "Bash", "arguments": pieces[0]},
+                        }
+                    ]
+                }
+            ),
+            event({"tool_calls": [{"index": 0, "function": {"arguments": pieces[1]}}]}),
+            event({}, "tool_calls"),
+            b"data: [DONE]\n",
+        ]
+        monkeypatch.setattr(
+            replay.urllib.request, "urlopen", lambda *args, **kwargs: Stream(events)
+        )
+        return replay.send("http://localhost", {})["output_sha256"]
+
+    original = run('{"command":"ls"}', 4)
+    assert original == run('{"command":"ls"}', 9)
+    assert original != run('{"command":"pwd"}', 4)

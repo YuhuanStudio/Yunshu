@@ -18,6 +18,7 @@ abort the replay instead of producing a successful measurement.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -47,6 +48,7 @@ def send(url: str, body: dict) -> dict:
     reasoning = []
     done = False
     calls = 0
+    tool_calls = {}
     usage = None
     xy = None
     finish = None
@@ -78,6 +80,14 @@ def send(url: str, body: dict) -> dict:
                     t_content = time.perf_counter()
                 got = visible or thought
                 if delta.get("tool_calls"):
+                    for fragment in delta["tool_calls"]:
+                        index = fragment.get("index", 0)
+                        call = tool_calls.setdefault(
+                            index, {"name": "", "arguments": ""}
+                        )
+                        function = fragment.get("function") or {}
+                        for field in ("name", "arguments"):
+                            call[field] += function.get(field) or ""
                     got = got or "x"
                     calls += 1
                 if got and t_first is None:
@@ -90,7 +100,20 @@ def send(url: str, body: dict) -> dict:
         raise RuntimeError("Replay stream ended without [DONE] and a finish reason")
     ct = (usage or {}).get("completion_tokens", 0)
     dec = (ct - 1) / (t1 - t_first) if t_first and ct > 1 and t1 > t_first else None
+    output_digest = hashlib.sha256(
+        json.dumps(
+            {
+                "content": "".join(content),
+                "reasoning": "".join(reasoning),
+                "tool_calls": [tool_calls[i] for i in sorted(tool_calls)],
+                "finish": finish,
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        ).encode()
+    ).hexdigest()
     return dict(
+        output_sha256=output_digest,
         ttft_s=round((t_first or t1) - t0, 3),
         total_s=round(t1 - t0, 3),
         content_ttft_s=round(t_content - t0, 3) if t_content is not None else None,
@@ -116,6 +139,7 @@ def main():
     ap.add_argument("--title")
     ap.add_argument("--n", type=int, default=3)
     ap.add_argument("--temperature", type=float)
+    ap.add_argument("--seed", type=int)
     ap.add_argument("--env", action="append", default=[])
     ap.add_argument("--server-arg", action="append", default=[])
     ap.add_argument("--label", default="")
@@ -147,6 +171,8 @@ def main():
             body = json.loads(Path(f).read_text())
             if a.temperature is not None:
                 body["temperature"] = a.temperature
+            if a.seed is not None:
+                body["seed"] = a.seed
             for i in range(a.n):
                 side = {}
                 th = None
@@ -154,6 +180,8 @@ def main():
                     tb = dict(title)
                     if a.temperature is not None:
                         tb["temperature"] = a.temperature
+                    if a.seed is not None:
+                        tb["seed"] = a.seed
                     th = ThreadPoolExecutor(max_workers=1)
                     title_future = th.submit(send, srv.url, tb)
                     time.sleep(0.3)
@@ -165,7 +193,13 @@ def main():
                 finally:
                     if th is not None:
                         th.shutdown(wait=True)
-                rec.update(body=Path(f).name, i=i, label=a.label, cold=i == 0)
+                rec.update(
+                    body=Path(f).name,
+                    i=i,
+                    label=a.label,
+                    cold=i == 0,
+                    seed=body.get("seed"),
+                )
                 print(
                     json.dumps(
                         {
