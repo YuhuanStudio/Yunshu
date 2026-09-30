@@ -260,14 +260,21 @@ class QwenMessageAdapter(MessageAdapter):
         # messages to the front (mirrors the Llama/GLM/DeepSeek/Phi adapters, which already
         # do this — a mid-system Qwen request otherwise raised → caught at
         # _apply_chat_template → collapsed to the plaintext fallback).
-        if (
-            adapted
-            and adapted[0]["role"] != "system"
-            and any(m["role"] == "system" for m in adapted)
-        ):
-            sys_msgs = [m for m in adapted if m["role"] == "system"]
+        # The template also rejects a second system message even when the first one leads
+        # (Codex sends `developer` items after the first user turn), so merge every system
+        # message into one leading message.
+        sys_msgs = [m for m in adapted if m["role"] == "system"]
+        if sys_msgs and (len(sys_msgs) > 1 or adapted[0]["role"] != "system"):
             other = [m for m in adapted if m["role"] != "system"]
-            adapted = sys_msgs + other
+            texts = [m["content"] for m in sys_msgs]
+            if all(isinstance(t, str) for t in texts):
+                merged = {
+                    "role": "system",
+                    "content": "\n\n".join(t for t in texts if t),
+                }
+                adapted = [merged] + other
+            else:
+                adapted = sys_msgs + other
         return adapted
 
     def family_name(self) -> str:
