@@ -341,6 +341,7 @@ CATALOG = {
     "models": [
         {
             "slug": "census-model",
+            "base_instructions": "You are a coding agent.",
             "display_name": "Census Model",
             "description": "local model",
             "default_reasoning_level": "medium",
