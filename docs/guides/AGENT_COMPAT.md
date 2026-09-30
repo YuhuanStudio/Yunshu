@@ -94,12 +94,12 @@ Last full rerun: current main plus the fixes listed under "Found and fixed by th
 | Claude Code turn after `Read` of an image: empty reply in 20 ms | The vision path skipped the family message adapter, so Qwen's template raised "System message must be at the beginning" on Claude Code's per-turn system note; the failure was then reported as a normal empty `end_turn` | The vision path runs the adapter; a template / engine error after the stream started is now an `error` event on Messages, chat and Responses |
 | `/status`, `/model` capture of Claude Code stopped at the welcome screen | With `CLAUDE_CONFIG_DIR` set, the interactive UI reads its onboarding state from inside that directory | The census harness writes it there; screens are rendered through a terminal emulator |
 
-### Open defect found by the 27B rerun
+### Sampled speculative decoding (reverted)
 
-On Qwen3.8-27B-oQ4e-mtp with the default MTP speculative lane, agent traffic (sampled, temperature > 0) produced stray
-multilingual tokens and repetition mid-answer (`cc_image`, `cx_mcp`, `oc_bash` degraded; tool-call text broke). The same
-four scenarios with `YUNSHU_VLM_DRAFT=off` all passed. The suspect is the recently merged position-keyed sampling in the
-speculative lane (`2c7c3166`); it is owned by the speculative-decoding work, not by the gateway.
+On Qwen3.8-27B-oQ4e-mtp, drafting sampled requests (temperature > 0) through the MTP lane with position-keyed
+sampling produced stray multilingual tokens and repetition mid-answer (`cc_image`, `cx_mcp`, `oc_bash` degraded;
+tool-call text broke). The same scenarios with speculation off passed. That change is reverted: sampled requests
+decode without drafts until the sampled lane is root-caused and re-verified on these scenarios.
 
 ### Known limits (not Yunshu defects)
 
