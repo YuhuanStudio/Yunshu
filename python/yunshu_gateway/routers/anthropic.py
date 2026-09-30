@@ -941,6 +941,70 @@ def _try_parse_tool_call_delta(text: str) -> list[dict] | None:
     return calls or None
 
 
+def _tool_choice_is_auto(tc) -> bool:
+    return tc in (None, "auto") or (isinstance(tc, dict) and tc.get("type") == "auto")
+
+
+def _inject_tool_prompt(messages: list[dict], tool_prompt: str) -> list[dict]:
+    """Append the generic tool instructions to the system message (or add one)."""
+    if messages and messages[0].get("role") == "system":
+        messages[0]["content"] += tool_prompt
+    else:
+        messages.insert(0, {"role": "system", "content": tool_prompt.strip()})
+    return messages
+
+
+def _apply_native_tools(req, engine) -> bool:
+    """Hand the tool definitions to a chat template that renders them itself.
+
+    Qwen3.x's template writes tools and calls in its own format (``<tool_call><function=...>``);
+    the injected prompt asks for JSON, and a model caught between the two sometimes emits neither
+    (measured: ``{"function": "WebSearch", ...}`` leaking as text). The VLM engine takes ``tools=``;
+    BatchedEngine reads the per-request contextvar. Returns False when the engine cannot, and the
+    generic prompt is injected instead.
+    """
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": t.name,
+                "description": t.description or "",
+                "parameters": t.input_schema or {"type": "object", "properties": {}},
+            },
+        }
+        for t in (req.tools or [])
+    ]
+    check = getattr(engine, "supports_native_tools", None)
+    try:
+        if callable(check) and check():
+            req._native_tools = tools
+            return True
+    except Exception:
+        logger.debug("native tool support check failed", exc_info=True)
+    try:
+        from yunshu_engine.batched_engine import (
+            _REQUEST_TOOLS,
+            BatchedEngine,
+            _template_supports_tools,
+        )
+
+        if isinstance(engine, BatchedEngine):
+            if _template_supports_tools(getattr(engine, "_tokenizer", None)):
+                _REQUEST_TOOLS.set(tools)
+                return True
+            _REQUEST_TOOLS.set(None)
+    except Exception:
+        logger.debug(
+            "native tool decision failed; using prompt injection", exc_info=True
+        )
+    return False
+
+
+def _native_kw(req) -> dict:
+    tools = getattr(req, "_native_tools", None)
+    return {"tools": tools} if tools else {}
+
+
 @router.post("/messages", response_model=None)
 async def create_message(req: AnthropicMessagesRequest, request: Request):
     """Anthropic Messages API endpoint.
@@ -1201,10 +1265,13 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
             req._forced_tool_grammar = _forced_tool_grammar
 
         if tool_prompt:
-            if messages and messages[0].get("role") == "system":
-                messages[0]["content"] += tool_prompt
+            if _tool_choice_is_auto(req.tool_choice):
+                # Decided after the engine is known: a chat template that renders `tools` itself
+                # (Qwen3.x) gets the definitions natively, in the model's own tool-call format;
+                # otherwise this generic prompt is injected.
+                req._tool_prompt_pending = tool_prompt
             else:
-                messages.insert(0, {"role": "system", "content": tool_prompt.strip()})
+                messages = _inject_tool_prompt(messages, tool_prompt)
 
     # Resolve engine
     try:
@@ -1239,6 +1306,10 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
                 "error": {"type": "invalid_request_error", "message": e.detail},
             },
         )
+
+    _pending_tools = getattr(req, "_tool_prompt_pending", "")
+    if _pending_tools and not _apply_native_tools(req, engine):
+        messages = _inject_tool_prompt(messages, _pending_tools)
 
     # Reject prompts over the context window (400) or too large to prefill (413),
     # before we attempt generation (chat.py). Covers stream +
@@ -1708,6 +1779,7 @@ async def _non_stream_legacy(
     _logit_bias = _convert_logit_bias(req)
     try:
         _gen_coro = engine.generate(
+            **_native_kw(req),
             prompt=messages,
             max_tokens=req.max_tokens,
             temperature=req.temperature,
@@ -2351,6 +2423,7 @@ async def _stream_anthropic(
                             yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _token_text}})}\n\n"
         else:
             async for output in engine.generate_stream(
+                **_native_kw(req),
                 prompt=messages,
                 max_tokens=req.max_tokens,
                 temperature=req.temperature,
