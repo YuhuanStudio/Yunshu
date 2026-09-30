@@ -64,9 +64,9 @@ SCHEMA = {
     "properties": {
         "city": {"type": "string"},
         "population_millions": {"type": "number"},
-        "is_capital": {"type": "boolean"},
+        "is_national_capital": {"type": "boolean"},
     },
-    "required": ["city", "population_millions", "is_capital"],
+    "required": ["city", "population_millions", "is_national_capital"],
     "additionalProperties": False,
 }
 CITIES = [
@@ -77,6 +77,7 @@ CITIES = [
     ("Berlin", True),
     ("Munich", False),
 ]
+# Osaka, Lyon and Munich are regional capitals: the schema asks for the national one.
 
 
 def image_url(red_left, size):
@@ -260,7 +261,11 @@ def main():
     t_end = time.time() + a.minutes * 60
     next_idle = time.time() + a.idle_every_min * 60
     n = 0
+    last_note = time.time()
     while time.time() < t_end:
+        if time.time() - last_note >= 60:  # progress on stdout (queue stall detection)
+            last_note = time.time()
+            print(f"soak {n} requests, footprint {mem()} GiB", flush=True)
         if time.time() >= next_idle:
             emit({"kind": "idle", "seconds": a.idle_s, "footprint_gib": mem()})
             time.sleep(a.idle_s)
@@ -362,7 +367,7 @@ def main():
                 obj = json.loads(r["content"])
                 ok = (
                     obj.get("city", "").lower() == city.lower()
-                    and obj.get("is_capital") is cap
+                    and obj.get("is_national_capital") is cap
                 )
             except Exception:  # noqa: BLE001
                 ok = False
