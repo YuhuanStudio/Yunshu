@@ -67,4 +67,4 @@ rm -rf ~/.yunshu                       # downloaded models: check before deletin
 rm -rf ~/.cache/yunshu                 # text-engine SSD prefix cache, if YUNSHU_SSD_CACHE was on
 ```
 
-If you set `YUNSHU_VLM_APC_DISK_DIR`, delete that directory too.
+The prefix-cache SSD tier lives in `~/.yunshu/cache/apc` (covered by the line above) or in `YUNSHU_VLM_APC_DISK_DIR` if you set it; delete that directory too.

@@ -132,6 +132,8 @@ class MTPHead:
                 self.slots.release(r.hslot)
                 r.hslot = None
         self.rows = [r for r in self.rows if id(r) not in ids]
+        if not self.rows:
+            self.slots = Slots(len(self.drafter.layers))
 
     def _run(self, rows: list, T: int, emb: mx.array, hid: mx.array) -> mx.array:
         """Head forward over the rows' ``T`` padded tokens (``emb`` / ``hid``

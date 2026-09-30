@@ -1,0 +1,285 @@
+"""YunshuAPCManager: checkpoint policy (supersede, head boundary, entries) and lookup provenance."""
+
+import time
+
+import pytest
+
+mx = pytest.importorskip("mlx.core")
+
+from mlx_vlm.models.cache import ArraysCache, KVCache  # noqa: E402
+
+from yunshu_engine.apc_manager import (  # noqa: E402
+    YunshuAPCManager,
+    auto_memory_gb,
+)
+
+IM_START, USER = 900, 901
+
+
+def _cache(n: int):
+    """A hybrid-style prompt cache: recurrent state + dense KV of n tokens."""
+    rec = ArraysCache(2)
+    rec.cache = [mx.ones((1, 4, 8)), mx.ones((1, 2, 3)) * n]
+    kv = KVCache()
+    kv.update_and_fetch(mx.ones((1, 1, n, 4)), mx.ones((1, 1, n, 4)))
+    mx.eval(rec.cache, kv.keys, kv.values)
+    return [rec, kv]
+
+
+def _mgr(**kw):
+    return YunshuAPCManager(
+        num_blocks=8,
+        block_size=16,
+        overrides={"memory_max_gb": 1},
+        head_marker=(IM_START, USER),
+        **kw,
+    )
+
+
+def _prompt(head, body, extra=()):
+    """system turn (head tokens) + user turn (body tokens)."""
+    return [7, 7, *head, IM_START, USER, *body, *extra]
+
+
+def test_auto_memory_scales_with_machine_and_model():
+    gib = 1 << 30
+    assert auto_memory_gb(128 * gib, 16 * gib) == 32.0
+    assert auto_memory_gb(64 * gib, 16 * gib) == 16.0
+    assert auto_memory_gb(32 * gib, 16 * gib) == 4.0
+    assert auto_memory_gb(16 * gib, 16 * gib) == 4.0
+    assert auto_memory_gb(512 * gib, 16 * gib) == 32.0
+
+
+def test_head_boundary_is_the_start_of_the_first_user_turn():
+    m = _mgr()
+    ids = _prompt(range(100, 150), range(200, 260))
+    assert m.head_boundary(ids) == 2 + 50
+    assert m.head_boundary([1, 2, 3]) == 0
+    assert _mgr().head_boundary([IM_START, USER, 5]) == 0  # no system turn
+    m.head_marker = None
+    assert m.head_boundary(ids) == 0
+
+
+def _coordinator(m):
+    from types import SimpleNamespace
+
+    from yunshu_engine.apc_manager import _Coordinator
+
+    c = object.__new__(_Coordinator)
+    c.manager = m
+    c.model = None
+    c.plan = SimpleNamespace(
+        restorable=True, strategy="checkpoint", legacy_mode="exact"
+    )
+    return c
+
+
+def test_checkpoint_lengths_are_final_one_interval_and_the_head():
+    m = _mgr()
+    c = _coordinator(m)
+    head = list(range(100, 3000))  # a long system turn
+    ids = _prompt(head, range(5000, 12000))
+    lengths = c.checkpoint_lengths(ids, set())
+    final = len(ids) - 1
+    interval = ((final - 1) // 2048) * 2048
+    assert lengths == sorted({final, interval, m.head_boundary(ids)})
+    assert m._generation == 1
+    # a short prompt: just the final one, no interval/head below the minimum
+    short = _prompt(range(100, 110), range(200, 220))
+    assert c.checkpoint_lengths(short, set()) == [len(short) - 1]
+    m.keep_interval_checkpoint = False
+    assert c.checkpoint_lengths(ids, set()) == sorted({final, m.head_boundary(ids)})
+
+
+def test_head_checkpoint_never_cuts_media_tokens():
+    m = _mgr()
+    c = _coordinator(m)
+    ids = _prompt(range(100, 400), range(500, 900))
+    h = m.head_boundary(ids)
+    assert h in c.checkpoint_lengths(ids, set())
+    # an image after the head: restoring only the head would leave media in the suffix
+    ids2 = list(ids)
+    ids2[h + 5] = 4242
+    assert h not in c.checkpoint_lengths(ids2, {4242})
+
+
+def test_entries_are_not_capped_at_two():
+    m = _mgr()
+    assert m._exact_cache_max >= 8
+
+
+def test_newer_checkpoint_supersedes_earlier_request_but_not_the_same_request():
+    m = _mgr()
+    a = list(range(1000, 1100))
+    m.begin_request()
+    m.store_exact_cache(a[:48], _cache(48))  # interval checkpoint of request 1
+    m.store_exact_cache(a[:96], _cache(96))  # its final: both belong to request 1
+    assert len(m._exact_cache) == 2
+    m.begin_request()  # request 2 extends request 1
+    m.store_exact_cache(a[:100] + [1, 2, 3], _cache(103))
+    assert [len(e.token_ids) for e in m._exact_cache.values()] == [103]
+
+
+def test_head_checkpoint_survives_supersede_and_other_sessions_are_untouched():
+    m = _mgr()
+    head = list(range(100, 150))
+    s1 = _prompt(head, range(200, 232))
+    s2 = _prompt(list(range(300, 350)), range(400, 432))
+    for ids in (s1, s2):
+        m.begin_request()
+        h = m.head_boundary(ids)
+        m.note_head(ids[:h])
+        m.store_exact_cache(ids[:h], _cache(h))
+        m.store_exact_cache(ids[:-1], _cache(len(ids) - 1))
+    assert len(m._exact_cache) == 4
+    # session 1 grows: its earlier final goes, both heads and session 2 stay
+    m.begin_request()
+    s1b = s1 + [1, 2, 3, 4]
+    m.store_exact_cache(s1b[:-1], _cache(len(s1b) - 1))
+    lengths = sorted(len(e.token_ids) for e in m._exact_cache.values())
+    h1, h2 = m.head_boundary(s1), m.head_boundary(s2)
+    assert lengths == sorted([h1, h2, len(s2) - 1, len(s1b) - 1])
+    # a new session with the same head reuses the head checkpoint
+    new = _prompt(head, range(500, 520))
+    cache, n = m.lookup_exact_cache(new)
+    assert n == h1 and cache is not None
+
+
+def test_lookup_provenance_ram_and_none():
+    m = _mgr()
+    ids = list(range(1000, 1100))
+    m.begin_request()
+    m.store_exact_cache(ids[:96], _cache(96))
+    _, n = m.lookup_exact_cache(ids + [5, 6])
+    assert n == 96
+    rec = m.take_lookup(len(ids) + 2, 96)
+    assert rec.tier == "ram" and rec.cached == 96 and rec.ms >= 0
+    _, n = m.lookup_exact_cache([9] * 50)
+    assert n == 0
+    assert m.take_lookup(50, 0).tier == "none"
+
+
+def test_snapshot_reports_occupancy():
+    m = _mgr()
+    m.begin_request()
+    m.store_exact_cache(list(range(1000, 1096)), _cache(96))
+    snap = m.snapshot()
+    assert snap["entries"] == 1 and snap["entry_tokens"] == [96]
+    assert snap["memory_max_bytes"] == 1 << 30
+    assert snap["resident_bytes"] > 0
+
+
+def test_runner_records_tier_on_the_job_and_x_yunshu_reports_it():
+    from types import SimpleNamespace
+
+    from yunshu_engine.vlm_batch_runner import RunStats, VLMBatchRunner
+    from yunshu_gateway import x_yunshu
+
+    m = _mgr()
+    ids = list(range(1000, 1100))
+    m.begin_request()
+    m.store_exact_cache(ids[:96], _cache(96))
+    prompt = ids + [5, 6]
+    _, n = m.lookup_exact_cache(prompt)
+    runner = VLMBatchRunner(object(), object(), apc_manager=m)
+    stats = RunStats(cached_tokens=n, used_apc=True)
+    job = SimpleNamespace(ids=prompt, stats=stats)
+    runner._note_cache(job)
+    assert stats.cache_tier == "ram" and stats.cache_reload_ms is not None
+
+    info = x_yunshu.RequestInfo("r", "POST", "/v1/chat/completions")
+    info.gen = SimpleNamespace(stats=stats)
+    out = x_yunshu.build_stats(
+        info, {"prompt_tokens": len(prompt), "completion_tokens": 1}
+    )
+    assert out["cache"]["tier"] == "ram" and out["cache"]["cached_tokens"] == 96
+    assert out["cache"]["reload_ms"] == stats.cache_reload_ms
+    headers = dict(x_yunshu.stats_headers(out, info))
+    assert headers[b"x-yunshu-cache-tier"] == b"ram"
+
+    # a lookup that found nothing reports "none"; lookups from before admission are ignored
+    m.lookup_exact_cache([9] * 40)
+    cold = SimpleNamespace(ids=[9] * 40, stats=RunStats(used_apc=True))
+    runner._note_cache(cold)
+    assert cold.stats.cache_tier == "none"
+    late = SimpleNamespace(
+        ids=[9] * 40, stats=RunStats(used_apc=True, t_admit=time.perf_counter() + 1)
+    )
+    runner._note_cache(late)
+    assert late.stats.cache_tier is None
+    info2 = x_yunshu.RequestInfo("r2", "POST", "/v1/chat/completions")
+    out2 = x_yunshu.build_stats(
+        info2, {"prompt_tokens": 10, "prompt_tokens_details": {"cached_tokens": 4}}
+    )
+    assert out2["cache"] == {"tier": "ram", "cached_tokens": 4, "reload_ms": None}
+
+
+def _disk_mgr(tmp_path, gb=1, **kw):
+    from yunshu_engine.apc_manager import SpillDiskStore
+
+    disk = SpillDiskStore(tmp_path, namespace="t", num_workers=1, max_bytes=1 << 30)
+    return YunshuAPCManager(
+        num_blocks=8,
+        block_size=16,
+        disk=disk,
+        overrides={"memory_max_gb": gb},
+        head_marker=(IM_START, USER),
+        **kw,
+    )
+
+
+def _files(tmp_path):
+    return sorted(p.name for p in tmp_path.rglob("*.safetensors"))
+
+
+def test_ssd_receives_a_checkpoint_when_ram_evicts_it_not_when_stored(tmp_path):
+    m = _disk_mgr(tmp_path, max_entries=2)
+    a, b, c = (list(range(1000 * i, 1000 * i + 96)) for i in (1, 2, 3))
+    for ids in (a, b):
+        m.begin_request()
+        m.store_exact_cache(ids, _cache(96))
+    m.disk.flush()
+    assert _files(tmp_path) == []  # both retained in RAM: nothing written
+    m.begin_request()
+    m.store_exact_cache(c, _cache(96))  # third entry: the LRU one (a) goes to the SSD
+    m.disk.flush()
+    assert len(_files(tmp_path)) == 1
+    cache, n = m.lookup_exact_cache(a + [1, 2])
+    assert n == 96 and cache is not None
+    assert m.take_lookup(98, 96).tier == "ssd"
+
+
+def test_superseded_checkpoints_are_never_written(tmp_path):
+    m = _disk_mgr(tmp_path)
+    ids = list(range(1000, 1200))
+    for n in (96, 112, 128, 144):
+        m.begin_request()
+        m.store_exact_cache(ids[:n], _cache(n))
+    assert len(m._exact_cache) == 1
+    m.disk.flush()
+    assert _files(tmp_path) == []
+
+
+def test_close_persists_resident_checkpoints_for_a_restart(tmp_path):
+    m = _disk_mgr(tmp_path)
+    ids = list(range(2000, 2096))
+    m.begin_request()
+    m.store_exact_cache(ids, _cache(96))
+    m.close()
+    assert len(_files(tmp_path)) == 1
+    fresh = _disk_mgr(tmp_path)  # a restarted server, empty RAM
+    cache, n = fresh.lookup_exact_cache(ids + [9, 9])
+    assert n == 96 and cache is not None
+    assert fresh.take_lookup(98, 96).tier == "ssd"
+    fresh.close()
+
+
+def test_entry_too_large_for_ram_is_written_synchronously(tmp_path):
+    m = _disk_mgr(tmp_path, gb=0.000001)  # ~1 KiB: nothing fits
+    ids = list(range(3000, 3096))
+    m.begin_request()
+    m.store_exact_cache(ids, _cache(96))
+    assert len(m._exact_cache) == 0
+    assert len(_files(tmp_path)) == 1
+    _, n = m.lookup_exact_cache(ids + [1])
+    assert n == 96

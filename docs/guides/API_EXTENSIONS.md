@@ -69,7 +69,11 @@ prompts.
 
 `x_yunshu` is in the JSON body of non-streaming chat / completions, in the streaming usage chunk
 (`stream_options.include_usage`), and, when the client did not ask for usage, in a trailing
-`: yunshu-stats {...}` comment before `[DONE]`. Real response, Qwen3.8-27B (MTP):
+`: yunshu-stats {...}` comment before `[DONE]`. On the Anthropic Messages and OpenAI Responses
+routes the same object sits inside `usage` (the `message` body and the `message_delta` event;
+the Response body and the terminal `response.completed` / `.incomplete` event), where the SDK
+models keep unknown fields (`usage.model_extra["x_yunshu"]`); the Ollama layer maps it onto Ollama's
+own nanosecond fields (below). Real response, Qwen3.8-27B (MTP):
 
 ```json
 "x_yunshu": {
@@ -77,7 +81,7 @@ prompts.
   "queue_wait_ms": 0.4, "ttft_ms": 309.5,
   "prompt_tokens": 58, "cached_tokens": 0, "prefill_ms": 287.5, "prefill_tps": 201.7,
   "completion_tokens": 24, "decode_ms": 541.3, "decode_tps": 42.5, "total_ms": 857.3,
-  "speculative": {"mode": "mtp", "drafted": null, "accepted": null, "acceptance_rate": null},
+  "speculative": {"mode": "mtp", "drafted": 20, "accepted": 15, "acceptance_rate": 0.75},
   "timings": {"cache_n": 0, "prompt_n": 58, "prompt_ms": 287.5, "prompt_per_second": 201.7,
               "predicted_n": 24, "predicted_ms": 541.3, "predicted_per_second": 42.5}
 }
@@ -90,10 +94,11 @@ prompts.
 | `prefill_tps` | Uncached prompt tokens / prefill time. |
 | `decode_tps` | (completion tokens - 1) / time between first and last token. |
 | `cached_tokens` | Prompt tokens served from the prefix cache. |
-| `speculative` | `mode` (`mtp` / `dflash`) when a drafter served the request. `drafted` / `accepted` / `acceptance_rate` are filled on the round-driver lane; the upstream single-row lane does not expose them, so they are `null` there (see Known gaps). |
+| `speculative` | `mode` (`mtp` / `dflash`) when a drafter served the request. `drafted` / `accepted` / `acceptance_rate` count the draft tokens of this request: the round driver counts them per row, the single-row lane (`mtp_lane`, the MTP / DFlash tree rounds, upstream's loops) bumps the drafter's lifetime counters and the runner takes the per-request difference. `null` when nothing was drafted. |
 
-Fields are `null` when a path cannot measure them (for example TTFT of a text-only model on the
-mlx-lm fast path, which has no engine-side clock; streaming still gets a gateway-measured TTFT).
+Fields are `null` when a path cannot measure them. The text-only mlx-lm fast path fills the same
+engine-side clocks as the VLM runner (queue wait, prefill progress from `generate_step`'s callback,
+TTFT, prefill and decode tokens per second).
 Non-streaming responses also carry `X-Yunshu-Queue-Wait-Ms`, `-TTFT-Ms`, `-Prefill-Tps`,
 `-Decode-Tps`, `-Cached-Tokens`, `-Total-Ms`, `-Spec`, `-Spec-Acceptance`, for clients that log
 headers and never parse bodies.
@@ -129,7 +134,11 @@ multi-model mode (`--models-dir`), where a sweeper (every 5 s, or the memory enf
 limit is set) unloads a model idle past its keep-alive, or past `YUNSHU_MODEL_TTL_SECONDS` when the
 request set none. A model with active requests is never unloaded. A single-model server never frees
 its model, so `keep_alive` is accepted and has nothing to do there. The Ollama layer (`/api/*`)
-does not forward its own `keep_alive` yet.
+forwards its `keep_alive` and the request's `X-Request-Id` (generated when absent, echoed on the
+response) to the OpenAI route, so cancel-by-id and `GET /v1/requests/{id}` work for Ollama clients.
+Its final message carries Ollama's own fields in nanoseconds from the engine stats:
+`total_duration`, `load_duration` (0: the model is resident), `prompt_eval_count` /
+`prompt_eval_duration` (prefill), `eval_count` / `eval_duration` (decode).
 
 `POST /v1/yunshu/warmup {"model": ..., "prompt": "<your system prompt>", "keep_alive": "30m"}` loads
 the model if needed (`load_ms`), runs a one-token generation through the normal path (kernel compile,
@@ -153,12 +162,26 @@ Hints exist for: context too long, out of memory, 401 (which key), unknown model
 validation, and 500 (`yunshu doctor`, the request id). Anthropic-format errors are left exactly as
 the Anthropic spec has them.
 
+### Server-side tools
+
+`x_yunshu.server_tools` on a Messages message (`message_delta` when streaming, top level otherwise) and on a
+Responses object (`response.completed` / the JSON body) reports what the server-side loop did; the SDKs ignore it.
+
+| Field | Meaning |
+|---|---|
+| `rounds` | Generate / run tool / continue rounds the request took. |
+| `round_usage[]` | Per round: `input_tokens` (prefilled), `cache_read_input_tokens` / `cached_tokens` (served from the prefix cache), `output_tokens`. A continuation reads the shared prefix from the cache and prefills only the new turn. |
+| `tools[]` | Per call: `tool`, `kind` (`web_search` / `web_fetch` / `mcp`), `ok`, `error_code`, `ms`, `query`, `provider`, and `hint` when the tool is not configured (for web search: how to set a provider up). |
+
+`GET /v1/models` items carry `yunshu.server_tools` (`web_search.available` / `provider` / `setup`, `web_fetch`,
+`mcp_connector`) so a client or `yunshu launch` knows what the server can run before it sends a request.
+
+`generate: false` on `POST /v1/responses` (and on the WebSocket's `response.create`) is a prewarm: the prompt is
+prefilled into the prefix cache, the response has no output and `x_yunshu.prewarm: true`.
+
 ## Known gaps
 
 | Item | State |
 |---|---|
-| `speculative.drafted/accepted/acceptance_rate` on the upstream single-row speculative lane | `null`; only the round-driver lane counts drafts. The mode is reported. |
-| Progress and engine-side timings on the text-only mlx-lm fast path (`_generate_fast`) | Not wired; those requests get gateway-measured total time and, for streams, TTFT. |
-| Ollama layer forwarding `X-Request-Id` and `keep_alive` to the OpenAI routes | Not done (that layer is being reworked separately). |
-| `x_yunshu` on the Responses and Anthropic routes | Request ids, queue headers and progress comments apply; the body object does not (the response shapes there are stricter). |
 | Non-streaming keep-alive whitespace | Rejected on purpose, see Prefill progress. |
+| `load_duration` on the Ollama layer | Always 0: a model that has to be loaded first is reported by the model-loading status, not per response. |

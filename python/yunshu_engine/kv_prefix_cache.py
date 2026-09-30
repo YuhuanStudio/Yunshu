@@ -24,10 +24,13 @@ import gc
 import hashlib
 import logging
 import threading
+import time
 from copy import copy
 from typing import Any
 
 import mlx.core as mx
+
+from . import settings
 
 logger = logging.getLogger(__name__)
 
@@ -327,6 +330,12 @@ class KVPrefixCache:
         # is replaced by get_no_trim() (boundary-only reuse) and every entry is
         # an exact-length boundary snapshot.
         self._no_trim_mode: bool = False
+        # Per-request provenance of the latest get(): which tier served the prefix
+        # ("hot" full-precision RAM, "warm" 4-bit RAM, "ssd", or "none"), how many
+        # tokens and how long the lookup (SSD reload / dequantize included) took.
+        self.last_lookup: dict = {"tier": "none", "matched": 0, "ms": 0.0}
+        self._n_dequant = 0
+        self._n_ssd_restore = 0
         self._min_prefix = min_prefix_length
         self._eviction_strategy: EvictionStrategy = _make_eviction_strategy(eviction)
         self._priorities: list[int] = []  # Per-entry priority
@@ -355,7 +364,9 @@ class KVPrefixCache:
         # (0.8B 2947→2.0×, 9B 430→7.8×) and only drops it for blazing ones (GLM).
         # _prefill_tps is fed by the engine via note_prefill_tps(); None = unknown
         # (no gate, preserves prior behaviour).
-        self._ssd_prefill_tps_ceil = 4000.0
+        self._ssd_prefill_tps_ceil = float(
+            settings.get("YUNSHU_SSD_CACHE_PREFILL_CEIL_TPS")
+        )
         self._prefill_tps: float | None = None
         # Pre-eviction callback (unused by default)
         self._pre_evict_callback: Any | None = None
@@ -533,10 +544,25 @@ class KVPrefixCache:
         """
         with self._lock:
             self._total_lookups += 1
+            _t0 = time.perf_counter()
+            _dq0, _ssd0 = self._n_dequant, self._n_ssd_restore
             if self._no_trim_mode:
                 result = self._get_no_trim_unlocked(prompt_tokens)
             else:
                 result = self._get_unlocked(prompt_tokens)
+            self.last_lookup = {
+                "tier": (
+                    "none"
+                    if result[0] is None
+                    else "ssd"
+                    if self._n_ssd_restore > _ssd0
+                    else "warm"
+                    if self._n_dequant > _dq0
+                    else "hot"
+                ),
+                "matched": int(result[2]) if result[0] is not None else 0,
+                "ms": round((time.perf_counter() - _t0) * 1000.0, 1),
+            }
             # result is (cached_kv, remaining, matched); count as hit when a
             # cached KV was returned (matched >= min_prefix in the cache paths).
             if result[0] is not None:
@@ -783,6 +809,9 @@ class KVPrefixCache:
                         best_length = 0  # collision — invalidate
 
             if best_length >= self._min_prefix:
+                longer = self._ssd_longer_than_ram(query_blocks, best_length)
+                if longer is not None:
+                    return longer[0], len(prompt_tokens) - longer[1], longer[1]
                 cached = self._caches[best_index]
                 tokens_to_trim = cached_len - best_length
                 try:
@@ -820,28 +849,11 @@ class KVPrefixCache:
         if best_length < self._min_prefix:
             # SSD restore: reassemble the longest run of consecutive
             # SSD-resident prefix blocks into a usable contiguous cache.
-            # Net-negative guard: skip the disk read when even the best-case
-            # restore (all query blocks) is too small to beat a re-prefill.
-            _ssd_skip = (
-                self._ssd_restore_min_tokens > 0
-                and len(query_blocks) * _BLOCK_SIZE < self._ssd_restore_min_tokens
-            )
-            # Prefill-speed auto-gate: for fast-prefill models the disk
-            # restore is slower than re-prefilling (GLM-OCR ~6300 t/s → F-SSD 0.93×).
-            # Skip when observed prefill throughput exceeds the ceiling.
             if (
-                not _ssd_skip
-                and self._prefill_tps is not None
-                and self._prefill_tps > self._ssd_prefill_tps_ceil
+                self._ssd_cache is not None
+                and query_blocks
+                and not self._ssd_gated(query_blocks)
             ):
-                _ssd_skip = True
-                logger.info(
-                    "KV prefix cache SSD restore gated by prefill speed: "
-                    "%.0f t/s > ceil %.0f — re-prefill instead",
-                    self._prefill_tps,
-                    self._ssd_prefill_tps_ceil,
-                )
-            if self._ssd_cache is not None and query_blocks and not _ssd_skip:
                 try:
                     ssd_cache, n_tok = self.restore_prefix_from_ssd(query_blocks)
                 except Exception:
@@ -858,6 +870,9 @@ class KVPrefixCache:
                     return ssd_cache, len(prompt_tokens) - n_tok, n_tok
             return None, len(prompt_tokens), 0
 
+        longer = self._ssd_longer_than_ram(query_blocks, best_length)
+        if longer is not None:
+            return longer[0], len(prompt_tokens) - longer[1], longer[1]
         cached = self._caches[best_index]
         cached_len = cache_length(cached)
         tokens_to_trim = cached_len - best_length
@@ -881,6 +896,64 @@ class KVPrefixCache:
             f"remaining={remaining}"
         )
         return result, remaining, best_length
+
+    def _ssd_gated(self, query_blocks) -> bool:
+        """True when a disk restore would not beat re-prefilling this prompt."""
+        # Net-negative guard: skip the disk read when even the best-case
+        # restore (all query blocks) is too small to beat a re-prefill.
+        if (
+            self._ssd_restore_min_tokens > 0
+            and len(query_blocks) * _BLOCK_SIZE < self._ssd_restore_min_tokens
+        ):
+            return True
+        # Prefill-speed auto-gate: for fast-prefill models the disk restore is
+        # slower than re-prefilling (GLM-OCR ~6300 t/s -> F-SSD 0.93x).
+        if (
+            self._prefill_tps is not None
+            and self._prefill_tps > self._ssd_prefill_tps_ceil
+        ):
+            logger.info(
+                "KV prefix cache SSD restore gated by prefill speed: "
+                "%.0f t/s > ceil %.0f — re-prefill instead",
+                self._prefill_tps,
+                self._ssd_prefill_tps_ceil,
+            )
+            return True
+        return False
+
+    # A longer SSD prefix must beat the RAM prefix by this many tokens to be worth
+    # the disk read (a RAM hit on the shared system prompt must not hide the
+    # conversation's own, much longer, spilled prefix).
+    _SSD_OVER_RAM_MIN_GAIN = 512
+
+    def _ssd_longer_than_ram(self, query_blocks, ram_len: int):
+        """Restore from SSD when it holds a clearly longer prefix than the RAM hit.
+
+        Returns ``(cache, n_tokens)`` or None (keep the RAM hit).
+        """
+        if self._ssd_cache is None or not query_blocks:
+            return None
+        try:
+            if self._ssd_gated(query_blocks):
+                return None
+            run = 0
+            for bh in query_blocks:
+                key = bh.to_bytes(8, "little") if isinstance(bh, int) else bh
+                if not self._ssd_cache.has_block(key):
+                    break
+                run += 1
+            if run * _BLOCK_SIZE < ram_len + self._SSD_OVER_RAM_MIN_GAIN:
+                return None
+            ssd_cache, n_tok = self.restore_prefix_from_ssd(query_blocks[:run])
+        except Exception:
+            logger.debug("SSD probe over a RAM hit failed", exc_info=True)
+            return None
+        if ssd_cache is None or n_tok < ram_len + self._SSD_OVER_RAM_MIN_GAIN:
+            return None
+        logger.info(
+            "KV prefix cache SSD restore beats RAM hit: %d vs %d tokens", n_tok, ram_len
+        )
+        return ssd_cache, n_tok
 
     def _find_prefix_via_hash_chain(self, query_blocks: list[int]) -> tuple[int, int]:
         """Find longest prefix match using hash-chain index.
@@ -1070,6 +1143,7 @@ class KVPrefixCache:
                 nc.keys = dk[..., :off, :]
                 nc.values = dv[..., :off, :]
                 nc.offset = off
+                self._n_dequant += 1
                 return nc
             except Exception:
                 logger.debug("WARM dequantize-on-reuse failed", exc_info=True)
@@ -1696,6 +1770,7 @@ class KVPrefixCache:
                 c.offset = ck.shape[-2]
                 cache_list.append(c)
                 total = ck.shape[-2]
+            self._n_ssd_restore += 1
             return cache_list, total
         except Exception:
             logger.warning("SSD multi-block reassembly failed", exc_info=True)

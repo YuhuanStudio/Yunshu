@@ -88,6 +88,12 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_BATCH_TIMEOUT` | float | 300.0 | Batch API: default per-batch timeout in seconds. |
 | `YUNSHU_ALLOW_LOCAL_FILES` | bool | off | Allow requests to reference any local file path (default: only under YUNSHU_MEDIA_DIR). |
 | `YUNSHU_MEDIA_DIR` | path | unset | Directory local media paths must live under. Unset: $TMPDIR/yunshu_media. |
+| `YUNSHU_FILES_DIR` | path | unset | Directory of the local Files / Batch API store. Unset: ~/.yunshu/files. |
+| `YUNSHU_FILES_MAX_BYTES` | int | 536870912 (512 MiB) | Files API: maximum size of one uploaded file in bytes (default 512 MB). |
+| `YUNSHU_FILES_TTL_DAYS` | float | unset | Files API: delete uploaded files after this many days. Unset: keep forever. |
+| `YUNSHU_CONVERSATIONS_DIR` | path | unset | Directory of the Conversations API store (JSON, one file per conversation). Unset: ~/.yunshu/conversations. |
+| `YUNSHU_CONVERSATION_MAX_ITEMS` | int | 10000 | Conversations API: maximum number of items one conversation may hold. |
+| `YUNSHU_COMPACT_MAX_TOKENS` | int | 2048 | Responses compaction: maximum tokens of the model-written summary. |
 
 ### auth
 
@@ -116,6 +122,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_SSD_CACHE` | bool | off | Text engine: persist prefix KV to SSD. |
 | `YUNSHU_SSD_CACHE_DIR` | path | ~/.cache/yunshu/kv-ssd | Text engine: SSD prefix-cache directory. |
 | `YUNSHU_SSD_CACHE_PRECISION` | `native` \| `int8` | native | Text engine: SSD prefix-cache storage precision: 'native' (KV and recurrent state stored bit-exact; lossless) or 'int8' (per-tensor int8, about half the disk bytes of bf16; lossy on reuse; memory vs quality). |
+| `YUNSHU_SSD_CACHE_PREFILL_CEIL_TPS` | float | 20000.0 | Text engine: skip an SSD prefix restore when the model's observed prefill speed exceeds this (tokens/s): re-prefilling is then as fast as reading the KV back. |
 | `YUNSHU_SSD_CACHE_MAX_GB` | float | 10.0 | Text engine: SSD prefix-cache size cap in GiB. |
 | `YUNSHU_KV_QUANT_BITS` | `auto` \| `off` \| `2` \| `3` \| `4` \| `8` | off | Text engine KV cache quantization (lossy; memory vs quality): 'off' (lossless), 'auto' (8-bit once the KV cache would exceed ~2 GiB), or 2/3/4/8 bits always. |
 
@@ -123,13 +130,14 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `YUNSHU_VLM_APC_MEMORY_GB` | float | 8.0 | VLM runner prefix cache (APC) RAM budget in GiB; 0 disables the prefix cache. |
-| `YUNSHU_VLM_APC_DISK_DIR` | path | unset | Directory for the APC SSD tier; evicted prefixes reload from disk instead of re-prefilling. |
+| `YUNSHU_VLM_APC_MEMORY_GB` | float | unset | VLM runner prefix cache (APC) RAM budget in GiB; 0 disables the prefix cache. Unset: half of the memory left after the model weights and a 16 GiB reserve, between 4 and 32 GiB (128 GB machine, 27B model: 32). A 27B checkpoint costs about 130 KiB per cached token. |
+| `YUNSHU_VLM_APC_DISK` | bool | on | APC SSD tier: prefix checkpoints that RAM evicts (and, at shutdown, those still resident) are written to disk and read back instead of re-prefilling (bit-exact states, lossless; a 27B checkpoint reloads about 20x faster than it prefills). Set 0 to keep the prefix cache in RAM only. |
+| `YUNSHU_VLM_APC_DISK_DIR` | path | unset | Directory of the APC SSD tier. Unset: ~/.yunshu/cache/apc (internal disk). Put it on a fast volume to keep the internal disk clean. |
 | `YUNSHU_KV_PRECISION` | `bf16` \| `int8` | bf16 | KV cache precision of the Qwen3.5-family runner's shared decode batch: 'bf16' (lossless) or 'int8' (int8 codes + one fp16 scale per 32-dim group: ~0.53x the KV memory and read bandwidth for a small attention error; memory vs quality). A lone request and the speculative lane stay bf16. Applies to models with Qwen3.5-family attention (the ragged KV layout). |
-| `YUNSHU_VLM_APC_DISK_GB` | float | 64.0 | Size cap of the APC SSD tier in GiB. |
+| `YUNSHU_VLM_APC_DISK_GB` | float | 64.0 | Size cap of the APC SSD tier in GiB (oldest shards are deleted past it; 0 = uncapped). A 27B checkpoint costs about 130 KiB per token, so 64 GiB holds about 500K tokens. |
 | `YUNSHU_VLM_MAX_IMAGE_BYTES` | int | 26214400 (25 MiB) | Largest image a request may reference by URL, in bytes. |
 | `YUNSHU_VLM_INSECURE_SSL` | bool | off | Retry image downloads without TLS verification when verification fails. |
-| `YUNSHU_ROUND_PREFILL_CHUNK` | int | 512 | Round driver: prompt tokens per prefill span. A decoding request only steps between prefill forwards, so smaller spans keep it running next to a long prompt (Qwen3.8-27B, M5 Max, one MTP row beside an 8K prompt: 512 -> 6 tok/s, 128 -> 24 tok/s, ~20% lower prefill speed). Spans are fixed per prompt, so output stays independent of what else is running; prompts prefilled with different spans are each self-consistent but not bit-identical to each other. |
+| `YUNSHU_ROUND_PREFILL_CHUNK` | int | 512 | Round driver: prompt tokens per prefill span. A decoding request only steps between prefill forwards, so smaller spans keep it running next to a long prompt (Qwen3.8-27B, M5 Max, one MTP row beside an 8K prompt: 512 -> 6 tok/s, 128 -> 24 tok/s, ~20% lower prefill speed). Atoms are fixed per prompt (idle steps merge consecutive full atoms without changing any bit), so output stays independent of what else is running; prompts prefilled with different chunk sizes are each self-consistent but not bit-identical to each other. |
 
 ### speculative
 
@@ -190,6 +198,27 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_MCP_CONFIG` | path | unset | MCP client config file (JSON/YAML) listing tool servers. |
 | `YUNSHU_MCP_SERVERS` | json | unset | MCP tool servers as a JSON array (alternative to YUNSHU_MCP_CONFIG). |
 
+### server-tools
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `YUNSHU_WEB_SEARCH_PROVIDER` | `auto` \| `none` \| `searxng` \| `brave` \| `tavily` \| `exa` | auto | Search backend for the server-side web_search tool (Anthropic web_search_*, OpenAI Responses web_search). 'auto' picks the first configured of searxng, brave, tavily, exa; 'none' disables. Unconfigured: requests get the API's 'unavailable' error with a hint. |
+| `YUNSHU_SEARXNG_URL` | str | unset | Base URL of a self-hosted SearXNG instance (JSON output enabled), e.g. http://127.0.0.1:8080. The privacy-friendly default recommendation. |
+| `YUNSHU_BRAVE_API_KEY` | str | unset | Brave Search API key. |
+| `YUNSHU_TAVILY_API_KEY` | str | unset | Tavily API key. |
+| `YUNSHU_EXA_API_KEY` | str | unset | Exa API key. |
+| `YUNSHU_WEB_SEARCH_RESULTS` | int | 5 | Results returned per web_search call. |
+| `YUNSHU_WEB_FETCH` | bool | on | Serve the server-side web_fetch tool (needs no provider). Off: web_fetch requests get an 'unavailable' error. |
+| `YUNSHU_WEB_FETCH_ALLOW_PRIVATE` | bool | off | Let web_fetch reach private, loopback and link-local addresses. Off (default) blocks them (SSRF protection), including after redirects and DNS resolution. |
+| `YUNSHU_WEB_FETCH_MAX_BYTES` | int | 2000000 | Largest response body web_fetch downloads. |
+| `YUNSHU_WEB_FETCH_TIMEOUT` | float | 20.0 | Seconds web_fetch waits for a page. |
+| `YUNSHU_WEB_FETCH_MAX_TEXT_CHARS` | int | 40000 | Extracted page text handed to the model is cut to this many characters (a request's max_content_tokens can lower it). |
+| `YUNSHU_MCP_CONNECTOR` | bool | on | Serve the MCP connector: Anthropic mcp_servers and OpenAI Responses {type: mcp} tools are executed by this server, which connects to the named MCP servers over streamable HTTP / SSE. |
+| `YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE` | bool | on | Let the MCP connector reach private and loopback MCP servers (local tool servers are the common case). Off: only public addresses. |
+| `YUNSHU_MCP_CONNECTOR_TIMEOUT` | float | 30.0 | Seconds an MCP connector call (initialize, tools/list, tools/call) may take. |
+| `YUNSHU_SERVER_TOOL_MAX_ITERATIONS` | int | 8 | Most generate, run-tool, continue rounds one request may take. |
+| `YUNSHU_MODEL_ALIASES` | json | unset | Multi-model mode: map the model names agents ask for (claude-sonnet-4-5, opus, gpt-5) onto a served model, as a JSON object {pattern: served model id}; patterns are exact names, prefix* or * (first match wins; a real model name always wins). Single-model mode answers to every name already. |
+
 ### observability
 
 | Setting | Type | Default | Description |
@@ -210,7 +239,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | Setting | Type | Default | Description | Decided by | Added |
 |---|---|---|---|---|---|
 | `YUNSHU_SPEC_TREE` | `off` \| `tree` | off | Qwen3.5-family single-request speculative lane: 'tree' verifies a draft tree of up to 8 rows (MTP head or DFlash2 lattice, each row with single-step arithmetic); 'off' keeps upstream's rounds. Greedy output equals plain decode in both. Paused: no measured win, long-context attention overhead unresolved. | 27B server, off vs tree: bench_context_batch novel_en and the default corpus at 1K/8K/32K/131K; delete the tree code unless it wins | 2026-09-29 |
-| `YUNSHU_ROUND_DRIVER` | bool | off | Dense Qwen3.5-family VLMs: Yunshu's round driver serves text requests (packed forwards over every decoding row's window, alternating with prefill steps that batch several prompts' fixed chunks; row-invariant lane projections; MTP drafts for every greedy row with cost-aware per-row depth; see docs/guides/ROUND_DRIVER.md). Off: upstream BatchGenerator shared batch + single-request speculative lane. Image prompts, APC reuse, int8 KV and MoE stay on the upstream path either way. | 27B idle GPU, off vs on: sweep_round_driver.py parity, bench_batch_spec-style rows 1/2/4/8, probe_concurrency, bench_engine_matrix, bench_context_batch b1-b8 + 32K/131K, bench_mixed_load 16K/32K, MMLU-Pro 300 b8 (scripts/research/validate_round_driver.sh); if it wins it becomes the path (with APC / images moved) and this flag, the upstream shared batch and the spec lane are deleted | 2026-09-29 |
+| `YUNSHU_ROUND_DRIVER` | bool | off | Dense Qwen3.5-family VLMs: Yunshu's round driver serves text requests (packed forwards over every decoding row's window, alternating with prefill steps that batch several prompts' fixed chunks; row-invariant lane projections; MTP drafts for every greedy row with cost-aware per-row depth; see docs/guides/ROUND_DRIVER.md). Off: upstream BatchGenerator shared batch + single-request speculative lane. APC prefix reuse (exact hybrid checkpoints) runs in the driver; image prompts, int8 KV and MoE stay on the upstream path either way. | 27B idle GPU, off vs on: sweep_round_driver.py parity, bench_batch_spec-style rows 1/2/4/8, probe_concurrency, bench_engine_matrix, bench_context_batch b1-b8 + 32K/131K, bench_mixed_load 16K/32K, MMLU-Pro 300 b8 (scripts/research/validate_round_driver.sh); if it wins it becomes the path (with APC / images moved) and this flag, the upstream shared batch and the spec lane are deleted | 2026-09-29 |
 | `YUNSHU_MTP_ROW_EXACT` | bool | off | Qwen3.5-family runner: oMLX row-exact verify (verify rows bit-identical to one-row decode) instead of batch-invariant kernels. | sweep_mtp_depth parity at long contexts vs decode tok/s (currently 30-50% slower than batch-invariant) | 2026-09-28 |
 | `YUNSHU_ENGINE_LOOP` | bool | off | Text models: EngineCore continuous-batching loop instead of the single-request fast path. | unify text-only models onto the batch runner vs keeping this loop (concurrency probe on a text model) | 2026-06-30 |
 | `YUNSHU_OVERLAP` | `''` \| `cpu_gpu` \| `two_batch` | unset | Text engine loop: overlap CPU and GPU work ('cpu_gpu') or split a batch into two overlapping halves ('two_batch'). | concurrency probe tok/s on a text model with the engine loop; deleted with the loop if text models move to the runner | 2026-06-30 |

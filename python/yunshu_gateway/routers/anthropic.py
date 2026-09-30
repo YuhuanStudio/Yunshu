@@ -29,7 +29,7 @@ _TRUNCATE_KEEP = 512 * 1024
 import contextlib
 import os
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from yunshu_engine.paths import stage_media_file
 from yunshu_engine.tool_arguments import coerce_tool_calls
@@ -37,6 +37,7 @@ from yunshu_engine.tool_call_streamer import ToolCallStreamer
 from yunshu_engine.tool_format import parse_tool_output, tool_formats
 
 from ..engine import get_engine
+from ..error_envelope import EngineStreamError
 from ..streaming import (
     run_with_disconnect_guard,
     with_sse_keepalive,
@@ -180,7 +181,11 @@ class AnthropicTool(BaseModel):
     types like ``web_search_20250305`` but user-defined tools have no type.
     """
 
-    name: str
+    # Server tools (web_search_*, web_fetch_*) and mcp_toolset carry extra fields
+    # (max_uses, allowed_domains, user_location, mcp_server_name, ...); keep them.
+    model_config = ConfigDict(extra="allow")
+
+    name: str = ""  # mcp_toolset has no name
     description: str | None = None
     input_schema: dict | None = None
     type: str | None = None  # Server-side tools set this; user tools omit it
@@ -217,6 +222,14 @@ class AnthropicMessagesRequest(BaseModel):
     metadata: dict | None = None
     tools: list[AnthropicTool] | None = None
     tool_choice: dict | str | None = None
+    # MCP connector (beta mcp-client): servers this gateway connects to and runs tools on.
+    mcp_servers: list[dict] | None = None
+    # Sent by Claude Code and the SDKs; accepted so the request validates.
+    output_config: dict | None = None
+    output_format: dict | None = None  # beta structured outputs (json_schema)
+    context_management: dict | None = None
+    service_tier: str | None = None
+    container: str | dict | None = None
 
     # ── Yunshu-extended fields (forwarded to engine) ──
     lora_adapter: str | None = None
@@ -286,9 +299,11 @@ class AnthropicMessagesRequest(BaseModel):
                     )
             elif thinking_type == "disabled":
                 pass  # Explicitly disabling thinking is valid
+            elif thinking_type == "adaptive":
+                pass  # the model decides how much to think (Claude Code's default)
             elif thinking_type is not None:
                 raise ValueError(
-                    f"thinking.type must be 'enabled' or 'disabled', got '{thinking_type}'"
+                    f"thinking.type must be 'enabled', 'disabled' or 'adaptive', got '{thinking_type}'"
                 )
         # Validate response_format type if provided
         if self.response_format is not None:
@@ -332,6 +347,13 @@ def _resolve_json_schema(req) -> dict | str | None:
     js = getattr(req, "json_schema", None)
     if js is not None:
         return js
+    # Anthropic structured outputs: output_config.format (GA) or output_format (beta
+    # structured-outputs-2025-11-13), both {"type": "json_schema", "schema": {...}}.
+    _of = (getattr(req, "output_config", None) or {}).get("format") or getattr(
+        req, "output_format", None
+    )
+    if isinstance(_of, dict) and _of.get("type") == "json_schema" and _of.get("schema"):
+        return _of["schema"]
     # Grammar constraint (regex, choice, CFG) — only if actually provided
     grammar = getattr(req, "grammar", None)
     if grammar is not None and isinstance(grammar, (dict, str)):
@@ -455,6 +477,10 @@ def _convert_anthropic_messages(
     for m in messages_input:
         content = m.content
         role = m.role
+        _n0 = len(intermediate)
+        _thinking_text = ""
+        if role == "assistant" and isinstance(content, list):
+            content, _thinking_text = _split_thinking(content)
 
         if not isinstance(content, list):
             # Simple string or None content — no block processing needed
@@ -661,7 +687,52 @@ def _convert_anthropic_messages(
             content_text = _extract_text_from_content(content)
             intermediate.append({"role": role, "content": content_text})
 
+        # Earlier reasoning goes back as ``reasoning_content`` (the field chat templates
+        # read), not as visible text: Claude Code and the SDKs send thinking blocks back
+        # verbatim, and flattening them into the reply confused the model and re-billed them.
+        if _thinking_text and len(intermediate) > _n0:
+            intermediate[_n0]["reasoning_content"] = _thinking_text
+
     return intermediate, temp_files
+
+
+def _split_thinking(content: list) -> tuple[list, str]:
+    """Separate ``thinking`` blocks (and drop ``redacted_thinking``) from an assistant turn."""
+    keep: list = []
+    think: list[str] = []
+    for b in content:
+        t = b.get("type") if isinstance(b, dict) else None
+        if t == "thinking":
+            if b.get("thinking"):
+                think.append(b["thinking"])
+        elif t != "redacted_thinking":
+            keep.append(b)
+    return keep, "\n".join(think)
+
+
+def _thinking_switches(req) -> tuple[bool | None, int | None]:
+    """Anthropic ``thinking`` -> (enable_thinking, thinking_budget).
+
+    ``enabled`` forces thinking on with its budget, ``disabled`` forces it off, and
+    ``adaptive`` (Claude Code's default) or no field leaves the model's template default.
+    """
+    th = req.thinking if isinstance(req.thinking, dict) else None
+    if not th:
+        return None, None
+    kind = th.get("type")
+    if kind == "enabled":
+        return True, th.get("budget_tokens")
+    if kind == "disabled":
+        return False, None
+    return None, None
+
+
+def _effective_effort(req) -> str | None:
+    """``reasoning_effort`` (Yunshu extension) or Anthropic's ``output_config.effort``."""
+    if req.reasoning_effort:
+        return req.reasoning_effort
+    eff = (req.output_config or {}).get("effort") if req.output_config else None
+    return str(eff) if eff else None
 
 
 def _convert_image_block(
@@ -879,10 +950,129 @@ def _try_parse_tool_call_delta(text: str) -> list[dict] | None:
     return calls or None
 
 
+def _tool_choice_is_auto(tc) -> bool:
+    return tc in (None, "auto") or (isinstance(tc, dict) and tc.get("type") == "auto")
+
+
+def _inject_tool_prompt(messages: list[dict], tool_prompt: str) -> list[dict]:
+    """Append the generic tool instructions to the system message (or add one)."""
+    if messages and messages[0].get("role") == "system":
+        messages[0]["content"] += tool_prompt
+    else:
+        messages.insert(0, {"role": "system", "content": tool_prompt.strip()})
+    return messages
+
+
+def _apply_native_tools(req, engine) -> bool:
+    """Hand the tool definitions to a chat template that renders them itself.
+
+    Qwen3.x's template writes tools and calls in its own format (``<tool_call><function=...>``);
+    the injected prompt asks for JSON, and a model caught between the two sometimes emits neither
+    (measured: ``{"function": "WebSearch", ...}`` leaking as text). The VLM engine takes ``tools=``;
+    BatchedEngine reads the per-request contextvar. Returns False when the engine cannot, and the
+    generic prompt is injected instead.
+    """
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": t.name,
+                "description": t.description or "",
+                "parameters": t.input_schema or {"type": "object", "properties": {}},
+            },
+        }
+        for t in (req.tools or [])
+    ]
+    check = getattr(engine, "supports_native_tools", None)
+    try:
+        if callable(check) and check():
+            req._native_tools = tools
+            return True
+    except Exception:
+        logger.debug("native tool support check failed", exc_info=True)
+    try:
+        from yunshu_engine.batched_engine import (
+            _REQUEST_TOOLS,
+            BatchedEngine,
+            _template_supports_tools,
+        )
+
+        if isinstance(engine, BatchedEngine):
+            if _template_supports_tools(getattr(engine, "_tokenizer", None)):
+                _REQUEST_TOOLS.set(tools)
+                return True
+            _REQUEST_TOOLS.set(None)
+    except Exception:
+        logger.debug(
+            "native tool decision failed; using prompt injection", exc_info=True
+        )
+    return False
+
+
+def _native_kw(req) -> dict:
+    tools = getattr(req, "_native_tools", None)
+    return {"tools": tools} if tools else {}
+
+
+def _keeps_mid_system(requested_model: str | None) -> bool:
+    """Whether the loaded model's message adapter keeps mid-conversation system
+    messages in place (see ``keeps_mid_conversation_system``)."""
+    from yunshu_engine.message_adapter import keeps_mid_conversation_system
+
+    engine = get_engine()
+    name = getattr(engine, "model_name", None) if engine is not None else None
+    return keeps_mid_conversation_system(
+        name if isinstance(name, str) else requested_model
+    )
+
+
 @router.post("/messages", response_model=None)
 async def create_message(req: AnthropicMessagesRequest, request: Request):
-    """Anthropic Messages API endpoint."""
+    """Anthropic Messages API endpoint.
+
+    Requests that declare server tools (web_search / web_fetch) or MCP servers run the
+    generate -> execute -> continue loop in ``server_tools.anthropic_loop``, which calls this
+    handler again for each generation round with the server tools rewritten as plain
+    functions (so the recursion takes the ordinary path below).
+    """
     _check_permission(request, "can_infer")
+    from ..anthropic_client_tools import fill_client_tool_schemas
+    from ..files_store import FileRefError, has_file_refs, resolve_file_refs
+
+    # bash_* / text_editor_* / memory_* are declared by type only; the model needs their schema.
+    fill_client_tool_schemas(req.tools)
+    from ..server_tools.anthropic_loop import create_with_server_tools, has_server_tools
+
+    # Files API references ({"source": {"type": "file", "file_id": ...}}) become inline sources.
+    if has_file_refs([m.content for m in req.messages]) or has_file_refs(req.system):
+        try:
+            req = req.model_copy(
+                update={
+                    "messages": [
+                        AnthropicMessage(
+                            role=m.role, content=resolve_file_refs(m.content)
+                        )
+                        for m in req.messages
+                    ],
+                    "system": resolve_file_refs(req.system),
+                }
+            )
+        except FileRefError as exc:
+            return JSONResponse(
+                status_code=exc.status,
+                content={
+                    "type": "error",
+                    "error": {
+                        "type": "not_found_error"
+                        if exc.status == 404
+                        else "invalid_request_error",
+                        "message": exc.message,
+                    },
+                },
+            )
+
+    if has_server_tools(req):
+        return await create_with_server_tools(req, request, create_message)
     # Build messages list. The canonical system text (top-level `system` field +
     # any role="system" lifted from messages[]) is prepended once AFTER the lift
     # block below — do NOT add it here, or it gets lifted back out and the merge
@@ -914,12 +1104,25 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     # Anthropic API semantics: role="system" entries in messages[] should be
     # lifted into the canonical system field, not left in the messages list.
     # This matches omlx behavior and ensures correct cache key computation.
+    # Only the leading ones for families whose adapter keeps later system messages in
+    # place (Qwen): Claude Code sends a per-turn note as a trailing system message, and
+    # hoisting it into the system prompt rewrote the prompt start every turn (0% reuse).
     _system_parts: list[str] = []
     _filtered_messages: list[dict] = []
+    _in_place = _keeps_mid_system(req.model)
+    _lead = True
     for msg in messages:
-        if msg.get("role") == "system":
-            _system_parts.append(msg.get("content", ""))
+        if msg.get("role") == "system" and (_lead or not _in_place):
+            _c = msg.get("content", "")
+            # With image blocks anywhere in the request every message's content is a list
+            # of parts (Claude Code's mid-conversation system reminders included).
+            if isinstance(_c, list):
+                _c = "\n".join(
+                    p.get("text", "") if isinstance(p, dict) else str(p) for p in _c
+                )
+            _system_parts.append(_c or "")
         else:
+            _lead = False
             _filtered_messages.append(msg)
     messages = _filtered_messages
     # Canonical system text = top-level `system` field, then any lifted
@@ -1093,10 +1296,13 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
             req._forced_tool_grammar = _forced_tool_grammar
 
         if tool_prompt:
-            if messages and messages[0].get("role") == "system":
-                messages[0]["content"] += tool_prompt
+            if _tool_choice_is_auto(req.tool_choice):
+                # Decided after the engine is known: a chat template that renders `tools` itself
+                # (Qwen3.x) gets the definitions natively, in the model's own tool-call format;
+                # otherwise this generic prompt is injected.
+                req._tool_prompt_pending = tool_prompt
             else:
-                messages.insert(0, {"role": "system", "content": tool_prompt.strip()})
+                messages = _inject_tool_prompt(messages, tool_prompt)
 
     # Resolve engine
     try:
@@ -1131,6 +1337,10 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
                 "error": {"type": "invalid_request_error", "message": e.detail},
             },
         )
+
+    _pending_tools = getattr(req, "_tool_prompt_pending", "")
+    if _pending_tools and not _apply_native_tools(req, engine):
+        messages = _inject_tool_prompt(messages, _pending_tools)
 
     # Reject prompts over the context window (400) or too large to prefill (413),
     # before we attempt generation (chat.py). Covers stream +
@@ -1340,8 +1550,7 @@ async def _non_stream_batched(
     """Non-streaming response via BatchedEngine."""
     from fastapi.responses import JSONResponse
 
-    enable_thinking = req.thinking and req.thinking.get("type") == "enabled"
-    budget_tokens = req.thinking.get("budget_tokens") if req.thinking else None
+    enable_thinking, budget_tokens = _thinking_switches(req)
     _logit_bias = _convert_logit_bias(req)
 
     try:
@@ -1363,7 +1572,7 @@ async def _non_stream_batched(
             seed=req.seed,
             enable_thinking=enable_thinking,
             thinking_budget=budget_tokens,
-            reasoning_effort=req.reasoning_effort,
+            reasoning_effort=_effective_effort(req),
             stop_token_ids=req.stop_token_ids,
             spec_decode=req.spec_decode,
             xtc_probability=req.xtc_probability,
@@ -1597,11 +1806,11 @@ async def _non_stream_legacy(
     from fastapi.responses import JSONResponse
 
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
-    enable_thinking = req.thinking and req.thinking.get("type") == "enabled"
-    budget_tokens = req.thinking.get("budget_tokens") if req.thinking else None
+    enable_thinking, budget_tokens = _thinking_switches(req)
     _logit_bias = _convert_logit_bias(req)
     try:
         _gen_coro = engine.generate(
+            **_native_kw(req),
             prompt=messages,
             max_tokens=req.max_tokens,
             temperature=req.temperature,
@@ -1619,7 +1828,7 @@ async def _non_stream_legacy(
             seed=req.seed,
             enable_thinking=enable_thinking,
             thinking_budget=budget_tokens,
-            reasoning_effort=req.reasoning_effort,
+            reasoning_effort=_effective_effort(req),
             stop_token_ids=req.stop_token_ids,
             spec_decode=req.spec_decode,
             xtc_probability=req.xtc_probability,
@@ -1836,8 +2045,7 @@ async def _stream_anthropic(
     input_tokens = 0
     output_tokens = 0
     cached_tokens = 0
-    enable_thinking = req.thinking and req.thinking.get("type") == "enabled"
-    budget_tokens = req.thinking.get("budget_tokens") if req.thinking else None
+    enable_thinking, budget_tokens = _thinking_switches(req)
     _logit_bias = _convert_logit_bias(req)
     # tool_choice="none" sets _suppress_tools (see above): the model is told not to
     # call tools and its prompt is emptied of them, so streaming must NOT extract
@@ -1977,7 +2185,7 @@ async def _stream_anthropic(
                 seed=req.seed,
                 enable_thinking=enable_thinking,
                 thinking_budget=budget_tokens,
-                reasoning_effort=req.reasoning_effort,
+                reasoning_effort=_effective_effort(req),
                 stop_token_ids=req.stop_token_ids,
                 spec_decode=req.spec_decode,
                 xtc_probability=req.xtc_probability,
@@ -1995,6 +2203,8 @@ async def _stream_anthropic(
                 # Use engine's current_state (token-level tracking) for
                 # thinking routing — more accurate than text-level ThinkingParser
                 # which may miss model-specific tags like Qwen3.5's special tokens.
+                if getattr(output, "error", None):
+                    raise EngineStreamError(str(output.error))
                 _is_reasoning = getattr(output, "current_state", None) == "reasoning"
                 _token_text = output.new_text
 
@@ -2246,6 +2456,7 @@ async def _stream_anthropic(
                             yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _token_text}})}\n\n"
         else:
             async for output in engine.generate_stream(
+                **_native_kw(req),
                 prompt=messages,
                 max_tokens=req.max_tokens,
                 temperature=req.temperature,
@@ -2263,7 +2474,7 @@ async def _stream_anthropic(
                 seed=req.seed,
                 enable_thinking=enable_thinking,
                 thinking_budget=budget_tokens,
-                reasoning_effort=req.reasoning_effort,
+                reasoning_effort=_effective_effort(req),
                 stop_token_ids=req.stop_token_ids,
                 spec_decode=req.spec_decode,
                 xtc_probability=req.xtc_probability,
@@ -2278,6 +2489,8 @@ async def _stream_anthropic(
                 lora_adapter=lora_adapter,
                 kv_cache_breakpoints=kv_cache_breakpoints,
             ):
+                if getattr(output, "error", None):
+                    raise EngineStreamError(str(output.error))
                 if (
                     hasattr(output, "prompt_tokens")
                     and output.prompt_tokens
@@ -2606,7 +2819,7 @@ async def _stream_anthropic(
             "error": {"type": "overloaded_error", "message": "Out of GPU memory"},
         }
         yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode()
-    except Exception:
+    except Exception as _stream_exc:
         logger.error("Anthropic streaming error", exc_info=True)
         # Emit message_start if it was never sent (error before first engine output)
         if not _message_start_emitted:
@@ -2641,7 +2854,12 @@ async def _stream_anthropic(
         yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': _exc_stop_reason, 'stop_sequence': None}, 'usage': _exc_delta_usage})}\n\n".encode()
         error_event = {
             "type": "error",
-            "error": {"type": "api_error", "message": "Internal server error"},
+            "error": {
+                "type": "api_error",
+                "message": str(_stream_exc)
+                if isinstance(_stream_exc, EngineStreamError)
+                else "Internal server error",
+            },
         }
         yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode()
     finally:

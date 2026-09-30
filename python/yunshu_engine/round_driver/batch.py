@@ -58,7 +58,10 @@ class Slots:
 
     def alloc(self) -> int:
         if not self.free:
-            S2 = max(1, self.S * 2)
+            # doubling while buffers are small; one slot at a time once a
+            # slot is large (every slot is as long as the longest row)
+            big = self.cap > 4096
+            S2 = self.S + 1 if big else max(1, self.S * 2)
             self._resize(S2, self.cap)
             self.free = list(range(self.S, S2))[::-1]
             self.S = S2
@@ -267,6 +270,9 @@ class DecodeBatch:
         if not keep:
             self.state = [None] * len(self.linear)
             self.conv = [None] * len(self.linear)
+            # an idle batch holds no KV: the next rows size the buffers to
+            # themselves, not to the longest row ever served
+            self.slots = Slots(len(self.linear))
             return
         sel = mx.array(keep, dtype=mx.int32)
         for i, lin in enumerate(self.linear):
@@ -299,7 +305,7 @@ class DecodeBatch:
         lens_arr = mx.array(lens, dtype=mx.int32)
         toks = np.array([t for w in windows for t in w], dtype=np.int32)
         x = model.embed_tokens(mx.array(toks))
-        hist: dict[int, tuple] = {}
+        hist: dict[int, tuple] = {}  # per GDN layer: what a partial commit replays
         for i, layer in enumerate(model.layers):
             xn = layer.input_layernorm(x)
             if self.linear[i]:
@@ -338,11 +344,15 @@ class DecodeBatch:
         q = (inv**2) * mx.fast.rms_norm(q, None, 1e-6)
         k = inv * mx.fast.rms_norm(k, None, 1e-6)
         gate, beta = _compute_g_beta(g.A_log, a, b, g.dt_bias)
-        y, self.state[i], h = gated_delta_rows(
-            q, k, v, gate, beta, self.state[i], lens_arr
+        # No per-token state history: a row that keeps part of its window
+        # replays its first tokens from the state before this call (the
+        # history would be T - 1 states per row and layer: gigabytes at 8 rows).
+        prev = self.state[i]
+        y, self.state[i], _ = gated_delta_rows(
+            q, k, v, gate, beta, prev, lens_arr, save_hist=False
         )
-        if h is not None:
-            hist[i] = (h, conv_in)
+        if T > 1:
+            hist[i] = (prev, q, k, v, gate, beta, conv_in)
         z = z.reshape(B, T, -1, g.head_v_dim)
         return g.out_proj(pack.unpad(g.norm(y, z).reshape(B, T, -1)))
 
@@ -355,13 +365,17 @@ class DecodeBatch:
         lens = last["lens"]
         for r, u in zip(self.rows, used, strict=True):
             r.n += u
-        part = [b for b, (u, w) in enumerate(zip(used, lens, strict=True)) if u < w]
-        if not part:
+        if all(u == w for u, w in zip(used, lens, strict=True)):
             return
-        rows = mx.array(part, dtype=mx.int32)
-        keep = mx.array([used[b] for b in part], dtype=mx.int32)
-        for i, (h, conv_in) in last["hist"].items():
-            self.state[i][rows] = h[rows, keep - 1]
+        # Rows that verified fewer positions than they ran: every row's state
+        # is recomputed to its kept length by the same kernel from the state
+        # before the step (a row that kept its whole window gets the same bits
+        # again), the conv window is read from its kept position.
+        keep = mx.array(used, dtype=mx.int32)
+        rows = mx.arange(len(used))[:, None]
+        for i, (prev, q, k, v, gate, beta, conv_in) in last["hist"].items():
+            _, self.state[i], _ = gated_delta_rows(
+                q, k, v, gate, beta, prev, keep, save_hist=False
+            )
             K1 = self.conv[i].shape[1]
-            pos = keep[:, None] + mx.arange(K1)[None, :]
-            self.conv[i][rows] = conv_in[rows[:, None], pos]
+            self.conv[i] = conv_in[rows, keep[:, None] + mx.arange(K1)[None, :]]

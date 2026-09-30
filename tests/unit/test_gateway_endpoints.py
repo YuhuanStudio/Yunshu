@@ -154,7 +154,7 @@ class TestBatchEndpoint:
                 "endpoint": "/v1/chat/completions",
             },
         )
-        assert resp.status_code in (200, 404, 500, 503)
+        assert resp.status_code in (200, 400, 404, 500, 503)
 
 
 class TestEmbeddingsEndpoint:

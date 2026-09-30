@@ -12,16 +12,18 @@
 # In-process (scripts/research/sweep_round_driver.py; parity and rows apart):
 #   parity-1k      alone / batch / staggered, MTP on and off token for token
 #   rows-1k        rows 1 2 4 8, with and without drafts
-#   parity-32k     the same at 32K context (two prompts)
+#   parity-32k-a/b the same at 32K context (one prompt each)
 #   rows-32k-a     rows 1 4 at 32K
 #   rows-32k-b     rows 8 at 32K
 #   decode-anatomy per-step time split at 1 / 8 rows (probe_driver_decode.py)
 # Server (port 18990..; YUNSHU_ROUND_DRIVER=0 / 1):
 #   server-rd{0,1}-probe    probe_concurrency n=8 + bench_engine_matrix (34/34)
-#   server-rd{0,1}-context  bench_context_batch b2 b4 b8 at 1K and 32K
-#   server-rd{0,1}-mixed    bench_mixed_load (4 streams + a 16K prompt)
+#   server-rd{0,1}-ctx1k / ctx32k   bench_context_batch: b1, then b2 b4 b8 at that length
+#   server-rd{0,1}-ctx131k-{1,2,4}  bench_context_batch at 131K (b8 x 131K exceeds a 20 minute job)
+#   server-rd{0,1}-mixed16 / mixed32  bench_mixed_load (4 streams + a 16K / 32K prompt)
+#   server-rd{0,1}-repeat   probe_repeat_doc: the same 8K / 32K prompt cold, repeated, and with another question
 # Accuracy:
-#   mmlu-<k>   MMLU-Pro slice k (0..2 = questions 100k .. 100k+99), b8, driver on
+#   mmlu-<k> / mmlu0-<k>  MMLU-Pro slice k (0..2 = questions 100k .. 100k+99), b8, driver on / off
 #
 # M (the Qwen3.8-27B checkpoint dir) comes from the environment or
 # scripts/research/local.env (gitignored). Results go to $OUT.
@@ -37,9 +39,13 @@ export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 mkdir -p $OUT
 log(){ echo "$(date +%H:%M:%S) $*"; }
 
-PHASES=(parity-1k rows-1k parity-32k rows-32k-a rows-32k-b decode-anatomy
-  server-rd0-probe server-rd1-probe server-rd0-context server-rd1-context
-  server-rd0-mixed server-rd1-mixed mmlu-0 mmlu-1 mmlu-2)
+PHASES=(parity-1k parity-32k-a parity-32k-b rows-1k rows-32k-a rows-32k-b decode-anatomy
+  server-rd0-probe server-rd1-probe
+  server-rd0-ctx1k server-rd1-ctx1k server-rd0-ctx32k server-rd1-ctx32k
+  server-rd0-ctx131k-1 server-rd1-ctx131k-1 server-rd0-ctx131k-2 server-rd1-ctx131k-2
+  server-rd0-ctx131k-4 server-rd1-ctx131k-4
+  server-rd0-mixed16 server-rd1-mixed16 server-rd0-mixed32 server-rd1-mixed32
+  server-rd0-repeat server-rd1-repeat mmlu-0 mmlu-1 mmlu-2 mmlu0-0 mmlu0-1 mmlu0-2)
 
 wait_ready(){ for i in $(seq 1 300); do curl -s -m 2 $URL/health/ready 2>/dev/null | grep -q '"ready":true' && return 0; kill -0 $1 2>/dev/null || return 1; sleep 2; done; return 1; }
 stop(){ kill -INT $1 2>/dev/null; for i in $(seq 1 30); do kill -0 $1 2>/dev/null || return; sleep 1; done; kill $1 2>/dev/null; }
@@ -59,16 +65,17 @@ run_phase(){
   case $1 in
     parity-1k)  sweep --phase parity --rows 4 --parity-rows 8 --output $OUT/parity-1k.jsonl ;;
     rows-1k)    sweep --phase rows --rows 1 2 4 8 --output $OUT/rows-1k.jsonl ;;
-    parity-32k) sweep --phase parity --rows 2 --parity-rows 2 --context 32768 --output $OUT/parity-32k.jsonl ;;
+    parity-32k-a) sweep --phase parity --rows 1 --parity-rows 1 --warm-rows 1 --context 32768 --output $OUT/parity-32k.jsonl ;;
+    parity-32k-b) sweep --phase parity --rows 1 --parity-rows 1 --warm-rows 1 --skip 1 --context 32768 --output $OUT/parity-32k.jsonl ;;
     rows-32k-a) sweep --phase rows --rows 1 4 --context 32768 --output $OUT/rows-32k.jsonl ;;
     rows-32k-b) sweep --phase rows --rows 8 --context 32768 --output $OUT/rows-32k.jsonl ;;
     decode-anatomy)
-      for r in 1 8; do
+      for r in 1 4 8; do
         $PY scripts/research/probe_driver_decode.py $M --rows $r --no-mtp --output $OUT/anatomy.jsonl
         $PY scripts/research/probe_driver_decode.py $M --rows $r --output $OUT/anatomy.jsonl
       done ;;
     server-rd?-*)
-      rd=${1#server-rd}; rd=${rd%%-*}; what=${1##*-}
+      rd=${1#server-rd}; rd=${rd%%-*}; what=${1#server-rd?-}
       PHASE=$1
       serve $rd || { log "server rd=$rd failed"; stop $YP; return 1; }
       case $what in
@@ -77,22 +84,40 @@ run_phase(){
             --note "round driver=$rd" --output $OUT/concurrency.jsonl > /dev/null 2>&1 || log "concurrency FAILED"
           $PY scripts/research/bench_engine_matrix.py --url $URL --model Qwen3.8-27B --engine yunshu-rd$rd \
             --checkpoint $M --pid $YP --note "round driver=$rd" --output $OUT/matrix.jsonl > /dev/null 2>&1 || log "matrix FAILED" ;;
-        context)
+        ctx1k)
           $PY scripts/research/bench_context_batch.py --url $URL --model Qwen3.8-27B --tokenizer $M --pid $YP \
-            --lengths 1024 32768 --batches 2 4 8 --note "round driver=$rd" \
+            --lengths 1024 --batches 2 4 8 --note "round driver=$rd" \
             --output $OUT/context-batch.jsonl > /dev/null 2>&1 || log "context FAILED" ;;
-        mixed)
+        ctx32k)
+          $PY scripts/research/bench_context_batch.py --url $URL --model Qwen3.8-27B --tokenizer $M --pid $YP \
+            --lengths 32768 --batches 2 4 8 --batch-pp 32768 --note "round driver=$rd" \
+            --output $OUT/context-batch.jsonl > /dev/null 2>&1 || log "context FAILED" ;;
+        ctx131k-1)
+          $PY scripts/research/bench_context_batch.py --url $URL --model Qwen3.8-27B --tokenizer $M --pid $YP \
+            --lengths 131072 --batches --note "round driver=$rd" \
+            --output $OUT/context-batch.jsonl > /dev/null 2>&1 || log "context FAILED" ;;
+        ctx131k-[24])
+          $PY scripts/research/bench_context_batch.py --url $URL --model Qwen3.8-27B --tokenizer $M --pid $YP \
+            --lengths --batches ${1##*-} --batch-pp 131072 --note "round driver=$rd" \
+            --output $OUT/context-batch.jsonl > /dev/null 2>&1 || log "context FAILED" ;;
+        repeat)
+          for n in 8192 32768; do
+            $PY scripts/research/probe_repeat_doc.py --url $URL --model Qwen3.8-27B --tokenizer $M \
+              --tokens $n --output $OUT/repeat-doc-rd$rd.jsonl > /dev/null 2>&1 || log "repeat FAILED"
+          done ;;
+        mixed16|mixed32)
           $PY scripts/research/bench_mixed_load.py --url $URL --model Qwen3.8-27B --tokenizer $M \
-            --streams 4 --pp 16384 --label rd$rd --output $OUT/mixed-load.jsonl > /dev/null 2>&1 || log "mixed FAILED" ;;
+            --streams 4 --pp $((${what#mixed} * 1024)) --label rd$rd-$what --output $OUT/mixed-load.jsonl > /dev/null 2>&1 || log "mixed FAILED" ;;
       esac
       stop $YP ;;
-    mmlu-?)
-      k=${1#mmlu-}
+    mmlu-?|mmlu0-?)
+      rd=1; [ ${1%%-*} = mmlu0 ] && rd=0
+      k=${1##*-}
       PHASE=$1
-      serve 1 || { log "mmlu server failed"; stop $YP; return 1; }
+      serve $rd || { log "mmlu server failed"; stop $YP; return 1; }
       $PY scripts/research/soak_mmlu_pro.py --url $URL --model Qwen3.8-27B --pid $YP \
         --start $((100 * k)) --n 100 --final-idle-s 15 \
-        --note "Yunshu round driver, slice $k" --output $OUT/mmlu-$k.jsonl > $OUT/mmlu-$k.log 2>&1 || log "mmlu FAILED"
+        --note "Yunshu round driver=$rd, slice $k" --output $OUT/mmlu-rd$rd-$k.jsonl > $OUT/mmlu-rd$rd-$k.log 2>&1 || log "mmlu FAILED"
       stop $YP ;;
     *) echo "unknown phase $1"; return 2 ;;
   esac

@@ -4,6 +4,7 @@ One place for the per-user locations, so the CLI, the gateway and the
 launchd service agree:
 
 - models: ``YUNSHU_MODELS_DIR``, else ``~/.yunshu/models``
+- APC SSD tier: ``YUNSHU_VLM_APC_DISK_DIR``, else ``~/.yunshu/cache/apc``
 - service logs: ``~/Library/Logs/Yunshu``
 - launchd agent: ``~/Library/LaunchAgents/<SERVICE_LABEL>.plist``
 """
@@ -26,6 +27,16 @@ def models_dir() -> Path:
     if configured:
         return Path(configured).expanduser()
     return home() / "models"
+
+
+def apc_dir() -> Path | None:
+    """The APC SSD tier directory, or None when the tier is switched off."""
+    if not settings.get_bool("YUNSHU_VLM_APC_DISK"):
+        return None
+    configured = settings.get("YUNSHU_VLM_APC_DISK_DIR")
+    if configured:
+        return Path(configured).expanduser()
+    return home() / "cache" / "apc"
 
 
 def log_dir() -> Path:

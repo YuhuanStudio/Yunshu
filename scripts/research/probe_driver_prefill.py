@@ -62,6 +62,7 @@ def main():
     ap.add_argument("ckpt")
     ap.add_argument("--quantize", action="store_true")
     ap.add_argument("--lengths", type=int, nargs="*", default=[2048, 8192, 16384])
+    ap.add_argument("--chunks", type=int, nargs="*", default=[512, 2048])
     ap.add_argument("--output", type=Path)
     a = ap.parse_args()
     import mlx.nn as nn
@@ -82,14 +83,20 @@ def main():
         )
     rng = __import__("random").Random(0)
     prompts = {n: [rng.randrange(1000, 20000) for _ in range(n)] for n in a.lengths}
-    stock = {n: plain_prefill(model, ids) for n, ids in prompts.items()}
+    chunks = a.chunks
+    stock = {
+        (n, c): plain_prefill(model, ids, c)
+        for n, ids in prompts.items()
+        for c in chunks
+    }
     lane_linear.convert(lm)
     if lm.args.tie_word_embeddings:
         lm._yunshu_lane_head = lane_linear.lane_head(lm.model.embed_tokens)
     for n, ids in prompts.items():
         dt, steps, peak = driver_prefill(model, ids)
-        pt, ppeak = plain_prefill(model, ids)
-        st, speak = stock[n]
+        lane = {c: plain_prefill(model, ids, c) for c in chunks}
+        pt, ppeak = lane[chunks[-1]]
+        st, speak = stock[(n, chunks[-1])]
         row = {
             "tokens": n,
             "stock_plain_s": round(st, 2),
@@ -102,6 +109,13 @@ def main():
             "lane_plain_s": round(pt, 2),
             "lane_plain_tok_s": round(n / pt, 1),
             "lane_plain_peak_gib": round(ppeak, 2),
+            "by_chunk_tok_s": {
+                str(c): {
+                    "stock": round(n / stock[(n, c)][0], 1),
+                    "lane": round(n / lane[c][0], 1),
+                }
+                for c in chunks
+            },
         }
         print(json.dumps(row), flush=True)
         if a.output:

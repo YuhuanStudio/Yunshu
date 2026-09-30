@@ -1,0 +1,7 @@
+{
+  "id": "long-context-surcharge",
+  "title": "Find and change one rate in a ~2,100-line codebase (long context)",
+  "generate": "gen.py",
+  "prompt": "This is a ~2,000-line Python package (`fleet`) for pricing and invoicing shipments. Finance says the fuel surcharge for region EU-WEST must go from 0.075 to 0.0825. Find the table that invoices actually use for that surcharge (follow the code, do not guess from file names), change only the EU-WEST entry there, and write the relative path of the file you changed (for example `fleet/x/y.py`) as the only content of ANSWER.txt. Other regions, including EU-EAST which shares the same rate today, and unrelated rates that happen to be 0.075 must not change. `python -m pytest -q tests` must still pass.",
+  "test": ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "_hidden_tests"]
+}

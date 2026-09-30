@@ -94,6 +94,7 @@ from .model import model_app, pull
 from .serve import serve_app
 from .service import service_app
 from .status import status_app
+from .statusline import statusline_app
 
 _START = "Get started"
 _SERVER = "Server and models"
@@ -109,6 +110,7 @@ app.add_typer(model_app, name="model", rich_help_panel=_SERVER)
 app.add_typer(config_app, name="config", rich_help_panel=_SERVER)
 app.add_typer(status_app, name="status", rich_help_panel=_SERVER)
 app.add_typer(launch_app, name="launch", rich_help_panel=_SERVER)
+app.add_typer(statusline_app, name="statusline", rich_help_panel=_TOOLS)
 app.add_typer(eval_app, name="eval", rich_help_panel=_TOOLS)
 app.add_typer(bench_app, name="bench", rich_help_panel=_TOOLS)
 app.add_typer(diagnose_app, name="diagnose", rich_help_panel=_TOOLS)

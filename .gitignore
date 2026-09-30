@@ -51,7 +51,7 @@ bench/**/*.csv
 
 # Internal / development
 .claude/
-reference/
+/reference/
 # Local archive of the pre-refocus tree (never published)
 /_archive_yunshu/
 PROGRESS_GUIDE.md
