@@ -1,0 +1,7 @@
+{
+  "id": "http-todo-api",
+  "title": "Implement a stdlib-only HTTP JSON todo API from a spec",
+  "prompt": "Implement the HTTP JSON API described in SPEC.md as a single file `server.py`, using only the Python standard library. It is started as `python server.py --port PORT` and must serve on 127.0.0.1. Write a few tests of your own if you like, but at least start the server and try every endpoint with curl or urllib before you finish.",
+  "test": ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "_hidden_tests"],
+  "timeout_s": 1500
+}
