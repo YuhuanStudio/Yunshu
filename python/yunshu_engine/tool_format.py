@@ -120,7 +120,10 @@ def _upstream(name: str) -> ToolFormat | None:
         return None
 
     def parse(body: str, tools: Any) -> list[Call]:
-        return _calls_from(module.parse_tool_call(_unwrap_doubled_braces(body), tools))
+        body = _unwrap_doubled_braces(body)
+        if "<function=" in body:
+            return _parse_function_xml(module, body, tools)
+        return _calls_from(module.parse_tool_call(body, tools))
 
     return ToolFormat(
         name=name,
@@ -128,6 +131,37 @@ def _upstream(name: str) -> ToolFormat | None:
         end=module.tool_call_end,
         parse=parse,
     )
+
+
+# ── Tolerant readers for Qwen's <function=...> XML ──────────────────────────
+
+_FUNCTION_SPAN = re.compile(
+    r"<function=.*?(?:</function>|(?=<function=)|\Z)", re.DOTALL
+)
+
+
+def _parse_function_xml(module: Any, body: str, tools: Any) -> list[Call]:
+    """Read ``<function=name><parameter=k>v</parameter></function>`` calls.
+
+    Upstream requires the body to end in ``</function>``. Models routinely
+    drop it (``</parameter>`` then ``</tool_call>``), put several functions in
+    one ``<tool_call>``, or emit a value that does not convert to its declared
+    type. Each function span is closed and parsed on its own; a span whose
+    typed conversion fails is read again with plain string values (the
+    request-schema coercion downstream still types what it can)."""
+    calls: list[Call] = []
+    for span in _FUNCTION_SPAN.findall(body):
+        text = span.rstrip()
+        if not text.endswith("</function>"):
+            text += "\n</function>"
+        try:
+            got = module.parse_tool_call(text, tools)
+        except Exception:  # noqa: BLE001
+            got = module.parse_tool_call(text, None)
+        calls.extend(_calls_from(got))
+    if not calls:
+        raise ValueError("no <function=> call")
+    return calls
 
 
 # ── Formats upstream lacks ──────────────────────────────────────────────────
@@ -158,8 +192,46 @@ def _unwrap_doubled_braces(body: str) -> str:
     return body
 
 
+_FUNCTION_ARGS_SLIP = re.compile(
+    r'^\{\s*"(?:function|name)"\s*:\s*"(?P<name>[^"]+)"\s*[:,]\s*'
+    r'"(?P<key>arguments|parameters)"\s*:\s*(?P<args>.*)$',
+    re.DOTALL,
+)
+_JSON_FENCE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
+
+
+def _json_candidates(body: str):
+    """The body, then the repairs of the malformations models produce: a code
+    fence, ``{"function": "f": "arguments": {...}}`` (a key/value slip for
+    ``{"name": "f", "arguments": {...}}``) and missing closing braces."""
+    text = _unwrap_doubled_braces(body).strip()
+    fence = _JSON_FENCE.match(text)
+    if fence:
+        text = fence.group(1).strip()
+    yield text
+    slip = _FUNCTION_ARGS_SLIP.match(text)
+    head = ""
+    if slip:
+        name, args = json.dumps(slip.group("name")), slip.group("args").rstrip()
+        head = f'{{"name": {name}, "arguments": {args}'
+        yield head
+    for extra in ("}", "}}"):
+        yield text + extra
+        if slip:
+            yield head + extra
+
+
 def _parse_yunshu_json(body: str, _tools: Any) -> list[Call]:
-    return _calls_from(json.loads(_unwrap_doubled_braces(body).strip()))
+    decoder = json.JSONDecoder()
+    last: Exception = ValueError("empty tool call")
+    for cand in _json_candidates(body):
+        try:
+            # raw_decode: tolerate junk after the object (a stray ``)``).
+            obj, _end = decoder.raw_decode(cand)
+            return _calls_from(obj)
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+    raise last
 
 
 INJECTED_JSON = ToolFormat(
@@ -379,16 +451,24 @@ def next_start(text: str, formats: Sequence[ToolFormat], pos: int = 0):
     return best[0], best[1], group
 
 
+_CALL_LOOK = re.compile(r"\s*(?:<function=|<parameter=|[\[{])")
+
+
 def parse_block(
     text: str, marker_at: int, group: Sequence[ToolFormat], tools: Any, final: bool
-) -> tuple[list[Call], int] | None:
+) -> tuple[list[Call], int, bool] | None:
     """Parse the call whose start marker sits at ``marker_at``.
 
-    Returns (calls, index just past the call), ([], index) when a complete
-    span parses in no format, or None when the span is still open (and not
-    ``final``). At end of output an unterminated span is parsed to the end.
+    Returns ``(calls, end, dropped)``: the calls and the index just past the
+    call. ``([], end, True)`` means a complete span that looks like a call but
+    parses in no format: it is dropped, never shown (tool markup does not
+    reach the content stream). ``([], end, False)`` means the marker was not a
+    call at all (prose that mentions it): only the marker is skipped and the
+    text stays visible. None means the span is still open (and not ``final``).
+    At end of output an unterminated span is parsed to the end.
     """
     open_span = False
+    unreadable: tuple[str, int] | None = None
     for fmt in group:
         body_start = marker_at + len(fmt.start)
         span = _span_end(text, fmt, body_start)
@@ -397,16 +477,26 @@ def parse_block(
                 open_span = True
                 continue
             span = (len(text), len(text))
+        body = text[body_start : span[0]]
         try:
-            calls = fmt.parse(text[body_start : span[0]], tools)
+            calls = fmt.parse(body, tools)
         except Exception as exc:  # noqa: BLE001 - any parser failure = not this format
             logger.debug("%s parser rejected a call: %s", fmt.name, exc)
+            if unreadable is None:
+                unreadable = (body, span[1])
             continue
-        return calls, span[1]
+        return calls, span[1], False
     if open_span:
         return None
-    # No format reads it: skip past the marker, keeping the text visible.
-    return [], marker_at + len(group[0].start)
+    if unreadable is not None and _CALL_LOOK.match(unreadable[0]):
+        logger.warning(
+            "dropped an unreadable tool call (%d chars): %.200r",
+            len(unreadable[0]),
+            unreadable[0],
+        )
+        return [], unreadable[1], True
+    # Not a call (prose): skip past the marker, keeping the text visible.
+    return [], marker_at + len(group[0].start), False
 
 
 def _whole_calls(text: str, formats: Sequence[ToolFormat], tools: Any):
@@ -440,19 +530,23 @@ def parse_tool_output(
     calls: list[Call] = []
     kept: list[str] = []
     pos = 0
+    any_dropped = False
     while True:
         found = next_start(text, formats, pos)
         if found is None:
             break
         at, _marker, group = found
-        got, end = parse_block(text, at, group, tools, final=True)
+        got, end, dropped = parse_block(text, at, group, tools, final=True)
         if got:
             kept.append(text[pos:at])
             calls.extend(got)
+        elif dropped:
+            kept.append(text[pos:at])
+            any_dropped = True
         else:
             kept.append(text[pos:end])
         pos = end
     kept.append(text[pos:])
     if not calls:
-        return [], text
+        return [], _tidy("".join(kept)) if any_dropped else text
     return coerce_tool_calls(calls, tools) or [], _tidy("".join(kept))

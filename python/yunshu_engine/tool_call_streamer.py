@@ -139,11 +139,11 @@ class ToolCallStreamer:
             parsed = parse_block(self._buf, 0, group, self._tools, final=final)
             if parsed is None:
                 break  # end marker not here yet
-            calls, end = parsed
+            calls, end, dropped = parsed
             if calls:
                 for call in calls:
                     self._emit_call(call, out)
-            else:
+            elif not dropped:
                 out.append(StreamOutput(text=self._buf[:end]))
             self._buf = self._buf[end:]
             self._state = StreamState.TEXT
