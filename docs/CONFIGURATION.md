@@ -88,6 +88,12 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_BATCH_TIMEOUT` | float | 300.0 | Batch API: default per-batch timeout in seconds. |
 | `YUNSHU_ALLOW_LOCAL_FILES` | bool | off | Allow requests to reference any local file path (default: only under YUNSHU_MEDIA_DIR). |
 | `YUNSHU_MEDIA_DIR` | path | unset | Directory local media paths must live under. Unset: $TMPDIR/yunshu_media. |
+| `YUNSHU_FILES_DIR` | path | unset | Directory of the local Files / Batch API store. Unset: ~/.yunshu/files. |
+| `YUNSHU_FILES_MAX_BYTES` | int | 536870912 (512 MiB) | Files API: maximum size of one uploaded file in bytes (default 512 MB). |
+| `YUNSHU_FILES_TTL_DAYS` | float | unset | Files API: delete uploaded files after this many days. Unset: keep forever. |
+| `YUNSHU_CONVERSATIONS_DIR` | path | unset | Directory of the Conversations API store (JSON, one file per conversation). Unset: ~/.yunshu/conversations. |
+| `YUNSHU_CONVERSATION_MAX_ITEMS` | int | 10000 | Conversations API: maximum number of items one conversation may hold. |
+| `YUNSHU_COMPACT_MAX_TOKENS` | int | 2048 | Responses compaction: maximum tokens of the model-written summary. |
 
 ### auth
 
@@ -189,6 +195,27 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 |---|---|---|---|
 | `YUNSHU_MCP_CONFIG` | path | unset | MCP client config file (JSON/YAML) listing tool servers. |
 | `YUNSHU_MCP_SERVERS` | json | unset | MCP tool servers as a JSON array (alternative to YUNSHU_MCP_CONFIG). |
+
+### server-tools
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `YUNSHU_WEB_SEARCH_PROVIDER` | `auto` \| `none` \| `searxng` \| `brave` \| `tavily` \| `exa` | auto | Search backend for the server-side web_search tool (Anthropic web_search_*, OpenAI Responses web_search). 'auto' picks the first configured of searxng, brave, tavily, exa; 'none' disables. Unconfigured: requests get the API's 'unavailable' error with a hint. |
+| `YUNSHU_SEARXNG_URL` | str | unset | Base URL of a self-hosted SearXNG instance (JSON output enabled), e.g. http://127.0.0.1:8080. The privacy-friendly default recommendation. |
+| `YUNSHU_BRAVE_API_KEY` | str | unset | Brave Search API key. |
+| `YUNSHU_TAVILY_API_KEY` | str | unset | Tavily API key. |
+| `YUNSHU_EXA_API_KEY` | str | unset | Exa API key. |
+| `YUNSHU_WEB_SEARCH_RESULTS` | int | 5 | Results returned per web_search call. |
+| `YUNSHU_WEB_FETCH` | bool | on | Serve the server-side web_fetch tool (needs no provider). Off: web_fetch requests get an 'unavailable' error. |
+| `YUNSHU_WEB_FETCH_ALLOW_PRIVATE` | bool | off | Let web_fetch reach private, loopback and link-local addresses. Off (default) blocks them (SSRF protection), including after redirects and DNS resolution. |
+| `YUNSHU_WEB_FETCH_MAX_BYTES` | int | 2000000 | Largest response body web_fetch downloads. |
+| `YUNSHU_WEB_FETCH_TIMEOUT` | float | 20.0 | Seconds web_fetch waits for a page. |
+| `YUNSHU_WEB_FETCH_MAX_TEXT_CHARS` | int | 40000 | Extracted page text handed to the model is cut to this many characters (a request's max_content_tokens can lower it). |
+| `YUNSHU_MCP_CONNECTOR` | bool | on | Serve the MCP connector: Anthropic mcp_servers and OpenAI Responses {type: mcp} tools are executed by this server, which connects to the named MCP servers over streamable HTTP / SSE. |
+| `YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE` | bool | on | Let the MCP connector reach private and loopback MCP servers (local tool servers are the common case). Off: only public addresses. |
+| `YUNSHU_MCP_CONNECTOR_TIMEOUT` | float | 30.0 | Seconds an MCP connector call (initialize, tools/list, tools/call) may take. |
+| `YUNSHU_SERVER_TOOL_MAX_ITERATIONS` | int | 8 | Most generate, run-tool, continue rounds one request may take. |
+| `YUNSHU_MODEL_ALIASES` | json | unset | Multi-model mode: map the model names agents ask for (claude-sonnet-4-5, opus, gpt-5) onto a served model, as a JSON object {pattern: served model id}; patterns are exact names, prefix* or * (first match wins; a real model name always wins). Single-model mode answers to every name already. |
 
 ### observability
 

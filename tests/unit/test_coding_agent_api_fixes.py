@@ -1,12 +1,14 @@
 """API gaps found by driving real coding agents (Claude Code and Codex CLI) at the server."""
 
+from types import SimpleNamespace
+
 import pytest
 
 from yunshu_engine.message_adapter import QwenMessageAdapter
 from yunshu_gateway.routers.anthropic import (
     AnthropicMessage,
     AnthropicMessagesRequest,
-    _thinking_flag,
+    _thinking_switches,
 )
 
 
@@ -30,10 +32,13 @@ def test_unknown_thinking_type_still_rejected():
 
 
 def test_thinking_flag():
-    assert _thinking_flag({"type": "enabled", "budget_tokens": 5}) is True
-    assert _thinking_flag({"type": "disabled"}) is False
-    assert _thinking_flag({"type": "adaptive"}) is None  # model default
-    assert _thinking_flag(None) is None
+    def sw(thinking):
+        return _thinking_switches(SimpleNamespace(thinking=thinking))
+
+    assert sw({"type": "enabled", "budget_tokens": 5}) == (True, 5)
+    assert sw({"type": "disabled"}) == (False, None)
+    assert sw({"type": "adaptive"}) == (None, None)  # model default
+    assert sw(None) == (None, None)
 
 
 def test_qwen_mid_conversation_system_messages_stay_in_place():

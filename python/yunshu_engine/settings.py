@@ -86,6 +86,7 @@ CATEGORIES = (
     "image-video",
     "embeddings",
     "mcp",
+    "server-tools",
     "observability",
     "cli",
 )
@@ -136,6 +137,12 @@ _add("YUNSHU_BATCH_MAX_ITEMS", "int", 500, "Batch API: maximum requests per batc
 _add("YUNSHU_BATCH_TIMEOUT", "float", 300.0, "Batch API: default per-batch timeout in seconds.", "server", minimum=0.0)
 _add("YUNSHU_ALLOW_LOCAL_FILES", "bool", False, "Allow requests to reference any local file path (default: only under YUNSHU_MEDIA_DIR).", "server")
 _add("YUNSHU_MEDIA_DIR", "path", None, "Directory local media paths must live under. Unset: $TMPDIR/yunshu_media.", "server")
+_add("YUNSHU_FILES_DIR", "path", None, "Directory of the local Files / Batch API store. Unset: ~/.yunshu/files.", "server")
+_add("YUNSHU_FILES_MAX_BYTES", "int", 536870912, "Files API: maximum size of one uploaded file in bytes (default 512 MB).", "server", minimum=1)
+_add("YUNSHU_FILES_TTL_DAYS", "float", None, "Files API: delete uploaded files after this many days. Unset: keep forever.", "server", minimum=0.0)
+_add("YUNSHU_CONVERSATIONS_DIR", "path", None, "Directory of the Conversations API store (JSON, one file per conversation). Unset: ~/.yunshu/conversations.", "server")
+_add("YUNSHU_CONVERSATION_MAX_ITEMS", "int", 10000, "Conversations API: maximum number of items one conversation may hold.", "server", minimum=1)
+_add("YUNSHU_COMPACT_MAX_TOKENS", "int", 2048, "Responses compaction: maximum tokens of the model-written summary.", "server", minimum=64)
 
 # ── auth ───────────────────────────────────────────────────────────────
 _add("YUNSHU_AUTH_TOKEN", "str", None, "Bearer token. When set, every request except health/version/docs needs it; unset: inference is open and operational endpoints are denied.", "auth", secret=True)
@@ -217,6 +224,24 @@ _add("YUNSHU_ANE_EMBEDDING_MODEL", "str", "intfloat/e5-small-v2", "Embedding mod
 # ── MCP ────────────────────────────────────────────────────────────────
 _add("YUNSHU_MCP_CONFIG", "path", None, "MCP client config file (JSON/YAML) listing tool servers.", "mcp")
 _add("YUNSHU_MCP_SERVERS", "json", None, "MCP tool servers as a JSON array (alternative to YUNSHU_MCP_CONFIG).", "mcp")
+
+# ── server-side tools (web search / web fetch / MCP connector) ──────────
+_add("YUNSHU_WEB_SEARCH_PROVIDER", "enum", "auto", "Search backend for the server-side web_search tool (Anthropic web_search_*, OpenAI Responses web_search). 'auto' picks the first configured of searxng, brave, tavily, exa; 'none' disables. Unconfigured: requests get the API's 'unavailable' error with a hint.", "server-tools", choices=("auto", "none", "searxng", "brave", "tavily", "exa"))
+_add("YUNSHU_SEARXNG_URL", "str", None, "Base URL of a self-hosted SearXNG instance (JSON output enabled), e.g. http://127.0.0.1:8080. The privacy-friendly default recommendation.", "server-tools")
+_add("YUNSHU_BRAVE_API_KEY", "str", None, "Brave Search API key.", "server-tools", secret=True)
+_add("YUNSHU_TAVILY_API_KEY", "str", None, "Tavily API key.", "server-tools", secret=True)
+_add("YUNSHU_EXA_API_KEY", "str", None, "Exa API key.", "server-tools", secret=True)
+_add("YUNSHU_WEB_SEARCH_RESULTS", "int", 5, "Results returned per web_search call.", "server-tools", minimum=1)
+_add("YUNSHU_WEB_FETCH", "bool", True, "Serve the server-side web_fetch tool (needs no provider). Off: web_fetch requests get an 'unavailable' error.", "server-tools")
+_add("YUNSHU_WEB_FETCH_ALLOW_PRIVATE", "bool", False, "Let web_fetch reach private, loopback and link-local addresses. Off (default) blocks them (SSRF protection), including after redirects and DNS resolution.", "server-tools")
+_add("YUNSHU_WEB_FETCH_MAX_BYTES", "int", 2000000, "Largest response body web_fetch downloads.", "server-tools", minimum=1024)
+_add("YUNSHU_WEB_FETCH_TIMEOUT", "float", 20.0, "Seconds web_fetch waits for a page.", "server-tools", minimum=1.0)
+_add("YUNSHU_WEB_FETCH_MAX_TEXT_CHARS", "int", 40000, "Extracted page text handed to the model is cut to this many characters (a request's max_content_tokens can lower it).", "server-tools", minimum=1000)
+_add("YUNSHU_MCP_CONNECTOR", "bool", True, "Serve the MCP connector: Anthropic mcp_servers and OpenAI Responses {type: mcp} tools are executed by this server, which connects to the named MCP servers over streamable HTTP / SSE.", "server-tools")
+_add("YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE", "bool", True, "Let the MCP connector reach private and loopback MCP servers (local tool servers are the common case). Off: only public addresses.", "server-tools")
+_add("YUNSHU_MCP_CONNECTOR_TIMEOUT", "float", 30.0, "Seconds an MCP connector call (initialize, tools/list, tools/call) may take.", "server-tools", minimum=1.0)
+_add("YUNSHU_SERVER_TOOL_MAX_ITERATIONS", "int", 8, "Most generate, run-tool, continue rounds one request may take.", "server-tools", minimum=1)
+_add("YUNSHU_MODEL_ALIASES", "json", None, "Multi-model mode: map the model names agents ask for (claude-sonnet-4-5, opus, gpt-5) onto a served model, as a JSON object {pattern: served model id}; patterns are exact names, prefix* or * (first match wins; a real model name always wins). Single-model mode answers to every name already.", "server-tools")
 
 # ── observability ──────────────────────────────────────────────────────
 _add("YUNSHU_LOG_LEVEL", "enum", "INFO", "Log level for Yunshu's loggers (third-party loggers stay at WARNING).", "observability", choices=("DEBUG", "INFO", "WARNING", "ERROR"))
