@@ -199,6 +199,28 @@ def test_malformed_calls_are_blocked(xml_tok, xml_grammar):
     )
 
 
+@pytest.mark.parametrize("kind", ["integer", "number", "boolean", "array", "object"])
+@pytest.mark.parametrize("nullable", [False, True])
+def test_xml_null_requires_nullable_schema(xml_tok, kind, nullable):
+    prop = {"type": [kind, "null"] if nullable else kind}
+    tools = [
+        {
+            "name": "Probe",
+            "parameters": {
+                "type": "object",
+                "properties": {"value": prop},
+                "required": ["value"],
+            },
+        }
+    ]
+    grammar = tcg.compile_tool_grammar(tools, xml_tok, len(xml_tok) + 243)
+    assert grammar is not None
+    body = "\n<function=Probe>\n<parameter=value>\nnull\n</parameter>\n</function>\n</tool_call>"
+    guide = call_guide(grammar)
+    rejected = run_tokens(guide, xml_tok.encode(body, add_special_tokens=False))
+    assert (rejected is None) is nullable
+
+
 def test_only_the_call_can_end_with_the_end_marker_and_eos_needs_a_finished_call(
     xml_tok, xml_grammar
 ):

@@ -124,7 +124,7 @@ class _GrammarBuilder:
             and isinstance(prop.get("type"), list)
             and "null" in prop["type"]
         )
-        null = ' | "null"' if kind not in (None, "string") or nullable else ""
+        null = ' | "null"' if nullable else ""
         close = '"\\n</parameter>"'
         if kind == "integer":
             return f"(INT{null}) {close}"
