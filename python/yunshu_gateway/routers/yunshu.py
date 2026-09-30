@@ -167,6 +167,7 @@ async def status(request: Request) -> dict:
             "decode": phases.get("decode", 0),
             "items": reqs,
         },
+        "last": registry.last(),
         "throughput": {
             "window_s": 60,
             "requests": len(window),

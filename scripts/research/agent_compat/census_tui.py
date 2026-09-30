@@ -45,6 +45,7 @@ def run_tui(
     model: str,
     wait: float,
     cfg: str | None,
+    configure=None,
 ):
     run = census.BUILD / "runs" / name
     if run.exists():
@@ -78,6 +79,8 @@ def run_tui(
                 str(work),
                 "--dangerously-bypass-approvals-and-sandbox",
             ]
+        if configure:
+            configure(launch)
         if cfg and cfg in census.HOOKS:
             census.HOOKS[cfg](launch.home, launch, dict(run=run, work=work))
         launch.env["TERM"] = "xterm-256color"

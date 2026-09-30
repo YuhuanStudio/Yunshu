@@ -279,6 +279,8 @@ def _claude(env, home, workdir, base_url, model, prompt, ctx, max_out):
             }
         )
     )
+    # with CLAUDE_CONFIG_DIR set, the global state lives inside it (the interactive TUI reads this one)
+    (cdir / ".claude.json").write_text((home / ".claude.json").read_text())
     env.update(
         CLAUDE_CONFIG_DIR=str(cdir),
         CLAUDE_CODE_TMPDIR=str(home / "tmp"),  # else it writes /tmp/claude-<uid>/
