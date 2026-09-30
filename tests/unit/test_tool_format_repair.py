@@ -159,6 +159,28 @@ def test_tool_named_tag_with_garbled_parameter_syntax():
     assert calls == [("Read", {"file_path": "/w/.docs/instructions.md"})]
 
 
+def test_split_json_name_and_arguments_in_two_objects():
+    body = '<tool_call>\n{"function": Read}\n{"arguments": {"file_path": "/a.md", "limit": 5}}\n</tool_call>'
+    for chunk in (1, 1000):
+        text, calls, _ = _stream(body, chunk)
+        assert calls == [("Read", {"file_path": "/a.md", "limit": 5})]
+        assert "tool_call" not in text
+
+
+def test_name_only_json_call_keeps_the_name():
+    _, calls, _ = _stream('<tool_call>\n{"function": "Read"}\n</tool_call>')
+    assert calls == [("Read", {})]
+
+
+def test_parameter_tag_naming_the_tool():
+    body = (
+        "<tool_call>\n<parameter=Bash>\n<parameter=command>\nls -la\n</parameter>\n"
+        "</tool_call>"
+    )
+    _, calls, _ = _stream(body, 3)
+    assert calls == [("Bash", {"command": "ls -la"})]
+
+
 def test_unknown_tag_call_is_dropped_not_leaked():
     text, calls, _ = _stream(
         "<tool_call>\n<Nope>\n<parameter=x>1</parameter>\n</tool_call>"

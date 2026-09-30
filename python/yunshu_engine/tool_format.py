@@ -170,31 +170,60 @@ def _parse_function_xml(module: Any, body: str, tools: Any) -> list[Call]:
     return calls
 
 
-_LOOSE_TAG = re.compile(r"\s*<(?P<name>[\w.\-]+)>(?P<rest>.*)$", re.DOTALL)
+_LOOSE_TAG = re.compile(
+    r"\s*<(?:parameter=)?(?P<name>[\w.\-]+)>(?P<rest>.*)$", re.DOTALL
+)
 _LOOSE_PARAM = re.compile(
-    r"<parameter=(?P<key>[\w.\-]+)[\"'>:=\s]*(?P<val>.*?)(?:</parameter>|(?=<parameter=)|\Z)",
+    r"<parameter=(?P<key>[\w.\-]+)(?P<sep>[\"'>:=\s]*)(?P<val>.*?)"
+    r"(?:</parameter>|(?=<parameter=)|\Z)",
     re.DOTALL,
 )
 
 
-def _parse_loose_tag(body: str, tools: Any) -> list[Call]:
-    """``<Read><parameter=file_path": /x"}`` — a tool-named tag with garbled
-    parameter syntax. Read only when the tag names a tool of the request, so
-    ordinary markup is never taken for a call; stray quote/brace residue
-    around a value is trimmed."""
-    m = _LOOSE_TAG.match(body)
-    known = {
+def _known_tools(tools: Any) -> set[str]:
+    return {
         t["function"]["name"]
         for t in (tools or [])
         if isinstance(t.get("function"), dict)
     }
-    if not m or m.group("name") not in known:
+
+
+def _parse_loose_tag(body: str, tools: Any) -> list[Call]:
+    """``<Read><parameter=file_path": /x"}`` or ``<parameter=Edit><parameter=...``:
+    a tool-named tag with garbled parameter syntax. Read only when the tag names
+    a tool of the request, so ordinary markup is never taken for a call; quote
+    and brace residue is trimmed only from values whose key was garbled."""
+    m = _LOOSE_TAG.match(body)
+    if not m or m.group("name") not in _known_tools(tools):
         return []
     args: dict[str, str] = {}
     for p in _LOOSE_PARAM.finditer(m.group("rest")):
-        val = p.group("val").strip().rstrip("}").strip().strip("\"'").strip()
-        args[p.group("key")] = val
+        val = p.group("val")
+        if '"' in p.group("sep"):
+            val = val.strip().rstrip("}").strip().strip("\"'")
+        args[p.group("key")] = val.strip("\n")
     return [_call(m.group("name"), args)] if args else []
+
+
+_SPLIT_NAME = re.compile(r'"(?:function|name)"\s*:\s*"?(?P<name>[\w.\-]+)"?')
+_SPLIT_ARGS = re.compile(r'"(?:arguments|parameters)"\s*:\s*')
+
+
+def _parse_split_json(body: str, tools: Any) -> list[Call]:
+    """``{"function": Read}`` then ``{"arguments": {...}}``, or a name with no
+    arguments at all: the name and the arguments object are found wherever they
+    sit. Only a name of one of the request's tools is accepted."""
+    n = _SPLIT_NAME.search(body)
+    if not n or n.group("name") not in _known_tools(tools):
+        return []
+    args: Any = {}
+    a = _SPLIT_ARGS.search(body)
+    if a:
+        try:
+            args, _ = json.JSONDecoder().raw_decode(body, a.end())
+        except ValueError:
+            return []
+    return [_call(n.group("name"), args)]
 
 
 # ── Formats upstream lacks ──────────────────────────────────────────────────
@@ -254,7 +283,7 @@ def _json_candidates(body: str):
             yield head + extra
 
 
-def _parse_yunshu_json(body: str, _tools: Any) -> list[Call]:
+def _parse_yunshu_json(body: str, tools: Any) -> list[Call]:
     decoder = json.JSONDecoder()
     last: Exception = ValueError("empty tool call")
     for cand in _json_candidates(body):
@@ -264,6 +293,9 @@ def _parse_yunshu_json(body: str, _tools: Any) -> list[Call]:
             return _calls_from(obj)
         except Exception as exc:  # noqa: BLE001
             last = exc
+    split = _parse_split_json(body, tools)
+    if split:
+        return split
     raise last
 
 
