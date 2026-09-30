@@ -51,5 +51,8 @@ case $JOB in
                   --env YUNSHU_PREFIX_MAX_ENTRIES=2 ;;
   text-bf16-ssd)   M=$TEXT_BF16 submit text-bf16-ssd 20 -- --scenario multi --sessions 3 --target 20000 --step 2500 --gap-s 5 \
                   --env YUNSHU_SSD_CACHE=1 --env YUNSHU_SSD_CACHE_DIR=$SSD_DIR/text-bf16 --env YUNSHU_PREFIX_MAX_ENTRIES=2 ;;
+  text-bf16-ssd-nogate) M=$TEXT_BF16 submit text-bf16-ssd-nogate 20 -- --scenario multi --sessions 3 --target 20000 --step 2500 --gap-s 5 \
+                  --env YUNSHU_SSD_CACHE=1 --env YUNSHU_SSD_CACHE_DIR=$SSD_DIR/text-bf16g --env YUNSHU_PREFIX_MAX_ENTRIES=2 \
+                  --env YUNSHU_SSD_CACHE_PREFILL_CEIL_TPS=1000000 ;;
   *) echo "unknown job $JOB"; exit 1 ;;
 esac

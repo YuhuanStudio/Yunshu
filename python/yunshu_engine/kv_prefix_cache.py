@@ -30,6 +30,8 @@ from typing import Any
 
 import mlx.core as mx
 
+from . import settings
+
 logger = logging.getLogger(__name__)
 
 # Block size for hash-chain prefix matching (tokens per block).
@@ -362,7 +364,9 @@ class KVPrefixCache:
         # (0.8B 2947→2.0×, 9B 430→7.8×) and only drops it for blazing ones (GLM).
         # _prefill_tps is fed by the engine via note_prefill_tps(); None = unknown
         # (no gate, preserves prior behaviour).
-        self._ssd_prefill_tps_ceil = 4000.0
+        self._ssd_prefill_tps_ceil = float(
+            settings.get("YUNSHU_SSD_CACHE_PREFILL_CEIL_TPS")
+        )
         self._prefill_tps: float | None = None
         # Pre-eviction callback (unused by default)
         self._pre_evict_callback: Any | None = None

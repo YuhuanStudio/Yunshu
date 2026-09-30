@@ -122,6 +122,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_SSD_CACHE` | bool | off | Text engine: persist prefix KV to SSD. |
 | `YUNSHU_SSD_CACHE_DIR` | path | ~/.cache/yunshu/kv-ssd | Text engine: SSD prefix-cache directory. |
 | `YUNSHU_SSD_CACHE_PRECISION` | `native` \| `int8` | native | Text engine: SSD prefix-cache storage precision: 'native' (KV and recurrent state stored bit-exact; lossless) or 'int8' (per-tensor int8, about half the disk bytes of bf16; lossy on reuse; memory vs quality). |
+| `YUNSHU_SSD_CACHE_PREFILL_CEIL_TPS` | float | 20000.0 | Text engine: skip an SSD prefix restore when the model's observed prefill speed exceeds this (tokens/s): re-prefilling is then as fast as reading the KV back. |
 | `YUNSHU_SSD_CACHE_MAX_GB` | float | 10.0 | Text engine: SSD prefix-cache size cap in GiB. |
 | `YUNSHU_KV_QUANT_BITS` | `auto` \| `off` \| `2` \| `3` \| `4` \| `8` | off | Text engine KV cache quantization (lossy; memory vs quality): 'off' (lossless), 'auto' (8-bit once the KV cache would exceed ~2 GiB), or 2/3/4/8 bits always. |
 
