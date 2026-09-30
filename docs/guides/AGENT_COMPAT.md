@@ -94,12 +94,19 @@ Last full rerun: current main plus the fixes listed under "Found and fixed by th
 | Claude Code turn after `Read` of an image: empty reply in 20 ms | The vision path skipped the family message adapter, so Qwen's template raised "System message must be at the beginning" on Claude Code's per-turn system note; the failure was then reported as a normal empty `end_turn` | The vision path runs the adapter; a template / engine error after the stream started is now an `error` event on Messages, chat and Responses |
 | `/status`, `/model` capture of Claude Code stopped at the welcome screen | With `CLAUDE_CONFIG_DIR` set, the interactive UI reads its onboarding state from inside that directory | The census harness writes it there; screens are rendered through a terminal emulator |
 
-### Sampled speculative decoding (reverted)
+### Sampled speculative decoding
 
-On Qwen3.8-27B-oQ4e-mtp, drafting sampled requests (temperature > 0) through the MTP lane with position-keyed
-sampling produced stray multilingual tokens and repetition mid-answer (`cc_image`, `cx_mcp`, `oc_bash` degraded;
-tool-call text broke). The same scenarios with speculation off passed. That change is reverted: sampled requests
-decode without drafts until the sampled lane is root-caused and re-verified on these scenarios.
+Sampled requests (temperature > 0, what every coding agent sends) draft through the MTP lane with position-keyed
+Gumbel sampling (`keyed_sampling.py`). The first version produced stray multilingual tokens and repetition on the
+27B agent scenarios. Root cause: the noise took 24 random bits, whose top bucket is `1 - 2^-25`; float32 rounds it
+to 1.0, so `-log(-log(u))` is `+inf`. About 1.5% of positions had a token with infinite noise, which won even
+when top-p / top-k had filtered it out (or was NaN against its `-inf` row): a random token from the 248K vocabulary.
+Fixed with 23-bit noise and by masking filtered logits after adding the noise. Greedy requests never hit it.
+
+Re-verified on Qwen3.8-27B-oQ4e-mtp: the lane is token-identical to keyed serial draws (the same lane with every
+draft rejected) on 16 prompt / sampling / seed combinations (T 0.6 / 0.7 / 1.0, top-p, top-k, min-p), the draws
+match softmax(filtered logits / T), none fall outside the filtered support, and `cc_image`, `cx_mcp`, `oc_bash`,
+`oc_edit`, `cc_edit`, `cx_edit`, `cc_mcp` all pass with clean output.
 
 ### Known limits (not Yunshu defects)
 
