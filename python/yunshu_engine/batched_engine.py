@@ -961,6 +961,17 @@ def _resolve_model_max_ctx(model) -> int:
     return 0
 
 
+def _prefix_cache_provenance(prefix_cache, prompt_cache_hit: bool, cached_tokens: int):
+    """(tier, lookup_ms) of a fast-path request's cached prefix for ``x_yunshu.cache``."""
+    if prompt_cache_hit:
+        return "ram", None
+    if not cached_tokens or prefix_cache is None:
+        return "none", None
+    lk = getattr(prefix_cache, "last_lookup", None) or {}
+    tier = lk.get("tier", "hot")
+    return ("ram" if tier == "hot" else tier), lk.get("ms")
+
+
 class BatchedEngine:
     """User-facing continuous batching engine.
 
@@ -3909,7 +3920,11 @@ class BatchedEngine:
                     )
 
             _timeout_check_interval = 32
-            _fp_stats.admit(cached_tokens, len(ids_to_prefill))
+            _fp_stats.admit(
+                cached_tokens,
+                len(ids_to_prefill),
+                *_prefix_cache_provenance(prefix_cache, _pc_hit, cached_tokens),
+            )
             with _wired_limit_ctx(model):
                 for token, logits in generate_step(
                     ids_to_prefill,
@@ -5610,7 +5625,11 @@ class BatchedEngine:
                         _stream_kv_bits = None
                 except Exception:
                     pass
-            _fp_stats.admit(_stream_cached_tokens, len(ids_to_prefill))
+            _fp_stats.admit(
+                _stream_cached_tokens,
+                len(ids_to_prefill),
+                *_prefix_cache_provenance(prefix_cache, False, _stream_cached_tokens),
+            )
             with _wired_limit_ctx(model):
                 for token, logits in generate_step(
                     ids_to_prefill,

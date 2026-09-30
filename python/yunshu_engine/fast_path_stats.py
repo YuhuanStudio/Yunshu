@@ -28,10 +28,20 @@ class FastPathStats:
             with contextlib.suppress(Exception):
                 cancel_event.run_stats = self.stats
 
-    def admit(self, cached_tokens: int, to_prefill: int) -> None:
-        """The request left the queue and its prefill starts now."""
+    def admit(
+        self,
+        cached_tokens: int,
+        to_prefill: int,
+        tier: str | None = None,
+        reload_ms: float | None = None,
+    ) -> None:
+        """The request left the queue and its prefill starts now. ``tier`` is where the
+        cached prefix came from ("hot", "warm", "ssd", "none") and ``reload_ms`` the lookup time."""
         st = self.stats
         st.cached_tokens = int(cached_tokens)
+        if tier is not None:
+            st.cache_tier = tier
+            st.cache_reload_ms = reload_ms
         st.prefill_total = int(to_prefill)
         st.prefill_done = 0
         st.t_admit = time.perf_counter()

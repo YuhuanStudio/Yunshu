@@ -47,6 +47,10 @@ PREFILL_STEP = 2048
 class RunStats:
     prompt_tokens: int = 0
     cached_tokens: int = 0
+    # Where the cached prefix came from ("ram", "ssd" or "none") and how long the lookup
+    # (including an SSD reload) took; None until the request's cache lookup ran.
+    cache_tier: str | None = None
+    cache_reload_ms: float | None = None
     first_token_s: float = 0.0
     generated: int = 0
     finish_reason: str | None = None
@@ -523,7 +527,7 @@ class VLMBatchRunner:
     ):
         from mlx_vlm.generate.ar import BatchGenerator
 
-        return BatchGenerator(
+        gen = BatchGenerator(
             self.model.language_model,
             self.processor,
             stop_tokens=self.stop_tokens,
@@ -538,6 +542,12 @@ class VLMBatchRunner:
             prefill_step_size=PREFILL_STEP,
             prefill_batch_size=1,
         )
+        # Upstream binds a stock APCCoordinator; ours places the extra checkpoints
+        # (end of the system turn) and numbers requests for superseding.
+        bind = getattr(self.apc_manager, "coordinator", None)
+        if use_apc and bind is not None and getattr(gen, "apc", None) is not None:
+            gen.apc = bind(gen.model)
+        return gen
 
     def _admit(self, job: _Job, alone: bool) -> None:
         from .mrope import clear_rope_state
@@ -732,6 +742,8 @@ class VLMBatchRunner:
                 lm._rope_deltas = mx.array([[job.rope_delta]], dtype=mx.float32)
         prompt_progress, responses = group.gen.next()
         self._note_prefill(group)
+        for job in group.jobs.values():
+            self._note_cache(job)
         if group.spec:
             for job in group.jobs.values():
                 _note_spec(self.drafter, job)
@@ -753,6 +765,7 @@ class VLMBatchRunner:
             job = group.jobs.get(getattr(progress, "uid", None))
             if job is not None:
                 job.stats.cached_tokens = int(getattr(progress, "cached_tokens", 0))
+                self._note_cache(job)
         for response in responses:
             job = group.jobs.get(response.uid)
             if job is None:
@@ -781,6 +794,18 @@ class VLMBatchRunner:
             job.out.put((int(response.token), lp))
             if response.finish_reason is not None:
                 self._finish(group, response.uid, response.finish_reason)
+
+    def _note_cache(self, job: _Job) -> None:
+        """Record the tier and lookup time of ``job``'s prefix-cache hit (per-request
+        provenance in ``x_yunshu.cache``)."""
+        mgr = self.apc_manager
+        take = getattr(mgr, "take_lookup", None)
+        if take is None or job.stats.cache_tier is not None:
+            return
+        rec = take(len(job.ids), job.stats.cached_tokens, since=job.stats.t_admit)
+        if rec is not None:
+            job.stats.cache_tier = rec.tier
+            job.stats.cache_reload_ms = rec.ms
 
     def _note_driver_prefill(self) -> None:
         """Publish prefill progress of the round driver's rows."""

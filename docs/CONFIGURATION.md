@@ -129,7 +129,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `YUNSHU_VLM_APC_MEMORY_GB` | float | 8.0 | VLM runner prefix cache (APC) RAM budget in GiB; 0 disables the prefix cache. |
+| `YUNSHU_VLM_APC_MEMORY_GB` | float | unset | VLM runner prefix cache (APC) RAM budget in GiB; 0 disables the prefix cache. Unset: half of the memory left after the model weights and a 16 GiB reserve, between 4 and 32 GiB (128 GB machine, 27B model: 32). A 27B checkpoint costs about 130 KiB per cached token. |
 | `YUNSHU_VLM_APC_DISK_DIR` | path | unset | Directory for the APC SSD tier; evicted prefixes reload from disk instead of re-prefilling. |
 | `YUNSHU_KV_PRECISION` | `bf16` \| `int8` | bf16 | KV cache precision of the Qwen3.5-family runner's shared decode batch: 'bf16' (lossless) or 'int8' (int8 codes + one fp16 scale per 32-dim group: ~0.53x the KV memory and read bandwidth for a small attention error; memory vs quality). A lone request and the speculative lane stay bf16. Applies to models with Qwen3.5-family attention (the ragged KV layout). |
 | `YUNSHU_VLM_APC_DISK_GB` | float | 64.0 | Size cap of the APC SSD tier in GiB. |

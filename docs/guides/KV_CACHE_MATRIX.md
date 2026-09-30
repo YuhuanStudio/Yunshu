@@ -9,6 +9,44 @@ sequentially (no concurrency) so numbers don't interfere. M3 Max, greedy, in-pro
 PYTHONPATH=. uv run python scripts/bench_all.py
 ```
 
+## Which cache tiers each serving path has
+
+Read this first: the "four tiers" exist on ONE of the serving paths.
+
+| Serving path | Serves | RAM, full precision (HOT) | RAM, 4-bit (WARM) | SSD | Nothing cached (COLD) |
+|---|---|---|---|---|---|
+| **VLM runner** (`VLMEngine` + `vlm_batch_runner.py`, mlx-vlm APC) | every mlx-vlm model, Qwen3.8-27B included; all `/v1/chat/completions`, `/v1/messages`, `/v1/responses` traffic for them | yes: exact checkpoints (KV + recurrent state), byte budget `YUNSHU_VLM_APC_MEMORY_GB` | **no** (would be lossy; not implemented here) | yes, lossless (bit-exact states): `YUNSHU_VLM_APC_DISK_DIR`, `YUNSHU_VLM_APC_DISK_GB` | full prefill |
+| **Text fast path** (`BatchedEngine._generate_fast`, mlx-lm `generate_step`) | text-only mlx-lm models (e.g. Qwen2.5-3B) | yes: `KVPrefixCache`, `YUNSHU_PREFIX_MAX_ENTRIES` entries | yes but **off by default** (`YUNSHU_PREFIX_HOT_LIMIT=0`; lossy on reuse) | yes but **off by default** (`YUNSHU_SSD_CACHE=1`; `native` precision is bit-exact) | full prefill |
+| Engine loop (`YUNSHU_ENGINE_LOOP=1`, legacy) | text models | radix cache (HOT only) | no | no | full prefill |
+
+`x_yunshu.cache` on every response says which tier served the request (additive; the SDK fields are
+untouched), and `X-Yunshu-Cache-Tier` / `X-Yunshu-Cache-Reload-Ms` carry it on non-streaming responses:
+
+```json
+"x_yunshu": { "cached_tokens": 13867,
+              "cache": { "tier": "ram", "cached_tokens": 13867, "reload_ms": 41.2 } }
+```
+
+`tier` is `ram` (full-precision RAM: the VLM runner's APC, the text path's HOT), `warm` (text path only,
+4-bit RAM, lossy), `ssd` (reloaded from disk; `reload_ms` includes the read) or `none`. `/debug/kv-cache`
+and `/metrics` (`apc_*` gauges and counters) report occupancy, entries, hits by tier, evictions and disk
+bytes for the VLM runner.
+
+### VLM runner (APC) policy
+
+mlx-vlm's APC keeps exact checkpoints for hybrid (GDN) models: a full copy of the attention KV plus the
+recurrent state at one token position, reusable only by a prompt that starts with exactly those tokens.
+`yunshu_engine/apc_manager.py` (`YunshuAPCManager`, `SpillDiskStore`) changes the policy, not the states
+(a hit restores the same bytes a cold prefill would produce):
+
+- the byte budget (not a two-entry cap) limits RAM; the default budget is half of the memory left after the
+  weights and a 16 GiB reserve, between 4 and 32 GiB (a 27B checkpoint costs about 130 KiB per cached token);
+- a request's checkpoints supersede earlier-request checkpoints that are prefixes of it (the conversation
+  grew), so a long session holds one copy, not one per turn;
+- the end of the system turn (system prompt + tool list) is a checkpoint of its own, kept per distinct
+  head: a new session in the same project reuses it;
+- the SSD tier receives a checkpoint when RAM evicts it (and resident ones at shutdown), not on every store.
+
 ## Result (latest run)
 
 ```

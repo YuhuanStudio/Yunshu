@@ -639,6 +639,14 @@ def get_message_adapter(model_name: str | None = None) -> MessageAdapter:
     return GenericMessageAdapter()
 
 
+def keeps_mid_conversation_system(model_name: str | None = None) -> bool:
+    """True when the family's adapter leaves later system messages where the agent put
+    them (Qwen: as user messages in place), so the API layer must not hoist them into the
+    leading system prompt: a per-turn note there rewrites the prompt start every turn and
+    defeats prefix reuse."""
+    return isinstance(get_message_adapter(model_name), QwenMessageAdapter)
+
+
 def adapt_messages(messages: list[dict], model_name: str | None = None) -> list[dict]:
     """Convenience: adapt messages for a model in one call."""
     adapter = get_message_adapter(model_name)

@@ -1114,6 +1114,16 @@ async def _prewarm_response(req: ResponsesRequest, request: Request):
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
+def _engine_templates_itself(engine) -> bool:
+    """VLMEngine (every mlx-vlm model, the 27B included) applies its own chat template,
+    family adapter and native tool rendering to the message list. Handing it a string that
+    this router already templated wraps the whole ChatML transcript in a user message, and
+    the model then reads a chat log inside a user turn."""
+    from yunshu_engine.vlm_engine import VLMEngine
+
+    return isinstance(engine, VLMEngine)
+
+
 @router.post("/responses", response_model=None)
 async def create_response(req: ResponsesRequest, request: Request):
     """OpenAI Responses API endpoint."""
@@ -1527,7 +1537,7 @@ async def create_response(req: ResponsesRequest, request: Request):
         # _messages_to_text() does not call adapt_messages() and may strip
         # tool-related fields, producing garbage for tool-use conversations.
         _non_batched_prompt: str | list[dict] = messages
-        if not is_batched and messages:
+        if not is_batched and not _engine_templates_itself(engine) and messages:
             _tokenizer = getattr(engine, "_tokenizer", None)
             if _tokenizer is not None and hasattr(_tokenizer, "apply_chat_template"):
                 # bring this deprecated non-batched path closer to the engine's
@@ -2050,7 +2060,7 @@ async def _stream_response(
     # _messages_to_text() does not call adapt_messages() and may strip
     # tool-related fields, producing garbage for tool-use conversations.
     _stream_prompt: str | list[dict] = messages
-    if not is_batched and messages:
+    if not is_batched and not _engine_templates_itself(engine) and messages:
         _tokenizer = getattr(engine, "_tokenizer", None)
         if _tokenizer is not None and hasattr(_tokenizer, "apply_chat_template"):
             # same role-remap + normalize as the non-stream sibling above.
