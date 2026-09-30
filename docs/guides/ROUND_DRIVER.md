@@ -33,9 +33,10 @@ Each **step** is one forward of one kind:
   drafts), right-padded to the longest window `T`; every weight-bearing op sees `B * T` rows (lane
   matmuls are flat in the row count up to 128 rows), padded positions carry a copy of the row's last
   token and write keys past its length / are skipped by the recurrence;
-- **prefill step**: fixed 512-token chunks of waiting prompts (absolute spans from the prompt
-  start), several prompts in one forward, up to 4096 tokens when no row decodes and 512 while rows
-  decode.
+- **prefill step**: waiting prompts' *atoms* (512-token chunks on the grid from the prompt start,
+  cut at the prompt's checkpoints and end): one atom while rows decode, up to 4096 tokens when no
+  row decodes. A prompt's consecutive full atoms run as ONE segment (its matmuls see 4096 rows), a
+  partial atom (checkpoint cut, tail) as a segment of its own.
 
 While rows decode and prompts wait, prefill and decode steps alternate one-to-one; the prefill
 budget sets the trade between the waiting prompt's TTFT and the decoding rows' rate. (Packing the
@@ -62,12 +63,18 @@ also snapshot the MTP head's KV (appended to the cache list) so a restored row d
 step; those entries are keyed apart (`extra_hash` salt) from rows without a head, and from the
 upstream runner's entries.
 
-Prefill numerics depend on the span a matmul sees, so the span plan is a function of the prompt alone:
-fixed `chunk`-token spans on the grid from position 0, cut at the prompt's own checkpoints. A row
-restored at a checkpoint on the grid continues with the spans a cold prefill runs, and a repeated
-prompt has the same plan both times, so hit == miss token for token
+Prefill numerics depend on the atom a token is in, so the atom plan is a function of the prompt
+alone: `chunk`-token atoms on the grid from position 0, cut at the prompt's own checkpoints and its
+end. A row restored at a checkpoint on the grid continues with the atoms a cold prefill runs, and a
+repeated prompt has the same plan both times, so hit == miss token for token
 (`tests/unit/test_round_driver_apc.py`). A checkpoint from a prompt with a different plan (a prefix
 that ends off the grid) is still valid state; the continuation just follows this prompt's own plan.
+How many full atoms one step runs together (512 while decoding rows wait, 4096 idle) never changes a
+token's bits: stock quantized matmul rows do not depend on a multiple-of-512 row count, prefill
+attention runs in `chunk`-token query blocks on the absolute grid, and the narrow GDN
+`in_proj_a/b` take the lane kernel (their stock kernel follows the row count). Measured on 27B: the
+same prompt as 512 / 1024 / 2048 / 4096-token spans gives identical hidden states and caches over all
+64 layers (`scripts/research/probe_span_bits.py`).
 
 ## Lossless: what holds per row
 
@@ -84,10 +91,13 @@ verify, or whether it drafts at all:
   for its own tokens. The kernel also writes the state after each real token but the last
   (`hist`); a row that keeps only part of its window continues from `hist[kept - 1]` and the conv
   window from its position `kept` (`DecodeBatch.commit`); KV needs only its length set.
-- **Prefill**: fixed spans (see the APC section), each its own segment with its own matmul calls, so a
-  prompt's bits do not depend on what it was packed with. Projections run MLX's stock quantized
-  matmul on the layer's weight untiled from the lane layout (`LaneLinear.prefill`, transient: one
-  layer's copy at a time), not the 128-row lane pieces (~25% slower at prefill sizes).
+- **Prefill**: atoms (see the APC section), each segment with its own matmul calls, so a prompt's bits
+  do not depend on what it was packed with. Projections of full-atom segments run MLX's stock
+  quantized matmul on the layer's weight untiled from the lane layout (`LaneLinear.prefill`,
+  transient: a few layers' copies at a time, ~140 ms per step on 27B), not the 128-row lane pieces
+  (~25% slower at prefill sizes). A partial atom of up to 256 tokens (a prompt's tail, the token after
+  a checkpoint: a repeated prompt's whole prefill) uses the lane kernel: no untiling, so a repeated
+  32K document's first token comes ~100 ms sooner.
 - Norms, activations, embedding: per token.
 
 For greedy rows: **spec on == spec off, and a row alone == the same row in any batch or join

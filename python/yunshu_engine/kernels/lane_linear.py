@@ -30,6 +30,7 @@ from .tensorfold import lane_qmm
 logger = logging.getLogger(__name__)
 
 PIECE = lane_qmm.MAX_ROWS
+NARROW = 256  # outputs below this run the lane matmul in prefill too
 
 
 def eligible(module: Any) -> bool:
@@ -139,7 +140,14 @@ class LaneLinear(nn.Module):
         matmul speed. A stock call's bits depend on its own row count, so the
         caller passes each prompt span as its own array: a prompt's prefill
         never depends on what shares the step. The weight is untiled once for
-        all spans (a transient copy, not a second resident one)."""
+        all spans (a transient copy, not a second resident one).
+
+        Narrow projections (GDN ``in_proj_a`` / ``in_proj_b``, a few dozen
+        outputs) are not span-invariant in the stock matmul (its kernel choice
+        follows the row count), and cost nothing: they take the lane path, so
+        a prompt's bits do not depend on how it was cut into spans."""
+        if self.output_dims < NARROW:
+            return [self(x) for x in xs]
         weight, scales, biases = self.stock()
         out = []
         for x in xs:
