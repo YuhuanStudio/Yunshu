@@ -684,6 +684,32 @@ class ResponsesRequest(BaseModel):
         return self
 
 
+def _input_file_text(block: dict) -> str:
+    """Text of an ``input_file`` part: a text file's content inline, else a note the model can act on."""
+    import base64 as _b64
+
+    name = block.get("filename") or "file"
+    data = block.get("file_data")
+    if isinstance(data, str) and data:
+        mime = "text/plain"
+        payload = data
+        if data.startswith("data:"):
+            head, _, payload = data.partition(",")
+            mime = head[5:].split(";")[0] or "text/plain"
+        try:
+            raw = _b64.b64decode(payload)
+        except Exception:
+            return ""
+        if mime.startswith("text/") or mime in (
+            "application/json",
+            "application/xml",
+            "application/x-yaml",
+        ):
+            return f"[file: {name}]\n{raw.decode('utf-8', errors='replace')}"
+        return f"[file: {name} ({mime}) cannot be read as text by this model]"
+    return ""
+
+
 def _extract_input_text(content) -> str | list:
     """Flatten OpenAI Responses content blocks to text.
 
@@ -728,6 +754,11 @@ def _extract_input_text(content) -> str | list:
             url = iu.get("url") if isinstance(iu, dict) else iu
             url = url or block.get("url")
             multimodal.append({"type": "image_url", "image_url": {"url": url}})
+        elif btype == "input_file":
+            txt = _input_file_text(block)
+            if txt:
+                text_parts.append(txt)
+                multimodal.append({"type": "text", "text": txt})
         elif btype == "input_audio":
             has_media = True
             multimodal.append(
@@ -1012,6 +1043,33 @@ async def _prewarm_response(req: ResponsesRequest, request: Request):
 async def create_response(req: ResponsesRequest, request: Request):
     """OpenAI Responses API endpoint."""
     _check_permission(request, "can_infer")
+    if isinstance(req.input, list):
+        from ..files_store import FileRefError, has_file_refs, resolve_file_refs
+
+        _raw_items = [
+            i.model_dump() if hasattr(i, "model_dump") else i for i in req.input
+        ]
+        if has_file_refs(_raw_items):
+            try:
+                req = req.model_copy(
+                    update={
+                        "input": [
+                            ResponseInputText(**i)
+                            for i in resolve_file_refs(_raw_items)
+                        ]
+                    }
+                )
+            except FileRefError as exc:
+                return JSONResponse(
+                    status_code=exc.status,
+                    content={
+                        "error": {
+                            "message": exc.message,
+                            "type": "invalid_request_error",
+                            "code": "file_not_found" if exc.status == 404 else None,
+                        }
+                    },
+                )
     if req.generate is False:
         return await _prewarm_response(req, request)
     # OpenAI background mode: return a queued response immediately and run the

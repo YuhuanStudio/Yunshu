@@ -951,7 +951,36 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     functions (so the recursion takes the ordinary path below).
     """
     _check_permission(request, "can_infer")
+    from ..files_store import FileRefError, has_file_refs, resolve_file_refs
     from ..server_tools.anthropic_loop import create_with_server_tools, has_server_tools
+
+    # Files API references ({"source": {"type": "file", "file_id": ...}}) become inline sources.
+    if has_file_refs([m.content for m in req.messages]) or has_file_refs(req.system):
+        try:
+            req = req.model_copy(
+                update={
+                    "messages": [
+                        AnthropicMessage(
+                            role=m.role, content=resolve_file_refs(m.content)
+                        )
+                        for m in req.messages
+                    ],
+                    "system": resolve_file_refs(req.system),
+                }
+            )
+        except FileRefError as exc:
+            return JSONResponse(
+                status_code=exc.status,
+                content={
+                    "type": "error",
+                    "error": {
+                        "type": "not_found_error"
+                        if exc.status == 404
+                        else "invalid_request_error",
+                        "message": exc.message,
+                    },
+                },
+            )
 
     if has_server_tools(req):
         return await create_with_server_tools(req, request, create_message)
@@ -990,7 +1019,14 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     _filtered_messages: list[dict] = []
     for msg in messages:
         if msg.get("role") == "system":
-            _system_parts.append(msg.get("content", ""))
+            _c = msg.get("content", "")
+            # With image blocks anywhere in the request every message's content is a list
+            # of parts (Claude Code's mid-conversation system reminders included).
+            if isinstance(_c, list):
+                _c = "\n".join(
+                    p.get("text", "") if isinstance(p, dict) else str(p) for p in _c
+                )
+            _system_parts.append(_c or "")
         else:
             _filtered_messages.append(msg)
     messages = _filtered_messages

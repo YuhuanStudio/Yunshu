@@ -643,3 +643,49 @@ def test_blank_text_blocks_are_not_emitted(make):
         "text",
     ]
     assert m["content"][-1]["text"] == "Answer [1]."
+
+
+def test_mid_conversation_system_message_with_image_request_does_not_crash(monkeypatch):
+    """Claude Code sends role=system reminders mid-conversation; with an image in the request every
+    message's content became a parts list and joining the lifted system text raised a 500."""
+    from fastapi import HTTPException
+
+    async def no_engine(model_id):
+        raise HTTPException(status_code=404, detail="no engine in this test")
+
+    monkeypatch.setattr(anthropic, "_resolve_engine", no_engine)
+    app = FastAPI()
+    app.include_router(anthropic.router, prefix="/v1")
+    png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    r = TestClient(app, raise_server_exceptions=False).post(
+        "/v1/messages",
+        json={
+            "model": "m",
+            "max_tokens": 10,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": png,
+                            },
+                        },
+                        {"type": "text", "text": "look"},
+                    ],
+                },
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "<reminder>7 left</reminder>"}
+                    ],
+                },
+            ],
+        },
+    )
+    assert r.status_code == 404, (
+        r.text
+    )  # reached engine resolution: the system lift did not crash
