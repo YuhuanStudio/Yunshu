@@ -421,7 +421,7 @@ async def run_stream(req, request, inner: Inner, setup: _Setup) -> AsyncIterator
     started = False
     stop_reason = "end_turn"
     sources: list[SearchResult] = []
-    stats = {"rounds": 0, "tools": []}
+    stats = {"rounds": 0, "tools": [], "round_usage": []}
     msg_id = _new_id("msg_")
     try:
         for rnd in range(max_iter):
@@ -601,6 +601,18 @@ async def run_stream(req, request, inner: Inner, setup: _Setup) -> AsyncIterator
                     yield _sse("error", ev)
                     return
             total.add(round_usage)
+            # Per-round prompt accounting: a continuation should read the shared prefix from the
+            # cache (cache_read_input_tokens) and prefill only the new turn (input_tokens).
+            stats["round_usage"].append(
+                {
+                    k: round_usage.get(k)
+                    for k in (
+                        "input_tokens",
+                        "cache_read_input_tokens",
+                        "output_tokens",
+                    )
+                }
+            )
             # blocks of this model turn -> assistant message for history; run server calls
             calls = []
             for tb in tool_blocks.values():

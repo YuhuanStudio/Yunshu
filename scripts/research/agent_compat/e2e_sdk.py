@@ -83,8 +83,10 @@ def anth_search():
     assert a.search_fact.lower() in text.lower(), text
     cites = [c for b in m.content if b.type == "text" for c in (b.citations or [])]
     assert m.usage.server_tool_use.web_search_requests >= 1
+    xs = ((m.model_extra or {}).get("x_yunshu") or {}).get("server_tools") or {}
     return {
         "kinds": ks,
+        "round_usage": xs.get("round_usage"),
         "citations": len(cites),
         "text": text[:200],
         "usage": m.usage.model_dump(),

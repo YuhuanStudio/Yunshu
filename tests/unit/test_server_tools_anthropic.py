@@ -94,6 +94,7 @@ def test_web_search_non_stream(make):
         m["usage"]["input_tokens"] == 20 and m["usage"]["output_tokens"] == 10
     )  # summed over rounds
     assert m["x_yunshu"]["server_tools"]["rounds"] == 2
+    assert len(m["x_yunshu"]["server_tools"]["round_usage"]) == 2
     assert fake.calls[0]["query"] == "yunshu"
     # round 2 saw the tool call and its result, and no server-tool declaration leaked as a type
     second = inner.requests[1]

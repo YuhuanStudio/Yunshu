@@ -416,7 +416,7 @@ class _Run:
         }
         self.sources: list[SearchResult] = []
         self.tool_texts: dict[str, str] = {}
-        self.stats: dict = {"rounds": 0, "tools": []}
+        self.stats: dict = {"rounds": 0, "tools": [], "round_usage": []}
         self.final: dict | None = None
         self.error: tuple[int, dict] | None = None
         self.status = "completed"
@@ -433,6 +433,16 @@ class _Run:
 
     def add_usage(self, u: dict | None):
         u = u or {}
+        # per round: a continuation should read the shared prefix from the cache
+        self.stats["round_usage"].append(
+            {
+                "input_tokens": u.get("input_tokens"),
+                "cached_tokens": (u.get("input_tokens_details") or {}).get(
+                    "cached_tokens"
+                ),
+                "output_tokens": u.get("output_tokens"),
+            }
+        )
         for k in ("input_tokens", "output_tokens", "total_tokens"):
             if isinstance(u.get(k), int):
                 self.usage[k] += u[k]

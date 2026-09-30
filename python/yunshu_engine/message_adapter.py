@@ -228,6 +228,32 @@ class DeepSeekMessageAdapter(MessageAdapter):
         return "deepseek"
 
 
+def _merge_leading_system(messages: list[dict]) -> list[dict]:
+    """Merge a run of consecutive leading ``system`` messages into one.
+
+    Templates such as Qwen's accept a system message only as ``messages[0]`` ("System message
+    must be at the beginning"), so ``instructions`` plus the ``developer`` messages Codex sends
+    (both become ``system``) must reach the template as a single one.
+    """
+    n = 0
+    while n < len(messages) and messages[n].get("role") == "system":
+        n += 1
+    if n < 2:
+        return messages
+
+    def text(c) -> str:
+        if isinstance(c, str):
+            return c
+        if isinstance(c, list):
+            return "\n".join(
+                p.get("text", "") if isinstance(p, dict) else str(p) for p in c
+            )
+        return "" if c is None else str(c)
+
+    merged = "\n\n".join(t for t in (text(m.get("content")) for m in messages[:n]) if t)
+    return [{"role": "system", "content": merged}, *messages[n:]]
+
+
 class QwenMessageAdapter(MessageAdapter):
     """Qwen 3.5: Attention patch compatibility formatting.
 
@@ -268,7 +294,7 @@ class QwenMessageAdapter(MessageAdapter):
             sys_msgs = [m for m in adapted if m["role"] == "system"]
             other = [m for m in adapted if m["role"] != "system"]
             adapted = sys_msgs + other
-        return adapted
+        return _merge_leading_system(adapted)
 
     def family_name(self) -> str:
         return "qwen"

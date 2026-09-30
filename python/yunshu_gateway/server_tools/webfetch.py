@@ -7,6 +7,7 @@ No provider is needed. Errors carry Anthropic's ``web_fetch_tool_result_error`` 
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 from dataclasses import dataclass, field
@@ -299,7 +300,8 @@ async def fetch_url(
             if ctype in ("text/html", "application/xhtml+xml") or (
                 "<html" in text[:2000].lower()
             ):
-                title, text = html_to_text(text, cur)
+                # off the event loop: parsing a large page must not stall other streams
+                title, text = await asyncio.to_thread(html_to_text, text, cur)
             elif ctype == "text/markdown":
                 media = "text/markdown"
             if len(text) > cap:
