@@ -29,7 +29,7 @@ _TRUNCATE_KEEP = 512 * 1024
 import contextlib
 import os
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from yunshu_engine.paths import stage_media_file
 from yunshu_engine.tool_arguments import coerce_tool_calls
@@ -180,7 +180,11 @@ class AnthropicTool(BaseModel):
     types like ``web_search_20250305`` but user-defined tools have no type.
     """
 
-    name: str
+    # Server tools (web_search_*, web_fetch_*) and mcp_toolset carry extra fields
+    # (max_uses, allowed_domains, user_location, mcp_server_name, ...); keep them.
+    model_config = ConfigDict(extra="allow")
+
+    name: str = ""  # mcp_toolset has no name
     description: str | None = None
     input_schema: dict | None = None
     type: str | None = None  # Server-side tools set this; user tools omit it
@@ -217,6 +221,13 @@ class AnthropicMessagesRequest(BaseModel):
     metadata: dict | None = None
     tools: list[AnthropicTool] | None = None
     tool_choice: dict | str | None = None
+    # MCP connector (beta mcp-client): servers this gateway connects to and runs tools on.
+    mcp_servers: list[dict] | None = None
+    # Sent by Claude Code and the SDKs; accepted so the request validates.
+    output_config: dict | None = None
+    context_management: dict | None = None
+    service_tier: str | None = None
+    container: str | dict | None = None
 
     # ── Yunshu-extended fields (forwarded to engine) ──
     lora_adapter: str | None = None
@@ -286,6 +297,8 @@ class AnthropicMessagesRequest(BaseModel):
                     )
             elif thinking_type == "disabled":
                 pass  # Explicitly disabling thinking is valid
+            elif thinking_type == "adaptive":
+                pass  # the model decides how much to think (Claude Code's default)
             elif thinking_type is not None:
                 raise ValueError(
                     f"thinking.type must be 'enabled' or 'disabled', got '{thinking_type}'"
@@ -881,8 +894,18 @@ def _try_parse_tool_call_delta(text: str) -> list[dict] | None:
 
 @router.post("/messages", response_model=None)
 async def create_message(req: AnthropicMessagesRequest, request: Request):
-    """Anthropic Messages API endpoint."""
+    """Anthropic Messages API endpoint.
+
+    Requests that declare server tools (web_search / web_fetch) or MCP servers run the
+    generate -> execute -> continue loop in ``server_tools.anthropic_loop``, which calls this
+    handler again for each generation round with the server tools rewritten as plain
+    functions (so the recursion takes the ordinary path below).
+    """
     _check_permission(request, "can_infer")
+    from ..server_tools.anthropic_loop import create_with_server_tools, has_server_tools
+
+    if has_server_tools(req):
+        return await create_with_server_tools(req, request, create_message)
     # Build messages list. The canonical system text (top-level `system` field +
     # any role="system" lifted from messages[]) is prepended once AFTER the lift
     # block below — do NOT add it here, or it gets lifted back out and the merge
