@@ -238,7 +238,7 @@ _add("YUNSHU_MCP_CONNECTOR", "bool", True, "Serve the MCP connector: Anthropic m
 _add("YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE", "bool", True, "Let the MCP connector reach private and loopback MCP servers (local tool servers are the common case). Off: only public addresses.", "server-tools")
 _add("YUNSHU_MCP_CONNECTOR_TIMEOUT", "float", 30.0, "Seconds an MCP connector call (initialize, tools/list, tools/call) may take.", "server-tools", minimum=1.0)
 _add("YUNSHU_SERVER_TOOL_MAX_ITERATIONS", "int", 8, "Most generate, run-tool, continue rounds one request may take.", "server-tools", minimum=1)
-_add("YUNSHU_MODEL_ALIASES", "json", None, "Extra model-name aliases as a JSON object {alias: served model id}. Agents ask for names like claude-sonnet-4-5, opus, haiku or gpt-5; built-in aliases already map the common ones to the served model.", "server-tools")
+_add("YUNSHU_MODEL_ALIASES", "json", None, "Multi-model mode: map the model names agents ask for (claude-sonnet-4-5, opus, gpt-5) onto a served model, as a JSON object {pattern: served model id}; patterns are exact names, prefix* or * (first match wins; a real model name always wins). Single-model mode answers to every name already.", "server-tools")
 
 # ── observability ──────────────────────────────────────────────────────
 _add("YUNSHU_LOG_LEVEL", "enum", "INFO", "Log level for Yunshu's loggers (third-party loggers stay at WARNING).", "observability", choices=("DEBUG", "INFO", "WARNING", "ERROR"))

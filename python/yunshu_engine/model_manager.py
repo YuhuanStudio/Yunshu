@@ -1292,6 +1292,28 @@ class ModelManager:
                 if mid.lower() == stripped.lower():
                     return mid
 
+        return self._resolve_alias(model_id)
+
+    def _resolve_alias(self, model_id: str) -> str | None:
+        """``YUNSHU_MODEL_ALIASES``: agents ask for names like ``claude-sonnet-4-5``, ``opus`` or
+        ``gpt-5``. ``{"claude-*": "qwen3.8-27b", "*": "qwen3.8-27b"}`` maps them onto a served model
+        (exact names, ``prefix*`` patterns, and ``*`` for everything else; the first match wins)."""
+        from . import settings
+
+        aliases = settings.get("YUNSHU_MODEL_ALIASES")
+        if not isinstance(aliases, dict):
+            return None
+        lower = model_id.lower()
+        for pattern, target in aliases.items():
+            pat = str(pattern).lower()
+            if (
+                pat == "*"
+                or pat == lower
+                or (pat.endswith("*") and lower.startswith(pat[:-1]))
+            ):
+                for mid in self._entries:
+                    if mid == target or mid.lower() == str(target).lower():
+                        return mid
         return None
 
     async def shutdown(self) -> None:
