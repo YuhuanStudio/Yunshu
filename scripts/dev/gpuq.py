@@ -229,10 +229,9 @@ def _adopt(job: dict, path: Path) -> None:
     except (OSError, ValueError):
         rc = None
     if rc is None and not why:
-        # Started by an older daemon without an rc file: judge by the log.
-        log = LOGS / f"{job['id']}.log"
-        text = log.read_text(errors="replace") if log.exists() else ""
-        state = "failed" if "Traceback" in text else "done"
+        # A reboot or killed shell can leave an ordinary partial log without
+        # writing the exit status. Absence of a traceback is not completion.
+        state = "lost"
     else:
         state = why or ("done" if rc == 0 else "failed")
     job.update(state=state, rc=rc, ended=_now(), adopted=True)
