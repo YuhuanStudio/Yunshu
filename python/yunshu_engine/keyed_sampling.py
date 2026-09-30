@@ -46,8 +46,10 @@ def gumbel(seed: int, positions: mx.array, vocab: int) -> mx.array:
     base = _mix(_u64((int(seed) & 0xFFFFFFFFFFFFFFFF) ^ _C0))
     x = _mix(base ^ (pos * _u64(_C3)))
     x = _mix(x ^ ids)
-    # 24 random bits -> u in (0, 1) exactly representable in float32
-    u = ((x >> _u64(40)).astype(mx.float32) + 0.5) * (1.0 / (1 << 24))
+    # 23 random bits -> u in [2^-24, 1 - 2^-24], exactly representable in float32. (With 24
+    # bits the top bucket is 1 - 2^-25, which float32 rounds to 1.0: -log(-log(1)) = +inf, a
+    # token with infinite noise that wins even when filtered out, or NaN with its -inf row.)
+    u = ((x >> _u64(41)).astype(mx.float32) + 0.5) * (1.0 / (1 << 23))
     return -mx.log(-mx.log(u))
 
 
@@ -80,9 +82,14 @@ class KeyedSampler:
 
     def sample_positions(self, logprobs: mx.array, positions) -> mx.array:
         """Tokens ``[N]`` for logprob rows ``[N, V]`` at generation indices ``positions``."""
-        pos = positions if isinstance(positions, mx.array) else mx.array(list(positions))
+        pos = (
+            positions if isinstance(positions, mx.array) else mx.array(list(positions))
+        )
         row = filter_logprobs(logprobs.astype(mx.float32), self.params)
-        tokens = mx.argmax(row + gumbel(self.seed, pos, row.shape[-1]), axis=-1)
+        noisy = mx.where(
+            row == -mx.inf, -mx.inf, row + gumbel(self.seed, pos, row.shape[-1])
+        )
+        tokens = mx.argmax(noisy, axis=-1)
         return tokens
 
     def sample_target(self, logprobs, row_ids=None, positions=None):

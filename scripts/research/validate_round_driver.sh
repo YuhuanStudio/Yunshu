@@ -81,33 +81,33 @@ run_phase(){
       case $what in
         probe)
           $PY scripts/research/probe_concurrency.py --url $URL --model Qwen3.8-27B --n 8 \
-            --note "round driver=$rd" --output $OUT/concurrency.jsonl > /dev/null 2>&1 || log "concurrency FAILED"
+            --note "round driver=$rd" --output $OUT/concurrency.jsonl > $OUT/$what-rd$rd.out 2>&1 || log "concurrency FAILED"
           $PY scripts/research/bench_engine_matrix.py --url $URL --model Qwen3.8-27B --engine yunshu-rd$rd \
-            --checkpoint $M --pid $YP --note "round driver=$rd" --output $OUT/matrix.jsonl > /dev/null 2>&1 || log "matrix FAILED" ;;
+            --checkpoint $M --pid $YP --note "round driver=$rd" --output $OUT/matrix.jsonl > $OUT/$what-rd$rd.out 2>&1 || log "matrix FAILED" ;;
         ctx1k)
           $PY scripts/research/bench_context_batch.py --url $URL --model Qwen3.8-27B --tokenizer $M --pid $YP \
             --lengths 1024 --batches 2 4 8 --note "round driver=$rd" \
-            --output $OUT/context-batch.jsonl > /dev/null 2>&1 || log "context FAILED" ;;
+            --output $OUT/context-batch.jsonl > $OUT/$what-rd$rd.out 2>&1 || log "context FAILED" ;;
         ctx32k)
           $PY scripts/research/bench_context_batch.py --url $URL --model Qwen3.8-27B --tokenizer $M --pid $YP \
             --lengths 32768 --batches 2 4 8 --batch-pp 32768 --note "round driver=$rd" \
-            --output $OUT/context-batch.jsonl > /dev/null 2>&1 || log "context FAILED" ;;
+            --output $OUT/context-batch.jsonl > $OUT/$what-rd$rd.out 2>&1 || log "context FAILED" ;;
         ctx131k-1)
           $PY scripts/research/bench_context_batch.py --url $URL --model Qwen3.8-27B --tokenizer $M --pid $YP \
             --lengths 131072 --batches --note "round driver=$rd" \
-            --output $OUT/context-batch.jsonl > /dev/null 2>&1 || log "context FAILED" ;;
+            --output $OUT/context-batch.jsonl > $OUT/$what-rd$rd.out 2>&1 || log "context FAILED" ;;
         ctx131k-[24])
           $PY scripts/research/bench_context_batch.py --url $URL --model Qwen3.8-27B --tokenizer $M --pid $YP \
             --lengths --batches ${1##*-} --batch-pp 131072 --note "round driver=$rd" \
-            --output $OUT/context-batch.jsonl > /dev/null 2>&1 || log "context FAILED" ;;
+            --output $OUT/context-batch.jsonl > $OUT/$what-rd$rd.out 2>&1 || log "context FAILED" ;;
         repeat)
           for n in 8192 32768; do
             $PY scripts/research/probe_repeat_doc.py --url $URL --model Qwen3.8-27B --tokenizer $M \
-              --tokens $n --output $OUT/repeat-doc-rd$rd.jsonl > /dev/null 2>&1 || log "repeat FAILED"
+              --tokens $n --output $OUT/repeat-doc-rd$rd.jsonl > $OUT/$what-rd$rd.out 2>&1 || log "repeat FAILED"
           done ;;
         mixed16|mixed32)
           $PY scripts/research/bench_mixed_load.py --url $URL --model Qwen3.8-27B --tokenizer $M \
-            --streams 4 --pp $((${what#mixed} * 1024)) --label rd$rd-$what --output $OUT/mixed-load.jsonl > /dev/null 2>&1 || log "mixed FAILED" ;;
+            --streams 4 --pp $((${what#mixed} * 1024)) --label rd$rd-$what --output $OUT/mixed-load.jsonl > $OUT/$what-rd$rd.out 2>&1 || log "mixed FAILED" ;;
       esac
       stop $YP ;;
     mmlu-?|mmlu0-?)

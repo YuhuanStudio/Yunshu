@@ -1332,27 +1332,48 @@ class VLMEngine:
             logger.debug("no ChatML head marker", exc_info=True)
             return None
 
+    def _apc_disk_namespace(self) -> str:
+        """Directory namespace of this checkpoint's states on disk.
+
+        The path plus the identity of the weights (file names, sizes, mtimes) and the
+        config: re-quantizing or replacing a checkpoint in place must not read back the
+        old checkpoint's states.
+        """
+        h = hashlib.sha256(str(self._model_path).encode())
+        root = Path(str(self._model_path))
+        try:
+            files = sorted(
+                [*root.glob("*.safetensors"), root / "config.json"],
+                key=lambda f: f.name,
+            )
+            for f in files:
+                st = f.stat()
+                h.update(f"|{f.name}:{st.st_size}:{st.st_mtime_ns}".encode())
+        except OSError:
+            pass  # not a local directory: the path alone
+        return h.hexdigest()[:16]
+
     def _apc_disk_tier(self):
-        """Optional APC SSD tier (``YUNSHU_VLM_APC_DISK_DIR``), off by default.
+        """The APC SSD tier (on by default; ``YUNSHU_VLM_APC_DISK=0`` switches it off).
 
         Holds evicted prefix checkpoints (incl. hybrid recurrent state) so a
-        long document revisited after RAM eviction is read back instead of
-        re-prefilled. Namespaced by model path; capped by
-        ``YUNSHU_VLM_APC_DISK_GB``.
+        long document or agent session revisited after RAM eviction (or a restart) is
+        read back instead of re-prefilled. Namespaced by checkpoint; capped by
+        ``YUNSHU_VLM_APC_DISK_GB``. Directory: ``YUNSHU_VLM_APC_DISK_DIR``, else
+        ``~/.yunshu/cache/apc``.
         """
-        path = settings.get("YUNSHU_VLM_APC_DISK_DIR")
-        if not path:
-            return None
-        import hashlib
+        from . import paths
 
+        path = paths.apc_dir()
+        if path is None:
+            return None
         from .apc_manager import SpillDiskStore
 
         max_gb = settings.get("YUNSHU_VLM_APC_DISK_GB")
-        namespace = hashlib.sha256(str(self._model_path).encode()).hexdigest()[:16]
         try:
             disk = SpillDiskStore(
-                Path(path).expanduser(),
-                namespace=namespace,
+                path,
+                namespace=self._apc_disk_namespace(),
                 num_workers=1,
                 max_bytes=int(max_gb * (1 << 30)) if max_gb > 0 else None,
             )
