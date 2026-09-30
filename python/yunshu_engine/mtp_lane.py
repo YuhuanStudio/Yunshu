@@ -31,8 +31,6 @@ from typing import Any
 
 import mlx.core as mx
 
-from .keyed_sampling import KeyedSampler
-
 logger = logging.getLogger(__name__)
 
 _STATE: dict = {"installed": False, "enabled": True, "window": 0, "profile": None}
@@ -68,7 +66,6 @@ def rounds(
     token_dtype: mx.Dtype,
     stop_check: Any,
     eos_token_ids: set | None,
-    keyed: Any = None,
 ) -> Generator[tuple[list, dict | None]]:
     import mlx_vlm.speculative.mtp as mtp
     from mlx_vlm.speculative.common import (
@@ -157,24 +154,10 @@ def rounds(
             verify_input = mx.concatenate(
                 [mx.array([[b]], dtype=token_dtype), draft_tokens], axis=1
             )
-            if keyed is None:
-                verify = mtp._mtp_verify_target(
-                    lm, verify_input, prompt_cache, sampler, sample_target_tokens=True
-                )
-                target = verify.target_tokens.reshape(1, -1).astype(token_dtype)
-            else:
-                # Sampled request: row r draws generation index ``emitted + r`` with the
-                # keyed sampler, so a draft is accepted exactly when serial sampling would
-                # have produced it (see keyed_sampling).
-                verify = mtp._mtp_verify_target(
-                    lm, verify_input, prompt_cache, sampler, sample_target_tokens=False
-                )
-                logits = lm.speculative_logits_from_hidden(verify.hidden)[0]
-                logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
-                target = keyed.sample_positions(
-                    logprobs, list(range(emitted, emitted + bs))
-                ).reshape(1, -1)
-                target = target.astype(token_dtype)
+            verify = mtp._mtp_verify_target(
+                lm, verify_input, prompt_cache, sampler, sample_target_tokens=True
+            )
+            target = verify.target_tokens.reshape(1, -1).astype(token_dtype)
             # Early absorb: every row through the head with the true tokens.
             # The chain's own entries (built from the head's hidden) go first.
             if chained:
@@ -260,10 +243,7 @@ def install() -> bool:
         if (
             _STATE["enabled"]
             and kw.get("draft_kind") == "mtp"
-            and (
-                kw.get("greedy_sampling")
-                or isinstance(kw.get("sampler"), KeyedSampler)
-            )
+            and kw.get("greedy_sampling")
             and first is not None
             and int(first.shape[0]) == 1
             and getattr(draft_model, "supports_greedy_draft_argmax", False)
@@ -281,7 +261,6 @@ def install() -> bool:
                 token_dtype=kw.get("token_dtype", mx.int32),
                 stop_check=kw.get("stop_check"),
                 eos_token_ids=kw.get("eos_token_ids"),
-                keyed=kw["sampler"] if isinstance(kw.get("sampler"), KeyedSampler) else None,
             )
         return original(model, draft_model, prompt_cache, hidden, **kw)
 
