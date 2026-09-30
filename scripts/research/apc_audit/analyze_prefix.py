@@ -157,7 +157,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
     ap.add_argument("--name", required=True)
-    ap.add_argument("--bodies", required=True, help="glob of request bodies, in order")
+    ap.add_argument(
+        "--bodies",
+        required=True,
+        action="append",
+        help="glob of request bodies, in order (repeat for several sessions served "
+        "one after the other by the same server)",
+    )
     ap.add_argument(
         "--actual", help="comma list of the server's cached tokens per request"
     )
@@ -175,8 +181,10 @@ def main():
     r = Renderer(a.model)
     tok = r.engine._tokenizer
     im_end = tok.convert_tokens_to_ids("<|im_end|>")
-    files = sorted(glob.glob(a.bodies))
+    files = [f for g in a.bodies for f in sorted(glob.glob(g))]
     files = [f for f in files if Path(f).stat().st_size > 0]
+    # error captures (NNNN-error-req.json) carry no response to compare with
+    files = [f for f in files if "-error-" not in f]
     renders = [r.render(load_body(Path(f)))["ids"] for f in files]
     actual = [int(x) for x in a.actual.split(",")] if a.actual else None
     if a.actual_from:

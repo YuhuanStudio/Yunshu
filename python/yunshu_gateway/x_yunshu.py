@@ -253,6 +253,8 @@ def progress_payload(info: RequestInfo) -> dict:
     out["phase"] = st.phase
     out["prompt_tokens"] = st.prompt_tokens or (st.prefill_total + st.cached_tokens)
     out["cached_tokens"] = st.cached_tokens
+    if st.cache_tier:
+        out["cache_tier"] = st.cache_tier
     if st.phase == "queued":
         ahead, wait_ms = queue_snapshot(info)
         out["queue_position"] = ahead
