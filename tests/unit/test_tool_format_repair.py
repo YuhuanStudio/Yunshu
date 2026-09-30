@@ -146,3 +146,21 @@ def test_calls_after_a_call_keep_parsing():
     text, calls, _ = _stream(body, 7)
     assert [c[0] for c in calls] == ["Read", "Bash", "Read", "Read"]
     assert "tool_call" not in text
+
+
+def test_tool_named_tag_with_garbled_parameter_syntax():
+    # Seen from Claude Code: the model writes <Read> and a garbled parameter, no closing tags.
+    body = '<tool_call>\n<Read>\n<parameter=file_path": /w/.docs/instructions.md"}'
+    for chunk in (1, 1000):
+        text, calls, _ = _stream("\n\n" + body, chunk)
+        assert calls == [("Read", {"file_path": "/w/.docs/instructions.md"})]
+        assert "tool_call" not in text and "<Read>" not in text
+    calls, rest = _parse(body)
+    assert calls == [("Read", {"file_path": "/w/.docs/instructions.md"})]
+
+
+def test_unknown_tag_call_is_dropped_not_leaked():
+    text, calls, _ = _stream(
+        "<tool_call>\n<Nope>\n<parameter=x>1</parameter>\n</tool_call>"
+    )
+    assert calls == [] and "tool_call" not in text

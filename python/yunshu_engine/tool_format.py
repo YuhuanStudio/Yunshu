@@ -123,7 +123,13 @@ def _upstream(name: str) -> ToolFormat | None:
         body = _unwrap_doubled_braces(body)
         if "<function=" in body:
             return _parse_function_xml(module, body, tools)
-        return _calls_from(module.parse_tool_call(body, tools))
+        try:
+            return _calls_from(module.parse_tool_call(body, tools))
+        except Exception:
+            loose = _parse_loose_tag(body, tools)
+            if loose:
+                return loose
+            raise
 
     return ToolFormat(
         name=name,
@@ -162,6 +168,33 @@ def _parse_function_xml(module: Any, body: str, tools: Any) -> list[Call]:
     if not calls:
         raise ValueError("no <function=> call")
     return calls
+
+
+_LOOSE_TAG = re.compile(r"\s*<(?P<name>[\w.\-]+)>(?P<rest>.*)$", re.DOTALL)
+_LOOSE_PARAM = re.compile(
+    r"<parameter=(?P<key>[\w.\-]+)[\"'>:=\s]*(?P<val>.*?)(?:</parameter>|(?=<parameter=)|\Z)",
+    re.DOTALL,
+)
+
+
+def _parse_loose_tag(body: str, tools: Any) -> list[Call]:
+    """``<Read><parameter=file_path": /x"}`` — a tool-named tag with garbled
+    parameter syntax. Read only when the tag names a tool of the request, so
+    ordinary markup is never taken for a call; stray quote/brace residue
+    around a value is trimmed."""
+    m = _LOOSE_TAG.match(body)
+    known = {
+        t["function"]["name"]
+        for t in (tools or [])
+        if isinstance(t.get("function"), dict)
+    }
+    if not m or m.group("name") not in known:
+        return []
+    args: dict[str, str] = {}
+    for p in _LOOSE_PARAM.finditer(m.group("rest")):
+        val = p.group("val").strip().rstrip("}").strip().strip("\"'").strip()
+        args[p.group("key")] = val
+    return [_call(m.group("name"), args)] if args else []
 
 
 # ── Formats upstream lacks ──────────────────────────────────────────────────
@@ -451,7 +484,7 @@ def next_start(text: str, formats: Sequence[ToolFormat], pos: int = 0):
     return best[0], best[1], group
 
 
-_CALL_LOOK = re.compile(r"\s*(?:<function=|<parameter=|[\[{])")
+_CALL_LOOK = re.compile(r"\s*(?:<function=|<parameter=|<\w+>|[\[{])")
 
 
 def parse_block(
