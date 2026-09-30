@@ -50,3 +50,19 @@ def test_convert_swaps_eligible_layers():
     assert isinstance(m.b, lane_linear.LaneLinear)
     assert isinstance(m.c, nn.QuantizedLinear)
     assert out["skipped"] == ["c"]
+
+
+@pytest.mark.parametrize("n", [16, 48, 128])
+def test_prefill_of_narrow_projections_is_row_invariant(n):
+    """Stock quantized matmul picks its kernel by row count, so a narrow
+    projection's prefill goes through the lane kernel: a token's output does
+    not depend on the span it prefilled in."""
+    mx.random.seed(2)
+    lin = nn.Linear(512, n, bias=False)
+    lin.set_dtype(mx.bfloat16)
+    q = nn.QuantizedLinear.from_linear(lin, group_size=64, bits=4)
+    lane = lane_linear.LaneLinear.from_quantized(q)
+    x = mx.random.normal((1, 2048, 512)).astype(mx.bfloat16)
+    full = lane.prefill([x])[0]
+    for m in (37, 100, 512, 1024):
+        assert mx.array_equal(lane.prefill([x[:, :m]])[0], full[:, :m]).item(), m

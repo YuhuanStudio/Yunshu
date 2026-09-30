@@ -122,6 +122,7 @@ class _Row:
     hit: int = 0  # prompt tokens restored from the APC prefix cache
     ckpts: list = field(default_factory=list)  # APC checkpoint lengths ahead
     salt: int = 0  # APC key of this row's cache layout
+    head_state: Any = None  # MTP head state of a just-joined row: its first draft
 
 
 @dataclass
@@ -274,6 +275,31 @@ class RoundDriver:
                 break
         return end
 
+    def _run_end(self, row: _Row, start: int, budget: int) -> int:
+        """End of the segment a prefill step runs for ``row`` from ``start``:
+        consecutive full ``chunk`` atoms (as many as ``budget`` takes, up to
+        the row's next checkpoint) become ONE segment, so a step with no
+        decoding row runs large matmuls. A partial atom (cut by a checkpoint
+        or the prompt's end) is a segment of its own. The atoms depend on the
+        prompt alone, and a segment of full atoms computes each token's bits
+        as its own atom would (tests/unit/test_round_driver.py: stock quantized
+        matmul rows do not depend on a multiple-of-chunk row count, prefill
+        attention runs in chunk-token query blocks, narrow projections take the
+        lane kernel), so the segment size never changes a prompt's output."""
+        end = self._span_end(row, start)
+        n = len(row.req.ids)
+        while (
+            end - start >= self.chunk
+            and (end - start) % self.chunk == 0
+            and end not in row.ckpts
+            and end < n
+        ):
+            nxt = self._span_end(row, end)
+            if nxt - end != self.chunk or nxt - start > budget:
+                break
+            end = nxt
+        return end
+
     def _store_checkpoint(self, row: _Row, end: int) -> None:
         caches = list(row.cache)
         if row.mtp_cache is not None:
@@ -397,10 +423,18 @@ class RoundDriver:
             ids = r.req.ids
             while budget > 0 and r.done < len(ids):
                 start = r.done
-                end = self._span_end(r, start)
+                end = self._run_end(r, start, budget)
                 chunk = mx.array(ids[start:end], dtype=mx.int32)
                 items.append(
-                    _Item("p", r, Segment(r.cache, chunk), start, end, at, end - start)
+                    _Item(
+                        "p",
+                        r,
+                        Segment(r.cache, chunk, self.chunk),
+                        start,
+                        end,
+                        at,
+                        end - start,
+                    )
                 )
                 r.done = end
                 at += end - start
@@ -463,12 +497,23 @@ class RoundDriver:
         if ready:
             self.head.join(ready)
             arrays += self.head.slots.arrays()
-            self._draft(ready, mx.stack([heads[id(r)] for r in ready]))
+            # The first draft waits for the next decode step: the row's first
+            # token is out already, and drafting (a chain of head forwards)
+            # would only delay it.
+            for r in ready:
+                r.head_state = heads[id(r)]
+                arrays.append(r.head_state)
         mx.eval(*arrays, *self.batch.arrays())
         self.steps += 1
         return events
 
     def _decode_step(self) -> list[Event]:
+        late = [r for r in self.batch.rows if r.head_state is not None]
+        if late:
+            self._draft(late, mx.stack([r.head_state for r in late]))
+            for r in late:
+                r.head_state = None
+            mx.eval(*self.head.slots.arrays())
         started = time.perf_counter()
         rows = list(self.batch.rows)
         windows = [[r.pending, *([] if r.force else r.drafts)] for r in rows]

@@ -154,13 +154,23 @@ def main():
         default="both",
         help="run only the parity check or only the rows sweep (separate locked jobs)",
     )
+    ap.add_argument(
+        "--skip", type=int, default=0, help="start from the k-th prompt (split jobs)"
+    )
+    ap.add_argument(
+        "--warm-rows",
+        type=int,
+        nargs="*",
+        default=None,
+        help="row counts of the warm-up runs (default 1 2 4 8 and max --rows)",
+    )
     ap.add_argument("--output", type=Path, required=True)
     a = ap.parse_args()
     model, processor, drafter, lanes = load(a.ckpt, a.quantize)
     tok = processor.tokenizer
     extra = getattr(tok, "eos_token_ids", None) or []
     stop = {tok.eos_token_id} | set([extra] if isinstance(extra, int) else extra)
-    prompts = [encode(tok, p, a.context) for p in PROMPTS]
+    prompts = [encode(tok, p, a.context) for p in PROMPTS[a.skip :]]
     n_parity = a.parity_rows or max(a.rows)
     a.output.parent.mkdir(parents=True, exist_ok=True)
     with a.output.open("a") as f:
@@ -186,7 +196,8 @@ def main():
             }
         )
         n = a.parity_rows or max(a.rows)
-        for rows in sorted({1, 2, 4, 8, max(a.rows)}):  # compiles + cost curve
+        warm = a.warm_rows if a.warm_rows is not None else {1, 2, 4, 8, max(a.rows)}
+        for rows in sorted(warm):  # compiles + cost curve
             if rows <= len(prompts):
                 run(model, drafter, prompts[:rows], 48, stop)
         if a.phase != "rows":
