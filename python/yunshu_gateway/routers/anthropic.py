@@ -896,6 +896,18 @@ def _try_parse_tool_call_delta(text: str) -> list[dict] | None:
     return calls or None
 
 
+def _keeps_mid_system(requested_model: str | None) -> bool:
+    """Whether the loaded model's message adapter keeps mid-conversation system
+    messages in place (see ``keeps_mid_conversation_system``)."""
+    from yunshu_engine.message_adapter import keeps_mid_conversation_system
+
+    engine = get_engine()
+    name = getattr(engine, "model_name", None) if engine is not None else None
+    return keeps_mid_conversation_system(
+        name if isinstance(name, str) else requested_model
+    )
+
+
 @router.post("/messages", response_model=None)
 async def create_message(req: AnthropicMessagesRequest, request: Request):
     """Anthropic Messages API endpoint."""
@@ -931,12 +943,18 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     # Anthropic API semantics: role="system" entries in messages[] should be
     # lifted into the canonical system field, not left in the messages list.
     # This matches omlx behavior and ensures correct cache key computation.
+    # Only the leading ones for families whose adapter keeps later system messages in
+    # place (Qwen): Claude Code sends a per-turn note as a trailing system message, and
+    # hoisting it into the system prompt rewrote the prompt start every turn (0% reuse).
     _system_parts: list[str] = []
     _filtered_messages: list[dict] = []
+    _in_place = _keeps_mid_system(req.model)
+    _lead = True
     for msg in messages:
-        if msg.get("role") == "system":
+        if msg.get("role") == "system" and (_lead or not _in_place):
             _system_parts.append(msg.get("content", ""))
         else:
+            _lead = False
             _filtered_messages.append(msg)
     messages = _filtered_messages
     # Canonical system text = top-level `system` field, then any lifted
