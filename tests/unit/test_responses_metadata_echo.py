@@ -41,5 +41,5 @@ def test_all_payload_builders_echo_client_metadata():
     src = inspect.getsource(responses)
     # the old hardcoded user_id-in-metadata is gone everywhere
     assert '{"user_id": req.user}' not in src
-    # all four payload builders echo the client's metadata map
-    assert src.count('"metadata": req.metadata,') == 4
+    # all four payload builders + the shared config echo carry the client metadata map
+    assert src.count('"metadata": req.metadata,') == 5

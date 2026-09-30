@@ -62,6 +62,7 @@ class ToolCallStreamer:
         *,
         forced_tool_name: str | None = None,
         allow_parallel: bool = True,
+        max_calls: int | None = None,
         tools: Any = None,
         call_id_prefix: str = "call_",
     ) -> None:
@@ -72,6 +73,7 @@ class ToolCallStreamer:
         self._schemas = tool_schemas(tools)
         self._forced = forced_tool_name
         self._allow_parallel = allow_parallel
+        self._max_calls = max_calls
         self._prefix = call_id_prefix
         self.reset()
 
@@ -162,6 +164,8 @@ class ToolCallStreamer:
         if self._forced is not None and name != self._forced:
             return
         if not self._allow_parallel and self._accepted >= 1:
+            return
+        if self._max_calls is not None and self._accepted >= self._max_calls:
             return
         self._accepted += 1
         call_id = f"{self._prefix}{self._counter:x}"

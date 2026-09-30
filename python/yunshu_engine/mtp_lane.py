@@ -68,7 +68,10 @@ def rounds(
     eos_token_ids: set | None,
 ) -> Generator[tuple[list, dict | None]]:
     import mlx_vlm.speculative.mtp as mtp
-    from mlx_vlm.speculative.common import _dflash_block_total
+    from mlx_vlm.speculative.common import (
+        _dflash_block_total,
+        _record_speculative_round,
+    )
 
     lm = model.language_model if hasattr(model, "language_model") else model
     block_total = _dflash_block_total(draft_model, draft_block_size)
@@ -175,6 +178,9 @@ def rounds(
             accepted = 0
             while accepted < bs - 1 and drafted[accepted] == tgt[accepted]:
                 accepted += 1
+            # per-round drafted / accepted counts (drafter lifetime counters; the runner
+            # diffs them per request for x_yunshu.speculative)
+            _record_speculative_round(draft_model, accepted, bs - 1)
             new_tokens = (drafted[:accepted] + [tgt[accepted]])[: max_tokens - emitted]
             # Rows 0..accepted stay in the head's cache; later rows go.
             rejected = bs - (accepted + 1)

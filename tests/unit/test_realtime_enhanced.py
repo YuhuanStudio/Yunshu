@@ -323,6 +323,15 @@ class TestConversationItemDelete:
         assert session.conversation.items[0].item_id == "item_2"
 
 
+def _created(ws):
+    """The response.created event (rate_limits.updated follows it)."""
+    return next(
+        c[0][0]
+        for c in ws.send_json.call_args_list
+        if c[0][0].get("type") == "response.created"
+    )
+
+
 class TestResponseCreateModalities:
     """Test response.create with modalities filter."""
 
@@ -340,7 +349,7 @@ class TestResponseCreateModalities:
         )
 
         # Check the response.created event
-        event = ws.send_json.call_args[0][0]
+        event = _created(ws)
         assert event["type"] == RealtimeEvent.RESPONSE_CREATED
         assert event["response"]["modalities"] == ["text"]
 
@@ -357,7 +366,7 @@ class TestResponseCreateModalities:
             }
         )
 
-        event = ws.send_json.call_args[0][0]
+        event = _created(ws)
         assert event["response"]["modalities"] == ["audio"]
 
     @pytest.mark.asyncio
@@ -373,7 +382,7 @@ class TestResponseCreateModalities:
             }
         )
 
-        event = ws.send_json.call_args[0][0]
+        event = _created(ws)
         assert event["response"]["modalities"] == ["text", "audio"]
 
     @pytest.mark.asyncio
@@ -389,7 +398,7 @@ class TestResponseCreateModalities:
             }
         )
 
-        event = ws.send_json.call_args[0][0]
+        event = _created(ws)
         # Should fall back to ["text"]
         assert "text" in event["response"]["modalities"]
 
@@ -406,7 +415,7 @@ class TestResponseCreateModalities:
             }
         )
 
-        event = ws.send_json.call_args[0][0]
+        event = _created(ws)
         assert event["response"]["modalities"] == ["text"]
 
     @pytest.mark.asyncio
@@ -423,7 +432,7 @@ class TestResponseCreateModalities:
             }
         )
 
-        event = ws.send_json.call_args[0][0]
+        event = _created(ws)
         assert event["response"]["modalities"] == ["text", "audio"]
 
 
