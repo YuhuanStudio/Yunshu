@@ -31,6 +31,7 @@ from yunshu_engine.tool_call_streamer import ToolCallStreamer
 from yunshu_engine.tool_format import parse_tool_output, tool_formats
 
 from ..engine import get_engine, get_model_manager
+from ..error_envelope import EngineStreamError
 from ..streaming import (
     ClosingStreamingResponse,
     extract_thinking,
@@ -4032,6 +4033,8 @@ async def _stream_response(
                 ignore_eos=req.ignore_eos,
                 suppress_tokens=req.suppress_tokens,
             ):
+                if getattr(output, "error", None):
+                    raise EngineStreamError(str(output.error))
                 token_text = output.new_text
                 # emit prefill progress as SSE comment for
                 # client-side progress bars during long chunked prefills.
@@ -4217,6 +4220,8 @@ async def _stream_response(
                 timeout_seconds=req.timeout,
                 lora_adapter=loaded_adapter,
             ):
+                if getattr(output, "error", None):
+                    raise EngineStreamError(str(output.error))
                 # Track token counts for usage reporting
                 if hasattr(output, "prompt_tokens") and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
@@ -4442,12 +4447,17 @@ async def _stream_response(
         yield b'data: {"error": {"message": "Out of GPU memory", "type": "memory_error", "code": "oom"}}\n\n'
         if not done_emitted:
             yield b"data: [DONE]\n\n"
-    except Exception:
+    except Exception as _stream_exc:
         if _cancel_evt is not None:
             _cancel_evt.set()
         logger.error("Chat streaming error", exc_info=True)
         err_payload = {
-            "error": {"message": "Internal server error", "type": "internal_error"}
+            "error": {
+                "message": str(_stream_exc)
+                if isinstance(_stream_exc, EngineStreamError)
+                else "Internal server error",
+                "type": "internal_error",
+            }
         }
         yield f"data: {json.dumps(err_payload, ensure_ascii=False)}\n\n".encode()
         if not done_emitted:

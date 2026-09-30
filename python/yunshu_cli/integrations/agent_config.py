@@ -9,6 +9,7 @@ network; ``ModelInfo.from_models_item`` takes the JSON ``/v1/models`` already re
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 
 # A compact coding-agent prompt for Codex's ``base_instructions``. Codex's own default is ~17K characters
@@ -100,6 +101,21 @@ def claude_code_env(
     if effort:
         env["CLAUDE_CODE_EFFORT_LEVEL"] = effort
     return env
+
+
+def claude_statusline_settings(
+    command: str, user_settings: dict | None = None
+) -> str | None:
+    """A ``--settings`` JSON string that adds the Yunshu status line, or ``None``.
+
+    ``--settings`` outranks the user's own settings files, so it is added only when the user has no
+    ``statusLine`` of their own: a status line someone configured is never replaced.
+    """
+    if (user_settings or {}).get("statusLine"):
+        return None
+    return json.dumps(
+        {"statusLine": {"type": "command", "command": command, "padding": 0}}
+    )
 
 
 # ── Codex ─────────────────────────────────────────────────────────────────────

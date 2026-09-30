@@ -14,6 +14,13 @@ from __future__ import annotations
 
 from starlette.responses import JSONResponse
 
+
+class EngineStreamError(Exception):
+    """The engine failed after a stream started (e.g. a chat-template error). Streaming routers
+    surface it as a protocol error event carrying the engine's message, never as an empty
+    successful completion."""
+
+
 # Paths served by the Anthropic router (exact match — don't overmatch /admin/.../messages).
 _ANTHROPIC_PATHS = frozenset(
     {

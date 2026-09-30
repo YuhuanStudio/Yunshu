@@ -2524,6 +2524,15 @@ class VLMEngine:
             logger.debug("VLM template cache hit: %d chars", len(cached))
             return cached
 
+        # The text path runs the family adapter (Qwen's template rejects a system message
+        # after the first: coding agents send per-turn notes mid-conversation); the vision
+        # path used to skip it, so any agent turn carrying an image failed in the template.
+        try:
+            from yunshu_engine.message_adapter import adapt_messages
+
+            messages = adapt_messages(messages, self.model_name)
+        except Exception:
+            logger.debug("VLM message adapter failed", exc_info=True)
         vlm_messages = self._build_vlm_messages(messages, max_images=max_images)
         tpl_kwargs: dict = {"tokenize": False, "add_generation_prompt": True}
         if enable_thinking is not None:

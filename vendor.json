@@ -461,18 +461,6 @@
       "commit": "924707f1",
       "license": "Apache-2.0",
       "why": "block pool adapted for UMA"
-    },
-    {
-      "kind": "inspired",
-      "path": "python/yunshu_engine/keyed_sampling.py",
-      "repo": "https://github.com/ashhart/TensorFold",
-      "clone": "reference/TensorFold",
-      "upstream_paths": [
-        "src/tensorfold/engine/exact_sampling.py"
-      ],
-      "commit": "34bae79a",
-      "license": "MIT",
-      "why": "position-keyed Gumbel sampling so sampled requests use speculative decoding losslessly; ours hashes (seed, position, token id) and filters in RowSampler order"
     }
   ],
   "patches": [

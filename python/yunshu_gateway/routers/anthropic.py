@@ -37,6 +37,7 @@ from yunshu_engine.tool_call_streamer import ToolCallStreamer
 from yunshu_engine.tool_format import parse_tool_output, tool_formats
 
 from ..engine import get_engine
+from ..error_envelope import EngineStreamError
 from ..streaming import (
     run_with_disconnect_guard,
     with_sse_keepalive,
@@ -2218,6 +2219,8 @@ async def _stream_anthropic(
                 # Use engine's current_state (token-level tracking) for
                 # thinking routing — more accurate than text-level ThinkingParser
                 # which may miss model-specific tags like Qwen3.5's special tokens.
+                if getattr(output, "error", None):
+                    raise EngineStreamError(str(output.error))
                 _is_reasoning = getattr(output, "current_state", None) == "reasoning"
                 _token_text = output.new_text
 
@@ -2502,6 +2505,8 @@ async def _stream_anthropic(
                 lora_adapter=lora_adapter,
                 kv_cache_breakpoints=kv_cache_breakpoints,
             ):
+                if getattr(output, "error", None):
+                    raise EngineStreamError(str(output.error))
                 if (
                     hasattr(output, "prompt_tokens")
                     and output.prompt_tokens
@@ -2830,7 +2835,7 @@ async def _stream_anthropic(
             "error": {"type": "overloaded_error", "message": "Out of GPU memory"},
         }
         yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode()
-    except Exception:
+    except Exception as _stream_exc:
         logger.error("Anthropic streaming error", exc_info=True)
         # Emit message_start if it was never sent (error before first engine output)
         if not _message_start_emitted:
@@ -2865,7 +2870,12 @@ async def _stream_anthropic(
         yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': _exc_stop_reason, 'stop_sequence': None}, 'usage': _exc_delta_usage})}\n\n".encode()
         error_event = {
             "type": "error",
-            "error": {"type": "api_error", "message": "Internal server error"},
+            "error": {
+                "type": "api_error",
+                "message": str(_stream_exc)
+                if isinstance(_stream_exc, EngineStreamError)
+                else "Internal server error",
+            },
         }
         yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode()
     finally:

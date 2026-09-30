@@ -34,6 +34,7 @@ from pydantic import (
 from yunshu_engine import settings
 
 from ..engine import get_engine, get_engine_for_model
+from ..error_envelope import EngineStreamError
 
 logger = logging.getLogger(__name__)
 
@@ -2441,6 +2442,8 @@ async def _stream_response(
                     timeout_seconds=req.timeout,
                     lora_adapter=loaded_adapter,
                 ):
+                    if getattr(output, "error", None):
+                        raise EngineStreamError(str(output.error))
                     if hasattr(output, "prompt_tokens") and output.prompt_tokens:
                         prompt_tok = output.prompt_tokens
                     if hasattr(output, "reasoning_tokens") and output.reasoning_tokens:
@@ -2523,6 +2526,8 @@ async def _stream_response(
                     timeout_seconds=req.timeout,
                     lora_adapter=loaded_adapter,
                 ):
+                    if getattr(output, "error", None):
+                        raise EngineStreamError(str(output.error))
                     if hasattr(output, "prompt_tokens") and output.prompt_tokens:
                         prompt_tok = output.prompt_tokens
                     if hasattr(output, "reasoning_tokens") and output.reasoning_tokens:
@@ -3078,7 +3083,9 @@ async def _stream_response(
             response_id,
             req.model,
             error_code="server_error",
-            error_message="Internal server error",
+            error_message=str(e)
+            if isinstance(e, EngineStreamError)
+            else "Internal server error",
             input_tokens=prompt_tok,
             output_tokens=completion_tok,
             total_tokens=prompt_tok + completion_tok,

@@ -11,7 +11,9 @@ import contextlib
 import json
 import logging
 import os
+import shlex
 import shutil
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +26,7 @@ from .._output import auth_headers
 from .agent_config import (
     ModelInfo,
     claude_code_env,
+    claude_statusline_settings,
     codex_catalog,
     codex_provider_toml,
     opencode_provider,
@@ -205,7 +208,15 @@ class ClaudeCodeIntegration(Integration):
 
     def preview(self, base_url: str, api_key: str, info: ModelInfo, **kwargs) -> str:
         env = claude_code_env(info, base_url, api_key, kwargs.get("effort"))
-        return "\n".join(f"export {k}={v}" for k, v in env.items())
+        text = "\n".join(f"export {k}={v}" for k, v in env.items())
+        if kwargs.get("statusline", True):
+            cmd = _statusline_command(base_url)
+            settings = claude_statusline_settings(
+                cmd, _claude_user_settings(os.environ)
+            )
+            if settings:
+                text += f"\n# claude --settings '{settings}'"
+        return text
 
     def configure(self, port, api_key, model, host="127.0.0.1", info=None) -> None:
         console.print(
@@ -225,8 +236,33 @@ class ClaudeCodeIntegration(Integration):
         ):
             env.pop(k, None)
         env.update(self.env(port, api_key, host, info, kwargs.get("effort")))
+        args = ["claude"]
+        if kwargs.get("statusline", True):
+            cmd = _statusline_command(f"http://{host}:{port}")
+            settings = claude_statusline_settings(cmd, _claude_user_settings(env))
+            if settings:
+                if api_key:
+                    env["YUNSHU_API_KEY"] = api_key
+                args += ["--settings", settings]
         console.print(f"[bold]Launching[/] Claude Code with model {model}...")
-        os.execvpe("claude", ["claude"], env)
+        os.execvpe("claude", args, env)
+
+
+def _statusline_command(url: str) -> str:
+    """The shell command Claude Code runs for its status line."""
+    exe = shutil.which("yunshu")
+    prefix = shlex.quote(exe) if exe else f"{shlex.quote(sys.executable)} -m yunshu_cli"
+    return f"{prefix} statusline --url {shlex.quote(url)}"
+
+
+def _claude_user_settings(env: dict[str, str]) -> dict:
+    """The user's Claude Code settings.json (read-only), to see whether they have their own status line."""
+    base = Path(env.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    try:
+        data = json.loads((base / "settings.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 # ── OpenCode Integration ──
@@ -446,6 +482,12 @@ def launch_tool(
     effort: str | None = typer.Option(
         None, "--effort", help="Claude Code reasoning effort (low, medium, high, ...)."
     ),
+    statusline: bool = typer.Option(
+        True,
+        "--statusline/--no-statusline",
+        help="Claude Code: show live engine state (prefill progress, decode speed, cache hit) in its "
+        "status line, unless you already have a status line of your own.",
+    ),
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
@@ -501,7 +543,11 @@ def launch_tool(
     if dry_run:
         console.print(
             integration.preview(
-                f"http://{host}:{port}", api_key or "", info, effort=effort
+                f"http://{host}:{port}",
+                api_key or "",
+                info,
+                effort=effort,
+                statusline=statusline,
             ),
             markup=False,
         )
@@ -513,4 +559,5 @@ def launch_tool(
         host=host,
         info=info,
         effort=effort,
+        statusline=statusline,
     )
