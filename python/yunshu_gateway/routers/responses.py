@@ -50,6 +50,13 @@ _response_store: OrderedDict[str, dict] = OrderedDict()
 _response_store_lock = threading.Lock()
 
 
+def _seal_extra(req, text: str | None) -> dict:
+    """``encrypted_content`` for a reasoning item, when the request asked for it (``include``)."""
+    if text and "reasoning.encrypted_content" in (getattr(req, "include", None) or []):
+        return {"encrypted_content": seal_reasoning(text)}
+    return {}
+
+
 def _store_response(response_id: str, payload: dict) -> None:
     """Insert/refresh a stored response (LRU evict to keep below the cap)."""
     with _response_store_lock:
@@ -235,6 +242,7 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
             "type": "reasoning",
             "id": rs_id,
             "summary": [{"type": "summary_text", "text": reasoning}],
+            **_seal_extra(req, reasoning),
             "status": "completed",
         }
         if reasoning
@@ -422,6 +430,7 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
     )
 
 
+from ..reasoning_token import reasoning_text_of, seal_reasoning
 from ..server_tools.responses_loop import (
     create_with_server_tools_responses,
     function_tools,
@@ -724,6 +733,14 @@ def _extract_input_text(content) -> str | list:
 def _convert_to_messages(req: ResponsesRequest) -> list[dict]:
     """Convert Responses API input to OpenAI chat messages."""
     messages = []
+    pending_reasoning: list[str] = []
+
+    def _take_reasoning(msg: dict) -> dict:
+        # Reasoning items the client sent back ride on the next assistant turn.
+        if pending_reasoning and msg.get("role") == "assistant":
+            msg["reasoning_content"] = "\n".join(pending_reasoning)
+            pending_reasoning.clear()
+        return msg
 
     if req.instructions:
         messages.append({"role": "system", "content": req.instructions})
@@ -739,6 +756,13 @@ def _convert_to_messages(req: ResponsesRequest) -> list[dict]:
                 else (lambda k, d=None: getattr(item, k, d))
             )
             itype = _get("type", "message")
+            if itype == "reasoning":
+                txt = reasoning_text_of(
+                    item.model_dump() if hasattr(item, "model_dump") else dict(item)
+                )
+                if txt:
+                    pending_reasoning.append(txt)
+                continue
             if itype not in ("message", "", "function_call", "function_call_output"):
                 # web_search_call / mcp_call / custom tool calls become a tool-call pair; reasoning,
                 # mcp_list_tools, approvals, compaction, item_reference ... are skipped.
@@ -765,27 +789,31 @@ def _convert_to_messages(req: ResponsesRequest) -> list[dict]:
                 continue
             if itype == "function_call":
                 messages.append(
-                    {
-                        "role": "assistant",
-                        "content": "",
-                        "tool_calls": [
-                            {
-                                "id": _get("call_id", "") or _get("id", "") or "",
-                                "type": "function",
-                                "function": {
-                                    "name": _get("name", "") or "",
-                                    "arguments": _get("arguments", "") or "{}",
-                                },
-                            }
-                        ],
-                    }
+                    _take_reasoning(
+                        {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": _get("call_id", "") or _get("id", "") or "",
+                                    "type": "function",
+                                    "function": {
+                                        "name": _get("name", "") or "",
+                                        "arguments": _get("arguments", "") or "{}",
+                                    },
+                                }
+                            ],
+                        }
+                    )
                 )
                 continue
             role = _get("role", "user") or "user"
             if role == "developer":
                 role = "system"
             content = _get("content", "")
-            messages.append({"role": role, "content": _extract_input_text(content)})
+            messages.append(
+                _take_reasoning({"role": role, "content": _extract_input_text(content)})
+            )
 
     return messages
 
@@ -957,13 +985,21 @@ async def create_response(req: ResponsesRequest, request: Request):
             _stored_input = _prev.get("_input_messages")
             if _stored_input:
                 _turn.extend(_stored_input)
+            _rs_pending: list[str] = []
             for out in _prev.get("output") or []:
+                if out.get("type") == "reasoning":
+                    _rt = reasoning_text_of(out)
+                    if _rt:
+                        _rs_pending.append(_rt)
+                    continue
                 if out.get("role") == "assistant":
                     for c in out.get("content") or []:
                         if c.get("type") == "output_text":
-                            _turn.append(
-                                {"role": "assistant", "content": c.get("text", "")}
-                            )
+                            _amsg = {"role": "assistant", "content": c.get("text", "")}
+                            if _rs_pending:
+                                _amsg["reasoning_content"] = "\n".join(_rs_pending)
+                                _rs_pending = []
+                            _turn.append(_amsg)
                 elif out.get("type") in ("web_search_call", "mcp_call"):
                     _turn.extend(
                         input_item_to_messages(out, _prev.get("_server_tool_texts"))
@@ -1547,6 +1583,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                     "type": "reasoning",
                     "id": f"rs-{uuid.uuid4().hex[:24]}",
                     "summary": [{"type": "summary_text", "text": _thinking}],
+                    **_seal_extra(req, _thinking),
                     "status": "completed",
                 }
                 if req.n > 1:
@@ -2013,6 +2050,7 @@ async def _stream_response(
                                         "text": accumulated_thinking,
                                     }
                                 ],
+                                **_seal_extra(req, accumulated_thinking),
                                 "status": "completed",
                             },
                             "sequence_number": _next_seq(),
@@ -2350,6 +2388,7 @@ async def _stream_response(
                         "summary": [
                             {"type": "summary_text", "text": accumulated_thinking}
                         ],
+                        **_seal_extra(req, accumulated_thinking),
                         "status": "completed",
                     }
                 )
@@ -2640,6 +2679,7 @@ async def _stream_response(
                             "summary": [
                                 {"type": "summary_text", "text": accumulated_thinking}
                             ],
+                            **_seal_extra(req, accumulated_thinking),
                             "status": "completed",
                         },
                         "sequence_number": _next_seq(),
@@ -2734,6 +2774,7 @@ async def _stream_response(
                             "summary": [
                                 {"type": "summary_text", "text": accumulated_thinking}
                             ],
+                            **_seal_extra(req, accumulated_thinking),
                             "status": "completed",
                         },
                         "sequence_number": _next_seq(),
