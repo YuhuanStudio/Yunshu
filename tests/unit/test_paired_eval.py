@@ -5,6 +5,8 @@ import math
 import sys
 from pathlib import Path
 
+import pytest
+
 _p = Path(__file__).resolve().parents[2] / "scripts/research/accuracy/paired_eval.py"
 _spec = importlib.util.spec_from_file_location("paired_eval", _p)
 pe = importlib.util.module_from_spec(_spec)
@@ -79,3 +81,31 @@ def test_needle_score():
     single = {"kind": "single", "gold": ["1111111"]}
     assert b.score(single, {"content": "1,111,111"})["correct"]
     assert not b.score(single, {"content": "1111111 or 2222222"})["correct"]
+
+
+@pytest.mark.parametrize("arm", ["ref", "default"])
+def test_busy_port_moves_server_and_requests_together(monkeypatch, tmp_path, arm):
+    class Probe:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def connect_ex(self, address):
+            return 0 if address[1] == 18990 else 1
+
+    launches = []
+
+    def launch(command, **kwargs):
+        launches.append(command)
+        kwargs["stdout"].close()
+        return object()
+
+    monkeypatch.setattr(pe.socket, "socket", lambda: Probe())
+    monkeypatch.setattr(pe.subprocess, "Popen", launch)
+    server = pe.Server(arm, "/existing/model", 18990, {}, tmp_path / "server.log")
+    assert server.port == 18991
+    assert server.url == "http://127.0.0.1:18991"
+    command = launches[0]
+    assert command[command.index("--port") + 1] == "18991"

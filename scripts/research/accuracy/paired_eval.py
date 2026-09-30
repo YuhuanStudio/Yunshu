@@ -539,6 +539,7 @@ class Server:
             raise RuntimeError(f"ports {port}..{port + 9} all in use; refusing to start")
         if cand != port:
             print(f"port {port} in use; using {cand}", flush=True)
+        port = cand
         self.arm, self.model, self.port = arm, model, cand
         self.url = f"http://127.0.0.1:{port}"
         e = {k: v for k, v in os.environ.items() if not k.startswith("YUNSHU_")}
