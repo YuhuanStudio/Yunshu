@@ -140,19 +140,6 @@
       "license": "MIT",
       "local_changes": [],
       "kind": "vendored"
-    },
-    {
-      "path": "python/yunshu_engine/keyed_sampling.py",
-      "repo": "https://github.com/ashhart/TensorFold",
-      "clone": "reference/TensorFold",
-      "upstream_path": "src/tensorfold/engine/exact_sampling.py",
-      "commit": "34bae79a",
-      "license": "MIT",
-      "local_changes": [
-        "own implementation: splitmix-style hash of (seed, position, token id) as Gumbel noise; filters in RowSampler order"
-      ],
-      "why": "position-keyed exact sampling so sampled requests can use speculative decoding losslessly",
-      "kind": "inspired"
     }
   ],
   "derived": [
@@ -474,6 +461,18 @@
       "commit": "924707f1",
       "license": "Apache-2.0",
       "why": "block pool adapted for UMA"
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/keyed_sampling.py",
+      "repo": "https://github.com/ashhart/TensorFold",
+      "clone": "reference/TensorFold",
+      "upstream_paths": [
+        "src/tensorfold/engine/exact_sampling.py"
+      ],
+      "commit": "34bae79a",
+      "license": "MIT",
+      "why": "position-keyed Gumbel sampling so sampled requests use speculative decoding losslessly; ours hashes (seed, position, token id) and filters in RowSampler order"
     }
   ],
   "patches": [
