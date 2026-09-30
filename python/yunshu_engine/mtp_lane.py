@@ -261,8 +261,7 @@ def install() -> bool:
             _STATE["enabled"]
             and kw.get("draft_kind") == "mtp"
             and (
-                kw.get("greedy_sampling")
-                or isinstance(kw.get("sampler"), KeyedSampler)
+                kw.get("greedy_sampling") or isinstance(kw.get("sampler"), KeyedSampler)
             )
             and first is not None
             and int(first.shape[0]) == 1
@@ -281,7 +280,9 @@ def install() -> bool:
                 token_dtype=kw.get("token_dtype", mx.int32),
                 stop_check=kw.get("stop_check"),
                 eos_token_ids=kw.get("eos_token_ids"),
-                keyed=kw["sampler"] if isinstance(kw.get("sampler"), KeyedSampler) else None,
+                keyed=kw["sampler"]
+                if isinstance(kw.get("sampler"), KeyedSampler)
+                else None,
             )
         return original(model, draft_model, prompt_cache, hidden, **kw)
 

@@ -82,7 +82,9 @@ class KeyedSampler:
 
     def sample_positions(self, logprobs: mx.array, positions) -> mx.array:
         """Tokens ``[N]`` for logprob rows ``[N, V]`` at generation indices ``positions``."""
-        pos = positions if isinstance(positions, mx.array) else mx.array(list(positions))
+        pos = (
+            positions if isinstance(positions, mx.array) else mx.array(list(positions))
+        )
         row = filter_logprobs(logprobs.astype(mx.float32), self.params)
         noisy = mx.where(
             row == -mx.inf, -mx.inf, row + gumbel(self.seed, pos, row.shape[-1])
