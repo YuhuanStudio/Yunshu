@@ -73,6 +73,31 @@ SCENARIOS = {
         expect=["pong"],
         proxy=False,
     ),
+    "cc_edit": dict(
+        agent="claude",
+        cfg=None,
+        prompt="Create a file named hello.txt containing exactly the text hi-there, then run ls to confirm it exists.",
+        check_files={"hello.txt": "hi-there"},
+    ),
+    "cx_edit": dict(
+        agent="codex",
+        cfg=None,
+        prompt="Create a file named hello.txt containing exactly the text hi-there, then run ls to confirm it exists.",
+        check_files={"hello.txt": "hi-there"},
+    ),
+    "oc_edit": dict(
+        agent="opencode",
+        cfg=None,
+        prompt="Create a file named hello.txt containing exactly the text hi-there, then run ls to confirm it exists.",
+        check_files={"hello.txt": "hi-there"},
+    ),
+    "cc_image": dict(
+        agent="claude",
+        cfg=None,
+        setup="red_png",
+        prompt="Use the Read tool to look at the image pic.png, then tell me its dominant color in one word.",
+        expect=["red"],
+    ),
     "oc_bash": dict(
         agent="opencode",
         cfg=None,
@@ -80,6 +105,26 @@ SCENARIOS = {
         expect=["yunshu-ok"],
     ),
 }
+
+
+def red_png(work: Path):
+    """A 64x64 solid red PNG (pure stdlib)."""
+    import struct
+    import zlib
+
+    def chunk(tag, data):
+        c = struct.pack(">I", len(data)) + tag + data
+        return c + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+    raw = b"".join(b"\x00" + b"\xff\x00\x00" * 64 for _ in range(64))
+    png = b"\x89PNG\r\n\x1a\n" + chunk(
+        b"IHDR", struct.pack(">IIBBBBB", 64, 64, 8, 2, 0, 0, 0)
+    )
+    png += chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+    (work / "pic.png").write_bytes(png)
+
+
+SETUPS = {"red_png": red_png}
 
 
 def cx_mcp_http(home, launch, ctx):
@@ -178,6 +223,19 @@ def main():
         srv.start()
         model_id = srv.model_id
         print("server ready", srv.url, model_id, f"{srv.ready_s:.0f}s", flush=True)
+        # what `yunshu launch` would hand each agent for THIS model's real card (no agent needed)
+        for tool in ("claude", "codex", "opencode"):
+            lp = subprocess.run(
+                [str(servers.YUNSHU_BIN), "launch", tool, "--dry-run", "-u", srv.url],
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "HOME": str(servers.SERVER_HOME),
+                    "PYTHONPATH": os.environ["AGENTIC_YUNSHU_SRC"],
+                },
+            )
+            (out / f"launch_{tool}.txt").write_text(lp.stdout + lp.stderr)
         for name in a.scenarios.split(","):
             if name.startswith("sdk"):
                 sdk_py = os.environ.get(
@@ -219,6 +277,8 @@ def main():
             shutil.rmtree(work, ignore_errors=True)
             work.mkdir(parents=True)
             subprocess.run(["git", "init", "-q"], cwd=work)
+            if sc.get("setup"):
+                SETUPS[sc["setup"]](work)
             proxy = (
                 CaptureProxy(srv.url, run / "requests.jsonl")
                 if sc.get("proxy", True)
@@ -254,7 +314,11 @@ def main():
             if proxy:
                 proxy.stop()
             text = final_text(sc["agent"], so)
-            ok = all(x.lower() in text.lower() for x in sc["expect"])
+            ok = all(x.lower() in text.lower() for x in sc.get("expect", []))
+            for fname, want in (sc.get("check_files") or {}).items():
+                f = work / fname
+                ok = ok and f.is_file() and want in f.read_text(errors="replace")
+                text += f" [file {fname}: {'ok' if f.is_file() and want in f.read_text(errors='replace') else 'MISSING/WRONG'}]"
             results[name] = dict(
                 ok=ok,
                 secs=round(time.time() - t0, 1),

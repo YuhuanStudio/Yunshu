@@ -44,7 +44,16 @@ async def serve(port_box: list, log: Path, ready: threading.Event):
     async def handler(ws):
         nonlocal n
         with log.open("a") as f:
-            f.write(json.dumps({"event": "connect", "path": ws.request.path, "headers": dict(ws.request.headers)}) + "\n")
+            f.write(
+                json.dumps(
+                    {
+                        "event": "connect",
+                        "path": ws.request.path,
+                        "headers": dict(ws.request.headers),
+                    }
+                )
+                + "\n"
+            )
         async for raw in ws:
             msg = json.loads(raw)
             with log.open("a") as f:
@@ -65,10 +74,43 @@ async def serve(port_box: list, log: Path, ready: threading.Event):
             base = resp_obj(n, "in_progress", [], model)
             await ws.send(json.dumps({"type": "response.created", "response": base}))
             if out:
-                await ws.send(json.dumps({"type": "response.output_item.added", "output_index": 0, "item": {**item, "content": [], "status": "in_progress"}}))
-                await ws.send(json.dumps({"type": "response.output_text.delta", "item_id": item["id"], "output_index": 0, "content_index": 0, "delta": "pong"}))
-                await ws.send(json.dumps({"type": "response.output_item.done", "output_index": 0, "item": item}))
-            await ws.send(json.dumps({"type": "response.completed", "response": resp_obj(n, "completed", out, model)}))
+                await ws.send(
+                    json.dumps(
+                        {
+                            "type": "response.output_item.added",
+                            "output_index": 0,
+                            "item": {**item, "content": [], "status": "in_progress"},
+                        }
+                    )
+                )
+                await ws.send(
+                    json.dumps(
+                        {
+                            "type": "response.output_text.delta",
+                            "item_id": item["id"],
+                            "output_index": 0,
+                            "content_index": 0,
+                            "delta": "pong",
+                        }
+                    )
+                )
+                await ws.send(
+                    json.dumps(
+                        {
+                            "type": "response.output_item.done",
+                            "output_index": 0,
+                            "item": item,
+                        }
+                    )
+                )
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "response.completed",
+                        "response": resp_obj(n, "completed", out, model),
+                    }
+                )
+            )
 
     async with websockets.serve(handler, "127.0.0.1", 0) as server:
         port_box.append(server.sockets[0].getsockname()[1])
@@ -86,16 +128,33 @@ def main():
     log.unlink(missing_ok=True)
     port_box: list = []
     ready = threading.Event()
-    threading.Thread(target=lambda: asyncio.run(serve(port_box, log, ready)), daemon=True).start()
+    threading.Thread(
+        target=lambda: asyncio.run(serve(port_box, log, ready)), daemon=True
+    ).start()
     ready.wait(10)
     run = census.BUILD / "runs" / "ws_probe"
     work = census.BUILD / "work" / "ws_probe"
     for d in (run, work):
         subprocess.run(["rm", "-rf", str(d)])
         d.mkdir(parents=True)
-    launch = census.agents.prepare("codex", run, work, f"http://127.0.0.1:{port_box[0]}", "probe-model", "Reply with pong")
+    launch = census.agents.prepare(
+        "codex",
+        run,
+        work,
+        f"http://127.0.0.1:{port_box[0]}",
+        "probe-model",
+        "Reply with pong",
+    )
     census.HOOKS["cx_ws"](launch.home, launch, {})
-    p = subprocess.run(launch.cmd, cwd=launch.cwd, env=launch.env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=90)
+    p = subprocess.run(
+        launch.cmd,
+        cwd=launch.cwd,
+        env=launch.env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
     (out / "stdout.txt").write_text(p.stdout)
     (out / "stderr.txt").write_text(p.stderr)
     print("rc", p.returncode)
