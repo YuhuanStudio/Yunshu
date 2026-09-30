@@ -101,6 +101,6 @@ would otherwise guess wrong; `--dry-run` prints it.
 
 | Agent | What is set |
 |---|---|
-| Claude Code | `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, every model alias -> the served model, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (the real window), `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`, optional `CLAUDE_CODE_EFFORT_LEVEL` (`--effort`). Environment only: `~/.claude` is not touched. |
+| Claude Code | `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, every model alias -> the served model, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (the real window), `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`, optional `CLAUDE_CODE_EFFORT_LEVEL` (`--effort`). Environment only: `~/.claude` is not touched. |
 | Codex | `~/.codex/config.toml` (`model_provider`, `model_context_window`, `model_auto_compact_token_limit`, `web_search = "live"` when a provider is configured) and `~/.codex/yunshu-models.json` (`model_catalog_json`: window, reasoning levels, modalities, a compact `base_instructions`). |
 | opencode | `provider.yunshu` in `opencode.json` with `limit.context` / `limit.output`, `reasoning`, `tool_call`, `modalities`. |

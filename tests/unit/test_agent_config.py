@@ -66,7 +66,9 @@ def test_claude_code_env():
     ):
         assert env[k] == "qwen3.8-27b"
     assert env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "262144"
-    assert int(env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]) < 262144
+    assert (
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW" not in env
+    )  # /context shows the real window
     assert env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "32000"
     assert env["CLAUDE_CODE_EFFORT_LEVEL"] == "medium"
     assert env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"

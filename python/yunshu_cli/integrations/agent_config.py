@@ -78,7 +78,7 @@ def claude_code_env(
       whether to trust it.
     - Every model alias (opus / sonnet / haiku / small-fast) resolves to the served model.
     - ``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` is the real window: for an id it does not know Claude Code assumes
-      200K and compacts too late; ``CLAUDE_CODE_AUTO_COMPACT_WINDOW`` keeps auto-compact inside it.
+      200K and compacts too late (with it, ``/context`` shows the real window and auto-compact fires below it).
     - ``CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`` fills ``/model`` from ``/v1/models``.
     """
     env = {
@@ -91,7 +91,6 @@ def claude_code_env(
         "ANTHROPIC_DEFAULT_HAIKU_MODEL": info.id,
         "CLAUDE_CODE_SUBAGENT_MODEL": info.id,
         "CLAUDE_CODE_MAX_CONTEXT_TOKENS": str(info.context),
-        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(int(info.context * 0.85)),
         "CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(min(info.max_output, 32000)),
         "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
         "DISABLE_TELEMETRY": "1",
