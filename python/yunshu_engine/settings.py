@@ -137,6 +137,9 @@ _add("YUNSHU_BATCH_MAX_ITEMS", "int", 500, "Batch API: maximum requests per batc
 _add("YUNSHU_BATCH_TIMEOUT", "float", 300.0, "Batch API: default per-batch timeout in seconds.", "server", minimum=0.0)
 _add("YUNSHU_ALLOW_LOCAL_FILES", "bool", False, "Allow requests to reference any local file path (default: only under YUNSHU_MEDIA_DIR).", "server")
 _add("YUNSHU_MEDIA_DIR", "path", None, "Directory local media paths must live under. Unset: $TMPDIR/yunshu_media.", "server")
+_add("YUNSHU_FILES_DIR", "path", None, "Directory of the local Files / Batch API store. Unset: ~/.yunshu/files.", "server")
+_add("YUNSHU_FILES_MAX_BYTES", "int", 536870912, "Files API: maximum size of one uploaded file in bytes (default 512 MB).", "server", minimum=1)
+_add("YUNSHU_FILES_TTL_DAYS", "float", None, "Files API: delete uploaded files after this many days. Unset: keep forever.", "server", minimum=0.0)
 
 # ── auth ───────────────────────────────────────────────────────────────
 _add("YUNSHU_AUTH_TOKEN", "str", None, "Bearer token. When set, every request except health/version/docs needs it; unset: inference is open and operational endpoints are denied.", "auth", secret=True)

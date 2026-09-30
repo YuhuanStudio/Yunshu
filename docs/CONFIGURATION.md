@@ -88,6 +88,9 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_BATCH_TIMEOUT` | float | 300.0 | Batch API: default per-batch timeout in seconds. |
 | `YUNSHU_ALLOW_LOCAL_FILES` | bool | off | Allow requests to reference any local file path (default: only under YUNSHU_MEDIA_DIR). |
 | `YUNSHU_MEDIA_DIR` | path | unset | Directory local media paths must live under. Unset: $TMPDIR/yunshu_media. |
+| `YUNSHU_FILES_DIR` | path | unset | Directory of the local Files / Batch API store. Unset: ~/.yunshu/files. |
+| `YUNSHU_FILES_MAX_BYTES` | int | 536870912 (512 MiB) | Files API: maximum size of one uploaded file in bytes (default 512 MB). |
+| `YUNSHU_FILES_TTL_DAYS` | float | unset | Files API: delete uploaded files after this many days. Unset: keep forever. |
 
 ### auth
 
