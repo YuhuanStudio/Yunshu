@@ -463,7 +463,6 @@
       "why": "block pool adapted for UMA"
     },
     {
-      "kind": "inspired",
       "path": "python/yunshu_engine/keyed_sampling.py",
       "repo": "https://github.com/ashhart/TensorFold",
       "clone": "reference/TensorFold",
@@ -472,7 +471,7 @@
       ],
       "commit": "34bae79a",
       "license": "MIT",
-      "why": "position-keyed Gumbel sampling so sampled requests use speculative decoding losslessly; ours hashes (seed, position, token id) and filters in RowSampler order"
+      "why": "position-keyed Gumbel sampling for the round driver's sampled drafting (off by default: YUNSHU_ROUND_KEYED_DRAFT); ours hashes (seed, position, token id)"
     }
   ],
   "patches": [

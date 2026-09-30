@@ -202,6 +202,7 @@ class RoundDriver:
         keyed = None
         if (
             req.sampling is not None
+            and req.draft
             and not req.processors
             and not req.logprobs
             and keyed_sampling.supports(req.sampling)

@@ -36,6 +36,11 @@ from capture_proxy import CaptureProxy  # noqa: E402
 
 FACT = "Cloud Book 42"
 
+TUIS = {
+    "tui_cc": ("claude", ["/status", "/model", "/context", "/cost"]),
+    "tui_cx": ("codex", ["/status", "/model"]),
+}
+
 SCENARIOS = {
     "cc_websearch": dict(
         agent="claude",
@@ -337,6 +342,38 @@ def main():
                     ok=p.returncode == 0, secs=round(time.time() - t0, 1)
                 )
                 print(p.stdout, p.stderr[-1500:], flush=True)
+                continue
+            if name in TUIS:
+                import census_tui
+
+                agent, inputs = TUIS[name]
+                cfg_ = None
+                census_tui.run_tui(
+                    agent,
+                    inputs,
+                    f"e2e_{name}",
+                    srv.url,
+                    model_id,
+                    8.0,
+                    cfg_,
+                    configure=(
+                        (
+                            lambda ln, ag=agent: apply_launch_config(
+                                ag, ln, card_info, ln.cwd, model_id
+                            )
+                        )
+                        if a.launch_config
+                        else None
+                    ),
+                )
+                dst = out / name
+                shutil.rmtree(dst, ignore_errors=True)
+                shutil.copytree(
+                    census.OUT_ROOT / f"e2e_{name}",
+                    dst,
+                    ignore=shutil.ignore_patterns("home", "sandbox.sb"),
+                )
+                results[name] = dict(ok=True, note="see tui.txt")
                 continue
             sc = SCENARIOS[name]
             run = census.BUILD / "runs" / f"e2e_{name}"
