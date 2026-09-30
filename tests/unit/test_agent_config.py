@@ -155,3 +155,43 @@ def test_opencode_configure_writes_provider(tmp_path, monkeypatch):
     assert (
         d["provider"]["yunshu"]["models"]["qwen3.8-27b"]["limit"]["context"] == 262144
     )
+
+
+def test_launch_dry_run_prints_the_config(monkeypatch):
+    """`yunshu launch <tool> --dry-run` (options after the tool name) reads /v1/models and prints."""
+    import httpx
+    from typer.testing import CliRunner
+
+    from yunshu_cli.integrations import launch_app
+
+    class Resp:
+        def __init__(self, data, status=200):
+            self._d, self.status_code = data, status
+
+        def json(self):
+            return self._d
+
+        def raise_for_status(self):
+            pass
+
+    def fake_get(url, **kw):
+        if url.endswith("/health"):
+            return Resp({"status": "ok"})
+        return Resp({"data": [ITEM]})
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    runner = CliRunner()
+    for tool, needle in (
+        ("claude", "CLAUDE_CODE_MAX_CONTEXT_TOKENS=262144"),
+        ("codex", "model_context_window = 262144"),
+        ("opencode", '"context": 262144'),
+    ):
+        r = runner.invoke(
+            launch_app, [tool, "--dry-run", "-u", "http://127.0.0.1:8000"]
+        )
+        assert r.exit_code == 0, (tool, r.output)
+        assert needle in r.output, (tool, r.output)
+    r = runner.invoke(
+        launch_app, ["claude", "--dry-run", "--effort", "medium", "-u", "http://h:1"]
+    )
+    assert "CLAUDE_CODE_EFFORT_LEVEL=medium" in r.output

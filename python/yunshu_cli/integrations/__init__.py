@@ -30,7 +30,12 @@ from .agent_config import (
 )
 
 console = Console()
-launch_app = typer.Typer(help="Launch external tools.", no_args_is_help=True)
+# Options may follow the tool name (`yunshu launch codex --dry-run -m x`).
+launch_app = typer.Typer(
+    help="Launch external tools.",
+    no_args_is_help=True,
+    context_settings={"allow_interspersed_args": True},
+)
 
 logger = logging.getLogger(__name__)
 
