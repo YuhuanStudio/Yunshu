@@ -109,3 +109,27 @@ def test_busy_port_moves_server_and_requests_together(monkeypatch, tmp_path, arm
     assert server.url == "http://127.0.0.1:18991"
     command = launches[0]
     assert command[command.index("--port") + 1] == "18991"
+
+
+def test_attempt_counts_keep_timeouts_visible_after_successful_retries(
+    monkeypatch, tmp_path
+):
+    import json
+
+    monkeypatch.setattr(pe, "OUT", tmp_path)
+    path = pe.result_path("mmlu_pro", "ref")
+    path.parent.mkdir(parents=True)
+    rows = [
+        {"kind": "meta"},
+        {"kind": "q", "id": "a", "error": "timeout"},
+        {"kind": "q", "id": "a", "correct": True},
+        {"kind": "q", "id": "b", "error": "timeout"},
+    ]
+    path.write_text("\n".join(json.dumps(r) for r in rows))
+    assert pe.arm_attempt_counts("mmlu_pro", "ref") == {
+        "attempts": 3,
+        "error_attempts": 2,
+        "attempted_items": 2,
+        "unresolved_items": 1,
+    }
+    assert set(pe.load_arm("mmlu_pro", "ref")) == {"a"}
