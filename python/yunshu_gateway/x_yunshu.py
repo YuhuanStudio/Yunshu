@@ -364,6 +364,18 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
         "ttft_ms": _ms(ttft),
         "prompt_tokens": prompt_tokens,
         "cached_tokens": cached,
+        # Prefix-cache provenance: which tier served the cached tokens ("ram", "ssd" or
+        # "none"), how many, and how long the lookup (an SSD reload included) took.
+        "cache": {
+            "tier": (st.cache_tier if st is not None and st.cache_tier else None)
+            or ("ram" if cached else "none"),
+            "cached_tokens": cached,
+            "reload_ms": (
+                round(st.cache_reload_ms, 1)
+                if st is not None and st.cache_reload_ms is not None
+                else None
+            ),
+        },
         "prefill_ms": _ms(prefill_s),
         "prefill_tps": prefill_tps,
         "completion_tokens": completion_tokens,
@@ -392,6 +404,8 @@ def stats_headers(stats: dict, info: RequestInfo) -> list[tuple[bytes, bytes]]:
         ("X-Yunshu-Prefill-Tps", stats.get("prefill_tps")),
         ("X-Yunshu-Decode-Tps", stats.get("decode_tps")),
         ("X-Yunshu-Cached-Tokens", stats.get("cached_tokens")),
+        ("X-Yunshu-Cache-Tier", (stats.get("cache") or {}).get("tier")),
+        ("X-Yunshu-Cache-Reload-Ms", (stats.get("cache") or {}).get("reload_ms")),
         ("X-Yunshu-Total-Ms", stats.get("total_ms")),
     ]
     spec = stats.get("speculative")

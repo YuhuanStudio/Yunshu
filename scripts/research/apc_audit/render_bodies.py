@@ -64,11 +64,18 @@ class Renderer:
                 recorded.append({"ids": ids, "text": text, "messages": messages})
                 raise _CapturedError()
 
+            @staticmethod
+            def _as_messages(prompt, messages):
+                # what VLMEngine.generate / generate_stream do with their arguments
+                if isinstance(prompt, str):
+                    return [{"role": "user", "content": prompt}]
+                return prompt if prompt is not None else (messages or [])
+
             async def generate(self, prompt=None, messages=None, **kw):
-                self._record(prompt if prompt is not None else messages, kw)
+                self._record(self._as_messages(prompt, messages), kw)
 
             async def generate_stream(self, prompt=None, messages=None, **kw):
-                self._record(prompt if prompt is not None else messages, kw)
+                self._record(self._as_messages(prompt, messages), kw)
                 yield None
 
         eng = _Eng(model_path)

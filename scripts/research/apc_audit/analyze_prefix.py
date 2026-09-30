@@ -22,6 +22,7 @@ import argparse
 import glob
 import json
 import logging
+import re
 import sys
 from collections import OrderedDict
 from pathlib import Path
@@ -117,6 +118,17 @@ def analyze(renders: list[list[int]], im_end: int, actual: list[int] | None = No
     return rows
 
 
+def cached_from_response(body_file: Path) -> int:
+    """Cached tokens the server reported for a request: max over its response stream."""
+    resp = body_file.with_name(body_file.name.replace("-req.json", "-resp.txt"))
+    if not resp.exists():
+        return 0
+    found = re.findall(
+        r'"(?:cached_tokens|cache_read_input_tokens)"\s*:\s*(\d+)', resp.read_text()
+    )
+    return max((int(x) for x in found), default=0)
+
+
 def divergence_context(tok, a: list[int], b: list[int], at: int, w: int = 12):
     def dec(x):
         return tok.decode(x[max(0, at - w) : at + w])
@@ -149,6 +161,11 @@ def main():
     ap.add_argument(
         "--actual", help="comma list of the server's cached tokens per request"
     )
+    ap.add_argument(
+        "--actual-from",
+        action="store_true",
+        help="read cached tokens from the NNNN-resp.txt next to each body",
+    )
     ap.add_argument("--show", action="store_true", help="print divergence contexts")
     ap.add_argument("--json", help="write rows here")
     a = ap.parse_args()
@@ -162,6 +179,8 @@ def main():
     files = [f for f in files if Path(f).stat().st_size > 0]
     renders = [r.render(load_body(Path(f)))["ids"] for f in files]
     actual = [int(x) for x in a.actual.split(",")] if a.actual else None
+    if a.actual_from:
+        actual = [cached_from_response(Path(f)) for f in files]
     rows = analyze(renders, im_end, actual)
     print(f"== {a.name}  ({len(files)} requests)")
     print("  i      n  lcp_prev  lcp_best(j)   sim  gen_ckpt  gen_len  actual")

@@ -36,6 +36,9 @@ class Policy:
     head: bool = False
     supersede: bool = False
     disk: bool = False
+    one_interval: bool = (
+        False  # Yunshu policy: final + 1 interval (+ head), not entries-2 intervals
+    )
 
 
 class Store:
@@ -92,7 +95,10 @@ class Store:
         p = self.p
         if p.entries > 1 and p.interval > 0:
             last = ((final - 1) // p.interval) * p.interval
-            first = max(p.interval, last - (p.entries - 2) * p.interval)
+            first = max(
+                p.interval,
+                last - (0 if p.one_interval else (p.entries - 2)) * p.interval,
+            )
             for b in range(first, last + 1, p.interval):
                 if 16 <= b < final:
                     lengths.add(b)
@@ -109,7 +115,9 @@ class Store:
                 for ek in [
                     ek
                     for ek in self.ram
-                    if len(ek) < n and ids[: len(ek)] == list(ek) and ek not in self.head_marks
+                    if len(ek) < n
+                    and ids[: len(ek)] == list(ek)
+                    and ek not in self.head_marks
                 ]:
                     self.ram.pop(ek)
             self._put(k, ids[:n])
@@ -178,23 +186,27 @@ def main():
                 return i
         return 0
 
-    print(f"workload: {len(ids)} requests, prompts {ids and len(ids[0])}..{max(map(len, ids))}")
+    print(
+        f"workload: {len(ids)} requests, prompts {ids and len(ids[0])}..{max(map(len, ids))}"
+    )
+    y = dict(entries=8, one_interval=True, supersede=True, head=True)
     policies = [
         Policy("baseline (2 entries, 8 GiB)"),
-        Policy("8 entries", entries=8),
-        Policy("8 entries, no interval", entries=8, interval=0),
-        Policy("8 entries, supersede", entries=8, supersede=True),
-        Policy("8 entries, supersede, head", entries=8, supersede=True, head=True),
-        Policy("baseline + SSD", disk=True),
-        Policy("8 entries, supersede, head, SSD", entries=8, supersede=True, head=True, disk=True),
-        Policy("32 GiB, 8 entries, supersede, head", entries=8, budget_gib=32, supersede=True, head=True),
+        Policy("baseline + SSD (write-through)", disk=True),
+        Policy("yunshu 8 GiB", **y),
+        Policy("yunshu 8 GiB + SSD", disk=True, **y),
+        Policy("yunshu 16 GiB", budget_gib=16, **y),
+        Policy("yunshu 32 GiB", budget_gib=32, **y),
+        Policy("yunshu 32 GiB, no interval", budget_gib=32, **{**y, "interval": 0}),
+        Policy("baseline 32 GiB, 2 entries", budget_gib=32),
+        Policy("baseline 32 GiB, 8 entries", budget_gib=32, entries=8),
     ]
     for p in policies:
         res = run(p, ids, head_len)
         rows = res.pop("rows")
         print(json.dumps(res))
         if "-v" in sys.argv:
-            for lab, (n, h, t) in zip(labels, rows):
+            for lab, (n, h, t) in zip(labels, rows, strict=True):
                 print("   ", lab, n, h, t)
 
 
