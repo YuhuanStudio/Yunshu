@@ -48,6 +48,8 @@ def sh(cmd, **kw):
 def git_sha() -> str:
     src = os.environ.get("AGENTIC_YUNSHU_SRC")
     main = os.environ.get("YUNSHU_MAIN", "/Users/yuhuan/Documents/YuhuanStudio/Yunshu")
+    if src and (Path(src).parent / "GIT_SHA").exists():  # a snapshot of the source tree
+        return (Path(src).parent / "GIT_SHA").read_text().strip()
     where = str(Path(src).parent) if src else main
     return sh(["git", "-C", where, "rev-parse", "--short", "HEAD"]) or "unknown"
 
