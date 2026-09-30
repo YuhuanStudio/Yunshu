@@ -409,7 +409,11 @@ class VLMBatchRunner:
         # accepting a draft equals what serial sampling would have produced (keyed_sampling).
         keyed_ok = greedy or keyed_sampling.supports(
             RowParams(
-                float(temperature), float(top_p), int(top_k), float(min_p), seed,
+                float(temperature),
+                float(top_p),
+                int(top_k),
+                float(min_p),
+                seed,
                 float(xtc_probability or 0.0),
             )
         )
@@ -1123,7 +1127,9 @@ class _Job:
     rope_delta: float = 0.0
     allow_draft: bool = False
     guide: Any = None
-    keyed: Any = None  # KeyedSampler of a sampled request served by the speculative lane
+    keyed: Any = (
+        None  # KeyedSampler of a sampled request served by the speculative lane
+    )
     # drafter lifetime counters at admission (rounds, accepted, drafted); diffed per step
     spec_base: tuple | None = None
 

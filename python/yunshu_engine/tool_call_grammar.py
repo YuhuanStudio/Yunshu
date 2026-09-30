@@ -644,10 +644,14 @@ class ToolCallGuide:
         cp = self.checkpoint()
         try:
             for i in range(n_pos):
-                self.fill(out[i])
+                constrained = self.fill(out[i])
                 if i >= len(drafts):
                     break
                 tok = int(drafts[i])
+                if constrained and not (out[i, tok >> 5] >> (tok & 31)) & 1:
+                    # The mask forbids this draft, so the round rejects it here.
+                    # Feeding it would leave the matcher in an error state.
+                    break
                 if self.arms(tok) or not self.feed(tok) or self.broken:
                     break
         finally:

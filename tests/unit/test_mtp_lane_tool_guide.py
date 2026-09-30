@@ -60,7 +60,9 @@ def toy():
     tok.decoder = decoders.ByteLevel()
     from tokenizers import AddedToken
 
-    tok.add_special_tokens([AddedToken(s, special=False, normalized=False) for s in SPECIALS[:-1]])
+    tok.add_special_tokens(
+        [AddedToken(s, special=False, normalized=False) for s in SPECIALS[:-1]]
+    )
     tok.add_special_tokens([AddedToken(SPECIALS[-1], special=True, normalized=False)])
     hf = PreTrainedTokenizerFast(tokenizer_object=tok, eos_token="<eos>")
     return hf
@@ -286,7 +288,12 @@ def test_malformed_call_is_steered_identically(toy, monkeypatch, accuracy, block
     grammar = make_grammar(hf)
     eos = hf.eos_token_id
     start = grammar.start_id
-    bad = ids_of(hf, 'Let me. ') + [start] + ids_of(hf, '\n{"name": "ab", "arguments": {}}') + [eos]
+    bad = (
+        ids_of(hf, "Let me. ")
+        + [start]
+        + ids_of(hf, '\n{"name": "ab", "arguments": {}}')
+        + [eos]
+    )
     target = ToyTarget(bad, len(hf) + 4, eos, seed=5)
     ref = reference(target, grammar.guide(), bad[0], eos, 120)
     assert ref != bad  # the JSON attempt was blocked
@@ -339,7 +346,15 @@ def test_marker_as_first_token_and_reasoning_gate(toy, monkeypatch):
     ref = reference(target, grammar.guide(thinking_open=True), text[0], eos, 100)
     assert ref == text
     got = run_lane(
-        monkeypatch, target, grammar.guide(thinking_open=True), text[0], eos, 100, 0.5, 2, 4
+        monkeypatch,
+        target,
+        grammar.guide(thinking_open=True),
+        text[0],
+        eos,
+        100,
+        0.5,
+        2,
+        4,
     )
     assert got == ref
 

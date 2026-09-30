@@ -52,7 +52,11 @@ def test_native_plan_for_an_engine_that_renders_tools():
     }
     # a tool without a schema still gets a valid empty object schema
     assert tools[1]["function"]["parameters"] == {"type": "object", "properties": {}}
-    assert anthropic._native_kw(req) == {"tools": tools}
+    assert anthropic._native_kw(req) == {
+        "tools": tools,
+        "tool_choice": None,
+        "parallel_tool_calls": True,
+    }
 
 
 def test_engine_without_native_tools_keeps_the_injected_prompt():

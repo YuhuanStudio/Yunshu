@@ -223,7 +223,9 @@ def rounds(
 
                     logits = apply_bitmask(logits, masks)
                 if keyed is None:
-                    target = mx.argmax(logits, axis=-1).reshape(1, -1).astype(token_dtype)
+                    target = (
+                        mx.argmax(logits, axis=-1).reshape(1, -1).astype(token_dtype)
+                    )
                 else:
                     logits = logits[0]
                     logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
@@ -325,8 +327,7 @@ def install() -> bool:
             _STATE["enabled"]
             and kw.get("draft_kind") == "mtp"
             and (
-                kw.get("greedy_sampling")
-                or isinstance(kw.get("sampler"), KeyedSampler)
+                kw.get("greedy_sampling") or isinstance(kw.get("sampler"), KeyedSampler)
             )
             and first is not None
             and int(first.shape[0]) == 1
@@ -346,7 +347,9 @@ def install() -> bool:
                 stop_check=kw.get("stop_check"),
                 eos_token_ids=kw.get("eos_token_ids"),
                 guide=_STATE["guide"],
-                keyed=kw["sampler"] if isinstance(kw.get("sampler"), KeyedSampler) else None,
+                keyed=kw["sampler"]
+                if isinstance(kw.get("sampler"), KeyedSampler)
+                else None,
             )
         if _STATE["guide"] is not None:
             logger.warning(
