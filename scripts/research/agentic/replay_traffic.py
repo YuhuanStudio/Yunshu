@@ -10,7 +10,8 @@ parallel no-tools title request opencode issues per task. ``--temperature`` over
 sampling (0: greedy) so the sampled and greedy speculative paths can be compared on the same bytes.
 
 ``ttft_s`` measures the first reasoning/content/tool delta; ``content_ttft_s``
-measures the first visible content or tool delta. Content and reasoning previews
+measures the first content or tool delta (including whitespace); ``meaningful_ttft_s``
+ignores whitespace-only content. Content and reasoning previews
 are recorded separately. Failed or incomplete SSE and concurrent title failures
 abort the replay instead of producing a successful measurement.
 """
@@ -43,6 +44,7 @@ def send(url: str, body: dict) -> dict:
     t0 = time.perf_counter()
     t_first = None
     t_content = None
+    t_meaningful = None
     text = []
     content = []
     reasoning = []
@@ -78,6 +80,10 @@ def send(url: str, body: dict) -> dict:
                     reasoning.append(thought)
                 if (visible or delta.get("tool_calls")) and t_content is None:
                     t_content = time.perf_counter()
+                if (
+                    visible.strip() or delta.get("tool_calls")
+                ) and t_meaningful is None:
+                    t_meaningful = time.perf_counter()
                 got = visible or thought
                 if delta.get("tool_calls"):
                     for fragment in delta["tool_calls"]:
@@ -117,6 +123,9 @@ def send(url: str, body: dict) -> dict:
         ttft_s=round((t_first or t1) - t0, 3),
         total_s=round(t1 - t0, 3),
         content_ttft_s=round(t_content - t0, 3) if t_content is not None else None,
+        meaningful_ttft_s=round(t_meaningful - t0, 3)
+        if t_meaningful is not None
+        else None,
         content="".join(content)[:400],
         reasoning="".join(reasoning)[:400],
         stream_done=done,

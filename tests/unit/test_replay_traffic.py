@@ -54,7 +54,7 @@ def test_replay_separates_reasoning_and_visible_output(replay, monkeypatch):
     monkeypatch.setattr(
         replay.urllib.request, "urlopen", lambda *args, **kwargs: stream
     )
-    clock = iter([10.0, 11.0, 12.0, 14.0])
+    clock = iter([10.0, 11.0, 12.0, 12.0, 14.0])
     monkeypatch.setattr(replay.time, "perf_counter", lambda: next(clock))
     result = replay.send("http://localhost", {})
     assert result["ttft_s"] == 1.0
@@ -162,3 +162,22 @@ def test_replay_digest_compares_complete_arguments_independent_of_chunks(
     original = run('{"command":"ls"}', 4)
     assert original == run('{"command":"ls"}', 9)
     assert original != run('{"command":"pwd"}', 4)
+
+
+def test_replay_blank_content_does_not_count_as_meaningful_output(replay, monkeypatch):
+    events = [
+        event({"content": "\n\n"}),
+        event({"reasoning_content": "thinking"}),
+        event({"content": "answer"}),
+        event({}, "stop"),
+        b"data: [DONE]\n",
+    ]
+    monkeypatch.setattr(
+        replay.urllib.request, "urlopen", lambda *a, **kw: Stream(events)
+    )
+    clock = iter([10.0, 11.0, 11.0, 15.0, 16.0])
+    monkeypatch.setattr(replay.time, "perf_counter", lambda: next(clock))
+    result = replay.send("http://localhost", {})
+    assert result["content_ttft_s"] == 1.0
+    assert result["meaningful_ttft_s"] == 5.0
+    assert result["content"] == "\n\nanswer"
