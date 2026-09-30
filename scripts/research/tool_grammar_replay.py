@@ -248,7 +248,7 @@ def main():
                         totals["errors"] += 1
                         print(Path(f).name, i, "ERROR", reply["error"], flush=True)
                         continue
-                    g = grade(reply, body["tools"])
+                    g = grade(reply, body.get("tools", []))
                     totals["replies"] += 1
                     totals["tool_use"] += reply["stop"] == "tool_use"
                     for k in ("malformed", "leaked", "dropped"):
