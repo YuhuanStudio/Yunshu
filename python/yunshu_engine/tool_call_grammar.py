@@ -512,6 +512,10 @@ class ToolCallGuide:
         self.matcher = None
         self.consumed = 0
         self.broken = False
+        # engagement counters (logged when a call closes)
+        self.calls = 0
+        self.masked = 0
+        self.lane_rounds = 0
         if thinking_open and grammar.think_end_id is not None:
             self.phase = WAIT
         elif grammar.forced:
@@ -572,6 +576,14 @@ class ToolCallGuide:
         self.consumed += 1
         if m.is_stopped():
             self.phase = FREE
+            self.calls += 1
+            logger.info(
+                "tool call closed under grammar (%d tokens masked so far in %d calls, "
+                "%d masked lane rounds)",
+                self.masked,
+                self.calls,
+                self.lane_rounds,
+            )
         return True
 
     def checkpoint(self) -> tuple:
@@ -603,6 +615,7 @@ class ToolCallGuide:
             return False
         import llguidance.numpy as lnp
 
+        self.masked += 1
         try:
             lnp.fill_next_token_bitmask(self.matcher, out.reshape(1, -1), 0)
         except Exception:

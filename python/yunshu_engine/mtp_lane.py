@@ -200,6 +200,7 @@ def rounds(
                 # Each position's mask depends on the drafts before it: read the
                 # chain back first (only inside a tool call, a short stretch).
                 masks = guide.plan(draft_tokens.reshape(-1).tolist(), bs)
+                guide.lane_rounds += masks is not None
             if masks is not None:
                 verify = mtp._mtp_verify_target(
                     lm, verify_input, prompt_cache, sampler, sample_target_tokens=False
@@ -230,9 +231,6 @@ def rounds(
             accepted = 0
             while accepted < bs - 1 and drafted[accepted] == tgt[accepted]:
                 accepted += 1
-            # per-round drafted / accepted counts (drafter lifetime counters; the runner
-            # diffs them per request for x_yunshu.speculative)
-            _record_speculative_round(draft_model, accepted, bs - 1)
             new_tokens = (drafted[:accepted] + [tgt[accepted]])[: max_tokens - emitted]
             if guide is not None:
                 # Keep the tokens up to the first one that arms a constraint (the
@@ -242,6 +240,9 @@ def rounds(
                 if kept < len(new_tokens):
                     new_tokens = new_tokens[:kept]
                     accepted = kept - 1
+            # per-round drafted / accepted counts (drafter lifetime counters; the runner
+            # diffs them per request for x_yunshu.speculative)
+            _record_speculative_round(draft_model, accepted, bs - 1)
             # Rows 0..accepted stay in the head's cache; later rows go.
             rejected = bs - (accepted + 1)
             if rejected:
