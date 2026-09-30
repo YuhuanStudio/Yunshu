@@ -185,6 +185,7 @@ target-version = "py313"
 src = ["python", "tests"]
 extend-exclude = [
     "reference",
+    "scripts/research/agentic/tasks",
     "python/yunshu_engine/kernels/omlx/qwen35_*.py",
     "python/yunshu_engine/kernels/omlx/row_exact_qmv.py",
     "python/yunshu_engine/kernels/omlx/module_cache.py",

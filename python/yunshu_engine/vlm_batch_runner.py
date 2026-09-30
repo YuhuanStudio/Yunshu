@@ -559,16 +559,15 @@ class VLMBatchRunner:
                 job.use_draft = job.allow_draft = False
                 job.processors = [*job.processors, ToolCallProcessor(job.guide)]
 
-        if self.driver is not None and job.prompt_kwargs is None:
-            self._admit_driver(job)
-            return
-
         use_apc = self.apc_manager is not None
         if use_apc and self._apc_admit is not None:
             try:
                 use_apc = bool(self._apc_admit(mx.array(job.ids)))
             except Exception:
                 logger.debug("APC admission check failed; using APC", exc_info=True)
+        if self.driver is not None and job.prompt_kwargs is None:
+            self._admit_driver(job, use_apc)
+            return
         job.stats.used_apc = use_apc
         spec = job.use_draft and alone and self._spec is None
         if not spec:
@@ -576,6 +575,7 @@ class VLMBatchRunner:
             job.stats.used_draft = False
         else:
             job.stats.spec_mode = _spec_mode(self.drafter)
+            job.spec_base = _spec_counters(self.drafter)
         pkw = job.prompt_kwargs
         if pkw is None:
             if alone:
@@ -627,10 +627,10 @@ class VLMBatchRunner:
             group.sampler.add(uid, job.sampling)
 
     # ── round driver ────────────────────────────────────────────────────
-    def _admit_driver(self, job: _Job) -> None:
+    def _admit_driver(self, job: _Job, use_apc: bool) -> None:
         from .round_driver.driver import Request
 
-        self.driver.add(
+        hit = self.driver.add(
             Request(
                 ids=job.ids,
                 max_tokens=job.max_tokens,
@@ -641,11 +641,15 @@ class VLMBatchRunner:
                 draft=job.allow_draft,
                 budget=job.budget,
                 handle=job,
+                extra_hash=self.apc_semantic_hash or 0,
+                use_apc=use_apc,
             )
         )
         job.start = job.stats.t_admit = time.perf_counter()
-        job.stats.prefill_total = len(job.ids)
-        job.stats.used_apc = False
+        hit = int(hit or 0)
+        job.stats.cached_tokens = hit
+        job.stats.prefill_total = len(job.ids) - hit
+        job.stats.used_apc = use_apc
         job.stats.used_draft = bool(job.allow_draft and self.driver.head is not None)
         if job.stats.used_draft:
             job.stats.spec_mode = "mtp"
@@ -746,6 +750,9 @@ class VLMBatchRunner:
             if group.spec:
                 mtp_lane.set_guide(None)
         self._note_prefill(group)
+        if group.spec:
+            for job in group.jobs.values():
+                _note_spec(self.drafter, job)
         if self.ragged_kv and not self._ragged_logged and not group.spec:
             # Engagement proof in the server log (a no-op path once cost a
             # full MMLU run to notice). Joins build the ragged caches
@@ -799,7 +806,7 @@ class VLMBatchRunner:
             for row in self.driver.rows:
                 st = row.req.handle.stats
                 if st.t_first == 0.0:
-                    st.prefill_done = min(row.done, st.prefill_total)
+                    st.prefill_done = min(row.done - row.hit, st.prefill_total)
         except Exception:
             logger.debug("driver prefill progress unavailable", exc_info=True)
 
@@ -895,6 +902,29 @@ class VLMBatchRunner:
             with contextlib.suppress(Exception):
                 mx.synchronize()
                 mx.clear_cache()
+
+
+def _spec_counters(drafter: Any) -> tuple | None:
+    """(rounds, accepted, drafted) lifetime counters the round loops keep on the drafter."""
+    if drafter is None:
+        return None
+    return (
+        getattr(drafter, "speculative_total_rounds", 0),
+        float(getattr(drafter, "speculative_total_accepted", 0.0)),
+        getattr(drafter, "speculative_total_drafted", 0),
+    )
+
+
+def _note_spec(drafter: Any, job: _Job) -> None:
+    """Per-request drafted / accepted draft tokens of the single-row speculative lane: the
+    drafter's counters (bumped by mtp_lane, mtp_tree, dflash_tree and upstream's loops)
+    minus their value at admission. The lane serves one request at a time, so the diff
+    belongs to ``job``."""
+    now, base = _spec_counters(drafter), job.spec_base
+    if now is None or base is None:
+        return
+    job.stats.spec_drafted = max(int(now[2] - base[2]), 0)
+    job.stats.spec_accepted = max(int(round(now[1] - base[1])), 0)
 
 
 def _spec_mode(drafter: Any) -> str:
@@ -1046,6 +1076,8 @@ class _Job:
     rope_delta: float = 0.0
     allow_draft: bool = False
     guide: Any = None
+    # drafter lifetime counters at admission (rounds, accepted, drafted); diffed per step
+    spec_base: tuple | None = None
 
 
 @dataclass

@@ -269,6 +269,8 @@ async def realtime_checks(base: str, model: str, audio: bool):
 
     A.model = model
     A.audio = audio
+    A.audio_out = False
+    A.content = True
     rc.RESULTS.clear()
     await rc.main(A)
     for name, ok, _detail in rc.RESULTS:

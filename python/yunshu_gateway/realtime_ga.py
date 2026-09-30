@@ -82,19 +82,16 @@ def _session_from_ga(s: dict) -> dict:
             # semantic_vad has no separate implementation here: serve it as server_vad.
             if td.get("type") == "semantic_vad":
                 td["type"] = "server_vad"
-            for k in (
-                "create_response",
-                "interrupt_response",
-                "idle_timeout_ms",
-                "eagerness",
-            ):
+            for k in ("create_response", "interrupt_response", "eagerness"):
                 td.pop(k, None)
         out["turn_detection"] = td
+    if "noise_reduction" in inp:
+        out["input_audio_noise_reduction"] = inp["noise_reduction"]
     return out
 
 
 def _response_from_ga(r: dict) -> dict:
-    skip = ("audio", "output_modalities", "max_output_tokens", "input")
+    skip = ("audio", "output_modalities", "max_output_tokens")
     out = {k: v for k, v in r.items() if k not in skip}
     if "output_modalities" in r:
         out["modalities"] = r["output_modalities"]
@@ -127,6 +124,7 @@ def _session_to_ga(s: dict) -> dict:
         td = {k: v for k, v in td.items() if k != "barge_in_min_ms"}
         td.setdefault("create_response", True)
         td.setdefault("interrupt_response", True)
+        td.setdefault("idle_timeout_ms", None)
     return {
         "type": "realtime",
         "object": "realtime.session",
@@ -143,7 +141,7 @@ def _session_to_ga(s: dict) -> dict:
             "input": {
                 "format": _fmt_to_ga(s.get("input_audio_format")),
                 "transcription": s.get("input_audio_transcription"),
-                "noise_reduction": None,
+                "noise_reduction": s.get("input_audio_noise_reduction"),
                 "turn_detection": td,
             },
             "output": {

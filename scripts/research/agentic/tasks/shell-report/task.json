@@ -1,0 +1,7 @@
+{
+  "id": "shell-report",
+  "title": "Inspect messy data files, write a robust report script, run it",
+  "generate": "gen.py",
+  "prompt": "The directory data/ holds sales exports from several systems (*.csv and *.txt). They are messy in different ways: inspect them with shell commands first. Write `report.py` (standard library only) that is run as `python report.py DATA_DIR OUT_JSON` and writes OUT_JSON containing {\"files\": <number of data files read>, \"rows\": <valid sales rows>, \"bad_rows\": <rows skipped because they are unusable>, \"revenue_by_region\": {region: total revenue rounded to 2 decimals, sorted by region name}}. A row is valid when the quantity is a positive integer, the unit price is a positive number (a leading currency symbol and a decimal comma are allowed) and the region is not empty; anything else is a bad row. Revenue of a row is quantity * unit_price. Regions must be normalised (upper case, trimmed). Header rows are not data rows and are not bad rows; a blank line is ignored. Then run it on data/ to produce report.json in this directory, and check the result looks sane.",
+  "test": ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "_hidden_tests"]
+}

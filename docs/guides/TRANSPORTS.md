@@ -124,11 +124,21 @@ and the session shape at the socket boundary. Also implemented: `?model=`, the `
 Verified with the official SDK by `scripts/dev/realtime_conformance.py` (unit test with a fake engine;
 real-model smoke in `scripts/dev/transport_smoke.py`). Known differences from api.openai.com:
 
-- `semantic_vad` is served as `server_vad`; `idle_timeout_ms`, `eagerness`, `noise_reduction`,
-  `output_audio_buffer.*` and `rate_limits.updated` are not implemented.
-- `response.create.input` (custom out-of-band context) is ignored; use `conversation: "none"`.
-- Assistant items keep one content part type per modality; for audio replies the GA `content_part` events
-  still carry `output_text` shaped parts.
+- `semantic_vad` is served as `server_vad` (`eagerness` is ignored).
+- `turn_detection.idle_timeout_ms`: that long after a completed response (plus the playback time of its
+  audio) without user speech, the server sends `input_audio_buffer.timeout_triggered`, commits the empty
+  buffer as a silent user turn and answers.
+- `audio.input.noise_reduction` (`near_field` / `far_field`; beta `input_audio_noise_reduction`): a causal
+  CPU high-pass plus noise-floor expander (`realtime_dsp.py`) on the input audio before VAD and ASR.
+  It is a light filter, not a neural denoiser.
+- `rate_limits.updated` follows `response.created`. A local server has no quota: `requests` reports
+  `YUNSHU_RATE_LIMIT_RPM` (unlimited = 2^31-1 when 0), `tokens` the model's context window.
+- `output_audio_buffer.started` / `.stopped` / `.cleared` (GA dialect only; OpenAI sends them on WebRTC / SIP)
+  bracket the audio of a response, `cleared` when it was cut by a cancel or barge-in; the client event
+  `output_audio_buffer.clear` cancels the speaking response.
+- `response.create.input` replaces the conversation as the context of that response (items or
+  `item_reference`s; `[]` clears it); combine with `conversation: "none"` to keep it out of the history.
+- Spoken replies carry `output_audio` content parts with the `transcript` (`audio` in the beta dialect).
 - Pass-through of unsupported session fields is silent (no `invalid_request_error`).
 
 ### WebRTC (planned)

@@ -106,7 +106,7 @@ jobs:
         run: uv python install ${{ env.PYTHON_VERSION }}
 
       - name: Install dependencies (core + dev only — e2e needs models)
-        run: uv sync --dev
+        run: uv sync --dev --extra vision
 
       - name: Run unit tests
         run: uv run pytest tests/unit -q --tb=short

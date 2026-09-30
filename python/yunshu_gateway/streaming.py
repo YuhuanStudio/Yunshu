@@ -18,6 +18,7 @@ Key design decisions:
 
 import asyncio
 import contextlib
+import contextvars
 import json
 import logging
 import re
@@ -827,6 +828,14 @@ def format_openai_non_stream(
 # event-specific fields defined in the openai.types.responses package.
 
 
+# The request's echoed configuration (instructions, temperature, tools, truncation, ...):
+# set by the Responses route so every response.* event carries the same fields the
+# final Response object has, as OpenAI's do.
+RESPONSES_ECHO: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "yunshu_responses_echo", default=None
+)
+
+
 def _responses_base_response(
     response_id: str,
     model: str,
@@ -847,6 +856,9 @@ def _responses_base_response(
         "tool_choice": "auto",
         "tools": [],
     }
+    echo = RESPONSES_ECHO.get()
+    if echo:
+        resp.update(echo)
     if usage is not None:
         resp["usage"] = usage
     return resp

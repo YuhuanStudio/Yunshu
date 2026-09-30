@@ -110,7 +110,7 @@ def test_value_error_on_continue_final_message_degrades_not_collapses():
     assert tok.calls[-1].get("add_generation_prompt") is False
 
 
-def test_qwen_adapter_hoists_mid_system():
+def test_qwen_adapter_keeps_mid_system_in_place():
     out = QwenMessageAdapter().adapt(
         [
             {"role": "user", "content": "hi"},
@@ -118,7 +118,7 @@ def test_qwen_adapter_hoists_mid_system():
             {"role": "user", "content": "2+2"},
         ]
     )
-    assert [m["role"] for m in out] == ["system", "user", "user"]
+    assert [m["role"] for m in out] == ["user", "user", "user"]
 
 
 def test_qwen_adapter_leaves_leading_system():

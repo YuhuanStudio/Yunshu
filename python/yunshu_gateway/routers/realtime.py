@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 import uuid
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -473,6 +474,8 @@ class SessionConfig:
         self.input_audio_format = "pcm16"
         self.output_audio_format = "pcm16"
         self.turn_detection = _default_turn_detection()
+        # {"type": "near_field" | "far_field"} or None: input noise reduction before VAD / ASR.
+        self.input_audio_noise_reduction: dict | None = None
         self.max_response_output_tokens = 4096
         self.temperature = 0.7
         self.tools: list[dict] = []
@@ -526,6 +529,23 @@ class SessionConfig:
                         td_type = value.get("type")
                         if td_type is not None and td_type not in ("server_vad", None):
                             continue
+                        # idle_timeout_ms: null / a positive int (ms) only
+                        idle = value.get("idle_timeout_ms")
+                        if idle is not None and (
+                            isinstance(idle, bool)
+                            or not isinstance(idle, int)
+                            or idle <= 0
+                        ):
+                            value = {
+                                k: v for k, v in value.items() if k != "idle_timeout_ms"
+                            }
+                if key == "input_audio_noise_reduction":
+                    from ..realtime_dsp import supported
+
+                    if value is not None and not (
+                        isinstance(value, dict) and supported(value.get("type"))
+                    ):
+                        continue
                 if key == "modalities":
                     # validate modalities like voice/format/turn_detection — a
                     # client could otherwise set a non-list or ["video"] and to_dict() would
@@ -561,6 +581,7 @@ class SessionConfig:
             "input_audio_format": self.input_audio_format,
             "output_audio_format": self.output_audio_format,
             "turn_detection": self.turn_detection,
+            "input_audio_noise_reduction": self.input_audio_noise_reduction,
             "max_response_output_tokens": self.max_response_output_tokens,
             "temperature": self.temperature,
             "tools": self.tools,
@@ -923,7 +944,183 @@ class RealtimeSession:
         self._response_item_open: bool = False
         self._response_done_emitted: bool = False
 
+    # Per-response / idle bookkeeping defaults (class level: a session built without
+    # __init__ in tests, or before its first response, sees them too).
+    _resp_audio: bool = (
+        False  # active response speaks: content parts carry the audio shape
+    )
+    _resp_audio_bytes: int = 0  # encoded audio sent for the active response
+    _obuf_started: bool = False  # output_audio_buffer.started sent
+    _obuf_cleared: bool = False  # the audio was cut (cancel / barge-in / clear)
+    _idle_task: asyncio.Task | None = None
+    _denoiser = None
+    _denoiser_key: tuple | None = None
+    _recent_requests: list[float] | None = None
+
+    def _content_part(self, text: str) -> dict:
+        """A content_part for the active response: audio replies carry the transcript."""
+        if self._resp_audio:
+            return {"type": "audio", "transcript": text}
+        return {"type": "text", "text": text}
+
     async def send_event(self, event: dict) -> None:
+        await self._send_wire(event)
+        await self._observe(event)
+
+    async def _observe(self, event: dict) -> None:
+        """Session bookkeeping driven by what was just sent: rate limits, the output audio
+        buffer lifecycle and the idle timeout. Never raises."""
+        t = event.get("type")
+        try:
+            if t == "response.created":
+                resp = event.get("response") or {}
+                self._resp_audio = "audio" in (resp.get("modalities") or [])
+                self._resp_audio_bytes = 0
+                self._obuf_started = False
+                self._obuf_cleared = False
+                self._cancel_idle_timer()
+                await self._send_wire(self._rate_limits_event())
+            elif t == "response.audio.delta":
+                self._resp_audio_bytes += len(event.get("delta") or "") * 3 // 4
+                if self.dialect == "ga" and not self._obuf_started:
+                    self._obuf_started = True
+                    await self._send_wire(
+                        _event(
+                            "output_audio_buffer.started",
+                            response_id=event.get("response_id"),
+                        )
+                    )
+            elif t == "response.audio.done":
+                if self.dialect == "ga" and self._obuf_started:
+                    self._obuf_started = False
+                    await self._send_wire(
+                        _event(
+                            "output_audio_buffer.cleared"
+                            if self._obuf_cleared
+                            else "output_audio_buffer.stopped",
+                            response_id=event.get("response_id"),
+                        )
+                    )
+            elif t == "response.done":
+                status = (event.get("response") or {}).get("status")
+                if status == "completed":
+                    self._arm_idle_timer()
+        except Exception:  # noqa: BLE001
+            logger.debug("realtime bookkeeping failed for %s", t, exc_info=True)
+
+    def _rate_limits_event(self) -> dict:
+        """``rate_limits.updated``: a local server has no quota, so the limits are the
+        configured requests-per-minute (``YUNSHU_RATE_LIMIT_RPM``, 0 = unlimited) and the
+        model's context window for tokens."""
+        now = time.monotonic()
+        recent = [x for x in (self._recent_requests or []) if now - x < 60.0]
+        recent.append(now)
+        self._recent_requests = recent
+        rpm = int(settings.get("YUNSHU_RATE_LIMIT_RPM") or 0)
+        unlimited = 2**31 - 1
+        ctx = None
+        try:
+            from ..streaming import get_max_context_window
+
+            ctx = get_max_context_window(self.session.model, self._resolve_engine())
+        except Exception:  # noqa: BLE001
+            ctx = None
+        if rpm > 0:
+            reset = max(0.0, 60.0 - (now - recent[0]))
+            requests = {
+                "name": "requests",
+                "limit": rpm,
+                "remaining": max(0, rpm - len(recent)),
+                "reset_seconds": round(reset, 3),
+            }
+        else:
+            requests = {
+                "name": "requests",
+                "limit": unlimited,
+                "remaining": unlimited,
+                "reset_seconds": 0.0,
+            }
+        tokens = {
+            "name": "tokens",
+            "limit": int(ctx) if ctx else unlimited,
+            "remaining": int(ctx) if ctx else unlimited,
+            "reset_seconds": 0.0,
+        }
+        return _event("rate_limits.updated", rate_limits=[requests, tokens])
+
+    # ── idle timeout (turn_detection.idle_timeout_ms) ──
+
+    def _cancel_idle_timer(self) -> None:
+        task = self._idle_task
+        if task is not None and not task.done():
+            task.cancel()
+        self._idle_task = None
+
+    def _arm_idle_timer(self) -> None:
+        """After a completed response: idle_timeout_ms past the end of its audio playback
+        without user speech, the server answers by itself (OpenAI ``idle_timeout_ms``)."""
+        td = self.session.turn_detection
+        idle = td.get("idle_timeout_ms") if isinstance(td, dict) else None
+        if not idle or td.get("type") != "server_vad":
+            return
+        self._cancel_idle_timer()
+        fmt = self.session.output_audio_format
+        bytes_per_ms = 8 if "g711" in str(fmt) else 48
+        playback_s = self._resp_audio_bytes / bytes_per_ms / 1000.0
+        self._idle_task = asyncio.create_task(
+            self._idle_timeout_run(playback_s + idle / 1000.0)
+        )
+
+    async def _idle_timeout_run(self, delay_s: float) -> None:
+        try:
+            await asyncio.sleep(delay_s)
+        except asyncio.CancelledError:
+            return
+        if self._vad_speaking or (
+            self._active_response is not None and not self._active_response.done()
+        ):
+            return
+        td = self.session.turn_detection
+        if not (isinstance(td, dict) and td.get("type") == "server_vad"):
+            return
+        bytes_per_ms = 16 if "g711" in str(self.session.input_audio_format) else 48
+        pos_ms = len(self._audio_buffer) // bytes_per_ms
+        item_id = f"item_{uuid.uuid4().hex[:24]}"
+        prev = self.conversation.items[-1].item_id if self.conversation.items else None
+        await self.send_event(
+            _event(
+                "input_audio_buffer.timeout_triggered",
+                item_id=item_id,
+                audio_start_ms=pos_ms,
+                audio_end_ms=pos_ms,
+            )
+        )
+        # the empty buffer is committed as a silent user turn, then the model answers
+        item = ConversationItem(
+            item_id=item_id,
+            item_type="message",
+            role="user",
+            content=[{"type": "input_audio", "transcript": ""}],
+        )
+        item.status = "completed"
+        self.conversation.add_item(item)
+        await self.send_event(
+            _event(
+                RealtimeEvent.INPUT_AUDIO_BUFFER_COMMITTED,
+                previous_item_id=prev,
+                item_id=item_id,
+            )
+        )
+        await self.send_event(
+            _event(
+                "conversation.item.created",
+                previous_item_id=prev,
+                item=item.to_dict(),
+            )
+        )
+        await self._handle_response_create({"type": "response.create", "response": {}})
+
+    async def _send_wire(self, event: dict) -> None:
         try:
             if self.dialect == "ga":
                 for ev in realtime_ga.to_ga(event):
@@ -999,6 +1196,7 @@ class RealtimeSession:
         except Exception as e:
             logger.error(f"Realtime session error: {e}", exc_info=True)
         finally:
+            self._cancel_idle_timer()
             # Cancel any active generation
             if self._cancel_event is not None:
                 self._cancel_event.set()
@@ -1265,8 +1463,24 @@ class RealtimeSession:
 
         response_id = f"resp_{uuid.uuid4().hex[:16]}"
         item_id = f"item_{uuid.uuid4().hex[:24]}"
+        self._cancel_idle_timer()
 
         response_config = event.get("response", {})
+        if "input" in response_config and not isinstance(
+            response_config["input"], list
+        ):
+            await self.send_event(
+                _event(
+                    RealtimeEvent.ERROR,
+                    error={
+                        "message": "response.input must be an array of conversation items",
+                        "type": "invalid_request_error",
+                        "code": "invalid_type",
+                        "param": "response.input",
+                    },
+                )
+            )
+            return
         modalities = response_config.get("modalities", self.session.modalities)
 
         # Validate modalities
@@ -1461,7 +1675,9 @@ class RealtimeSession:
             # tools) from response.create — previously only session-level values
             # were used, so a turn-specific instruction/voice/tool set was ignored.
             _instr_override = config.get("instructions")
-            messages = self._build_messages(instructions_override=_instr_override)
+            messages = self._build_messages(
+                instructions_override=_instr_override, input_items=config.get("input")
+            )
             if not messages:
                 await self.send_event(
                     _event(
@@ -1619,7 +1835,7 @@ class RealtimeSession:
                     item_id=item_id,
                     output_index=0,
                     content_index=0,
-                    part={"type": "text", "text": ""},
+                    part=self._content_part(""),
                 )
             )
 
@@ -1771,7 +1987,7 @@ class RealtimeSession:
                     item_id=item_id,
                     output_index=0,
                     content_index=0,
-                    part={"type": "text", "text": full_text},
+                    part=self._content_part(full_text),
                 )
             )
 
@@ -2111,7 +2327,9 @@ class RealtimeSession:
         _img_tmp: list[str] = []
         try:
             _instr_override = config.get("instructions")
-            _messages = self._build_messages(instructions_override=_instr_override)
+            _messages = self._build_messages(
+                instructions_override=_instr_override, input_items=config.get("input")
+            )
             _audio_path: str | None = None
             # Native vision-in: an image on the latest user turn is fed to the omni
             # model too (OmniEngine.stream supports image_path) — the realtime socket
@@ -2210,7 +2428,7 @@ class RealtimeSession:
                     item_id=item_id,
                     output_index=0,
                     content_index=0,
-                    part={"type": "text", "text": ""},
+                    part=self._content_part(""),
                 )
             )
 
@@ -2342,7 +2560,7 @@ class RealtimeSession:
                     item_id=item_id,
                     output_index=0,
                     content_index=0,
-                    part={"type": "text", "text": _visible_text},
+                    part=self._content_part(_visible_text),
                 )
             )
 
@@ -2495,6 +2713,7 @@ class RealtimeSession:
             # Capture audio modality BEFORE awaiting the task, because the task's
             # finally block clears self._active_modalities to [].
             _had_audio = "audio" in self._active_modalities
+            self._obuf_cleared = True  # output_audio_buffer.cleared instead of .stopped
             # Signal the cancel_event so the engine can stop mid-generation
             if self._cancel_event is not None:
                 self._cancel_event.set()
@@ -2570,7 +2789,7 @@ class RealtimeSession:
                 item_id=item_id,
                 output_index=0,
                 content_index=0,
-                part={"type": "text", "text": text},
+                part=self._content_part(text),
             )
         )
         await _send(
@@ -2582,7 +2801,7 @@ class RealtimeSession:
                     "id": item_id,
                     "type": "message",
                     "role": "assistant",
-                    "content": [{"type": "text", "text": text}],
+                    "content": [self._content_part(text)],
                     "status": status,
                 },
             )
@@ -2781,6 +3000,7 @@ class RealtimeSession:
             chunk = self._decode_g711_ulaw(chunk)
         elif fmt == "g711_alaw":
             chunk = self._decode_g711_alaw(chunk)
+        chunk = self._denoise(chunk)
 
         self._audio_buffer.extend(chunk)
 
@@ -2908,6 +3128,7 @@ class RealtimeSession:
                 self._vad_silence_bytes = 0
                 self._vad_speech_bytes = 0
                 self._barge_in_fired = False
+                self._cancel_idle_timer()
                 await self.send_event(
                     _event(
                         RealtimeEvent.INPUT_AUDIO_BUFFER_SPEECH_STARTED,
@@ -3137,6 +3358,27 @@ class RealtimeSession:
         self._reset_silero()
         return _item_created
 
+    async def _handle_output_audio_buffer_clear(self, event: dict) -> None:
+        """``output_audio_buffer.clear``: cut the audio of the response being spoken (the
+        response is cancelled, as on a barge-in); a no-op when nothing is playing."""
+        if self._active_response is not None and not self._active_response.done():
+            await self._handle_response_cancel({})
+
+    def _denoise(self, chunk: bytes) -> bytes:
+        """Apply the session's ``noise_reduction`` to a decoded PCM16 input chunk."""
+        nr = getattr(self.session, "input_audio_noise_reduction", None)
+        kind = nr.get("type") if isinstance(nr, dict) else None
+        if not kind:
+            self._denoiser = None
+            return chunk
+        rate = 8000 if "g711" in str(self.session.input_audio_format) else 24000
+        if self._denoiser is None or self._denoiser_key != (kind, rate):
+            from ..realtime_dsp import NoiseReducer
+
+            self._denoiser = NoiseReducer(kind, rate)
+            self._denoiser_key = (kind, rate)
+        return self._denoiser.process(chunk)
+
     async def _handle_input_audio_buffer_clear(self, event: dict) -> None:
         """Handle input_audio_buffer.clear — discard audio buffer without processing."""
         self._audio_buffer = bytearray()
@@ -3181,8 +3423,41 @@ class RealtimeSession:
                 {"type": "response.create", "response": {}}
             )
 
-    def _build_messages(self, instructions_override: str | None = None) -> list[dict]:
+    def _items_from_input(self, input_items: list) -> list:
+        """``response.create.input``: conversation items (or ``item_reference``s to items
+        already in the conversation) that make up this response's context."""
+        items: list = []
+        for data in input_items:
+            if not isinstance(data, dict):
+                continue
+            if data.get("type") == "item_reference":
+                ref = self.conversation.get_item(data.get("id", ""))
+                if ref is not None:
+                    items.append(ref)
+                continue
+            items.append(
+                ConversationItem(
+                    item_id=data.get("id") or f"item_{uuid.uuid4().hex[:24]}",
+                    item_type=data.get("type", "message"),
+                    role=data.get("role"),
+                    content=data.get("content", []),
+                    call_id=data.get("call_id"),
+                    name=data.get("name"),
+                    arguments=data.get("arguments"),
+                    output=data.get("output"),
+                )
+            )
+        return items
+
+    def _build_messages(
+        self,
+        instructions_override: str | None = None,
+        input_items: list | None = None,
+    ) -> list[dict]:
         """Build messages list from conversation items.
+
+        ``input_items`` (``response.create.input``) replaces the conversation as this
+        response's context; an empty list clears it.
 
         ``instructions_override`` lets a per-response
         ``response.create`` carry its own ``instructions`` (a documented OpenAI
@@ -3197,7 +3472,12 @@ class RealtimeSession:
             _instr = getattr(session_cfg, "instructions", "")
         if _instr:
             messages.append({"role": "system", "content": _instr})
-        for item in self.conversation.items:
+        source = (
+            self._items_from_input(input_items)
+            if input_items is not None
+            else self.conversation.items
+        )
+        for item in source:
             # feed function calls + tool RESULTS back to the model (they were
             # dropped, so tool calling over realtime never saw its results). Map the
             # OpenAI-Realtime item types to chat-template messages.
@@ -3235,10 +3515,14 @@ class RealtimeSession:
                 if isinstance(content, dict):
                     # OpenAI Realtime API uses "input_text" for user content
                     # and "text" for assistant content. Accept both.
-                    if content.get("type") in ("text", "input_text"):
+                    if content.get("type") in ("text", "input_text", "output_text"):
                         text_parts.append(content.get("text", ""))
                     # Audio transcript fallback (when transcription available)
-                    elif content.get("type") in ("input_audio", "audio"):
+                    elif content.get("type") in (
+                        "input_audio",
+                        "audio",
+                        "output_audio",
+                    ):
                         if content.get("transcript"):
                             text_parts.append(content["transcript"])
                 elif isinstance(content, str):
@@ -3290,6 +3574,7 @@ _EVENT_HANDLERS = {
     "input_audio_buffer.append": RealtimeSession._handle_input_audio_buffer_append,
     "input_audio_buffer.commit": RealtimeSession._handle_input_audio_buffer_commit,
     "input_audio_buffer.clear": RealtimeSession._handle_input_audio_buffer_clear,
+    "output_audio_buffer.clear": RealtimeSession._handle_output_audio_buffer_clear,
 }
 
 

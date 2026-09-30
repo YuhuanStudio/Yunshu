@@ -1,0 +1,6 @@
+{
+  "id": "cli-add-flag",
+  "title": "Add --top and --ignore-case flags to a small word-count CLI, with tests",
+  "prompt": "`wcx` is a tiny word-count CLI (`python -m wcx FILE...`). Add two options and tests:\n- `--top N`: after the normal per-file (and total) lines, print the N most frequent words across all the files, one per line as `<count>\\t<word>`, sorted by count descending and then word ascending. A word is a maximal run of ASCII letters, digits or apostrophes. N must be a positive integer; otherwise exit with argparse's usual usage error (status 2).\n- `--ignore-case` / `-i`: with `--top`, count words case-insensitively and print them lower-case. Without it, counting is case-sensitive.\nExisting output and behaviour must not change when the new options are absent. Update README.md to document the options and add at least two new tests for them in tests/test_cli.py. Run `python -m pytest -q tests` to check.",
+  "test": ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "_hidden_tests"]
+}

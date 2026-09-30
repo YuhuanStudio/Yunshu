@@ -7,6 +7,7 @@ The same checks run against a real model in the smoke test
 from __future__ import annotations
 
 import asyncio
+import base64
 import importlib.util
 import pathlib
 import socket
@@ -68,6 +69,17 @@ def server(monkeypatch):
     monkeypatch.setattr(
         rt.RealtimeSession, "_resolve_engine", lambda self: FakeEngine()
     )
+
+    async def fake_tts(self, text, response_id, item_id, voice=None, out_fmt=None):
+        delta = base64.b64encode(b"\0" * 4800).decode()
+        await self.send_event(
+            {"type": "response.audio.delta", "response_id": response_id, "delta": delta}
+        )
+        await self.send_event(
+            {"type": "response.audio.done", "response_id": response_id}
+        )
+
+    monkeypatch.setattr(rt.RealtimeSession, "_synthesize_audio_response", fake_tts)
     app = FastAPI()
     app.include_router(rt.router)
     port = _free_port()
@@ -97,7 +109,13 @@ def _load_script():
 def test_openai_sdk_ga_and_beta_conformance(server):
     mod = _load_script()
     args = SimpleNamespace(
-        url=server, model="fake-model", api_key="x", audio=False, uds=None
+        url=server,
+        model="fake-model",
+        api_key="x",
+        audio=False,
+        audio_out=True,
+        content=False,
+        uds=None,
     )
     rc = asyncio.run(mod.main(args))
     failed = [r for r in mod.RESULTS if not r[1]]
