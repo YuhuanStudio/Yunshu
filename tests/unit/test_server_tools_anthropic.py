@@ -689,3 +689,69 @@ def test_mid_conversation_system_message_with_image_request_does_not_crash(monke
     assert r.status_code == 404, (
         r.text
     )  # reached engine resolution: the system lift did not crash
+
+
+def test_explicit_search_request_steers_only_the_first_round(make):
+    """A local model sometimes answers from memory when told to search: an explicit ask forces round one."""
+    search.set_provider_for_tests(FakeSearch())
+    c, inner = make(
+        [
+            ([call("web_search", {"query": "q"})], "tool_use"),
+            ([text("done")], "end_turn"),
+        ]
+    )
+    r = c.post(
+        "/v1/messages",
+        json={
+            "model": "m",
+            "max_tokens": 50,
+            "tools": [WS],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Perform a web search for the query: yunshu",
+                }
+            ],
+        },
+    )
+    assert r.status_code == 200
+    assert inner.requests[0].tool_choice == {"type": "tool", "name": "web_search"}
+    assert inner.requests[1].tool_choice == {"type": "auto"}
+    # no explicit ask: the model decides
+    c, inner = make([([text("hi")], "end_turn")])
+    c.post(
+        "/v1/messages",
+        json={
+            "model": "m",
+            "max_tokens": 50,
+            "tools": [WS],
+            "messages": [{"role": "user", "content": "say hello"}],
+        },
+    )
+    assert inner.requests[0].tool_choice is None
+
+
+def test_explicit_tool_request_patterns():
+    from yunshu_gateway.server_tools.runtime import ServerToolDef, explicit_tool_request
+
+    defs = [
+        ServerToolDef("web_search", "web_search", "", {}),
+        ServerToolDef("web_fetch", "web_fetch", "", {}),
+    ]
+    assert (
+        explicit_tool_request("Please search the web for mlx news", defs)
+        == "web_search"
+    )
+    assert (
+        explicit_tool_request("Perform a web search for the query: x", defs)
+        == "web_search"
+    )
+    assert (
+        explicit_tool_request("fetch https://example.com/a and summarize", defs)
+        == "web_fetch"
+    )
+    assert explicit_tool_request("what is a web server?", defs) is None
+    assert explicit_tool_request("tell me about https://example.com", defs) is None
+    assert (
+        explicit_tool_request("search the web", defs[1:]) is None
+    )  # tool not declared

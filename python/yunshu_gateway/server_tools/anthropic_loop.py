@@ -42,6 +42,7 @@ from .runtime import (
     ToolOutcome,
     decode_result,
     encode_result,
+    explicit_tool_request,
     format_search_text,
     mcp_tool_to_def,
     run_all,
@@ -426,7 +427,9 @@ async def run_stream(req, request, inner: Inner, setup: _Setup) -> AsyncIterator
     try:
         for rnd in range(max_iter):
             stats["rounds"] += 1
-            inner_req = _inner_request(req, history, setup.client_tools + fn_tools)
+            inner_req = _inner_request(
+                req, history, setup.client_tools + fn_tools, rnd == 0, setup.defs
+            )
             resp = await inner(inner_req, request)
             if not isinstance(resp, StreamingResponse):
                 body = resp.body.decode() if hasattr(resp, "body") else "{}"
@@ -721,16 +724,44 @@ async def run_stream(req, request, inner: Inner, setup: _Setup) -> AsyncIterator
             await rt.aclose()
 
 
-def _inner_request(req, history: list[dict], tools: list[dict]):
-    """A fresh request for one generation round: the running history, function-style tools."""
+def _last_user_text(history: list[dict]) -> str:
+    """Text of the last user turn, or "" when it only carries tool results."""
+    if not history or history[-1].get("role") != "user":
+        return ""
+    c = history[-1].get("content")
+    if isinstance(c, str):
+        return c
+    parts = []
+    for b in c or []:
+        if isinstance(b, dict) and b.get("type") == "tool_result":
+            return ""
+        if isinstance(b, dict) and b.get("type") == "text":
+            parts.append(b.get("text", ""))
+    return "\n".join(parts)
+
+
+def _inner_request(req, history: list[dict], tools: list[dict], first: bool, defs=()):
+    """A fresh request for one generation round: the running history, function-style tools.
+
+    ``tool_choice`` only shapes the first round (a forced tool would otherwise loop): later rounds are
+    ``auto``, and an explicit "search the web ..." in the last user turn steers round one to the tool.
+    """
     from ..routers.anthropic import AnthropicMessage, AnthropicTool
 
+    tc = req.tool_choice
+    if not first:
+        tc = {"type": "auto"} if tools else None
+    elif tc in (None, "auto", {"type": "auto"}):
+        want = explicit_tool_request(_last_user_text(history), defs)
+        if want:
+            tc = {"type": "tool", "name": want}
     return req.model_copy(
         update={
             "messages": [
                 AnthropicMessage(role=m["role"], content=m["content"]) for m in history
             ],
             "tools": [AnthropicTool(**t) for t in tools] or None,
+            "tool_choice": tc if tools else None,
             "stream": True,
             "mcp_servers": None,
         }

@@ -556,13 +556,31 @@ def _approval_items(req, request) -> tuple[list[dict], set[str], list[dict]]:
     return decisions, known, []
 
 
-def _inner_request(req, items: list[dict], tools: list[dict], first: bool):
+def _inner_request(req, items: list[dict], tools: list[dict], first: bool, defs=()):
     from ..routers.responses import ResponseInputText, ResponseTool
 
     base = list(req.input) if isinstance(req.input, list) else None
     if base is None:
         base = [ResponseInputText(type="message", role="user", content=req.input)]
     tc = req.tool_choice
+    if first and tc in (None, "auto"):
+        # an explicit "search the web ..." / "fetch <url>" in the last user turn steers round one
+        from .runtime import explicit_tool_request
+
+        last = ""
+        for it in reversed(base):
+            role = getattr(it, "role", None)
+            if role == "user":
+                c = getattr(it, "content", None) or ""
+                last = (
+                    c
+                    if isinstance(c, str)
+                    else " ".join(p.get("text", "") for p in c if isinstance(p, dict))
+                )
+                break
+        want = explicit_tool_request(last, defs)
+        if want:
+            tc = {"type": "function", "name": want}
     if not first:
         tc = "auto"
     elif isinstance(tc, dict) and tc.get("type") in (
@@ -672,7 +690,9 @@ async def run_stream(req, request, inner: Inner, setup: _Setup, run: _Run):
             run.stats["rounds"] += 1
             capped = cap is not None and run.total_calls >= cap
             tools = setup.client_tools + ([] if capped else fn_tools)
-            inner_req = _inner_request(req, hist, tools, first=(rnd == 0 and not hist))
+            inner_req = _inner_request(
+                req, hist, tools, first=(rnd == 0 and not hist), defs=setup.defs
+            )
             with contextlib.suppress(Exception):
                 request.state._forced_response_id = run.id
             resp = await inner(inner_req, request)

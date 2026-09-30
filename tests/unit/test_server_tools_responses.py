@@ -715,3 +715,29 @@ def test_openai_sdk_parses_stream(make):
     assert parsed.output[0].type == "web_search_call"
     assert parsed.output[1].content[0].annotations[0].type == "url_citation"
     assert openai
+
+
+def test_explicit_search_request_steers_only_the_first_round_responses():
+    from yunshu_gateway.routers import responses
+    from yunshu_gateway.server_tools import responses_loop
+    from yunshu_gateway.server_tools.runtime import ServerToolDef
+
+    defs = [ServerToolDef("web_search", "web_search", "", {})]
+    tools = [
+        {"name": "web_search", "description": "", "parameters": {"type": "object"}}
+    ]
+    req = responses.ResponsesRequest(
+        model="m",
+        input="Please search the web for yunshu",
+        tools=[{"type": "web_search"}],
+    )
+    first = responses_loop._inner_request(req, [], tools, True, defs)
+    assert first.tool_choice == {"type": "function", "name": "web_search"}
+    later = responses_loop._inner_request(req, [], tools, False, defs)
+    assert later.tool_choice == "auto"
+    quiet = responses.ResponsesRequest(
+        model="m", input="hello", tools=[{"type": "web_search"}]
+    )
+    assert (
+        responses_loop._inner_request(quiet, [], tools, True, defs).tool_choice is None
+    )

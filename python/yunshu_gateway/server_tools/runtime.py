@@ -111,6 +111,31 @@ def format_search_text(query: str, results: list[SearchResult], start: int = 1) 
     return "\n".join(lines).strip()
 
 
+_SEARCH_ASK = re.compile(
+    r"\b(?:search\s+(?:the\s+)?(?:web|internet|online)|web\s+search|search\s+online"
+    r"|look\s+(?:it\s+|this\s+|that\s+)?up\s+online|use\s+(?:the\s+)?web_search|google\s+(?:it|this))\b",
+    re.I,
+)
+_FETCH_ASK = re.compile(
+    r"\b(?:fetch|open|read|visit|retrieve)\b[^\n]{0,80}https?://", re.I
+)
+
+
+def explicit_tool_request(text: str, defs) -> str | None:
+    """The server tool the user explicitly asked for ("search the web for ...", "fetch <url>"), if any.
+
+    A local model sometimes answers from memory even when told to search. When the last user message
+    plainly asks for a search or a fetch, the first round is steered to that tool (tool_choice) and every
+    later round is free again. Requests that only declare the tool leave the choice to the model.
+    """
+    names = {d.kind: d.fname for d in defs if d.kind in ("web_search", "web_fetch")}
+    if "web_fetch" in names and _FETCH_ASK.search(text or ""):
+        return names["web_fetch"]
+    if "web_search" in names and _SEARCH_ASK.search(text or ""):
+        return names["web_search"]
+    return None
+
+
 def safe_fname(s: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]", "_", s)[:64]
 

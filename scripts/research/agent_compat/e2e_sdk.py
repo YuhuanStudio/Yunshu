@@ -181,9 +181,10 @@ def anth_fetch_public():
     assert res, kinds(m)
     c = res[0].content
     assert getattr(c, "type", "") == "web_fetch_result", c
-    assert "example domain" in c.content.source.data.lower(), c.content.source.data[
-        :200
-    ]
+    assert "example domain" in (c.content.title or "").lower(), c.content.title
+    assert "documentation examples" in c.content.source.data.lower(), (
+        c.content.source.data[:200]
+    )
     text = "".join(getattr(b, "text", "") for b in m.content if b.type == "text")
     return {"kinds": kinds(m), "title": c.content.title, "text": text[:160]}
 
