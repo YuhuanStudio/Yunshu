@@ -61,21 +61,53 @@ window; the cost line is Claude Code's own arithmetic and cannot be corrected fr
 
 ## Feature matrix
 
-Status: **works** (verified, evidence named), **partial**, **missing**. "E2E" = the real agent against a real
-Yunshu; "SDK" = the official SDK; "unit" = `tests/unit` with fakes.
+Status: **works** (verified, evidence named), **partial**, **missing**, **n/a** (the agent never asks for it).
+"E2E" = the real pinned agent against a real Yunshu (Qwen3.5-9B and Qwen3.8-27B-oQ4e-mtp, launch-helper
+configuration, capture proxy); "SDK" = the official SDK against a real server; "unit" = `tests/unit` with fakes.
+Last full rerun: current main plus the fixes listed under "Found and fixed by the last rerun".
 
 | Feature | Claude Code | Codex | opencode | SDK users | Evidence |
 |---|---|---|---|---|---|
-| Streaming generation, tool calls | works | works | works | works | census replay, E2E |
-| Thinking / reasoning blocks in the native shape | works (`thinking` blocks; `adaptive` accepted) | works (`reasoning` items with `summary`, `encrypted_content` round-trip) | works (`reasoning_content`) | works | unit |
+| Streaming generation, tool calls | works | works | works | works | E2E edit / bash tasks in all three, unit |
+| Mid-conversation system messages (per-turn notes) | works (text and image turns) | works (`developer` items) | n/a | works | unit; the image-turn case was broken, see below |
+| Thinking / reasoning blocks in the native shape | works (`thinking` blocks, `adaptive` accepted) | works (`reasoning` items, `encrypted_content` round-trip) | works (`reasoning_content`) | works | unit, SDK |
 | Effort control | works (`output_config.effort` -> template `reasoning_effort`) | works (`reasoning.effort` via catalog levels) | works (`reasoning_effort`) | works | unit, launch |
-| Web search, server-side | see E2E results | see E2E results | not used (client tool) | works | unit, E2E |
-| Web fetch, server-side | client-side in the CLI | not used | not used | works | unit, E2E |
-| MCP connector (`mcp_servers`, `{type: "mcp"}`) | not used (client-side MCP) | not used | not used | works | unit, E2E |
-| Model discovery / picker | works with launch env | works with catalog | n/a | works | census |
-| Context window / auto-compact point | works with launch env | works with catalog | works with `limit` | works | launch |
+| Web search, server-side | works (WebSearch tool, fake SearXNG fact found) | works (`web_search`, fact found) | n/a (client tool) | works (Messages, Responses, streamed and not) | E2E, SDK |
+| Web fetch | client-side in the CLI | n/a | n/a | works (server-side, public page and SSRF-guarded loopback) | SDK |
+| MCP | client-side, works (tiny MCP server, answer 42) | client-side, works (answer 42) | n/a | server-side connector works (Messages, Responses) | E2E, SDK |
+| Images (tool result / input) | works after the fix (Read of a PNG, answer "red") | n/a in exec | n/a | works | E2E |
+| Model discovery / picker | works (`/model` lists the served model, launch env) | works (catalog: `/model` lists it with its description) | n/a | works | TUI capture, census |
+| Context window / auto-compact point | works (`/context` 262.1k window, 33k autocompact buffer) | works (catalog `context_window`) | works (`limit.context`) | works | E2E `/context`, launch |
+| Cost display | shows `$0.0000` in `/cost` (real: nothing is billed); the per-turn `total_cost_usd` is Claude Code's own arithmetic for an unknown model and cannot be changed server-side | n/a | n/a | n/a | TUI capture |
+| Rate-limit headers | n/a: no agent needs them for an API-key / custom provider; Yunshu has no quota, so it reports none (never invented) | n/a | n/a | n/a | census (no agent read them) |
 | `count_tokens` | works | n/a | n/a | works | census replay |
-| Prefix-cache reuse on agent traffic | see Known gaps | | | | |
+| Usage fields | works (`input_tokens`, `cache_read_input_tokens`, `output_tokens`, thinking tokens) | works | works (`include_usage`) | works | E2E capture |
+| Engine failure mid-request | works: an SSE `error` event with the engine's message (was an empty successful reply) | works: `response.failed` with the message | works: an error chunk | works | unit |
+| Websocket transport | n/a | works (`generate:false` prewarm, `WS /v1/responses`) | n/a | n/a | E2E `cx_ws` |
+| Live engine state in the agent UI (Yunshu extra) | works: `yunshu launch claude` installs `yunshu statusline` (prefill %, decode tok/s, last cache hit, ctx %) unless the user has their own status line | not available (Codex has no status-line hook that runs a command) | not available | `x_yunshu` fields, `: yunshu-progress` SSE comments | unit |
+| Prefix-cache reuse on agent traffic | works: per-request `x_yunshu.cache` and `X-Yunshu-Cache-*` | works | works | works | APC audit (see PERF_TREND) |
+
+### Found and fixed by the last rerun
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Claude Code turn after `Read` of an image: empty reply in 20 ms | The vision path skipped the family message adapter, so Qwen's template raised "System message must be at the beginning" on Claude Code's per-turn system note; the failure was then reported as a normal empty `end_turn` | The vision path runs the adapter; a template / engine error after the stream started is now an `error` event on Messages, chat and Responses |
+| `/status`, `/model` capture of Claude Code stopped at the welcome screen | With `CLAUDE_CONFIG_DIR` set, the interactive UI reads its onboarding state from inside that directory | The census harness writes it there; screens are rendered through a terminal emulator |
+
+### Open defect found by the 27B rerun
+
+On Qwen3.8-27B-oQ4e-mtp with the default MTP speculative lane, agent traffic (sampled, temperature > 0) produced stray
+multilingual tokens and repetition mid-answer (`cc_image`, `cx_mcp`, `oc_bash` degraded; tool-call text broke). The same
+four scenarios with `YUNSHU_VLM_DRAFT=off` all passed. The suspect is the recently merged position-keyed sampling in the
+speculative lane (`2c7c3166`); it is owned by the speculative-decoding work, not by the gateway.
+
+### Known limits (not Yunshu defects)
+
+- Claude Code's `/model` still lists its built-in "Fable" row, and the default row carries a `[1m]` label: both come from the
+  client's own catalog. The window it works with is the real one (`/context`).
+- The non-streaming Responses `web_search` SDK check is model-dependent: a small model sometimes answers without calling
+  the tool (same inner request as the streamed one, which searched). The server-side loop is the same code for both.
+- Codex `/status` needs a completed turn before it prints token usage; the capture only shows the header and `/model`.
 
 ## Server-side tools
 
@@ -101,6 +133,6 @@ would otherwise guess wrong; `--dry-run` prints it.
 
 | Agent | What is set |
 |---|---|
-| Claude Code | `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, every model alias -> the served model, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (the real window), `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`, optional `CLAUDE_CODE_EFFORT_LEVEL` (`--effort`). Environment only: `~/.claude` is not touched. |
+| Claude Code | `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, every model alias -> the served model, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (the real window), `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`, optional `CLAUDE_CODE_EFFORT_LEVEL` (`--effort`), and a `--settings` status line running `yunshu statusline` (live prefill progress, decode speed, last cache hit, context %; skipped when you have your own `statusLine`, off with `--no-statusline`). Environment and flags only: `~/.claude` is not written. |
 | Codex | `~/.codex/config.toml` (`model_provider`, `model_context_window`, `model_auto_compact_token_limit`, `web_search = "live"` when a provider is configured) and `~/.codex/yunshu-models.json` (`model_catalog_json`: window, reasoning levels, modalities, a compact `base_instructions`). |
 | opencode | `provider.yunshu` in `opencode.json` with `limit.context` / `limit.output`, `reasoning`, `tool_call`, `modalities`. |

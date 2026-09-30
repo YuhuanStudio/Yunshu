@@ -390,3 +390,54 @@ def test_cache_control_is_accepted_everywhere_claude_code_sends_it(engine):
             ],
         )
     assert msg.content[0].text == "ok"
+
+
+def test_engine_error_after_stream_start_is_an_error_event_not_an_empty_message(engine):
+    """A template / engine failure used to end the stream as a normal empty `end_turn` message."""
+    from yunshu_gateway.main import create_app
+
+    async def failing(*_a, **_k):
+        yield GenerationOutput(
+            text="",
+            new_text="",
+            finished=True,
+            finish_reason="error",
+            error="System message must be at the beginning.",
+        )
+
+    client = TestClient(create_app(), raise_server_exceptions=False)
+    with patch.object(engine, "stream_chat", failing):
+        r = client.post(
+            "/v1/messages",
+            json={
+                "model": "claude-test",
+                "max_tokens": 64,
+                "stream": True,
+                "messages": [{"role": "user", "content": "go"}],
+            },
+        )
+    assert "event: error" in r.text
+    assert "System message must be at the beginning" in r.text
+
+
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v1/responses"])
+def test_engine_error_reaches_openai_streams(engine, path):
+    from yunshu_gateway.main import create_app
+
+    async def failing(*_a, **_k):
+        yield GenerationOutput(
+            text="",
+            new_text="",
+            finished=True,
+            finish_reason="error",
+            error="template exploded",
+        )
+
+    body = {"model": "m", "stream": True, "max_tokens": 16}
+    body["input" if "responses" in path else "messages"] = (
+        "go" if "responses" in path else [{"role": "user", "content": "go"}]
+    )
+    client = TestClient(create_app(), raise_server_exceptions=False)
+    with patch.object(engine, "stream_chat", failing):
+        r = client.post(path, json=body)
+    assert "template exploded" in r.text

@@ -184,6 +184,10 @@ class _Registry:
         with self._lock:
             return [e for e in self._recent if e["t"] >= cutoff]
 
+    def last(self) -> dict | None:
+        with self._lock:
+            return dict(self._recent[-1]) if self._recent else None
+
     def clear(self) -> None:
         with self._lock:
             self._active.clear()
@@ -431,6 +435,7 @@ def record_done(info: RequestInfo, stats: dict) -> None:
             "request_id": info.request_id,
             "prompt_tokens": stats.get("prompt_tokens") or 0,
             "completion_tokens": stats.get("completion_tokens") or 0,
+            "cached_tokens": stats.get("cached_tokens") or 0,
             "prefill_tps": stats.get("prefill_tps"),
             "decode_tps": stats.get("decode_tps"),
             "ttft_ms": stats.get("ttft_ms"),
