@@ -738,6 +738,11 @@ class VLMEngine:
         if self.has_active_requests():
             logger.warning("VLM stop(): active requests still pending after 10s wait")
         self._cleanup_temp_files()
+        apc = self._apc_backend
+        if apc is not None:
+            # Persist resident checkpoints to the SSD tier (if any) before dropping them.
+            with contextlib.suppress(Exception):
+                await asyncio.get_running_loop().run_in_executor(None, apc.close)
         self._model = None
         self._tokenizer = None
         self._apc_backend = None
@@ -788,7 +793,8 @@ class VLMEngine:
         ):
             return True
         budget = getattr(manager, "memory_max_bytes", None)
-        if budget is None:
+        if budget is None or getattr(manager, "disk", None) is not None:
+            # A checkpoint too big for RAM still lands on the SSD tier when there is one.
             return True
         # Empirical resident size: ~160 MiB + 130 KiB per token (within 0.6%
         # of three measured points). The 20% margin covers short history growth
@@ -1291,6 +1297,41 @@ class VLMEngine:
     # batch-invariant kernels) is validated. Every family uses the runner.
     _SPEC_MODEL_TYPES = ("qwen3_5", "qwen3_6", "qwen3_5_moe")
 
+    def _apc_memory_gb(self) -> float:
+        """APC RAM budget in GiB: ``YUNSHU_VLM_APC_MEMORY_GB``, else sized from the
+        machine's memory and the model's weights (0 disables the cache)."""
+        budget = settings.get("YUNSHU_VLM_APC_MEMORY_GB")
+        if budget is not None:
+            return float(budget)
+        from .apc_manager import auto_memory_gb, total_memory_bytes
+
+        weights = 0
+        with contextlib.suppress(OSError):
+            weights = sum(
+                p.stat().st_size for p in Path(self._model_path).glob("*.safetensors")
+            )
+        gb = auto_memory_gb(total_memory_bytes(), weights)
+        logger.info("APC RAM budget: %.0f GiB (auto)", gb)
+        return gb
+
+    def _chatml_head_marker(self) -> tuple[int, int] | None:
+        """Token ids of ``<|im_start|>`` and ``user`` when the chat template is ChatML: the
+        end of the system turn (system prompt + tools) is then a checkpoint position, so a
+        new session with the same head reuses it."""
+        tok = self._tokenizer
+        template = getattr(tok, "chat_template", None) or ""
+        if not (isinstance(template, str) and "<|im_start|>" in template):
+            return None
+        try:
+            start = tok.convert_tokens_to_ids("<|im_start|>")
+            user = tok.encode("user", add_special_tokens=False)
+            if start is None or start == getattr(tok, "unk_token_id", None):
+                return None
+            return (int(start), int(user[0])) if len(user) == 1 else None
+        except Exception:
+            logger.debug("no ChatML head marker", exc_info=True)
+            return None
+
     def _apc_disk_tier(self):
         """Optional APC SSD tier (``YUNSHU_VLM_APC_DISK_DIR``), off by default.
 
@@ -1304,12 +1345,12 @@ class VLMEngine:
             return None
         import hashlib
 
-        from mlx_vlm.apc import DiskBlockStore
+        from .apc_manager import SpillDiskStore
 
         max_gb = settings.get("YUNSHU_VLM_APC_DISK_GB")
         namespace = hashlib.sha256(str(self._model_path).encode()).hexdigest()[:16]
         try:
-            disk = DiskBlockStore(
+            disk = SpillDiskStore(
                 Path(path).expanduser(),
                 namespace=namespace,
                 num_workers=1,
@@ -1364,18 +1405,21 @@ class VLMEngine:
                 lanes["converted"],
                 len(lanes["skipped"]),
             )
-        budget = settings.get("YUNSHU_VLM_APC_MEMORY_GB")
+        budget = self._apc_memory_gb()
         if self._apc_backend is None and budget > 0:
-            from mlx_vlm.apc import APCManager, semantic_extra_hash
+            from mlx_vlm.apc import semantic_extra_hash
+
+            from .apc_manager import YunshuAPCManager
 
             # Sliding-window (rotating) caches cannot be checkpointed at a
             # prefix boundary, so those families decode without APC.
             if not self.backend_capabilities(lm).cache.has_sliding_window:
-                self._apc_backend = APCManager(
+                self._apc_backend = YunshuAPCManager(
                     num_blocks=512,
                     block_size=16,
                     disk=self._apc_disk_tier(),
                     overrides={"memory_max_gb": budget},
+                    head_marker=self._chatml_head_marker(),
                 )
                 self._apc_semantic_hash = semantic_extra_hash(
                     image_hash=0,
@@ -3146,6 +3190,32 @@ class VLMEngine:
 
     # ── Stats ──
 
+    def apc_snapshot(self) -> dict | None:
+        """Prefix-cache (APC) occupancy and counters; None when the cache is off."""
+        apc = self._apc_backend
+        if apc is None:
+            return None
+        try:
+            return apc.snapshot() if hasattr(apc, "snapshot") else apc.stats_snapshot()
+        except Exception:
+            logger.debug("APC snapshot unavailable", exc_info=True)
+            return None
+
+    def get_kv_cache_stats(self) -> dict:
+        """Same shape as the text engine's, so /debug/kv-cache and /metrics cover both."""
+        snap = self.apc_snapshot()
+        if snap is None:
+            return {"prefix_cache": {"enabled": False}}
+        return {
+            "apc": snap,
+            "prefix_cache": {
+                "enabled": True,
+                "entries": snap.get("entries", 0),
+                "hits": snap.get("lookups_hit", 0),
+                "misses": snap.get("lookups_miss", 0),
+            },
+        }
+
     def get_stats(self) -> dict:
         uptime = time.monotonic() - self._start_time if self._start_time else 0.0
         stats = {
@@ -3159,13 +3229,9 @@ class VLMEngine:
             "uptime_seconds": uptime,
             "text_prompt_cache": self._text_prompt_cache.stats,
         }
-        apc = self._apc_backend
-        if apc is not None:
-            with contextlib.suppress(Exception):
-                stats["apc"] = {
-                    "memory_max_bytes": apc.memory_max_bytes,
-                    "matched_tokens": apc.stats.matched_tokens,
-                }
+        snap = self.apc_snapshot()
+        if snap is not None:
+            stats["apc"] = snap
         try:
             stats["pipeline"] = self._pipeline.get_stats()
         except Exception:

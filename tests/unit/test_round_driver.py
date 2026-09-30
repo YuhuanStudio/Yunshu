@@ -277,3 +277,27 @@ def test_prefill_chunk_sets_the_span_a_decoding_row_waits_behind(tiny, monkeypat
     small, large = prefill_spans(32), prefill_spans(128)
     assert max(small) <= 32 and max(large) <= 128
     assert len(small) > len(large)
+
+
+def test_prefill_atoms_merge_only_when_full():
+    """A prefill segment is a run of full ``chunk`` atoms: a partial atom (cut
+    by a checkpoint, the prompt's end or a restore off the grid) stands alone,
+    and a run stops after an atom that ends at a checkpoint."""
+    from types import SimpleNamespace
+
+    from yunshu_engine.round_driver import driver as drv
+
+    d = drv.RoundDriver.__new__(drv.RoundDriver)
+    d.chunk = 512
+    ids = list(range(512 * 6 + 40))
+    row = SimpleNamespace(req=SimpleNamespace(ids=ids), ckpts=[])
+    assert d._run_end(row, 0, 512) == 512  # budget of one atom
+    assert d._run_end(row, 0, 4096) == 512 * 6  # the tail atom stays apart
+    assert d._run_end(row, 512 * 6, 4096) == len(ids)
+    row.ckpts = [1024, len(ids) - 1]
+    assert d._run_end(row, 0, 4096) == 1024  # stops at the checkpoint
+    assert d._run_end(row, 1024, 4096) == 512 * 6
+    assert d._run_end(row, 512 * 6, 4096) == len(ids) - 1
+    row.ckpts = []
+    assert d._run_end(row, 600, 4096) == 1024  # restored off the grid: alone
+    assert d._run_end(row, 1024, 1024) == 2048

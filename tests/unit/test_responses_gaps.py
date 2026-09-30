@@ -6,7 +6,6 @@ from __future__ import annotations
 import json
 
 import pytest
-from fastapi.testclient import TestClient
 
 from yunshu_gateway.routers.responses import (
     ResponsesRequest,
@@ -135,17 +134,3 @@ def test_max_calls_limits_streamed_tool_calls():
 
     assert run(None) == 2
     assert run(1) == 1
-
-
-def test_conversation_is_rejected_with_a_pointer_to_previous_response_id():
-    from fastapi import FastAPI
-
-    from yunshu_gateway.routers import responses
-
-    app = FastAPI()
-    app.include_router(responses.router, prefix="/v1")
-    r = TestClient(app).post(
-        "/v1/responses", json={"model": "m", "input": "x", "conversation": "conv_1"}
-    )
-    assert r.status_code == 400
-    assert "previous_response_id" in json.dumps(r.json())

@@ -228,6 +228,32 @@ class DeepSeekMessageAdapter(MessageAdapter):
         return "deepseek"
 
 
+def _merge_leading_system(messages: list[dict]) -> list[dict]:
+    """Merge a run of consecutive leading ``system`` messages into one.
+
+    Templates such as Qwen's accept a system message only as ``messages[0]`` ("System message
+    must be at the beginning"), so ``instructions`` plus the ``developer`` messages Codex sends
+    (both become ``system``) must reach the template as a single one.
+    """
+    n = 0
+    while n < len(messages) and messages[n].get("role") == "system":
+        n += 1
+    if n < 2:
+        return messages
+
+    def text(c) -> str:
+        if isinstance(c, str):
+            return c
+        if isinstance(c, list):
+            return "\n".join(
+                p.get("text", "") if isinstance(p, dict) else str(p) for p in c
+            )
+        return "" if c is None else str(c)
+
+    merged = "\n\n".join(t for t in (text(m.get("content")) for m in messages[:n]) if t)
+    return [{"role": "system", "content": merged}, *messages[n:]]
+
+
 class QwenMessageAdapter(MessageAdapter):
     """Qwen 3.5: Attention patch compatibility formatting.
 
@@ -267,13 +293,7 @@ class QwenMessageAdapter(MessageAdapter):
         for m in adapted[lead:]:
             if m["role"] == "system":
                 m["role"] = "user"
-        heads = adapted[:lead]
-        if len(heads) > 1:
-            texts = [m["content"] for m in heads]
-            if all(isinstance(t, str) for t in texts):
-                joined = "\n\n".join(t for t in texts if t)
-                adapted = [{"role": "system", "content": joined}] + adapted[lead:]
-        return adapted
+        return _merge_leading_system(adapted)
 
     def family_name(self) -> str:
         return "qwen"
@@ -617,6 +637,14 @@ def get_message_adapter(model_name: str | None = None) -> MessageAdapter:
                 adapter_cls = _REGISTRY.get(family, GenericMessageAdapter)
                 return adapter_cls()
     return GenericMessageAdapter()
+
+
+def keeps_mid_conversation_system(model_name: str | None = None) -> bool:
+    """True when the family's adapter leaves later system messages where the agent put
+    them (Qwen: as user messages in place), so the API layer must not hoist them into the
+    leading system prompt: a per-turn note there rewrites the prompt start every turn and
+    defeats prefix reuse."""
+    return isinstance(get_message_adapter(model_name), QwenMessageAdapter)
 
 
 def adapt_messages(messages: list[dict], model_name: str | None = None) -> list[dict]:

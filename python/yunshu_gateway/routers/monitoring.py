@@ -874,7 +874,51 @@ async def prometheus_export(request: Request) -> str:
                     exc_info=True,
                 )
 
+    _populate_apc_metrics(pm)
     return pm.generate()
+
+
+_APC_GAUGES = (
+    ("memory_max_bytes", "apc_memory_max_bytes"),
+    ("resident_bytes", "apc_resident_bytes"),
+    ("entries", "apc_entries"),
+    ("head_checkpoints", "apc_head_checkpoints"),
+    ("disk_bytes", "apc_disk_bytes"),
+    ("disk_max_bytes", "apc_disk_max_bytes"),
+    ("disk_pending_bytes", "apc_disk_pending_bytes"),
+)
+_APC_COUNTERS = (
+    ("lookups_hit", "apc_lookups_hit"),
+    ("lookups_miss", "apc_lookups_miss"),
+    ("matched_tokens", "apc_matched_tokens"),
+    ("exact_hits", "apc_exact_hits"),
+    ("exact_stores", "apc_exact_stores"),
+    ("disk_hits", "apc_disk_hits"),
+    ("disk_writes", "apc_disk_writes"),
+    ("memory_evictions", "apc_memory_evictions"),
+    ("memory_skips", "apc_memory_skips"),
+)
+
+
+def _populate_apc_metrics(pm) -> None:
+    """Prefix-cache (APC) gauges / counters of every loaded VLM-runner engine."""
+    try:
+        from ..engine import get_engine, get_model_manager
+
+        for model_id, engine in _collect_engines(get_engine(), get_model_manager()):
+            snap_fn = getattr(engine, "apc_snapshot", None)
+            snap = snap_fn() if callable(snap_fn) else None
+            if not snap:
+                continue
+            ml = {"model_id": model_id}
+            for key, name in _APC_GAUGES:
+                if snap.get(key) is not None:
+                    pm.set_gauge(name, snap[key], labels=ml)
+            for key, name in _APC_COUNTERS:
+                if snap.get(key) is not None:
+                    pm.set_counter(name, snap[key], labels=ml)
+    except Exception:
+        logger.debug("APC metrics population failed", exc_info=True)
 
 
 @router.get("/kv-cache")
@@ -882,6 +926,7 @@ async def kv_cache_stats(request: Request) -> dict[str, Any]:
     """KV prefix cache statistics."""
     _check_permission(request)
     from yunshu_engine.batched_engine import BatchedEngine
+    from yunshu_engine.vlm_engine import VLMEngine
 
     from ..engine import get_engine, get_model_manager
 
@@ -890,7 +935,7 @@ async def kv_cache_stats(request: Request) -> dict[str, Any]:
     if manager is not None:
         for entry in manager.list_entries():
             if entry.is_loaded and isinstance(
-                getattr(entry, "engine", None), BatchedEngine
+                getattr(entry, "engine", None), (BatchedEngine, VLMEngine)
             ):
                 try:
                     stats = entry.engine.get_kv_cache_stats()
@@ -903,7 +948,7 @@ async def kv_cache_stats(request: Request) -> dict[str, Any]:
                     caches.append({"model_id": entry.model_id, "error": "unavailable"})
     else:
         engine = get_engine()
-        if engine and isinstance(engine, BatchedEngine):
+        if engine and isinstance(engine, (BatchedEngine, VLMEngine)):
             try:
                 caches.append(
                     {"model_id": engine.model_name, **engine.get_kv_cache_stats()}

@@ -253,6 +253,8 @@ def progress_payload(info: RequestInfo) -> dict:
     out["phase"] = st.phase
     out["prompt_tokens"] = st.prompt_tokens or (st.prefill_total + st.cached_tokens)
     out["cached_tokens"] = st.cached_tokens
+    if st.cache_tier:
+        out["cache_tier"] = st.cache_tier
     if st.phase == "queued":
         ahead, wait_ms = queue_snapshot(info)
         out["queue_position"] = ahead
@@ -364,6 +366,18 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
         "ttft_ms": _ms(ttft),
         "prompt_tokens": prompt_tokens,
         "cached_tokens": cached,
+        # Prefix-cache provenance: which tier served the cached tokens ("ram", "ssd" or
+        # "none"), how many, and how long the lookup (an SSD reload included) took.
+        "cache": {
+            "tier": (st.cache_tier if st is not None and st.cache_tier else None)
+            or ("ram" if cached else "none"),
+            "cached_tokens": cached,
+            "reload_ms": (
+                round(st.cache_reload_ms, 1)
+                if st is not None and st.cache_reload_ms is not None
+                else None
+            ),
+        },
         "prefill_ms": _ms(prefill_s),
         "prefill_tps": prefill_tps,
         "completion_tokens": completion_tokens,
@@ -392,6 +406,8 @@ def stats_headers(stats: dict, info: RequestInfo) -> list[tuple[bytes, bytes]]:
         ("X-Yunshu-Prefill-Tps", stats.get("prefill_tps")),
         ("X-Yunshu-Decode-Tps", stats.get("decode_tps")),
         ("X-Yunshu-Cached-Tokens", stats.get("cached_tokens")),
+        ("X-Yunshu-Cache-Tier", (stats.get("cache") or {}).get("tier")),
+        ("X-Yunshu-Cache-Reload-Ms", (stats.get("cache") or {}).get("reload_ms")),
         ("X-Yunshu-Total-Ms", stats.get("total_ms")),
     ]
     spec = stats.get("speculative")

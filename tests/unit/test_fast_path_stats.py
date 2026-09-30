@@ -12,7 +12,7 @@ def test_phases_and_x_yunshu_fields():
     fp = FastPathStats(ev, prompt_tokens=1000)
     st = ev.run_stats
     assert st.phase == "queued"
-    fp.admit(cached_tokens=200, to_prefill=800)
+    fp.admit(cached_tokens=200, to_prefill=800, tier="ssd", reload_ms=12.5)
     assert st.phase == "prefill" and st.cached_tokens == 200
     fp.progress(400, 800)
     assert (st.prefill_done, st.prefill_total) == (400, 800)
@@ -22,6 +22,7 @@ def test_phases_and_x_yunshu_fields():
     prog = x_yunshu.progress_payload(info)
     assert prog["phase"] == "prefill" and prog["percent"] == 50.0
     assert prog["processed_tokens"] == 600  # cached tokens count as processed
+    assert prog["cache_tier"] == "ssd"
 
     time.sleep(0.02)
     fp.token(1)
@@ -35,6 +36,7 @@ def test_phases_and_x_yunshu_fields():
     assert stats["ttft_ms"] is not None and stats["ttft_ms"] > 0
     assert stats["prefill_ms"] > 0 and stats["prefill_tps"] > 0
     assert stats["decode_tps"] > 0 and stats["cached_tokens"] == 200
+    assert stats["cache"] == {"tier": "ssd", "cached_tokens": 200, "reload_ms": 12.5}
 
 
 def test_slotted_event_does_not_break():

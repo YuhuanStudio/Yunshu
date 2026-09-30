@@ -24,6 +24,7 @@ import gc
 import hashlib
 import logging
 import threading
+import time
 from copy import copy
 from typing import Any
 
@@ -327,6 +328,12 @@ class KVPrefixCache:
         # is replaced by get_no_trim() (boundary-only reuse) and every entry is
         # an exact-length boundary snapshot.
         self._no_trim_mode: bool = False
+        # Per-request provenance of the latest get(): which tier served the prefix
+        # ("hot" full-precision RAM, "warm" 4-bit RAM, "ssd", or "none"), how many
+        # tokens and how long the lookup (SSD reload / dequantize included) took.
+        self.last_lookup: dict = {"tier": "none", "matched": 0, "ms": 0.0}
+        self._n_dequant = 0
+        self._n_ssd_restore = 0
         self._min_prefix = min_prefix_length
         self._eviction_strategy: EvictionStrategy = _make_eviction_strategy(eviction)
         self._priorities: list[int] = []  # Per-entry priority
@@ -533,10 +540,25 @@ class KVPrefixCache:
         """
         with self._lock:
             self._total_lookups += 1
+            _t0 = time.perf_counter()
+            _dq0, _ssd0 = self._n_dequant, self._n_ssd_restore
             if self._no_trim_mode:
                 result = self._get_no_trim_unlocked(prompt_tokens)
             else:
                 result = self._get_unlocked(prompt_tokens)
+            self.last_lookup = {
+                "tier": (
+                    "none"
+                    if result[0] is None
+                    else "ssd"
+                    if self._n_ssd_restore > _ssd0
+                    else "warm"
+                    if self._n_dequant > _dq0
+                    else "hot"
+                ),
+                "matched": int(result[2]) if result[0] is not None else 0,
+                "ms": round((time.perf_counter() - _t0) * 1000.0, 1),
+            }
             # result is (cached_kv, remaining, matched); count as hit when a
             # cached KV was returned (matched >= min_prefix in the cache paths).
             if result[0] is not None:
@@ -1070,6 +1092,7 @@ class KVPrefixCache:
                 nc.keys = dk[..., :off, :]
                 nc.values = dv[..., :off, :]
                 nc.offset = off
+                self._n_dequant += 1
                 return nc
             except Exception:
                 logger.debug("WARM dequantize-on-reuse failed", exc_info=True)
@@ -1696,6 +1719,7 @@ class KVPrefixCache:
                 c.offset = ck.shape[-2]
                 cache_list.append(c)
                 total = ck.shape[-2]
+            self._n_ssd_restore += 1
             return cache_list, total
         except Exception:
             logger.warning("SSD multi-block reassembly failed", exc_info=True)

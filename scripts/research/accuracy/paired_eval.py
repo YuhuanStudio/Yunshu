@@ -529,10 +529,17 @@ BENCHES: dict[str, Bench] = {
 # ── servers ──────────────────────────────────────────────────────────────
 class Server:
     def __init__(self, arm: str, model: str, port: int, env: dict[str, str], log: Path):
-        self.arm, self.model, self.port = arm, model, port
-        with socket.socket() as probe:
-            if probe.connect_ex(("127.0.0.1", port)) == 0:
-                raise RuntimeError(f"port {port} already in use; refusing to start")
+        # A busy port (e.g. a server left behind by an interrupted job) moves this run to the
+        # next free one in the 10-port test range instead of failing every queued round.
+        for cand in range(port, port + 10):
+            with socket.socket() as probe:
+                if probe.connect_ex(("127.0.0.1", cand)) != 0:
+                    break
+        else:
+            raise RuntimeError(f"ports {port}..{port + 9} all in use; refusing to start")
+        if cand != port:
+            print(f"port {port} in use; using {cand}", flush=True)
+        self.arm, self.model, self.port = arm, model, cand
         self.url = f"http://127.0.0.1:{port}"
         e = {k: v for k, v in os.environ.items() if not k.startswith("YUNSHU_")}
         e["HF_HUB_OFFLINE"] = "1"

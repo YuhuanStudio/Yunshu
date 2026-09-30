@@ -20,6 +20,8 @@ from typing import Any
 import mlx.core as mx
 import mlx.nn as nn
 
+ATTN_BLOCK = 512  # default prefill attention query block (absolute grid)
+LANE_TAIL = 256  # partial atoms up to this many tokens use lane projections
 EVAL_EVERY = 4  # layers between evaluations of a prefill forward
 
 
@@ -29,10 +31,20 @@ class Segment:
 
     cache: list
     tokens: mx.array  # [T] int32
+    block: int = ATTN_BLOCK  # prefill attention query block (the driver's chunk)
 
     @property
     def length(self) -> int:
         return int(self.tokens.shape[0])
+
+    @property
+    def lane(self) -> bool:
+        """Short partial atom (a prompt's tail, the token after a checkpoint):
+        its projections run the row-invariant lane matmul, which reads each
+        weight once per <= 128 rows and needs no stock-layout copy of the
+        weights (a stock call of 1..256 rows costs ~100 ms of untiling on a
+        27B target). A function of the atom alone, so hit == miss."""
+        return self.length < self.block and self.length <= LANE_TAIL
 
 
 def supports(language_model: Any) -> bool:
@@ -56,9 +68,31 @@ def _attention_mix(attn, q, k, v, seg: Segment, cache) -> mx.array:
     queries, keys, values, gate, _ = attn._prepare_projected_qkv(
         q, k, v, cache, None, None, None
     )
-    out = mx.fast.scaled_dot_product_attention(
-        queries, keys, values, scale=attn.scale, mask="causal" if T > 1 else None
-    )
+    if T == 1:
+        out = mx.fast.scaled_dot_product_attention(
+            queries, keys, values, scale=attn.scale, mask=None
+        )
+    else:
+        # SDPA's bits follow its query count, so the queries go through in
+        # blocks on the absolute ``seg.block`` grid (a span's edge cuts a
+        # block): a token's attention is the same whatever span it prefilled in.
+        n = int(keys.shape[2])
+        start = n - T
+        parts = []
+        b0 = start
+        while b0 < n:
+            b1 = min((b0 // seg.block + 1) * seg.block, n)
+            parts.append(
+                mx.fast.scaled_dot_product_attention(
+                    queries[:, :, b0 - start : b1 - start],
+                    keys[:, :, :b1],
+                    values[:, :, :b1],
+                    scale=attn.scale,
+                    mask="causal",
+                )
+            )
+            b0 = b1
+        out = parts[0] if len(parts) == 1 else mx.concatenate(parts, axis=2)
     out = out.transpose(0, 2, 1, 3).reshape(1, T, -1)
     return out * mx.sigmoid(gate)
 
@@ -104,22 +138,34 @@ def _slices(segments: list[Segment]) -> list[tuple[int, int]]:
     return out
 
 
-def _project(lin, x: mx.array, spans: list[tuple[int, int]]) -> mx.array:
+def _project(
+    lin, x: mx.array, spans: list[tuple[int, int]], lane: list[bool]
+) -> mx.array:
     """``lin`` over the packed tokens, one matmul per segment: a segment's
     result is what it would be as the only segment of a step. Lane projections
     run MLX's quantized matmul on a transient stock-layout weight
     (``LaneLinear.prefill``); anything else is called per segment."""
     parts = [x[:, s:e] for s, e in spans]
-    if hasattr(lin, "prefill"):
-        return mx.concatenate(lin.prefill(parts), axis=1)
-    return mx.concatenate([lin(p) for p in parts], axis=1)
+    if not hasattr(lin, "prefill"):
+        return mx.concatenate([lin(p) for p in parts], axis=1)
+    outs: list = [None] * len(parts)
+    stock = [i for i, short in enumerate(lane) if not short]
+    if stock:
+        for i, o in zip(stock, lin.prefill([parts[i] for i in stock]), strict=True):
+            outs[i] = o
+    for i, short in enumerate(lane):
+        if short:
+            outs[i] = lin(parts[i])
+    return mx.concatenate(outs, axis=1)
 
 
-def _mlp(mlp, x: mx.array, spans: list[tuple[int, int]]) -> mx.array:
+def _mlp(mlp, x: mx.array, spans: list[tuple[int, int]], lane: list[bool]) -> mx.array:
     from mlx_vlm.models.qwen3_5.language import swiglu
 
-    h = swiglu(_project(mlp.gate_proj, x, spans), _project(mlp.up_proj, x, spans))
-    return _project(mlp.down_proj, h, spans)
+    h = swiglu(
+        _project(mlp.gate_proj, x, spans, lane), _project(mlp.up_proj, x, spans, lane)
+    )
+    return _project(mlp.down_proj, h, spans, lane)
 
 
 def forward(language_model: Any, segments: list[Segment]) -> mx.array:
@@ -132,6 +178,7 @@ def forward(language_model: Any, segments: list[Segment]) -> mx.array:
     untiles its weight once for all segments of the step."""
     model = language_model.model
     spans = _slices(segments)
+    lane = [seg.lane for seg in segments]
     tokens = mx.concatenate([s.tokens for s in segments]).astype(mx.int32)
     x = model.embed_tokens(tokens)[None]
     for i, layer in enumerate(model.layers):
@@ -139,26 +186,32 @@ def forward(language_model: Any, segments: list[Segment]) -> mx.array:
         if layer.is_linear:
             g = layer.linear_attn
             qkv, z = (
-                _project(g.in_proj_qkv, xn, spans),
-                _project(g.in_proj_z, xn, spans),
+                _project(g.in_proj_qkv, xn, spans, lane),
+                _project(g.in_proj_z, xn, spans, lane),
             )
-            b, a = _project(g.in_proj_b, xn, spans), _project(g.in_proj_a, xn, spans)
+            b, a = (
+                _project(g.in_proj_b, xn, spans, lane),
+                _project(g.in_proj_a, xn, spans, lane),
+            )
             parts = [
                 _gdn_mix(g, qkv[:, s:e], z[:, s:e], b[:, s:e], a[:, s:e], seg.cache[i])
                 for seg, (s, e) in zip(segments, spans, strict=True)
             ]
-            r = _project(g.out_proj, mx.concatenate(parts, axis=1), spans)
+            r = _project(g.out_proj, mx.concatenate(parts, axis=1), spans, lane)
         else:
             at = layer.self_attn
-            q = _project(at.q_proj, xn, spans)
-            k, v = _project(at.k_proj, xn, spans), _project(at.v_proj, xn, spans)
+            q = _project(at.q_proj, xn, spans, lane)
+            k, v = (
+                _project(at.k_proj, xn, spans, lane),
+                _project(at.v_proj, xn, spans, lane),
+            )
             parts = [
                 _attention_mix(at, q[:, s:e], k[:, s:e], v[:, s:e], seg, seg.cache[i])
                 for seg, (s, e) in zip(segments, spans, strict=True)
             ]
-            r = _project(at.o_proj, mx.concatenate(parts, axis=1), spans)
+            r = _project(at.o_proj, mx.concatenate(parts, axis=1), spans, lane)
         h = x + r
-        x = h + _mlp(layer.mlp, layer.post_attention_layernorm(h), spans)
+        x = h + _mlp(layer.mlp, layer.post_attention_layernorm(h), spans, lane)
         # transient stock weights are freed every few layers (the graph would
         # otherwise hold every layer's)
         if i % EVAL_EVERY == EVAL_EVERY - 1:

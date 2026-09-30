@@ -563,9 +563,11 @@ def validate_context_window(
     if max_ctx and num_prompt_tokens > max_ctx:
         raise HTTPException(
             status_code=400,
+            # The leading clause is Anthropic's own wording: Claude Code parses
+            # "prompt is too long: N tokens > M" to learn the real window and compact.
             detail=(
-                f"Prompt too long: {num_prompt_tokens} tokens exceeds "
-                f"max context window of {max_ctx} tokens"
+                f"prompt is too long: {num_prompt_tokens} tokens > {max_ctx} maximum; "
+                f"the prompt exceeds max context window of {max_ctx} tokens"
             ),
         )
 
