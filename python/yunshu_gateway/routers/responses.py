@@ -50,6 +50,12 @@ _response_store: OrderedDict[str, dict] = OrderedDict()
 _response_store_lock = threading.Lock()
 
 
+def _native_kw(req) -> dict:
+    """``tools=`` for an engine whose chat template renders tool definitions itself."""
+    tools = getattr(req, "_native_tools", None)
+    return {"tools": tools} if tools else {}
+
+
 def _seal_extra(req, text: str | None) -> dict:
     """``encrypted_content`` for a reasoning item, when the request asked for it (``include``)."""
     if text and "reasoning.encrypted_content" in (getattr(req, "include", None) or []):
@@ -1338,9 +1344,16 @@ async def create_response(req: ResponsesRequest, request: Request):
             )
             for t in req.tools
         ]
-        messages = _inject_tool_system_prompt(
-            messages, tools, tool_choice=req.tool_choice
-        )
+        from .chat import _vlm_renders_tools
+
+        if req.tool_choice in (None, "auto") and _vlm_renders_tools(engine):
+            # The chat template renders the tools itself (Qwen3.x): the model's own tool-call
+            # format, not an injected JSON prompt it may half-follow.
+            req._native_tools = [t.model_dump() for t in tools]
+        else:
+            messages = _inject_tool_system_prompt(
+                messages, tools, tool_choice=req.tool_choice, engine=engine
+            )
         # Structurally FORCE a required/named tool_choice via an assistant prefill — the
         # advisory injection alone lets the model emit plain text (so "required"/named
         # couldn't be honored). Non-stream only: the streaming path uses
@@ -1584,6 +1597,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                     state = await run_with_disconnect_guard(
                         request,
                         engine.generate(
+                            **_native_kw(req),
                             prompt=_non_batched_prompt,
                             max_tokens=req.max_output_tokens,
                             temperature=req.temperature,
@@ -2373,6 +2387,7 @@ async def _stream_response(
                             yield _ev
             else:
                 async for output in engine.generate_stream(
+                    **_native_kw(req),
                     prompt=_stream_prompt,
                     max_tokens=req.max_output_tokens,
                     temperature=req.temperature,
