@@ -20,7 +20,7 @@ multi-model mode (`--models-dir`) an unknown model is a 404 `model_not_found`.
 |---|---|---|
 | `POST /v1/chat/completions` | kept, fixed | SDK + unit. All params below verified. `stop` accepts a string or a list. `usage.prompt_tokens_details.cached_tokens` and `completion_tokens_details.reasoning_tokens` are always present. Context overflow is 400 `context_length_exceeded`. Images on a text-only model are a 400. An embedding-only model (sentence-transformers export) answers a 400 that points to `/v1/embeddings`. |
 | `POST /v1/completions` | kept | SDK + unit. `echo`, `logprobs` (int; also on the VLM runner, streamed and not), `n`, `stop`, `seed`, `stream_options.include_usage`, prompt as string / list / token ids. |
-| `POST /v1/responses` | kept, fixed | SDK + unit. `text.format` (`json_schema`, `json_object`) now maps to constrained decoding (it was ignored). `instructions`, input items, `previous_response_id` / `store`, `function_call` and `function_call_output`, `text.format` json_schema, `reasoning`, streaming event types (created, in_progress, output_item, content_part, output_text delta/done, completed). Usage details always present. |
+| `POST /v1/responses` | kept, fixed | SDK + unit. `text.format` (`json_schema`, `json_object`) now maps to constrained decoding (it was ignored). `instructions`, input items, `previous_response_id` / `store`, `function_call` and `function_call_output`, `text.format` json_schema, `reasoning`, streaming event types (created, in_progress, output_item, content_part, output_text delta/done, completed). Usage details always present. Server-side tools run inside the generation loop: `web_search` (`web_search_call` items, `url_citation` annotations, `filters.allowed_domains`, `user_location`) and `{type: "mcp"}` (`mcp_list_tools`, `mcp_call`, `mcp_approval_request` / `mcp_approval_response`, `allowed_tools`, `require_approval`), see [Server-side tools](#server-side-tools). `generate: false` (Codex's WebSocket prewarm) prefills the prompt and returns a chainable empty response; `include: ["reasoning.encrypted_content"]` returns reasoning items that come back as `reasoning_content`; `namespace` / `custom` tools, `developer` messages and unknown input item types are accepted; `input_file` / `input_image` file ids resolve from the local Files store. |
 | `GET/DELETE /v1/responses/{id}`, `POST /v1/responses/{id}/cancel` | kept | unit + SDK. |
 | `POST /v1/responses/input_tokens` | added | Counts the input tokens a request would use. |
 | `POST /v1/embeddings` | kept | SDK + unit. `dimensions`, `encoding_format=base64`, token-id input, L2-normalised, empty input 400. Multimodal (`Qwen3-VL-Embedding`) as an extension. |
@@ -37,7 +37,9 @@ multi-model mode (`--models-dir`) an unknown model is a 404 `model_not_found`.
 | `WS /v1/stream` | kept, extension | Yunshu protocol: many chat.completions / completions / responses / messages requests on one socket, cancel / stop / max_tokens update by id, heartbeats, backpressure. Anthropic has no official WebSocket mode. |
 | Unix socket (`yunshu serve --uds PATH`) | kept | Same app; `curl --unix-socket`, httpx `uds=`. |
 | HTTP/2 (h2c) | not offered | uvicorn is HTTP/1.1 only; see [TRANSPORTS.md](TRANSPORTS.md). |
-| `/v1/files`, `/v1/batches`, `/v1/fine_tuning`, `/v1/moderations`, `/v1/assistants`, `/v1/vector_stores`, `/v1/uploads` | not applicable | Hosted-platform features with no local-engine meaning. |
+| `POST/GET /v1/files`, `GET/DELETE /v1/files/{id}`, `GET /v1/files/{id}/content` | added | Local file store (`YUNSHU_FILES_DIR`, 512 MB per file). OpenAI shape, or the Anthropic Files shape when the request carries `anthropic-version`. unit + OpenAI SDK. |
+| `POST/GET /v1/batches`, `GET /v1/batches/{id}`, `POST /v1/batches/{id}/cancel` | added | JSONL input file, one background worker calling this server over loopback, resumes after a restart; output and error files. unit + OpenAI SDK. |
+| `/v1/fine_tuning`, `/v1/moderations`, `/v1/assistants`, `/v1/vector_stores`, `/v1/uploads` | not applicable | Hosted-platform features with no local-engine meaning. |
 
 ### Chat completions: parameters and fields
 
@@ -61,10 +63,38 @@ multi-model mode (`--models-dir`) an unknown model is a 404 `model_not_found`.
 |---|---|---|
 | `POST /v1/messages` (and `/messages`) | kept, fixed | SDK + unit. `system` (string or blocks with `cache_control`), `tools`, `tool_choice` (`auto`, `any`, `tool`, `none`), `thinking` (`budget_tokens` must be < `max_tokens`), `stop_sequences` (`stop_reason: stop_sequence` and the matched string, streaming and not), `metadata`, `top_k`, `tool_use` / `tool_result` / `image` (base64; a 400 on a text-only model, like OpenAI `image_url`) / `document` (text source) blocks. Streaming: `message_start`, `content_block_start/delta/stop` (`text_delta`, `thinking_delta`, `input_json_delta`), `message_delta`, `message_stop`. Usage includes `cache_read_input_tokens` and `cache_creation_input_tokens`. |
 | `POST /v1/messages/count_tokens` | kept | SDK + unit. Counts system, messages, tools, images. |
+| `POST /v1/messages` with `web_search_20250305`, `web_fetch_20250910` | added | Server tools, run inside the generation loop: `server_tool_use` + `web_search_tool_result` / `web_fetch_tool_result` blocks, text with `citations` (`web_search_result_location`), `max_uses`, `allowed_domains` / `blocked_domains`, `user_location`, `usage.server_tool_use`, `pause_turn` at the iteration cap. Search needs a configured provider, otherwise `web_search_tool_result_error` `unavailable` with an `x_yunshu` hint. SDK (`messages`, `beta.messages`) + unit + Claude Code end to end. See [Server-side tools](#server-side-tools). |
+| `POST /v1/messages` with `mcp_servers` (beta `mcp-client`) and `mcp_toolset` | added | The gateway connects to the named MCP servers (streamable HTTP or legacy SSE) and runs their tools: `mcp_tool_use` / `mcp_tool_result` blocks, `authorization_token`, `tool_configuration.allowed_tools`, per-tool enable. SDK + unit. |
+| `thinking: {type: "adaptive"}`, `output_config.effort`, `context_management` | accepted | Claude Code sends all three (the first two used to be a 400 / ignored). `adaptive` leaves the model's template default, `output_config.effort` becomes the template's `reasoning_effort`; earlier `thinking` blocks return as `reasoning_content`. |
+| `POST/GET /v1/messages/batches`, `GET .../{id}`, `.../{id}/results`, `.../{id}/cancel`, `DELETE .../{id}` | added | Message Batches over the same loopback worker as `/v1/batches`; results JSONL. unit. |
+| `POST/GET /v1/files` (Anthropic Files, beta `files-api-2025-04-14`) | added | Same paths as OpenAI Files, dispatched on `anthropic-version`; `document` / `image` blocks with `source: {type: "file"}` are inlined before generation. |
 | `GET /v1/models`, `GET /v1/models/{id}` | kept, extended | Same route as OpenAI. `ModelInfo` is complete: `display_name`, `created_at`, `max_input_tokens`, `max_tokens` and the `capabilities` object (`thinking`, `effort.{low,medium,high,xhigh,max}`, `image_input`, `structured_outputs`, ...). Verified with `anthropic.models.list/retrieve`. |
 | Errors `{type:"error", error:{type,message}}` | implemented | `invalid_request_error`, `authentication_error`, `permission_error`, `not_found_error`, `request_too_large`, `rate_limit_error`, `api_error`, `overloaded_error`. |
 | `x-api-key`, `anthropic-version`, `anthropic-beta` headers | accepted | `x-api-key` is honoured as the bearer token when `YUNSHU_AUTH_TOKEN` is set. |
-| Message Batches, Files API, server tools (web search, code execution), citations | not applicable | Hosted services. |
+| Code execution, computer use, memory and other hosted server tools | not applicable | Hosted services without a local meaning. |
+
+## Server-side tools
+
+The two APIs let the model call tools the *server* runs. Yunshu runs them inside the generation loop, off the
+MLX thread: generate, the model calls a server tool, the tool runs (async, with timeouts), the result is
+appended, generation continues. Every round re-renders the same conversation plus the new turn, so the prefix
+cache serves the shared prefix and a continuation prefills only the new tokens (per-round
+`input_tokens` / `cache_read_input_tokens` are in `x_yunshu.server_tools.round_usage`).
+
+| Tool | Anthropic | OpenAI Responses |
+|---|---|---|
+| Web search | `web_search_20250305` | `web_search`, `web_search_preview` |
+| Web fetch | `web_fetch_20250910` | not part of the API |
+| MCP connector | `mcp_servers` + `mcp_toolset` | `{type: "mcp"}` |
+
+Off unless configured (settings, see [AGENT_COMPAT.md](AGENT_COMPAT.md#server-side-tools)): a self-hosted SearXNG,
+Brave, Tavily or Exa for search; `web_fetch` needs no provider and blocks private, loopback and link-local
+addresses (also after redirects and DNS resolution). With no provider a search request gets the API's own error
+shape and `x_yunshu.server_tools` carries the hint that says how to configure one; `GET /v1/models` shows the
+state under `yunshu.server_tools`. The streamed blocks follow the specs; the differences that remain:
+`page_age` is whatever the provider returns, `encrypted_content` is an opaque envelope of the result text (a
+local server has nothing to hide from its own client), and citations come from the `[n]` markers the model writes
+next to the results it used.
 
 ## Model cards
 
@@ -198,6 +228,7 @@ Z-Image ControlNet through `control_image`, is unchanged.
 | Command | Status | Notes |
 |---|---|---|
 | `serve`, `chat`, `pull`, `doctor`, `config` (`set`, `unset`, `path`), `service` (`install`, `uninstall`, `start`, `stop`, `restart`, `status`, `logs`), `model` (`list`, `info`, `load`, `unload`, `download`) | kept | Smoke-tested; `model load/unload` need the token on the server. |
+| `launch claude` / `codex` / `opencode` / `pi` (`--dry-run`, `--effort`) | extended | Reads the model card and configures the agent with the real context window, output limit, reasoning levels and vision support; see [AGENT_COMPAT.md](AGENT_COMPAT.md#launching-an-agent). |
 | `status`, `diagnose gpu`, `diagnose server`, `launch list` | kept | `diagnose gpu` and `bench roofline` printed thousands of TFLOPS because the lazy matmuls were never evaluated; fixed. |
 | `complete`, `embed`, `tokenize`, `detokenize`, `rerank`, `score`, `classify`, `transcribe`, `speak`, `ocr`, `image`, `image-edit`, `image-variations`, `voices`, `cancel` | kept | Talk to a running server. |
 | `bench roofline`, `latency`, `throughput`, `memory`, `inference`, `eval` | kept | |
