@@ -19,10 +19,17 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from yunshu_engine import settings
 
@@ -415,6 +422,12 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
     )
 
 
+from ..server_tools.responses_loop import (
+    create_with_server_tools_responses,
+    function_tools,
+    has_server_tools_responses,
+    input_item_to_messages,
+)
 from ..streaming import (
     format_responses_completed,
     format_responses_content_part_added,
@@ -453,7 +466,13 @@ class ResponseInputText(BaseModel):
     call_id: str | None = None
     name: str | None = None
     arguments: str | None = None
-    output: str | None = None
+    # function_call_output / custom_tool_call_output carry a string or a list of content items.
+    output: Any = None
+
+    # Every other Responses input item (reasoning, custom_tool_call, web_search_call, mcp_call,
+    # mcp_list_tools, mcp_approval_request/response, compaction, item_reference, ...) keeps its
+    # own fields; _convert_to_messages decides what the model sees.
+    model_config = ConfigDict(extra="allow")
 
     @model_validator(mode="after")
     def _require_content_for_messages(self):
@@ -463,10 +482,15 @@ class ResponseInputText(BaseModel):
 
 
 class ResponseTool(BaseModel):
+    """A declared tool. Besides ``function`` it can be ``web_search*``, ``mcp``, ``namespace``
+    (Codex), ``custom`` ...; those keep their own fields (extra="allow") and have no ``name``."""
+
     type: str = "function"
-    name: str
+    name: str = ""
     description: str | None = None
     parameters: dict | None = None
+
+    model_config = ConfigDict(extra="allow")
 
 
 class StreamOptions(BaseModel):
@@ -504,6 +528,13 @@ class ResponsesRequest(BaseModel):
     # reasoning_effort); without this field Pydantic silently dropped it and reasoning
     # models were served without thinking.
     reasoning: dict | None = None
+    # Fields real clients (Codex, the OpenAI SDK) send; ``include`` and ``max_tool_calls`` are
+    # read by the server-tool loop, the rest are accepted for compatibility.
+    include: list[str] | None = None
+    max_tool_calls: int | None = Field(default=None, ge=1)
+    prompt_cache_key: str | None = None
+    client_metadata: dict | None = None
+    service_tier: str | None = None
     repetition_penalty: float = Field(default=1.0, ge=0.0, le=2.0)
     frequency_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
     presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
@@ -708,6 +739,15 @@ def _convert_to_messages(req: ResponsesRequest) -> list[dict]:
                 else (lambda k, d=None: getattr(item, k, d))
             )
             itype = _get("type", "message")
+            if itype not in ("message", "", "function_call", "function_call_output"):
+                # web_search_call / mcp_call / custom tool calls become a tool-call pair; reasoning,
+                # mcp_list_tools, approvals, compaction, item_reference ... are skipped.
+                messages.extend(
+                    input_item_to_messages(
+                        item.model_dump() if hasattr(item, "model_dump") else dict(item)
+                    )
+                )
+                continue
             # Tool-conversation items: feed a prior tool call + its result back so
             # multi-turn agent loops work. Previously these had no role/content and
             # became empty "user" messages (the call_id/output were dropped).
@@ -742,6 +782,8 @@ def _convert_to_messages(req: ResponsesRequest) -> list[dict]:
                 )
                 continue
             role = _get("role", "user") or "user"
+            if role == "developer":
+                role = "system"
             content = _get("content", "")
             messages.append({"role": role, "content": _extract_input_text(content)})
 
@@ -851,8 +893,14 @@ async def create_response(req: ResponsesRequest, request: Request):
     # full (non-stream) generation asynchronously under the same id. Streaming +
     # background is not supported here (would require resumable SSE), so it only
     # triggers when stream is off.
+    if has_server_tools_responses(req):
+        return await create_with_server_tools_responses(req, request, create_response)
     if req.background and not req.stream:
         return await _start_background_response(req, request)
+    _fn_tools = function_tools(req.tools)
+    if _fn_tools != req.tools:
+        # namespaces flattened, non-function tools (custom, ...) dropped: the engine sees plain functions
+        req = req.model_copy(update={"tools": _fn_tools})
     messages = _convert_to_messages(req)
     # Snapshot THIS hop's own input before previous_response_id chaining mutates
     # `messages` (MED). Storing the post-chain `messages` as
@@ -916,6 +964,10 @@ async def create_response(req: ResponsesRequest, request: Request):
                             _turn.append(
                                 {"role": "assistant", "content": c.get("text", "")}
                             )
+                elif out.get("type") in ("web_search_call", "mcp_call"):
+                    _turn.extend(
+                        input_item_to_messages(out, _prev.get("_server_tool_texts"))
+                    )
                 elif out.get("type") == "function_call":
                     # Replay the prior tool call (stored as a top-level item with no
                     # "role") so a chained agent loop remembers it requested the
