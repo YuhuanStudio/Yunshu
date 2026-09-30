@@ -170,6 +170,7 @@ yunshu = "yunshu_cli:main"
 
 [dependency-groups]
 dev = [
+    "anthropic>=1.9.0",
     "matplotlib>=3.10.9",
     "mypy>=2.0.0",
     "pytest>=9.0.3",
