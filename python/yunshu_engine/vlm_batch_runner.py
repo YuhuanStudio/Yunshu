@@ -405,7 +405,11 @@ class VLMBatchRunner:
         # accepting a draft equals what serial sampling would have produced (keyed_sampling).
         keyed_ok = greedy or keyed_sampling.supports(
             RowParams(
-                float(temperature), float(top_p), int(top_k), float(min_p), seed,
+                float(temperature),
+                float(top_p),
+                int(top_k),
+                float(min_p),
+                seed,
                 float(xtc_probability or 0.0),
             )
         )
@@ -460,10 +464,10 @@ class VLMBatchRunner:
             stats=stats,
             budget=budget,
         )
-        # The round driver drafts for any greedy row without logits
+        # The round driver drafts for any greedy or keyed-sampled row without logits
         # processors or logprobs (a thinking budget is fine there).
         job.allow_draft = bool(
-            allow_draft and greedy and not processors and not logprobs
+            allow_draft and keyed_ok and not processors and not logprobs
         )
         stats.used_draft = use_draft
         stats.t_submit = time.perf_counter()
@@ -1082,7 +1086,9 @@ class _Job:
     budget: Any = None
     rope_delta: float = 0.0
     allow_draft: bool = False
-    keyed: Any = None  # KeyedSampler of a sampled request served by the speculative lane
+    keyed: Any = (
+        None  # KeyedSampler of a sampled request served by the speculative lane
+    )
     # drafter lifetime counters at admission (rounds, accepted, drafted); diffed per step
     spec_base: tuple | None = None
 
