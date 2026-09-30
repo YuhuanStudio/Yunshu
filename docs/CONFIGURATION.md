@@ -129,7 +129,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_VLM_APC_DISK_GB` | float | 64.0 | Size cap of the APC SSD tier in GiB. |
 | `YUNSHU_VLM_MAX_IMAGE_BYTES` | int | 26214400 (25 MiB) | Largest image a request may reference by URL, in bytes. |
 | `YUNSHU_VLM_INSECURE_SSL` | bool | off | Retry image downloads without TLS verification when verification fails. |
-| `YUNSHU_ROUND_PREFILL_CHUNK` | int | 512 | Round driver: prompt tokens per prefill span. A decoding request only steps between prefill forwards, so smaller spans keep it running next to a long prompt (Qwen3.8-27B, M5 Max, one MTP row beside an 8K prompt: 512 -> 6 tok/s, 128 -> 24 tok/s, ~20% lower prefill speed). Spans are fixed per prompt, so output stays independent of what else is running; prompts prefilled with different spans are each self-consistent but not bit-identical to each other. |
+| `YUNSHU_ROUND_PREFILL_CHUNK` | int | 512 | Round driver: prompt tokens per prefill span. A decoding request only steps between prefill forwards, so smaller spans keep it running next to a long prompt (Qwen3.8-27B, M5 Max, one MTP row beside an 8K prompt: 512 -> 6 tok/s, 128 -> 24 tok/s, ~20% lower prefill speed). Atoms are fixed per prompt (idle steps merge consecutive full atoms without changing any bit), so output stays independent of what else is running; prompts prefilled with different chunk sizes are each self-consistent but not bit-identical to each other. |
 
 ### speculative
 
