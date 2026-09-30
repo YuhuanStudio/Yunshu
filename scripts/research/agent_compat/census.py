@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import base64
 import collections
+import contextlib
 import json
 import os
 import shutil
@@ -151,6 +152,47 @@ S = {
         script=[{"text": "<summary>s</summary>"}],
         cfg="cc_two_turn",
     ),
+    "cc_discovery": dict(
+        agent="claude", prompt="Say hi.", script=[{"text": "hi"}], cfg="cc_discovery"
+    ),
+    "cc_discovery2": dict(
+        agent="claude",
+        prompt="Say hi.",
+        script=[{"text": "hi"}],
+        cfg="cc_discovery",
+        model="qwen3.8-27b",
+        models_payload={
+            "data": [
+                {
+                    "type": "model",
+                    "id": "qwen3.8-27b",
+                    "display_name": "Qwen3.8 27B",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "max_input_tokens": 131072,
+                    "max_tokens": 65536,
+                    "capabilities": {
+                        "image_input": {"supported": True},
+                        "thinking": {
+                            "supported": True,
+                            "types": {
+                                "enabled": {"supported": True},
+                                "adaptive": {"supported": True},
+                            },
+                        },
+                        "effort": {
+                            "supported": True,
+                            "low": {"supported": True},
+                            "medium": {"supported": True},
+                            "high": {"supported": True},
+                        },
+                    },
+                }
+            ],
+            "has_more": False,
+            "first_id": "qwen3.8-27b",
+            "last_id": "qwen3.8-27b",
+        },
+    ),
     "cc_statusline": dict(
         agent="claude", prompt="Say hi.", script=[{"text": "hi"}], cfg="cc_statusline"
     ),
@@ -182,7 +224,18 @@ S = {
         agent="codex", prompt="Think.", script=[{"text": "x"}], cfg="cx_reasoning"
     ),
     "cx_compact": dict(
-        agent="codex", prompt="Say hello.", script=[{"text": "x"}], cfg="cx_compact"
+        agent="codex",
+        prompt="Run ls then say done.",
+        script=[
+            {"tool": ["exec_command"], "input": {"cmd": "ls"}},
+            {"text": "SUMMARY: ran ls."},
+            {"text": "Done."},
+            {"text": "Done."},
+        ],
+        cfg="cx_compact",
+    ),
+    "cx_catalog": dict(
+        agent="codex", prompt="Say hello.", script=[{"text": "x"}], cfg="cx_catalog"
     ),
     "cx_ws": dict(
         agent="codex", prompt="Say hello.", script=[{"text": "x"}], cfg="cx_ws"
@@ -226,6 +279,12 @@ def cc_thinking(home, launch, ctx):
     d = json.loads(s.read_text())
     d["alwaysThinkingEnabled"] = True
     s.write_text(json.dumps(d))
+
+
+def cc_discovery(home, launch, ctx):
+    launch.env.pop("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", None)
+    launch.env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
+    launch.env["ANTHROPIC_AUTH_TOKEN"] = "sk-yunshu-bench-dummy"
 
 
 def cc_two_turn(home, launch, ctx):
@@ -278,6 +337,41 @@ def cx_compact(home, launch, ctx):
     p.write_text(t)
 
 
+CATALOG = {
+    "models": [
+        {
+            "slug": "census-model",
+            "display_name": "Census Model",
+            "description": "local model",
+            "default_reasoning_level": "medium",
+            "supported_reasoning_levels": [
+                {"effort": "low", "description": "fast"},
+                {"effort": "medium", "description": "balanced"},
+                {"effort": "high", "description": "deep"},
+            ],
+            "shell_type": "shell_command",
+            "visibility": "list",
+            "supported_in_api": True,
+            "priority": 1,
+            "supports_reasoning_summaries": True,
+            "support_verbosity": False,
+            "truncation_policy": {"mode": "tokens", "limit": 10000},
+            "supports_parallel_tool_calls": True,
+            "context_window": 131072,
+            "input_modalities": ["text", "image"],
+            "experimental_supported_tools": [],
+        }
+    ]
+}
+
+
+def cx_catalog(home, launch, ctx):
+    cat = home / ".codex" / "catalog.json"
+    cat.write_text(json.dumps(CATALOG))
+    p = home / ".codex" / "config.toml"
+    p.write_text(f'model_catalog_json = "{cat}"\n' + p.read_text())
+
+
 def cx_ws(home, launch, ctx):
     p = home / ".codex" / "config.toml"
     p.write_text(
@@ -291,6 +385,7 @@ def cx_ws(home, launch, ctx):
 HOOKS = {
     f.__name__: f
     for f in (
+        cc_discovery,
         cc_allow_web,
         cc_mcp,
         cc_thinking,
@@ -301,6 +396,7 @@ HOOKS = {
         cx_reasoning,
         cx_compact,
         cx_ws,
+        cx_catalog,
     )
 }
 
@@ -330,9 +426,17 @@ def run_session(name: str, timeout: int = 180):
     subprocess.run(["git", "init", "-q"], cwd=work)
     srv = Census(run / "requests.jsonl", [], port=0)
     srv.script = fill(spec["script"], work, srv.port)
+    srv.models_payload = spec.get("models_payload")
+    if spec.get("model"):
+        srv.model = spec["model"]
     try:
         launch = agents.prepare(
-            spec["agent"], run, work, srv.url, "census-model", spec["prompt"]
+            spec["agent"],
+            run,
+            work,
+            srv.url,
+            spec.get("model", "census-model"),
+            spec["prompt"],
         )
         # prepare() wrapped the command in sandbox-exec; hooks edit configs and may append args
         ctx = dict(run=run, work=work)
@@ -340,24 +444,24 @@ def run_session(name: str, timeout: int = 180):
         if hook:
             HOOKS[hook](launch.home, launch, ctx)
         t0 = time.time()
+        proc = subprocess.Popen(
+            launch.cmd,
+            cwd=launch.cwd,
+            env=launch.env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
         try:
-            p = subprocess.run(
-                launch.cmd,
-                cwd=launch.cwd,
-                env=launch.env,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-            rc, so, se = p.returncode, p.stdout, p.stderr
-        except subprocess.TimeoutExpired as e:
-            rc, so, se = (
-                -9,
-                (e.stdout or b"").decode()
-                if isinstance(e.stdout, bytes)
-                else (e.stdout or ""),
-                "TIMEOUT",
-            )
+            so, se = proc.communicate(timeout=timeout)
+            rc = proc.returncode
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, 9)
+            so, se = proc.communicate()
+            rc, se = -9, "TIMEOUT\n" + (se or "")
         (run / "stdout.txt").write_text(so)
         (run / "stderr.txt").write_text(se)
         (run / "meta.json").write_text(

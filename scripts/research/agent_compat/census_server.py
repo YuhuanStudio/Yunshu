@@ -31,6 +31,7 @@ class Census:
         self.script = list(script)
         self.model = model
         self.lock = threading.Lock()
+        self.models_payload = None
         self.log.parent.mkdir(parents=True, exist_ok=True)
         srv = self
 
@@ -110,7 +111,13 @@ class Census:
         path = h.path.split("?")[0].rstrip("/")
         status, note = 200, ""
         try:
-            if method == "GET" and path.endswith("/models"):
+            if (
+                method == "GET"
+                and path.endswith("/models")
+                and self.models_payload is not None
+            ):
+                self.send_json(h, self.models_payload)
+            elif method == "GET" and path.endswith("/models"):
                 m = {
                     "id": self.model,
                     "object": "model",

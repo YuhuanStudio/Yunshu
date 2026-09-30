@@ -468,6 +468,10 @@ def _convert_anthropic_messages(
     for m in messages_input:
         content = m.content
         role = m.role
+        _n0 = len(intermediate)
+        _thinking_text = ""
+        if role == "assistant" and isinstance(content, list):
+            content, _thinking_text = _split_thinking(content)
 
         if not isinstance(content, list):
             # Simple string or None content — no block processing needed
@@ -674,7 +678,52 @@ def _convert_anthropic_messages(
             content_text = _extract_text_from_content(content)
             intermediate.append({"role": role, "content": content_text})
 
+        # Earlier reasoning goes back as ``reasoning_content`` (the field chat templates
+        # read), not as visible text: Claude Code and the SDKs send thinking blocks back
+        # verbatim, and flattening them into the reply confused the model and re-billed them.
+        if _thinking_text and len(intermediate) > _n0:
+            intermediate[_n0]["reasoning_content"] = _thinking_text
+
     return intermediate, temp_files
+
+
+def _split_thinking(content: list) -> tuple[list, str]:
+    """Separate ``thinking`` blocks (and drop ``redacted_thinking``) from an assistant turn."""
+    keep: list = []
+    think: list[str] = []
+    for b in content:
+        t = b.get("type") if isinstance(b, dict) else None
+        if t == "thinking":
+            if b.get("thinking"):
+                think.append(b["thinking"])
+        elif t != "redacted_thinking":
+            keep.append(b)
+    return keep, "\n".join(think)
+
+
+def _thinking_switches(req) -> tuple[bool | None, int | None]:
+    """Anthropic ``thinking`` -> (enable_thinking, thinking_budget).
+
+    ``enabled`` forces thinking on with its budget, ``disabled`` forces it off, and
+    ``adaptive`` (Claude Code's default) or no field leaves the model's template default.
+    """
+    th = req.thinking if isinstance(req.thinking, dict) else None
+    if not th:
+        return None, None
+    kind = th.get("type")
+    if kind == "enabled":
+        return True, th.get("budget_tokens")
+    if kind == "disabled":
+        return False, None
+    return None, None
+
+
+def _effective_effort(req) -> str | None:
+    """``reasoning_effort`` (Yunshu extension) or Anthropic's ``output_config.effort``."""
+    if req.reasoning_effort:
+        return req.reasoning_effort
+    eff = (req.output_config or {}).get("effort") if req.output_config else None
+    return str(eff) if eff else None
 
 
 def _convert_image_block(
@@ -1363,8 +1412,7 @@ async def _non_stream_batched(
     """Non-streaming response via BatchedEngine."""
     from fastapi.responses import JSONResponse
 
-    enable_thinking = req.thinking and req.thinking.get("type") == "enabled"
-    budget_tokens = req.thinking.get("budget_tokens") if req.thinking else None
+    enable_thinking, budget_tokens = _thinking_switches(req)
     _logit_bias = _convert_logit_bias(req)
 
     try:
@@ -1386,7 +1434,7 @@ async def _non_stream_batched(
             seed=req.seed,
             enable_thinking=enable_thinking,
             thinking_budget=budget_tokens,
-            reasoning_effort=req.reasoning_effort,
+            reasoning_effort=_effective_effort(req),
             stop_token_ids=req.stop_token_ids,
             spec_decode=req.spec_decode,
             xtc_probability=req.xtc_probability,
@@ -1620,8 +1668,7 @@ async def _non_stream_legacy(
     from fastapi.responses import JSONResponse
 
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
-    enable_thinking = req.thinking and req.thinking.get("type") == "enabled"
-    budget_tokens = req.thinking.get("budget_tokens") if req.thinking else None
+    enable_thinking, budget_tokens = _thinking_switches(req)
     _logit_bias = _convert_logit_bias(req)
     try:
         _gen_coro = engine.generate(
@@ -1642,7 +1689,7 @@ async def _non_stream_legacy(
             seed=req.seed,
             enable_thinking=enable_thinking,
             thinking_budget=budget_tokens,
-            reasoning_effort=req.reasoning_effort,
+            reasoning_effort=_effective_effort(req),
             stop_token_ids=req.stop_token_ids,
             spec_decode=req.spec_decode,
             xtc_probability=req.xtc_probability,
@@ -1859,8 +1906,7 @@ async def _stream_anthropic(
     input_tokens = 0
     output_tokens = 0
     cached_tokens = 0
-    enable_thinking = req.thinking and req.thinking.get("type") == "enabled"
-    budget_tokens = req.thinking.get("budget_tokens") if req.thinking else None
+    enable_thinking, budget_tokens = _thinking_switches(req)
     _logit_bias = _convert_logit_bias(req)
     # tool_choice="none" sets _suppress_tools (see above): the model is told not to
     # call tools and its prompt is emptied of them, so streaming must NOT extract
@@ -2000,7 +2046,7 @@ async def _stream_anthropic(
                 seed=req.seed,
                 enable_thinking=enable_thinking,
                 thinking_budget=budget_tokens,
-                reasoning_effort=req.reasoning_effort,
+                reasoning_effort=_effective_effort(req),
                 stop_token_ids=req.stop_token_ids,
                 spec_decode=req.spec_decode,
                 xtc_probability=req.xtc_probability,
@@ -2286,7 +2332,7 @@ async def _stream_anthropic(
                 seed=req.seed,
                 enable_thinking=enable_thinking,
                 thinking_budget=budget_tokens,
-                reasoning_effort=req.reasoning_effort,
+                reasoning_effort=_effective_effort(req),
                 stop_token_ids=req.stop_token_ids,
                 spec_decode=req.spec_decode,
                 xtc_probability=req.xtc_probability,
