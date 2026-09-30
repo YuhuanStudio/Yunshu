@@ -163,6 +163,31 @@ def anth_fetch():
     return {"kinds": ks, "text": text[:200]}
 
 
+def anth_fetch_public():
+    """web_fetch against a real public site (network access from the server, SSRF guard on)."""
+    m = ac.beta.messages.create(
+        model=a.model,
+        max_tokens=4000,
+        betas=["web-fetch-2025-09-10"],
+        tools=[{"type": "web_fetch_20250910", "name": "web_fetch", "max_uses": 2}],
+        messages=[
+            {
+                "role": "user",
+                "content": "Fetch https://example.com/ and quote its main heading.",
+            }
+        ],
+    )
+    res = [b for b in m.content if b.type == "web_fetch_tool_result"]
+    assert res, kinds(m)
+    c = res[0].content
+    assert getattr(c, "type", "") == "web_fetch_result", c
+    assert "example domain" in c.content.source.data.lower(), c.content.source.data[
+        :200
+    ]
+    text = "".join(getattr(b, "text", "") for b in m.content if b.type == "text")
+    return {"kinds": kinds(m), "title": c.content.title, "text": text[:160]}
+
+
 def anth_mcp():
     m = ac.beta.messages.create(
         model=a.model,
@@ -227,6 +252,7 @@ check("anthropic_web_search_stream", anth_search_stream)
 check("anthropic_web_search_followup", anth_search_followup)
 if a.page_url:
     check("anthropic_web_fetch", anth_fetch)
+check("anthropic_web_fetch_public", anth_fetch_public)
 if a.mcp_url:
     check("anthropic_mcp", anth_mcp)
 check("responses_web_search", lambda: resp_search(False))
