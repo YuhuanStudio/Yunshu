@@ -140,6 +140,9 @@ _add("YUNSHU_MEDIA_DIR", "path", None, "Directory local media paths must live un
 _add("YUNSHU_FILES_DIR", "path", None, "Directory of the local Files / Batch API store. Unset: ~/.yunshu/files.", "server")
 _add("YUNSHU_FILES_MAX_BYTES", "int", 536870912, "Files API: maximum size of one uploaded file in bytes (default 512 MB).", "server", minimum=1)
 _add("YUNSHU_FILES_TTL_DAYS", "float", None, "Files API: delete uploaded files after this many days. Unset: keep forever.", "server", minimum=0.0)
+_add("YUNSHU_CONVERSATIONS_DIR", "path", None, "Directory of the Conversations API store (JSON, one file per conversation). Unset: ~/.yunshu/conversations.", "server")
+_add("YUNSHU_CONVERSATION_MAX_ITEMS", "int", 10000, "Conversations API: maximum number of items one conversation may hold.", "server", minimum=1)
+_add("YUNSHU_COMPACT_MAX_TOKENS", "int", 2048, "Responses compaction: maximum tokens of the model-written summary.", "server", minimum=64)
 
 # ── auth ───────────────────────────────────────────────────────────────
 _add("YUNSHU_AUTH_TOKEN", "str", None, "Bearer token. When set, every request except health/version/docs needs it; unset: inference is open and operational endpoints are denied.", "auth", secret=True)

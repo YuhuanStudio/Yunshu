@@ -44,3 +44,25 @@ def reasoning_text_of(item: dict) -> str:
         if parts:
             break
     return "\n".join(parts)
+
+
+# ``compaction`` items (Responses compaction) use the same honest envelope: the model-written summary
+# in an opaque wrapper. Tokens from another provider do not unseal and are skipped.
+_COMPACTION_PREFIX = "yunshu1c:"
+
+
+def seal_compaction(text: str) -> str:
+    return _COMPACTION_PREFIX + base64.urlsafe_b64encode(text.encode("utf-8")).decode(
+        "ascii"
+    )
+
+
+def unseal_compaction(token: str | None) -> str | None:
+    if not isinstance(token, str) or not token.startswith(_COMPACTION_PREFIX):
+        return None
+    try:
+        return base64.urlsafe_b64decode(
+            token[len(_COMPACTION_PREFIX) :].encode("ascii")
+        ).decode("utf-8")
+    except Exception:
+        return None

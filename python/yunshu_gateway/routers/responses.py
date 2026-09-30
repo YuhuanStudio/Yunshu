@@ -519,6 +519,11 @@ class ResponsesRequest(BaseModel):
     input: str | list[ResponseInputText]
     instructions: str | None = None
     previous_response_id: str | None = None
+    # Conversations API: a conversation id (or {id}); its items are prepended to `input` and this
+    # turn is appended to it. Mutually exclusive with previous_response_id.
+    conversation: str | dict | None = None
+    # [{"type": "compaction", "compact_threshold": N}]: compact the input first when it exceeds N tokens.
+    context_management: list[dict] | None = None
     max_output_tokens: int = Field(default=2048, ge=1, le=131072)
     # OpenAI Chat Completions legacy alias — accept silently and alias to
     # max_output_tokens so old client code doesn't run unbounded against
@@ -1049,6 +1054,11 @@ async def _prewarm_response(req: ResponsesRequest, request: Request):
 async def create_response(req: ResponsesRequest, request: Request):
     """OpenAI Responses API endpoint."""
     _check_permission(request, "can_infer")
+    from ..responses_context import needs_state, run_stateful_response
+
+    if needs_state(req):
+        # conversation / compaction items / auto compaction: rewrite the request, re-enter here
+        return await run_stateful_response(req, request, create_response)
     if isinstance(req.input, list):
         from ..files_store import FileRefError, has_file_refs, resolve_file_refs
 

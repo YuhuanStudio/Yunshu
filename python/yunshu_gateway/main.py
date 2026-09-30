@@ -975,7 +975,14 @@ def create_app() -> FastAPI:
     from .routers import omni as omni_mod
 
     app.include_router(completions.router, prefix="/v1")
+    from .routers import conversations as conversations_mod
+    from .routers import responses_compact as responses_compact_mod
+
+    app.include_router(
+        responses_compact_mod.router, prefix="/v1"
+    )  # before /responses/{id}
     app.include_router(responses_mod.router, prefix="/v1")
+    app.include_router(conversations_mod.router, prefix="/v1")
     app.include_router(embeddings.router, prefix="/v1")
     app.include_router(models.router, prefix="/v1")
     from .routers import batches as batches_mod
