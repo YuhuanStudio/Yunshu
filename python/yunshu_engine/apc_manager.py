@@ -45,6 +45,8 @@ GIB = 1 << 30
 
 # Entry-count cap: the byte budget decides, this only bounds bookkeeping.
 MAX_ENTRIES = 16
+# Shutdown spill budget: a service stop must not hang on a 32 GiB cache.
+CLOSE_FLUSH_SECONDS = 20.0
 # Reserve for the OS, activations and the live decode KV when sizing the budget from memory.
 _RESERVE_GIB = 16.0
 _MIN_GIB = 4.0
@@ -195,7 +197,13 @@ class YunshuAPCManager(APCManager):
         if isinstance(self.disk, SpillDiskStore):
             with self.lock:
                 entries = list(self._exact_cache.items())
-            for key, entry in entries:
+            # newest first, within a time budget: a service stop must not hang on a
+            # 32 GiB cache; what does not fit in the budget is simply re-prefilled later
+            deadline = time.monotonic() + CLOSE_FLUSH_SECONDS
+            for key, entry in reversed(entries):
+                if time.monotonic() > deadline:
+                    logger.info("APC: shutdown spill budget spent; rest stays RAM-only")
+                    break
                 self._spill(key, entry)
             with contextlib.suppress(Exception):
                 self.disk.flush()

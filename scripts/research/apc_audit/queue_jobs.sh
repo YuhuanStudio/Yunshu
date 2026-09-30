@@ -9,10 +9,11 @@ WT=$(cd "$(dirname "$0")/../../.." && pwd)
 JOB=$1
 SRC=${2:-$WT/python}
 BASELINE=/Volumes/P5Plus/yunshu-build/apcaudit-baseline/python
-OUT=$MAIN/docs/research/runs/2026-09-30-apcaudit
+OUT=$MAIN/docs/research/runs/${APC_OUT_DAY:-2026-09-30}-apcaudit
 M=/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp
 TEXT_M=/Volumes/P5Plus/models/Qwen2.5-3B-Instruct-4bit
 TEMPLATE=$MAIN/docs/research/runs/2026-09-30-agtraffic/artifacts/cap-opencode-fix-cart-discount-r1/bodies/0002-req.json
+TEXT_BF16=/Volumes/P5Plus/models/Qwen2.5-3B-Instruct-bf16
 SSD_DIR=/Volumes/P5Plus/tmp/apcaudit-ssd
 PY=$MAIN/.venv/bin/python
 SCRIPT=$WT/scripts/research/apc_audit/session_replay.py
@@ -43,5 +44,12 @@ case $JOB in
                   --env YUNSHU_SSD_CACHE=1 --env YUNSHU_SSD_CACHE_DIR=$SSD_DIR/text --env YUNSHU_PREFIX_MAX_ENTRIES=2 ;;
   text-warm)    M=$TEXT_M submit text-warm 20 -- --scenario multi --sessions 3 --target 20000 --step 2500 --gap-s 5 \
                   --env YUNSHU_PREFIX_HOT_LIMIT=2 ;;
+  restart)    submit restart 30 -- --scenario restart --lengths 10000,30000,60000 \
+                --env YUNSHU_VLM_APC_DISK_DIR=$SSD_DIR/restart ;;
+  # mid-size text model: prefill (~2K t/s) is slow enough that the SSD gate lets restores through
+  text-bf16-nossd) M=$TEXT_BF16 submit text-bf16-nossd 20 -- --scenario multi --sessions 3 --target 20000 --step 2500 --gap-s 5 \
+                  --env YUNSHU_PREFIX_MAX_ENTRIES=2 ;;
+  text-bf16-ssd)   M=$TEXT_BF16 submit text-bf16-ssd 20 -- --scenario multi --sessions 3 --target 20000 --step 2500 --gap-s 5 \
+                  --env YUNSHU_SSD_CACHE=1 --env YUNSHU_SSD_CACHE_DIR=$SSD_DIR/text-bf16 --env YUNSHU_PREFIX_MAX_ENTRIES=2 ;;
   *) echo "unknown job $JOB"; exit 1 ;;
 esac
