@@ -73,6 +73,9 @@ SCENARIOS = {
         expect=["pong"],
         proxy=False,
     ),
+    "cc_context": dict(
+        agent="claude", cfg=None, prompt="/context", expect=["Context Usage"]
+    ),
     "cc_edit": dict(
         agent="claude",
         cfg=None,
@@ -105,6 +108,54 @@ SCENARIOS = {
         expect=["yunshu-ok"],
     ),
 }
+
+
+def apply_launch_config(agent: str, launch, info, run: Path, model_id: str):
+    """Configure the agent the way `yunshu launch` would, from the served model's real card."""
+    sys.path.insert(0, str(HERE.parents[2] / "python"))
+    from yunshu_cli.integrations.agent_config import (
+        claude_code_env,
+        codex_catalog,
+        codex_provider_toml,
+        opencode_provider,
+    )
+
+    if agent == "claude":
+        env = claude_code_env(info, "http://unused", "unused")
+        for k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"):
+            env.pop(k)
+        launch.env.update(env)
+    elif agent == "codex":
+        home = launch.home / ".codex"
+        cat = home / "yunshu-models.json"
+        cat.write_text(json.dumps(codex_catalog(info)))
+        cfg = home / "config.toml"
+        import re
+
+        text = cfg.read_text()
+        for key in ("model_context_window", "model_auto_compact_token_limit"):
+            text = re.sub(rf"^{key} = .*\n", "", text, flags=re.M)
+        block = codex_provider_toml(info, "http://unused", str(cat)).split(
+            "\n[model_providers"
+        )[0]
+        keep = [
+            ln
+            for ln in block.splitlines()
+            if ln.split(" = ")[0]
+            in (
+                "model_catalog_json",
+                "model_context_window",
+                "model_auto_compact_token_limit",
+                "model_reasoning_summary",
+            )
+        ]
+        cfg.write_text("\n".join(keep) + "\n" + text)
+    elif agent == "opencode":
+        cfgp = launch.home / ".config" / "opencode" / "opencode.json"
+        cfg = json.loads(cfgp.read_text())
+        prov = opencode_provider(info, "http://unused", "k")
+        cfg["provider"]["yunshu"]["models"] = {model_id: prov["models"][info.id]}
+        cfgp.write_text(json.dumps(cfg, indent=1))
 
 
 def red_png(work: Path):
@@ -204,6 +255,12 @@ def main():
     )
     ap.add_argument("--out", default="")
     ap.add_argument("--extra", nargs="*", default=[], help="extra `yunshu serve` args")
+    ap.add_argument(
+        "--launch-config",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="configure each agent the way `yunshu launch` does (real window, catalog, limits)",
+    )
     a = ap.parse_args()
     out = Path(
         a.out or census.OUT_ROOT.parent / f"{time.strftime('%Y-%m-%d')}-agent-e2e"
@@ -223,6 +280,18 @@ def main():
         srv.start()
         model_id = srv.model_id
         print("server ready", srv.url, model_id, f"{srv.ready_s:.0f}s", flush=True)
+        import httpx
+
+        sys.path.insert(0, str(HERE.parents[2] / "python"))
+        from yunshu_cli.integrations.agent_config import ModelInfo
+
+        card_item = next(
+            m
+            for m in httpx.get(srv.url + "/v1/models").json()["data"]
+            if m["id"] == model_id
+        )
+        card_info = ModelInfo.from_models_item(card_item)
+        (out / "model_card.json").write_text(json.dumps(card_item, indent=1))
         # what `yunshu launch` would hand each agent for THIS model's real card (no agent needed)
         for tool in ("claude", "codex", "opencode"):
             lp = subprocess.run(
@@ -288,6 +357,8 @@ def main():
             launch = census.agents.prepare(
                 sc["agent"], run, work, base, model_id, sc["prompt"]
             )
+            if a.launch_config:
+                apply_launch_config(sc["agent"], launch, card_info, run, model_id)
             hook = sc.get("cfg")
             if hook:
                 census.HOOKS[hook](

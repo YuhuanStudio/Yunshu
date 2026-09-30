@@ -233,7 +233,7 @@ _add("YUNSHU_WEB_FETCH", "bool", True, "Serve the server-side web_fetch tool (ne
 _add("YUNSHU_WEB_FETCH_ALLOW_PRIVATE", "bool", False, "Let web_fetch reach private, loopback and link-local addresses. Off (default) blocks them (SSRF protection), including after redirects and DNS resolution.", "server-tools")
 _add("YUNSHU_WEB_FETCH_MAX_BYTES", "int", 2000000, "Largest response body web_fetch downloads.", "server-tools", minimum=1024)
 _add("YUNSHU_WEB_FETCH_TIMEOUT", "float", 20.0, "Seconds web_fetch waits for a page.", "server-tools", minimum=1.0)
-_add("YUNSHU_WEB_FETCH_MAX_TEXT_CHARS", "int", 60000, "Extracted page text handed to the model is cut to this many characters (a request's max_content_tokens can lower it).", "server-tools", minimum=1000)
+_add("YUNSHU_WEB_FETCH_MAX_TEXT_CHARS", "int", 40000, "Extracted page text handed to the model is cut to this many characters (a request's max_content_tokens can lower it).", "server-tools", minimum=1000)
 _add("YUNSHU_MCP_CONNECTOR", "bool", True, "Serve the MCP connector: Anthropic mcp_servers and OpenAI Responses {type: mcp} tools are executed by this server, which connects to the named MCP servers over streamable HTTP / SSE.", "server-tools")
 _add("YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE", "bool", True, "Let the MCP connector reach private and loopback MCP servers (local tool servers are the common case). Off: only public addresses.", "server-tools")
 _add("YUNSHU_MCP_CONNECTOR_TIMEOUT", "float", 30.0, "Seconds an MCP connector call (initialize, tools/list, tools/call) may take.", "server-tools", minimum=1.0)
