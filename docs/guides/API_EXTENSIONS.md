@@ -153,6 +153,23 @@ Hints exist for: context too long, out of memory, 401 (which key), unknown model
 validation, and 500 (`yunshu doctor`, the request id). Anthropic-format errors are left exactly as
 the Anthropic spec has them.
 
+### Server-side tools
+
+`x_yunshu.server_tools` on a Messages message (`message_delta` when streaming, top level otherwise) and on a
+Responses object (`response.completed` / the JSON body) reports what the server-side loop did; the SDKs ignore it.
+
+| Field | Meaning |
+|---|---|
+| `rounds` | Generate / run tool / continue rounds the request took. |
+| `round_usage[]` | Per round: `input_tokens` (prefilled), `cache_read_input_tokens` / `cached_tokens` (served from the prefix cache), `output_tokens`. A continuation reads the shared prefix from the cache and prefills only the new turn. |
+| `tools[]` | Per call: `tool`, `kind` (`web_search` / `web_fetch` / `mcp`), `ok`, `error_code`, `ms`, `query`, `provider`, and `hint` when the tool is not configured (for web search: how to set a provider up). |
+
+`GET /v1/models` items carry `yunshu.server_tools` (`web_search.available` / `provider` / `setup`, `web_fetch`,
+`mcp_connector`) so a client or `yunshu launch` knows what the server can run before it sends a request.
+
+`generate: false` on `POST /v1/responses` (and on the WebSocket's `response.create`) is a prewarm: the prompt is
+prefilled into the prefix cache, the response has no output and `x_yunshu.prewarm: true`.
+
 ## Known gaps
 
 | Item | State |
@@ -160,5 +177,5 @@ the Anthropic spec has them.
 | `speculative.drafted/accepted/acceptance_rate` on the upstream single-row speculative lane | `null`; only the round-driver lane counts drafts. The mode is reported. |
 | Progress and engine-side timings on the text-only mlx-lm fast path (`_generate_fast`) | Not wired; those requests get gateway-measured total time and, for streams, TTFT. |
 | Ollama layer forwarding `X-Request-Id` and `keep_alive` to the OpenAI routes | Not done (that layer is being reworked separately). |
-| `x_yunshu` on the Responses and Anthropic routes | Request ids, queue headers and progress comments apply; the body object does not (the response shapes there are stricter). |
+| `x_yunshu` on the Responses and Anthropic routes | Only `x_yunshu.server_tools` (above) is a body object there. Request ids, queue headers and progress comments apply; the body object does not (the response shapes there are stricter). |
 | Non-streaming keep-alive whitespace | Rejected on purpose, see Prefill progress. |

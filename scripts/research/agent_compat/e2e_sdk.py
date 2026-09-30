@@ -93,6 +93,34 @@ def anth_search():
     }
 
 
+def anth_search_followup():
+    """Second turn: the earlier server_tool_use / web_search_tool_result blocks go back in the history."""
+    tools = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}]
+    q1 = "Search the web: what is the reference release code name of Yunshu? Answer in one sentence."
+    m1 = ac.messages.create(
+        model=a.model,
+        max_tokens=4000,
+        tools=tools,
+        messages=[{"role": "user", "content": q1}],
+    )
+    assert "web_search_tool_result" in kinds(m1), kinds(m1)
+    hist = [
+        {"role": "user", "content": q1},
+        {
+            "role": "assistant",
+            "content": [b.model_dump(exclude_none=True) for b in m1.content],
+        },
+        {
+            "role": "user",
+            "content": "Without searching again: which page URL did that answer come from? Give the URL.",
+        },
+    ]
+    m2 = ac.messages.create(model=a.model, max_tokens=4000, tools=tools, messages=hist)
+    text = "".join(getattr(b, "text", "") for b in m2.content if b.type == "text")
+    assert "/page/" in text or "127.0.0.1" in text, text
+    return {"kinds": kinds(m2), "text": text[:200]}
+
+
 def anth_search_stream():
     with ac.messages.stream(
         model=a.model,
@@ -196,6 +224,7 @@ def resp_mcp():
 
 check("anthropic_web_search", anth_search)
 check("anthropic_web_search_stream", anth_search_stream)
+check("anthropic_web_search_followup", anth_search_followup)
 if a.page_url:
     check("anthropic_web_fetch", anth_fetch)
 if a.mcp_url:
