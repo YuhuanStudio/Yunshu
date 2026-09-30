@@ -4693,14 +4693,6 @@ class BatchedEngine:
                 instead of calling .is_set() which is not safe from executor threads.
                 """
 
-                def __setattr__(self, name, value):
-                    # engine-side RunStats belong to the gateway's event (the tracker
-                    # entry it reads live progress / x_yunshu from)
-                    if name == "run_stats":
-                        setattr(_external, name, value)
-                    else:
-                        object.__setattr__(self, name, value)
-
                 def is_set(self):
                     if _internal is not None:
                         # asyncio.Event: read _value (GIL-protected bool)
