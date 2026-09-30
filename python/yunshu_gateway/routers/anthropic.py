@@ -1023,7 +1023,11 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     functions (so the recursion takes the ordinary path below).
     """
     _check_permission(request, "can_infer")
+    from ..anthropic_client_tools import fill_client_tool_schemas
     from ..files_store import FileRefError, has_file_refs, resolve_file_refs
+
+    # bash_* / text_editor_* / memory_* are declared by type only; the model needs their schema.
+    fill_client_tool_schemas(req.tools)
     from ..server_tools.anthropic_loop import create_with_server_tools, has_server_tools
 
     # Files API references ({"source": {"type": "file", "file_id": ...}}) become inline sources.
