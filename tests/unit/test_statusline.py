@@ -66,6 +66,29 @@ def test_unreachable_server_never_raises():
     assert render(None) == "yunshu | engine unreachable"
 
 
+def test_fetch_status_uses_the_v1_route(monkeypatch):
+    import httpx
+
+    from yunshu_cli.statusline import fetch_status
+
+    seen = {}
+
+    class R:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"ok": 1}
+
+    def fake_get(url, **kw):
+        seen["url"] = url
+        return R()
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    assert fetch_status("http://127.0.0.1:8000/") == {"ok": 1}
+    assert seen["url"] == "http://127.0.0.1:8000/v1/yunshu/status"
+
+
 def test_statusline_settings_never_replace_the_users_own():
     cmd = "yunshu statusline --url http://127.0.0.1:8000"
     got = json.loads(claude_statusline_settings(cmd, {}))

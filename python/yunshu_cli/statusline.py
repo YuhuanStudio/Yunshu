@@ -100,7 +100,7 @@ def fetch_status(
     headers = {"authorization": f"Bearer {api_key}"} if api_key else {}
     try:
         r = httpx.get(
-            url.rstrip("/") + "/yunshu/status", headers=headers, timeout=timeout
+            url.rstrip("/") + "/v1/yunshu/status", headers=headers, timeout=timeout
         )
         r.raise_for_status()
         return r.json()
