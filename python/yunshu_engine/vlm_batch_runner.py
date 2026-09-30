@@ -509,7 +509,7 @@ class VLMBatchRunner:
     def _new_generator(self, *, spec: bool, use_apc: bool, top_logprobs: int, sampler):
         from mlx_vlm.generate.ar import BatchGenerator
 
-        return BatchGenerator(
+        gen = BatchGenerator(
             self.model.language_model,
             self.processor,
             stop_tokens=self.stop_tokens,
@@ -524,6 +524,12 @@ class VLMBatchRunner:
             prefill_step_size=PREFILL_STEP,
             prefill_batch_size=1,
         )
+        # Upstream binds a stock APCCoordinator; ours places the extra checkpoints
+        # (end of the system turn) and numbers requests for superseding.
+        bind = getattr(self.apc_manager, "coordinator", None)
+        if use_apc and bind is not None and getattr(gen, "apc", None) is not None:
+            gen.apc = bind(gen.model)
+        return gen
 
     def _admit(self, job: _Job, alone: bool) -> None:
         from .mrope import clear_rope_state

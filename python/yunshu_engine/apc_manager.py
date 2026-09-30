@@ -138,6 +138,17 @@ class _Coordinator(APCCoordinator):
             if mgr.exact_cache_min_tokens <= last < final:
                 lengths.add(last)
         head = mgr.head_boundary(token_ids)
+        if head:
+            from mlx_vlm.apc import adjust_prefix_to_text_suffix_boundary
+
+            # media tokens (an image inside the system turn) must not be cut in half
+            if (
+                adjust_prefix_to_text_suffix_boundary(
+                    token_ids, head, media_token_ids, max_prefix_tokens=final
+                )
+                != head
+            ):
+                head = 0
         if head and mgr.exact_cache_min_tokens <= head < final:
             lengths.add(head)
             mgr.note_head(token_ids[:head])

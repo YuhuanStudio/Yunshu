@@ -60,6 +60,49 @@ def test_head_boundary_is_the_start_of_the_first_user_turn():
     assert m.head_boundary(ids) == 0
 
 
+def _coordinator(m):
+    from types import SimpleNamespace
+
+    from yunshu_engine.apc_manager import _Coordinator
+
+    c = object.__new__(_Coordinator)
+    c.manager = m
+    c.model = None
+    c.plan = SimpleNamespace(
+        restorable=True, strategy="checkpoint", legacy_mode="exact"
+    )
+    return c
+
+
+def test_checkpoint_lengths_are_final_one_interval_and_the_head():
+    m = _mgr()
+    c = _coordinator(m)
+    head = list(range(100, 3000))  # a long system turn
+    ids = _prompt(head, range(5000, 12000))
+    lengths = c.checkpoint_lengths(ids, set())
+    final = len(ids) - 1
+    interval = ((final - 1) // 2048) * 2048
+    assert lengths == sorted({final, interval, m.head_boundary(ids)})
+    assert m._generation == 1
+    # a short prompt: just the final one, no interval/head below the minimum
+    short = _prompt(range(100, 110), range(200, 220))
+    assert c.checkpoint_lengths(short, set()) == [len(short) - 1]
+    m.keep_interval_checkpoint = False
+    assert c.checkpoint_lengths(ids, set()) == sorted({final, m.head_boundary(ids)})
+
+
+def test_head_checkpoint_never_cuts_media_tokens():
+    m = _mgr()
+    c = _coordinator(m)
+    ids = _prompt(range(100, 400), range(500, 900))
+    h = m.head_boundary(ids)
+    assert h in c.checkpoint_lengths(ids, set())
+    # an image after the head: restoring only the head would leave media in the suffix
+    ids2 = list(ids)
+    ids2[h + 5] = 4242
+    assert h not in c.checkpoint_lengths(ids2, {4242})
+
+
 def test_entries_are_not_capped_at_two():
     m = _mgr()
     assert m._exact_cache_max >= 8
