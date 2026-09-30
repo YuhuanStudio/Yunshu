@@ -992,19 +992,18 @@ async def _prewarm_response(req: ResponsesRequest, request: Request):
         return JSONResponse(obj)
 
     async def gen():
-        seq = 0
         started = {**obj, "status": "in_progress", "usage": None}
-        for name, body in (
+        events = [
             ("response.created", started),
             ("response.in_progress", started),
             ("response.completed", obj),
-        ):
+        ]
+        for seq, (name, body) in enumerate(events):
             yield (
                 f"event: {name}\ndata: "
                 + json.dumps({"type": name, "response": body, "sequence_number": seq})
                 + "\n\n"
             ).encode()
-            seq += 1
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 
