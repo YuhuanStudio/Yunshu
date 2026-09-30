@@ -1,5 +1,7 @@
 """API gaps found by driving real coding agents (Claude Code and Codex CLI) at the server."""
 
+import pytest
+
 from yunshu_engine.message_adapter import QwenMessageAdapter
 from yunshu_gateway.routers.anthropic import (
     AnthropicMessage,
@@ -23,8 +25,6 @@ def test_adaptive_thinking_is_accepted():
 
 
 def test_unknown_thinking_type_still_rejected():
-    import pytest
-
     with pytest.raises(ValueError, match="adaptive"):
         _req({"type": "sometimes"}).validate_request()
 
@@ -36,21 +36,36 @@ def test_thinking_flag():
     assert _thinking_flag(None) is None
 
 
-def test_qwen_merges_mid_conversation_developer_messages():
-    # Codex sends `developer` items after the first user turn even when a system message
-    # leads; the Qwen template raises "System message must be at the beginning".
+def test_qwen_mid_conversation_system_messages_stay_in_place():
+    # Codex sends `developer` items and Claude Code sends per-turn notes after the first
+    # user turn; the Qwen template rejects them as system messages. They must not be
+    # hoisted (that rewrites the prompt start every turn and kills prefix caching).
     msgs = [
         {"role": "system", "content": "base"},
         {"role": "user", "content": "hi"},
-        {"role": "system", "content": "permissions"},  # a remapped developer item
+        {"role": "system", "content": "permissions"},
         {"role": "assistant", "content": "ok"},
         {"role": "system", "content": "env"},
     ]
     out = QwenMessageAdapter().adapt(msgs)
-    assert [m["role"] for m in out] == ["system", "user", "assistant"]
-    assert out[0]["content"] == "base\n\npermissions\n\nenv"
+    assert [m["role"] for m in out] == ["system", "user", "user", "assistant", "user"]
+    assert [m["content"] for m in out] == ["base", "hi", "permissions", "ok", "env"]
 
 
-def test_qwen_single_leading_system_unchanged():
-    msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}]
-    assert QwenMessageAdapter().adapt(msgs) == msgs
+def test_qwen_system_after_user_first_message_not_hoisted():
+    msgs = [
+        {"role": "user", "content": "u"},
+        {"role": "system", "content": "note"},
+    ]
+    out = QwenMessageAdapter().adapt(msgs)
+    assert [m["role"] for m in out] == ["user", "user"]
+
+
+def test_qwen_leading_system_messages_merge():
+    msgs = [
+        {"role": "system", "content": "a"},
+        {"role": "system", "content": "b"},
+        {"role": "user", "content": "u"},
+    ]
+    out = QwenMessageAdapter().adapt(msgs)
+    assert out[0] == {"role": "system", "content": "a\n\nb"} and len(out) == 2

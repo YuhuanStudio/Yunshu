@@ -255,26 +255,24 @@ class QwenMessageAdapter(MessageAdapter):
 
             adapted.append(new_msg)
 
-        # Qwen's chat template raises TemplateError "System message must be at
-        # the beginning" when a system message appears mid-conversation. Hoist system
-        # messages to the front (mirrors the Llama/GLM/DeepSeek/Phi adapters, which already
-        # do this — a mid-system Qwen request otherwise raised → caught at
-        # _apply_chat_template → collapsed to the plaintext fallback).
-        # The template also rejects a second system message even when the first one leads
-        # (Codex sends `developer` items after the first user turn), so merge every system
-        # message into one leading message.
-        sys_msgs = [m for m in adapted if m["role"] == "system"]
-        if sys_msgs and (len(sys_msgs) > 1 or adapted[0]["role"] != "system"):
-            other = [m for m in adapted if m["role"] != "system"]
-            texts = [m["content"] for m in sys_msgs]
+        # Qwen's chat template raises TemplateError "System message must be at the
+        # beginning" for any system message after the first. Coding agents send them in
+        # the middle of the conversation (Codex `developer` items, Claude Code's per-turn
+        # environment / token-budget notes). Hoisting them to the front would rewrite the
+        # start of the prompt every turn and defeat prefix caching, so leading system
+        # messages merge into one and later ones become user messages in place.
+        lead = 0
+        while lead < len(adapted) and adapted[lead]["role"] == "system":
+            lead += 1
+        for m in adapted[lead:]:
+            if m["role"] == "system":
+                m["role"] = "user"
+        heads = adapted[:lead]
+        if len(heads) > 1:
+            texts = [m["content"] for m in heads]
             if all(isinstance(t, str) for t in texts):
-                merged = {
-                    "role": "system",
-                    "content": "\n\n".join(t for t in texts if t),
-                }
-                adapted = [merged] + other
-            else:
-                adapted = sys_msgs + other
+                joined = "\n\n".join(t for t in texts if t)
+                adapted = [{"role": "system", "content": joined}] + adapted[lead:]
         return adapted
 
     def family_name(self) -> str:
