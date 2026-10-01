@@ -500,6 +500,25 @@ class TestBatchAPI:
         with TestClient(app) as client:
             assert client.post("/v1/batch", json=body).status_code == 404
 
+    def test_files_backed_batches_validation(self):
+        """The current contract: /v1/batches is Files-backed and answers 400 for
+        a missing input_file_id, a bad endpoint and malformed JSON."""
+        app = create_app()
+        with TestClient(app) as client:
+            assert client.post("/v1/batches", json={}).status_code == 400
+            bad_endpoint = {
+                "input_file_id": "file-x",
+                "endpoint": "/v1/nope",
+                "completion_window": "24h",
+            }
+            assert client.post("/v1/batches", json=bad_endpoint).status_code == 400
+            resp = client.post(
+                "/v1/batches",
+                content=b"{not json",
+                headers={"content-type": "application/json"},
+            )
+            assert resp.status_code == 400
+
 
 # ═══════════════════════════════════════════════════════════════
 # 9. Anthropic Compatibility Tests
