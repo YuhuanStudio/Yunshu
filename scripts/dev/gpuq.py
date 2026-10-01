@@ -18,6 +18,8 @@ State lives in $GPUQ_DIR (default ~/.cache/yunshu/gpuq). Jobs keep the
 submitter's cwd and environment.
 """
 
+from __future__ import annotations
+
 import argparse
 import contextlib
 import fcntl
