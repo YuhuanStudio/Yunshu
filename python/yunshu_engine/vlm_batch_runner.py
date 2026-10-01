@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import mlx.core as mx
+import numpy as np
 
 from . import keyed_sampling
 from .keyed_sampling import top_k_filter, top_p_filter
@@ -1052,12 +1053,7 @@ class RowSampler:
                 if params.seed is not None
                 else int.from_bytes(os.urandom(8), "little")
             )
-            self._rows[uid] = [
-                params,
-                None,
-                keyed_sampling.KeyedSampler(params, seed),
-                0,
-            ]
+            self._rows[uid] = [params, None, keyed_sampling.seed_base(seed), 0]
             return
         # XTC is stateful by design (its coin flips advance a PRNG): stays on the old path.
         key = mx.random.key(int(params.seed)) if params.seed is not None else None
@@ -1086,16 +1082,18 @@ class RowSampler:
                 f"RowSampler cannot map {logprobs.shape[0]} rows to requests "
                 f"(step uids: {uids})"
             )
+        keyed: dict[tuple, list[int]] = {}
         for i, uid in enumerate(uids):
             entry = self._rows.get(uid)
             if entry is None:
                 continue
-            p, key, keyed, pos = entry
-            row = logprobs[i : i + 1]
-            if keyed is not None:
-                entry[3] = pos + 1
-                tokens[i] = keyed.sample_positions(row, [pos])[0]
+            p, key, base, pos = entry
+            if base is not None:
+                keyed.setdefault((p.temperature, p.top_p, p.top_k, p.min_p), []).append(
+                    i
+                )
                 continue
+            row = logprobs[i : i + 1]
             if p.top_p < 1.0:
                 row = top_p_filter(row, max(p.top_p, 0.0))
             if p.min_p:
@@ -1116,6 +1114,20 @@ class RowSampler:
             else:
                 token = mx.random.categorical(row)
             tokens[i] = token[0]
+        for idx in keyed.values():
+            # one vectorized draw per distinct parameter set (usually one per step)
+            ents = [self._rows[uids[i]] for i in idx]
+            bases = mx.array(np.array([e[2] for e in ents], dtype=np.uint64))
+            pos = mx.array([e[3] for e in ents])
+            for e in ents:
+                e[3] += 1
+            whole = len(idx) == logprobs.shape[0]
+            sub = logprobs if whole else logprobs[mx.array(idx)]
+            drawn = keyed_sampling.sample_rows(sub, ents[0][0], bases, pos)
+            if whole:
+                tokens = drawn.astype(tokens.dtype)
+            else:
+                tokens[mx.array(idx)] = drawn.astype(tokens.dtype)
         return tokens
 
 

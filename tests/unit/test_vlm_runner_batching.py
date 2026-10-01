@@ -116,21 +116,28 @@ def test_mixed_sampling_shares_one_batch(runner):
     ex = ThreadPoolExecutor(max_workers=1)
     runner._executor = ex
     out = {}
-    barrier = threading.Barrier(2)
+    # Hold the executor until both requests are queued, so they are admitted in the same
+    # drive slice whatever the thread timing (no sleeps, no join timeouts).
+    gate = threading.Event()
+    ex.submit(gate.wait)
 
     def a():
-        barrier.wait()
         out["a"] = _collect(runner, 4)
 
     def b():
-        barrier.wait()
         out["b"] = _collect(runner, 4, temperature=0.7, top_p=0.9)
 
     ta, tb = threading.Thread(target=a), threading.Thread(target=b)
     ta.start()
     tb.start()
-    ta.join(10)
-    tb.join(10)
+    while True:
+        with runner._lock:
+            if len(runner._pending) == 2:
+                break
+        threading.Event().wait(0.001)
+    gate.set()
+    ta.join()
+    tb.join()
     ex.shutdown(wait=True)
     assert len(out["a"]) == 4 and len(out["b"]) == 4
     # One shared generator with the per-row sampler, no per-params groups.

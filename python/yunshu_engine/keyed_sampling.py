@@ -39,18 +39,54 @@ def _mix(x: mx.array) -> mx.array:
     return x ^ (x >> _u64(31))
 
 
-def gumbel(seed: int, positions: mx.array, vocab: int) -> mx.array:
-    """Gumbel(0, 1) noise ``[N, vocab]`` keyed by (seed, positions[n], token id)."""
+_M64 = 0xFFFFFFFFFFFFFFFF
+
+
+def _mix_int(x: int) -> int:
+    x ^= x >> 30
+    x = (x * _C1) & _M64
+    x ^= x >> 27
+    x = (x * _C2) & _M64
+    return x ^ (x >> 31)
+
+
+def seed_base(seed: int) -> int:
+    """Per-request constant of the noise hash (python int, no device work)."""
+    return _mix_int((int(seed) & _M64) ^ _C0)
+
+
+def gumbel_rows(bases: mx.array, positions: mx.array, vocab: int) -> mx.array:
+    """Gumbel(0, 1) noise ``[N, vocab]``: row n is keyed by (bases[n], positions[n], token id).
+
+    ``bases`` are ``seed_base`` values as a uint64 array, so rows with different seeds are
+    drawn in one graph."""
     pos = positions.astype(mx.uint64).reshape(-1, 1)
     ids = mx.arange(vocab, dtype=mx.uint64)[None, :]
-    base = _mix(_u64((int(seed) & 0xFFFFFFFFFFFFFFFF) ^ _C0))
-    x = _mix(base ^ (pos * _u64(_C3)))
+    x = _mix(bases.astype(mx.uint64).reshape(-1, 1) ^ (pos * _u64(_C3)))
     x = _mix(x ^ ids)
     # 23 random bits -> u in [2^-24, 1 - 2^-24], exactly representable in float32. (With 24
     # bits the top bucket is 1 - 2^-25, which float32 rounds to 1.0: -log(-log(1)) = +inf, a
     # token with infinite noise that wins even when filtered out, or NaN with its -inf row.)
     u = ((x >> _u64(41)).astype(mx.float32) + 0.5) * (1.0 / (1 << 23))
     return -mx.log(-mx.log(u))
+
+
+def gumbel(seed: int, positions: mx.array, vocab: int) -> mx.array:
+    """Gumbel(0, 1) noise ``[N, vocab]`` keyed by (seed, positions[n], token id)."""
+    n = int(positions.size)
+    bases = mx.array(np.full((n,), seed_base(seed), dtype=np.uint64))
+    return gumbel_rows(bases, positions, vocab)
+
+
+def sample_rows(
+    logprobs: mx.array, params: Any, bases: mx.array, positions: mx.array
+) -> mx.array:
+    """Tokens ``[N]`` for rows that share ``params`` but have their own seed and position."""
+    row = filter_logprobs(logprobs.astype(mx.float32), params)
+    noisy = mx.where(
+        row == -mx.inf, -mx.inf, row + gumbel_rows(bases, positions, row.shape[-1])
+    )
+    return mx.argmax(noisy, axis=-1)
 
 
 def top_p_filter(logprobs: mx.array, top_p: float) -> mx.array:
@@ -113,12 +149,10 @@ class KeyedSampler:
         pos = (
             positions if isinstance(positions, mx.array) else mx.array(list(positions))
         )
-        row = filter_logprobs(logprobs.astype(mx.float32), self.params)
-        noisy = mx.where(
-            row == -mx.inf, -mx.inf, row + gumbel(self.seed, pos, row.shape[-1])
+        bases = mx.array(
+            np.full((int(pos.size),), seed_base(self.seed), dtype=np.uint64)
         )
-        tokens = mx.argmax(noisy, axis=-1)
-        return tokens
+        return sample_rows(logprobs, self.params, bases, pos)
 
     def sample_target(self, logprobs, row_ids=None, positions=None):
         if positions is None:
