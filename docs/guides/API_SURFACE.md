@@ -240,3 +240,18 @@ Z-Image ControlNet through `control_image`, is unchanged.
 |---|---|
 | Unknown `model` in single-model mode | Served, not 404 (deliberate, see the top). |
 | Tool calling on tiny models with thinking off | Qwen3.5-0.8B without thinking emits malformed `<tool_call>` markup; the 27B and thinking-on paths pass the release gate. |
+
+## Sampling contract
+
+- **Seeded sampling is position-keyed.** On every VLM-runner path (speculative lane and shared
+  batch, alone or mixed with other requests) the token drawn at generation index `g` is a function
+  of `(logits, seed, g)` only, so the same `seed` gives the same stream whatever the admission
+  path or concurrency, given batch-invariant logits. Unseeded requests draw a random seed.
+  Exceptions that stay stateful: XTC (`xtc_probability > 0`), the text-only `mlx-lm` fast path,
+  and the round driver's own sampler. Different paths are different (equally correct) random
+  streams, not a distribution bias.
+- **`top_p`** always keeps the most probable token; `top_p = 0` therefore means greedy over the
+  filtered row.
+- **`top_k`** at or above the vocabulary size means "no truncation" (no error); `0` disables it.
+- **`n > 1`** choice `i` uses seed `seed + i` wrapped to signed 64 bits (choice 0 keeps `seed`),
+  identically on chat, completions and responses.
