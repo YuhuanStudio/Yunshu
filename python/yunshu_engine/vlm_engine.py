@@ -1728,6 +1728,7 @@ class VLMEngine:
         top_n_sigma: float = 0.0,
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
+        tool_spec: dict | None = None,
     ):
         """Yield ``(text, token_id, state, finish_reason, thinking_tokens, logprob)``.
 
@@ -1783,6 +1784,7 @@ class VLMEngine:
                 in_think = think_end is None or think_end not in tail[last_open + 1 :]
         thinking_tokens = 0
         count = 0
+        guide = self._tool_guide(tool_spec, in_think)
         for token in self._batch_runner.iter_tokens(
             input_ids,
             max_tokens=max_tokens,
@@ -1809,6 +1811,7 @@ class VLMEngine:
             xtc_probability=xtc_probability,
             xtc_threshold=xtc_threshold,
             xtc_special_tokens=list(self._get_eos_ids()),
+            guide=guide,
         ):
             count += 1
             lp = stats.last_logprob if logprobs else None
@@ -1988,7 +1991,37 @@ class VLMEngine:
             top_n_sigma=float(kwargs.get("top_n_sigma") or 0.0),
             xtc_probability=float(kwargs.get("xtc_probability") or 0.0),
             xtc_threshold=float(kwargs.get("xtc_threshold") or 0.0),
+            tool_spec=kwargs.get("_tool_spec"),
         )
+
+    def _tool_guide(self, spec: dict | None, thinking_open: bool):
+        """A ``ToolCallGuide`` for this request's tools (structural-tag constrained
+        decoding), or None: no tools, ``YUNSHU_TOOL_GRAMMAR`` off, or a model / tool
+        set the grammar cannot cover (the reply is then decoded unconstrained)."""
+        if not spec:
+            return None
+        from . import tool_call_grammar as tcg
+
+        cache = self.__dict__.setdefault("_tool_grammars", {})
+        key = tcg.grammar_key(spec["tools"], spec["tool_choice"], spec["parallel"])
+        if key not in cache:
+            cfg = self._config or {}
+            vocab = (cfg.get("text_config") or {}).get("vocab_size") or cfg.get(
+                "vocab_size"
+            )
+            tok = self._tokenizer
+            vocab = int(vocab or len(getattr(tok, "_tokenizer", tok)))
+            if len(cache) >= 8:
+                cache.pop(next(iter(cache)))
+            cache[key] = tcg.compile_tool_grammar(
+                spec["tools"],
+                tok,
+                vocab,
+                tool_choice=spec["tool_choice"],
+                parallel=spec["parallel"],
+            )
+        grammar = cache[key]
+        return grammar.guide(thinking_open=thinking_open) if grammar else None
 
     def _generate_vlm_runner_text(
         self, input_ids: mx.array, extras: dict | None = None, **params
@@ -2239,8 +2272,20 @@ class VLMEngine:
         of their cache keys."""
         extra = dict(self._template_effort_extra(kwargs) or {})
         tools = kwargs.pop("tools", None)
+        choice = kwargs.pop("tool_choice", None)
+        parallel = kwargs.pop("parallel_tool_calls", True)
         if tools:
             extra["tools"] = tools
+            if settings.get_bool("YUNSHU_TOOL_GRAMMAR"):
+                from .tool_call_grammar import normalize_tool_choice
+
+                choice = normalize_tool_choice(choice)
+                if choice != "none":
+                    kwargs["_tool_spec"] = {
+                        "tools": tools,
+                        "tool_choice": choice,
+                        "parallel": parallel is not False,
+                    }
         return extra or None
 
     def _template_effort_extra(self, kwargs: dict) -> dict | None:

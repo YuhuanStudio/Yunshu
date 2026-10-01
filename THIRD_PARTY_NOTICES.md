@@ -72,3 +72,10 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## llguidance — runtime dependency (`python/yunshu_engine/tool_call_grammar.py`)
+
+Tool-call constrained decoding builds a Lark grammar (structural tag: free text, then
+the call body) and runs it with llguidance's token-mask matcher and MLX bitmask apply.
+Used as a library, not copied. Copyright (c) Microsoft Corporation, MIT license.
+https://github.com/guidance-ai/llguidance

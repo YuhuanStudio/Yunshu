@@ -992,6 +992,7 @@ def _apply_native_tools(req, engine) -> bool:
         logger.debug("native tool support check failed", exc_info=True)
     try:
         from yunshu_engine.batched_engine import (
+            _REQUEST_TOOL_USE,
             _REQUEST_TOOLS,
             BatchedEngine,
             _template_supports_tools,
@@ -1000,8 +1001,16 @@ def _apply_native_tools(req, engine) -> bool:
         if isinstance(engine, BatchedEngine):
             if _template_supports_tools(getattr(engine, "_tokenizer", None)):
                 _REQUEST_TOOLS.set(tools)
+                use = _native_kw(req)
+                _REQUEST_TOOL_USE.set(
+                    {
+                        "tool_choice": use["tool_choice"],
+                        "parallel": use["parallel_tool_calls"],
+                    }
+                )
                 return True
             _REQUEST_TOOLS.set(None)
+            _REQUEST_TOOL_USE.set(None)
     except Exception:
         logger.debug(
             "native tool decision failed; using prompt injection", exc_info=True
@@ -1011,7 +1020,14 @@ def _apply_native_tools(req, engine) -> bool:
 
 def _native_kw(req) -> dict:
     tools = getattr(req, "_native_tools", None)
-    return {"tools": tools} if tools else {}
+    if not tools:
+        return {}
+    choice = req.tool_choice if isinstance(req.tool_choice, dict) else None
+    return {
+        "tools": tools,
+        "tool_choice": req.tool_choice,
+        "parallel_tool_calls": not (choice or {}).get("disable_parallel_tool_use"),
+    }
 
 
 def _keeps_mid_system(requested_model: str | None) -> bool:
