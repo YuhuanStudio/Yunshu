@@ -431,6 +431,235 @@ def check_prefix_disk() -> Check:
     return Check("prefix cache disk", "ok", msg)
 
 
+# Minimums mirror pyproject.toml; a lower version has known breakage (APC, MTP, llguidance
+# schemas), so it is a failure with the upgrade command, not a warning.
+MIN_VERSIONS = {
+    "mlx": "0.32.3",
+    "mlx-lm": "0.31.3",
+    "mlx-vlm": "0.7.4",
+    "mlx-audio": "0.5.7",
+    "llguidance": "1.8",
+}
+# extra name -> (package, what it enables)
+EXTRAS = {
+    "vision": ("mlx-vlm", "image/video input and the Qwen3.5 / 3.6 / 3.8 family"),
+    "audio": ("mlx-audio", "speech-to-text, text-to-speech and the Realtime voice WS"),
+}
+
+
+def _vkey(v: str) -> tuple[int, ...]:
+    out = []
+    for part in v.split("."):
+        digits = "".join(ch for ch in part if ch.isdigit())
+        if not digits:
+            break
+        out.append(int(digits))
+    return tuple(out)
+
+
+def check_versions(pkg=_pkg) -> list[Check]:
+    """Installed packages below the minimum this release needs."""
+    out = []
+    for name, minimum in MIN_VERSIONS.items():
+        have = pkg(name)
+        if have is None or _vkey(have) >= _vkey(minimum):
+            continue
+        out.append(
+            Check(
+                f"version {name}",
+                "fail",
+                f"{name} {have} < {minimum}",
+                f"Upgrade: `uv pip install -U '{name}>={minimum}'` (or reinstall "
+                "Yunshu).",
+            )
+        )
+    if not out:
+        out.append(
+            Check("versions", "ok", "mlx / mlx-lm / mlx-vlm / llguidance current")
+        )
+    return out
+
+
+def check_extras(pkg=_pkg) -> list[Check]:
+    """Optional extras (what is installed, what each one unlocks) and llguidance."""
+    out = []
+    for extra, (name, enables) in EXTRAS.items():
+        have = pkg(name)
+        if name == "mlx-vlm":
+            continue  # reported by check_mlx with its own fix text
+        out.append(
+            Check(
+                f"extra {extra}",
+                "ok" if have else "warn",
+                f"{name} {have}" if have else f"{name} not installed ({enables})",
+                "" if have else f"Install `yunshu[{extra}]`.",
+            )
+        )
+    llg = pkg("llguidance")
+    out.append(
+        Check(
+            "llguidance",
+            "ok" if llg else "fail",
+            llg or "not installed",
+            ""
+            if llg
+            else "CFG grammars and JSON schemas beyond the in-house subset need it: "
+            "reinstall Yunshu (it is a core dependency).",
+        )
+    )
+    return out
+
+
+def check_api_features(host: str) -> list[Check]:
+    """State of the API features that depend on configuration."""
+    out = []
+    token = settings.get("YUNSHU_AUTH_TOKEN")
+    disabled = settings.get_bool("YUNSHU_AUTH_DISABLED")
+    exposed = host not in ("127.0.0.1", "localhost", "::1")
+    if exposed and not token:
+        out.append(
+            Check(
+                "auth",
+                "warn",
+                f"serving on {host} with no YUNSHU_AUTH_TOKEN: inference is open to "
+                "the network",
+                "Set YUNSHU_AUTH_TOKEN, or bind 127.0.0.1.",
+            )
+        )
+    elif disabled:
+        out.append(
+            Check(
+                "auth",
+                "warn",
+                "YUNSHU_AUTH_DISABLED is on: operational endpoints are open",
+                "Unset it, or set YUNSHU_AUTH_TOKEN.",
+            )
+        )
+    else:
+        out.append(Check("auth", "ok", "token set" if token else "local, open"))
+    provider = settings.get("YUNSHU_WEB_SEARCH_PROVIDER")
+    fetch = settings.get_bool("YUNSHU_WEB_FETCH")
+    out.append(
+        Check(
+            "server tools",
+            "ok",
+            f"web_search provider={provider}, web_fetch={'on' if fetch else 'off'}",
+        )
+    )
+    return out
+
+
+def _gib(n: float) -> str:
+    return f"{n / 1024**3:.1f} GiB"
+
+
+def check_disk_budget(models_base: Path, free=None) -> list[Check]:
+    """Models + APC SSD cache against the free space of their volumes."""
+    from .cache import cache_targets
+
+    free = free or (lambda p: shutil.disk_usage(p).free)
+    out = []
+    for label, directory, cap in cache_targets():
+        probe = directory
+        while not probe.exists() and probe != probe.parent:
+            probe = probe.parent
+        try:
+            avail = free(probe)
+        except OSError:
+            continue
+        if cap and cap > avail:
+            out.append(
+                Check(
+                    f"disk {label} cache",
+                    "warn",
+                    f"cap {_gib(cap)} > {_gib(avail)} free on {probe}",
+                    "Lower the cap (YUNSHU_VLM_APC_DISK_GB / YUNSHU_SSD_CACHE_MAX_GB)"
+                    " or move the cache with YUNSHU_VLM_APC_DISK_DIR.",
+                )
+            )
+        else:
+            out.append(
+                Check(
+                    f"disk {label} cache",
+                    "ok",
+                    f"{directory}: cap {_gib(cap) if cap else 'none'}, "
+                    f"{_gib(avail)} free",
+                )
+            )
+    return out
+
+
+def check_cache_integrity() -> list[Check]:
+    """Corrupt / truncated / old-format cache entries and orphaned temp files."""
+    from yunshu_kv import cache_gc
+
+    from .cache import cache_targets
+
+    out = []
+    for label, directory, cap in cache_targets():
+        rep = cache_gc.scan(directory, max_bytes=cap)
+        if not rep.findings:
+            continue
+        out.append(
+            Check(
+                f"cache {label}",
+                "warn",
+                f"{directory}: {rep.by_reason()} "
+                f"({_gib(sum(f.bytes for f in rep.findings))} reclaimable)",
+                "Run `yunshu cache gc --apply`.",
+            )
+        )
+    if not out:
+        out.append(Check("cache integrity", "ok", "no damaged or orphaned entries"))
+    return out
+
+
+def check_downloads(base: Path) -> list[Check]:
+    """Half-downloaded models in the models directory."""
+    from .model import scan_models_dir, weights_complete
+
+    if not base.is_dir():
+        return []
+    out = []
+    names = {m["name"] for m in scan_models_dir(base)}
+    candidates = [
+        c for c in sorted(base.iterdir()) if c.is_dir() and not c.name.startswith(".")
+    ]
+    candidates += [
+        g
+        for c in candidates
+        if c.name not in names
+        for g in sorted(c.iterdir())
+        if g.is_dir() and not g.name.startswith(".")
+    ]
+    for c in candidates:
+        partial = c / ".cache" / "huggingface" / "download"
+        if partial.is_dir() and any(partial.rglob("*.incomplete")):
+            out.append(
+                Check(
+                    "download",
+                    "warn",
+                    f"{c.relative_to(base)}: interrupted download",
+                    f"Resume with `yunshu pull {c.relative_to(base)}`.",
+                )
+            )
+            continue
+        if (c / "config.json").exists():
+            done, reason = weights_complete(c)
+            if not done:
+                out.append(
+                    Check(
+                        "download",
+                        "warn",
+                        f"{c.relative_to(base)}: {reason}",
+                        f"Resume with `yunshu pull {c.relative_to(base)}`.",
+                    )
+                )
+    if not out:
+        out.append(Check("downloads", "ok", "no half-downloaded models"))
+    return out
+
+
 def check_service() -> Check:
     plist = paths.launch_agent_plist()
     if plist.exists():
@@ -450,8 +679,14 @@ def run_checks(model: str | None, host: str, port: int) -> list[Check]:
     mlx_checks, info = check_mlx()
     checks += mlx_checks
     checks.append(check_memory(info))
+    checks += check_versions()
+    checks += check_extras()
     checks += check_settings()
     checks += check_models_dir(paths.models_dir())
+    checks += check_downloads(paths.models_dir())
+    checks += check_disk_budget(paths.models_dir())
+    checks += check_cache_integrity()
+    checks += check_api_features(host)
     if model:
         checks += check_model(model, info)
         checks += check_speculative(model)
