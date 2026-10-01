@@ -350,3 +350,19 @@ Splash 官方模型 120 個交錯前綴請求全數輸出正確，約 316 s 後 
 | 8K / 32K 同文件換問題 TTFT | 10.9 / 47.5 s | 2.6 / 3.7 s |
 | mixed16（4 流 + 16K prompt）聚合 / prefill 期間背景 tok/s | 70.4 / 0.6 | 84.7 / 3.8 |
 | MMLU-Pro 300 b8 | 249/300 | 249/300 (152-209 tok/s) |
+
+2026-10-02 round driver step pipeline (early absorb + queued draft chain + reduced draft vocabulary for a lone row), same checkpoint and server, 3 randomized runs per arm. Still not the default: single-request decode trails.
+
+| 項目 | 預設 | driver（前 → 後） |
+|---|---:|---:|
+| 單請求 decode，256 tok 貪婪（probe_concurrency） | 93.0 tok/s（92.0-93.7） | 75.5 → 87.3（85.1-88.4） |
+| 8 並行聚合 decode | 168.0 tok/s | 295 → 346（343-349） |
+| 單請求 decode，1K ctx bench（128 tok） | 57-82 | 78-113 |
+| 單請求 decode，32K ctx bench | 68-76 tok/s | 81-87 tok/s；冷 TTFT 46.4 → 41.8 s |
+| opencode replay 貪婪（主請求，並行 title） | 12 tok/s | 51-82 tok/s；輸出 digest 一致 |
+| 32K b2 / b4 冷 prefill mean TTFT | 71 / 119 s | 100 / 166 s（較差：同時 prefill，非循序） |
+| MMLU-Pro 切片 1/2（b8，取樣） | 81 / 81 | 78 / 81（156-196 tok/s vs 123-157） |
+| 貪婪 parity（sweep_round_driver，合併 main 後） | — | alone / batch / staggered / AR 全部逐 token 相同 |
+
+單列 verify forward（profile_verify_step, T=6, 1K）：packed 46.9 ms，driver 用的 lane matmul 42.9 ms，所以 forward 不是差距來源；runner 步與步之間 0.0-0.1 ms。
+
