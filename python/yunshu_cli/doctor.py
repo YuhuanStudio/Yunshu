@@ -420,6 +420,18 @@ def check_prefix_disk() -> Check:
         )
     used = _dir_bytes(d) / 1024**3 if d.exists() else 0.0
     msg = f"{d} ({used:.1f} GiB used, cap {cap:.0f} GiB, {free:.0f} GiB free)"
+    try:
+        from yunshu_kv import disk_budget
+
+        per_ns: dict[str, int] = {}
+        for e in disk_budget.scan_root(d):
+            per_ns[e.ns] = per_ns.get(e.ns, 0) + e.size
+        if len(per_ns) > 1:
+            msg += "; namespaces: " + ", ".join(
+                f"{k} {v / 1024**3:.1f}" for k, v in sorted(per_ns.items())
+            )
+    except Exception:
+        pass
     if free < min(cap, 20.0):
         return Check(
             "prefix cache disk",
@@ -582,7 +594,8 @@ def check_disk_budget(models_base: Path, free=None) -> list[Check]:
                 Check(
                     f"disk {label} cache",
                     "ok",
-                    f"{directory}: cap {_gib(cap) if cap else 'none'}, "
+                    f"{directory}: {_gib(_dir_bytes(directory)) if directory.exists() else '0'}"
+                    f" used (all namespaces), cap {_gib(cap) if cap else 'none'}, "
                     f"{_gib(avail)} free",
                 )
             )

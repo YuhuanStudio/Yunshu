@@ -132,6 +132,91 @@ class SpillDiskStore(DiskBlockStore):
     # Set by the engine: ``validator(token_ids, prompt_cache) -> bool`` on a loaded
     # checkpoint (see ``check_loaded_cache``). None accepts what the format checks pass.
     validator = None
+    # The root's shared DiskBudget (yunshu_kv.disk_budget): global cap across namespaces,
+    # free-space reserve, pause after a failed write. None keeps upstream's per-namespace cap.
+    budget = None
+
+    def attach_budget(self, budget) -> None:
+        """Put this namespace under the root-wide budget."""
+        self.budget = budget
+        ns = self.dir.name
+        budget.register_owner(ns, self._evict_path, self._in_flight_paths)
+        self._budget_ns = ns
+
+    def _in_flight_paths(self) -> set:
+        with self._in_flight_lock:
+            hashes = set(self._in_flight)
+        with self._index_lock:
+            paths = {self._index[h][0] for h in hashes if h in self._index}
+            paths.update(self._exact_index[h] for h in hashes if h in self._exact_index)
+        return paths
+
+    def _evict_path(self, path) -> bool:
+        """Drop one of this namespace's files on the budget's behalf (index and all)."""
+        if path in self._in_flight_paths():
+            return False
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
+        self._drop_index_for_path(path)
+        path.unlink(missing_ok=True)
+        self._disk_bytes = max(0, self._disk_bytes - size)
+        self.evictions += 1
+        return True
+
+    def _maybe_evict(self) -> int:
+        budget = self.budget
+        if budget is None:
+            return super()._maybe_evict()
+        before = self.evictions
+        try:
+            budget.enforce(keep={self._budget_ns})
+        except Exception:
+            logger.warning("APC disk: budget enforcement failed", exc_info=True)
+        return self.evictions - before
+
+    def _write_payload(self, shard_id, block_hashes, payload) -> bool:
+        budget = self.budget
+        if budget is None:
+            return super()._write_payload(shard_id, block_hashes, payload)
+        from mlx_vlm.apc import _cache_nbytes
+
+        path = self._shard_path(shard_id)
+        try:
+            exact = hasattr(payload, "prompt_cache")
+            size = _cache_nbytes(
+                payload.prompt_cache
+                if exact
+                else payload.layer_keys + payload.layer_values
+            )
+        except Exception:
+            size = 0
+        if not budget.allow_write(size):
+            self._notify_write_callback(self._write_failure_callback, len(block_hashes))
+            return False
+        try:
+            # mirrors upstream's _write_payload, but keeps the error: a failed write drops
+            # this checkpoint, leaves no temp file, and pauses spilling (one warning)
+            with self._write_lock:
+                if hasattr(payload, "prompt_cache"):
+                    self._write_exact_cache_snapshot(path, payload)
+                else:
+                    self._write_layer_major_snapshot(path, payload)
+        except Exception as e:
+            from yunshu_kv.disk_budget import sweep_tmp
+
+            sweep_tmp(path.parent, path.stem)
+            if isinstance(e, OSError):
+                budget.record_failure(e)
+            else:  # this one checkpoint cannot be serialized; the disk is fine
+                logger.warning("APC disk: checkpoint not saved (%s)", e)
+            self._notify_write_callback(self._write_failure_callback, len(block_hashes))
+            return False
+        budget.note_written(path)
+        self._maybe_evict()  # now that the new file is counted
+        self._notify_write_callback(self._write_success_callback, len(block_hashes))
+        return True
 
     def quarantine(self, path, why: str) -> None:
         """Invalidate one persisted file: delete it and forget it, so it is never read
@@ -319,8 +404,8 @@ class YunshuAPCManager(APCManager):
             return
         try:
             disk.write_now(key, entry.token_ids, entry.extra_hash, entry.prompt_cache)
-        except Exception:
-            logger.warning("APC: SSD spill failed", exc_info=True)
+        except Exception as e:
+            logger.warning("APC: SSD spill failed (%s)", e)
 
     def close(self) -> None:
         """Write what is still resident so the cache survives a restart."""
