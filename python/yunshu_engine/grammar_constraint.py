@@ -1254,3 +1254,39 @@ class ConstraintFactory:
             return CfgGrammarConstraint(grammar, tokenizer=tokenizer)
 
         raise ValueError(f"Unknown grammar_type: {grammar_type}")
+
+
+def validate_constraint_spec(spec: Any) -> None:
+    """Validate a parsed ``response_format`` / ``grammar`` spec before generation.
+
+    Raises a ``ValueError`` subclass (``UnsupportedRegexError``,
+    ``UnsupportedSchemaError``, ``UnsupportedGrammarError``) naming the
+    unsupported construct, so a gateway can answer 400 instead of generating
+    against an approximation.  CFG grammars are validated against the engine
+    once a tokenizer is bound (``CfgGrammarConstraint``).
+    """
+    if spec is None or spec == "json_object":
+        return
+    if not isinstance(spec, dict):
+        return
+    gtype = spec.get("type")
+    if gtype == "regex" and "pattern" in spec:
+        pattern = spec["pattern"]
+        if not isinstance(pattern, str):
+            raise UnsupportedRegexError("regex pattern must be a string")
+        _RegexDFA(pattern)
+        return
+    if gtype == "choice" and "choices" in spec:
+        choices = spec["choices"]
+        if not isinstance(choices, list) or not all(
+            isinstance(c, str) for c in choices
+        ):
+            raise ValueError("choice constraint requires a list of strings")
+        return
+    if gtype == "cfg" and "grammar" in spec:
+        if not isinstance(spec["grammar"], str):
+            raise UnsupportedGrammarError("cfg constraint requires a grammar string")
+        return
+    from .json_schema import validate_supported_schema
+
+    validate_supported_schema(spec)

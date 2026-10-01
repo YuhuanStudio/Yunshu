@@ -561,6 +561,24 @@ class ChatCompletionRequest(BaseModel):
 def _parse_response_format(
     response_format: dict | None, grammar: dict | None = None
 ) -> dict | str | None:
+    """Parse the request's constraint, rejecting unsupported constructs with a 400."""
+    spec = _parse_response_format_unchecked(response_format, grammar)
+    _check_constraint_spec(spec)
+    return spec
+
+
+def _check_constraint_spec(spec: Any) -> None:
+    from yunshu_engine.grammar_constraint import validate_constraint_spec
+
+    try:
+        validate_constraint_spec(spec)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _parse_response_format_unchecked(
+    response_format: dict | None, grammar: dict | None = None
+) -> dict | str | None:
     """Parse OpenAI response_format and grammar parameters into json_schema.
 
     Supports:
