@@ -3,7 +3,8 @@
 ``yunshu service install`` writes a per-user launchd agent
 (``~/Library/LaunchAgents/com.yuhuanstudio.yunshu.plist``) that runs
 ``yunshu serve`` with the options given at install time, restarts it if it
-crashes, and logs to ``~/Library/Logs/Yunshu/yunshu.log``. Nothing runs as
+crashes, and logs to ``~/Library/Logs/Yunshu/yunshu.log`` (rotated by size and age, archives
+redacted). Nothing runs as
 root and nothing outside those two paths is touched.
 """
 
@@ -308,3 +309,23 @@ def logs(
     if follow:
         os.execvp("tail", cmd)
     print(subprocess.run(cmd, capture_output=True, text=True).stdout, end="")
+
+
+@service_app.command("rotate-logs")
+def rotate_logs():
+    """Rotate the service log now (size / age limits: the log settings, see yunshu config).
+
+    The running service does this by itself; this is for a stopped service or a manual
+    check. Rotated files are gzip archives with tokens and API keys redacted.
+    """
+    from yunshu_engine import log_rotation
+
+    result = log_rotation.rotate(log_file())
+    emit(
+        result,
+        human=lambda: console.print(
+            f"[green]✓ Rotated[/] to {result['archive']}"
+            if result["rotated"]
+            else "Nothing to rotate yet."
+        ),
+    )

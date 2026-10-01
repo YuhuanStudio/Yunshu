@@ -301,6 +301,7 @@ def serve(
         with contextlib.suppress(OSError):
             if stat.S_ISSOCK(os.stat(uds_path).st_mode):
                 os.unlink(uds_path)
+    _rotate_service_log()
     uvicorn.run(
         "yunshu_gateway.main:app",
         **({"uds": uds_path} if uds_path else {"host": host, "port": port}),
@@ -317,6 +318,15 @@ def serve(
         # by the gateway middleware via YUNSHU_MAX_REQUEST_SIZE (set above).
         server_header="Yunshu" if server_header else None,
     )
+
+
+def _rotate_service_log() -> None:
+    """Under the launchd agent (stdout is the service log) keep that log rotated."""
+    from yunshu_engine import log_rotation, paths
+
+    log = paths.log_dir() / "yunshu.log"
+    if log_rotation.stdout_is(log):
+        log_rotation.start_background(log)
 
 
 def _preflight_model(model: str) -> None:
