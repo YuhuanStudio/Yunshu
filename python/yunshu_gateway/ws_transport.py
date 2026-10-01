@@ -226,6 +226,18 @@ def is_delta(api: str, data: dict) -> bool:
     return False
 
 
+def is_error_event(event: str | None, data: Any) -> bool:
+    """True for the terminal error event of any dialect's SSE stream: OpenAI chat/completions
+    ``{"error": ...}``, Anthropic ``event: error``, Responses ``response.failed``."""
+    if event in ("error", "response.failed"):
+        return True
+    if isinstance(data, dict):
+        return data.get("type") in ("error", "response.failed") or (
+            "error" in data and "choices" not in data and "type" not in data
+        )
+    return False
+
+
 class Job:
     def __init__(self, req_id: str, api: str, body: dict, stream_id: str | None):
         self.id = req_id
@@ -557,6 +569,10 @@ class Connection:
                         except ValueError:
                             obj = data
                         job.events += 1
+                        if is_error_event(event, obj):
+                            # The HTTP stream carried its own terminal error: the request did
+                            # not complete, whatever happens to the rest of the stream.
+                            status = "error"
                         if isinstance(obj, dict) and is_delta(job.api, obj):
                             job.deltas += 1
                             if ttft is None:

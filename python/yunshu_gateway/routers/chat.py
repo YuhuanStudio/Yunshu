@@ -31,7 +31,7 @@ from yunshu_engine.tool_call_streamer import ToolCallStreamer
 from yunshu_engine.tool_format import parse_tool_output, tool_formats
 
 from ..engine import get_engine, get_model_manager
-from ..error_envelope import EngineStreamError
+from ..error_envelope import EngineStreamError, server_error_body, server_error_sse
 from ..streaming import (
     ClosingStreamingResponse,
     extract_thinking,
@@ -44,6 +44,7 @@ from ..streaming import (
     validate_prefill_memory,
     with_sse_keepalive,
 )
+from ..usage_shapes import openai_usage
 from ..x_yunshu import apply_keep_alive
 from .models import _check_permission
 
@@ -1604,12 +1605,7 @@ async def _build_multi_choice(
                     "error": {"message": "Out of GPU memory", "type": "memory_error"}
                 },
             )
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": {"message": "Internal server error", "type": "internal_error"}
-            },
-        )
+        return JSONResponse(status_code=500, content=server_error_body())
 
     # Record metrics once for the entire n>1 request (not per-choice)
     if prompt_tok > 0 or completion_tok > 0 or reasoning_tok > 0:
@@ -1617,15 +1613,11 @@ async def _build_multi_choice(
             prompt_tok, completion_tok
         )  # completion_tok already incl. reasoning
 
-    usage: dict[str, Any] = {
-        "prompt_tokens": prompt_tok,
-        # completion_tok (engine n_tok) ALREADY includes reasoning tokens;
-        # reasoning_tok is the detail subset, not an addend (was double-counting).
-        "completion_tokens": completion_tok,
-        "total_tokens": prompt_tok + completion_tok,
-    }
-    usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tok}
-    usage["prompt_tokens_details"] = {"cached_tokens": cached_tok}
+    # completion_tok (engine n_tok) already includes reasoning tokens; reasoning_tok is
+    # the detail subset, not an addend.
+    usage: dict[str, Any] = openai_usage(
+        prompt_tok, completion_tok, reasoning_tok, cached_tok
+    )
 
     return JSONResponse(
         {
@@ -1644,22 +1636,9 @@ async def _build_multi_choice(
 
 def _enforce_capability_contract(req: ChatCompletionRequest) -> None:
     """400 for a request field the served model's capability contract does not cover."""
-    try:
-        from yunshu_engine.capability_contract import unsupported
+    from ..capability_gate import enforce
 
-        from ..model_cards import find_card
-
-        reasons = unsupported(
-            find_card(req.model), req.model_dump(exclude_unset=True, mode="json")
-        )
-    except Exception:  # noqa: BLE001 - a card problem must never break serving
-        logger.debug("capability contract check failed", exc_info=True)
-        return
-    if reasons:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Model '{req.model}' does not support: " + "; ".join(reasons),
-        )
+    enforce(req.model, req.model_dump(exclude_unset=True, mode="json"))
 
 
 @router.post("/chat/completions", response_model=None)
@@ -2138,15 +2117,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                 )
             except Exception:
                 logger.error("engine inference failed", exc_info=True)
-                return JSONResponse(
-                    status_code=500,
-                    content={
-                        "error": {
-                            "message": "Internal server error",
-                            "type": "internal_error",
-                        }
-                    },
-                )
+                return JSONResponse(status_code=500, content=server_error_body())
 
             # Stop-sequence overcount correction
             if req.stop and finish == "stop":
@@ -2261,12 +2232,15 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                     response_body["choices"][0]["prompt_logprobs"] = _n1_prompt_lp
 
             # Attach reasoning_tokens and cached_tokens to usage
-            response_body.setdefault("usage", {})["completion_tokens_details"] = {
-                "reasoning_tokens": _reasoning_tok or 0,
-            }
-            response_body.setdefault("usage", {})["prompt_tokens_details"] = {
-                "cached_tokens": _cached_tok or 0,
-            }
+            _u = response_body.setdefault("usage", {})
+            _u.update(
+                openai_usage(
+                    _u.get("prompt_tokens", 0),
+                    _u.get("completion_tokens", 0),
+                    _reasoning_tok or 0,
+                    _cached_tok or 0,
+                )
+            )
 
             # Attach MCP tool execution results (if any were executed)
             if mcp_results:
@@ -2707,15 +2681,10 @@ async def _handle_vlm_chat(
     # If every choice returned 0 (e.g., timeout), fall back to text-only count
     if prompt_tok == 0:
         prompt_tok = fallback_prompt_tok
-    vlm_usage = {
-        "prompt_tokens": prompt_tok,
-        # VLM completion count is len(tokens) — all generated tokens, already
-        # incl. reasoning; reasoning is the detail subset below (was double-added).
-        "completion_tokens": total_completion_tok,
-        "total_tokens": prompt_tok + total_completion_tok,
-    }
-    vlm_usage["completion_tokens_details"] = {"reasoning_tokens": total_reasoning_tok}
-    vlm_usage["prompt_tokens_details"] = {"cached_tokens": vlm_cached_tok}
+    # VLM completion count is len(tokens): every generated token, reasoning included.
+    vlm_usage = openai_usage(
+        prompt_tok, total_completion_tok, total_reasoning_tok, vlm_cached_tok
+    )
 
     # Record metrics for VLM non-streaming path
     if prompt_tok > 0 or total_completion_tok > 0 or total_reasoning_tok > 0:
@@ -3063,7 +3032,7 @@ async def _stream_vlm_response(
         if _vlm_cancel_evt is not None:
             _vlm_cancel_evt.set()
         logger.error("VLM streaming error", exc_info=True)
-        yield b'data: {"error": {"message": "Internal server error", "type": "internal_error"}}\n\n'
+        yield server_error_sse()
         if not done_emitted:
             yield b"data: [DONE]\n\n"
     finally:
@@ -3829,7 +3798,7 @@ async def _stream_response_multi(
         if _multi_cancel_evt is not None:
             _multi_cancel_evt.set()
         logger.error("Chat multi-choice streaming error", exc_info=True)
-        yield b'data: {"error": {"message": "Internal server error", "type": "internal_error"}}\n\n'
+        yield server_error_sse()
         if not done_emitted:
             yield b"data: [DONE]\n\n"
     finally:
@@ -4511,15 +4480,11 @@ async def _stream_response(
         if _cancel_evt is not None:
             _cancel_evt.set()
         logger.error("Chat streaming error", exc_info=True)
-        err_payload = {
-            "error": {
-                "message": str(_stream_exc)
-                if isinstance(_stream_exc, EngineStreamError)
-                else "Internal server error",
-                "type": "internal_error",
-            }
-        }
-        yield f"data: {json.dumps(err_payload, ensure_ascii=False)}\n\n".encode()
+        yield server_error_sse(
+            str(_stream_exc)
+            if isinstance(_stream_exc, EngineStreamError)
+            else "Internal server error"
+        )
         if not done_emitted:
             yield b"data: [DONE]\n\n"
     finally:

@@ -148,7 +148,9 @@ the three needs no custom code.
 ### Capability contract (`yunshu.contract`)
 
 Every card carries a `contract` object, built by `yunshu_engine/capability_contract.py` from the checkpoint, and
-`POST /v1/chat/completions` enforces the same object:
+every generation route enforces the same object (`/v1/chat/completions`, `/v1/completions`, `/v1/messages`, `/v1/responses`;
+`/api/chat` and `/api/generate` through the chat route they call), each answering in its own error shape (OpenAI `{"error": {...}}`,
+Anthropic `{"type": "error", ...}`, Ollama `{"error": "..."}`):
 
 | Contract key | States |
 |---|---|
@@ -160,7 +162,8 @@ Every card carries a `contract` object, built by `yunshu_engine/capability_contr
 | `cache_tiers` | `ram` (`kv_prefix` or `apc`) and `ssd` when that tier is enabled |
 | `context` | window and maximum output tokens |
 
-A request that uses what the contract rules out returns 400 naming the field: an `image` / `audio` / `video` content part the model does not accept, and tools, `response_format`,
+A request that uses what the contract rules out returns 400 naming the field: an `image` / `audio` / `video` content part the model does not accept
+(also inside an Anthropic `tool_result` or a Responses `function_call_output`), and tools, `response_format`,
 guided decoding or `logprobs` on a model that does not generate text. `reasoning_effort` / `thinking_budget` on a model without
 a reasoning mode are accepted and have no effect (coding agents send an effort on every request; the card's `reasoning` field
 says whether it applies). A checkpoint whose config cannot be read has no contract and is not gated.
@@ -260,6 +263,24 @@ Z-Image ControlNet through `control_image`, is unchanged.
 |---|---|
 | Unknown `model` in single-model mode | Served, not 404 (deliberate, see the top). |
 | Tool calling on tiny models with thinking off | Qwen3.5-0.8B without thinking emits malformed `<tool_call>` markup; the 27B and thinking-on paths pass the release gate. |
+
+## Wire contract
+
+`tests/unit/test_wire_*.py` drive the routers with the official `openai` and `anthropic` SDKs (Ollama over raw NDJSON, since the
+`ollama` SDK is not a dependency) against a scripted engine, so one generation can be compared across dialects, stream against not.
+
+| Guarantee | Where it is checked |
+|---|---|
+| Event order and field shapes: chat chunks (role first, one finish chunk, usage-only chunk, `[DONE]`), completions, Messages (`message_start` .. `message_stop`, thinking before text, `tool_use` blocks), Responses (`response.created` .. `response.completed` / `.incomplete`, ascending `sequence_number`, reasoning item before the message), Ollama NDJSON | `test_wire_stream_shapes.py` |
+| Tools: single, parallel, `tool_choice` `required` / named / `none`, `parallel_tool_calls=false` / `disable_parallel_tool_use`, JSON schema reaching the engine, on chat, Messages, Responses and Ollama, stream and not | `test_wire_tools_matrix.py` |
+| Usage: prompt / completion / reasoning / cached agree between stream and non-stream and across dialects for plain, cached, thinking, truncated, stop-string, zero-output and cut-off-while-thinking generations; details never exceed their totals; Anthropic `message_delta.usage` restates the prompt split (`input_tokens`, `cache_*`) and the cumulative output | `test_wire_usage_matrix.py`, `test_wire_usage_invariants.py` (shapes in `yunshu_gateway/usage_shapes.py`) |
+| A failure after the stream headers is one terminal error event on the same response, never a second HTTP response and never a clean-looking finish: chat / completions `data: {"error": ...}` then `[DONE]`; Messages `event: error` (no `message_delta` / `message_stop`); Responses `response.failed`; Ollama `{"error": ...}` line; `/v1/stream` ends with `done(reason=error)`; Realtime sends `error` then `response.done` with `status: failed` and `status_details`. Cancel stops generation on `/v1/stream`, Responses WS and Realtime | `test_wire_errors.py` |
+| The capability contract answers every dialect in its own error shape | `test_capability_contract_dialects.py` |
+
+Known, accepted differences: with `tool_choice: none` a model that still emits tool-call markup has it returned as plain text when
+streaming; non-streaming chat and Messages strip it. Responses delivers a function call whole (`output_item.added` carries the arguments,
+no `function_call_arguments.delta`) and, like its non-stream form, keeps the empty message item before it. A non-stream answer's content
+is whitespace-trimmed, a stream's concatenated deltas are not.
 
 ## Sampling contract
 

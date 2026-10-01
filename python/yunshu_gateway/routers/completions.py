@@ -8,7 +8,6 @@ Supports:
 - Logprobs
 - Echo mode
 """
-import json
 import logging
 import time
 import types
@@ -22,6 +21,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from yunshu_engine.tracing import get_inference_tracer, get_structured_logger
 
 from ..engine import get_engine, get_engine_for_model
+from ..error_envelope import EngineStreamError, server_error_body, server_error_sse
+from ..usage_shapes import openai_usage
 from .chat import (
     _apply_lora_adapter,
     _normalize_finish_reason,
@@ -318,6 +319,9 @@ class CompletionRequest(BaseModel):
 async def create_completion(req: CompletionRequest, request: Request):
     """OpenAI-compatible text completion endpoint."""
     _check_permission(request, "can_infer")
+    from ..capability_gate import enforce_completion
+
+    enforce_completion(req)
     apply_keep_alive(req.model, req.keep_alive)
     _validate_sampling_params(req.temperature, req.effective_max_tokens(), req.top_p)
 
@@ -926,18 +930,13 @@ async def create_completion(req: CompletionRequest, request: Request):
         # total_completion_tokens (engine count) already includes reasoning.
         _record_metrics(prompt_tokens, total_completion_tokens)
 
-        usage = {
-            "prompt_tokens": prompt_tokens,
-            # total_completion_tokens (engine count) already includes reasoning;
-            # reasoning is the detail subset below (was double-added — the
-            # tracing/slog above correctly report it WITHOUT the add).
-            "completion_tokens": total_completion_tokens,
-            "total_tokens": prompt_tokens + total_completion_tokens,
-        }
-        usage["completion_tokens_details"] = {
-            "reasoning_tokens": total_reasoning_tokens
-        }
-        usage["prompt_tokens_details"] = {"cached_tokens": max_cached_tokens}
+        # total_completion_tokens (engine count) already includes reasoning.
+        usage = openai_usage(
+            prompt_tokens,
+            total_completion_tokens,
+            total_reasoning_tokens,
+            max_cached_tokens,
+        )
 
         return JSONResponse(
             {
@@ -956,12 +955,7 @@ async def create_completion(req: CompletionRequest, request: Request):
         )
     except Exception as e:
         logger.error(f"Completions generation error: {e}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": {"message": "Internal server error", "type": "internal_error"}
-            },
-        )
+        return JSONResponse(status_code=500, content=server_error_body())
     finally:
         _release_lora_adapter(engine, loaded_adapter)
         if _ns_tracker is not None:
@@ -1097,6 +1091,8 @@ async def _stream_completion(
                 ignore_eos=req.ignore_eos,
                 suppress_tokens=req.suppress_tokens,
             ):
+                if getattr(output, "error", None):
+                    raise EngineStreamError(str(output.error))
                 if hasattr(output, "prompt_tokens") and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
                 if (
@@ -1219,6 +1215,8 @@ async def _stream_completion(
                 ignore_eos=req.ignore_eos,
                 suppress_tokens=req.suppress_tokens,
             ):
+                if getattr(output, "error", None):
+                    raise EngineStreamError(str(output.error))
                 if hasattr(output, "prompt_tokens") and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
                 if (
@@ -1417,10 +1415,9 @@ async def _stream_completion(
             for chunk in _drain_sse_buffer():
                 yield chunk
         logger.error(f"Completions streaming error: {e}", exc_info=True)
-        err_payload = {
-            "error": {"message": "Internal server error", "type": "internal_error"}
-        }
-        yield f"data: {json.dumps(err_payload, ensure_ascii=False)}\n\n".encode()
+        yield server_error_sse(
+            str(e) if isinstance(e, EngineStreamError) else "Internal server error"
+        )
         if not _done_emitted:
             yield b"data: [DONE]\n\n"
     finally:

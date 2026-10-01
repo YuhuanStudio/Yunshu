@@ -126,18 +126,30 @@ def unsupported(card: Any, body: dict) -> list[str]:
     # every request whatever model they point at, and a 400 would break them.
     allowed = set(card.input_modalities)
     seen: set[str] = set()
-    for msg in body.get("messages") or []:
-        content = msg.get("content") if isinstance(msg, dict) else None
-        if not isinstance(content, list):
-            continue
-        for part in content:
-            if not isinstance(part, dict):
-                continue
-            need = _PART_MODALITY.get(str(part.get("type")))
-            if need and need not in allowed and need not in seen:
-                seen.add(need)
-                out.append(
-                    f"messages.content[type={part['type']}]: this model accepts "
-                    f"{'/'.join(sorted(allowed)) or 'no'} input, not {need}"
-                )
+    for part in _iter_parts(body.get("messages") or []):
+        need = _PART_MODALITY.get(str(part.get("type")))
+        if need and need not in allowed and need not in seen:
+            seen.add(need)
+            out.append(
+                f"messages.content[type={part['type']}]: this model accepts "
+                f"{'/'.join(sorted(allowed)) or 'no'} input, not {need}"
+            )
     return out
+
+
+def _iter_parts(node: Any):
+    """Every content part of a message list, however the dialect nests it.
+
+    Chat: ``messages[].content[]``; Anthropic: the same plus ``tool_result`` blocks whose
+    ``content`` is itself a block list; Responses: ``input[]`` items that are parts
+    themselves or messages holding parts.
+    """
+    if isinstance(node, list):
+        for item in node:
+            yield from _iter_parts(item)
+    elif isinstance(node, dict):
+        if "type" in node and node["type"] in _PART_MODALITY:
+            yield node
+        for key in ("content", "output"):
+            if isinstance(node.get(key), list):
+                yield from _iter_parts(node[key])

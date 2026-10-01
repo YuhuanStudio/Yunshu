@@ -34,6 +34,7 @@ from yunshu_engine import settings
 from yunshu_engine.tool_arguments import arguments_json
 
 from .middleware.disconnect import client_disconnected
+from .usage_shapes import openai_usage, responses_usage
 
 # ── Sentinel for _safe_anext ──
 
@@ -483,13 +484,20 @@ def extract_thinking(text: str, model_name: str | None = None) -> tuple[str, str
         thinking_parts.append(match.group(1))
         remaining = remaining[: match.start()] + remaining[match.end() :]
 
+    _CLOSE_RE = re.compile(r"</think\s*/?\s*>")
+    _OPEN_RE = re.compile(r"<think\s*/?\s*>")
+    # A generation cut off inside the block (max_tokens, stop, cancel) has an opening tag and
+    # no close: what follows it is still reasoning, as the streaming split reports it.
+    unclosed = _OPEN_RE.search(remaining)
+    if unclosed is not None and not _CLOSE_RE.search(remaining[unclosed.end() :]):
+        thinking_parts.append(remaining[unclosed.end() :])
+        remaining = remaining[: unclosed.start()]
+
     if thinking_parts:
         thinking = "\n".join(thinking_parts).strip()
         return (thinking, remaining.strip())
 
     # Handle partial: content before </think ...> without <think ...> tag
-    _CLOSE_RE = re.compile(r"</think\s*/?\s*>")
-    _OPEN_RE = re.compile(r"<think\s*/?\s*>")
     if _CLOSE_RE.search(text) and not _OPEN_RE.search(text):
         match = _THINKING_TAIL_PATTERN.match(text)
         if match:
@@ -734,13 +742,9 @@ def format_openai_completion_usage_chunk(
     SUBSET, per OpenAI semantics — do NOT add it to the totals or reasoning is
     double-counted.
     """
-    usage = {
-        "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens,
-        "total_tokens": prompt_tokens + completion_tokens,
-    }
-    usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
-    usage["prompt_tokens_details"] = {"cached_tokens": cached_tokens}
+    usage = openai_usage(
+        prompt_tokens, completion_tokens, reasoning_tokens, cached_tokens
+    )
     chunk = {
         "id": completion_id,
         "object": "text_completion",
@@ -771,18 +775,9 @@ def format_openai_usage_chunk(
     double-counted (was inflating completion_tokens/total_tokens for thinking
     models with include_usage=true).
     """
-    usage = {
-        "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens,
-        "total_tokens": prompt_tokens + completion_tokens,
-    }
-    # Detail fields are subsets of their totals, never addends or larger than them.
-    usage["completion_tokens_details"] = {
-        "reasoning_tokens": max(0, min(reasoning_tokens, completion_tokens))
-    }
-    usage["prompt_tokens_details"] = {
-        "cached_tokens": max(0, min(cached_tokens, prompt_tokens))
-    }
+    usage = openai_usage(
+        prompt_tokens, completion_tokens, reasoning_tokens, cached_tokens
+    )
     chunk = {
         "id": completion_id,
         "object": "chat.completion.chunk",
@@ -1100,13 +1095,10 @@ def format_responses_completed(
     seq: int = 0,
 ) -> str:
     """response.completed — final event with full response and usage."""
-    usage: dict[str, Any] = {
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "total_tokens": total_tokens,
-    }
-    usage["output_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
-    usage["input_tokens_details"] = {"cached_tokens": cached_tokens}
+    usage: dict[str, Any] = responses_usage(
+        input_tokens, output_tokens, reasoning_tokens, cached_tokens
+    )
+    usage["total_tokens"] = total_tokens or usage["total_tokens"]
     completed_at = int(time.time())
     resp = _responses_base_response(
         response_id,
@@ -1172,13 +1164,10 @@ def format_responses_incomplete(
     cached_tokens: int = 0,
 ) -> str:
     """response.incomplete — terminal event when generation is interrupted."""
-    usage: dict[str, Any] = {
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "total_tokens": total_tokens,
-    }
-    usage["output_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
-    usage["input_tokens_details"] = {"cached_tokens": cached_tokens}
+    usage: dict[str, Any] = responses_usage(
+        input_tokens, output_tokens, reasoning_tokens, cached_tokens
+    )
+    usage["total_tokens"] = total_tokens or usage["total_tokens"]
     incomplete_at = int(time.time())
     resp = _responses_base_response(
         response_id,

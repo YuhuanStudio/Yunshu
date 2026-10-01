@@ -12,6 +12,8 @@ is consistent.
 
 from __future__ import annotations
 
+import json
+
 from starlette.responses import JSONResponse
 
 
@@ -19,6 +21,24 @@ class EngineStreamError(Exception):
     """The engine failed after a stream started (e.g. a chat-template error). Streaming routers
     surface it as a protocol error event carrying the engine's message, never as an empty
     successful completion."""
+
+
+def server_error_body(message: str = "Internal server error") -> dict:
+    """The OpenAI error object for a server-side failure (every OpenAI-shaped route, stream or not)."""
+    return {
+        "error": {
+            "message": message,
+            "type": "server_error",
+            "param": None,
+            "code": "internal_error",
+        }
+    }
+
+
+def server_error_sse(message: str = "Internal server error") -> bytes:
+    """The same error as a terminal SSE ``data:`` event."""
+    body = json.dumps(server_error_body(message), ensure_ascii=False)
+    return f"data: {body}\n\n".encode()
 
 
 # Paths served by the Anthropic router (exact match — don't overmatch /admin/.../messages).
