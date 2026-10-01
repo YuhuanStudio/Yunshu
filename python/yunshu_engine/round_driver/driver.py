@@ -198,6 +198,10 @@ class RoundDriver:
         self._chain_t = 0.0  # when the last chain was submitted
         self._chain_deep = 0  # its depth while it may still be running
         self._calls = 0
+        self.decode_steps = 0  # telemetry since the batch last went idle
+        self.step_s = 0.0
+        self.gap_s = 0.0
+        self._t_end = 0.0
         # per draft depth: drafted / landed (telemetry)
         self.depth_drafted = [0] * (MAX_DECODE_TOKENS - 1)
         self.depth_landed = [0] * (MAX_DECODE_TOKENS - 1)
@@ -247,6 +251,12 @@ class RoundDriver:
         elif seed is not None:
             row.key = mx.random.key(int(seed))
         self._restore(row)
+        vocab = self.head.vocab if self.head is not None and draft else None
+        if vocab is not None:
+            if self.rows:
+                vocab.add_context(req.ids)
+            else:
+                vocab.set_context(req.ids)
         self.rows.append(row)
         return row.hit
 
@@ -461,7 +471,29 @@ class RoundDriver:
             return []
         if self._will_decode():
             self._prefilled_last = False
-            return self._decode_step()
+            t0 = time.perf_counter()
+            if self._t_end:
+                self.gap_s += t0 - self._t_end  # the host's time between steps
+            out = self._decode_step()
+            self._t_end = time.perf_counter()
+            self.step_s += self._t_end - t0
+            self.decode_steps += 1
+            if not self.rows:
+                logger.info(
+                    "round driver idle: %d decode steps, %.1f ms in a step, "
+                    "%.1f ms between steps",
+                    self.decode_steps,
+                    self.step_s * 1e3 / self.decode_steps,
+                    self.gap_s * 1e3 / self.decode_steps,
+                )
+                self.decode_steps, self.step_s, self.gap_s, self._t_end = (
+                    0,
+                    0.0,
+                    0.0,
+                    0.0,
+                )
+            return out
+        self._t_end = 0.0
         self._prefilled_last = True
         return self._prefill_step(
             [r for r in self.rows if r.pending is None], bool(self.batch.rows)
@@ -753,6 +785,13 @@ class RoundDriver:
                     row.force = [int(forced)]
                     break
         row.pending = committed[used - 1]
+        if (
+            self.head is not None
+            and self.head.vocab is not None
+            and row.drafting
+            and len(self.rows) == 1
+        ):
+            self.head.vocab.learn(committed[:used])
         return used
 
     # ── drafting policy ──────────────────────────────────────────────────

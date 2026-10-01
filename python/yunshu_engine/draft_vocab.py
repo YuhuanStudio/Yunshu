@@ -111,6 +111,21 @@ class DraftVocab:
             mx.eval(self.extra_ids, *self.extra_rows)
         return count
 
+    def add_context(self, token_ids: list[int]) -> int:
+        """Another request joins while others run: its prompt's ids join the
+        extension (``set_context`` would drop the running requests')."""
+        ids = [int(t) for t in token_ids]
+        if self.full:
+            return 0
+        if len(ids) >= PROMPT_MIN and self._mostly_high(ids) and self.fallback:
+            self.full = True  # a non-Latin script: search everything
+            self.extra_ids = self.extra_rows = None
+            return 0
+        count = self._add(ids)
+        if count:
+            mx.eval(self.extra_ids, *self.extra_rows)
+        return count
+
     def _mostly_high(self, ids: list[int]) -> bool:
         high = sum(1 for t in ids if self.keep <= t < self.vocab)
         return high * 2 >= len(ids)

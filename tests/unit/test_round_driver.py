@@ -384,3 +384,20 @@ def test_sampled_rows_keyed_positions_invariant(tiny):
         )
         assert got == ref
         assert 0 < d.accepted < d.drafted
+
+
+def test_head_readout_uses_the_reduced_vocabulary_for_one_row_only(tiny):
+    """The lane's reduced-vocabulary readout serves a lone drafting row; with
+    several rows the full head reads out (drafts only propose either way)."""
+    from yunshu_engine.round_driver.driver import RoundDriver
+
+    lm, drafter = tiny
+    d = RoundDriver(lm, drafter=drafter, stop_tokens=set())
+    calls = []
+    d.head.vocab = object()
+    drafter._greedy_token = lambda h: calls.append(1) or mx.zeros(h.shape[0], mx.int32)
+    h = mx.random.normal((3, lm.args.hidden_size))
+    d.head.readout(h, single=False)
+    assert not calls
+    d.head.readout(h, single=True)
+    assert calls

@@ -34,8 +34,19 @@ class MTPHead:
         self.lm = language_model
         self.embed = language_model.model.embed_tokens
         self.logits = logits_fn
+        # The lane's reduced-vocabulary greedy readout (draft_vocab.py), when the
+        # engine installed one: a draft only proposes, the target verifies.
+        self.vocab = getattr(drafter, "_draft_vocab", None)
         self.slots = Slots(len(drafter.layers))
         self.rows: list = []  # rows in the slot buffers
+
+    def readout(self, hidden: mx.array, single: bool = False) -> mx.array:
+        """Greedy token ids [R] (int32) of head outputs ``hidden`` [R, D].
+        ``single``: one row drafts, so the reduced vocabulary (kept for one
+        request) applies; with several rows the full head reads out."""
+        if self.vocab is not None and single:
+            return self.drafter._greedy_token(hidden).astype(mx.int32)
+        return mx.argmax(self.logits(hidden), axis=-1).astype(mx.int32)
 
     def make_cache(self) -> list:
         from mlx_vlm.models.cache import KVCache
@@ -170,8 +181,7 @@ class MTPHead:
             self.embed(tokens.reshape(-1)),
             hidden.reshape(B * T, -1),
         )
-        seeds = mx.argmax(self.logits(out.reshape(B * T, -1)), axis=-1)
-        return out, seeds.astype(mx.int32).reshape(B, T)
+        return out, self.readout(out.reshape(B * T, -1), B == 1).reshape(B, T)
 
     def draft(
         self,
@@ -193,7 +203,7 @@ class MTPHead:
         lrows = [rows[b] for b in live]
         hid = heads[sel]
         if first is None:
-            tok = mx.argmax(self.logits(hid), axis=-1).astype(mx.int32)
+            tok = self.readout(hid, len(lrows) == 1 and len(self.rows) == 1)
         else:
             tok = first[sel]
         steps = [tok]
@@ -204,7 +214,7 @@ class MTPHead:
             hid = self._run(lrows, 1, self.embed(tok), hid)[:, 0]
             for r, n in zip(lrows, saved, strict=True):
                 r.hn = n
-            tok = mx.argmax(self.logits(hid), axis=-1).astype(mx.int32)
+            tok = self.readout(hid, len(lrows) == 1 and len(self.rows) == 1)
             steps.append(tok)
         table = mx.stack(steps, axis=1)  # [live, deepest]
         out = [empty for _ in rows]
