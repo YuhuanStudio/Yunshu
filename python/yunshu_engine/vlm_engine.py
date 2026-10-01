@@ -1719,7 +1719,37 @@ class VLMEngine:
             self._reasoning_markers_cache = cached
         return cached
 
-    def _runner_events(
+    def _runner_events(self, input_ids, **kw):
+        """``_runner_events_impl`` plus the optional generated-vs-delivered capture
+        (``YUNSHU_DEBUG_STREAM_CAPTURE``)."""
+        path = settings.get_str("YUNSHU_DEBUG_STREAM_CAPTURE")
+        if not path:
+            yield from self._runner_events_impl(input_ids, **kw)
+            return
+        ids: list[int] = []
+        pieces: list[str] = []
+        finish = None
+        try:
+            for event in self._runner_events_impl(input_ids, **kw):
+                text, token, _state, finish_reason = event[:4]
+                if token is not None:
+                    ids.append(int(token))
+                pieces.append(text)
+                finish = finish_reason or finish
+                yield event
+        finally:
+            with contextlib.suppress(Exception):
+                row = {
+                    "prompt_tokens": len(input_ids),
+                    "token_ids": ids,
+                    "pieces": pieces,
+                    "text": "".join(pieces),
+                    "finish": finish,
+                }
+                with open(path, "a") as fh:
+                    fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    def _runner_events_impl(
         self,
         input_ids: mx.array,
         *,

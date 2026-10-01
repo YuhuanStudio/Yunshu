@@ -260,4 +260,6 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 
 ## Internal settings
 
-None.
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `YUNSHU_DEBUG_STREAM_CAPTURE` | path | unset | Debugging aid: append one JSON line per VLM-runner generation to this file with the generated token ids, the text pieces the engine handed to the gateway and their joined text, so a delivered answer can be compared with what was generated (soak invariant check). Off when unset. |

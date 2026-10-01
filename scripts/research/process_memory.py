@@ -74,3 +74,19 @@ def process_tree_memory(root_pid):
             x.get("physical_footprint_bytes", 0) for x in processes
         ),
     )
+
+
+def apc_resident_gib(url):
+    """Prefix-cache (APC) bytes held in RAM, from the server's /metrics; None when
+    unavailable. The prefix cache legitimately holds RAM, so a "memory returns"
+    check compares footprints with it subtracted."""
+    import urllib.request
+
+    try:
+        text = urllib.request.urlopen(url.rstrip("/") + "/metrics", timeout=10).read()
+        for line in text.decode().splitlines():
+            if "apc_resident_bytes" in line and not line.startswith("#"):
+                return round(float(line.rsplit(" ", 1)[1]) / 2**30, 3)
+    except Exception:  # noqa: BLE001
+        pass
+    return None

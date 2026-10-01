@@ -45,6 +45,17 @@ log(){ echo "$(date +%H:%M:%S) $*"; }
 has(){ [[ ",$STAGE," == *",$1,"* ]]; }
 rec(){ $PY $ROOT/scripts/release/gate_checks.py --results $RESULTS record "$@"; }
 jget(){ $PY -c "import json,sys; d=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]; s=[x for x in d if x.get('kind')=='summary'][-1]; print(eval(sys.argv[2], {}, s))" "$@" 2>/dev/null; }
+# Memory returns: the footprint after the idle must come back to within 4 GiB of the start
+# once the prefix cache's resident bytes (APC, held by design up to its RAM budget) are
+# subtracted from both ends; without APC figures the raw footprints are compared.
+mem_returns(){  # $1 check name, $2 start, $3 end, $4 start ex-APC, $5 end ex-APC, $6 start APC, $7 end APC
+  local a=$2 b=$3 detail
+  if [[ $4 != None && $5 != None && -n $4 && -n $5 ]]; then a=$4 b=$5
+    detail="start $2, end $3 GiB; prefix cache holds $6 -> $7 GiB, so $4 -> $5 GiB without it"
+  else detail="start $2, end $3 GiB after idle (no prefix-cache figure)"; fi
+  $PY -c "import sys; sys.exit(0 if float('$b') - float('$a') < 4 else 1)" \
+    && rec $1 PASS "$detail" || rec $1 FAIL "$detail"
+}
 port_free(){ ! curl -s -m 2 -o /dev/null $URL/health; }
 serve(){  # $1 binary, $2 model, $3 log -> sets YP; 0 when ready
   ${YENV[@]} $1 serve -m $2 -p $PORT > $3 2>&1 &
@@ -190,31 +201,27 @@ if has soak; then
       log "soak mmlu"
       $PY scripts/research/soak_mmlu_pro.py --url $URL --model Qwen3.8-27B --pid $YP \
         --ids $MMLU_IDS --note "release gate" --output $OUT/soak-mmlu.jsonl > $OUT/soak-mmlu.log 2>&1
-      s=$(jget $OUT/soak-mmlu.jsonl "f\"{correct} {errors} {n} {time_s} {tok_per_s} {start_footprint_gib} {max_footprint_gib} {end_footprint_gib}\"")
+      s=$(jget $OUT/soak-mmlu.jsonl "f\"{correct} {errors} {n} {time_s} {tok_per_s} {start_footprint_gib} {max_footprint_gib} {end_footprint_gib} {start_footprint_ex_apc_gib} {end_footprint_ex_apc_gib} {start_apc_gib} {end_apc_gib}\"")
       if [ -z "$s" ]; then rec soak.mmlu FAIL "no summary (soak-mmlu.log)"
       else
-        read correct errors n secs tps m0 mmax m1 <<< "$s"
+        read correct errors n secs tps m0 mmax m1 x0 x1 q0 q1 <<< "$s"
         d=$(( MMLU_BASELINE - correct ))  # only a drop fails; a rise past the band is noise or a better baseline
         detail="$correct/$n, $errors errors, $(( ${secs%.*} / 60 )) min, $tps tok/s, footprint $m0 -> max $mmax -> $m1 GiB"
         [ $n = 300 ] && [ $errors = 0 ] && [ $d -le $MMLU_TOLERANCE ] \
           && rec soak.mmlu PASS "$detail" || rec soak.mmlu FAIL "$detail (baseline $MMLU_BASELINE, allowed drop $MMLU_TOLERANCE)"
-        $PY -c "import sys; sys.exit(0 if float('$m1') - float('$m0') < 4 else 1)" \
-          && rec soak.mmlu_memory_returns PASS "start $m0, end $m1 GiB" \
-          || rec soak.mmlu_memory_returns FAIL "start $m0, end $m1 GiB after idle"
+        mem_returns soak.mmlu_memory_returns $m0 $m1 $x0 $x1 $q0 $q1
       fi
       log "soak realistic $SOAK_MINUTES min"
       $PY scripts/research/soak_realistic.py --url $URL --model Qwen3.8-27B --pid $YP \
         --minutes $SOAK_MINUTES --note "release gate" --output $OUT/soak-realistic.jsonl 2>&1 | tee $OUT/soak-realistic.log
-      s=$(jget $OUT/soak-realistic.jsonl "f\"{requests} {ok} {errors} {start_footprint_gib} {max_footprint_gib} {end_footprint_gib}\"")
+      s=$(jget $OUT/soak-realistic.jsonl "f\"{requests} {ok} {errors} {start_footprint_gib} {max_footprint_gib} {end_footprint_gib} {start_footprint_ex_apc_gib} {end_footprint_ex_apc_gib} {start_apc_gib} {end_apc_gib}\"")
       if [ -z "$s" ]; then rec soak.realistic FAIL "no summary (soak-realistic.log)"
       else
-        read reqs okn errs m0 mmax m1 <<< "$s"
+        read reqs okn errs m0 mmax m1 x0 x1 q0 q1 <<< "$s"
         detail="$okn/$reqs ok, $errs errors, footprint $m0 -> max $mmax -> $m1 GiB"
         [ $errs = 0 ] && [ $(( okn * 100 )) -ge $(( reqs * 95 )) ] \
           && rec soak.realistic PASS "$detail" || rec soak.realistic FAIL "$detail (need 0 errors, >=95% ok)"
-        $PY -c "import sys; sys.exit(0 if float('$m1') - float('$m0') < 4 else 1)" \
-          && rec soak.realistic_memory_returns PASS "start $m0, end $m1 GiB" \
-          || rec soak.realistic_memory_returns FAIL "start $m0, end $m1 GiB after idle"
+        mem_returns soak.realistic_memory_returns $m0 $m1 $x0 $x1 $q0 $q1
       fi
     else rec soak.boot FAIL "server did not become ready (soak-server.log)"; fi
     stop $YP

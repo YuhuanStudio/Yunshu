@@ -25,7 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from process_memory import process_tree_memory  # noqa: E402
+from process_memory import apc_resident_gib, process_tree_memory  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 DATASET = ROOT / "reference/omlx/omlx/eval/data/mmlu_pro_test.jsonl"
@@ -128,6 +128,7 @@ def main():
             stop.wait(10)
 
     start_mem = mem()
+    start_apc = apc_resident_gib(a.url)
     emit(
         {
             "kind": "meta",
@@ -251,6 +252,7 @@ def main():
     elapsed = time.time() - t_start
     time.sleep(a.final_idle_s)
     stop.set()
+    end_mem, end_apc = mem(), apc_resident_gib(a.url)
     mems = [
         json.loads(line)["footprint_gib"]
         for line in a.output.read_text().split("\n")
@@ -275,7 +277,15 @@ def main():
         "tok_per_s": round(tokens / elapsed, 1) if elapsed else None,
         "start_footprint_gib": start_mem,
         "max_footprint_gib": max(mems) if mems else None,
-        "end_footprint_gib": mem(),
+        "end_footprint_gib": end_mem,
+        "start_apc_gib": start_apc,
+        "end_apc_gib": end_apc,
+        "start_footprint_ex_apc_gib": None
+        if start_mem is None or start_apc is None
+        else round(start_mem - start_apc, 3),
+        "end_footprint_ex_apc_gib": None
+        if end_mem is None or end_apc is None
+        else round(end_mem - end_apc, 3),
         "categories": {k: f"{v[1]}/{v[0]}" for k, v in sorted(cats.items())},
     }
     emit(summary)
