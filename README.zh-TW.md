@@ -94,8 +94,10 @@ print(r.choices[0].message.content)
 **從原始碼**(開發用):複製儲存庫,執行 `uv sync --extra vision`(或 `--all-extras`),
 然後 `uv run yunshu serve -m <model>`。`uv.lock` 固定了確切版本(MLX 0.32、`mlx-vlm` 0.7.3+)。
 
-**不收集遙測。** Yunshu 不會把任何資料送到任何地方。唯一的對外連線是你要求的模型下載,以及你設定的
-MCP 伺服器。
+**不收集遙測。** Yunshu 不收集、不傳送任何使用資料、分析或當機報告。但這不等於「從不連網」:只有在你或你的請求觸發時才會
+對外連線,包括你要求的模型下載、你設定的 MCP 伺服器、你設定的伺服器端 `web_search` 提供者,以及 `web_fetch`
+(預設開啟,只抓取請求指定的 URL,除非你允許,否則會攔截私有位址,見 `YUNSHU_WEB_FETCH`)。維護者的上游檢查
+(`just vendor-check`)由人工手動執行。
 
 **文件:**
 - [連接用戶端](docs/guides/CLIENTS.md)(OpenAI / Anthropic SDK、程式代理、Open WebUI)
