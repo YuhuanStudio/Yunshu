@@ -5,8 +5,9 @@ Stock ``quantized_matmul`` switches kernels with the row count (``qmv_fast``
 or ``qmv`` at one row, ``qmv_wide`` and then tiled qmm for more), so a
 speculative verify row and the serial decode step for the same token get
 different bits from the same projection. Here every row runs MLX 0.32.2's
-one-row ``qmv_fast`` (K a multiple of 512 and N of 8) or ``qmv`` traversal,
-transcribed in ``moe_verify_gather``, so row ``r`` of the output equals
+one-row ``qmv_fast`` (N a multiple of 8, K of the kernel block: 512 for
+4/5-bit, 256 for 6/8-bit weights) or ``qmv`` traversal, transcribed in
+``moe_verify_gather``, so row ``r`` of the output equals
 ``quantized_matmul(x[r:r+1])`` bit for bit.
 
 A threadgroup computes one ``2 * RPS``-column output tile for ``ROWS`` rows:
@@ -27,7 +28,7 @@ from functools import cache
 import mlx.core as mx
 import mlx.nn as nn
 
-from .moe_verify_gather import _BITS, _GROUP_SIZES, _HEADER
+from .moe_verify_gather import _BITS, _GROUP_SIZES, _HEADER, qmv_fast_layout
 
 MAX_ROWS = 8
 # Output columns per simdgroup (qmv's own tile: a threadgroup owns 8).
@@ -323,7 +324,7 @@ def _kernel_supported(linear: nn.QuantizedLinear, x: mx.array) -> bool:
         return False
     n = int(linear.weight.shape[0])
     k = int(linear.scales.shape[-1]) * group_size
-    fast = k % 512 == 0 and n % 8 == 0
+    fast = qmv_fast_layout(k, n, bits)
     return (
         x.shape[-1] == k
         and k % 8 == 0
@@ -349,7 +350,7 @@ class _Plan:
         k = int(x.shape[-1])
         n = int(linear.weight.shape[0])
         bits = int(linear.bits)
-        fast = k % 512 == 0 and n % 8 == 0
+        fast = qmv_fast_layout(k, n, bits)
         rows_per_group, rps = _launch_geometry(bits, fast, n, rows)
         self.kernel = _kernel(bits, int(linear.group_size), fast)
         self.template = [
@@ -419,7 +420,7 @@ class _GroupPlan:
         sizes = [int(linear.weight.shape[0]) for linear in linears]
         first = linears[0]
         bits = int(first.bits)
-        fast = k % 512 == 0 and sizes[0] % 8 == 0
+        fast = qmv_fast_layout(k, sizes[0], bits)
         rows_per_group, rps = _launch_geometry(bits, fast, max(sizes), rows)
         self.kernel = _group_kernel(bits, int(first.group_size), fast, len(linears))
         self.template = [("T", x.dtype), ("K_SIZE", k)]
@@ -440,7 +441,10 @@ def _group_plan(linears, x: mx.array, rows: int) -> _GroupPlan | None:
     key = (tuple(id(linear) for linear in linears), rows, x.dtype, x.shape[-1])
     if key not in plans:
         k = int(x.shape[-1])
-        fast = [k % 512 == 0 and int(linear.weight.shape[0]) % 8 == 0 for linear in linears]
+        fast = [
+            qmv_fast_layout(k, int(linear.weight.shape[0]), int(linear.bits))
+            for linear in linears
+        ]
         grouped = (
             rows <= MAX_ROWS
             and all(fast) == any(fast)
@@ -525,8 +529,8 @@ class OneRowQmv:
 
 
 def _qmv_fast_layout(weight, scales, biases, bits, group_size, mode, dtype, rps) -> bool:
-    """Stock one-row ``quantized_matmul`` runs ``qmv_fast`` on this layout (K a
-    multiple of 512, N of 8) and ``2 * rps`` divides N."""
+    """Stock one-row ``quantized_matmul`` runs ``qmv_fast`` on this layout
+    (``qmv_fast_layout``) and ``2 * rps`` divides N."""
     if (
         mode != "affine"
         or bits not in _BITS
@@ -543,8 +547,7 @@ def _qmv_fast_layout(weight, scales, biases, bits, group_size, mode, dtype, rps)
     n = int(weight.shape[0])
     k = int(scales.shape[-1]) * group_size
     return not (
-        k % 512
-        or n % 8
+        not qmv_fast_layout(k, n, bits)
         or n % (2 * rps)
         or scales.shape != (n, k // group_size)
         or weight.shape[1] * 32 != k * bits

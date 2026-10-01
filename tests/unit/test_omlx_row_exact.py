@@ -21,6 +21,35 @@ def _qlinear(k, n, bits, seed):
     return nn.QuantizedLinear.from_linear(lin, group_size=64, bits=bits)
 
 
+@pytest.mark.parametrize(
+    "k, n, bits, expected",
+    [
+        (5120, 17408, 4, True),
+        (5120, 17408, 5, True),
+        (768, 1024, 8, True),  # 8-bit block is 256 wide
+        (1280, 1024, 6, True),  # 6-bit block is 256 wide
+        (768, 1024, 4, False),  # 4-bit block is 512 wide
+        (1280, 1024, 5, False),
+        (2560, 12, 4, False),  # N % 8
+    ],
+)
+def test_qmv_fast_layout_rule(k, n, bits, expected):
+    from yunshu_engine.kernels.omlx.moe_verify_gather import qmv_fast_layout
+
+    assert qmv_fast_layout(k, n, bits) is expected
+
+
+@pytest.mark.parametrize("k, bits", [(768, 8), (1280, 6), (768, 4), (1280, 5)])
+def test_row_exact_projection_off_512_blocks(k, bits):
+    from yunshu_engine.kernels.omlx import row_exact_qmv
+
+    lin = _qlinear(k, 1024, bits, seed=k + bits)
+    x = (mx.random.normal((1, 4, k)) * 0.5).astype(mx.bfloat16)
+    out = row_exact_qmv.quantized_linear(lin, x)
+    for r in range(4):
+        assert mx.array_equal(out[:, r : r + 1, :], lin(x[:, r : r + 1, :])).item()
+
+
 @pytest.mark.parametrize("bits", [4, 5])
 @pytest.mark.parametrize("rows", [2, 5, 8])
 def test_row_exact_projection_matches_one_row_decode(bits, rows):
