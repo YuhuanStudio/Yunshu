@@ -7,7 +7,6 @@ Security: All monitoring endpoints require authentication (deny-by-default).
 Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true for access.
 """
 
-import hmac
 import logging
 import os
 import platform
@@ -16,6 +15,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
+
+from yunshu_gateway.token_compare import tokens_equal
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ def _check_permission(request: Request) -> None:
             headers={"WWW-Authenticate": "Bearer"},
         )
     token = auth_header[7:]
-    if not hmac.compare_digest(token, auth_token):
+    if not tokens_equal(token, auth_token):
         raise HTTPException(
             status_code=401,
             detail="Invalid API key",

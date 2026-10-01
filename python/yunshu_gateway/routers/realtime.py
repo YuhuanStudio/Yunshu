@@ -3592,7 +3592,7 @@ async def realtime_endpoint(ws: WebSocket):
     the session model. Origin and bearer checks run *before* the upgrade, so a
     rejected client sees an HTTP 403 handshake failure like on api.openai.com.
     """
-    import hmac
+    from yunshu_gateway.token_compare import tokens_equal
 
     origin = ws.headers.get("origin", "")
     if origin:
@@ -3616,7 +3616,7 @@ async def realtime_endpoint(ws: WebSocket):
                     token = proto.removeprefix("openai-insecure-api-key.")
         if not token:
             token = ws.query_params.get("token") or ""
-        if not (token and hmac.compare_digest(token, auth_token)):
+        if not (token and tokens_equal(token, auth_token)):
             await ws.close(code=1008)
             return
 

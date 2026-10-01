@@ -58,9 +58,9 @@ def _check_auth(request: Request) -> None:
             headers={"WWW-Authenticate": "Bearer"},
         )
     token = auth[7:]
-    import hmac
+    from yunshu_gateway.token_compare import tokens_equal
 
-    if not hmac.compare_digest(token, auth_token):
+    if not tokens_equal(token, auth_token):
         raise HTTPException(
             status_code=401,
             detail="Invalid API key",

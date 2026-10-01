@@ -41,14 +41,14 @@ def _check_permission(request: Request, permission: str) -> None:
     # When a token IS configured it gates everything, inference included.
     auth_token = settings.get("YUNSHU_AUTH_TOKEN")
     if auth_token is not None and auth_token:
-        import hmac
+        from yunshu_gateway.token_compare import tokens_equal
 
         auth = request.headers.get("Authorization", "")
         # Anthropic SDKs send the key as x-api-key instead of a bearer token.
         presented = (
             auth[7:] if auth.startswith("Bearer ") else request.headers.get("x-api-key")
         )
-        if presented and hmac.compare_digest(presented, auth_token):
+        if presented and tokens_equal(presented, auth_token):
             return  # Valid static token
         # Token is configured but request doesn't provide a valid one
         raise HTTPException(

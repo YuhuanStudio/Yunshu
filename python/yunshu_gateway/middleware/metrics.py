@@ -326,7 +326,7 @@ def _check_metrics_auth(request: Request) -> None:
     Single-consumer model: only the static ``YUNSHU_AUTH_TOKEN`` gate is
     honored; the RBAC / legacy-tenant paths have been removed.
     """
-    import hmac
+    from yunshu_gateway.token_compare import tokens_equal
 
     if settings.get_bool("YUNSHU_AUTH_DISABLED"):
         return
@@ -357,7 +357,7 @@ def _check_metrics_auth(request: Request) -> None:
     token = auth_header[7:]
 
     # Static token (constant-time compare).
-    if hmac.compare_digest(token, static_token):
+    if tokens_equal(token, static_token):
         return
 
     raise HTTPException(
