@@ -40,7 +40,7 @@ import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -736,7 +736,9 @@ class SSDKVCache:
             import mlx.core as mx
             import numpy as np
 
-            data, header = mx.load(meta.file_path, return_metadata=True)
+            loaded, header_any = mx.load(meta.file_path, return_metadata=True)
+            data = cast("dict[str, Any]", loaded)  # safetensors: name -> array
+            header = cast("dict[str, Any]", header_any)
             if self._fingerprint and header.get("fingerprint", "") != self._fingerprint:
                 # written under another checkpoint revision / layout: prune, don't serve
                 raise ValueError("block fingerprint mismatch")
@@ -752,7 +754,7 @@ class SSDKVCache:
 
             # Reconstruct cache data from safetensors keys
             num_layers = int(header.get("num_layers", "0"))
-            cache_data = [None] * num_layers
+            cache_data: list[Any] = [None] * num_layers
 
             for i in range(num_layers):
                 keys_key = f"layer_{i}_keys"

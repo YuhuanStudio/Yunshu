@@ -141,8 +141,6 @@
 8	python/yunshu_engine/grammar_constraint.py	attr-defined	"type[RegexConstraint]" has no attribute "_token_char_cache"
 4	python/yunshu_engine/grammar_constraint.py	attr-defined	"type[RegexConstraint]" has no attribute "_token_text_cache"
 1	python/yunshu_engine/grammar_constraint.py	no-redef	Name "_build_token_text_map" already defined on line N
-7	python/yunshu_engine/hybrid_ssd_snapshot.py	union-attr	Item "array" of "array | str | dict[str, Any]" has no attribute "get"
-7	python/yunshu_engine/hybrid_ssd_snapshot.py	union-attr	Item "str" of "array | str | dict[str, Any]" has no attribute "get"
 1	python/yunshu_engine/image_engine.py	arg-type	Argument 1 to "exp" has incompatible type "float"; expected "array"
 1	python/yunshu_engine/image_engine.py	arg-type	Argument 1 to "int" has incompatible type "int | float | complex"; expected "str | Buffer | SupportsInt | SupportsIndex | SupportsTrunc"
 1	python/yunshu_engine/image_engine.py	arg-type	Argument 1 to "resize" of "Image" has incompatible type "tuple[int, ...]"; expected "tuple[int, int] | list[int] | ndarray[tuple[Any, ...], dtype[Any]]"
@@ -425,12 +423,7 @@
 2	python/yunshu_engine/speculative_decoder.py	arg-type	Argument 1 to "int" has incompatible type "int | float | complex"; expected "str | Buffer | SupportsInt | SupportsIndex | SupportsTrunc"
 1	python/yunshu_engine/speculative_decoder.py	assignment	Incompatible types in assignment (expression has type "dict[Any, Any]", target has type "float")
 1	python/yunshu_engine/speculative_decoder.py	attr-defined	"int" has no attribute "item"
-1	python/yunshu_engine/ssd_kv_cache.py	call-overload	No overload variant of "__setitem__" of "list" matches argument types "int", "list[array | str]"
-1	python/yunshu_engine/ssd_kv_cache.py	call-overload	No overload variant of "__setitem__" of "list" matches argument types "int", "tuple[array | str, array | str]"
-3	python/yunshu_engine/ssd_kv_cache.py	index	Invalid index type "str" for "str"; expected type "SupportsIndex | slice[SupportsIndex | None, SupportsIndex | None, SupportsIndex | None]"
 1	python/yunshu_engine/ssd_kv_cache.py	no-any-return	Returning Any from function declared to return "dict[str, Any]"
-4	python/yunshu_engine/ssd_kv_cache.py	union-attr	Item "array" of "array | str | dict[str, Any]" has no attribute "get"
-4	python/yunshu_engine/ssd_kv_cache.py	union-attr	Item "str" of "array | str | dict[str, Any]" has no attribute "get"
 1	python/yunshu_engine/streaming_optimizer.py	no-any-return	Returning Any from function declared to return "PipelineToken | None"
 1	python/yunshu_engine/streaming_optimizer.py	no-any-return	Returning Any from function declared to return "ndarray[tuple[Any, ...], dtype[Any]]"
 1	python/yunshu_engine/teacache.py	arg-type	Argument 1 to "float" has incompatible type "int | float | complex"; expected "str | Buffer | SupportsFloat | SupportsIndex"

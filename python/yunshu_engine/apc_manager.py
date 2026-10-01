@@ -165,7 +165,7 @@ class SpillDiskStore(DiskBlockStore):
                 ),
                 default=0,
             )
-            return path.stat().st_size >= data_start + end
+            return bool(path.stat().st_size >= data_start + end)
         except (OSError, KeyError, TypeError, ValueError, IndexError):
             return False
 

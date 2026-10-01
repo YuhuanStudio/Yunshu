@@ -28,7 +28,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import mlx.core as mx
 
@@ -355,7 +355,9 @@ class HybridSnapshotStore:
         meta0 = self._read_header_meta(path)
         if meta0 is None or not self._meta_ok(meta0):
             return None, 0
-        arrays, meta = mx.load(str(path), return_metadata=True)
+        loaded, meta_any = mx.load(str(path), return_metadata=True)
+        arrays = cast("dict[str, Any]", loaded)  # safetensors: name -> array
+        meta = cast("dict[str, Any]", meta_any)
         quant = meta.get("q") == "i8"
 
         def _get(name):
