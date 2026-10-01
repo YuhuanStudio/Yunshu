@@ -53,17 +53,45 @@ def gumbel(seed: int, positions: mx.array, vocab: int) -> mx.array:
     return -mx.log(-mx.log(u))
 
 
+def top_p_filter(logprobs: mx.array, top_p: float) -> mx.array:
+    """Nucleus filter that always keeps the most probable token.
+
+    A token is kept when the probability mass of the tokens ranked above it is below
+    ``top_p``, so the top token survives any ``top_p`` (``0`` keeps only it, which is greedy).
+    Rows need not be normalized: the mass is taken against their own total.
+    """
+    row = logprobs.astype(mx.float32)
+    probs = mx.exp(row - mx.logsumexp(row, axis=-1, keepdims=True))
+    order = mx.argsort(-row, axis=-1)
+    before = mx.cumsum(mx.take_along_axis(probs, order, axis=-1), axis=-1) - (
+        mx.take_along_axis(probs, order, axis=-1)
+    )
+    keep_sorted = (before < top_p) | (mx.arange(row.shape[-1]) == 0)
+    keep = mx.put_along_axis(
+        mx.zeros(keep_sorted.shape, dtype=mx.bool_), order, keep_sorted, axis=-1
+    )
+    return mx.where(keep, row, -mx.inf)
+
+
+def top_k_filter(logprobs: mx.array, top_k: int) -> mx.array:
+    """Top-k filter; ``k <= 0`` or ``k >= vocab`` keeps every token (no truncation)."""
+    if top_k <= 0 or top_k >= logprobs.shape[-1]:
+        return logprobs
+    from mlx_lm.sample_utils import apply_top_k
+
+    return apply_top_k(logprobs, int(top_k))
+
+
 def filter_logprobs(logprobs: mx.array, params: Any) -> mx.array:
     """top-p / min-p / top-k then temperature, in RowSampler's order (``[N, V]``)."""
-    from mlx_lm.sample_utils import apply_min_p, apply_top_k, apply_top_p
+    from mlx_lm.sample_utils import apply_min_p
 
     row = logprobs
-    if 0 < params.top_p < 1.0:
-        row = apply_top_p(row, params.top_p)
+    if params.top_p < 1.0:
+        row = top_p_filter(row, max(float(params.top_p), 0.0))
     if params.min_p:
         row = apply_min_p(row, params.min_p)
-    if params.top_k > 0:
-        row = apply_top_k(row, params.top_k)
+    row = top_k_filter(row, params.top_k)
     return row * (1 / params.temperature)
 
 

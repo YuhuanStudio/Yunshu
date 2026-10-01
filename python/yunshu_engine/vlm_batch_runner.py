@@ -35,6 +35,7 @@ from typing import Any
 import mlx.core as mx
 
 from . import keyed_sampling
+from .keyed_sampling import top_k_filter, top_p_filter
 
 logger = logging.getLogger(__name__)
 
@@ -1037,11 +1038,30 @@ class RowSampler:
     """
 
     def __init__(self):
-        self._rows: dict[int, tuple[RowParams, Any]] = {}
+        # uid -> (params, mx PRNG key for stateful XTC rows | None, keyed sampler | None,
+        # generation index of the next draw)
+        self._rows: dict[int, list] = {}
 
     def add(self, uid: int, params: RowParams) -> None:
+        if keyed_sampling.supports(params):
+            # Position-keyed draws: the token at generation index g is a function of
+            # (logits, seed, g) only, so a seeded request gives the same stream here as on
+            # the speculative lane, alone or in a mixed batch.
+            seed = (
+                params.seed
+                if params.seed is not None
+                else int.from_bytes(os.urandom(8), "little")
+            )
+            self._rows[uid] = [
+                params,
+                None,
+                keyed_sampling.KeyedSampler(params, seed),
+                0,
+            ]
+            return
+        # XTC is stateful by design (its coin flips advance a PRNG): stays on the old path.
         key = mx.random.key(int(params.seed)) if params.seed is not None else None
-        self._rows[uid] = (params, key)
+        self._rows[uid] = [params, key, None, 0]
 
     def drop(self, uid: int) -> None:
         self._rows.pop(uid, None)
@@ -1052,8 +1072,6 @@ class RowSampler:
     def __call__(self, logprobs: mx.array) -> mx.array:
         from mlx_lm.sample_utils import (
             apply_min_p,
-            apply_top_k,
-            apply_top_p,
             apply_xtc,
         )
 
@@ -1072,10 +1090,14 @@ class RowSampler:
             entry = self._rows.get(uid)
             if entry is None:
                 continue
-            p, key = entry
+            p, key, keyed, pos = entry
             row = logprobs[i : i + 1]
-            if 0 < p.top_p < 1.0:
-                row = apply_top_p(row, p.top_p)
+            if keyed is not None:
+                entry[3] = pos + 1
+                tokens[i] = keyed.sample_positions(row, [pos])[0]
+                continue
+            if p.top_p < 1.0:
+                row = top_p_filter(row, max(p.top_p, 0.0))
             if p.min_p:
                 row = apply_min_p(row, p.min_p)
             if p.xtc_probability > 0.0:
@@ -1085,12 +1107,11 @@ class RowSampler:
                     p.xtc_threshold,
                     list(p.xtc_special_tokens or []),
                 )
-            if p.top_k > 0:
-                row = apply_top_k(row, p.top_k)
+            row = top_k_filter(row, p.top_k)
             row = row * (1 / p.temperature)
             if key is not None:
                 key, sub = mx.random.split(key)
-                self._rows[uid] = (p, key)
+                entry[1] = key
                 token = mx.random.categorical(row, key=sub)
             else:
                 token = mx.random.categorical(row)
