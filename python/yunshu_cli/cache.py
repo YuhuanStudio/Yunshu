@@ -1,6 +1,6 @@
 """Yunshu CLI — cache: check and clean the SSD prefix caches.
 
-``yunshu cache status`` reports what is on disk; ``yunshu cache gc`` removes truncated /
+``yunshu cache status`` reports what is on disk; ``yunshu cache gc`` removes stale namespaces (unused for YUNSHU_CACHE_STALE_DAYS, or whose checkpoint is gone), truncated /
 corrupt / old-format entries and orphaned temp files, and trims each cache to its size cap.
 ``gc`` is a dry run until ``--apply``.
 """
@@ -43,11 +43,26 @@ def _gib(n: int) -> str:
 
 
 def _run(apply: bool) -> list[dict]:
-    from yunshu_kv import cache_gc
+    from yunshu_kv import cache_gc, disk_budget
 
     rows = []
+    stale_days = float(settings.get("YUNSHU_CACHE_STALE_DAYS"))
     for label, directory, cap in cache_targets():
-        rep = cache_gc.scan(directory, max_bytes=cap, apply=apply)
+        budget = disk_budget.DiskBudget(
+            directory,
+            cap_bytes=cap or 0,
+            reserve_pct=float(settings.get("YUNSHU_CACHE_RESERVE_PCT")),
+            reserve_min_bytes=int(
+                float(settings.get("YUNSHU_CACHE_RESERVE_GB")) * 2**30
+            ),
+        )
+        try:
+            effective = budget.effective_cap() if directory.is_dir() else cap
+        except OSError:
+            effective = cap
+        rep = cache_gc.scan(
+            directory, max_bytes=effective, apply=apply, stale_days=stale_days
+        )
         rows.append(
             {
                 "cache": label,
@@ -56,6 +71,9 @@ def _run(apply: bool) -> list[dict]:
                 "files": rep.files,
                 "valid_bytes": rep.bytes,
                 "cap_bytes": cap,
+                "effective_cap_bytes": effective,
+                "namespaces": rep.namespaces,
+                "stale_namespaces": rep.stale_namespaces,
                 "problems": rep.by_reason(),
                 "reclaimable_bytes": sum(f.bytes for f in rep.findings),
                 "freed_bytes": rep.freed,
@@ -79,6 +97,9 @@ def status():
                 f"[bold]{r['cache']}[/] {r['dir']}: {r['files']} files, "
                 f"{_gib(r['valid_bytes'])} (cap {cap})"
             )
+            for ns, n in sorted(r["namespaces"].items(), key=lambda kv: -kv[1]):
+                tag = " [stale]" if ns in r["stale_namespaces"] else ""
+                console.print(f"    {ns}: {_gib(n)}{tag}")
             if r["problems"]:
                 console.print(
                     f"  [yellow]{r['problems']}[/] — {_gib(r['reclaimable_bytes'])} "

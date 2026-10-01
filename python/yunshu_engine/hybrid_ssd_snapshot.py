@@ -60,7 +60,10 @@ class HybridSnapshotStore:
         fingerprint: str = "",
         max_bytes: int = 0,
         budget: Callable[[], int] | None = None,
+        disk_budget=None,
     ):
+        # ``disk_budget``: the root-wide yunshu_kv.disk_budget.DiskBudget (see there)
+        self._disk_budget = disk_budget
         # "native": tensors stored bit-exact (lossless reuse). "int8": per-tensor
         # symmetric int8 (~4x smaller than fp32 state; lossy on reuse, and the
         # recurrent state carries the whole prefix). Load reads either format.
@@ -187,6 +190,20 @@ class HybridSnapshotStore:
             with contextlib.suppress(OSError):
                 self._path(key_hex).unlink()
 
+    budget_ns = "."
+
+    def evict_path(self, path) -> bool:
+        """Drop one snapshot on the root budget's behalf."""
+        key_hex = Path(path).stem
+        with self._lock:
+            self._index.pop(key_hex, None)
+            self._sizes.pop(key_hex, None)
+            self._used.pop(key_hex, None)
+        self.evictions += 1
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(path)
+        return True
+
     def _path(self, key_hex: str) -> Path:
         sub = self._dir / key_hex[:2]
         sub.mkdir(parents=True, exist_ok=True)
@@ -306,14 +323,34 @@ class HybridSnapshotStore:
             # (the whole-snapshot SSD tier was dead: has()→False →
             # every restore fell back to a full prefill). Keep the extension.
             tmp_path = f"{path}.{os.getpid()}.tmp.safetensors"
-            mx.save_safetensors(tmp_path, tensors, meta)
-            os.replace(tmp_path, str(path))
+            db = self._disk_budget
+            if db is not None:
+                est = sum(int(getattr(t, "nbytes", 0)) for t in tensors.values())
+                if not db.allow_write(est):
+                    return
+            try:
+                mx.save_safetensors(tmp_path, tensors, meta)
+                os.replace(tmp_path, str(path))
+            except OSError as e:
+                # full disk / write error: drop this snapshot, no temp file, pause spilling
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp_path)
+                if db is not None:
+                    db.record_failure(e)
+                else:
+                    logger.warning("hybrid snapshot not saved (%s)", e)
+                return
+            if db is not None:
+                db.note_written(path)
             with self._lock:
                 self._index[key.hex()] = token_count
                 with contextlib.suppress(OSError):
                     self._sizes[key.hex()] = os.stat(path).st_size
                 self._used[key.hex()] = time.time()
             self._enforce_budget(protect=key.hex())
+            if db is not None:
+                with contextlib.suppress(Exception):
+                    db.enforce(keep={self.budget_ns}, protect={path})
         except Exception:
             logger.debug("hybrid snapshot save failed", exc_info=True)
 

@@ -23,9 +23,11 @@ import contextlib
 import gc
 import hashlib
 import logging
+import os
 import threading
 import time
 from copy import copy
+from pathlib import Path
 from typing import Any
 
 import mlx.core as mx
@@ -288,6 +290,19 @@ def _make_eviction_strategy(name: str) -> EvictionStrategy:
             f"Supported: {', '.join(strategies.keys())}"
         )
     return cls()
+
+
+def _local_signature(model_name: str) -> str | None:
+    """Fingerprint of a local checkpoint directory (for stale-namespace detection)."""
+    import os
+
+    if not model_name.startswith(("/", "~")) or not os.path.isdir(
+        os.path.expanduser(model_name)
+    ):
+        return None
+    from yunshu_kv.fingerprint import checkpoint_fingerprint
+
+    return checkpoint_fingerprint(model_name, digest_size=8)
 
 
 class KVPrefixCache:
@@ -1622,12 +1637,33 @@ class KVPrefixCache:
         # is physically isolated (covers both the per-block store and the hybrid
         # whole-snapshot store) without perturbing the in-memory hash chain.
         scoped_dir = self._scoped_ssd_dir(cache_dir, model_name, fingerprint)
+        base_dir = os.path.expanduser(cache_dir)
+        budget = None
+        ns = "."
+        try:
+            from yunshu_kv import disk_budget
+
+            # one budget for the whole cache dir (every model's namespace together)
+            budget = disk_budget.budget_for(
+                base_dir, cap_bytes=max_size_bytes, label="SSD KV cache"
+            )
+            if scoped_dir != base_dir:
+                ns = os.path.basename(scoped_dir)
+                disk_budget.write_marker(
+                    Path(scoped_dir),
+                    model_name if model_name.startswith(("/", "~")) else None,
+                    _local_signature(model_name),
+                )
+        except Exception:
+            logger.warning("SSD KV cache: root budget unavailable", exc_info=True)
         self._ssd_cache = SSDKVCache(
             cache_dir=scoped_dir,
             max_size_bytes=max_size_bytes,
             precision=precision,
             fingerprint=fingerprint,
+            budget=budget,
         )
+        self._ssd_cache._budget_ns = ns
         self._ssd_model_name = model_name
         # whole-snapshot SSD store for HYBRID models (the
         # per-block SSD path can't serialize ArraysCache recurrent state).
@@ -1643,7 +1679,17 @@ class KVPrefixCache:
                 fingerprint=fingerprint,
                 max_bytes=max_size_bytes,
                 budget=lambda: max_size_bytes - ssd.block_bytes(),
+                disk_budget=budget,
             )
+            hybrid.budget_ns = ns
+            if budget is not None:
+
+                def _evict(path, _ssd=ssd, _hybrid=hybrid):
+                    if "hybrid_snapshots" in path.parts:
+                        return _hybrid.evict_path(path)
+                    return _ssd.evict_path(path)
+
+                budget.register_owner(ns, _evict)
             ssd.set_external_bytes(lambda: hybrid.total_bytes)
             self._hybrid_ssd = hybrid
         except Exception:

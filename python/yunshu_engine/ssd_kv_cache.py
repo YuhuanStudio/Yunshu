@@ -242,7 +242,12 @@ class SSDKVCache:
         backend: str | None = None,
         precision: str = "native",
         fingerprint: str = "",
+        budget=None,
     ):
+        # ``budget``: the root-wide yunshu_kv.disk_budget.DiskBudget (all namespaces
+        # together, free-space reserve, pause on write errors); None = this cache only.
+        self._budget = budget
+        self._budget_ns = "."
         # ``fingerprint``: checkpoint identity written into every block and checked on
         # load; a block from another revision is dropped, never served.
         self._fingerprint = fingerprint
@@ -676,7 +681,25 @@ class SSDKVCache:
                             block_hash_hex[:16],
                         )
                         return
-                file_size = _write_safetensors(file_path, tensors_raw, meta_dict)
+                budget = self._budget
+                if budget is not None:
+                    est = sum(len(t[0]) for t in tensors_raw.values())
+                    if not budget.allow_write(est):
+                        self._forget_unwritten(block_hash_hex)
+                        return
+                try:
+                    file_size = _write_safetensors(file_path, tensors_raw, meta_dict)
+                except OSError as e:
+                    # full disk or another write error: drop this block, pause spilling
+                    # (one warning); _write_safetensors already removed its temp file
+                    self._forget_unwritten(block_hash_hex)
+                    if budget is not None:
+                        budget.record_failure(e)
+                    else:
+                        logger.warning("SSD KV cache: write failed (%s)", e)
+                    return
+                if budget is not None:
+                    budget.note_written(Path(file_path), file_size)
                 with self._lock:
                     if block_hash_hex in self._index:
                         self._index[block_hash_hex].file_size = file_size
@@ -693,11 +716,39 @@ class SSDKVCache:
                         )
                         with contextlib.suppress(OSError):
                             os.unlink(file_path)
+                if budget is not None:
+                    with contextlib.suppress(Exception):
+                        budget.enforce(
+                            keep={self._budget_ns}, protect={Path(file_path)}
+                        )
             elif op == "delete":
                 with contextlib.suppress(OSError):
                     os.unlink(item[1])
         except Exception:
             logger.debug("SSD write error", exc_info=True)
+
+    def _forget_unwritten(self, hex_hash: str) -> None:
+        """A block whose file was never written must not stay indexed."""
+        with self._lock:
+            self._index.pop(hex_hash, None)
+        with contextlib.suppress(Exception):
+            self._sqlite_delete(hex_hash)
+
+    def evict_path(self, path) -> bool:
+        """Drop one of this cache's files on the root budget's behalf (index and all)."""
+        sp = str(path)
+        with self._lock:
+            hit = next((h for h, m in self._index.items() if m.file_path == sp), None)
+            if hit is not None:
+                self._index.pop(hit, None)
+                self._hot_cache.pop(hit, None)
+                self._evictions += 1
+        if hit is not None:
+            with contextlib.suppress(Exception):
+                self._sqlite_delete(hit)
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(sp)
+        return True
 
     def load_block(self, block_hash: bytes) -> list | None:
         """Load a KV block from hot cache or SSD.
@@ -816,6 +867,8 @@ class SSDKVCache:
             # deleted or replaced by a concurrent delete_block() while we
             # read from disk (TOCTOU guard: verify file_path still matches).
             token_count = int(header.get("token_count", "0"))
+            with contextlib.suppress(OSError):
+                os.utime(meta.file_path, None)  # LRU clock for the root budget
             with self._lock:
                 meta_now = self._index.get(hex_hash)
                 if meta_now is None or meta_now.file_path != meta.file_path:
