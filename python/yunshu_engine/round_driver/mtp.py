@@ -45,7 +45,8 @@ class MTPHead:
         ``single``: one row drafts, so the reduced vocabulary (kept for one
         request) applies; with several rows the full head reads out."""
         if self.vocab is not None and single:
-            return self.drafter._greedy_token(hidden).astype(mx.int32)
+            out: mx.array = self.drafter._greedy_token(hidden).astype(mx.int32)
+            return out
         return mx.argmax(self.logits(hidden), axis=-1).astype(mx.int32)
 
     def make_cache(self) -> list:

@@ -122,7 +122,7 @@ class DraftVocab:
             self.extra_ids = self.extra_rows = None
             return 0
         count = self._add(ids)
-        if count:
+        if count and self.extra_ids is not None and self.extra_rows is not None:
             mx.eval(self.extra_ids, *self.extra_rows)
         return count
 
