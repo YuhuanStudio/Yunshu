@@ -2410,9 +2410,16 @@ async def _handle_vlm_chat(
 
         _vtok = getattr(vlm_engine, "_tokenizer", None)
         if _vtok is not None:
+            from yunshu_engine.media_tokens import make_media_token_counter
+
             _vlm_est = count_message_tokens(
-                messages, _vtok
-            )  # already counts image blocks
+                messages,
+                _vtok,
+                media_counter=make_media_token_counter(
+                    getattr(vlm_engine, "_processor", None),
+                    getattr(vlm_engine, "_config", None),
+                ),
+            )  # image/video cost from the processor's patch grid
         else:
             _img = sum(
                 1
