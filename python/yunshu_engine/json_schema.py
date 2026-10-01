@@ -33,6 +33,8 @@ from collections.abc import Callable
 from enum import Enum, auto
 from typing import Any
 
+from yunshu_engine.constraint_eos import ConstrainedDecodingError, normalize_eos_ids
+
 logger = logging.getLogger(__name__)
 
 
@@ -352,12 +354,7 @@ def without_special_ids(tokenizer: Any, ids) -> list[int]:
         special.update(int(t) for t in getattr(tokenizer, "all_special_ids", ()) or ())
     except Exception:  # noqa: BLE001 - a tokenizer without the attribute
         logger.debug("special-token ids unavailable", exc_info=True)
-    for name in ("eos_token_ids", "eos_token_id"):
-        eos = getattr(tokenizer, name, None)
-        if isinstance(eos, int):
-            special.add(eos)
-        elif eos:
-            special.update(int(t) for t in eos)
+    special.update(normalize_eos_ids(tokenizer))
     return [t for t in ids if t not in special]
 
 
@@ -507,11 +504,7 @@ class JsonSchemaConstraint:
         )
 
     def _eos_ids(self, tokenizer: Any) -> list[int]:
-        if hasattr(tokenizer, "eos_token_ids"):
-            return list(tokenizer.eos_token_ids)
-        if getattr(tokenizer, "eos_token_id", None) is not None:
-            return [tokenizer.eos_token_id]
-        return []
+        return normalize_eos_ids(tokenizer)
 
     def _get_type_from_schema(self, schema: dict) -> str | list[str]:
         """Extract the type from a schema, with default."""
@@ -2268,9 +2261,9 @@ def apply_json_constraint(
 ) -> Any:
     """Mask logits for disallowed tokens to -inf.
 
-    When no tokens are allowed (empty ``allowed_token_ids``), falls back to
-    the argmax of the original logits instead of masking all to -inf, which
-    would cause softmax NaN.
+    An empty ``allowed_token_ids`` (or an allowed set whose logits are all
+    -inf) is a dead end and raises ``ConstrainedDecodingError``; it is never
+    answered with the unconstrained argmax.
 
     Args:
         logits: mx.array of shape (1, vocab_size) or (vocab_size,)
@@ -2284,36 +2277,9 @@ def apply_json_constraint(
     neg_inf = mx.array(float("-inf"), dtype=logits.dtype)
 
     if not allowed_token_ids:
-        # No valid tokens in current state — fall back to argmax of original
-        # logits to avoid all-inf -> softmax NaN
-        logger.warning(
-            "JSON constraint: no allowed tokens in current state, "
-            "falling back to argmax of original logits"
+        raise ConstrainedDecodingError(
+            "constrained decoding dead end: no token is allowed in the current state"
         )
-        # Use per-position argmax for correct multi-dimensional logits.
-        # Flat argmax index cannot index into a vocab-sized mask when
-        # batch or seq dimensions are present.
-        vocab_size = logits.shape[-1]
-        flat_2d = logits.reshape(-1, vocab_size)
-        # Sanitize NaN logits before argmax — NaN produces arbitrary indices
-        flat_2d = mx.where(
-            mx.isnan(flat_2d), mx.array(-1e10, dtype=flat_2d.dtype), flat_2d
-        )
-        best_per_pos = mx.argmax(flat_2d, axis=-1)
-        mask = mx.ones(logits.shape, dtype=mx.bool_)
-        mask = mask.reshape(-1, vocab_size)
-        mask[mx.arange(mask.shape[0]), best_per_pos] = False
-        mask = mask.reshape(logits.shape)
-        result = mx.where(mask, neg_inf, logits)
-        # If even the argmax was -inf (all-logits-inf edge case), force
-        # one finite value per position so sampling doesn't produce NaN.
-        if not mx.any(mx.isfinite(result.reshape(-1))).item():
-            result = result.reshape(-1, vocab_size)
-            result[mx.arange(result.shape[0]), best_per_pos] = mx.array(
-                0.0, dtype=logits.dtype
-            )
-            result = result.reshape(logits.shape)
-        return result
 
     # Create mask: True where token is NOT allowed
     vocab_size = logits.shape[-1]
@@ -2332,32 +2298,11 @@ def apply_json_constraint(
     # Apply mask
     result = mx.where(mask, neg_inf, logits)
 
-    # Safety: if all allowed tokens already had -inf logits, fall back to argmax
-    is_finite = mx.isfinite(result.reshape(-1))
-    if not mx.any(is_finite).item():
-        logger.warning(
-            "JSON constraint: all allowed tokens have -inf logits, "
-            "falling back to argmax of original logits"
+    # Fail closed: every row must keep at least one finite allowed logit.
+    if not mx.all(mx.any(mx.isfinite(result), axis=-1)).item():
+        raise ConstrainedDecodingError(
+            "constrained decoding dead end: every allowed token has a -inf logit"
         )
-        vocab_size = logits.shape[-1]
-        flat_2d = logits.reshape(-1, vocab_size)
-        flat_2d = mx.where(
-            mx.isnan(flat_2d), mx.array(-1e10, dtype=flat_2d.dtype), flat_2d
-        )
-        best_per_pos = mx.argmax(flat_2d, axis=-1)
-        fallback_mask = mx.ones(logits.shape, dtype=mx.bool_)
-        fallback_mask = fallback_mask.reshape(-1, vocab_size)
-        fallback_mask[mx.arange(fallback_mask.shape[0]), best_per_pos] = False
-        fallback_mask = fallback_mask.reshape(logits.shape)
-        result = mx.where(fallback_mask, neg_inf, logits)
-        # If even the argmax was -inf, force one finite value per position
-        if not mx.any(mx.isfinite(result.reshape(-1))).item():
-            result = result.reshape(-1, vocab_size)
-            result[mx.arange(result.shape[0]), best_per_pos] = mx.array(
-                0.0, dtype=logits.dtype
-            )
-            result = result.reshape(logits.shape)
-        return result
 
     return result
 
@@ -2408,15 +2353,9 @@ class ConstrainedSampler:
             # No valid tokens in current state — force EOS to avoid
             # producing invalid output.  Setting all logits to -inf
             # causes softmax NaN, so we allowlist only EOS tokens.
-            eos_ids = []
-            if hasattr(self._tokenizer, "eos_token_ids"):
-                eos_ids = list(self._tokenizer.eos_token_ids)
-            elif hasattr(self._tokenizer, "eos_token_id"):
-                eos_ids = [self._tokenizer.eos_token_id]
-            if eos_ids:
-                masked_logits = apply_json_constraint(logits, eos_ids)
-            else:
-                masked_logits = apply_json_constraint(logits, [])
+            raise ConstrainedDecodingError(
+                "constrained decoding dead end: no token is allowed in the current state"
+            )
 
         # Sample using base sampler
         token = self._base_sampler(masked_logits)
@@ -2429,11 +2368,7 @@ class ConstrainedSampler:
         # Skip advance() for EOS tokens — their decoded text (e.g. "</s>")
         # would corrupt the constraint's text buffer and break
         # checkpoint/rollback correctness.
-        eos_ids = set()
-        if hasattr(self._tokenizer, "eos_token_ids"):
-            eos_ids = set(self._tokenizer.eos_token_ids)
-        elif hasattr(self._tokenizer, "eos_token_id"):
-            eos_ids = {self._tokenizer.eos_token_id}
+        eos_ids = set(normalize_eos_ids(self._tokenizer))
 
         if token_id not in eos_ids:
             try:

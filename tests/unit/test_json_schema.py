@@ -609,18 +609,15 @@ class TestApplyJsonConstraint:
         for i in range(3):
             assert abs(float(masked[0, i]) - float(logits[0, i])) < 1e-6
 
-    def test_empty_allowed_falls_back_to_argmax(self):
+    def test_empty_allowed_is_dead_end(self):
         import mlx.core as mx
+        import pytest
+
+        from yunshu_engine.constraint_eos import ConstrainedDecodingError
 
         logits = mx.array([[1.0, 2.0, 3.0]])
-        masked = apply_json_constraint(logits, [])
-        # Empty allowed now falls back to argmax (token 2 = 3.0) to avoid NaN.
-        assert float(masked[0, 2]) == 3.0, "argmax token should keep its original logit"
-        assert float(masked[0, 0]) < -1e10, "non-argmax tokens should be -inf"
-        assert float(masked[0, 1]) < -1e10, "non-argmax tokens should be -inf"
-        # Verify softmax does not produce NaN
-        probs = mx.softmax(masked)
-        assert not mx.any(mx.isnan(probs)).item(), "softmax should not produce NaN"
+        with pytest.raises(ConstrainedDecodingError):
+            apply_json_constraint(logits, [])
 
     def test_single_token_allowed(self):
         import mlx.core as mx

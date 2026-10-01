@@ -17,12 +17,13 @@ All constraints implement the same interface as JsonSchemaConstraint:
 Integration: plug into ConstrainedSampler alongside JsonSchemaConstraint.
 """
 
-import contextlib
 import logging
 import re
 import re._parser as _sre_parse
 import weakref
 from typing import Any
+
+from yunshu_engine.constraint_eos import normalize_eos_ids
 
 logger = logging.getLogger(__name__)
 
@@ -767,11 +768,7 @@ class RegexConstraint:
         self, tokenizer: Any, generated_token_ids: list[int]
     ) -> list[int]:
         if self._done:
-            eos_ids = []
-            if hasattr(tokenizer, "eos_token_ids"):
-                eos_ids = list(tokenizer.eos_token_ids)
-            elif hasattr(tokenizer, "eos_token_id"):
-                eos_ids = [tokenizer.eos_token_id]
+            eos_ids = normalize_eos_ids(tokenizer)
             return eos_ids
 
         # seed the DFA probe with the tokenizer's actual first-char
@@ -799,14 +796,7 @@ class RegexConstraint:
                 if self._dfa.has_dfa
                 else (self._dfa.is_full_match(self._text_buffer))
             ):
-                eos = getattr(tokenizer, "eos_token_ids", None)
-                if eos is None:
-                    eos = [getattr(tokenizer, "eos_token_id", None)]
-                eos = [
-                    e
-                    for e in (eos if isinstance(eos, (list, tuple, set)) else [eos])
-                    if e is not None
-                ]
+                eos = normalize_eos_ids(tokenizer)
                 everything = list(everything) + [
                     e for e in eos if e not in set(everything)
                 ]
@@ -836,11 +826,7 @@ class RegexConstraint:
             else self._dfa.is_full_match(self._text_buffer)
         )
         if _full:
-            eos_ids = []
-            if hasattr(tokenizer, "eos_token_ids"):
-                eos_ids = list(tokenizer.eos_token_ids)
-            elif hasattr(tokenizer, "eos_token_id"):
-                eos_ids = [tokenizer.eos_token_id]
+            eos_ids = normalize_eos_ids(tokenizer)
             if eos_ids:
                 # _filter_tokens_by_dfa returns a cached list; build a new list so
                 # we never mutate the cached entry with EOS ids.
@@ -1009,11 +995,7 @@ class ChoiceConstraint:
         self, tokenizer: Any, generated_token_ids: list[int]
     ) -> list[int]:
         if self._done:
-            eos_ids = []
-            if hasattr(tokenizer, "eos_token_ids"):
-                eos_ids = list(tokenizer.eos_token_ids)
-            elif hasattr(tokenizer, "eos_token_id"):
-                eos_ids = [tokenizer.eos_token_id]
+            eos_ids = normalize_eos_ids(tokenizer)
             return eos_ids
 
         buf = self._text_buffer if self._case_sensitive else self._text_buffer.lower()
@@ -1042,11 +1024,7 @@ class ChoiceConstraint:
 
         # If only __eos__ is valid, return EOS tokens
         if valid_chars == {"__eos__"}:
-            eos_ids = []
-            if hasattr(tokenizer, "eos_token_ids"):
-                eos_ids = list(tokenizer.eos_token_ids)
-            elif hasattr(tokenizer, "eos_token_id"):
-                eos_ids = [tokenizer.eos_token_id]
+            eos_ids = normalize_eos_ids(tokenizer)
             return eos_ids
 
         # Re-check whether the current buffer position is at a valid
@@ -1105,11 +1083,7 @@ class ChoiceConstraint:
         # Include EOS tokens only when the current position is a valid
         # choice end (__end__ marker present in the trie node).
         if has_eos:
-            eos_ids = []
-            if hasattr(tokenizer, "eos_token_ids"):
-                eos_ids = list(tokenizer.eos_token_ids)
-            elif hasattr(tokenizer, "eos_token_id"):
-                eos_ids = [tokenizer.eos_token_id]
+            eos_ids = normalize_eos_ids(tokenizer)
             allowed.update(eos_ids)
         return list(allowed)
 
@@ -1212,11 +1186,7 @@ class LarkGrammarConstraint:
     ) -> list[int]:
         if self._done or self._parser is None:
             if self._done:
-                eos_ids = []
-                if hasattr(tokenizer, "eos_token_ids"):
-                    eos_ids = list(tokenizer.eos_token_ids)
-                elif hasattr(tokenizer, "eos_token_id"):
-                    eos_ids = [tokenizer.eos_token_id]
+                eos_ids = normalize_eos_ids(tokenizer)
                 return eos_ids
             return []
 
@@ -1416,13 +1386,7 @@ def _build_token_text_map(tokenizer: Any) -> dict[int, str]:
     else:
         return text_map
 
-    eos_ids: set[int] = set()
-    if hasattr(tokenizer, "eos_token_ids"):
-        with contextlib.suppress(Exception):
-            eos_ids = set(tokenizer.eos_token_ids)
-    elif hasattr(tokenizer, "eos_token_id"):
-        with contextlib.suppress(Exception):
-            eos_ids = {tokenizer.eos_token_id}
+    eos_ids: set[int] = set(normalize_eos_ids(tokenizer))
 
     for _token_text, token_id in vocab.items():
         if token_id in eos_ids:
