@@ -33,10 +33,216 @@ from collections.abc import Callable
 from enum import Enum, auto
 from typing import Any
 
+from yunshu_engine.constraint_eos import ConstrainedDecodingError, normalize_eos_ids
+
 logger = logging.getLogger(__name__)
 
 
 # ── JSON Schema Auto-Repair ──────────────────────────────────────────────────
+
+
+class UnsupportedSchemaError(ValueError):
+    """The JSON Schema uses a construct the constrained decoder cannot enforce.
+
+    This is the subset of the IN-HOUSE state machine. ``build_json_constraint``
+    routes every schema outside it to an llguidance constraint (value constraints,
+    prefixItems, recursion, ``format``), and the request is rejected only when
+    llguidance cannot compile the schema either (``uniqueItems``, ``not``,
+    ``if/then/else``, ``contains``, ...).
+
+    In-house subset (enforced token by token; everything else is rejected, never
+    silently ignored):
+
+    * ``type`` (one name or a list of ``object array string number integer
+      boolean null``), ``enum``, ``const``;
+    * ``properties`` / ``required`` / ``additionalProperties`` (bool or schema;
+      an object that declares ``properties`` and omits ``additionalProperties``
+      is closed, the OpenAI structured-output convention);
+    * ``items`` (one schema);
+    * ``anyOf`` / ``oneOf`` / ``allOf`` of supported schemas;
+    * local, non-recursive ``$ref`` into ``$defs`` / ``definitions``;
+    * annotations that never affect validity: ``title description default
+      examples example $schema $id $comment deprecated readOnly writeOnly
+      format name strict``.
+
+    Rejected: length / range / count / pattern bounds (``minLength minimum
+    minItems pattern multipleOf uniqueItems ...``), ``not``, ``if/then/else``,
+    ``patternProperties``, ``prefixItems``, ``contains``, ``dependent*``,
+    ``propertyNames``, ``unevaluated*``, boolean sub-schemas, remote or
+    recursive ``$ref`` and schemas that exceed the compile budget.
+    """
+
+
+_SCHEMA_ANNOTATIONS = frozenset(
+    {
+        "title",
+        "description",
+        "default",
+        "examples",
+        "example",
+        "$schema",
+        "$id",
+        "$comment",
+        "deprecated",
+        "readOnly",
+        "writeOnly",
+        "format",
+        "name",
+        "strict",
+    }
+)
+_SCHEMA_ENFORCED = frozenset(
+    {
+        "type",
+        "enum",
+        "const",
+        "properties",
+        "required",
+        "additionalProperties",
+        "items",
+        "anyOf",
+        "oneOf",
+        "allOf",
+        "$ref",
+        "$defs",
+        "definitions",
+    }
+)
+_SCHEMA_TYPES = frozenset(
+    {"object", "array", "string", "number", "integer", "boolean", "null"}
+)
+# ``format`` values llguidance enforces; any other value is a pure annotation.
+LLG_ENFORCED_FORMATS = frozenset(
+    {
+        "date",
+        "time",
+        "date-time",
+        "duration",
+        "email",
+        "hostname",
+        "ipv4",
+        "ipv6",
+        "uuid",
+        "uri",
+    }
+)
+_SCHEMA_MAX_NODES = 20_000
+_SCHEMA_MAX_DEPTH = 64
+
+
+def validate_supported_schema(schema: Any) -> None:
+    """Raise :class:`UnsupportedSchemaError` unless every keyword is enforced."""
+    if not isinstance(schema, dict):
+        raise UnsupportedSchemaError("JSON Schema must be an object")
+    problems: list[str] = []
+    budget = [0]
+
+    def resolve(ref: str) -> Any:
+        if ref == "#":
+            return schema
+        if not ref.startswith("#/"):
+            return None
+        node: Any = schema
+        for seg in ref[2:].split("/"):
+            seg = seg.replace("~1", "/").replace("~0", "~")
+            if isinstance(node, dict) and seg in node:
+                node = node[seg]
+            else:
+                return None
+        return node
+
+    def walk(node: Any, path: str, stack: tuple[str, ...], depth: int) -> None:
+        budget[0] += 1
+        if budget[0] > _SCHEMA_MAX_NODES or depth > _SCHEMA_MAX_DEPTH:
+            raise UnsupportedSchemaError(
+                "JSON Schema too complex (exceeds the compile budget of "
+                f"{_SCHEMA_MAX_NODES} nodes / depth {_SCHEMA_MAX_DEPTH})"
+            )
+        if not isinstance(node, dict):
+            problems.append(f"{path or '/'}: boolean/non-object sub-schema")
+            return
+        bad = sorted(
+            k
+            for k in node
+            if k not in _SCHEMA_ENFORCED
+            and k not in _SCHEMA_ANNOTATIONS
+            and not k.startswith("x-")
+        )
+        if bad:
+            problems.append(f"{path or '/'}: {', '.join(bad)}")
+        fmt = node.get("format")
+        if isinstance(fmt, str) and fmt in LLG_ENFORCED_FORMATS:
+            problems.append(f"{path or '/'}: format {fmt} (enforced by llguidance)")
+        t = node.get("type")
+        if t is not None:
+            kinds = t if isinstance(t, list) else [t]
+            if not kinds or any(k not in _SCHEMA_TYPES for k in kinds):
+                problems.append(f"{path or '/'}: invalid type {t!r}")
+        if "enum" in node and not (isinstance(node["enum"], list) and node["enum"]):
+            problems.append(f"{path or '/'}: enum must be a non-empty list")
+        if "required" in node and not (
+            isinstance(node["required"], list)
+            and all(isinstance(r, str) for r in node["required"])
+        ):
+            problems.append(f"{path or '/'}: required must be a list of strings")
+        ref = node.get("$ref")
+        if ref is not None:
+            if not isinstance(ref, str) or not ref.startswith("#"):
+                problems.append(f"{path or '/'}: remote $ref {ref!r}")
+            elif ref in stack:
+                problems.append(f"{path or '/'}: recursive $ref {ref}")
+            else:
+                target = resolve(ref)
+                if not isinstance(target, dict):
+                    problems.append(f"{path or '/'}: unresolvable $ref {ref}")
+                else:
+                    walk(target, path + f"[{ref}]", stack + (ref,), depth + 1)
+        props = node.get("properties")
+        if props is not None:
+            if not isinstance(props, dict):
+                problems.append(f"{path or '/'}: properties must be an object")
+            else:
+                for name, sub in props.items():
+                    walk(sub, f"{path}/properties/{name}", stack, depth + 1)
+        add = node.get("additionalProperties")
+        if isinstance(add, dict):
+            walk(add, f"{path}/additionalProperties", stack, depth + 1)
+        elif add is not None and not isinstance(add, bool):
+            problems.append(f"{path or '/'}: additionalProperties must be bool/schema")
+        if "items" in node:
+            walk(node["items"], f"{path}/items", stack, depth + 1)
+        for key in ("anyOf", "oneOf", "allOf"):
+            if key in node:
+                subs = node[key]
+                if not isinstance(subs, list) or not subs:
+                    problems.append(f"{path or '/'}: {key} must be a non-empty list")
+                else:
+                    for i, sub in enumerate(subs):
+                        walk(sub, f"{path}/{key}/{i}", stack, depth + 1)
+        for key in ("$defs", "definitions"):
+            defs = node.get(key)
+            if isinstance(defs, dict):
+                for name, sub in defs.items():
+                    # Definitions are checked when referenced; an unreferenced
+                    # one never reaches generation.
+                    if not isinstance(sub, dict):
+                        problems.append(f"{path}/{key}/{name}: non-object definition")
+
+    if "enum" in schema or "const" in schema:
+        # The token machine enforces enum / const on object properties and array
+        # items; at the document root it does not (it would let any string through).
+        problems.append("/: enum/const at the schema root is not enforced")
+    walk(schema, "", (), 0)
+    if problems:
+        raise UnsupportedSchemaError(
+            "unsupported JSON Schema: "
+            + "; ".join(problems[:8])
+            + " (supported keywords: "
+            + ", ".join(sorted(_SCHEMA_ENFORCED))
+            + "; annotations ignored: "
+            + ", ".join(sorted(_SCHEMA_ANNOTATIONS))
+            + ")"
+        )
 
 
 def _repair_json_schema(
@@ -352,12 +558,7 @@ def without_special_ids(tokenizer: Any, ids) -> list[int]:
         special.update(int(t) for t in getattr(tokenizer, "all_special_ids", ()) or ())
     except Exception:  # noqa: BLE001 - a tokenizer without the attribute
         logger.debug("special-token ids unavailable", exc_info=True)
-    for name in ("eos_token_ids", "eos_token_id"):
-        eos = getattr(tokenizer, name, None)
-        if isinstance(eos, int):
-            special.add(eos)
-        elif eos:
-            special.update(int(t) for t in eos)
+    special.update(normalize_eos_ids(tokenizer))
     return [t for t in ids if t not in special]
 
 
@@ -416,6 +617,8 @@ class JsonSchemaConstraint:
                     The schema is auto-repaired via ``_repair_json_schema``
                     before use.
         """
+        if schema is not None:
+            validate_supported_schema(schema)
         self._schema = _repair_json_schema(schema) if schema is not None else None
         self._state = JsonState.START
         self._text_buffer = ""  # decoded text so far
@@ -507,11 +710,7 @@ class JsonSchemaConstraint:
         )
 
     def _eos_ids(self, tokenizer: Any) -> list[int]:
-        if hasattr(tokenizer, "eos_token_ids"):
-            return list(tokenizer.eos_token_ids)
-        if getattr(tokenizer, "eos_token_id", None) is not None:
-            return [tokenizer.eos_token_id]
-        return []
+        return normalize_eos_ids(tokenizer)
 
     def _get_type_from_schema(self, schema: dict) -> str | list[str]:
         """Extract the type from a schema, with default."""
@@ -1129,8 +1328,9 @@ class JsonSchemaConstraint:
             return False
         schema_type = self._get_type_from_schema(schema)
         if isinstance(schema_type, list):
-            # Multiple types: integer only if all types are integer
-            return all(t == "integer" for t in schema_type)
+            # A union is integer-only when it names "integer" and no "number":
+            # [integer, string] must not admit 1.5.
+            return "integer" in schema_type and "number" not in schema_type
         return schema_type == "integer"
 
     def _get_current_value_schema(self) -> dict | None:
@@ -2268,9 +2468,9 @@ def apply_json_constraint(
 ) -> Any:
     """Mask logits for disallowed tokens to -inf.
 
-    When no tokens are allowed (empty ``allowed_token_ids``), falls back to
-    the argmax of the original logits instead of masking all to -inf, which
-    would cause softmax NaN.
+    An empty ``allowed_token_ids`` (or an allowed set whose logits are all
+    -inf) is a dead end and raises ``ConstrainedDecodingError``; it is never
+    answered with the unconstrained argmax.
 
     Args:
         logits: mx.array of shape (1, vocab_size) or (vocab_size,)
@@ -2284,36 +2484,9 @@ def apply_json_constraint(
     neg_inf = mx.array(float("-inf"), dtype=logits.dtype)
 
     if not allowed_token_ids:
-        # No valid tokens in current state — fall back to argmax of original
-        # logits to avoid all-inf -> softmax NaN
-        logger.warning(
-            "JSON constraint: no allowed tokens in current state, "
-            "falling back to argmax of original logits"
+        raise ConstrainedDecodingError(
+            "constrained decoding dead end: no token is allowed in the current state"
         )
-        # Use per-position argmax for correct multi-dimensional logits.
-        # Flat argmax index cannot index into a vocab-sized mask when
-        # batch or seq dimensions are present.
-        vocab_size = logits.shape[-1]
-        flat_2d = logits.reshape(-1, vocab_size)
-        # Sanitize NaN logits before argmax — NaN produces arbitrary indices
-        flat_2d = mx.where(
-            mx.isnan(flat_2d), mx.array(-1e10, dtype=flat_2d.dtype), flat_2d
-        )
-        best_per_pos = mx.argmax(flat_2d, axis=-1)
-        mask = mx.ones(logits.shape, dtype=mx.bool_)
-        mask = mask.reshape(-1, vocab_size)
-        mask[mx.arange(mask.shape[0]), best_per_pos] = False
-        mask = mask.reshape(logits.shape)
-        result = mx.where(mask, neg_inf, logits)
-        # If even the argmax was -inf (all-logits-inf edge case), force
-        # one finite value per position so sampling doesn't produce NaN.
-        if not mx.any(mx.isfinite(result.reshape(-1))).item():
-            result = result.reshape(-1, vocab_size)
-            result[mx.arange(result.shape[0]), best_per_pos] = mx.array(
-                0.0, dtype=logits.dtype
-            )
-            result = result.reshape(logits.shape)
-        return result
 
     # Create mask: True where token is NOT allowed
     vocab_size = logits.shape[-1]
@@ -2332,32 +2505,11 @@ def apply_json_constraint(
     # Apply mask
     result = mx.where(mask, neg_inf, logits)
 
-    # Safety: if all allowed tokens already had -inf logits, fall back to argmax
-    is_finite = mx.isfinite(result.reshape(-1))
-    if not mx.any(is_finite).item():
-        logger.warning(
-            "JSON constraint: all allowed tokens have -inf logits, "
-            "falling back to argmax of original logits"
+    # Fail closed: every row must keep at least one finite allowed logit.
+    if not mx.all(mx.any(mx.isfinite(result), axis=-1)).item():
+        raise ConstrainedDecodingError(
+            "constrained decoding dead end: every allowed token has a -inf logit"
         )
-        vocab_size = logits.shape[-1]
-        flat_2d = logits.reshape(-1, vocab_size)
-        flat_2d = mx.where(
-            mx.isnan(flat_2d), mx.array(-1e10, dtype=flat_2d.dtype), flat_2d
-        )
-        best_per_pos = mx.argmax(flat_2d, axis=-1)
-        fallback_mask = mx.ones(logits.shape, dtype=mx.bool_)
-        fallback_mask = fallback_mask.reshape(-1, vocab_size)
-        fallback_mask[mx.arange(fallback_mask.shape[0]), best_per_pos] = False
-        fallback_mask = fallback_mask.reshape(logits.shape)
-        result = mx.where(fallback_mask, neg_inf, logits)
-        # If even the argmax was -inf, force one finite value per position
-        if not mx.any(mx.isfinite(result.reshape(-1))).item():
-            result = result.reshape(-1, vocab_size)
-            result[mx.arange(result.shape[0]), best_per_pos] = mx.array(
-                0.0, dtype=logits.dtype
-            )
-            result = result.reshape(logits.shape)
-        return result
 
     return result
 
@@ -2408,15 +2560,9 @@ class ConstrainedSampler:
             # No valid tokens in current state — force EOS to avoid
             # producing invalid output.  Setting all logits to -inf
             # causes softmax NaN, so we allowlist only EOS tokens.
-            eos_ids = []
-            if hasattr(self._tokenizer, "eos_token_ids"):
-                eos_ids = list(self._tokenizer.eos_token_ids)
-            elif hasattr(self._tokenizer, "eos_token_id"):
-                eos_ids = [self._tokenizer.eos_token_id]
-            if eos_ids:
-                masked_logits = apply_json_constraint(logits, eos_ids)
-            else:
-                masked_logits = apply_json_constraint(logits, [])
+            raise ConstrainedDecodingError(
+                "constrained decoding dead end: no token is allowed in the current state"
+            )
 
         # Sample using base sampler
         token = self._base_sampler(masked_logits)
@@ -2429,11 +2575,7 @@ class ConstrainedSampler:
         # Skip advance() for EOS tokens — their decoded text (e.g. "</s>")
         # would corrupt the constraint's text buffer and break
         # checkpoint/rollback correctness.
-        eos_ids = set()
-        if hasattr(self._tokenizer, "eos_token_ids"):
-            eos_ids = set(self._tokenizer.eos_token_ids)
-        elif hasattr(self._tokenizer, "eos_token_id"):
-            eos_ids = {self._tokenizer.eos_token_id}
+        eos_ids = set(normalize_eos_ids(self._tokenizer))
 
         if token_id not in eos_ids:
             try:
@@ -2491,5 +2633,7 @@ def make_constrained_sampler(
     Returns:
         ConstrainedSampler that wraps base_sampler with constraint masking
     """
-    constraint = JsonSchemaConstraint(schema)
+    from .grammar_constraint import build_json_constraint
+
+    constraint = build_json_constraint(schema, tokenizer)
     return ConstrainedSampler(base_sampler, constraint, tokenizer)

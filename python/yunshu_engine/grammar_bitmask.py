@@ -45,6 +45,8 @@ import weakref
 from collections.abc import Callable
 from typing import Any
 
+from yunshu_engine.constraint_eos import ConstrainedDecodingError, normalize_eos_ids
+
 logger = logging.getLogger(__name__)
 
 # ── Bitmask Applicator ──────────────────────────────────────────────────────
@@ -64,8 +66,9 @@ class BitmaskApplicator:
     def apply(self, logits: Any, bitmask: Any) -> Any:
         """Apply bitmask to logits.
 
-        When no tokens are allowed (all-False bitmask), falls back to
-        allowing only the argmax of the original logits to avoid NaN.
+        An all-False bitmask (or one whose allowed tokens all have -inf
+        logits) is a dead end and raises ``ConstrainedDecodingError``; it is
+        never answered with the unconstrained argmax.
 
         Args:
             logits: mx.array of shape (..., vocab_size)
@@ -77,35 +80,12 @@ class BitmaskApplicator:
         """
         import mlx.core as mx
 
-        # If no tokens allowed, fall back to argmax to avoid all-inf -> NaN
+        # Empty allowed set = dead end. Never fall back to the unconstrained
+        # argmax: that is exactly a token the grammar forbade.
         if not mx.any(bitmask).item():
-            logger.warning(
-                "BitmaskApplicator: no tokens allowed by bitmask, "
-                "falling back to argmax of original logits"
+            raise ConstrainedDecodingError(
+                "constrained decoding dead end: the grammar bitmask allows no token"
             )
-            # Use per-position argmax for correct multi-dimensional logits.
-            # Taking argmax of the flattened array gives a flat index that
-            # cannot be used to index a vocab-sized mask when batch > 1 or
-            # seq_len > 1.
-            vocab_size = logits.shape[-1]
-            flat_2d = logits.reshape(-1, vocab_size)
-            best_per_pos = mx.argmax(flat_2d, axis=-1)  # (num_positions,)
-            neg_inf = mx.array(float("-inf"), dtype=logits.dtype)
-            fallback_mask = mx.ones(logits.shape, dtype=mx.bool_)
-            # Scatter False at the best position for each (batch, seq) slot
-            fallback_mask = fallback_mask.reshape(-1, vocab_size)
-            fallback_mask[mx.arange(fallback_mask.shape[0]), best_per_pos] = False
-            fallback_mask = fallback_mask.reshape(logits.shape)
-            result = mx.where(fallback_mask, neg_inf, logits)
-            # If even the argmax was -inf (all-logits-inf edge case), force
-            # one finite value per position so sampling doesn't produce NaN.
-            if not mx.any(mx.isfinite(result.reshape(-1))).item():
-                result = result.reshape(-1, vocab_size)
-                result[mx.arange(result.shape[0]), best_per_pos] = mx.array(
-                    0.0, dtype=logits.dtype
-                )
-                result = result.reshape(logits.shape)
-            return result
 
         # bitmask is True where allowed; we want True where BLOCKED
         blocked = mx.logical_not(bitmask)
@@ -130,30 +110,11 @@ class BitmaskApplicator:
         neg_inf = mx.array(float("-inf"), dtype=logits.dtype)
         result = mx.where(blocked, neg_inf, logits)
 
-        # Safety: if all allowed tokens were already -inf, fall back to argmax
-        if not mx.any(mx.isfinite(result.reshape(-1))).item():
-            logger.warning(
-                "BitmaskApplicator: all allowed tokens have -inf logits, "
-                "falling back to argmax of original logits"
+        # Fail closed when every allowed token has a -inf logit (per row).
+        if not mx.all(mx.any(mx.isfinite(result), axis=-1)).item():
+            raise ConstrainedDecodingError(
+                "constrained decoding dead end: every allowed token has a -inf logit"
             )
-            vocab_size = logits.shape[-1]
-            flat_2d = logits.reshape(-1, vocab_size)
-            best_per_pos = mx.argmax(flat_2d, axis=-1)
-            neg_inf = mx.array(float("-inf"), dtype=logits.dtype)
-            fallback_mask = mx.ones(logits.shape, dtype=mx.bool_)
-            fallback_mask = fallback_mask.reshape(-1, vocab_size)
-            fallback_mask[mx.arange(fallback_mask.shape[0]), best_per_pos] = False
-            fallback_mask = fallback_mask.reshape(logits.shape)
-            result = mx.where(fallback_mask, neg_inf, logits)
-            # If even the argmax was -inf, force one finite value per position
-            if not mx.any(mx.isfinite(result.reshape(-1))).item():
-                result = result.reshape(-1, vocab_size)
-                result[mx.arange(result.shape[0]), best_per_pos] = mx.array(
-                    0.0, dtype=logits.dtype
-                )
-                result = result.reshape(logits.shape)
-            return result
-
         return result
 
     def apply_allowlist(self, logits: Any, allowed_ids: list[int]) -> Any:
@@ -195,10 +156,7 @@ class TokenStringTable:
         self._eos_ids: list[int] = []
 
         # Extract EOS tokens
-        if hasattr(tokenizer, "eos_token_ids"):
-            self._eos_ids = list(tokenizer.eos_token_ids)
-        elif hasattr(tokenizer, "eos_token_id"):
-            self._eos_ids = [tokenizer.eos_token_id]
+        self._eos_ids = normalize_eos_ids(tokenizer)
 
         # Build vocabulary
         if hasattr(tokenizer, "get_vocab"):
@@ -452,7 +410,6 @@ class BitmaskConstrainedSampler:
 
     def __call__(self, logits: Any) -> Any:
         """Sample a token with bitmask constraint."""
-        import mlx.core as mx
 
         # Lazy-init applicator
         if self._applicator is None:
@@ -469,17 +426,9 @@ class BitmaskConstrainedSampler:
             should_advance = False
         else:
             bitmask = self._engine.compute_bitmask(self._tokenizer)
-            if mx.any(bitmask).item():
-                masked_logits = self._applicator.apply(logits, bitmask)
-                should_advance = True
-            else:
-                # Nothing is grammatically allowed — force EOS to avoid
-                # producing invalid output.  Do NOT advance constraint after
-                # forced EOS — the EOS text would corrupt the state buffer.
-                masked_logits = self._applicator.apply_allowlist(
-                    logits, self._table.eos_ids
-                )
-                should_advance = False
+            # apply() raises ConstrainedDecodingError on an empty mask.
+            masked_logits = self._applicator.apply(logits, bitmask)
+            should_advance = True
 
         token = self._base_sampler(masked_logits)
 
@@ -546,13 +495,13 @@ def build_bitmask_engine(
         GrammarBitmaskEngine wrapping the appropriate constraint.
     """
     if grammar_type in ("json_schema", "json_object"):
-        from .json_schema import JsonSchemaConstraint
-
         schema = grammar if grammar_type == "json_schema" else None
         if isinstance(grammar, str) and grammar_type == "json_schema":
             # None signals generic JSON object mode
             schema = None if grammar == "json_object" else json.loads(grammar)
-        constraint = JsonSchemaConstraint(schema)
+        from .grammar_constraint import build_json_constraint
+
+        constraint = build_json_constraint(schema)
         return GrammarBitmaskEngine(constraint)
 
     if grammar_type == "regex":
@@ -572,11 +521,11 @@ def build_bitmask_engine(
         return GrammarBitmaskEngine(constraint)
 
     if grammar_type == "cfg":
-        from .grammar_constraint import LarkGrammarConstraint
+        from .grammar_constraint import CfgGrammarConstraint
 
         if not isinstance(grammar, str):
             raise ValueError("cfg constraint requires a grammar string")
-        constraint = LarkGrammarConstraint(grammar)
+        constraint = CfgGrammarConstraint(grammar)
         return GrammarBitmaskEngine(constraint)
 
     raise ValueError(f"Unknown grammar_type: {grammar_type}")

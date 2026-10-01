@@ -1629,7 +1629,9 @@ class VLMEngine:
 
             if isinstance(json_schema, str) and json_schema == "json_object":
                 return JsonSchemaConstraint(None)
-            return JsonSchemaConstraint(json_schema)
+            from .grammar_constraint import build_json_constraint
+
+            return build_json_constraint(json_schema, self._tokenizer)
         except Exception as exc:
             raise ValueError("Grammar constraint initialization failed") from exc
 
