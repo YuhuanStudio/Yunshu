@@ -266,7 +266,13 @@ def daemon() -> None:
             _write(path, job)
             continue
         print(f"{time.strftime('%H:%M:%S')} run {job['id']}", flush=True)
-        _run_one(job, path)
+        try:
+            _run_one(job, path)
+        except Exception as e:  # noqa: BLE001 - a full disk etc. must not stop the queue
+            print(f"{time.strftime('%H:%M:%S')} job error {job['id']}: {e!r}", flush=True)
+            with contextlib.suppress(Exception):
+                job.update(state="failed", rc=None, ended=_now(), error=repr(e))
+                _write(path, job)
         print(f"{time.strftime('%H:%M:%S')} end {job['id']} {job['state']}", flush=True)
         idle_since = _now()
 
