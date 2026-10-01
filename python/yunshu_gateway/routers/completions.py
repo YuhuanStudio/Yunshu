@@ -44,7 +44,7 @@ from ..streaming import (
     validate_prefill_memory,
 )
 from ..x_yunshu import apply_keep_alive
-from .chat import _validate_sampling_params
+from .chat import _per_choice_seed, _validate_sampling_params
 from .models import _check_permission
 
 router = APIRouter(tags=["completions"])
@@ -562,7 +562,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                     logit_bias=req.logit_bias,
                     stop=req.stop,
                     stop_token_ids=req.stop_token_ids,
-                    seed=(req.seed + idx) if req.seed is not None else None,
+                    seed=_per_choice_seed(req.seed, idx),
                     spec_decode=req.spec_decode,
                     enable_thinking=req.enable_thinking,
                     thinking_budget=req.thinking_budget,
@@ -638,7 +638,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                     logit_bias=req.logit_bias,
                     stop=req.stop,
                     stop_token_ids=req.stop_token_ids,
-                    seed=(req.seed + idx) if req.seed is not None else None,
+                    seed=_per_choice_seed(req.seed, idx),
                     enable_thinking=req.enable_thinking,
                     thinking_budget=req.thinking_budget,
                     reasoning_effort=req.reasoning_effort,
@@ -1072,7 +1072,7 @@ async def _stream_completion(
                 logit_bias=req.logit_bias,
                 stop=req.stop,
                 stop_token_ids=req.stop_token_ids,
-                seed=(req.seed + choice_idx) if req.seed is not None else None,
+                seed=_per_choice_seed(req.seed, choice_idx),
                 enable_thinking=req.enable_thinking,
                 thinking_budget=req.thinking_budget,
                 json_schema=json_schema,
@@ -1194,7 +1194,7 @@ async def _stream_completion(
                 presence_penalty=req.presence_penalty,
                 logit_bias=req.logit_bias,
                 stop=req.stop,
-                seed=(req.seed + choice_idx) if req.seed is not None else None,
+                seed=_per_choice_seed(req.seed, choice_idx),
                 enable_thinking=req.enable_thinking,
                 thinking_budget=req.thinking_budget,
                 reasoning_effort=req.reasoning_effort,

@@ -1328,7 +1328,10 @@ def _per_choice_seed(user_seed: int | None, idx: int) -> int:
     the same family of bug seen for VLM determinism.
     """
     if user_seed is not None:
-        return (int(user_seed) + int(idx)) & ((1 << 63) - 1)
+        # Choice 0 keeps the caller's seed (so n=1 and choice 0 of n>1 are the same stream);
+        # the others add the index and wrap in the signed 64-bit range the API accepts.
+        v = (int(user_seed) + int(idx)) & ((1 << 64) - 1)
+        return v - (1 << 64) if v >= 1 << 63 else v
     import time as _t
 
     return (_t.time_ns() + int(idx) * 1_000_003) & ((1 << 63) - 1)
@@ -3303,7 +3306,7 @@ async def _stream_response_multi(
                     logit_bias=req.logit_bias,
                     stop=req.stop,
                     stop_token_ids=req.stop_token_ids,
-                    seed=(req.seed + choice_idx) if req.seed is not None else None,
+                    seed=_per_choice_seed(req.seed, choice_idx),
                     enable_thinking=req.enable_thinking,
                     json_schema=json_schema,
                     thinking_budget=req.thinking_budget,
@@ -3530,7 +3533,7 @@ async def _stream_response_multi(
                     presence_penalty=req.presence_penalty,
                     logit_bias=req.logit_bias,
                     stop=req.stop,
-                    seed=(req.seed + choice_idx) if req.seed is not None else None,
+                    seed=_per_choice_seed(req.seed, choice_idx),
                     enable_thinking=req.enable_thinking,
                     stop_token_ids=req.stop_token_ids,
                     thinking_budget=req.thinking_budget,

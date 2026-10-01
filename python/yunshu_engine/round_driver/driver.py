@@ -45,8 +45,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import mlx.core as mx
+import numpy as np
 
 from .. import keyed_sampling
+from ..keyed_sampling import top_k_filter, top_p_filter
 from .allocate import CostCurve, allocate, chain
 from .batch import MAX_WINDOW, DecodeBatch
 from .forward import Segment, forward, logits
@@ -115,6 +117,7 @@ class _Row:
     rates: list = field(default_factory=list)
     key: Any = None
     keyed: Any = None  # KeyedSampler of a sampled row that drafts
+    base: int | None = None  # keyed-sampling seed constant (None: stateful key)
     context: list = field(default_factory=list)
     force: list = field(default_factory=list)  # the budget's next token
     finished: bool = False
@@ -231,7 +234,12 @@ class RoundDriver:
             keyed=keyed,
         )
         seed = getattr(req.sampling, "seed", None)
-        if seed is not None:
+        if req.sampling is not None and keyed_sampling.supports(req.sampling):
+            # Position-keyed draws, like the shared batch and the speculative lane.
+            if seed is None:
+                seed = int.from_bytes(os.urandom(8), "little")
+            row.base = keyed_sampling.seed_base(seed)
+        elif seed is not None:
             row.key = mx.random.key(int(seed))
         self._restore(row)
         self.rows.append(row)
@@ -360,22 +368,29 @@ class RoundDriver:
         return lg
 
     def _sample(self, row: _Row, logprobs: mx.array) -> mx.array:
-        from mlx_lm.sample_utils import apply_min_p, apply_top_k, apply_top_p, apply_xtc
+        from mlx_lm.sample_utils import apply_min_p, apply_xtc
 
         p = row.req.sampling
         if p is None:
             return mx.argmax(logprobs, axis=-1)
+        if row.base is not None:
+            # row.generated is this draw's generation index: draws happen one per committed token
+            return keyed_sampling.sample_rows(
+                logprobs,
+                p,
+                mx.array(np.array([row.base], dtype=np.uint64)),
+                mx.array([row.generated]),
+            )
         x = logprobs
-        if 0 < p.top_p < 1.0:
-            x = apply_top_p(x, p.top_p)
+        if p.top_p < 1.0:
+            x = top_p_filter(x, max(p.top_p, 0.0))
         if p.min_p:
             x = apply_min_p(x, p.min_p)
         if p.xtc_probability > 0.0:
             x = apply_xtc(
                 x, p.xtc_probability, p.xtc_threshold, list(p.xtc_special_tokens or [])
             )
-        if p.top_k > 0:
-            x = apply_top_k(x, p.top_k)
+        x = top_k_filter(x, p.top_k)
         x = x * (1 / p.temperature)
         if row.key is not None:
             row.key, sub = mx.random.split(row.key)
