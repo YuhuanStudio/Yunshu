@@ -132,6 +132,39 @@ def diagnose_server(
             console.print(f"  • {mid}")
 
 
+@diagnose_app.command("bundle")
+def diagnose_bundle(
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="File to write (default: ./yunshu-diagnostics-<time>.json).",
+    ),
+    host: str = typer.Option("127.0.0.1", "--host", help="Host you serve on."),
+    port: int = typer.Option(8000, "--port", "-p", help="Port you serve on."),
+):
+    """Write a local diagnostics file: version, settings (secrets redacted), doctor, recent errors.
+
+    Never includes prompts or completions, and never uploads anything.
+    """
+    import time
+    from pathlib import Path
+
+    from ._output import emit
+    from .bundle import write
+
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dest = Path(output or f"yunshu-diagnostics-{stamp}.json").expanduser()
+    path = write(dest, host=host, port=port)
+    emit(
+        {"path": str(path.resolve())},
+        human=lambda: console.print(
+            f"[green]✓ Wrote[/] {path.resolve()}\n"
+            "Local file only: review it before attaching it to a report."
+        ),
+    )
+
+
 def _fmt(b: int) -> str:
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if b < 1024:
