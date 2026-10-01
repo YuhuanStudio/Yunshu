@@ -35,6 +35,7 @@ from __future__ import annotations
 import difflib
 import json
 import logging
+import math
 import os
 import tomllib
 from collections.abc import Mapping
@@ -394,12 +395,14 @@ def _parse(s: Setting, text: str) -> Any:
             out: Any = int(value)
         elif s.type == "float":
             out = float(value)
+            if not math.isfinite(out):
+                raise ValueError("expected a finite number")
         elif s.type == "gb":
             # GiB with an optional "GB" suffix; "disabled" = 0 (no limit).
             if value.lower() == "disabled":
                 return 0.0
             out = float(value.upper().removesuffix("GB").strip())
-            if out <= 0:
+            if not math.isfinite(out) or out <= 0:
                 raise ValueError("expected a positive size in GB or 'disabled'")
         elif s.type == "enum":
             # Choices are lower-case except the log level, which is upper-case.
