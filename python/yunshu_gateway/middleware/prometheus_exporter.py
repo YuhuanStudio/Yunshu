@@ -662,6 +662,32 @@ class PrometheusMetrics:
             "Total response cache misses",
         )
 
+        # Prefix cache (APC) of the VLM runner, populated from the engine's snapshot
+        # (monitoring._populate_apc_metrics). A name missing here made that population
+        # fail silently, so /metrics never showed the cache.
+        for key, text in (
+            ("apc_memory_max_bytes", "APC RAM budget in bytes"),
+            ("apc_resident_bytes", "Bytes of prefix-cache checkpoints held in RAM"),
+            ("apc_entries", "Exact prefix-cache entries in RAM"),
+            ("apc_head_checkpoints", "Head checkpoints among the entries"),
+            ("apc_disk_bytes", "Bytes of the APC SSD tier"),
+            ("apc_disk_max_bytes", "Size cap of the APC SSD tier in bytes"),
+            ("apc_disk_pending_bytes", "APC bytes queued for the SSD tier"),
+        ):
+            self._gauges[key] = _Gauge(f"yunshu_{key}", text)
+        for key, text in (
+            ("apc_lookups_hit", "APC lookups that hit"),
+            ("apc_lookups_miss", "APC lookups that missed"),
+            ("apc_matched_tokens", "Prompt tokens served from the APC"),
+            ("apc_exact_hits", "APC exact-checkpoint hits"),
+            ("apc_exact_stores", "APC exact checkpoints stored"),
+            ("apc_disk_hits", "APC SSD tier hits"),
+            ("apc_disk_writes", "APC SSD tier writes"),
+            ("apc_memory_evictions", "APC RAM evictions"),
+            ("apc_memory_skips", "APC checkpoints skipped by the RAM budget"),
+        ):
+            self._counters[key] = _Counter(f"yunshu_{key}_total", text)
+
         # TTFT histogram with inference buckets (was missing from predefined)
         self._histograms["ttft_seconds"] = _Histogram(
             "yunshu_ttft_seconds",

@@ -27,7 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from process_memory import process_tree_memory  # noqa: E402
+from process_memory import apc_resident_gib, process_tree_memory  # noqa: E402
 
 CODES = [
     "AMBER",
@@ -244,6 +244,11 @@ def main():
         + ["long"] * 8
     )
     start_mem = mem()
+    start_apc = apc_resident_gib(a.url)
+
+    def ex_apc(total, apc):
+        return None if total is None or apc is None else round(total - apc, 3)
+
     emit(
         {
             "kind": "meta",
@@ -304,7 +309,14 @@ def main():
                 )
                 r = cli.chat(threads[j], 16)
                 expect, ok = thread_codes[j], thread_codes[j] in r["content"].upper()
-            threads[j].append({"role": "assistant", "content": r["content"] or "OK"})
+            # The history carries the reference answer, not the model's: a single
+            # near-tie flip (J for JADE) must not poison every later turn of the thread.
+            threads[j].append(
+                {
+                    "role": "assistant",
+                    "content": thread_codes[j] if expect else (r["content"] or "OK"),
+                }
+            )
             if len(threads[j]) > 80:
                 threads[j] = threads[j][:1] + threads[j][-40:]
         elif kind == "image":
@@ -421,6 +433,11 @@ def main():
                 "ok": bool(ok),
                 "expect": expect,
                 "got": (r["content"] or "")[:80],
+                # Full delivered text, for the generated-vs-delivered check
+                # (scripts/research/check_stream_delivery.py).
+                "content": r["content"],
+                "reasoning": r["reasoning"],
+                "tool_calls": len(r["tools"]),
                 "status": r.get("status"),
                 "error": r.get("error"),
                 "first_s": r.get("first") and round(r["first"], 3),
@@ -445,6 +462,7 @@ def main():
             break
     time.sleep(a.final_idle_s)
     stop.set()
+    end_mem, end_apc = mem(), apc_resident_gib(a.url)
     rows = [
         json.loads(line) for line in a.output.read_text().splitlines() if line.strip()
     ]
@@ -464,7 +482,13 @@ def main():
         "errors": sum(1 for r in reqs if r.get("error") and r["type"] != "disconnect"),
         "start_footprint_gib": start_mem,
         "max_footprint_gib": max(mems) if mems else None,
-        "end_footprint_gib": mem(),
+        "end_footprint_gib": end_mem,
+        # The prefix cache legitimately holds RAM; memory that does not return is
+        # what is left after subtracting it.
+        "start_apc_gib": start_apc,
+        "end_apc_gib": end_apc,
+        "start_footprint_ex_apc_gib": ex_apc(start_mem, start_apc),
+        "end_footprint_ex_apc_gib": ex_apc(end_mem, end_apc),
         "per_type": {},
     }
     for k, rs in by.items():
