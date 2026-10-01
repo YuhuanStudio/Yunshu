@@ -70,10 +70,17 @@ def reset_mlx_executor() -> ThreadPoolExecutor:
 
     Used by EngineCore's BrokenThreadPool recovery to ensure all
     subsequent get_mlx_executor() calls return the new executor,
-    maintaining the single-thread GPU serialization guarantee.
+    maintaining the single-thread GPU serialization guarantee. Only a broken
+    or shut-down executor with no live worker is replaced; otherwise the
+    current one is returned unchanged (never two GPU workers).
     """
     global _executor
     with _executor_lock:
+        if _executor is not None and not _is_broken(_executor):
+            # A live worker (possibly mid-task) must not be orphaned: a second
+            # GPU worker would break the single-thread Metal guarantee.
+            logger.warning("reset_mlx_executor ignored: worker is still alive")
+            return _executor
         if _executor is not None:
             with contextlib.suppress(Exception):
                 _executor.shutdown(wait=False)
@@ -84,6 +91,16 @@ def reset_mlx_executor() -> ThreadPoolExecutor:
         )
         logger.info("MLX executor reset after thread pool failure")
         return _executor
+
+
+def _is_broken(executor: ThreadPoolExecutor) -> bool:
+    """True when the executor can no longer run work and has no live worker."""
+    threads = list(getattr(executor, "_threads", ()))
+    if any(t.is_alive() for t in threads):
+        return False
+    return bool(getattr(executor, "_broken", False)) or bool(
+        getattr(executor, "_shutdown", False)
+    )
 
 
 def shutdown_mlx_executor(wait: bool = True) -> None:
@@ -100,7 +117,9 @@ def shutdown_mlx_executor(wait: bool = True) -> None:
         if _executor is not None:
             if wait:
                 try:
-                    sync_and_clear_cache()
+                    # Synchronize on the executor's own thread: the generation
+                    # stream is thread-local to it.
+                    _executor.submit(sync_and_clear_cache).result(timeout=60)
                 except Exception:
                     logger.debug(
                         "sync_and_clear_cache during shutdown failed", exc_info=True

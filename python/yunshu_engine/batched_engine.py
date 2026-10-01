@@ -31,6 +31,7 @@ from typing import Any
 from . import settings
 from .context_window import ContextBudgetError
 from .fast_path_stats import FastPathStats
+from .stream_bridge import StreamBridge, make_stream_queue
 from .text_utils import StopHoldbackBuffer
 
 logger = logging.getLogger(__name__)
@@ -5413,46 +5414,22 @@ class BatchedEngine:
         # Thread-safe bridge: executor puts via call_soon_threadsafe so the
         # event loop's async consumer is woken for every token.
         _sentinel = object()
-        _q: asyncio.Queue = asyncio.Queue(maxsize=512)
+        _q: asyncio.Queue = make_stream_queue(512)
         loop = asyncio.get_running_loop()
         # Cross-thread cancel: set by the async consumer on timeout so the
         # GPU generation loop in _run_inner stops producing tokens.
         _timeout_cancel = threading.Event()
 
+        _bridge = StreamBridge(
+            loop,
+            _q,
+            lambda it: it is _sentinel or isinstance(it, BaseException),
+            on_overflow=_timeout_cancel.set,
+        )
+
         def _put(item):
-            # Backpressure-aware queue with retry: avoid blocking the MLX
-            # executor thread with long sleeps — GPU work from other
-            # requests would stall. Use short yields instead.
-            if _q.qsize() > 400:  # 78% of 512
-                time.sleep(0.0001)  # minimal yield — 0.1ms, not 1ms
-            # NOTE: We do NOT call _q.get_nowait() here because this
-            # function runs on the MLX executor thread (not the asyncio
-            # event loop thread). asyncio.Queue.get_nowait() mutates the
-            # internal deque AND calls _wakeup_next() which modifies
-            # asyncio.Future objects — neither operation is thread-safe.
-            for _attempt in range(10):
-                if not _q.full():
-                    with suppress(RuntimeError):  # Event loop closed — consumer gone
-                        loop.call_soon_threadsafe(_q.put_nowait, item)
-                    return
-                if _attempt < 9:
-                    time.sleep(0.0005)  # 0.5ms per attempt, not 5ms
-            # Queue is persistently full — put an error sentinel so the
-            # consumer sees finish_reason="error" instead of silently
-            # missing content.
-            logger.warning(
-                "Streaming queue overflow after 50ms — sending error sentinel. "
-                "Client will see finish_reason=error."
-            )
-            try:
-                loop.call_soon_threadsafe(
-                    _q.put_nowait,
-                    Exception("Streaming queue overflow — output truncated"),
-                )
-            except Exception:
-                logger.debug(
-                    "Failed to put error sentinel into streaming queue", exc_info=True
-                )
+            # Atomic reserve-then-schedule; terminals bypass capacity (B12).
+            return _bridge.put(item)
 
         # (LoRA concurrency keystone): acquire+apply / release+restore moved into
         # _run_with_lora on the executor thread (serialized with generate_step), not here on
@@ -9567,39 +9544,22 @@ class BatchedEngine:
             return filtered
 
         _sentinel = object()
-        _q: asyncio.Queue = asyncio.Queue(maxsize=512)
+        _q: asyncio.Queue = make_stream_queue(512)
         loop = asyncio.get_running_loop()
         from .streaming_optimizer import StreamingBackpressureController
 
         _backpressure = StreamingBackpressureController(max_queue_size=100)
 
+        _bridge = StreamBridge(
+            loop,
+            _q,
+            lambda it: it is _sentinel or isinstance(it, BaseException),
+            on_overflow=lambda: _ng_timeout_cancel.set(),
+            overflow_error="N-gram streaming queue overflow — output truncated",
+        )
+
         def _put(item):
-            # Backpressure-aware queue with retry (same logic as main streaming path)
-            if _q.qsize() > 400:  # 78% of 512
-                time.sleep(0.01)
-            # Retry up to 3 times if the queue is full, sleeping 1ms between
-            # attempts. Thread-safe: skip get_nowait() — see main streaming
-            # _put for rationale (executor thread must not mutate asyncio Queue).
-            for _attempt in range(4):  # 1 initial + 3 retries
-                if not _q.full():
-                    loop.call_soon_threadsafe(_q.put_nowait, item)
-                    return
-                if _attempt < 3:
-                    time.sleep(0.001)
-            logger.warning(
-                "N-gram spec streaming queue overflow after 3 retries — sending error sentinel. "
-                "Client will see finish_reason=error."
-            )
-            try:
-                loop.call_soon_threadsafe(
-                    _q.put_nowait,
-                    Exception("N-gram streaming queue overflow — output truncated"),
-                )
-            except Exception:
-                logger.debug(
-                    "Failed to put error sentinel into n-gram streaming queue",
-                    exc_info=True,
-                )
+            return _bridge.put(item)
 
         # Inflight prefix sharing for streaming n-gram spec
         _ng_s_inflight_req_id = f"ng-s-{int(time.monotonic() * 1e6)}"
@@ -10842,7 +10802,7 @@ class BatchedEngine:
                 )
 
         _sentinel = object()
-        _q: asyncio.Queue = asyncio.Queue(maxsize=512)
+        _q: asyncio.Queue = make_stream_queue(512)
         loop = asyncio.get_running_loop()
         from .streaming_optimizer import StreamingBackpressureController
 
@@ -10850,33 +10810,16 @@ class BatchedEngine:
         _mtp_gen_t0 = time.perf_counter()
         _backpressure = StreamingBackpressureController(max_queue_size=100)
 
+        _bridge = StreamBridge(
+            loop,
+            _q,
+            lambda it: it is _sentinel or isinstance(it, BaseException),
+            on_overflow=lambda: _mtp_timeout_cancel.set(),
+            overflow_error="MTP streaming queue overflow — output truncated",
+        )
+
         def _put(item):
-            # Backpressure-aware queue with retry (same logic as main streaming path)
-            if _q.qsize() > 400:  # 78% of 512
-                time.sleep(0.01)
-            # Retry up to 3 times if the queue is full, sleeping 1ms between
-            # attempts. Thread-safe: skip get_nowait() — see main streaming
-            # _put for rationale (executor thread must not mutate asyncio Queue).
-            for _attempt in range(4):  # 1 initial + 3 retries
-                if not _q.full():
-                    loop.call_soon_threadsafe(_q.put_nowait, item)
-                    return
-                if _attempt < 3:
-                    time.sleep(0.001)
-            logger.warning(
-                "MTP streaming queue overflow after 3 retries — sending error sentinel. "
-                "Client will see finish_reason=error."
-            )
-            try:
-                loop.call_soon_threadsafe(
-                    _q.put_nowait,
-                    Exception("MTP streaming queue overflow — output truncated"),
-                )
-            except Exception:
-                logger.debug(
-                    "Failed to put error sentinel into MTP streaming queue",
-                    exc_info=True,
-                )
+            return _bridge.put(item)
 
         def _run():
             try:

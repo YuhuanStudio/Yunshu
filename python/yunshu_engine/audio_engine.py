@@ -35,6 +35,9 @@ import numpy as np
 
 from .types import EngineConfig
 
+# Longest the shared MLX thread waits on a TTS client that stopped reading.
+_CLIENT_STALL_S = 1.0
+
 logger = logging.getLogger(__name__)
 
 # Standard WAV header for 16-bit mono PCM
@@ -578,10 +581,15 @@ class TTSEngine(ActiveRequestMixin):
                     else model.generate
                 )
                 _first_chunk = True
-                for result in gen_fn(**gen_kwargs):
-                    # Check cancel flag between chunks (thread-safe)
+                # cancelled while queued behind other work: never start the model
+                gen_iter = iter(()) if _cancel.is_set() else iter(gen_fn(**gen_kwargs))
+                while True:
+                    # Cooperative cancel BEFORE paying for the next chunk.
                     if _cancel.is_set():
                         logger.info("TTS stream cancelled mid-generation")
+                        break
+                    result = next(gen_iter, None)
+                    if result is None:
                         break
                     audio = np.array(result.audio).flatten()
                     # Propagate the NaN/Inf guard to the streaming
@@ -612,20 +620,31 @@ class TTSEngine(ActiveRequestMixin):
                         )
                         _first_chunk = False
                     else:
-                        try:
-                            _thread_queue.put(
-                                {
-                                    "audio": raw_bytes,
-                                    "text": getattr(result, "text", ""),
-                                    "is_final": False,
-                                },
-                                timeout=5.0,
-                            )
-                        except _queue_mod.Full:
-                            logger.warning(
-                                "TTS stream queue full after timeout -- consumer likely gone"
-                            )
-                            break
+                        # The executor is shared with every other model: never
+                        # wait long on a client that stopped reading.
+                        _deadline = time.monotonic() + _CLIENT_STALL_S
+                        _item = {
+                            "audio": raw_bytes,
+                            "text": getattr(result, "text", ""),
+                            "is_final": False,
+                        }
+                        while True:
+                            try:
+                                _thread_queue.put(_item, timeout=0.05)
+                                break
+                            except _queue_mod.Full:
+                                if _cancel.is_set():
+                                    break
+                                if time.monotonic() >= _deadline:
+                                    logger.warning(
+                                        "TTS stream client stalled for %.1fs; "
+                                        "aborting stream",
+                                        _CLIENT_STALL_S,
+                                    )
+                                    _cancel.set()
+                                    raise RuntimeError(
+                                        "TTS stream aborted: client not reading"
+                                    ) from None
                 # Send is_final sentinel — drain one item if full so the client
                 # always receives the completion marker and doesn't hang.
                 try:
