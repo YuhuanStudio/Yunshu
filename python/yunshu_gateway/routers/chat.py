@@ -554,6 +554,10 @@ class ChatCompletionRequest(BaseModel):
                 raise ValueError(
                     f"grammar.type: must be one of 'json', 'regex', 'choice', 'cfg', got '{gtype}'"
                 )
+            if gtype == "cfg" and "grammar" in self.grammar:
+                from yunshu_engine.grammar_constraint import validate_constraint_spec
+
+                validate_constraint_spec(self.grammar)
         # Validate logprobs/top_logprobs consistency
         if self.logprobs and self.top_logprobs is None:
             pass  # OK, top_logprobs defaults to None which is valid
