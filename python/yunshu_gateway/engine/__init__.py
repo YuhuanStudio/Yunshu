@@ -61,6 +61,27 @@ def set_engine(engine: Engine, display_id: str | None = None) -> None:
     _display_model_id = display_id
 
 
+def engine_generation() -> str:
+    """Identity of the model instances currently serving requests.
+
+    Changes whenever the single engine is replaced or a multi-model engine is loaded,
+    unloaded or swapped, so caches keyed on it cannot outlive the model that made them.
+    """
+    parts = [f"e{id(_engine)}"]
+    if _model_manager is not None:
+        try:
+            for entry in sorted(
+                _model_manager.list_entries(), key=lambda e: e.model_id
+            ):
+                parts.append(
+                    f"{entry.model_id}:{entry.model_path}:{id(entry.engine)}:"
+                    f"{entry.load_time}"
+                )
+        except Exception:
+            parts.append("m?")
+    return "|".join(parts)
+
+
 def get_display_model_id() -> str | None:
     """The single engine's listed id when it differs from its model_name."""
     return _display_model_id
@@ -238,6 +259,7 @@ __all__ = [
     "Engine",
     "EngineConfig",
     "ModelManager",
+    "engine_generation",
     "get_engine",
     "get_engine_for_model",
     "get_model_manager",
