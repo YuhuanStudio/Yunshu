@@ -22,7 +22,7 @@ include = [
 
 [project]
 name = "yunshu"
-version = "0.1.1"
+version = "0.1.2"
 description = "Fast local LLM/VLM inference engine for Apple Silicon — lossless speculative decoding, prefix caching, OpenAI/Anthropic-compatible"
 readme = "README.md"
 license = "Apache-2.0"

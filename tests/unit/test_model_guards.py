@@ -131,7 +131,7 @@ def test_anthropic_image_block_on_text_model_is_400(monkeypatch):
 
 
 def test_version_reads_pyproject_in_a_checkout():
-    assert yunshu_version() == "0.1.1"
+    assert yunshu_version() == "0.1.2"
 
 
 def test_responses_on_embedding_model_is_400(monkeypatch, tmp_path):

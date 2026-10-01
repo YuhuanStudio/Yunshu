@@ -24,7 +24,7 @@ first public release, P2 = soon after, P3 = later or on request.
 | From source (`uv sync --extra vision`) | ✅ | `uv.lock` pins MLX 0.32.2 / mlx-lm 0.31.3 / mlx-vlm 0.7.3 |
 | `uv tool install` from a wheel | ✅ | Clean tool env on 2026-09-29, then `doctor`, serve Qwen3.5-0.8B, `/health`, `/version`, `/v1/models`, chat, `/v1/messages`, `service install --dry-run` |
 | `uv tool install` from git | ✅ | Same package as the wheel; the repository is public |
-| PyPI (`uv tool install "yunshu[vision]"`, `pipx install`) | 🟡 P1 | 0.1.1 builds and passes `twine check`; the name `yunshu` was free on 2026-09-29. Publishing waits for the maintainer's go-ahead and the one-time trusted-publisher setup ([RELEASING.md](../../RELEASING.md)) |
+| PyPI (`uv tool install "yunshu[vision]"`, `pipx install`) | 🟡 P1 | 0.1.2 builds and passes `twine check`; the name `yunshu` was free on 2026-09-29. Publishing waits for the maintainer's go-ahead and the one-time trusted-publisher setup ([RELEASING.md](../../RELEASING.md)) |
 | Homebrew | 🟡 P2 | Formula for the shared tap [YuhuanStudio/homebrew-tap](https://github.com/YuhuanStudio/homebrew-tap) (`brew install yuhuanstudio/tap/yunshu`) in `packaging/homebrew/`; added after the PyPI release ([steps](../../packaging/homebrew/README.md)) |
 | macOS app / menu bar / DMG | — | Not planned for now: CLI + launchd service (decided 2026-09-29) |
 | `curl … \| bash` installer with a model suggestion by RAM | ❌ P3 | Rapid-MLX has one; `uv tool install` + `yunshu doctor` covers most of it |
@@ -75,7 +75,7 @@ first public release, P2 = soon after, P3 = later or on request.
 | | Status | Notes |
 |---|---|---|
 | One version source | ✅ | `pyproject.toml`; the CLI, `/version`, OpenAPI and MCP read the installed metadata |
-| CHANGELOG | ✅ | `## [0.1.1]` entry; version bumped in `pyproject.toml` and `uv.lock` |
+| CHANGELOG | ✅ | `## [0.1.2]` entry; version bumped in `pyproject.toml` and `uv.lock` |
 | Release workflow | ✅ | Tag-only; checks version / changelog, lint, tests, build, twine, clean install, PyPI behind approval, draft GitHub release |
 | CI on push | 🟡 P1 | Lint + build on Linux; macOS unit tests only on release / manual run (to save quota). Never run on GitHub yet: the first push is the first run |
 | Third-party notices in the artifacts | ✅ | `THIRD_PARTY_NOTICES.md` ships in the wheel and sdist |
@@ -83,7 +83,7 @@ first public release, P2 = soon after, P3 = later or on request.
 
 ## Decisions (2026-09-29)
 
-- The repository is public; PyPI `yunshu` 0.1.1 is published after the maintainer approves the
+- The repository is public; PyPI `yunshu` 0.1.2 is published after the maintainer approves the
   pre-release check.
 - CLI + launchd service; no app for now.
 - Homebrew through the shared tap `YuhuanStudio/homebrew-tap`.
