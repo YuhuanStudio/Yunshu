@@ -145,6 +145,26 @@ Anonymous callers never see filesystem paths; authenticated callers also get `lo
 `architecture.*_modalities`, `top_provider.max_completion_tokens`. All are present, so a Yunshu server registered under any of
 the three needs no custom code.
 
+### Capability contract (`yunshu.contract`)
+
+Every card carries a `contract` object, built by `yunshu_engine/capability_contract.py` from the checkpoint, and
+`POST /v1/chat/completions` enforces the same object:
+
+| Contract key | States |
+|---|---|
+| `tools` | `supported`, `mode` (`template` when the chat template renders tools, else `prompt` injection), `parallel`, `tool_choice` values |
+| `structured_output` | `json_object`, `json_schema.engines` (`in-house`, plus `llguidance` for schemas outside the in-house subset), `regex`, `choice`, `grammar` (Lark via llguidance) |
+| `logprobs`, `reasoning` | support, `max_top_logprobs`, effort levels |
+| `media` | accepted input and produced output modalities beyond text |
+| `speculative` | `mode` (`mtp`, `dflash2`, `none`) and `lossless` |
+| `cache_tiers` | `ram` (`kv_prefix` or `apc`) and `ssd` when that tier is enabled |
+| `context` | window and maximum output tokens |
+
+A request that uses what the contract rules out returns 400 naming the field: an `image` / `audio` / `video` content part the model does not accept, and tools, `response_format`,
+guided decoding or `logprobs` on a model that does not generate text. `reasoning_effort` / `thinking_budget` on a model without
+a reasoning mode are accepted and have no effect (coding agents send an effort on every request; the card's `reasoning` field
+says whether it applies). A checkpoint whose config cannot be read has no contract and is not gated.
+
 ## Ollama-compatible (`/api/*`)
 
 A thin translation layer over the OpenAI routes (loopback), verified with the `ollama` Python SDK.
@@ -227,9 +247,9 @@ Z-Image ControlNet through `control_image`, is unchanged.
 
 | Command | Status | Notes |
 |---|---|---|
-| `serve`, `chat`, `pull`, `doctor`, `config` (`set`, `unset`, `path`), `service` (`install`, `uninstall`, `start`, `stop`, `restart`, `status`, `logs`), `model` (`list`, `info`, `load`, `unload`, `download`) | kept | Smoke-tested; `model load/unload` need the token on the server. |
+| `serve`, `chat`, `pull`, `doctor`, `config` (`set`, `unset`, `path`), `service` (`install`, `uninstall`, `start`, `stop`, `restart`, `status`, `logs`, `rotate-logs`), `cache` (`status`, `gc`), `model` (`list`, `info`, `load`, `unload`, `download`) | kept | Smoke-tested; `model load/unload` need the token on the server. |
 | `launch claude` / `codex` / `opencode` / `pi` (`--dry-run`, `--effort`) | extended | Reads the model card and configures the agent with the real context window, output limit, reasoning levels and vision support; see [AGENT_COMPAT.md](AGENT_COMPAT.md#launching-an-agent). |
-| `status`, `diagnose gpu`, `diagnose server`, `launch list` | kept | `diagnose gpu` and `bench roofline` printed thousands of TFLOPS because the lazy matmuls were never evaluated; fixed. |
+| `status`, `diagnose gpu`, `diagnose server`, `diagnose bundle`, `launch list` | kept | `diagnose gpu` and `bench roofline` printed thousands of TFLOPS because the lazy matmuls were never evaluated; fixed. |
 | `complete`, `embed`, `tokenize`, `detokenize`, `rerank`, `score`, `classify`, `transcribe`, `speak`, `ocr`, `image`, `image-edit`, `image-variations`, `voices`, `cancel` | kept | Talk to a running server. |
 | `bench roofline`, `latency`, `throughput`, `memory`, `inference`, `eval` | kept | |
 | `image-inpaint`, `image-controlnet`, `image-depth`, `video`, `audio-enhance`, `audio-separate`, `audio-transform`, `voice-pipeline` | removed | Their routes are gone. |
@@ -240,3 +260,18 @@ Z-Image ControlNet through `control_image`, is unchanged.
 |---|---|
 | Unknown `model` in single-model mode | Served, not 404 (deliberate, see the top). |
 | Tool calling on tiny models with thinking off | Qwen3.5-0.8B without thinking emits malformed `<tool_call>` markup; the 27B and thinking-on paths pass the release gate. |
+
+## Sampling contract
+
+- **Seeded sampling is position-keyed.** On every VLM-runner path (speculative lane and shared
+  batch, alone or mixed with other requests) the token drawn at generation index `g` is a function
+  of `(logits, seed, g)` only, so the same `seed` gives the same stream whatever the admission
+  path or concurrency, given batch-invariant logits. Unseeded requests draw a random seed.
+  Exceptions that stay stateful: XTC (`xtc_probability > 0`), the text-only `mlx-lm` fast path,
+  and the round driver's own sampler. Different paths are different (equally correct) random
+  streams, not a distribution bias.
+- **`top_p`** always keeps the most probable token; `top_p = 0` therefore means greedy over the
+  filtered row.
+- **`top_k`** at or above the vocabulary size means "no truncation" (no error); `0` disables it.
+- **`n > 1`** choice `i` uses seed `seed + i` wrapped to signed 64 bits (choice 0 keeps `seed`),
+  identically on chat, completions and responses.

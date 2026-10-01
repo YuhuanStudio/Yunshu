@@ -387,6 +387,7 @@ class ModelCard:
     state: dict = field(default_factory=dict)
     memory: dict = field(default_factory=dict)
     api: dict = field(default_factory=dict)
+    contract: dict = field(default_factory=dict)
     supported_parameters: list[str] = field(default_factory=list)
     generation_defaults: dict = field(default_factory=dict)
     created: int = 0
@@ -737,6 +738,9 @@ def build_model_card(
         "weights_bytes": base.memory.get("weights_bytes"),
         "estimated_bytes": estimated_bytes or base.memory.get("weights_bytes"),
     }
+    from .capability_contract import build_contract
+
+    card.contract = build_contract(card)
     if loaded and engine is not None:
         _apply_engine(card, engine)
     return card

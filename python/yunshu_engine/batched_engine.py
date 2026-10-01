@@ -1142,6 +1142,7 @@ class BatchedEngine:
                 max_size_bytes=int(settings.get("YUNSHU_SSD_CACHE_MAX_GB") * 1024**3),
                 model_name=model_name,
                 precision=settings.get("YUNSHU_SSD_CACHE_PRECISION"),
+                fingerprint=self._ssd_fingerprint(model_name),
             )
 
         # KV cache quantization config (mlx-lm pattern: to_quantized — group-wise
@@ -1605,6 +1606,7 @@ class BatchedEngine:
                 max_size_bytes=s.ssd_cache_max_gb * 1024**3,
                 model_name=self.model_name,
                 precision=settings.get("YUNSHU_SSD_CACHE_PRECISION"),
+                fingerprint=self._ssd_fingerprint(self.model_name),
             )
         if s.enable_thinking is not None:
             self.enable_thinking = s.enable_thinking
@@ -1823,6 +1825,19 @@ class BatchedEngine:
         if not (n_layers and n_kv and head_dim):
             return 0
         return 2 * n_layers * n_kv * head_dim * 2  # K+V, bf16
+
+    @staticmethod
+    def _ssd_fingerprint(model_name: str) -> str:
+        """Identity of the checkpoint and the persisted layout for the SSD KV cache."""
+        from yunshu_kv.fingerprint import checkpoint_fingerprint
+
+        return checkpoint_fingerprint(
+            model_name,
+            extra={
+                "ssd_precision": settings.get("YUNSHU_SSD_CACHE_PRECISION"),
+                "kv_quant_bits": str(settings.get("YUNSHU_KV_QUANT_BITS")),
+            },
+        )
 
     def _effective_kv_quant_bits(self, total_tokens: int) -> int | None:
         """KV-quant bits for THIS request.

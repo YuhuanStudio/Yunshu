@@ -1328,7 +1328,10 @@ def _per_choice_seed(user_seed: int | None, idx: int) -> int:
     the same family of bug seen for VLM determinism.
     """
     if user_seed is not None:
-        return (int(user_seed) + int(idx)) & ((1 << 63) - 1)
+        # Choice 0 keeps the caller's seed (so n=1 and choice 0 of n>1 are the same stream);
+        # the others add the index and wrap in the signed 64-bit range the API accepts.
+        v = (int(user_seed) + int(idx)) & ((1 << 64) - 1)
+        return v - (1 << 64) if v >= 1 << 63 else v
     import time as _t
 
     return (_t.time_ns() + int(idx) * 1_000_003) & ((1 << 63) - 1)
@@ -1639,9 +1642,30 @@ async def _build_multi_choice(
 # ── Endpoints ──
 
 
+def _enforce_capability_contract(req: ChatCompletionRequest) -> None:
+    """400 for a request field the served model's capability contract does not cover."""
+    try:
+        from yunshu_engine.capability_contract import unsupported
+
+        from ..model_cards import find_card
+
+        reasons = unsupported(
+            find_card(req.model), req.model_dump(exclude_unset=True, mode="json")
+        )
+    except Exception:  # noqa: BLE001 - a card problem must never break serving
+        logger.debug("capability contract check failed", exc_info=True)
+        return
+    if reasons:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model '{req.model}' does not support: " + "; ".join(reasons),
+        )
+
+
 @router.post("/chat/completions", response_model=None)
 async def create_chat_completion(req: ChatCompletionRequest, request: Request):
     _check_permission(request, "can_infer")
+    _enforce_capability_contract(req)
     apply_keep_alive(req.model, req.keep_alive)
     _validate_sampling_params(req.temperature, req.effective_max_tokens(), req.top_p)
 
@@ -3282,7 +3306,7 @@ async def _stream_response_multi(
                     logit_bias=req.logit_bias,
                     stop=req.stop,
                     stop_token_ids=req.stop_token_ids,
-                    seed=(req.seed + choice_idx) if req.seed is not None else None,
+                    seed=_per_choice_seed(req.seed, choice_idx),
                     enable_thinking=req.enable_thinking,
                     json_schema=json_schema,
                     thinking_budget=req.thinking_budget,
@@ -3509,7 +3533,7 @@ async def _stream_response_multi(
                     presence_penalty=req.presence_penalty,
                     logit_bias=req.logit_bias,
                     stop=req.stop,
-                    seed=(req.seed + choice_idx) if req.seed is not None else None,
+                    seed=_per_choice_seed(req.seed, choice_idx),
                     enable_thinking=req.enable_thinking,
                     stop_token_ids=req.stop_token_ids,
                     thinking_budget=req.thinking_budget,

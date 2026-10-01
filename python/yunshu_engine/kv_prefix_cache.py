@@ -1594,8 +1594,14 @@ class KVPrefixCache:
         max_size_bytes: int = 10 * 1024**3,
         model_name: str = "",
         precision: str = "native",
+        fingerprint: str = "",
     ) -> None:
         """Enable SSD-tier KV cache persistence.
+
+        ``fingerprint`` (``yunshu_kv.fingerprint.checkpoint_fingerprint``) identifies the
+        checkpoint revision, config, tokenizer and cache layout: it namespaces the
+        directory and is recorded in / checked against every persisted file, so weights
+        replaced in place under the same name never read back stale KV.
 
         After enabling, blocks saved to the prefix cache are also persisted
         to disk. On restart, previously cached blocks are recovered.
@@ -1615,11 +1621,12 @@ class KVPrefixCache:
         # crash. Namespace the on-disk dir per model so each model's persisted KV
         # is physically isolated (covers both the per-block store and the hybrid
         # whole-snapshot store) without perturbing the in-memory hash chain.
-        scoped_dir = self._scoped_ssd_dir(cache_dir, model_name)
+        scoped_dir = self._scoped_ssd_dir(cache_dir, model_name, fingerprint)
         self._ssd_cache = SSDKVCache(
             cache_dir=scoped_dir,
             max_size_bytes=max_size_bytes,
             precision=precision,
+            fingerprint=fingerprint,
         )
         self._ssd_model_name = model_name
         # whole-snapshot SSD store for HYBRID models (the
@@ -1627,7 +1634,18 @@ class KVPrefixCache:
         try:
             from .hybrid_ssd_snapshot import HybridSnapshotStore
 
-            self._hybrid_ssd = HybridSnapshotStore(scoped_dir, precision=precision)
+            # One SSD budget for both stores: the snapshots may use what the block
+            # store leaves of ``max_size_bytes``, and the block store counts them.
+            ssd = self._ssd_cache
+            hybrid = HybridSnapshotStore(
+                scoped_dir,
+                precision=precision,
+                fingerprint=fingerprint,
+                max_bytes=max_size_bytes,
+                budget=lambda: max_size_bytes - ssd.block_bytes(),
+            )
+            ssd.set_external_bytes(lambda: hybrid.total_bytes)
+            self._hybrid_ssd = hybrid
         except Exception:
             self._hybrid_ssd = None
             logger.debug("hybrid SSD snapshot store init failed", exc_info=True)
@@ -1637,7 +1655,7 @@ class KVPrefixCache:
         )
 
     @staticmethod
-    def _scoped_ssd_dir(cache_dir: str, model_name: str) -> str:
+    def _scoped_ssd_dir(cache_dir: str, model_name: str, fingerprint: str = "") -> str:
         """Namespace the SSD cache dir per model so different models never share
         content-hash-keyed KV blocks on disk. Empty model_name → the
         base dir unchanged (back-compat / single-model deployments)."""
@@ -1650,7 +1668,11 @@ class KVPrefixCache:
         # Stable, filesystem-safe per-model subdir: readable suffix + a short
         # digest of the FULL name to disambiguate names that sanitize identically.
         safe = re.sub(r"[^A-Za-z0-9._-]", "_", model_name).strip("_")[-48:]
-        digest = hashlib.blake2b(model_name.encode("utf-8"), digest_size=6).hexdigest()
+        # The fingerprint (weights revision, config, tokenizer, layout) is part of the
+        # namespace: same name with different weights is a different directory.
+        digest = hashlib.blake2b(
+            f"{model_name}\0{fingerprint}".encode(), digest_size=6
+        ).hexdigest()
         return os.path.join(base, f"{safe}-{digest}" if safe else digest)
 
     def flush_to_ssd(self) -> int:

@@ -252,6 +252,10 @@ _add("YUNSHU_MODEL_ALIASES", "json", None, "Multi-model mode: map the model name
 # ── observability ──────────────────────────────────────────────────────
 _add("YUNSHU_LOG_LEVEL", "enum", "INFO", "Log level for Yunshu's loggers (third-party loggers stay at WARNING).", "observability", choices=("DEBUG", "INFO", "WARNING", "ERROR"))
 _add("YUNSHU_AUDIT_LOG_FILE", "path", None, "Also write the audit log to this file.", "observability")
+_add("YUNSHU_LOG_MAX_MB", "float", 50.0, "Service log (launchd): rotate the log file at this size in MiB; 0 turns size rotation off.", "observability", minimum=0.0)
+_add("YUNSHU_LOG_ROTATE_HOURS", "float", 24.0, "Service log: also rotate when this many hours passed since the last rotation; 0 turns time rotation off.", "observability", minimum=0.0)
+_add("YUNSHU_LOG_KEEP", "int", 7, "Service log: rotated (gzip, secrets redacted) files kept.", "observability", minimum=0)
+_add("YUNSHU_LOG_RETENTION_DAYS", "float", 14.0, "Service log: delete rotated files older than this many days; 0 keeps them until YUNSHU_LOG_KEEP prunes them.", "observability", minimum=0.0)
 
 # ── CLI ────────────────────────────────────────────────────────────────
 _add("YUNSHU_GATEWAY_URL", "str", "http://localhost:8000", "Server URL used by the yunshu CLI client commands.", "cli")
