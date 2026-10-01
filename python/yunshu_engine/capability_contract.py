@@ -115,21 +115,15 @@ def unsupported(card: Any, body: dict) -> list[str]:
     """Reasons ``body`` (a chat request) uses what ``card``'s model lacks."""
     if card is None or not has_evidence(card):
         return []
-    c = card.contract or build_contract(card)
     out: list[str] = []
     text = card.kind in _TEXT_KINDS
     if not text:
         for f in _CONSTRAINT_FIELDS + ("logprobs",):
             if body.get(f):
                 out.append(f"{f}: a {card.kind} model does not generate text")
-    effort = body.get("reasoning_effort")
-    if text and effort and effort != "none":
-        if not c["reasoning"]["supported"]:
-            out.append("reasoning_effort: this model has no reasoning mode")
-        elif not c["reasoning"]["effort_levels"]:
-            out.append("reasoning_effort: this model has no effort levels")
-    if text and body.get("thinking_budget") and not c["reasoning"]["supported"]:
-        out.append("thinking_budget: this model has no reasoning mode")
+    # reasoning_effort / thinking_budget on a model without a reasoning mode are
+    # accepted and have no effect (the card says so): coding agents send an effort on
+    # every request whatever model they point at, and a 400 would break them.
     allowed = set(card.input_modalities)
     seen: set[str] = set()
     for msg in body.get("messages") or []:

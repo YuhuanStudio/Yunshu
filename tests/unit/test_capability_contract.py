@@ -76,10 +76,10 @@ def test_contract_is_served_on_v1_models(served):
     assert "image" in vision["media"]["input"]
 
 
-def test_reasoning_effort_on_non_reasoning_model_is_400(served):
+def test_reasoning_effort_on_non_reasoning_model_is_accepted(served):
+    # Coding agents send an effort whatever model they target; it has no effect here.
     r = _chat(served, "plain", reasoning_effort="high")
-    assert r.status_code == 400
-    assert "reasoning_effort" in r.text
+    assert r.status_code != 400, r.text
 
 
 def test_image_part_on_text_model_is_400(served):
@@ -136,7 +136,16 @@ def test_openai_sdk_sees_the_400(served):
     with pytest.raises(openai.BadRequestError) as e:
         client.chat.completions.create(
             model="plain",
-            messages=[{"role": "user", "content": "hi"}],
-            reasoning_effort="high",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,AAAA"},
+                        }
+                    ],
+                }
+            ],
         )
-    assert "reasoning_effort" in str(e.value)
+    assert "image" in str(e.value)

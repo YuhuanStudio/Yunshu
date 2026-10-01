@@ -160,10 +160,10 @@ Every card carries a `contract` object, built by `yunshu_engine/capability_contr
 | `cache_tiers` | `ram` (`kv_prefix` or `apc`) and `ssd` when that tier is enabled |
 | `context` | window and maximum output tokens |
 
-A request that uses what the contract rules out returns 400 naming the field: `reasoning_effort` / `thinking_budget` on a model
-without a reasoning mode, an `image` / `audio` / `video` content part the model does not accept, and tools, `response_format`,
-guided decoding or `logprobs` on a model that does not generate text. A checkpoint whose config cannot be read has no contract
-and is not gated.
+A request that uses what the contract rules out returns 400 naming the field: an `image` / `audio` / `video` content part the model does not accept, and tools, `response_format`,
+guided decoding or `logprobs` on a model that does not generate text. `reasoning_effort` / `thinking_budget` on a model without
+a reasoning mode are accepted and have no effect (coding agents send an effort on every request; the card's `reasoning` field
+says whether it applies). A checkpoint whose config cannot be read has no contract and is not gated.
 
 ## Ollama-compatible (`/api/*`)
 
