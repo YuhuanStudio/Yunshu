@@ -2695,9 +2695,8 @@ class BatchedEngine:
         spec_decode = _spec is not None
 
         # Memory guard preflight check
-        guard_rejection = self._check_memory_guard(prompt, max_tokens)
-        if guard_rejection is not None:
-            return guard_rejection
+        # (raises: a refused request is an error, not an empty "length" completion)
+        self._check_memory_guard(prompt, max_tokens, raise_on_reject=True)
 
         # Resolve reasoning_effort → thinking_budget if not explicitly set
         if thinking_budget is None and reasoning_effort is not None:
@@ -2804,6 +2803,7 @@ class BatchedEngine:
                             strategy="importance_aware",
                         )
                         prompt = result.messages
+                        result.publish()
                         result.raise_if_cannot_fit()
                         logger.debug(
                             f"Context window truncated: {token_count} → "
@@ -3298,6 +3298,7 @@ class BatchedEngine:
                             strategy="importance_aware",
                         )
                         prompt = result.messages
+                        result.publish()
                         result.raise_if_cannot_fit()
                         logger.debug(
                             "Fast path pre-encode truncation: estimated %d → %d tokens",
@@ -5131,6 +5132,7 @@ class BatchedEngine:
                             strategy="importance_aware",
                         )
                         prompt = result.messages
+                        result.publish()
                         result.raise_if_cannot_fit()
                         logger.debug(
                             "Streaming fast path pre-encode truncation: estimated %d → %d tokens",
@@ -12025,11 +12027,14 @@ class BatchedEngine:
         self,
         prompt: str | list,
         max_tokens: int,
+        raise_on_reject: bool = False,
     ) -> GenerationOutput | None:
         """Run memory guard preflight check. Returns None if OK.
 
-        Returns a GenerationOutput with finish_reason="memory_limit"
-        if the memory guard rejects the request.
+        Returns a GenerationOutput with finish_reason="memory_limit" if the memory guard
+        rejects the request (streams surface its ``error``); ``raise_on_reject`` raises
+        :class:`MemoryGuardRejectedError` instead, for the non-streaming path whose caller
+        would otherwise return the refusal as an empty, successful completion.
         """
         guard = self._ensure_memory_guard()
         if guard is None:
@@ -12069,6 +12074,10 @@ class BatchedEngine:
         )
         if not ok:
             logger.info(f"Memory guard rejected request: {reason}")
+            if raise_on_reject:
+                from .exceptions import MemoryGuardRejectedError
+
+                raise MemoryGuardRejectedError(f"Memory guard rejected: {reason}")
             return GenerationOutput(
                 finished=True,
                 finish_reason="memory_limit",

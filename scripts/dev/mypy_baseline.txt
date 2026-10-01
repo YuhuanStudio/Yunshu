@@ -534,7 +534,6 @@
 1	python/yunshu_gateway/routers/batches.py	union-attr	Item "None" of "Event | None" has no attribute "wait"
 1	python/yunshu_gateway/routers/cancel.py	arg-type	Argument 1 to "get_owner" of "RequestTracker" has incompatible type "Any | None"; expected "str"
 1	python/yunshu_gateway/routers/chat.py	assignment	Incompatible types in assignment (expression has type "dict[Any, Any]", target has type "str")
-2	python/yunshu_gateway/routers/chat.py	assignment	Incompatible types in assignment (expression has type "dict[str, int]", target has type "int")
 1	python/yunshu_gateway/routers/chat.py	assignment	Incompatible types in assignment (expression has type "list[dict[str, Collection[str]]]", target has type "str")
 1	python/yunshu_gateway/routers/chat.py	no-any-return	Returning Any from function declared to return "dict[Any, Any] | str | None"
 1	python/yunshu_gateway/routers/chat.py	type-var	Value of type variable "_SupportsAcloseT" of "aclosing" cannot be "AsyncIterator[str]"
@@ -622,7 +621,6 @@
 1	python/yunshu_gateway/server_tools/runtime.py	arg-type	Argument 1 to "format_search_text" has incompatible type "Any | None"; expected "str"
 1	python/yunshu_gateway/server_tools/runtime.py	arg-type	Argument 1 to "run_search" has incompatible type "Any | None"; expected "str"
 2	python/yunshu_gateway/server_tools/runtime.py	no-any-return	Returning Any from function declared to return "str | None"
-4	python/yunshu_gateway/streaming.py	assignment	Incompatible types in assignment (expression has type "dict[str, int]", target has type "int")
 1	python/yunshu_gateway/streaming.py	assignment	Incompatible types in assignment (expression has type "list[dict[Any, Any]]", target has type "None")
 1	python/yunshu_gateway/streaming.py	assignment	Incompatible types in assignment (expression has type "list[dict[str, Collection[str]]]", target has type "str")
 2	python/yunshu_gateway/streaming.py	assignment	Incompatible types in assignment (expression has type "str", target has type "None")

@@ -83,7 +83,23 @@ with `--host 0.0.0.0 --auth-token <secret>` and connect to `http://host.docker.i
 **A reasoning model's answer is empty.** Its tokens went to thinking. Raise `max_tokens`, lower
 `reasoning_effort`, or pass `chat_template_kwargs: {"enable_thinking": false}`.
 
+**A request answers 400.** The body says why. Typical causes: `context_length_exceeded` (the
+system prompt and the latest user turn do not fit the context; shorten them or use a
+model with a longer context), a regex construct or JSON-schema keyword the
+engine cannot enforce (`uniqueItems`, `not`, `if / then / else`, `contains` are rejected rather than
+ignored), or a feature the model lacks (tools, images, audio, logprobs). `GET /v1/models` lists
+what each model supports.
+
+**The SSD cache fills the disk or `yunshu doctor` warns about it.** The prefix-cache SSD tier
+(`~/.yunshu/cache/apc`) has one global budget per cache root and keeps a free-space reserve (the
+larger of 10% and 20 GiB); when a write fails it pauses spilling with one warning. `yunshu cache
+status` lists entries per namespace, `yunshu cache gc` removes truncated, corrupt and old-format
+entries and trims to the cap, and `YUNSHU_VLM_APC_DISK=0` turns the tier off.
+
 ## Reporting a bug
+
+`yunshu diagnose` writes a local bundle (version, redacted settings, doctor output, recent errors
+with trace ids). It never contains prompts and is never uploaded; attach it if you are comfortable.
 
 Include:
 

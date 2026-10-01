@@ -35,7 +35,7 @@ _HEX = re.compile(r"^[0-9a-f]+$")
 @dataclass
 class Finding:
     path: str
-    reason: str  # tmp-orphan | truncated | corrupt | old-format | over-cap
+    reason: str  # tmp-orphan | truncated | corrupt | old-format | over-cap | stale-namespace | dead-namespace
     bytes: int
 
 
@@ -50,6 +50,8 @@ class Report:
     freed: int = 0
     kept_bytes: int = 0
     cap_bytes: int | None = None
+    namespaces: dict[str, int] = field(default_factory=dict)  # bytes per namespace
+    stale_namespaces: list[str] = field(default_factory=list)
 
     def by_reason(self) -> dict[str, int]:
         out: dict[str, int] = {}
@@ -108,6 +110,7 @@ def scan(
     apply: bool = False,
     tmp_grace_s: float = TMP_GRACE_S,
     now: float | None = None,
+    stale_days: float = 0.0,
 ) -> Report:
     """Check every cache file under ``root``; with ``apply`` remove the bad ones and trim to the cap."""
     now = time.time() if now is None else now
@@ -115,7 +118,31 @@ def scan(
     if not root.is_dir():
         return rep
     valid: list[tuple[float, int, Path]] = []
+    from . import disk_budget
+
+    entries = disk_budget.scan_root(root)
+    for e in entries:
+        rep.namespaces[e.ns] = rep.namespaces.get(e.ns, 0) + e.size
+    dead: dict[str, str] = {}  # namespace -> reason
+    for ns in rep.namespaces:
+        if ns == disk_budget.ROOT_NS or not disk_budget.removable_namespace(root / ns):
+            continue
+        reason = disk_budget.namespace_orphaned(root / ns)
+        if reason is not None:
+            dead[ns] = "dead-namespace"
+        elif (
+            stale_days > 0
+            and now - disk_budget.namespace_last_used(root, ns, entries)
+            >= stale_days * 86400
+        ):
+            dead[ns] = "stale-namespace"
+    rep.stale_namespaces = sorted(dead)
+    for e in entries:
+        if e.ns in dead:
+            rep.findings.append(Finding(str(e.path), dead[e.ns], e.size))
     for p in sorted(root.rglob("*")):
+        if p.suffix == SUFFIX and disk_budget._ns_of(root, p) in dead:
+            continue
         if not p.is_file() or p.is_symlink():
             continue
         try:
@@ -159,4 +186,9 @@ def scan(
                 rep.freed += f.bytes
             except OSError:
                 pass
+        import shutil
+
+        for ns in dead:
+            if disk_budget.removable_namespace(root / ns):
+                shutil.rmtree(root / ns, ignore_errors=True)
     return rep

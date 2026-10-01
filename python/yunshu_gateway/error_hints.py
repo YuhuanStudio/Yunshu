@@ -42,9 +42,27 @@ _RULES: list[tuple[int | None, re.Pattern[str], str]] = [
     ),
     (
         429,
+        re.compile(r"queue_full|requests in flight", re.I),
+        "the server is full: retry after the Retry-After header; the limit is "
+        "YUNSHU_QUEUE_LIMIT (0 turns it off)",
+    ),
+    (
+        429,
         re.compile(r".*", re.S),
         "wait for the Retry-After header and retry; the limit is YUNSHU_RATE_LIMIT_RPM "
         "(0 turns it off)",
+    ),
+    (
+        503,
+        re.compile(r"memory_pressure|under memory pressure", re.I),
+        "memory is nearly full while other requests run: retry after the Retry-After header, "
+        "or lower max_tokens / the prompt length; the threshold is YUNSHU_MEMORY_PRESSURE_REJECT",
+    ),
+    (
+        504,
+        re.compile(r"deadline", re.I),
+        "the request ran past its X-Yunshu-Deadline-Ms; raise the deadline or shorten the "
+        "prompt / max_tokens",
     ),
     (
         503,

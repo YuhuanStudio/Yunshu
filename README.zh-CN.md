@@ -28,11 +28,21 @@
   4-bit 缓存前缀、int8 SSD 缓存)都是需要手动开启的设置。
 - **混合架构模型的前缀缓存。** Qwen3.5 家族把注意力层和循环的 GatedDeltaNet 层混在一起,普通的
   KV 缓存切不开。Yunshu 保存精确的 checkpoint,以文本与图片像素共同作为键,默认 8 GiB 内存,
-  可再加一层 SSD。重复或只改结尾的长 prompt 无需重新 prefill。
+  另有默认开启的 SSD 层(`~/.yunshu/cache/apc`,每个缓存根目录一个全局磁盘预算并保留剩余空间,
+  `YUNSHU_VLM_APC_DISK=0` 可关闭)。重复或只改结尾的长 prompt 无需重新 prefill,重启后也一样。
 - **以输出验证过的验证 kernel。** GatedDeltaNet、注意力、5-bit 矩阵乘的验证 kernel,部分取自
   oMLX,每一颗都经过同 checkpoint A/B 才采用。
 - **快速路径上有完整 API。** 工具调用、JSON-schema 约束、停止序列、logprobs、流式推理/内容分离、
-  `reasoning_effort` 直接传给支持它的 chat template(Qwen3.8),以及客户端断开时取消生成。
+  `reasoning_effort` 直接传给支持它的 chat template(Qwen3.8),以及客户端断开时取消生成。`/v1/models` 会标明各模型支持的功能
+  (工具、结构化输出、logprobs、媒体、context),请求用到模型没有的功能会得到明确的 400。
+  regex 与 JSON-schema 约束是精确执行的(超出内置子集的 schema 交给 llguidance);无法执行的
+  语法(如 `uniqueItems`、`not`、`if / then / else`、`contains`)返回 400,不会被默默忽略。
+- **编程代理兼容。** Claude Code、Codex、opencode 都能使用:Messages 与 Responses 的原生工具、
+  服务端 `web_search` / `web_fetch` / MCP connector、Files、Batches、Conversations,以及给
+  Claude Code 状态栏用的 `yunshu statusline`。采样请求(temperature 大于 0,代理发送的就是这种)
+  也使用推测解码。各功能的证据见 [AGENT_COMPAT.md](docs/guides/AGENT_COMPAT.md)。
+- **诊断。** `yunshu doctor`(每个问题附修复方法)、`yunshu cache status|gc`、`yunshu diagnose`
+  (本机诊断包,不含 prompt,不上传)。
 
 ## 快速开始
 

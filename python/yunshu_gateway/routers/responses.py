@@ -34,7 +34,8 @@ from pydantic import (
 from yunshu_engine import settings
 
 from ..engine import get_engine, get_engine_for_model
-from ..error_envelope import EngineStreamError
+from ..error_envelope import EngineStreamError, server_error_body
+from ..usage_shapes import responses_usage
 
 logger = logging.getLogger(__name__)
 
@@ -186,8 +187,11 @@ def _public_stored(payload: dict) -> dict:
 
 import contextlib
 
+# A cut-short generation (token limit, the request's timeout, the memory guard) is
+# "incomplete", never "completed".
+_TRUNCATED_FINISH = ("length", "timeout", "memory_limit", "memory_exceeded")
 _INCOMPLETE_FINISH = (
-    "length",
+    *_TRUNCATED_FINISH,
     "cancel",
     "cancelled",
     "abort",
@@ -459,7 +463,7 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
             yield format_responses_incomplete(
                 response_id,
                 req.model,
-                reason="max_output_tokens" if finish == "length" else finish,
+                reason="max_output_tokens" if finish in _TRUNCATED_FINISH else finish,
                 output=final_output,
                 input_tokens=pt,
                 output_tokens=ct,
@@ -1140,10 +1144,27 @@ def _engine_templates_itself(engine) -> bool:
     return isinstance(engine, VLMEngine)
 
 
+def _enforce_tool_choice(req: ResponsesRequest, calls: list[dict]) -> list[dict]:
+    """The tool_choice / parallel_tool_calls / max_tool_calls contract on a finished call list
+    (chat's ``_enforce_tool_choice``): a named function keeps only its own calls,
+    ``parallel_tool_calls=false`` keeps the first, ``max_tool_calls`` caps the total."""
+    named = req.tool_choice.get("name") if isinstance(req.tool_choice, dict) else None
+    if named:
+        calls = [c for c in calls if c.get("name") == named]
+    if req.parallel_tool_calls is False:
+        calls = calls[:1]
+    if req.max_tool_calls:
+        calls = calls[: req.max_tool_calls]
+    return calls
+
+
 @router.post("/responses", response_model=None)
 async def create_response(req: ResponsesRequest, request: Request):
     """OpenAI Responses API endpoint."""
     _check_permission(request, "can_infer")
+    from ..capability_gate import enforce_responses
+
+    enforce_responses(req)
     from ..responses_context import needs_state, run_stateful_response
 
     if needs_state(req):
@@ -1411,14 +1432,40 @@ async def create_response(req: ResponsesRequest, request: Request):
             _ctx = get_max_context_window(req.model, engine)
             if _ctx and _est > _ctx:
                 _room = _ctx - min(req.max_output_tokens, _ctx // 4)
+                _before, _est_before = messages, _est
                 messages, _est = _auto_truncate(
                     messages,
                     _est,
                     _room,
                     lambda ms: count_message_tokens(ms, _tok),
                 )
+                if len(messages) < len(_before):
+                    # never silent: what was dropped goes to x_yunshu.context_policy
+                    from yunshu_engine.context_window import (
+                        publish_report,
+                        removal_report,
+                    )
+
+                    publish_report(
+                        removal_report(
+                            "truncation_auto",
+                            _before,
+                            messages,
+                            _est_before,
+                            _est,
+                            _room,
+                        )
+                    )
         validate_context_window(_est, req.model, engine)
         validate_prefill_memory(_est)
+        from ..token_budget import plan_for_engine
+
+        _tb = plan_for_engine(
+            _est, req.max_output_tokens, req.thinking_budget, req.model, engine
+        )
+        if _tb is not None and _tb.clamped:
+            req.max_output_tokens = _tb.max_tokens_granted
+            req.thinking_budget = _tb.thinking_budget_granted
     except HTTPException:
         raise
     except Exception:
@@ -1824,7 +1871,7 @@ async def create_response(req: ResponsesRequest, request: Request):
 
             # Extract tool calls for this choice
             tool_calls = None
-            if req.tools:
+            if req.tools and req.tool_choice != "none":
                 from yunshu_engine.tool_format import parse_tool_output, tool_formats
 
                 # Prepend the forced-tool prefill (if any) so the markup is complete for
@@ -1835,10 +1882,10 @@ async def create_response(req: ResponsesRequest, request: Request):
                 tool_calls, _clean = parse_tool_output(
                     _parse_text, tool_formats(engine), req.tools
                 )
-                if tool_calls and req.max_tool_calls:
-                    tool_calls = tool_calls[: req.max_tool_calls]
                 if tool_calls:
                     text = _clean
+                    tool_calls = _enforce_tool_choice(req, tool_calls)
+                if tool_calls:
                     finish_reason = "tool_calls"
 
             # Build output item for this choice
@@ -1948,7 +1995,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                 "incomplete"
                 if last_finish_reason
                 in (
-                    "length",
+                    *_TRUNCATED_FINISH,
                     "cancel",
                     "cancelled",
                     "abort",
@@ -1969,15 +2016,10 @@ async def create_response(req: ResponsesRequest, request: Request):
             "status": _response_status,
             "output": all_output_items,
             "metadata": req.metadata,
-            "usage": {
-                "input_tokens": total_pt,
-                # total_ct (engine count) already includes reasoning tokens;
-                # reasoning is the detail subset below (was double-added).
-                "output_tokens": total_ct,
-                "total_tokens": total_pt + total_ct,
-                "output_tokens_details": {"reasoning_tokens": total_reasoning_tokens},
-                "input_tokens_details": {"cached_tokens": max_cached_tokens},
-            },
+            # total_ct (engine count) already includes reasoning tokens.
+            "usage": responses_usage(
+                total_pt, total_ct, total_reasoning_tokens, max_cached_tokens
+            ),
         }
         # Persist when the client requested storage so it can be retrieved
         # via GET /v1/responses/{id}. Stash the raw input messages and the
@@ -2022,16 +2064,7 @@ async def create_response(req: ResponsesRequest, request: Request):
         )
     except Exception as e:
         logger.error(f"Responses API generation error: {e}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": {
-                    "message": "Internal server error",
-                    "type": "server_error",
-                    "code": "internal_error",
-                }
-            },
-        )
+        return JSONResponse(status_code=500, content=server_error_body())
     finally:
         _release_lora_adapter(engine, loaded_adapter)
         if _ns_tracker is not None:
@@ -2634,16 +2667,15 @@ async def _stream_response(
             # ── Check for tool calls in the accumulated text (before closing lifecycles) ──
             tool_calls = None
             clean_text = accumulated_text
-            if req.tools:
+            if req.tools and req.tool_choice != "none":
                 from yunshu_engine.tool_format import parse_tool_output, tool_formats
 
                 tool_calls, _clean = parse_tool_output(
                     accumulated_text, tool_formats(engine), req.tools
                 )
-                if tool_calls and req.max_tool_calls:
-                    tool_calls = tool_calls[: req.max_tool_calls]
                 if tool_calls:
                     clean_text = _clean
+                    tool_calls = _enforce_tool_choice(req, tool_calls)
 
             # ── Lifecycle: response.output_text.done (use cleaned text). output_index is
             # _msg_idx (1 when a reasoning item precedes the message, else 0) —. ──
@@ -2813,7 +2845,7 @@ async def _stream_response(
                     cached_tokens=cached_tok,
                     seq=_next_seq(),
                 )
-            elif last_finish_reason == "length":
+            elif last_finish_reason in _TRUNCATED_FINISH:
                 _terminal_status = "incomplete"
                 yield format_responses_incomplete(
                     response_id=response_id,
@@ -2858,15 +2890,9 @@ async def _stream_response(
             # Persist final response when the client requested storage. Mirrors
             # the non-streaming path so GET /v1/responses/{id} succeeds.
             if getattr(req, "store", None):
-                _usage_dict: dict = {
-                    "input_tokens": prompt_tok,
-                    "output_tokens": _total_output_tok,
-                    "total_tokens": prompt_tok + _total_output_tok,
-                }
-                _usage_dict["output_tokens_details"] = {
-                    "reasoning_tokens": reasoning_tok
-                }
-                _usage_dict["input_tokens_details"] = {"cached_tokens": cached_tok}
+                _usage_dict: dict = responses_usage(
+                    prompt_tok, _total_output_tok, reasoning_tok, cached_tok
+                )
                 try:
                     _store_response(
                         response_id,

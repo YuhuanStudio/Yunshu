@@ -42,6 +42,7 @@ from ..streaming import (
     run_with_disconnect_guard,
     with_sse_keepalive,
 )
+from ..usage_shapes import clamp_detail
 from .chat import _apply_lora_adapter, _release_lora_adapter
 from .models import _check_permission
 
@@ -56,6 +57,12 @@ _FINISH_REASON_MAP = {
     "stop": "end_turn",
     "length": "max_tokens",
     "tool_calls": "tool_use",
+    # Output cut short by the engine (the request's `timeout`, the memory guard) is
+    # "max_tokens", never "end_turn": a truncated answer must not look finished. (The chat
+    # route maps the same reasons to "length".)
+    "timeout": "max_tokens",
+    "memory_limit": "max_tokens",
+    "memory_exceeded": "max_tokens",
 }
 
 
@@ -1052,6 +1059,9 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     functions (so the recursion takes the ordinary path below).
     """
     _check_permission(request, "can_infer")
+    from ..capability_gate import enforce_anthropic
+
+    enforce_anthropic(req)
     from ..anthropic_client_tools import fill_client_tool_schemas
     from ..files_store import FileRefError, has_file_refs, resolve_file_refs
 
@@ -1372,6 +1382,18 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
         _pf_est = count_message_tokens(messages, _pf_tok)
         validate_context_window(_pf_est, req.model, engine)
         validate_prefill_memory(_pf_est)
+        from ..token_budget import plan_for_engine
+
+        _th = req.thinking.get("budget_tokens") if req.thinking else None
+        _tb = plan_for_engine(_pf_est, req.max_tokens, _th, req.model, engine)
+        if _tb is not None and _tb.clamped:
+            # prompt + thinking + answer must fit the window: grant what is left
+            req.max_tokens = _tb.max_tokens_granted
+            if _th is not None and req.thinking is not None:
+                req.thinking = {
+                    **req.thinking,
+                    "budget_tokens": _tb.thinking_budget_granted,
+                }
     except HTTPException as e:
         return JSONResponse(
             status_code=e.status_code,
@@ -1793,7 +1815,9 @@ async def _non_stream_batched(
         "cache_read_input_tokens": cache_read,
     }
     if reasoning_tok > 0:
-        usage["output_tokens_details"] = {"reasoning_tokens": reasoning_tok}
+        usage["output_tokens_details"] = {
+            "reasoning_tokens": clamp_detail(reasoning_tok, total_output_tokens)
+        }
 
     resp = {
         "id": message_id,
@@ -2029,7 +2053,9 @@ async def _non_stream_legacy(
         "cache_read_input_tokens": _lg_read,
     }
     if _reasoning_tok > 0:
-        _legacy_usage["output_tokens_details"] = {"reasoning_tokens": _reasoning_tok}
+        _legacy_usage["output_tokens_details"] = {
+            "reasoning_tokens": clamp_detail(_reasoning_tok, _legacy_total_output)
+        }
 
     return JSONResponse(
         {
@@ -2761,9 +2787,28 @@ async def _stream_anthropic(
         stop_reason = _map_stop_reason(
             _streaming_finish_reason, matched_stop, has_tool_calls=_has_tool_calls
         )
-        _delta_usage: dict = {"output_tokens": output_tokens}
+        # Cumulative usage, as the final message reports it: the prompt split is restated
+        # here because message_start went out with whatever the first engine output knew.
+        _d_input, _d_creation, _d_read = _anthropic_cache_usage(
+            input_tokens,
+            cached_tokens,
+            _cacheable_prefix_token_count(
+                getattr(req, "_anthropic_orig_system", req.system),
+                kv_cache_breakpoints,
+                getattr(engine, "_tokenizer", None)
+                or getattr(engine, "tokenizer", None),
+            ),
+        )
+        _delta_usage: dict = {
+            "input_tokens": _d_input,
+            "cache_creation_input_tokens": _d_creation,
+            "cache_read_input_tokens": _d_read,
+            "output_tokens": output_tokens,
+        }
         if reasoning_tok > 0:
-            _delta_usage["output_tokens_details"] = {"reasoning_tokens": reasoning_tok}
+            _delta_usage["output_tokens_details"] = {
+                "reasoning_tokens": clamp_detail(reasoning_tok, output_tokens)
+            }
         delta_data = {
             "type": "message_delta",
             "delta": {
@@ -2820,16 +2865,8 @@ async def _stream_anthropic(
             yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': _text_block_idx})}\n\n".encode()
         if thinking_block_started:
             yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': _thinking_block_idx})}\n\n".encode()
-        # Emit message_delta with stop_reason before message_stop (Anthropic protocol requirement)
-        _error_stop_reason = _map_stop_reason(
-            _streaming_finish_reason, None, has_tool_calls=_has_tool_calls
-        )
-        _error_delta_usage: dict = {"output_tokens": output_tokens}
-        if reasoning_tok > 0:
-            _error_delta_usage["output_tokens_details"] = {
-                "reasoning_tokens": reasoning_tok
-            }
-        yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': _error_stop_reason, 'stop_sequence': None}, 'usage': _error_delta_usage})}\n\n".encode()
+        # No message_delta: it would announce a stop_reason (end_turn) for a message that
+        # failed. The terminal error event below is the end of the stream.
         error_event = {
             "type": "error",
             "error": {"type": "overloaded_error", "message": "Out of GPU memory"},
@@ -2858,16 +2895,8 @@ async def _stream_anthropic(
             yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': _text_block_idx})}\n\n".encode()
         if thinking_block_started:
             yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': _thinking_block_idx})}\n\n".encode()
-        # Emit message_delta with stop_reason before message_stop (Anthropic protocol requirement)
-        _exc_stop_reason = _map_stop_reason(
-            _streaming_finish_reason, None, has_tool_calls=_has_tool_calls
-        )
-        _exc_delta_usage: dict = {"output_tokens": output_tokens}
-        if reasoning_tok > 0:
-            _exc_delta_usage["output_tokens_details"] = {
-                "reasoning_tokens": reasoning_tok
-            }
-        yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': _exc_stop_reason, 'stop_sequence': None}, 'usage': _exc_delta_usage})}\n\n".encode()
+        # No message_delta: it would announce a stop_reason (end_turn) for a message that
+        # failed. The terminal error event below is the end of the stream.
         error_event = {
             "type": "error",
             "error": {

@@ -65,6 +65,47 @@ when the first byte goes out, so padding the body with whitespace would turn a l
 200), so they poll `GET /v1/requests/{id}` with the id they sent. Prefer `stream: true` for long
 prompts.
 
+### Overload, deadlines and cancel
+
+Nothing waits without bound. A generation request (chat, completions, messages, responses) that
+arrives while `YUNSHU_QUEUE_LIMIT` (default 64) requests are in flight gets `429` at once, with
+`Retry-After` (the queue's estimated wait, 1-60 s) and `error.x_yunshu` = `{reason: "queue_full",
+queue_depth, queue_limit, retry_after_s}`; while MLX memory is above `YUNSHU_MEMORY_PRESSURE_REJECT`
+(default 0.95 of the Metal working set) *and other requests are running* it gets `503`
+(`memory_pressure`). An idle server never refuses on memory: waiting would not help. Each dialect
+gets its own error type (`rate_limit_error` / `overloaded_error` on Messages; `rate_limit_error` /
+`server_error` with `code` on the OpenAI routes), and the OpenAI / Anthropic SDKs already retry both
+statuses and honour `Retry-After`.
+
+`X-Yunshu-Deadline-Ms: N` is the wall time the client will wait, counted from arrival (the queue
+included). OpenAI has no such field and a body field would be rejected by strict clients, so it is a
+header next to `X-Request-Id`. Past the deadline the generation is cancelled and the client gets
+`504` `deadline_exceeded` (Messages: `timeout_error`); once a stream has started, exactly one
+terminal error event (`data: {"error": ...}` + `[DONE]`, `event: error`) ends it. The existing
+`timeout` field is different: it ends *generation* with a partial answer (`finish_reason: "length"`,
+`stop_reason: "max_tokens"`, `status: "incomplete"`).
+
+An answer cut short by `DELETE /v1/requests/{id}`, `POST /v1/cancel` or a deadline carries
+`x_yunshu.cancelled: true` (and `X-Yunshu-Cancelled: true` when not streaming); a queued request is
+cancelled the same way and never reaches the engine.
+
+### Context policy and token budget
+
+`x_yunshu.context_policy` appears when the prompt was shortened to fit: `policy` (the strategy, or
+`truncation_auto` for the Responses API's own option), `tokens_before` / `tokens_after` /
+`tokens_removed`, `messages_before` / `messages_after` / `messages_removed`, `removed_roles` (user
+turns are counted under `user`), `budget_tokens` and `cannot_fit`. Non-streaming responses also carry
+`X-Yunshu-Context-Policy: truncate_oldest; removed=3 messages (2 user turns); tokens=9000->4000`;
+streams report it in the usage chunk (the headers are sent before the prompt is shortened). The
+latest user turn and the system messages are never removed: when they alone do not fit, the request
+is a `400` `context_length_exceeded`, not a silent cut.
+
+`x_yunshu.budget` appears when the prompt fits but leaves less room than `max_tokens` asks for:
+the prompt, the thinking and the answer share one window, so `max_tokens` is clamped to what is
+left (`max_tokens_requested` vs `max_tokens_granted`) and `thinking_budget` (a part of those tokens)
+to what was granted. A prompt that leaves no room at all is a `400`. Only a window the model itself
+reports counts; the tokenizer's `model_max_length` never shrinks a request.
+
 ### Per-response stats
 
 `x_yunshu` is in the JSON body of non-streaming chat / completions, in the streaming usage chunk
@@ -118,7 +159,7 @@ status endpoint show the same live.
 stay minimal: they are public, and orchestrators key off their status codes.
 
 ```json
-{"object":"yunshu.status","version":"0.1.1","state":"running","uptime_s":17.3,
+{"object":"yunshu.status","version":"0.1.2","state":"running","uptime_s":17.3,
  "models":[{"id":"Qwen3.8-27B-oQ4e-mtp","type":"VLMEngine","loaded":true,"pinned":true}],
  "memory":{"active_gb":17.4,"cache_gb":0.3,"peak_gb":18.1,"total_gb":137.4,"pressure":0.127},
  "requests":{"active":1,"queued":0,"prefill":0,"decode":1,"items":[{"request_id":"job-7","phase":"decode","completion_tokens":112}]},

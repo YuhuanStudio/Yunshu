@@ -15,7 +15,7 @@ Read this first: the "four tiers" exist on ONE of the serving paths.
 
 | Serving path | Serves | RAM, full precision (HOT) | RAM, 4-bit (WARM) | SSD | Nothing cached (COLD) |
 |---|---|---|---|---|---|
-| **VLM runner** (`VLMEngine` + `vlm_batch_runner.py`, mlx-vlm APC) | every mlx-vlm model, Qwen3.8-27B included; all `/v1/chat/completions`, `/v1/messages`, `/v1/responses` traffic for them | yes: exact checkpoints (KV + recurrent state), byte budget `YUNSHU_VLM_APC_MEMORY_GB` | **no** (would be lossy; not implemented here) | **yes, on by default**, lossless (bit-exact states), `~/.yunshu/cache/apc`, 64 GiB cap: `YUNSHU_VLM_APC_DISK=0` opts out, `YUNSHU_VLM_APC_DISK_DIR` / `YUNSHU_VLM_APC_DISK_GB` | full prefill |
+| **VLM runner** (`VLMEngine` + `vlm_batch_runner.py`, mlx-vlm APC) | every mlx-vlm model, Qwen3.8-27B included; all `/v1/chat/completions`, `/v1/messages`, `/v1/responses` traffic for them | yes: exact checkpoints (KV + recurrent state), byte budget `YUNSHU_VLM_APC_MEMORY_GB` | **no** (would be lossy; not implemented here) | **yes, on by default**, lossless (bit-exact states), `~/.yunshu/cache/apc`, 64 GiB cap for the whole directory (all models together): `YUNSHU_VLM_APC_DISK=0` opts out, `YUNSHU_VLM_APC_DISK_DIR` / `YUNSHU_VLM_APC_DISK_GB` | full prefill |
 | **Text fast path** (`BatchedEngine._generate_fast`, mlx-lm `generate_step`) | text-only mlx-lm models (e.g. Qwen2.5-3B) | yes: `KVPrefixCache`, `YUNSHU_PREFIX_MAX_ENTRIES` entries | yes but **off by default** (`YUNSHU_PREFIX_HOT_LIMIT=0`; lossy on reuse) | yes but **off by default** (`YUNSHU_SSD_CACHE=1`; `native` precision is bit-exact; skipped for models that prefill faster than `YUNSHU_SSD_CACHE_PREFILL_CEIL_TPS`) | full prefill |
 | Engine loop (`YUNSHU_ENGINE_LOOP=1`, legacy) | text models | radix cache (HOT only) | no | no | full prefill |
 
@@ -50,6 +50,27 @@ recurrent state at one token position, reusable only by a prompt that starts wit
   re-prefilling; the cache also survives a restart). States are namespaced by the checkpoint's weights
   (path, file sizes, mtimes), so replacing a model in place never reads old states. `yunshu doctor` prints
   the directory, its size, the cap and the free space.
+
+### SSD cache disk budget (APC and text tier)
+
+Both SSD tiers keep one namespace directory per checkpoint under a root. The budget is per
+**root**, shared by every namespace (`yunshu_kv/disk_budget.py`), so old fingerprints and other
+models can no longer add up to more than the cap (a 117 GiB directory against a 64 GiB cap, and a
+full 1 TB volume, was the failure this replaces):
+
+- **Global cap**: `YUNSHU_VLM_APC_DISK_GB` / `YUNSHU_SSD_CACHE_MAX_GB` bound everything under the
+  root; over it, the least recently used files go first across namespaces (mtime is the clock; loads
+  touch it).
+- **Stale namespaces** go before anything else: unused for `YUNSHU_CACHE_STALE_DAYS` (7), or whose
+  recorded checkpoint (`namespace.json`: path + signature) is gone or changed. `yunshu cache gc`
+  reports them (`stale-namespace`, `dead-namespace`) and `--apply` removes them; `yunshu cache status`
+  and `yunshu doctor` show the size per namespace and per root.
+- **Free-space reserve**: no write may leave the volume under max(`YUNSHU_CACHE_RESERVE_PCT` of the
+  volume, `YUNSHU_CACHE_RESERVE_GB`) free (10 % / 20 GiB). The effective cap is
+  `min(configured cap, root usage + free - reserve)`, re-evaluated as space changes, not fixed at start.
+- **Write errors** (ENOSPC, EIO): that checkpoint is dropped, one warning is logged (no traceback),
+  spilling pauses until free space is back (re-checked every 30 s), temp files are removed, and the
+  request in flight is unaffected. The cache content, its validation and the lossless default are unchanged.
 
 ### Text path SSD tier (opt-in)
 

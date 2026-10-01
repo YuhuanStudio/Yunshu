@@ -8,6 +8,8 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from yunshu_kv.disk_budget import is_enospc
+
 from ..conversations_store import (
     MAX_CREATE_ITEMS,
     ConversationError,
@@ -26,7 +28,7 @@ def error_response(
         content={
             "error": {
                 "message": message,
-                "type": "invalid_request_error",
+                "type": "server_error" if status >= 500 else "invalid_request_error",
                 "param": param,
                 "code": code,
             }
@@ -35,8 +37,18 @@ def error_response(
 
 
 async def _io(fn, *args, **kwargs):
-    """Run one whole store operation (its own process-lock RMW) off the event loop."""
-    return await asyncio.to_thread(fn, *args, **kwargs)
+    """Run one whole store operation (its own process-lock RMW) off the event loop. A full
+    disk is a 507 the client can act on, not an opaque 500; the store removes its temp file."""
+    try:
+        return await asyncio.to_thread(fn, *args, **kwargs)
+    except OSError as exc:
+        if not is_enospc(exc):
+            raise
+        raise ConversationError(
+            507,
+            "The server's disk is full, the change was not saved; free space and retry",
+            "insufficient_storage",
+        ) from exc
 
 
 def _err(exc: ConversationError) -> JSONResponse:

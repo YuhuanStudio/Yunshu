@@ -1345,6 +1345,7 @@ class EngineCore:
                             _ctx_reject = True
                         else:
                             truncated_messages = trunc_result.messages
+                            trunc_result.publish()
                     except Exception:
                         logger.debug(
                             "message-level truncation failed, falling back to token-level",

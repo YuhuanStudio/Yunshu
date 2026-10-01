@@ -69,6 +69,8 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 |---|---|---|---|
 | `YUNSHU_CONFIG` | path | unset | TOML config file with YUNSHU_* settings (lower precedence than the environment). |
 | `YUNSHU_MAX_CONCURRENT` | int | unset | Cap on concurrently admitted requests. Unset: adaptive (starts at 8). |
+| `YUNSHU_QUEUE_LIMIT` | int | 64 | Generation requests (chat, completions, messages, responses) in flight at once, running and waiting together. The next one is refused at once with 429, `Retry-After` and the queue depth in `error.x_yunshu` instead of waiting without bound. 0 = no limit. |
+| `YUNSHU_MEMORY_PRESSURE_REJECT` | float | 0.95 | Share of the Metal working set (MLX active memory / recommended working set) above which, while other requests are running, a new generation request is refused with 503 and `Retry-After` (it would OOM the process). An idle server never refuses. 0 = off. |
 | `YUNSHU_COMPLETION_BATCH_SIZE` | int | 32 | Text engine: maximum sequences decoded together. |
 | `YUNSHU_DEFAULT_MAX_TOKENS` | int | 512 | Completion length when a request omits max_tokens. |
 | `YUNSHU_MAX_PREFILL_TOKENS` | int | 0 | Reject prompts longer than this many tokens (0: no limit beyond the model context). |
@@ -124,18 +126,21 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_SSD_CACHE_DIR` | path | ~/.cache/yunshu/kv-ssd | Text engine: SSD prefix-cache directory. |
 | `YUNSHU_SSD_CACHE_PRECISION` | `native` \| `int8` | native | Text engine: SSD prefix-cache storage precision: 'native' (KV and recurrent state stored bit-exact; lossless) or 'int8' (per-tensor int8, about half the disk bytes of bf16; lossy on reuse; memory vs quality). |
 | `YUNSHU_SSD_CACHE_PREFILL_CEIL_TPS` | float | 20000.0 | Text engine: skip an SSD prefix restore when the model's observed prefill speed exceeds this (tokens/s): re-prefilling is then as fast as reading the KV back. |
-| `YUNSHU_SSD_CACHE_MAX_GB` | float | 10.0 | Text engine: SSD prefix-cache size cap in GiB. |
+| `YUNSHU_SSD_CACHE_MAX_GB` | float | 10.0 | Text engine: SSD prefix-cache size cap in GiB, one budget for the whole directory (all models together). |
+| `YUNSHU_CACHE_RESERVE_PCT` | float | 10.0 | SSD prefix caches (APC and text): free space, as a percentage of the volume, that no cache write may eat into. The reserve is max(this percentage, YUNSHU_CACHE_RESERVE_GB); the effective cap of a cache root is also limited to what the reserve leaves it. |
+| `YUNSHU_CACHE_RESERVE_GB` | float | 20.0 | SSD prefix caches (APC and text): minimum free space in GiB left on the volume (see YUNSHU_CACHE_RESERVE_PCT). A write that would leave less is dropped and spilling pauses until space is back. |
+| `YUNSHU_CACHE_STALE_DAYS` | float | 7.0 | SSD prefix caches (APC and text): a checkpoint namespace not used for this many days, or whose checkpoint no longer exists or has changed, is removed before anything else is evicted (0 = never by age). |
 | `YUNSHU_KV_QUANT_BITS` | `auto` \| `off` \| `2` \| `3` \| `4` \| `8` | off | Text engine KV cache quantization (lossy; memory vs quality): 'off' (lossless), 'auto' (8-bit once the KV cache would exceed ~2 GiB), or 2/3/4/8 bits always. |
 
 ### vlm-runner
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `YUNSHU_VLM_APC_MEMORY_GB` | float | unset | VLM runner prefix cache (APC) RAM budget in GiB; 0 disables the prefix cache. Unset: half of the memory left after the model weights and a 16 GiB reserve, between 4 and 32 GiB (128 GB machine, 27B model: 32). A 27B checkpoint costs about 130 KiB per cached token. |
+| `YUNSHU_VLM_APC_MEMORY_GB` | float | unset | VLM runner prefix cache (APC) RAM budget in GiB; 0 disables the prefix cache. Unset: half of the memory left after the model weights and an OS / activation reserve (a quarter of the machine, 4 to 16 GiB), at most a quarter of the machine and 32 GiB, and 0 (off) when under 1 GiB would be left (128 GB machine, 27B model: 32; 8 GB machine, 4B model: 0). A 27B checkpoint costs about 130 KiB per cached token. |
 | `YUNSHU_VLM_APC_DISK` | bool | on | APC SSD tier: prefix checkpoints that RAM evicts (and, at shutdown, those still resident) are written to disk and read back instead of re-prefilling (bit-exact states, lossless; a 27B checkpoint reloads about 20x faster than it prefills). Set 0 to keep the prefix cache in RAM only. |
 | `YUNSHU_VLM_APC_DISK_DIR` | path | unset | Directory of the APC SSD tier. Unset: ~/.yunshu/cache/apc (internal disk). Put it on a fast volume to keep the internal disk clean. |
 | `YUNSHU_KV_PRECISION` | `bf16` \| `int8` | bf16 | KV cache precision of the Qwen3.5-family runner's shared decode batch: 'bf16' (lossless) or 'int8' (int8 codes + one fp16 scale per 32-dim group: ~0.53x the KV memory and read bandwidth for a small attention error; memory vs quality). A lone request and the speculative lane stay bf16. Applies to models with Qwen3.5-family attention (the ragged KV layout). |
-| `YUNSHU_VLM_APC_DISK_GB` | float | 64.0 | Size cap of the APC SSD tier in GiB (oldest shards are deleted past it; 0 = uncapped). A 27B checkpoint costs about 130 KiB per token, so 64 GiB holds about 500K tokens. |
+| `YUNSHU_VLM_APC_DISK_GB` | float | unset | Size cap of the APC SSD tier in GiB, one budget for the whole directory (every checkpoint namespace together; least recently used files go first across namespaces; 0 = no configured cap, the free-space reserve still applies). Unset: a quarter of the volume, at most 64 GiB (a 128 GB disk: 32). A 27B checkpoint costs about 130 KiB per token, so 64 GiB holds about 500K tokens. |
 | `YUNSHU_VLM_MAX_IMAGE_BYTES` | int | 26214400 (25 MiB) | Largest image a request may reference by URL, in bytes. |
 | `YUNSHU_VLM_INSECURE_SSL` | bool | off | Retry image downloads without TLS verification when verification fails. |
 | `YUNSHU_ROUND_PREFILL_CHUNK` | int | 512 | Round driver: prompt tokens per prefill span. A decoding request only steps between prefill forwards, so smaller spans keep it running next to a long prompt (Qwen3.8-27B, M5 Max, one MTP row beside an 8K prompt: 512 -> 6 tok/s, 128 -> 24 tok/s, ~20% lower prefill speed). Atoms are fixed per prompt (idle steps merge consecutive full atoms without changing any bit), so output stays independent of what else is running; prompts prefilled with different chunk sizes are each self-consistent but not bit-identical to each other. |
