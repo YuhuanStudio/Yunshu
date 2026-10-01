@@ -84,6 +84,7 @@ def _global_options(
 
 
 from .benchmark import bench_app
+from .cache import cache_app
 from .chat import chat_app
 from .config import config_app
 from .diagnose import diagnose_app
@@ -114,6 +115,7 @@ app.add_typer(statusline_app, name="statusline", rich_help_panel=_TOOLS)
 app.add_typer(eval_app, name="eval", rich_help_panel=_TOOLS)
 app.add_typer(bench_app, name="bench", rich_help_panel=_TOOLS)
 app.add_typer(diagnose_app, name="diagnose", rich_help_panel=_TOOLS)
+app.add_typer(cache_app, name="cache", rich_help_panel=_SERVER)
 
 # Top-level single-shot inference commands (complete/embed/tokenize/rerank/transcribe/
 # speak/ocr/image) — the agent-facing surface, all JSON-capable + non-interactive.
