@@ -70,6 +70,32 @@ class HarmonyMessageAdapter(MessageAdapter):
         return "harmony"
 
 
+def _has_media(content) -> bool:
+    return isinstance(content, list) and any(
+        isinstance(p, dict) and p.get("type") not in (None, "text") for p in content
+    )
+
+
+def _as_parts(content) -> list:
+    if isinstance(content, list):
+        return list(content)
+    return [{"type": "text", "text": content}] if content else []
+
+
+def _prepend_text(content, text: str):
+    """``text`` ahead of ``content``; list content (media parts) stays a list."""
+    if isinstance(content, list):
+        return [{"type": "text", "text": text}, *content]
+    return f"{text}\n\n{content}" if content else text
+
+
+def _join_content(a, b):
+    """Two same-role turns merged; media parts survive."""
+    if isinstance(a, list) or isinstance(b, list):
+        return _as_parts(a) + _as_parts(b)
+    return f"{a}\n{b}"
+
+
 class Gemma4MessageAdapter(MessageAdapter):
     """Gemma4: Special system message handling + turn structure.
 
@@ -103,9 +129,13 @@ class Gemma4MessageAdapter(MessageAdapter):
 
         for msg in messages:
             role = msg.get("role", "user")
-            content = self._extract_text(msg.get("content", ""))
+            raw = msg.get("content", "")
+            # Media parts (images, audio, video) must reach the template; only
+            # text-only content is flattened.
+            content = raw if _has_media(raw) else self._extract_text(raw)
 
             if role == "system":
+                content = self._extract_text(raw)
                 # ACCUMULATE multiple system messages — the old
                 # `system_prefix = content` overwrote, so with ≥2 system msgs (e.g. a
                 # cached_content context doc prepended ahead of the request's own system
@@ -123,7 +153,7 @@ class Gemma4MessageAdapter(MessageAdapter):
                 continue
 
             if role == "user" and system_prefix and not adapted:
-                content = f"{system_prefix}\n\n{content}" if content else system_prefix
+                content = _prepend_text(content, system_prefix)
                 system_prefix = ""
 
             # Merge consecutive same-role messages (but only plain text;
@@ -139,7 +169,7 @@ class Gemma4MessageAdapter(MessageAdapter):
                 and not adapted[-1].get("reasoning_content")
             ):
                 last = adapted[-1]
-                last["content"] = last.get("content", "") + "\n" + content
+                last["content"] = _join_content(last.get("content", ""), content)
                 continue
 
             new_msg = {"role": role, "content": content}
@@ -168,10 +198,8 @@ class Gemma4MessageAdapter(MessageAdapter):
         # message list → plaintext fallback → the system prompt was 100% lost.
         if system_prefix:
             if adapted:
-                adapted[0]["content"] = (
-                    f"{system_prefix}\n\n{adapted[0]['content']}"
-                    if adapted[0]["content"]
-                    else system_prefix
+                adapted[0]["content"] = _prepend_text(
+                    adapted[0]["content"], system_prefix
                 )
             else:
                 adapted.append({"role": "user", "content": system_prefix})
@@ -346,11 +374,7 @@ class MistralMessageAdapter(MessageAdapter):
             if adapted:
                 first = adapted[0]
                 if first["role"] == "user":
-                    first["content"] = (
-                        f"{system_prefix}\n\n{first['content']}"
-                        if first["content"]
-                        else system_prefix
-                    )
+                    first["content"] = _prepend_text(first["content"], system_prefix)
                 else:
                     adapted.insert(0, {"role": "user", "content": system_prefix})
             else:
