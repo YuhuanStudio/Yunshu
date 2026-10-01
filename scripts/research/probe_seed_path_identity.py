@@ -38,6 +38,7 @@ def main() -> None:
     ap.add_argument("--model", required=True)
     ap.add_argument("--tokens", type=int, default=160)
     ap.add_argument("--seeds", type=int, nargs="+", default=[1, 2])
+    ap.add_argument("--speed-only", action="store_true")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
 
@@ -83,7 +84,7 @@ def main() -> None:
         return hashlib.sha256(json.dumps(t).encode()).hexdigest()[:16]
 
     ok = True
-    for pname, text in PROMPTS.items():
+    for pname, text in {} if a.speed_only else PROMPTS.items():
         ids = ids_of(text)
         for ci, cfg in enumerate(CONFIGS):
             for seed in a.seeds:
