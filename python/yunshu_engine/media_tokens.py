@@ -41,7 +41,7 @@ def _first(sources: list[Any], *keys: str) -> Any:
         for k in keys:
             v = _get(src, k)
             if v is not None:
-                return str(v)
+                return v
     return None
 
 
@@ -145,7 +145,7 @@ def _block_ref(block: dict) -> str | None:
             return str(v)
     src = block.get("source")
     if isinstance(src, dict) and isinstance(src.get("data"), str):
-        return "data:;base64," + src["data"]
+        return "data:;base64," + str(src["data"])
     return None
 
 
