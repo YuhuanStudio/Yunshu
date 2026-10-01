@@ -659,7 +659,6 @@ def create_app() -> FastAPI:
 
     # Gateway middleware (order: outermost first)
     from .middleware.auth import AuthMiddleware
-    from .middleware.body_replay import replay_receive
     from .middleware.metrics import MetricsMiddleware
     from .middleware.rate_limit import RateLimitMiddleware
     from .middleware.request_logging import RequestLoggingMiddleware
@@ -894,8 +893,10 @@ def create_app() -> FastAPI:
 
                 # Re-inject the body so downstream handlers (Pydantic validators)
                 # can access it via request.body() or request.json().
-                # Body once, then the real receive (keeps http.disconnect).
-                request._receive = replay_receive(body_bytes, request._receive)
+                # BaseHTTPMiddleware's wrapped receive hands a cached ``_body`` to the
+                # downstream app once, then the real receive's http.disconnect. (A
+                # consumed stream without ``_body`` would be forwarded as EMPTY.)
+                request._body = body_bytes
             except Exception:
                 pass  # Body read failed — let downstream handle it
         return await call_next(request)

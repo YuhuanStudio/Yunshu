@@ -756,8 +756,13 @@ def format_openai_usage_chunk(
         "completion_tokens": completion_tokens,
         "total_tokens": prompt_tokens + completion_tokens,
     }
-    usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
-    usage["prompt_tokens_details"] = {"cached_tokens": cached_tokens}
+    # Detail fields are subsets of their totals, never addends or larger than them.
+    usage["completion_tokens_details"] = {
+        "reasoning_tokens": max(0, min(reasoning_tokens, completion_tokens))
+    }
+    usage["prompt_tokens_details"] = {
+        "cached_tokens": max(0, min(cached_tokens, prompt_tokens))
+    }
     chunk = {
         "id": completion_id,
         "object": "chat.completion.chunk",
