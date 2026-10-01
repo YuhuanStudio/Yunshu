@@ -122,6 +122,19 @@ tokens per `(forward ms at that many packed rows + chain ms x deepest chain)`, b
 Alone, a row drafts as deep as it pays; at 8 rows, drafts stop where a wider forward costs more than
 it lands — no row-count thresholds.
 
+## Step pipeline
+
+A decode step is one host read: the window's tokens are built on the device from the previous step's
+(still lazy) drafts; the MTP head runs over every window position inside the verify graph (early
+absorb: its greedy readout is the next first draft whichever position the row keeps, only `used`
+decides which); the host then walks acceptance and queues the next chain with `async_eval` before
+building the next step's graph, so the chain runs on the GPU while the host builds. Cost samples
+subtract the queued chain (measured every 16th chain synchronously). A lone drafting row reads out
+through the lane's reduced draft vocabulary (`draft_vocab.py`); with several rows the full head reads
+out. Single request, Qwen3.8-27B: 75.5 -> 87.3 tok/s against 93 for the default lane. The remaining
+~6% is not the verify forward (the lane matmul is faster than the packed kernels there) and not host
+time between steps; it has not been isolated.
+
 ## Not yet
 
 - Image / audio prompts (mRoPE), int8 KV, MoE: those requests stay on the upstream path.

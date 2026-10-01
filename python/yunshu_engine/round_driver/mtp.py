@@ -22,7 +22,6 @@ from __future__ import annotations
 from typing import Any
 
 import mlx.core as mx
-import numpy as np
 
 from .batch import KVPlan, Slots, attend
 
@@ -35,8 +34,20 @@ class MTPHead:
         self.lm = language_model
         self.embed = language_model.model.embed_tokens
         self.logits = logits_fn
+        # The lane's reduced-vocabulary greedy readout (draft_vocab.py), when the
+        # engine installed one: a draft only proposes, the target verifies.
+        self.vocab = getattr(drafter, "_draft_vocab", None)
         self.slots = Slots(len(drafter.layers))
         self.rows: list = []  # rows in the slot buffers
+
+    def readout(self, hidden: mx.array, single: bool = False) -> mx.array:
+        """Greedy token ids [R] (int32) of head outputs ``hidden`` [R, D].
+        ``single``: one row drafts, so the reduced vocabulary (kept for one
+        request) applies; with several rows the full head reads out."""
+        if self.vocab is not None and single:
+            out: mx.array = self.drafter._greedy_token(hidden).astype(mx.int32)
+            return out
+        return mx.argmax(self.logits(hidden), axis=-1).astype(mx.int32)
 
     def make_cache(self) -> list:
         from mlx_vlm.models.cache import KVCache
@@ -152,41 +163,50 @@ class MTPHead:
             x = hh + layer.mlp(layer.post_attention_layernorm(hh))
         return d.norm(x)
 
-    def absorb(
-        self,
-        rows: list,
-        tokens: list[list[int]],
-        hidden: mx.array,
-        where: list[list[int]],
-    ) -> mx.array:
-        """Decoding rows absorb the positions they kept: ``tokens[b]`` (next
-        tokens) pair with ``hidden[where[b]]`` (the target's hidden states).
-        Returns each row's head output at its last absorbed position [B, D]."""
-        T = max(len(t) for t in tokens)
-        tok = np.array([t + [t[-1]] * (T - len(t)) for t in tokens], dtype=np.int32)
-        idx = np.array([w + [w[-1]] * (T - len(w)) for w in where], dtype=np.int32)
+    def absorb_window(
+        self, rows: list, tokens: mx.array, hidden: mx.array
+    ) -> tuple[mx.array, mx.array]:
+        """Early absorb: the head over every position of the rows' verify
+        windows before the host knows how many land. ``tokens`` [B, T] are the
+        target's next tokens (position ``p`` pairs token ``p + 1`` with hidden
+        ``p``), ``hidden`` [B, T, D] the target's hidden states. Keys go to
+        ``hn .. hn + T - 1``; once a row's ``used`` positions are known the
+        caller advances ``hn`` by ``used`` and the rest is overwritten by the
+        next window. Returns the head outputs [B, T, D] and the greedy token
+        read out of each [B, T] (the row's first draft is the one at its last
+        kept position)."""
+        B, T = (int(s) for s in tokens.shape)
         out = self._run(
             rows,
             T,
-            self.embed(mx.array(tok.reshape(-1))),
-            hidden[mx.array(idx.reshape(-1))],
+            self.embed(tokens.reshape(-1)),
+            hidden.reshape(B * T, -1),
         )
-        last = out[mx.arange(len(rows)), mx.array([len(t) - 1 for t in tokens])]
-        for r, t in zip(rows, tokens, strict=True):
-            r.hn += len(t)
-        return last
+        return out, self.readout(out.reshape(B * T, -1), B == 1).reshape(B, T)
 
-    def draft(self, rows: list, heads: mx.array, depths: list[int]) -> list[list[int]]:
+    def draft(
+        self,
+        rows: list,
+        heads: mx.array,
+        depths: list[int],
+        first: mx.array | None = None,
+    ) -> list[mx.array]:
         """``heads`` [B, D]: each row's head output at its last absorbed
-        position. Returns each row's ``depth`` greedy drafts (chain entries are
-        written past ``hn`` and overwritten by the next absorb)."""
+        position (``first`` [B] int32: the greedy token already read out of
+        it). Returns each row's ``depth`` greedy drafts as lazy int32 arrays
+        (chain entries are written past ``hn`` and overwritten by the next
+        absorb); nothing is evaluated here."""
+        empty = mx.zeros((0,), dtype=mx.int32)
         live = [b for b, d in enumerate(depths) if d > 0]
         if not live:
-            return [[] for _ in rows]
+            return [empty for _ in rows]
         sel = mx.array(live, dtype=mx.int32)
         lrows = [rows[b] for b in live]
         hid = heads[sel]
-        tok = mx.argmax(self.logits(hid), axis=-1).astype(mx.int32)
+        if first is None:
+            tok = self.readout(hid, len(lrows) == 1 and len(self.rows) == 1)
+        else:
+            tok = first[sel]
         steps = [tok]
         for j in range(1, max(depths[b] for b in live)):
             saved = [r.hn for r in lrows]
@@ -195,13 +215,12 @@ class MTPHead:
             hid = self._run(lrows, 1, self.embed(tok), hid)[:, 0]
             for r, n in zip(lrows, saved, strict=True):
                 r.hn = n
-            tok = mx.argmax(self.logits(hid), axis=-1).astype(mx.int32)
+            tok = self.readout(hid, len(lrows) == 1 and len(self.rows) == 1)
             steps.append(tok)
-        mx.eval(*steps)
-        table = [s.tolist() for s in steps]
-        out: list[list[int]] = [[] for _ in rows]
+        table = mx.stack(steps, axis=1)  # [live, deepest]
+        out = [empty for _ in rows]
         for i, b in enumerate(live):
-            out[b] = [table[j][i] for j in range(depths[b])]
+            out[b] = table[i, : depths[b]]
         return out
 
 
