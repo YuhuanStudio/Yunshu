@@ -476,36 +476,29 @@ class TestMCP:
 
 
 class TestBatchAPI:
-    """Test /v1/batch endpoint validation."""
+    """The custom ``/v1/batch`` endpoint is retired (docs/guides/API_SURFACE.md,
+    "Removed"); nothing replaces it, so it must stay 404 rather than reappear."""
 
     @pytest.fixture(autouse=True)
     def _reset(self, _reset_engine):
         pass
 
-    def test_batch_empty_400(self):
-        """Batch endpoint returns 400 for empty batch."""
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"requests": []},
+            {
+                "requests": [
+                    {"custom_id": f"r{i}", "body": {"model": "test"}}
+                    for i in range(501)
+                ]
+            },
+        ],
+    )
+    def test_retired_batch_endpoint_is_404(self, body):
         app = create_app()
         with TestClient(app) as client:
-            resp = client.post(
-                "/v1/batch",
-                json={"requests": []},
-            )
-            assert resp.status_code == 400
-
-    def test_batch_too_large_400(self):
-        """Batch endpoint returns 400 for too large batch."""
-        app = create_app()
-        with TestClient(app) as client:
-            resp = client.post(
-                "/v1/batch",
-                json={
-                    "requests": [
-                        {"custom_id": f"r{i}", "body": {"model": "test"}}
-                        for i in range(501)
-                    ]
-                },
-            )
-            assert resp.status_code == 400
+            assert client.post("/v1/batch", json=body).status_code == 404
 
 
 # ═══════════════════════════════════════════════════════════════
