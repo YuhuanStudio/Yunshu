@@ -43,6 +43,82 @@ WEB_SEARCH_DESC = (
 WEB_FETCH_DESC = "Fetch a web page or text document by URL and return its text content."
 
 
+_URL_KEYS = ("url", "uri", "link", "href", "address", "website", "site", "page", "u")
+_WRAP_KEYS = ("input", "arguments", "parameters", "args", "params")
+_FETCH_EXPECTED = 'web_fetch takes one JSON object: {"url": "https://example.com/page"}'
+_HOSTLIKE = re.compile(
+    r"^(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?::\d+)?(?:[/?#].*)?$", re.I
+)
+
+
+def parse_tool_args(raw) -> dict:
+    """Best-effort decode of a model's tool arguments into a dict.
+
+    Accepts a dict, a JSON object string, JSON that decoded to a bare string / list,
+    a truncated JSON object (key/value pairs are salvaged), or a plain string. Anything
+    that is not an object ends up under ``"__raw__"`` so a tool can still use it."""
+    if isinstance(raw, dict):
+        return raw
+    if raw is None or raw == "":
+        return {}
+    if not isinstance(raw, str):
+        return {"__raw__": raw}
+    text = raw.strip()
+    try:
+        val = json.loads(text)
+    except ValueError:
+        pairs = re.findall(r'"([\w-]+)"\s*:\s*"((?:[^"\\]|\\.)*)', text)
+        if pairs and text.startswith("{"):
+            return {k: v.replace("\\/", "/") for k, v in pairs}
+        return {"__raw__": text}
+    return val if isinstance(val, dict) else {"__raw__": val}
+
+
+def extract_fetch_url(args) -> tuple[str | None, str]:
+    """(url, problem): the URL a web_fetch call means, tolerating the usual model
+    slips (``uri`` / ``link`` key, a bare string, nested ``input``, markdown link,
+    scheme-less host). ``url`` is None with an actionable ``problem`` otherwise."""
+    raw = args if isinstance(args, dict) else {"__raw__": args}
+    cand = None
+    for _ in range(3):  # unwrap {"input": {...}} style wrappers
+        for k in _URL_KEYS:
+            if raw.get(k) not in (None, ""):
+                cand = raw[k]
+                break
+        if cand is not None:
+            break
+        wrapped = next(
+            (raw[k] for k in _WRAP_KEYS if isinstance(raw.get(k), (dict, str))), None
+        )
+        if wrapped is None:
+            break
+        raw = parse_tool_args(wrapped)
+    if cand is None and raw.get("__raw__") not in (None, ""):
+        cand = raw["__raw__"]
+    if isinstance(cand, list) and len(cand) == 1:
+        cand = cand[0]
+    if isinstance(cand, dict):
+        cand = cand.get("url")
+    if not isinstance(cand, str) or not cand.strip():
+        keys = [k for k in (args if isinstance(args, dict) else {}) if k != "__raw__"]
+        got = f" (got keys: {', '.join(keys)})" if keys else " (got no url)"
+        return None, f"{_FETCH_EXPECTED}{got}"
+    url = cand.strip().strip("\"'`").strip()
+    m = re.match(r"^\[[^\]]*\]\(([^)\s]+)\)$", url)  # [text](url)
+    if m:
+        url = m.group(1)
+    url = url.strip("<>").strip()
+    if url.startswith("//"):
+        url = "https:" + url
+    elif not re.match(r"^[a-z][a-z0-9+.-]*://", url, re.I) and _HOSTLIKE.match(url):
+        url = "https://" + url
+    if not re.match(r"^https?://", url, re.I):
+        return None, (
+            f"url must be an absolute http(s) URL, got {url[:120]!r}. {_FETCH_EXPECTED}"
+        )
+    return url, ""
+
+
 @dataclass
 class ServerToolDef:
     fname: str  # the function name the model sees
@@ -240,7 +316,15 @@ class ServerToolRuntime:
         )
 
     async def _fetch(self, d: ServerToolDef, args: dict) -> ToolOutcome:
-        url = args.get("url") if isinstance(args, dict) else None
+        url, problem = extract_fetch_url(args)
+        if url is None:
+            return ToolOutcome(
+                "web_fetch",
+                f"Error: {problem}",
+                True,
+                "invalid_tool_input",
+                problem,
+            )
         cap = None
         if d.spec.get("max_content_tokens"):
             cap = int(d.spec["max_content_tokens"]) * 4
