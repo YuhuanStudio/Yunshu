@@ -8,17 +8,24 @@ Each body is sent ``--n`` times serially (the first one is cold, later ones hit 
 ``--title`` fires a second request concurrently with the first send of every body, like the
 parallel no-tools title request opencode issues per task. ``--temperature`` overrides the body's
 sampling (0: greedy) so the sampled and greedy speculative paths can be compared on the same bytes.
+
+``ttft_s`` measures the first reasoning/content/tool delta; ``content_ttft_s``
+measures the first content or tool delta (including whitespace); ``meaningful_ttft_s``
+ignores whitespace-only content. Content and reasoning previews
+are recorded separately. Failed or incomplete SSE and concurrent title failures
+abort the replay instead of producing a successful measurement.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
-import threading
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -34,10 +41,16 @@ def send(url: str, body: dict) -> dict:
         json.dumps(body).encode(),
         {"Content-Type": "application/json", "Authorization": "Bearer k"},
     )
-    t0 = time.time()
+    t0 = time.perf_counter()
     t_first = None
+    t_content = None
+    t_meaningful = None
     text = []
+    content = []
+    reasoning = []
+    done = False
     calls = 0
+    tool_calls = {}
     usage = None
     xy = None
     finish = None
@@ -48,29 +61,74 @@ def send(url: str, body: dict) -> dict:
                 continue
             payload = line[5:].strip()
             if payload == b"[DONE]":
+                done = True
                 break
             d = json.loads(payload)
+            if d.get("error"):
+                raise RuntimeError(f"Replay server returned an SSE error: {d['error']}")
             if d.get("x_yunshu") is not None:
                 xy = d["x_yunshu"]
             if d.get("usage"):
                 usage = d["usage"]
             for ch in d.get("choices") or []:
                 delta = ch.get("delta") or {}
-                got = delta.get("content") or delta.get("reasoning_content")
+                visible = delta.get("content") or ""
+                thought = delta.get("reasoning_content") or ""
+                if visible:
+                    content.append(visible)
+                if thought:
+                    reasoning.append(thought)
+                if (visible or delta.get("tool_calls")) and t_content is None:
+                    t_content = time.perf_counter()
+                if (
+                    visible.strip() or delta.get("tool_calls")
+                ) and t_meaningful is None:
+                    t_meaningful = time.perf_counter()
+                got = visible or thought
                 if delta.get("tool_calls"):
+                    for fragment in delta["tool_calls"]:
+                        index = fragment.get("index", 0)
+                        call = tool_calls.setdefault(
+                            index, {"name": "", "arguments": ""}
+                        )
+                        function = fragment.get("function") or {}
+                        for field in ("name", "arguments"):
+                            call[field] += function.get(field) or ""
                     got = got or "x"
                     calls += 1
                 if got and t_first is None:
-                    t_first = time.time()
+                    t_first = time.perf_counter()
                 if got:
                     text.append(got)
                 finish = ch.get("finish_reason") or finish
-    t1 = time.time()
+    t1 = time.perf_counter()
+    if not done or finish is None:
+        raise RuntimeError("Replay stream ended without [DONE] and a finish reason")
     ct = (usage or {}).get("completion_tokens", 0)
     dec = (ct - 1) / (t1 - t_first) if t_first and ct > 1 and t1 > t_first else None
+    output_digest = hashlib.sha256(
+        json.dumps(
+            {
+                "content": "".join(content),
+                "reasoning": "".join(reasoning),
+                "tool_calls": [tool_calls[i] for i in sorted(tool_calls)],
+                "finish": finish,
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        ).encode()
+    ).hexdigest()
     return dict(
+        output_sha256=output_digest,
         ttft_s=round((t_first or t1) - t0, 3),
         total_s=round(t1 - t0, 3),
+        content_ttft_s=round(t_content - t0, 3) if t_content is not None else None,
+        meaningful_ttft_s=round(t_meaningful - t0, 3)
+        if t_meaningful is not None
+        else None,
+        content="".join(content)[:400],
+        reasoning="".join(reasoning)[:400],
+        stream_done=done,
         completion_tokens=ct,
         prompt_tokens=(usage or {}).get("prompt_tokens"),
         decode_tok_s=round(dec, 1) if dec else None,
@@ -90,6 +148,7 @@ def main():
     ap.add_argument("--title")
     ap.add_argument("--n", type=int, default=3)
     ap.add_argument("--temperature", type=float)
+    ap.add_argument("--seed", type=int)
     ap.add_argument("--env", action="append", default=[])
     ap.add_argument("--server-arg", action="append", default=[])
     ap.add_argument("--label", default="")
@@ -110,7 +169,9 @@ def main():
             send(
                 srv.url,
                 {
-                    "model": json.loads(Path(a.bodies[0]).read_text()).get("model", "m"),
+                    "model": json.loads(Path(a.bodies[0]).read_text()).get(
+                        "model", "m"
+                    ),
                     "messages": [{"role": "user", "content": "Say hi."}],
                     "max_tokens": 24,
                 },
@@ -119,6 +180,8 @@ def main():
             body = json.loads(Path(f).read_text())
             if a.temperature is not None:
                 body["temperature"] = a.temperature
+            if a.seed is not None:
+                body["seed"] = a.seed
             for i in range(a.n):
                 side = {}
                 th = None
@@ -126,17 +189,36 @@ def main():
                     tb = dict(title)
                     if a.temperature is not None:
                         tb["temperature"] = a.temperature
-                    th = threading.Thread(
-                        target=lambda: side.update(send(srv.url, tb)), daemon=True
-                    )
-                    th.start()
+                    if a.seed is not None:
+                        tb["seed"] = a.seed
+                    th = ThreadPoolExecutor(max_workers=1)
+                    title_future = th.submit(send, srv.url, tb)
                     time.sleep(0.3)
-                rec = send(srv.url, body)
-                if th is not None:
-                    th.join()
-                    rec["title"] = side
-                rec.update(body=Path(f).name, i=i, label=a.label, cold=i == 0)
-                print(json.dumps({k: v for k, v in rec.items() if k != "text"}), flush=True)
+                try:
+                    rec = send(srv.url, body)
+                    if th is not None:
+                        side = title_future.result()
+                        rec["title"] = side
+                finally:
+                    if th is not None:
+                        th.shutdown(wait=True)
+                rec.update(
+                    body=Path(f).name,
+                    i=i,
+                    label=a.label,
+                    cold=i == 0,
+                    seed=body.get("seed"),
+                )
+                print(
+                    json.dumps(
+                        {
+                            k: v
+                            for k, v in rec.items()
+                            if k not in {"text", "content", "reasoning"}
+                        }
+                    ),
+                    flush=True,
+                )
                 with out.open("a") as fh:
                     fh.write(json.dumps(rec) + "\n")
     finally:
