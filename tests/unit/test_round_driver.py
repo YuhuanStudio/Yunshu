@@ -301,3 +301,86 @@ def test_prefill_atoms_merge_only_when_full():
     row.ckpts = []
     assert d._run_end(row, 600, 4096) == 1024  # restored off the grid: alone
     assert d._run_end(row, 1024, 1024) == 2048
+
+
+# ── keyed sampling: sampled rows draft and stay on their own stream ─────────
+
+
+def _sampled_run(
+    lm, drafter, prompts, seeds, *, stagger=False, oracle=None, wrong=False
+):
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+    from yunshu_engine.vlm_batch_runner import RowParams
+
+    d = RoundDriver(lm, drafter=drafter, stop_tokens=set())
+    if oracle is not None:
+
+        def draft(rows, heads, depths):
+            out = []
+            for row, depth in zip(rows, depths, strict=True):
+                ref = oracle[row.req.handle]
+                got = list(ref[row.generated : row.generated + depth])
+                if wrong and got:
+                    j = (row.generated + row.req.handle) % len(got)
+                    got[j] = (got[j] + 1) % 500
+                out.append(got)
+            return out
+
+        d.head.draft = draft
+    out = {i: [] for i in range(len(prompts))}
+    todo = list(range(len(prompts)))
+
+    def add(i):
+        d.add(
+            Request(
+                prompts[i],
+                N,
+                sampling=RowParams(1.0, 0.95, 0, 0.0, seeds[i]),
+                handle=i,
+            )
+        )
+
+    if not stagger:
+        for i in todo:
+            add(i)
+        todo = []
+    steps = 0
+    while d.busy() or todo:
+        if todo and steps % 2 == 0:
+            add(todo.pop(0))
+        for e in d.step():
+            out[e.handle].append(e.token)
+        steps += 1
+    return [out[i] for i in range(len(prompts))], d
+
+
+def test_sampled_rows_keyed_positions_invariant(tiny):
+    """A sampled row's stream depends on its seed and generation index only:
+    the same alone, batched, staggered, drafting with every draft right, and
+    drafting with partial acceptance (positions advance by the kept tokens)."""
+    lm, drafter = tiny
+    seeds = [11, 22, 33]
+    ref = [
+        _sampled_run(lm, None, [p], [s])[0][0]
+        for p, s in zip(PROMPTS, seeds, strict=True)
+    ]
+    assert all(len(r) == N for r in ref)
+    assert _sampled_run(lm, None, PROMPTS, seeds)[0] == ref
+    assert _sampled_run(lm, drafter, PROMPTS, seeds, stagger=True)[0] == ref
+    # another seed draws another stream
+    assert _sampled_run(lm, None, [PROMPTS[0]], [99])[0][0] != ref[0]
+    got, d = _sampled_run(lm, drafter, PROMPTS, seeds, oracle=dict(enumerate(ref)))
+    assert got == ref
+    assert d.accepted > N and d.steps < N + 6
+    for stagger in (False, True):
+        got, d = _sampled_run(
+            lm,
+            drafter,
+            PROMPTS,
+            seeds,
+            stagger=stagger,
+            oracle=dict(enumerate(ref)),
+            wrong=True,
+        )
+        assert got == ref
+        assert 0 < d.accepted < d.drafted

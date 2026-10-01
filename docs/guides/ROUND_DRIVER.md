@@ -103,10 +103,12 @@ verify, or whether it drafts at all:
 For greedy rows: **spec on == spec off, and a row alone == the same row in any batch or join
 order**, with drafts all accepted or all rejected, and with the thinking budget's forced tokens
 (`tests/unit/test_round_driver.py` on a random 4-bit Qwen3.5; `scripts/research/
-sweep_round_driver.py` on a real checkpoint). Sampled rows draw with their own seeded key and never
-draft; rows with logits processors (grammar / JSON, penalties) or logprobs never draft.
+sweep_round_driver.py` on a real checkpoint). Sampled rows draw with `keyed_sampling.KeyedSampler` (seed, generation index): the token at index `g` is a pure
+function of the row's logits, seed and `g`, so a draft is kept exactly when serial sampling would have drawn it
+and a sampled row's stream is the same alone, batched, drafting or not. Rows with logits processors (grammar /
+JSON, penalties), logprobs or XTC never draft.
 
-## Drafting: the MTP head for every greedy row, cost-aware depth
+## Drafting: the MTP head for every greedy or keyed-sampled row, cost-aware depth
 
 Each draftable row keeps its MTP head's KV current every step: the head absorbs every committed
 position with the *target's* hidden state (prompt chunks as they prefill, then each step's kept
