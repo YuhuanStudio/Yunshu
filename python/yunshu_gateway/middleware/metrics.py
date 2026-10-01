@@ -498,6 +498,11 @@ class MetricsMiddleware(BaseHTTPMiddleware):
                                 )
                 except Exception:
                     logger.debug("operation failed", exc_info=True)
+                # The prefix cache (APC) of the VLM runner: this middleware serves
+                # /metrics before the router does, so it fills these itself.
+                from ..routers.monitoring import _populate_apc_metrics
+
+                _populate_apc_metrics(pm)
                 pm_text = pm.generate()
                 if pm_text:
                     parts.append(pm_text)

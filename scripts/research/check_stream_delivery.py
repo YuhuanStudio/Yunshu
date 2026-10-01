@@ -7,7 +7,7 @@
 The server capture holds, per generation, the token ids and the text pieces the engine
 handed to the gateway. Every non-aborted soak request is matched to a capture row by
 its prompt and completion token counts, and the text the client received
-(content + reasoning) must equal the capture's joined text (tool-call requests are
+(reasoning + content) must equal the capture's joined text (tool-call requests are
 matched on counts only: their markup is parsed out of the text). Exits 1 on a
 mismatch or an unmatched request.
 """
@@ -58,7 +58,7 @@ def main():
         checked += 1
         if r.get("tool_calls"):
             continue
-        delivered = norm((r.get("content") or "") + (r.get("reasoning") or ""))
+        delivered = norm((r.get("reasoning") or "") + (r.get("content") or ""))
         generated = norm(c["text"])
         if delivered != generated:
             mismatched += 1
