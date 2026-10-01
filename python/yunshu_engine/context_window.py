@@ -67,6 +67,10 @@ class TruncationStrategy(StrEnum):
     SUMMARY_COMPRESSION = "summary_compression"
 
 
+class ContextBudgetError(ValueError):
+    """The protected messages plus the latest user turn exceed the budget."""
+
+
 @dataclass
 class TruncationResult:
     """Result of a truncation operation."""
@@ -78,6 +82,20 @@ class TruncationResult:
     strategy: str
     messages_removed: int = 0
     messages_summarized: int = 0
+    # True when the protected messages plus the latest user turn alone exceed
+    # the budget: nothing was silently dropped and the caller must reject the
+    # request. required_tokens is the minimum budget that would be needed.
+    cannot_fit: bool = False
+    required_tokens: int = 0
+    max_tokens: int = 0
+
+    def raise_if_cannot_fit(self) -> None:
+        if self.cannot_fit:
+            raise ContextBudgetError(
+                f"Prompt needs at least {self.required_tokens} tokens for system/"
+                f"developer messages and the latest user turn, but only "
+                f"{self.max_tokens} are available in the context window"
+            )
 
 
 @dataclass
@@ -123,7 +141,9 @@ class ContextWindowManager:
         default_strategy: str = "importance_aware",
         min_recent_turns: int = 2,
         importance_threshold: float = 0.5,
+        media_token_counter: Callable[[dict], int] | None = None,
     ) -> None:
+        self._media_token_counter = media_token_counter
         self._token_counter = token_counter or self._default_token_counter
         self._default_strategy = default_strategy
         self._min_recent_turns = min_recent_turns
@@ -185,6 +205,14 @@ class ContextWindowManager:
 
         truncated_count = self._count_messages_tokens(result_messages)
         tokens_saved = original_count - truncated_count
+        cannot_fit = truncated_count > max_tokens
+        required = self._required_tokens(messages) if cannot_fit else 0
+        if cannot_fit:
+            logger.warning(
+                "context budget cannot be met: required=%d > budget=%d",
+                required,
+                max_tokens,
+            )
 
         # Update stats
         self._stats.truncations_applied += 1
@@ -200,6 +228,9 @@ class ContextWindowManager:
             tokens_saved=tokens_saved,
             strategy=strat_name,
             messages_removed=len(messages) - len(result_messages),
+            cannot_fit=cannot_fit,
+            required_tokens=required,
+            max_tokens=max_tokens,
         )
 
     def count_tokens(self, text: str) -> int:
@@ -243,369 +274,210 @@ class ContextWindowManager:
             "strategy_usage": dict(self._stats.strategy_usage),
         }
 
-    # ── Strategy implementations ──
+    # ── Strategy implementations (unit based) ──
+    #
+    # A *unit* is the smallest group of messages that may be dropped together:
+    # one protected message (never dropped), one plain message, or an
+    # assistant(tool_calls) plus the tool results that answer its call ids.
+    # Orphan tool results and incomplete tool groups are "invalid" units and
+    # are dropped first whenever truncation is applied.  Messages keep their
+    # original relative order; protected messages keep their original index.
+
+    def _build_units(self, messages: list[dict]) -> list[dict]:
+        units: list[dict] = []
+        i = 0
+        n = len(messages)
+        while i < n:
+            m = messages[i]
+            role = m.get("role")
+            if role in self._PROTECTED_ROLES:
+                units.append({"idx": [i], "protected": True, "valid": True})
+                i += 1
+                continue
+            tcs = m.get("tool_calls")
+            if role == "assistant" and isinstance(tcs, list) and tcs:
+                declared = {
+                    tc.get("id") for tc in tcs if isinstance(tc, dict) and tc.get("id")
+                }
+                idx = [i]
+                answered: list = []
+                j = i + 1
+                while j < n and messages[j].get("role") == "tool":
+                    tid = messages[j].get("tool_call_id")
+                    if declared and tid not in declared:
+                        break
+                    answered.append(tid)
+                    idx.append(j)
+                    j += 1
+                if declared:
+                    ok = set(answered) == declared and len(answered) == len(declared)
+                else:
+                    ok = len(answered) >= len(tcs)
+                units.append({"idx": idx, "protected": False, "valid": ok})
+                i = j
+                continue
+            if role in ("tool", "function"):
+                units.append({"idx": [i], "protected": False, "valid": False})
+            else:
+                units.append({"idx": [i], "protected": False, "valid": True})
+            i += 1
+        # required: protected + everything from the latest user turn onward
+        last_user = None
+        for k, u in enumerate(units):
+            if not u["protected"] and messages[u["idx"][0]].get("role") == "user":
+                last_user = k
+        if last_user is None:
+            nonprot = [k for k, u in enumerate(units) if not u["protected"]]
+            last_user = nonprot[-1] if nonprot else len(units)
+        for k, u in enumerate(units):
+            u["required"] = u["protected"] or k >= last_user
+        return units
+
+    def _unit_tokens(self, messages: list[dict], unit: dict) -> int:
+        return self._count_messages_tokens([messages[i] for i in unit["idx"]])
+
+    def _assemble(
+        self,
+        messages: list[dict],
+        keep: list[dict],
+        extra: list[tuple[float, dict]] | None = None,
+    ) -> list[dict]:
+        pairs: list[tuple[float, dict]] = []
+        for u in keep:
+            for i in u["idx"]:
+                pairs.append((i, deepcopy(messages[i])))
+        pairs.extend(extra or [])
+        pairs.sort(key=lambda p: p[0])
+        return [m for _, m in pairs]
+
+    def _plan(self, messages: list[dict]):
+        units = self._build_units(messages)
+        base = [u for u in units if u["required"]]
+        cand = [u for u in units if not u["required"] and u["valid"]]
+        base_tokens = self._count_messages_tokens(
+            [messages[i] for u in base for i in u["idx"]]
+        )
+        return units, base, cand, base_tokens
+
+    def _required_tokens(self, messages: list[dict]) -> int:
+        return self._plan(messages)[3]
 
     def _truncate_oldest(self, messages: list[dict], max_tokens: int) -> list[dict]:
-        """Drop oldest messages until under budget. Always keeps system prompt.
+        """Drop the oldest complete unit until the prompt fits.
 
-        Preserves original message order. Protected roles (system/developer)
-        are never removed, but retain their original positions.
-
-        When even a single non-system message exceeds the budget, returns just
-        the system messages (if any) rather than looping infinitely.
+        Protected messages and the latest user turn (with anything after it)
+        are never dropped; if they alone exceed the budget the required set is
+        returned and compute_truncation flags ``cannot_fit``.
         """
         if not messages:
             return []
-
-        # If ALL messages are system/developer and they exceed the budget,
-        # there are no removable messages.  Return them as-is (better to
-        # send overlength system prompts than an empty conversation) and
-        # log a warning so the operator can adjust.
-        if not any(m.get("role") not in self._PROTECTED_ROLES for m in messages):
-            total = self._count_messages_tokens(messages)
-            if total > max_tokens:
-                logger.warning(
-                    "All messages are system/developer (%d tokens) but "
-                    "max_tokens=%d — returning without truncation",
-                    total,
-                    max_tokens,
-                )
-            return deepcopy(messages)
-
-        result = deepcopy(messages)
-        # Indices of removable (non-protected) messages
-        removable_indices = [
-            i
-            for i, m in enumerate(result)
-            if m.get("role") not in self._PROTECTED_ROLES
-        ]
-
-        # Remove oldest removable messages first (by original index order)
-        prev_count = -1
-        while removable_indices and self._count_messages_tokens(result) > max_tokens:
-            if len(removable_indices) == prev_count:
-                # Remaining messages still over budget — strip all non-protected.
-                # Always keep at least one message to prevent empty conversation.
-                protected = [
-                    m
-                    for m in deepcopy(messages)
-                    if m.get("role") in self._PROTECTED_ROLES
-                ]
-                return protected or deepcopy(messages[-1:])
-            prev_count = len(removable_indices)
-            # Find contiguous group at start of removable_indices
-            group = [removable_indices[0]]
-            for j in range(1, len(removable_indices)):
-                if removable_indices[j] == removable_indices[j - 1] + 1:
-                    group.append(removable_indices[j])
-                else:
-                    break
-            # Also include trailing tool messages after assistant tool_calls
-            last_idx = group[-1]
-            msg = result[last_idx]
-            if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                k = last_idx + 1
-                while k < len(result) and result[k].get("role") == "tool":
-                    if k in removable_indices:
-                        group.append(k)
-                    k += 1
-            for idx in sorted(group, reverse=True):
-                result.pop(idx)
-            removable_indices = [
-                i
-                for i, m in enumerate(result)
-                if m.get("role") not in self._PROTECTED_ROLES
-            ]
-
-        # Remove orphaned tool messages at start of result (truncation may
-        # have removed the assistant with tool_calls but left its tool responses)
-        while result and result[0].get("role") == "tool":
-            result.pop(0)
-
-        return result
+        _units, base, cand, base_tokens = self._plan(messages)
+        if base_tokens > max_tokens:
+            return self._assemble(messages, base)
+        total = base_tokens + sum(self._unit_tokens(messages, u) for u in cand)
+        keep = list(cand)
+        while keep and total > max_tokens:
+            total -= self._unit_tokens(messages, keep.pop(0))
+        return self._assemble(messages, base + keep)
 
     def _sliding_window(self, messages: list[dict], max_tokens: int) -> list[dict]:
-        """Keep only the most recent messages that fit in the window.
-
-        Always preserves system messages at the start.
-        Ensures tool call/response pairs are kept together.
-        """
+        """Keep the newest contiguous run of complete units that fit."""
         if not messages:
             return []
-
-        system_msgs = [m for m in messages if m.get("role") in self._PROTECTED_ROLES]
-        non_system = [m for m in messages if m.get("role") not in self._PROTECTED_ROLES]
-
-        # Pre-compute system token cost to avoid recounting every iteration.
-        system_token_cost = self._count_messages_tokens(system_msgs)
-
-        # If system messages alone exceed the budget, we cannot fit anything.
-        # Return only the system messages (truncating them would lose the prompt).
-        if system_token_cost > max_tokens:
-            logger.warning(
-                "System messages (%d tokens) alone exceed max_tokens (%d); "
-                "returning system messages without truncation",
-                system_token_cost,
-                max_tokens,
-            )
-            return deepcopy(system_msgs)
-
-        remaining_budget = max_tokens - system_token_cost
-
-        # Build window from most recent backwards, appending to a list (O(1))
-        # and reversing at the end instead of insert(0, ...) which is O(n^2).
-        window_rev: list[dict] = []
-        current_cost = 0
-        for msg in reversed(non_system):
-            msg_cost = self._count_messages_tokens([msg])
-            if current_cost + msg_cost > remaining_budget:
+        _units, base, cand, base_tokens = self._plan(messages)
+        if base_tokens > max_tokens:
+            return self._assemble(messages, base)
+        remaining = max_tokens - base_tokens
+        kept_rev: list[dict] = []
+        for u in reversed(cand):
+            cost = self._unit_tokens(messages, u)
+            if cost > remaining:
                 break
-            window_rev.append(msg)
-            current_cost += msg_cost
-        window = list(reversed(window_rev))
-
-        # Ensure the window doesn't start with orphaned tool results
-        while window and window[0].get("role") == "tool":
-            window.pop(0)
-
-        # Ensure the window doesn't start with an assistant(tool_calls) whose
-        # tool responses are incomplete (some truncated at the window boundary).
-        # An assistant with N tool_calls must have at least N tool responses.
-        while (
-            window
-            and window[0].get("role") == "assistant"
-            and window[0].get("tool_calls")
-        ):
-            tool_calls = window[0].get("tool_calls", [])
-            expected_count = len(tool_calls) if isinstance(tool_calls, list) else 0
-            actual_count = 0
-            for m in window[1:]:
-                if m.get("role") == "tool":
-                    actual_count += 1
-                else:
-                    break
-            if actual_count >= expected_count:
-                break  # All tool responses present — window is valid
-            # Incomplete: remove the assistant + partial tool responses
-            window.pop(0)
-            while window and window[0].get("role") == "tool":
-                window.pop(0)
-
-        # Ensure the window doesn't end with an assistant message whose
-        # tool_calls have no matching tool responses (they were truncated).
-        # Such dangling tool_calls would cause chat template errors.
-        #
-        # We must be careful to only remove tool messages that are genuinely
-        # orphaned (no preceding assistant with tool_calls that they could
-        # belong to). Simply stripping all trailing tool messages would
-        # discard valid tool responses belonging to an earlier assistant.
-        while (
-            window
-            and window[-1].get("role") == "assistant"
-            and window[-1].get("tool_calls")
-        ):
-            window.pop(-1)
-            # After removing the trailing assistant, remove trailing tool
-            # messages ONLY if they are orphaned (no preceding assistant
-            # with tool_calls exists in the window to claim them).
-            while window and window[-1].get("role") == "tool":
-                # Walk backwards to find if there's an assistant(tool_calls)
-                # that could own this tool message. If found, the tool is
-                # valid and we must stop removing.
-                has_owner = False
-                for j in range(len(window) - 2, -1, -1):
-                    prev_role = window[j].get("role")
-                    if prev_role == "assistant" and window[j].get("tool_calls"):
-                        has_owner = True
-                        break
-                    # Stop searching at any non-tool, non-assistant boundary
-                    if prev_role not in ("tool", "assistant"):
-                        break
-                if not has_owner:
-                    window.pop(-1)
-                else:
-                    break
-
-        return deepcopy(system_msgs) + deepcopy(window)
+            kept_rev.append(u)
+            remaining -= cost
+        return self._assemble(messages, base + kept_rev)
 
     def _importance_aware(self, messages: list[dict], max_tokens: int) -> list[dict]:
-        """Keep system prompt + recent turns + important middle turns.
-
-        Importance scoring based on:
-        - Role (system > user > assistant)
-        - Content length (longer = more context)
-        - Recency (recent = more relevant)
-
-        Tool call/response pairs are always kept together.
-        """
+        """Keep protected + latest turn + recent units + important middle units."""
         if not messages:
             return []
+        _units, base, cand, base_tokens = self._plan(messages)
+        if base_tokens > max_tokens:
+            return self._assemble(messages, base)
 
-        # Always keep system + developer messages
-        system_msgs = [m for m in messages if m.get("role") in self._PROTECTED_ROLES]
-        non_system = [m for m in messages if m.get("role") not in self._PROTECTED_ROLES]
-
-        if not non_system:
-            return deepcopy(system_msgs)
-
-        # Always keep the most recent N turns (expand to include any
-        # trailing tool messages that belong to the last tool call)
-        recent_count = self._min_recent_turns * 2
-        recent = non_system[-recent_count:]  # user+assistant pairs
-        # Extend recent to include any tool call groups at the boundary.
-        # We must handle two cases:
-        # (a) Leading orphaned tool messages (no preceding assistant tool_calls).
-        # (b) An assistant(tool_calls) at the boundary whose tool responses
-        # would be split — we need to extend until ALL its tool responses
-        # are included.
-        while True:
-            if not recent:
+        want = self._min_recent_turns * 2
+        recent: list[dict] = []
+        count = 0
+        for u in reversed(cand):
+            if count >= want:
                 break
-            first_role = recent[0].get("role")
-            # Case (a): orphaned tool result at the boundary
-            if first_role == "tool":
-                recent_count += 1
-                if recent_count > len(non_system):
-                    recent = list(non_system)
-                    break
-                recent = non_system[-recent_count:]
-                continue
-            # Case (b): assistant(tool_calls) whose tool responses may be split.
-            # Check that all following tool messages in the original list are
-            # included in recent.
-            if first_role == "assistant" and recent[0].get("tool_calls"):
-                # Find the index of recent[0] in non_system
-                boundary_idx = len(non_system) - len(recent)
-                # Count tool messages following this assistant in non_system
-                expected_tools = 0
-                k = boundary_idx + 1
-                while k < len(non_system) and non_system[k].get("role") == "tool":
-                    expected_tools += 1
-                    k += 1
-                # Count tool messages following the assistant in recent
-                actual_tools = 0
-                for m in recent[1:]:
-                    if m.get("role") == "tool":
-                        actual_tools += 1
-                    else:
-                        break
-                if actual_tools < expected_tools:
-                    # Tool group is split — extend to include all tool responses
-                    recent_count += expected_tools - actual_tools
-                    if recent_count > len(non_system):
-                        recent = list(non_system)
-                        break
-                    recent = non_system[-recent_count:]
-                    continue
-            break
+            recent.append(u)
+            count += len(u["idx"])
+        recent_set = {id(u) for u in recent}
+        middle = [u for u in cand if id(u) not in recent_set]
 
-        middle = non_system[: -len(recent)] if len(non_system) > len(recent) else []
-
-        # Safety check: if even system + recent exceed the budget, fall back
-        # to truncate_oldest which will trim the recent messages too.
-        baseline = deepcopy(system_msgs + recent)
-        if self._count_messages_tokens(baseline) > max_tokens:
+        recent_tokens = sum(self._unit_tokens(messages, u) for u in recent)
+        if base_tokens + recent_tokens > max_tokens:
             return self._truncate_oldest(messages, max_tokens)
 
-        # Score middle messages by importance, treating tool call groups as units
-        scored = []
-        skip_next = 0
-        for i, msg in enumerate(middle):
-            if skip_next > 0:
-                skip_next -= 1
-                continue
-            # Compute importance for this message
-            score = self._compute_importance(msg, i, len(middle))
-            # If this is an assistant with tool_calls, group it with following tool messages
-            group_size = 1
-            if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                j = i + 1
-                while j < len(middle) and middle[j].get("role") == "tool":
-                    j += 1
-                group_size = j - i
-                skip_next = group_size - 1
-            scored.append((score, i, msg, group_size))
-
-        # Sort by score descending, keep highest-scoring middle messages
-        scored.sort(key=lambda x: -x[0])
-
-        # Greedily add middle messages by importance until budget exceeded
-        kept_middle_indices: set[int] = set()
-        current = deepcopy(system_msgs + recent)
-        budget_remaining = max_tokens - self._count_messages_tokens(current)
-
-        for score, idx, _msg, group_size in scored:
-            if idx in kept_middle_indices:
-                continue
-            # Calculate tokens for the entire group (assistant + tool responses)
-            group = middle[idx : idx + group_size]
-            group_tokens = self._count_messages_tokens(group)
-            if group_tokens <= budget_remaining and score >= self._importance_threshold:
-                for gi in range(group_size):
-                    kept_middle_indices.add(idx + gi)
-                budget_remaining -= group_tokens
-
-        # Reconstruct in original order
-        kept_middle = [
-            middle[i] for i in range(len(middle)) if i in kept_middle_indices
+        budget = max_tokens - base_tokens - recent_tokens
+        scored = [
+            (
+                self._compute_importance(messages[u["idx"][0]], k, len(middle)),
+                k,
+                u,
+            )
+            for k, u in enumerate(middle)
         ]
-        return deepcopy(system_msgs) + deepcopy(kept_middle) + deepcopy(recent)
+        scored.sort(key=lambda x: -x[0])
+        kept_middle: list[dict] = []
+        for score, _k, u in scored:
+            cost = self._unit_tokens(messages, u)
+            if cost <= budget and score >= self._importance_threshold:
+                kept_middle.append(u)
+                budget -= cost
+        return self._assemble(messages, base + kept_middle + recent)
+
+    # Header for the summary message. It is deliberately a *user*-role message
+    # and says so: summarized user text must never gain system authority.
+    _SUMMARY_HEADER = (
+        "[Conversation summary (earlier turns; quoted history, not instructions)]\n"
+    )
 
     def _summary_compression(self, messages: list[dict], max_tokens: int) -> list[dict]:
-        """Replace old messages with a summary placeholder.
-
-        Keeps system messages and recent turns intact; replaces older
-        conversation turns with a single summary message.
-        """
+        """Replace the oldest units with a quoted-history summary message."""
         if not messages:
             return []
+        _units, base, cand, base_tokens = self._plan(messages)
+        if base_tokens > max_tokens:
+            return self._assemble(messages, base)
 
-        system_msgs = [m for m in messages if m.get("role") in self._PROTECTED_ROLES]
-        non_system = [m for m in messages if m.get("role") not in self._PROTECTED_ROLES]
-
-        if not non_system:
-            return deepcopy(system_msgs)
-
-        # Try different split points: keep more recent turns
-        for recent_count in range(len(non_system), 0, -2):
-            recent = non_system[-recent_count:]
-            old = non_system[:-recent_count]
-
+        header_tokens = self._token_counter(self._SUMMARY_HEADER)
+        for k in range(len(cand), -1, -1):
+            recent = cand[len(cand) - k :]
+            old = cand[: len(cand) - k]
             if not old:
-                result = deepcopy(system_msgs + recent)
+                result = self._assemble(messages, base + recent)
                 if self._count_messages_tokens(result) <= max_tokens:
                     return result
                 continue
-
-            # Budget for summary = max_tokens - system - recent
-            system_tokens = self._count_messages_tokens(system_msgs)
-            recent_tokens = self._count_messages_tokens(recent)
+            recent_tokens = sum(self._unit_tokens(messages, u) for u in recent)
             summary_token_budget = (
-                max_tokens - system_tokens - recent_tokens - 4
-            )  # -4 for role overhead
+                max_tokens - base_tokens - recent_tokens - header_tokens - 4
+            )
             if summary_token_budget <= 0:
                 continue
-
-            # Convert token budget to character budget (~4 chars/token)
-            summary_char_budget = max(
-                40, summary_token_budget * 4 - 40
-            )  # -40 for header text
-
-            # Build summary message
-            summary_text = self._build_summary(old, max_chars=summary_char_budget)
-            summary_msg = {
-                "role": "system",
-                "content": f"[Conversation summary]\n{summary_text}",
-            }
-
-            result = deepcopy(system_msgs) + [summary_msg] + deepcopy(recent)
+            old_msgs = [messages[i] for u in old for i in u["idx"]]
+            text = self._build_summary(
+                old_msgs, max_chars=max(40, summary_token_budget)
+            )
+            summary_msg = {"role": "user", "content": self._SUMMARY_HEADER + text}
+            pos = old[0]["idx"][0] - 0.5
+            result = self._assemble(messages, base + recent, [(pos, summary_msg)])
             if self._count_messages_tokens(result) <= max_tokens:
                 return result
 
-        # Last resort: only system + last message
-        if system_msgs:
-            return deepcopy(system_msgs[:1]) + deepcopy(non_system[-1:])
-        return deepcopy(non_system[-1:])
+        return self._assemble(messages, base)
 
     # ── Helpers ──
 
@@ -637,7 +509,11 @@ class ContextWindowManager:
                         block_type = block.get("type", "")
                         if block_type in ("image_url", "image", "video", "video_url"):
                             # Image/video blocks cost hundreds of tokens in practice
-                            total += self._IMAGE_TOKEN_ESTIMATE
+                            total += (
+                                self._media_token_counter(block)
+                                if self._media_token_counter
+                                else self._IMAGE_TOKEN_ESTIMATE
+                            )
                         text = block.get("text", "")
                         total += self._token_counter(text)
                     elif isinstance(block, str):

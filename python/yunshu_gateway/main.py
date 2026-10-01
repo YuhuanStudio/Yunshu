@@ -579,6 +579,27 @@ def create_app() -> FastAPI:
             headers=getattr(exc, "headers", None),
         )
 
+    from yunshu_engine.context_window import ContextBudgetError
+
+    @app.exception_handler(ContextBudgetError)
+    async def context_budget_handler(request: Request, exc: ContextBudgetError):
+        """The system messages plus the latest user turn do not fit: a client error."""
+        if request.url.path in _ANTHROPIC_PATHS:
+            content = {
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": str(exc)},
+            }
+        else:
+            content = {
+                "error": {
+                    "message": str(exc),
+                    "type": "invalid_request_error",
+                    "param": "messages",
+                    "code": "context_length_exceeded",
+                }
+            }
+        return JSONResponse(status_code=400, content=content)
+
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
         """Catch-all for unhandled exceptions — prevents stack trace leakage.
