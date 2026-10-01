@@ -3,14 +3,12 @@
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-import pytest
-
-from tests.unit.test_vlm_runner_batching import FakeGen, runner  # noqa: F401
+from tests.unit.test_vlm_runner_batching import FakeGen, runner  # noqa: F401,F811
 from yunshu_engine import vlm_batch_runner as vbr
 
 
-def _run(runner, n=3, **kw):
-    return list(runner.iter_tokens([1, 2, 3], max_tokens=n, prompt_kwargs={}, **kw))
+def _run(rn, n=3, **kw):
+    return list(rn.iter_tokens([1, 2, 3], max_tokens=n, prompt_kwargs={}, **kw))
 
 
 class BrokenExecutor:
