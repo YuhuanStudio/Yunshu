@@ -1365,9 +1365,11 @@ class VLMEngine:
         path = paths.apc_dir()
         if path is None:
             return None
+        from yunshu_kv.disk_budget import resolve_cap_gb
+
         from .apc_manager import SpillDiskStore
 
-        max_gb = settings.get("YUNSHU_VLM_APC_DISK_GB")
+        max_gb = resolve_cap_gb(settings.get("YUNSHU_VLM_APC_DISK_GB"), path)
         try:
             disk = SpillDiskStore(
                 path,
