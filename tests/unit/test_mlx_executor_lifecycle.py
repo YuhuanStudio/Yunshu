@@ -26,8 +26,7 @@ def test_r12_reset_with_running_task_keeps_single_worker(fresh):
     assert again is ex and me.get_mlx_executor() is ex
     release.set()
     fut.result(5)
-    workers = [t for t in threading.enumerate() if t.name.startswith("mlx-global")]
-    assert len(workers) == 1
+    assert len(me._executor._threads) == 1
 
 
 def test_r12_reset_replaces_shut_down_executor(fresh):
