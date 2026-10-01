@@ -131,17 +131,13 @@
 1	python/yunshu_engine/gemma4_assistant.py	return-value	Incompatible return value type (got "int | list[int]", expected "int")
 1	python/yunshu_engine/gemma4_assistant.py	union-attr	Item "array" of "array | dict[str, array] | tuple[dict[str, array], dict[str, Any]]" has no attribute "items"
 1	python/yunshu_engine/gemma4_assistant.py	union-attr	Item "tuple[dict[str, array] | dict[str, Any], ...]" of "array | dict[str, array] | tuple[dict[str, array], dict[str, Any]]" has no attribute "items"
-1	python/yunshu_engine/grammar_bitmask.py	assignment	Incompatible types in assignment (expression has type "ChoiceConstraint", variable has type "JsonSchemaConstraint")
-1	python/yunshu_engine/grammar_bitmask.py	assignment	Incompatible types in assignment (expression has type "LarkGrammarConstraint", variable has type "JsonSchemaConstraint")
-1	python/yunshu_engine/grammar_bitmask.py	assignment	Incompatible types in assignment (expression has type "RegexConstraint", variable has type "JsonSchemaConstraint")
 1	python/yunshu_engine/grammar_bitmask.py	no-any-return	Returning Any from function declared to return "TokenStringTable"
 1	python/yunshu_engine/grammar_bitmask.py	no-any-return	Returning Any from function declared to return "bool"
 1	python/yunshu_engine/grammar_bitmask.py	no-any-return	Returning Any from function declared to return "int"
 1	python/yunshu_engine/grammar_bitmask.py	no-any-return	Returning Any from function declared to return "list[int]"
-3	python/yunshu_engine/grammar_bitmask.py	union-attr	Item "None" of "TokenStringTable | None" has no attribute "eos_ids"
+2	python/yunshu_engine/grammar_bitmask.py	union-attr	Item "None" of "TokenStringTable | None" has no attribute "eos_ids"
 4	python/yunshu_engine/grammar_constraint.py	attr-defined	"type[ChoiceConstraint]" has no attribute "_token_char_cache"
 4	python/yunshu_engine/grammar_constraint.py	attr-defined	"type[ChoiceConstraint]" has no attribute "_token_text_cache"
-4	python/yunshu_engine/grammar_constraint.py	attr-defined	"type[LarkGrammarConstraint]" has no attribute "_token_char_cache"
 8	python/yunshu_engine/grammar_constraint.py	attr-defined	"type[RegexConstraint]" has no attribute "_token_char_cache"
 4	python/yunshu_engine/grammar_constraint.py	attr-defined	"type[RegexConstraint]" has no attribute "_token_text_cache"
 1	python/yunshu_engine/grammar_constraint.py	no-redef	Name "_build_token_text_map" already defined on line N
@@ -172,8 +168,6 @@
 1	python/yunshu_engine/json_schema.py	arg-type	Argument 1 to "_get_type_from_schema" of "JsonSchemaConstraint" has incompatible type "dict[Any, Any] | None"; expected "dict[Any, Any]"
 1	python/yunshu_engine/json_schema.py	arg-type	Argument 1 to "_init_object_keys" of "JsonSchemaConstraint" has incompatible type "dict[Any, Any] | None"; expected "dict[Any, Any]"
 6	python/yunshu_engine/json_schema.py	arg-type	Argument 1 to "append" of "list" has incompatible type "tuple[JsonState, dict[Any, Any] | None]"; expected "tuple[JsonState, dict[Any, Any]]"
-2	python/yunshu_engine/json_schema.py	assignment	Incompatible types in assignment (expression has type "set[Any]", variable has type "list[Any]")
-1	python/yunshu_engine/json_schema.py	assignment	Incompatible types in assignment (expression has type "set[Never]", variable has type "list[Any]")
 4	python/yunshu_engine/json_schema.py	attr-defined	"type[JsonSchemaConstraint]" has no attribute "_token_char_cache"
 2	python/yunshu_engine/json_schema.py	attr-defined	"type[JsonSchemaConstraint]" has no attribute "_token_text_cache"
 1	python/yunshu_engine/json_schema.py	no-any-return	Returning Any from function declared to return "dict[Any, Any] | None"
