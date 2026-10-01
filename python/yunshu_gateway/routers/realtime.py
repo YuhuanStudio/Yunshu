@@ -23,6 +23,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from yunshu_engine import settings
 
 from .. import realtime_ga
+from ..error_envelope import EngineStreamError
 
 logger = logging.getLogger(__name__)
 
@@ -1869,6 +1870,8 @@ class RealtimeSession:
                     priority=_priority,
                     cancel_event=self._cancel_event,
                 ):
+                    if getattr(output, "error", None):
+                        raise EngineStreamError(str(output.error))
                     if output.new_text:
                         full_text += output.new_text
                         if "text" in modalities:
@@ -1923,6 +1926,8 @@ class RealtimeSession:
                     seed=getattr(self.session, "seed", None),
                     cancel_event=self._cancel_event,
                 ):
+                    if getattr(output, "error", None):
+                        raise EngineStreamError(str(output.error))
                     if output.token_text:
                         full_text += output.token_text
                         if "text" in modalities:
@@ -2246,10 +2251,13 @@ class RealtimeSession:
             self._response_done_emitted = True  # (self-audit R2)
         except Exception as e:
             logger.error(f"Realtime generation error: {e}", exc_info=True)
+            _err_message = (
+                str(e) if isinstance(e, EngineStreamError) else "Internal server error"
+            )
             await self.send_event(
                 _event(
                     RealtimeEvent.ERROR,
-                    error={"message": "Internal server error", "type": "server_error"},
+                    error={"message": _err_message, "type": "server_error"},
                 )
             )
             await self._close_response_item(response_id, item_id, status="incomplete")
@@ -2260,6 +2268,13 @@ class RealtimeSession:
                         "id": response_id,
                         "object": "realtime.response",
                         "status": "failed",
+                        "status_details": {
+                            "type": "failed",
+                            "error": {
+                                "type": "server_error",
+                                "code": "generation_failed",
+                            },
+                        },
                         "error": "Generation failed",
                     },
                 )

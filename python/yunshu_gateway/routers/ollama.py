@@ -358,6 +358,13 @@ async def _run_chat(request: Request, body: dict, *, generate: bool):
         tool_acc: dict[int, dict] = {}
         try:
             async for ev in _sse(resp):
+                if ev.get("error"):
+                    # The chat stream failed after its headers: Ollama's terminal error is a
+                    # {"error": ...} line, never a "done" line that reads as a clean finish.
+                    err = ev["error"]
+                    msg = err.get("message") if isinstance(err, dict) else str(err)
+                    yield _ndjson({"error": msg or "generation failed"})
+                    return
                 if ev.get("usage"):
                     usage = ev["usage"]
                 if ev.get("x_yunshu"):
