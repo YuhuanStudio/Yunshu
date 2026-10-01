@@ -66,6 +66,58 @@ def total_memory_bytes() -> int:
     return os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
 
 
+def check_loaded_cache(
+    token_ids, prompt_cache, template=None, kv_heads=None, head_dim=None
+):
+    """Structural check of an exact checkpoint read back from disk; True when it is
+    consistent with the live model.
+
+    ``template`` is ``model.make_cache()`` (same layer count / cache classes); ``kv_heads``
+    and ``head_dim`` (optional) pin the attention geometry. Offsets must agree with the
+    token count and every tensor must have a plausible rank, dtype and batch of one. A
+    corrupt or foreign file fails here and the caller falls back to a cold prefill.
+    """
+    n_tokens = len(token_ids)
+    if not prompt_cache or n_tokens <= 0:
+        return False
+    if template is not None and len(template) != len(prompt_cache):
+        return False
+    for i, c in enumerate(prompt_cache):
+        if template is not None and type(template[i]).__name__ != type(c).__name__:
+            return False
+        keys, values = getattr(c, "keys", None), getattr(c, "values", None)
+        if keys is not None or values is not None:
+            if keys is None or values is None or isinstance(keys, (tuple, list)):
+                return False
+            offset = int(getattr(c, "offset", 0))
+            if (
+                keys.ndim != 4
+                or keys.shape[0] != 1
+                or keys.shape[:3] != values.shape[:3]
+                or keys.dtype != values.dtype
+                or not 0 < offset <= min(keys.shape[2], n_tokens)
+                or (kv_heads is not None and keys.shape[1] != kv_heads)
+                or (head_dim is not None and keys.shape[3] != head_dim)
+            ):
+                return False
+            continue
+        state = getattr(c, "cache", None)
+        if state is None:
+            state = getattr(c, "state", None)
+        if state is None:
+            continue  # an empty layer
+        if template is not None:
+            tstate = getattr(template[i], "cache", None)
+            if tstate is not None and len(tstate) != len(state):
+                return False
+        for a in state:
+            if a is None:
+                continue
+            if a.ndim < 2 or a.shape[0] != 1 or a.size == 0:
+                return False
+    return True
+
+
 class SpillDiskStore(DiskBlockStore):
     """SSD tier that receives a checkpoint when RAM evicts it, not when it is stored.
 
@@ -76,6 +128,84 @@ class SpillDiskStore(DiskBlockStore):
     conversation superseded it), so the SSD holds what RAM had to give up and the cache
     survives a restart (``YunshuAPCManager.close`` writes what is still resident).
     """
+
+    # Set by the engine: ``validator(token_ids, prompt_cache) -> bool`` on a loaded
+    # checkpoint (see ``check_loaded_cache``). None accepts what the format checks pass.
+    validator = None
+
+    def quarantine(self, path, why: str) -> None:
+        """Invalidate one persisted file: delete it and forget it, so it is never read
+        again and the lookup that hit it prefills cold."""
+        logger.warning(
+            "APC disk: %s unusable (%s), dropped", getattr(path, "name", path), why
+        )
+        self.invalidated = getattr(self, "invalidated", 0) + 1
+        try:
+            self._drop_index_for_path(path)
+        finally:
+            try:
+                size = path.stat().st_size
+                path.unlink()
+                self._disk_bytes = max(0, self._disk_bytes - size)
+            except OSError:
+                pass
+
+    def _file_complete(self, path) -> bool:
+        """The file's tensor payload is all there (a torn write or truncation is not)."""
+        parsed = self._open_shard_header(path)
+        if parsed is None:
+            return False
+        entries, _meta, data_start = parsed
+        try:
+            end = max(
+                (
+                    int(e["data_offsets"][1])
+                    for e in entries.values()
+                    if "data_offsets" in e
+                ),
+                default=0,
+            )
+            return path.stat().st_size >= data_start + end
+        except (OSError, KeyError, TypeError, ValueError, IndexError):
+            return False
+
+    def find_exact_prefix(self, *args, **kwargs):
+        try:
+            return super().find_exact_prefix(*args, **kwargs)
+        except Exception:
+            logger.warning("APC disk: index lookup failed, going cold", exc_info=True)
+            return None
+
+    def load_exact_cache(self, cache_hash, **kwargs):
+        with self._index_lock:
+            path = self._exact_index.get(cache_hash)
+        try:
+            loaded = super().load_exact_cache(cache_hash, **kwargs)
+        except Exception as e:
+            if path is not None:
+                self.quarantine(path, f"load raised {type(e).__name__}")
+            return None
+        if loaded is None:
+            if path is not None and path.exists() and not self._file_complete(path):
+                self.quarantine(path, "torn or truncated")
+            return None
+        if self.validator is not None:
+            try:
+                ok = bool(self.validator(loaded[0], loaded[2]))
+            except Exception:
+                ok = False
+            if not ok:
+                if path is not None:
+                    self.quarantine(path, "structure does not match the model")
+                return None
+        return loaded
+
+    def load_layer_major_prefix(self, *args, **kwargs):
+        try:
+            return super().load_layer_major_prefix(*args, **kwargs)
+        except Exception:
+            logger.warning("APC disk: block restore failed, going cold", exc_info=True)
+            return None
 
     def save_exact_cache(
         self, cache_hash, token_ids, extra_hash, prompt_cache, *, synchronous=False

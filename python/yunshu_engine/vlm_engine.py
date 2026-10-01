@@ -1335,23 +1335,60 @@ class VLMEngine:
     def _apc_disk_namespace(self) -> str:
         """Directory namespace of this checkpoint's states on disk.
 
-        The path plus the identity of the weights (file names, sizes, mtimes) and the
-        config: re-quantizing or replacing a checkpoint in place must not read back the
-        old checkpoint's states.
+        ``yunshu_kv.fingerprint``: the path, the weight files (names, sizes, mtimes), the
+        config / tokenizer / chat-template / preprocessor contents and the cache layout
+        (KV precision, mlx-vlm's adapter schema and exact-cache format). Re-quantizing,
+        replacing or re-tokenizing a checkpoint in place, or a layout change, selects a
+        fresh namespace and never reads back the old states.
         """
-        h = hashlib.sha256(str(self._model_path).encode())
-        root = Path(str(self._model_path))
+        from yunshu_kv.fingerprint import checkpoint_fingerprint
+
         try:
-            files = sorted(
-                [*root.glob("*.safetensors"), root / "config.json"],
-                key=lambda f: f.name,
-            )
-            for f in files:
-                st = f.stat()
-                h.update(f"|{f.name}:{st.st_size}:{st.st_mtime_ns}".encode())
-        except OSError:
-            pass  # not a local directory: the path alone
-        return h.hexdigest()[:16]
+            from mlx_vlm.apc_adapters import ADAPTER_SCHEMA_VERSION
+        except Exception:  # pragma: no cover - older mlx-vlm
+            ADAPTER_SCHEMA_VERSION = 0
+        return checkpoint_fingerprint(
+            self._model_path,
+            extra={
+                "kv_precision": settings.get("YUNSHU_KV_PRECISION"),
+                "apc_adapter_schema": ADAPTER_SCHEMA_VERSION,
+                "apc_layout": "exact_cache_v1",
+            },
+            digest_size=8,
+        )
+
+    def _install_apc_identity(self, lm) -> None:
+        """Make every APC key (RAM and SSD) depend on this checkpoint's identity, and
+        have the SSD tier check what it reads back against the live model.
+
+        mlx-vlm folds ``lm.apc_key_dependencies()`` into every request's extra hash, so a
+        checkpoint revision (weights, config, tokenizer, layout) that differs from the one
+        that wrote a state can never match it, even when the file sits in a shared
+        directory. The validator rejects a state whose layer classes, offsets or
+        geometry do not fit the model (a corrupt or foreign file).
+        """
+        identity = self._apc_disk_namespace()
+        lm.apc_key_dependencies = lambda: (f"yunshu-checkpoint:{identity}",)
+        disk = getattr(self._apc_backend, "disk", None)
+        if disk is None or not hasattr(disk, "validator"):
+            return
+        from .apc_manager import check_loaded_cache
+
+        try:
+            template = lm.make_cache()
+        except Exception:
+            template = None
+        args = getattr(lm, "args", None)
+        kv_heads = getattr(args, "num_key_value_heads", None)
+        # the config's explicit head_dim; the module property derives it from the hidden size
+        # and heads, which is wrong when a family sets head_dim itself
+        head_dim = getattr(args, "head_dim", None) or getattr(lm, "head_dim", None)
+        if not isinstance(head_dim, int):
+            head_dim = None
+
+        disk.validator = lambda tokens, cache: check_loaded_cache(
+            tokens, cache, template, kv_heads, head_dim
+        )
 
     def _apc_disk_tier(self):
         """The APC SSD tier (on by default; ``YUNSHU_VLM_APC_DISK=0`` switches it off).
@@ -1442,6 +1479,7 @@ class VLMEngine:
                     overrides={"memory_max_gb": budget},
                     head_marker=self._chatml_head_marker(),
                 )
+                self._install_apc_identity(lm)
                 self._apc_semantic_hash = semantic_extra_hash(
                     image_hash=0,
                     media={"audio": None, "video": None},

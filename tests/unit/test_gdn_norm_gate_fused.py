@@ -5,8 +5,6 @@ exponential, so the kernel probes which expression matches ``_precise_swiglu``
 and declines fusion when none does.
 """
 
-from types import SimpleNamespace
-
 import mlx.core as mx
 import pytest
 
@@ -68,5 +66,6 @@ def test_probe_declines_unknown_served_arithmetic(monkeypatch):
     try:
         assert fused._sigmoid_exp() is None
     finally:
+        monkeypatch.undo()
         fused._sigmoid_exp.cache_clear()
     assert fused._sigmoid_exp() is not None
