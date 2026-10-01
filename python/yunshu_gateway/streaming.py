@@ -503,11 +503,15 @@ def extract_thinking(text: str, model_name: str | None = None) -> tuple[str, str
 # ── Context Window Validation ──
 
 
-def get_max_context_window(model_id: str | None = None, engine=None) -> int | None:
+def get_max_context_window(
+    model_id: str | None = None, engine=None, trusted_only: bool = False
+) -> int | None:
     """Get effective max context window limit.
 
     Checks model config for max_position_embeddings or similar fields.
-    Returns None if not determinable.
+    Returns None if not determinable. ``trusted_only`` skips the tokenizer's
+    ``model_max_length`` (often a stale default): fine for rejecting an absurd prompt, not
+    for shrinking a request that would have been served.
     """
     if engine is None:
         return None
@@ -559,6 +563,8 @@ def get_max_context_window(model_id: str | None = None, engine=None) -> int | No
                         return int(v)
 
     # Tokenizer fallback (least trustworthy — only when the model exposed nothing)
+    if trusted_only:
+        return None
     tokenizer = getattr(engine, "_tokenizer", None)
     if tokenizer is not None:
         model_max = getattr(tokenizer, "model_max_length", None)

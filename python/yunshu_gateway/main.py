@@ -609,6 +609,37 @@ def create_app() -> FastAPI:
         """
         import traceback
 
+        from yunshu_kv.disk_budget import is_enospc
+
+        if is_enospc(exc):
+            # a store ran out of disk: tell the client what to do, keep the details in the log
+            logger.error(
+                "Disk full on %s %s: %s", request.method, request.url.path, exc
+            )
+            msg = "The server's disk is full; free space and retry"
+            if request.url.path in _ANTHROPIC_PATHS:
+                return JSONResponse(
+                    status_code=507,
+                    content={
+                        "type": "error",
+                        "error": {"type": "api_error", "message": msg},
+                    },
+                )
+            return JSONResponse(
+                status_code=507,
+                content={
+                    "error": add_hint(
+                        {
+                            "message": msg,
+                            "type": "server_error",
+                            "param": None,
+                            "code": "insufficient_storage",
+                        },
+                        507,
+                        getattr(request.state, "request_id", None),
+                    )
+                },
+            )
         logger.error(
             "Unhandled exception on %s %s: %s\n%s",
             request.method,

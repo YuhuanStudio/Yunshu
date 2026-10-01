@@ -11,6 +11,17 @@ working unchanged:
 - non-streaming JSON responses get a top-level ``x_yunshu`` object and ``X-Yunshu-*`` headers.
 - ``X-Yunshu-Queue-Position`` / ``X-Yunshu-Queue-Est-Wait-Ms`` say how busy the server was when
   the request arrived.
+- a full server (``YUNSHU_QUEUE_LIMIT``) or one short of memory refuses new generation requests
+  with a retryable 429 / 503 (``admission.py``) instead of queueing them without bound.
+- ``X-Yunshu-Deadline-Ms: N`` is a per-request wall-clock deadline from arrival, queue wait
+  included: past it the generation is cancelled and the client gets a 504 (or, once a stream has
+  started, one terminal error event), never a hang.
+- ``x_yunshu.cancelled`` (``X-Yunshu-Cancelled: true``) marks an answer cut short by a cancel
+  request or a deadline, so a truncated answer is not mistaken for a finished one.
+- ``x_yunshu.budget`` says when ``max_tokens`` (and ``thinking_budget``) were clamped to the room
+  the prompt leaves in the context window.
+- ``x_yunshu.context_policy`` / ``X-Yunshu-Context-Policy`` report what the context-window
+  manager removed from the prompt, when it did.
 
 The measurements come from the engine's live ``RunStats`` (the VLM batch runner) when the
 request reaches it, and from the gateway's own clock otherwise, so the fields are best-effort
@@ -34,6 +45,9 @@ from yunshu_engine import settings
 from yunshu_engine.request_tracker import current_request_id, current_request_info
 
 REQUEST_ID_HEADER = "X-Request-Id"
+# How long a stream past its deadline waits for the engine to wind down before the response
+# is ended anyway.
+_DEADLINE_GRACE_S = 10.0
 _ID_OK = re.compile(r"^[A-Za-z0-9._:\-]{1,128}$")
 
 # Generation endpoints whose requests are tracked (queue position, progress, cancel by id).
@@ -139,6 +153,14 @@ class RequestInfo:
     queue_position: int = 0
     queue_est_wait_ms: float = 0.0
     cancel_requested: bool = False
+    deadline_ms: int | None = None
+    deadline_exceeded: bool = False
+    # What the context-window manager removed from the prompt (set by the engine through
+    # ``ContextWindowManager.publish``); None when nothing was.
+    context_policy: dict | None = None
+    # The token budget when the prompt left less room than max_tokens asked for
+    # (``token_budget.TokenBudget.report``); None when the request fit.
+    budget: dict | None = None
     _rate: tuple[float, int, float] | None = None  # (t, processed, ema tokens/s)
 
     @property
@@ -364,7 +386,7 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
                 else None
             ),
         }
-    return {
+    out = {
         "request_id": info.request_id,
         "queue_wait_ms": _ms(queue_wait),
         "ttft_ms": _ms(ttft),
@@ -400,6 +422,15 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
             "predicted_per_second": decode_tps,
         },
     }
+    if info.cancel_requested or getattr(info.gen, "cancelled", False):
+        out["cancelled"] = True
+    if info.context_policy:
+        out["context_policy"] = info.context_policy
+    if info.budget:
+        out["budget"] = info.budget
+    if info.deadline_ms is not None:
+        out["deadline_ms"] = info.deadline_ms
+    return out
 
 
 def stats_headers(stats: dict, info: RequestInfo) -> list[tuple[bytes, bytes]]:
@@ -414,11 +445,27 @@ def stats_headers(stats: dict, info: RequestInfo) -> list[tuple[bytes, bytes]]:
         ("X-Yunshu-Cache-Reload-Ms", (stats.get("cache") or {}).get("reload_ms")),
         ("X-Yunshu-Total-Ms", stats.get("total_ms")),
     ]
+    if stats.get("cancelled"):
+        pairs.append(("X-Yunshu-Cancelled", "true"))
+    cp = stats.get("context_policy")
+    if cp:
+        pairs.append(("X-Yunshu-Context-Policy", context_policy_header(cp)))
     spec = stats.get("speculative")
     if spec:
         pairs.append(("X-Yunshu-Spec", spec.get("mode")))
         pairs.append(("X-Yunshu-Spec-Acceptance", spec.get("acceptance_rate")))
     return [(k.lower().encode(), str(v).encode()) for k, v in pairs if v is not None]
+
+
+def context_policy_header(cp: dict) -> str:
+    """One header line for a context-policy report: ``importance_aware; removed=3 messages
+    (2 user turns); tokens=9000->4000``."""
+    turns = (cp.get("removed_roles") or {}).get("user", 0)
+    return (
+        f"{cp.get('policy')}; removed={cp.get('messages_removed', 0)} messages "
+        f"({turns} user turns); tokens={cp.get('tokens_before')}->"
+        f"{cp.get('tokens_after')}"
+    )
 
 
 def queue_headers(info: RequestInfo) -> list[tuple[bytes, bytes]]:
@@ -482,6 +529,11 @@ class YunshuExtensionsMiddleware:
         path = scope.get("path", "")
         tracked = scope.get("method") == "POST" and path in TRACKED_PATHS
         info = RequestInfo(request_id, scope.get("method", ""), path)
+        if tracked:
+            refused = self._refuse(info, raw_headers)
+            if refused is not None:
+                await refused(scope, receive, send)
+                return
         tokens = [(current_request_id, current_request_id.set(request_id))]
         if tracked:
             info.queue_position, info.queue_est_wait_ms = queue_snapshot(info)
@@ -500,6 +552,46 @@ class YunshuExtensionsMiddleware:
                 with contextlib.suppress(ValueError):
                     var.reset(tok)
 
+    @staticmethod
+    def _refuse(info: RequestInfo, raw_headers: dict):
+        """The error response to send instead of serving this request, or None to serve it:
+        a malformed deadline header (400), a full server (429) or memory pressure (503)."""
+        from .admission import DEADLINE_HEADER, admit, parse_deadline_ms
+        from .error_envelope import format_error_response
+
+        rid = {REQUEST_ID_HEADER: info.request_id}
+        try:
+            info.deadline_ms = parse_deadline_ms(
+                raw_headers.get(DEADLINE_HEADER.encode())
+            )
+        except ValueError as exc:
+            return format_error_response(
+                info.path,
+                str(exc),
+                400,
+                code="invalid_deadline",
+                request_id=info.request_id,
+                extra_headers=rid,
+            )
+        ahead, wait_ms = queue_snapshot(info)
+        refusal = admit(len(registry.active()), wait_ms)
+        if refusal is None:
+            return None
+        return format_error_response(
+            info.path,
+            refusal.message,
+            refusal.status,
+            code=refusal.code,
+            retry_after=refusal.retry_after,
+            request_id=info.request_id,
+            x_yunshu=refusal.detail,
+            extra_headers={
+                **rid,
+                "X-Yunshu-Queue-Position": str(ahead),
+                "X-Yunshu-Queue-Est-Wait-Ms": str(wait_ms),
+            },
+        )
+
     async def _serve(self, scope, receive, send, info: RequestInfo, tracked: bool):
         send_lock = asyncio.Lock()
         state: dict[str, Any] = {
@@ -509,6 +601,9 @@ class YunshuExtensionsMiddleware:
             "done": False,
             "task": None,
             "sent_stats": False,
+            "committed": False,  # the response start has gone out
+            "swallow": False,  # the deadline answered for the app: drop what it sends
+            "events": 0,  # SSE events forwarded (the Responses sequence number)
         }
         rid_header = (REQUEST_ID_HEADER.lower().encode(), info.request_id.encode())
         stats_path = info.path in STATS_PATHS
@@ -539,6 +634,60 @@ class YunshuExtensionsMiddleware:
                     )
                 except Exception:
                     return
+
+        async def deadline_loop() -> None:
+            from .admission import (
+                deadline_message,
+                deadline_stream_event,
+            )
+            from .error_envelope import format_error_response
+
+            assert info.deadline_ms is not None
+            left = info.deadline_ms / 1000.0 - (time.perf_counter() - info.arrived)
+            await asyncio.sleep(max(left, 0.0))
+            if state["done"] or state["swallow"]:
+                return
+            info.deadline_exceeded = True
+            # Stop the generation wherever it is: queued (applied when it registers) or running.
+            info.cancel_requested = True
+            if info.gen is not None:
+                info.gen.cancelled = True
+                info.gen.cancel_event.set()
+            state["swallow"] = True
+            state["done"] = True
+            if state["committed"]:
+                await emit(
+                    {
+                        "type": "http.response.body",
+                        "body": deadline_stream_event(
+                            kind, info.deadline_ms, info.request_id, state["events"]
+                        ),
+                        "more_body": True,
+                    }
+                )
+                # End the response only once the app has wound down (its generators close
+                # and release their request): completing it first lets the layers above
+                # cancel the app mid-iteration, leaving its body generator unfinalized.
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(app_done.wait(), _DEADLINE_GRACE_S)
+                await emit(
+                    {"type": "http.response.body", "body": b"", "more_body": False}
+                )
+                return
+            info.status = 504
+            resp = format_error_response(
+                info.path,
+                deadline_message(info.deadline_ms),
+                504,
+                code="deadline_exceeded",
+                request_id=info.request_id,
+                x_yunshu={
+                    "reason": "deadline_exceeded",
+                    "deadline_ms": info.deadline_ms,
+                },
+                extra_headers={REQUEST_ID_HEADER: info.request_id},
+            )
+            await resp(scope, receive, emit)
 
         def attach(obj: dict, usage: dict) -> None:
             """Put ``x_yunshu`` inside a usage object (extra fields there are tolerated
@@ -627,6 +776,8 @@ class YunshuExtensionsMiddleware:
             return ("\n\n".join(out) + "\n\n").encode("utf-8")
 
         async def wrapped_send(message) -> None:
+            if state["swallow"]:
+                return
             mtype = message["type"]
             if mtype == "http.response.start":
                 info.status = int(message["status"])
@@ -658,6 +809,7 @@ class YunshuExtensionsMiddleware:
                     return
                 elif tracked:
                     headers.extend(queue_headers(info))
+                state["committed"] = True
                 await emit({**message, "headers": headers})
                 return
             if mtype != "http.response.body":
@@ -669,6 +821,7 @@ class YunshuExtensionsMiddleware:
                 body = message.get("body", b"")
                 if body:
                     message = {**message, "body": rewrite_sse(body)}
+                    state["events"] += body.count(b"\n\n")
                 if not more:
                     state["done"] = True
                 await emit(message)
@@ -712,6 +865,7 @@ class YunshuExtensionsMiddleware:
                     headers.extend(stats_headers(stats, info))
                 headers.extend(queue_headers(info))
                 headers.append((b"content-length", str(len(body)).encode()))
+                state["committed"] = True
                 await emit({**start, "headers": headers})
                 await emit({"type": "http.response.body", "body": body})
                 return
@@ -719,13 +873,24 @@ class YunshuExtensionsMiddleware:
                 state["done"] = True
             await emit(message)
 
+        app_done = asyncio.Event()
+        deadline_task = (
+            asyncio.create_task(deadline_loop())
+            if info.deadline_ms is not None
+            else None
+        )
         try:
             await self.app(scope, receive, wrapped_send)
         finally:
             state["done"] = True
-            task = state["task"]
-            if task is not None:
-                task.cancel()
+            app_done.set()
+            tasks: list[Any] = [state["task"], deadline_task]
+            for task in tasks:
+                if task is None:
+                    continue
+                # a deadline answer already under way is let finish, not cut short
+                if not (task is deadline_task and state["swallow"]):
+                    task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await task
 

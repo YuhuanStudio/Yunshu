@@ -69,6 +69,8 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 |---|---|---|---|
 | `YUNSHU_CONFIG` | path | unset | TOML config file with YUNSHU_* settings (lower precedence than the environment). |
 | `YUNSHU_MAX_CONCURRENT` | int | unset | Cap on concurrently admitted requests. Unset: adaptive (starts at 8). |
+| `YUNSHU_QUEUE_LIMIT` | int | 64 | Generation requests (chat, completions, messages, responses) in flight at once, running and waiting together. The next one is refused at once with 429, `Retry-After` and the queue depth in `error.x_yunshu` instead of waiting without bound. 0 = no limit. |
+| `YUNSHU_MEMORY_PRESSURE_REJECT` | float | 0.95 | Share of the Metal working set (MLX active memory / recommended working set) above which, while other requests are running, a new generation request is refused with 503 and `Retry-After` (it would OOM the process). An idle server never refuses. 0 = off. |
 | `YUNSHU_COMPLETION_BATCH_SIZE` | int | 32 | Text engine: maximum sequences decoded together. |
 | `YUNSHU_DEFAULT_MAX_TOKENS` | int | 512 | Completion length when a request omits max_tokens. |
 | `YUNSHU_MAX_PREFILL_TOKENS` | int | 0 | Reject prompts longer than this many tokens (0: no limit beyond the model context). |

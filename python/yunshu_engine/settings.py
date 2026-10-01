@@ -119,6 +119,8 @@ _add("YUNSHU_WARM_PROMPTS", "str", None, "Prompts prefilled at startup to warm t
 # ── server ─────────────────────────────────────────────────────────────
 _add("YUNSHU_CONFIG", "path", None, "TOML config file with YUNSHU_* settings (lower precedence than the environment).", "server")
 _add("YUNSHU_MAX_CONCURRENT", "int", None, "Cap on concurrently admitted requests. Unset: adaptive (starts at 8).", "server", minimum=1)
+_add("YUNSHU_QUEUE_LIMIT", "int", 64, "Generation requests (chat, completions, messages, responses) in flight at once, running and waiting together. The next one is refused at once with 429, `Retry-After` and the queue depth in `error.x_yunshu` instead of waiting without bound. 0 = no limit.", "server", minimum=0)
+_add("YUNSHU_MEMORY_PRESSURE_REJECT", "float", 0.95, "Share of the Metal working set (MLX active memory / recommended working set) above which, while other requests are running, a new generation request is refused with 503 and `Retry-After` (it would OOM the process). An idle server never refuses. 0 = off.", "server", minimum=0.0)
 _add("YUNSHU_COMPLETION_BATCH_SIZE", "int", 32, "Text engine: maximum sequences decoded together.", "server", minimum=1)
 _add("YUNSHU_DEFAULT_MAX_TOKENS", "int", 512, "Completion length when a request omits max_tokens.", "server", minimum=1)
 _add("YUNSHU_MAX_PREFILL_TOKENS", "int", 0, "Reject prompts longer than this many tokens (0: no limit beyond the model context).", "server", minimum=0)

@@ -53,6 +53,27 @@ _MAX_STREAMING_TEXT_BUFFER = 1 * 1024 * 1024  # 1MB safety limit
 _TRUNCATE_KEEP = 512 * 1024  # Keep last 512KB for stop-sequence detection
 
 
+def _apply_token_budget(req: ChatCompletionRequest, prompt_tokens: int, engine) -> None:
+    """Clamp ``max_tokens`` / ``thinking_budget`` to the room the prompt leaves in the context
+    window (reported in ``x_yunshu.budget``); a request that fits is untouched."""
+    from ..token_budget import plan_for_engine
+
+    budget = plan_for_engine(
+        prompt_tokens,
+        req.effective_max_tokens(),
+        req.thinking_budget,
+        req.model,
+        engine,
+    )
+    if budget is None or not budget.clamped:
+        return
+    if req.max_completion_tokens is not None:
+        req.max_completion_tokens = budget.max_tokens_granted
+    else:
+        req.max_tokens = budget.max_tokens_granted
+    req.thinking_budget = budget.thinking_budget_granted
+
+
 def _validate_sampling_params(
     temperature: float, max_tokens: int, top_p: float
 ) -> None:
@@ -1925,7 +1946,9 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
             _cap = get_max_prefill_tokens()
             # Provably safe if the upper bound clears both limits with 10% headroom
             # (covers chat-template framing tokens the char count doesn't see).
-            _ctx_safe = (_max_ctx == 0) or (char_upper < _max_ctx * 0.9)
+            _ctx_safe = (_max_ctx == 0) or (
+                char_upper + (req.effective_max_tokens() or 0) < _max_ctx * 0.9
+            )
             _cap_safe = char_upper < _cap * 0.9
             if not (_ctx_safe and _cap_safe):
                 # Near a limit — compute the precise count and enforce both guards.
@@ -1939,6 +1962,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                 # Reject huge under-window prompts that would OOM-crash the prefill
                 # (uncatchable process death) before we attempt them.
                 validate_prefill_memory(est_tokens)
+                _apply_token_budget(req, est_tokens, engine)
     except HTTPException:
         raise
     except Exception:
@@ -2427,6 +2451,7 @@ async def _handle_vlm_chat(
             _vlm_est += _img * IMAGE_TOKEN_ESTIMATE
         validate_context_window(_vlm_est, req.model, vlm_engine)
         validate_prefill_memory(_vlm_est)
+        _apply_token_budget(req, _vlm_est, vlm_engine)
     except HTTPException:
         raise
     except Exception:

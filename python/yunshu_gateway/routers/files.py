@@ -13,6 +13,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
+from yunshu_kv.disk_budget import is_enospc
+
 from ..files_store import FileStore, FileStoreError, get_store
 from .models import _check_permission
 
@@ -192,6 +194,16 @@ async def create_file(request: Request):
         )
     except FileStoreError as exc:
         return error_response(request, exc.status, exc.message, exc.code)
+    except OSError as exc:
+        if not is_enospc(exc):
+            raise
+        # nothing was kept: the store removes its temp file and the half-written blob
+        return error_response(
+            request,
+            507,
+            "The server's disk is full, the file was not stored; free space and retry",
+            "insufficient_storage",
+        )
     return JSONResponse(anthropic_file(meta) if anth else openai_file(meta))
 
 

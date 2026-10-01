@@ -42,6 +42,10 @@ class ActiveGeneration:
     owner: str | None = None  # actor/key that started it (for per-request cancel auth)
     client_request_id: str | None = None  # X-Request-Id of the HTTP request
     priority: int = 0
+    # Set when someone asked for the cancel (the cancel endpoints, a deadline); a disconnect or
+    # the end of a stream also sets ``cancel_event`` but is not this. The gateway reports it as
+    # ``x_yunshu.cancelled`` so a truncated answer is never mistaken for a finished one.
+    cancelled: bool = False
 
     @property
     def stats(self):
@@ -85,6 +89,7 @@ class RequestTracker:
                 info.gen = gen  # type: ignore[attr-defined]
                 info.engine_request_id = request_id  # type: ignore[attr-defined]
                 if getattr(info, "cancel_requested", False):
+                    gen.cancelled = True
                     gen.cancel_event.set()  # cancelled before it reached the engine
             except Exception:
                 logger.debug("request info link failed", exc_info=True)
@@ -149,6 +154,7 @@ class RequestTracker:
             gen = self._active.get(self._aliases.get(request_id, request_id))
         if gen is None:
             return False
+        gen.cancelled = True
         gen.cancel_event.set()
         logger.info(f"Generation cancelled: {request_id}")
         return True
@@ -159,6 +165,7 @@ class RequestTracker:
             gens = list(self._active.values())
         count = 0
         for gen in gens:
+            gen.cancelled = True
             gen.cancel_event.set()
             count += 1
         logger.info(f"Cancelled all generations: {count}")

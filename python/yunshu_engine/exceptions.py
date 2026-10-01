@@ -7,6 +7,9 @@ Cache corruption patterns enable automatic scheduler recovery.
 """
 
 
+import builtins
+
+
 class YunshuError(Exception):
     def __init__(self, message: str, details: dict | None = None):
         super().__init__(message)
@@ -193,3 +196,13 @@ CACHE_CORRUPTION_PATTERNS = [
 
 def is_cache_corruption_error(error: Exception) -> bool:
     return any(p in str(error) for p in CACHE_CORRUPTION_PATTERNS)
+
+
+# ── Admission ──
+
+
+class MemoryGuardRejectedError(builtins.MemoryError):
+    """The memory guard refused a request before it started (not enough memory for its
+    prompt + decode KV). The *builtin* ``MemoryError`` (this module defines its own, different
+    ``MemoryError``) so every route answers it the way it answers an out-of-memory generation
+    (507 / an ``oom`` error event), never as an empty completion."""
