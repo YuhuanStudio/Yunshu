@@ -37,9 +37,8 @@ def test_download_has_size_cap_and_skips_insecure_retry_on_oversize():
     # a configurable cap is read and enforced
     assert "YUNSHU_VLM_MAX_IMAGE_BYTES" in code
     # Content-Length pre-check AND streaming byte-count enforcement
-    assert 'resp.headers.get("Content-Length")' in code
-    assert "_written > _cap" in code
-    # the unbounded copyfileobj is gone
-    assert "shutil.copyfileobj(resp, fh)" not in code
+    # (Content-Length pre-check and the streaming byte count live in netguard.download_to_file)
+    assert "download_to_file" in code
+    assert "shutil.copyfileobj" not in code
     # a size violation bypasses the insecure-SSL retry (no re-download of the oversized body)
     assert 'if "size limit" in str(e):' in code

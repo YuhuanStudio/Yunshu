@@ -18,8 +18,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from yunshu_engine import settings
-
-from .netguard import domain_matches
+from yunshu_engine.netguard import domain_matches
 
 MAX_QUERY_LEN = 400
 PROVIDER_ORDER = ("searxng", "brave", "tavily", "exa")
