@@ -536,9 +536,12 @@ class Server:
                 if probe.connect_ex(("127.0.0.1", cand)) != 0:
                     break
         else:
-            raise RuntimeError(f"ports {port}..{port + 9} all in use; refusing to start")
+            raise RuntimeError(
+                f"ports {port}..{port + 9} all in use; refusing to start"
+            )
         if cand != port:
             print(f"port {port} in use; using {cand}", flush=True)
+        port = cand
         self.arm, self.model, self.port = arm, model, cand
         self.url = f"http://127.0.0.1:{port}"
         e = {k: v for k, v in os.environ.items() if not k.startswith("YUNSHU_")}
@@ -810,7 +813,26 @@ def cmd_score(a) -> int:
     return 0
 
 
+def arm_attempt_counts(bench: str, arm: str) -> dict[str, int]:
+    """Include failed requests that accuracy's completed-pair filter excludes."""
+    rows = [r for r in read_jsonl(result_path(bench, arm)) if r.get("kind") == "q"]
+    completed = {r["id"] for r in rows if not r.get("error")}
+    attempted = {r["id"] for r in rows}
+    return {
+        "attempts": len(rows),
+        "error_attempts": sum(bool(r.get("error")) for r in rows),
+        "attempted_items": len(attempted),
+        "unresolved_items": len(attempted - completed),
+    }
+
+
 def cmd_report(a) -> int:
+    for name in (a.ref, a.cand):
+        counts = arm_attempt_counts(a.bench, name)
+        print(
+            f"  {name}: attempts {counts['attempts']}, error_attempts {counts['error_attempts']}, "
+            f"attempted_items {counts['attempted_items']}, unresolved_items {counts['unresolved_items']}"
+        )
     ref, cand = load_arm(a.bench, a.ref), load_arm(a.bench, a.cand)
     ids = sorted(set(ref) & set(cand))
     key = a.field

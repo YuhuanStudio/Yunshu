@@ -88,27 +88,35 @@ class Server:
         if src and self.kind == "yunshu":
             env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
         self.log.parent.mkdir(parents=True, exist_ok=True)
-        f = self.log.open("ab")
-        self.proc = subprocess.Popen(
-            self.command(),
-            stdout=f,
-            stderr=subprocess.STDOUT,
-            env=env,
-            start_new_session=True,
-        )
-        t0 = time.time()
-        while time.time() - t0 < ready_timeout:
-            if self.proc.poll() is not None:
-                raise RuntimeError(f"server exited early rc={self.proc.returncode}")
-            try:
-                with urllib.request.urlopen(self.url + "/v1/models", timeout=3) as r:
-                    if r.status == 200:
-                        self.models = json.load(r)
-                        self.ready_s = time.time() - t0
-                        return self
-            except Exception:
-                time.sleep(2)
-        raise RuntimeError("server not ready in time")
+        try:
+            with self.log.open("ab") as log_file:
+                self.proc = subprocess.Popen(
+                    self.command(),
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    env=env,
+                    start_new_session=True,
+                )
+            t0 = time.monotonic()
+            while time.monotonic() - t0 < ready_timeout:
+                if self.proc.poll() is not None:
+                    raise RuntimeError(f"server exited early rc={self.proc.returncode}")
+                try:
+                    with urllib.request.urlopen(
+                        self.url + "/v1/models", timeout=3
+                    ) as r:
+                        if r.status == 200:
+                            self.models = json.load(r)
+                            self.ready_s = time.monotonic() - t0
+                            return self
+                except Exception:
+                    time.sleep(2)
+            raise RuntimeError("server not ready in time")
+        except BaseException:
+            # start() runs before callers enter their cleanup block. A timeout or
+            # interrupted startup must not leave our model process on the GPU.
+            self.kill()
+            raise
 
     @property
     def model_id(self) -> str:
