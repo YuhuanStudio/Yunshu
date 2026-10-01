@@ -397,7 +397,11 @@ class RoundDriver:
         if not pick:
             return []
         lg = logits(self.lm, hidden[mx.array(pick, dtype=mx.int32)])
-        greedy = mx.argmax(lg, axis=-1)
+        # Serial greedy decoding samples ``logits - logsumexp(logits)`` in the logits
+        # dtype, so its argmax runs over rounded log-probabilities: two adjacent bf16
+        # logits can land on one value and the tie goes to the lower id. Take the same
+        # argmax so a verified row picks the token serial decode would (omlx 26375259).
+        greedy = mx.argmax(lg - mx.logsumexp(lg, axis=-1, keepdims=True), axis=-1)
         draws = []
         for it, off, n in outs:
             row = it.row
