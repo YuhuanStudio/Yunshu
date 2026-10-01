@@ -12,13 +12,19 @@ import re
 import time
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin
 
 import httpx
 
 from yunshu_engine import settings
-
-from .netguard import UrlNotAllowedError, domain_matches, resolve_target
+from yunshu_engine.netguard import (
+    UrlNotAllowedError,
+    domain_matches,
+    join_url,
+    parse_url,
+    pin_request,
+    resolve_target,
+)
 
 MAX_URL_LEN = 250
 MAX_REDIRECTS = 5
@@ -191,7 +197,31 @@ async def fetch_url(
     max_content_chars: int | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> FetchResult:
-    """Download ``url`` and return its text. Raises :class:`FetchError` with a spec error code."""
+    """Download ``url`` and return its text. Raises :class:`FetchError` with a spec error code.
+
+    One wall-clock deadline (``YUNSHU_WEB_FETCH_TIMEOUT``) covers DNS, every redirect hop, the
+    body and the HTML parse."""
+    try:
+        async with asyncio.timeout(float(settings.get("YUNSHU_WEB_FETCH_TIMEOUT"))):
+            return await _fetch_url(
+                url,
+                allowed_domains=allowed_domains,
+                blocked_domains=blocked_domains,
+                max_content_chars=max_content_chars,
+                client=client,
+            )
+    except TimeoutError as e:
+        raise FetchError("url_not_accessible", "timed out") from e
+
+
+async def _fetch_url(
+    url: str,
+    *,
+    allowed_domains: list[str] | None = None,
+    blocked_domains: list[str] | None = None,
+    max_content_chars: int | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> FetchResult:
     if not settings.get("YUNSHU_WEB_FETCH"):
         raise FetchError("unavailable", "web_fetch is disabled (YUNSHU_WEB_FETCH=0)")
     if not isinstance(url, str) or not url.strip():
@@ -208,11 +238,11 @@ async def fetch_url(
     cur = url.strip()
     hops: list[str] = []
     own = client is None
-    client = client or httpx.AsyncClient(follow_redirects=False)
+    client = client or httpx.AsyncClient(follow_redirects=False, trust_env=False)
     try:
         for _ in range(MAX_REDIRECTS + 1):
             try:
-                host = urlsplit(cur).hostname or ""
+                host = parse_url(cur).hostname or ""
                 if allowed_domains and not domain_matches(host, allowed_domains):
                     raise FetchError(
                         "url_not_allowed", f"{host} is not in allowed_domains"
@@ -222,21 +252,12 @@ async def fetch_url(
                 tgt = await resolve_target(cur, allow_private=allow_private)
             except UrlNotAllowedError as e:
                 raise FetchError("url_not_allowed", str(e)) from e
-            ip = f"[{tgt.ip}]" if ":" in tgt.ip else tgt.ip
-            parts = urlsplit(cur)
-            pinned = f"{tgt.scheme}://{ip}:{tgt.port}{parts.path or '/'}" + (
-                f"?{parts.query}" if parts.query else ""
-            )
-            default_port = 443 if tgt.scheme == "https" else 80
-            hostport = (
-                tgt.host if tgt.port == default_port else f"{tgt.host}:{tgt.port}"
-            )
+            pinned, pin_headers, ext = pin_request(tgt)
             headers = {
-                "Host": hostport,
+                **pin_headers,
                 "User-Agent": USER_AGENT,
                 "Accept": "text/html,text/plain,*/*;q=0.5",
             }
-            ext = {"sni_hostname": tgt.host} if tgt.scheme == "https" else {}
             remaining = max(0.5, deadline - time.monotonic())
             try:
                 async with client.stream(
@@ -249,7 +270,10 @@ async def fetch_url(
                         307,
                         308,
                     ) and resp.headers.get("location"):
-                        cur = urljoin(cur, resp.headers["location"])
+                        try:
+                            cur = join_url(cur, resp.headers["location"])
+                        except UrlNotAllowedError as e:
+                            raise FetchError("url_not_allowed", str(e)) from e
                         hops.append(cur)
                         continue
                     if resp.status_code == 429:

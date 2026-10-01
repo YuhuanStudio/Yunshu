@@ -4,7 +4,7 @@ from __future__ import annotations
 
 Provides token-level constraint masking for:
 1. RegexConstraint — regex pattern enforcement (e.g., date, email, phone)
-2. LarkGrammarConstraint — context-free grammar via Lark parser
+2. CfgGrammarConstraint — context-free grammar (Lark syntax) via llguidance
 3. ChoiceConstraint — enumeration from a fixed list of strings
 4. ConstraintFactory — unified interface matching grammar_type to constraint
 
@@ -17,12 +17,13 @@ All constraints implement the same interface as JsonSchemaConstraint:
 Integration: plug into ConstrainedSampler alongside JsonSchemaConstraint.
 """
 
-import contextlib
 import logging
 import re
 import re._parser as _sre_parse
 import weakref
 from typing import Any
+
+from yunshu_engine.constraint_eos import normalize_eos_ids
 
 logger = logging.getLogger(__name__)
 
@@ -30,76 +31,102 @@ logger = logging.getLogger(__name__)
 # ── Regex DFA for prefix matching ────────────────────────────────────────────
 
 
-class _ExceptChars:
-    """Compact representation for 'all chars except these'.
+class UnsupportedRegexError(ValueError):
+    """The regex uses syntax outside the supported subset (or is invalid).
 
-    Avoids materialising sets of ~1M codepoints for NOT_LITERAL, negated []
-    character classes, and CATEGORY_NOT_* patterns.  The subset construction
-    resolves these against the query range at DFA build time.
+    Supported subset (everything is matched with ``re.fullmatch`` semantics):
+    literals, ``.``, character classes (ranges, negation, ``\\d \\w \\s`` and their
+    negations with Python's Unicode semantics), alternation, capturing /
+    non-capturing groups, scoped and global ``i`` / ``s`` / ``a`` / ``u`` / ``x``
+    flags, the quantifiers ``* + ? {n} {n,} {n,m}`` (greedy or lazy), and the
+    anchors ``^`` / ``\\A`` at the very start and ``$`` / ``\\Z`` at the very end.
+    Rejected, never approximated: back-references, lookahead / lookbehind,
+    conditionals, atomic groups, possessive quantifiers, word-boundary and
+    multiline anchors, anchors in the middle of the pattern, the ``m`` / ``L`` flags.
     """
 
-    __slots__ = ("excluded",)
 
-    def __init__(self, excluded: set[int]) -> None:
-        self.excluded = excluded
+_REGEX_SUPPORTED_FLAGS = re.IGNORECASE | re.DOTALL | re.ASCII | re.UNICODE | re.VERBOSE
 
-    def __contains__(self, item: int) -> bool:
-        return item not in self.excluded
 
-    def __len__(self) -> int:
-        # Not meaningful but prevents empty-set checks from short-circuiting.
-        return 1
+class _CharLabel:
+    """A symbolic single-character predicate: no alphabet is ever enumerated."""
 
-    def intersect(self, query_range: set[int]) -> set[int]:
-        """Return the members of *query_range* that are not excluded."""
-        return query_range - self.excluded
+    __slots__ = ("ranges", "negate", "pred", "cache")
+
+    def __init__(
+        self,
+        ranges: list[tuple[int, int]] | None = None,
+        negate: bool = False,
+        pred: Any = None,
+    ) -> None:
+        self.ranges = ranges or []
+        self.negate = negate
+        self.pred = pred  # compiled single-char ``re`` pattern (flags / categories)
+        self.cache: dict[int, bool] = {}
+
+    def matches(self, cp: int) -> bool:
+        if self.pred is not None:
+            hit = self.cache.get(cp)
+            if hit is None:
+                hit = self.pred.fullmatch(chr(cp)) is not None
+                self.cache[cp] = hit
+            return hit
+        inside = False
+        for lo, hi in self.ranges:
+            if lo <= cp <= hi:
+                inside = True
+                break
+        return inside != self.negate
+
+    def satisfiable(self) -> bool:
+        if self.pred is not None:
+            return True
+        return bool(self.ranges) or self.negate
 
 
 class _RegexDFA:
-    """Builds a DFA from a regex pattern to support prefix-valid checks.
+    """Exact, lazily built DFA over a symbolic-alphabet NFA for a regex.
 
-    The key capability: given a partial string, determine which characters
-    can be appended so that the result is still a prefix of some string that
-    fully matches the pattern.
-
-    This solves the fundamental problem with using re.match() for prefix
-    checking: re.match(r'\\d{3}', '1') returns None because the pattern
-    requires 3 digits, but '1' is a perfectly valid prefix of '123'.
-
-    Approach:
-    1. Parse regex via _sre_parse to get the parse tree
-    2. Build an NFA with epsilon transitions
-    3. Convert to DFA via subset construction
-    4. For each DFA state, compute the set of characters that transition
-       to another (non-dead) state
+    Single-character transitions are predicates (code-point ranges, negation,
+    or Python's own ``re`` for categories / flags), so the automaton is exact
+    for every Unicode character, not for a sampled subset.  DFA states are
+    subsets of NFA states created on demand while stepping.
     """
+
+    # SECURITY (ReDoS/DoS): a user-supplied regex like "a{100000000}" or
+    # nested "(a{5000}){5000}" materializes one NFA copy per repeat; cap states.
+    _MAX_NFA_STATES = 200_000
 
     def __init__(self, pattern: str) -> None:
         self._pattern = pattern
-        self._compiled = re.compile(pattern)
-        # Build DFA
-        self._nfa_start: int = 0
-        self._nfa_accept: set[int] = set()
-        self._nfa_transitions: dict[
-            int, list[tuple[set[int] | _ExceptChars | None, int]]
-        ] = {}
+        try:
+            self._compiled = re.compile(pattern)
+            parsed = _sre_parse.parse(pattern)
+        except (re.error, RecursionError, OverflowError) as exc:
+            raise UnsupportedRegexError(f"invalid regex: {exc}") from exc
+        self._nfa_transitions: dict[int, list[tuple[_CharLabel, int]]] = {}
         self._nfa_epsilon: dict[int, list[int]] = {}
-        self._dfa_transitions: dict[frozenset[int], dict[int, frozenset[int]]] = {}
-        self._dfa_accept_states: set[frozenset[int]] = set()
-        self._dfa_start: frozenset[int] = frozenset()
         self._nfa_counter = 0
-        self._build_dfa(pattern)
+        self._closure_cache: dict[frozenset[int], frozenset[int]] = {}
+        self._trans: dict[frozenset[int], dict[int, frozenset[int] | None]] = {}
+        flags = int(parsed.state.flags)
+        if flags & re.LOCALE:
+            raise UnsupportedRegexError("regex flag L (locale) is not supported")
+        if flags & re.MULTILINE:
+            raise UnsupportedRegexError("regex flag m (multiline) is not supported")
+        s, e = self._seq(list(parsed), flags, parsed.state, top=True)
+        self._nfa_accept = e
+        self._dfa_start = self._closure(frozenset({s}))
+        self._live_nfa = self._compute_live()
+        if not (self._dfa_start & self._live_nfa):
+            raise UnsupportedRegexError("regex matches no string")
 
-    # SECURITY (ReDoS/DoS): a user-supplied regex like "a{100000000}" or
-    # nested "(a{5000}){5000}" materializes one NFA copy per repeat → unbounded
-    # state allocation + subset-construction blowup that hangs the serial executor
-    # before a single token is generated. Cap total NFA states; _new_nfa_state
-    # raises the moment the bound is crossed, short-circuiting the build loops.
-    _MAX_NFA_STATES = 200_000
+    # ── NFA construction (Thompson, fresh states per fragment) ─────────────
 
-    def _new_nfa_state(self) -> int:
+    def _new_state(self) -> int:
         if self._nfa_counter >= self._MAX_NFA_STATES:
-            raise ValueError(
+            raise UnsupportedRegexError(
                 f"regex too complex: NFA exceeds {self._MAX_NFA_STATES} states "
                 "(repeat counts too large)"
             )
@@ -107,491 +134,271 @@ class _RegexDFA:
         self._nfa_counter += 1
         return s
 
-    def _build_dfa(self, pattern: str) -> None:
-        """Parse pattern and build DFA via NFA + subset construction."""
+    def _eps(self, a: int, b: int) -> None:
+        self._nfa_epsilon.setdefault(a, []).append(b)
+
+    def _edge(self, a: int, label: _CharLabel, b: int) -> None:
+        self._nfa_transitions.setdefault(a, []).append((label, b))
+
+    def _pred_label(self, state: Any, item: tuple, flags: int) -> _CharLabel:
+        import re._compiler as _sre_compile
+
+        sub = _sre_parse.SubPattern(state, [item])
         try:
-            parsed = _sre_parse.parse(pattern)
-        except re.error:
-            # If parsing fails, fall back — DFA will be empty, constraint
-            # will return None (unrestricted) for safety.
-            return
+            pred = _sre_compile.compile(sub, flags)
+        except re.error as exc:  # pragma: no cover - defensive
+            raise UnsupportedRegexError(f"invalid regex: {exc}") from exc
+        return _CharLabel(pred=pred)
 
-        # Build NFA from parse tree
-        start = self._new_nfa_state()
-        accept = self._new_nfa_state()
-        self._nfa_accept = {accept}
-        self._nfa_start = start
-        self._build_nfa(parsed, start, accept)
-
-        # Convert NFA to DFA via subset construction
-        self._subset_construction()
-
-    def _build_nfa(
-        self,
-        parsed: _sre_parse.SubPattern,
-        start: int,
-        accept: int,
-    ) -> None:
-        """Recursively build NFA fragments from _sre_parse output."""
-        items = list(parsed)
-        if not items:
-            # Empty pattern — epsilon transition
-            self._nfa_epsilon.setdefault(start, []).append(accept)
-            return
-
-        # Build chain: connect each item sequentially
-        current = start
-        for i, item in enumerate(items):
-            op, av = item
-            if op == _sre_parse.LITERAL:
-                # Single character match
-                next_state = accept if i == len(items) - 1 else self._new_nfa_state()
-                self._nfa_transitions.setdefault(current, []).append(
-                    (set([av]), next_state)
-                )
-                current = next_state
-
-            elif op == _sre_parse.NOT_LITERAL:
-                next_state = accept if i == len(items) - 1 else self._new_nfa_state()
-                # Use a compact "except" representation instead of expanding
-                # 1.1M Unicode codepoints. The subset construction resolves
-                # this against the query range at DFA build time.
-                self._nfa_transitions.setdefault(current, []).append(
-                    (_ExceptChars({av}), next_state)
-                )
-                current = next_state
-
-            elif op == _sre_parse.ANY:
-                # Match any character (except newline by default)
-                next_state = accept if i == len(items) - 1 else self._new_nfa_state()
-                self._nfa_transitions.setdefault(current, []).append(
-                    (_ExceptChars({ord("\n")}), next_state)
-                )
-                current = next_state
-
-            elif op == _sre_parse.IN:
-                next_state = accept if i == len(items) - 1 else self._new_nfa_state()
-                char_set = self._parse_charset(av)
-                self._nfa_transitions.setdefault(current, []).append(
-                    (char_set, next_state)
-                )
-                current = next_state
-
-            elif op == _sre_parse.BRANCH:
-                # av is (None, [branch1, branch2, ...])
-                _, branches = av
-                next_state = accept if i == len(items) - 1 else self._new_nfa_state()
-                for branch in branches:
-                    self._build_nfa(branch, current, next_state)
-                current = next_state
-
-            elif op == _sre_parse.SUBPATTERN:
-                # av is (group, add_flags, del_flags, parsed_subpattern)
-                _, _, _, parsed_sub = av
-                next_state = accept if i == len(items) - 1 else self._new_nfa_state()
-                self._build_nfa(parsed_sub, current, next_state)
-                current = next_state
-
-            elif op == _sre_parse.MAX_REPEAT or op == _sre_parse.MIN_REPEAT:
-                # av is (min, max, parsed_subpattern)
-                min_count, max_count, parsed_sub = av
-                next_state = accept if i == len(items) - 1 else self._new_nfa_state()
-                self._build_repeat_nfa(
-                    parsed_sub, min_count, max_count, current, next_state
-                )
-                current = next_state
-
-            elif op == _sre_parse.AT:
-                # Anchors (^, $, \b, etc.) — treat as epsilon for
-                # prefix matching since we track state per character
-                if i == len(items) - 1:
-                    self._nfa_epsilon.setdefault(current, []).append(accept)
-                # Otherwise just continue (anchor doesn't consume input)
-
-            elif op == _sre_parse.ASSERT or op == _sre_parse.ASSERT_NOT:
-                # Lookahead/lookbehind — treat as epsilon (approximate)
-                if i == len(items) - 1:
-                    self._nfa_epsilon.setdefault(current, []).append(accept)
-
-            else:
-                # Unknown op — epsilon as fallback
-                if i == len(items) - 1:
-                    self._nfa_epsilon.setdefault(current, []).append(accept)
-
-    def _build_repeat_nfa(
-        self,
-        parsed: _sre_parse.SubPattern,
-        min_count: int,
-        max_count: int,
-        start: int,
-        accept: int,
-    ) -> None:
-        """Build NFA for repetition (quantifier) constructs.
-
-        Handles: *, +, ?, {n}, {n,}, {n,m}
-        Strategy:
-        - Build `min_count` mandatory copies in sequence
-        - For optional copies (between min and max), add epsilon bypass
-        - For unbounded (max == _sre_parse.MAXREPEAT), loop back
-        """
-        if min_count == 0 and max_count == 1:
-            # ? — zero or one
-            self._nfa_epsilon.setdefault(start, []).append(accept)
-            self._build_nfa(parsed, start, accept)
-            return
-
-        if max_count == _sre_parse.MAXREPEAT:
-            # Unbounded: *, +, {n,}
-            # Strategy: chain min mandatory copies, then add a loop
-            if min_count == 0:
-                # * or {0,} — epsilon to accept
-                self._nfa_epsilon.setdefault(start, []).append(accept)
-
-            current = start
-            for _ in range(min_count):
-                next_s = self._new_nfa_state()
-                self._build_nfa(parsed, current, next_s)
-                current = next_s
-
-            # Loop: from current, match one more and loop back
-            self._nfa_epsilon.setdefault(current, []).append(accept)
-            self._build_nfa(parsed, current, current)
-        else:
-            # Bounded: {n,m}
-            # Chain min mandatory copies, then (max - min) optional copies
-            current = start
-            for _ in range(min_count):
-                next_s = self._new_nfa_state()
-                self._build_nfa(parsed, current, next_s)
-                current = next_s
-
-            self._nfa_epsilon.setdefault(current, []).append(accept)
-
-            for _ in range(max_count - min_count):
-                next_s = self._new_nfa_state()
-                self._build_nfa(parsed, current, next_s)
-                self._nfa_epsilon.setdefault(next_s, []).append(accept)
-                current = next_s
-
-    def _parse_charset(self, items: list) -> set[int] | _ExceptChars:
-        """Parse _sre_parse IN items into a set of character ordinals.
-
-        Returns an _ExceptChars for negated char classes to avoid creating
-        huge sets of ~1M elements.
-        """
-        char_set: set[int] = set()
-        # Track whether any _ExceptChars was encountered — if so the final
-        # result is also an _ExceptChars (union of exclusions).
-        except_accum: _ExceptChars | None = None
+    def _label_for(self, op: Any, av: Any, flags: int, state: Any) -> _CharLabel:
+        icase = bool(flags & re.IGNORECASE)
+        if op == _sre_parse.ANY:
+            if flags & re.DOTALL:
+                return _CharLabel(negate=True)
+            return _CharLabel([(10, 10)], negate=True)
+        if icase:
+            return self._pred_label(state, (op, av), flags)
+        if op == _sre_parse.LITERAL:
+            return _CharLabel([(av, av)])
+        if op == _sre_parse.NOT_LITERAL:
+            return _CharLabel([(av, av)], negate=True)
+        # IN
+        ranges: list[tuple[int, int]] = []
         negate = False
-
-        for op, av in items:
-            if op == _sre_parse.NEGATE:
+        for iop, iav in av:
+            if iop == _sre_parse.NEGATE:
                 negate = True
-            elif op == _sre_parse.LITERAL:
-                char_set.add(av)
-            elif op == _sre_parse.RANGE:
-                lo, hi = av
-                char_set.update(range(lo, hi + 1))
-            elif op == _sre_parse.CATEGORY:
-                expanded = self._expand_category(av)
-                if isinstance(expanded, _ExceptChars):
-                    # Merge exclusions
-                    if except_accum is None:
-                        except_accum = _ExceptChars(set(expanded.excluded))
-                    else:
-                        except_accum.excluded.update(expanded.excluded)
-                else:
-                    char_set.update(expanded)
+            elif iop == _sre_parse.LITERAL:
+                ranges.append((iav, iav))
+            elif iop == _sre_parse.RANGE:
+                ranges.append((iav[0], iav[1]))
+            elif iop == _sre_parse.CATEGORY:
+                return self._pred_label(state, (op, av), flags)
             else:
-                pass  # Unknown
+                raise UnsupportedRegexError(
+                    f"unsupported character-class element {iop}"
+                )
+        return _CharLabel(ranges, negate)
 
-        # If we accumulated any _ExceptChars, combine with the explicit set.
-        # The final semantics: match chars NOT in (explicit ∪ exclusions).
-        if except_accum is not None:
-            # The class is (explicit chars) UNION (everything except E), so a char is
-            # excluded only when it is in E and NOT in the explicit set: [\\s\\S] matches
-            # every character, including whitespace.
-            remaining = except_accum.excluded - char_set
-            if negate:
-                # [^...] of that union is exactly the excluded-but-not-explicit chars.
-                return set(remaining)
-            return _ExceptChars(remaining)
+    def _seq(
+        self, items: list, flags: int, state: Any, top: bool = False
+    ) -> tuple[int, int]:
+        s = self._new_state()
+        cur = s
+        n = len(items)
+        for idx, (op, av) in enumerate(items):
+            if op == _sre_parse.AT:
+                begin = av in (_sre_parse.AT_BEGINNING, _sre_parse.AT_BEGINNING_STRING)
+                end = av in (_sre_parse.AT_END, _sre_parse.AT_END_STRING)
+                if (
+                    top
+                    and begin
+                    and all(
+                        i[0] == _sre_parse.AT
+                        and i[1]
+                        in (_sre_parse.AT_BEGINNING, _sre_parse.AT_BEGINNING_STRING)
+                        for i in items[:idx]
+                    )
+                ):
+                    continue
+                if (
+                    top
+                    and end
+                    and all(
+                        i[0] == _sre_parse.AT
+                        and i[1] in (_sre_parse.AT_END, _sre_parse.AT_END_STRING)
+                        for i in items[idx + 1 : n]
+                    )
+                ):
+                    continue
+                raise UnsupportedRegexError(
+                    "unsupported regex anchor (only ^/\\A at the very start and "
+                    "$/\\Z at the very end are supported)"
+                )
+            fs, fe = self._item(op, av, flags, state)
+            self._eps(cur, fs)
+            cur = fe
+        return s, cur
 
-        if negate:
-            # Return compact "except" representation instead of expanding
-            # 65k+ Unicode codepoints.
-            return _ExceptChars(char_set)
-
-        return char_set
-
-    def _expand_category(self, category: int) -> set[int] | _ExceptChars:
-        """Expand _sre_parse category to a set of character ordinals.
-
-        Returns _ExceptChars for negated categories to avoid creating
-        ~65k element sets.
-        """
-        if category == _sre_parse.CATEGORY_DIGIT:
-            return set(range(ord("0"), ord("9") + 1))
-        elif category == _sre_parse.CATEGORY_NOT_DIGIT:
-            return _ExceptChars(set(range(ord("0"), ord("9") + 1)))
-        elif category == _sre_parse.CATEGORY_SPACE:
-            return {ord(c) for c in " \t\n\r\f\v"}
-        elif category == _sre_parse.CATEGORY_NOT_SPACE:
-            return _ExceptChars({ord(c) for c in " \t\n\r\f\v"})
-        elif category == _sre_parse.CATEGORY_WORD:
-            chars: set[int] = set()
-            chars.update(range(ord("a"), ord("z") + 1))
-            chars.update(range(ord("A"), ord("Z") + 1))
-            chars.update(range(ord("0"), ord("9") + 1))
-            chars.add(ord("_"))
-            return chars
-        elif category == _sre_parse.CATEGORY_NOT_WORD:
-            word = (
-                set(range(ord("a"), ord("z") + 1))
-                | set(range(ord("A"), ord("Z") + 1))
-                | set(range(ord("0"), ord("9") + 1))
-                | {ord("_")}
+    def _item(self, op: Any, av: Any, flags: int, state: Any) -> tuple[int, int]:
+        if op in (
+            _sre_parse.LITERAL,
+            _sre_parse.NOT_LITERAL,
+            _sre_parse.ANY,
+            _sre_parse.IN,
+        ):
+            label = self._label_for(op, av, flags, state)
+            s, e = self._new_state(), self._new_state()
+            if label.satisfiable():
+                self._edge(s, label, e)
+            return s, e
+        if op == _sre_parse.BRANCH:
+            s, e = self._new_state(), self._new_state()
+            for branch in av[1]:
+                fs, fe = self._seq(list(branch), flags, state)
+                self._eps(s, fs)
+                self._eps(fe, e)
+            return s, e
+        if op == _sre_parse.SUBPATTERN:
+            _group, add, delete, sub = av
+            new_flags = (flags | add) & ~delete
+            if new_flags & re.LOCALE or new_flags & re.MULTILINE:
+                raise UnsupportedRegexError("regex flag L/m is not supported")
+            return self._seq(list(sub), new_flags, state)
+        if op in (_sre_parse.MAX_REPEAT, _sre_parse.MIN_REPEAT):
+            lo, hi, sub = av
+            sub_items = list(sub)
+            s = self._new_state()
+            cur = s
+            for _ in range(lo):
+                fs, fe = self._seq(sub_items, flags, state)
+                self._eps(cur, fs)
+                cur = fe
+            if hi == _sre_parse.MAXREPEAT:
+                fs, fe = self._seq(sub_items, flags, state)
+                self._eps(cur, fs)
+                self._eps(fe, cur)
+                return s, cur
+            e = self._new_state()
+            for _ in range(hi - lo):
+                self._eps(cur, e)
+                fs, fe = self._seq(sub_items, flags, state)
+                self._eps(cur, fs)
+                cur = fe
+            self._eps(cur, e)
+            return s, e
+        names = {
+            getattr(_sre_parse, n): n
+            for n in (
+                "ASSERT",
+                "ASSERT_NOT",
+                "GROUPREF",
+                "GROUPREF_EXISTS",
+                "ATOMIC_GROUP",
+                "POSSESSIVE_REPEAT",
             )
-            return _ExceptChars(word)
-        return set()
+            if hasattr(_sre_parse, n)
+        }
+        what = {
+            "ASSERT": "lookahead/lookbehind",
+            "ASSERT_NOT": "negative lookahead/lookbehind",
+            "GROUPREF": "back-reference",
+            "GROUPREF_EXISTS": "conditional group",
+            "ATOMIC_GROUP": "atomic group",
+            "POSSESSIVE_REPEAT": "possessive quantifier",
+        }.get(names.get(op, ""), f"construct {op}")
+        raise UnsupportedRegexError(f"unsupported regex syntax: {what}")
 
-    def _epsilon_closure(self, states: frozenset[int]) -> frozenset[int]:
-        """Compute epsilon closure of a set of NFA states."""
+    def _compute_live(self) -> frozenset[int]:
+        reverse: dict[int, list[int]] = {}
+        for a, targets in self._nfa_epsilon.items():
+            for b in targets:
+                reverse.setdefault(b, []).append(a)
+        for a, edges in self._nfa_transitions.items():
+            for _label, b in edges:
+                reverse.setdefault(b, []).append(a)
+        live = {self._nfa_accept}
+        stack = [self._nfa_accept]
+        while stack:
+            node = stack.pop()
+            for prev in reverse.get(node, ()):
+                if prev not in live:
+                    live.add(prev)
+                    stack.append(prev)
+        return frozenset(live)
+
+    # ── lazy DFA ────────────────────────────────────────────────────────────
+
+    def _closure(self, states: frozenset[int]) -> frozenset[int]:
+        cached = self._closure_cache.get(states)
+        if cached is not None:
+            return cached
         closure = set(states)
         stack = list(states)
         while stack:
             s = stack.pop()
-            for ns in self._nfa_epsilon.get(s, []):
+            for ns in self._nfa_epsilon.get(s, ()):
                 if ns not in closure:
                     closure.add(ns)
                     stack.append(ns)
-        return frozenset(closure)
+        out = frozenset(closure)
+        if len(self._closure_cache) < 100_000:
+            self._closure_cache[states] = out
+        return out
 
-    def _subset_construction(self) -> None:
-        """Convert NFA to DFA using subset construction algorithm.
-
-        Uses a two-phase approach to handle large character sets
-        (NOT_LITERAL, negated IN, CATEGORY_NOT_*) efficiently:
-        1. Find all "small" char_sets and iterate those directly.
-        2. For large char_sets, intersect with a limited query range
-           (printable ASCII + common scripts) since valid_next_chars()
-           only ever queries characters within that range.
-        """
-        start_closure = self._epsilon_closure(frozenset({self._nfa_start}))
-        self._dfa_start = start_closure
-
-        # Check if start state is accept (empty string matches)
-        if start_closure & self._nfa_accept:
-            self._dfa_accept_states.add(start_closure)
-
-        # Precompute the query range — characters that valid_next_chars()
-        # will ever ask about. Expanding the full 1.1M-char Unicode range
-        # for NOT_LITERAL is pointless if we only ever query ~2k chars.
-        _QUERY_RANGE = set(range(1, 128))  # ASCII
-        _QUERY_RANGE.update(range(0x4E00, 0x4E00 + 500))  # CJK
-        _QUERY_RANGE.update(range(0xAC00, 0xAC00 + 100))  # Hangul
-        _QUERY_RANGE.update(range(0x3040, 0x30FF))  # Hiragana + Katakana
-        _QUERY_RANGE.update(range(0x0600, 0x0660))  # Arabic
-        _QUERY_RANGE.update(range(0x0E00, 0x0E50))  # Thai
-        _QUERY_RANGE.update(range(0x0900, 0x0970))  # Devanagari
-        _QUERY_RANGE.update(range(0x00C0, 0x0250))  # Latin Extended
-        _QUERY_RANGE.update(range(0x1F600, 0x1F6C8))  # Emoji
-        _QUERY_RANGE.add(ord("\n"))
-        _QUERY_RANGE.add(ord("\t"))
-        _QUERY_RANGE.add(ord("\r"))
-
-        worklist = [start_closure]
-        visited: set[frozenset[int]] = set()
-
-        while worklist:
-            current = worklist.pop()
-            if current in visited:
-                continue
-            visited.add(current)
-
-            # Collect all transitions from NFA states in current DFA state
-            nfa_transitions: list[tuple[set[int] | _ExceptChars | None, int]] = []
-            for nfa_state in current:
-                nfa_transitions.extend(self._nfa_transitions.get(nfa_state, []))
-
-            if not nfa_transitions:
-                continue
-
-            # Build char_to_next by iterating each char_set.
-            # For _ExceptChars (NOT_LITERAL, negated IN), intersect with
-            # _QUERY_RANGE to produce a concrete set. For large concrete
-            # sets (> 256 elements, from CATEGORY_NOT_* etc.), also intersect.
-            char_to_next: dict[int, set[int]] = {}
-            for char_set, target in nfa_transitions:
-                if char_set is None:
-                    continue
-                if isinstance(char_set, _ExceptChars):
-                    effective = char_set.intersect(_QUERY_RANGE)
-                elif len(char_set) > 256:
-                    # Intersect with query range — characters outside this
-                    # range are never queried, so omitting them is safe.
-                    effective = char_set & _QUERY_RANGE
-                else:
-                    effective = char_set
-                for ch in effective:
-                    char_to_next.setdefault(ch, set()).add(target)
-
-            for ch, target_states in char_to_next.items():
-                next_dfa = self._epsilon_closure(frozenset(target_states))
-                self._dfa_transitions.setdefault(current, {})[ch] = next_dfa
-
-                if next_dfa & self._nfa_accept:
-                    self._dfa_accept_states.add(next_dfa)
-
-                if next_dfa not in visited:
-                    worklist.append(next_dfa)
+    def _next(self, state: frozenset[int], cp: int) -> frozenset[int] | None:
+        targets: set[int] = set()
+        for n in state:
+            for label, t in self._nfa_transitions.get(n, ()):
+                if t in self._live_nfa and label.matches(cp):
+                    targets.add(t)
+        if not targets:
+            return None
+        return self._closure(frozenset(targets))
 
     @property
     def has_dfa(self) -> bool:
-        return bool(self._dfa_transitions)
+        return True
 
     def step(self, state: frozenset[int] | None, text: str) -> frozenset[int] | None:
         """Advance ``state`` over ``text``; None when a character has no transition."""
-        if state is None:
-            return None
-        transitions = self._dfa_transitions
         for ch in text:
-            trans = transitions.get(state)
-            if trans is None:
-                return None
-            state = trans.get(ord(ch))
             if state is None:
                 return None
+            cp = ord(ch)
+            memo = self._trans.get(state)
+            if memo is None:
+                memo = self._trans[state] = {}
+            if cp in memo:
+                state = memo[cp]
+            else:
+                nxt = self._next(state, cp)
+                if len(memo) < 4096:
+                    memo[cp] = nxt
+                state = nxt
         return state
 
     def is_accepting(self, state: frozenset[int] | None) -> bool:
-        return state is not None and state in self._dfa_accept_states
+        return state is not None and self._nfa_accept in state
 
     def is_live(self, state: frozenset[int] | None) -> bool:
-        """True when an accept state is reachable from ``state`` (computed once, linear)."""
+        """True when an accept state is reachable from ``state``."""
+        return state is not None and not self._live_nfa.isdisjoint(state)
+
+    def can_extend(self, state: frozenset[int] | None) -> bool:
+        """Exact: can ANY character continue toward an accepting string?"""
         if state is None:
             return False
-        live = self.__dict__.get("_live_states")
-        if live is None:
-            reverse: dict[frozenset[int], list[frozenset[int]]] = {}
-            for src, trans in self._dfa_transitions.items():
-                for dst in trans.values():
-                    reverse.setdefault(dst, []).append(src)
-            live = set(self._dfa_accept_states)
-            stack = list(live)
-            while stack:
-                node = stack.pop()
-                for prev in reverse.get(node, ()):
-                    if prev not in live:
-                        live.add(prev)
-                        stack.append(prev)
-            self._live_states = live
-        return state in live
+        for n in state:
+            for _label, t in self._nfa_transitions.get(n, ()):
+                if t in self._live_nfa:
+                    return True
+        return False
 
     def valid_next_chars_from(
-        self, state: frozenset[int] | None, char_range: list[int]
+        self, state: frozenset[int] | None, char_range: Any
     ) -> set[int]:
         if state is None:
             return set()
-        trans = self._dfa_transitions.get(state, {})
-        return {cp for cp in char_range if cp in trans}
+        edges = [
+            label
+            for n in state
+            for label, t in self._nfa_transitions.get(n, ())
+            if t in self._live_nfa
+        ]
+        if not edges:
+            return set()
+        return {cp for cp in char_range if any(lb.matches(cp) for lb in edges)}
 
     def is_prefix_valid(self, text: str) -> bool:
-        """Check if text is a valid prefix of some string matching the pattern.
-
-        Returns True if text can be extended to match the pattern.
-        """
-        if not self._dfa_transitions:
-            # DFA construction failed — fall back to regex-based check
-            return self._fallback_prefix_check(text)
+        """True when ``text`` can still be extended to a full match."""
         return self.is_live(self.step(self._dfa_start, text))
 
     def is_full_match(self, text: str) -> bool:
-        """Check if text fully matches the pattern."""
-        if not self._dfa_transitions:
-            return bool(self._compiled.fullmatch(text))
+        return self.is_accepting(self.step(self._dfa_start, text))
 
-        state = self._dfa_start
-        for ch in text:
-            code = ord(ch)
-            trans = self._dfa_transitions.get(state, {})
-            if code not in trans:
-                return False
-            state = trans[code]
-        return state in self._dfa_accept_states
-
-    def valid_next_chars(self, text: str, char_range: list[int]) -> set[int]:
-        """Return the set of character ordinals that are valid after text.
-
-        For each character codepoint, checks if text + chr(cp) is a valid
-        prefix or full match.
-        """
-        if not self._dfa_transitions:
-            # DFA construction failed — use fallback
-            return self._fallback_valid_chars(text, char_range)
-
-        # Run the DFA to current position
-        state = self._dfa_start
-        for ch in text:
-            code = ord(ch)
-            trans = self._dfa_transitions.get(state, {})
-            if code not in trans:
-                return set()  # Dead state — no valid continuation
-            state = trans[code]
-
-        # Now check which characters lead to a valid next state
-        trans = self._dfa_transitions.get(state, {})
-        valid = set()
-        for cp in char_range:
-            if cp in trans:
-                valid.add(cp)
-
-        return valid
-
-    def _fallback_prefix_check(self, text: str) -> bool:
-        """Fallback prefix check using regex when DFA construction fails.
-
-        Uses the approach: a string is a valid prefix if either:
-        1. It's a full match, OR
-        2. The pattern's match() consumes the entire string (meaning
-           the string is on a valid path through the pattern)
-        3. As a last resort, check if pattern + '.*' matches the text
-        """
-        if self._compiled.fullmatch(text):
-            return True
-        m = self._compiled.match(text)
-        if m and m.end() == len(text):
-            return True
-        # Try wrapping: check if the text could be a prefix by trying
-        # the original pattern with a wildcard suffix
-        try:
-            extended = re.compile(self._pattern + r".*")
-            return bool(extended.fullmatch(text))
-        except re.error:
-            return False
-
-    def _fallback_valid_chars(self, text: str, char_range: list[int]) -> set[int]:
-        """Fallback valid-next-chars when DFA is unavailable."""
-        valid = set()
-        for cp in char_range:
-            ch = chr(cp)
-            candidate = text + ch
-            if self._compiled.fullmatch(candidate):
-                valid.add(cp)
-                continue
-            m = self._compiled.match(candidate)
-            if m and m.end() == len(candidate):
-                valid.add(cp)
-                continue
-            # Try extended pattern
-            try:
-                extended = re.compile(self._pattern + r".*")
-                if extended.fullmatch(candidate):
-                    valid.add(cp)
-            except re.error:
-                pass
-        return valid
+    def valid_next_chars(self, text: str, char_range: Any) -> set[int]:
+        return self.valid_next_chars_from(self.step(self._dfa_start, text), char_range)
 
 
 class RegexConstraint:
@@ -614,7 +421,10 @@ class RegexConstraint:
 
     def __init__(self, pattern: str) -> None:
         self._pattern = pattern
-        self._compiled = re.compile(pattern)
+        # Build the DFA first: it validates the pattern and rejects anything
+        # outside the supported subset (UnsupportedRegexError, a ValueError).
+        self._dfa = _RegexDFA(pattern)
+        self._compiled = self._dfa._compiled
         self._text_buffer = ""
         self._done = False
         self._valid_chars_cache: dict[str, set[str] | None] = {}
@@ -626,8 +436,6 @@ class RegexConstraint:
         # script (e.g. "Привет|Пока") was never probed → empty allow-set → premature
         # EOS → empty output.
         self._query_codepoints: set[int] | None = None
-        # Build DFA for prefix matching
-        self._dfa = _RegexDFA(pattern)
         # Cache: buffer_text -> list of token IDs whose full decoded text
         # keeps the buffer on a valid DFA path. This is the correct prefix
         # check for multi-character tokens (single-char check via
@@ -655,12 +463,10 @@ class RegexConstraint:
         self._text_buffer += token_text
         if self._dfa.has_dfa:
             self._dfa_state = self._dfa.step(self._dfa_state, token_text)
-            if self._dfa.is_accepting(self._dfa_state):
-                extendable = self._dfa.valid_next_chars_from(
-                    self._dfa_state, self._probe_codepoints()
-                )
-                if not extendable:
-                    self._done = True
+            if self._dfa.is_accepting(self._dfa_state) and not self._dfa.can_extend(
+                self._dfa_state
+            ):
+                self._done = True
             return
         # Only mark done if the buffer is a full match AND no further
         # characters can extend the match. For unbounded patterns (e.g.,
@@ -767,11 +573,7 @@ class RegexConstraint:
         self, tokenizer: Any, generated_token_ids: list[int]
     ) -> list[int]:
         if self._done:
-            eos_ids = []
-            if hasattr(tokenizer, "eos_token_ids"):
-                eos_ids = list(tokenizer.eos_token_ids)
-            elif hasattr(tokenizer, "eos_token_id"):
-                eos_ids = [tokenizer.eos_token_id]
+            eos_ids = normalize_eos_ids(tokenizer)
             return eos_ids
 
         # seed the DFA probe with the tokenizer's actual first-char
@@ -799,14 +601,7 @@ class RegexConstraint:
                 if self._dfa.has_dfa
                 else (self._dfa.is_full_match(self._text_buffer))
             ):
-                eos = getattr(tokenizer, "eos_token_ids", None)
-                if eos is None:
-                    eos = [getattr(tokenizer, "eos_token_id", None)]
-                eos = [
-                    e
-                    for e in (eos if isinstance(eos, (list, tuple, set)) else [eos])
-                    if e is not None
-                ]
+                eos = normalize_eos_ids(tokenizer)
                 everything = list(everything) + [
                     e for e in eos if e not in set(everything)
                 ]
@@ -836,11 +631,7 @@ class RegexConstraint:
             else self._dfa.is_full_match(self._text_buffer)
         )
         if _full:
-            eos_ids = []
-            if hasattr(tokenizer, "eos_token_ids"):
-                eos_ids = list(tokenizer.eos_token_ids)
-            elif hasattr(tokenizer, "eos_token_id"):
-                eos_ids = [tokenizer.eos_token_id]
+            eos_ids = normalize_eos_ids(tokenizer)
             if eos_ids:
                 # _filter_tokens_by_dfa returns a cached list; build a new list so
                 # we never mutate the cached entry with EOS ids.
@@ -1009,11 +800,7 @@ class ChoiceConstraint:
         self, tokenizer: Any, generated_token_ids: list[int]
     ) -> list[int]:
         if self._done:
-            eos_ids = []
-            if hasattr(tokenizer, "eos_token_ids"):
-                eos_ids = list(tokenizer.eos_token_ids)
-            elif hasattr(tokenizer, "eos_token_id"):
-                eos_ids = [tokenizer.eos_token_id]
+            eos_ids = normalize_eos_ids(tokenizer)
             return eos_ids
 
         buf = self._text_buffer if self._case_sensitive else self._text_buffer.lower()
@@ -1042,11 +829,7 @@ class ChoiceConstraint:
 
         # If only __eos__ is valid, return EOS tokens
         if valid_chars == {"__eos__"}:
-            eos_ids = []
-            if hasattr(tokenizer, "eos_token_ids"):
-                eos_ids = list(tokenizer.eos_token_ids)
-            elif hasattr(tokenizer, "eos_token_id"):
-                eos_ids = [tokenizer.eos_token_id]
+            eos_ids = normalize_eos_ids(tokenizer)
             return eos_ids
 
         # Re-check whether the current buffer position is at a valid
@@ -1105,11 +888,7 @@ class ChoiceConstraint:
         # Include EOS tokens only when the current position is a valid
         # choice end (__end__ marker present in the trie node).
         if has_eos:
-            eos_ids = []
-            if hasattr(tokenizer, "eos_token_ids"):
-                eos_ids = list(tokenizer.eos_token_ids)
-            elif hasattr(tokenizer, "eos_token_id"):
-                eos_ids = [tokenizer.eos_token_id]
+            eos_ids = normalize_eos_ids(tokenizer)
             allowed.update(eos_ids)
         return list(allowed)
 
@@ -1148,196 +927,296 @@ class ChoiceConstraint:
         }
 
 
-class LarkGrammarConstraint:
-    """Context-free grammar constraint using Lark parser.
+class UnsupportedGrammarError(ValueError):
+    """The CFG grammar cannot be served (invalid grammar or no engine/tokenizer)."""
 
-    Falls back gracefully if lark is not installed — in that case,
-    only JSON schema and regex constraints are available.
+
+class _LlgConstraint:
+    """Token-mask constraint backed by an llguidance grammar (base class).
+
+    llguidance is an Earley engine that computes the exact set of tokens that
+    keep the input a viable prefix of the grammar, so there is no first-character
+    shortcut, no candidate cap and no fixed probe alphabet.  The grammar is
+    validated at construction (:class:`UnsupportedGrammarError` with the engine's
+    message); the start rule is ``start`` as in Lark.  The advance interface is
+    text-based like the other constraints: the text is re-tokenized into
+    vocabulary ids that llguidance consumes (the grammar state depends on the
+    bytes, not on the token boundaries).
     """
 
-    def __init__(self, grammar: str, start_rule: str = "start") -> None:
+    _KIND = "llguidance"
+
+    def __init__(self, grammar: Any, tokenizer: Any = None) -> None:
         self._grammar_text = grammar
-        self._start_rule = start_rule
         self._text_buffer = ""
         self._done = False
-        self._parser = None
+        self._dead = False
+        self._consumed = 0
+        self._llt: Any = None
+        self._matcher: Any = None
+        self._cache_text = ""
+        self._allowed_cache: dict[int, list[int]] = {}
+        self._ckpt_stack: list[dict[str, Any]] = []
+        try:
+            from llguidance import LLMatcher
+        except ImportError as exc:  # pragma: no cover - llguidance is a dependency
+            raise UnsupportedGrammarError(
+                "CFG grammar constraints require llguidance"
+            ) from exc
+        self._LLMatcher = LLMatcher
+        if tokenizer is not None:
+            self._bind(tokenizer)
+
+    def _make_grammar(self) -> str:
+        raise NotImplementedError
+
+    def _error(self, message: str) -> Exception:
+        return UnsupportedGrammarError(f"invalid grammar: {message[:400]}")
+
+    # ── engine binding ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def _vocab_width(tokenizer: Any) -> int:
+        from yunshu_engine.tool_call_grammar import _hf_tokenizer
+
+        hf = _hf_tokenizer(tokenizer)
+        for probe in (
+            lambda: len(hf),
+            lambda: int(hf.vocab_size),
+            lambda: len(hf.get_vocab()),
+        ):
+            try:
+                n = int(probe())
+                if n > 0:
+                    return n
+            except Exception:  # noqa: BLE001 - try the next shape
+                continue
+        raise UnsupportedGrammarError("cannot determine the tokenizer vocabulary size")
+
+    def _bind(self, tokenizer: Any) -> None:
+        from yunshu_engine.tool_call_grammar import llg_tokenizer
 
         try:
-            from lark import Lark, Token
+            llt = llg_tokenizer(tokenizer, self._vocab_width(tokenizer))
+        except UnsupportedGrammarError:
+            raise
+        except Exception as exc:
+            raise UnsupportedGrammarError(
+                f"CFG constraints need a Hugging Face tokenizer: {exc}"
+            ) from exc
+        grammar = self._make_grammar()
+        err = self._LLMatcher.validate_grammar(grammar, llt)
+        if err:
+            raise self._error(err)
+        matcher = self._LLMatcher(llt, grammar)
+        err = matcher.get_error()
+        if err:
+            raise self._error(err)
+        self._llt = llt
+        self._matcher = matcher
+        self._words = (llt.vocab_size + 31) // 32
 
-            self._lark_token = Token
-            self._parser = Lark(
-                grammar,
-                start=start_rule,
-                parser="earley",
-                ambiguity="resolve",
-            )
-        except ImportError:
-            logger.warning("lark not installed — CFG constraint unavailable")
-        except Exception as e:
-            logger.warning(f"Lark grammar parse failed: {e}")
+    # ── constraint interface ────────────────────────────────────────────────
 
     @property
     def state(self) -> str:
-        return "done" if self._done else "active" if self._parser else "unavailable"
+        return "done" if self._done else "active"
 
     @property
     def is_done(self) -> bool:
         return self._done
 
     def advance(self, token_text: str) -> None:
-        if self._done or self._parser is None:
+        if self._done or self._dead or self._matcher is None or not token_text:
             return
         self._text_buffer += token_text
-        try:
-            self._parser.parse(self._text_buffer)
-            # Full match succeeded — but check if the match can be extended.
-            # Without this, patterns like `start: /[a-z]+/` terminate after
-            # the first character "a" because parse("a") succeeds.
-            extendable = False
-            for ch in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _-.,:;!?@#$%":
-                try:
-                    self._parser.parse(self._text_buffer + ch)
-                    extendable = True
-                    break
-                except Exception:
-                    pass
-            if not extendable:
-                self._done = True
-        except Exception:
-            logger.debug("CFG parse incomplete, continuing generation", exc_info=True)
+        for tid in self._llt.tokenize_str(token_text):
+            if not self._matcher.consume_token(tid):
+                # The model emitted text the mask forbade: fail closed.
+                self._dead = True
+                return
+            self._consumed += 1
+        if self._matcher.is_stopped():
+            self._done = True
 
     def get_allowed_tokens(
         self, tokenizer: Any, generated_token_ids: list[int]
     ) -> list[int]:
-        if self._done or self._parser is None:
-            if self._done:
-                eos_ids = []
-                if hasattr(tokenizer, "eos_token_ids"):
-                    eos_ids = list(tokenizer.eos_token_ids)
-                elif hasattr(tokenizer, "eos_token_id"):
-                    eos_ids = [tokenizer.eos_token_id]
-                return eos_ids
+        if self._matcher is None:
+            self._bind(tokenizer)
+        if self._dead:
             return []
+        if self._done or self._matcher.is_stopped():
+            return normalize_eos_ids(tokenizer)
+        cached = self._allowed_cache.get(self._consumed)
+        if cached is not None and self._cache_text == self._text_buffer:
+            return cached
+        import llguidance.numpy as lnp
+        import numpy as np
 
-        # For CFG, we use a broader approach: try single-char extensions
-        # and check if they produce valid partial parses
-        valid_chars = self._valid_next_chars()
-        if valid_chars is None:
-            return _get_all_token_ids(tokenizer)
-        if not valid_chars:
-            return []
-
-        if not hasattr(self.__class__, "_token_char_cache"):
-            self.__class__._token_char_cache = weakref.WeakKeyDictionary()
-        if tokenizer not in self.__class__._token_char_cache:
-            self.__class__._token_char_cache[tokenizer] = _build_token_char_map(
-                tokenizer
-            )
-
-        char_map = self.__class__._token_char_cache[tokenizer]
-        candidates = set()
-        for ch in valid_chars:
-            if ch in char_map:
-                candidates.update(char_map[ch])
-        # char_map only matches the FIRST char, so a multi-char token whose
-        # tail violates the grammar (e.g. "fox" for grammar "foo"|"bar") was wrongly
-        # admitted. The JSON/regex/choice constraints all reject such tokens; do the
-        # same here by validating the FULL token text against the parser. Single-char
-        # tokens are already fully validated by valid_chars. Cap the candidate set to
-        # bound cost (CFG is opt-in); fall back to first-char-only above the cap.
-        _decode = getattr(tokenizer, "decode", None)
-        if _decode is None or len(candidates) > 5000:
-            return list(candidates)
-        allowed = []
-        for tid in candidates:
-            try:
-                ttext = _decode([tid])
-            except Exception:
-                continue
-            if len(ttext) <= 1 or self._token_text_extends(ttext):
-                allowed.append(tid)
+        row = np.zeros((1, self._words), dtype=np.int32)
+        lnp.fill_next_token_bitmask(self._matcher, row, 0)
+        bits = np.unpackbits(row.view(np.uint8), bitorder="little")
+        allowed = np.flatnonzero(bits[: self._llt.vocab_size]).tolist()
+        if self._matcher.is_accepting():
+            allowed += [e for e in normalize_eos_ids(tokenizer) if e not in allowed]
+        if len(self._allowed_cache) >= 64:
+            self._allowed_cache.clear()
+        self._allowed_cache[self._consumed] = allowed
+        self._cache_text = self._text_buffer
         return allowed
 
-    def _token_text_extends(self, text: str) -> bool:
-        """True if appending the whole token ``text`` keeps the parse valid/extendable."""
-        if self._parser is None:
-            return True
-        cand = self._text_buffer + text
-        try:
-            self._parser.parse(cand)
-            return True
-        except Exception:
-            try:
-                interactive = self._parser.parse_interactive(cand)
-                interactive.exhaust_lexer()
-                return True
-            except Exception:
-                return False
-
-    def _valid_next_chars(self) -> set[str] | None:
-        """Test which characters can extend the current partial parse."""
-        if self._parser is None:
-            return None
-
-        has_interactive = hasattr(self._parser, "parse_interactive")
-        if not has_interactive:
-            import logging
-
-            logging.getLogger(__name__).warning(
-                "LarkGrammarConstraint: parse_interactive unavailable (Lark < 1.2). "
-                "CFG constraint will be permissive — all characters allowed. "
-                "Upgrade to Lark >= 1.2 for proper grammar-constrained generation."
-            )
-            return None
-
-        valid = set()
-        test_chars = [chr(i) for i in range(32, 127)]
-        test_chars.extend(["\n", "\t"])
-        # CJK Unified Ideographs sample and Latin Extended sample
-        test_chars.extend(chr(i) for i in range(0x4E00, 0x4E00 + 100))
-        test_chars.extend(chr(i) for i in range(0x00C0, 0x00C0 + 50))
-
-        for ch in test_chars:
-            candidate = self._text_buffer + ch
-            try:
-                self._parser.parse(candidate)
-                valid.add(ch)
-            except Exception:
-                try:
-                    interactive = self._parser.parse_interactive(candidate)
-                    interactive.exhaust_lexer()
-                    valid.add(ch)
-                except Exception:
-                    pass
-
-        if len(valid) > len(test_chars) - 2:
-            return None
-        return valid
-
     def checkpoint(self) -> dict[str, Any]:
-        """Save current state for rollback (speculative decoding support)."""
-        return {
+        """Save current state; returns it and also pushes it on a stack so the
+        no-argument ``rollback()`` / ``discard_checkpoint()`` of the JSON-schema
+        constraint interface work too (speculative decoding)."""
+        saved = {
             "text_buffer": self._text_buffer,
             "done": self._done,
+            "dead": self._dead,
+            "consumed": self._consumed,
         }
+        self._ckpt_stack.append(saved)
+        if len(self._ckpt_stack) > 64:
+            del self._ckpt_stack[:32]
+        return saved
 
-    def rollback(self, saved: dict[str, Any]) -> None:
-        """Restore state from a checkpoint."""
+    def rollback(self, saved: dict[str, Any] | None = None) -> None:
+        """Restore a checkpoint (the given one, else the most recent)."""
+        if saved is None:
+            if not self._ckpt_stack:
+                return
+            saved = self._ckpt_stack.pop()
+        if self._matcher is not None and self._consumed > saved["consumed"]:
+            self._matcher.rollback(self._consumed - saved["consumed"])
         self._text_buffer = saved["text_buffer"]
         self._done = saved["done"]
+        self._dead = saved["dead"]
+        self._consumed = saved["consumed"]
+
+    def discard_checkpoint(self) -> None:
+        if self._ckpt_stack:
+            self._ckpt_stack.pop()
 
     def reset(self) -> None:
+        if self._matcher is not None:
+            self._matcher.reset()
         self._text_buffer = ""
         self._done = False
+        self._dead = False
+        self._consumed = 0
+        self._cache_text = ""
+        self._allowed_cache.clear()
 
     def get_stats(self) -> dict[str, Any]:
         return {
-            "type": "cfg",
-            "has_parser": self._parser is not None,
+            "type": self._KIND,
+            "has_parser": self._matcher is not None,
             "buffer_len": len(self._text_buffer),
             "is_done": self._done,
         }
+
+
+class CfgGrammarConstraint(_LlgConstraint):
+    """Context-free grammar constraint (Lark syntax) backed by llguidance."""
+
+    _KIND = "cfg"
+
+    def __init__(
+        self, grammar: str, start_rule: str = "start", tokenizer: Any = None
+    ) -> None:
+        if start_rule != "start":
+            raise UnsupportedGrammarError("CFG grammars must define a 'start' rule")
+        super().__init__(grammar, tokenizer)
+
+    def _make_grammar(self) -> str:
+        return self._LLMatcher.grammar_from_lark(self._grammar_text)
+
+    def _error(self, message: str) -> Exception:
+        return UnsupportedGrammarError(f"invalid CFG grammar: {message[:400]}")
+
+
+def _llg_schema_json(schema: Any) -> str:
+    """The schema as JSON for llguidance, without ``format`` values it does not know
+    (``format`` is an annotation in JSON Schema, so an unknown one is not an error)."""
+    import json as _json
+
+    from .json_schema import LLG_ENFORCED_FORMATS
+
+    def clean(node: Any) -> Any:
+        if isinstance(node, dict):
+            return {
+                k: clean(v)
+                for k, v in node.items()
+                if not (k == "format" and v not in LLG_ENFORCED_FORMATS)
+            }
+        if isinstance(node, list):
+            return [clean(v) for v in node]
+        return node
+
+    return _json.dumps(clean(schema), ensure_ascii=False)
+
+
+class LlgJsonSchemaConstraint(_LlgConstraint):
+    """JSON Schema constraint backed by llguidance: value constraints (pattern,
+    lengths, ranges, multipleOf, item counts), prefixItems, recursive ``$ref`` and
+    common ``format`` values are enforced token by token."""
+
+    _KIND = "json_schema"
+
+    def __init__(self, schema: dict, tokenizer: Any = None) -> None:
+        self._schema_json = _llg_schema_json(schema)
+        super().__init__(schema, tokenizer)
+
+    def _make_grammar(self) -> str:
+        return self._LLMatcher.grammar_from_json_schema(self._schema_json)
+
+    def _error(self, message: str) -> Exception:
+        from .json_schema import UnsupportedSchemaError
+
+        return UnsupportedSchemaError(
+            f"unsupported JSON Schema (llguidance cannot enforce it): {message[:400]}"
+        )
+
+
+def validate_llg_json_schema(schema: dict) -> None:
+    """Raise ``UnsupportedSchemaError`` when llguidance cannot compile ``schema``."""
+    from llguidance import LLMatcher
+
+    from .json_schema import UnsupportedSchemaError
+
+    try:
+        grammar = LLMatcher.grammar_from_json_schema(_llg_schema_json(schema))
+        err = LLMatcher.validate_grammar(grammar)
+    except Exception as exc:  # noqa: BLE001 - llguidance raises plain exceptions
+        err = str(exc)
+    if err:
+        raise UnsupportedSchemaError(
+            f"unsupported JSON Schema (llguidance cannot enforce it): {err[:400]}"
+        )
+
+
+def build_json_constraint(schema: Any, tokenizer: Any = None) -> Any:
+    """The constraint for a JSON schema (``None`` = any JSON object).
+
+    Schemas fully inside the in-house subset use the in-house state machine; any
+    other schema (value constraints, prefixItems, recursion, ...) is enforced by
+    llguidance.  Only what llguidance cannot compile is rejected.
+    """
+    from .json_schema import (
+        JsonSchemaConstraint,
+        UnsupportedSchemaError,
+        validate_supported_schema,
+    )
+
+    if schema is None:
+        return JsonSchemaConstraint(None)
+    try:
+        validate_supported_schema(schema)
+    except UnsupportedSchemaError:
+        validate_llg_json_schema(schema)
+        return LlgJsonSchemaConstraint(schema, tokenizer)
+    return JsonSchemaConstraint(schema)
 
 
 # ── Shared utilities ────────────────────────────────────────────────────────
@@ -1416,13 +1295,7 @@ def _build_token_text_map(tokenizer: Any) -> dict[int, str]:
     else:
         return text_map
 
-    eos_ids: set[int] = set()
-    if hasattr(tokenizer, "eos_token_ids"):
-        with contextlib.suppress(Exception):
-            eos_ids = set(tokenizer.eos_token_ids)
-    elif hasattr(tokenizer, "eos_token_id"):
-        with contextlib.suppress(Exception):
-            eos_ids = {tokenizer.eos_token_id}
+    eos_ids: set[int] = set(normalize_eos_ids(tokenizer))
 
     for _token_text, token_id in vocab.items():
         if token_id in eos_ids:
@@ -1459,7 +1332,7 @@ class ConstraintFactory:
     - json_object → JsonSchemaConstraint (no schema)
     - regex → RegexConstraint
     - choice → ChoiceConstraint
-    - cfg → LarkGrammarConstraint (requires lark)
+    - cfg → CfgGrammarConstraint (Lark syntax, llguidance engine)
     """
 
     @staticmethod
@@ -1479,10 +1352,8 @@ class ConstraintFactory:
             Constraint object with advance/get_allowed_tokens/is_done/reset interface
         """
         if grammar_type in ("json_schema", "json_object"):
-            from .json_schema import JsonSchemaConstraint
-
             schema = grammar if grammar_type == "json_schema" else None
-            return JsonSchemaConstraint(schema)
+            return build_json_constraint(schema, tokenizer)
 
         if grammar_type == "regex":
             if not isinstance(grammar, str):
@@ -1497,6 +1368,45 @@ class ConstraintFactory:
         if grammar_type == "cfg":
             if not isinstance(grammar, str):
                 raise ValueError("cfg constraint requires a grammar string")
-            return LarkGrammarConstraint(grammar)
+            return CfgGrammarConstraint(grammar, tokenizer=tokenizer)
 
         raise ValueError(f"Unknown grammar_type: {grammar_type}")
+
+
+def validate_constraint_spec(spec: Any) -> None:
+    """Validate a parsed ``response_format`` / ``grammar`` spec before generation.
+
+    Raises a ``ValueError`` subclass (``UnsupportedRegexError``,
+    ``UnsupportedSchemaError``, ``UnsupportedGrammarError``) naming the
+    unsupported construct, so a gateway can answer 400 instead of generating
+    against an approximation.  CFG grammars are validated against the engine
+    once a tokenizer is bound (``CfgGrammarConstraint``).
+    """
+    if spec is None or spec == "json_object":
+        return
+    if not isinstance(spec, dict):
+        return
+    gtype = spec.get("type")
+    if gtype == "regex" and "pattern" in spec:
+        pattern = spec["pattern"]
+        if not isinstance(pattern, str):
+            raise UnsupportedRegexError("regex pattern must be a string")
+        _RegexDFA(pattern)
+        return
+    if gtype == "choice" and "choices" in spec:
+        choices = spec["choices"]
+        if not isinstance(choices, list) or not all(
+            isinstance(c, str) for c in choices
+        ):
+            raise ValueError("choice constraint requires a list of strings")
+        return
+    if gtype == "cfg" and "grammar" in spec:
+        if not isinstance(spec["grammar"], str):
+            raise UnsupportedGrammarError("cfg constraint requires a grammar string")
+        return
+    from .json_schema import UnsupportedSchemaError, validate_supported_schema
+
+    try:
+        validate_supported_schema(spec)
+    except UnsupportedSchemaError:
+        validate_llg_json_schema(spec)  # enforced by llguidance, or rejected here

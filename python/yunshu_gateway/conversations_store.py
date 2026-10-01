@@ -176,6 +176,20 @@ class ConversationStore:
         self.root = Path(root)
         self.max_items = int(max_items)
         self.root.mkdir(parents=True, exist_ok=True)
+        self.gc()
+
+    def gc(self, grace_seconds: float = 600.0) -> int:
+        """Delete ``.tmp`` leftovers from a crash mid-save (older than the grace)."""
+        removed = 0
+        cutoff = time.time() - grace_seconds
+        for p in self.root.glob(".*.tmp"):
+            try:
+                if p.stat().st_mtime < cutoff:
+                    p.unlink()
+                    removed += 1
+            except OSError:
+                pass
+        return removed
 
     # -- persistence ---------------------------------------------------------
     def _path(self, conv_id: str) -> Path:
@@ -194,11 +208,15 @@ class ConversationStore:
     def _save(self, rec: dict) -> None:
         path = self._path(rec["id"])
         tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(rec, fh, ensure_ascii=False)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(rec, fh, ensure_ascii=False)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
 
     @staticmethod
     def public(rec: dict) -> dict:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import socket
 import tempfile
@@ -13,8 +14,8 @@ import pytest
 pytest.importorskip("mlx_vlm")
 
 from yunshu_engine.vlm_engine import (
-    _VALIDATE_URL,
     VLMEngine,
+    _resolve_media_target,
     _VLMTextPromptCache,
 )
 
@@ -560,7 +561,7 @@ class TestApplyVLMTemplateWithCache:
 
 
 class TestSSRFValidation:
-    """_VALIDATE_URL should block private/reserved IPs and non-http(s) schemes."""
+    """media URL validation should block private/reserved IPs and non-http(s) schemes."""
 
     def _make_addrinfo(self, ip: str):
         """Build a minimal socket.getaddrinfo return value for a given IP."""
@@ -570,63 +571,67 @@ class TestSSRFValidation:
     def test_blocks_loopback(self):
         with patch("socket.getaddrinfo", return_value=self._make_addrinfo("127.0.0.1")):
             with pytest.raises(ValueError, match="SSRF blocked"):
-                _VALIDATE_URL("http://localhost/image.png")
+                asyncio.run(_resolve_media_target("http://localhost/image.png"))
 
     def test_blocks_private_10(self):
         with patch("socket.getaddrinfo", return_value=self._make_addrinfo("10.0.0.1")):
             with pytest.raises(ValueError, match="SSRF blocked"):
-                _VALIDATE_URL("http://internal.corp/img.jpg")
+                asyncio.run(_resolve_media_target("http://internal.corp/img.jpg"))
 
     def test_blocks_private_172(self):
         with patch(
             "socket.getaddrinfo", return_value=self._make_addrinfo("172.16.0.5")
         ):
             with pytest.raises(ValueError, match="SSRF blocked"):
-                _VALIDATE_URL("https://10.172.16.5/img.jpg")
+                asyncio.run(_resolve_media_target("https://10.172.16.5/img.jpg"))
 
     def test_blocks_private_192_168(self):
         with patch(
             "socket.getaddrinfo", return_value=self._make_addrinfo("192.168.1.1")
         ):
             with pytest.raises(ValueError, match="SSRF blocked"):
-                _VALIDATE_URL("http://router.local/img.png")
+                asyncio.run(_resolve_media_target("http://router.local/img.png"))
 
     def test_blocks_link_local(self):
         with patch(
             "socket.getaddrinfo", return_value=self._make_addrinfo("169.254.169.254")
         ):
             with pytest.raises(ValueError, match="SSRF blocked"):
-                _VALIDATE_URL("http://metadata.aws.internal/img.png")
+                asyncio.run(
+                    _resolve_media_target("http://metadata.aws.internal/img.png")
+                )
 
     def test_blocks_ipv6_loopback(self):
         with patch("socket.getaddrinfo", return_value=self._make_addrinfo("::1")):
             with pytest.raises(ValueError, match="SSRF blocked"):
-                _VALIDATE_URL("http://[::1]/img.png")
+                asyncio.run(_resolve_media_target("http://[::1]/img.png"))
 
     def test_blocks_non_http_scheme(self):
-        with pytest.raises(ValueError, match="Blocked URL scheme"):
-            _VALIDATE_URL("file:///etc/passwd")
+        with pytest.raises(ValueError, match="not allowed"):
+            asyncio.run(_resolve_media_target("file:///etc/passwd"))
 
     def test_blocks_ftp_scheme(self):
-        with pytest.raises(ValueError, match="Blocked URL scheme"):
-            _VALIDATE_URL("ftp://example.com/img.png")
+        with pytest.raises(ValueError, match="not allowed"):
+            asyncio.run(_resolve_media_target("ftp://example.com/img.png"))
 
     def test_allows_public_ip(self):
         with patch(
-            "socket.getaddrinfo", return_value=self._make_addrinfo("203.0.113.1")
+            "socket.getaddrinfo", return_value=self._make_addrinfo("93.184.216.34")
         ):
-            _VALIDATE_URL("https://example.com/image.jpg")  # must not raise
+            asyncio.run(_resolve_media_target("https://example.com/image.jpg"))
 
     def test_allows_public_ipv6(self):
         with patch(
-            "socket.getaddrinfo", return_value=self._make_addrinfo("2001:db8::1")
+            "socket.getaddrinfo", return_value=self._make_addrinfo("2606:4700::1111")
         ):
-            _VALIDATE_URL("https://example.com/image.jpg")  # must not raise
+            asyncio.run(_resolve_media_target("https://example.com/image.jpg"))
 
     def test_unresolvable_hostname_raises(self):
         with patch("socket.getaddrinfo", side_effect=socket.gaierror("NXDOMAIN")):
-            with pytest.raises(ValueError, match="Cannot resolve hostname"):
-                _VALIDATE_URL("http://does-not-exist.invalid/img.png")
+            with pytest.raises(ValueError, match="cannot resolve"):
+                asyncio.run(
+                    _resolve_media_target("http://does-not-exist.invalid/img.png")
+                )
 
 
 class TestFinishVLMLoad:

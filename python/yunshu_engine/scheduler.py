@@ -4230,7 +4230,7 @@ class Scheduler:
         grammar = getattr(sp, "grammar", None)
         if json_schema is not None or grammar is not None:
             from .grammar_constraint import ConstraintFactory
-            from .json_schema import ConstrainedSampler, JsonSchemaConstraint
+            from .json_schema import ConstrainedSampler
 
             # grammar field takes priority for non-JSON types (regex, choice, cfg)
             if grammar is not None and isinstance(grammar, dict):
@@ -4256,8 +4256,10 @@ class Scheduler:
                             exc_info=True,
                         )
                 elif gtype == "json":
+                    from .grammar_constraint import build_json_constraint
+
                     schema = grammar.get("schema")
-                    constraint = JsonSchemaConstraint(schema)
+                    constraint = build_json_constraint(schema, self.tokenizer)
                     return ConstrainedSampler(sampler, constraint, self.tokenizer)
 
             # Fallback to json_schema field

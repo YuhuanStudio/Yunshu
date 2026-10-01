@@ -99,10 +99,15 @@ def test_partial_prefix_and_other_layouts_do_not_mix(tiny):
     ref = _run(lm, drafter, [other], _manager())[0][0]
     got, hits, _ = _run(lm, drafter, [other], apc)
     assert got[0] == ref
-    # rows without a head (sampled) keep their own entries
-    got, hits, _ = _run(lm, drafter, [DOC], apc, sampled=True)
-    assert hits == [0]
+    # a sampled row drafts like a greedy one: same layout, same entries
     _, hits, _ = _run(lm, drafter, [DOC], apc, sampled=True)
+    assert hits[0] >= len(DOC) - 1
+    # rows without a head keep their own entries
+    apc = _manager()
+    _run(lm, drafter, [DOC], apc)
+    _, hits, _ = _run(lm, None, [DOC], apc)
+    assert hits == [0]
+    _, hits, _ = _run(lm, None, [DOC], apc)
     assert hits[0] >= len(DOC) - 1
 
 

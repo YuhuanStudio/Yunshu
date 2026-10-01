@@ -467,10 +467,12 @@ class VLMBatchRunner:
             stats=stats,
             budget=budget,
         )
-        # The round driver drafts for any greedy row without logits
-        # processors or logprobs (a thinking budget is fine there).
+        # The round driver drafts for any row without logits processors, logprobs
+        # or a tool-call guide (a thinking budget is fine there); sampled rows draw
+        # with the position-keyed sampler, so a draft is accepted exactly when serial
+        # sampling would have produced it.
         job.allow_draft = bool(
-            allow_draft and greedy and not processors and not logprobs and guide is None
+            allow_draft and not processors and not logprobs and guide is None
         )
         stats.used_draft = use_draft
         stats.t_submit = time.perf_counter()
@@ -515,6 +517,53 @@ class VLMBatchRunner:
             and not guide.constrained
         )
 
+    def _emit(self, job: _Job, item: Any) -> None:
+        """Hand one item to a job's consumer; exactly one terminal per job.
+
+        Data past OUT_LIMIT (a consumer that stopped reading) ends the job with
+        an error instead of growing without bound; the row is dropped at the
+        next slice. Never blocks the executor thread.
+        """
+        if job.terminal:
+            return
+        if item is _DONE or isinstance(item, BaseException):
+            job.terminal = True
+        elif job.out.qsize() >= OUT_LIMIT:
+            job.overflowed = job.terminal = job.abandoned = True
+            item = RuntimeError(
+                f"output queue exceeded {OUT_LIMIT} undelivered tokens; "
+                "request cancelled"
+            )
+        job.out.put(item)
+
+    def _fail_all(self, exc: BaseException) -> None:
+        """Terminate every pending / active job with ``exc`` (executor gone)."""
+        with self._lock:
+            pending, self._pending = self._pending, []
+            self._driving = False
+        for job in pending:
+            self._emit(job, exc)
+        for group in self._groups():
+            for job in group.jobs.values():
+                self._emit(job, exc)
+            with contextlib.suppress(Exception):
+                group.gen.close()
+        self._batches.clear()
+        self._spec = None
+        for job in self._driver_jobs.values():
+            self._emit(job, exc)
+            if self.driver is not None:
+                with contextlib.suppress(Exception):
+                    self.driver.remove(job)
+        self._driver_jobs.clear()
+
+    def _schedule(self) -> None:
+        try:
+            self._executor.submit(self._drive_slice)
+        except Exception as exc:
+            logger.exception("VLM runner could not schedule a slice")
+            self._fail_all(exc)
+
     def busy(self) -> bool:
         with self._lock:
             return bool(
@@ -531,7 +580,7 @@ class VLMBatchRunner:
             if self._executor is None or self._driving:
                 return
             self._driving = True
-        self._executor.submit(self._drive_slice)
+        self._schedule()
 
     def _groups(self) -> list[_Group]:
         return ([self._spec] if self._spec is not None else []) + list(
@@ -695,7 +744,7 @@ class VLMBatchRunner:
                 self.driver.remove(job)
                 del self._driver_jobs[key]
                 job.stats.finish_reason = "cancel" if cancelled else None
-                job.out.put(_DONE)
+                self._emit(job, _DONE)
         if not self._driver_jobs:
             return
         events = self.driver.step()
@@ -710,11 +759,11 @@ class VLMBatchRunner:
                 stats.prefill_done = stats.prefill_total
             stats.t_last = now
             stats.generated += 1
-            job.out.put((int(event.token), event.logprob))
+            self._emit(job, (int(event.token), event.logprob))
             if event.finish is not None:
                 stats.finish_reason = event.finish
                 self._driver_jobs.pop(id(job), None)
-                job.out.put(_DONE)
+                self._emit(job, _DONE)
 
     def _finish(self, group: _Group, uid: int, reason: str | None) -> None:
         job = group.jobs.pop(uid, None)
@@ -724,7 +773,7 @@ class VLMBatchRunner:
             return
         if reason is not None:
             job.stats.finish_reason = reason
-        job.out.put(_DONE)
+        self._emit(job, _DONE)
 
     def _step_group(self, group: _Group) -> None:
         from .kernels import batch_invariant
@@ -832,7 +881,7 @@ class VLMBatchRunner:
                         for t, v in (response.top_logprobs or [])
                     ],
                 }
-            job.out.put((int(response.token), lp))
+            self._emit(job, (int(response.token), lp))
             if response.finish_reason is not None:
                 self._finish(group, response.uid, response.finish_reason)
 
@@ -898,11 +947,17 @@ class VLMBatchRunner:
                 len(pending) == 1 and self._active_jobs() == 0 and self.inflight() <= 1
             )
             for job in pending:
+                cancelled = job.cancel_event is not None and job.cancel_event.is_set()
+                if job.abandoned or cancelled:
+                    # Never prefill a request nobody is waiting for.
+                    job.stats.finish_reason = "cancel" if cancelled else None
+                    self._emit(job, _DONE)
+                    continue
                 try:
                     self._admit(job, alone)
                 except Exception as exc:
                     logger.exception("VLM runner admission failed")
-                    job.out.put(exc)
+                    self._emit(job, exc)
             for group in self._groups():
                 self._step_group(group)
             if self._driver_jobs:
@@ -919,13 +974,13 @@ class VLMBatchRunner:
             logger.exception("VLM runner step failed; failing active requests")
             for group in self._groups():
                 for job in group.jobs.values():
-                    job.out.put(exc)
+                    self._emit(job, exc)
                 with contextlib.suppress(Exception):
                     group.gen.close()
             self._batches.clear()
             self._spec = None
             for job in self._driver_jobs.values():
-                job.out.put(exc)
+                self._emit(job, exc)
                 if self.driver is not None:
                     self.driver.remove(job)
             self._driver_jobs.clear()
@@ -943,7 +998,7 @@ class VLMBatchRunner:
                 self._driving = False
                 again = False
         if again:
-            self._executor.submit(self._drive_slice)
+            self._schedule()
         elif self.clear_on_idle:
             # Large models: release the buffer pool once everything drains
             # (clearing under active batches would only force reallocation).
@@ -1099,6 +1154,8 @@ class RowSampler:
 
 
 _DONE = object()
+# Undelivered tokens a job may hold before it is cancelled (slow / stuck client).
+OUT_LIMIT = 65536
 
 
 @dataclass
@@ -1129,6 +1186,8 @@ class _Job:
     )
     # drafter lifetime counters at admission (rounds, accepted, drafted); diffed per step
     spec_base: tuple | None = None
+    terminal: bool = False
+    overflowed: bool = False
 
 
 @dataclass

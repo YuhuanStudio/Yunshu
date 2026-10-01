@@ -35,6 +35,7 @@ from __future__ import annotations
 import difflib
 import json
 import logging
+import math
 import os
 import tomllib
 from collections.abc import Mapping
@@ -140,6 +141,7 @@ _add("YUNSHU_MEDIA_DIR", "path", None, "Directory local media paths must live un
 _add("YUNSHU_FILES_DIR", "path", None, "Directory of the local Files / Batch API store. Unset: ~/.yunshu/files.", "server")
 _add("YUNSHU_FILES_MAX_BYTES", "int", 536870912, "Files API: maximum size of one uploaded file in bytes (default 512 MB).", "server", minimum=1)
 _add("YUNSHU_FILES_TTL_DAYS", "float", None, "Files API: delete uploaded files after this many days. Unset: keep forever.", "server", minimum=0.0)
+_add("YUNSHU_FILES_MAX_TOTAL_BYTES", "int", 0, "Files API: total bytes the store may hold; an upload that would exceed it fails with 413 storage_quota_exceeded (expired files are reaped first). 0: unlimited.", "server", minimum=0)
 _add("YUNSHU_CONVERSATIONS_DIR", "path", None, "Directory of the Conversations API store (JSON, one file per conversation). Unset: ~/.yunshu/conversations.", "server")
 _add("YUNSHU_CONVERSATION_MAX_ITEMS", "int", 10000, "Conversations API: maximum number of items one conversation may hold.", "server", minimum=1)
 _add("YUNSHU_COMPACT_MAX_TOKENS", "int", 2048, "Responses compaction: maximum tokens of the model-written summary.", "server", minimum=64)
@@ -195,7 +197,7 @@ _add("YUNSHU_QUANT_CONFIG", "str", None, "Bits/group for affine in-memory quanti
 
 # ── kernels / experiments ──────────────────────────────────────────────
 _add("YUNSHU_ROUND_PREFILL_CHUNK", "int", 512, "Round driver: prompt tokens per prefill span. A decoding request only steps between prefill forwards, so smaller spans keep it running next to a long prompt (Qwen3.8-27B, M5 Max, one MTP row beside an 8K prompt: 512 -> 6 tok/s, 128 -> 24 tok/s, ~20% lower prefill speed). Atoms are fixed per prompt (idle steps merge consecutive full atoms without changing any bit), so output stays independent of what else is running; prompts prefilled with different chunk sizes are each self-consistent but not bit-identical to each other.", "vlm-runner", minimum=16)
-_add("YUNSHU_ROUND_DRIVER", "bool", False, "Dense Qwen3.5-family VLMs: Yunshu's round driver serves text requests (packed forwards over every decoding row's window, alternating with prefill steps that batch several prompts' fixed chunks; row-invariant lane projections; MTP drafts for every greedy row with cost-aware per-row depth; see docs/guides/ROUND_DRIVER.md). Off: upstream BatchGenerator shared batch + single-request speculative lane. APC prefix reuse (exact hybrid checkpoints) runs in the driver; image prompts, int8 KV and MoE stay on the upstream path either way.", "vlm-runner", stability="experimental", decide="27B idle GPU, off vs on: sweep_round_driver.py parity, bench_batch_spec-style rows 1/2/4/8, probe_concurrency, bench_engine_matrix, bench_context_batch b1-b8 + 32K/131K, bench_mixed_load 16K/32K, MMLU-Pro 300 b8 (scripts/research/validate_round_driver.sh); if it wins it becomes the path (with APC / images moved) and this flag, the upstream shared batch and the spec lane are deleted", added="2026-09-29")
+_add("YUNSHU_ROUND_DRIVER", "bool", False, "Dense Qwen3.5-family VLMs: Yunshu's round driver serves text requests (packed forwards over every decoding row's window, alternating with prefill steps that batch several prompts' fixed chunks; row-invariant lane projections; MTP drafts for every row with cost-aware per-row depth; sampled rows draw with the position-keyed sampler; see docs/guides/ROUND_DRIVER.md). Off: upstream BatchGenerator shared batch + single-request speculative lane. APC prefix reuse (exact hybrid checkpoints) runs in the driver; image prompts, int8 KV and MoE stay on the upstream path either way.", "vlm-runner", stability="experimental", decide="needs single-request greedy decode >= the default lane (2026-10-01: 10-40% behind; serial draft chain + verify, overlap them), sampled-row seed + digest identity vs keyed serial on 27B, then 27B idle GPU, off vs on: sweep_round_driver.py parity, bench_batch_spec-style rows 1/2/4/8, probe_concurrency, bench_engine_matrix, bench_context_batch b1-b8 + 32K/131K, bench_mixed_load 16K/32K, MMLU-Pro 300 b8 (scripts/research/validate_round_driver.sh); if it wins it becomes the path (with APC / images moved) and this flag, the upstream shared batch and the spec lane are deleted", added="2026-09-29")
 _add("YUNSHU_MTP_ROW_EXACT", "bool", False, "Qwen3.5-family runner: oMLX row-exact verify (verify rows bit-identical to one-row decode) instead of batch-invariant kernels.", "kernels", stability="experimental", decide="sweep_mtp_depth parity at long contexts vs decode tok/s (currently 30-50% slower than batch-invariant)", added="2026-09-28")
 _add("YUNSHU_ENGINE_LOOP", "bool", False, "Text models: EngineCore continuous-batching loop instead of the single-request fast path.", "text-engine", stability="experimental", decide="unify text-only models onto the batch runner vs keeping this loop (concurrency probe on a text model)", added="2026-06-30")
 _add("YUNSHU_OVERLAP", "enum", "", "Text engine loop: overlap CPU and GPU work ('cpu_gpu') or split a batch into two overlapping halves ('two_batch').", "text-engine", stability="experimental", choices=("", "cpu_gpu", "two_batch"), decide="concurrency probe tok/s on a text model with the engine loop; deleted with the loop if text models move to the runner", added="2026-06-30")
@@ -242,7 +244,8 @@ _add("YUNSHU_WEB_FETCH_TIMEOUT", "float", 20.0, "Seconds web_fetch waits for a p
 _add("YUNSHU_WEB_FETCH_MAX_TEXT_CHARS", "int", 40000, "Extracted page text handed to the model is cut to this many characters (a request's max_content_tokens can lower it).", "server-tools", minimum=1000)
 _add("YUNSHU_MCP_CONNECTOR", "bool", True, "Serve the MCP connector: Anthropic mcp_servers and OpenAI Responses {type: mcp} tools are executed by this server, which connects to the named MCP servers over streamable HTTP / SSE.", "server-tools")
 _add("YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE", "bool", True, "Let the MCP connector reach private and loopback MCP servers (local tool servers are the common case). Off: only public addresses.", "server-tools")
-_add("YUNSHU_MCP_CONNECTOR_TIMEOUT", "float", 30.0, "Seconds an MCP connector call (initialize, tools/list, tools/call) may take.", "server-tools", minimum=1.0)
+_add("YUNSHU_MCP_CONNECTOR_TIMEOUT", "float", 30.0, "Seconds an MCP connector call (initialize, tools/list, tools/call) may take, DNS included.", "server-tools", minimum=1.0)
+_add("YUNSHU_MCP_CONNECTOR_MAX_BYTES", "int", 8 * 1024 * 1024, "Largest single reply (JSON body, or one SSE event) an MCP connector server may send, after decompression.", "server-tools", minimum=1024)
 _add("YUNSHU_SERVER_TOOL_MAX_ITERATIONS", "int", 8, "Most generate, run-tool, continue rounds one request may take.", "server-tools", minimum=1)
 _add("YUNSHU_MODEL_ALIASES", "json", None, "Multi-model mode: map the model names agents ask for (claude-sonnet-4-5, opus, gpt-5) onto a served model, as a JSON object {pattern: served model id}; patterns are exact names, prefix* or * (first match wins; a real model name always wins). Single-model mode answers to every name already.", "server-tools")
 
@@ -394,12 +397,14 @@ def _parse(s: Setting, text: str) -> Any:
             out: Any = int(value)
         elif s.type == "float":
             out = float(value)
+            if not math.isfinite(out):
+                raise ValueError("expected a finite number")
         elif s.type == "gb":
             # GiB with an optional "GB" suffix; "disabled" = 0 (no limit).
             if value.lower() == "disabled":
                 return 0.0
             out = float(value.upper().removesuffix("GB").strip())
-            if out <= 0:
+            if not math.isfinite(out) or out <= 0:
                 raise ValueError("expected a positive size in GB or 'disabled'")
         elif s.type == "enum":
             # Choices are lower-case except the log level, which is upper-case.

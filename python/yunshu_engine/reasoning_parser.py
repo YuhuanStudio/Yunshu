@@ -28,6 +28,15 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 
+# A JSON object / array payload (a tool call, structured output). Tag text inside it
+# (``"use </think> tags"``) is data, never a reasoning boundary.
+_STRUCTURED_START = re.compile(r'^\s*(\{|\[\s*(\{|\[|"|\]|-?\d|true\b|false\b|null\b))')
+
+
+def _looks_structured(text: str) -> bool:
+    return _STRUCTURED_START.match(text) is not None
+
+
 @dataclass
 class ReasoningOutput:
     content: str
@@ -69,8 +78,10 @@ class ReasoningParser(ABC):
         # NORMAL thinking-mode wire format for the most common reasoning models.
         _first_open = self._OPEN_RE.search(text)
         _first_close = self._CLOSE_RE.search(text)
-        if _first_close and (
-            _first_open is None or _first_close.start() < _first_open.start()
+        if (
+            _first_close
+            and not _looks_structured(text)
+            and (_first_open is None or _first_close.start() < _first_open.start())
         ):
             reasoning_parts.append(text[: _first_close.start()].strip())
             pos = _first_close.end()
@@ -79,6 +90,8 @@ class ReasoningParser(ABC):
             # Skip matches inside already-processed regions
             if m.start() < pos:
                 continue
+            if _looks_structured(text[pos:]):
+                break  # the rest is a JSON payload: its tag text is data
             # Everything before this open tag is content
             content_parts.append(text[pos : m.start()])
             think_start = m.end()
@@ -105,7 +118,10 @@ class ReasoningParser(ABC):
             # the leftover </think> leaked as visible text. Remove the format's own
             # open/close markers from the final content (they are parse artifacts here).
             content = "".join(content_parts)
-            content = self._CLOSE_RE.sub("", self._OPEN_RE.sub("", content)).strip()
+            if _looks_structured(content):
+                content = content.strip()
+            else:
+                content = self._CLOSE_RE.sub("", self._OPEN_RE.sub("", content)).strip()
             return ReasoningOutput(
                 content=content,
                 reasoning=reasoning,

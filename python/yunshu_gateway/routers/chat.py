@@ -561,6 +561,24 @@ class ChatCompletionRequest(BaseModel):
 def _parse_response_format(
     response_format: dict | None, grammar: dict | None = None
 ) -> dict | str | None:
+    """Parse the request's constraint, rejecting unsupported constructs with a 400."""
+    spec = _parse_response_format_unchecked(response_format, grammar)
+    _check_constraint_spec(spec)
+    return spec
+
+
+def _check_constraint_spec(spec: Any) -> None:
+    from yunshu_engine.grammar_constraint import validate_constraint_spec
+
+    try:
+        validate_constraint_spec(spec)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _parse_response_format_unchecked(
+    response_format: dict | None, grammar: dict | None = None
+) -> dict | str | None:
     """Parse OpenAI response_format and grammar parameters into json_schema.
 
     Supports:
@@ -616,7 +634,23 @@ def _parse_response_format(
 
 
 def _vlm_json_output_error(content: str, schema: dict | str | None) -> str | None:
-    """Reject a completed VLM JSON response that did not meet its contract."""
+    """Reject a completed VLM JSON response that did not meet its contract.
+
+    The decoder masks make a violation impossible for an exact grammar; if one still
+    happens it is logged and returned (the caller answers 422 with
+    ``x_yunshu.validation``), never passed through silently.
+    """
+    error = _json_output_error(content, schema)
+    if error:
+        logger.warning("structured output failed final validation: %s", error[:300])
+    return error
+
+
+def _validation_extension(error: str) -> dict:
+    return {"validation": {"valid": False, "error": error}}
+
+
+def _json_output_error(content: str, schema: dict | str | None) -> str | None:
     if schema is None or (
         isinstance(schema, dict) and schema.get("type") in ("regex", "choice", "cfg")
     ):
@@ -2599,7 +2633,8 @@ async def _handle_vlm_chat(
                             "error": {
                                 "message": validation_error,
                                 "type": "invalid_structured_output",
-                            }
+                            },
+                            "x_yunshu": _validation_extension(validation_error),
                         },
                     )
 
@@ -2933,7 +2968,8 @@ async def _stream_vlm_response(
                             "error": {
                                 "message": validation_error,
                                 "type": "invalid_structured_output",
-                            }
+                            },
+                            "x_yunshu": _validation_extension(validation_error),
                         }
                     )
                     + "\n\n"

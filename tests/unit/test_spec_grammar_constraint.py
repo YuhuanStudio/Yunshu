@@ -22,12 +22,14 @@ from __future__ import annotations
 
 import inspect
 
+import pytest
+
 from yunshu_engine import speculative_decoder
 from yunshu_engine.batched_engine import _build_grammar_constraint
 from yunshu_engine.grammar_constraint import (
     ChoiceConstraint,
-    LarkGrammarConstraint,
     RegexConstraint,
+    UnsupportedGrammarError,
 )
 from yunshu_engine.json_schema import JsonSchemaConstraint
 
@@ -57,10 +59,10 @@ def test_build_grammar_constraint_routes_each_type():
         _build_grammar_constraint({"type": "choice", "choices": ["a", "b"]}, tok),
         ChoiceConstraint,
     )
-    assert isinstance(
-        _build_grammar_constraint({"type": "cfg", "grammar": 'start: "a"'}, tok),
-        LarkGrammarConstraint,
-    )
+    # cfg routes to the llguidance-backed constraint, which needs a real HF
+    # tokenizer: the stub is refused loudly instead of running unconstrained.
+    with pytest.raises(UnsupportedGrammarError):
+        _build_grammar_constraint({"type": "cfg", "grammar": 'start: "a"'}, tok)
     # JSON schema / json_object still go to JsonSchemaConstraint
     assert isinstance(
         _build_grammar_constraint({"type": "object", "properties": {}}, tok),

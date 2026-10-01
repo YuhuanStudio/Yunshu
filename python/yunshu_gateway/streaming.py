@@ -292,6 +292,15 @@ class ThinkingParser:
     _MAX_TAG_LEN = 10
     _MAX_ACCUMULATOR_SIZE = 1 * 1024 * 1024  # 1 MB per accumulator
 
+    @staticmethod
+    def _is_partial_tag(tail: str, tag_prefix: str) -> bool:
+        """True when ``tail`` can still grow into ``<think\\s*/?\\s*>`` (or the closing form)."""
+        if len(tail) <= len(tag_prefix):
+            return tag_prefix.startswith(tail)
+        if not tail.startswith(tag_prefix):
+            return False
+        return re.fullmatch(r"\s*/?\s*", tail[len(tag_prefix) :]) is not None
+
     def _retain_tail(self, buf: str) -> tuple[str, str]:
         """Split buffer into safe-to-emit prefix and potential tag-tail suffix.
 
@@ -308,6 +317,17 @@ class ThinkingParser:
         # suffix that could be the start of a tag.  Everything before
         # that suffix is safe to emit immediately.
         tag_prefix = "</think" if self.in_thinking else "<think"
+        # The tag grammar is ``<think\s*/?\s*>``: a tail such as ``<think  `` (any
+        # amount of whitespace / a slash, not yet the ``>``) is a partial tag too,
+        # however the stream is chunked. A partial tag holds exactly one ``<``, at
+        # its start, so only the last ``<`` can begin one.
+        lt = buf.rfind("<")
+        if (
+            lt != -1
+            and len(buf) - lt <= 64
+            and self._is_partial_tag(buf[lt:], tag_prefix)
+        ):
+            return buf[:lt], buf[lt:]
         for i in range(len(buf) - 1, max(-1, len(buf) - self._MAX_TAG_LEN - 1), -1):
             tail = buf[i:]
             # Check if tail could be a prefix of any relevant tag.
@@ -756,8 +776,13 @@ def format_openai_usage_chunk(
         "completion_tokens": completion_tokens,
         "total_tokens": prompt_tokens + completion_tokens,
     }
-    usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
-    usage["prompt_tokens_details"] = {"cached_tokens": cached_tokens}
+    # Detail fields are subsets of their totals, never addends or larger than them.
+    usage["completion_tokens_details"] = {
+        "reasoning_tokens": max(0, min(reasoning_tokens, completion_tokens))
+    }
+    usage["prompt_tokens_details"] = {
+        "cached_tokens": max(0, min(cached_tokens, prompt_tokens))
+    }
     chunk = {
         "id": completion_id,
         "object": "chat.completion.chunk",

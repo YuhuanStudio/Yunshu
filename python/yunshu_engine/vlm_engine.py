@@ -33,18 +33,16 @@ import json
 import logging
 import os
 import shutil
-import ssl
 import tempfile
 import threading
 import time
-import urllib.request
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
 import mlx.core as mx
 
-from . import settings
+from . import netguard, settings
 from .request import RequestOutput
 from .types import EngineConfig
 
@@ -132,53 +130,16 @@ def _quantize_shape_safety_patch():
     return _ctx()
 
 
-def _VALIDATE_URL(url: str) -> None:
-    """SSRF protection: reject URLs pointing to private/reserved IPs."""
-    import ipaddress
-    import socket
-    from urllib.parse import urlparse
+async def _resolve_media_target(url: str):
+    """SSRF protection for remote media: one shared network policy (see ``netguard``) resolves
+    the host off the event loop and refuses private, loopback, link-local, CGNAT, multicast,
+    reserved and IPv4-mapped IPv6 addresses. Raises ValueError("SSRF blocked: ...")."""
+    from .netguard import UrlNotAllowedError, resolve_target
 
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        raise ValueError(f"Blocked URL scheme: {parsed.scheme}")
-    hostname = parsed.hostname
-    if not hostname:
-        raise ValueError("URL has no hostname")
     try:
-        resolved = socket.getaddrinfo(
-            hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM
-        )
-    except socket.gaierror:
-        raise ValueError(f"Cannot resolve hostname: {hostname}") from None
-    _PRIVATE_NETWORKS = [
-        ipaddress.ip_network("127.0.0.0/8"),
-        ipaddress.ip_network("10.0.0.0/8"),
-        ipaddress.ip_network("172.16.0.0/12"),
-        ipaddress.ip_network("192.168.0.0/16"),
-        ipaddress.ip_network("169.254.0.0/16"),
-        ipaddress.ip_network("0.0.0.0/8"),
-        ipaddress.ip_network("::1/128"),
-        ipaddress.ip_network("fc00::/7"),
-        ipaddress.ip_network("fe80::/10"),
-    ]
-    for _, _, _, _, addr in resolved:
-        ip = ipaddress.ip_address(addr[0])
-        for net in _PRIVATE_NETWORKS:
-            if ip in net:
-                raise ValueError(
-                    f"SSRF blocked: {hostname} resolves to private IP {ip}"
-                )
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """SECURITY: block SSRF-via-redirect. _VALIDATE_URL only checks the
-    INITIAL host, but urllib follows 3xx by default — a permitted host could 302
-    to http://169.254.169.254/… (cloud metadata) or any internal host. Returning
-    None makes urllib surface the 3xx as an error instead of following it.
-    (Mirrors routers/bench.py's _NoRedirect.)"""
-
-    def redirect_request(self, *args, **kwargs):
-        return None
+        return await resolve_target(url, allow_private=False)
+    except UrlNotAllowedError as e:
+        raise ValueError(f"SSRF blocked: {e}") from e
 
 
 def _VALIDATE_LOCAL_PATH(path: str) -> str:
@@ -1706,7 +1667,9 @@ class VLMEngine:
 
             if isinstance(json_schema, str) and json_schema == "json_object":
                 return JsonSchemaConstraint(None)
-            return JsonSchemaConstraint(json_schema)
+            from .grammar_constraint import build_json_constraint
+
+            return build_json_constraint(json_schema, self._tokenizer)
         except Exception as exc:
             raise ValueError("Grammar constraint initialization failed") from exc
 
@@ -2894,8 +2857,8 @@ class VLMEngine:
     async def _download_image(self, url: str) -> str:
         """Download an image from HTTP/HTTPS URL to a temp file."""
 
-        # SSRF validation: block private/internal IPs
-        _VALIDATE_URL(url)
+        # SSRF validation up front (the download re-resolves, checks and pins every hop)
+        await _resolve_media_target(url)
 
         ext = url.rsplit(".", 1)[-1].lower() if "." in url.split("?")[0] else "png"
         ext = ext if ext in ("png", "jpg", "jpeg", "webp", "gif") else "png"
@@ -2905,53 +2868,31 @@ class VLMEngine:
         # Register temp file eagerly so cleanup happens even if download fails
         self._register_temp_file(tmp.name)
 
-        # urllib.request.urlretrieve does NOT accept a Request object (only a
-        # URL string), so to send a custom User-Agent we use urlopen(Request)
-        # and stream the body to disk manually.
-        def _download(ssl_ctx):
-            req = urllib.request.Request(url, headers={"User-Agent": "Yunshu/1.0"})
-            # SSRF-via-redirect defense: _VALIDATE_URL only validated the initial
-            # host; a redirect to an internal host would otherwise be followed.
-            opener = urllib.request.build_opener(
-                _NoRedirect, urllib.request.HTTPSHandler(context=ssl_ctx)
+        # httpx through netguard.download_to_file: DNS resolved once per hop, checked and
+        # pinned (Host/SNI keep the name), redirects re-checked, one total deadline, and a byte
+        # cap enforced up front (Content-Length) and while streaming. "size limit" in the message
+        # lets the outer handler skip the insecure-SSL retry (no re-download).
+        async def _download(verify: bool) -> None:
+            await netguard.download_to_file(
+                url,
+                tmp.name,
+                max_bytes=settings.get("YUNSHU_VLM_MAX_IMAGE_BYTES"),
+                timeout=30,
+                allow_private=False,
+                verify=verify,
+                headers={"User-Agent": "Yunshu/1.0"},
             )
-            # enforce a max download size. SSRF (_VALIDATE_URL), redirect
-            # (_NoRedirect) and a 30s timeout were all present, but there was NO size cap —
-            # shutil.copyfileobj streamed the whole body, so a multi-GB (or slowly-streamed)
-            # remote image_url filled the disk + then PIL loaded it whole into memory. This
-            # bypasses the request-body size middleware because the bytes arrive
-            # out-of-band from the model server. Check Content-Length up front AND count bytes
-            # while streaming (a lying/absent header can't evade it). "size limit" in the
-            # message lets the outer handler skip the insecure-SSL retry (no re-download).
-            _cap = settings.get("YUNSHU_VLM_MAX_IMAGE_BYTES")
-            with opener.open(req, timeout=30) as resp:
-                _clen = resp.headers.get("Content-Length")
-                if _clen is not None and str(_clen).isdigit() and int(_clen) > _cap:
-                    raise ValueError(
-                        f"remote image exceeds size limit ({_clen} > {_cap} bytes)"
-                    )
-                with open(tmp.name, "wb") as fh:
-                    _written = 0
-                    while True:
-                        _chunk = resp.read(65536)
-                        if not _chunk:
-                            break
-                        _written += len(_chunk)
-                        if _written > _cap:
-                            raise ValueError(
-                                f"remote image exceeds size limit (> {_cap} bytes)"
-                            )
-                        fh.write(_chunk)
 
-        loop = asyncio.get_running_loop()
         try:
-            await loop.run_in_executor(None, _download, ssl.create_default_context())
+            await _download(True)
         except Exception as e:
             # a size-limit violation is final — don't fall through to the insecure-
             # SSL retry (which would re-download the oversized body). Map straight to a clean
             # error (→ 400/413 at the gateway).
             if "size limit" in str(e):
                 logger.warning(f"Rejected oversized remote image from {url}: {e}")
+                raise ValueError(str(e)) from e
+            if "SSRF blocked" in str(e):
                 raise ValueError(str(e)) from e
             # Insecure SSL fallback is a MITM vector — only enable when the
             # operator explicitly opts in via YUNSHU_VLM_INSECURE_SSL=true.
@@ -2964,10 +2905,7 @@ class VLMEngine:
                 "disabled because YUNSHU_VLM_INSECURE_SSL is set (insecure)"
             )
             try:
-                relaxed = ssl.create_default_context()
-                relaxed.check_hostname = False
-                relaxed.verify_mode = ssl.CERT_NONE
-                await loop.run_in_executor(None, _download, relaxed)
+                await _download(False)
             except Exception as e2:
                 logger.warning(f"Failed to download image from {url}: {e2}")
                 raise ValueError(f"Cannot download image: {e2}") from e2

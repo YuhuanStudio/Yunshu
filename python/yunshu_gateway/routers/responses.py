@@ -933,6 +933,21 @@ def _convert_to_messages(req: ResponsesRequest) -> list[dict]:
 
 
 def _parse_response_format(rf: dict | None, grammar: dict | None = None) -> dict | None:
+    spec = _parse_response_format_unchecked(rf, grammar)
+    from fastapi import HTTPException
+
+    from yunshu_engine.grammar_constraint import validate_constraint_spec
+
+    try:
+        validate_constraint_spec(spec)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return spec
+
+
+def _parse_response_format_unchecked(
+    rf: dict | None, grammar: dict | None = None
+) -> dict | None:
     if grammar is not None:
         gtype = grammar.get("type")
         if gtype == "json":

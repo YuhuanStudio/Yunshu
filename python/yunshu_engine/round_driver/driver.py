@@ -22,8 +22,9 @@ separate forwards at the same chunk size, docs/research/runs/
    one LM-head call over the real window positions;
 2. samples: greedy rows take the argmax of every window position and keep the
    drafts up to the first mismatch plus the target's token there; sampled rows
-   and rows with logits processors run one token a step through their own
-   sampler / processors (never drafting);
+   with a keyed sampler draw every window position at its generation index
+   (kept while equal to the draft), rows with logits processors run one
+   token a step through their own sampler / processors (never drafting);
 3. commits each window (KV lengths advance, rows that kept part of a window
    continue their GDN state from that position), runs stop / length checks;
 4. keeps every draftable row's MTP head current with the kept positions, then
@@ -38,12 +39,14 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
 import mlx.core as mx
 
+from .. import keyed_sampling
 from .allocate import CostCurve, allocate, chain
 from .batch import MAX_WINDOW, DecodeBatch
 from .forward import Segment, forward, logits
@@ -111,6 +114,7 @@ class _Row:
     drafts: list = field(default_factory=list)
     rates: list = field(default_factory=list)
     key: Any = None
+    keyed: Any = None  # KeyedSampler of a sampled row that drafts
     context: list = field(default_factory=list)
     force: list = field(default_factory=list)  # the budget's next token
     finished: bool = False
@@ -195,7 +199,28 @@ class RoundDriver:
         """Queue a row; returns the prompt tokens restored from the APC."""
         if len(req.ids) < 1:
             raise ValueError("round driver: empty prompt")
-        draft = bool(req.draft and self.head is not None and req.sampling is None)
+        keyed = None
+        if (
+            req.sampling is not None
+            and req.draft
+            and not req.processors
+            and not req.logprobs
+            and keyed_sampling.supports(req.sampling)
+        ):
+            # A sampled row drafts too (and draws the same tokens whether or
+            # not it does): its token at generation index g is a
+            # pure function of (logits, seed, g), so a draft is kept exactly
+            # when serial sampling would have drawn it (keyed_sampling).
+            seed = getattr(req.sampling, "seed", None)
+            keyed = keyed_sampling.KeyedSampler(
+                req.sampling,
+                seed if seed is not None else int.from_bytes(os.urandom(8), "little"),
+            )
+        draft = bool(
+            req.draft
+            and self.head is not None
+            and (req.sampling is None or keyed is not None)
+        )
         row = _Row(
             req=req,
             cache=self.lm.make_cache(),
@@ -203,6 +228,7 @@ class RoundDriver:
             rates=[ACCEPT_PRIOR] * (MAX_DECODE_TOKENS - 1),
             context=list(req.ids),
             drafting=draft,
+            keyed=keyed,
         )
         seed = getattr(req.sampling, "seed", None)
         if seed is not None:
@@ -383,6 +409,15 @@ class RoundDriver:
                 continue
             if req.sampling is None and not req.processors and not req.logprobs:
                 draws.append((it, greedy[off : off + n], None))
+                continue
+            if row.keyed is not None:
+                # window position j is generation index generated + j
+                x = lg[off : off + n].astype(mx.float32)
+                lp = x - mx.logsumexp(x, axis=-1, keepdims=True)
+                tok = row.keyed.sample_positions(
+                    lp, list(range(row.generated, row.generated + n))
+                )
+                draws.append((it, tok, None))
                 continue
             x = self._processed(row, lg[off : off + 1], first=it.kind == "p")
             lp = x - mx.logsumexp(x, axis=-1, keepdims=True)
