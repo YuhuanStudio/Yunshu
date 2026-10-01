@@ -25,6 +25,8 @@ import logging
 import os
 import struct
 import threading
+import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -33,16 +35,45 @@ import mlx.core as mx
 logger = logging.getLogger(__name__)
 
 
-class HybridSnapshotStore:
-    """Disk store of full hybrid cache snapshots, keyed by prefix-token hash."""
+# Persisted layout. Bump when the file meaning changes: older files are invalidated
+# (deleted and re-prefilled), never interpreted.
+_SCHEMA = "2"
+_DTYPES = {"bfloat16", "float16", "float32"}
 
-    def __init__(self, cache_dir: str, precision: str = "native"):
+
+class HybridSnapshotStore:
+    """Disk store of full hybrid cache snapshots, keyed by prefix-token hash.
+
+    Every file carries a schema version and the checkpoint fingerprint it was written
+    under. A file that does not match, is truncated, or fails structural validation on
+    load is deleted (invalidated) and the lookup falls back to a cold prefill; it is
+    never served and never retried. ``max_bytes`` / ``budget`` bound the store (LRU by
+    last use): ``budget`` is a callable returning the bytes this store may use right
+    now, so it can share one SSD budget with the block store beside it.
+    """
+
+    def __init__(
+        self,
+        cache_dir: str,
+        precision: str = "native",
+        *,
+        fingerprint: str = "",
+        max_bytes: int = 0,
+        budget: Callable[[], int] | None = None,
+    ):
         # "native": tensors stored bit-exact (lossless reuse). "int8": per-tensor
         # symmetric int8 (~4x smaller than fp32 state; lossy on reuse, and the
         # recurrent state carries the whole prefix). Load reads either format.
         if precision not in ("native", "int8"):
             raise ValueError(f"unknown SSD cache precision {precision!r}")
         self._precision = precision
+        self._fingerprint = fingerprint
+        self._max_bytes = int(max_bytes)
+        self._budget = budget
+        self._sizes: dict[str, int] = {}
+        self._used: dict[str, float] = {}
+        self.evictions = 0
+        self.invalidated = 0
         self._dir = Path(os.path.expanduser(cache_dir)) / "hybrid_snapshots"
         self._dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
@@ -62,7 +93,99 @@ class HybridSnapshotStore:
                     with contextlib.suppress(OSError):
                         f.unlink()
                     continue
+                meta = self._read_header_meta(f)
+                if meta is None or not self._meta_ok(meta):
+                    self._drop_file(f, f.stem)  # torn, foreign or old-schema file
+                    continue
+                try:
+                    st = f.stat()
+                except OSError:
+                    continue
                 self._index[f.stem] = 0  # token_count filled lazily on load
+                self._sizes[f.stem] = st.st_size
+                self._used[f.stem] = st.st_mtime
+        self._enforce_budget()
+
+    # -- validation / invalidation ------------------------------------------------
+    @staticmethod
+    def _read_header_meta(path: Path) -> dict | None:
+        """The ``__metadata__`` dict of a safetensors header, or None when the header is
+        torn / not safetensors / implausible. Reads only the header."""
+        try:
+            size = path.stat().st_size
+            with open(path, "rb") as fh:
+                _n = struct.unpack("<Q", fh.read(8))[0]
+                if _n <= 0 or _n > (1 << 24) or 8 + _n > size:
+                    return None
+                hdr = json.loads(fh.read(_n).decode("utf-8"))
+            meta = hdr.get("__metadata__", {})
+            return meta if isinstance(meta, dict) else None
+        except Exception:
+            return None
+
+    def _meta_ok(self, meta: dict) -> bool:
+        if meta.get("schema") != _SCHEMA:
+            return False
+        if self._fingerprint and meta.get("fp", "") != self._fingerprint:
+            return False
+        try:
+            return int(meta.get("tok", "0")) > 0 and int(meta.get("n", "0")) > 0
+        except (TypeError, ValueError):
+            return False
+
+    def _drop_file(self, path: Path, key_hex: str) -> None:
+        """Invalidate one snapshot: delete the file and forget it."""
+        with contextlib.suppress(OSError):
+            path.unlink()
+        with self._lock:
+            self._index.pop(key_hex, None)
+            self._sizes.pop(key_hex, None)
+            self._used.pop(key_hex, None)
+        self.invalidated += 1
+        logger.warning(
+            "hybrid snapshot %s invalid, dropped (cold fallback)", key_hex[:12]
+        )
+
+    @property
+    def total_bytes(self) -> int:
+        with self._lock:
+            return sum(self._sizes.values())
+
+    def _limit(self) -> int:
+        """Bytes this store may hold now (the smaller of the cap and the shared budget)."""
+        limits = []
+        if self._max_bytes > 0:
+            limits.append(self._max_bytes)
+        if self._budget is not None:
+            with contextlib.suppress(Exception):
+                limits.append(int(self._budget()))
+        return min(limits) if limits else 0
+
+    def _enforce_budget(self, protect: str | None = None) -> None:
+        """Evict least-recently-used snapshots until within the limit (the snapshot
+        just written is evicted last)."""
+        if self._max_bytes <= 0 and self._budget is None:
+            return
+        limit = max(self._limit(), 0)
+        with self._lock:
+            total = sum(self._sizes.values())
+            order = sorted(
+                (k for k in self._sizes if k != protect),
+                key=lambda k: self._used.get(k, 0.0),
+            )
+            if protect is not None and protect in self._sizes:
+                order.append(protect)
+        for key_hex in order:
+            if total <= limit:
+                break
+            with self._lock:
+                size = self._sizes.pop(key_hex, 0)
+                self._index.pop(key_hex, None)
+                self._used.pop(key_hex, None)
+            total -= size
+            self.evictions += 1
+            with contextlib.suppress(OSError):
+                self._path(key_hex).unlink()
 
     def _path(self, key_hex: str) -> Path:
         sub = self._dir / key_hex[:2]
@@ -119,6 +242,8 @@ class HybridSnapshotStore:
         meta: dict[str, str] = {
             "n": str(len(cache_list)),
             "tok": str(token_count),
+            "schema": _SCHEMA,
+            "fp": self._fingerprint,
         }
         if quantize:
             meta["q"] = "i8"
@@ -185,11 +310,19 @@ class HybridSnapshotStore:
             os.replace(tmp_path, str(path))
             with self._lock:
                 self._index[key.hex()] = token_count
+                with contextlib.suppress(OSError):
+                    self._sizes[key.hex()] = os.stat(path).st_size
+                self._used[key.hex()] = time.time()
+            self._enforce_budget(protect=key.hex())
         except Exception:
             logger.debug("hybrid snapshot save failed", exc_info=True)
 
     def load(self, key: bytes) -> tuple[list | None, int]:
-        """Rebuild the cache_list from disk. Returns (cache_list, token_count)."""
+        """Rebuild the cache_list from disk. Returns (cache_list, token_count).
+
+        A file that is torn, from another checkpoint / schema, or whose structure does
+        not hold together (missing tensors, wrong rank, dtype, offsets) is deleted and
+        reported as a miss, so the caller prefills cold."""
         key_hex = key.hex()
         if key_hex not in self._index:
             return None, 0
@@ -197,51 +330,79 @@ class HybridSnapshotStore:
         if not path.exists():
             with self._lock:
                 self._index.pop(key_hex, None)
+                self._sizes.pop(key_hex, None)
+                self._used.pop(key_hex, None)
             return None, 0
         try:
-            from mlx_lm.models.cache import ArraysCache, KVCache
-
-            _DT = {
-                "bfloat16": mx.bfloat16,
-                "float16": mx.float16,
-                "float32": mx.float32,
-            }
-            arrays, meta = mx.load(str(path), return_metadata=True)
-            quant = meta.get("q") == "i8"
-
-            def _get(name):
-                a = arrays[name]
-                if quant:
-                    s = float(meta.get(f"{name}s", "1.0"))
-                    dt = _DT.get(meta.get(f"{name}d", "bfloat16"), mx.bfloat16)
-                    return (a.astype(mx.float32) * s).astype(dt)
-                return a
-
-            n = int(meta.get("n", "0"))
-            token_count = int(meta.get("tok", "0"))
-            out: list[Any] = []
-            for i in range(n):
-                kind = meta.get(f"l{i}", "kv")
-                if kind == "kv":
-                    c = KVCache()
-                    c.keys = _get(f"l{i}_k")
-                    c.values = _get(f"l{i}_v")
-                    c.offset = int(meta.get(f"l{i}o", c.keys.shape[-2]))
-                    out.append(c)
-                else:
-                    size = int(meta.get(f"l{i}n", "0"))
-                    nonnull = [
-                        int(x) for x in meta.get(f"l{i}m", "").split(",") if x != ""
-                    ]
-                    state: list[Any] = [None] * size
-                    for j in nonnull:
-                        state[j] = _get(f"l{i}_a{j}")
-                    ac = ArraysCache(size)
-                    ac.cache = state
-                    out.append(ac)
-            with self._lock:
-                self._index[key_hex] = token_count
-            return out, token_count
+            out, token_count = self._load_validated(path)
         except Exception:
             logger.debug("hybrid snapshot load failed", exc_info=True)
+            out, token_count = None, 0
+        if out is None:
+            self._drop_file(path, key_hex)
             return None, 0
+        with self._lock:
+            self._index[key_hex] = token_count
+            self._used[key_hex] = time.time()
+        with contextlib.suppress(OSError):
+            os.utime(path, None)
+        return out, token_count
+
+    def _load_validated(self, path: Path) -> tuple[list | None, int]:
+        from mlx_lm.models.cache import ArraysCache, KVCache
+
+        _DT = {"bfloat16": mx.bfloat16, "float16": mx.float16, "float32": mx.float32}
+        meta0 = self._read_header_meta(path)
+        if meta0 is None or not self._meta_ok(meta0):
+            return None, 0
+        arrays, meta = mx.load(str(path), return_metadata=True)
+        quant = meta.get("q") == "i8"
+
+        def _get(name):
+            a = arrays[name]  # KeyError (missing tensor) -> invalid
+            if quant:
+                s = float(meta[f"{name}s"])
+                dname = meta.get(f"{name}d", "bfloat16")
+                if not (s > 0 and s < float("inf")) or dname not in _DTYPES:
+                    raise ValueError(f"bad quantization record for {name}")
+                return (a.astype(mx.float32) * s).astype(_DT[dname])
+            return a
+
+        n = int(meta["n"])
+        token_count = int(meta["tok"])
+        out: list[Any] = []
+        for i in range(n):
+            kind = meta.get(f"l{i}")
+            if kind == "kv":
+                c = KVCache()
+                c.keys = _get(f"l{i}_k")
+                c.values = _get(f"l{i}_v")
+                k, v = c.keys, c.values
+                offset = int(meta[f"l{i}o"])
+                if (
+                    k.ndim != 4
+                    or v.ndim != 4
+                    or k.shape[:3] != v.shape[:3]
+                    or k.dtype != v.dtype
+                    or not 0 < offset <= k.shape[-2]
+                ):
+                    return None, 0
+                c.offset = offset
+                out.append(c)
+            elif kind == "arr":
+                size = int(meta[f"l{i}n"])
+                nonnull = [int(x) for x in meta.get(f"l{i}m", "").split(",") if x != ""]
+                if size <= 0 or any(not 0 <= j < size for j in nonnull):
+                    return None, 0
+                state: list[Any] = [None] * size
+                for j in nonnull:
+                    a = _get(f"l{i}_a{j}")
+                    if a.ndim < 1 or a.size == 0:
+                        return None, 0
+                    state[j] = a
+                ac = ArraysCache(size)
+                ac.cache = state
+                out.append(ac)
+            else:
+                return None, 0  # unknown layer kind: written by something else
+        return out, token_count

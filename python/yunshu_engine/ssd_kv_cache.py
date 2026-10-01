@@ -241,7 +241,12 @@ class SSDKVCache:
         writer_queue_size: int = 64,
         backend: str | None = None,
         precision: str = "native",
+        fingerprint: str = "",
     ):
+        # ``fingerprint``: checkpoint identity written into every block and checked on
+        # load; a block from another revision is dropped, never served.
+        self._fingerprint = fingerprint
+        self._external_bytes = None
         # "native": blocks stored bit-exact in the KV dtype (lossless reuse).
         # "int8": per-tensor symmetric int8 (~half the bytes of bf16; lossy on
         # reuse). Loading reads either format regardless of this setting.
@@ -349,6 +354,14 @@ class SSDKVCache:
         # outside any lock) so we do NOT wrap it in _writer_lock here.
         self._drain_pending_writes_locked()
 
+    def set_external_bytes(self, fn) -> None:
+        """Bytes other stores sharing this budget currently hold (the hybrid snapshots)."""
+        self._external_bytes = fn
+
+    def block_bytes(self) -> int:
+        with self._lock:
+            return sum(m.file_size for m in self._index.values())
+
     def _recover_index(self) -> None:
         """Recover block index from SQLite store, or scan cache directory."""
         # Try SQLite store first (fast, crash-consistent)
@@ -397,6 +410,12 @@ class SSDKVCache:
                     meta = header.get("__metadata__", {})
                     version = meta.get("yunshu_cache_version", "unknown")
                     if version not in _READABLE_VERSIONS:
+                        continue
+                    if self._fingerprint and meta.get("fingerprint", "") != (
+                        self._fingerprint
+                    ):
+                        with contextlib.suppress(OSError):
+                            os.unlink(f)  # another checkpoint's block
                         continue
                     self._index[block_hash_hex] = _BlockMeta(
                         block_hash=bytes.fromhex(block_hash_hex),
@@ -542,6 +561,7 @@ class SSDKVCache:
             "token_count": str(token_count),
             "num_layers": str(len(cache_data)),
             "model_name": model_name,
+            "fingerprint": self._fingerprint,
             "created_at": str(time.time()),
         }
         if quantize:
@@ -717,6 +737,9 @@ class SSDKVCache:
             import numpy as np
 
             data, header = mx.load(meta.file_path, return_metadata=True)
+            if self._fingerprint and header.get("fingerprint", "") != self._fingerprint:
+                # written under another checkpoint revision / layout: prune, don't serve
+                raise ValueError("block fingerprint mismatch")
 
             # Check if data was stored with int8 quantization
             is_quantized = header.get("quantization") == "int8"
@@ -924,6 +947,9 @@ class SSDKVCache:
         if self._max_size_bytes <= 0:
             return
         total = sum(m.file_size for m in self._index.values())
+        if self._external_bytes is not None:
+            with contextlib.suppress(Exception):
+                total += int(self._external_bytes())
         if total <= self._max_size_bytes:
             return
         # Oldest activity first; a never-read entry falls back to its write time so the
