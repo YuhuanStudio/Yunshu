@@ -1639,9 +1639,30 @@ async def _build_multi_choice(
 # ── Endpoints ──
 
 
+def _enforce_capability_contract(req: ChatCompletionRequest) -> None:
+    """400 for a request field the served model's capability contract does not cover."""
+    try:
+        from yunshu_engine.capability_contract import unsupported
+
+        from ..model_cards import find_card
+
+        reasons = unsupported(
+            find_card(req.model), req.model_dump(exclude_unset=True, mode="json")
+        )
+    except Exception:  # noqa: BLE001 - a card problem must never break serving
+        logger.debug("capability contract check failed", exc_info=True)
+        return
+    if reasons:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model '{req.model}' does not support: " + "; ".join(reasons),
+        )
+
+
 @router.post("/chat/completions", response_model=None)
 async def create_chat_completion(req: ChatCompletionRequest, request: Request):
     _check_permission(request, "can_infer")
+    _enforce_capability_contract(req)
     apply_keep_alive(req.model, req.keep_alive)
     _validate_sampling_params(req.temperature, req.effective_max_tokens(), req.top_p)
 

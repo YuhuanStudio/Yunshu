@@ -145,6 +145,26 @@ Anonymous callers never see filesystem paths; authenticated callers also get `lo
 `architecture.*_modalities`, `top_provider.max_completion_tokens`. All are present, so a Yunshu server registered under any of
 the three needs no custom code.
 
+### Capability contract (`yunshu.contract`)
+
+Every card carries a `contract` object, built by `yunshu_engine/capability_contract.py` from the checkpoint, and
+`POST /v1/chat/completions` enforces the same object:
+
+| Contract key | States |
+|---|---|
+| `tools` | `supported`, `mode` (`template` when the chat template renders tools, else `prompt` injection), `parallel`, `tool_choice` values |
+| `structured_output` | `json_object`, `json_schema.engines` (`in-house`, plus `llguidance` for schemas outside the in-house subset), `regex`, `choice`, `grammar` (Lark via llguidance) |
+| `logprobs`, `reasoning` | support, `max_top_logprobs`, effort levels |
+| `media` | accepted input and produced output modalities beyond text |
+| `speculative` | `mode` (`mtp`, `dflash2`, `none`) and `lossless` |
+| `cache_tiers` | `ram` (`kv_prefix` or `apc`) and `ssd` when that tier is enabled |
+| `context` | window and maximum output tokens |
+
+A request that uses what the contract rules out returns 400 naming the field: `reasoning_effort` / `thinking_budget` on a model
+without a reasoning mode, an `image` / `audio` / `video` content part the model does not accept, and tools, `response_format`,
+guided decoding or `logprobs` on a model that does not generate text. A checkpoint whose config cannot be read has no contract
+and is not gated.
+
 ## Ollama-compatible (`/api/*`)
 
 A thin translation layer over the OpenAI routes (loopback), verified with the `ollama` Python SDK.
@@ -227,9 +247,9 @@ Z-Image ControlNet through `control_image`, is unchanged.
 
 | Command | Status | Notes |
 |---|---|---|
-| `serve`, `chat`, `pull`, `doctor`, `config` (`set`, `unset`, `path`), `service` (`install`, `uninstall`, `start`, `stop`, `restart`, `status`, `logs`), `model` (`list`, `info`, `load`, `unload`, `download`) | kept | Smoke-tested; `model load/unload` need the token on the server. |
+| `serve`, `chat`, `pull`, `doctor`, `config` (`set`, `unset`, `path`), `service` (`install`, `uninstall`, `start`, `stop`, `restart`, `status`, `logs`, `rotate-logs`), `cache` (`status`, `gc`), `model` (`list`, `info`, `load`, `unload`, `download`) | kept | Smoke-tested; `model load/unload` need the token on the server. |
 | `launch claude` / `codex` / `opencode` / `pi` (`--dry-run`, `--effort`) | extended | Reads the model card and configures the agent with the real context window, output limit, reasoning levels and vision support; see [AGENT_COMPAT.md](AGENT_COMPAT.md#launching-an-agent). |
-| `status`, `diagnose gpu`, `diagnose server`, `launch list` | kept | `diagnose gpu` and `bench roofline` printed thousands of TFLOPS because the lazy matmuls were never evaluated; fixed. |
+| `status`, `diagnose gpu`, `diagnose server`, `diagnose bundle`, `launch list` | kept | `diagnose gpu` and `bench roofline` printed thousands of TFLOPS because the lazy matmuls were never evaluated; fixed. |
 | `complete`, `embed`, `tokenize`, `detokenize`, `rerank`, `score`, `classify`, `transcribe`, `speak`, `ocr`, `image`, `image-edit`, `image-variations`, `voices`, `cancel` | kept | Talk to a running server. |
 | `bench roofline`, `latency`, `throughput`, `memory`, `inference`, `eval` | kept | |
 | `image-inpaint`, `image-controlnet`, `image-depth`, `video`, `audio-enhance`, `audio-separate`, `audio-transform`, `voice-pipeline` | removed | Their routes are gone. |
