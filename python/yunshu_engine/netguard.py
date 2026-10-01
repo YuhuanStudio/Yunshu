@@ -176,7 +176,7 @@ async def download_to_file(
     clean 400.
     """
     own = client is None
-    if own:
+    if client is None:
         client = httpx.AsyncClient(
             verify=verify, trust_env=False, follow_redirects=False
         )

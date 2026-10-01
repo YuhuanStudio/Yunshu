@@ -360,7 +360,7 @@ class ContextWindowManager:
         return units, base, cand, base_tokens
 
     def _required_tokens(self, messages: list[dict]) -> int:
-        return self._plan(messages)[3]
+        return int(self._plan(messages)[3])
 
     def _truncate_oldest(self, messages: list[dict], max_tokens: int) -> list[dict]:
         """Drop the oldest complete unit until the prompt fits.

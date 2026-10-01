@@ -89,14 +89,13 @@
 5	python/yunshu_engine/batched_engine.py	no-any-return	Returning Any from function declared to return "int"
 2	python/yunshu_engine/batched_engine.py	no-any-return	Returning Any from function declared to return "list[int]"
 1	python/yunshu_engine/batched_engine.py	no-any-return	Returning Any from function declared to return "str"
-1	python/yunshu_engine/batched_engine.py	no-redef	Name "_chunk_logprobs" already defined on line 10158
-1	python/yunshu_engine/batched_engine.py	no-redef	Name "_chunk_logprobs" already defined on line 11387
+2	python/yunshu_engine/batched_engine.py	no-redef	Name "_chunk_logprobs" already defined on line N
 1	python/yunshu_engine/batched_engine.py	union-attr	Item "None" of "Any | None" has no attribute "embed_tokens"
 1	python/yunshu_engine/batched_engine.py	union-attr	Item "complex" of "int | float | complex | list[list_or_scalar]" has no attribute "__iter__" (not iterable)
 1	python/yunshu_engine/batched_engine.py	union-attr	Item "float" of "int | float | complex | list[list_or_scalar]" has no attribute "__iter__" (not iterable)
 1	python/yunshu_engine/batched_engine.py	union-attr	Item "int" of "int | float | complex | list[list_or_scalar]" has no attribute "__iter__" (not iterable)
 1	python/yunshu_engine/bfcl_eval.py	no-any-return	Returning Any from function declared to return "str"
-1	python/yunshu_engine/bfcl_eval.py	no-redef	Name "results" already defined on line 120
+1	python/yunshu_engine/bfcl_eval.py	no-redef	Name "results" already defined on line N
 1	python/yunshu_engine/deltanet_inversion.py	arg-type	Argument 1 to "float" has incompatible type "int | float | complex"; expected "str | Buffer | SupportsFloat | SupportsIndex"
 4	python/yunshu_engine/dflash_context.py	method-assign	Cannot assign to a method
 1	python/yunshu_engine/dflash_tree.py	attr-defined	"def rounds(*args: Any, **kwargs: Any) -> Any" has no attribute "_yunshu_tree"
@@ -145,7 +144,7 @@
 4	python/yunshu_engine/grammar_constraint.py	attr-defined	"type[LarkGrammarConstraint]" has no attribute "_token_char_cache"
 8	python/yunshu_engine/grammar_constraint.py	attr-defined	"type[RegexConstraint]" has no attribute "_token_char_cache"
 4	python/yunshu_engine/grammar_constraint.py	attr-defined	"type[RegexConstraint]" has no attribute "_token_text_cache"
-1	python/yunshu_engine/grammar_constraint.py	no-redef	Name "_build_token_text_map" already defined on line 1346
+1	python/yunshu_engine/grammar_constraint.py	no-redef	Name "_build_token_text_map" already defined on line N
 7	python/yunshu_engine/hybrid_ssd_snapshot.py	union-attr	Item "array" of "array | str | dict[str, Any]" has no attribute "get"
 7	python/yunshu_engine/hybrid_ssd_snapshot.py	union-attr	Item "str" of "array | str | dict[str, Any]" has no attribute "get"
 1	python/yunshu_engine/image_engine.py	arg-type	Argument 1 to "exp" has incompatible type "float"; expected "array"
@@ -180,7 +179,7 @@
 1	python/yunshu_engine/json_schema.py	no-any-return	Returning Any from function declared to return "dict[Any, Any] | None"
 1	python/yunshu_engine/json_schema.py	no-any-return	Returning Any from function declared to return "dict[int, str]"
 1	python/yunshu_engine/json_schema.py	no-any-return	Returning Any from function declared to return "str | list[str]"
-3	python/yunshu_engine/json_schema.py	no-redef	Name "chars" already defined on line 704
+3	python/yunshu_engine/json_schema.py	no-redef	Name "chars" already defined on line N
 1	python/yunshu_engine/kernels/batch_invariant.py	attr-defined	"type[PackedLinear]" has no attribute "_yunshu_invariant_pad"
 6	python/yunshu_engine/kernels/batch_invariant.py	method-assign	Cannot assign to a method
 2	python/yunshu_engine/kernels/batch_invariant.py	no-any-return	Returning Any from function declared to return "array"
@@ -296,7 +295,7 @@
 4	python/yunshu_engine/model_manager.py	func-returns-value	"clear_cache" does not return a value (it only ever returns None)
 4	python/yunshu_engine/model_manager.py	func-returns-value	"synchronize" does not return a value (it only ever returns None)
 1	python/yunshu_engine/model_optimizations.py	assignment	Incompatible types in assignment (expression has type "float", variable has type "int")
-1	python/yunshu_engine/model_optimizations.py	no-redef	Name "result" already defined on line 253
+1	python/yunshu_engine/model_optimizations.py	no-redef	Name "result" already defined on line N
 1	python/yunshu_engine/model_preprocessor.py	abstract	Cannot instantiate abstract class "ModelPreprocessor" with abstract attributes "input_type", "model_family" and "preprocess"
 2	python/yunshu_engine/model_preprocessor.py	no-any-return	Returning Any from function declared to return "bool"
 6	python/yunshu_engine/model_registry.py	attr-defined	"ModelRegistry" has no attribute "_lock"
@@ -514,7 +513,7 @@
 1	python/yunshu_gateway/files_store.py	no-any-return	Returning Any from function declared to return "dict[str, Any]"
 2	python/yunshu_gateway/files_store.py	valid-type	Function "yunshu_gateway.files_store.FileStore.list" is not valid as a type
 1	python/yunshu_gateway/main.py	assignment	Incompatible types in assignment (expression has type "ModelManager | None", variable has type "ModelManager")
-1	python/yunshu_gateway/main.py	no-redef	Name "_total_uma_bytes" already defined on line 44
+1	python/yunshu_gateway/main.py	no-redef	Name "_total_uma_bytes" already defined on line N
 1	python/yunshu_gateway/main.py	return-value	Incompatible return value type (got "JSONResponse", expected "dict[Any, Any]")
 1	python/yunshu_gateway/middleware/disconnect.py	no-any-return	Returning Any from function declared to return "bool"
 1	python/yunshu_gateway/middleware/metrics.py	func-returns-value	"record_request" of "_Metrics" does not return a value (it only ever returns None)
@@ -597,11 +596,11 @@
 1	python/yunshu_gateway/routers/responses.py	attr-defined	"ResponsesRequest" has no attribute "_native_tools"
 1	python/yunshu_gateway/routers/responses.py	no-any-return	Returning Any from function declared to return "bool"
 2	python/yunshu_gateway/routers/responses.py	no-any-return	Returning Any from function declared to return "dict[Any, Any] | None"
-1	python/yunshu_gateway/routers/responses.py	no-redef	Name "conversation" already defined on line 576
-1	python/yunshu_gateway/routers/responses.py	no-redef	Name "include" already defined on line 608
-1	python/yunshu_gateway/routers/responses.py	no-redef	Name "max_tool_calls" already defined on line 609
-1	python/yunshu_gateway/routers/responses.py	no-redef	Name "prompt_cache_key" already defined on line 610
-1	python/yunshu_gateway/routers/responses.py	no-redef	Name "service_tier" already defined on line 612
+1	python/yunshu_gateway/routers/responses.py	no-redef	Name "conversation" already defined on line N
+1	python/yunshu_gateway/routers/responses.py	no-redef	Name "include" already defined on line N
+1	python/yunshu_gateway/routers/responses.py	no-redef	Name "max_tool_calls" already defined on line N
+1	python/yunshu_gateway/routers/responses.py	no-redef	Name "prompt_cache_key" already defined on line N
+1	python/yunshu_gateway/routers/responses.py	no-redef	Name "service_tier" already defined on line N
 2	python/yunshu_gateway/routers/responses.py	return-value	Incompatible return value type (got "str", expected "dict[Any, Any] | None")
 1	python/yunshu_gateway/routers/scoring.py	arg-type	Argument 1 to "append" of "list" has incompatible type "str | dict[Any, Any]"; expected "str"
 1	python/yunshu_gateway/routers/scoring.py	list-item	List item 0 has incompatible type "str | dict[Any, Any]"; expected "str"
@@ -616,9 +615,6 @@
 1	python/yunshu_gateway/server_tools/anthropic_loop.py	union-attr	Item "None" of "FetchResult | None" has no attribute "title"
 2	python/yunshu_gateway/server_tools/anthropic_loop.py	union-attr	Item "None" of "FetchResult | None" has no attribute "url"
 1	python/yunshu_gateway/server_tools/anthropic_loop.py	var-annotated	Need type annotation for "outb"
-1	python/yunshu_gateway/server_tools/mcp_connector.py	arg-type	Argument 1 to "post" of "AsyncClient" has incompatible type "str | None"; expected "URL | str"
-2	python/yunshu_gateway/server_tools/mcp_connector.py	union-attr	Item "None" of "AsyncClient | None" has no attribute "post"
-1	python/yunshu_gateway/server_tools/mcp_connector.py	union-attr	Item "None" of "AsyncClient | None" has no attribute "stream"
 2	python/yunshu_gateway/server_tools/responses_loop.py	arg-type	Argument 1 to "_pair" has incompatible type "Sequence[str]"; expected "str"
 1	python/yunshu_gateway/server_tools/responses_loop.py	arg-type	Argument 1 to "join" of "str" has incompatible type "list[Any | None]"; expected "Iterable[str]"
 1	python/yunshu_gateway/server_tools/responses_loop.py	assignment	Incompatible types in assignment (expression has type "dict[str, list[dict[str, str]]]", target has type "Sequence[str]")
@@ -651,7 +647,7 @@
 1	python/yunshu_kv/boundary_snapshot.py	str-bytes-safe	If x = b'abc' then f"{x}" or "{}".format(x) produces "b'abc'", not "abc". If this is desired behavior, use f"{x!r}" or "{!r}".format(x). Otherwise, decode the bytes
 1	python/yunshu_kv/compression.py	misc	Tuple index out of range
 2	python/yunshu_kv/manager.py	index	Value of type "None" is not indexable
-1	python/yunshu_kv/manager.py	no-redef	Name "matched_blocks" already defined on line 202
+1	python/yunshu_kv/manager.py	no-redef	Name "matched_blocks" already defined on line N
 1	python/yunshu_kv/mlx_cache.py	no-any-return	Returning Any from function declared to return "int"
 2	python/yunshu_kv/radix_attention.py	assignment	Incompatible types in assignment (expression has type "RadixNode | None", variable has type "RadixNode")
 2	python/yunshu_kv/radix_attention.py	attr-defined	"RadixNode" has no attribute "_replaced_blocks"
@@ -660,6 +656,6 @@
 1	python/yunshu_kv/thinking_segment.py	assignment	Incompatible types in assignment (expression has type "None", variable has type "Path")
 2	python/yunshu_kv/tiered.py	assignment	Incompatible types in assignment (expression has type "dict[Any, Any]", target has type "float")
 1	python/yunshu_kv/tiered.py	no-any-return	Returning Any from function declared to return "tuple[BlockTable, PrefixMatch]"
-1	python/yunshu_kv/tiered.py	no-redef	Name "stored_block_hash" already defined on line 386
+1	python/yunshu_kv/tiered.py	no-redef	Name "stored_block_hash" already defined on line N
 1	python/yunshu_kv/tiered.py	union-attr	Item "None" of "list[Path] | None" has no attribute "extend"
 1	python/yunshu_kv/warm_tier.py	no-any-return	Returning Any from function declared to return "bytes | None"

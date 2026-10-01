@@ -472,10 +472,7 @@ class VLMBatchRunner:
         # with the position-keyed sampler, so a draft is accepted exactly when serial
         # sampling would have produced it.
         job.allow_draft = bool(
-            allow_draft
-            and not processors
-            and not logprobs
-            and guide is None
+            allow_draft and not processors and not logprobs and guide is None
         )
         stats.used_draft = use_draft
         stats.t_submit = time.perf_counter()

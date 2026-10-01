@@ -276,15 +276,20 @@ class McpConnection:
         pinned, extra, ext = pin_request(await self._target(url), url)
         return pinned, {**headers, **extra}, ext
 
+    def _http(self) -> httpx.AsyncClient:
+        if self._client is None:
+            raise McpError("MCP connection is closed")
+        return self._client
+
     async def _call(self, method: str, url: str, *, headers: dict, **kw):
         pinned, hdrs, ext = await self._pinned(url, headers)
-        return await self._client.request(
+        return await self._http().request(
             method, pinned, headers=hdrs, extensions=ext, **kw
         )
 
     async def _open(self, method: str, url: str, *, headers: dict, **kw):
         pinned, hdrs, ext = await self._pinned(url, headers)
-        return self._client.stream(method, pinned, headers=hdrs, extensions=ext, **kw)
+        return self._http().stream(method, pinned, headers=hdrs, extensions=ext, **kw)
 
     async def _notify(self, method: str, params: dict):
         body = {"jsonrpc": "2.0", "method": method, "params": params}
@@ -453,6 +458,8 @@ class McpConnection:
         try:
             if self._legacy_task is None or self._legacy_task.done():
                 raise McpError("MCP SSE stream closed")
+            if self._legacy_post is None:
+                raise McpError("MCP SSE endpoint not announced")
             r = await self._call(
                 "POST",
                 self._legacy_post,

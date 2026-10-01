@@ -24,17 +24,21 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+# At most two terminal items reach a stream: an error, then the end sentinel.
+_TERMINAL_SLOTS = 2
+
+
 class _Queue(asyncio.Queue):
-    def put_terminal_nowait(self, item: Any) -> None:
-        """Enqueue regardless of maxsize (loop thread only)."""
-        self._put(item)
-        self._unfinished_tasks += 1
-        self._finished.clear()
-        self._wakeup_next(self._getters)
+    """A queue with room kept free for terminal items: data may fill only
+    ``data_capacity`` slots, so an error or the end sentinel always fits."""
+
+    def __init__(self, maxsize: int) -> None:
+        super().__init__(maxsize=maxsize + _TERMINAL_SLOTS)
+        self.data_capacity = maxsize
 
 
 def make_stream_queue(maxsize: int) -> asyncio.Queue:
-    return _Queue(maxsize=maxsize)
+    return _Queue(maxsize)
 
 
 class StreamBridge:
@@ -55,6 +59,7 @@ class StreamBridge:
         self._wait_s = wait_s
         self._overflow_error = overflow_error
         self._lock = threading.Lock()
+        self._capacity = getattr(q, "data_capacity", q.maxsize)
         self._reserved = 0  # scheduled data items not yet in the queue
         self._closed = False  # a terminal has been scheduled; drop the rest
 
@@ -67,14 +72,10 @@ class StreamBridge:
 
     def _terminal(self, item: Any) -> None:
         def deliver() -> None:
-            put = getattr(self._q, "put_terminal_nowait", None)
-            if put is not None:
-                put(item)
-            else:  # plain queue: best effort
-                try:
-                    self._q.put_nowait(item)
-                except asyncio.QueueFull:
-                    logger.warning("terminal item dropped: queue full")
+            try:
+                self._q.put_nowait(item)
+            except asyncio.QueueFull:  # only a plain queue without terminal slots
+                logger.warning("terminal item dropped: queue full")
 
         self._schedule(deliver)
 
@@ -96,7 +97,7 @@ class StreamBridge:
             with self._lock:
                 if self._closed:
                     return False
-                if self._q.qsize() + self._reserved < self._q.maxsize:
+                if self._q.qsize() + self._reserved < self._capacity:
                     self._reserved += 1
                     break
             if time.monotonic() >= deadline:

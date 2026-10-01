@@ -24,12 +24,21 @@ _LINE = re.compile(
 )
 
 
+# Messages can cite other lines ("already defined on line 10158"); those shift with
+# unrelated edits just like the error's own line, so they are not part of the key.
+_LINE_REF = re.compile(r"\bline \d+")
+
+
+def _key(file: str, code: str | None, msg: str) -> str:
+    return f"{file}\t{code or '-'}\t{_LINE_REF.sub('line N', msg)}"
+
+
 def collect(output: str) -> collections.Counter[str]:
     counts: collections.Counter[str] = collections.Counter()
     for line in output.splitlines():
         m = _LINE.match(line)
         if m:
-            counts[f"{m['file']}\t{m['code'] or '-'}\t{m['msg']}"] += 1
+            counts[_key(m["file"], m["code"], m["msg"])] += 1
     return counts
 
 
@@ -39,7 +48,7 @@ def load_baseline() -> collections.Counter[str]:
         for line in BASELINE.read_text().splitlines():
             n, _, key = line.partition("\t")
             if n.isdigit():
-                counts[key] = int(n)
+                counts[_key(*key.split("\t", 2))] += int(n)
     return counts
 
 
