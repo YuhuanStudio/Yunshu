@@ -2,9 +2,9 @@
 
 import pytest
 from python.yunshu_engine.grammar_constraint import (
+    CfgGrammarConstraint,
     ChoiceConstraint,
     ConstraintFactory,
-    LarkGrammarConstraint,
     RegexConstraint,
 )
 
@@ -202,24 +202,22 @@ class TestChoiceConstraint:
         assert stats["num_choices"] == 3
 
 
-class TestLarkGrammarConstraint:
-    def test_init_without_lark(self):
-        """Should initialize gracefully without lark."""
-        c = LarkGrammarConstraint("start: NUMBER\nNUMBER: /[0-9]+/")
-        # May or may not have parser depending on env
-        assert c.state in ("active", "unavailable")
+class TestCfgGrammarConstraint:
+    def test_init_defers_binding_until_a_tokenizer_is_known(self):
+        c = CfgGrammarConstraint("start: NUMBER\nNUMBER: /[0-9]+/")
+        assert c.state == "active"
 
     def test_is_done_initially_false(self):
-        c = LarkGrammarConstraint('start: "hello"')
+        c = CfgGrammarConstraint('start: "hello"')
         assert not c.is_done
 
     def test_reset(self):
-        c = LarkGrammarConstraint('start: "hello"')
+        c = CfgGrammarConstraint('start: "hello"')
         c.reset()
         assert not c.is_done
 
     def test_get_stats(self):
-        c = LarkGrammarConstraint('start: "test"')
+        c = CfgGrammarConstraint('start: "test"')
         stats = c.get_stats()
         assert stats["type"] == "cfg"
         assert "buffer_len" in stats
@@ -248,7 +246,7 @@ class TestConstraintFactory:
 
     def test_create_cfg(self):
         c = ConstraintFactory.create("cfg", 'start: "hello"')
-        assert isinstance(c, LarkGrammarConstraint)
+        assert isinstance(c, CfgGrammarConstraint)
 
     def test_regex_requires_string(self):
         with pytest.raises(ValueError, match="string pattern"):

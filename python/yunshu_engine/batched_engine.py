@@ -825,7 +825,7 @@ def _build_constrained_sampler(sampler, json_schema, tokenizer):
     - "json_object" string → generic JSON constraint
     - {"type": "regex", "pattern": "..."} → RegexConstraint
     - {"type": "choice", "choices": [...]} → ChoiceConstraint
-    - {"type": "cfg", "grammar": "..."} → LarkGrammarConstraint
+    - {"type": "cfg", "grammar": "..."} → CfgGrammarConstraint
 
     When YUNSHU_GRAMMAR_BITMASK=1 is set, uses the bitmask engine instead
     of the allowlist-based ConstrainedSampler (xgrammar-style approach).

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 Provides token-level constraint masking for:
 1. RegexConstraint — regex pattern enforcement (e.g., date, email, phone)
-2. LarkGrammarConstraint — context-free grammar via Lark parser
+2. CfgGrammarConstraint — context-free grammar (Lark syntax) via llguidance
 3. ChoiceConstraint — enumeration from a fixed list of strings
 4. ConstraintFactory — unified interface matching grammar_type to constraint
 
@@ -927,189 +927,174 @@ class ChoiceConstraint:
         }
 
 
-class LarkGrammarConstraint:
-    """Context-free grammar constraint using Lark parser.
+class UnsupportedGrammarError(ValueError):
+    """The CFG grammar cannot be served (invalid grammar or no engine/tokenizer)."""
 
-    Falls back gracefully if lark is not installed — in that case,
-    only JSON schema and regex constraints are available.
+
+class CfgGrammarConstraint:
+    """Context-free grammar constraint (Lark syntax) backed by llguidance.
+
+    llguidance is an Earley engine that computes the exact set of tokens that
+    keep the input a viable prefix of the grammar, so there is no first-character
+    shortcut, no candidate cap and no fixed probe alphabet.  The grammar is
+    validated at construction (:class:`UnsupportedGrammarError` with the engine's
+    message); the start rule is ``start`` as in Lark.  The advance interface is
+    text-based like the other constraints: the text is re-tokenized into
+    vocabulary ids that llguidance consumes (the grammar state depends on the
+    bytes, not on the token boundaries).
     """
 
-    def __init__(self, grammar: str, start_rule: str = "start") -> None:
+    def __init__(
+        self, grammar: str, start_rule: str = "start", tokenizer: Any = None
+    ) -> None:
         self._grammar_text = grammar
         self._start_rule = start_rule
         self._text_buffer = ""
         self._done = False
-        self._parser = None
+        self._dead = False
+        self._consumed = 0
+        self._llt: Any = None
+        self._matcher: Any = None
+        self._lark = grammar
+        self._cache_text = ""
+        self._allowed_cache: dict[int, list[int]] = {}
+        if start_rule != "start":
+            raise UnsupportedGrammarError("CFG grammars must define a 'start' rule")
+        try:
+            from llguidance import LLMatcher
+        except ImportError as exc:  # pragma: no cover - llguidance is a dependency
+            raise UnsupportedGrammarError(
+                "CFG grammar constraints require llguidance"
+            ) from exc
+        self._LLMatcher = LLMatcher
+        if tokenizer is not None:
+            self._bind(tokenizer)
+
+    # ── engine binding ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def _vocab_width(tokenizer: Any) -> int:
+        from yunshu_engine.tool_call_grammar import _hf_tokenizer
+
+        hf = _hf_tokenizer(tokenizer)
+        for probe in (
+            lambda: len(hf),
+            lambda: int(hf.vocab_size),
+            lambda: len(hf.get_vocab()),
+        ):
+            try:
+                n = int(probe())
+                if n > 0:
+                    return n
+            except Exception:  # noqa: BLE001 - try the next shape
+                continue
+        raise UnsupportedGrammarError("cannot determine the tokenizer vocabulary size")
+
+    def _bind(self, tokenizer: Any) -> None:
+        from yunshu_engine.tool_call_grammar import llg_tokenizer
 
         try:
-            from lark import Lark, Token
+            llt = llg_tokenizer(tokenizer, self._vocab_width(tokenizer))
+        except UnsupportedGrammarError:
+            raise
+        except Exception as exc:
+            raise UnsupportedGrammarError(
+                f"CFG constraints need a Hugging Face tokenizer: {exc}"
+            ) from exc
+        grammar = self._LLMatcher.grammar_from_lark(self._lark)
+        err = self._LLMatcher.validate_grammar(grammar, llt)
+        if err:
+            raise UnsupportedGrammarError(f"invalid CFG grammar: {err[:400]}")
+        matcher = self._LLMatcher(llt, grammar)
+        err = matcher.get_error()
+        if err:
+            raise UnsupportedGrammarError(f"invalid CFG grammar: {err[:400]}")
+        self._llt = llt
+        self._matcher = matcher
+        self._words = (llt.vocab_size + 31) // 32
 
-            self._lark_token = Token
-            self._parser = Lark(
-                grammar,
-                start=start_rule,
-                parser="earley",
-                ambiguity="resolve",
-            )
-        except ImportError:
-            logger.warning("lark not installed — CFG constraint unavailable")
-        except Exception as e:
-            logger.warning(f"Lark grammar parse failed: {e}")
+    # ── constraint interface ────────────────────────────────────────────────
 
     @property
     def state(self) -> str:
-        return "done" if self._done else "active" if self._parser else "unavailable"
+        return "done" if self._done else "active"
 
     @property
     def is_done(self) -> bool:
         return self._done
 
     def advance(self, token_text: str) -> None:
-        if self._done or self._parser is None:
+        if self._done or self._dead or self._matcher is None or not token_text:
             return
         self._text_buffer += token_text
-        try:
-            self._parser.parse(self._text_buffer)
-            # Full match succeeded — but check if the match can be extended.
-            # Without this, patterns like `start: /[a-z]+/` terminate after
-            # the first character "a" because parse("a") succeeds.
-            extendable = False
-            for ch in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _-.,:;!?@#$%":
-                try:
-                    self._parser.parse(self._text_buffer + ch)
-                    extendable = True
-                    break
-                except Exception:
-                    pass
-            if not extendable:
-                self._done = True
-        except Exception:
-            logger.debug("CFG parse incomplete, continuing generation", exc_info=True)
+        for tid in self._llt.tokenize_str(token_text):
+            if not self._matcher.consume_token(tid):
+                # The model emitted text the mask forbade: fail closed.
+                self._dead = True
+                return
+            self._consumed += 1
+        if self._matcher.is_stopped():
+            self._done = True
 
     def get_allowed_tokens(
         self, tokenizer: Any, generated_token_ids: list[int]
     ) -> list[int]:
-        if self._done or self._parser is None:
-            if self._done:
-                eos_ids = normalize_eos_ids(tokenizer)
-                return eos_ids
+        if self._matcher is None:
+            self._bind(tokenizer)
+        if self._dead:
             return []
+        if self._done or self._matcher.is_stopped():
+            return normalize_eos_ids(tokenizer)
+        cached = self._allowed_cache.get(self._consumed)
+        if cached is not None and self._cache_text == self._text_buffer:
+            return cached
+        import llguidance.numpy as lnp
+        import numpy as np
 
-        # For CFG, we use a broader approach: try single-char extensions
-        # and check if they produce valid partial parses
-        valid_chars = self._valid_next_chars()
-        if valid_chars is None:
-            return _get_all_token_ids(tokenizer)
-        if not valid_chars:
-            return []
-
-        if not hasattr(self.__class__, "_token_char_cache"):
-            self.__class__._token_char_cache = weakref.WeakKeyDictionary()
-        if tokenizer not in self.__class__._token_char_cache:
-            self.__class__._token_char_cache[tokenizer] = _build_token_char_map(
-                tokenizer
-            )
-
-        char_map = self.__class__._token_char_cache[tokenizer]
-        candidates = set()
-        for ch in valid_chars:
-            if ch in char_map:
-                candidates.update(char_map[ch])
-        # char_map only matches the FIRST char, so a multi-char token whose
-        # tail violates the grammar (e.g. "fox" for grammar "foo"|"bar") was wrongly
-        # admitted. The JSON/regex/choice constraints all reject such tokens; do the
-        # same here by validating the FULL token text against the parser. Single-char
-        # tokens are already fully validated by valid_chars. Cap the candidate set to
-        # bound cost (CFG is opt-in); fall back to first-char-only above the cap.
-        _decode = getattr(tokenizer, "decode", None)
-        if _decode is None or len(candidates) > 5000:
-            return list(candidates)
-        allowed = []
-        for tid in candidates:
-            try:
-                ttext = _decode([tid])
-            except Exception:
-                continue
-            if len(ttext) <= 1 or self._token_text_extends(ttext):
-                allowed.append(tid)
+        row = np.zeros((1, self._words), dtype=np.int32)
+        lnp.fill_next_token_bitmask(self._matcher, row, 0)
+        bits = np.unpackbits(row.view(np.uint8), bitorder="little")
+        allowed = np.flatnonzero(bits[: self._llt.vocab_size]).tolist()
+        if self._matcher.is_accepting():
+            allowed += [e for e in normalize_eos_ids(tokenizer) if e not in allowed]
+        if len(self._allowed_cache) >= 64:
+            self._allowed_cache.clear()
+        self._allowed_cache[self._consumed] = allowed
+        self._cache_text = self._text_buffer
         return allowed
-
-    def _token_text_extends(self, text: str) -> bool:
-        """True if appending the whole token ``text`` keeps the parse valid/extendable."""
-        if self._parser is None:
-            return True
-        cand = self._text_buffer + text
-        try:
-            self._parser.parse(cand)
-            return True
-        except Exception:
-            try:
-                interactive = self._parser.parse_interactive(cand)
-                interactive.exhaust_lexer()
-                return True
-            except Exception:
-                return False
-
-    def _valid_next_chars(self) -> set[str] | None:
-        """Test which characters can extend the current partial parse."""
-        if self._parser is None:
-            return None
-
-        has_interactive = hasattr(self._parser, "parse_interactive")
-        if not has_interactive:
-            import logging
-
-            logging.getLogger(__name__).warning(
-                "LarkGrammarConstraint: parse_interactive unavailable (Lark < 1.2). "
-                "CFG constraint will be permissive — all characters allowed. "
-                "Upgrade to Lark >= 1.2 for proper grammar-constrained generation."
-            )
-            return None
-
-        valid = set()
-        test_chars = [chr(i) for i in range(32, 127)]
-        test_chars.extend(["\n", "\t"])
-        # CJK Unified Ideographs sample and Latin Extended sample
-        test_chars.extend(chr(i) for i in range(0x4E00, 0x4E00 + 100))
-        test_chars.extend(chr(i) for i in range(0x00C0, 0x00C0 + 50))
-
-        for ch in test_chars:
-            candidate = self._text_buffer + ch
-            try:
-                self._parser.parse(candidate)
-                valid.add(ch)
-            except Exception:
-                try:
-                    interactive = self._parser.parse_interactive(candidate)
-                    interactive.exhaust_lexer()
-                    valid.add(ch)
-                except Exception:
-                    pass
-
-        if len(valid) > len(test_chars) - 2:
-            return None
-        return valid
 
     def checkpoint(self) -> dict[str, Any]:
         """Save current state for rollback (speculative decoding support)."""
         return {
             "text_buffer": self._text_buffer,
             "done": self._done,
+            "dead": self._dead,
+            "consumed": self._consumed,
         }
 
     def rollback(self, saved: dict[str, Any]) -> None:
         """Restore state from a checkpoint."""
+        if self._matcher is not None and self._consumed > saved["consumed"]:
+            self._matcher.rollback(self._consumed - saved["consumed"])
         self._text_buffer = saved["text_buffer"]
         self._done = saved["done"]
+        self._dead = saved["dead"]
+        self._consumed = saved["consumed"]
 
     def reset(self) -> None:
+        if self._matcher is not None:
+            self._matcher.reset()
         self._text_buffer = ""
         self._done = False
+        self._dead = False
+        self._consumed = 0
+        self._cache_text = ""
+        self._allowed_cache.clear()
 
     def get_stats(self) -> dict[str, Any]:
         return {
             "type": "cfg",
-            "has_parser": self._parser is not None,
+            "has_parser": self._matcher is not None,
             "buffer_len": len(self._text_buffer),
             "is_done": self._done,
         }
@@ -1228,7 +1213,7 @@ class ConstraintFactory:
     - json_object → JsonSchemaConstraint (no schema)
     - regex → RegexConstraint
     - choice → ChoiceConstraint
-    - cfg → LarkGrammarConstraint (requires lark)
+    - cfg → CfgGrammarConstraint (Lark syntax, llguidance engine)
     """
 
     @staticmethod
@@ -1266,6 +1251,6 @@ class ConstraintFactory:
         if grammar_type == "cfg":
             if not isinstance(grammar, str):
                 raise ValueError("cfg constraint requires a grammar string")
-            return LarkGrammarConstraint(grammar)
+            return CfgGrammarConstraint(grammar, tokenizer=tokenizer)
 
         raise ValueError(f"Unknown grammar_type: {grammar_type}")

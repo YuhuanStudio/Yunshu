@@ -521,11 +521,11 @@ def build_bitmask_engine(
         return GrammarBitmaskEngine(constraint)
 
     if grammar_type == "cfg":
-        from .grammar_constraint import LarkGrammarConstraint
+        from .grammar_constraint import CfgGrammarConstraint
 
         if not isinstance(grammar, str):
             raise ValueError("cfg constraint requires a grammar string")
-        constraint = LarkGrammarConstraint(grammar)
+        constraint = CfgGrammarConstraint(grammar)
         return GrammarBitmaskEngine(constraint)
 
     raise ValueError(f"Unknown grammar_type: {grammar_type}")
