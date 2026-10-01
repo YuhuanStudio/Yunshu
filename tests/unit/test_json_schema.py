@@ -274,16 +274,21 @@ class TestJsonSchemaConstraintArrays:
             == "ACCEPT"
         )
 
-    def test_prefixitems_tuple_accepted(self):
-        """prefixItems tuple validation — the leading non-string
-        element was rejected because only `items` was understood."""
-        c = JsonSchemaConstraint(
-            {
-                "type": "array",
-                "prefixItems": [{"type": "integer"}, {"type": "string"}],
-            }
-        )
-        assert self._feed_all_accepted(c, '[1, "a"]') == "ACCEPT"
+    def test_prefixitems_is_rejected_not_approximated(self):
+        """prefixItems used to be approximated as "any of the prefix types at any
+        position", which let ["a", 1] through a [integer, string] tuple. It is now
+        outside the supported subset and rejected with a clear error."""
+        import pytest
+
+        from yunshu_engine.json_schema import UnsupportedSchemaError
+
+        with pytest.raises(UnsupportedSchemaError, match="prefixItems"):
+            JsonSchemaConstraint(
+                {
+                    "type": "array",
+                    "prefixItems": [{"type": "integer"}, {"type": "string"}],
+                }
+            )
 
     def test_typed_items_still_strict(self):
         """Regression guard: the no-items='any' fix must NOT loosen a typed

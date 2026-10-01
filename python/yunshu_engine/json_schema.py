@@ -41,6 +41,186 @@ logger = logging.getLogger(__name__)
 # ── JSON Schema Auto-Repair ──────────────────────────────────────────────────
 
 
+class UnsupportedSchemaError(ValueError):
+    """The JSON Schema uses a construct the constrained decoder cannot enforce.
+
+    Supported subset (enforced token by token; everything else is rejected, never
+    silently ignored):
+
+    * ``type`` (one name or a list of ``object array string number integer
+      boolean null``), ``enum``, ``const``;
+    * ``properties`` / ``required`` / ``additionalProperties`` (bool or schema;
+      an object that declares ``properties`` and omits ``additionalProperties``
+      is closed, the OpenAI structured-output convention);
+    * ``items`` (one schema);
+    * ``anyOf`` / ``oneOf`` / ``allOf`` of supported schemas;
+    * local, non-recursive ``$ref`` into ``$defs`` / ``definitions``;
+    * annotations that never affect validity: ``title description default
+      examples example $schema $id $comment deprecated readOnly writeOnly
+      format name strict``.
+
+    Rejected: length / range / count / pattern bounds (``minLength minimum
+    minItems pattern multipleOf uniqueItems ...``), ``not``, ``if/then/else``,
+    ``patternProperties``, ``prefixItems``, ``contains``, ``dependent*``,
+    ``propertyNames``, ``unevaluated*``, boolean sub-schemas, remote or
+    recursive ``$ref`` and schemas that exceed the compile budget.
+    """
+
+
+_SCHEMA_ANNOTATIONS = frozenset(
+    {
+        "title",
+        "description",
+        "default",
+        "examples",
+        "example",
+        "$schema",
+        "$id",
+        "$comment",
+        "deprecated",
+        "readOnly",
+        "writeOnly",
+        "format",
+        "name",
+        "strict",
+    }
+)
+_SCHEMA_ENFORCED = frozenset(
+    {
+        "type",
+        "enum",
+        "const",
+        "properties",
+        "required",
+        "additionalProperties",
+        "items",
+        "anyOf",
+        "oneOf",
+        "allOf",
+        "$ref",
+        "$defs",
+        "definitions",
+    }
+)
+_SCHEMA_TYPES = frozenset(
+    {"object", "array", "string", "number", "integer", "boolean", "null"}
+)
+_SCHEMA_MAX_NODES = 20_000
+_SCHEMA_MAX_DEPTH = 64
+
+
+def validate_supported_schema(schema: Any) -> None:
+    """Raise :class:`UnsupportedSchemaError` unless every keyword is enforced."""
+    if not isinstance(schema, dict):
+        raise UnsupportedSchemaError("JSON Schema must be an object")
+    problems: list[str] = []
+    budget = [0]
+
+    def resolve(ref: str) -> Any:
+        if ref == "#":
+            return schema
+        if not ref.startswith("#/"):
+            return None
+        node: Any = schema
+        for seg in ref[2:].split("/"):
+            seg = seg.replace("~1", "/").replace("~0", "~")
+            if isinstance(node, dict) and seg in node:
+                node = node[seg]
+            else:
+                return None
+        return node
+
+    def walk(node: Any, path: str, stack: tuple[str, ...], depth: int) -> None:
+        budget[0] += 1
+        if budget[0] > _SCHEMA_MAX_NODES or depth > _SCHEMA_MAX_DEPTH:
+            raise UnsupportedSchemaError(
+                "JSON Schema too complex (exceeds the compile budget of "
+                f"{_SCHEMA_MAX_NODES} nodes / depth {_SCHEMA_MAX_DEPTH})"
+            )
+        if not isinstance(node, dict):
+            problems.append(f"{path or '/'}: boolean/non-object sub-schema")
+            return
+        bad = sorted(
+            k
+            for k in node
+            if k not in _SCHEMA_ENFORCED
+            and k not in _SCHEMA_ANNOTATIONS
+            and not k.startswith("x-")
+        )
+        if bad:
+            problems.append(f"{path or '/'}: {', '.join(bad)}")
+        t = node.get("type")
+        if t is not None:
+            kinds = t if isinstance(t, list) else [t]
+            if not kinds or any(k not in _SCHEMA_TYPES for k in kinds):
+                problems.append(f"{path or '/'}: invalid type {t!r}")
+        if "enum" in node and not (isinstance(node["enum"], list) and node["enum"]):
+            problems.append(f"{path or '/'}: enum must be a non-empty list")
+        if "required" in node and not (
+            isinstance(node["required"], list)
+            and all(isinstance(r, str) for r in node["required"])
+        ):
+            problems.append(f"{path or '/'}: required must be a list of strings")
+        ref = node.get("$ref")
+        if ref is not None:
+            if not isinstance(ref, str) or not ref.startswith("#"):
+                problems.append(f"{path or '/'}: remote $ref {ref!r}")
+            elif ref in stack:
+                problems.append(f"{path or '/'}: recursive $ref {ref}")
+            else:
+                target = resolve(ref)
+                if not isinstance(target, dict):
+                    problems.append(f"{path or '/'}: unresolvable $ref {ref}")
+                else:
+                    walk(target, path + f"[{ref}]", stack + (ref,), depth + 1)
+        props = node.get("properties")
+        if props is not None:
+            if not isinstance(props, dict):
+                problems.append(f"{path or '/'}: properties must be an object")
+            else:
+                for name, sub in props.items():
+                    walk(sub, f"{path}/properties/{name}", stack, depth + 1)
+        add = node.get("additionalProperties")
+        if isinstance(add, dict):
+            walk(add, f"{path}/additionalProperties", stack, depth + 1)
+        elif add is not None and not isinstance(add, bool):
+            problems.append(f"{path or '/'}: additionalProperties must be bool/schema")
+        if "items" in node:
+            walk(node["items"], f"{path}/items", stack, depth + 1)
+        for key in ("anyOf", "oneOf", "allOf"):
+            if key in node:
+                subs = node[key]
+                if not isinstance(subs, list) or not subs:
+                    problems.append(f"{path or '/'}: {key} must be a non-empty list")
+                else:
+                    for i, sub in enumerate(subs):
+                        walk(sub, f"{path}/{key}/{i}", stack, depth + 1)
+        for key in ("$defs", "definitions"):
+            defs = node.get(key)
+            if isinstance(defs, dict):
+                for name, sub in defs.items():
+                    # Definitions are checked when referenced; an unreferenced
+                    # one never reaches generation.
+                    if not isinstance(sub, dict):
+                        problems.append(f"{path}/{key}/{name}: non-object definition")
+
+    if "enum" in schema or "const" in schema:
+        # The token machine enforces enum / const on object properties and array
+        # items; at the document root it does not (it would let any string through).
+        problems.append("/: enum/const at the schema root is not enforced")
+    walk(schema, "", (), 0)
+    if problems:
+        raise UnsupportedSchemaError(
+            "unsupported JSON Schema: "
+            + "; ".join(problems[:8])
+            + " (supported keywords: "
+            + ", ".join(sorted(_SCHEMA_ENFORCED))
+            + "; annotations ignored: "
+            + ", ".join(sorted(_SCHEMA_ANNOTATIONS))
+            + ")"
+        )
+
+
 def _repair_json_schema(
     schema: dict,
     _depth: int = 0,
@@ -413,6 +593,8 @@ class JsonSchemaConstraint:
                     The schema is auto-repaired via ``_repair_json_schema``
                     before use.
         """
+        if schema is not None:
+            validate_supported_schema(schema)
         self._schema = _repair_json_schema(schema) if schema is not None else None
         self._state = JsonState.START
         self._text_buffer = ""  # decoded text so far
@@ -1122,8 +1304,9 @@ class JsonSchemaConstraint:
             return False
         schema_type = self._get_type_from_schema(schema)
         if isinstance(schema_type, list):
-            # Multiple types: integer only if all types are integer
-            return all(t == "integer" for t in schema_type)
+            # A union is integer-only when it names "integer" and no "number":
+            # [integer, string] must not admit 1.5.
+            return "integer" in schema_type and "number" not in schema_type
         return schema_type == "integer"
 
     def _get_current_value_schema(self) -> dict | None:
