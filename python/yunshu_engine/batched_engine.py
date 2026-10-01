@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import settings
+from .context_window import ContextBudgetError
 from .text_utils import StopHoldbackBuffer
 
 logger = logging.getLogger(__name__)
@@ -2769,10 +2770,13 @@ class BatchedEngine:
                             strategy="importance_aware",
                         )
                         prompt = result.messages
+                        result.raise_if_cannot_fit()
                         logger.debug(
                             f"Context window truncated: {token_count} → "
                             f"{result.truncated_token_count} tokens (saved {result.tokens_saved})"
                         )
+            except ContextBudgetError:
+                raise
             except Exception:
                 logger.warning("context window truncation skipped", exc_info=True)
 
@@ -3221,11 +3225,14 @@ class BatchedEngine:
                             strategy="importance_aware",
                         )
                         prompt = result.messages
+                        result.raise_if_cannot_fit()
                         logger.debug(
                             "Fast path pre-encode truncation: estimated %d → %d tokens",
                             _est_tokens,
                             result.truncated_token_count,
                         )
+            except ContextBudgetError:
+                raise
             except Exception:
                 logger.debug(
                     "context window truncation skipped in fast path", exc_info=True
@@ -5029,11 +5036,14 @@ class BatchedEngine:
                             strategy="importance_aware",
                         )
                         prompt = result.messages
+                        result.raise_if_cannot_fit()
                         logger.debug(
                             "Streaming fast path pre-encode truncation: estimated %d → %d tokens",
                             _est_tokens,
                             result.truncated_token_count,
                         )
+            except ContextBudgetError:
+                raise
             except Exception:
                 logger.debug(
                     "context window truncation skipped in streaming fast path",
