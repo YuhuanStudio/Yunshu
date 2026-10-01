@@ -17,6 +17,7 @@ Model type detection uses dynamic library probing instead of static lists:
 
 
 import asyncio
+import contextlib
 import gc
 import importlib
 import json
@@ -31,6 +32,9 @@ from typing import Any
 import mlx.core as mx
 
 from .types import EngineConfig
+
+# Seconds a model stays un-unloadable after get_engine() hands it out.
+HANDOFF_GRACE_S = 10.0
 
 logger = logging.getLogger(__name__)
 
@@ -305,6 +309,11 @@ class ModelEntry:
     load_time: float = (
         0.0  # monotonic timestamp when model was loaded (for /models endpoint)
     )
+    # Explicit leases (ModelManager.lease) and the short hand-off window after
+    # get_engine(): a non-forced unload is refused while either holds, closing
+    # the gap before the engine's own active-request counter increments.
+    leases: int = 0
+    handoff_until: float = 0.0
 
 
 async def instantiate_engine(
@@ -477,7 +486,32 @@ class ModelManager:
             )
             logger.info(f"Registered model: {model_id} (type={model_type.name})")
 
+    def _held(self, entry: ModelEntry) -> bool:
+        return entry.leases > 0 or entry.handoff_until > time.monotonic()
+
+    @contextlib.asynccontextmanager
+    async def lease(self, model_id: str, engine_config: EngineConfig | None = None):
+        """Hold a model loaded from acquire to release (unload/TTL/eviction skip it)."""
+        engine = await self.get_engine(model_id, engine_config)
+        entry = self._entries[model_id]
+        entry.leases += 1
+        try:
+            yield engine
+        finally:
+            entry.leases = max(0, entry.leases - 1)
+
     async def get_engine(
+        self,
+        model_id: str,
+        engine_config: EngineConfig | None = None,
+    ) -> Any:
+        engine = await self._get_engine(model_id, engine_config)
+        entry = self._entries.get(model_id)
+        if entry is not None:
+            entry.handoff_until = time.monotonic() + HANDOFF_GRACE_S
+        return engine
+
+    async def _get_engine(
         self,
         model_id: str,
         engine_config: EngineConfig | None = None,
@@ -703,6 +737,9 @@ class ModelManager:
         # updated at get_engine time, so a long stream has a stale timestamp).
         # Tearing down a model mid-generation crashes the in-flight request.
         # shutdown passes force=True.
+        if not force and self._held(entry):
+            logger.info("Skipping unload of '%s' — leased / just handed out", model_id)
+            return False
         if not force and entry.engine is not None:
             # FAIL SAFE. Only LLM/VLM engines define has_active_requests;
             # TTS/ASR/Image/STS/Video/OCR engines don't, so the old `try/except:
@@ -1051,6 +1088,7 @@ class ModelManager:
             and not e.is_pinned
             and not e.is_loading
             and e.model_id != exclude_model_id
+            and not self._held(e)
         ]
         # Filter out engines with active requests.
         # A victim is only "safe" if we can PROVE it is idle —
