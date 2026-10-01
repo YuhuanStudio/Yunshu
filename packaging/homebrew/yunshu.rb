@@ -2,6 +2,9 @@
 # (https://github.com/YuhuanStudio/homebrew-tap, file Formula/yunshu.rb).
 # Install: brew install yuhuanstudio/tap/yunshu
 #
+# TODO(0.1.2): url and sha256 below still point at the published 0.1.1 sdist. After 0.1.2 is on
+# PyPI, set both to the 0.1.2 sdist (packaging/homebrew/README.md step 1) before copying to the tap.
+#
 # The source is the PyPI sdist of the same version; the sha256 is of the file PyPI serves.
 #
 # Background running is `yunshu service install` (one launchd agent for every

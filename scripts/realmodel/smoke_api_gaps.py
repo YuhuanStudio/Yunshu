@@ -57,10 +57,10 @@ def red_png_b64() -> str:
 
 def version():
     v = httpx.get(B + "/version").json()
-    return v.get("version") == "0.1.1", v
+    return v.get("version") == "0.1.2", v
 
 
-chk("version 0.1.1", version)
+chk("version 0.1.2", version)
 
 
 def logprob_consistency():

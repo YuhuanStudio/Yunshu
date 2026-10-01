@@ -7,6 +7,117 @@ Release steps: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-01
+
+Agent compatibility, constrained decoding that says what it cannot do, a bounded SSD prefix cache,
+and sampled requests that use speculative decoding.
+
+### Added
+
+- Native agent compatibility for Claude Code, Codex and opencode: server-side `web_search`,
+  `web_fetch` and the MCP connector run inside the generation loop (Messages and Responses);
+  Files, Batches and Conversations APIs (OpenAI and Anthropic shapes), Responses compaction and
+  `generate=false` prewarm; reasoning items with `encrypted_content`; `YUNSHU_MODEL_ALIASES` so
+  agent-style model names resolve to a served model; `yunshu launch` starts agents with the
+  model's real window and effort levels. The agent x feature matrix with end-to-end evidence is in
+  [AGENT_COMPAT.md](docs/guides/AGENT_COMPAT.md).
+- `yunshu statusline`: live engine state (prefill progress, decode speed, last cache hit) for
+  Claude Code's status line, read from `/v1/yunshu/status`.
+- Capability contract per model: `/v1/models` states tools, structured-output engines, logprobs,
+  media, speculative mode, cache tiers and context length.
+- `yunshu doctor` checks dependency versions, extras, llguidance, API feature state,
+  half-downloaded models, the cache disk budget and cache integrity, each with a fix.
+  `yunshu cache status|gc` finds truncated, corrupt and old-format SSD cache entries and orphaned
+  temp files and trims to the size cap. `yunshu diagnose` writes a local diagnostics bundle
+  (version, redacted settings, doctor output, recent errors with trace ids; never prompts, never
+  uploaded). `yunshu service rotate-logs` plus size / age log rotation with gzip archives and
+  secrets redacted.
+- Constrained decoding: CFG constraints and JSON Schemas outside the in-house subset (pattern,
+  length, range, multipleOf, item counts, prefixItems, recursive refs, formats) are enforced with
+  llguidance; Messages `output_config.format` maps to constrained decoding.
+- Tool-call structural-tag grammar (llguidance) for Qwen3.x XML and Hermes JSON calls, as an
+  experimental option (default off).
+- Per-request cache provenance (`x_yunshu.cache`, `X-Yunshu-Cache-*`); `x_yunshu` inside usage on
+  Messages and Responses; Ollama `keep_alive`, request id and eval / load / total durations; speculative
+  drafted / accepted counters; prefill progress on the mlx-lm fast path.
+- Realtime GA fields (`idle_timeout_ms`, `noise_reduction`, `output_audio_buffer.*`,
+  `rate_limits.updated`), Responses request echo, `truncation=auto`, `max_tool_calls`.
+- Paired downstream evaluation harness (GSM8K, MMLU-Pro, IFEval, needle, BFCL; McNemar and
+  paired CI) and an agentic coding benchmark driving real agent CLIs against a local server.
+
+### Changed
+
+- Behavior you may notice:
+  - Unsupported regex constructs and the JSON-Schema keywords `uniqueItems`, `not`, `if / then /
+    else` and `contains` now answer 400 before generation instead of being approximated or ignored.
+  - The context budget answers 400 `context_length_exceeded` when the system prompt and the latest
+    user turn do not fit, instead of silently dropping them. Truncation is unit-based, keeps the
+    system prompt and the latest user turn, and summaries are quoted user history, never a system
+    message.
+  - Capability-contract 400s: a chat request using tools, media parts or other features the
+    model lacks gets an explicit error.
+  - The APC SSD prefix cache is on by default (`~/.yunshu/cache/apc`, opt out with
+    `YUNSHU_VLM_APC_DISK=0`) under one global disk budget per cache root (64 GiB cap, LRU across
+    models), a free-space reserve (the larger of 10% and 20 GiB, rechecked per write), and stale
+    namespace pruning. A write error pauses spilling with one warning instead of tracebacks.
+  - The tool-call structural-tag grammar is experimental and off by default.
+- Sampling contract: `top_p` always keeps the best token, `top_k` at or above the vocabulary is a
+  no-op, the shared batch and the round driver use the position-keyed sampler, and per-choice
+  seeds are derived the same way on every route (choice 0 keeps the caller's seed).
+- Messages and Responses hand tools to templates that render them natively (Qwen3.x tool-call
+  format); mid-conversation system messages stay in place for prefix reuse.
+- Checkpoint fingerprints (weights, config, tokenizer, template, adapter, layout, format) are part
+  of text SSD and APC cache keys; SSD loads are validated and fall back to a cold prefill on
+  corruption.
+- The speculative lane uses lane-linear projections by default (27B: MTP prose 1K +12%, DFlash2
+  prose 1K +17%, parity unchanged); the packed path and `YUNSHU_LANE_LINEAR` are gone.
+- The round driver remains experimental (single-request greedy decode 10-40% behind the default
+  lane); its sampled drafting is behind `YUNSHU_ROUND_KEYED_DRAFT`.
+- The mypy baseline gate is shared by `just lint` and CI; `llguidance` is an explicit dependency.
+
+### Fixed
+
+- Malformed Qwen3.x tool calls (missing `</function>`, broken JSON, tool-name tags) become
+  `tool_use` blocks and call markup no longer leaks into text; unreadable calls are dropped.
+- Family adapters keep media parts on the vision path (Gemma 4 and Mistral dropped images); a
+  Claude Code turn with an image tool result no longer fails with "System message must be at the
+  beginning"; an engine error after the stream starts is an error event on Messages, chat and
+  Responses.
+- Streaming and lifecycle: terminal events can no longer be dropped from a full queue, a failed
+  runner submit drains every job, per-job output is bounded, a request cancelled before admit never
+  prefills, reset no longer orphans an MLX worker, and a model lease prevents unload racing
+  `get_engine`. TTS cancels between chunks.
+- Constrained decoding: regex uses an exact Unicode DFA, a dead-end mask raises instead of
+  releasing the constraint, EOS shape is normalized, reasoning tags inside tool JSON stay data,
+  and a draft the tool mask forbids is never fed to the matcher.
+- Stop / reasoning split keeps tag text inside JSON payloads; a streaming parser holds spaced tags.
+- Responses no longer double-templates on VLMs; the Anthropic route keeps native tools with
+  `tool_choice` / parallel; a 500 on Claude Code system reminders in image requests.
+- Gateway: constant-time UTF-8 token compare, request alias survives duplicate ids, non-finite
+  settings rejected, malformed `Content-Length` rejected, a counted body without `Content-Length`
+  is forwarded (was empty), response cache keyed by engine generation, Conversations I/O off the
+  event loop, file-store quota and crash-orphan cleanup.
+- Round driver: greedy rows take the serial-equivalent argmax; an idle decode batch releases its
+  slot buffers (b8 after a 32K request 34 to 21 GiB).
+
+### Security
+
+- One network policy (`netguard`) for MCP, `web_fetch` and media downloads: resolve once, classify
+  mapped IPv6 / CGNAT / multicast, connect to the pinned IP, re-check every redirect hop, total
+  deadline and byte budget; MCP JSON-RPC replies are validated and the legacy SSE endpoint must be
+  same-origin.
+- Diagnostics and rotated logs redact secrets; the docs list the real outbound connections.
+
+### Performance
+
+- Sampled requests use speculative decoding (position-keyed Gumbel sampling makes draft acceptance
+  exact): sampled 27B agent traffic 20 to 69-93 tok/s, token distribution checked against the
+  serial sampler.
+- The APC SSD tier reloads bit-exact checkpoints 10-40x faster than re-prefill on 27B and survives
+  restarts; a longer SSD prefix beats a short RAM hit on the text engine.
+- Byte-bounded prefix cache with superseded checkpoints dropped and an end-of-system-turn checkpoint.
+- Ported oMLX SiLU probe and `qmv_fast` layout rule (27B greedy output identical, decode unchanged).
+
 ## [0.1.1] - 2026-09-29
 
 Yunshu is now positioned as a local LLM / VLM inference engine (decode speed, TTFT, prefix reuse,

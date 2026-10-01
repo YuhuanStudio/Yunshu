@@ -118,7 +118,7 @@ status endpoint show the same live.
 stay minimal: they are public, and orchestrators key off their status codes.
 
 ```json
-{"object":"yunshu.status","version":"0.1.1","state":"running","uptime_s":17.3,
+{"object":"yunshu.status","version":"0.1.2","state":"running","uptime_s":17.3,
  "models":[{"id":"Qwen3.8-27B-oQ4e-mtp","type":"VLMEngine","loaded":true,"pinned":true}],
  "memory":{"active_gb":17.4,"cache_gb":0.3,"peak_gb":18.1,"total_gb":137.4,"pressure":0.127},
  "requests":{"active":1,"queued":0,"prefill":0,"decode":1,"items":[{"request_id":"job-7","phase":"decode","completion_tokens":112}]},

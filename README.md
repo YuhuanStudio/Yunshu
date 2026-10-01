@@ -32,13 +32,25 @@ already paid for. The first fully tuned model is **Qwen3.8-27B**.
   KV, KV quantization, 4-bit cached prefixes, int8 SSD cache) are settings you turn on.
 - **Prefix cache for hybrid models.** Qwen3.5-family models mix attention with recurrent
   GatedDeltaNet layers, which ordinary KV caches cannot slice. Yunshu keeps exact checkpoints,
-  keyed by image pixels as well as text, 8 GiB in RAM by default plus an optional SSD tier.
-  Repeated or edited long prompts skip prefill.
+  keyed by image pixels as well as text, 8 GiB in RAM by default plus an SSD tier that is on by
+  default (`~/.yunshu/cache/apc`, one global disk budget with a free-space reserve, opt out with
+  `YUNSHU_VLM_APC_DISK=0`). Repeated or edited long prompts skip prefill, also after a restart.
 - **Verify kernels checked against output.** GatedDeltaNet, attention and 5-bit matmul verify
   kernels, partly vendored from oMLX, each adopted only after a same-checkpoint A/B.
 - **The full API surface on the fast path.** Tool calls, JSON-schema constraints, stop sequences,
   logprobs, a streaming reasoning/content split, `reasoning_effort` passed to chat templates that
-  support it (Qwen3.8), and cancellation on client disconnect.
+  support it (Qwen3.8), and cancellation on client disconnect. `/v1/models` states what each model
+  supports (tools, structured output, logprobs, media, context) and a request that uses what the
+  model lacks gets an explicit 400. Regex and JSON-schema constraints are enforced exactly
+  (llguidance covers schemas beyond the built-in subset); a construct that cannot be enforced
+  (e.g. `uniqueItems`, `not`, `if / then / else`, `contains`) is a 400, not silently ignored.
+- **Coding-agent compatibility.** Claude Code, Codex and opencode run against it: Messages and
+  Responses with native tools, server-side `web_search` / `web_fetch` / MCP connector, Files,
+  Batches, Conversations, and `yunshu statusline` for Claude Code's status line. Sampled requests
+  (temperature above 0, what agents send) use speculative decoding too. Evidence per feature:
+  [AGENT_COMPAT.md](docs/guides/AGENT_COMPAT.md).
+- **Diagnostics.** `yunshu doctor` (with a fix per problem), `yunshu cache status|gc`,
+  `yunshu diagnose` (a local bundle with no prompts, never uploaded).
 
 ## Quickstart
 

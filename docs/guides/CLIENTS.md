@@ -81,6 +81,11 @@ print(msg.content[-1].text)
 - **Continue**: a model entry with `provider: openai`, `apiBase: http://127.0.0.1:8000/v1`,
   `model: local`.
 
+`yunshu launch claude` also sets the model's real context window and adds `yunshu statusline` (prefill
+progress, decode speed, last cache hit) to Claude Code's status line unless you have your own. Server-side
+`web_search` / `web_fetch`, the MCP connector and what each agent supports are in
+[AGENT_COMPAT.md](AGENT_COMPAT.md).
+
 Agents send long, repeated prompts. Yunshu's prefix cache reuses the shared part, so after the first
 turn only the new tokens are prefilled.
 

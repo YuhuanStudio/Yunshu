@@ -28,11 +28,22 @@
   4-bit 快取前綴、int8 SSD 快取)都是需要手動開啟的設定。
 - **混合架構模型的前綴快取。** Qwen3.5 家族把注意力層和遞迴的 GatedDeltaNet 層混在一起,一般的
   KV 快取切不開。Yunshu 保存精確的 checkpoint,以文字與圖片像素共同作為鍵,預設 8 GiB 記憶體,
-  可再加一層 SSD。重複或只改尾巴的長 prompt 不必重新 prefill。
+  另有預設開啟的 SSD 層(`~/.yunshu/cache/apc`,每個快取根目錄一個全域磁碟預算並保留剩餘空間,
+  `YUNSHU_VLM_APC_DISK=0` 可關閉)。重複或只改尾巴的長 prompt 不必重新 prefill,重啟後也一樣。
 - **以輸出驗證過的驗證 kernel。** GatedDeltaNet、注意力、5-bit 矩陣乘的驗證 kernel,部分取自
   oMLX,每一顆都經過同 checkpoint A/B 才採用。
 - **快速路徑上有完整 API。** 工具呼叫、JSON-schema 約束、停止序列、logprobs、串流推理/內容分離、
   `reasoning_effort` 直接傳給支援它的 chat template(Qwen3.8),以及客戶端斷線時取消生成。
+  `/v1/models` 會標明各模型支援的功能
+  (工具、結構化輸出、logprobs、媒體、context),請求用到模型沒有的功能會得到明確的 400。
+  regex 與 JSON-schema 約束是精確執行的(超出內建子集的 schema 交給 llguidance);無法執行的
+  語法(如 `uniqueItems`、`not`、`if / then / else`、`contains`)回 400,不會被默默忽略。
+- **程式代理相容。** Claude Code、Codex、opencode 都能使用:Messages 與 Responses 的原生工具、
+  伺服器端 `web_search` / `web_fetch` / MCP connector、Files、Batches、Conversations,以及給
+  Claude Code 狀態列用的 `yunshu statusline`。取樣請求(temperature 大於 0,代理送的就是這種)
+  也使用推測解碼。各功能的證據見 [AGENT_COMPAT.md](docs/guides/AGENT_COMPAT.md)。
+- **診斷。** `yunshu doctor`(每個問題附修正方法)、`yunshu cache status|gc`、`yunshu diagnose`
+  (本機診斷包,不含 prompt,不上傳)。
 
 ## 快速開始
 
