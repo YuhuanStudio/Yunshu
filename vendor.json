@@ -1041,6 +1041,7 @@
     "mlx-lm",
     "mlx-vlm",
     "mlx-metal",
-    "transformers"
+    "transformers",
+    "llguidance"
   ]
 }

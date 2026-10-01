@@ -88,6 +88,7 @@ dependencies = [
     "python-multipart>=0.0.27",
     "openai>=2.33.0",
     "jsonschema>=4.26.0",
+    "llguidance>=1.8",
 ]
 
 [project.urls]
