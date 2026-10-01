@@ -111,7 +111,9 @@ class _Row:
     done: int = 0  # prompt tokens prefilled
     pending: int | None = None  # committed token not yet in the cache
     generated: int = 0
-    drafts: list = field(default_factory=list)
+    drafts: list = field(default_factory=list)  # host ints of this step's window
+    draft_dev: Any = None  # the next window's drafts: a (maybe lazy) int32 array
+    nd: int = 0  # how many drafts ``draft_dev`` holds
     rates: list = field(default_factory=list)
     key: Any = None
     keyed: Any = None  # KeyedSampler of a sampled row that drafts
@@ -190,6 +192,9 @@ class RoundDriver:
         self.accepted = 0
         self._prefilled_last = False
         self.chain_ms = 0.0  # measured drafting cost per chain depth
+        self._chain_t = 0.0  # when the last chain was submitted
+        self._chain_deep = 0  # its depth while it may still be running
+        self._calls = 0
         # per draft depth: drafted / landed (telemetry)
         self.depth_drafted = [0] * (MAX_DECODE_TOKENS - 1)
         self.depth_landed = [0] * (MAX_DECODE_TOKENS - 1)
@@ -543,34 +548,80 @@ class RoundDriver:
         return events
 
     def _decode_step(self) -> list[Event]:
+        started = time.perf_counter()
         late = [r for r in self.batch.rows if r.head_state is not None]
         if late:
             self._draft(late, mx.stack([r.head_state for r in late]))
             for r in late:
                 r.head_state = None
-            mx.eval(*self.head.slots.arrays())
-        started = time.perf_counter()
         rows = list(self.batch.rows)
-        windows = [[r.pending, *([] if r.force else r.drafts)] for r in rows]
-        hidden = self.batch.forward(windows)
+        # The drafts are still a lazy graph (the previous step queued the
+        # chain and returned before it ran): the window's tokens are built on
+        # the device, so this step's graph is built while the chain runs.
+        lens, parts, used_drafts = [], [], []
+        for r in rows:
+            use = r.nd if r.draft_dev is not None and not r.force else 0
+            parts.append(mx.array([r.pending], dtype=mx.int32))
+            if use:
+                parts.append(r.draft_dev)
+            lens.append(1 + use)
+            used_drafts.append(use)
+        hidden = self.batch.forward(lens, mx.concatenate(parts))
         items, at = [], 0
-        for r, w in zip(rows, windows, strict=True):
-            items.append(_Item("d", r, None, 0, 0, at, len(w)))
-            at += len(w)
+        for r, n in zip(rows, lens, strict=True):
+            items.append(_Item("d", r, None, 0, 0, at, n))
+            at += n
         draws = self._draw(items, hidden)
-        mx.eval(
+
+        # Early absorb: the head reads (target token, hidden) at every window
+        # position inside this step's graph, and its greedy readout is the
+        # row's next first draft whichever position the row keeps. The host
+        # only picks which position, so drafting the next window starts at
+        # once instead of after a second dependent pass.
+        head_rows = [(b, r) for b, r in enumerate(rows) if r.hslot is not None]
+        early_out: mx.array | None = None
+        early_seeds: mx.array | None = None
+        head = self.head
+        if head_rows and head is not None:
+            T = max(lens)
+            idx = mx.array(
+                [
+                    [items[b].at + min(j, lens[b] - 1) for j in range(T)]
+                    for b, _ in head_rows
+                ],
+                dtype=mx.int32,
+            )
+            flat = mx.concatenate([d[1] for d in draws]).astype(mx.int32)
+            early_out, early_seeds = head.absorb_window(
+                [r for _, r in head_rows], flat[idx], hidden[idx]
+            )
+        mx.async_eval(
             *[d[1] for d in draws],
             *[a for d in draws if d[2] for a in d[2]],
             *self.batch.arrays(),
+            *(
+                [early_out, early_seeds, *head.slots.arrays()]
+                if early_out is not None and early_seeds is not None and head
+                else []
+            ),
         )
-        self.cost.observe(at, (time.perf_counter() - started) * 1e3)
+        window_tokens: list[Any] = [d[1].tolist() for d in draws]  # waits for the step
+        seed_vals: Any = early_seeds.tolist() if early_seeds is not None else []
+        # forward cost: from when the GPU could start it (the chain before it
+        # is not part of the forward) to now
+        gpu_free = self._chain_t + self.chain_ms * self._chain_deep / 1e3
+        ms = (time.perf_counter() - max(started, gpu_free)) * 1e3
+        if ms > 0:
+            self.cost.observe(at, ms)
+        self._chain_deep = 0
 
         events: list[Event] = []
         used_all: list[int] = []
-        toks_all: list[list[int]] = []
-        for (it, tok, extra), window in zip(draws, windows, strict=True):
+        for (it, _tok, extra), toks, use in zip(
+            draws, window_tokens, used_drafts, strict=True
+        ):
             row = it.row
-            toks = [int(t) for t in tok.tolist()]
+            window = [row.pending, *(row.draft_dev.tolist() if use else [])]
             keep = 1
             while keep < len(window) and window[keep] == toks[keep - 1]:
                 keep += 1
@@ -580,40 +631,66 @@ class RoundDriver:
             # window short: the cache keeps what was emitted
             used = self._emit(row, toks[:keep], extra, events)
             used_all.append(used)
-            toks_all.append(toks[:used])
         self.batch.commit(used_all)
         gone = [r for r in rows if r.finished]
         self.rows = [r for r in self.rows if not r.finished]
         self._release(gone)
-        if self.head is not None:
-            alive = [
-                (b, r)
-                for b, r in enumerate(rows)
-                if r.hslot is not None and not r.finished
-            ]
+        if early_out is not None:
+            alive = [(i, b, r) for i, (b, r) in enumerate(head_rows) if not r.finished]
+            for _, b, r in alive:
+                r.hn += used_all[b]  # the positions it kept stay in the head's KV
             if alive:
-                heads = self.head.absorb(
-                    [r for _, r in alive],
-                    [toks_all[b] for b, _ in alive],
-                    hidden,
-                    [[items[b].at + j for j in range(used_all[b])] for b, _ in alive],
+                at_last = [used_all[b] - 1 for _, b, _ in alive]
+                heads = early_out[
+                    mx.array([i for i, _, _ in alive], dtype=mx.int32),
+                    mx.array(at_last, dtype=mx.int32),
+                ]
+                first = mx.array(
+                    [
+                        seed_vals[i][u]
+                        for (i, _, _), u in zip(alive, at_last, strict=True)
+                    ],
+                    dtype=mx.int32,
                 )
-                self._draft([r for _, r in alive], heads)
-                mx.eval(*self.head.slots.arrays())
+                self._draft([r for _, _, r in alive], heads, first)
         self.steps += 1
         return events
 
-    def _draft(self, rows: list[_Row], heads: mx.array) -> None:
+    def _draft(
+        self,
+        rows: list[_Row],
+        heads: mx.array,
+        first: mx.array | None = None,
+        sync: bool = False,
+    ) -> None:
+        """Queue the next window's drafts for ``rows``. The chain is submitted
+        to the GPU here (async) and the caller returns to build the next
+        step's graph while it runs; ``sync`` (or every 16th call, to keep the
+        chain's cost measured) waits for it."""
+        assert self.head is not None
         depths = self._depths(rows)
         drafted_at = time.perf_counter()
-        drafts = self.head.draft(rows, heads, depths)
+        drafts = self.head.draft(rows, heads, depths, first)
         deepest = max(depths, default=0)
+        for r, d, n in zip(rows, drafts, depths, strict=True):
+            r.draft_dev, r.nd, r.drafts = d, n, []
+            self.drafted += n
+        self._chain_deep = 0
         if deepest:
-            ms = (time.perf_counter() - drafted_at) * 1e3 / deepest
-            self.chain_ms += ACCEPT_EMA * (ms - self.chain_ms)
-        for r, d in zip(rows, drafts, strict=True):
-            r.drafts = d
-            self.drafted += len(d)
+            self._calls += 1
+            live = [d for d, n in zip(drafts, depths, strict=True) if n]
+            if sync or self._calls % 16 == 1:
+                mx.eval(*live, *self.head.slots.arrays())
+                ms = (time.perf_counter() - drafted_at) * 1e3 / deepest
+                self.chain_ms = (
+                    ms
+                    if not self.chain_ms
+                    else self.chain_ms + ACCEPT_EMA * (ms - self.chain_ms)
+                )
+            else:
+                mx.async_eval(*live, *self.head.slots.arrays())
+                self._chain_deep = deepest
+        self._chain_t = time.perf_counter()
 
     def _emit(self, row: _Row, committed: list[int], extra, out: list) -> int:
         """Emit ``committed`` in order until a stop, the length limit or the
@@ -632,7 +709,7 @@ class RoundDriver:
                         extra[1][0].tolist(), extra[2][0].tolist(), strict=True
                     )
                 ]
-        row.drafts = []
+        row.drafts, row.draft_dev, row.nd = [], None, 0
         used = 0
         for t in committed:
             used += 1

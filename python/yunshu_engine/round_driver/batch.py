@@ -288,13 +288,14 @@ class DecodeBatch:
         return out
 
     # ── one decode step ──────────────────────────────────────────────────
-    def forward(self, windows: list[list[int]]) -> mx.array:
-        """Run every row's window (``windows[b]`` = the row's pending token and
-        drafts) through the decoder; returns final-norm hidden states
+    def forward(self, lens: list[int], tokens: mx.array) -> mx.array:
+        """Run every row's window (``lens[b]`` tokens: the row's pending token
+        and drafts, back to back in ``tokens`` [N] int32, which may still be a
+        lazy graph) through the decoder; returns final-norm hidden states
         ``[N, D]`` (the rows' tokens back to back, ``N = sum(len(w))``). KV is appended and the GDN state advanced optimistically
         (all of every window kept); ``commit`` corrects rows that keep less."""
         model = self.lm.model
-        lens = [len(w) for w in windows]
+        lens = list(lens)
         T = max(lens)
         if T > MAX_WINDOW:
             raise ValueError("decode window longer than the tile window")
@@ -303,8 +304,7 @@ class DecodeBatch:
         plan = KVPlan.make([r.slot for r in self.rows], n0, T)
         pack = Pack(lens, T)
         lens_arr = mx.array(lens, dtype=mx.int32)
-        toks = np.array([t for w in windows for t in w], dtype=np.int32)
-        x = model.embed_tokens(mx.array(toks))
+        x = model.embed_tokens(tokens)
         hist: dict[int, tuple] = {}  # per GDN layer: what a partial commit replays
         for i, layer in enumerate(model.layers):
             xn = layer.input_layernorm(x)

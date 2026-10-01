@@ -126,7 +126,7 @@ def _run(
     d = RoundDriver(lm, drafter=drafter, stop_tokens=set())
     if oracle is not None:
         # drafts that are always right: the reference continuation
-        def draft(rows, heads, depths):
+        def draft(rows, heads, depths, first=None):
             out = []
             for row, depth in zip(rows, depths, strict=True):
                 ref = oracle[row.req.handle]
@@ -135,7 +135,7 @@ def _run(
                     # right up to a position that varies by row and step
                     j = (row.generated + row.req.handle) % len(got)
                     got[j] = (got[j] + 1) % 500
-                out.append(got)
+                out.append(mx.array(got, dtype=mx.int32))
             return out
 
         d.head.draft = draft
@@ -315,7 +315,7 @@ def _sampled_run(
     d = RoundDriver(lm, drafter=drafter, stop_tokens=set())
     if oracle is not None:
 
-        def draft(rows, heads, depths):
+        def draft(rows, heads, depths, first=None):
             out = []
             for row, depth in zip(rows, depths, strict=True):
                 ref = oracle[row.req.handle]
@@ -323,7 +323,7 @@ def _sampled_run(
                 if wrong and got:
                     j = (row.generated + row.req.handle) % len(got)
                     got[j] = (got[j] + 1) % 500
-                out.append(got)
+                out.append(mx.array(got, dtype=mx.int32))
             return out
 
         d.head.draft = draft

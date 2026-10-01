@@ -59,7 +59,7 @@ def main():
     timed(d.batch, "commit", sink)
     timed(d, "_draw", sink)
     if d.head is not None:
-        timed(d.head, "absorb", sink)
+        timed(d.head, "absorb_window", sink)
         timed(d.head, "draft", sink)
     for _ in range(4):  # warm-up: kernel compiles, cost curve
         d.step()
