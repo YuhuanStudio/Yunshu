@@ -97,11 +97,20 @@ def guess_mime(
 
 def _atomic_write(path: Path, data: bytes) -> None:
     tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
-    with open(tmp, "wb") as fh:
-        fh.write(data)
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+# Files younger than this are never garbage-collected: a put() writes the blob and then
+# its metadata, so a fresh blob without metadata may simply be in flight.
+GC_GRACE_SECONDS = 600
 
 
 class FileStore:
@@ -109,8 +118,67 @@ class FileStore:
         self.root = Path(root)
         self.max_bytes = int(max_bytes)
         self.ttl_days = ttl_days
+        self.max_total_bytes = 0  # 0 = unlimited
         for sub in ("blobs", "meta", "batches"):
             (self.root / sub).mkdir(parents=True, exist_ok=True)
+        with contextlib.suppress(OSError):
+            self.gc()
+
+    # -- housekeeping --------------------------------------------------------
+    def total_bytes(self) -> int:
+        total = 0
+        for p in (self.root / "blobs").iterdir():
+            with contextlib.suppress(OSError):
+                total += p.stat().st_size
+        return total
+
+    def gc(self) -> int:
+        """Remove crash leftovers and expired files; returns how many entries went.
+
+        Stale ``.tmp`` files, blobs without metadata, metadata without a blob (all older
+        than the grace period, so an in-flight put is untouched) and expired files.
+        """
+        removed = 0
+        now = time.time()
+        old = now - GC_GRACE_SECONDS
+        blobs, metas = self.root / "blobs", self.root / "meta"
+
+        def stale(p: Path) -> bool:
+            try:
+                return p.stat().st_mtime < old
+            except OSError:
+                return False
+
+        with _lock:
+            for d in (blobs, metas):
+                for p in d.glob(".*.tmp"):
+                    if stale(p):
+                        p.unlink(missing_ok=True)
+                        removed += 1
+            for p in list(blobs.glob("file_*")):
+                if not self._meta(p.name).exists() and stale(p):
+                    p.unlink(missing_ok=True)
+                    removed += 1
+            for p in list(metas.glob("file_*.json")):
+                try:
+                    meta = json.loads(p.read_text())
+                except (OSError, json.JSONDecodeError):
+                    meta = None
+                fid = p.name.removesuffix(".json")
+                expired = bool(
+                    meta and meta.get("expires_at") and meta["expires_at"] <= now
+                )
+                if (
+                    expired
+                    or meta is None
+                    or (not self._blob(fid).exists() and stale(p))
+                ):
+                    if meta is None and not stale(p):
+                        continue
+                    self._blob(fid).unlink(missing_ok=True)
+                    p.unlink(missing_ok=True)
+                    removed += 1
+        return removed
 
     # -- paths -------------------------------------------------------------
     def _check(self, file_id: str) -> str:
@@ -155,8 +223,21 @@ class FileStore:
             "downloadable": bool(downloadable),
         }
         with _lock:
+            if self.max_total_bytes:
+                if self.total_bytes() + len(data) > self.max_total_bytes:
+                    self.gc()  # reap expired files before refusing
+                if self.total_bytes() + len(data) > self.max_total_bytes:
+                    raise FileStoreError(
+                        413,
+                        f"File store is full (limit {self.max_total_bytes} bytes)",
+                        "storage_quota_exceeded",
+                    )
             _atomic_write(self._blob(fid), data)
-            _atomic_write(self._meta(fid), json.dumps(meta).encode())
+            try:
+                _atomic_write(self._meta(fid), json.dumps(meta).encode())
+            except BaseException:
+                self._blob(fid).unlink(missing_ok=True)
+                raise
         return meta
 
     def get_meta(self, file_id: str) -> dict[str, Any]:
@@ -288,9 +369,11 @@ def get_store() -> FileStore:
                 int(settings.get("YUNSHU_FILES_MAX_BYTES")),
                 settings.get("YUNSHU_FILES_TTL_DAYS"),
             )
+            _store.max_total_bytes = int(settings.get("YUNSHU_FILES_MAX_TOTAL_BYTES"))
         else:
             _store.max_bytes = int(settings.get("YUNSHU_FILES_MAX_BYTES"))
             _store.ttl_days = settings.get("YUNSHU_FILES_TTL_DAYS")
+            _store.max_total_bytes = int(settings.get("YUNSHU_FILES_MAX_TOTAL_BYTES"))
         return _store
 
 
