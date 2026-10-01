@@ -42,7 +42,7 @@ log(){ echo "$(date +%H:%M:%S) $*"; }
 PHASES=(parity-1k parity-32k-a parity-32k-b rows-1k rows-32k-a rows-32k-b decode-anatomy
   server-rd0-probe server-rd1-probe
   server-rd0-ctx1k server-rd1-ctx1k server-rd0-ctx32k server-rd1-ctx32k
-  server-rd0-ctx131k-1 server-rd1-ctx131k-1 server-rd0-ctx131k-2 server-rd1-ctx131k-2
+  server-rd0-ctx32k-8 server-rd1-ctx32k-8 server-rd0-ctx131k-1 server-rd1-ctx131k-1 server-rd0-ctx131k-2 server-rd1-ctx131k-2
   server-rd0-ctx131k-4 server-rd1-ctx131k-4
   server-rd0-mixed16 server-rd1-mixed16 server-rd0-mixed32 server-rd1-mixed32
   server-rd0-repeat server-rd1-repeat mmlu-0 mmlu-1 mmlu-2 mmlu0-0 mmlu0-1 mmlu0-2)
@@ -92,6 +92,10 @@ run_phase(){
           $PY scripts/research/bench_context_batch.py --url $URL --model Qwen3.8-27B --tokenizer $M --pid $YP \
             --lengths 32768 --batches 2 4 8 --batch-pp 32768 --note "round driver=$rd" \
             --output $OUT/context-batch.jsonl > $OUT/$what-rd$rd.out 2>&1 || log "context FAILED" ;;
+        ctx32k-8)
+          $PY scripts/research/bench_context_batch.py --url $URL --model Qwen3.8-27B --tokenizer $M --pid $YP \
+            --lengths --batches 8 --batch-pp 32768 --note "round driver=$rd" \
+            --output $OUT/context-batch.jsonl 2>&1 | tee $OUT/$what-rd$rd.out || log "context FAILED" ;;
         ctx131k-1)
           $PY scripts/research/bench_context_batch.py --url $URL --model Qwen3.8-27B --tokenizer $M --pid $YP \
             --lengths 131072 --batches --note "round driver=$rd" \

@@ -335,3 +335,18 @@ Splash 官方模型 120 個交錯前綴請求全數輸出正確，約 316 s 後 
 | 27B 形狀 lane verify T=6，32K／131K，16 層 | stock 6.32 / 21.5 ms | tile 6.77 / 22.2 ms |
 
 0.8B（4-bit in-memory）MTP block 3/6 貪婪輸出與一般貪婪逐 token 相同（21／1528／4020／17020-token 提示，lane 開）。
+
+2026-10-01 round driver (`YUNSHU_ROUND_DRIVER=1`) vs default, Qwen3.8-27B oQ4e-mtp, M5 Max, queue-serialized, not made the default (single-request greedy decode is slower). Driver sampled-row drafting is `YUNSHU_ROUND_KEYED_DRAFT` (off).
+
+| 項目 | 預設 | driver |
+|---|---:|---:|
+| 8 並行 QA 聚合 decode（probe_concurrency） | 167.0 tok/s | 294.8 tok/s |
+| 單請求 decode（probe_concurrency / replay 貪婪 warm） | 91.1 / 71-92 tok/s | 75.5 / 41-83 tok/s |
+| opencode 並行 title 時主請求 decode（replay，貪婪冷） | 12-26 tok/s | 36-76 tok/s |
+| 1K b2/b4/b8 聚合 tok/s（冷 prompt） | 32.0 / 44.9 / 56.9 | 50.3 / 62.6 / 75.7 |
+| 1K b8 footprint | 21.7 GiB | 23.8 GiB |
+| 32K 單請求冷 TTFT / 32K b8 mean TTFT | 46.6 s / 225 s | 42.4 s / 289 s |
+| 32K b8 footprint | 61.8 GiB | 41.5 GiB |
+| 8K / 32K 同文件換問題 TTFT | 10.9 / 47.5 s | 2.6 / 3.7 s |
+| mixed16（4 流 + 16K prompt）聚合 / prefill 期間背景 tok/s | 70.4 / 0.6 | 84.7 / 3.8 |
+| MMLU-Pro 300 b8 | 249/300 | 249/300 (152-209 tok/s) |
