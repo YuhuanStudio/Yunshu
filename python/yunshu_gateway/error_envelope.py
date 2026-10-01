@@ -62,6 +62,9 @@ def format_error_response(
     retry_after: int | str | None = None,
     extra_headers: dict | None = None,
     jsonrpc_code: int = -32600,  # INVALID_REQUEST
+    error_type: str | None = None,
+    request_id: str | None = None,
+    x_yunshu: dict | None = None,
 ) -> JSONResponse:
     """Build a JSONResponse error in the envelope matching `path`'s API family.
 
@@ -71,7 +74,10 @@ def format_error_response(
     - everything else      → OpenAI {"error":{message,type,code}}.
 
     `code` overrides the OpenAI `code` field (defaults to rate_limit_exceeded on 429,
-    else omitted). `retry_after` sets the Retry-After header (429/503).
+    else omitted). `retry_after` sets the Retry-After header (429/503). `error_type`
+    overrides the dialect's error type; 5xx get `server_error` (OpenAI) / `overloaded_error`
+    (503, 529) / `timeout_error` (504) / `api_error` (Anthropic). `x_yunshu` is merged into
+    the OpenAI `error.x_yunshu` object (next to the hint and `request_id`).
     """
     headers = dict(extra_headers or {})
     if retry_after is not None:
@@ -90,25 +96,21 @@ def format_error_response(
 
     is_429 = status_code == 429
     if path in _ANTHROPIC_PATHS:
-        a_type = (
-            "rate_limit_error"
-            if is_429
-            else (
-                "authentication_error"
-                if status_code == 401
-                else "invalid_request_error"
-            )
-        )
+        a_type = error_type or _anthropic_type(status_code)
         return JSONResponse(
             status_code=status_code,
             content={"type": "error", "error": {"type": a_type, "message": message}},
             headers=headers,
         )
 
-    o_type = (
+    o_type = error_type or (
         "rate_limit_error"
         if is_429
-        else ("authentication_error" if status_code == 401 else "invalid_request_error")
+        else (
+            "authentication_error"
+            if status_code == 401
+            else ("server_error" if status_code >= 500 else "invalid_request_error")
+        )
     )
     o_code = (
         code
@@ -124,7 +126,23 @@ def format_error_response(
         err["code"] = o_code
     from .error_hints import add_hint
 
-    add_hint(err, status_code)
+    add_hint(err, status_code, request_id)
+    if x_yunshu:
+        err.setdefault("x_yunshu", {}).update(x_yunshu)
     return JSONResponse(
         status_code=status_code, content={"error": err}, headers=headers
     )
+
+
+def _anthropic_type(status_code: int) -> str:
+    if status_code == 429:
+        return "rate_limit_error"
+    if status_code == 401:
+        return "authentication_error"
+    if status_code in (503, 529):
+        return "overloaded_error"
+    if status_code == 504:
+        return "timeout_error"
+    if status_code >= 500:
+        return "api_error"
+    return "invalid_request_error"

@@ -57,6 +57,12 @@ _FINISH_REASON_MAP = {
     "stop": "end_turn",
     "length": "max_tokens",
     "tool_calls": "tool_use",
+    # Output cut short by the engine (the request's `timeout`, the memory guard) is
+    # "max_tokens", never "end_turn": a truncated answer must not look finished. (The chat
+    # route maps the same reasons to "length".)
+    "timeout": "max_tokens",
+    "memory_limit": "max_tokens",
+    "memory_exceeded": "max_tokens",
 }
 
 
@@ -1376,6 +1382,18 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
         _pf_est = count_message_tokens(messages, _pf_tok)
         validate_context_window(_pf_est, req.model, engine)
         validate_prefill_memory(_pf_est)
+        from ..token_budget import plan_for_engine
+
+        _th = req.thinking.get("budget_tokens") if req.thinking else None
+        _tb = plan_for_engine(_pf_est, req.max_tokens, _th, req.model, engine)
+        if _tb is not None and _tb.clamped:
+            # prompt + thinking + answer must fit the window: grant what is left
+            req.max_tokens = _tb.max_tokens_granted
+            if _th is not None and req.thinking is not None:
+                req.thinking = {
+                    **req.thinking,
+                    "budget_tokens": _tb.thinking_budget_granted,
+                }
     except HTTPException as e:
         return JSONResponse(
             status_code=e.status_code,

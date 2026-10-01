@@ -46,7 +46,7 @@ def test_auto_memory_scales_with_machine_and_model():
     assert auto_memory_gb(128 * gib, 16 * gib) == 32.0
     assert auto_memory_gb(64 * gib, 16 * gib) == 16.0
     assert auto_memory_gb(32 * gib, 16 * gib) == 4.0
-    assert auto_memory_gb(16 * gib, 16 * gib) == 4.0
+    assert auto_memory_gb(16 * gib, 16 * gib) == 0.0
     assert auto_memory_gb(512 * gib, 16 * gib) == 32.0
 
 

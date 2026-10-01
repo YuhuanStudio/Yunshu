@@ -187,8 +187,11 @@ def _public_stored(payload: dict) -> dict:
 
 import contextlib
 
+# A cut-short generation (token limit, the request's timeout, the memory guard) is
+# "incomplete", never "completed".
+_TRUNCATED_FINISH = ("length", "timeout", "memory_limit", "memory_exceeded")
 _INCOMPLETE_FINISH = (
-    "length",
+    *_TRUNCATED_FINISH,
     "cancel",
     "cancelled",
     "abort",
@@ -460,7 +463,7 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
             yield format_responses_incomplete(
                 response_id,
                 req.model,
-                reason="max_output_tokens" if finish == "length" else finish,
+                reason="max_output_tokens" if finish in _TRUNCATED_FINISH else finish,
                 output=final_output,
                 input_tokens=pt,
                 output_tokens=ct,
@@ -1429,14 +1432,40 @@ async def create_response(req: ResponsesRequest, request: Request):
             _ctx = get_max_context_window(req.model, engine)
             if _ctx and _est > _ctx:
                 _room = _ctx - min(req.max_output_tokens, _ctx // 4)
+                _before, _est_before = messages, _est
                 messages, _est = _auto_truncate(
                     messages,
                     _est,
                     _room,
                     lambda ms: count_message_tokens(ms, _tok),
                 )
+                if len(messages) < len(_before):
+                    # never silent: what was dropped goes to x_yunshu.context_policy
+                    from yunshu_engine.context_window import (
+                        publish_report,
+                        removal_report,
+                    )
+
+                    publish_report(
+                        removal_report(
+                            "truncation_auto",
+                            _before,
+                            messages,
+                            _est_before,
+                            _est,
+                            _room,
+                        )
+                    )
         validate_context_window(_est, req.model, engine)
         validate_prefill_memory(_est)
+        from ..token_budget import plan_for_engine
+
+        _tb = plan_for_engine(
+            _est, req.max_output_tokens, req.thinking_budget, req.model, engine
+        )
+        if _tb is not None and _tb.clamped:
+            req.max_output_tokens = _tb.max_tokens_granted
+            req.thinking_budget = _tb.thinking_budget_granted
     except HTTPException:
         raise
     except Exception:
@@ -1966,7 +1995,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                 "incomplete"
                 if last_finish_reason
                 in (
-                    "length",
+                    *_TRUNCATED_FINISH,
                     "cancel",
                     "cancelled",
                     "abort",
@@ -2816,7 +2845,7 @@ async def _stream_response(
                     cached_tokens=cached_tok,
                     seq=_next_seq(),
                 )
-            elif last_finish_reason == "length":
+            elif last_finish_reason in _TRUNCATED_FINISH:
                 _terminal_status = "incomplete"
                 yield format_responses_incomplete(
                     response_id=response_id,

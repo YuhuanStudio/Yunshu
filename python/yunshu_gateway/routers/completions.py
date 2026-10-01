@@ -469,6 +469,15 @@ async def create_completion(req: CompletionRequest, request: Request):
             _est_tokens = max((len(_ctx_tok.encode(p)) for p in _prompts), default=0)
             validate_context_window(_est_tokens, req.model, engine)
             validate_prefill_memory(_est_tokens)
+            from ..token_budget import plan_for_engine
+
+            _tb = plan_for_engine(
+                _est_tokens, req.effective_max_tokens(), None, req.model, engine
+            )
+            if _tb is not None and _tb.clamped:
+                req.max_tokens = _tb.max_tokens_granted
+                if getattr(req, "max_completion_tokens", None) is not None:
+                    req.max_completion_tokens = _tb.max_tokens_granted
     except HTTPException:
         raise
     except Exception:

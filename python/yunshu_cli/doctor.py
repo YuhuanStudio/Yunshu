@@ -405,7 +405,9 @@ def check_prefix_disk() -> Check:
             "ok",
             "off (YUNSHU_VLM_APC_DISK=0): evicted prefixes are re-prefilled",
         )
-    cap = float(settings.get("YUNSHU_VLM_APC_DISK_GB") or 0)
+    from yunshu_kv.disk_budget import resolve_cap_gb
+
+    cap = resolve_cap_gb(settings.get("YUNSHU_VLM_APC_DISK_GB"), d)
     probe = d
     while not probe.exists() and probe != probe.parent:
         probe = probe.parent

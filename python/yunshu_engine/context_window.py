@@ -17,10 +17,12 @@ Integration:
 """
 
 import logging
+from collections import Counter
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,50 @@ class ContextBudgetError(ValueError):
     """The protected messages plus the latest user turn exceed the budget."""
 
 
+def publish_report(report: dict) -> None:
+    """Attach a context-policy report to the request being served (a no-op outside one)."""
+    logger.info("context policy applied: %s", report)
+    from .request_tracker import current_request_info
+
+    info: Any = current_request_info.get()
+    if info is not None:
+        try:
+            info.context_policy = report
+        except Exception:
+            logger.debug("context policy report not attached", exc_info=True)
+
+
+def removal_report(
+    policy: str,
+    before: list[dict],
+    after: list[dict],
+    tokens_before: int,
+    tokens_after: int,
+    budget_tokens: int,
+) -> dict:
+    """The report of a policy that is not a :class:`ContextWindowManager` strategy (the
+    Responses API's ``truncation: "auto"``), in the same shape as ``TruncationResult.report``."""
+    roles_before = Counter(str(m.get("role")) for m in before)
+    roles_after = Counter(str(m.get("role")) for m in after)
+    return {
+        "policy": policy,
+        "budget_tokens": budget_tokens,
+        "tokens_before": tokens_before,
+        "tokens_after": tokens_after,
+        "tokens_removed": tokens_before - tokens_after,
+        "messages_before": len(before),
+        "messages_after": len(after),
+        "messages_removed": len(before) - len(after),
+        "messages_summarized": 0,
+        "removed_roles": {
+            r: n - roles_after.get(r, 0)
+            for r, n in roles_before.items()
+            if n > roles_after.get(r, 0)
+        },
+        "cannot_fit": tokens_after > budget_tokens,
+    }
+
+
 @dataclass
 class TruncationResult:
     """Result of a truncation operation."""
@@ -88,6 +134,42 @@ class TruncationResult:
     cannot_fit: bool = False
     required_tokens: int = 0
     max_tokens: int = 0
+    # Messages per role before and after (``removed_roles`` is the per-role difference).
+    roles_before: dict[str, int] = field(default_factory=dict)
+    roles_after: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def truncated(self) -> bool:
+        return self.messages_removed > 0 or self.tokens_saved > 0
+
+    def report(self) -> dict:
+        """What the policy did, for ``x_yunshu.context_policy`` and the response headers: the
+        policy, the messages and tokens before / after, which roles lost how many messages
+        (``removed_roles["user"]`` is user turns) and the budget that forced it."""
+        removed = {
+            role: n - self.roles_after.get(role, 0)
+            for role, n in self.roles_before.items()
+            if n > self.roles_after.get(role, 0)
+        }
+        return {
+            "policy": self.strategy,
+            "budget_tokens": self.max_tokens,
+            "tokens_before": self.original_token_count,
+            "tokens_after": self.truncated_token_count,
+            "tokens_removed": self.tokens_saved,
+            "messages_before": sum(self.roles_before.values()),
+            "messages_after": sum(self.roles_after.values()),
+            "messages_removed": self.messages_removed,
+            "messages_summarized": self.messages_summarized,
+            "removed_roles": removed,
+            "cannot_fit": self.cannot_fit,
+        }
+
+    def publish(self) -> None:
+        """Attach :meth:`report` to the request being served (the gateway puts it in the
+        response); a no-op outside a request and when nothing was removed."""
+        if self.truncated:
+            publish_report(self.report())
 
     def raise_if_cannot_fit(self) -> None:
         if self.cannot_fit:
@@ -231,6 +313,8 @@ class ContextWindowManager:
             cannot_fit=cannot_fit,
             required_tokens=required,
             max_tokens=max_tokens,
+            roles_before=dict(Counter(str(m.get("role")) for m in messages)),
+            roles_after=dict(Counter(str(m.get("role")) for m in result_messages)),
         )
 
     def count_tokens(self, text: str) -> int:

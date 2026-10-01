@@ -47,17 +47,29 @@ GIB = 1 << 30
 MAX_ENTRIES = 16
 # Shutdown spill budget: a service stop must not hang on a 32 GiB cache.
 CLOSE_FLUSH_SECONDS = 20.0
-# Reserve for the OS, activations and the live decode KV when sizing the budget from memory.
-_RESERVE_GIB = 16.0
-_MIN_GIB = 4.0
+# What the OS, activations and the live decode KV need, as a share of the machine, between
+# these bounds (8 / 16 GB machines: 4 GiB, 32 GB: 8, 64 GB and up: 16).
+_RESERVE_SHARE = 0.25
+_RESERVE_MIN_GIB = 4.0
+_RESERVE_MAX_GIB = 16.0
+# The cache never takes more than this share of the machine, whatever is left over.
+_MAX_SHARE = 0.25
+# Under this the cache is not worth its footprint (about 8K tokens of a 27B checkpoint).
+_MIN_GIB = 1.0
 _MAX_GIB = 32.0
 
 
 def auto_memory_gb(total_bytes: int, weights_bytes: int) -> float:
-    """Default APC RAM budget: half of what is left after the weights and a fixed reserve,
-    clamped to [4, 32] GiB (128 GB machine + 16 GB model: 32; 64 GB: 16; 32 GB: 4)."""
-    free = total_bytes / GIB - weights_bytes / GIB - _RESERVE_GIB
-    return float(min(_MAX_GIB, max(_MIN_GIB, 0.5 * free)))
+    """Default APC RAM budget in GiB: half of what is left after the weights and the OS /
+    activation reserve, at most a quarter of the machine and 32 GiB; 0 (cache off) when less
+    than 1 GiB would be left to it, so a small machine never gives away memory the model
+    needs (128 GB + 16 GB model: 32; 64 GB: 16; 32 GB: 4; 16 GB with 16 GB of weights or an
+    8 GB machine with a 4 GB model: 0)."""
+    total = total_bytes / GIB
+    reserve = min(_RESERVE_MAX_GIB, max(_RESERVE_MIN_GIB, _RESERVE_SHARE * total))
+    free = total - weights_bytes / GIB - reserve
+    budget = min(_MAX_GIB, _MAX_SHARE * total, 0.5 * free)
+    return float(budget) if budget >= _MIN_GIB else 0.0
 
 
 def total_memory_bytes() -> int:

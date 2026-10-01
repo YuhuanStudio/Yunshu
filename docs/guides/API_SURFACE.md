@@ -225,6 +225,11 @@ Additive and namespaced; the SDKs above ignore all of it. Design and rationale:
 | `x_yunshu` object: chat / completions JSON body, streaming usage chunk (or `: yunshu-stats` comment without `include_usage`); inside `usage` on Messages and Responses | added | TTFT, queue wait, prefill / decode tokens/s, cached tokens, speculative mode and acceptance, llama.cpp-style `timings`. `null` when unknown. |
 | `X-Yunshu-*` response headers | added | `Queue-Position`, `Queue-Est-Wait-Ms` (all streaming and non-streaming generation responses); `TTFT-Ms`, `Prefill-Tps`, `Decode-Tps`, `Cached-Tokens`, `Queue-Wait-Ms`, `Total-Ms`, `Spec`, `Spec-Acceptance` (non-streaming chat / completions). |
 | `error.x_yunshu.hint` / `.request_id`; `(hint: ...)` appended to `error.message` (OpenAI-format errors) | added | The fix, e.g. context too long, 401, 429, model loading. |
+| `X-Yunshu-Deadline-Ms: N` request header (generation routes) | added | Wall time the client will wait, from arrival, queue wait included. Past it the generation is cancelled: `504` `deadline_exceeded` (`timeout_error` on Messages) before the stream starts, one terminal error event after. A malformed value is a 400. |
+| `429` `queue_full` / `503` `memory_pressure` with `Retry-After` (generation routes) | added | `YUNSHU_QUEUE_LIMIT` requests in flight, or memory nearly full while others run: refused at once in the route's dialect (`rate_limit_error` / `overloaded_error` on Messages) with `error.x_yunshu.queue_depth`, never queued without bound. |
+| `x_yunshu.cancelled` / `X-Yunshu-Cancelled: true` | added | The answer was cut short by `DELETE /v1/requests/{id}`, `POST /v1/cancel` or a deadline, so it is not mistaken for a finished one. |
+| `x_yunshu.context_policy` / `X-Yunshu-Context-Policy` | added | When the context-window manager (or Responses `truncation: "auto"`) removed turns: policy, tokens before / after, messages and roles removed, the budget. Streams carry it in the usage chunk / `: yunshu-stats` (headers are already sent). |
+| `x_yunshu.budget` | added | `max_tokens` (and `thinking_budget`) clamped to the room the prompt leaves in the context window: requested vs granted. A prompt that fills the window is a 400. |
 
 ## Removed
 

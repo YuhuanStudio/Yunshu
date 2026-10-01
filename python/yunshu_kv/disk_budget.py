@@ -184,6 +184,25 @@ def removable_namespace(ns_dir: Path) -> bool:
     return True
 
 
+AUTO_CAP_SHARE = 0.25
+AUTO_CAP_MAX_GIB = 64.0
+
+
+def auto_cap_gb(path: Path | str) -> float:
+    """Default SSD cache cap: a quarter of the volume holding ``path``, at most 64 GiB
+    (a 128 GB disk: 32; 256 GB and up: 64). The free-space reserve still applies on top."""
+    try:
+        total = disk_usage(_probe(Path(path).expanduser())).total
+    except OSError:
+        return AUTO_CAP_MAX_GIB / 2
+    return float(min(AUTO_CAP_MAX_GIB, AUTO_CAP_SHARE * total / GIB))
+
+
+def resolve_cap_gb(configured: float | None, path: Path | str) -> float:
+    """The configured cap in GiB (0 = no configured cap), or the auto cap when unset."""
+    return float(configured) if configured is not None else auto_cap_gb(path)
+
+
 class DiskBudget:
     """The budget of one cache root; shared by every store that writes under it."""
 

@@ -513,10 +513,13 @@ class TestAnthropicMapStopReason:
         assert _map_stop_reason(None) == "end_turn"
 
     def test_internal_timeout_maps_to_max_tokens(self):
-        """Internal 'timeout' is not in _FINISH_REASON_MAP, but goes to end_turn."""
+        """A timeout / memory-guard cut is "max_tokens" (the chat route says "length"): a
+        truncated answer must not look finished."""
         from yunshu_gateway.routers.anthropic import _map_stop_reason
 
-        assert _map_stop_reason("timeout") == "end_turn"
+        assert _map_stop_reason("timeout") == "max_tokens"
+        assert _map_stop_reason("memory_limit") == "max_tokens"
+        assert _map_stop_reason("abort") == "end_turn"
 
 
 # ── 8. Parameter forwarding completeness ──

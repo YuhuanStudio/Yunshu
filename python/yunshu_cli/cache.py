@@ -27,7 +27,9 @@ def cache_targets() -> list[tuple[str, Path, int | None]]:
     out: list[tuple[str, Path, int | None]] = []
     apc = paths.apc_dir()
     if apc is not None:
-        gb = settings.get("YUNSHU_VLM_APC_DISK_GB")
+        from yunshu_kv.disk_budget import resolve_cap_gb
+
+        gb = resolve_cap_gb(settings.get("YUNSHU_VLM_APC_DISK_GB"), apc)
         out.append(("apc", apc, int(gb * (1 << 30)) if gb and gb > 0 else None))
     text = settings.get("YUNSHU_SSD_CACHE_DIR")
     if text and settings.get_bool("YUNSHU_SSD_CACHE"):
