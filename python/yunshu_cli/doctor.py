@@ -387,6 +387,50 @@ def check_settings() -> list[Check]:
     return [Check("settings", "ok", "all YUNSHU_* values parse")]
 
 
+def _dir_bytes(d: Path) -> int:
+    total = 0
+    for f in d.rglob("*"):
+        with contextlib.suppress(OSError):
+            if f.is_file():
+                total += f.stat().st_size
+    return total
+
+
+def check_prefix_disk() -> Check:
+    """The APC SSD tier: where it lives, what it holds, whether the disk can carry it."""
+    d = paths.apc_dir()
+    if d is None:
+        return Check(
+            "prefix cache disk",
+            "ok",
+            "off (YUNSHU_VLM_APC_DISK=0): evicted prefixes are re-prefilled",
+        )
+    cap = float(settings.get("YUNSHU_VLM_APC_DISK_GB") or 0)
+    probe = d
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    try:
+        free = shutil.disk_usage(probe).free / 1024**3
+    except OSError as exc:
+        return Check(
+            "prefix cache disk",
+            "warn",
+            f"{d}: cannot read free space ({exc})",
+            "Set YUNSHU_VLM_APC_DISK_DIR to a writable volume, or YUNSHU_VLM_APC_DISK=0.",
+        )
+    used = _dir_bytes(d) / 1024**3 if d.exists() else 0.0
+    msg = f"{d} ({used:.1f} GiB used, cap {cap:.0f} GiB, {free:.0f} GiB free)"
+    if free < min(cap, 20.0):
+        return Check(
+            "prefix cache disk",
+            "warn",
+            msg,
+            "Little free space: lower YUNSHU_VLM_APC_DISK_GB, point "
+            "YUNSHU_VLM_APC_DISK_DIR at another volume, or set YUNSHU_VLM_APC_DISK=0.",
+        )
+    return Check("prefix cache disk", "ok", msg)
+
+
 def check_service() -> Check:
     plist = paths.launch_agent_plist()
     if plist.exists():
@@ -412,6 +456,7 @@ def run_checks(model: str | None, host: str, port: int) -> list[Check]:
         checks += check_model(model, info)
         checks += check_speculative(model)
     checks.append(check_port(host, port))
+    checks.append(check_prefix_disk())
     checks.append(check_service())
     return checks
 

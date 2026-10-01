@@ -11,7 +11,9 @@ import contextlib
 import json
 import logging
 import os
+import shlex
 import shutil
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,9 +23,22 @@ from rich.console import Console
 from rich.table import Table
 
 from .._output import auth_headers
+from .agent_config import (
+    ModelInfo,
+    claude_code_env,
+    claude_statusline_settings,
+    codex_catalog,
+    codex_provider_toml,
+    opencode_provider,
+)
 
 console = Console()
-launch_app = typer.Typer(help="Launch external tools.", no_args_is_help=True)
+# Options may follow the tool name (`yunshu launch codex --dry-run -m x`).
+launch_app = typer.Typer(
+    help="Launch external tools.",
+    no_args_is_help=True,
+    context_settings={"allow_interspersed_args": True},
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +57,12 @@ class Integration:
         return shutil.which(self.install_check) is not None
 
     def configure(
-        self, port: int, api_key: str, model: str, host: str = "127.0.0.1"
+        self,
+        port: int,
+        api_key: str,
+        model: str,
+        host: str = "127.0.0.1",
+        info: ModelInfo | None = None,
     ) -> None:
         raise NotImplementedError
 
@@ -50,6 +70,10 @@ class Integration:
         self, port: int, api_key: str, model: str, host: str = "127.0.0.1", **kwargs
     ) -> None:
         raise NotImplementedError
+
+    def preview(self, base_url: str, api_key: str, info: ModelInfo, **kwargs) -> str:
+        """What ``launch`` would write / export, as text (``--dry-run``)."""
+        return ""
 
     def _write_json_config(self, config_path: Path, updater) -> None:
         existing: dict = {}
@@ -74,9 +98,19 @@ class Integration:
 
 
 class CodexIntegration(Integration):
-    """OpenAI Codex CLI — configures ~/.codex/config.toml."""
+    """OpenAI Codex CLI — configures ~/.codex/config.toml and a model catalog."""
 
     CONFIG_PATH = Path.home() / ".codex" / "config.toml"
+    CATALOG_PATH = Path.home() / ".codex" / "yunshu-models.json"
+    _TOP_KEYS = (
+        "model",
+        "model_provider",
+        "model_catalog_json",
+        "model_context_window",
+        "model_auto_compact_token_limit",
+        "web_search",
+        "model_reasoning_summary",
+    )
 
     def __init__(self):
         super().__init__(
@@ -86,63 +120,66 @@ class CodexIntegration(Integration):
             install_hint="npm install -g @openai/codex",
         )
 
+    def preview(self, base_url: str, api_key: str, info: ModelInfo, **kwargs) -> str:
+        toml = codex_provider_toml(info, base_url, str(self.CATALOG_PATH))
+        return f"# {self.CONFIG_PATH}\n{toml}\n# {self.CATALOG_PATH}\n" + json.dumps(
+            codex_catalog(info), indent=2
+        )
+
     def configure(
-        self, port: int, api_key: str, model: str, host: str = "127.0.0.1"
+        self,
+        port: int,
+        api_key: str,
+        model: str,
+        host: str = "127.0.0.1",
+        info: ModelInfo | None = None,
     ) -> None:
+        info = info or ModelInfo(id=model or "default")
         config_path = self.CONFIG_PATH
         config_path.parent.mkdir(parents=True, exist_ok=True)
+        self.CATALOG_PATH.write_text(
+            json.dumps(codex_catalog(info), indent=2) + "\n", encoding="utf-8"
+        )
+        block = codex_provider_toml(
+            info, f"http://{host}:{port}", str(self.CATALOG_PATH)
+        )
+        top, _, provider = block.partition("\n[model_providers.yunshu]")
+        top_lines = [ln for ln in top.splitlines() if ln.strip()]
 
         existing = ""
         if config_path.exists():
             with contextlib.suppress(OSError):
                 existing = config_path.read_text(encoding="utf-8")
+            with contextlib.suppress(OSError):
+                shutil.copy2(
+                    config_path, config_path.with_suffix(f".{int(time.time())}.bak")
+                )
 
-        lines = existing.splitlines()
-        new_lines = []
-        in_yunshu_section = False
-
-        top_overrides = {
-            "model": f'"{model or "default"}"',
-            "model_provider": '"yunshu"',
-        }
-
-        seen = set()
+        kept: list[str] = []
         in_section = False
-
-        for line in lines:
+        skipping = False
+        for line in existing.splitlines():
             stripped = line.strip()
             if stripped.startswith("[") and stripped.endswith("]"):
                 in_section = True
-                in_yunshu_section = stripped == "[model_providers.yunshu]"
-
-            if not in_section and "=" in stripped:
-                key = stripped.split("=")[0].strip()
-                if key in top_overrides:
-                    new_lines.append(f"{key} = {top_overrides[key]}")
-                    seen.add(key)
-                    continue
-
-            if in_yunshu_section:
+                skipping = stripped == "[model_providers.yunshu]"
+            if skipping:
                 continue
-
-            new_lines.append(line)
-
-        for key, val in top_overrides.items():
-            if key not in seen:
-                new_lines.insert(0, f"{key} = {val}")
-
-        new_lines.append("\n[model_providers.yunshu]")
-        new_lines.append('name = "Yunshu"')
-        new_lines.append(f'base_url = "http://{host}:{port}/v1"')
-        new_lines.append('env_key = "YUNSHU_API_KEY"')
-
-        config_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+            if not in_section and "=" in stripped:
+                if stripped.split("=")[0].strip() in self._TOP_KEYS:
+                    continue
+            kept.append(line)
+        out = (
+            top_lines + kept + ["", "[model_providers.yunshu]"] + provider.splitlines()
+        )
+        config_path.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
         console.print(f"[green]✓[/] Config updated: {config_path}")
+        console.print(f"[green]✓[/] Model catalog: {self.CATALOG_PATH}")
 
     def launch(
         self, port: int, api_key: str, model: str, host: str = "127.0.0.1", **kwargs
     ) -> None:
-        self.configure(port, api_key, model, host)
+        self.configure(port, api_key, model, host, info=kwargs.get("info"))
         env = os.environ.copy()
         env["YUNSHU_API_KEY"] = api_key or "yunshu"
         args = ["codex"]
@@ -150,6 +187,82 @@ class CodexIntegration(Integration):
             args.extend(["-m", model])
         console.print(f"[bold]Launching[/] Codex with model {model}...")
         os.execvpe("codex", args, env)
+
+
+# ── Claude Code Integration ──
+
+
+class ClaudeCodeIntegration(Integration):
+    """Claude Code — environment only: nothing under ~/.claude is written."""
+
+    def __init__(self):
+        super().__init__(
+            name="claude",
+            display_name="Claude Code",
+            install_check="claude",
+            install_hint="npm install -g @anthropic-ai/claude-code",
+        )
+
+    def env(self, port, api_key, host, info, effort=None) -> dict[str, str]:
+        return claude_code_env(info, f"http://{host}:{port}", api_key, effort)
+
+    def preview(self, base_url: str, api_key: str, info: ModelInfo, **kwargs) -> str:
+        env = claude_code_env(info, base_url, api_key, kwargs.get("effort"))
+        text = "\n".join(f"export {k}={v}" for k, v in env.items())
+        if kwargs.get("statusline", True):
+            cmd = _statusline_command(base_url)
+            settings = claude_statusline_settings(
+                cmd, _claude_user_settings(os.environ)
+            )
+            if settings:
+                text += f"\n# claude --settings '{settings}'"
+        return text
+
+    def configure(self, port, api_key, model, host="127.0.0.1", info=None) -> None:
+        console.print(
+            "Claude Code needs environment variables only; use `yunshu launch claude`."
+        )
+
+    def launch(
+        self, port: int, api_key: str, model: str, host: str = "127.0.0.1", **kwargs
+    ) -> None:
+        info = kwargs.get("info") or ModelInfo(id=model)
+        env = os.environ.copy()
+        # A stray key or Bedrock / Vertex switch in the shell would send requests elsewhere.
+        for k in (
+            "ANTHROPIC_API_KEY",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_USE_VERTEX",
+        ):
+            env.pop(k, None)
+        env.update(self.env(port, api_key, host, info, kwargs.get("effort")))
+        args = ["claude"]
+        if kwargs.get("statusline", True):
+            cmd = _statusline_command(f"http://{host}:{port}")
+            settings = claude_statusline_settings(cmd, _claude_user_settings(env))
+            if settings:
+                if api_key:
+                    env["YUNSHU_API_KEY"] = api_key
+                args += ["--settings", settings]
+        console.print(f"[bold]Launching[/] Claude Code with model {model}...")
+        os.execvpe("claude", args, env)
+
+
+def _statusline_command(url: str) -> str:
+    """The shell command Claude Code runs for its status line."""
+    exe = shutil.which("yunshu")
+    prefix = shlex.quote(exe) if exe else f"{shlex.quote(sys.executable)} -m yunshu_cli"
+    return f"{prefix} statusline --url {shlex.quote(url)}"
+
+
+def _claude_user_settings(env: dict[str, str]) -> dict:
+    """The user's Claude Code settings.json (read-only), to see whether they have their own status line."""
+    base = Path(env.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    try:
+        data = json.loads((base / "settings.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 # ── OpenCode Integration ──
@@ -168,28 +281,29 @@ class OpenCodeIntegration(Integration):
             install_hint="curl -fsSL https://opencode.ai/install | bash",
         )
 
+    def preview(self, base_url: str, api_key: str, info: ModelInfo, **kwargs) -> str:
+        cfg = {
+            "provider": {"yunshu": opencode_provider(info, base_url, api_key)},
+            "model": f"yunshu/{info.id}",
+        }
+        return f"# {self.CONFIG_PATH}\n" + json.dumps(cfg, indent=2)
+
     def configure(
-        self, port: int, api_key: str, model: str, host: str = "127.0.0.1"
+        self,
+        port: int,
+        api_key: str,
+        model: str,
+        host: str = "127.0.0.1",
+        info: ModelInfo | None = None,
     ) -> None:
+        info = info or ModelInfo(id=model or "default")
+
         def updater(config: dict) -> None:
             config.setdefault("provider", {})
-            provider_config = {
-                "npm": "@ai-sdk/openai-compatible",
-                "name": "Yunshu",
-                "options": {"baseURL": f"http://{host}:{port}/v1"},
-            }
-            if api_key:
-                provider_config["options"]["apiKey"] = api_key
-            if model:
-                provider_config["models"] = {
-                    model: {
-                        "name": model,
-                        "modalities": {"input": ["text"], "output": ["text"]},
-                    }
-                }
-            config["provider"]["yunshu"] = provider_config
-            if model:
-                config["model"] = f"yunshu/{model}"
+            config["provider"]["yunshu"] = opencode_provider(
+                info, f"http://{host}:{port}", api_key
+            )
+            config["model"] = f"yunshu/{info.id}"
 
         self._write_json_config(self.CONFIG_PATH, updater)
         console.print(f"[green]✓[/] Config updated: {self.CONFIG_PATH}")
@@ -197,7 +311,7 @@ class OpenCodeIntegration(Integration):
     def launch(
         self, port: int, api_key: str, model: str, host: str = "127.0.0.1", **kwargs
     ) -> None:
-        self.configure(port, api_key, model, host)
+        self.configure(port, api_key, model, host, info=kwargs.get("info"))
         console.print(f"[bold]Launching[/] OpenCode with model {model}...")
         os.execvpe("opencode", ["opencode"], os.environ.copy())
 
@@ -220,7 +334,12 @@ class PiIntegration(Integration):
         )
 
     def configure(
-        self, port: int, api_key: str, model: str, host: str = "127.0.0.1"
+        self,
+        port: int,
+        api_key: str,
+        model: str,
+        host: str = "127.0.0.1",
+        info: ModelInfo | None = None,
     ) -> None:
         def update_models(config: dict) -> None:
             config.setdefault("providers", {})
@@ -253,7 +372,7 @@ class PiIntegration(Integration):
     def launch(
         self, port: int, api_key: str, model: str, host: str = "127.0.0.1", **kwargs
     ) -> None:
-        self.configure(port, api_key, model, host)
+        self.configure(port, api_key, model, host, info=kwargs.get("info"))
         args = ["pi"]
         if model:
             args.extend(["--model", f"yunshu/{model}"])
@@ -264,6 +383,7 @@ class PiIntegration(Integration):
 # ── Registry ──
 
 INTEGRATIONS: dict[str, Integration] = {
+    "claude": ClaudeCodeIntegration(),
     "codex": CodexIntegration(),
     "opencode": OpenCodeIntegration(),
     "pi": PiIntegration(),
@@ -289,6 +409,21 @@ def _resolve_model(url: str) -> str | None:
     except Exception:
         logger.debug("failed to resolve model from server", exc_info=True)
     return None
+
+
+def _fetch_info(url: str, model: str) -> ModelInfo:
+    """The served model's facts (window, output limit, effort levels, vision, web search)."""
+    import httpx
+
+    try:
+        resp = httpx.get(f"{url}/v1/models", headers=auth_headers(), timeout=5)
+        if resp.status_code == 200:
+            for item in resp.json().get("data", []):
+                if item.get("id") == model:
+                    return ModelInfo.from_models_item(item)
+    except Exception:
+        logger.debug("failed to read the model card from the server", exc_info=True)
+    return ModelInfo(id=model)
 
 
 # ── Commands ──
@@ -333,7 +468,7 @@ def list_tools():
 @launch_app.callback(invoke_without_command=True)
 def launch_tool(
     tool: str = typer.Argument(
-        "list", help="Tool to launch: codex, opencode, pi, or 'list'."
+        "list", help="Tool to launch: claude, codex, opencode, pi, or 'list'."
     ),
     model: str | None = typer.Option(None, "--model", "-m", help="Model to use."),
     url: str = typer.Option(
@@ -344,8 +479,27 @@ def launch_tool(
         help="Server URL.",
     ),
     api_key: str | None = typer.Option(None, "--api-key", "-k", help="API key."),
+    effort: str | None = typer.Option(
+        None, "--effort", help="Claude Code reasoning effort (low, medium, high, ...)."
+    ),
+    statusline: bool = typer.Option(
+        True,
+        "--statusline/--no-statusline",
+        help="Claude Code: show live engine state (prefill progress, decode speed, cache hit) in its "
+        "status line, unless you already have a status line of your own.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Print the configuration instead of writing it and launching the tool.",
+    ),
 ):
-    """Launch an external coding tool configured for Yunshu."""
+    """Launch an external coding tool configured for Yunshu.
+
+    The model's real context window, output limit, reasoning-effort levels and vision
+    support are read from the server and handed to the tool, which would otherwise guess
+    (Claude Code assumes 200K for an unknown model, Codex has no catalog entry for it).
+    """
     if tool == "list":
         return list_tools()
 
@@ -355,7 +509,7 @@ def launch_tool(
         console.print(f"Available: {', '.join(INTEGRATIONS.keys())}")
         raise typer.Exit(1)
 
-    if not integration.is_installed():
+    if not dry_run and not integration.is_installed():
         console.print(f"[red]{integration.display_name} is not installed.[/]")
         console.print(f"Install: [bold]{integration.install_hint}[/]")
         raise typer.Exit(1)
@@ -385,6 +539,25 @@ def launch_tool(
         console.print("[red]No model available.[/]")
         raise typer.Exit(1)
 
+    info = _fetch_info(url, resolved_model)
+    if dry_run:
+        console.print(
+            integration.preview(
+                f"http://{host}:{port}",
+                api_key or "",
+                info,
+                effort=effort,
+                statusline=statusline,
+            ),
+            markup=False,
+        )
+        return
     integration.launch(
-        port=port, api_key=api_key or "", model=resolved_model, host=host
+        port=port,
+        api_key=api_key or "",
+        model=resolved_model,
+        host=host,
+        info=info,
+        effort=effort,
+        statusline=statusline,
     )

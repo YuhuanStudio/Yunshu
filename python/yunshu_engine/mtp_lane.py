@@ -20,6 +20,16 @@ idle or serialised behind host decisions:
 
 Only used where the lane is exact and greedy (no processors, no thinking
 budget); everything else stays on upstream's loop.
+
+**Tool-call guide.** A request with tools carries a ``ToolCallGuide``
+(``tool_call_grammar``): free until the model emits the tool-call start marker,
+then constrained to the exact call grammar. In a free stretch the lane is
+unchanged except that a round is cut right after a marker token (the positions
+after it were verified without the grammar's mask; the cache is rolled back to
+the marker like any partial acceptance). In a constrained stretch the verify
+window's target tokens are the argmax of the *masked* logits, one mask per
+position along the draft path, so the round is exactly what plain masked decode
+would produce token by token.
 """
 
 from __future__ import annotations
@@ -31,9 +41,39 @@ from typing import Any
 
 import mlx.core as mx
 
+from .keyed_sampling import KeyedSampler
+
 logger = logging.getLogger(__name__)
 
-_STATE: dict = {"installed": False, "enabled": True, "window": 0, "profile": None}
+_STATE: dict = {
+    "installed": False,
+    "enabled": True,
+    "window": 0,
+    "profile": None,
+    "guide": None,
+}
+
+
+def set_guide(guide: Any) -> None:
+    """The tool-call guide of the request the lane is stepping (None: none)."""
+    _STATE["guide"] = guide
+
+
+def can_guide(draft_model: Any) -> bool:
+    """True when ``rounds`` can apply a tool-call guide with this drafter."""
+    return bool(
+        _STATE["enabled"]
+        and _STATE["installed"]
+        and getattr(draft_model, "supports_greedy_draft_argmax", False)
+    )
+
+
+def _masked_targets(lm: Any, hidden: mx.array, masks: Any, dtype: mx.Dtype) -> mx.array:
+    """Target tokens of a verify window under per-position token masks."""
+    from .tool_call_grammar import apply_bitmask
+
+    logits = lm.speculative_logits_from_hidden(hidden)
+    return mx.argmax(apply_bitmask(logits, masks), axis=-1).reshape(1, -1).astype(dtype)
 
 
 def set_profile(enabled: bool) -> dict | None:
@@ -66,9 +106,14 @@ def rounds(
     token_dtype: mx.Dtype,
     stop_check: Any,
     eos_token_ids: set | None,
+    guide: Any = None,
+    keyed: Any = None,
 ) -> Generator[tuple[list, dict | None]]:
     import mlx_vlm.speculative.mtp as mtp
-    from mlx_vlm.speculative.common import _dflash_block_total
+    from mlx_vlm.speculative.common import (
+        _dflash_block_total,
+        _record_speculative_round,
+    )
 
     lm = model.language_model if hasattr(model, "language_model") else model
     block_total = _dflash_block_total(draft_model, draft_block_size)
@@ -122,6 +167,8 @@ def rounds(
 
     emitted = 1  # the caller already emitted the first bonus
     b = int(first_bonus)
+    if guide is not None:
+        guide.feed(b)
     finished = False
     queued = None  # (drafts, chained entries, block) built ahead of the rollback
 
@@ -151,10 +198,41 @@ def rounds(
             verify_input = mx.concatenate(
                 [mx.array([[b]], dtype=token_dtype), draft_tokens], axis=1
             )
-            verify = mtp._mtp_verify_target(
-                lm, verify_input, prompt_cache, sampler, sample_target_tokens=True
-            )
-            target = verify.target_tokens.reshape(1, -1).astype(token_dtype)
+            masks = None
+            if guide is not None and guide.constrained:
+                # Each position's mask depends on the drafts before it: read the
+                # chain back first (only inside a tool call, a short stretch).
+                masks = guide.plan(draft_tokens.reshape(-1).tolist(), bs)
+                guide.lane_rounds += masks is not None
+            if keyed is None and masks is None:
+                verify = mtp._mtp_verify_target(
+                    lm, verify_input, prompt_cache, sampler, sample_target_tokens=True
+                )
+                target = verify.target_tokens.reshape(1, -1).astype(token_dtype)
+            else:
+                # Masked and/or sampled request. A sampled row r draws generation index
+                # ``emitted + r`` with the keyed sampler, so a draft is accepted exactly
+                # when serial sampling would have produced it (see keyed_sampling); a
+                # tool-call mask is applied to the logits first, as serial decoding does.
+                verify = mtp._mtp_verify_target(
+                    lm, verify_input, prompt_cache, sampler, sample_target_tokens=False
+                )
+                logits = lm.speculative_logits_from_hidden(verify.hidden)
+                if masks is not None:
+                    from .tool_call_grammar import apply_bitmask
+
+                    logits = apply_bitmask(logits, masks)
+                if keyed is None:
+                    target = (
+                        mx.argmax(logits, axis=-1).reshape(1, -1).astype(token_dtype)
+                    )
+                else:
+                    logits = logits[0]
+                    logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
+                    target = keyed.sample_positions(
+                        logprobs, list(range(emitted, emitted + bs))
+                    ).reshape(1, -1)
+                    target = target.astype(token_dtype)
             # Early absorb: every row through the head with the true tokens.
             # The chain's own entries (built from the head's hidden) go first.
             if chained:
@@ -176,6 +254,17 @@ def rounds(
             while accepted < bs - 1 and drafted[accepted] == tgt[accepted]:
                 accepted += 1
             new_tokens = (drafted[:accepted] + [tgt[accepted]])[: max_tokens - emitted]
+            if guide is not None:
+                # Keep the tokens up to the first one that arms a constraint (the
+                # ones after it were verified without its mask), and advance the
+                # guide over what is kept.
+                kept = guide.advance(new_tokens)
+                if kept < len(new_tokens):
+                    new_tokens = new_tokens[:kept]
+                    accepted = kept - 1
+            # per-round drafted / accepted counts (drafter lifetime counters; the runner
+            # diffs them per request for x_yunshu.speculative)
+            _record_speculative_round(draft_model, accepted, bs - 1)
             # Rows 0..accepted stay in the head's cache; later rows go.
             rejected = bs - (accepted + 1)
             if rejected:
@@ -237,7 +326,9 @@ def install() -> bool:
         if (
             _STATE["enabled"]
             and kw.get("draft_kind") == "mtp"
-            and kw.get("greedy_sampling")
+            and (
+                kw.get("greedy_sampling") or isinstance(kw.get("sampler"), KeyedSampler)
+            )
             and first is not None
             and int(first.shape[0]) == 1
             and getattr(draft_model, "supports_greedy_draft_argmax", False)
@@ -255,6 +346,14 @@ def install() -> bool:
                 token_dtype=kw.get("token_dtype", mx.int32),
                 stop_check=kw.get("stop_check"),
                 eos_token_ids=kw.get("eos_token_ids"),
+                guide=_STATE["guide"],
+                keyed=kw["sampler"]
+                if isinstance(kw.get("sampler"), KeyedSampler)
+                else None,
+            )
+        if _STATE["guide"] is not None:
+            logger.warning(
+                "tool-call guide dropped: the speculative lane's rounds are not in use"
             )
         return original(model, draft_model, prompt_cache, hidden, **kw)
 

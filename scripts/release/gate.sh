@@ -194,17 +194,17 @@ if has soak; then
       if [ -z "$s" ]; then rec soak.mmlu FAIL "no summary (soak-mmlu.log)"
       else
         read correct errors n secs tps m0 mmax m1 <<< "$s"
-        d=$(( correct - MMLU_BASELINE )); d=${d#-}
+        d=$(( MMLU_BASELINE - correct ))  # only a drop fails; a rise past the band is noise or a better baseline
         detail="$correct/$n, $errors errors, $(( ${secs%.*} / 60 )) min, $tps tok/s, footprint $m0 -> max $mmax -> $m1 GiB"
         [ $n = 300 ] && [ $errors = 0 ] && [ $d -le $MMLU_TOLERANCE ] \
-          && rec soak.mmlu PASS "$detail" || rec soak.mmlu FAIL "$detail (baseline $MMLU_BASELINE ±$MMLU_TOLERANCE)"
+          && rec soak.mmlu PASS "$detail" || rec soak.mmlu FAIL "$detail (baseline $MMLU_BASELINE, allowed drop $MMLU_TOLERANCE)"
         $PY -c "import sys; sys.exit(0 if float('$m1') - float('$m0') < 4 else 1)" \
           && rec soak.mmlu_memory_returns PASS "start $m0, end $m1 GiB" \
           || rec soak.mmlu_memory_returns FAIL "start $m0, end $m1 GiB after idle"
       fi
       log "soak realistic $SOAK_MINUTES min"
       $PY scripts/research/soak_realistic.py --url $URL --model Qwen3.8-27B --pid $YP \
-        --minutes $SOAK_MINUTES --note "release gate" --output $OUT/soak-realistic.jsonl > $OUT/soak-realistic.log 2>&1
+        --minutes $SOAK_MINUTES --note "release gate" --output $OUT/soak-realistic.jsonl 2>&1 | tee $OUT/soak-realistic.log
       s=$(jget $OUT/soak-realistic.jsonl "f\"{requests} {ok} {errors} {start_footprint_gib} {max_footprint_gib} {end_footprint_gib}\"")
       if [ -z "$s" ]; then rec soak.realistic FAIL "no summary (soak-realistic.log)"
       else

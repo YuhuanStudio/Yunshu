@@ -150,6 +150,11 @@ def openai_model(card: ModelCard, *, detailed: bool = False) -> dict[str, Any]:
         # Everything else, in one namespace.
         "yunshu": _wire(card, None),
     }
+    if text_like:
+        # What the gateway itself can run for server tools (web search provider, MCP connector).
+        from .server_tools import status as _server_tools_status
+
+        entry["yunshu"]["server_tools"] = _server_tools_status()
     if detailed:
         entry["yunshu"]["path"] = card.path
     return entry

@@ -31,6 +31,7 @@ from yunshu_engine.tool_call_streamer import ToolCallStreamer
 from yunshu_engine.tool_format import parse_tool_output, tool_formats
 
 from ..engine import get_engine, get_model_manager
+from ..error_envelope import EngineStreamError
 from ..streaming import (
     ClosingStreamingResponse,
     extract_thinking,
@@ -929,22 +930,31 @@ def _inject_tool_system_prompt(
     if not tools:
         return messages
 
-    # Native tool rendering (auto/None only — the inject path handles forced choices).
+    # Native tool rendering: auto/None, or a forced choice that tool-call grammar
+    # enforces (otherwise the inject path handles forced choices).
     try:
         from yunshu_engine.batched_engine import (
+            _REQUEST_TOOL_USE,
             _REQUEST_TOOLS,
             BatchedEngine,
             _template_supports_tools,
         )
 
+        forced_by_grammar = tool_choice not in (None, "auto", "none") and (
+            settings.get_bool("YUNSHU_TOOL_GRAMMAR")
+        )
         if (
-            tool_choice in (None, "auto")
+            (tool_choice in (None, "auto") or forced_by_grammar)
             and isinstance(engine, BatchedEngine)
             and _template_supports_tools(getattr(engine, "_tokenizer", None))
         ):
             _REQUEST_TOOLS.set([t.model_dump() for t in tools])
+            _REQUEST_TOOL_USE.set(
+                {"tool_choice": tool_choice, "parallel": parallel_tool_calls}
+            )
             return messages
         _REQUEST_TOOLS.set(None)  # ensure no stale native tools leak in
+        _REQUEST_TOOL_USE.set(None)
     except Exception:
         logger.debug(
             "native-tool decision failed; using prompt injection", exc_info=True
@@ -1036,6 +1046,17 @@ def _inject_tool_system_prompt(
     return messages
 
 
+def _native_tools_active() -> bool:
+    """True when this request's tools go to the chat template natively (the grammar
+    enforces a forced tool_choice; the JSON prefill below is for injected prompts)."""
+    try:
+        from yunshu_engine.batched_engine import _REQUEST_TOOLS
+
+        return bool(_REQUEST_TOOLS.get())
+    except Exception:
+        return False
+
+
 def _tool_choice_prefill(tool_choice: str | ToolChoiceFunction | None) -> str:
     """Return the assistant-turn PREFILL that structurally commits the model to a
     tool call for a forced tool_choice, or "" when no prefill applies.
@@ -1106,11 +1127,17 @@ def _vlm_tool_plan(req, engine, messages: list[dict]):
     """Return ``(messages, native_tools)`` for a VLM request with tools.
 
     Native (definitions passed to the engine's chat template, messages
-    untouched) when the template renders tools and tool_choice is auto/None;
+    untouched) when the template renders tools and tool_choice is auto/None, or
+    a forced choice that tool-call grammar enforces (YUNSHU_TOOL_GRAMMAR);
     otherwise the generic injected tool system prompt, as before."""
     if not req.tools:
         return messages, None
-    if req.tool_choice in (None, "auto") and _vlm_renders_tools(engine):
+    forced_by_grammar = req.tool_choice not in (None, "auto", "none") and (
+        settings.get_bool("YUNSHU_TOOL_GRAMMAR")
+    )
+    if (req.tool_choice in (None, "auto") or forced_by_grammar) and _vlm_renders_tools(
+        engine
+    ):
         return messages, [t.model_dump() for t in req.tools]
     return (
         _inject_tool_system_prompt(
@@ -1874,7 +1901,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
     # each path below prepends `_tool_prefill` back (or seeds the streamer with it) before
     # tool-call parsing so the parser sees complete `<tool_call>…` markup.
     _tool_prefill = ""
-    if req.tools and is_batched:
+    if req.tools and is_batched and not _native_tools_active():
         _tool_prefill = _tool_choice_prefill(req.tool_choice)
         if _tool_prefill:
             messages = _append_tool_prefill(messages, _tool_prefill)
@@ -2411,6 +2438,8 @@ async def _handle_vlm_chat(
         gen_kwargs["json_schema"] = json_schema
     if native_tools:
         gen_kwargs["tools"] = native_tools
+        gen_kwargs["tool_choice"] = req.tool_choice
+        gen_kwargs["parallel_tool_calls"] = req.parallel_tool_calls
 
     tok = getattr(vlm_engine, "_tokenizer", None)
     # Pre-compute a text-only fallback prompt_tok for the case where the engine
@@ -2787,6 +2816,8 @@ async def _stream_vlm_response(
             stream_kwargs["json_schema"] = json_schema
         if native_tools:
             stream_kwargs["tools"] = native_tools
+            stream_kwargs["tool_choice"] = req.tool_choice
+            stream_kwargs["parallel_tool_calls"] = req.parallel_tool_calls
         async with contextlib.aclosing(
             vlm_engine.generate_stream(**stream_kwargs)
         ) as stream:
@@ -4002,6 +4033,8 @@ async def _stream_response(
                 ignore_eos=req.ignore_eos,
                 suppress_tokens=req.suppress_tokens,
             ):
+                if getattr(output, "error", None):
+                    raise EngineStreamError(str(output.error))
                 token_text = output.new_text
                 # emit prefill progress as SSE comment for
                 # client-side progress bars during long chunked prefills.
@@ -4187,6 +4220,8 @@ async def _stream_response(
                 timeout_seconds=req.timeout,
                 lora_adapter=loaded_adapter,
             ):
+                if getattr(output, "error", None):
+                    raise EngineStreamError(str(output.error))
                 # Track token counts for usage reporting
                 if hasattr(output, "prompt_tokens") and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
@@ -4412,12 +4447,17 @@ async def _stream_response(
         yield b'data: {"error": {"message": "Out of GPU memory", "type": "memory_error", "code": "oom"}}\n\n'
         if not done_emitted:
             yield b"data: [DONE]\n\n"
-    except Exception:
+    except Exception as _stream_exc:
         if _cancel_evt is not None:
             _cancel_evt.set()
         logger.error("Chat streaming error", exc_info=True)
         err_payload = {
-            "error": {"message": "Internal server error", "type": "internal_error"}
+            "error": {
+                "message": str(_stream_exc)
+                if isinstance(_stream_exc, EngineStreamError)
+                else "Internal server error",
+                "type": "internal_error",
+            }
         }
         yield f"data: {json.dumps(err_payload, ensure_ascii=False)}\n\n".encode()
         if not done_emitted:

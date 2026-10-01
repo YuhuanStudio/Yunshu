@@ -45,6 +45,11 @@ def _now() -> str:
 
 def _client(request: Request) -> httpx.AsyncClient:
     headers = {}
+    rid = getattr(request.state, "request_id", None)
+    if (
+        rid
+    ):  # same id on the loopback call: cancel / DELETE /v1/requests/{id} still work
+        headers["X-Request-Id"] = rid
     if request.headers.get("authorization"):
         headers["Authorization"] = request.headers["authorization"]
     base = f"{request.url.scheme}://{request.url.netloc}"
@@ -207,16 +212,35 @@ def _done_reason(fr: str | None) -> str:
     )
 
 
-def _timing(t0: float, usage: dict | None, t_first: float | None) -> dict:
-    total = int((time.perf_counter() - t0) * _NS)
-    pe = int(((t_first or time.perf_counter()) - t0) * _NS)
+def _timing(
+    t0: float, usage: dict | None, t_first: float | None, xy: dict | None = None
+) -> dict:
+    """Ollama's own timing fields (ns). Engine-side ``x_yunshu`` numbers win when the
+    upstream sent them; otherwise the gateway clock is used."""
+    xy = xy or {}
+
+    def ns(ms: float | None) -> int | None:
+        return None if ms is None else int(ms * 1_000_000)
+
+    total = ns(xy.get("total_ms"))
+    if total is None:
+        total = int((time.perf_counter() - t0) * _NS)
+    pe = ns(xy.get("prefill_ms"))
+    if pe is None:
+        pe = ns(xy.get("ttft_ms"))
+    if pe is None:
+        pe = int(((t_first or time.perf_counter()) - t0) * _NS)
+    ev = ns(xy.get("decode_ms"))
+    if ev is None:
+        ev = max(total - pe, 0)
+    u = usage or {}
     return {
         "total_duration": total,
-        "load_duration": 0,
-        "prompt_eval_count": (usage or {}).get("prompt_tokens", 0),
+        "load_duration": ns(xy.get("load_ms")) or 0,
+        "prompt_eval_count": xy.get("prompt_tokens") or u.get("prompt_tokens", 0),
         "prompt_eval_duration": pe,
-        "eval_count": (usage or {}).get("completion_tokens", 0),
-        "eval_duration": max(total - pe, 0),
+        "eval_count": xy.get("completion_tokens") or u.get("completion_tokens", 0),
+        "eval_duration": ev,
     }
 
 
@@ -266,6 +290,8 @@ async def _run_chat(request: Request, body: dict, *, generate: bool):
         oa["stream_options"] = {"include_usage": True}
     if body.get("tools"):
         oa["tools"] = body["tools"]
+    if body.get("keep_alive") is not None:
+        oa["keep_alive"] = body["keep_alive"]
     t0 = time.perf_counter()
     client = _client(request)
 
@@ -303,7 +329,7 @@ async def _run_chat(request: Request, body: dict, *, generate: bool):
         msg = ch["message"]
         extra = {
             "done_reason": _done_reason(ch.get("finish_reason")),
-            **_timing(t0, j.get("usage"), None),
+            **_timing(t0, j.get("usage"), None, j.get("x_yunshu")),
         }
         return JSONResponse(
             shape(
@@ -326,6 +352,7 @@ async def _run_chat(request: Request, body: dict, *, generate: bool):
 
     async def gen() -> AsyncIterator[bytes]:
         usage = None
+        xy = None
         finish = None
         t_first = None
         tool_acc: dict[int, dict] = {}
@@ -333,6 +360,8 @@ async def _run_chat(request: Request, body: dict, *, generate: bool):
             async for ev in _sse(resp):
                 if ev.get("usage"):
                     usage = ev["usage"]
+                if ev.get("x_yunshu"):
+                    xy = ev["x_yunshu"]
                 for ch in ev.get("choices") or []:
                     d = ch.get("delta") or {}
                     for tc in d.get("tool_calls") or []:
@@ -352,7 +381,10 @@ async def _run_chat(request: Request, body: dict, *, generate: bool):
                     if ch.get("finish_reason"):
                         finish = ch["finish_reason"]
             tcs = _tool_calls_out([tool_acc[k] for k in sorted(tool_acc)])
-            extra = {"done_reason": _done_reason(finish), **_timing(t0, usage, t_first)}
+            extra = {
+                "done_reason": _done_reason(finish),
+                **_timing(t0, usage, t_first, xy),
+            }
             yield _ndjson(shape("", "", tcs, True, extra))
         except Exception as e:  # noqa: BLE001
             yield _ndjson({"error": str(e)})

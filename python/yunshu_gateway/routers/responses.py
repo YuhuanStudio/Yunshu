@@ -19,14 +19,22 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from yunshu_engine import settings
 
 from ..engine import get_engine, get_engine_for_model
+from ..error_envelope import EngineStreamError
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +49,19 @@ _TRUNCATE_KEEP = 512 * 1024
 _RESPONSE_STORE_MAX = 1024
 _response_store: OrderedDict[str, dict] = OrderedDict()
 _response_store_lock = threading.Lock()
+
+
+def _native_kw(req) -> dict:
+    """``tools=`` for an engine whose chat template renders tool definitions itself."""
+    tools = getattr(req, "_native_tools", None)
+    return {"tools": tools} if tools else {}
+
+
+def _seal_extra(req, text: str | None) -> dict:
+    """``encrypted_content`` for a reasoning item, when the request asked for it (``include``)."""
+    if text and "reasoning.encrypted_content" in (getattr(req, "include", None) or []):
+        return {"encrypted_content": seal_reasoning(text)}
+    return {}
 
 
 def _store_response(response_id: str, payload: dict) -> None:
@@ -105,6 +126,56 @@ def _owns_stored(request, payload: dict) -> bool:
     if _is_admin(request):
         return True
     return owner == _resolve_owner(request)
+
+
+def _config_echo(req: ResponsesRequest) -> dict:
+    """The request's configuration as the Response object echoes it (OpenAI shape)."""
+    reasoning = dict(req.reasoning) if isinstance(req.reasoning, dict) else {}
+    if req.reasoning_effort and "effort" not in reasoning:
+        reasoning["effort"] = req.reasoning_effort
+    text = dict(req.text) if isinstance(req.text, dict) else {}
+    text.setdefault("format", {"type": "text"})
+    return {
+        "instructions": req.instructions,
+        "temperature": req.temperature,
+        "top_p": req.top_p,
+        "max_output_tokens": req.max_output_tokens,
+        "tools": [t.model_dump(exclude_none=True) for t in (req.tools or [])],
+        "tool_choice": req.tool_choice or "auto",
+        "parallel_tool_calls": req.parallel_tool_calls,
+        "text": text,
+        "reasoning": {"effort": reasoning.get("effort"), "summary": None}
+        if reasoning
+        else {"effort": None, "summary": None},
+        "truncation": req.truncation or "disabled",
+        "store": bool(req.store),
+        "background": bool(req.background),
+        "previous_response_id": req.previous_response_id,
+        "service_tier": req.service_tier or "default",
+        "user": req.user,
+        "top_logprobs": req.top_logprobs or 0,
+        "max_tool_calls": req.max_tool_calls,
+        "prompt_cache_key": req.prompt_cache_key,
+        "safety_identifier": req.safety_identifier,
+        "metadata": req.metadata,
+    }
+
+
+def _auto_truncate(messages: list, tokens: int, limit: int, count) -> tuple[list, int]:
+    """``truncation="auto"``: drop the oldest non-system messages (and the tool results
+    that would be left without their call) until the prompt fits, keeping the last one."""
+    msgs = list(messages)
+    while tokens > limit:
+        idx = next(
+            (i for i, m in enumerate(msgs[:-1]) if m.get("role") != "system"), None
+        )
+        if idx is None:
+            break
+        del msgs[idx]
+        while idx < len(msgs) - 1 and msgs[idx].get("role") == "tool":
+            del msgs[idx]
+        tokens = count(msgs)
+    return msgs, tokens
 
 
 def _public_stored(payload: dict) -> dict:
@@ -228,6 +299,7 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
             "type": "reasoning",
             "id": rs_id,
             "summary": [{"type": "summary_text", "text": reasoning}],
+            **_seal_extra(req, reasoning),
             "status": "completed",
         }
         if reasoning
@@ -245,6 +317,7 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
     payload = {
         "id": response_id,
         "object": "response",
+        **_config_echo(req),
         "created_at": int(time.time()),
         "completed_at": int(time.time()),
         "model": req.model,
@@ -415,6 +488,13 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
     )
 
 
+from ..reasoning_token import reasoning_text_of, seal_reasoning
+from ..server_tools.responses_loop import (
+    create_with_server_tools_responses,
+    function_tools,
+    has_server_tools_responses,
+    input_item_to_messages,
+)
 from ..streaming import (
     format_responses_completed,
     format_responses_content_part_added,
@@ -453,7 +533,13 @@ class ResponseInputText(BaseModel):
     call_id: str | None = None
     name: str | None = None
     arguments: str | None = None
-    output: str | None = None
+    # function_call_output / custom_tool_call_output carry a string or a list of content items.
+    output: Any = None
+
+    # Every other Responses input item (reasoning, custom_tool_call, web_search_call, mcp_call,
+    # mcp_list_tools, mcp_approval_request/response, compaction, item_reference, ...) keeps its
+    # own fields; _convert_to_messages decides what the model sees.
+    model_config = ConfigDict(extra="allow")
 
     @model_validator(mode="after")
     def _require_content_for_messages(self):
@@ -463,10 +549,15 @@ class ResponseInputText(BaseModel):
 
 
 class ResponseTool(BaseModel):
+    """A declared tool. Besides ``function`` it can be ``web_search*``, ``mcp``, ``namespace``
+    (Codex), ``custom`` ...; those keep their own fields (extra="allow") and have no ``name``."""
+
     type: str = "function"
-    name: str
+    name: str = ""
     description: str | None = None
     parameters: dict | None = None
+
+    model_config = ConfigDict(extra="allow")
 
 
 class StreamOptions(BaseModel):
@@ -480,6 +571,11 @@ class ResponsesRequest(BaseModel):
     input: str | list[ResponseInputText]
     instructions: str | None = None
     previous_response_id: str | None = None
+    # Conversations API: a conversation id (or {id}); its items are prepended to `input` and this
+    # turn is appended to it. Mutually exclusive with previous_response_id.
+    conversation: str | dict | None = None
+    # [{"type": "compaction", "compact_threshold": N}]: compact the input first when it exceeds N tokens.
+    context_management: list[dict] | None = None
     max_output_tokens: int = Field(default=2048, ge=1, le=131072)
     # OpenAI Chat Completions legacy alias — accept silently and alias to
     # max_output_tokens so old client code doesn't run unbounded against
@@ -504,6 +600,16 @@ class ResponsesRequest(BaseModel):
     # reasoning_effort); without this field Pydantic silently dropped it and reasoning
     # models were served without thinking.
     reasoning: dict | None = None
+    # WebSocket-mode prewarm (Codex): `generate: false` prefills the prompt prefix and
+    # returns a response id without producing output.
+    generate: bool | None = None
+    # Fields real clients (Codex, the OpenAI SDK) send; ``include`` and ``max_tool_calls`` are
+    # read by the server-tool loop, the rest are accepted for compatibility.
+    include: list[str] | None = None
+    max_tool_calls: int | None = Field(default=None, ge=1)
+    prompt_cache_key: str | None = None
+    client_metadata: dict | None = None
+    service_tier: str | None = None
     repetition_penalty: float = Field(default=1.0, ge=0.0, le=2.0)
     frequency_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
     presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
@@ -554,6 +660,18 @@ class ResponsesRequest(BaseModel):
     # (Pydantic extra="ignore"), and every payload echoed {"user_id": user} instead — a
     # client using metadata for request correlation got nothing back. Now echoed.
     metadata: dict | None = None
+    # OpenAI Responses fields that used to be dropped silently. ``truncation="auto"``
+    # drops the oldest input items when the prompt would overflow the context window
+    # (``"disabled"``, the default, answers 400); ``max_tool_calls`` caps the function
+    # calls of one response; the rest are echoed on the Response object.
+    truncation: Literal["auto", "disabled"] | None = None
+    max_tool_calls: int | None = Field(default=None, ge=1)
+    include: list[str] | None = None
+    conversation: str | dict | None = None
+    service_tier: str | None = None
+    prompt_cache_key: str | None = None
+    prompt_cache_retention: str | None = None
+    safety_identifier: str | None = None
     priority: int = Field(default=0, ge=0, le=100)
     logits_processors: list | None = None  # User-provided custom logits processors
     timeout: float | None = Field(
@@ -605,7 +723,12 @@ class ResponsesRequest(BaseModel):
         # Validate input: string must be non-empty, list must have elements
         if isinstance(self.input, str) and not self.input.strip():
             raise ValueError("input: cannot be empty or whitespace-only")
-        if isinstance(self.input, list) and not self.input:
+        # (a `generate: false` prewarm carries no input by design)
+        if (
+            isinstance(self.input, list)
+            and not self.input
+            and self.generate is not False
+        ):
             raise ValueError("input: cannot be an empty list")
         # Validate response_format type if provided
         if self.response_format is not None:
@@ -634,6 +757,32 @@ class ResponsesRequest(BaseModel):
         if self.metadata is not None and len(self.metadata) > 16:
             raise ValueError("metadata: maximum 16 key-value pairs")
         return self
+
+
+def _input_file_text(block: dict) -> str:
+    """Text of an ``input_file`` part: a text file's content inline, else a note the model can act on."""
+    import base64 as _b64
+
+    name = block.get("filename") or "file"
+    data = block.get("file_data")
+    if isinstance(data, str) and data:
+        mime = "text/plain"
+        payload = data
+        if data.startswith("data:"):
+            head, _, payload = data.partition(",")
+            mime = head[5:].split(";")[0] or "text/plain"
+        try:
+            raw = _b64.b64decode(payload)
+        except Exception:
+            return ""
+        if mime.startswith("text/") or mime in (
+            "application/json",
+            "application/xml",
+            "application/x-yaml",
+        ):
+            return f"[file: {name}]\n{raw.decode('utf-8', errors='replace')}"
+        return f"[file: {name} ({mime}) cannot be read as text by this model]"
+    return ""
 
 
 def _extract_input_text(content) -> str | list:
@@ -680,6 +829,11 @@ def _extract_input_text(content) -> str | list:
             url = iu.get("url") if isinstance(iu, dict) else iu
             url = url or block.get("url")
             multimodal.append({"type": "image_url", "image_url": {"url": url}})
+        elif btype == "input_file":
+            txt = _input_file_text(block)
+            if txt:
+                text_parts.append(txt)
+                multimodal.append({"type": "text", "text": txt})
         elif btype == "input_audio":
             has_media = True
             multimodal.append(
@@ -693,6 +847,14 @@ def _extract_input_text(content) -> str | list:
 def _convert_to_messages(req: ResponsesRequest) -> list[dict]:
     """Convert Responses API input to OpenAI chat messages."""
     messages = []
+    pending_reasoning: list[str] = []
+
+    def _take_reasoning(msg: dict) -> dict:
+        # Reasoning items the client sent back ride on the next assistant turn.
+        if pending_reasoning and msg.get("role") == "assistant":
+            msg["reasoning_content"] = "\n".join(pending_reasoning)
+            pending_reasoning.clear()
+        return msg
 
     if req.instructions:
         messages.append({"role": "system", "content": req.instructions})
@@ -708,6 +870,22 @@ def _convert_to_messages(req: ResponsesRequest) -> list[dict]:
                 else (lambda k, d=None: getattr(item, k, d))
             )
             itype = _get("type", "message")
+            if itype == "reasoning":
+                txt = reasoning_text_of(
+                    item.model_dump() if hasattr(item, "model_dump") else dict(item)
+                )
+                if txt:
+                    pending_reasoning.append(txt)
+                continue
+            if itype not in ("message", "", "function_call", "function_call_output"):
+                # web_search_call / mcp_call / custom tool calls become a tool-call pair; reasoning,
+                # mcp_list_tools, approvals, compaction, item_reference ... are skipped.
+                messages.extend(
+                    input_item_to_messages(
+                        item.model_dump() if hasattr(item, "model_dump") else dict(item)
+                    )
+                )
+                continue
             # Tool-conversation items: feed a prior tool call + its result back so
             # multi-turn agent loops work. Previously these had no role/content and
             # became empty "user" messages (the call_id/output were dropped).
@@ -725,25 +903,31 @@ def _convert_to_messages(req: ResponsesRequest) -> list[dict]:
                 continue
             if itype == "function_call":
                 messages.append(
-                    {
-                        "role": "assistant",
-                        "content": "",
-                        "tool_calls": [
-                            {
-                                "id": _get("call_id", "") or _get("id", "") or "",
-                                "type": "function",
-                                "function": {
-                                    "name": _get("name", "") or "",
-                                    "arguments": _get("arguments", "") or "{}",
-                                },
-                            }
-                        ],
-                    }
+                    _take_reasoning(
+                        {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": _get("call_id", "") or _get("id", "") or "",
+                                    "type": "function",
+                                    "function": {
+                                        "name": _get("name", "") or "",
+                                        "arguments": _get("arguments", "") or "{}",
+                                    },
+                                }
+                            ],
+                        }
+                    )
                 )
                 continue
             role = _get("role", "user") or "user"
+            if role == "developer":
+                role = "system"
             content = _get("content", "")
-            messages.append({"role": role, "content": _extract_input_text(content)})
+            messages.append(
+                _take_reasoning({"role": role, "content": _extract_input_text(content)})
+            )
 
     return messages
 
@@ -784,6 +968,7 @@ async def _start_background_response(req: ResponsesRequest, request: Request):
     queued_payload = {
         "id": response_id,
         "object": "response",
+        **_config_echo(req),
         "created_at": int(time.time()),
         "model": req.model,
         "status": "queued",
@@ -843,16 +1028,156 @@ async def _start_background_response(req: ResponsesRequest, request: Request):
     return JSONResponse(_public_stored(queued_payload))
 
 
+async def _prewarm_response(req: ResponsesRequest, request: Request):
+    """``generate: false``: prefill the prompt prefix, return a response id, produce no output.
+
+    Codex opens its Responses WebSocket with a prewarm frame (``generate: false``, empty ``input``,
+    the full ``instructions`` and ``tools``), then sends the real request with ``previous_response_id``
+    set to the prewarm's id. The point is the cache: the stable prefix (instructions + tool schemas,
+    several thousand tokens) is prefilled before the user has typed anything. Here that is a real
+    1-token generation through the normal path, whose prompt lands in the prefix cache; the tokens it
+    produced are discarded. The stored response carries no input and no output, so chaining onto it
+    replays nothing.
+    """
+    messages_present = bool(req.input) and (
+        isinstance(req.input, str) or len(req.input) > 0
+    )
+    inner = req.model_copy(
+        update={
+            "generate": None,
+            "stream": False,
+            "background": False,
+            "max_output_tokens": 1,
+            "store": False,
+            # Qwen-style templates need a user turn to render; the real request replaces it.
+            "input": req.input
+            if messages_present
+            else [ResponseInputText(type="message", role="user", content="Hi")],
+        }
+    )
+    resp = await create_response(inner, request)
+    status_code = getattr(resp, "status_code", 200)
+    if status_code >= 400:
+        return resp
+    try:
+        prefilled = json.loads(bytes(resp.body))
+    except Exception:
+        prefilled = {}
+    rid = f"resp-{uuid.uuid4().hex[:24]}"
+    usage = prefilled.get("usage") or {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "input_tokens_details": {"cached_tokens": 0},
+        "output_tokens_details": {"reasoning_tokens": 0},
+    }
+    usage = dict(usage)
+    usage["output_tokens"] = 0
+    usage["total_tokens"] = usage.get("input_tokens", 0)
+    created = int(time.time())
+    obj = {
+        "id": rid,
+        "object": "response",
+        "created_at": created,
+        "status": "completed",
+        "model": req.model,
+        "output": [],
+        "usage": usage,
+        "previous_response_id": req.previous_response_id,
+        "store": bool(req.store),
+        "x_yunshu": {"prewarm": True},
+    }
+    _store_response(
+        rid,
+        {
+            **obj,
+            "_input_messages": [],
+            "_owner": _resolve_owner(request),
+        },
+    )
+    if not req.stream:
+        return JSONResponse(obj)
+
+    async def gen():
+        started = {**obj, "status": "in_progress", "usage": None}
+        events = [
+            ("response.created", started),
+            ("response.in_progress", started),
+            ("response.completed", obj),
+        ]
+        for seq, (name, body) in enumerate(events):
+            yield (
+                f"event: {name}\ndata: "
+                + json.dumps({"type": name, "response": body, "sequence_number": seq})
+                + "\n\n"
+            ).encode()
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+def _engine_templates_itself(engine) -> bool:
+    """VLMEngine (every mlx-vlm model, the 27B included) applies its own chat template,
+    family adapter and native tool rendering to the message list. Handing it a string that
+    this router already templated wraps the whole ChatML transcript in a user message, and
+    the model then reads a chat log inside a user turn."""
+    from yunshu_engine.vlm_engine import VLMEngine
+
+    return isinstance(engine, VLMEngine)
+
+
 @router.post("/responses", response_model=None)
 async def create_response(req: ResponsesRequest, request: Request):
     """OpenAI Responses API endpoint."""
     _check_permission(request, "can_infer")
+    from ..responses_context import needs_state, run_stateful_response
+
+    if needs_state(req):
+        # conversation / compaction items / auto compaction: rewrite the request, re-enter here
+        return await run_stateful_response(req, request, create_response)
+    from ..streaming import RESPONSES_ECHO
+
+    RESPONSES_ECHO.set(_config_echo(req))
+    if isinstance(req.input, list):
+        from ..files_store import FileRefError, has_file_refs, resolve_file_refs
+
+        _raw_items = [
+            i.model_dump() if hasattr(i, "model_dump") else i for i in req.input
+        ]
+        if has_file_refs(_raw_items):
+            try:
+                req = req.model_copy(
+                    update={
+                        "input": [
+                            ResponseInputText(**i)
+                            for i in resolve_file_refs(_raw_items)
+                        ]
+                    }
+                )
+            except FileRefError as exc:
+                return JSONResponse(
+                    status_code=exc.status,
+                    content={
+                        "error": {
+                            "message": exc.message,
+                            "type": "invalid_request_error",
+                            "code": "file_not_found" if exc.status == 404 else None,
+                        }
+                    },
+                )
+    if req.generate is False:
+        return await _prewarm_response(req, request)
     # OpenAI background mode: return a queued response immediately and run the
     # full (non-stream) generation asynchronously under the same id. Streaming +
     # background is not supported here (would require resumable SSE), so it only
     # triggers when stream is off.
+    if has_server_tools_responses(req):
+        return await create_with_server_tools_responses(req, request, create_response)
     if req.background and not req.stream:
         return await _start_background_response(req, request)
+    _fn_tools = function_tools(req.tools)
+    if _fn_tools != req.tools:
+        # namespaces flattened, non-function tools (custom, ...) dropped: the engine sees plain functions
+        req = req.model_copy(update={"tools": _fn_tools})
     messages = _convert_to_messages(req)
     # Snapshot THIS hop's own input before previous_response_id chaining mutates
     # `messages` (MED). Storing the post-chain `messages` as
@@ -909,13 +1234,25 @@ async def create_response(req: ResponsesRequest, request: Request):
             _stored_input = _prev.get("_input_messages")
             if _stored_input:
                 _turn.extend(_stored_input)
+            _rs_pending: list[str] = []
             for out in _prev.get("output") or []:
+                if out.get("type") == "reasoning":
+                    _rt = reasoning_text_of(out)
+                    if _rt:
+                        _rs_pending.append(_rt)
+                    continue
                 if out.get("role") == "assistant":
                     for c in out.get("content") or []:
                         if c.get("type") == "output_text":
-                            _turn.append(
-                                {"role": "assistant", "content": c.get("text", "")}
-                            )
+                            _amsg = {"role": "assistant", "content": c.get("text", "")}
+                            if _rs_pending:
+                                _amsg["reasoning_content"] = "\n".join(_rs_pending)
+                                _rs_pending = []
+                            _turn.append(_amsg)
+                elif out.get("type") in ("web_search_call", "mcp_call"):
+                    _turn.extend(
+                        input_item_to_messages(out, _prev.get("_server_tool_texts"))
+                    )
                 elif out.get("type") == "function_call":
                     # Replay the prior tool call (stored as a top-level item with no
                     # "role") so a chained agent loop remembers it requested the
@@ -1053,6 +1390,18 @@ async def create_response(req: ResponsesRequest, request: Request):
 
         _tok = getattr(engine, "_tokenizer", None) or getattr(engine, "tokenizer", None)
         _est = count_message_tokens(messages, _tok)
+        if req.truncation == "auto":
+            from ..streaming import get_max_context_window
+
+            _ctx = get_max_context_window(req.model, engine)
+            if _ctx and _est > _ctx:
+                _room = _ctx - min(req.max_output_tokens, _ctx // 4)
+                messages, _est = _auto_truncate(
+                    messages,
+                    _est,
+                    _room,
+                    lambda ms: count_message_tokens(ms, _tok),
+                )
         validate_context_window(_est, req.model, engine)
         validate_prefill_memory(_est)
     except HTTPException:
@@ -1095,9 +1444,16 @@ async def create_response(req: ResponsesRequest, request: Request):
             )
             for t in req.tools
         ]
-        messages = _inject_tool_system_prompt(
-            messages, tools, tool_choice=req.tool_choice
-        )
+        from .chat import _vlm_renders_tools
+
+        if req.tool_choice in (None, "auto") and _vlm_renders_tools(engine):
+            # The chat template renders the tools itself (Qwen3.x): the model's own tool-call
+            # format, not an injected JSON prompt it may half-follow.
+            req._native_tools = [t.model_dump() for t in tools]
+        else:
+            messages = _inject_tool_system_prompt(
+                messages, tools, tool_choice=req.tool_choice, engine=engine
+            )
         # Structurally FORCE a required/named tool_choice via an assistant prefill — the
         # advisory injection alone lets the model emit plain text (so "required"/named
         # couldn't be honored). Non-stream only: the streaming path uses
@@ -1182,7 +1538,7 @@ async def create_response(req: ResponsesRequest, request: Request):
         # _messages_to_text() does not call adapt_messages() and may strip
         # tool-related fields, producing garbage for tool-use conversations.
         _non_batched_prompt: str | list[dict] = messages
-        if not is_batched and messages:
+        if not is_batched and not _engine_templates_itself(engine) and messages:
             _tokenizer = getattr(engine, "_tokenizer", None)
             if _tokenizer is not None and hasattr(_tokenizer, "apply_chat_template"):
                 # bring this deprecated non-batched path closer to the engine's
@@ -1341,6 +1697,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                     state = await run_with_disconnect_guard(
                         request,
                         engine.generate(
+                            **_native_kw(req),
                             prompt=_non_batched_prompt,
                             max_tokens=req.max_output_tokens,
                             temperature=req.temperature,
@@ -1463,6 +1820,8 @@ async def create_response(req: ResponsesRequest, request: Request):
                 tool_calls, _clean = parse_tool_output(
                     _parse_text, tool_formats(engine), req.tools
                 )
+                if tool_calls and req.max_tool_calls:
+                    tool_calls = tool_calls[: req.max_tool_calls]
                 if tool_calls:
                     text = _clean
                     finish_reason = "tool_calls"
@@ -1495,6 +1854,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                     "type": "reasoning",
                     "id": f"rs-{uuid.uuid4().hex[:24]}",
                     "summary": [{"type": "summary_text", "text": _thinking}],
+                    **_seal_extra(req, _thinking),
                     "status": "completed",
                 }
                 if req.n > 1:
@@ -1587,6 +1947,7 @@ async def create_response(req: ResponsesRequest, request: Request):
         _response_payload = {
             "id": response_id,
             "object": "response",
+            **_config_echo(req),
             "created_at": int(time.time()),
             "completed_at": int(time.time()),
             "model": req.model,
@@ -1700,7 +2061,7 @@ async def _stream_response(
     # _messages_to_text() does not call adapt_messages() and may strip
     # tool-related fields, producing garbage for tool-use conversations.
     _stream_prompt: str | list[dict] = messages
-    if not is_batched and messages:
+    if not is_batched and not _engine_templates_itself(engine) and messages:
         _tokenizer = getattr(engine, "_tokenizer", None)
         if _tokenizer is not None and hasattr(_tokenizer, "apply_chat_template"):
             # same role-remap + normalize as the non-stream sibling above.
@@ -1829,6 +2190,7 @@ async def _stream_response(
             tool_formats(engine),
             forced_tool_name=_tc_forced,
             allow_parallel=req.parallel_tool_calls,
+            max_calls=req.max_tool_calls,
             tools=req.tools,
         )
 
@@ -1961,6 +2323,7 @@ async def _stream_response(
                                         "text": accumulated_thinking,
                                     }
                                 ],
+                                **_seal_extra(req, accumulated_thinking),
                                 "status": "completed",
                             },
                             "sequence_number": _next_seq(),
@@ -2079,6 +2442,8 @@ async def _stream_response(
                     timeout_seconds=req.timeout,
                     lora_adapter=loaded_adapter,
                 ):
+                    if getattr(output, "error", None):
+                        raise EngineStreamError(str(output.error))
                     if hasattr(output, "prompt_tokens") and output.prompt_tokens:
                         prompt_tok = output.prompt_tokens
                     if hasattr(output, "reasoning_tokens") and output.reasoning_tokens:
@@ -2128,6 +2493,7 @@ async def _stream_response(
                             yield _ev
             else:
                 async for output in engine.generate_stream(
+                    **_native_kw(req),
                     prompt=_stream_prompt,
                     max_tokens=req.max_output_tokens,
                     temperature=req.temperature,
@@ -2160,6 +2526,8 @@ async def _stream_response(
                     timeout_seconds=req.timeout,
                     lora_adapter=loaded_adapter,
                 ):
+                    if getattr(output, "error", None):
+                        raise EngineStreamError(str(output.error))
                     if hasattr(output, "prompt_tokens") and output.prompt_tokens:
                         prompt_tok = output.prompt_tokens
                     if hasattr(output, "reasoning_tokens") and output.reasoning_tokens:
@@ -2257,6 +2625,8 @@ async def _stream_response(
                 tool_calls, _clean = parse_tool_output(
                     accumulated_text, tool_formats(engine), req.tools
                 )
+                if tool_calls and req.max_tool_calls:
+                    tool_calls = tool_calls[: req.max_tool_calls]
                 if tool_calls:
                     clean_text = _clean
 
@@ -2298,6 +2668,7 @@ async def _stream_response(
                         "summary": [
                             {"type": "summary_text", "text": accumulated_thinking}
                         ],
+                        **_seal_extra(req, accumulated_thinking),
                         "status": "completed",
                     }
                 )
@@ -2487,6 +2858,7 @@ async def _stream_response(
                         {
                             "id": response_id,
                             "object": "response",
+                            **_config_echo(req),
                             "created_at": int(time.time()),
                             "completed_at": int(time.time()),
                             "model": req.model,
@@ -2588,6 +2960,7 @@ async def _stream_response(
                             "summary": [
                                 {"type": "summary_text", "text": accumulated_thinking}
                             ],
+                            **_seal_extra(req, accumulated_thinking),
                             "status": "completed",
                         },
                         "sequence_number": _next_seq(),
@@ -2682,6 +3055,7 @@ async def _stream_response(
                             "summary": [
                                 {"type": "summary_text", "text": accumulated_thinking}
                             ],
+                            **_seal_extra(req, accumulated_thinking),
                             "status": "completed",
                         },
                         "sequence_number": _next_seq(),
@@ -2709,7 +3083,9 @@ async def _stream_response(
             response_id,
             req.model,
             error_code="server_error",
-            error_message="Internal server error",
+            error_message=str(e)
+            if isinstance(e, EngineStreamError)
+            else "Internal server error",
             input_tokens=prompt_tok,
             output_tokens=completion_tok,
             total_tokens=prompt_tok + completion_tok,

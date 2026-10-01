@@ -132,14 +132,16 @@ def gated_delta_rows(
     beta: mx.array,
     state: mx.array,
     lengths: mx.array,
+    save_hist: bool = True,
 ) -> tuple[mx.array, mx.array, mx.array | None]:
     """``q``, ``k`` [B, T, Hk, Dk], ``v`` [B, T, Hv, Dv], ``g`` / ``beta``
     [B, T, Hv] (scalar gating), ``state`` [B, Hv, Dv, Dk], ``lengths`` int32
     [B]. Returns ``(y, state_after, hist)``; ``hist`` [B, T - 1, Hv, Dv, Dk] is
-    None for ``T == 1``."""
+    None for ``T == 1`` or ``save_hist=False`` (a row that keeps part of its
+    window then replays its first tokens from the state before the call)."""
     B, T, Hk, Dk = k.shape
     Hv, Dv = v.shape[2:]
-    hist = T > 1
+    hist = T > 1 and save_hist
     outs = _kernel(hist)(
         inputs=[q, k, v, g, beta, state, lengths.astype(mx.int32), T],
         template=[

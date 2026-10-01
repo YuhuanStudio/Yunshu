@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import queue
 import threading
 import time
@@ -32,6 +33,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import mlx.core as mx
+
+from . import keyed_sampling
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +47,10 @@ PREFILL_STEP = 2048
 class RunStats:
     prompt_tokens: int = 0
     cached_tokens: int = 0
+    # Where the cached prefix came from ("ram", "ssd" or "none") and how long the lookup
+    # (including an SSD reload) took; None until the request's cache lookup ran.
+    cache_tier: str | None = None
+    cache_reload_ms: float | None = None
     first_token_s: float = 0.0
     generated: int = 0
     finish_reason: str | None = None
@@ -380,6 +387,7 @@ class VLMBatchRunner:
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
         xtc_special_tokens: list | None = None,
+        guide: Any = None,
     ) -> Iterator[int]:
         """Yield generated token ids; ``stats`` is filled in as generation runs.
 
@@ -394,13 +402,26 @@ class VLMBatchRunner:
         # Upstream drops logprobs while drafting, so logprob requests decode AR.
         # A thinking budget forces "\n</think>" through upstream's
         # ThinkingBudgetCriteria, which only the non-speculative batch applies.
+        # Sampled requests draft too: their tokens are drawn by a position-keyed sampler, so
+        # accepting a draft equals what serial sampling would have produced (keyed_sampling).
+        keyed_ok = greedy or keyed_sampling.supports(
+            RowParams(
+                float(temperature),
+                float(top_p),
+                int(top_k),
+                float(min_p),
+                seed,
+                float(xtc_probability or 0.0),
+            )
+        )
         use_draft = bool(
             allow_draft
             and self.drafter is not None
-            and greedy
+            and keyed_ok
             and not processors
             and not logprobs
             and thinking_budget is None
+            and (guide is None or self._lane_takes_guide(guide))
         )
         if logprobs:
             processors.append(Fp32LogitsProcessor())
@@ -438,6 +459,7 @@ class VLMBatchRunner:
             logprobs=bool(logprobs),
             top_logprobs=int(top_logprobs or 0) if logprobs else 0,
             processors=processors,
+            guide=guide,
             prompt_kwargs=prompt_kwargs,
             salt=apc_semantic_hash,
             seed=seed,
@@ -448,13 +470,18 @@ class VLMBatchRunner:
         # The round driver drafts for any greedy row without logits
         # processors or logprobs (a thinking budget is fine there).
         job.allow_draft = bool(
-            allow_draft and greedy and not processors and not logprobs
+            allow_draft and greedy and not processors and not logprobs and guide is None
         )
         stats.used_draft = use_draft
         stats.t_submit = time.perf_counter()
         with contextlib.suppress(Exception):
             # The gateway reaches the live stats through the cancel event it owns.
             cancel_event.run_stats = stats
+        if not greedy and use_draft:
+            job.keyed = keyed_sampling.KeyedSampler(
+                job.sampling,
+                seed if seed is not None else int.from_bytes(os.urandom(8), "little"),
+            )
         self._submit(job)
         try:
             while True:
@@ -475,6 +502,18 @@ class VLMBatchRunner:
             # A consumer that stops early (stop string, max length reached on
             # its side, disconnect) releases its row at the next slice.
             job.abandoned = True
+
+    def _lane_takes_guide(self, guide: Any) -> bool:
+        """The speculative lane masks a tool-call guide's verify window itself when the
+        row is greedy MTP and starts unconstrained (its first token is sampled
+        before the lane runs)."""
+        from . import mtp_lane
+
+        return (
+            self.draft_kind == "mtp"
+            and mtp_lane.can_guide(self.drafter)
+            and not guide.constrained
+        )
 
     def busy(self) -> bool:
         with self._lock:
@@ -502,10 +541,12 @@ class VLMBatchRunner:
     def _active_jobs(self) -> int:
         return sum(len(g.jobs) for g in self._groups()) + len(self._driver_jobs)
 
-    def _new_generator(self, *, spec: bool, use_apc: bool, top_logprobs: int, sampler):
+    def _new_generator(
+        self, *, spec: bool, use_apc: bool, top_logprobs: int, sampler, greedy=True
+    ):
         from mlx_vlm.generate.ar import BatchGenerator
 
-        return BatchGenerator(
+        gen = BatchGenerator(
             self.model.language_model,
             self.processor,
             stop_tokens=self.stop_tokens,
@@ -514,12 +555,18 @@ class VLMBatchRunner:
             draft_model=self.drafter if spec else None,
             draft_kind=self.draft_kind if spec else None,
             draft_block_size=self.draft_block_size if spec else None,
-            greedy_sampling=spec,
+            greedy_sampling=spec and greedy,
             compute_logprobs=not spec,
             top_logprobs_k=top_logprobs,
             prefill_step_size=PREFILL_STEP,
             prefill_batch_size=1,
         )
+        # Upstream binds a stock APCCoordinator; ours places the extra checkpoints
+        # (end of the system turn) and numbers requests for superseding.
+        bind = getattr(self.apc_manager, "coordinator", None)
+        if use_apc and bind is not None and getattr(gen, "apc", None) is not None:
+            gen.apc = bind(gen.model)
+        return gen
 
     def _admit(self, job: _Job, alone: bool) -> None:
         from .mrope import clear_rope_state
@@ -527,9 +574,19 @@ class VLMBatchRunner:
         job.stats.t_admit = time.perf_counter()
         job.stats.prefill_total = len(job.ids)
 
-        if self.driver is not None and job.prompt_kwargs is None:
-            self._admit_driver(job)
-            return
+        if job.guide is not None:
+            lane = (
+                job.use_draft
+                and alone
+                and self._spec is None
+                and not (self.driver is not None and job.prompt_kwargs is None)
+            )
+            if not lane:
+                # Rows that decode one token at a time mask through a processor.
+                from .tool_call_grammar import ToolCallProcessor
+
+                job.use_draft = job.allow_draft = False
+                job.processors = [*job.processors, ToolCallProcessor(job.guide)]
 
         use_apc = self.apc_manager is not None
         if use_apc and self._apc_admit is not None:
@@ -537,6 +594,9 @@ class VLMBatchRunner:
                 use_apc = bool(self._apc_admit(mx.array(job.ids)))
             except Exception:
                 logger.debug("APC admission check failed; using APC", exc_info=True)
+        if self.driver is not None and job.prompt_kwargs is None:
+            self._admit_driver(job, use_apc)
+            return
         job.stats.used_apc = use_apc
         spec = job.use_draft and alone and self._spec is None
         if not spec:
@@ -544,6 +604,7 @@ class VLMBatchRunner:
             job.stats.used_draft = False
         else:
             job.stats.spec_mode = _spec_mode(self.drafter)
+            job.spec_base = _spec_counters(self.drafter)
         pkw = job.prompt_kwargs
         if pkw is None:
             if alone:
@@ -562,7 +623,11 @@ class VLMBatchRunner:
                 vocab.set_context(job.ids)
             group = self._spec = _Group(
                 gen=self._new_generator(
-                    spec=True, use_apc=use_apc, top_logprobs=0, sampler=None
+                    spec=True,
+                    use_apc=use_apc,
+                    top_logprobs=0,
+                    sampler=job.keyed,
+                    greedy=job.keyed is None,
                 ),
                 spec=True,
             )
@@ -595,10 +660,10 @@ class VLMBatchRunner:
             group.sampler.add(uid, job.sampling)
 
     # ── round driver ────────────────────────────────────────────────────
-    def _admit_driver(self, job: _Job) -> None:
+    def _admit_driver(self, job: _Job, use_apc: bool) -> None:
         from .round_driver.driver import Request
 
-        self.driver.add(
+        hit = self.driver.add(
             Request(
                 ids=job.ids,
                 max_tokens=job.max_tokens,
@@ -609,11 +674,15 @@ class VLMBatchRunner:
                 draft=job.allow_draft,
                 budget=job.budget,
                 handle=job,
+                extra_hash=self.apc_semantic_hash or 0,
+                use_apc=use_apc,
             )
         )
         job.start = job.stats.t_admit = time.perf_counter()
-        job.stats.prefill_total = len(job.ids)
-        job.stats.used_apc = False
+        hit = int(hit or 0)
+        job.stats.cached_tokens = hit
+        job.stats.prefill_total = len(job.ids) - hit
+        job.stats.used_apc = use_apc
         job.stats.used_draft = bool(job.allow_draft and self.driver.head is not None)
         if job.stats.used_draft:
             job.stats.spec_mode = "mtp"
@@ -704,8 +773,21 @@ class VLMBatchRunner:
             lm = self.model.language_model
             if hasattr(lm, "_rope_deltas"):
                 lm._rope_deltas = mx.array([[job.rope_delta]], dtype=mx.float32)
-        prompt_progress, responses = group.gen.next()
+        if group.spec:
+            from . import mtp_lane
+
+            mtp_lane.set_guide(job.guide)
+        try:
+            prompt_progress, responses = group.gen.next()
+        finally:
+            if group.spec:
+                mtp_lane.set_guide(None)
         self._note_prefill(group)
+        for job in group.jobs.values():
+            self._note_cache(job)
+        if group.spec:
+            for job in group.jobs.values():
+                _note_spec(self.drafter, job)
         if self.ragged_kv and not self._ragged_logged and not group.spec:
             # Engagement proof in the server log (a no-op path once cost a
             # full MMLU run to notice). Joins build the ragged caches
@@ -724,6 +806,7 @@ class VLMBatchRunner:
             job = group.jobs.get(getattr(progress, "uid", None))
             if job is not None:
                 job.stats.cached_tokens = int(getattr(progress, "cached_tokens", 0))
+                self._note_cache(job)
         for response in responses:
             job = group.jobs.get(response.uid)
             if job is None:
@@ -753,13 +836,25 @@ class VLMBatchRunner:
             if response.finish_reason is not None:
                 self._finish(group, response.uid, response.finish_reason)
 
+    def _note_cache(self, job: _Job) -> None:
+        """Record the tier and lookup time of ``job``'s prefix-cache hit (per-request
+        provenance in ``x_yunshu.cache``)."""
+        mgr = self.apc_manager
+        take = getattr(mgr, "take_lookup", None)
+        if take is None or job.stats.cache_tier is not None:
+            return
+        rec = take(len(job.ids), job.stats.cached_tokens, since=job.stats.t_admit)
+        if rec is not None:
+            job.stats.cache_tier = rec.tier
+            job.stats.cache_reload_ms = rec.ms
+
     def _note_driver_prefill(self) -> None:
         """Publish prefill progress of the round driver's rows."""
         try:
             for row in self.driver.rows:
                 st = row.req.handle.stats
                 if st.t_first == 0.0:
-                    st.prefill_done = min(row.done, st.prefill_total)
+                    st.prefill_done = min(row.done - row.hit, st.prefill_total)
         except Exception:
             logger.debug("driver prefill progress unavailable", exc_info=True)
 
@@ -855,6 +950,29 @@ class VLMBatchRunner:
             with contextlib.suppress(Exception):
                 mx.synchronize()
                 mx.clear_cache()
+
+
+def _spec_counters(drafter: Any) -> tuple | None:
+    """(rounds, accepted, drafted) lifetime counters the round loops keep on the drafter."""
+    if drafter is None:
+        return None
+    return (
+        getattr(drafter, "speculative_total_rounds", 0),
+        float(getattr(drafter, "speculative_total_accepted", 0.0)),
+        getattr(drafter, "speculative_total_drafted", 0),
+    )
+
+
+def _note_spec(drafter: Any, job: _Job) -> None:
+    """Per-request drafted / accepted draft tokens of the single-row speculative lane: the
+    drafter's counters (bumped by mtp_lane, mtp_tree, dflash_tree and upstream's loops)
+    minus their value at admission. The lane serves one request at a time, so the diff
+    belongs to ``job``."""
+    now, base = _spec_counters(drafter), job.spec_base
+    if now is None or base is None:
+        return
+    job.stats.spec_drafted = max(int(now[2] - base[2]), 0)
+    job.stats.spec_accepted = max(int(round(now[1] - base[1])), 0)
 
 
 def _spec_mode(drafter: Any) -> str:
@@ -1005,6 +1123,12 @@ class _Job:
     budget: Any = None
     rope_delta: float = 0.0
     allow_draft: bool = False
+    guide: Any = None
+    keyed: Any = (
+        None  # KeyedSampler of a sampled request served by the speculative lane
+    )
+    # drafter lifetime counters at admission (rounds, accepted, drafted); diffed per step
+    spec_base: tuple | None = None
 
 
 @dataclass

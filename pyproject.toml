@@ -88,6 +88,7 @@ dependencies = [
     "python-multipart>=0.0.27",
     "openai>=2.33.0",
     "jsonschema>=4.26.0",
+    "llguidance>=1.8",
 ]
 
 [project.urls]
@@ -170,6 +171,7 @@ yunshu = "yunshu_cli:main"
 
 [dependency-groups]
 dev = [
+    "anthropic>=1.9.0",
     "matplotlib>=3.10.9",
     "mypy>=2.0.0",
     "pytest>=9.0.3",
@@ -185,6 +187,7 @@ target-version = "py313"
 src = ["python", "tests"]
 extend-exclude = [
     "reference",
+    "scripts/research/agentic/tasks",
     "python/yunshu_engine/kernels/omlx/qwen35_*.py",
     "python/yunshu_engine/kernels/omlx/row_exact_qmv.py",
     "python/yunshu_engine/kernels/omlx/module_cache.py",

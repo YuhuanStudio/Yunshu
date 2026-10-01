@@ -317,7 +317,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.warning("Omni preload hook failed", exc_info=True)
 
+    try:
+        from .routers import batches as _batches
+
+        _batches.start_runner()  # resume unfinished Batch API jobs
+    except Exception:
+        logger.warning("Batch runner resume failed", exc_info=True)
+
     yield
+
+    try:
+        await _batches.stop_runner()
+    except Exception:
+        logger.debug("Batch runner stop failed", exc_info=True)
 
     # ═══ Graceful shutdown ═══
     logger.info(
@@ -963,9 +975,21 @@ def create_app() -> FastAPI:
     from .routers import omni as omni_mod
 
     app.include_router(completions.router, prefix="/v1")
+    from .routers import conversations as conversations_mod
+    from .routers import responses_compact as responses_compact_mod
+
+    app.include_router(
+        responses_compact_mod.router, prefix="/v1"
+    )  # before /responses/{id}
     app.include_router(responses_mod.router, prefix="/v1")
+    app.include_router(conversations_mod.router, prefix="/v1")
     app.include_router(embeddings.router, prefix="/v1")
     app.include_router(models.router, prefix="/v1")
+    from .routers import batches as batches_mod
+    from .routers import files as files_mod
+
+    app.include_router(files_mod.router, prefix="/v1")  # OpenAI + Anthropic Files
+    app.include_router(batches_mod.router, prefix="/v1")  # Batches + Message Batches
     app.include_router(anthropic.router, prefix="/v1")
     app.include_router(audio.router, prefix="/v1")
     app.include_router(images.router, prefix="/v1")

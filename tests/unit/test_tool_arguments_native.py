@@ -181,13 +181,38 @@ def test_vlm_tool_plan_native_for_auto(choice):
     "choice",
     ["none", "required", {"type": "function", "function": {"name": "get_weather"}}],
 )
-def test_vlm_tool_plan_injects_for_forced_choice(choice):
+def test_vlm_tool_plan_injects_for_forced_choice_without_grammar(choice, monkeypatch):
     from yunshu_gateway.routers.chat import _vlm_tool_plan
 
+    monkeypatch.setenv("YUNSHU_TOOL_GRAMMAR", "0")
     msgs = [{"role": "user", "content": "hi"}]
     out, native = _vlm_tool_plan(_chat_req(choice), _Engine(True), msgs)
     assert native is None
     assert out is not msgs and out[0]["role"] == "system"
+
+
+def test_vlm_tool_plan_none_always_injects():
+    from yunshu_gateway.routers.chat import _vlm_tool_plan
+
+    msgs = [{"role": "user", "content": "hi"}]
+    out, native = _vlm_tool_plan(_chat_req("none"), _Engine(True), msgs)
+    assert native is None and out[0]["role"] == "system"
+
+
+@pytest.mark.parametrize(
+    "choice",
+    ["required", {"type": "function", "function": {"name": "get_weather"}}],
+)
+def test_vlm_tool_plan_forced_choice_is_native_when_grammar_enforces_it(
+    choice, monkeypatch
+):
+    from yunshu_gateway.routers.chat import _vlm_tool_plan
+
+    monkeypatch.setenv("YUNSHU_TOOL_GRAMMAR", "1")
+
+    msgs = [{"role": "user", "content": "hi"}]
+    out, native = _vlm_tool_plan(_chat_req(choice), _Engine(True), msgs)
+    assert out is msgs and native
 
 
 def test_vlm_tool_plan_injects_without_template_support():

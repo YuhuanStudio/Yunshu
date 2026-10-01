@@ -738,6 +738,11 @@ class VLMEngine:
         if self.has_active_requests():
             logger.warning("VLM stop(): active requests still pending after 10s wait")
         self._cleanup_temp_files()
+        apc = self._apc_backend
+        if apc is not None:
+            # Persist resident checkpoints to the SSD tier (if any) before dropping them.
+            with contextlib.suppress(Exception):
+                await asyncio.get_running_loop().run_in_executor(None, apc.close)
         self._model = None
         self._tokenizer = None
         self._apc_backend = None
@@ -788,7 +793,8 @@ class VLMEngine:
         ):
             return True
         budget = getattr(manager, "memory_max_bytes", None)
-        if budget is None:
+        if budget is None or getattr(manager, "disk", None) is not None:
+            # A checkpoint too big for RAM still lands on the SSD tier when there is one.
             return True
         # Empirical resident size: ~160 MiB + 130 KiB per token (within 0.6%
         # of three measured points). The 20% margin covers short history growth
@@ -1291,27 +1297,83 @@ class VLMEngine:
     # batch-invariant kernels) is validated. Every family uses the runner.
     _SPEC_MODEL_TYPES = ("qwen3_5", "qwen3_6", "qwen3_5_moe")
 
+    def _apc_memory_gb(self) -> float:
+        """APC RAM budget in GiB: ``YUNSHU_VLM_APC_MEMORY_GB``, else sized from the
+        machine's memory and the model's weights (0 disables the cache)."""
+        budget = settings.get("YUNSHU_VLM_APC_MEMORY_GB")
+        if budget is not None:
+            return float(budget)
+        from .apc_manager import auto_memory_gb, total_memory_bytes
+
+        weights = 0
+        with contextlib.suppress(OSError):
+            weights = sum(
+                p.stat().st_size for p in Path(self._model_path).glob("*.safetensors")
+            )
+        gb = auto_memory_gb(total_memory_bytes(), weights)
+        logger.info("APC RAM budget: %.0f GiB (auto)", gb)
+        return gb
+
+    def _chatml_head_marker(self) -> tuple[int, int] | None:
+        """Token ids of ``<|im_start|>`` and ``user`` when the chat template is ChatML: the
+        end of the system turn (system prompt + tools) is then a checkpoint position, so a
+        new session with the same head reuses it."""
+        tok = self._tokenizer
+        template = getattr(tok, "chat_template", None) or ""
+        if not (isinstance(template, str) and "<|im_start|>" in template):
+            return None
+        try:
+            start = tok.convert_tokens_to_ids("<|im_start|>")
+            user = tok.encode("user", add_special_tokens=False)
+            if start is None or start == getattr(tok, "unk_token_id", None):
+                return None
+            return (int(start), int(user[0])) if len(user) == 1 else None
+        except Exception:
+            logger.debug("no ChatML head marker", exc_info=True)
+            return None
+
+    def _apc_disk_namespace(self) -> str:
+        """Directory namespace of this checkpoint's states on disk.
+
+        The path plus the identity of the weights (file names, sizes, mtimes) and the
+        config: re-quantizing or replacing a checkpoint in place must not read back the
+        old checkpoint's states.
+        """
+        h = hashlib.sha256(str(self._model_path).encode())
+        root = Path(str(self._model_path))
+        try:
+            files = sorted(
+                [*root.glob("*.safetensors"), root / "config.json"],
+                key=lambda f: f.name,
+            )
+            for f in files:
+                st = f.stat()
+                h.update(f"|{f.name}:{st.st_size}:{st.st_mtime_ns}".encode())
+        except OSError:
+            pass  # not a local directory: the path alone
+        return h.hexdigest()[:16]
+
     def _apc_disk_tier(self):
-        """Optional APC SSD tier (``YUNSHU_VLM_APC_DISK_DIR``), off by default.
+        """The APC SSD tier (on by default; ``YUNSHU_VLM_APC_DISK=0`` switches it off).
 
         Holds evicted prefix checkpoints (incl. hybrid recurrent state) so a
-        long document revisited after RAM eviction is read back instead of
-        re-prefilled. Namespaced by model path; capped by
-        ``YUNSHU_VLM_APC_DISK_GB``.
+        long document or agent session revisited after RAM eviction (or a restart) is
+        read back instead of re-prefilled. Namespaced by checkpoint; capped by
+        ``YUNSHU_VLM_APC_DISK_GB``. Directory: ``YUNSHU_VLM_APC_DISK_DIR``, else
+        ``~/.yunshu/cache/apc``.
         """
-        path = settings.get("YUNSHU_VLM_APC_DISK_DIR")
-        if not path:
-            return None
-        import hashlib
+        from . import paths
 
-        from mlx_vlm.apc import DiskBlockStore
+        path = paths.apc_dir()
+        if path is None:
+            return None
+        from .apc_manager import SpillDiskStore
 
         max_gb = settings.get("YUNSHU_VLM_APC_DISK_GB")
-        namespace = hashlib.sha256(str(self._model_path).encode()).hexdigest()[:16]
         try:
-            disk = DiskBlockStore(
-                Path(path).expanduser(),
-                namespace=namespace,
+            disk = SpillDiskStore(
+                path,
+                namespace=self._apc_disk_namespace(),
                 num_workers=1,
                 max_bytes=int(max_gb * (1 << 30)) if max_gb > 0 else None,
             )
@@ -1364,18 +1426,21 @@ class VLMEngine:
                 lanes["converted"],
                 len(lanes["skipped"]),
             )
-        budget = settings.get("YUNSHU_VLM_APC_MEMORY_GB")
+        budget = self._apc_memory_gb()
         if self._apc_backend is None and budget > 0:
-            from mlx_vlm.apc import APCManager, semantic_extra_hash
+            from mlx_vlm.apc import semantic_extra_hash
+
+            from .apc_manager import YunshuAPCManager
 
             # Sliding-window (rotating) caches cannot be checkpointed at a
             # prefix boundary, so those families decode without APC.
             if not self.backend_capabilities(lm).cache.has_sliding_window:
-                self._apc_backend = APCManager(
+                self._apc_backend = YunshuAPCManager(
                     num_blocks=512,
                     block_size=16,
                     disk=self._apc_disk_tier(),
                     overrides={"memory_max_gb": budget},
+                    head_marker=self._chatml_head_marker(),
                 )
                 self._apc_semantic_hash = semantic_extra_hash(
                     image_hash=0,
@@ -1458,12 +1523,21 @@ class VLMEngine:
             if invariant:
                 from .kernels.batch_invariant import install as install_invariant
                 from .kernels.batch_invariant import set_active
-                from .kernels.omlx import is_nax_available
 
+                # Target projections run TensorFold's row-invariant lane matmul
+                # (M5-class tensor ops; sg8 elsewhere). 27B, in-process vs the
+                # NAX packed kernel: MTP / DFlash2 decode +0..+17% at 1K-131K
+                # with identical tokens, and 0.6 GiB less memory (no repacked copy).
+                from .kernels.ragged_attention import tile_ready
+
+                if tile_ready():
+                    from .kernels import lane_linear
+
+                    kernels["lane_linear"] = lane_linear.convert(
+                        self._model.language_model
+                    )["converted"]
                 kernels["invariant"] = install_invariant(
-                    self._model.language_model,
-                    model=self._model,
-                    packed=is_nax_available(),
+                    self._model.language_model, model=self._model, packed=False
                 )
                 # The runner turns them on only while its speculative lane steps.
                 set_active(False)
@@ -1555,6 +1629,7 @@ class VLMEngine:
                 drafter=drafter if draft_kind == "mtp" else None,
                 stop_tokens=runner.stop_tokens,
                 chunk=settings.get("YUNSHU_ROUND_PREFILL_CHUNK"),
+                apc=self._apc_backend,
             )
         logger.info(
             "VLM batch runner: apc=%s draft=%s block=%s verify_kernels=%s",
@@ -1653,6 +1728,7 @@ class VLMEngine:
         top_n_sigma: float = 0.0,
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
+        tool_spec: dict | None = None,
     ):
         """Yield ``(text, token_id, state, finish_reason, thinking_tokens, logprob)``.
 
@@ -1708,6 +1784,7 @@ class VLMEngine:
                 in_think = think_end is None or think_end not in tail[last_open + 1 :]
         thinking_tokens = 0
         count = 0
+        guide = self._tool_guide(tool_spec, in_think)
         for token in self._batch_runner.iter_tokens(
             input_ids,
             max_tokens=max_tokens,
@@ -1734,6 +1811,7 @@ class VLMEngine:
             xtc_probability=xtc_probability,
             xtc_threshold=xtc_threshold,
             xtc_special_tokens=list(self._get_eos_ids()),
+            guide=guide,
         ):
             count += 1
             lp = stats.last_logprob if logprobs else None
@@ -1913,7 +1991,37 @@ class VLMEngine:
             top_n_sigma=float(kwargs.get("top_n_sigma") or 0.0),
             xtc_probability=float(kwargs.get("xtc_probability") or 0.0),
             xtc_threshold=float(kwargs.get("xtc_threshold") or 0.0),
+            tool_spec=kwargs.get("_tool_spec"),
         )
+
+    def _tool_guide(self, spec: dict | None, thinking_open: bool):
+        """A ``ToolCallGuide`` for this request's tools (structural-tag constrained
+        decoding), or None: no tools, ``YUNSHU_TOOL_GRAMMAR`` off, or a model / tool
+        set the grammar cannot cover (the reply is then decoded unconstrained)."""
+        if not spec:
+            return None
+        from . import tool_call_grammar as tcg
+
+        cache = self.__dict__.setdefault("_tool_grammars", {})
+        key = tcg.grammar_key(spec["tools"], spec["tool_choice"], spec["parallel"])
+        if key not in cache:
+            cfg = self._config or {}
+            vocab = (cfg.get("text_config") or {}).get("vocab_size") or cfg.get(
+                "vocab_size"
+            )
+            tok = self._tokenizer
+            vocab = int(vocab or len(getattr(tok, "_tokenizer", tok)))
+            if len(cache) >= 8:
+                cache.pop(next(iter(cache)))
+            cache[key] = tcg.compile_tool_grammar(
+                spec["tools"],
+                tok,
+                vocab,
+                tool_choice=spec["tool_choice"],
+                parallel=spec["parallel"],
+            )
+        grammar = cache[key]
+        return grammar.guide(thinking_open=thinking_open) if grammar else None
 
     def _generate_vlm_runner_text(
         self, input_ids: mx.array, extras: dict | None = None, **params
@@ -2164,8 +2272,20 @@ class VLMEngine:
         of their cache keys."""
         extra = dict(self._template_effort_extra(kwargs) or {})
         tools = kwargs.pop("tools", None)
+        choice = kwargs.pop("tool_choice", None)
+        parallel = kwargs.pop("parallel_tool_calls", True)
         if tools:
             extra["tools"] = tools
+            if settings.get_bool("YUNSHU_TOOL_GRAMMAR"):
+                from .tool_call_grammar import normalize_tool_choice
+
+                choice = normalize_tool_choice(choice)
+                if choice != "none":
+                    kwargs["_tool_spec"] = {
+                        "tools": tools,
+                        "tool_choice": choice,
+                        "parallel": parallel is not False,
+                    }
         return extra or None
 
     def _template_effort_extra(self, kwargs: dict) -> dict | None:
@@ -2425,6 +2545,15 @@ class VLMEngine:
             logger.debug("VLM template cache hit: %d chars", len(cached))
             return cached
 
+        # The text path runs the family adapter (Qwen's template rejects a system message
+        # after the first: coding agents send per-turn notes mid-conversation); the vision
+        # path used to skip it, so any agent turn carrying an image failed in the template.
+        try:
+            from yunshu_engine.message_adapter import adapt_messages
+
+            messages = adapt_messages(messages, self.model_name)
+        except Exception:
+            logger.debug("VLM message adapter failed", exc_info=True)
         vlm_messages = self._build_vlm_messages(messages, max_images=max_images)
         tpl_kwargs: dict = {"tokenize": False, "add_generation_prompt": True}
         if enable_thinking is not None:
@@ -3091,6 +3220,32 @@ class VLMEngine:
 
     # ── Stats ──
 
+    def apc_snapshot(self) -> dict | None:
+        """Prefix-cache (APC) occupancy and counters; None when the cache is off."""
+        apc = self._apc_backend
+        if apc is None:
+            return None
+        try:
+            return apc.snapshot() if hasattr(apc, "snapshot") else apc.stats_snapshot()
+        except Exception:
+            logger.debug("APC snapshot unavailable", exc_info=True)
+            return None
+
+    def get_kv_cache_stats(self) -> dict:
+        """Same shape as the text engine's, so /debug/kv-cache and /metrics cover both."""
+        snap = self.apc_snapshot()
+        if snap is None:
+            return {"prefix_cache": {"enabled": False}}
+        return {
+            "apc": snap,
+            "prefix_cache": {
+                "enabled": True,
+                "entries": snap.get("entries", 0),
+                "hits": snap.get("lookups_hit", 0),
+                "misses": snap.get("lookups_miss", 0),
+            },
+        }
+
     def get_stats(self) -> dict:
         uptime = time.monotonic() - self._start_time if self._start_time else 0.0
         stats = {
@@ -3104,13 +3259,9 @@ class VLMEngine:
             "uptime_seconds": uptime,
             "text_prompt_cache": self._text_prompt_cache.stats,
         }
-        apc = self._apc_backend
-        if apc is not None:
-            with contextlib.suppress(Exception):
-                stats["apc"] = {
-                    "memory_max_bytes": apc.memory_max_bytes,
-                    "matched_tokens": apc.stats.matched_tokens,
-                }
+        snap = self.apc_snapshot()
+        if snap is not None:
+            stats["apc"] = snap
         try:
             stats["pipeline"] = self._pipeline.get_stats()
         except Exception:

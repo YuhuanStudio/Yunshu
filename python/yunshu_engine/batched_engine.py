@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import settings
+from .fast_path_stats import FastPathStats
 from .text_utils import StopHoldbackBuffer
 
 logger = logging.getLogger(__name__)
@@ -754,6 +755,14 @@ _REQUEST_TOOLS: contextvars.ContextVar[list | None] = contextvars.ContextVar(
 )
 
 
+# How the reply must use the request's native tools: {"tool_choice": ..., "parallel":
+# bool}. Set with _REQUEST_TOOLS (same task-side propagation); read by _generate_fast
+# to build the tool-call guide.
+_REQUEST_TOOL_USE: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "yunshu_request_tool_use", default=None
+)
+
+
 def _template_supports_tools(tokenizer) -> bool:
     """True if the tokenizer's chat template natively renders a ``tools`` variable
     (Qwen3, Llama-3.1, Hermes, Mistral, GLM, …). When False, callers fall back to the
@@ -958,6 +967,17 @@ def _resolve_model_max_ctx(model) -> int:
             if isinstance(v, int) and v > 0:
                 return v
     return 0
+
+
+def _prefix_cache_provenance(prefix_cache, prompt_cache_hit: bool, cached_tokens: int):
+    """(tier, lookup_ms) of a fast-path request's cached prefix for ``x_yunshu.cache``."""
+    if prompt_cache_hit:
+        return "ram", None
+    if not cached_tokens or prefix_cache is None:
+        return "none", None
+    lk = getattr(prefix_cache, "last_lookup", None) or {}
+    tier = lk.get("tier", "hot")
+    return ("ram" if tier == "hot" else tier), lk.get("ms")
 
 
 class BatchedEngine:
@@ -3121,6 +3141,45 @@ class BatchedEngine:
                     logger.debug("hybrid boundary snapshot add failed", exc_info=True)
         return p
 
+    def _tool_call_processor(self, input_ids: list[int]):
+        """Structural-tag logits processor for the request's native tools (free until
+        the tool-call marker, then the call body is masked to this request's tool
+        grammar), or None: no native tools, ``YUNSHU_TOOL_GRAMMAR`` off, or a model /
+        tool set the grammar cannot cover."""
+        tools = _REQUEST_TOOLS.get()
+        if not tools or not settings.get_bool("YUNSHU_TOOL_GRAMMAR"):
+            return None
+        from . import tool_call_grammar as tcg
+
+        use = _REQUEST_TOOL_USE.get() or {}
+        choice = tcg.normalize_tool_choice(use.get("tool_choice"))
+        if choice == "none":
+            return None
+        parallel = use.get("parallel", True) is not False
+        cache = self.__dict__.setdefault("_tool_grammars", {})
+        key = tcg.grammar_key(tools, choice, parallel)
+        if key not in cache:
+            args = getattr(self._model, "args", None)
+            vocab = getattr(args, "vocab_size", None) or len(
+                getattr(self._tokenizer, "_tokenizer", self._tokenizer)
+            )
+            if len(cache) >= 8:
+                cache.pop(next(iter(cache)))
+            cache[key] = tcg.compile_tool_grammar(
+                tools,
+                self._tokenizer,
+                int(vocab),
+                tool_choice=choice,
+                parallel=parallel,
+            )
+        grammar = cache[key]
+        if grammar is None:
+            return None
+        guide = grammar.guide(
+            thinking_open=tcg.prompt_opens_thinking(input_ids, grammar, self._tokenizer)
+        )
+        return tcg.TokenStreamToolCallProcessor(guide)
+
     async def _generate_fast(
         self,
         prompt: str | list[dict],
@@ -3470,6 +3529,9 @@ class BatchedEngine:
         _req_kv_bits = self._effective_kv_quant_bits(prompt_tokens + max_tokens)
         _custom_logits_processors = logits_processors or []
         logits_processors = []
+        _tool_processor = (
+            self._tool_call_processor(input_ids) if json_schema is None else None
+        )
         if repetition_penalty != 1.0:
 
             def _rep_penalty(tokens, logits, rp=repetition_penalty, ctx=20):
@@ -3593,6 +3655,8 @@ class BatchedEngine:
             logits_processors.extend(
                 _wrap_custom_logits_processor(p) for p in _custom_logits_processors
             )
+        if _tool_processor is not None:
+            logits_processors.append(_tool_processor)
 
         # Convert KV cache breakpoint char offsets to token positions.
         _kv_breakpoint_token_positions: list[int] = []
@@ -3621,6 +3685,8 @@ class BatchedEngine:
         # max_workers=1 MLX executor (below), serialized with generate_step — so a
         # release-triggered _restore_base can never mutate the shared model while another
         # request's generation reads it (the cross-thread race the concurrency audit found).
+
+        _fp_stats = FastPathStats(cancel_event, prompt_tokens)
 
         def _run():
             import mlx.core as mx
@@ -3906,6 +3972,11 @@ class BatchedEngine:
                     )
 
             _timeout_check_interval = 32
+            _fp_stats.admit(
+                cached_tokens,
+                len(ids_to_prefill),
+                *_prefix_cache_provenance(prefix_cache, _pc_hit, cached_tokens),
+            )
             with _wired_limit_ctx(model):
                 for token, logits in generate_step(
                     ids_to_prefill,
@@ -3915,6 +3986,7 @@ class BatchedEngine:
                     prompt_cache=cache,
                     logits_processors=_lprocs,
                     prefill_step_size=_prefill_step_size(),
+                    prompt_progress_callback=_fp_stats.progress,
                 ):
                     if first:
                         ttft_s = time.perf_counter() - gen_t0
@@ -3953,6 +4025,7 @@ class BatchedEngine:
                         if _itl > 0 and _itl < 10:
                             _itl_samples.append(_itl)
                     tokens.append(token)
+                    _fp_stats.token(len(tokens))
                     # Request-level timeout: check every N tokens
                     if len(tokens) % _timeout_check_interval == 0:
                         if time.perf_counter() > _timeout_deadline:
@@ -4195,6 +4268,7 @@ class BatchedEngine:
                     output_text = output_text[:_cut]
                     _stopped_by_suffix = True
             mx.synchronize()
+            _fp_stats.finish("stop")
 
             # Unregister from inflight prefix tracker
             try:
@@ -4658,9 +4732,16 @@ class BatchedEngine:
         try:
             from .request_tracker import get_request_tracker
 
-            _tracker = get_request_tracker()
-            _active_gen = _tracker.register(_stream_req_id, self.model_name or "")
-            _cancel_event = _active_gen.cancel_event
+            if cancel_event is not None:
+                # The gateway already registered this request (its event carries the
+                # live RunStats and the client's request id); a second registration
+                # would take over both. Cancellation is the gateway's event alone.
+                _tracker = None
+                _cancel_event = cancel_event
+            else:
+                _tracker = get_request_tracker()
+                _active_gen = _tracker.register(_stream_req_id, self.model_name or "")
+                _cancel_event = _active_gen.cancel_event
         except Exception:
             logger.debug("request tracker registration failed", exc_info=True)
             _cancel_event = None
@@ -4668,7 +4749,7 @@ class BatchedEngine:
 
         # If the gateway passes an external cancel_event, wrap both events
         # so that checking .is_set() on the wrapper detects either source.
-        if cancel_event is not None:
+        if cancel_event is not None and _tracker is not None:
             _internal = _cancel_event
             _external = cancel_event
 
@@ -5197,6 +5278,9 @@ class BatchedEngine:
         _req_kv_bits = self._effective_kv_quant_bits(prompt_tokens + max_tokens)
         _custom_logits_processors = logits_processors or []
         logits_processors = []
+        _tool_processor = (
+            self._tool_call_processor(input_ids) if json_schema is None else None
+        )
         if repetition_penalty != 1.0:
 
             def _repetition_penalty(tokens, logits, rp=repetition_penalty, ctx=20):
@@ -5313,6 +5397,8 @@ class BatchedEngine:
             logits_processors.extend(
                 _wrap_custom_logits_processor(p) for p in _custom_logits_processors
             )
+        if _tool_processor is not None:
+            logits_processors.append(_tool_processor)
 
         # Thread-safe bridge: executor puts via call_soon_threadsafe so the
         # event loop's async consumer is woken for every token.
@@ -5377,6 +5463,7 @@ class BatchedEngine:
                 )
 
         _stream_gen_t0 = time.perf_counter()  # TTFT timing for streaming fast path
+        _fp_stats = FastPathStats(cancel_event, prompt_tokens)
         # a TOTAL-generation deadline for the streaming path. The consumer's
         # asyncio.wait_for(_q.get(), timeout_seconds) only catches an INACTIVITY gap
         # (no token for timeout_seconds); a stream that keeps emitting tokens steadily
@@ -5595,6 +5682,11 @@ class BatchedEngine:
                         _stream_kv_bits = None
                 except Exception:
                     pass
+            _fp_stats.admit(
+                _stream_cached_tokens,
+                len(ids_to_prefill),
+                *_prefix_cache_provenance(prefix_cache, False, _stream_cached_tokens),
+            )
             with _wired_limit_ctx(model):
                 for token, logits in generate_step(
                     ids_to_prefill,
@@ -5604,6 +5696,7 @@ class BatchedEngine:
                     prompt_cache=cache,
                     logits_processors=_lprocs,
                     prefill_step_size=_prefill_step_size(),
+                    prompt_progress_callback=_fp_stats.progress,
                     # the streaming path had NO KV-quant — mlx-lm
                     # quantizes the cache per-step internally, but only when these
                     # are passed, so YUNSHU_KV_QUANT_BITS gave zero in-flight memory
@@ -5613,6 +5706,7 @@ class BatchedEngine:
                     quantized_kv_start=self._kv_quant_start,
                 ):
                     n_tok += 1
+                    _fp_stats.token(n_tok)
                     # Check stop_ids BEFORE adding to detokenizer to avoid emitting stop text
                     stop_hit = token in stop_ids
                     suffix_hit = False
@@ -6343,6 +6437,7 @@ class BatchedEngine:
                 if done:
                     break
         finally:
+            _fp_stats.finish("stop")
             # LoRA release+restore happens inside _run_with_lora on the executor .
             # Record in ServerMetrics for streaming fast path (consistency)
             if n_tok > 0:

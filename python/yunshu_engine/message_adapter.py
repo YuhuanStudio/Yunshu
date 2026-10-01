@@ -228,6 +228,32 @@ class DeepSeekMessageAdapter(MessageAdapter):
         return "deepseek"
 
 
+def _merge_leading_system(messages: list[dict]) -> list[dict]:
+    """Merge a run of consecutive leading ``system`` messages into one.
+
+    Templates such as Qwen's accept a system message only as ``messages[0]`` ("System message
+    must be at the beginning"), so ``instructions`` plus the ``developer`` messages Codex sends
+    (both become ``system``) must reach the template as a single one.
+    """
+    n = 0
+    while n < len(messages) and messages[n].get("role") == "system":
+        n += 1
+    if n < 2:
+        return messages
+
+    def text(c) -> str:
+        if isinstance(c, str):
+            return c
+        if isinstance(c, list):
+            return "\n".join(
+                p.get("text", "") if isinstance(p, dict) else str(p) for p in c
+            )
+        return "" if c is None else str(c)
+
+    merged = "\n\n".join(t for t in (text(m.get("content")) for m in messages[:n]) if t)
+    return [{"role": "system", "content": merged}, *messages[n:]]
+
+
 class QwenMessageAdapter(MessageAdapter):
     """Qwen 3.5: Attention patch compatibility formatting.
 
@@ -255,20 +281,19 @@ class QwenMessageAdapter(MessageAdapter):
 
             adapted.append(new_msg)
 
-        # Qwen's chat template raises TemplateError "System message must be at
-        # the beginning" when a system message appears mid-conversation. Hoist system
-        # messages to the front (mirrors the Llama/GLM/DeepSeek/Phi adapters, which already
-        # do this — a mid-system Qwen request otherwise raised → caught at
-        # _apply_chat_template → collapsed to the plaintext fallback).
-        if (
-            adapted
-            and adapted[0]["role"] != "system"
-            and any(m["role"] == "system" for m in adapted)
-        ):
-            sys_msgs = [m for m in adapted if m["role"] == "system"]
-            other = [m for m in adapted if m["role"] != "system"]
-            adapted = sys_msgs + other
-        return adapted
+        # Qwen's chat template raises TemplateError "System message must be at the
+        # beginning" for any system message after the first. Coding agents send them in
+        # the middle of the conversation (Codex `developer` items, Claude Code's per-turn
+        # environment / token-budget notes). Hoisting them to the front would rewrite the
+        # start of the prompt every turn and defeat prefix caching, so leading system
+        # messages merge into one and later ones become user messages in place.
+        lead = 0
+        while lead < len(adapted) and adapted[lead]["role"] == "system":
+            lead += 1
+        for m in adapted[lead:]:
+            if m["role"] == "system":
+                m["role"] = "user"
+        return _merge_leading_system(adapted)
 
     def family_name(self) -> str:
         return "qwen"
@@ -612,6 +637,14 @@ def get_message_adapter(model_name: str | None = None) -> MessageAdapter:
                 adapter_cls = _REGISTRY.get(family, GenericMessageAdapter)
                 return adapter_cls()
     return GenericMessageAdapter()
+
+
+def keeps_mid_conversation_system(model_name: str | None = None) -> bool:
+    """True when the family's adapter leaves later system messages where the agent put
+    them (Qwen: as user messages in place), so the API layer must not hoist them into the
+    leading system prompt: a per-turn note there rewrites the prompt start every turn and
+    defeats prefix reuse."""
+    return isinstance(get_message_adapter(model_name), QwenMessageAdapter)
 
 
 def adapt_messages(messages: list[dict], model_name: str | None = None) -> list[dict]:

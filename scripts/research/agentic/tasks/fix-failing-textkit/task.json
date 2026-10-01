@@ -1,0 +1,7 @@
+{
+  "id": "fix-failing-textkit",
+  "title": "Make a failing test suite pass by finding the real bugs",
+  "prompt": "`python -m pytest -q tests` currently fails in the `textkit` package. Find the root causes in the package code and fix them properly (do not edit the tests, do not special-case test inputs). Keep going until the whole suite passes; behaviour that the tests do not cover must also be correct for reasonable inputs.",
+  "test": ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "_hidden_tests"],
+  "protected": ["tests/test_wrap.py", "tests/test_slug.py", "tests/test_memo.py", "tests/test_table.py"]
+}
