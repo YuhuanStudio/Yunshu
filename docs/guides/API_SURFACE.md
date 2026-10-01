@@ -145,6 +145,26 @@ Anonymous callers never see filesystem paths; authenticated callers also get `lo
 `architecture.*_modalities`, `top_provider.max_completion_tokens`. All are present, so a Yunshu server registered under any of
 the three needs no custom code.
 
+### Capability contract (`yunshu.contract`)
+
+Every card carries a `contract` object, built by `yunshu_engine/capability_contract.py` from the checkpoint, and
+`POST /v1/chat/completions` enforces the same object:
+
+| Contract key | States |
+|---|---|
+| `tools` | `supported`, `mode` (`template` when the chat template renders tools, else `prompt` injection), `parallel`, `tool_choice` values |
+| `structured_output` | `json_object`, `json_schema.engines` (`in-house`, plus `llguidance` for schemas outside the in-house subset), `regex`, `choice`, `grammar` (Lark via llguidance) |
+| `logprobs`, `reasoning` | support, `max_top_logprobs`, effort levels |
+| `media` | accepted input and produced output modalities beyond text |
+| `speculative` | `mode` (`mtp`, `dflash2`, `none`) and `lossless` |
+| `cache_tiers` | `ram` (`kv_prefix` or `apc`) and `ssd` when that tier is enabled |
+| `context` | window and maximum output tokens |
+
+A request that uses what the contract rules out returns 400 naming the field: `reasoning_effort` / `thinking_budget` on a model
+without a reasoning mode, an `image` / `audio` / `video` content part the model does not accept, and tools, `response_format`,
+guided decoding or `logprobs` on a model that does not generate text. A checkpoint whose config cannot be read has no contract
+and is not gated.
+
 ## Ollama-compatible (`/api/*`)
 
 A thin translation layer over the OpenAI routes (loopback), verified with the `ollama` Python SDK.
