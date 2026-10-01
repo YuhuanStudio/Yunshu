@@ -203,8 +203,12 @@ def test_vlm_tool_plan_none_always_injects():
     "choice",
     ["required", {"type": "function", "function": {"name": "get_weather"}}],
 )
-def test_vlm_tool_plan_forced_choice_is_native_when_grammar_enforces_it(choice):
+def test_vlm_tool_plan_forced_choice_is_native_when_grammar_enforces_it(
+    choice, monkeypatch
+):
     from yunshu_gateway.routers.chat import _vlm_tool_plan
+
+    monkeypatch.setenv("YUNSHU_TOOL_GRAMMAR", "1")
 
     msgs = [{"role": "user", "content": "hi"}]
     out, native = _vlm_tool_plan(_chat_req(choice), _Engine(True), msgs)
