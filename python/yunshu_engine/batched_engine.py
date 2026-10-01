@@ -891,19 +891,20 @@ def _build_constrained_sampler(sampler, json_schema, tokenizer):
             return sampler
 
     # Standard JSON schema path
-    from .json_schema import ConstrainedSampler, JsonSchemaConstraint
+    from .grammar_constraint import build_json_constraint
+    from .json_schema import ConstrainedSampler
 
     if isinstance(json_schema, str):
         if json_schema == "json_object":
             # Generic JSON object mode — no specific schema
-            constraint = JsonSchemaConstraint(None)
+            constraint = build_json_constraint(None)
         else:
             import json as _json
 
             schema = _json.loads(json_schema)
-            constraint = JsonSchemaConstraint(schema)
+            constraint = build_json_constraint(schema, tokenizer)
     else:
-        constraint = JsonSchemaConstraint(json_schema)
+        constraint = build_json_constraint(json_schema, tokenizer)
     return ConstrainedSampler(sampler, constraint, tokenizer)
 
 
@@ -939,18 +940,15 @@ def _build_grammar_constraint(json_schema, tokenizer):
 
         return ConstraintFactory.create(gtype, grammar, tokenizer)
 
-    from .json_schema import JsonSchemaConstraint
+    from .grammar_constraint import build_json_constraint
 
     if isinstance(json_schema, str) and json_schema != "json_object":
         import json as _json
 
-        try:
-            return JsonSchemaConstraint(_json.loads(json_schema))
-        except Exception:
-            return JsonSchemaConstraint(json_schema)
+        return build_json_constraint(_json.loads(json_schema), tokenizer)
     if json_schema == "json_object":
-        return JsonSchemaConstraint(None)
-    return JsonSchemaConstraint(json_schema)
+        return build_json_constraint(None)
+    return build_json_constraint(json_schema, tokenizer)
 
 
 def _resolve_model_max_ctx(model) -> int:

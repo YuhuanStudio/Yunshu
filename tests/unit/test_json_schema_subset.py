@@ -100,7 +100,7 @@ SUPPORTED = [
         ['{"a":1}', '{"a":"x"}', '{"a":1.5}'],
     ),
     (
-        {"type": "string", "title": "t", "description": "d", "format": "email"},
+        {"type": "string", "title": "t", "description": "d", "format": "int32"},
         ['"a"', "1"],
     ),
 ]

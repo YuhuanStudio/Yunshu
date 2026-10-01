@@ -44,7 +44,13 @@ logger = logging.getLogger(__name__)
 class UnsupportedSchemaError(ValueError):
     """The JSON Schema uses a construct the constrained decoder cannot enforce.
 
-    Supported subset (enforced token by token; everything else is rejected, never
+    This is the subset of the IN-HOUSE state machine. ``build_json_constraint``
+    routes every schema outside it to an llguidance constraint (value constraints,
+    prefixItems, recursion, ``format``), and the request is rejected only when
+    llguidance cannot compile the schema either (``uniqueItems``, ``not``,
+    ``if/then/else``, ``contains``, ...).
+
+    In-house subset (enforced token by token; everything else is rejected, never
     silently ignored):
 
     * ``type`` (one name or a list of ``object array string number integer
@@ -105,6 +111,21 @@ _SCHEMA_ENFORCED = frozenset(
 _SCHEMA_TYPES = frozenset(
     {"object", "array", "string", "number", "integer", "boolean", "null"}
 )
+# ``format`` values llguidance enforces; any other value is a pure annotation.
+LLG_ENFORCED_FORMATS = frozenset(
+    {
+        "date",
+        "time",
+        "date-time",
+        "duration",
+        "email",
+        "hostname",
+        "ipv4",
+        "ipv6",
+        "uuid",
+        "uri",
+    }
+)
 _SCHEMA_MAX_NODES = 20_000
 _SCHEMA_MAX_DEPTH = 64
 
@@ -149,6 +170,9 @@ def validate_supported_schema(schema: Any) -> None:
         )
         if bad:
             problems.append(f"{path or '/'}: {', '.join(bad)}")
+        fmt = node.get("format")
+        if isinstance(fmt, str) and fmt in LLG_ENFORCED_FORMATS:
+            problems.append(f"{path or '/'}: format {fmt} (enforced by llguidance)")
         t = node.get("type")
         if t is not None:
             kinds = t if isinstance(t, list) else [t]
@@ -2609,5 +2633,7 @@ def make_constrained_sampler(
     Returns:
         ConstrainedSampler that wraps base_sampler with constraint masking
     """
-    constraint = JsonSchemaConstraint(schema)
+    from .grammar_constraint import build_json_constraint
+
+    constraint = build_json_constraint(schema, tokenizer)
     return ConstrainedSampler(base_sampler, constraint, tokenizer)

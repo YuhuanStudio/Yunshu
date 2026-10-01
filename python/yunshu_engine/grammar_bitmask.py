@@ -495,13 +495,13 @@ def build_bitmask_engine(
         GrammarBitmaskEngine wrapping the appropriate constraint.
     """
     if grammar_type in ("json_schema", "json_object"):
-        from .json_schema import JsonSchemaConstraint
-
         schema = grammar if grammar_type == "json_schema" else None
         if isinstance(grammar, str) and grammar_type == "json_schema":
             # None signals generic JSON object mode
             schema = None if grammar == "json_object" else json.loads(grammar)
-        constraint = JsonSchemaConstraint(schema)
+        from .grammar_constraint import build_json_constraint
+
+        constraint = build_json_constraint(schema)
         return GrammarBitmaskEngine(constraint)
 
     if grammar_type == "regex":

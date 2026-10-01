@@ -22,16 +22,16 @@ from yunshu_gateway.routers import chat, responses
                 "type": "json_schema",
                 "json_schema": {
                     "name": "x",
-                    "schema": {"type": "string", "minLength": 3},
+                    "schema": {"type": "array", "uniqueItems": True},
                 },
             },
             None,
-            "minLength",
+            "uniqueItems",
         ),
         (
             None,
-            {"type": "json", "schema": {"type": "integer", "minimum": 1}},
-            "minimum",
+            {"type": "json", "schema": {"not": {"type": "integer"}}},
+            "not",
         ),
     ],
 )
@@ -56,6 +56,16 @@ def test_supported_constraints_pass_through():
         {"type": "json_schema", "json_schema": {"name": "n", "schema": schema}}
     )
     assert got["properties"] == schema["properties"]
+
+
+def test_final_validation_violation_is_logged_and_reported(caplog):
+    schema = {"type": "object", "properties": {"a": {"type": "integer"}}}
+    with caplog.at_level("WARNING"):
+        error = chat._vlm_json_output_error('{"a":"x"}', schema)
+    assert error and "does not match" in error
+    assert "final validation" in caplog.text
+    assert chat._validation_extension(error)["validation"]["valid"] is False
+    assert chat._vlm_json_output_error('{"a":1}', schema) is None
 
 
 def test_validate_none_and_choice():

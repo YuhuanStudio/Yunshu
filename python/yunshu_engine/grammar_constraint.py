@@ -931,8 +931,8 @@ class UnsupportedGrammarError(ValueError):
     """The CFG grammar cannot be served (invalid grammar or no engine/tokenizer)."""
 
 
-class CfgGrammarConstraint:
-    """Context-free grammar constraint (Lark syntax) backed by llguidance.
+class _LlgConstraint:
+    """Token-mask constraint backed by an llguidance grammar (base class).
 
     llguidance is an Earley engine that computes the exact set of tokens that
     keep the input a viable prefix of the grammar, so there is no first-character
@@ -944,22 +944,19 @@ class CfgGrammarConstraint:
     bytes, not on the token boundaries).
     """
 
-    def __init__(
-        self, grammar: str, start_rule: str = "start", tokenizer: Any = None
-    ) -> None:
+    _KIND = "llguidance"
+
+    def __init__(self, grammar: Any, tokenizer: Any = None) -> None:
         self._grammar_text = grammar
-        self._start_rule = start_rule
         self._text_buffer = ""
         self._done = False
         self._dead = False
         self._consumed = 0
         self._llt: Any = None
         self._matcher: Any = None
-        self._lark = grammar
         self._cache_text = ""
         self._allowed_cache: dict[int, list[int]] = {}
-        if start_rule != "start":
-            raise UnsupportedGrammarError("CFG grammars must define a 'start' rule")
+        self._ckpt_stack: list[dict[str, Any]] = []
         try:
             from llguidance import LLMatcher
         except ImportError as exc:  # pragma: no cover - llguidance is a dependency
@@ -969,6 +966,12 @@ class CfgGrammarConstraint:
         self._LLMatcher = LLMatcher
         if tokenizer is not None:
             self._bind(tokenizer)
+
+    def _make_grammar(self) -> str:
+        raise NotImplementedError
+
+    def _error(self, message: str) -> Exception:
+        return UnsupportedGrammarError(f"invalid grammar: {message[:400]}")
 
     # ── engine binding ──────────────────────────────────────────────────────
 
@@ -1001,14 +1004,14 @@ class CfgGrammarConstraint:
             raise UnsupportedGrammarError(
                 f"CFG constraints need a Hugging Face tokenizer: {exc}"
             ) from exc
-        grammar = self._LLMatcher.grammar_from_lark(self._lark)
+        grammar = self._make_grammar()
         err = self._LLMatcher.validate_grammar(grammar, llt)
         if err:
-            raise UnsupportedGrammarError(f"invalid CFG grammar: {err[:400]}")
+            raise self._error(err)
         matcher = self._LLMatcher(llt, grammar)
         err = matcher.get_error()
         if err:
-            raise UnsupportedGrammarError(f"invalid CFG grammar: {err[:400]}")
+            raise self._error(err)
         self._llt = llt
         self._matcher = matcher
         self._words = (llt.vocab_size + 31) // 32
@@ -1064,22 +1067,36 @@ class CfgGrammarConstraint:
         return allowed
 
     def checkpoint(self) -> dict[str, Any]:
-        """Save current state for rollback (speculative decoding support)."""
-        return {
+        """Save current state; returns it and also pushes it on a stack so the
+        no-argument ``rollback()`` / ``discard_checkpoint()`` of the JSON-schema
+        constraint interface work too (speculative decoding)."""
+        saved = {
             "text_buffer": self._text_buffer,
             "done": self._done,
             "dead": self._dead,
             "consumed": self._consumed,
         }
+        self._ckpt_stack.append(saved)
+        if len(self._ckpt_stack) > 64:
+            del self._ckpt_stack[:32]
+        return saved
 
-    def rollback(self, saved: dict[str, Any]) -> None:
-        """Restore state from a checkpoint."""
+    def rollback(self, saved: dict[str, Any] | None = None) -> None:
+        """Restore a checkpoint (the given one, else the most recent)."""
+        if saved is None:
+            if not self._ckpt_stack:
+                return
+            saved = self._ckpt_stack.pop()
         if self._matcher is not None and self._consumed > saved["consumed"]:
             self._matcher.rollback(self._consumed - saved["consumed"])
         self._text_buffer = saved["text_buffer"]
         self._done = saved["done"]
         self._dead = saved["dead"]
         self._consumed = saved["consumed"]
+
+    def discard_checkpoint(self) -> None:
+        if self._ckpt_stack:
+            self._ckpt_stack.pop()
 
     def reset(self) -> None:
         if self._matcher is not None:
@@ -1093,11 +1110,113 @@ class CfgGrammarConstraint:
 
     def get_stats(self) -> dict[str, Any]:
         return {
-            "type": "cfg",
+            "type": self._KIND,
             "has_parser": self._matcher is not None,
             "buffer_len": len(self._text_buffer),
             "is_done": self._done,
         }
+
+
+class CfgGrammarConstraint(_LlgConstraint):
+    """Context-free grammar constraint (Lark syntax) backed by llguidance."""
+
+    _KIND = "cfg"
+
+    def __init__(
+        self, grammar: str, start_rule: str = "start", tokenizer: Any = None
+    ) -> None:
+        if start_rule != "start":
+            raise UnsupportedGrammarError("CFG grammars must define a 'start' rule")
+        super().__init__(grammar, tokenizer)
+
+    def _make_grammar(self) -> str:
+        return self._LLMatcher.grammar_from_lark(self._grammar_text)
+
+    def _error(self, message: str) -> Exception:
+        return UnsupportedGrammarError(f"invalid CFG grammar: {message[:400]}")
+
+
+def _llg_schema_json(schema: Any) -> str:
+    """The schema as JSON for llguidance, without ``format`` values it does not know
+    (``format`` is an annotation in JSON Schema, so an unknown one is not an error)."""
+    import json as _json
+
+    from .json_schema import LLG_ENFORCED_FORMATS
+
+    def clean(node: Any) -> Any:
+        if isinstance(node, dict):
+            return {
+                k: clean(v)
+                for k, v in node.items()
+                if not (k == "format" and v not in LLG_ENFORCED_FORMATS)
+            }
+        if isinstance(node, list):
+            return [clean(v) for v in node]
+        return node
+
+    return _json.dumps(clean(schema), ensure_ascii=False)
+
+
+class LlgJsonSchemaConstraint(_LlgConstraint):
+    """JSON Schema constraint backed by llguidance: value constraints (pattern,
+    lengths, ranges, multipleOf, item counts), prefixItems, recursive ``$ref`` and
+    common ``format`` values are enforced token by token."""
+
+    _KIND = "json_schema"
+
+    def __init__(self, schema: dict, tokenizer: Any = None) -> None:
+        self._schema_json = _llg_schema_json(schema)
+        super().__init__(schema, tokenizer)
+
+    def _make_grammar(self) -> str:
+        return self._LLMatcher.grammar_from_json_schema(self._schema_json)
+
+    def _error(self, message: str) -> Exception:
+        from .json_schema import UnsupportedSchemaError
+
+        return UnsupportedSchemaError(
+            f"unsupported JSON Schema (llguidance cannot enforce it): {message[:400]}"
+        )
+
+
+def validate_llg_json_schema(schema: dict) -> None:
+    """Raise ``UnsupportedSchemaError`` when llguidance cannot compile ``schema``."""
+    from llguidance import LLMatcher
+
+    from .json_schema import UnsupportedSchemaError
+
+    try:
+        grammar = LLMatcher.grammar_from_json_schema(_llg_schema_json(schema))
+        err = LLMatcher.validate_grammar(grammar)
+    except Exception as exc:  # noqa: BLE001 - llguidance raises plain exceptions
+        err = str(exc)
+    if err:
+        raise UnsupportedSchemaError(
+            f"unsupported JSON Schema (llguidance cannot enforce it): {err[:400]}"
+        )
+
+
+def build_json_constraint(schema: Any, tokenizer: Any = None) -> Any:
+    """The constraint for a JSON schema (``None`` = any JSON object).
+
+    Schemas fully inside the in-house subset use the in-house state machine; any
+    other schema (value constraints, prefixItems, recursion, ...) is enforced by
+    llguidance.  Only what llguidance cannot compile is rejected.
+    """
+    from .json_schema import (
+        JsonSchemaConstraint,
+        UnsupportedSchemaError,
+        validate_supported_schema,
+    )
+
+    if schema is None:
+        return JsonSchemaConstraint(None)
+    try:
+        validate_supported_schema(schema)
+    except UnsupportedSchemaError:
+        validate_llg_json_schema(schema)
+        return LlgJsonSchemaConstraint(schema, tokenizer)
+    return JsonSchemaConstraint(schema)
 
 
 # ── Shared utilities ────────────────────────────────────────────────────────
@@ -1233,10 +1352,8 @@ class ConstraintFactory:
             Constraint object with advance/get_allowed_tokens/is_done/reset interface
         """
         if grammar_type in ("json_schema", "json_object"):
-            from .json_schema import JsonSchemaConstraint
-
             schema = grammar if grammar_type == "json_schema" else None
-            return JsonSchemaConstraint(schema)
+            return build_json_constraint(schema, tokenizer)
 
         if grammar_type == "regex":
             if not isinstance(grammar, str):
@@ -1287,6 +1404,9 @@ def validate_constraint_spec(spec: Any) -> None:
         if not isinstance(spec["grammar"], str):
             raise UnsupportedGrammarError("cfg constraint requires a grammar string")
         return
-    from .json_schema import validate_supported_schema
+    from .json_schema import UnsupportedSchemaError, validate_supported_schema
 
-    validate_supported_schema(spec)
+    try:
+        validate_supported_schema(spec)
+    except UnsupportedSchemaError:
+        validate_llg_json_schema(spec)  # enforced by llguidance, or rejected here
