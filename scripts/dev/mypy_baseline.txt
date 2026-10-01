@@ -356,14 +356,11 @@
 1	python/yunshu_engine/round_driver/driver.py	misc	List comprehension has incompatible type List[Segment | None]; expected List[Segment]
 1	python/yunshu_engine/round_driver/driver.py	union-attr	Item "None" of "APCCoordinator | None" has no attribute "store_checkpoint"
 1	python/yunshu_engine/round_driver/driver.py	union-attr	Item "None" of "MTPHead | None" has no attribute "absorb_prompt"
-1	python/yunshu_engine/round_driver/driver.py	union-attr	Item "None" of "MTPHead | None" has no attribute "draft"
 1	python/yunshu_engine/round_driver/driver.py	union-attr	Item "None" of "MTPHead | None" has no attribute "join"
 2	python/yunshu_engine/round_driver/driver.py	union-attr	Item "None" of "MTPHead | None" has no attribute "make_cache"
-2	python/yunshu_engine/round_driver/driver.py	union-attr	Item "None" of "MTPHead | None" has no attribute "slots"
+1	python/yunshu_engine/round_driver/driver.py	union-attr	Item "None" of "MTPHead | None" has no attribute "slots"
 1	python/yunshu_engine/round_driver/driver.py	var-annotated	Need type annotation for "pick" (hint: "pick: list[<type>] = ...")
 5	python/yunshu_engine/round_driver/forward.py	no-any-return	Returning Any from function declared to return "array"
-1	python/yunshu_engine/round_driver/mtp.py	index	Value of type "int | float | complex | list[list_or_scalar]" is not indexable
-1	python/yunshu_engine/round_driver/mtp.py	misc	List comprehension has incompatible type List[Any | int | float | complex | list[list_or_scalar]]; expected List[int]
 1	python/yunshu_engine/round_driver/mtp.py	no-any-return	Returning Any from function declared to return "array"
 1	python/yunshu_engine/scheduler.py	arg-type	Argument 1 to "_snapshot_cache" of "SpeculativeDecoder" has incompatible type "None"; expected "list[Any]"
 1	python/yunshu_engine/scheduler.py	arg-type	Argument 1 to "append" of "list" has incompatible type "tuple[Any, str]"; expected "tuple[tuple[Any], None]"
