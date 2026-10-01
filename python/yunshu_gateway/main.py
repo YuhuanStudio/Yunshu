@@ -969,6 +969,11 @@ def create_app() -> FastAPI:
     from .middleware.disconnect import DisconnectWatchMiddleware
 
     app.add_middleware(DisconnectWatchMiddleware)
+    # Outermost of all: every request/WS holds a lease on each model it acquires
+    # until it ends, so unload / TTL / eviction cannot pull it mid-response.
+    from .middleware.model_lease import ModelLeaseMiddleware
+
+    app.add_middleware(ModelLeaseMiddleware)
 
     # ── Gateway optimizer wiring ──
     from yunshu_engine.gateway_optimizer import (
