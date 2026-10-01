@@ -38,7 +38,7 @@ test-single FILE:
 
 lint:
     uv run ruff check python/ tests/
-    uv run mypy python/
+    uv run python scripts/dev/mypy_gate.py
 
 format:
     uv run ruff format python/ tests/

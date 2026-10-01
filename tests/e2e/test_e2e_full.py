@@ -476,34 +476,46 @@ class TestMCP:
 
 
 class TestBatchAPI:
-    """Test /v1/batch endpoint validation."""
+    """The custom ``/v1/batch`` endpoint is retired (docs/guides/API_SURFACE.md,
+    "Removed"); nothing replaces it, so it must stay 404 rather than reappear."""
 
     @pytest.fixture(autouse=True)
     def _reset(self, _reset_engine):
         pass
 
-    def test_batch_empty_400(self):
-        """Batch endpoint returns 400 for empty batch."""
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"requests": []},
+            {
+                "requests": [
+                    {"custom_id": f"r{i}", "body": {"model": "test"}}
+                    for i in range(501)
+                ]
+            },
+        ],
+    )
+    def test_retired_batch_endpoint_is_404(self, body):
         app = create_app()
         with TestClient(app) as client:
-            resp = client.post(
-                "/v1/batch",
-                json={"requests": []},
-            )
-            assert resp.status_code == 400
+            assert client.post("/v1/batch", json=body).status_code == 404
 
-    def test_batch_too_large_400(self):
-        """Batch endpoint returns 400 for too large batch."""
+    def test_files_backed_batches_validation(self):
+        """The current contract: /v1/batches is Files-backed and answers 400 for
+        a missing input_file_id, a bad endpoint and malformed JSON."""
         app = create_app()
         with TestClient(app) as client:
+            assert client.post("/v1/batches", json={}).status_code == 400
+            bad_endpoint = {
+                "input_file_id": "file-x",
+                "endpoint": "/v1/nope",
+                "completion_window": "24h",
+            }
+            assert client.post("/v1/batches", json=bad_endpoint).status_code == 400
             resp = client.post(
-                "/v1/batch",
-                json={
-                    "requests": [
-                        {"custom_id": f"r{i}", "body": {"model": "test"}}
-                        for i in range(501)
-                    ]
-                },
+                "/v1/batches",
+                content=b"{not json",
+                headers={"content-type": "application/json"},
             )
             assert resp.status_code == 400
 

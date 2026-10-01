@@ -17,7 +17,16 @@ import logging
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from .body_replay import replay_receive
+
 logger = logging.getLogger(__name__)
+
+_STATEFUL_MARKERS = (
+    b'"file_id"',
+    b'"previous_response_id"',
+    b'"conversation"',
+    b'"input_file"',
+)
 
 
 class ResponseCacheMiddleware:
@@ -60,10 +69,7 @@ class ResponseCacheMiddleware:
             if stream:
                 # Must provide the cached body back to downstream via a
                 # synthetic receive — the original receive was consumed.
-                async def _cached_receive():
-                    return {"type": "http.request", "body": body, "more_body": False}
-
-                await self.app(scope, _cached_receive, send)
+                await self.app(scope, replay_receive(body, receive), send)
                 return
 
             # namespace the cache by the caller's
@@ -74,19 +80,29 @@ class ResponseCacheMiddleware:
             # bearer token in means a HIT can only be served to the same key that
             # cached it (and that key already passed model-access for that body).
             _auth = request.headers.get("Authorization", "")
+            # A body that references stored state (uploaded files, earlier responses,
+            # conversations) can change meaning without the body changing (file expiry
+            # or deletion, store edits), and a HIT would skip the route's validation.
+            if any(m in body for m in _STATEFUL_MARKERS):
+                await self.app(scope, replay_receive(body, receive), send)
+                return
+            # The engine generation (which loaded model instance serves the request) is
+            # part of the key so an unload / reload / swap never serves old output.
+            from yunshu_gateway.engine import engine_generation
+
             cache_key = hashlib.sha256(
-                _auth.encode("utf-8") + b"\x00" + body
+                _auth.encode("utf-8")
+                + b"\x00"
+                + str(engine_generation()).encode("utf-8")
+                + b"\x00"
+                + body
             ).hexdigest()
 
             # Skip caching for non-deterministic sampling (temperature > 0, no seed)
             temperature = body_json.get("temperature", 1.0)
             seed = body_json.get("seed")
             if temperature > 0 and seed is None:
-
-                async def _nondet_receive():
-                    return {"type": "http.request", "body": body, "more_body": False}
-
-                await self.app(scope, _nondet_receive, send)
+                await self.app(scope, replay_receive(body, receive), send)
                 return
 
             # cache.get() is async (uses asyncio.Lock internally)
@@ -98,18 +114,13 @@ class ResponseCacheMiddleware:
                 return
         except Exception:
             logger.debug("cache lookup failed", exc_info=True)
-
-            async def _fallback_receive():
-                return {"type": "http.request", "body": body, "more_body": False}
-
-            await self.app(scope, _fallback_receive, send)
+            await self.app(scope, replay_receive(body, receive), send)
             return
 
         # Cache miss — capture response.
         # Provide the cached body via synthetic receive so downstream
         # handlers don't get an empty body from the consumed receive.
-        async def _replay_receive():
-            return {"type": "http.request", "body": body, "more_body": False}
+        _replay_receive = replay_receive(body, receive)
 
         response_started = False
         status_code = 200

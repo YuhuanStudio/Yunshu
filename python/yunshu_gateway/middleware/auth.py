@@ -20,7 +20,6 @@ single-consumer model.
 """
 
 import contextlib
-import hmac
 import logging
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -28,6 +27,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from yunshu_engine import settings
+from yunshu_gateway.token_compare import tokens_equal
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +178,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         # Static token auth (constant-time comparison). The single consumer
         # authenticates with the one configured bearer token.
-        if auth_token and hmac.compare_digest(token, auth_token):
+        if auth_token and tokens_equal(token, auth_token):
             return await call_next(request)
 
         return _ErrorFormatter.auth_error(request, "Invalid or missing API key")

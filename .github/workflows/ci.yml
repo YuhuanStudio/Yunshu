@@ -53,6 +53,29 @@ jobs:
       - name: Ruff format check
         run: uvx ruff@${{ env.RUFF_VERSION }} format --check python/ tests/
 
+  # Same gate as `just lint`: mypy against the committed baseline (new errors fail).
+  # Needs the installed deps (mlx is macOS-only) so results match local runs.
+  typecheck:
+    name: Type check (mypy baseline)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: mypy (no new errors beyond baseline)
+        run: uv run python scripts/dev/mypy_gate.py
+
   # Runs on every push/PR — Linux (1× minutes). `uv build` needs only the build
   # backend (hatchling), not the runtime deps, so it doesn't install MLX either.
   build:

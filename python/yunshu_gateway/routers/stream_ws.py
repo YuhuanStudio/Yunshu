@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import hmac
-
 from fastapi import APIRouter, WebSocket
 
 from yunshu_engine import settings
+from yunshu_gateway.token_compare import tokens_equal
 
 from ..ws_transport import Connection
 
@@ -33,7 +32,7 @@ async def _admit(ws: WebSocket) -> bool:
             got = ws.headers.get("x-api-key", "") or (
                 ws.query_params.get("token") or ""
             )
-        if not (got and hmac.compare_digest(got, token)):
+        if not (got and tokens_equal(got, token)):
             await ws.close(code=1008)
             return False
     return True

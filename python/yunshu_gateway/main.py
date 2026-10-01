@@ -821,6 +821,29 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def request_size_limit(request: Request, call_next):
         content_length = request.headers.get("content-length")
+        if content_length is not None and not (
+            content_length.isascii() and content_length.isdigit()
+        ):
+            # Fail closed: a malformed / negative Content-Length cannot be bounded.
+            msg = f"Invalid Content-Length header: {content_length!r}"
+            if request.url.path in _ANTHROPIC_PATHS:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "type": "error",
+                        "error": {"type": "invalid_request_error", "message": msg},
+                    },
+                )
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "message": msg,
+                        "type": "invalid_request_error",
+                        "code": "invalid_content_length",
+                    }
+                },
+            )
         if content_length is not None:
             try:
                 if int(content_length) > max_request_size:
@@ -847,7 +870,7 @@ def create_app() -> FastAPI:
                         },
                     )
             except (ValueError, TypeError):
-                pass  # Malformed content-length — let downstream handle it
+                pass
 
         # Any request WITHOUT a Content-Length header (chunked transfer-encoding, HTTP/2
         # DATA frames, or a body with no declared length) must be byte-counted from the
@@ -891,14 +914,10 @@ def create_app() -> FastAPI:
 
                 # Re-inject the body so downstream handlers (Pydantic validators)
                 # can access it via request.body() or request.json().
-                async def _receive_with_body():
-                    return {
-                        "type": "http.request",
-                        "body": body_bytes,
-                        "more_body": False,
-                    }
-
-                request._receive = _receive_with_body
+                # BaseHTTPMiddleware's wrapped receive hands a cached ``_body`` to the
+                # downstream app once, then the real receive's http.disconnect. (A
+                # consumed stream without ``_body`` would be forwarded as EMPTY.)
+                request._body = body_bytes
             except Exception:
                 pass  # Body read failed — let downstream handle it
         return await call_next(request)

@@ -125,8 +125,22 @@ class RequestTracker:
         """Remove a completed generation from the registry."""
         with self._lock:
             gen = self._active.pop(request_id, None)
-            if gen is not None and gen.client_request_id:
-                self._aliases.pop(gen.client_request_id, None)
+            cid = gen.client_request_id if gen is not None else None
+            if cid and self._aliases.get(cid) == request_id:
+                # Only drop the alias if it still points at us; fall back to another
+                # live generation that shares the client id (duplicate id, n>1).
+                other = next(
+                    (
+                        rid
+                        for rid, g in self._active.items()
+                        if g.client_request_id == cid and rid != cid
+                    ),
+                    None,
+                )
+                if other is None:
+                    self._aliases.pop(cid, None)
+                else:
+                    self._aliases[cid] = other
 
     def cancel(self, request_id: str) -> bool:
         """Signal cancellation for a request (engine id or client X-Request-Id).

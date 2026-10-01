@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -31,6 +32,11 @@ def error_response(
             }
         },
     )
+
+
+async def _io(fn, *args, **kwargs):
+    """Run one whole store operation (its own process-lock RMW) off the event loop."""
+    return await asyncio.to_thread(fn, *args, **kwargs)
 
 
 def _err(exc: ConversationError) -> JSONResponse:
@@ -78,7 +84,7 @@ async def create_conversation(request: Request):
     _check_permission(request, "can_infer")
     try:
         body = await _body(request)
-        return get_store().create(body.get("items"), body.get("metadata"))
+        return await _io(get_store().create, body.get("items"), body.get("metadata"))
     except ConversationError as exc:
         return _err(exc)
 
@@ -87,7 +93,7 @@ async def create_conversation(request: Request):
 async def get_conversation(conversation_id: str, request: Request):
     _check_permission(request, "can_infer")
     try:
-        return get_store().get(conversation_id)
+        return await _io(get_store().get, conversation_id)
     except ConversationError as exc:
         return _err(exc)
 
@@ -101,7 +107,7 @@ async def update_conversation(conversation_id: str, request: Request):
             raise ConversationError(
                 400, "metadata is required", "missing_required_parameter", "metadata"
             )
-        return get_store().update_metadata(conversation_id, body["metadata"])
+        return await _io(get_store().update_metadata, conversation_id, body["metadata"])
     except ConversationError as exc:
         return _err(exc)
 
@@ -110,7 +116,7 @@ async def update_conversation(conversation_id: str, request: Request):
 async def delete_conversation(conversation_id: str, request: Request):
     _check_permission(request, "can_infer")
     try:
-        get_store().delete(conversation_id)
+        await _io(get_store().delete, conversation_id)
     except ConversationError as exc:
         return _err(exc)
     return {"id": conversation_id, "object": "conversation.deleted", "deleted": True}
@@ -126,7 +132,9 @@ async def create_items(conversation_id: str, request: Request):
             raise ConversationError(
                 400, "items is required", "missing_required_parameter", "items"
             )
-        added = get_store().add_items(conversation_id, items, cap=MAX_CREATE_ITEMS)
+        added = await _io(
+            get_store().add_items, conversation_id, items, cap=MAX_CREATE_ITEMS
+        )
     except ConversationError as exc:
         return _err(exc)
     return {
@@ -148,7 +156,8 @@ async def list_items(conversation_id: str, request: Request):
             raise ConversationError(
                 400, "order must be 'asc' or 'desc'", "invalid_value", "order"
             )
-        return get_store().list_items(
+        return await _io(
+            get_store().list_items,
             conversation_id,
             limit=limit,
             order=order,
@@ -162,7 +171,7 @@ async def list_items(conversation_id: str, request: Request):
 async def get_item(conversation_id: str, item_id: str, request: Request) -> Any:
     _check_permission(request, "can_infer")
     try:
-        return get_store().get_item(conversation_id, item_id)
+        return await _io(get_store().get_item, conversation_id, item_id)
     except ConversationError as exc:
         return _err(exc)
 
@@ -171,6 +180,6 @@ async def get_item(conversation_id: str, item_id: str, request: Request) -> Any:
 async def delete_item(conversation_id: str, item_id: str, request: Request):
     _check_permission(request, "can_infer")
     try:
-        return get_store().delete_item(conversation_id, item_id)
+        return await _io(get_store().delete_item, conversation_id, item_id)
     except ConversationError as exc:
         return _err(exc)

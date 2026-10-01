@@ -103,8 +103,11 @@ local models, including the Hugging Face cache.
 `--all-extras`), then `uv run yunshu serve -m <model>`. `uv.lock` pins the exact versions
 (MLX 0.32, `mlx-vlm` 0.7.3+).
 
-**No telemetry.** Yunshu sends nothing anywhere. The only outgoing connections are the model
-downloads you ask for and MCP servers you configure.
+**No telemetry.** Yunshu collects and sends no usage data, analytics or crash reports. That is not
+"never goes online": it connects out only when you or your request cause it to — model downloads you
+ask for, MCP servers you configure, the server-side `web_search` provider you set up, and `web_fetch`
+(on by default; it fetches the URL a request asks for, and blocks private addresses unless you allow
+them, see `YUNSHU_WEB_FETCH`). Maintainers' upstream checks (`just vendor-check`) are run by hand.
 
 **Docs:**
 - [connecting clients](docs/guides/CLIENTS.md) (OpenAI / Anthropic SDKs, coding agents, Open WebUI)

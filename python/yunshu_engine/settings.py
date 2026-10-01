@@ -35,6 +35,7 @@ from __future__ import annotations
 import difflib
 import json
 import logging
+import math
 import os
 import tomllib
 from collections.abc import Mapping
@@ -140,6 +141,7 @@ _add("YUNSHU_MEDIA_DIR", "path", None, "Directory local media paths must live un
 _add("YUNSHU_FILES_DIR", "path", None, "Directory of the local Files / Batch API store. Unset: ~/.yunshu/files.", "server")
 _add("YUNSHU_FILES_MAX_BYTES", "int", 536870912, "Files API: maximum size of one uploaded file in bytes (default 512 MB).", "server", minimum=1)
 _add("YUNSHU_FILES_TTL_DAYS", "float", None, "Files API: delete uploaded files after this many days. Unset: keep forever.", "server", minimum=0.0)
+_add("YUNSHU_FILES_MAX_TOTAL_BYTES", "int", 0, "Files API: total bytes the store may hold; an upload that would exceed it fails with 413 storage_quota_exceeded (expired files are reaped first). 0: unlimited.", "server", minimum=0)
 _add("YUNSHU_CONVERSATIONS_DIR", "path", None, "Directory of the Conversations API store (JSON, one file per conversation). Unset: ~/.yunshu/conversations.", "server")
 _add("YUNSHU_CONVERSATION_MAX_ITEMS", "int", 10000, "Conversations API: maximum number of items one conversation may hold.", "server", minimum=1)
 _add("YUNSHU_COMPACT_MAX_TOKENS", "int", 2048, "Responses compaction: maximum tokens of the model-written summary.", "server", minimum=64)
@@ -395,12 +397,14 @@ def _parse(s: Setting, text: str) -> Any:
             out: Any = int(value)
         elif s.type == "float":
             out = float(value)
+            if not math.isfinite(out):
+                raise ValueError("expected a finite number")
         elif s.type == "gb":
             # GiB with an optional "GB" suffix; "disabled" = 0 (no limit).
             if value.lower() == "disabled":
                 return 0.0
             out = float(value.upper().removesuffix("GB").strip())
-            if out <= 0:
+            if not math.isfinite(out) or out <= 0:
                 raise ValueError("expected a positive size in GB or 'disabled'")
         elif s.type == "enum":
             # Choices are lower-case except the log level, which is upper-case.

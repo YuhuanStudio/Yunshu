@@ -79,7 +79,7 @@ first public release, P2 = soon after, P3 = later or on request.
 | Release workflow | ✅ | Tag-only; checks version / changelog, lint, tests, build, twine, clean install, PyPI behind approval, draft GitHub release |
 | CI on push | 🟡 P1 | Lint + build on Linux; macOS unit tests only on release / manual run (to save quota). Never run on GitHub yet: the first push is the first run |
 | Third-party notices in the artifacts | ✅ | `THIRD_PARTY_NOTICES.md` ships in the wheel and sdist |
-| Telemetry | ✅ | None, stated in the README. Yunshu makes no network calls except the model downloads and MCP servers you ask for |
+| Telemetry | ✅ | None collected, stated in the README. Outbound connections happen only on user action: model downloads, MCP servers you configure, the configured `web_search` provider, and `web_fetch` for URLs a request names |
 
 ## Decisions (2026-09-29)
 
