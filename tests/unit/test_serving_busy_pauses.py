@@ -84,7 +84,7 @@ def test_runner_slice_and_driver_step_are_metered():
 
     runner.driver = Driver()
     runner._driver_jobs = {}
-    runner._note_driver_prefill = lambda: None
+    runner._note_driver_prefill = lambda driver=None: None
     runner._driver_jobs[1] = type(
         "J", (), {"abandoned": False, "cancel_event": None, "stats": None}
     )()

@@ -159,6 +159,8 @@ class RequestInfo:
     # ``ContextWindowManager.publish``); None when nothing was.
     context_policy: dict | None = None
     # Generations in flight (this one included) when it was admitted; serve log only.
+    scheduling_priority: int = 0
+    auxiliary_kind: str | None = None
     concurrency_start: int = 0
     # The token budget when the prompt left less room than max_tokens asked for
     # (``token_budget.TokenBudget.report``); None when the request fit.
@@ -246,7 +248,16 @@ def queue_snapshot(info: RequestInfo) -> tuple[int, float]:
     token, not a promise.
     """
     ahead = [
-        i for i in registry.active() if i is not info and i.arrived <= info.arrived
+        i
+        for i in registry.active()
+        if i is not info
+        and (
+            i.scheduling_priority > info.scheduling_priority
+            or (
+                i.scheduling_priority == info.scheduling_priority
+                and i.arrived <= info.arrived
+            )
+        )
     ]
     wait = sum(_remaining_prefill_s(i.stats) for i in ahead)
     return len(ahead), round(wait * 1000, 1)

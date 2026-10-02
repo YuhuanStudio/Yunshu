@@ -144,6 +144,10 @@ def _send(url: str, body: dict) -> dict:
         tool_chunks=calls,
         spec=(xy or {}).get("speculative"),
         x_decode_tps=(xy or {}).get("decode_tps"),
+        cached_tokens=(xy or {}).get("cached_tokens"),
+        queue_wait_ms=(xy or {}).get("queue_wait_ms"),
+        prefill_ms=(xy or {}).get("prefill_ms"),
+        cache=(xy or {}).get("cache"),
         text="".join(text)[:400],
     )
 
