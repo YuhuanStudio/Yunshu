@@ -1,3 +1,4 @@
+# Upstream (inspired): jundot/omlx (Apache-2.0) omlx/model_settings.py @ deb9f00a
 """Per-Model Settings — configurable runtime parameters per model.
 
 Inspired by oMLX's per-model config system. Each registered model can

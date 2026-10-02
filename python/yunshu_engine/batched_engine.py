@@ -1,3 +1,4 @@
+# Upstream (inspired): ml-explore/mlx-lm (MIT) mlx_lm/sample_utils.py @ e5dd6100
 from __future__ import annotations
 
 """Yunshu BatchedEngine — user-facing continuous batching engine.

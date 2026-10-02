@@ -1,3 +1,4 @@
+# Upstream (inspired): sgl-project/sglang (Apache-2.0) python/sglang/srt/mem_cache/radix_cache.py @ a0ba1968
 from __future__ import annotations
 
 """Yunshu KV Cache Optimizations — production-grade memory and compute optimizations.

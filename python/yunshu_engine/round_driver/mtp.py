@@ -1,3 +1,4 @@
+# Upstream (derived): Blaizzy/mlx-vlm (MIT) mlx_vlm/speculative/drafters/qwen3_5_mtp/qwen3_5_mtp.py @ 00093678
 """The checkpoint's MTP head as a per-row drafter for the round driver.
 
 Qwen3.5's MTP head is one decoder layer that, at target position ``p``, reads

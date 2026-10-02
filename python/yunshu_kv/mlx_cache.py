@@ -1,3 +1,4 @@
+# Upstream (inspired): jundot/omlx (Apache-2.0) omlx/cache/type_handlers.py @ deb9f00a
 from __future__ import annotations
 
 """Yunshu MLX Cache Integration — Real KVCache manipulation.
@@ -84,6 +85,20 @@ def is_sliceable(cache_obj: Any) -> bool:
     )
 
 
+def cache_keys_values(cache_obj: Any) -> tuple[Any, Any]:
+    """The (keys, values) a KV cache holds, up to its offset, under any mlx-lm version.
+
+    mlx-lm 0.32 made ``.state`` the whole buffer plus offsets (a 3- to 6-tuple) and added
+    ``keys_and_values()``; before that ``.state`` was ``(keys, values)``.
+    """
+    fn = getattr(cache_obj, "keys_and_values", None)
+    if callable(fn):
+        keys, values = fn()
+        return keys, values
+    state = cache_obj.state
+    return state[0], state[1]
+
+
 def extract_cache_state(cache_obj: Any) -> dict:
     """Extract serializable state from an MLX cache object.
 
@@ -92,7 +107,7 @@ def extract_cache_state(cache_obj: Any) -> dict:
     ct = detect_cache_type(cache_obj)
 
     if ct in (CacheType.KVCACHE, CacheType.BATCH_KVCACHE, CacheType.QUANTIZED_KVCACHE):
-        keys, values = cache_obj.state
+        keys, values = cache_keys_values(cache_obj)
         return {
             "keys": keys,
             "values": values,
@@ -103,7 +118,7 @@ def extract_cache_state(cache_obj: Any) -> dict:
         }
 
     elif ct == CacheType.ROTATING_KVCACHE:
-        keys, values = cache_obj.state
+        keys, values = cache_keys_values(cache_obj)
         meta = getattr(cache_obj, "meta_state", "")
         return {
             "keys": keys,
@@ -141,7 +156,11 @@ def extract_cache_state(cache_obj: Any) -> dict:
         # Fallback: try to extract keys/values
         if hasattr(cache_obj, "state"):
             state = cache_obj.state
-            if isinstance(state, tuple) and len(state) >= 2:
+            if (
+                isinstance(state, tuple)
+                and len(state) >= 2
+                and hasattr(state[0], "shape")
+            ):
                 return {
                     "keys": state[0],
                     "values": state[1],

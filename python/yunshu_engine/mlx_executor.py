@@ -1,3 +1,4 @@
+# Upstream (inspired): jundot/omlx (Apache-2.0) omlx/engine_core.py @ deb9f00a
 """Yunshu Global MLX Executor — single-thread GPU serialization.
 
 Studied from oMLX's engine_core.py:

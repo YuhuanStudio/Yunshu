@@ -1,3 +1,4 @@
+# Upstream (inspired): ggml-org/llama.cpp (MIT) common/speculative.cpp, common/speculative.h @ dc9879cf
 from __future__ import annotations
 
 """Unified speculative decoding interface — begin()/draft()/accept() lifecycle.

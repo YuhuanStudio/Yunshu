@@ -125,7 +125,10 @@ def _forward_n_confirmed(
     """
 
     if self.sharding_group is not None:
-        from mlx_lm.models.gated_delta import sum_gradients
+        try:
+            from mlx_lm.models.gated_delta import sum_gradients
+        except ImportError:  # mlx-lm >= 0.32 moved it
+            from mlx.nn.layers.distributed import sum_gradients
 
         inputs = sum_gradients(self.sharding_group)(inputs)
 
@@ -232,9 +235,14 @@ def _process_chunk(
         )
     ]
 
-    inv_scale = k.shape[-1] ** -0.5
-    q = (inv_scale**2) * mx.fast.rms_norm(q, None, 1e-6)
-    k = inv_scale * mx.fast.rms_norm(k, None, 1e-6)
+    try:
+        from mlx_lm.models.gated_delta import normalize_qk
+    except ImportError:  # mlx-lm < 0.32 normalizes with rms_norm
+        inv_scale = k.shape[-1] ** -0.5
+        q = (inv_scale**2) * mx.fast.rms_norm(q, None, 1e-6)
+        k = inv_scale * mx.fast.rms_norm(k, None, 1e-6)
+    else:  # what the stock layer does under 0.32
+        q, k = normalize_qk(q, k, inv_scale=k.shape[-1] ** -0.5, eps=1e-6)
 
     out, new_ssm_state = gated_delta_update(
         q,

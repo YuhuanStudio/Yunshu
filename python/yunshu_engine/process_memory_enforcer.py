@@ -1,3 +1,4 @@
+# Upstream (derived): jundot/omlx (Apache-2.0) omlx/process_memory_enforcer.py @ deb9f00a
 from __future__ import annotations
 
 """Process-level memory enforcer — .

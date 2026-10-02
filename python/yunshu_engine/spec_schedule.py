@@ -1,3 +1,4 @@
+# Upstream (inspired): Blaizzy/mlx-vlm (MIT) mlx_vlm/speculative/dflash.py @ c8da6659
 """Cost-aware draft budget (chain depth or tree nodes).
 
 A round verifies the first ``n`` drafts of a chain, or the first ``n`` nodes of a

@@ -1,3 +1,4 @@
+# Upstream (inspired): ml-explore/mlx-lm (MIT) mlx_lm/generate.py @ e5dd6100
 from __future__ import annotations
 
 """Speculative draft token verifier for single-request fast-path generation.

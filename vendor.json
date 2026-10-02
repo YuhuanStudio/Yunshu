@@ -1,5 +1,5 @@
 {
-  "_doc": "Everything Yunshu took from another project. kind: vendored = copied file; derived = rewritten from specific upstream files; inspired = same algorithm, independent code; patches = we monkeypatch an upstream symbol (source_sha256 pins the code we depend on). scripts/vendor/check_upstream.py reports upstream changes since 'commit'. 'local_changes' lists deliberate edits to keep on a sync.",
+  "_doc": "Everything Yunshu took from another project. kind: vendored = copied file; derived = rewritten from specific upstream files; inspired = same algorithm, independent code; patches = we monkeypatch an upstream symbol (source_sha256 pins the code we depend on). scripts/vendor/check_upstream.py reports upstream changes since 'commit'. 'local_changes' lists deliberate edits to keep on a sync. watch = every reference clone we follow for ideas or fixes (commit = reviewed up to). watch_excluded = every other clone with the reason it is not followed; scripts/vendor/check_upstream.py fails when a clone is in neither list. packages = extra pins on top of everything declared in pyproject.toml, which is read automatically.",
   "vendored": [
     {
       "path": "python/yunshu_engine/kernels/omlx/qwen35_verify_qmm.py",
@@ -258,6 +258,30 @@
       "commit": "v0.7.3",
       "license": "MIT",
       "why": "tree variant of upstream MTP rounds"
+    },
+    {
+      "kind": "derived",
+      "path": "python/yunshu_engine/process_memory_enforcer.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_paths": [
+        "omlx/process_memory_enforcer.py"
+      ],
+      "commit": "deb9f00a",
+      "license": "Apache-2.0",
+      "why": "process memory limit enforcer, simplified to one asyncio loop"
+    },
+    {
+      "kind": "derived",
+      "path": "python/yunshu_engine/round_driver/mtp.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "upstream_paths": [
+        "mlx_vlm/speculative/drafters/qwen3_5_mtp/qwen3_5_mtp.py"
+      ],
+      "commit": "00093678",
+      "license": "MIT",
+      "why": "Qwen3.5 MTP head weights driven per row, upstream draft loop"
     }
   ],
   "inspired": [
@@ -478,6 +502,175 @@
       "commit": "924707f1",
       "license": "Apache-2.0",
       "why": "block pool adapted for UMA"
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/tool_call_grammar.py",
+      "repo": "https://github.com/guidance-ai/llguidance",
+      "clone": "reference/llguidance",
+      "upstream_paths": [
+        "python/llguidance/_struct_tag.py"
+      ],
+      "commit": "c05068cc",
+      "license": "MIT",
+      "why": "structural-tag constrained decoding for tool calls"
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/tool_call_grammar.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "upstream_paths": [
+        "mlx_vlm/structured.py"
+      ],
+      "commit": "c8da6659",
+      "license": "MIT",
+      "why": "llguidance logits processor wiring"
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/model_settings.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_paths": [
+        "omlx/model_settings.py"
+      ],
+      "commit": "deb9f00a",
+      "license": "Apache-2.0",
+      "why": "per-model runtime settings loaded from the model directory"
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/mrope.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_paths": [
+        "omlx/scheduler.py"
+      ],
+      "commit": "deb9f00a",
+      "license": "Apache-2.0",
+      "why": "mRoPE delta capture and batch decode positions"
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/mrope.py",
+      "repo": "https://github.com/vllm-project/vllm",
+      "clone": "reference/vllm",
+      "upstream_paths": [
+        "vllm/v1/worker/gpu/mm/rope.py"
+      ],
+      "commit": "924707f1",
+      "license": "Apache-2.0",
+      "why": "mRoPE state per request"
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/mlx_executor.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_paths": [
+        "omlx/engine_core.py"
+      ],
+      "commit": "deb9f00a",
+      "license": "Apache-2.0",
+      "why": "one MLX thread with a thread-local stream"
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/prefill_progress.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_paths": [
+        "omlx/prefill_progress.py"
+      ],
+      "commit": "deb9f00a",
+      "license": "Apache-2.0",
+      "why": "per-request prefill progress tracker"
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_kv/mlx_cache.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_paths": [
+        "omlx/cache/type_handlers.py"
+      ],
+      "commit": "deb9f00a",
+      "license": "Apache-2.0",
+      "why": "per cache-type slicing and assembly of MLX caches"
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/spec_draft_verifier.py",
+      "repo": "https://github.com/ml-explore/mlx-lm",
+      "clone": "reference/mlx-lm",
+      "upstream_paths": [
+        "mlx_lm/generate.py"
+      ],
+      "commit": "e5dd6100",
+      "license": "MIT",
+      "why": "speculative verification that re-includes the last token (speculative_generate_step)"
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/spec_schedule.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "upstream_paths": [
+        "mlx_vlm/speculative/dflash.py"
+      ],
+      "commit": "c8da6659",
+      "license": "MIT",
+      "why": "DFlash chain depth selection"
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/kv_optimizations.py",
+      "repo": "https://github.com/sgl-project/sglang",
+      "clone": "reference/sglang",
+      "upstream_paths": [
+        "python/sglang/srt/mem_cache/radix_cache.py"
+      ],
+      "commit": "a0ba1968",
+      "license": "Apache-2.0",
+      "why": "radix-tree prefix matching"
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/model_optimizations.py",
+      "repo": "https://github.com/waybarrios/vllm-mlx",
+      "clone": "reference/vllm-mlx",
+      "upstream_paths": [
+        "vllm_mlx/prompt_warmup.py"
+      ],
+      "commit": "2b931cfe",
+      "license": "Apache-2.0",
+      "why": "warm prompt preloading into the prefix cache"
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/batched_engine.py",
+      "repo": "https://github.com/ml-explore/mlx-lm",
+      "clone": "reference/mlx-lm",
+      "upstream_paths": [
+        "mlx_lm/sample_utils.py"
+      ],
+      "commit": "e5dd6100",
+      "license": "MIT",
+      "why": "sampler order top_p, min_p, XTC, top_k and penalty semantics"
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/spec_proposer.py",
+      "repo": "https://github.com/ggml-org/llama.cpp",
+      "clone": "reference/llama.cpp",
+      "upstream_paths": [
+        "common/speculative.cpp",
+        "common/speculative.h"
+      ],
+      "commit": "dc9879cf",
+      "license": "MIT",
+      "why": "common_speculative_state: one proposer interface for n-gram, draft model and MTP"
     }
   ],
   "patches": [
@@ -841,8 +1034,8 @@
       "license": "MIT",
       "commit": "v0.31.3",
       "why": "n_confirmed rollback for GatedDeltaNet (experimental route)",
-      "source_sha256": "95d37d1115244b23b88ad5eb89e6946b0601ef05952cf77e6ba5d4e07e8519e8",
-      "installed_version": "0.31.3"
+      "source_sha256": "0d6f97f05c2abfdcf8eced32e538808df08947338ab1f0ef1d660a4d3547c86d",
+      "installed_version": "0.32.0"
     },
     {
       "kind": "patches",
@@ -856,8 +1049,8 @@
       "license": "MIT",
       "commit": "v0.31.3",
       "why": "n_confirmed rollback for GatedDeltaNet (experimental route)",
-      "source_sha256": "687e99f007e73597baf8913b2e40b9649110cd798fd23ba5f20a4e71d4061357",
-      "installed_version": "0.31.3"
+      "source_sha256": "6acb548f006a114cca650dbbf15dbdb8f8f3991f9a754e586ea780b58468e568",
+      "installed_version": "0.32.0"
     },
     {
       "kind": "patches",
@@ -872,7 +1065,7 @@
       "commit": "v0.31.3",
       "why": "n_confirmed rollback for GatedDeltaNet (experimental route)",
       "source_sha256": "b1f708d4fa7825a66240e9b04115bf52ae2bf420ab7cb5484c62beabcc6e7a30",
-      "installed_version": "0.31.3"
+      "installed_version": "0.32.0"
     },
     {
       "kind": "patches",
@@ -1063,7 +1256,8 @@
         "omlx/patches/qwen35_*.py",
         "omlx/patches/mlx_vlm_mtp/*.py"
       ],
-      "why": "new or changed Qwen3.5-family kernels we may want"
+      "why": "new or changed Qwen3.5-family kernels we may want",
+      "commit": "87460f4d"
     },
     {
       "repo": "https://github.com/Blaizzy/mlx-vlm",
@@ -1113,7 +1307,173 @@
       "globs": [
         "**"
       ],
-      "why": "native Metal runtime using M5 Neural Accelerators (MPP) for prefill/GEMM"
+      "why": "native Metal runtime using M5 Neural Accelerators (MPP) for prefill/GEMM",
+      "commit": "128bdd73"
+    },
+    {
+      "repo": "https://github.com/sgl-project/sglang",
+      "clone": "reference/sglang",
+      "globs": [
+        "python/sglang/srt/mem_cache/radix_cache.py",
+        "python/sglang/srt/speculative/**/*.py",
+        "python/sglang/srt/constrained/**/*.py"
+      ],
+      "why": "radix prefix cache, speculative decoding, structured output",
+      "commit": "5423a4d8"
+    },
+    {
+      "repo": "https://github.com/vllm-project/vllm",
+      "clone": "reference/vllm",
+      "globs": [
+        "vllm/v1/spec_decode/**/*.py",
+        "vllm/v1/core/block_pool.py",
+        "vllm/v1/core/kv_cache_utils.py",
+        "vllm/v1/worker/gpu/mm/rope.py",
+        "vllm/model_executor/models/gemma4_mtp.py"
+      ],
+      "why": "n-gram / suffix / MTP proposers, block pool, mRoPE",
+      "commit": "e35082e7"
+    },
+    {
+      "repo": "https://github.com/ggml-org/llama.cpp",
+      "clone": "reference/llama.cpp",
+      "globs": [
+        "common/speculative.*",
+        "common/ngram-*",
+        "common/sampling.*",
+        "common/json-schema-to-grammar.*",
+        "common/chat.*"
+      ],
+      "why": "n-gram speculation, samplers, grammar and chat templates",
+      "commit": "a868c3e3"
+    },
+    {
+      "repo": "https://github.com/incoai/splash",
+      "clone": "reference/splash",
+      "globs": [
+        "runtime/metal/kernels/**",
+        "runtime/metal/abi/**"
+      ],
+      "why": "batch-invariant Metal kernels (decode, prefill, paged attention)",
+      "commit": "a1056620"
+    },
+    {
+      "repo": "https://github.com/bstnxbt/dflash-mlx",
+      "clone": "reference/dflash-mlx",
+      "globs": [
+        "dflash_mlx/**/*.py"
+      ],
+      "why": "DFlash block-diffusion drafter engine on MLX",
+      "commit": "60803233"
+    },
+    {
+      "repo": "https://github.com/youssofal/MTPLX",
+      "clone": "reference/MTPLX",
+      "globs": [
+        "mtplx/**/*.py"
+      ],
+      "why": "MTP speculative decoding on MLX",
+      "commit": "1de2b1c0"
+    },
+    {
+      "repo": "https://github.com/raullenchai/Rapid-MLX",
+      "clone": "reference/Rapid-MLX",
+      "globs": [
+        "rapid_mlx/**/*.py"
+      ],
+      "why": "MLX serving engine: tools, caching, agent runtime",
+      "commit": "d6a2e4ec"
+    },
+    {
+      "repo": "https://github.com/waybarrios/vllm-mlx",
+      "clone": "reference/vllm-mlx",
+      "globs": [
+        "vllm_mlx/prefix_cache.py",
+        "vllm_mlx/prompt_warmup.py",
+        "vllm_mlx/constrained/**",
+        "vllm_mlx/engine/**"
+      ],
+      "why": "prefix cache, warm prompts, constrained decoding on MLX",
+      "commit": "f5d7e00a"
+    },
+    {
+      "repo": "https://github.com/nRanzo/MLX-MTP",
+      "clone": "reference/MLX-MTP",
+      "globs": [
+        "mlx_mtp/**/*.py"
+      ],
+      "why": "native MTP head speculative decoding on MLX",
+      "commit": "5bd77836"
+    },
+    {
+      "repo": "https://github.com/pierre427/mlx2",
+      "clone": "reference/mlx2",
+      "globs": [
+        "**/*.py",
+        "docs/**/*.md"
+      ],
+      "why": "experimental Apple Silicon inference runtime for the next Qwen generation",
+      "commit": "3d0b9d58"
+    },
+    {
+      "repo": "https://github.com/VincentGourbin/qwen38-mlx-swift",
+      "clone": "reference/qwen38-mlx-swift",
+      "globs": [
+        "Sources/**/*.swift",
+        "Sources/**/*.metal"
+      ],
+      "why": "Qwen3.8 on MLX Swift (the model Yunshu tunes first)",
+      "commit": "2bc9a23d"
+    },
+    {
+      "repo": "https://github.com/ddalcu/mlx-serve",
+      "clone": "reference/mlx-serve-zig",
+      "globs": [
+        "src/**",
+        "lib/*.zig"
+      ],
+      "why": "fused add+norm and other Metal kernels in a Zig MLX server",
+      "commit": "6281442d"
+    },
+    {
+      "repo": "https://github.com/Blaizzy/mlx-audio",
+      "clone": "reference/mlx-audio",
+      "globs": [
+        "mlx_audio/stt/**/*.py",
+        "mlx_audio/tts/**/*.py",
+        "mlx_audio/server.py"
+      ],
+      "why": "ASR / TTS backend we depend on",
+      "commit": "94c77162"
+    },
+    {
+      "repo": "https://github.com/Blaizzy/mlx-embeddings",
+      "clone": "reference/mlx-embeddings",
+      "globs": [
+        "mlx_embeddings/*.py",
+        "mlx_embeddings/models/**/*.py"
+      ],
+      "why": "embeddings backend we depend on (GPL-3.0: ideas only, never copy code)",
+      "commit": "9b28270b"
+    },
+    {
+      "repo": "https://github.com/vllm-project/vllm-omni",
+      "clone": "reference/vllm-omni",
+      "globs": [
+        "vllm_omni/diffusion/cache/teacache/**"
+      ],
+      "why": "TeaCache diffusion step cache",
+      "commit": "bbee488d"
+    },
+    {
+      "repo": "https://github.com/guidance-ai/llguidance",
+      "clone": "reference/llguidance",
+      "globs": [
+        "python/llguidance/**/*.py",
+        "parser/src/**"
+      ],
+      "why": "grammar / JSON-schema engine we depend on",
+      "commit": "e7c69004"
     }
   ],
   "packages": [
@@ -1123,5 +1483,69 @@
     "mlx-metal",
     "transformers",
     "llguidance"
-  ]
+  ],
+  "watch_excluded": {
+    "reference/ACE-Step-1.5": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/Chatterbox": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/ComfyUI": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/ComfyUI-workflow-templates": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/ComfyUI-workflow-templates-source": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/CosyVoice": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/Depth-Pro": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/Dia": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/DiffusionKit": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/F5-TTS": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/HunyuanVideo-1.5": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/LTX-2": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/LTX-Video": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/Lance": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/MeloTTS": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/MiniMax-H3": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/MiniMax-H3-Swift": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/Qwen-Image": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/Qwen3-TTS": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/SAM2": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/VibeVoice": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/Wan2.1": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/Wan2.2": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/Z-Image": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/flux": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/fish-speech": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/h3.c": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/hibiki": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/ltx-2-mlx": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/ltx-video-swift-mlx": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/minimax-h3-mlx": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/ml-sharp": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/mlx-gen": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/mlx-h3": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/mlx-video": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/mflux": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/mflux-multimodal": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/stable-audio-tools": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/stable-diffusion.cpp": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/draw-things-community": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/delayed-streams-modeling": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/moshi": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/diffusers": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
+    "reference/DeepSeek-OCR-2": "OCR / document parsing / ASR / VAD models: modality-specific, parked; revisit only when that modality is prioritized",
+    "reference/GLM-OCR": "OCR / document parsing / ASR / VAD models: modality-specific, parked; revisit only when that modality is prioritized",
+    "reference/PaddleOCR": "OCR / document parsing / ASR / VAD models: modality-specific, parked; revisit only when that modality is prioritized",
+    "reference/Docling": "OCR / document parsing / ASR / VAD models: modality-specific, parked; revisit only when that modality is prioritized",
+    "reference/Marker": "OCR / document parsing / ASR / VAD models: modality-specific, parked; revisit only when that modality is prioritized",
+    "reference/Surya": "OCR / document parsing / ASR / VAD models: modality-specific, parked; revisit only when that modality is prioritized",
+    "reference/Qwen3-ASR": "OCR / document parsing / ASR / VAD models: modality-specific, parked; revisit only when that modality is prioritized",
+    "reference/faster-whisper": "OCR / document parsing / ASR / VAD models: modality-specific, parked; revisit only when that modality is prioritized",
+    "reference/whisper.cpp": "OCR / document parsing / ASR / VAD models: modality-specific, parked; revisit only when that modality is prioritized",
+    "reference/silero-vad": "OCR / document parsing / ASR / VAD models: modality-specific, parked; revisit only when that modality is prioritized",
+    "reference/argmax-oss-swift": "OCR / document parsing / ASR / VAD models: modality-specific, parked; revisit only when that modality is prioritized",
+    "reference/Qwen3-Omni": "model repos (weights code / HF reference): read when adding the family, not an engine technique",
+    "reference/Qwen3-VL": "model repos (weights code / HF reference): read when adding the family, not an engine technique",
+    "reference/Qwen3-VL-Embedding": "model repos (weights code / HF reference): read when adding the family, not an engine technique",
+    "reference/exo": "multi-node / distributed serving is a stated non-goal",
+    "reference/parallax": "multi-node / distributed serving is a stated non-goal",
+    "reference/mlx-examples": "superseded or covered elsewhere (mlx-examples -> mlx-lm; our own fork; hot-swap multimodal server)",
+    "reference/mlx-vlm-yunshu": "superseded or covered elsewhere (mlx-examples -> mlx-lm; our own fork; hot-swap multimodal server)",
+    "reference/mlx-serve-multimodal": "superseded or covered elsewhere (mlx-examples -> mlx-lm; our own fork; hot-swap multimodal server)"
+  }
 }
