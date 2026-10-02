@@ -287,6 +287,28 @@ def test_a_grown_conversation_supersedes_its_older_checkpoints_on_disk(tmp_path)
     assert m.disk_superseded >= 1
 
 
+def test_supersede_also_works_for_checkpoints_written_straight_to_the_ssd(tmp_path):
+    """RAM too small to keep a checkpoint: it is written synchronously inside store_exact_cache,
+    before the manager could record its generation afterwards."""
+    from yunshu_engine.apc_manager import SpillDiskStore
+
+    disk = SpillDiskStore(tmp_path, namespace=NS, num_workers=1, max_bytes=1 << 30)
+    m = YunshuAPCManager(
+        num_blocks=8,
+        block_size=BLOCK,
+        disk=disk,
+        overrides={"memory_max_gb": 0.0004, "checkpoint_interval_tokens": 0},
+        max_entries=1,
+    )
+    sessions = [_toks(2000, i) for i in range(3)]
+    for turn in range(1, 5):
+        for i, toks in enumerate(sessions):
+            _store_req(m, toks[: 400 + 300 * turn], i + turn)
+    disk.flush()
+    assert len(disk._exact_index) == 3, "only each session's newest checkpoint stays"
+    assert m.disk_superseded >= 6
+
+
 def test_supersede_reaches_lower_tiers_and_spares_unknown_files(tmp_path):
     s = _store(tmp_path, soft_mb=0.2, lower=[(1e9, "raw")])
     m = _mgr_for(s)

@@ -727,15 +727,22 @@ class YunshuAPCManager(APCManager):
             gen = self._generation
             is_head = n in self._head_lengths
         self._supersede(token_ids, extra_hash, gen)
+        key = _sequence_hash(
+            tuple(int(t) for t in token_ids), extra_hash, self.block_size
+        )
+        # recorded first: a checkpoint too big for RAM is written to the SSD inside the call
+        # below, and the write hook needs its generation to tell what it supersedes
+        with self._plock:
+            had = key in self._born
+            self._born[key] = gen
+            if is_head:
+                self._head_keys.add(key)
         ok = super().store_exact_cache(token_ids, prompt_cache, extra_hash=extra_hash)
-        if ok:
-            key = _sequence_hash(
-                tuple(int(t) for t in token_ids), extra_hash, self.block_size
-            )
+        if not ok and not had:
             with self._plock:
-                self._born[key] = gen
+                self._born.pop(key, None)
                 if is_head:
-                    self._head_keys.add(key)
+                    self._head_keys.discard(key)
         return ok
 
     def _supersede(self, token_ids, extra_hash: int, gen: int) -> None:
