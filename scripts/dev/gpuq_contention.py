@@ -4,6 +4,7 @@ CPU is summed in percent of one core, never divided by the machine's core count.
 ps supplies the initial estimate; subsequent samples use CPU-time deltas over the
 actual wall interval. A job's descendants and process group are excluded, including
 children reparented while its session remains alive. Sampling errors fail closed.
+Foreign processes with nice >= 10 are background work and excluded.
 """
 
 from __future__ import annotations
@@ -47,7 +48,7 @@ def requires_quiet(job):
 
 def process_snapshot():
     return subprocess.run(
-        ["ps", "-A", "-o", "pid=,ppid=,pgid=,pcpu=,time=,comm="],
+        ["ps", "-A", "-o", "pid=,ppid=,pgid=,nice=,pcpu=,time=,comm="],
         capture_output=True,
         text=True,
         check=True,
@@ -88,16 +89,17 @@ class CpuSampler:
         try:
             processes = {}
             for line in process_snapshot().splitlines():
-                fields = line.split(None, 5)
-                if len(fields) != 6:
+                fields = line.split(None, 6)
+                if len(fields) != 7:
                     raise ValueError("incomplete ps row")
-                p, parent, group, pct, seconds, command = fields
+                p, parent, group, nice, pct, seconds, command = fields
                 processes[int(p)] = (
                     int(parent),
                     int(group),
                     float(pct),
                     _cpu_seconds(seconds),
                     Path(command).name,
+                    int(nice),
                 )
             if not processes:
                 raise ValueError("empty ps snapshot")
@@ -113,14 +115,14 @@ class CpuSampler:
                     self.owned.update(children)
             consumers = []
             dt = now - since
-            for p, (_, _, pct, seconds, name) in processes.items():
+            for p, (_, _, pct, seconds, name, nice) in processes.items():
                 if dt > 0 and p in self.previous:
                     pct = max(0.0, seconds - self.previous[p]) * 100 / dt
                 elif dt > 0 and p not in self.previous:
                     # A new process cannot have used more than one interval of
                     # its total CPU time. It can use several cores in that interval.
                     pct = seconds * 100 / dt
-                if p not in self.owned:
+                if p not in self.owned and nice < 10:
                     consumers.append(dict(pid=p, name=name, cpu_pct=round(pct, 2)))
             row["foreign_cpu_pct"] = round(sum(p["cpu_pct"] for p in consumers), 2)
             row["top_cpu"] = sorted(consumers, key=lambda p: -p["cpu_pct"])[:8]
@@ -150,7 +152,9 @@ class QuietGate:
         last = job.get("quiet_last_poll")
         if last is not None and now - last > MAX_POLL_GAP_S:
             # Waiting behind another GPU job is not observed CPU admission time.
-            job.update(quiet_since=None, quiet_wait_started=now, quiet_timeout=False)
+            job["quiet_since"] = None
+            if job.get("quiet_hold_started") is None:
+                job.update(quiet_wait_started=now, quiet_timeout=False)
         job["quiet_last_poll"] = now
         job.setdefault("quiet_wait_started", now)
         cpu = sample["foreign_cpu_pct"]
@@ -164,7 +168,13 @@ class QuietGate:
         ):
             job["quiet_timeout"] = False
             return False
-        if now - job["quiet_wait_started"] >= cfg["max_wait_s"]:
+        start = job.get("quiet_hold_started")
+        limit = cfg["max_wait_s"]
+        if start is not None:
+            limit = min(limit, job["quiet_hold_limit_s"])
+        else:
+            start = job["quiet_wait_started"]
+        if now - start >= limit:
             job["quiet_timeout"] = True
             return False
         return True
