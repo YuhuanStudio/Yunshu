@@ -102,3 +102,25 @@ SSD tier enabled while preventing cross-run persistence; there is no artificial 
 TTFT p50/p90 pooled and per run, and compares complete content / reasoning / tool-call /
 finish-reason SHA-256 digests for both primary and auxiliary responses. The result
 must pass all 18 primary and all 3 title comparisons before a lossless default is enabled.
+
+## Uncached-work ordering: CPU simulation (YUNSHU_UNCACHED_SCHEDULING)
+
+`scripts/research/agentic/i8_admission_sim.py` replays three captured opencode
+sessions (prompt sizes from the request bodies, 4.15 chars/token, 236 ms +
+1.21 ms/token prefill in 512-token atoms, 25 ms batched decode step, 150 decode
+tokens and 2 s tool time per turn, sessions starting 0/1.5/3 s apart) through
+three policies. Main-turn TTFT, seconds (n = 30 main turns):
+
+| policy | p50 | p90 | max | title TTFT p50 |
+|---|---|---|---|---|
+| upstream FIFO | 1.86 | 10.93 | 29.0 | 10.5 |
+| auxiliary yields | 1.86 | 10.72 | 28.5 | 21.7 |
+| auxiliary + uncached HRRN + 250 ms decode quanta | 1.47 | 16.91 | 32.5 | 21.9 |
+
+Shortest-uncached-first lowers the median but lengthens the tail (long cold
+first turns wait behind many short suffix turns), and decode quanta lengthen
+cold prefills; a 25 ms quantum gives p50 2.12 / p90 13.76. In this trace the
+auxiliary deferral alone moves main p90 only about 2%. The ordering is therefore
+kept disabled (default off) and is not recommended on this evidence; the model
+is crude (no real contention between decode and prefill kernels), so a GPU
+A/B would be required before any default change.

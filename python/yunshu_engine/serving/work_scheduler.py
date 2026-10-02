@@ -31,4 +31,10 @@ class Work:
         service += max(0.0, self.restore_s)
         # HRRN within the interactive class; captured auxiliary work yields
         # until idle or aged. Smaller remaining work breaks equal ratios.
-        return (1.0, float(self.priority < 0), -(1 + waited / service), service, self.arrived)
+        return (
+            1.0,
+            float(self.priority < 0),
+            -(1 + waited / service),
+            service,
+            self.arrived,
+        )
