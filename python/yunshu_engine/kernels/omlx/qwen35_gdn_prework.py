@@ -75,6 +75,10 @@ _QWEN4_VERIFY_FUSED = os.environ.get("OMLX_QWEN4_GDN_VERIFY_FUSED", "1") != "0"
 _QWEN4_VERIFY_STEP_KERNELS: dict = {}
 _QWEN4_VERIFY_ENGAGED_LOGGED = False
 _VERIFY_REJECT_DIAG = 0
+# Widest verify window the fused prework + recurrence take (rows share one lane
+# group's shuffle of the per-row decay, so <= 32); every row has the same
+# arithmetic whatever the window width.
+VERIFY_MAX_ROWS = 32
 
 _SOURCE = """
     uint lane = thread_position_in_threadgroup.x;
@@ -1930,7 +1934,7 @@ def apply_qwen35_gdn_prework_patch() -> bool:
             (compatible_norm or l2_norm)
             and cache is not None
             and cache.is_speculating
-            and min_length <= length <= 9
+            and min_length <= length <= VERIFY_MAX_ROWS
             and mask is None
             and inputs.dtype in (mx.bfloat16, mx.float16)
             and layer.conv_kernel_size == 4
@@ -1952,7 +1956,7 @@ def apply_qwen35_gdn_prework_patch() -> bool:
                     for name, ok in (
                         ("norm", compatible_norm or l2_norm),
                         ("speculating", cache.is_speculating),
-                        ("length", min_length <= length <= 9),
+                        ("length", min_length <= length <= VERIFY_MAX_ROWS),
                         ("mask", mask is None),
                         ("inputs_dtype", inputs.dtype in (mx.bfloat16, mx.float16)),
                         ("conv_kernel", layer.conv_kernel_size == 4),

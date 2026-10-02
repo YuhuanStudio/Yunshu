@@ -33,7 +33,7 @@ from .spec_schedule import NodeBudget
 logger = logging.getLogger(__name__)
 
 CHILDREN = 4  # candidates expanded under each node
-BEAM = 7  # paths kept per level (the tree has at most 7 nodes)
+BEAM = 15  # paths kept per level (the tree has at most NODES nodes)
 EDGE = 0.6  # weight of the pairwise score
 TAU = 1.5  # softmax temperature of the node scores
 
@@ -175,9 +175,25 @@ def supported(model: Any, draft_model: Any) -> bool:
     return hasattr(draft_model, "candidate_selector") and tv.supported(lm)
 
 
-NODES = 7  # draft nodes at most per round (window = pending token + nodes <= 8 rows)
+NODES = 15  # draft nodes at most per round (window = pending token + nodes <= 16 rows)
 # landing probability of the i-th best node before the round history says otherwise
-PRIOR = [0.75, 0.5, 0.35, 0.25, 0.2, 0.15, 0.1]
+PRIOR = [
+    0.75,
+    0.5,
+    0.35,
+    0.25,
+    0.2,
+    0.15,
+    0.1,
+    0.1,
+    0.08,
+    0.08,
+    0.06,
+    0.06,
+    0.05,
+    0.05,
+    0.05,
+]
 POSITIONS = 7  # masked positions the drafter fills (its trained block minus one)
 
 

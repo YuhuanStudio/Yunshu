@@ -32,6 +32,8 @@ RUNS = ROOT / "docs/research/runs/2026-09-30-agtraffic/artifacts"
 BODIES = RUNS / "cap-opencode-fix-cart-discount-r1/bodies"
 BODIES2 = RUNS / "cap-opencode-polyglot-wordy-r1/bodies"
 WORK = Path("/Volumes/P5Plus/yunshu-build/tfnew")
+# Server homes and logs go here (prompts stay in WORK); lets reruns keep their data apart.
+OUT = Path(os.environ.get("TFB_OUT", str(WORK)))
 
 
 def free_port():
@@ -48,10 +50,11 @@ def free_port():
 class Srv:
     def __init__(self, engine, extra_env, tag):
         self.engine, self.port = engine, free_port()
-        self.home = WORK / "home" / tag
+        self.home = OUT / "home" / tag
         shutil.rmtree(self.home, ignore_errors=True)
         self.home.mkdir(parents=True)
-        self.log = WORK / "out" / f"server-{tag}.log"
+        self.log = OUT / "out" / f"server-{tag}.log"
+        self.log.parent.mkdir(parents=True, exist_ok=True)
         env = {
             k: v
             for k, v in os.environ.items()
@@ -265,9 +268,9 @@ def emit(out, **kw):
 
 
 def part_decode(s, out, a):
-    ctxs = [a.only_ctx] if a.only_ctx else [1024, 8192, 32768]
+    ctxs = a.only_ctx or [1024, 8192, 32768]
     for ctx in ctxs:
-        for kind in ("prose", "code"):
+        for kind in a.only_kind or ("prose", "code"):
             salt = ctx // 1024 + (3 if kind == "code" else 0)
             text = load_prompt(f"{kind}-{ctx}")
             reply = ""
@@ -358,7 +361,8 @@ def main():
     ap.add_argument("--part", required=True)
     ap.add_argument("--rep", type=int, default=0)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--only-ctx", type=int)
+    ap.add_argument("--only-ctx", type=int, action="append")
+    ap.add_argument("--only-kind", action="append", choices=["prose", "code"])
     ap.add_argument("--env", action="append", default=[])
     ap.add_argument("--tag", default="")
     a = ap.parse_args()

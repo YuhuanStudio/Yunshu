@@ -17,6 +17,9 @@ import httpx
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(
+    0, str(HERE.parent / "agentic")
+)  # servers.py lives with the agentic harness
 import fake_searxng  # noqa: E402
 import servers  # noqa: E402
 
