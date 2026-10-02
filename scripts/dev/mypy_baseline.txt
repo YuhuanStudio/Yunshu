@@ -43,8 +43,8 @@
 2	python/yunshu_engine/batch_sampler.py	index	Value of type "int | float | complex" is not indexable
 1	python/yunshu_engine/batch_sampler.py	operator	Unsupported operand types for / ("array" and "None")
 1	python/yunshu_engine/batched_engine.py	arg-type	Argument "logprobs" to "_stream_generate_mtp" of "BatchedEngine" has incompatible type "bool | int"; expected "bool"
-1	python/yunshu_engine/batched_engine.py	arg-type	Argument "logprobs" to "_stream_generate_speculative" of "BatchedEngine" has incompatible type "bool | int"; expected "bool"
-2	python/yunshu_engine/batched_engine.py	arg-type	Argument "prompt" to "_stream_generate_fast" of "EngineStreamMixin" has incompatible type "str | list[dict[Any, Any]]"; expected "str"
+1	python/yunshu_engine/batched_engine.py	arg-type	Argument "logprobs" to "_stream_generate_speculative" of "EngineSpeculativeMixin" has incompatible type "bool | int"; expected "bool"
+1	python/yunshu_engine/batched_engine.py	arg-type	Argument "prompt" to "_stream_generate_fast" of "EngineStreamMixin" has incompatible type "str | list[dict[Any, Any]]"; expected "str"
 3	python/yunshu_engine/batched_engine.py	arg-type	Argument 1 to "make_prompt_cache" has incompatible type "None"; expected Module
 1	python/yunshu_engine/batched_engine.py	arg-type	Argument 1 to "quantize" has incompatible type "None"; expected Module
 1	python/yunshu_engine/batched_engine.py	arg-type	Argument 2 to "hash_request" of "ResponseCache" has incompatible type "str"; expected "list[dict[Any, Any]]"
@@ -64,7 +64,7 @@
 1	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "config"
 2	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "decode"
 1	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "detokenizer"
-10	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "encode"
+8	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "encode"
 4	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "eos_token_id"
 1	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "full_kv_layer"
 1	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "generate"
@@ -128,6 +128,8 @@
 1	python/yunshu_engine/engine_policy.py	attr-defined	"Event" has no attribute "_value"
 2	python/yunshu_engine/engine_policy.py	no-any-return	Returning Any from function declared to return "bool"
 1	python/yunshu_engine/engine_policy.py	no-any-return	Returning Any from function declared to return "int"
+1	python/yunshu_engine/engine_speculative.py	arg-type	Argument "prompt" to "_stream_generate_fast" of "EngineStreamMixin" has incompatible type "str | list[dict[Any, Any]]"; expected "str"
+2	python/yunshu_engine/engine_speculative.py	attr-defined	"None" has no attribute "encode"
 1	python/yunshu_engine/engine_stream.py	assignment	Incompatible types in assignment (expression has type "list[int]", variable has type "str")
 2	python/yunshu_engine/engine_stream.py	attr-defined	"None" has no attribute "config"
 1	python/yunshu_engine/engine_stream.py	attr-defined	"None" has no attribute "decode"
