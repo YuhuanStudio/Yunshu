@@ -1,3 +1,4 @@
+# Patches upstream mlx-vlm symbols (see vendor.json kind=patches; `just vendor-check` flags source changes)
 """Chunked GatedDeltaNet core for prefill chunks.
 
 mlx-vlm's Qwen3.5 GatedDeltaNet runs the per-token step kernel over a whole prompt chunk. MLX's own
