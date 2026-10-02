@@ -70,7 +70,14 @@ class _FakeBatchGen:
         self._pending = {}
         self._gen_pending = {}
 
-    def insert(self, prompts, max_tokens=None, samplers=None, state_machines=None):
+    def insert(
+        self,
+        prompts,
+        max_tokens=None,
+        samplers=None,
+        state_machines=None,
+        stop_sequences=None,
+    ):
         uids = []
         for _prompt, _mt in zip(prompts, max_tokens or [128], strict=False):
             uid = self._uid_counter
@@ -416,7 +423,13 @@ class TestEngineCoreIntegration:
         batch_gen._gen_pending.clear()
         uid_counter = [0]
 
-        def _insert(prompts, max_tokens=None, samplers=None, state_machines=None):
+        def _insert(
+            prompts,
+            max_tokens=None,
+            samplers=None,
+            state_machines=None,
+            stop_sequences=None,
+        ):
             uids = []
             for _prompt, _mt in zip(prompts, max_tokens or [128], strict=False):
                 uid = uid_counter[0]

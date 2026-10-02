@@ -461,7 +461,6 @@
 1	python/yunshu_engine/vlm_batch_runner.py	assignment	Incompatible types in assignment (expression has type "_Group | None", variable has type "_Group")
 1	python/yunshu_engine/vlm_batch_runner.py	attr-defined	Module has no attribute "_yunshu_row_context"
 1	python/yunshu_engine/vlm_batch_runner.py	no-any-return	Returning Any from function declared to return "array"
-1	python/yunshu_engine/vlm_batch_runner.py	no-any-return	Returning Any from function declared to return "list[Any]"
 1	python/yunshu_engine/vlm_engine.py	arg-type	Argument 1 to "index" of "list" has incompatible type "int"; expected "array"
 1	python/yunshu_engine/vlm_engine.py	arg-type	Argument 1 to "len" has incompatible type "Any | None"; expected "Sized"
 1	python/yunshu_engine/vlm_engine.py	arg-type	Argument 2 to "TokenMaskProcessor" has incompatible type "**dict[str, float | int | list[int] | None]"; expected "bool"

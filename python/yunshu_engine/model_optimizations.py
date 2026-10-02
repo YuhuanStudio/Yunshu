@@ -1,3 +1,4 @@
+# Upstream (inspired): waybarrios/vllm-mlx (Apache-2.0) vllm_mlx/prompt_warmup.py @ 2b931cfe
 from __future__ import annotations
 
 """Model-specific optimizations for RoPE, attention, MoE, and warmup.

@@ -32,8 +32,10 @@ import hashlib
 import importlib.metadata
 import importlib.util
 import json
+import re
 import subprocess
 import sys
+import tomllib
 import urllib.request
 from pathlib import Path
 
@@ -70,6 +72,93 @@ def upstream_ref(clone: Path) -> str:
         if git(clone, "rev-parse", "--verify", "-q", ref):
             return ref
     return "HEAD"
+
+
+REGISTERED_KINDS = ("vendored", "derived", "inspired", "patches")
+# A source file that credits another project in its first lines must be in vendor.json.
+HEADER_RE = re.compile(
+    r"^\s*#\s*Upstream\b|\b(ported|adapted|studied) from\b|^\s*(Inspired by|Vendored from)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+HEADER_LINES = 25
+
+
+def registered_paths(manifest: dict) -> set:
+    return {e["path"] for k in REGISTERED_KINDS for e in manifest.get(k, [])}
+
+
+def unregistered_headers(root: Path, manifest: dict) -> list:
+    """Files under ``python/`` whose header credits an upstream but that vendor.json lacks.
+
+    ``__init__.py`` files that sit next to registered files are package notes, not ports.
+    """
+    reg = registered_paths(manifest)
+    reg_dirs = {str(Path(p).parent) for p in reg}
+    bad = []
+    for f in sorted((root / "python").rglob("*.py")):
+        rel = str(f.relative_to(root))
+        if rel in reg:
+            continue
+        if f.name == "__init__.py" and str(Path(rel).parent) in reg_dirs:
+            continue
+        head = "\n".join(f.read_text(errors="replace").splitlines()[:HEADER_LINES])
+        if HEADER_RE.search(head):
+            bad.append(rel)
+    return bad
+
+
+def pyproject_packages(pyproject: Path) -> dict:
+    """Every dependency declared in pyproject.toml (base, extras, dependency groups).
+
+    Returns ``{normalized name: [specifier strings]}``; the project's own extras
+    (``yunshu[vision]``) are skipped.
+    """
+    data = tomllib.loads(pyproject.read_text())
+    own = data.get("project", {}).get("name", "")
+    specs = list(data.get("project", {}).get("dependencies", []))
+    for group in data.get("project", {}).get("optional-dependencies", {}).values():
+        specs += group
+    for group in data.get("dependency-groups", {}).values():
+        specs += [g for g in group if isinstance(g, str)]
+    out: dict = {}
+    for spec in specs:
+        m = re.match(
+            r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*([^;]*)", spec
+        )
+        if not m:
+            continue
+        name = re.sub(r"[-_.]+", "-", m.group(1)).lower()
+        if name == re.sub(r"[-_.]+", "-", own).lower():
+            continue
+        ver = m.group(2).strip()
+        out.setdefault(name, [])
+        if ver and ver not in out[name]:
+            out[name].append(ver)
+    return out
+
+
+def unclassified_clones(ref_dir: Path, manifest: dict) -> list:
+    """Clones under reference/ that are neither watched nor excluded with a reason."""
+    known = {w["clone"] for w in manifest["watch"]} | set(
+        manifest.get("watch_excluded", {})
+    )
+    if not ref_dir.is_dir():
+        return []
+    return sorted(
+        f"reference/{c.name}"
+        for c in ref_dir.iterdir()
+        if (c / ".git").exists() and f"reference/{c.name}" not in known
+    )
+
+
+def added_files(clone: Path, since: str, ref: str, globs: list, skip: set) -> list:
+    """Files matching ``globs`` that appeared upstream since ``since``."""
+    out = git(clone, "diff", "--name-only", "--diff-filter=A", since, ref)
+    return [
+        f
+        for f in out.splitlines()
+        if f not in skip and any(fnmatch.fnmatch(f, g) for g in globs)
+    ]
 
 
 def check_vendored(entries, fetched: set) -> int:
@@ -214,7 +303,7 @@ def check_watch(watch, vendored_paths: set, pins: dict) -> int:
             print(f"- {w['repo']}: no local clone at {w['clone']}")
             continue
         ref = upstream_ref(clone)
-        since = pins.get(w["clone"])
+        since = w.get("commit") or pins.get(w["clone"])
         if w.get("pin_package"):
             # Compare against the release we actually run (tag v<installed>).
             try:
@@ -222,19 +311,18 @@ def check_watch(watch, vendored_paths: set, pins: dict) -> int:
                 since = git(clone, "rev-parse", "--verify", "-q", tag) and tag or since
             except importlib.metadata.PackageNotFoundError:
                 pass
+        if since and not git(clone, "rev-parse", "--verify", "-q", since):
+            since = None
         since = since or git(clone, "rev-parse", "HEAD")
         files = git(clone, "ls-tree", "-r", "--name-only", ref).splitlines()
         matched = [f for f in files if any(fnmatch.fnmatch(f, g) for g in w["globs"])]
-        commits = (
-            git(clone, "log", "--oneline", f"{since}..{ref}", "--", *matched)
-            if matched
-            else ""
-        )
-        new_files = [
-            f
-            for f in matched
-            if f not in vendored_paths and w["clone"] == "reference/omlx"
-        ]
+        if not matched:
+            commits = ""
+        elif len(matched) < 5000:
+            commits = git(clone, "log", "--oneline", f"{since}..{ref}", "--", *matched)
+        else:
+            commits = git(clone, "log", "--oneline", f"{since}..{ref}")
+        new_files = added_files(clone, since, ref, w["globs"], vendored_paths)
         print(
             f"- {w['repo']} ({w['why']}): {len(commits.splitlines()) if commits else 0} commits on watched paths since {since[:10]}"
         )
@@ -242,15 +330,17 @@ def check_watch(watch, vendored_paths: set, pins: dict) -> int:
             print(f"      {line}")
         if new_files:
             print(
-                f"    not vendored ({len(new_files)}): {', '.join(sorted(new_files)[:12])}"
+                f"    new files not vendored ({len(new_files)}): {', '.join(sorted(new_files)[:12])}"
             )
         news += bool(commits)
     return news
 
 
 def check_packages(packages) -> int:
+    """``packages``: names, or ``{name: [declared specifiers]}``."""
     behind = 0
     for name in packages:
+        declared = ", ".join(packages[name]) if isinstance(packages, dict) else ""
         try:
             installed = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
@@ -264,7 +354,8 @@ def check_packages(packages) -> int:
             latest = "?"
         flag = "" if latest in ("?", installed) else "  <- newer on PyPI"
         behind += bool(flag)
-        print(f"- {name}: installed {installed}, PyPI {latest}{flag}")
+        decl = f" (pyproject: {declared})" if declared else ""
+        print(f"- {name}: installed {installed}, PyPI {latest}{flag}{decl}")
     return behind
 
 
@@ -313,9 +404,23 @@ def main():
     pins = {e["clone"]: e["commit"] for e in manifest["vendored"]}
     vendored_paths = {e["upstream_path"] for e in manifest["vendored"]}
     check_watch(manifest["watch"], vendored_paths, pins)
-    print("\n## Packages")
-    pkgs = check_packages(manifest["packages"])
-    sys.exit(2 if broken else 1 if (behind or pkgs) else 0)
+    print(
+        "\n## Packages (pyproject.toml, every extra and group, plus vendor.json extras)"
+    )
+    declared = pyproject_packages(ROOT / "pyproject.toml")
+    for extra in manifest["packages"]:
+        declared.setdefault(re.sub(r"[-_.]+", "-", extra).lower(), [])
+    pkgs = check_packages(dict(sorted(declared.items())))
+    print("\n## Self-checks")
+    bad = unregistered_headers(ROOT, manifest)
+    for f in bad:
+        print(f"!! {f} credits an upstream but is not in vendor.json")
+    loose = unclassified_clones(clone_dir("reference"), manifest)
+    for c in loose:
+        print(f"!! {c} is neither in watch nor in watch_excluded")
+    if not (bad or loose):
+        print("- every credited file is registered; every clone is watched or excluded")
+    sys.exit(2 if (broken or bad or loose) else 1 if (behind or pkgs) else 0)
 
 
 if __name__ == "__main__":

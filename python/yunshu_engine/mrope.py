@@ -1,3 +1,5 @@
+# Upstream (inspired): jundot/omlx (Apache-2.0) omlx/scheduler.py @ deb9f00a
+# Upstream (inspired): vllm-project/vllm (Apache-2.0) vllm/v1/worker/gpu/mm/rope.py @ 924707f1
 from __future__ import annotations
 
 """Yunshu mRoPE (Multi-dimensional Rotary Position Embedding) support.

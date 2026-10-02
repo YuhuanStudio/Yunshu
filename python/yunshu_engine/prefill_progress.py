@@ -1,3 +1,4 @@
+# Upstream (inspired): jundot/omlx (Apache-2.0) omlx/prefill_progress.py @ deb9f00a
 from __future__ import annotations
 
 """Prefill progress tracker — lightweight per-request progress for dashboard.

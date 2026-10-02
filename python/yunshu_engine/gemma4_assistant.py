@@ -26,6 +26,8 @@ from pathlib import Path
 import mlx.core as mx
 import mlx.nn as nn
 
+from yunshu_kv.mlx_cache import cache_keys_values
+
 # --- DEFERRED (genuinely needs the real Gemma-4 checkpoint + model drive) ---
 # Only two things below truly require the drive:
 # 1. load_weights() — mapping safetensors keys (incl. gate/up stacking and
@@ -704,7 +706,7 @@ class Gemma4AssistantProposer:
                 mx.eval(_bh)
                 hidden_last = _bh[0, -1:]
                 continue
-            kv = {sl: cache[sl].state, fl: cache[fl].state}
+            kv = {sl: cache_keys_values(cache[sl]), fl: cache_keys_values(cache[fl])}
             if greedy:
                 drafts = self.propose_chain(t1, hidden_last, kv, offset, k=k)
             else:
