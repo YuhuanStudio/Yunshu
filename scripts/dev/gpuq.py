@@ -442,7 +442,7 @@ def _eff_priority(job: dict, now: float | None = None) -> int:
     one (never above 0), so p-1 work is not starved forever by a stream of p0 jobs
     while deep backlog (p-3) stays behind interactive work."""
     p = job.get("priority", 0)
-    if p >= 0 or job.get("state") != "pending":
+    if p >= 0 or job.get("state") not in ("pending", "running"):
         return p
     waited = (now or time.time()) - job.get("submitted", now or time.time())
     return min(0, p + 1) if waited >= AGE_S else p
@@ -613,7 +613,9 @@ def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
     Returns True while priority work still owns the pause. The nested runner
     cannot preempt again (its priority is >=0), so at most two jobs are resident.
     """
-    if pauser.job.get("priority", 0) >= 0:
+    # A backlog job that already aged into the interactive level (waited AGE_S) is
+    # not paused again for every new p0 job, or it would never finish.
+    if _eff_priority(pauser.job) >= 0:
         return False
     jobs = _jobs()
     pending = _preempting(jobs)
