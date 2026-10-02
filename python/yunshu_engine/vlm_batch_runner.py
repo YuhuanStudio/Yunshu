@@ -1051,10 +1051,14 @@ class VLMBatchRunner:
             self._schedule()
         elif self.clear_on_idle:
             # Large models: release the buffer pool once everything drains
-            # (clearing under active batches would only force reallocation).
+            # (clearing under active batches would only force reallocation). Up to
+            # YUNSHU_PREFILL_BUFFER_CACHE_GB stays: the next request's cache restore
+            # reuses it (a cleared pool costs ~45 ms per 32K-token cache copy).
             with contextlib.suppress(Exception):
+                from .kernels import buffer_cache
+
                 mx.synchronize()
-                mx.clear_cache()
+                buffer_cache.clear_if_over()
 
 
 def _spec_counters(drafter: Any) -> tuple | None:

@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 _STATE = {"limit": 0}
 
 
-def _clear_cache() -> None:
+def clear_if_over() -> None:
     limit = _STATE["limit"]
     if limit <= 0 or mx.get_cache_memory() > limit:
         mx.clear_cache()
@@ -40,7 +40,7 @@ def install(limit_gib: float) -> bool:
     _STATE["limit"] = int(max(0.0, limit_gib) * (1 << 30))
     if not isinstance(ar.mx, _MxView):
         view = _MxView("mlx.core")
-        view.clear_cache = _clear_cache
+        view.clear_cache = clear_if_over
         ar.mx = view
         logger.info("prefill buffer cache kept up to %.1f GiB", limit_gib)
     return _STATE["limit"] > 0
