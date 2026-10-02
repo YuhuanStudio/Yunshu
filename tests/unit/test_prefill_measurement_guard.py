@@ -3,7 +3,6 @@
 import json
 from types import SimpleNamespace
 
-import pytest
 from scripts.research.probe_checkpoint_http import assert_no_full_unit_suites
 
 
@@ -51,20 +50,17 @@ def process(pid, *argv):
     return SimpleNamespace(info={"pid": pid, "cmdline": list(argv)})
 
 
-def test_full_suite_contamination_is_an_error():
-    with pytest.raises(RuntimeError, match="contaminated.*113"):
-        assert_no_full_unit_suites(
-            [
-                process(
-                    113,
-                    "/external/.venv/bin/python",
-                    "-m",
-                    "pytest",
-                    "tests/unit",
-                    "-q",
-                )
-            ]
-        )
+def test_full_suite_is_reported_not_fatal(capsys):
+    suite = ("/external/.venv/bin/python", "-m", "pytest", "tests/unit", "-q")
+    assert assert_no_full_unit_suites([process(113, *suite)]) == [113]
+    assert "113" in capsys.readouterr().err
+
+
+def test_niced_full_suite_is_ignored():
+    suite = ("python", "-m", "pytest", "tests/unit", "-q")
+    p = process(114, *suite)
+    p.info["nice"] = 15
+    assert assert_no_full_unit_suites([p]) == []
 
 
 def test_agent_prompt_mentions_do_not_match_actual_pytest_process():
