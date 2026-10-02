@@ -18,6 +18,7 @@ Model type detection uses dynamic library probing instead of static lists:
 
 import asyncio
 import contextlib
+import contextvars
 import gc
 import importlib
 import json
@@ -33,8 +34,49 @@ import mlx.core as mx
 
 from .types import EngineConfig
 
-# Seconds a model stays un-unloadable after get_engine() hands it out.
-HANDOFF_GRACE_S = 10.0
+_lease_scope_var: contextvars.ContextVar[LeaseScope | None] = contextvars.ContextVar(
+    "yunshu_lease_scope", default=None
+)
+
+
+class LeaseScope:
+    """Leases taken during one request/connection, released when it ends.
+
+    ``ModelManager.get_engine`` attaches a lease for every engine it hands out
+    while a scope is active (the gateway opens one per HTTP request / WebSocket
+    in ``ModelLeaseMiddleware``), so unload / TTL / LRU eviction can never take
+    a model away from a request between engine acquisition and the end of its
+    response, errors and client disconnects included.
+    """
+
+    def __init__(self) -> None:
+        self._entries: list[ModelEntry] = []
+        self.closed = False
+
+    def add(self, entry: ModelEntry) -> bool:
+        if self.closed:
+            return False
+        entry.leases += 1
+        self._entries.append(entry)
+        return True
+
+    def release(self) -> None:
+        self.closed = True
+        entries, self._entries = self._entries, []
+        for entry in entries:
+            entry.leases = max(0, entry.leases - 1)
+
+
+@contextlib.contextmanager
+def lease_scope():
+    scope = LeaseScope()
+    token = _lease_scope_var.set(scope)
+    try:
+        yield scope
+    finally:
+        _lease_scope_var.reset(token)
+        scope.release()
+
 
 logger = logging.getLogger(__name__)
 
@@ -309,11 +351,9 @@ class ModelEntry:
     load_time: float = (
         0.0  # monotonic timestamp when model was loaded (for /models endpoint)
     )
-    # Explicit leases (ModelManager.lease) and the short hand-off window after
-    # get_engine(): a non-forced unload is refused while either holds, closing
-    # the gap before the engine's own active-request counter increments.
+    # Leases (ModelManager.lease / a request's LeaseScope): a non-forced unload
+    # is refused while any is held.
     leases: int = 0
-    handoff_until: float = 0.0
 
 
 async def instantiate_engine(
@@ -487,12 +527,12 @@ class ModelManager:
             logger.info(f"Registered model: {model_id} (type={model_type.name})")
 
     def _held(self, entry: ModelEntry) -> bool:
-        return entry.leases > 0 or entry.handoff_until > time.monotonic()
+        return entry.leases > 0
 
     @contextlib.asynccontextmanager
     async def lease(self, model_id: str, engine_config: EngineConfig | None = None):
         """Hold a model loaded from acquire to release (unload/TTL/eviction skip it)."""
-        engine = await self.get_engine(model_id, engine_config)
+        engine = await self._get_engine(model_id, engine_config)
         entry = self._entries[model_id]
         entry.leases += 1
         try:
@@ -505,10 +545,12 @@ class ModelManager:
         model_id: str,
         engine_config: EngineConfig | None = None,
     ) -> Any:
+        """Hand out the engine; inside a LeaseScope the request also holds a lease."""
         engine = await self._get_engine(model_id, engine_config)
+        scope = _lease_scope_var.get()
         entry = self._entries.get(model_id)
-        if entry is not None:
-            entry.handoff_until = time.monotonic() + HANDOFF_GRACE_S
+        if scope is not None and entry is not None:
+            scope.add(entry)  # no await between load completion and the lease
         return engine
 
     async def _get_engine(
@@ -738,7 +780,7 @@ class ModelManager:
         # Tearing down a model mid-generation crashes the in-flight request.
         # shutdown passes force=True.
         if not force and self._held(entry):
-            logger.info("Skipping unload of '%s' — leased / just handed out", model_id)
+            logger.info("Skipping unload of '%s' — leased", model_id)
             return False
         if not force and entry.engine is not None:
             # FAIL SAFE. Only LLM/VLM engines define has_active_requests;

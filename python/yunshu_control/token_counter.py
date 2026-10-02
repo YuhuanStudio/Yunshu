@@ -31,7 +31,9 @@ def count_tokens(text: str, tokenizer=None) -> int:
     return max(words, int(chars / _CHARS_PER_TOKEN))
 
 
-def count_message_tokens(messages: list[dict], tokenizer=None) -> int:
+def count_message_tokens(
+    messages: list[dict], tokenizer=None, media_counter=None
+) -> int:
     """Count total tokens across a list of chat messages.
 
     Handles tool call fields in assistant messages and tool_call_id/name
@@ -58,7 +60,11 @@ def count_message_tokens(messages: list[dict], tokenizer=None) -> int:
                         "video",
                         "video_url",
                     ):
-                        total += IMAGE_TOKEN_ESTIMATE
+                        total += (
+                            media_counter(part)
+                            if media_counter
+                            else IMAGE_TOKEN_ESTIMATE
+                        )
                     elif part.get("type") in ("input_audio", "audio", "audio_url"):
                         # Audio cost varies with duration; a fixed non-zero estimate
                         # stops an audio prompt silently counting 0 and bypassing
