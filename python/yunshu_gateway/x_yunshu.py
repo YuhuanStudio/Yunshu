@@ -390,6 +390,11 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
         }
     if spec is not None and st.spec_rounds:
         spec["rounds"] = st.spec_rounds
+        if st.spec_copy_rounds:
+            spec["copy"] = {
+                "rounds": st.spec_copy_rounds,
+                "tokens": st.spec_copy_tokens,
+            }
     out = {
         "request_id": info.request_id,
         "queue_wait_ms": _ms(queue_wait),

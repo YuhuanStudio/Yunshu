@@ -385,3 +385,16 @@ The failing tasks are cli-add-flag, fix-failing-textkit, http-todo-api and parse
 
 82 shards are pending at priority -3 (below every other job, so they run only when the queue is otherwise empty); no cell has all three repeats of all 20 tasks yet.
 
+
+## 2026-10-02 prompt-copy 草稿（MTP lane，驗證視窗 8 列，YUNSHU_SPEC_COPY_ROWS=0 為關）
+
+Qwen3.8-27B，貪婪，tfbench decode 與 replay_traffic（seed 1234）；所有 cell 輸出 digest 與關閉時逐 token 相同。
+
+| cell | 關 tok/s | 開 tok/s |
+|---|---|---|
+| 32K code turn2 | 63 | 100-138 |
+| 8K code turn2 | 62 | 86 |
+| 1K code 冷 | 72 | 83 |
+| 32K / 8K / 1K prose（含 turn2） | 46-59 | 持平（±3%，單次量測雜訊） |
+| agent replay 0004（編輯） | 92 | 106 |
+| agent replay 0002/0006/0003 | 83/71/84 | 持平 |

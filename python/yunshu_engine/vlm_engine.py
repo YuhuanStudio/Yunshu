@@ -1561,6 +1561,7 @@ class VLMEngine:
                 from .kernels import lane_layers
 
                 kernels["mtp_lane"] = mtp_lane.install()
+                mtp_lane.set_copy_rows(settings.get("YUNSHU_SPEC_COPY_ROWS"))
                 kernels["lane_layers"] = lane_layers.install()
                 found = install_draft_vocab(
                     drafter, self._model.language_model, DRAFT_VOCAB
