@@ -13,6 +13,7 @@ Protocol: JSON events over WebSocket, following OpenAI's realtime API structure.
 
 import asyncio
 import contextlib
+import inspect
 import json
 import logging
 import time
@@ -2900,10 +2901,17 @@ class RealtimeSession:
                         )
                         self._pcm16_lin_state = None
                         self._g711_lin_state = None
-                        async for chunk in engine.synthesize_stream(
-                            text,
-                            voice=voice,
+                        # The response's cancel event (set by a barge-in or response.cancel
+                        # before the task is cancelled) reaches the engine so its thread
+                        # stops at the next chunk.
+                        _tts_kw: dict = {"voice": voice}
+                        if (
+                            self._cancel_event is not None
+                            and "cancel_event"
+                            in inspect.signature(engine.synthesize_stream).parameters
                         ):
+                            _tts_kw["cancel_event"] = self._cancel_event
+                        async for chunk in engine.synthesize_stream(text, **_tts_kw):
                             if chunk.get("is_final"):
                                 continue
                             audio = chunk.get("audio", b"")

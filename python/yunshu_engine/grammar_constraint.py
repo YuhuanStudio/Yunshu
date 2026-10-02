@@ -1136,8 +1136,108 @@ class CfgGrammarConstraint(_LlgConstraint):
         return UnsupportedGrammarError(f"invalid CFG grammar: {message[:400]}")
 
 
+#: Structural whitespace llguidance may emit between JSON tokens: nothing, one space,
+#: or a newline plus indentation (the in-house engine's run; llguidance's default is
+#: any run of blanks, which lets a greedy model spin on whitespace forever).
+_LLG_WHITESPACE: Any = {"whitespace_pattern": r"[ ]?|\n[ ]{0,16}"}
+_LLG_COMPACT: Any = {"whitespace_flexible": False}
+
+_SCHEMA_MAP_KEYS = ("properties", "patternProperties", "$defs", "definitions")
+_SCHEMA_LIST_KEYS = ("anyOf", "oneOf", "allOf", "prefixItems")
+_SCHEMA_ONE_KEYS = (
+    "items",
+    "additionalProperties",
+    "not",
+    "if",
+    "then",
+    "else",
+    "contains",
+    "propertyNames",
+)
+_MERGEABLE_KEYS = frozenset(
+    {
+        "type",
+        "properties",
+        "required",
+        "title",
+        "description",
+        "additionalProperties",
+        "$comment",
+        "default",
+        "examples",
+    }
+)
+
+
+def _merge_all_of_objects(node: dict) -> None:
+    """Fold ``allOf`` branches that are plain object schemas into ``node`` so the
+    merged object can be closed once (closing each branch would make the
+    intersection unsatisfiable).  Anything else stays an ``allOf``."""
+    branches = node.get("allOf")
+    if not isinstance(branches, list) or not branches:
+        return
+    props: dict[str, Any] = dict(node.get("properties") or {})
+    required: list[str] = list(node.get("required") or [])
+    for b in branches:
+        if not (
+            isinstance(b, dict)
+            and set(b) <= _MERGEABLE_KEYS
+            and b.get("type") in (None, "object")
+            and "additionalProperties" not in b
+            and isinstance(b.get("properties", {}), dict)
+        ):
+            return
+        for k, v in (b.get("properties") or {}).items():
+            if k in props and props[k] != v:
+                return
+            props[k] = v
+        required += [r for r in (b.get("required") or []) if r not in required]
+    del node["allOf"]
+    node["type"] = "object"
+    node["properties"] = props
+    if required:
+        node["required"] = required
+
+
+def _normalize_for_llg(node: Any, *, closing: bool = True) -> Any:
+    """Our documented JSON-schema conventions, applied before llguidance sees the
+    schema (it follows plain JSON Schema): an object that declares ``properties``
+    and omits ``additionalProperties`` is closed (the OpenAI structured-output
+    convention) and ``properties`` without a ``type`` mean an object."""
+    if isinstance(node, list):
+        return [_normalize_for_llg(v, closing=closing) for v in node]
+    if not isinstance(node, dict):
+        return node
+    out = dict(node)
+    _merge_all_of_objects(out)
+    if closing and isinstance(out.get("properties"), dict) and out["properties"]:
+        out.setdefault("type", "object")
+        if out.get("type") == "object":
+            out.setdefault("additionalProperties", False)
+    child_closing = closing and "allOf" not in out
+    for k in _SCHEMA_MAP_KEYS:
+        if isinstance(out.get(k), dict):
+            out[k] = {
+                name: _normalize_for_llg(sub, closing=child_closing)
+                for name, sub in out[k].items()
+            }
+    for k in _SCHEMA_LIST_KEYS:
+        if isinstance(out.get(k), list):
+            out[k] = [
+                _normalize_for_llg(sub, closing=child_closing and k != "allOf")
+                for sub in out[k]
+            ]
+    for k in _SCHEMA_ONE_KEYS:
+        if isinstance(out.get(k), dict):
+            out[k] = _normalize_for_llg(out[k], closing=child_closing)
+        elif isinstance(out.get(k), list):
+            out[k] = [_normalize_for_llg(v, closing=child_closing) for v in out[k]]
+    return out
+
+
 def _llg_schema_json(schema: Any) -> str:
-    """The schema as JSON for llguidance, without ``format`` values it does not know
+    """The schema as JSON for llguidance: our conventions applied
+    (:func:`_normalize_for_llg`) and without ``format`` values it does not know
     (``format`` is an annotation in JSON Schema, so an unknown one is not an error)."""
     import json as _json
 
@@ -1154,22 +1254,37 @@ def _llg_schema_json(schema: Any) -> str:
             return [clean(v) for v in node]
         return node
 
-    return _json.dumps(clean(schema), ensure_ascii=False)
+    return _json.dumps(clean(_normalize_for_llg(schema)), ensure_ascii=False)
 
 
 class LlgJsonSchemaConstraint(_LlgConstraint):
     """JSON Schema constraint backed by llguidance: value constraints (pattern,
     lengths, ranges, multipleOf, item counts), prefixItems, recursive ``$ref`` and
-    common ``format`` values are enforced token by token."""
+    common ``format`` values are enforced token by token.
+
+    Where it differs from the in-house engine (measured on the Qwen3.5/3.8
+    tokenizer, ``scripts/research/c06_json_ab.py``): properties come in schema order
+    (OpenAI's documented key order), literal text the schema forces (keys, ``true``)
+    is only allowed in the tokenizer's canonical tokenization, ``\\uXXXX`` escapes
+    are limited to control characters, and no whitespace precedes the first value.
+    Closed objects, whitespace runs, number and integer literals match."""
 
     _KIND = "json_schema"
 
-    def __init__(self, schema: dict, tokenizer: Any = None) -> None:
+    def __init__(
+        self, schema: dict, tokenizer: Any = None, *, compact: bool = False
+    ) -> None:
+        """``compact``: no structural whitespace at all (``{"a":1}``), so every
+        key, separator and brace is forced text; jump-forward decoding uses it."""
         self._schema_json = _llg_schema_json(schema)
+        self._compact = compact
         super().__init__(schema, tokenizer)
 
     def _make_grammar(self) -> str:
-        return self._LLMatcher.grammar_from_json_schema(self._schema_json)
+        return self._LLMatcher.grammar_from_json_schema(
+            self._schema_json,
+            defaults=_LLG_COMPACT if self._compact else _LLG_WHITESPACE,
+        )
 
     def _error(self, message: str) -> Exception:
         from .json_schema import UnsupportedSchemaError
@@ -1177,6 +1292,17 @@ class LlgJsonSchemaConstraint(_LlgConstraint):
         return UnsupportedSchemaError(
             f"unsupported JSON Schema (llguidance cannot enforce it): {message[:400]}"
         )
+
+    def forced_continuation(self, max_len: int = 128) -> str:
+        """Text the schema forces next (llguidance's fast-forward bytes), for
+        jump-forward decoding; ``""`` when the next token is a real choice."""
+        if self._matcher is None or self._dead or self._done:
+            return ""
+        try:
+            forced = bytes(self._matcher.compute_ff_bytes())
+        except Exception:  # noqa: BLE001 - a failed probe just means no jump
+            return ""
+        return forced.decode("utf-8", errors="ignore")[:max_len]
 
 
 def validate_llg_json_schema(schema: dict) -> None:
@@ -1186,7 +1312,9 @@ def validate_llg_json_schema(schema: dict) -> None:
     from .json_schema import UnsupportedSchemaError
 
     try:
-        grammar = LLMatcher.grammar_from_json_schema(_llg_schema_json(schema))
+        grammar = LLMatcher.grammar_from_json_schema(
+            _llg_schema_json(schema), defaults=_LLG_WHITESPACE
+        )
         err = LLMatcher.validate_grammar(grammar)
     except Exception as exc:  # noqa: BLE001 - llguidance raises plain exceptions
         err = str(exc)
@@ -1214,27 +1342,50 @@ def validate_llg_cfg(grammar: str) -> None:
         raise UnsupportedGrammarError(f"invalid CFG grammar: {err[:400]}")
 
 
-def build_json_constraint(schema: Any, tokenizer: Any = None) -> Any:
+def build_json_constraint(
+    schema: Any, tokenizer: Any = None, *, compact: bool = False
+) -> Any:
     """The constraint for a JSON schema (``None`` = any JSON object).
 
-    Schemas fully inside the in-house subset use the in-house state machine; any
-    other schema (value constraints, prefixItems, recursion, ...) is enforced by
-    llguidance.  Only what llguidance cannot compile is rejected.
+    llguidance enforces every schema it can compile (``YUNSHU_JSON_SCHEMA_ENGINE``
+    selects the in-house state machine instead).  A schema llguidance cannot
+    compile falls back to the in-house engine when that supports it; only what
+    neither can enforce is rejected.  ``compact`` (jump-forward decoding) asks for
+    llguidance without structural whitespace.
     """
+    from yunshu_engine import settings
+
     from .json_schema import (
         JsonSchemaConstraint,
         UnsupportedSchemaError,
         validate_supported_schema,
     )
 
-    if schema is None:
-        return JsonSchemaConstraint(None)
+    # Without a tokenizer there is nothing to bind llguidance to: keep the in-house
+    # engine (a schema only llguidance can enforce still binds lazily).
+    inhouse = (
+        tokenizer is None or settings.get("YUNSHU_JSON_SCHEMA_ENGINE") == "inhouse"
+    )
+    if inhouse:
+        if schema is None:
+            return JsonSchemaConstraint(None)
+        try:
+            validate_supported_schema(schema)
+        except UnsupportedSchemaError:
+            validate_llg_json_schema(schema)
+            return LlgJsonSchemaConstraint(schema, tokenizer)
+        return JsonSchemaConstraint(schema)
+    llg_schema = {"type": "object"} if schema is None else schema
     try:
-        validate_supported_schema(schema)
-    except UnsupportedSchemaError:
-        validate_llg_json_schema(schema)
-        return LlgJsonSchemaConstraint(schema, tokenizer)
-    return JsonSchemaConstraint(schema)
+        validate_llg_json_schema(llg_schema)
+        return LlgJsonSchemaConstraint(llg_schema, tokenizer, compact=compact)
+    except (UnsupportedSchemaError, UnsupportedGrammarError):
+        # llguidance cannot compile the schema, or cannot bind this tokenizer
+        # (it needs a Hugging Face fast tokenizer): the in-house engine, if it can.
+        if schema is None:
+            return JsonSchemaConstraint(None)
+        validate_supported_schema(schema)  # raises when neither engine can
+        return JsonSchemaConstraint(schema)
 
 
 # ── Shared utilities ────────────────────────────────────────────────────────
