@@ -1009,21 +1009,6 @@
     },
     {
       "kind": "patches",
-      "path": "python/yunshu_engine/mlx_vlm_patches.py",
-      "repo": "https://github.com/Blaizzy/mlx-vlm",
-      "clone": "reference/mlx-vlm",
-      "package": "mlx-vlm",
-      "module": "mlx_vlm.models.qwen3_omni_moe.qwen3_omni_moe",
-      "symbol": "Model.get_input_embeddings",
-      "signature": "(self, *args, input_features_mask=None, **kwargs)",
-      "license": "MIT",
-      "commit": "v0.7.3",
-      "why": "audio mask key (fixed upstream; patch self-disables)",
-      "source_sha256": "50f36cc0e406eef871e9c5e2346481bea8170d9cca072dfe0af1cf8991ca59cb",
-      "installed_version": "0.7.4"
-    },
-    {
-      "kind": "patches",
       "path": "python/yunshu_engine/n_confirmed_patch.py",
       "repo": "https://github.com/ml-explore/mlx-lm",
       "clone": "reference/mlx-lm",

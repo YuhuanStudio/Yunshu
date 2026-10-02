@@ -1,32 +1,16 @@
-"""Cache and stop-matcher helpers that read the same under mlx-lm 0.31 and 0.32."""
+"""Cache-state extraction, reasoning tracking and stop matchers against the locked mlx-lm."""
 
 import mlx.core as mx
 from mlx_lm.models.cache import KVCache, RotatingKVCache
 
 from yunshu_engine.scheduler import Scheduler, _ReasoningTracker
-from yunshu_kv.mlx_cache import cache_keys_values, extract_cache_state
+from yunshu_kv.mlx_cache import extract_cache_state
 
 
-class _OldKV:
-    """mlx-lm 0.31 shape: ``.state`` is ``(keys, values)``, no keys_and_values()."""
-
-    def __init__(self, k, v):
-        self.keys, self.values, self.offset = k, v, k.shape[2]
-        self.state = (k, v)
-
-
-def test_cache_keys_values_old_style_state():
-    k = mx.zeros((1, 2, 5, 4))
-    got = cache_keys_values(_OldKV(k, k))
-    assert got[0].shape == (1, 2, 5, 4)
-
-
-def test_cache_keys_values_real_cache_is_trimmed_to_offset():
+def test_extract_cache_state_trims_to_offset():
     c = KVCache()
     k = mx.ones((1, 2, 3, 4))
     c.update_and_fetch(k, k)
-    keys, values = cache_keys_values(c)
-    assert keys.shape == (1, 2, 3, 4) and values.shape == (1, 2, 3, 4)
     state = extract_cache_state(c)
     assert state["offset"] == 3 and state["keys"].shape[2] == 3
 
@@ -66,16 +50,7 @@ def test_reasoning_tracker_without_thinking_stays_normal():
     assert [t.advance(x) for x in (10, 11)] == ["normal", "normal"]
 
 
-def test_stop_kwargs_name_the_right_insert_argument():
-    class StopSequences:  # mlx-lm >= 0.32 type, matched by name
-        pass
-
-    assert Scheduler._stop_kwargs(StopSequences()).keys() == {"stop_sequences"}
-    assert Scheduler._stop_kwargs(object()).keys() == {"state_machines"}
-
-
-def test_make_state_machine_matches_the_installed_mlx_lm():
-    import importlib
+def test_stop_kwargs_and_state_machine_use_stop_sequences():
     from types import SimpleNamespace
 
     tok = SimpleNamespace(
@@ -84,6 +59,5 @@ def test_make_state_machine_matches_the_installed_mlx_lm():
         encode=lambda text, add_special_tokens=False: [ord(c) for c in text],
     )
     sm = Scheduler._make_state_machine(SimpleNamespace(tokenizer=tok), ["ab"], [9])
-    old = hasattr(importlib.import_module("mlx_lm.generate"), "SequenceStateMachine")
-    key = next(iter(Scheduler._stop_kwargs(sm)))
-    assert key == ("state_machines" if old else "stop_sequences")
+    assert type(sm).__name__ == "StopSequences"
+    assert Scheduler._stop_kwargs(sm) == {"stop_sequences": [sm]}

@@ -405,7 +405,7 @@ def supports(language_model: Any) -> bool:
     through the ragged kernels); any other family keeps stock caches."""
     try:
         from mlx_vlm.models.qwen3_5 import language as lang
-    except ImportError:  # pragma: no cover - older mlx-vlm
+    except ImportError:  # pragma: no cover - mlx-vlm not installed
         return False
     modules = getattr(language_model, "modules", None)
     if not callable(modules):
@@ -553,7 +553,7 @@ def install() -> bool:
 
     try:
         from mlx_vlm.models.qwen3_5 import speculative_verifier as sv
-    except ImportError:  # pragma: no cover - older mlx-vlm
+    except ImportError:  # pragma: no cover - mlx-vlm not installed
         sv = None
     if sv is not None:
         vcls = sv.Qwen3_5BatchInvariantForward

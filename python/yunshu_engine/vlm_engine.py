@@ -503,14 +503,6 @@ class VLMEngine:
         # Apply mlx-vlm patches BEFORE load: the nemotron model_type remap must be
         # in MODEL_REMAPPING before get_model_and_args() reads the config, else
         # newer Nemotron omni variants fail "model type … not supported".
-        # Idempotent — _finish_vlm_load's later call becomes a no-op.
-        try:
-            from .mlx_vlm_patches import apply_mlx_vlm_patches
-
-            apply_mlx_vlm_patches()
-        except Exception as e:
-            logger.warning(f"Could not apply mlx-vlm patches pre-load: {e}")
-
         import glob
 
         import mlx.core as mx
@@ -616,15 +608,6 @@ class VLMEngine:
 
     def _finish_vlm_load(self, model_path) -> None:
         """Common post-load initialization."""
-
-        # Apply pinned-mlx-vlm runtime patches (Omni audio path). Idempotent;
-        # no-op for non-audio / non-Omni requests. See mlx_vlm_patches.py.
-        try:
-            from .mlx_vlm_patches import apply_mlx_vlm_patches
-
-            apply_mlx_vlm_patches()
-        except Exception as e:
-            logger.warning(f"Could not apply mlx-vlm patches: {e}")
 
         # The processor prepares image/audio/video inputs and renders media
         # chat templates; every mlx_vlm model needs it for media requests.
@@ -1302,12 +1285,10 @@ class VLMEngine:
         replacing or re-tokenizing a checkpoint in place, or a layout change, selects a
         fresh namespace and never reads back the old states.
         """
+        from mlx_vlm.apc_adapters import ADAPTER_SCHEMA_VERSION
+
         from yunshu_kv.fingerprint import checkpoint_fingerprint
 
-        try:
-            from mlx_vlm.apc_adapters import ADAPTER_SCHEMA_VERSION
-        except Exception:  # pragma: no cover - older mlx-vlm
-            ADAPTER_SCHEMA_VERSION = 0
         return checkpoint_fingerprint(
             self._model_path,
             extra={

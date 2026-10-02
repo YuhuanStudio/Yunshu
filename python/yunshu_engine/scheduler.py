@@ -1273,7 +1273,7 @@ class Scheduler:
 
         Returns SchedulerOutput with response list.
 
-        mlx-lm BatchGenerator API (0.31.3):
+        mlx-lm BatchGenerator API:
           next() → (prompt_responses, gen_responses) — handles prefill
           next_generated() → gen_responses — decode step, one token per request
         """
@@ -3557,10 +3557,7 @@ class Scheduler:
                 except Exception:
                     logger.debug("logprobs extraction failed", exc_info=True)
 
-            current_state = getattr(resp, "current_state", None)
-            if current_state is None:  # mlx-lm >= 0.32 no longer reports it
-                current_state = self._reasoning_state(req, getattr(resp, "token", None))
-            current_state = current_state or "normal"
+            current_state = self._reasoning_state(req, getattr(resp, "token", None))
             finish_reason = resp.finish_reason
 
             # ── Thinking-segment KV tracking ──
@@ -4325,9 +4322,8 @@ class Scheduler:
     ):
         """Stop / reasoning matcher for one request.
 
-        mlx-lm < 0.32 takes a token-level ``SequenceStateMachine`` that also reports the
-        reasoning state per response; 0.32 replaced it by ``StopSequences`` (stops only),
-        so the reasoning state is then tracked here (``_ReasoningTracker``).
+        mlx-lm's ``StopSequences`` matches stops only; the reasoning state is tracked
+        here (``_ReasoningTracker``).
         """
         eos_ids = (
             list(self.tokenizer.eos_token_ids)
@@ -4358,33 +4354,15 @@ class Scheduler:
         # mlx_lm.generate is a function on the package; take the module itself.
         mlx_generate = importlib.import_module("mlx_lm.generate")
 
-        SequenceStateMachine = getattr(mlx_generate, "SequenceStateMachine", None)
-        if SequenceStateMachine is None:  # mlx-lm >= 0.32
-            return mlx_generate.StopSequences([seq for seq, _ in common_stops])
-
-        transitions = {"normal": list(common_stops)}
-
-        if getattr(self.tokenizer, "has_thinking", False):
-            try:
-                ts = self.tokenizer.think_start_tokens
-                te = self.tokenizer.think_end_tokens
-                transitions["normal"].append((ts, "reasoning"))
-                transitions["reasoning"] = [(te, "normal")]
-                transitions["reasoning"].extend(common_stops)
-            except (AttributeError, TypeError):
-                pass
-
-        return SequenceStateMachine(transitions, initial="normal")
+        return mlx_generate.StopSequences([seq for seq, _ in common_stops])
 
     @staticmethod
     def _stop_kwargs(sm) -> dict:
         """The BatchGenerator.insert keyword for ``sm`` (see ``_make_state_machine``)."""
-        if type(sm).__name__ == "StopSequences":
-            return {"stop_sequences": [sm]}
-        return {"state_machines": [sm]}
+        return {"stop_sequences": [sm]}
 
     def _reasoning_state(self, req, token: int | None) -> str:
-        """Reasoning state after ``token``, for mlx-lm versions that no longer report it."""
+        """Reasoning state after ``token``, (mlx-lm does not report it)."""
         tracker = getattr(req, "_reasoning_tracker", None)
         if tracker is None:
             tracker = _ReasoningTracker(self.tokenizer)
