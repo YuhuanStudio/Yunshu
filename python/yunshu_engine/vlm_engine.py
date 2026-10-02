@@ -1656,6 +1656,9 @@ class VLMEngine:
                     settings.get("YUNSHU_SPEC_COPY_ROWS"),
                     mtp_lane.verify_max_rows(bool(kernels.get("lane_linear")), lm),
                 )
+                kernels["copy_cost"] = mtp_lane.set_copy_cost(
+                    settings.get("YUNSHU_SPEC_COPY_COST")
+                )
                 kernels["lane_layers"] = lane_layers.install()
                 found = install_draft_vocab(
                     drafter, self._model.language_model, DRAFT_VOCAB

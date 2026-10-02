@@ -92,4 +92,31 @@ class CopyCosts:
         return min(3, drafts) if best == 0 and self.choices % 16 == 0 else best
 
 
-__all__ = ["CopyCosts"]
+# Measured 27B (Qwen3.8, M5 Max) chain-verify round cost in ms by verify rows,
+# quiet GPU (gpuq rowcost-quiet-0051): flat to 16 rows, a tile jump at 24, and at
+# long context the attention term makes 12+ rows cost more. Keys are context
+# lengths (tokens); a request uses the first bucket at or above its length.
+VERIFY_MS_BY_CONTEXT: dict[int, dict[int, float]] = {
+    1024: {6: 42.25, 8: 42.6, 12: 43.11, 16: 43.68},
+    8192: {6: 43.07, 8: 43.61, 12: 46.14, 16: 46.92},
+    32768: {6: 47.53, 8: 47.89, 12: 55.9, 16: 55.77},
+}
+# Drafter + selection overhead of a model round on top of its verify (DFlash2
+# draft ~8.5 ms, quiet), and the block the model round verifies.
+MODEL_DRAFT_MS = 8.5
+MODEL_BLOCK_ROWS = 6
+MAX_PRICED_ROWS = 16
+
+
+def costs_for_context(context_len: int) -> CopyCosts:
+    """Price table for a request whose context is ``context_len`` tokens.
+
+    Beyond the largest measured bucket the largest is used (its attention term
+    only grows, so the cap there is the conservative one)."""
+    buckets = sorted(VERIFY_MS_BY_CONTEXT)
+    key = next((b for b in buckets if context_len <= b), buckets[-1])
+    table = VERIFY_MS_BY_CONTEXT[key]
+    return CopyCosts(table, table[MODEL_BLOCK_ROWS] + MODEL_DRAFT_MS)
+
+
+__all__ = ["CopyCosts", "costs_for_context", "MAX_PRICED_ROWS"]

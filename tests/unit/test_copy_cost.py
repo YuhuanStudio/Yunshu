@@ -68,3 +68,32 @@ def test_short_match_misses_do_not_label_a_new_confident_island():
         costs.observe_copy(7, 0, 42)
     assert costs.choose(7, model_tpr=3) == 0
     assert costs.choose(15, model_tpr=3, confident=True) == 15
+
+
+def test_context_table_prices_short_and_long_context_differently():
+    from yunshu_engine.copy_cost import MAX_PRICED_ROWS, costs_for_context
+
+    short, long_ = costs_for_context(900), costs_for_context(40_000)
+    assert short.cost(16) < short.cost(8) * 1.05  # flat to 16 rows
+    assert long_.cost(16) > long_.cost(8) * 1.15  # attention term at 32K+
+    assert max(short.row_ms) == MAX_PRICED_ROWS
+    # between buckets a request is priced by the next larger context
+    assert costs_for_context(5000).row_ms == costs_for_context(8192).row_ms
+
+
+def test_long_context_prices_extra_width_out_of_a_mediocre_copy():
+    from yunshu_engine.copy_cost import costs_for_context
+
+    for ctx, expect in ((1000, 11), (50_000, 7)):
+        costs = costs_for_context(ctx)
+        for _ in range(4):  # every copy accepts exactly eight drafts
+            costs.observe_copy(15, 8, costs.cost(16))
+        assert costs.choose(15, model_tpr=3) == expect
+
+
+def test_copy_cost_setting_and_lane_state():
+    from yunshu_engine import mtp_lane, settings
+
+    assert settings.get("YUNSHU_SPEC_COPY_COST") is False
+    assert mtp_lane.set_copy_cost(True) is True
+    assert mtp_lane.set_copy_cost(False) is False

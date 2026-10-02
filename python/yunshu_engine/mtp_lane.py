@@ -41,6 +41,7 @@ from typing import Any
 
 import mlx.core as mx
 
+from .copy_cost import MAX_PRICED_ROWS, costs_for_context
 from .copy_drafter import CopyDrafter
 from .keyed_sampling import KeyedSampler
 
@@ -53,6 +54,7 @@ _STATE: dict = {
     "profile": None,
     "guide": None,
     "context": None,  # the request's FULL prompt ids (not the tail after a prefix hit)
+    "copy_cost": False,  # price copy rounds from the measured width table
     "copy_rows": 8,  # verify rows a copy round may use (0: copy rounds off)
 }
 
@@ -106,10 +108,16 @@ def set_copy_rows(rows: int, limit: int | None = None) -> int:
     return rows
 
 
-def copy_rows_for_model(language_model: Any) -> int:
+def set_copy_cost(on: bool) -> bool:
+    """Cost-aware copy rounds (width / copy-or-model chosen from measured prices)."""
+    _STATE["copy_cost"] = bool(on)
+    return _STATE["copy_cost"]
+
+
+def copy_rows_for_model(language_model: Any, rows: int | None = None) -> int:
     """Recheck the current target, even if another loaded engine set the lane's
     process-global copy preference after this engine was constructed."""
-    rows = int(_STATE["copy_rows"])
+    rows = int(_STATE["copy_rows"] if rows is None else rows)
     if rows < 3:
         return rows
     layers = getattr(getattr(language_model, "model", None), "layers", None)
@@ -237,8 +245,13 @@ def rounds(
     copy = None
     context = _STATE["context"]
     copy_rows = copy_rows_for_model(lm)
+    if _STATE["copy_cost"] and copy_rows >= 3 and context is not None:
+        # cost-aware: the verify-width price table (context dependent) decides each
+        # copy round's width up to MAX_PRICED_ROWS, or hands the round to the model
+        copy_rows = copy_rows_for_model(lm, MAX_PRICED_ROWS)
     if copy_rows >= 3 and context is not None:
-        copy = CopyDrafter(max_draft=copy_rows - 1)
+        costs = costs_for_context(len(context)) if _STATE["copy_cost"] else None
+        copy = CopyDrafter(max_draft=copy_rows - 1, costs=costs)
         copy.extend(context)
         copy.extend([b])
 
