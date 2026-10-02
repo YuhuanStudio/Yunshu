@@ -441,10 +441,10 @@ def test_real_assistant_proposer_acceptance():
     for t in range(gen_start, seq_len - 1):
         kv = {
             prop.sliding_kv_layer: tuple(
-                x[:, :, : t + 1, :] for x in cache[prop.sliding_kv_layer].state
+                x[:, :, : t + 1, :] for x in cache[prop.sliding_kv_layer].keys_and_values()
             ),
             prop.full_kv_layer: tuple(
-                x[:, :, : t + 1, :] for x in cache[prop.full_kv_layer].state
+                x[:, :, : t + 1, :] for x in cache[prop.full_kv_layer].keys_and_values()
             ),
         }
         pred = prop.propose(ids[t], hid[0, : t + 1], kv)
