@@ -34,7 +34,7 @@ class NodeBudget:
         size: int,
         prior=None,
         plain_ms: float = 43.0,
-        row_ms: float = 0.8,
+        row_ms: float = 0.5,
         draft_ms: float = 10.0,
     ):
         self.size = int(size)
