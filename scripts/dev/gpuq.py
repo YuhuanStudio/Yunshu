@@ -8,7 +8,7 @@ plain local process (``wait``), so whoever submitted can block on completion
 without polling anything else.
 
     gpuq submit [--label L] [--timeout MIN] [--priority N] [--serving-ok] [--mem-gb G] -- cmd args...
-    gpuq wait [--max-seconds N] ID [ID ...]  # exit 0 verified / 1 failed / 2 unfinished
+    gpuq wait [--max-seconds N] ID [ID ...]  # exit 0 verified / 1 failed / 2 unfinished / 3 contended perf
     gpuq run [opts] -- cmd ...   # submit + wait (drop-in for the old gpu_run.sh)
     gpuq status                  # queue table (paused / waiting-idle / waiting-mem columns)
     gpuq log ID                  # print a job's log
@@ -28,6 +28,14 @@ resident jobs, even without a serving config. Unknown/insufficient memory leaves
 Submit-level repeatable ``--out PATH`` declares expected results; ``--expect-complete`` requires a line containing
 ``complete`` in each output. Wait and digest validate declared and legacy command-level output paths.
 Duplicate active labels are refused; submitting never deletes earlier artifacts.
+
+CPU contention (Q02): every job records load averages and the top foreign CPU consumers at start,
+periodically and end, excluding its own descendants/process group. p>=0 and --quiet jobs wait for a
+continuous quiet window (default summed foreign CPU <150% for 20s, maximum wait 300s). --cpu-threshold,
+--quiet-window and --quiet-max-wait override GPUQ_CPU_THRESHOLD / GPUQ_QUIET_WINDOW_S /
+GPUQ_QUIET_MAX_WAIT_S. GPUQ_CPU_SAMPLE_S controls stored periodic samples (default 30s); monitoring polls
+at most every 2s. Contention is latched in job.contended and GPUQ_CONTENTION_FILE; done is displayed as
+contended, and wait returns 3 for otherwise successful contended perf/quiet jobs (failures still return 1).
 
 State lives in $GPUQ_DIR (default ~/.cache/yunshu/gpuq). Jobs keep the
 submitter's cwd and environment.
@@ -57,6 +65,17 @@ STALL_S = 600  # a job whose log stops growing this long is stopped as "stalled"
 POLL_S = 2.0
 DEFAULT_MEM_GB = 24.0
 DEFAULT_RESERVE_GB = 16.0
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from gpuq_contention import (  # noqa: E402
+    ENV,
+    MAX_POLL_GAP_S,
+    ContentionMonitor,
+    QuietGate,
+    contention_config,
+    flag_sample_time,
+    requires_quiet,
+)
 
 
 def _now() -> float:
@@ -140,6 +159,7 @@ class ServingGate:
 
     def __init__(self, fetch=None) -> None:
         self.cfg: dict = {}
+        self.cpu = None
         self.fetch = fetch or _fetch_busy
         self.idle_since: float | None = None
 
@@ -247,7 +267,31 @@ def _blocker(job: dict, gate: ServingGate, free=free_memory_gb) -> str | None:
         return "idle"
     if mem_blocked(job, gate, free):
         return "mem"
-    return None
+    return _cpu_blocker(job, gate)
+
+
+def _cpu_blocker(job: dict, gate: ServingGate):
+    if gate.cpu is None or not requires_quiet(job):
+        return None
+    now = _now()
+    sample = gate.cpu.sample(now)
+    blocked = gate.cpu.blocked(job, sample, now)
+    if not blocked:
+        job["cpu_admission_sample"] = sample
+    _patch_job(
+        JOBS / (job["id"] + ".json"),
+        **{
+            k: job[k]
+            for k in (
+                "quiet_wait_started",
+                "quiet_since",
+                "quiet_timeout",
+                "quiet_last_poll",
+            )
+            if k in job
+        },
+    )
+    return "cpu" if blocked else None
 
 
 class Pauser:
@@ -394,7 +438,10 @@ def submit(
     mem_gb: float | None = None,
     outputs: list[str] | None = None,
     expect_complete: bool = False,
+    quiet: bool = False,
+    cpu_config: dict | None = None,
 ) -> str:
+    cfg = contention_config({"contention_config": cpu_config or {}})
     JOBS.mkdir(parents=True, exist_ok=True)
     LOGS.mkdir(parents=True, exist_ok=True)
     # Serialize label admission and id allocation across all submitters.
@@ -425,6 +472,9 @@ def submit(
                     str(Path(p).expanduser().resolve()) for p in (outputs or [])
                 ],
                 "expect_complete": expect_complete,
+                "quiet": quiet,
+                "contention_config": cfg,
+                "contended": False,
                 "submitted": _now(),
                 "state": "pending",
             },
@@ -453,7 +503,7 @@ def _preempt_blocker(job: dict, gate: ServingGate) -> str | None:
             return "mem"
     if gate.enabled and not job.get("serving_ok") and not gate.may_start():
         return "idle"
-    return None
+    return _cpu_blocker(job, gate)
 
 
 def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
@@ -496,6 +546,8 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
     log = open(LOGS / f"{job['id']}.log", "w")  # noqa: SIM115 - closed after the job ends
     pause_file = LOGS / f"{job['id']}.pauses.json"
     _write(pause_file, {"pauses": []})
+    monitor = ContentionMonitor(job, path, LOGS, _write, _read)
+    monitor.record("start")
     try:
         rc_file = LOGS / f"{job['id']}.rc"
         proc = subprocess.Popen(
@@ -509,8 +561,10 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
             cwd=job["cwd"],
             env={
                 **job["env"],
+                **{ENV[k]: str(v) for k, v in monitor.cfg.items()},
                 "GPUQ_RC": str(rc_file),
                 "GPUQ_PAUSE_FILE": str(pause_file),
+                "GPUQ_CONTENTION_FILE": str(monitor.flag),
             },
             stdout=log,
             stderr=subprocess.STDOUT,
@@ -520,6 +574,8 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
     except OSError as e:
         log.write(f"gpuq: failed to start: {e}\n")
         job.update(state="failed", rc=127, ended=_now())
+        monitor.record("end")
+        log.write(monitor.summary() + "\n")
         _write(path, job)
         log.close()
         return
@@ -544,6 +600,7 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
             elif not _priority_step(pauser, gate, now):
                 pauser.step(gate, serving_ok, now)
             now = _now()
+            monitor.poll(now)
             if pauser.paused:
                 continue  # timeouts and stall detection only count active time
             deadline = job["started"] + job["timeout_s"] + pauser.total(now)
@@ -581,6 +638,8 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
         f"\ngpuq: {state} rc={rc} after {ended - job['started']:.0f}s "
         f"({len(pauser.pauses)} pauses, {pauser.total(ended):.0f}s paused)\n"
     )
+    monitor.record("end", ended)
+    log.write(monitor.summary() + "\n")
     log.close()
     _write(LOGS / f"{job['id']}.pauses.json", {"pauses": pauser.pauses})
     _write(path, job)
@@ -603,6 +662,22 @@ def _adopt(job: dict, path: Path, gate: ServingGate | None = None) -> None:
     pid = job.get("pid")
     pauser = Pauser(job, path)
     serving_ok = bool(job.get("serving_ok"))
+    monitor = ContentionMonitor(job, path, LOGS, _write, _read)
+    last_sample = flag_sample_time(_read(monitor.flag))
+    if (
+        not job.get("cpu_samples")
+        or last_sample is None
+        or _now() - last_sample > MAX_POLL_GAP_S
+    ):
+        job["contended"] = True
+        job.setdefault("contention_reasons", []).append("unmonitored_before_adoption")
+        monitor.events.append(
+            [
+                last_sample if last_sample is not None else job.get("started", _now()),
+                _now(),
+            ]
+        )
+    monitor.record("adopt")
     why = None
     while _alive(pid):
         now = _now()
@@ -614,6 +689,7 @@ def _adopt(job: dict, path: Path, gate: ServingGate | None = None) -> None:
         elif not _priority_step(pauser, gate, now):
             pauser.step(gate, serving_ok, now)
         now = _now()
+        monitor.poll(now)
         deadline = (
             job.get("started", now) + job.get("timeout_s", 1200) + pauser.total(now)
         )
@@ -644,6 +720,9 @@ def _adopt(job: dict, path: Path, gate: ServingGate | None = None) -> None:
         pauses=pauser.pauses,
         paused=False,
     )
+    monitor.record("end")
+    with open(LOGS / f"{job['id']}.log", "a") as log:
+        log.write("\n" + monitor.summary() + "\n")
     _write(LOGS / f"{job['id']}.pauses.json", {"pauses": pauser.pauses})
     _write(path, job)
 
@@ -688,6 +767,7 @@ def daemon() -> None:
         return
     idle_since = _now()
     gate = ServingGate()
+    gate.cpu = QuietGate()
     while True:
         gate.configure(load_serving_config())
         # A job left running by a previous daemon is adopted: wait for its
@@ -755,13 +835,15 @@ def wait(ids: list[str], max_seconds: float | None = None) -> int:
             delay = min(delay, max(0.0, deadline - time.monotonic()))
         time.sleep(delay)
     bad = False
+    contended = False
     for jid, j in jobs:
         issues = _output_issues(j) if j else ["job not found"]
         state = j.get("state", "missing")
         print(
-            f"{jid}: {state} rc={j.get('rc')} missing_outputs={json.dumps(issues)} "
+            f"{jid}: {display_state(j) if j else state} rc={j.get('rc')} missing_outputs={json.dumps(issues)} "
             f"log={LOGS / (jid + '.log')}"
         )
+        contended = contended or (bool(j.get("contended")) and requires_quiet(j))
         bad = (
             bad
             or not j
@@ -770,7 +852,7 @@ def wait(ids: list[str], max_seconds: float | None = None) -> int:
             )
         )
     # An unfinished job takes precedence: callers must keep waiting even if a peer failed.
-    return 2 if pending else (1 if bad else 0)
+    return 2 if pending else (1 if bad else (3 if contended else 0))
 
 
 def display_state(j: dict) -> str:
@@ -779,6 +861,8 @@ def display_state(j: dict) -> str:
         return "paused"
     if j["state"] == "pending" and j.get("waiting"):
         return f"wait-{j['waiting']}"
+    if j["state"] == "done" and j.get("contended"):
+        return "contended"
     return j["state"]
 
 
@@ -813,6 +897,7 @@ def status() -> None:
                 "mem": "memory admission (free memory minus job need is below reserve, or unknown during preemption)",
                 "idle": "serving (busy or idle-start window)",
                 "pause": "pause",
+                "cpu": "CPU contention (waiting for continuous quiet window)",
             }.get(why)
             if explanation:
                 reasons.append(f"{j['id']}: {explanation}")
@@ -870,6 +955,22 @@ def main() -> int:
             action="store_true",
             help="require a line containing complete in every output",
         )
+        p.add_argument(
+            "--quiet", action="store_true", help="wait for quiet CPU even for p<0"
+        )
+        p.add_argument(
+            "--cpu-threshold",
+            type=float,
+            help="summed foreign CPU percent (default 150)",
+        )
+        p.add_argument(
+            "--quiet-window", type=float, help="continuous quiet seconds (default 20)"
+        )
+        p.add_argument(
+            "--quiet-max-wait",
+            type=float,
+            help="maximum CPU wait seconds (default 300)",
+        )
         p.add_argument("cmd", nargs=argparse.REMAINDER)
     wp = sub.add_parser("wait")
     wp.add_argument(
@@ -904,6 +1005,16 @@ def main() -> int:
                 a.mem_gb,
                 a.out,
                 a.expect_complete,
+                a.quiet,
+                {
+                    k: v
+                    for k, v in dict(
+                        threshold_pct=a.cpu_threshold,
+                        window_s=a.quiet_window,
+                        max_wait_s=a.quiet_max_wait,
+                    ).items()
+                    if v is not None
+                },
             )
         except ValueError as e:
             print(f"gpuq: {e}", file=sys.stderr)

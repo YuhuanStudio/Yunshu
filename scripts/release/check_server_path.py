@@ -18,12 +18,18 @@ Run it while the server is idle (the two share the GPU):
     python scripts/release/check_server_path.py --url http://127.0.0.1:18764 \\
         --model <ckpt> --output runs/server-path-guard.json
 
-Prints one JSON summary line; exit 0 = PASS, 1 = FAIL, 2 = could not measure.
+Prints one JSON summary line; exit 0 = PASS, 1 = FAIL, 2 = could not measure,
+3 = CONTENDED. --retry-contended waits for a bounded quiet CPU window and retries
+once, preserving both attempts. Contention cannot excuse text/spec mismatches;
+a quiet ratio failure still fails. Two contended attempts require remeasurement.
 """
+
+from __future__ import annotations
 
 import argparse
 import asyncio
 import json
+import os
 import statistics
 import sys
 import threading
@@ -31,10 +37,15 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts" / "dev"))
+from gpuq_contention import (  # noqa: E402
+    server_path_attempts,
+    wait_for_quiet,
+    was_contended,
+)
+
 sys.path.insert(0, str(ROOT / "python"))
 sys.path.insert(0, str(ROOT / "scripts" / "research"))
-
-from probe_server_path import messages_for, run_http  # noqa: E402
 
 
 def inprocess_run(engine, msgs, max_tokens: int) -> tuple[float | None, str]:
@@ -97,8 +108,29 @@ def main() -> int:
         help="server log; its 'Speculative decoding: <kind>' line must match "
         "the in-process selection (same env => same path)",
     )
+    ap.add_argument(
+        "--retry-contended",
+        action="store_true",
+        help="retry once after a bounded quiet CPU wait",
+    )
     a = ap.parse_args()
+    if a.retry_contended:
+        summary = server_path_attempts(
+            lambda: measure(a), before_retry=lambda: wait_for_quiet(os.getpgrp())
+        )
+    else:
+        summary = measure(a)
+    if a.output:
+        a.output.parent.mkdir(parents=True, exist_ok=True)
+        a.output.write_text(json.dumps(summary, indent=2))
+    print(json.dumps(summary), flush=True)
+    return {"PASS": 0, "FAIL": 1, "CONTENDED": 3}.get(summary["status"], 2)
 
+
+def measure(a):
+    from probe_server_path import messages_for, run_http
+
+    started = time.time()
     from yunshu_engine.vlm_engine import VLMEngine
 
     engine = VLMEngine(a.model)
@@ -131,9 +163,7 @@ def main() -> int:
                             k = next(
                                 (
                                     i
-                                    for i, (x, y) in enumerate(
-                                        zip(t, inproc_text, strict=False)
-                                    )
+                                    for i, (x, y) in enumerate(zip(t, inproc_text))  # noqa: B905 - Python 3.9
                                     if x != y
                                 ),
                                 min(len(t), len(inproc_text)),
@@ -166,12 +196,17 @@ def main() -> int:
     worst = min(ratios) if ratios else None
     all_same = all(c["same_text"] for c in cases)
     status = (
-        "PASS" if worst is not None and worst >= a.min_ratio and all_same else "FAIL"
+        "PASS"
+        if worst is not None and worst >= a.min_ratio and all_same and spec_ok
+        else "FAIL"
     )
     if worst is None:
         status = "ERROR"
     summary = {
         "status": status,
+        "contended": was_contended(started, time.time()),
+        "started": started,
+        "ended": time.time(),
         "worst_ratio": worst,
         "min_ratio": a.min_ratio,
         "same_text": all_same,
@@ -179,11 +214,7 @@ def main() -> int:
         "spec_match": spec_ok,
         "cases": cases,
     }
-    if a.output:
-        a.output.parent.mkdir(parents=True, exist_ok=True)
-        a.output.write_text(json.dumps(summary, indent=2))
-    print(json.dumps(summary), flush=True)
-    return {"PASS": 0, "FAIL": 1}.get(status, 2)
+    return summary
 
 
 if __name__ == "__main__":

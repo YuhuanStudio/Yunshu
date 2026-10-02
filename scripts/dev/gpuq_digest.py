@@ -7,9 +7,10 @@
 
 Finished jobs are grouped by label family (the label without its round / shard suffix: ``paired-gsm8k-ref-r3``
 -> ``paired-gsm8k-ref``). Each family shows its states, the log of its last job and every output path found
-at submission or in commands (the argument after ``--out`` / ``--output``, also ``--out=PATH``). Two kinds of problem are
+at submission or in commands (the argument after ``--out`` / ``--output``, also ``--out=PATH``). Problems are
 flagged and listed first, because they are the results nobody read:
 
+* a contended perf/quiet job (CPU timing is not trustworthy; rerun after contention);
 * a job that ended failed, lost, stalled, timeout or cancelled, or has an absent/nonzero rc;
 * an output that is missing/empty, or lacks a line containing ``complete`` when expect_complete is set.
   A directory counts as empty when it has no files; complete checking requires a file.
@@ -174,11 +175,20 @@ def collect(root: Path, since: float, until: float, label_prefix: str = "") -> d
         issues = []
         if j["state"] in BAD_STATES or j.get("rc") != 0:
             issues.append("state %s rc=%s" % (j["state"], j.get("rc")))
+        if j.get("contended") and (j.get("priority", 0) >= 0 or j.get("quiet")):
+            issues.append(
+                "contended: CPU timing is not trustworthy; rerun after contention"
+            )
         issues.extend(output_issues(j))
         entry = {
             "id": j["id"],
             "label": j.get("label", ""),
-            "state": j["state"],
+            "state": "contended"
+            if j["state"] == "done" and j.get("contended")
+            else j["state"],
+            "contended": bool(j.get("contended")),
+            "foreign_cpu_max_pct": j.get("foreign_cpu_max_pct"),
+            "foreign_cpu_mean_pct": j.get("foreign_cpu_mean_pct"),
             "rc": j.get("rc"),
             "dur": max(0.0, ended - (j.get("started") or ended)),
             "ended": ended,
