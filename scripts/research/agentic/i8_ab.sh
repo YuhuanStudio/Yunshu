@@ -1,6 +1,6 @@
 #!/bin/sh
-# Interleaved A/B (arm 0 = stock ordering, arm 1 = auxiliary + uncached-work scheduling), 3 rounds.
-# Each arm continues after a failure of the other; rc recorded per arm.
+# One round of the A/B (arm 0 = stock ordering, arm 1 = auxiliary + uncached-work scheduling);
+# usage: i8_ab.sh RUN [first-arm]. Each arm continues after a failure of the other.
 set -u
 root="$(git rev-parse --show-toplevel)"
 main=/Users/yuhuan/Documents/YuhuanStudio/Yunshu
@@ -9,8 +9,10 @@ out="$root/docs/research/runs/2026-10-03-i8c"
 mkdir -p "$out"
 export AGENTIC_YUNSHU_SRC="$root/python"
 rc=0
-for run in 1 2 3; do
-  for arm in 0 1; do
+run=$1
+first=${2:-0}
+for run in $run; do
+  for arm in $first $((1 - first)); do
     YUNSHU_AUXILIARY_SCHEDULING=$arm YUNSHU_UNCACHED_SCHEDULING=$arm \
     "$main/.venv/bin/python" "$root/scripts/research/agentic/i8_session_replay.py" \
       --checkpoint /Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp \
