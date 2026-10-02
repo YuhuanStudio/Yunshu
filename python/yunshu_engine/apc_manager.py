@@ -43,6 +43,9 @@ logger = logging.getLogger(__name__)
 
 GIB = 1 << 30
 
+# Request-generation bookkeeping (_born) is trimmed past this many entries, keeping the newest.
+_BORN_MAX = 20000
+_BORN_KEEP_GENERATIONS = 5000
 # Entry-count cap: the byte budget decides, this only bounds bookkeeping.
 MAX_ENTRIES = 16
 # Shutdown spill budget: a service stop must not hang on a 32 GiB cache.
@@ -716,6 +719,11 @@ class YunshuAPCManager(APCManager):
     def begin_request(self) -> None:
         with self._plock:
             self._generation += 1
+            if (
+                len(self._born) > _BORN_MAX
+            ):  # bookkeeping only: forget the oldest generations
+                cut = self._generation - _BORN_KEEP_GENERATIONS
+                self._born = {k: g for k, g in self._born.items() if g >= cut}
 
     def note_head(self, head_tokens, extra_hash: int = 0) -> None:
         with self._plock:
@@ -761,7 +769,8 @@ class YunshuAPCManager(APCManager):
                 ):
                     continue
                 del self._exact_cache[key]
-                self._born.pop(key, None)
+                # _born stays: a copy of this checkpoint may still be on the SSD, and the
+                # disk supersede needs its generation to know it is an earlier request's
                 dropped += 1
         if self.warm is not None:
             with self._plock:

@@ -579,3 +579,55 @@ def test_manager_reports_device_and_stays_token_identical(tmp_path):
     assert any(
         t["name"] == "hdd" and t["hits"] == 1 for t in mgr.snapshot()["storage_tiers"]
     )
+
+
+def test_agent_sessions_leave_one_or_two_checkpoints_each_on_the_ssd(tmp_path):
+    """Three interleaved growing sessions through the real runner, RAM too small to hold them:
+    restored checkpoints are superseded in RAM, and their SSD copies must still be dropped when
+    the session's next checkpoint is written (the generation of a RAM-superseded entry is kept)."""
+    from tests.unit.test_apc_warm import _tiny_model
+    from yunshu_engine.apc_manager import SpillDiskStore
+    from yunshu_engine.vlm_batch_runner import RunStats, VLMBatchRunner
+
+    class Stop:
+        def __init__(self):
+            self.eos = set()
+
+        def add_eos_token_ids(self, ids):
+            self.eos |= set(ids or [])
+
+        def __call__(self, token):
+            return int(token) in self.eos
+
+    disk = SpillDiskStore(tmp_path, namespace=NS, num_workers=1, max_bytes=1 << 30)
+    mgr = YunshuAPCManager(
+        num_blocks=64,
+        block_size=16,
+        disk=disk,
+        overrides={"memory_max_gb": 0.002, "checkpoint_interval_tokens": 128},
+        max_entries=4,
+        head_marker=(900, 901),
+    )
+    proc = SimpleNamespace(tokenizer=SimpleNamespace(stopping_criteria=Stop()))
+    runner = VLMBatchRunner(
+        _tiny_model(), processor=proc, apc_manager=mgr, apc_semantic_hash=12345
+    )
+    r = random.Random(3)
+    head = [r.randrange(3, 800) for _ in range(150)]
+    sess = [
+        [7, *head, 900, 901] + [r.randrange(3, 800) for _ in range(3000)]
+        for _ in range(3)
+    ]
+    cached = prompt = 0
+    for turn in range(1, 6):
+        for s in range(3):
+            ids = sess[s][: 250 + turn * 200]
+            st = RunStats()
+            list(runner.iter_tokens(ids, max_tokens=2, stats=st, allow_draft=False))
+            if turn > 1:
+                cached += st.cached_tokens
+                prompt += len(ids)
+    disk.flush()
+    assert len(disk._exact_index) <= 1 + 3 * 2, "stale checkpoints pile up on the SSD"
+    assert cached / prompt > 0.7
+    assert mgr.disk_superseded >= 12
