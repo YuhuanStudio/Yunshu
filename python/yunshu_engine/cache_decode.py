@@ -61,9 +61,58 @@ def fused_gdn_step(layer, inputs, cache):
     return result
 
 
+def canonical_attention(cache, queries, scale):
+    from .kernels.ragged_attention import ragged_decode_attention
+
+    return ragged_decode_attention(
+        queries,
+        cache.keys,
+        cache.values,
+        cache.offset,
+        scale,
+        max_length=cache._idx,
+        k_scales=cache.k_scales,
+        v_scales=cache.v_scales,
+        row_lengths=cache.lengths,
+        slots=cache.slot_ids,
+        impl="tile",
+    )
+
+
+def install_attention():
+    from .kernels.ragged_attention import tile_ready
+    from .kernels.ragged_kv import RaggedKVCache
+
+    cls = RaggedKVCache
+    if getattr(cls, "_yunshu_prefix_attention", False):
+        return
+    original = cls.attend
+    logged = False
+
+    def attend(self, queries, scale):
+        nonlocal logged
+        if (
+            getattr(_STATE, "active", False)
+            and queries.dtype == mx.bfloat16
+            and self.keys.dtype == mx.bfloat16
+            and queries.shape[-1] == 256
+            and queries.shape[1] // self.keys.shape[1] <= 8
+            and tile_ready()
+        ):
+            if not logged:
+                logged = True
+                logger.info("APC shared attention tile arithmetic engaged")
+            return canonical_attention(self, queries, scale)
+        return original(self, queries, scale)
+
+    cls.attend = attend
+    cls._yunshu_prefix_attention = True
+
+
 def install():
     from mlx_vlm.models.qwen3_5 import language as q35
 
+    install_attention()
     cls = q35.Qwen3_5GatedDeltaNet
     if getattr(cls, "_yunshu_prefix_decode", False):
         return
@@ -84,7 +133,7 @@ def install():
             and mask is None
             and cache is not None
             and not cache.is_speculating
-            and cache.lengths is None
+            and (cache.lengths is None or (q35._qwen3_5_lengths_info(cache) or 0) >= 1)
             and self.head_k_dim == self.head_v_dim == 128
             and self.conv_kernel_size == 4
             and self.conv1d.weight.dtype == inputs.dtype

@@ -262,6 +262,12 @@ class VLMBatchRunner:
     ):
         self.model = model
         self.prefix_invariant = prefix_invariant
+        logger.info(
+            "APC admission configuration: qualified=%s enabled=%s source=%s",
+            prefix_invariant,
+            self.singleflight,
+            __file__,
+        )
         self.processor = processor
         self.apc_manager = apc_manager
         self.apc_semantic_hash = apc_semantic_hash
@@ -841,6 +847,14 @@ class VLMBatchRunner:
     def _step_group(self, group: _Group) -> None:
         from .kernels import batch_invariant
 
+        if not getattr(self, "_kernel_configuration_logged", False):
+            self._kernel_configuration_logged = True
+            logger.info(
+                "APC runtime kernels: qualified=%s installed=%s module=%s",
+                self.prefix_invariant,
+                batch_invariant.is_installed(),
+                batch_invariant.__file__,
+            )
         # Drop rows whose consumer left or whose request was cancelled.
         for uid, job in list(group.jobs.items()):
             cancelled = job.cancel_event is not None and job.cancel_event.is_set()

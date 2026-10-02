@@ -83,9 +83,38 @@ def test_singleton_batch_cache_keeps_the_same_decode_dispatch(monkeypatch):
     ]
     cache_decode.set_active(True)
     try:
+        c.lengths = mx.array([1], dtype=mx.int32)
         assert (
             cls.__call__(layer, mx.zeros((1, 1, 32), mx.bfloat16), cache=c)
             == "canonical"
         )
     finally:
         cache_decode.set_active(False)
+
+
+def test_shared_attention_uses_the_same_tile_as_dense_singleton(monkeypatch):
+    from yunshu_engine import cache_decode
+    from yunshu_engine.kernels import ragged_attention
+
+    seen = {}
+    monkeypatch.setattr(
+        ragged_attention,
+        "ragged_decode_attention",
+        lambda *args, **kwargs: seen.update(kwargs) or "tile",
+    )
+    c = SimpleNamespace(
+        keys=mx.zeros((4, 1, 256, 256), mx.bfloat16),
+        values=mx.zeros((4, 1, 256, 256), mx.bfloat16),
+        offset=mx.array([64] * 4),
+        _idx=64,
+        k_scales=None,
+        v_scales=None,
+        lengths=[64] * 4,
+        slot_ids=mx.arange(4),
+    )
+    assert (
+        cache_decode.canonical_attention(c, mx.zeros((4, 4, 1, 256), mx.bfloat16), 0.1)
+        == "tile"
+    )
+    assert seen["impl"] == "tile"
+    assert seen["row_lengths"] == [64] * 4

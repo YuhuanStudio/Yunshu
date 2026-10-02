@@ -278,6 +278,7 @@ def _release_lora_adapter(engine, adapter_id: str | None) -> None:
 class TextContent(BaseModel):
     type: str = "text"
     text: str
+    prompt_cache_breakpoint: dict | None = None
 
 
 class ImageURL(BaseModel):
@@ -794,7 +795,10 @@ def _extract_messages(msgs: list[ChatMessage]) -> list[dict]:
                 isinstance(p, dict) and p.get("type") not in (None, "text")
                 for p in parts
             )
-            if parts and not _has_non_text:
+            _has_cache_marker = any(
+                p.get("prompt_cache_breakpoint") for p in parts if isinstance(p, dict)
+            )
+            if parts and not _has_non_text and not _has_cache_marker:
                 d["content"] = "\n".join(
                     p.get("text", "") for p in parts if isinstance(p, dict)
                 )

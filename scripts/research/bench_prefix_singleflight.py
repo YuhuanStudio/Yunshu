@@ -184,6 +184,8 @@ def main():
                                 in log,
                                 "shared_gdn": "APC shared GDN singleton arithmetic engaged:"
                                 in log,
+                                "shared_attention_tile": "APC shared attention tile arithmetic engaged"
+                                in log,
                                 "source": source,
                             },
                             "server_log": str(server.log),

@@ -2880,7 +2880,17 @@ class VLMEngine:
                     texts.append(part.get("text", ""))
                 elif isinstance(part, str):
                     texts.append(part)
-            return " ".join(texts)
+            # Chat/Responses normally flatten text-only blocks with newlines.
+            # Cache markers retain the parts; preserve that exact input text.
+            separator = (
+                "\n"
+                if any(
+                    isinstance(p, dict) and p.get("prompt_cache_breakpoint")
+                    for p in content
+                )
+                else " "
+            )
+            return separator.join(texts)
         return str(content)
 
     # ── Image Extraction ──

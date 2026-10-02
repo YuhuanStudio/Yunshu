@@ -186,3 +186,25 @@ def test_openai_implicit_keeps_a_reusable_developer_head():
         {"mode": "implicit", "ttl": "30m"},
     )
     assert len(plan["write_markers"]) == 2
+
+
+def test_chat_conversion_preserves_explicit_content_breakpoint():
+    from yunshu_gateway.routers.chat import ChatMessage, _extract_messages
+
+    message = ChatMessage(
+        role="user",
+        content=[
+            {
+                "type": "text",
+                "text": "stable",
+                "prompt_cache_breakpoint": {"mode": "explicit"},
+            },
+            {"type": "text", "text": "tail"},
+        ],
+    )
+    converted = _extract_messages([message])[0]["content"]
+    assert isinstance(converted, list)
+    assert converted[0]["prompt_cache_breakpoint"] == {"mode": "explicit"}
+    from yunshu_engine.vlm_engine import VLMEngine
+
+    assert VLMEngine._extract_text(converted) == "stable\ntail"
