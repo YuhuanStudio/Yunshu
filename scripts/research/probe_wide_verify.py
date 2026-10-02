@@ -11,6 +11,7 @@ and tree shapes), pipelined like the rounds, with a barrier split by part.
 """
 
 import argparse
+import copy
 import json
 import sys
 import time
@@ -18,6 +19,11 @@ from collections import defaultdict
 from pathlib import Path
 
 import mlx.core as mx
+
+if __package__:
+    from .spec_bench_snapshot import refuse_contended
+else:
+    from spec_bench_snapshot import refuse_contended
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python"))
 
@@ -42,7 +48,7 @@ def shape_parents(kind: str, w: int) -> list[int]:
 def setup(model_dir: str, lane_linear: bool = True):
     from mlx_vlm import load
 
-    from yunshu_engine.kernels import omlx, ragged_kv
+    from yunshu_engine.kernels import gdn_prefill, omlx, ragged_kv
     from yunshu_engine.kernels.batch_invariant import install as install_invariant
     from yunshu_engine.kernels.batch_invariant import set_active
 
@@ -53,7 +59,9 @@ def setup(model_dir: str, lane_linear: bool = True):
         from yunshu_engine.kernels import lane_linear as ll
 
         ll.convert(lm)
+        ll.set_stock_rows(ll.PIECE)
     install_invariant(lm, model=model, packed=False)
+    gdn_prefill.install()
     set_active(True)
     ragged_kv.install()
     ragged_kv.set_dense_lane(True)
@@ -74,6 +82,18 @@ def chain_verify(lm, toks, cache):
     import mlx_vlm.speculative.mtp as mtp
 
     return mtp._mtp_verify_target(lm, toks, cache, lambda lg: mx.argmax(lg, axis=-1))
+
+
+def path_reference(lm, toks, cache):
+    """A one-node path uses canonical decode on a private cache. The single-row
+    speculative verifier skips verify prework (min_length=2) and is not the
+    invariant decoder's arithmetic; it cannot be used as the tree root oracle.
+    """
+    if toks.shape[1] == 1:
+        out = lm(toks, cache=copy.deepcopy(cache), return_hidden=True)
+        return out.hidden_states[-1], lambda: None
+    result = chain_verify(lm, toks, cache)
+    return result.hidden, result.abort
 
 
 def invariance(a, lm, ids):
@@ -125,11 +145,11 @@ def invariance(a, lm, ids):
             for rr in range(T):
                 path = shape.paths[rr]
                 pt = mx.array([[int(toks[0, p].item()) for p in path]])
-                rc = chain_verify(lm, pt, cache)
-                mx.eval(rc.hidden)
-                if not mx.array_equal(rc.hidden[:, -1], h_tree[:, rr]).item():
+                reference, abort = path_reference(lm, pt, cache)
+                mx.eval(reference)
+                if not mx.array_equal(reference[:, -1], h_tree[:, rr]).item():
                     bad.append(rr)
-                rc.abort()
+                abort()
             print(
                 json.dumps(
                     {
@@ -247,11 +267,27 @@ def main():
     ap.add_argument("--context-list", type=int, nargs="+", default=[1024])
     ap.add_argument("--shapes", nargs="+", default=["heap"])
     ap.add_argument("--steps", type=int, default=12)
+    ap.add_argument("--output", type=Path)
     a = ap.parse_args()
+    if a.mode == "time" and a.output is not None and refuse_contended(a.output):
+        return
     model, lm, ids = setup(a.model_dir)
     if a.mode == "invariance":
-        sys.exit(0 if invariance(a, lm, ids) else 1)
-    timing(a, lm, ids)
+        success = invariance(a, lm, ids)
+        rows = []
+    else:
+        rows = timing(a, lm, ids)
+        success = True
+    if a.output is not None:
+        a.output.parent.mkdir(parents=True, exist_ok=True)
+        with a.output.open("x") as out:
+            for row in rows:
+                out.write(json.dumps(row) + "\n")
+            out.write(
+                json.dumps({"complete": True, "success": success, "mode": a.mode})
+                + "\n"
+            )
+    sys.exit(0 if success else 1)
 
 
 if __name__ == "__main__":

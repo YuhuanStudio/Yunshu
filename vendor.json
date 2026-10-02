@@ -1333,6 +1333,36 @@
       "why": "a WARM hit is decoded into the RAM tier through the upstream byte-budget admission",
       "source_sha256": "094ed706a1cb3ed3fabaea9ce24c10cbdfdedd60e2cc0d56973a190a7bb10447",
       "installed_version": "0.7.4"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/dflash_draft.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.speculative.drafters.qwen3_dflash.dflash",
+      "symbol": "DFlashDraftModel._project_context_kv",
+      "signature": "(self, hidden: mlx.core.array)",
+      "license": "MIT",
+      "commit": "v0.7.4",
+      "installed_version": "0.7.4",
+      "source_sha256": "e1961cbdf5902336ae9ca4e7a4b755943b69af942401cf9c38fc3fcf752c0058",
+      "why": "instance-only prototype: affine quantized context KV fusion"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/dflash_draft.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.speculative.drafters.qwen3_dflash.dflash",
+      "symbol": "DFlashDraftModel.draft_block_greedy",
+      "signature": "(self, last_bonus, hidden: mlx.core.array, cache: List[mlx_vlm.models.cache.KVCache], block_size: int, sampler, token_dtype: mlx.core.Dtype = mlx.core.int32) -> mlx.core.array",
+      "license": "MIT",
+      "commit": "v0.7.4",
+      "installed_version": "0.7.4",
+      "source_sha256": "c367cf45513db12de61a0c5201d2943d1fbda5d024d03e7fe9cca1e794cccbc1",
+      "why": "instance-only prototype: preserve DFlash2 subclass candidate selector on greedy proposals"
     }
   ],
   "watch": [

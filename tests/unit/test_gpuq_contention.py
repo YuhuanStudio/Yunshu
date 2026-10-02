@@ -68,7 +68,8 @@ def test_quiet_gate_requires_continuous_window_and_has_bounded_wait(q):
     h = helper()
     gate = h.QuietGate()
     job = dict(
-        priority=0, quiet=True,
+        priority=0,
+        quiet=True,
         env={},
         contention_config=dict(threshold_pct=150, window_s=20, max_wait_s=60),
     )
@@ -78,7 +79,9 @@ def test_quiet_gate_requires_continuous_window_and_has_bounded_wait(q):
     for now in range(122, 140, 2):
         assert gate.blocked(job, sample(50, now), now)
     assert not gate.blocked(job, sample(50, 140), 140)
-    other = dict(priority=0, quiet=True, env={}, contention_config=job["contention_config"])
+    other = dict(
+        priority=0, quiet=True, env={}, contention_config=job["contention_config"]
+    )
     assert gate.blocked(other, sample(500, 100), 100)
     for now in range(102, 160, 2):
         assert gate.blocked(other, sample(500, now), now)
@@ -515,7 +518,8 @@ def test_adoption_marks_a_gap_even_when_old_cpu_samples_exist(q, monkeypatch):
         id=jid,
         pid=123,
         state="running",
-        priority=0, quiet=True,
+        priority=0,
+        quiet=True,
         started=90,
         cpu_samples=[sample(20, 100)],
     )
@@ -549,7 +553,8 @@ def test_adoption_survives_structurally_invalid_flag(q, monkeypatch, payload):
         id=jid,
         state="running",
         pid=123,
-        priority=0, quiet=True,
+        priority=0,
+        quiet=True,
         started=90,
         cpu_samples=[sample(20, 100)],
     )

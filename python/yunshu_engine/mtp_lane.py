@@ -69,10 +69,61 @@ def set_context(ids: Any) -> None:
     _STATE["context"] = ids
 
 
-def set_copy_rows(rows: int) -> None:
-    """Verify rows a copy round may use (drafts <= rows - 1); 0 turns copy rounds off.
-    The batch-invariant verify kernels are exact up to 8 rows today."""
-    _STATE["copy_rows"] = max(0, int(rows))
+def verify_max_rows(lane_projections: bool, language_model: Any = None) -> int:
+    """Widest verify window whose rows equal plain decode: with the lane
+    projections and the tile attention kernel the fused GDN, tile attention and
+    lane matmul are row-invariant to 32 rows; otherwise (sg8 / packed
+    projections) 8."""
+    from .kernels import ragged_attention as ra
+
+    if not lane_projections or not ra.tile_ready():
+        return 8
+    if language_model is not None:
+        for layer in language_model.model.layers:
+            # Expert projections are not converted to LaneLinear; their
+            # wider-row arithmetic has not been certified by this lane.
+            if hasattr(getattr(layer, "mlp", None), "switch_mlp"):
+                return 8
+            if layer.is_linear:
+                continue
+            attention = layer.self_attn
+            if (
+                attention.head_dim != 256
+                or attention.num_attention_heads // attention.num_key_value_heads > 8
+            ):
+                return 8
+    return ra.MAX_WINDOW
+
+
+def set_copy_rows(rows: int, limit: int | None = None) -> int:
+    """Verify rows a copy round may use (drafts <= rows - 1); 0 turns copy rounds
+    off. ``limit`` is the verify's real maximum width (``verify_max_rows``); the
+    rows are capped to it. Returns the rows in effect."""
+    rows = max(0, int(rows))
+    if limit is not None:
+        rows = min(rows, max(0, int(limit)))
+    _STATE["copy_rows"] = rows
+    return rows
+
+
+def copy_rows_for_model(language_model: Any) -> int:
+    """Recheck the current target, even if another loaded engine set the lane's
+    process-global copy preference after this engine was constructed."""
+    rows = int(_STATE["copy_rows"])
+    if rows < 3:
+        return rows
+    layers = getattr(getattr(language_model, "model", None), "layers", None)
+    if not layers:  # unknown projection geometry keeps the conservative bound
+        return min(rows, 8)
+    from .kernels.lane_linear import LaneLinear
+
+    layer = layers[0]
+    projection = (
+        layer.linear_attn.in_proj_qkv if layer.is_linear else layer.self_attn.q_proj
+    )
+    return min(
+        rows, verify_max_rows(isinstance(projection, LaneLinear), language_model)
+    )
 
 
 def can_guide(draft_model: Any) -> bool:
@@ -185,8 +236,9 @@ def rounds(
     b = int(first_bonus)
     copy = None
     context = _STATE["context"]
-    if _STATE["copy_rows"] >= 3 and context is not None:
-        copy = CopyDrafter(max_draft=_STATE["copy_rows"] - 1)
+    copy_rows = copy_rows_for_model(lm)
+    if copy_rows >= 3 and context is not None:
+        copy = CopyDrafter(max_draft=copy_rows - 1)
         copy.extend(context)
         copy.extend([b])
 
@@ -205,6 +257,7 @@ def rounds(
 
     prof = _STATE["profile"]
     clock = time.perf_counter
+    last_readback: float | None = None
 
     def mark(name, since):
         now = clock()
@@ -289,6 +342,8 @@ def rounds(
             t = mark("submit", t)
             values = flat.reshape(-1).tolist()
             t = mark("gpu_wait", t)
+            round_ms = (t - last_readback) * 1e3 if last_readback is not None else None
+            last_readback = t
             drafted = values[: bs - 1]
             tgt = values[bs - 1 : 2 * bs - 1]
             next_seed = values[2 * bs - 1 :]
@@ -321,7 +376,7 @@ def rounds(
             # The next chain is queued before the rollback is built.
             if copy is not None:
                 if is_copy:
-                    copy.observe_copy(bs - 1, accepted)
+                    copy.observe_copy(bs - 1, accepted, round_ms)
                     draft_model.copy_total_rounds = (
                         getattr(draft_model, "copy_total_rounds", 0) + 1
                     )
@@ -329,7 +384,7 @@ def rounds(
                         draft_model, "copy_total_tokens", 0
                     ) + len(new_tokens)
                 else:
-                    copy.observe_model(len(new_tokens))
+                    copy.observe_model(len(new_tokens), round_ms)
                 copy.extend(new_tokens)
                 next_copy = plan_copy(emitted + len(new_tokens))
             nb = min(block_total, max_tokens - (emitted + len(new_tokens)) + 1)
