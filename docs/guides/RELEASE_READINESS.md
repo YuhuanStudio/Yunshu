@@ -14,7 +14,7 @@ The reference points are what users of other local servers already know:
 - **mlx-serve**: a single binary.
 - **LM Studio**: a GUI and `lms` CLI, with the server on `localhost:1234` by default.
 
-Status as of 2026-09-29. ✅ done and checked, 🟡 partly done, ❌ missing. P1 = before the
+Status reviewed 2026-10-02 (released v0.1.2; later main changes are unreleased). ✅ done and checked, 🟡 partly done, ❌ missing. P1 = before the
 first public release, P2 = soon after, P3 = later or on request.
 
 ## Install
@@ -24,8 +24,8 @@ first public release, P2 = soon after, P3 = later or on request.
 | From source (`uv sync --extra vision`) | ✅ | `uv.lock` pins MLX 0.32.3 / mlx-lm 0.32.0 / mlx-vlm 0.7.4 |
 | `uv tool install` from a wheel | ✅ | Clean tool env on 2026-09-29, then `doctor`, serve Qwen3.5-0.8B, `/health`, `/version`, `/v1/models`, chat, `/v1/messages`, `service install --dry-run` |
 | `uv tool install` from git | ✅ | Same package as the wheel; the repository is public |
-| PyPI (`uv tool install "yunshu[vision]"`, `pipx install`) | 🟡 P1 | 0.1.2 builds and passes `twine check`; the name `yunshu` was free on 2026-09-29. Publishing waits for the maintainer's go-ahead and the one-time trusted-publisher setup ([RELEASING.md](../../RELEASING.md)) |
-| Homebrew | 🟡 P2 | Formula for the shared tap [YuhuanStudio/homebrew-tap](https://github.com/YuhuanStudio/homebrew-tap) (`brew install yuhuanstudio/tap/yunshu`) in `packaging/homebrew/`; added after the PyPI release ([steps](../../packaging/homebrew/README.md)) |
+| PyPI (`uv tool install "yunshu[vision]"`, `pipx install`) | ✅ | v0.1.1 (2026-09-29) and v0.1.2 (2026-10-02) released; see [RELEASING.md](../../RELEASING.md) |
+| Homebrew | 🟡 P2 | Formula points to the published v0.1.2 sdist in the shared tap [YuhuanStudio/homebrew-tap](https://github.com/YuhuanStudio/homebrew-tap) (`brew install yuhuanstudio/tap/yunshu`) in `packaging/homebrew/`; added after the PyPI release ([steps](../../packaging/homebrew/README.md)) |
 | macOS app / menu bar / DMG | — | Not planned for now: CLI + launchd service (decided 2026-09-29) |
 | `curl … \| bash` installer with a model suggestion by RAM | ❌ P3 | Rapid-MLX has one; `uv tool install` + `yunshu doctor` covers most of it |
 | Python versions | 🟡 P3 | 3.13 only (oMLX supports 3.11–3.13) |
@@ -52,22 +52,22 @@ first public release, P2 = soon after, P3 = later or on request.
 | Background service | ✅ | `yunshu service install/uninstall/start/stop/restart/status/logs` (launchd, restart on crash, `~/Library/Logs/Yunshu`). Plist generation tested; not loaded on the development Mac |
 | Health / status endpoints | ✅ | `/health`, `/health/ready` (503 when not ready), `/health/live`, `/version`, `/metrics`; `yunshu status` |
 | Settings: one entry point | ✅ | Registry + TOML (`~/.yunshu/config.toml` by default) + `--set` + `yunshu config` / `config set` + generated reference |
-| Admin web UI / built-in chat page | ❌ P3 | oMLX has `/admin`; Yunshu has the `yunshu chat` terminal client. Decision |
-| Application log file with rotation | 🟡 P3 | The service log is one file without rotation; the foreground server logs to the terminal |
+| Terminal chat client | ✅ | `yunshu chat`; no admin control plane |
+| Service log rotation | ✅ | Size / age rotation, redacted gzip archives, count / age retention; `yunshu service rotate-logs` |
 
 ## Clients
 
 | | Status | Notes |
 |---|---|---|
 | OpenAI SDKs, curl, Anthropic SDK | ✅ | [CLIENTS.md](CLIENTS.md). Auth accepts `Bearer` and `x-api-key` |
-| `yunshu launch` for Codex / OpenCode / Pi | ✅ | |
-| Claude Code, Cline, Continue, Open WebUI | 🟡 P2 | Configuration documented; not wire-tested each release (Rapid-MLX runs a matrix). A small scripted client matrix is the next step |
+| `yunshu launch` for Claude Code / Codex / opencode / Pi | ✅ | |
+| Claude Code, Cline, Continue, Open WebUI | 🟡 P2 | Claude Code / Codex / opencode have feature-level E2E evidence in [AGENT_COMPAT.md](AGENT_COMPAT.md); Cline / Continue / Open WebUI remain configuration guidance, not per-release E2E claims |
 
 ## Upgrade and uninstall
 
 | | Status | Notes |
 |---|---|---|
-| Upgrade | 🟡 | `uv tool upgrade yunshu` once on PyPI; the service needs `yunshu service restart` afterwards ([SERVICE.md](SERVICE.md)) |
+| Upgrade | 🟡 | `uv tool upgrade yunshu` for the released package; the service needs `yunshu service restart` afterwards ([SERVICE.md](SERVICE.md)) |
 | Uninstall | ✅ | Documented in [SERVICE.md](SERVICE.md#uninstalling-yunshu-completely) |
 
 ## Release engineering
@@ -77,13 +77,13 @@ first public release, P2 = soon after, P3 = later or on request.
 | One version source | ✅ | `pyproject.toml`; the CLI, `/version`, OpenAPI and MCP read the installed metadata |
 | CHANGELOG | ✅ | `## [0.1.2]` entry; version bumped in `pyproject.toml` and `uv.lock` |
 | Release workflow | ✅ | Tag-only; checks version / changelog, lint, tests, build, twine, clean install, PyPI behind approval, draft GitHub release |
-| CI on push | 🟡 P1 | Lint + build on Linux; macOS unit tests only on release / manual run (to save quota). Never run on GitHub yet: the first push is the first run |
+| CI on push | 🟡 P1 | Lint + build on Linux; macOS unit tests only on release / manual run (to save quota). See the workflow run history; no fresh CI run is claimed by this checklist |
 | Third-party notices in the artifacts | ✅ | `THIRD_PARTY_NOTICES.md` ships in the wheel and sdist |
 | Telemetry | ✅ | None collected, stated in the README. Outbound connections happen only on user action: model downloads, MCP servers you configure, the configured `web_search` provider, and `web_fetch` for URLs a request names |
 
 ## Decisions (2026-09-29)
 
-- The repository is public; PyPI `yunshu` 0.1.2 is published after the maintainer approves the
+- The repository is public; v0.1.1 and v0.1.2 are released. Future releases follow the
   pre-release check.
 - CLI + launchd service; no app for now.
 - Homebrew through the shared tap `YuhuanStudio/homebrew-tap`.

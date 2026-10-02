@@ -8,12 +8,12 @@ noise, so it cannot see small numeric drift. Three tiers, cheapest and most sens
 |---|---|---|---|---|
 | 1 | next-token distributions on fixed text (teacher forcing) | about 1e-4 nats of KLD | about 10 min per condition | implemented, `scripts/research/accuracy/kld.py` |
 | 2 | greedy continuations of 50 fixed prompts x 256 tokens | first differing token | about 15 min per condition | implemented, `scripts/research/accuracy/greedy_div.py` |
-| 3 | paired downstream evals (GSM8K, IFEval, MMLU-Pro, needle/RULER, tool calls) | accuracy differences of about 1 point | hours | plan only (below) |
+| 3 | paired downstream evals (GSM8K, IFEval, MMLU-Pro, needle/RULER, tool calls) | paired task differences; sensitivity depends on n and discordance | hours | running; final GSM8K, other rows partial / pending (below) |
 
 The reference is always stock mlx-vlm on the same checkpoint with no Yunshu kernel imported
 (no batch_invariant, ragged KV, lane, omlx, int-code). The run asserts this. The candidate is
 what `VLMEngine._build_batch_runner` installs: oMLX verify kernels, batch-invariant and
-NAX-packed projections (active only in the speculative lane), ragged KV.
+lane-linear projections (active in the speculative lane; older runs used NAX-packed projections), ragged KV.
 
 ## Tier 1: teacher-forced logit alignment
 
@@ -78,7 +78,7 @@ Tier 2 pass criteria:
   the results note below);
 * stock rerun 50/50 identical (harness sanity).
 
-First measurement (Qwen3.8-27B oQ4e): the engine's speculative-off path (stock decode
+Recorded first measurement (Qwen3.8-27B oQ4e; not a rerun after the 2026-10-02 prefill/wide-verify merges): the engine's speculative-off path (stock decode
 kernels inside the runner) and speculative-on path (invariant kernels) match each other in
 26/50 prompts, and each matches the stock reference in 26-27/50. The spec-on == spec-off
 gate therefore fails when "off" means the runner's plain decode; it holds inside the
@@ -92,6 +92,9 @@ Status: running. GSM8K is final; MMLU-Pro, IFEval, BFCL and needle are still bei
 the harness (`scripts/research/accuracy/paired_eval.py`) actually does and found.
 
 ### Results (Qwen3.8-27B oQ4e-mtp, M5 Max, 2026-10-02)
+
+Recorded in `2815311c`; the public table does not pin each candidate run SHA. Later
+unreleased main prefill/wide-verify changes are not re-evaluated by these scores.
 
 Method as run: reference = stock `mlx_vlm.server` (same checkpoint, no Yunshu import),
 candidate = Yunshu default settings, same HTTP chat endpoint, greedy, thinking on with
