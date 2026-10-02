@@ -7,7 +7,7 @@ Release steps: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
-## [0.1.2] - 2026-10-01
+## [0.1.2] - 2026-10-02
 
 Agent compatibility, constrained decoding that says what it cannot do, a bounded SSD prefix cache,
 and sampled requests that use speculative decoding.

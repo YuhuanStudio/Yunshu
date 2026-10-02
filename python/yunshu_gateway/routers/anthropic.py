@@ -323,6 +323,12 @@ class AnthropicMessagesRequest(BaseModel):
                 raise ValueError(
                     f"response_format.type: must be 'json_object', 'json_schema', or 'text', got '{rf_type}'"
                 )
+        # Reject an unusable grammar (bad Lark / regex) here, as a 400, rather than
+        # when the engine builds the constraint.
+        if isinstance(self.grammar, dict):
+            from yunshu_engine.grammar_constraint import validate_constraint_spec
+
+            validate_constraint_spec(self.grammar)
         # Per Anthropic spec: top_logprobs requires logprobs=True
         if self.top_logprobs is not None and not self.logprobs:
             raise ValueError("top_logprobs requires logprobs to be true")

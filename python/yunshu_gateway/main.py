@@ -962,6 +962,12 @@ def create_app() -> FastAPI:
     from .x_yunshu import YunshuExtensionsMiddleware
 
     app.add_middleware(YunshuExtensionsMiddleware)
+    # Every request/WS holds a lease on each model it acquires until it ends, so
+    # unload / TTL / eviction cannot pull it mid-response (wraps everything but the
+    # metrics + disconnect layers, which hold no engine).
+    from .middleware.model_lease import ModelLeaseMiddleware
+
+    app.add_middleware(ModelLeaseMiddleware)
     # OUTERMOST — added last so it wraps auth/rate-limit and records their
     # rejections (401/429/413/503) into the metrics, which it could not see when innermost.
     app.add_middleware(MetricsMiddleware)

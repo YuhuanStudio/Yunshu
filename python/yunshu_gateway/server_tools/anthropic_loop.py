@@ -45,6 +45,7 @@ from .runtime import (
     explicit_tool_request,
     format_search_text,
     mcp_tool_to_def,
+    parse_tool_args,
     run_all,
     safe_fname,
 )
@@ -624,6 +625,12 @@ async def run_stream(req, request, inner: Inner, setup: _Setup) -> AsyncIterator
                 except ValueError:
                     args = {}
                 tb["args"] = args
+                # what the tool runs on: tolerant of truncated / bare-string arguments
+                tb["exec_args"] = (
+                    args
+                    if isinstance(args, dict) and args
+                    else parse_tool_args(tb["json"])
+                )
                 if tb["server"]:
                     calls.append(tb)
             client_calls = [tb for tb in tool_blocks.values() if not tb["server"]]
@@ -631,7 +638,7 @@ async def run_stream(req, request, inner: Inner, setup: _Setup) -> AsyncIterator
                 stop_reason = turn_stop
                 break
             outcomes = await run_all(
-                rt, [(tb["def"].fname, tb["args"]) for tb in calls]
+                rt, [(tb["def"].fname, tb["exec_args"]) for tb in calls]
             )
             assistant_blocks = [b for b in model_turn]
             result_msgs = []

@@ -1196,6 +1196,24 @@ def validate_llg_json_schema(schema: dict) -> None:
         )
 
 
+def validate_llg_cfg(grammar: str) -> None:
+    """Raise ``UnsupportedGrammarError`` for a Lark grammar llguidance cannot compile.
+
+    Needs no tokenizer, so the gateway can reject a bad grammar with a 400 at
+    request validation instead of when the engine builds the constraint.
+    """
+    try:
+        from llguidance import LLMatcher
+    except ImportError:  # no llguidance: the engine reports it when it builds
+        return
+    try:
+        err = LLMatcher.validate_grammar(LLMatcher.grammar_from_lark(grammar))
+    except Exception as exc:  # noqa: BLE001 - llguidance raises plain exceptions
+        err = str(exc)
+    if err:
+        raise UnsupportedGrammarError(f"invalid CFG grammar: {err[:400]}")
+
+
 def build_json_constraint(schema: Any, tokenizer: Any = None) -> Any:
     """The constraint for a JSON schema (``None`` = any JSON object).
 
@@ -1403,6 +1421,7 @@ def validate_constraint_spec(spec: Any) -> None:
     if gtype == "cfg" and "grammar" in spec:
         if not isinstance(spec["grammar"], str):
             raise UnsupportedGrammarError("cfg constraint requires a grammar string")
+        validate_llg_cfg(spec["grammar"])
         return
     from .json_schema import UnsupportedSchemaError, validate_supported_schema
 

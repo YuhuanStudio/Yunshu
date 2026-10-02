@@ -66,8 +66,6 @@ async def test_unload_is_refused_while_a_request_runs_then_works(
         assert_one_terminal(dialect, rep.text)
         await a.settle()
         a.assert_clean()
-        # the hand-off window that keeps a just-served model loaded has passed
-        mgr.get_entry("fault-model").handoff_until = 0.0
         r = await asgi_call(app, "POST", "/v1/models/unload/fault-model")
         assert r.status == 200, r.text
         assert not mgr.get_entry("fault-model").is_loaded
@@ -78,7 +76,6 @@ async def test_request_after_unload_is_a_clean_error_not_a_hang(managed):
     path, body = request_for("openai", False, model="fault-model")
     async with running_app(app, warm=False):
         eng.script = Script.ok("x")
-        mgr.get_entry("fault-model").handoff_until = 0.0
         assert (
             await asgi_call(app, "POST", "/v1/models/unload/fault-model")
         ).status == 200

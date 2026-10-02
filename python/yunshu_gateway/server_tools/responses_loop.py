@@ -40,6 +40,7 @@ from .runtime import (
     ServerToolRuntime,
     format_search_text,
     mcp_tool_to_def,
+    parse_tool_args,
     run_all,
     safe_fname,
 )
@@ -505,13 +506,7 @@ def _args_str(v: Any) -> str:
 
 
 def _parse_args(v: Any) -> dict:
-    if isinstance(v, dict):
-        return v
-    try:
-        r = json.loads(v) if v else {}
-    except ValueError:
-        return {}
-    return r if isinstance(r, dict) else {}
+    return parse_tool_args(v)
 
 
 def _approval_items(req, request) -> tuple[list[dict], set[str], list[dict]]:

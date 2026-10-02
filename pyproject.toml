@@ -234,6 +234,24 @@ warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
 
+# Optional-extra packages are typed as Any whether or not they are installed, so the
+# baseline gate gives the same result locally (all extras) and in CI (base deps only).
+[[tool.mypy.overrides]]
+module = [
+    "mlx_vlm.*",
+    "mlx_audio.*",
+    "mlx_embeddings.*",
+    "diffusers.*",
+    "torch.*",
+    "torchvision.*",
+    "PIL.*",
+    "zstandard.*",
+    "lz4.*",
+    "xxhash.*",
+]
+follow_imports = "skip"
+follow_imports_for_stubs = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
