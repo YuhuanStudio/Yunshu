@@ -40,7 +40,9 @@ def contention_config(job=None):
 
 
 def requires_quiet(job):
-    return job.get("priority", 0) >= 0 or bool(job.get("quiet"))
+    # Only jobs that compare timings ask for a quiet CPU (--quiet); correctness and
+    # smoke jobs run at once. Contention is still sampled and recorded for every job.
+    return bool(job.get("quiet"))
 
 
 def process_snapshot():

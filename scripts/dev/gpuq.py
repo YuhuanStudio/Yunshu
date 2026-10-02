@@ -30,7 +30,7 @@ Submit-level repeatable ``--out PATH`` declares expected results; ``--expect-com
 Duplicate active labels are refused; submitting never deletes earlier artifacts.
 
 CPU contention (Q02): every job records load averages and the top foreign CPU consumers at start,
-periodically and end, excluding its own descendants/process group. p>=0 and --quiet jobs wait for a
+periodically and end, excluding its own descendants/process group. --quiet jobs (timing measurements) wait for a
 continuous quiet window (default summed foreign CPU <150% for 20s, maximum wait 300s). --cpu-threshold,
 --quiet-window and --quiet-max-wait override GPUQ_CPU_THRESHOLD / GPUQ_QUIET_WINDOW_S /
 GPUQ_QUIET_MAX_WAIT_S. GPUQ_CPU_SAMPLE_S controls stored periodic samples (default 30s); monitoring polls
@@ -956,7 +956,7 @@ def main() -> int:
             help="require a line containing complete in every output",
         )
         p.add_argument(
-            "--quiet", action="store_true", help="wait for quiet CPU even for p<0"
+            "--quiet", action="store_true", help="timing measurement: wait for a quiet CPU before starting and treat contention as untrustworthy"
         )
         p.add_argument(
             "--cpu-threshold",
