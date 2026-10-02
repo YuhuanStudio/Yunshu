@@ -1684,12 +1684,10 @@ class VLMEngine:
                     "cfg": json_schema.get("grammar", ""),
                 }[gtype]
                 return ConstraintFactory.create(gtype, grammar, self._tokenizer)
-            from .json_schema import JsonSchemaConstraint
-
-            if isinstance(json_schema, str) and json_schema == "json_object":
-                return JsonSchemaConstraint(None)
             from .grammar_constraint import build_json_constraint
 
+            if isinstance(json_schema, str) and json_schema == "json_object":
+                return build_json_constraint(None, self._tokenizer)
             return build_json_constraint(json_schema, self._tokenizer)
         except Exception as exc:
             raise ValueError("Grammar constraint initialization failed") from exc

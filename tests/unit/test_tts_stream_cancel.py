@@ -66,3 +66,30 @@ async def test_stalled_client_releases_executor_quickly():
     assert time.monotonic() - t0 < 4.0
     await agen.aclose()
     eng._executor.shutdown(wait=True)
+
+
+class _SlowModel(_Model):
+    def stream_generate(self, text, verbose=False):
+        for _ in range(self.n):
+            time.sleep(0.01)
+            self.computed += 1
+            yield SimpleNamespace(audio=np.zeros(16, dtype=np.float32), text="x")
+
+
+@pytest.mark.asyncio
+async def test_barge_in_stops_the_thread_while_the_consumer_is_not_reading():
+    """The cancel event is set while the consumer is parked (a slow websocket send):
+    the thread must stop at its next chunk, not run on until the queue fills."""
+    model = _SlowModel(n=500)
+    eng = _engine(model)
+    ev = asyncio.Event()
+    agen = eng.synthesize_stream("hi", cancel_event=ev)
+    await agen.__anext__()  # first chunk, then the consumer parks
+    ev.set()  # barge-in
+    await asyncio.sleep(0.3)
+    first = model.computed
+    await asyncio.sleep(0.3)
+    assert model.computed == first, "the thread kept computing after the cancel"
+    assert first < 40
+    await agen.aclose()
+    eng._executor.shutdown(wait=True)

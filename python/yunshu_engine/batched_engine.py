@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import settings
-from .context_window import ContextBudgetError
+from .context_window import ContextBudgetError, reject_overlong_prompt
 from .fast_path_stats import FastPathStats
 from .stream_bridge import StreamBridge, make_stream_queue
 from .text_utils import StopHoldbackBuffer
@@ -899,7 +899,7 @@ def _build_constrained_sampler(sampler, json_schema, tokenizer):
     if isinstance(json_schema, str):
         if json_schema == "json_object":
             # Generic JSON object mode — no specific schema
-            constraint = build_json_constraint(None)
+            constraint = build_json_constraint(None, tokenizer)
         else:
             import json as _json
 
@@ -949,7 +949,7 @@ def _build_grammar_constraint(json_schema, tokenizer):
 
         return build_json_constraint(_json.loads(json_schema), tokenizer)
     if json_schema == "json_object":
-        return build_json_constraint(None)
+        return build_json_constraint(None, tokenizer)
     return build_json_constraint(json_schema, tokenizer)
 
 
@@ -3348,18 +3348,9 @@ class BatchedEngine:
         # RoPE-extrapolated garbage. Resolve correctly, then clamp max_tokens.
         _max_ctx = _resolve_model_max_ctx(model)
         if _max_ctx and _max_ctx > 0:
-            # Deeper fallback: prompt alone exceeds the window → left-truncate.
-            # (The gateway context guard normally rejects this with a 400 first.)
-            if prompt_tokens >= _max_ctx:
-                _orig = prompt_tokens
-                input_ids = input_ids[-max(1, _max_ctx - 1) :]
-                prompt_tokens = len(input_ids)
-                logger.warning(
-                    "Fast path prompt truncated to fit context: %d → %d tokens (ctx=%d)",
-                    _orig,
-                    prompt_tokens,
-                    _max_ctx,
-                )
+            # Prompt alone fills the window: reject (the gateway guard normally
+            # does this first); never cut the token stream from the left.
+            reject_overlong_prompt(prompt_tokens, _max_ctx)
             # Clamp max_tokens so prompt + generation stays within the window
             # (prevents RoPE-extrapolated garbage past max_position_embeddings).
             _room = _max_ctx - prompt_tokens
@@ -3485,7 +3476,7 @@ class BatchedEngine:
                 import json as _json
                 import time as _jf_time
 
-                from .json_schema import JsonSchemaConstraint
+                from .grammar_constraint import build_json_constraint
                 from .mlx_executor import get_mlx_executor
 
                 if json_schema == "json_object":
@@ -3494,7 +3485,9 @@ class BatchedEngine:
                     _jf_schema = _json.loads(json_schema)
                 else:
                     _jf_schema = json_schema
-                _jf_constraint = JsonSchemaConstraint(_jf_schema)
+                _jf_constraint = build_json_constraint(
+                    _jf_schema, self._tokenizer, compact=True
+                )
                 _jf_t0 = _jf_time.perf_counter()
                 _jf_loop = asyncio.get_running_loop()
                 # Count this against the fast-path concurrency gauge like the normal
@@ -5175,16 +5168,7 @@ class BatchedEngine:
         # prompt+generation can't decode past the window into RoPE garbage.
         _max_ctx = _resolve_model_max_ctx(model)
         if _max_ctx and _max_ctx > 0:
-            if prompt_tokens >= _max_ctx:
-                _orig = prompt_tokens
-                input_ids = input_ids[-max(1, _max_ctx - 1) :]
-                prompt_tokens = len(input_ids)
-                logger.warning(
-                    "Streaming fast path prompt truncated to fit context: %d → %d tokens (ctx=%d)",
-                    _orig,
-                    prompt_tokens,
-                    _max_ctx,
-                )
+            reject_overlong_prompt(prompt_tokens, _max_ctx)
             _room = _max_ctx - prompt_tokens
             if _room >= 1 and max_tokens > _room:
                 logger.info(

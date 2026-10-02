@@ -568,6 +568,13 @@ class TTSEngine(ActiveRequestMixin):
         if cancel_event is not None and cancel_event.is_set():
             _cancel.set()
 
+        def _cancelled() -> bool:
+            # The caller's event is read directly (a plain bool) so a barge-in stops
+            # the thread at its next chunk even while the consumer is not reading.
+            return _cancel.is_set() or (
+                cancel_event is not None and cancel_event.is_set()
+            )
+
         def _stream_sync():
             try:
                 if _seed is not None:
@@ -582,10 +589,10 @@ class TTSEngine(ActiveRequestMixin):
                 )
                 _first_chunk = True
                 # cancelled while queued behind other work: never start the model
-                gen_iter = iter(()) if _cancel.is_set() else iter(gen_fn(**gen_kwargs))
+                gen_iter = iter(()) if _cancelled() else iter(gen_fn(**gen_kwargs))
                 while True:
                     # Cooperative cancel BEFORE paying for the next chunk.
-                    if _cancel.is_set():
+                    if _cancelled():
                         logger.info("TTS stream cancelled mid-generation")
                         break
                     result = next(gen_iter, None)
@@ -633,7 +640,7 @@ class TTSEngine(ActiveRequestMixin):
                                 _thread_queue.put(_item, timeout=0.05)
                                 break
                             except _queue_mod.Full:
-                                if _cancel.is_set():
+                                if _cancelled():
                                     break
                                 if time.monotonic() >= _deadline:
                                     logger.warning(

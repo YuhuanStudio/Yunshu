@@ -73,6 +73,21 @@ class ContextBudgetError(ValueError):
     """The protected messages plus the latest user turn exceed the budget."""
 
 
+def reject_overlong_prompt(prompt_tokens: int, max_ctx: int) -> None:
+    """Refuse a prompt that fills the model's context window.
+
+    Cutting the token stream from the left would silently drop the system
+    prompt and tool structure; the request fails with the same error as an
+    over-budget message list instead.
+    """
+    if max_ctx > 0 and prompt_tokens >= max_ctx:
+        raise ContextBudgetError(
+            f"Prompt is {prompt_tokens} tokens but the context window is "
+            f"{max_ctx}; it cannot be shortened without dropping the system "
+            f"prompt or tool structure"
+        )
+
+
 def publish_report(report: dict) -> None:
     """Attach a context-policy report to the request being served (a no-op outside one)."""
     logger.info("context policy applied: %s", report)
