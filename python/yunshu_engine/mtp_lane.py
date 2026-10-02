@@ -41,6 +41,7 @@ from typing import Any
 
 import mlx.core as mx
 
+from .copy_drafter import CopyDrafter
 from .keyed_sampling import KeyedSampler
 
 logger = logging.getLogger(__name__)
@@ -51,12 +52,27 @@ _STATE: dict = {
     "window": 0,
     "profile": None,
     "guide": None,
+    "context": None,  # the request's FULL prompt ids (not the tail after a prefix hit)
+    "copy_rows": 8,  # verify rows a copy round may use (0: copy rounds off)
 }
 
 
 def set_guide(guide: Any) -> None:
     """The tool-call guide of the request the lane is stepping (None: none)."""
     _STATE["guide"] = guide
+
+
+def set_context(ids: Any) -> None:
+    """The full prompt ids of the request the lane is stepping (None: none). The
+    copy drafter indexes all of them, however much of the prompt a prefix-cache
+    hit skipped."""
+    _STATE["context"] = ids
+
+
+def set_copy_rows(rows: int) -> None:
+    """Verify rows a copy round may use (drafts <= rows - 1); 0 turns copy rounds off.
+    The batch-invariant verify kernels are exact up to 8 rows today."""
+    _STATE["copy_rows"] = max(0, int(rows))
 
 
 def can_guide(draft_model: Any) -> bool:
@@ -167,6 +183,21 @@ def rounds(
 
     emitted = 1  # the caller already emitted the first bonus
     b = int(first_bonus)
+    copy = None
+    context = _STATE["context"]
+    if _STATE["copy_rows"] >= 3 and context is not None:
+        copy = CopyDrafter(max_draft=_STATE["copy_rows"] - 1)
+        copy.extend(context)
+        copy.extend([b])
+
+    def plan_copy(done: int) -> list[int]:
+        """Copy draft for the next round (``[]``: the model drafts)."""
+        if copy is None:
+            return []
+        cap = min(max_tokens - done, copy.max_draft)
+        return copy.draft(cap) if cap >= 2 else []
+
+    next_copy = plan_copy(emitted)
     if guide is not None:
         guide.feed(b)
     finished = False
@@ -182,11 +213,22 @@ def rounds(
         return now
 
     while emitted < max_tokens and not finished:
-        bs = min(block_total, max_tokens - emitted + 1)
+        is_copy = bool(next_copy)
+        bs = (
+            len(next_copy) + 1
+            if is_copy
+            else min(block_total, max_tokens - emitted + 1)
+        )
         if bs <= 1:
             break
         t = clock()
-        if queued is not None and queued[2] == bs:
+        if is_copy:
+            # A copied run is verified like any draft; the head's chain is not built.
+            draft_tokens, chained = mx.array([next_copy], dtype=token_dtype), 0
+            next_copy = []
+            if queued is not None:  # cannot happen (no chain is queued before a copy)
+                chained = queued[1]
+        elif queued is not None and queued[2] == bs:
             draft_tokens, chained, _ = queued
         else:
             draft_tokens, chained = chain(seed_tok, seed_h, bs)
@@ -277,8 +319,21 @@ def rounds(
                 vocab.learn(new_tokens)
             t = mark("walk", t)
             # The next chain is queued before the rollback is built.
+            if copy is not None:
+                if is_copy:
+                    copy.observe_copy(bs - 1, accepted)
+                    draft_model.copy_total_rounds = (
+                        getattr(draft_model, "copy_total_rounds", 0) + 1
+                    )
+                    draft_model.copy_total_tokens = getattr(
+                        draft_model, "copy_total_tokens", 0
+                    ) + len(new_tokens)
+                else:
+                    copy.observe_model(len(new_tokens))
+                copy.extend(new_tokens)
+                next_copy = plan_copy(emitted + len(new_tokens))
             nb = min(block_total, max_tokens - (emitted + len(new_tokens)) + 1)
-            if nb > 1 and len(new_tokens) == accepted + 1:
+            if nb > 1 and len(new_tokens) == accepted + 1 and not next_copy:
                 queued = (*chain(seed_tok, seed_h, nb), nb)
             t = mark("next_chain_build", t)
             verify.commit(lm, prompt_cache, accepted, bs)
