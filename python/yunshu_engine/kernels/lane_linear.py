@@ -31,6 +31,22 @@ logger = logging.getLogger(__name__)
 
 PIECE = lane_qmm.MAX_ROWS
 NARROW = 256  # outputs below this run the lane matmul in prefill too
+# Calls above this many rows (a prefill chunk) run MLX's own quantized matmul on the weight
+# untiled for the call: the lane kernel reads the whole weight once per 128 rows (16 reads per
+# 2048-token chunk), which costs ~25% of a cold prefill. 0 (the default) keeps the lane kernel
+# everywhere; the runner turns it on (``YUNSHU_PREFILL_MATMUL``).
+STOCK_ROWS = 0
+
+
+def set_stock_rows(rows: int) -> None:
+    global STOCK_ROWS
+    STOCK_ROWS = max(0, int(rows))
+
+
+def prefill_kernel_id() -> str:
+    """Names the prefill arithmetic; part of every APC key and SSD namespace, so states written
+    by one prefill kernel are never read back as another's."""
+    return f"stock-qmm-gt{STOCK_ROWS}" if STOCK_ROWS else "lane-qmm"
 
 
 def eligible(module: Any) -> bool:
@@ -177,7 +193,18 @@ class LaneLinear(nn.Module):
         if dtype != mx.bfloat16:
             x2 = x2.astype(mx.bfloat16)
         m = int(x2.shape[0])
-        if m <= PIECE:
+        if STOCK_ROWS and m > STOCK_ROWS and self.output_dims >= NARROW:
+            weight, scales, biases = self.stock()
+            y = mx.quantized_matmul(
+                x2,
+                weight,
+                scales,
+                biases,
+                transpose=True,
+                group_size=self.group_size,
+                bits=self.bits,
+            )
+        elif m <= PIECE:
             y = self._rows(x2)
         else:
             y = mx.concatenate(

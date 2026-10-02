@@ -1243,6 +1243,21 @@
       "why": "depended on (not patched): forget an invalidated file",
       "source_sha256": "bd807a6e029355ab1165cba870fcf968ce7d8732740ab6353dcbaaa5e5ea3b1c",
       "installed_version": "0.7.4"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/kernels/gdn_prefill.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen3_5.gated_delta",
+      "symbol": "gated_delta_kernel",
+      "signature": "(q, k, v, g, beta, state, mask=None)",
+      "license": "MIT",
+      "commit": "v0.7.3",
+      "why": "prefill chunks of 64+ tokens run mx.fast.gated_delta_update (MLX core) instead of the per-token step kernel",
+      "source_sha256": "84cd89879cc0526439b5b2b9f4b4ff5d93f144fa424b2b8268552f18b130b90c",
+      "installed_version": "0.7.4"
     }
   ],
   "watch": [

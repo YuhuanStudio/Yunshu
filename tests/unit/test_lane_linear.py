@@ -90,3 +90,28 @@ def test_prefill_of_narrow_projections_is_row_invariant(n):
     full = lane.prefill([x])[0]
     for m in (37, 100, 512, 1024):
         assert mx.array_equal(lane.prefill([x[:, :m]])[0], full[:, :m]).item(), m
+
+
+def test_prefill_chunks_run_stock_matmul_only_when_enabled():
+    mx.random.seed(4)
+    lin = nn.Linear(512, 3072, bias=False)
+    lin.set_dtype(mx.bfloat16)
+    q = nn.QuantizedLinear.from_linear(lin, group_size=64, bits=4)
+    lane = lane_linear.LaneLinear.from_quantized(q)
+    x = mx.random.normal((300, 512)).astype(mx.bfloat16)
+    lane_out = lane(x)
+    assert lane_linear.STOCK_ROWS == 0
+    assert lane_linear.prefill_kernel_id() == "lane-qmm"
+    lane_linear.set_stock_rows(lane_linear.PIECE)
+    try:
+        assert lane_linear.prefill_kernel_id() == f"stock-qmm-gt{lane_linear.PIECE}"
+        stock_out = lane(x)
+        # above the threshold: MLX's own matmul on the same rows
+        assert mx.array_equal(stock_out, q(x)).item()
+        assert not mx.array_equal(stock_out, lane_out).item()
+        # at or below it (decode / verify / short tails): still the lane kernel
+        assert mx.array_equal(lane(x[:128]), lane_out[:128]).item()
+        assert mx.array_equal(lane(x[:5]), lane_out[:5]).item()
+    finally:
+        lane_linear.set_stock_rows(0)
+    assert mx.array_equal(lane(x), lane_out).item()
