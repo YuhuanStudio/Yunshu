@@ -36,6 +36,7 @@ NARROW = 256  # outputs below this run the lane matmul in prefill too
 # 2048-token chunk), which costs ~25% of a cold prefill. 0 (the default) keeps the lane kernel
 # everywhere; the runner turns it on (``YUNSHU_PREFILL_MATMUL``).
 STOCK_ROWS = 0
+STOCK_MIN_ROWS = 512  # what the runner turns it on at (untiling the weight costs ~0.16 s a call; lane costs ~0.3 ms/token more)
 
 
 def set_stock_rows(rows: int) -> None:

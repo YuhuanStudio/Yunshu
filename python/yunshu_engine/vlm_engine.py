@@ -1622,7 +1622,7 @@ class VLMEngine:
                         settings.get("YUNSHU_PREFILL_MATMUL") == "stock"
                         and not use_driver
                     ):
-                        lane_linear.set_stock_rows(lane_linear.PIECE)
+                        lane_linear.set_stock_rows(lane_linear.STOCK_MIN_ROWS)
                     kernels["prefill_matmul"] = lane_linear.prefill_kernel_id()
                 if settings.get("YUNSHU_PREFILL_GDN") == "chunked" and not use_driver:
                     from .kernels import gdn_prefill
