@@ -494,18 +494,30 @@ class WarmTier:
         return cache, ent
 
     def _decode_blob(self, b: _Blob) -> mx.array:
-        parts = list(self._chunk_pool.map(self._decompress_chunk, b.chunks))
-        raw = np.frombuffer(b"".join(parts), dtype=np.uint8)
-        if raw.size != b.raw_bytes:
+        """Chunks decompress in parallel straight into one buffer; the byte planes are put back
+        together on the GPU (a NumPy interleave runs at about 2 GB/s on one core)."""
+        n = b.raw_bytes
+        buf = np.empty(n, dtype=np.uint8)
+
+        def task(i: int) -> int:
+            dec = self._decompress_chunk(b.chunks[i])
+            if i * CHUNK + len(dec) > n:
+                raise WarmCorruptError("chunk overruns the array")
+            buf[i * CHUNK : i * CHUNK + len(dec)] = np.frombuffer(dec, dtype=np.uint8)
+            return len(dec)
+
+        lens = list(self._chunk_pool.map(task, range(len(b.chunks))))
+        if sum(lens) != n or any(x != CHUNK for x in lens[:-1]):
             raise WarmCorruptError("size mismatch")
         np_dt, mx_dt = _NP_DTYPE[b.dtype]
         if b.planes:
-            half = raw.size // 2
-            out = np.empty((half, 2), dtype=np.uint8)
-            out[:, 0] = raw[:half]
-            out[:, 1] = raw[half:]
-            raw = out.reshape(-1)
-        arr = mx.array(raw.view(np_dt).reshape(b.shape))
+            half = n // 2
+            a = mx.array(buf)
+            u = (a[half:].astype(mx.uint16) << 8) | a[:half].astype(mx.uint16)
+            return u.reshape(b.shape).view(
+                mx_dt or getattr(mx, b.dtype.rsplit(".", 1)[-1])
+            )
+        arr = mx.array(buf.view(np_dt).reshape(b.shape))
         return arr.view(mx_dt) if mx_dt is not None else arr
 
     def _decode(self, ent: WarmEntry) -> list:

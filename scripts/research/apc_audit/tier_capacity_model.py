@@ -35,17 +35,24 @@ class Warm:
     name: str
     kv_ratio: float
     state_ratio: float
-    decode_gbps: float  # restore throughput on the raw bytes (0 = fixed cost per GB below)
+    decode_gbps: (
+        float  # restore throughput on the raw bytes (0 = fixed cost per GB below)
+    )
     lossy: bool = False
 
     def stored(self, n: int) -> float:
         return STATE / self.state_ratio + KV_TOK * n / self.kv_ratio
 
     def restore_s(self, n: int) -> float:
-        return raw_bytes(n) / (self.decode_gbps * 1e9) + raw_bytes(n) / 1e9 * CLONE_S_PER_GB
+        return (
+            raw_bytes(n) / (self.decode_gbps * 1e9)
+            + raw_bytes(n) / 1e9 * CLONE_S_PER_GB
+        )
 
 
-WARM_LOSSLESS = Warm("warm-lossless", 1.458, 1.068, 6.0)  # 6 GB/s: 17 GB/s decode + unshuffle + copy
+WARM_LOSSLESS = Warm(
+    "warm-lossless", 1.458, 1.068, 6.0
+)  # 6 GB/s: 17 GB/s decode + unshuffle + copy
 WARM_INT8 = Warm("warm-int8", 1.778, 1.0, 40.0, lossy=True)  # GPU dequantize
 
 
@@ -65,8 +72,17 @@ TB4 = Disk("TB4 5 GB/s", 5.0, 0.0001, 64)
 HDD = Disk("HDD 0.15 GB/s", 0.15, 0.012, 200)
 
 
-def run(hot_gib: float, warm_gib: float, warm: Warm | None, disks: list[Disk], sessions: int,
-        length: int, step: int = 3000, requests: int = 1500, seed: int = 1):
+def run(
+    hot_gib: float,
+    warm_gib: float,
+    warm: Warm | None,
+    disks: list[Disk],
+    sessions: int,
+    length: int,
+    step: int = 3000,
+    requests: int = 1500,
+    seed: int = 1,
+):
     rnd = random.Random(seed)
     hot: OrderedDict[int, int] = OrderedDict()  # session id -> checkpoint tokens
     wm: OrderedDict[int, int] = OrderedDict()
@@ -185,17 +201,28 @@ def main() -> None:
         ("internal + warm-int8", WARM_INT8, 0.4, [INTERNAL]),
         ("TB4 + warm-lossless", WARM_LOSSLESS, 0.4, [TB4]),
         ("TB4 + warm-int8", WARM_INT8, 0.4, [TB4]),
-        ("internal(8G) > HDD", None, 0.0, [Disk("internal 10 GB/s", 10.0, 0.0001, 8), HDD]),
+        (
+            "internal(8G) > HDD",
+            None,
+            0.0,
+            [Disk("internal 10 GB/s", 10.0, 0.0001, 8), HDD],
+        ),
         ("HDD only", None, 0.0, [HDD]),
     ]
     for budget in (4.0, 16.0, 32.0):
         for sessions, length in ((3, 30000), (6, 30000), (3, 60000), (6, 60000)):
-            print(f"\nAPC RAM {budget:g} GiB, {sessions} sessions to {length // 1000}K tokens")
-            print(f"{'config':28} {'hot':>5} {'warm':>5} {'disk':>5} {'cold':>5} {'cached':>7} {'mean s':>7} {'p90 s':>7}")
+            print(
+                f"\nAPC RAM {budget:g} GiB, {sessions} sessions to {length // 1000}K tokens"
+            )
+            print(
+                f"{'config':28} {'hot':>5} {'warm':>5} {'disk':>5} {'cold':>5} {'cached':>7} {'mean s':>7} {'p90 s':>7}"
+            )
             for name, warm, share, disks in cfgs:
                 w_gib = budget * share if warm else 0.0
                 r = run(budget - w_gib, w_gib, warm, disks, sessions, length)
-                print(f"{name:28} {r['hot']:5.2f} {r['warm']:5.2f} {r['disk']:5.2f} {r['cold']:5.2f} {r['cached']:7.3f} {r['mean']:7.2f} {r['p90']:7.2f}")
+                print(
+                    f"{name:28} {r['hot']:5.2f} {r['warm']:5.2f} {r['disk']:5.2f} {r['cold']:5.2f} {r['cached']:7.3f} {r['mean']:7.2f} {r['p90']:7.2f}"
+                )
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Queue the APC cache-hierarchy GPU jobs (one server per job, Qwen3.8-27B).   queue_tier4.sh JOB
 #   JOB: smoke | smoke-base | small-base | small-nodisk | small-warm | small-warm-int8 | large-base
-#        | small-tiers | small-tiers-warm | hdd-only
+#        | small-tiers | small-tiers-warm | hdd-only | mid-base | mid-warm | mid-warm-int8
 # 3 agent sessions grow to 30K tokens round-robin with idle gaps, then each is revisited; the APC
 # RAM budget is small (4 GiB: about two 30K checkpoints) or large (32 GiB). Results (private) land in
 # docs/research/runs/<day>-tier4 of the main checkout; the replay is session_replay.py.
@@ -12,8 +12,8 @@ SRC=${SRC:-$WT/python}
 OUT=$MAIN/docs/research/runs/${TIER4_DAY:-2026-10-02}-tier4
 M=/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp
 TEMPLATE=$MAIN/docs/research/runs/2026-09-30-agtraffic/artifacts/cap-opencode-fix-cart-discount-r1/bodies/0002-req.json
-SCRATCH=/Volumes/P5Plus/yunshu-scratch/tier4
-INTERNAL=/Users/yuhuan/.yunshu/cache/tier4-apc   # the real internal SSD; removed after the run
+SCRATCH=/Volumes/P5Plus/yunshu-scratch/tier4/run${SUFFIX:-}   # a fresh tree per run label (no pre-warmed caches)
+INTERNAL=/Users/yuhuan/.yunshu/cache/tier4-apc${SUFFIX:-}   # the real internal SSD; removed after the run
 PY=$MAIN/.venv/bin/python
 SCRIPT=$WT/scripts/research/apc_audit/session_replay.py
 mkdir -p "$OUT"
@@ -22,7 +22,7 @@ SMALL=4
 MULTI="--scenario multi --sessions 3 --target 30000 --step 3000 --gap-s 20 --deadline-min 48"
 
 submit() { # label timeout -- args...
-  local label=$1 timeout=$2
+  local label=$1${SUFFIX:-} timeout=$2
   shift 3
   rm -f "$OUT/$label.jsonl" "$OUT/$label.server.log"
   "$MAIN/scripts/dev/gpuq" submit --label "tier4-$label" --timeout "$timeout" --stall 10 --priority 0 -- \
@@ -50,6 +50,12 @@ case $JOB in
                     --env YUNSHU_VLM_APC_DISK_GB=3 --env YUNSHU_VLM_APC_WARM=lossless \
                     --env "YUNSHU_VLM_APC_DISK_TIERS=$SCRATCH/tb4-tier@6,$SCRATCH/hdd-tier@40!sim=150/12" ;;
   hdd-only)       submit hdd-only 55 -- $MULTI --env YUNSHU_VLM_APC_MEMORY_GB=$SMALL --env YUNSHU_VLM_APC_DISK_DIR=$SCRATCH/hdd-t0 \
-                    --env YUNSHU_VLM_APC_DISK_GB=1 --env "YUNSHU_VLM_APC_DISK_TIERS=$SCRATCH/hdd-only-tier@40!sim=150/12" ;;
+                    --env YUNSHU_VLM_APC_DISK_GB=3 --env "YUNSHU_VLM_APC_DISK_TIERS=$SCRATCH/hdd-only-tier@40!sim=150/12" ;;
+  # 6 GiB: the three sessions' newest checkpoints (6.6 GB at 30K) are about HOT + WARM, where WARM can matter
+  mid-base)       submit mid-base 55 -- $MULTI --env YUNSHU_VLM_APC_MEMORY_GB=6 --env YUNSHU_VLM_APC_DISK_DIR=$SCRATCH/mid-base ;;
+  mid-warm)       submit mid-warm 55 -- $MULTI --env YUNSHU_VLM_APC_MEMORY_GB=6 --env YUNSHU_VLM_APC_DISK_DIR=$SCRATCH/mid-warm \
+                    --env YUNSHU_VLM_APC_WARM=lossless ;;
+  mid-warm-int8)  submit mid-warm-int8 55 -- $MULTI --env YUNSHU_VLM_APC_MEMORY_GB=6 --env YUNSHU_VLM_APC_DISK_DIR=$SCRATCH/mid-warm8 \
+                    --env YUNSHU_VLM_APC_WARM=int8 ;;
   *) echo "unknown job $JOB"; exit 1 ;;
 esac

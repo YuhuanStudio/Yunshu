@@ -244,6 +244,78 @@ def test_fresh_spill_replaces_a_slower_duplicate(tmp_path):
     assert k not in s.lower[0].index and k in s._exact_index
 
 
+# ── superseded checkpoints are garbage on disk too ───────────────────────
+def _mgr_for(disk, hot_entries=1):
+    return YunshuAPCManager(
+        num_blocks=8,
+        block_size=BLOCK,
+        disk=disk,
+        overrides={"memory_max_gb": 1, "checkpoint_interval_tokens": 0},
+        max_entries=hot_entries,
+    )
+
+
+def _store_req(m, toks, seed, *, head=False):
+    m.begin_request()
+    assert m.store_exact_cache(list(toks), _cache(len(toks), seed))
+    if head:
+        with m._plock:
+            m._head_keys.add(_sequence_hash(tuple(toks), 0, BLOCK))
+
+
+def test_a_grown_conversation_supersedes_its_older_checkpoints_on_disk(tmp_path):
+    disk = TieredDiskStore(
+        tmp_path / "t0", namespace=NS, num_workers=1, max_bytes=1 << 30
+    )
+    disk.profile = _profile(8e9, 8e9)
+    m = _mgr_for(disk)
+    session = _toks(400, 1)
+    key = lambda toks: _sequence_hash(tuple(toks), 0, BLOCK)  # noqa: E731
+    head, other = session[:100], _toks(300, 2)
+    _store_req(m, head, 1, head=True)  # the shared system-turn checkpoint
+    _store_req(m, session[:200], 2)  # request 1 of the session
+    _store_req(
+        m, session[:300], 3
+    )  # request 2 grows it: request 1's checkpoint is garbage
+    _store_req(m, other, 4)
+    _store_req(m, session, 5)  # request 3
+    _store_req(m, _toks(250, 6), 6)  # push everything through the SSD
+    disk.flush()
+    stored = set(disk._exact_index)
+    assert key(head) in stored, "heads are never superseded"
+    assert key(session[:200]) not in stored and key(session[:300]) not in stored
+    assert m.disk_superseded >= 1
+
+
+def test_supersede_reaches_lower_tiers_and_spares_unknown_files(tmp_path):
+    s = _store(tmp_path, soft_mb=0.2, lower=[(1e9, "raw")])
+    m = _mgr_for(s)
+    session = _toks(400, 1)
+    _store_req(m, session[:200], 1)
+    _store_req(
+        m, _toks(300, 2), 2
+    )  # session[:200] reaches the SSD, the mover demotes it
+    s.flush()
+    s.settle()
+    old = _sequence_hash(tuple(session[:200]), 0, BLOCK)
+    assert old in s.lower[0].index or old in s._exact_index
+    # a checkpoint this process never stored or restored (an earlier run) is left to LRU
+    with m._plock:
+        m._born.pop(old, None)
+    _store_req(m, session[:300], 3)
+    _store_req(m, _toks(250, 4), 4)
+    s.flush()
+    assert old in s.lower[0].index or old in s._exact_index
+    # once it is a known earlier-request checkpoint it goes, wherever it is
+    with m._plock:
+        m._born[old] = 0
+    _store_req(m, session, 5)
+    _store_req(m, _toks(260, 6), 6)
+    s.flush()
+    s.settle()
+    assert old not in s.lower[0].index and old not in s._exact_index
+
+
 # ── cost model, availability, corruption ─────────────────────────────────
 def test_a_tier_slower_than_reprefill_is_not_used_or_filled(tmp_path):
     s = _store(

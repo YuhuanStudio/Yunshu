@@ -24,6 +24,14 @@ def pct(xs: list[float], q: float) -> float:
 
 def summarize(path: Path) -> dict:
     rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    finished = rows and (
+        rows[-1].get("kind") == "complete"
+        or any(r.get("kind") == "final" for r in rows)
+    )
+    if not finished:
+        raise SystemExit(
+            f"{path}: incomplete run (no 'complete' record), not summarized"
+        )
     reqs = [r for r in rows if r.get("kind") in ("turn", "revisit", "revisit+1")]
     tiers: Counter = Counter()
     devices: Counter = Counter()

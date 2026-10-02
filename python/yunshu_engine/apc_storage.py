@@ -68,6 +68,12 @@ DEFAULT_PREFILL_TPS = (
 _TWO_BYTE = {"BF16", "F16"}
 
 
+def _delete_above(cap_bytes: int, file_bytes: int) -> float:
+    """Usage over which a tier deletes a file the mover has not yet demoted: 1.5x its cap, but
+    always room for a couple of files even when one file is bigger than the cap."""
+    return max(OVERSHOOT_DELETE * cap_bytes, cap_bytes + 2 * file_bytes)
+
+
 # ── tier specs ───────────────────────────────────────────────────────────
 @dataclass
 class TierSpec:
@@ -589,7 +595,7 @@ class FileTier:
                 ((k, v) for k, v in self.index.items() if v.path == path), (None, None)
             )
         if owner is not None and e is not None and not self.is_last:
-            if self.used() < OVERSHOOT_DELETE * self.cap_bytes:
+            if self.used() < _delete_above(self.cap_bytes, e.size):
                 pos = owner.lower.index(self) + 1
                 if owner._target_for(pos, e.orig, len(e.tokens)) is not None:
                     owner._wake.set()
@@ -1048,19 +1054,42 @@ class TieredDiskStore(SpillDiskStore):
                 return None
         return loaded
 
+    # ── supersede across tiers ─────────────────────────────────────────
+    def exact_prefixes_of(self, tokens, extra_hash, exclude=None) -> list:
+        out = super().exact_prefixes_of(tokens, extra_hash, exclude)
+        for tier in self.lower:
+            with tier._lock:
+                items = list(tier.index.items())
+            for h, e in items:
+                if (
+                    h != exclude
+                    and e.extra_hash == extra_hash
+                    and 0 < len(e.tokens) < len(tokens)
+                ):
+                    if tokens[: len(e.tokens)] == e.tokens:
+                        out.append(h)
+        return out
+
+    def drop_exact(self, cache_hash) -> bool:
+        for tier in self.lower:
+            if cache_hash in tier.index:
+                tier.drop(cache_hash)
+                return True
+        return bool(super().drop_exact(cache_hash))
+
     # ── placement ──────────────────────────────────────────────────────
     def _evict_path(self, path) -> bool:
         """The root's budget wants this file gone: with a lower tier that can take it, the mover
         demotes it instead (return False = busy); otherwise (or when the mover is stuck, the
         store far over its cap) it is deleted, i.e. recomputed later."""
         if self.lower and self.soft_cap_bytes and path not in self._in_flight_paths():
-            if self._root_used() < OVERSHOOT_DELETE * self.soft_cap_bytes:
+            try:
+                size = path.stat().st_size
+            except OSError:
+                size = 0
+            if self._root_used() < _delete_above(self.soft_cap_bytes, size):
                 meta = self._meta_of(path)
                 if meta is not None:
-                    try:
-                        size = path.stat().st_size
-                    except OSError:
-                        size = 0
                     ntok = meta.get("token_ids", "").count(",") + 1
                     if self._target_for(0, size, ntok) is not None:
                         self._wake.set()

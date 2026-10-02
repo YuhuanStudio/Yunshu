@@ -294,8 +294,14 @@ def main():
                 emit(dict(kind="hit", length=L, **hit, stats=kv_stats(srv.url)))
                 hit2 = summarize(post(srv.url, b2))
                 emit(dict(kind="hit-repeat", length=L, **hit2))
+        emit(dict(kind="complete"))
     finally:
         srv.kill()
+    # fail closed: a run that did not reach its last line wrote incomplete results
+    lines = out.read_text().splitlines() if out.exists() else []
+    if not lines or json.loads(lines[-1]).get("kind") != "complete":
+        print("session_replay: results incomplete", file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == "__main__":

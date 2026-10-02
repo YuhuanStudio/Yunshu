@@ -8,6 +8,7 @@ import pytest
 
 mx = pytest.importorskip("mlx.core")
 
+from mlx_vlm.apc import _sequence_hash  # noqa: E402
 from mlx_vlm.models.cache import ArraysCache, KVCache  # noqa: E402
 
 from yunshu_engine.apc_manager import SpillDiskStore, YunshuAPCManager  # noqa: E402
@@ -88,6 +89,25 @@ def test_lossless_roundtrip_is_bit_exact():
     w.close()
 
 
+@pytest.mark.parametrize("dtype", [mx.bfloat16, mx.float16, mx.float32])
+def test_multi_chunk_arrays_roundtrip_bit_exact(dtype):
+    w = WarmTier("lossless", 256 << 20)
+    kv = KVCache()
+    mx.random.seed(4)
+    kv.update_and_fetch(  # 10+ MB per array: three 4 MiB chunks, an odd tail
+        mx.random.normal((1, 2, 20011, 64)).astype(dtype),
+        mx.random.normal((1, 2, 20011, 64)).astype(dtype),
+    )
+    mx.eval(kv.keys, kv.values)
+    src = [kv]
+    assert w.demote(1, SimpleNamespace(token_ids=(1,), extra_hash=0, prompt_cache=src))
+    w.wait_idle()
+    w.drain()
+    cache, _ent = w.take(1)
+    _same(src, cache)
+    w.close()
+
+
 def test_demotion_on_eviction_and_promotion_on_hit():
     m = _mgr()
     a, b = _toks(200, 1), _toks(200, 2)
@@ -134,6 +154,29 @@ def test_warm_budget_overflow_goes_to_ssd_exact(tmp_path):
     cache, n = m.lookup_exact_cache(list(seqs[0]) + [1])
     assert n == 2500 and m.lookups[-1].tier == "ssd"
     _same(cache, _cache(2500, 1))
+
+
+def test_a_longer_ssd_prefix_is_not_preceded_by_a_wasted_warm_decode(tmp_path):
+    disk = SpillDiskStore(tmp_path, namespace="w", num_workers=1, max_bytes=1 << 30)
+    m = _mgr(disk=disk, hot_entries=1)
+    base = _toks(300, 5)
+    short, long_ = (
+        base[:200],
+        base,
+    )  # one session: an older (short) and the latest checkpoint
+    _store(m, short, 1)
+    _store(m, _toks(150, 9), 9)  # short goes down to WARM
+    _settle(m)
+    assert m.warm.snapshot()["warm_entries"] == 1
+    key = _sequence_hash(tuple(long_), 0, 16)
+    assert disk.write_now(
+        key, long_, 0, _cache(300, 2), True
+    )  # the longer one lives on SSD only
+    disk.flush()
+    cache, n = m.lookup_exact_cache(list(long_) + [7])
+    assert n == 300 and m.lookups[-1].tier == "ssd"
+    assert m.warm.stats.hits == 0, "the short WARM entry was decoded for nothing"
+    del cache
 
 
 def test_corrupt_warm_entry_falls_back_cold_and_is_dropped():

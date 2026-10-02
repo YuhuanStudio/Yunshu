@@ -188,7 +188,73 @@ class SpillDiskStore(DiskBlockStore):
             logger.warning("APC disk: budget enforcement failed", exc_info=True)
         return self.evictions - before
 
+    # Called on the writer thread after a checkpoint file landed: ``(cache_hash, token_ids,
+    # extra_hash)``. The manager uses it to drop the files that checkpoint supersedes.
+    on_exact_written = None
+
     def _write_payload(self, shard_id, block_hashes, payload) -> bool:
+        ok = self._write_payload_impl(shard_id, block_hashes, payload)
+        h = getattr(payload, "cache_hash", None)
+        if ok and h is not None:
+            tokens = tuple(int(t) for t in payload.token_ids)
+            self._tok_cache()[int(h)] = (tokens, int(payload.extra_hash))
+            hook = self.on_exact_written
+            if hook is not None:
+                try:
+                    hook(int(h), tokens, int(payload.extra_hash))
+                except Exception:
+                    logger.warning("APC disk: supersede hook failed", exc_info=True)
+        return ok
+
+    def _tok_cache(self) -> dict:
+        cache = self.__dict__.get("_tok_by_hash")
+        if cache is None:
+            cache = self.__dict__.setdefault("_tok_by_hash", {})
+        return cache
+
+    def exact_prefixes_of(self, tokens, extra_hash, exclude=None) -> list:
+        """Hashes of the stored checkpoints whose tokens are a strict prefix of ``tokens``."""
+        cache = self._tok_cache()
+        with self._index_lock:
+            items = list(self._exact_index.items())
+        out = []
+        for h, path in items:
+            if h == exclude:
+                continue
+            got = cache.get(h)
+            if got is None:
+                parsed = self._open_shard_header(path)
+                if parsed is None:
+                    continue
+                meta = parsed[1]
+                try:
+                    got = (
+                        tuple(
+                            int(x) for x in meta.get("token_ids", "").split(",") if x
+                        ),
+                        int(meta.get("extra_hash", "0")),
+                    )
+                except (TypeError, ValueError):
+                    continue
+                cache[h] = got
+            stored, extra = got
+            if extra == extra_hash and 0 < len(stored) < len(tokens):
+                if tokens[: len(stored)] == stored:
+                    out.append(h)
+        return out
+
+    def drop_exact(self, cache_hash) -> bool:
+        """Delete one checkpoint file (index and all); False when it is not stored here or busy."""
+        with self._index_lock:
+            path = self._exact_index.get(cache_hash)
+        if path is None:
+            return False
+        ok = bool(self._evict_path(path))
+        if ok:
+            self._tok_cache().pop(cache_hash, None)
+        return ok
+
+    def _write_payload_impl(self, shard_id, block_hashes, payload) -> bool:
         budget = self.budget
         if budget is None:
             return super()._write_payload(shard_id, block_hashes, payload)
@@ -421,6 +487,7 @@ class YunshuAPCManager(APCManager):
         self.warm = None
         self._promoted: tuple[int, float] | None = None
         self.tier_hits: collections.Counter = collections.Counter()
+        self.disk_superseded = 0
         if warm_mode != "off" and warm_bytes > 0:
             from .apc_warm import WarmTier
 
@@ -434,6 +501,8 @@ class YunshuAPCManager(APCManager):
                 )
         if isinstance(self.disk, SpillDiskStore) or self.warm is not None:
             self._exact_cache = _SpillingDict(self._demote)
+        if isinstance(self.disk, SpillDiskStore):
+            self.disk.on_exact_written = self._disk_superseded_by
 
     # ── demotion: HOT -> WARM -> SSD ───────────────────────────────────
     def _spill(self, key, entry) -> None:
@@ -487,6 +556,45 @@ class YunshuAPCManager(APCManager):
         for key, inf in warm.failed():
             self._spill(key, _Held(inf.entry_tokens, inf.extra_hash, inf.prompt_cache))
 
+    def _disk_superseded_by(self, cache_hash, tokens, extra_hash) -> None:
+        """A checkpoint reached the SSD tiers: the checkpoints of earlier requests that are
+        prefixes of it (the conversation grew past them) are garbage there too, exactly as in
+        RAM; without this a tier fills with stale copies of every session and the cache the next
+        request needs is the one LRU pushes out first. Heads are kept, and so is anything this
+        process did not store or restore itself (it may serve another session)."""
+        with self._plock:
+            newest = self._born.get(cache_hash)
+            heads = set(self._head_keys)
+        disk = self.disk
+        if newest is None or disk is None:
+            return
+        dropped = 0
+        for h in disk.exact_prefixes_of(tokens, extra_hash, exclude=cache_hash):
+            if h in heads:
+                continue
+            with self._plock:
+                born = self._born.get(h)
+            if born is None or born >= newest:
+                continue
+            if disk.drop_exact(h):
+                dropped += 1
+                with self._plock:
+                    self._born.pop(h, None)
+        if dropped:
+            self.disk_superseded += dropped
+            logger.debug("APC: dropped %d superseded SSD checkpoint(s)", dropped)
+
+    def _note_disk_hit(self, tokens, n, extra_hash) -> None:
+        """A checkpoint came back from an SSD tier: it belongs to this request's generation (its
+        next, longer checkpoint supersedes it), and it is a head when it ends the system turn."""
+        key = _sequence_hash(
+            tuple(int(t) for t in tokens[:n]), extra_hash, self.block_size
+        )
+        with self._plock:
+            self._born.setdefault(key, self._generation)
+            if self.head_marker is not None and self.head_boundary(tokens) == n:
+                self._head_keys.add(key)
+
     def _promote_warm(
         self, tokens, extra_hash, max_prefix_tokens, min_prefix_tokens
     ) -> None:
@@ -514,6 +622,17 @@ class YunshuAPCManager(APCManager):
         if found is None:
             return
         key, n, where = found
+        if self.disk is not None:
+            # a longer prefix on SSD wins the lookup anyway: decoding this one would be wasted
+            longer = self.disk.find_exact_prefix(
+                tokens,
+                extra_hash=extra_hash,
+                max_prefix_tokens=max_prefix_tokens,
+                min_prefix_tokens=n,
+                block_size=self.block_size,
+            )
+            if longer is not None:
+                return
         t0 = time.perf_counter()
         if where == "inflight":
             inf = warm.take_inflight(key)
@@ -663,6 +782,10 @@ class YunshuAPCManager(APCManager):
         if n and self._promoted is not None and self._promoted[0] == n:
             tier = "warm"
         self._promoted = None
+        if tier == "ssd" and n:
+            self._note_disk_hit(
+                tuple(int(t) for t in token_ids), int(n), self._extra_of(args, kwargs)
+            )
         self.tier_hits[tier] += 1
         device = getattr(self.disk, "last_device", None) if tier == "ssd" else None
         self.lookups.append(
@@ -671,6 +794,10 @@ class YunshuAPCManager(APCManager):
             )
         )
         return cache, n
+
+    @staticmethod
+    def _extra_of(args, kwargs) -> int:
+        return int(kwargs.get("extra_hash", args[0] if args else 0) or 0)
 
     def lookup_prefix(self, token_ids, *args, **kwargs):
         """Block-mode (plain KV) families: the in-RAM block pool."""
@@ -720,6 +847,7 @@ class YunshuAPCManager(APCManager):
             ]
         snap["head_checkpoints"] = len(self._head_keys & set(self._exact_cache))
         snap["tier_hits"] = dict(self.tier_hits)
+        snap["disk_superseded"] = self.disk_superseded
         tiers = getattr(self.disk, "snapshot", None)
         if callable(tiers):
             snap["storage_tiers"] = tiers()
