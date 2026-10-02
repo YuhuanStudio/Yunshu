@@ -65,6 +65,9 @@ class EngineStreamMixin:
 
         _backpressure = StreamingBackpressureController(max_queue_size=100)
 
+        from .grammar_compile import prepare_constraint
+
+        await prepare_constraint(json_schema)
         tokenizer = self._tokenizer
         model = self._model
 
