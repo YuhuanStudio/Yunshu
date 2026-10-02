@@ -1139,8 +1139,8 @@ class CfgGrammarConstraint(_LlgConstraint):
 #: Structural whitespace llguidance may emit between JSON tokens: nothing, one space,
 #: or a newline plus indentation (the in-house engine's run; llguidance's default is
 #: any run of blanks, which lets a greedy model spin on whitespace forever).
-_LLG_WHITESPACE = {"whitespace_pattern": r"[ ]?|\n[ ]{0,16}"}
-_LLG_COMPACT = {"whitespace_flexible": False}
+_LLG_WHITESPACE: Any = {"whitespace_pattern": r"[ ]?|\n[ ]{0,16}"}
+_LLG_COMPACT: Any = {"whitespace_flexible": False}
 
 _SCHEMA_MAP_KEYS = ("properties", "patternProperties", "$defs", "definitions")
 _SCHEMA_LIST_KEYS = ("anyOf", "oneOf", "allOf", "prefixItems")
