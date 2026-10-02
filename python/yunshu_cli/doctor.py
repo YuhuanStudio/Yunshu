@@ -445,6 +445,53 @@ def check_prefix_disk() -> Check:
     return Check("prefix cache disk", "ok", msg)
 
 
+def check_prefix_tiers() -> Check | None:
+    """The lower APC storage tiers (YUNSHU_VLM_APC_DISK_TIERS): mounted or not, free space, and
+    the bandwidth measured at the last startup (never probed here)."""
+    raw = settings.get("YUNSHU_VLM_APC_DISK_TIERS")
+    if not raw or paths.apc_dir() is None:
+        return None
+    from yunshu_engine.apc_storage import (
+        ProfileStore,
+        device_name,
+        mount_of,
+        parse_tiers,
+    )
+
+    store = ProfileStore(paths.home() / "cache" / "apc-device-profiles.json")
+    parts, warn = [], False
+    for spec in parse_tiers(raw):
+        probe = spec.path
+        while not probe.exists() and probe != probe.parent:
+            probe = probe.parent
+        mounted = spec.path.exists() or (
+            not str(spec.path).startswith(("/Volumes/", "/mnt/", "/media/"))
+        )
+        if not mounted:
+            parts.append(f"{spec.path} NOT MOUNTED (skipped until it is)")
+            warn = True
+            continue
+        try:
+            free = f"{shutil.disk_usage(probe).free / 1024**3:.0f} GiB free"
+        except OSError:
+            free, warn = "free space unreadable", True
+        prof = store.get(str(mount_of(spec.path)), ttl_s=float("inf"))
+        speed = (
+            f", read {prof.read_bps / 1e6:.0f} MB/s, {prof.latency_s * 1e3:.1f} ms"
+            if prof
+            else ", not profiled yet (measured at the next start)"
+        )
+        parts.append(f"{spec.path} ({device_name(spec.path)}, {free}{speed})")
+    return Check(
+        "prefix cache tiers",
+        "warn" if warn else "ok",
+        "; ".join(parts),
+        "Plug in or mount the volume, or remove it from YUNSHU_VLM_APC_DISK_TIERS."
+        if warn
+        else "",
+    )
+
+
 # Minimums mirror pyproject.toml; a lower version has known breakage (APC, MTP, llguidance
 # schemas), so it is a failure with the upgrade command, not a warning.
 MIN_VERSIONS = {
@@ -707,6 +754,9 @@ def run_checks(model: str | None, host: str, port: int) -> list[Check]:
         checks += check_speculative(model)
     checks.append(check_port(host, port))
     checks.append(check_prefix_disk())
+    tiers = check_prefix_tiers()
+    if tiers is not None:
+        checks.append(tiers)
     checks.append(check_service())
     return checks
 

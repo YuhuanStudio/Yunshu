@@ -47,3 +47,23 @@ def test_doctor_reports_the_tier(monkeypatch, tmp_path):
     c = doctor.check_prefix_disk()
     assert c.status == "ok" and "off" in c.detail
     assert isinstance(tmp_path, Path)
+
+
+def test_doctor_lists_the_storage_tiers_and_flags_an_unmounted_one(
+    monkeypatch, tmp_path
+):
+    mounted = tmp_path / "ext"
+    mounted.mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("YUNSHU_VLM_APC_DISK_DIR", str(tmp_path / "apc"))
+    monkeypatch.delenv("YUNSHU_VLM_APC_DISK_TIERS", raising=False)
+    assert doctor.check_prefix_tiers() is None
+    monkeypatch.setenv(
+        "YUNSHU_VLM_APC_DISK_TIERS",
+        f"{mounted}@8,/Volumes/yunshu-absent-volume/apc",
+    )
+    c = doctor.check_prefix_tiers()
+    assert c.status == "warn" and "NOT MOUNTED" in c.detail
+    assert str(mounted) in c.detail and "not profiled" in c.detail
+    monkeypatch.setenv("YUNSHU_VLM_APC_DISK_TIERS", str(mounted))
+    assert doctor.check_prefix_tiers().status == "ok"
