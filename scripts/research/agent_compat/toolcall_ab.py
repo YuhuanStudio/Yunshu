@@ -25,6 +25,9 @@ import httpx
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(
+    0, str(HERE.parent / "agentic")
+)  # servers.py lives with the agentic harness
 import servers  # noqa: E402
 
 LEAK = re.compile(r"<tool_call>|<function=|\{\s*\"function\"|<parameter=")
