@@ -222,3 +222,11 @@ def test_starved_backlog_job_ages_one_step(q, monkeypatch):
     assert q._pick([old, deep, fresh])["id"] == "old"
     young = dict(old, id="young", submitted=now - 60)
     assert q._pick([young, fresh])["id"] == "fresh"
+
+
+def test_aged_backlog_job_does_not_preempt_running_backlog(q):
+    now = 100_000.0
+    aged = dict(id="aged", state="pending", priority=-1, submitted=now - q.AGE_S - 1, env={})
+    interactive = dict(id="p0", state="pending", priority=0, submitted=now, env={})
+    assert q._eff_priority(aged, now) == 0
+    assert [j["id"] for j in q._preempting([aged, interactive])] == ["p0"]

@@ -521,6 +521,17 @@ def _preempt_blocker(job: dict, gate: ServingGate) -> str | None:
     return _cpu_blocker(job, gate)
 
 
+def _preempting(jobs: list[dict]) -> list[dict]:
+    """Pending jobs allowed to pause a running backlog job. Raw priority, not aged:
+    an aged backlog job must never preempt another backlog job (each nested job
+    would pause the previous one and start the next, stacking resident jobs)."""
+    return [
+        j
+        for j in jobs
+        if j["state"] == "pending" and j.get("priority", 0) >= 0 and not j.get("cancel")
+    ]
+
+
 def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
     """Run admitted p>=0 work inside a p<=-1 pause; never kill to reclaim memory.
 
@@ -529,11 +540,7 @@ def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
     """
     if pauser.job.get("priority", 0) >= 0:
         return False
-    pending = [
-        j
-        for j in _jobs()
-        if j["state"] == "pending" and _eff_priority(j) >= 0 and not j.get("cancel")
-    ]
+    pending = _preempting(_jobs())
     blockers = {j["id"]: _preempt_blocker(j, gate) for j in pending}
     for j in pending:
         why = blockers[j["id"]]
