@@ -320,6 +320,15 @@ class SpillDiskStore(DiskBlockStore):
         )
 
 
+@dataclass
+class _Held:
+    """What the SSD writer needs of a checkpoint that is not (or no longer) a HOT entry."""
+
+    token_ids: tuple
+    extra_hash: int
+    prompt_cache: list
+
+
 class _SpillingDict(collections.OrderedDict):
     """The exact-checkpoint table; LRU eviction (``popitem(last=False)``) spills to SSD."""
 
@@ -340,9 +349,10 @@ class Lookup:
 
     prompt_len: int
     cached: int
-    tier: str  # "ram" | "ssd" | "none"
+    tier: str  # "ram" | "warm" | "ssd" | "none"
     ms: float
     t: float  # time.perf_counter() when the lookup finished
+    device: str | None = None  # storage tier (volume name) of an ssd hit
 
 
 class _Coordinator(APCCoordinator):
@@ -392,6 +402,8 @@ class YunshuAPCManager(APCManager):
         head_marker: tuple[int, int] | None = None,
         keep_interval_checkpoint: bool = True,
         max_entries: int = MAX_ENTRIES,
+        warm_mode: str = "off",
+        warm_bytes: int = 0,
         **kwargs: Any,
     ):
         overrides = dict(kwargs.pop("overrides", None) or {})
@@ -406,10 +418,17 @@ class YunshuAPCManager(APCManager):
         self._head_keys: set[int] = set()
         self._head_lengths: set[int] = set()
         self._plock = threading.Lock()
-        if isinstance(self.disk, SpillDiskStore):
-            self._exact_cache = _SpillingDict(self._spill)
+        self.warm = None
+        self._promoted: tuple[int, float] | None = None
+        self.tier_hits: collections.Counter = collections.Counter()
+        if warm_mode != "off" and warm_bytes > 0:
+            from .apc_warm import WarmTier
 
-    # ── SSD spill ──────────────────────────────────────────────────────
+            self.warm = WarmTier(warm_mode, warm_bytes)
+        if isinstance(self.disk, SpillDiskStore) or self.warm is not None:
+            self._exact_cache = _SpillingDict(self._demote)
+
+    # ── demotion: HOT -> WARM -> SSD ───────────────────────────────────
     def _spill(self, key, entry) -> None:
         disk = self.disk
         if not isinstance(disk, SpillDiskStore):
@@ -418,6 +437,110 @@ class YunshuAPCManager(APCManager):
             disk.write_now(key, entry.token_ids, entry.extra_hash, entry.prompt_cache)
         except Exception as e:
             logger.warning("APC: SSD spill failed (%s)", e)
+
+    def _demote(self, key, entry) -> None:
+        """A HOT entry was evicted: it moves to WARM (compact form in RAM) when there is one and
+        to SSD otherwise. Lossy WARM keeps the SSD copy exact, so the exact bytes go to SSD now."""
+        warm = self.warm
+        if warm is None:
+            self._spill(key, entry)
+            return
+        self._settle_warm()
+        with self._plock:
+            born = self._born.get(key, 0)
+            head = key in self._head_keys
+        if warm.lossy:
+            self._spill(key, entry)  # exact states stay the SSD's invariant
+        try:
+            taken = warm.demote(key, entry, born=born, head=head)
+        except Exception as e:
+            logger.warning("APC warm: demotion failed (%s)", e)
+            taken = False
+        if not taken and not warm.lossy:
+            self._spill(key, entry)
+
+    def _settle_warm(self) -> None:
+        """Absorb finished compressions; entries the WARM budget pushes out go to SSD (lossless
+        mode: decoded back to exact arrays) or are dropped (lossy mode: SSD already has them)."""
+        warm = self.warm
+        if warm is None:
+            return
+        for key, ent in warm.drain():
+            if warm.lossy:
+                warm.stats.dropped += 1
+                continue
+            try:
+                cache = warm.decode_entry(ent)
+            except Exception as e:
+                warm.stats.corrupt += 1
+                logger.warning("APC warm: evicted entry unusable (%s), dropped", e)
+                continue
+            self._spill(key, _Held(ent.token_ids, ent.extra_hash, cache))
+            warm.stats.evicted_to_ssd += 1
+        for key, inf in warm.failed():
+            self._spill(key, _Held(inf.entry_tokens, inf.extra_hash, inf.prompt_cache))
+
+    def _promote_warm(
+        self, tokens, extra_hash, max_prefix_tokens, min_prefix_tokens
+    ) -> None:
+        """If WARM holds a longer reusable prefix than HOT, decode it into HOT so the regular
+        lookup serves it (the same exact states a HOT hit would use in lossless mode)."""
+        warm = self.warm
+        self._promoted = None
+        if warm is None:
+            return
+        self._settle_warm()
+        max_len = len(tokens) - 1
+        if max_prefix_tokens is not None and max_prefix_tokens > 0:
+            max_len = min(max_len, int(max_prefix_tokens))
+        hot_best = 0
+        with self.lock:
+            for entry in self._exact_cache.values():
+                n = len(entry.token_ids)
+                if (
+                    entry.extra_hash == extra_hash
+                    and hot_best < n <= max_len
+                    and tokens[:n] == entry.token_ids
+                ):
+                    hot_best = n
+        found = warm.find(tokens, extra_hash, max_len, max(min_prefix_tokens, hot_best))
+        if found is None:
+            return
+        key, n, where = found
+        t0 = time.perf_counter()
+        if where == "inflight":
+            inf = warm.take_inflight(key)
+            if inf is None:
+                return
+            cache, born, head = inf.prompt_cache, inf.born, inf.head
+        else:
+            try:
+                got = warm.take(key)
+            except Exception:
+                return  # corrupt: dropped, the lookup goes on to SSD / recompute
+            if got is None:
+                return
+            cache, ent = got
+            born, head = ent.born, ent.head
+        from mlx_vlm.apc import APCExactCacheEntry, _cache_nbytes
+
+        size = _cache_nbytes(cache)
+        if size > self.memory_max_bytes or not self._make_room(size, retain_bytes=size):
+            # no HOT room for the decoded copy: it is discarded and the lookup goes on to
+            # SSD / recompute
+            return
+        with self.lock:
+            self._exact_cache[key] = APCExactCacheEntry(
+                tokens[:n], int(extra_hash), cache
+            )
+            self._exact_cache.move_to_end(key)
+            while len(self._exact_cache) > self._exact_cache_max:
+                self._exact_cache.popitem(last=False)
+        with self._plock:
+            self._born[key] = born
+            if head:
+                self._head_keys.add(key)
+        self._promoted = (n, (time.perf_counter() - t0) * 1000.0)
 
     def close(self) -> None:
         """Write what is still resident so the cache survives a restart."""
@@ -432,8 +555,21 @@ class YunshuAPCManager(APCManager):
                     logger.info("APC: shutdown spill budget spent; rest stays RAM-only")
                     break
                 self._spill(key, entry)
+            if self.warm is not None and not self.warm.lossy:
+                self.warm.wait_idle(max(1.0, deadline - time.monotonic()))
+                self._settle_warm()
+                for key, ent in reversed(list(self.warm.entries.items())):
+                    if time.monotonic() > deadline:
+                        break
+                    try:
+                        cache = self.warm.decode_entry(ent)
+                    except Exception:
+                        continue
+                    self._spill(key, _Held(ent.token_ids, ent.extra_hash, cache))
             with contextlib.suppress(Exception):
                 self.disk.flush()
+        if self.warm is not None:
+            self.warm.close()
         super().close()
 
     # ── policy ─────────────────────────────────────────────────────────
@@ -494,6 +630,10 @@ class YunshuAPCManager(APCManager):
                 del self._exact_cache[key]
                 self._born.pop(key, None)
                 dropped += 1
+        if self.warm is not None:
+            with self._plock:
+                keep = set(self._head_keys)
+            dropped += self.warm.supersede(tokens, extra_hash, gen, keep)
         if dropped:
             logger.debug("APC: superseded %d earlier checkpoint(s)", dropped)
 
@@ -501,11 +641,27 @@ class YunshuAPCManager(APCManager):
     def lookup_exact_cache(self, token_ids, *args, **kwargs):
         before = self.stats.disk_hits
         t0 = time.perf_counter()
+        if self.warm is not None:
+            tokens = tuple(int(t) for t in token_ids)
+            names = ("extra_hash", "max_prefix_tokens", "min_prefix_tokens")
+            defaults = (0, None, 0)
+            vals = [
+                kwargs.get(k, args[i] if i < len(args) else d)
+                for i, (k, d) in enumerate(zip(names, defaults, strict=True))
+            ]
+            self._promote_warm(tokens, int(vals[0]), vals[1], vals[2])
         cache, n = super().lookup_exact_cache(token_ids, *args, **kwargs)
         ms = (time.perf_counter() - t0) * 1000.0
         tier = ("ssd" if self.stats.disk_hits > before else "ram") if n else "none"
+        if n and self._promoted is not None and self._promoted[0] == n:
+            tier = "warm"
+        self._promoted = None
+        self.tier_hits[tier] += 1
+        device = getattr(self.disk, "last_device", None) if tier == "ssd" else None
         self.lookups.append(
-            Lookup(len(token_ids), int(n), tier, round(ms, 1), time.perf_counter())
+            Lookup(
+                len(token_ids), int(n), tier, round(ms, 1), time.perf_counter(), device
+            )
         )
         return cache, n
 
@@ -556,4 +712,10 @@ class YunshuAPCManager(APCManager):
                 len(e.token_ids) for e in self._exact_cache.values()
             ]
         snap["head_checkpoints"] = len(self._head_keys & set(self._exact_cache))
+        snap["tier_hits"] = dict(self.tier_hits)
+        tiers = getattr(self.disk, "snapshot", None)
+        if callable(tiers):
+            snap["storage_tiers"] = tiers()
+        if self.warm is not None:
+            snap.update(self.warm.snapshot())
         return snap

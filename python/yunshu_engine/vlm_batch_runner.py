@@ -53,6 +53,9 @@ class RunStats:
     # (including an SSD reload) took; None until the request's cache lookup ran.
     cache_tier: str | None = None
     cache_reload_ms: float | None = None
+    cache_device: str | None = (
+        None  # the storage tier (volume) an SSD-tier hit came from
+    )
     first_token_s: float = 0.0
     generated: int = 0
     finish_reason: str | None = None
@@ -775,6 +778,7 @@ class VLMBatchRunner:
             return
         if reason is not None:
             job.stats.finish_reason = reason
+        self._observe_prefill(job)
         self._emit(job, _DONE)
 
     def _step_group(self, group: _Group) -> None:
@@ -887,6 +891,22 @@ class VLMBatchRunner:
             if response.finish_reason is not None:
                 self._finish(group, response.uid, response.finish_reason)
 
+    def _observe_prefill(self, job: _Job) -> None:
+        """Tell the storage tiers how fast prefill really is (their cost model compares a
+        restore against it); only a request that prefilled alone and a lot counts."""
+        disk = getattr(self.apc_manager, "disk", None)
+        observe = getattr(disk, "observe_prefill", None)
+        st = job.stats
+        if (
+            observe is None
+            or not st.t_first
+            or not st.t_admit
+            or self._active_jobs() > 0
+        ):
+            return
+        reload_s = (st.cache_reload_ms or 0.0) / 1000.0
+        observe(st.prefill_total, st.t_first - st.t_admit - reload_s)
+
     def _note_cache(self, job: _Job) -> None:
         """Record the tier and lookup time of ``job``'s prefix-cache hit (per-request
         provenance in ``x_yunshu.cache``)."""
@@ -898,6 +918,7 @@ class VLMBatchRunner:
         if rec is not None:
             job.stats.cache_tier = rec.tier
             job.stats.cache_reload_ms = rec.ms
+            job.stats.cache_device = rec.device
 
     def _note_driver_prefill(self) -> None:
         """Publish prefill progress of the round driver's rows."""

@@ -36,6 +36,10 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 SUFFIX = ".safetensors"
+SUFFIXES = (
+    SUFFIX,
+    ".yscx",
+)  # raw checkpoint files, and the zstd containers of lower storage tiers
 MARKER = "namespace.json"
 ROOT_NS = "."  # files that sit directly under a bucket of the root (no model namespace)
 _BUCKET = re.compile(r"^[0-9a-f]$|^hybrid_snapshots$")
@@ -152,7 +156,7 @@ def scan_root(root: Path) -> list[_Entry]:
     out: list[_Entry] = []
     if not root.is_dir():
         return out
-    for p in root.rglob(f"*{SUFFIX}"):
+    for p in (q for suffix in SUFFIXES for q in root.rglob(f"*{suffix}")):
         try:
             if p.is_symlink() or not p.is_file() or is_tmp(p.name):
                 continue
@@ -176,7 +180,7 @@ def removable_namespace(ns_dir: Path) -> bool:
         for p in ns_dir.rglob("*"):
             if p.is_dir():
                 continue
-            if p.name.endswith(SUFFIX) or is_tmp(p.name) or p.name in _NS_EXTRA:
+            if p.name.endswith(SUFFIXES) or is_tmp(p.name) or p.name in _NS_EXTRA:
                 continue
             return False
     except OSError:

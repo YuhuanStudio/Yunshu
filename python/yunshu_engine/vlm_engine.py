@@ -1370,13 +1370,30 @@ class VLMEngine:
         from .apc_manager import SpillDiskStore
 
         max_gb = resolve_cap_gb(settings.get("YUNSHU_VLM_APC_DISK_GB"), path)
+        from .apc_storage import parse_tiers
+
+        lower_specs = parse_tiers(settings.get("YUNSHU_VLM_APC_DISK_TIERS"))
+        # with lower tiers the mover keeps the SSD at its cap; the budget's hard cap is a little
+        # above, so the cap only deletes when the mover lags behind
+        hard_gb = max_gb * 1.25 if (lower_specs and max_gb > 0) else max_gb
         try:
-            disk = SpillDiskStore(
-                path,
-                namespace=self._apc_disk_namespace(),
-                num_workers=1,
-                max_bytes=int(max_gb * (1 << 30)) if max_gb > 0 else None,
-            )
+            if lower_specs:
+                from .apc_storage import TieredDiskStore
+
+                disk = TieredDiskStore(
+                    path,
+                    namespace=self._apc_disk_namespace(),
+                    num_workers=1,
+                    max_bytes=int(hard_gb * (1 << 30)) if hard_gb > 0 else None,
+                )
+                disk.soft_cap_bytes = int(max_gb * (1 << 30)) if max_gb > 0 else 0
+            else:
+                disk = SpillDiskStore(
+                    path,
+                    namespace=self._apc_disk_namespace(),
+                    num_workers=1,
+                    max_bytes=int(max_gb * (1 << 30)) if max_gb > 0 else None,
+                )
         except Exception:
             logger.warning("APC disk tier unavailable at %s", path, exc_info=True)
             return None
@@ -1387,7 +1404,7 @@ class VLMEngine:
             # one budget for the whole directory (every namespace / model together)
             budget = disk_budget.budget_for(
                 path,
-                cap_bytes=int(max_gb * (1 << 30)) if max_gb > 0 else 0,
+                cap_bytes=int(hard_gb * (1 << 30)) if hard_gb > 0 else 0,
                 label="APC disk",
             )
             disk.attach_budget(budget)
@@ -1399,8 +1416,74 @@ class VLMEngine:
             budget.enforce(keep={disk.dir.name})
         except Exception:
             logger.warning("APC disk budget unavailable", exc_info=True)
+        if lower_specs:
+            self._attach_lower_tiers(disk, path, lower_specs)
         logger.info("APC disk tier at %s (cap %.0f GiB, root-wide)", disk.dir, max_gb)
         return disk
+
+    def _attach_lower_tiers(self, disk, primary_path, specs) -> None:
+        """Profile the primary SSD and every lower tier, build the lower tiers (own budget and
+        reserve per volume) and start the background mover."""
+        from yunshu_kv import disk_budget
+        from yunshu_kv.fingerprint import checkpoint_fingerprint
+
+        from . import paths
+        from .apc_storage import FileTier, ProfileStore, TierSpec, profile_for
+
+        store = ProfileStore(paths.home() / "cache" / "apc-device-profiles.json")
+        disk.profile = profile_for(TierSpec(primary_path), store)
+        encoding = str(settings.get("YUNSHU_VLM_APC_DISK_ENCODING"))
+        ns = disk.dir.name
+        for spec in specs:
+            prof = profile_for(spec, store)
+            cap_gb = disk_budget.resolve_cap_gb(spec.cap_gib, spec.path)
+            budget = None
+            try:
+                budget = disk_budget.budget_for(
+                    spec.path,
+                    cap_bytes=int(cap_gb * 1.25 * (1 << 30)) if cap_gb > 0 else 0,
+                    label=f"APC disk tier {spec.path}",
+                )
+            except Exception:
+                logger.warning(
+                    "APC storage tier %s: no budget", spec.path, exc_info=True
+                )
+            try:
+                tier = FileTier(
+                    spec,
+                    ns,
+                    prof,
+                    cap_bytes=int(cap_gb * (1 << 30)),
+                    budget=budget,
+                    encoding=encoding,
+                )
+            except Exception:
+                logger.warning(
+                    "APC storage tier %s unavailable", spec.path, exc_info=True
+                )
+                continue
+            with contextlib.suppress(Exception):
+                disk_budget.write_marker(
+                    tier.dir,
+                    str(self._model_path),
+                    checkpoint_fingerprint(self._model_path, digest_size=8),
+                )
+            disk.add_lower(tier)
+            if prof is None:
+                logger.warning(
+                    "APC storage tier %s: not profiled, not used until it is", spec.path
+                )
+            else:
+                logger.info(
+                    "APC storage tier %s (%s): read %.0f MB/s, write %.0f MB/s, latency %.1f ms, cap %.0f GiB",
+                    spec.path,
+                    tier.name,
+                    prof.read_bps / 1e6,
+                    prof.write_bps / 1e6,
+                    prof.latency_s * 1e3,
+                    cap_gb,
+                )
+        disk.start_mover()
 
     def _round_driver_wanted(self, lm) -> bool:
         """``YUNSHU_ROUND_DRIVER`` on a dense Qwen3.5-family text decoder with
@@ -1454,12 +1537,17 @@ class VLMEngine:
             # Sliding-window (rotating) caches cannot be checkpointed at a
             # prefix boundary, so those families decode without APC.
             if not self.backend_capabilities(lm).cache.has_sliding_window:
+                warm_mode = str(settings.get("YUNSHU_VLM_APC_WARM"))
+                share = float(settings.get("YUNSHU_VLM_APC_WARM_SHARE"))
+                warm_gb = budget * share if warm_mode != "off" else 0.0
                 self._apc_backend = YunshuAPCManager(
                     num_blocks=512,
                     block_size=16,
                     disk=self._apc_disk_tier(),
-                    overrides={"memory_max_gb": budget},
+                    overrides={"memory_max_gb": budget - warm_gb},
                     head_marker=self._chatml_head_marker(),
+                    warm_mode=warm_mode,
+                    warm_bytes=int(warm_gb * (1 << 30)),
                 )
                 self._install_apc_identity(lm)
                 self._apc_semantic_hash = semantic_extra_hash(
