@@ -61,3 +61,21 @@ report such a sample.
 * Online lossless A/B on live traffic, recording metrics only (no prompts).
 * Bandit auto-tuning of lossless knobs against those metrics.
 * A gated autonomous improvement loop that proposes, measures and lands changes only through the existing gates.
+
+## Reading finished GPU jobs: `gpuq digest`
+
+A job that finished is not a result anyone has read. `scripts/dev/gpuq digest` (`scripts/dev/gpuq_digest.py`, stdlib
+only, python 3.9 safe) lists the jobs finished since the last digest, grouped by label family (`paired-gsm8k-ref-r3`
+-> `paired-gsm8k-ref`): states, total time, the last job's log and every output path named by `--out` / `--output`
+in the command. It flags first, and exits 1 on, any job that ended `failed`, `lost`, `stalled` or `timeout`, and any
+`done` job whose output file is missing or empty (so a clean exit that wrote nothing is not a result).
+
+```bash
+scripts/dev/gpuq digest              # since the last digest (first run: last 24 h); moves the marker
+scripts/dev/gpuq digest --peek       # same window, marker untouched
+scripts/dev/gpuq digest --since 6h   # 90m / 2d / ISO time / epoch; never moves the marker
+```
+
+The marker is `$GPUQ_DIR/.digest_marker`, the time the previous digest started (taken before it read the jobs, so a
+job ending mid-digest appears next time). Rule: the coordinator runs `gpuq digest` at every check-in and acts on
+every flagged line (fix, requeue or explain) before starting new work.
