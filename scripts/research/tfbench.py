@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import shutil
 import signal
 import socket
@@ -47,9 +48,33 @@ def free_port():
     raise RuntimeError("no port")
 
 
+def spec_request(engine, extra_env):
+    """Make the comparison independent of drafter discovery under isolated HOME."""
+    if engine != "yunshu":
+        return "dflash", dict(extra_env)
+    env = dict(extra_env)
+    override = env.setdefault("YUNSHU_VLM_DRAFT", D)
+    mode = {"mtp": "mtp", "force-mtp": "mtp", "off": "off", "none": "off"}.get(
+        override.lower(), "dflash"
+    )
+    return mode, env
+
+
+def engaged_spec_mode(engine, log):
+    """Read the initialized runner, not the earlier selection/fallback message."""
+    if engine == "yunshu":
+        modes = re.findall(r"VLM batch runner: [^\n]*?draft=(dflash|mtp|off)\b", log)
+        return modes[-1] if modes else None
+    if re.search(r"\[tensorfold\] drafter [^\n]*DFlash[^\n]*block=", log):
+        return "dflash"
+    return None
+
+
 class Srv:
     def __init__(self, engine, extra_env, tag):
         self.engine, self.port = engine, free_port()
+        self.requested_spec_mode, extra_env = spec_request(engine, extra_env)
+        self.extra_env = extra_env
         self.home = OUT / "home" / tag
         shutil.rmtree(self.home, ignore_errors=True)
         self.home.mkdir(parents=True)
@@ -97,11 +122,27 @@ class Srv:
                 with urllib.request.urlopen(self.url + "/v1/models", timeout=3) as r:
                     self.model = json.load(r)["data"][0]["id"]
                     self.ready_s = time.time() - t0
-                    return
+                    break
             except Exception:
                 time.sleep(2)
-        self.kill()
-        raise RuntimeError("not ready")
+        else:
+            self.kill()
+            raise RuntimeError("not ready")
+        try:
+            self.verify_spec_mode()
+        except Exception:
+            self.kill()
+            raise
+
+    def verify_spec_mode(self):
+        self.engaged_spec_mode = engaged_spec_mode(
+            self.engine, self.log.read_text(errors="replace")
+        )
+        if self.engaged_spec_mode != self.requested_spec_mode:
+            raise RuntimeError(
+                f"requested spec={self.requested_spec_mode}, "
+                f"engaged={self.engaged_spec_mode}; see {self.log}"
+            )
 
     def kill(self):
         if self.proc.poll() is None:
@@ -377,7 +418,9 @@ def main():
                 rep=a.rep,
                 ready_s=round(s.ready_s, 1),
                 cmd=s.cmd,
-                env=extra_env,
+                env=s.extra_env,
+                requested_spec_mode=s.requested_spec_mode,
+                engaged_spec_mode=s.engaged_spec_mode,
                 tag=a.tag,
             )
             for _ in range(2):
@@ -387,6 +430,7 @@ def main():
                 part_agent(s, out, a)
             else:
                 {"decode": part_decode}[a.part](s, out, a)
+            s.verify_spec_mode()
             emit(out, part="part_done", engine=a.engine, which=a.part, rep=a.rep)
     finally:
         s.kill()
