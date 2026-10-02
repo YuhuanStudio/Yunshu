@@ -124,3 +124,23 @@ auxiliary deferral alone moves main p90 only about 2%. The ordering is therefore
 kept disabled (default off) and is not recommended on this evidence; the model
 is crude (no real contention between decode and prefill kernels), so a GPU
 A/B would be required before any default change.
+
+## 27B replay, both options on (round 1 of the A/B, job i8c-ab-r1-0103)
+
+Captured opencode fix-cart-discount session (six agent turns plus the title),
+seed 42, arm 0 = stock, arm 1 = `YUNSHU_AUXILIARY_SCHEDULING=1` and
+`YUNSHU_UNCACHED_SCHEDULING=1`. Main-turn TTFT (s), turns 1-6:
+
+| arm | turn 1 | 2 | 3 | 4 | 5 | 6 | title |
+|---|---|---|---|---|---|---|---|
+| 0 | 8.66 | 0.50 | 0.86 | 1.74 | 0.62 | 0.30 | 3.04 |
+| 1 | 7.78 | 0.27 | 0.87 | 2.60 | 20.43 | 20.41 | 26.0 |
+
+Main outputs are token-identical in both arms. Arm 1 regresses turns 5-6 to 20 s
+(prefill_ms 20305): the main prefill is starved while the title row decodes, and
+the title output hash differs from arm 0. Both options stay off. The upstream
+`_next` returns right after a decode step when the generation batch is
+speculative, so any ordering that dispatches a prefill atom through
+`gen.next()` while a speculative row decodes cannot advance that prefill; the
+work-ordered stepping needs to drive the prefill atom explicitly. Single-feature
+arms (job i8c-bisect-r1-0103) were still queued when this was written.
