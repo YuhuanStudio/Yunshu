@@ -85,7 +85,62 @@ gate therefore fails when "off" means the runner's plain decode; it holds inside
 invariant path (Tier 1 `dec6` == `dec1`) and with the round driver (spec on and off
 identical). The round-driver vs upstream-runner comparison is 27/50.
 
-## Tier 3: paired downstream evaluation (plan, not run)
+## Tier 3: paired downstream evaluation
+
+Status: running. GSM8K is final; MMLU-Pro, IFEval, BFCL and needle are still being filled
+(see the results table). The plan below is the target; the first subsection records what
+the harness (`scripts/research/accuracy/paired_eval.py`) actually does and found.
+
+### Results (Qwen3.8-27B oQ4e-mtp, M5 Max, 2026-10-02)
+
+Method as run: reference = stock `mlx_vlm.server` (same checkpoint, no Yunshu import),
+candidate = Yunshu default settings, same HTTP chat endpoint, greedy, thinking on with
+`reasoning_effort` medium (needle and BFCL: off). MMLU-Pro is a seeded random sample of
+2000 (seed 20260930), not stratified. IFEval is strict prompt level (lm_eval checker; a
+truncated answer counts as wrong). Items are paired by id; only items completed without
+a transport error in both arms enter the pair. The reference arm is effectively serial
+(stock server, no batching), so its jobs time out requests that Yunshu finishes; the
+failed attempts are counted below, not hidden. Report command:
+`paired_eval.py report --bench B --ref ref --cand default`.
+
+| bench | status | n paired | ref | Yunshu | delta (pts) | CI95 (pts) | b / c | McNemar p |
+|---|---|---:|---:|---:|---:|---|---|---:|
+| GSM8K | final | 1319 / 1319 | 97.12% | 97.65% | +0.53 | [+0.04, +1.02] | 2 / 9 | 0.065 |
+| MMLU-Pro | partial (917 of 2000) | 917 | 83.97% | 83.53% | -0.44 | [-1.44, +0.57] | 13 / 9 | 0.523 |
+| IFEval | partial (179 of 541) | 179 | 90.50% | 88.27% | -2.23 | [-6.01, +1.54] | 8 / 4 | 0.388 |
+| BFCL | pending | - | - | - | - | - | - | - |
+| needle | pending | - | - | - | - | - | - | - |
+
+b = reference right and Yunshu wrong, c = the reverse. No bench shows a significant loss
+(p(candidate worse): GSM8K 0.994, MMLU-Pro 0.262, IFEval 0.194). The GSM8K gain is at the
+edge of significance and is read as noise around equal accuracy, not as an improvement.
+The partial rows are not final: their intervals still contain a loss of 1.4 (MMLU-Pro)
+and 6 (IFEval) points, and the reference subset is the items it finished first, so do not
+quote them as the benchmark scores.
+
+Failed attempts (requests that returned an error, usually a timeout, in the arm's file):
+
+| bench | arm | attempts | error attempts | items attempted | items unresolved |
+|---|---|---:|---:|---:|---:|
+| GSM8K | ref | 2638 | 1319 | 1319 | 0 |
+| GSM8K | Yunshu | 1319 | 0 | 1319 | 0 |
+| MMLU-Pro | ref | 1085 | 168 | 923 | 6 |
+| MMLU-Pro | Yunshu | 2016 | 16 | 2000 | 0 |
+| IFEval | ref | 185 | 6 | 182 | 3 |
+| IFEval | Yunshu | 349 | 1 | 348 | 0 |
+
+Truncation (finish = length) among paired items: GSM8K ref 1 / Yunshu 0; MMLU-Pro 0 / 2;
+IFEval 1 / 0. Mean completion tokens: GSM8K 351 / 348; MMLU-Pro 770 / 811; IFEval 1334 /
+1284.
+
+Still queued (priority -1): 36 reference rounds for MMLU-Pro (about 30 completed items per
+round at concurrency 2, so about 1080 missing items), 6 reference and 2 Yunshu IFEval
+rounds, 6 BFCL and 8 needle rounds per arm. When they finish, re-run the report command per
+bench and replace the partial rows. IFEval answers are stored unscored; `report` scores
+them in memory (it re-executes under the lm_eval venv), so no separate `score` step is
+needed.
+
+### Plan
 
 Purpose: confirm that numerics within the Tier 1/2 limits do not change task accuracy, and
 catch failures that distribution metrics miss (format, tool calls, long-context retrieval).
