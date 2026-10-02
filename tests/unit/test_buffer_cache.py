@@ -8,6 +8,14 @@ ar = pytest.importorskip("mlx_vlm.generate.ar")
 from yunshu_engine.kernels import buffer_cache  # noqa: E402
 
 
+def test_default_pool_scales_with_physical_ram():
+    gib = 1 << 30
+    assert buffer_cache.auto_limit_gib(128 * gib) == 6.0
+    assert buffer_cache.auto_limit_gib(32 * gib) == pytest.approx(1.6)
+    assert buffer_cache.auto_limit_gib(8 * gib) == pytest.approx(0.4)
+    assert buffer_cache.auto_limit_gib(0) == 0.0
+
+
 @pytest.fixture
 def restore():
     original = ar.mx

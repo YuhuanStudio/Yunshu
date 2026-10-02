@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import collections
 import contextlib
+import contextvars
 import logging
 import threading
 import time
@@ -40,6 +41,10 @@ from mlx_vlm.apc import APCManager, DiskBlockStore, _sequence_hash
 from mlx_vlm.apc_coordinator import APCCoordinator
 
 logger = logging.getLogger(__name__)
+
+_CANONICAL_LOOKUP: contextvars.ContextVar[
+    tuple[int, int, int, int, frozenset[int]] | None
+] = contextvars.ContextVar("yunshu_canonical_apc_lookup", default=None)
 
 GIB = 1 << 30
 
@@ -425,11 +430,177 @@ class Lookup:
 class _Coordinator(APCCoordinator):
     """Checkpoint positions: the prompt end, one interval boundary, the end of the system turn."""
 
+    # Enabled only around a runner generator step. Round-driver and external APC
+    # callers retain synchronous admission until they supply the same flush boundary.
+    defer_checkpoint_stores = False
+
+    def lookup(self, token_ids, **kwargs):
+        stride = getattr(self.manager, "prefill_stride", 0)
+        # Media processors may expand / reshape positions; retain their existing
+        # boundary policy. Text prefixes use the same grid in cold and warm runs.
+        if not stride or kwargs["prefix_has_media"](len(token_ids)):
+            return super().lookup(token_ids, **kwargs)
+        policy = (
+            id(self.manager),
+            stride,
+            len(token_ids) - self.manager.exact_cache_guard_tokens,
+            self.manager.head_boundary(token_ids),
+            frozenset(self.manager.semantic_boundaries(token_ids)),
+        )
+        context = _CANONICAL_LOOKUP.set(policy)
+        try:
+            return super().lookup(token_ids, **kwargs)
+        finally:
+            _CANONICAL_LOOKUP.reset(context)
+
+    def merge_rows(self, picks, prefix_lens, *, kv_quant_config=None):
+        """Keep the reserved capacity of a private, single-row native restore."""
+        from mlx_vlm.apc_adapters import merge_cache_entries
+        from mlx_vlm.models.cache import ArraysCache, BatchKVCache, KVCache
+
+        hit = picks[0] if len(picks) == 1 else None
+        rows = hit.get("warm_cache") if hit is not None else None
+        prefix = int(prefix_lens[0]) if len(prefix_lens) == 1 else 0
+        if (
+            self.enabled
+            and self.is_checkpoint
+            and kv_quant_config is None
+            and prefix > 0
+            and rows
+            and all(
+                type(c) is ArraysCache
+                or (
+                    type(c) is KVCache
+                    and c.offset == prefix
+                    and c.keys is not None
+                    and c.values is not None
+                    and c.keys.shape[0] == 1
+                )
+                for c in rows
+            )
+        ):
+            import mlx.core as mx
+
+            merged = []
+            for c in rows:
+                if type(c) is KVCache:
+                    batch = BatchKVCache([0])
+                    # New array handles share the already-detached restore's
+                    # buffers. MLX copy-on-write protects any retained source
+                    # handles; no physical row copy or capacity truncation.
+                    batch.keys = c.keys.view(c.keys.dtype)
+                    batch.values = c.values.view(c.values.dtype)
+                    batch._idx = prefix
+                    batch.offset += prefix
+                    merged.append(batch)
+                else:
+                    merged.append(merge_cache_entries([c], [prefix]))
+            if all(c is not None for c in merged):
+                mx.eval([c.state for c in merged])
+                with self.manager.lock:
+                    self.manager.stats.restored_tokens += prefix
+                return merged, prefix
+        return super().merge_rows(picks, prefix_lens, kv_quant_config=kv_quant_config)
+
+    def store_checkpoint(
+        self, token_ids, prompt_cache, *, extra_hash=0, batch_idx=None
+    ) -> bool:
+        if (
+            getattr(self, "_split_lengths", False)
+            and len(token_ids) not in self._store_lengths
+        ):
+            return False  # deterministic forward boundary, not an extra snapshot
+        from mlx_vlm.apc import _cache_nbytes
+        from mlx_vlm.apc_adapters import clone_cache_entry
+        from mlx_vlm.models.cache import ArraysCache, BatchKVCache, KVCache
+
+        # Multi-row extraction and custom contracts stay on the upstream path.
+        # Native single-row caches (including the spec lane's BatchKVCache) only
+        # build lazy, detached arrays and copy Python metadata in these adapters.
+        can_defer = (
+            self.defer_checkpoint_stores
+            and self.enabled
+            and self.is_checkpoint
+            and batch_idx in (None, 0)
+            and bool(prompt_cache)
+            and all(
+                type(c) in (ArraysCache, KVCache)
+                or (type(c) is BatchKVCache and c.is_single_row())
+                for c in prompt_cache
+            )
+        )
+        size = _cache_nbytes(prompt_cache) if can_defer else 0
+        pending_bytes = getattr(self, "_deferred_bytes", 0)
+        # Captures are outside the manager's resident accounting until flush.
+        # Keep their combined footprint inside the same APC budget; a full
+        # tier falls back to upstream eviction / reserve checks before copying.
+        resident = self.manager.resident_bytes() if can_defer else 0
+        if (
+            not can_defer
+            or resident + pending_bytes + size > self.manager.memory_max_bytes
+        ):
+            return bool(
+                super().store_checkpoint(
+                    token_ids, prompt_cache, extra_hash=extra_hash, batch_idx=batch_idx
+                )
+            )
+        targets: list[Any] = []
+        snapshot = [
+            clone_cache_entry(c, min_capacity_tokens=None, eval_targets=targets)
+            for c in prompt_cache
+        ]
+        if any(c is None for c in snapshot):
+            return bool(
+                super().store_checkpoint(
+                    token_ids, prompt_cache, extra_hash=extra_hash, batch_idx=batch_idx
+                )
+            )
+        pending = self.__dict__.setdefault("_deferred_checkpoints", [])
+        pending.append(
+            (
+                tuple(token_ids),
+                snapshot,
+                int(extra_hash),
+                targets,
+                getattr(
+                    self,
+                    "_request_generation",
+                    getattr(self.manager, "_generation", None),
+                ),
+            )
+        )
+        self._deferred_bytes = pending_bytes + size
+        self.deferred_checkpoint_count = (
+            getattr(self, "deferred_checkpoint_count", 0) + 1
+        )
+        # "stored" means captured here: the runner guarantees a flush after its
+        # first emitted token. A cancelled prefill explicitly discards its captures.
+        return True
+
+    def flush_deferred_checkpoints(self) -> None:
+        import mlx.core as mx
+
+        pending = self.__dict__.pop("_deferred_checkpoints", [])
+        self._deferred_bytes = 0
+        for tokens, snapshot, extra_hash, targets, generation in pending:
+            mx.eval(targets)
+            kwargs = {"extra_hash": extra_hash}
+            if generation is not None:
+                kwargs["_generation"] = generation
+            self.manager.store_exact_cache(tokens, snapshot, **kwargs)
+
+    def discard_deferred_checkpoints(self) -> None:
+        self.__dict__.pop("_deferred_checkpoints", None)
+        self._deferred_bytes = 0
+
     def checkpoint_lengths(self, token_ids, media_token_ids):
         final = self.checkpoint_len(token_ids, media_token_ids)
         if final <= 0:
             return []
         mgr = self.manager
+        stride = getattr(mgr, "prefill_stride", 0)
+        if media_token_ids.intersection(token_ids):
+            stride = 0
         lengths = {final}
         interval = mgr.checkpoint_interval_tokens
         if interval > 0 and mgr.keep_interval_checkpoint:
@@ -438,6 +609,8 @@ class _Coordinator(APCCoordinator):
             block = mgr.block_size
             interval = ((interval + block - 1) // block) * block
             last = ((final - 1) // interval) * interval
+            if stride:
+                last = (last // stride) * stride
             last = adjust_prefix_to_text_suffix_boundary(
                 token_ids, last, media_token_ids, max_prefix_tokens=final
             )
@@ -459,6 +632,12 @@ class _Coordinator(APCCoordinator):
             lengths.add(head)
             mgr.note_head(token_ids[:head])
         mgr.begin_request()
+        self._request_generation = mgr._generation
+        self._store_lengths = frozenset(lengths)
+        self._split_lengths = bool(stride)
+        if stride:
+            lengths.update(range(stride, final, stride))
+            lengths.update(n for n in mgr.semantic_boundaries(token_ids) if n < final)
         return sorted(lengths)
 
 
@@ -471,6 +650,10 @@ class YunshuAPCManager(APCManager):
         max_entries: int = MAX_ENTRIES,
         warm_mode: str = "off",
         warm_bytes: int = 0,
+        prefill_stride: int = 0,
+        prefill_boundary_tokens: tuple[int, ...] = (),
+        prefill_assistant_header: tuple[int, int] | None = None,
+        prefill_message_end: int | None = None,
         **kwargs: Any,
     ):
         overrides = dict(kwargs.pop("overrides", None) or {})
@@ -479,6 +662,10 @@ class YunshuAPCManager(APCManager):
         # (<|im_start|>, user) token ids: the end of the system turn is the head boundary.
         self.head_marker = head_marker
         self.keep_interval_checkpoint = keep_interval_checkpoint
+        self.prefill_stride = int(prefill_stride)
+        self.prefill_boundary_tokens = frozenset(prefill_boundary_tokens)
+        self.prefill_assistant_header = prefill_assistant_header
+        self.prefill_message_end = prefill_message_end
         self.lookups: collections.deque[Lookup] = collections.deque(maxlen=64)
         self._generation = 0
         self._born: dict[int, int] = {}
@@ -709,6 +896,8 @@ class YunshuAPCManager(APCManager):
             return 0
         a, b = self.head_marker
         n = len(token_ids)
+        if n >= 2 and token_ids[0] == a and token_ids[1] == b:
+            return 0
         for i in range(1, n - 1):
             if token_ids[i] == a and token_ids[i + 1] == b:
                 return i
@@ -727,10 +916,14 @@ class YunshuAPCManager(APCManager):
         with self._plock:
             self._head_lengths.add(len(head_tokens))
 
-    def store_exact_cache(self, token_ids, prompt_cache, *, extra_hash=0) -> bool:
+    def store_exact_cache(
+        self, token_ids, prompt_cache, *, extra_hash=0, _generation=None
+    ) -> bool:
         n = len(token_ids)
         with self._plock:
-            gen = self._generation
+            # A deferred checkpoint belongs to the request that captured it,
+            # even when another group began prefill before publication.
+            gen = self._generation if _generation is None else _generation
             is_head = n in self._head_lengths
         self._supersede(token_ids, extra_hash, gen)
         key = _sequence_hash(
@@ -778,7 +971,107 @@ class YunshuAPCManager(APCManager):
             logger.debug("APC: superseded %d earlier checkpoint(s)", dropped)
 
     # ── provenance ─────────────────────────────────────────────────────
+    def semantic_boundaries(self, token_ids):
+        boundaries = set()
+        header = self.prefill_assistant_header
+        assistant = header is None
+        previous = None
+        for i, token in enumerate(token_ids):
+            if header is not None:
+                if token == header[0] or token == self.prefill_message_end:
+                    assistant = False
+                elif previous == header[0]:
+                    assistant = token == header[1]
+            if assistant and token in self.prefill_boundary_tokens:
+                boundaries.add(i + 1)
+            previous = token
+        return boundaries
+
+    def _canonical_bounds(self, tokens, extra_hash, maximum, minimum, policy):
+        _, stride, final, head, semantic = policy
+
+        def allowed(n):
+            return n > 0 and (n in (final, head) or n in semantic or n % stride == 0)
+
+        def previous(n):
+            return max(
+                (n - 1) // stride * stride,
+                head if head < n else 0,
+                final if final < n else 0,
+                max((b for b in semantic if b < n), default=0),
+            )
+
+        best = 0
+        with self.lock:
+            for entry in self._exact_cache.values():
+                n = len(entry.token_ids)
+                if (
+                    minimum < n <= maximum
+                    and n > best
+                    and allowed(n)
+                    and entry.extra_hash == extra_hash
+                    and tokens[:n] == entry.token_ids
+                ):
+                    best = n
+        if self.warm is not None:
+            limit = maximum
+            while limit > max(minimum, best):
+                hit = self.warm.find(tokens, extra_hash, limit, max(minimum, best))
+                if hit is None:
+                    break
+                n = hit[1]
+                if allowed(n):
+                    best = max(best, n)
+                    break
+                limit = previous(n)
+        if self.disk is not None:
+            limit = maximum
+            while limit > max(minimum, best):
+                hit = self.disk.find_exact_prefix(
+                    tokens,
+                    extra_hash=extra_hash,
+                    max_prefix_tokens=limit,
+                    min_prefix_tokens=max(minimum, best),
+                    block_size=self.block_size,
+                )
+                if hit is None:
+                    break
+                n = hit[1]
+                if allowed(n):
+                    best = max(best, n)
+                    break
+                limit = previous(n)
+        return best
+
     def lookup_exact_cache(self, token_ids, *args, **kwargs):
+        policy = _CANONICAL_LOOKUP.get()
+        if policy is not None and policy[0] == id(self):
+            names = ("extra_hash", "max_prefix_tokens", "min_prefix_tokens")
+            defaults = (0, None, 0)
+            vals = [
+                kwargs.get(k, args[i] if i < len(args) else d)
+                for i, (k, d) in enumerate(zip(names, defaults, strict=True))
+            ]
+            maximum = len(token_ids) - 1
+            if vals[1] is not None and vals[1] > 0:
+                maximum = min(maximum, int(vals[1]))
+            n = self._canonical_bounds(
+                tuple(token_ids), int(vals[0]), maximum, int(vals[2]), policy
+            )
+            if not n:
+                self.tier_hits["none"] += 1
+                self.lookups.append(
+                    Lookup(len(token_ids), 0, "none", 0.0, time.perf_counter(), None)
+                )
+                return None, 0
+            # Require this exact boundary, including if eviction races selection.
+            # Falling back to a smaller arbitrary guard would reintroduce drift.
+            args = ()
+            kwargs.update(
+                extra_hash=int(vals[0]),
+                max_prefix_tokens=n,
+                min_prefix_tokens=max(int(vals[2]), n - 1),
+            )
         before = self.stats.disk_hits
         t0 = time.perf_counter()
         if self.warm is not None:

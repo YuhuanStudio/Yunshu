@@ -795,23 +795,34 @@ class VLMBatchRunner:
     def _step_group(self, group: _Group) -> None:
         from .kernels import batch_invariant
 
+        apc = getattr(group.gen, "apc", None)
+        discard = getattr(apc, "discard_deferred_checkpoints", None)
         # Drop rows whose consumer left or whose request was cancelled.
         for uid, job in list(group.jobs.items()):
             cancelled = job.cancel_event is not None and job.cancel_event.is_set()
             if job.abandoned or cancelled:
+                # A second request may have joined after the first captured a
+                # checkpoint. Cancellation must drop those unpublished captures
+                # even if the group still has another live row.
+                if discard is not None:
+                    discard()
                 with contextlib.suppress(Exception):
                     group.gen.remove(uid)
                 self._finish(group, uid, "cancel" if cancelled else None)
         if not group.jobs:
+            if discard is not None:
+                discard()
             return
-        # The invariant kernels are what make spec on == spec off; they are on
-        # only while the single-row speculative lane steps (and off for every
-        # other user of the model, including the shared batch).
-        invariant = group.spec and batch_invariant.is_installed()
+        # A lone AR request (including logprobs / draft=False) must use the
+        # same target arithmetic as the speculative lane. Otherwise switching
+        # drafting changes greedy tokens and shares incompatible APC entries.
+        invariant = batch_invariant.is_installed()
         # With ragged KV on, the speculative lane's decode and verify
         # attention run the ragged kernel over its one-row cache, so both
         # share per-row arithmetic (and the shared batch's).
-        dense_lane = group.spec and bool(self.ragged_kv)
+        # The attention adapter checks B == 1; a single prefill row keeps the
+        # same arithmetic even while other requests are decoding in this group.
+        dense_lane = bool(self.ragged_kv)
         if invariant:
             batch_invariant.set_active(True)
         if self.ragged_kv:
@@ -844,9 +855,23 @@ class VLMBatchRunner:
 
             mtp_lane.set_guide(job.guide)
             mtp_lane.set_context(job.ids)
+        apc = getattr(group.gen, "apc", None)
+        flush = getattr(apc, "flush_deferred_checkpoints", None)
+        if flush is not None and apc is not None:
+            # One prefilling request owns these captures. A shared group can
+            # decode one row while admitting another, whose first token has not
+            # been delivered yet; that admission keeps synchronous stores.
+            apc.defer_checkpoint_stores = len(group.jobs) == 1
         try:
             prompt_progress, responses = group.gen.next()
+        except BaseException:
+            discard = getattr(apc, "discard_deferred_checkpoints", None)
+            if discard is not None:
+                discard()
+            raise
         finally:
+            if flush is not None and apc is not None:
+                apc.defer_checkpoint_stores = False
             if group.spec:
                 mtp_lane.set_guide(None)
                 mtp_lane.set_context(None)
@@ -903,6 +928,10 @@ class VLMBatchRunner:
             self._emit(job, (int(response.token), lp))
             if response.finish_reason is not None:
                 self._finish(group, response.uid, response.finish_reason)
+        # The consumer can detokenize/send the first token while checkpoint
+        # copies and admission run on this same serialized MLX thread.
+        if responses and flush is not None:
+            flush()
 
     def _observe_prefill(self, job: _Job) -> None:
         """Tell the storage tiers how fast prefill really is (their cost model compares a

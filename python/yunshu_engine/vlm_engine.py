@@ -1310,11 +1310,22 @@ class VLMEngine:
         from .kernels import gdn_prefill
 
         matmul = "stock"
-        if lm is not None and any(
-            isinstance(m, lane_linear.LaneLinear) for _, m in lm.named_modules()
-        ):
-            matmul = lane_linear.prefill_kernel_id()
-        return f"{matmul}+{gdn_prefill.kernel_id()}"
+        single_row = ""
+        if lm is not None:
+            modules = [m for _, m in lm.named_modules()]
+            lanes = any(isinstance(m, lane_linear.LaneLinear) for m in modules)
+            invariant = lanes or any(
+                getattr(m, "_yunshu_invariant", False) for m in modules
+            )
+            if lanes:
+                matmul = lane_linear.prefill_kernel_id()
+            # Old AR requests used stock attention for short prefill tails;
+            # do not restore those checkpoints into the invariant lone-row path.
+            if invariant:
+                single_row = "+single-row-invariant-v1"
+        stride = getattr(self, "_apc_prefill_stride", 0)
+        grid = f"+apc-grid{stride}-v2" if stride else ""
+        return f"{matmul}+{gdn_prefill.kernel_id()}{single_row}{grid}"
 
     def _install_apc_identity(self, lm) -> None:
         """Make every APC key (RAM and SSD) depend on this checkpoint's identity, and
@@ -1631,7 +1642,7 @@ class VLMEngine:
                 kernels["invariant"] = install_invariant(
                     self._model.language_model, model=self._model, packed=False
                 )
-                # The runner turns them on only while its speculative lane steps.
+                # The runner turns them on for spec and lone AR target steps.
                 set_active(False)
             else:
                 # Exact: 5-bit layers use the fixed streamed kernel for >= 5 verify rows.
@@ -1669,9 +1680,21 @@ class VLMEngine:
                 else:
                     block = 6 if invariant else 3
         # After the kernels: the identity names the prefill matmul they installed.
+        from .vlm_batch_runner import PREFILL_STEP
+
+        self._apc_prefill_stride = (
+            PREFILL_STEP
+            if spec_family and not use_driver and (kernels or {}).get("invariant")
+            else 0
+        )
         from .kernels import buffer_cache
 
-        buffer_cache.install(float(settings.get("YUNSHU_PREFILL_BUFFER_CACHE_GB")))
+        cache_gib = settings.get("YUNSHU_PREFILL_BUFFER_CACHE_GB")
+        if cache_gib is None:
+            from .apc_manager import total_memory_bytes
+
+            cache_gib = buffer_cache.auto_limit_gib(total_memory_bytes())
+        buffer_cache.install(float(cache_gib))
         budget = self._apc_memory_gb()
         if self._apc_backend is None and budget > 0:
             from mlx_vlm.apc import semantic_extra_hash
@@ -1684,6 +1707,28 @@ class VLMEngine:
                 warm_mode = str(settings.get("YUNSHU_VLM_APC_WARM"))
                 share = float(settings.get("YUNSHU_VLM_APC_WARM_SHARE"))
                 warm_gb = budget * share if warm_mode != "off" else 0.0
+                boundary_tokens: list[int] = []
+                assistant_header = None
+                message_end = None
+                if self._apc_prefill_stride and self._tokenizer is not None:
+                    # Generation guards end at these tags. A later cold chat
+                    # must finish the same prefix forward before assistant text.
+                    for marker in ("<think>", "</think>"):
+                        ids = self._tokenizer.encode(marker, add_special_tokens=False)
+                        if len(ids) == 1:
+                            boundary_tokens.append(int(ids[0]))
+                    start_ids = self._tokenizer.encode(
+                        "<|im_start|>", add_special_tokens=False
+                    )
+                    role_ids = self._tokenizer.encode(
+                        "assistant", add_special_tokens=False
+                    )
+                    end_ids = self._tokenizer.encode(
+                        "<|im_end|>", add_special_tokens=False
+                    )
+                    if len(start_ids) == len(role_ids) == len(end_ids) == 1:
+                        assistant_header = (int(start_ids[0]), int(role_ids[0]))
+                        message_end = int(end_ids[0])
                 self._apc_backend = YunshuAPCManager(
                     num_blocks=512,
                     block_size=16,
@@ -1692,6 +1737,10 @@ class VLMEngine:
                     head_marker=self._chatml_head_marker(),
                     warm_mode=warm_mode,
                     warm_bytes=int(warm_gb * (1 << 30)),
+                    prefill_stride=self._apc_prefill_stride,
+                    prefill_boundary_tokens=tuple(boundary_tokens),
+                    prefill_assistant_header=assistant_header,
+                    prefill_message_end=message_end,
                 )
                 self._install_apc_identity(lm)
                 self._apc_semantic_hash = semantic_extra_hash(

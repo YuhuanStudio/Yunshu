@@ -2,280 +2,261 @@
 
 # Yunshu
 
-**為 Apple Silicon 打造的快速本地 LLM / VLM 推理引擎。**
+**為 Apple Silicon 打造的快速本地 LLM / VLM 推論引擎。**
 
-單一程序,相容 OpenAI 與 Anthropic API,透過 MLX 在裝置端執行。為單機低延遲而設計:首 token 快、
-無損解碼快,並以前綴重用跳過已經算過的部分。第一個完整調校的模型是 **Qwen3.8-27B**。
+單一進程，相容 OpenAI 與 Anthropic API，透過 MLX 在裝置端執行。為單台 Mac 的低延遲而設計：
+首字快、無損解碼快，並重用已經算過的前綴。第一個完整調校的模型是 **Qwen3.8-27B**。
 
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
 [![CI](https://github.com/YuhuanStudio/Yunshu/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/YuhuanStudio/Yunshu/actions/workflows/ci.yml)
 
-[English](./README.md) · [简体中文](./README.zh-CN.md) · **繁體中文**
+[English](README.md) · [简体中文](README.zh-CN.md) · **繁體中文**
 
 </div>
 
 ---
 
-## 與眾不同之處
+## 亮點
 
-- **無損推測解碼。** 優先使用已安裝的 DFlash2 drafter(自動選用),否則用 checkpoint 自帶的 MTP 頭。會推測的請求,其所有
-  解碼與驗證矩陣乘都走同一顆 batch-invariant kernel,所以 greedy 下開推測與不開推測的輸出逐 token
-  相同 —— 即 Splash 所說的無損。
-- **並發請求各列獨立的 KV。** 共用批次裡每一列保有自己的 KV 長度,短請求不會讀到長請求的補齊
-  (Qwen3.5 家族;8 路並發的 MMLU-Pro 88 → 139 tok/s,131K 上下文解碼 24 → 47 tok/s)。
-- **有損的只在你要求時才開。** 所有預設都是無損的。會改變輸出的省記憶體選項(int8 KV、KV 量化、
-  4-bit 快取前綴、int8 SSD 快取)都是需要手動開啟的設定。
-- **混合架構模型的前綴快取。** Qwen3.5 家族把注意力層和遞迴的 GatedDeltaNet 層混在一起,一般的
-  KV 快取切不開。Yunshu 保存精確的 checkpoint,以文字與圖片像素共同作為鍵,預設 8 GiB 記憶體,
-  另有預設開啟的 SSD 層(`~/.yunshu/cache/apc`,每個快取根目錄一個全域磁碟預算並保留剩餘空間,
-  `YUNSHU_VLM_APC_DISK=0` 可關閉)。重複或只改尾巴的長 prompt 不必重新 prefill,重啟後也一樣。
-- **以輸出驗證過的驗證 kernel。** GatedDeltaNet、注意力、5-bit 矩陣乘的驗證 kernel,部分取自
-  oMLX,每一顆都經過同 checkpoint A/B 才採用。
-- **快速路徑上有完整 API。** 工具呼叫、JSON-schema 約束、停止序列、logprobs、串流推理/內容分離、
-  `reasoning_effort` 直接傳給支援它的 chat template(Qwen3.8),以及客戶端斷線時取消生成。
-  `/v1/models` 會標明各模型支援的功能
-  (工具、結構化輸出、logprobs、媒體、context),請求用到模型沒有的功能會得到明確的 400。
-  regex 與 JSON-schema 約束是精確執行的(超出內建子集的 schema 交給 llguidance);無法執行的
-  語法(如 `uniqueItems`、`not`、`if / then / else`、`contains`)回 400,不會被默默忽略。
-- **程式代理相容。** Claude Code、Codex、opencode 都能使用:Messages 與 Responses 的原生工具、
-  伺服器端 `web_search` / `web_fetch` / MCP connector、Files、Batches、Conversations,以及給
-  Claude Code 狀態列用的 `yunshu statusline`。取樣請求(temperature 大於 0,代理送的就是這種)
-  也使用推測解碼。各功能的證據見 [AGENT_COMPAT.md](docs/guides/AGENT_COMPAT.md)。
-- **診斷。** `yunshu doctor`(每個問題附修正方法)、`yunshu cache status|gc`、`yunshu diagnose`
-  (本機診斷包,不含 prompt,不上傳)。
+- **無損推測解碼**：DFlash2 或 MTP 草稿，搭配不隨批次改變的 kernel，開啟推測解碼時的貪婪輸出
+  與關閉時逐 token 相同。
+- **混合模型的前綴快取**：為 attention + GatedDeltaNet 模型保存精確 checkpoint，放在 RAM 與 SSD，
+  重開後仍在；可再加儲存層。
+- **快速路徑上的完整 API**：工具呼叫、JSON schema、停止序列、logprobs、推理、取消，涵蓋 OpenAI
+  Chat / Responses、Anthropic Messages 與 Ollama。
+- **原生支援程式碼 agent**：Claude Code、Codex、opencode 透過各自的 API 運作，含伺服器端網頁
+  搜尋／抓取與 MCP。
+- **預設無損**：任何可能改變輸出的東西都是要自己開的設定。
+- **本地且私密**：不收集遙測；診斷資料不含 prompt。
 
 ## 快速開始
 
-需要 Apple Silicon 的 Mac(macOS 14 以上)與 [uv](https://docs.astral.sh/uv/)。
+需要 Apple Silicon、macOS 14 以上、Python 3.13 以上與 [uv](https://docs.astral.sh/uv/)。
 
 ```bash
-# 安裝。vision extra 涵蓋 Qwen3.5 / 3.6 / 3.8 系列和所有 VLM。
 uv tool install "yunshu[vision]"
-
-yunshu doctor                                   # 檢查這台 Mac,並列出修正方法
-yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit   # 下載到 ~/.yunshu/models/
+yunshu doctor                                   # 檢查這台 Mac，並說明怎麼修
+yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit
 yunshu serve -m mlx-community/Qwen3.5-9B-MLX-4bit
 ```
 
-其他安裝方式:`pipx install "yunshu[vision]"`、Homebrew(`brew install yuhuanstudio/tap/yunshu`),
-或最新的 `main`(`uv tool install "yunshu[vision] @ git+https://github.com/YuhuanStudio/Yunshu"`)。
-
-`yunshu serve -m org/name` 會直接使用模型目錄或 Hugging Face 快取裡已有的模型,兩邊都沒有才下載。
-模型預設放在 `~/.yunshu/models`;要放到別處,執行 `yunshu config set models_dir /path/to/models`
-(存在 `~/.yunshu/config.toml`)。
-
-### Qwen3.8-27B(已調校的模型)
-
-實測記憶體佔用約 21 GiB(1K prompt)、29 GiB(32K),包含權重、drafter 與 KV,建議 32 GB 以上的
-Mac;131K 上下文需要更多。
-
-```bash
-yunshu pull Jundot/Qwen3.8-27B-oQ4e-mtp            # 模型:4-bit,自帶 MTP 頭
-yunshu pull incoai/Qwen3.8-27B-DFlash2             # drafter:比 MTP 更快
-yunshu doctor -m Jundot/Qwen3.8-27B-oQ4e-mtp       # 「speculative」一列顯示將使用的推測路徑
-yunshu serve -m Jundot/Qwen3.8-27B-oQ4e-mtp
-```
-
-drafter 放在模型目錄或 Hugging Face 快取時,`yunshu serve` 會自動找到並使用,不需任何旗標;啟動日誌會
-印出 `Speculative decoding: dflash`。要自行指定:`YUNSHU_VLM_DRAFT=mtp` 強制使用 checkpoint 的 MTP 頭,
-`YUNSHU_VLM_DRAFT=off` 關閉推測,`YUNSHU_VLM_DRAFT=/path/to/drafter` 指定某個 drafter。每條路徑都是無損的:
-greedy 下開推測與不開推測的輸出相同。
-
-伺服器監聽 `http://127.0.0.1:8000`,任何 OpenAI 用戶端都能直接使用:
+伺服器在 `http://127.0.0.1:8000`。任何 OpenAI 或 Anthropic 客戶端都能直接使用：
 
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="local")  # 任意 key 都可以
-
-# 單模型模式:模型名稱只是佔位,伺服器提供的是你載入的那個模型。
+client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="local")  # 任意 key 皆可
 r = client.chat.completions.create(
     model="local",
     messages=[{"role": "user", "content": "用一句話解釋 MLX。"}],
-    extra_body={"reasoning_effort": "medium"},
 )
 print(r.choices[0].message.content)
 ```
 
-要在登入時於背景執行:`yunshu service install -m <model>`
-([服務指南](docs/guides/SERVICE.md))。每個指令都有 `--help`。`yunshu model list`
-會列出本機模型,包含 Hugging Face 快取。
+```python
+from anthropic import Anthropic
 
-**從原始碼**(開發用):複製儲存庫,執行 `uv sync --extra vision`(或 `--all-extras`),
-然後 `uv run yunshu serve -m <model>`。`uv.lock` 固定了確切版本(MLX 0.32、`mlx-vlm` 0.7.3+)。
+client = Anthropic(base_url="http://127.0.0.1:8000", api_key="local")
+msg = client.messages.create(
+    model="local", max_tokens=512,
+    messages=[{"role": "user", "content": "用一句話解釋 MLX。"}],
+)
+print(msg.content[0].text)
+```
 
-**不收集遙測。** Yunshu 不收集、不傳送任何使用資料、分析或當機報告。但這不等於「從不連網」:只有在你或你的請求觸發時才會
-對外連線,包括你要求的模型下載、你設定的 MCP 伺服器、你設定的伺服器端 `web_search` 提供者,以及 `web_fetch`
-(預設開啟,只抓取請求指定的 URL,除非你允許,否則會攔截私有位址,見 `YUNSHU_WEB_FETCH`)。維護者的上游檢查
-(`just vendor-check`)由人工手動執行。
+模型放在 `~/.yunshu/models`（用 `yunshu config set models_dir PATH` 搬移）；`serve -m org/name`
+也會找 Hugging Face 快取，只有需要時才下載。`yunshu service install -m <model>` 讓伺服器在登入時啟動。
 
-**文件:**
-- [連接用戶端](docs/guides/CLIENTS.md)(OpenAI / Anthropic SDK、程式代理、Open WebUI)
-- [疑難排解](docs/guides/TROUBLESHOOTING.md)
-- [API 參考](docs/API.md)
-- [設定參考](docs/CONFIGURATION.md)
+### Qwen3.8-27B
+
+```bash
+yunshu pull Jundot/Qwen3.8-27B-oQ4e-mtp
+yunshu pull incoai/Qwen3.8-27B-DFlash2          # 選用的草稿模型，會自動使用
+yunshu serve -m Jundot/Qwen3.8-27B-oQ4e-mtp
+```
+
+裝好草稿模型後，啟動日誌會顯示 `Speculative decoding: dflash`；沒裝時由模型自帶的 MTP 頭產生草稿。
+`yunshu doctor -m <model>` 會回報選用的路徑，以及這台 Mac 的記憶體是否放得下。
+
+### 從原始碼執行
+
+```bash
+git clone https://github.com/YuhuanStudio/Yunshu.git && cd Yunshu
+uv sync --extra vision
+uv run yunshu serve -m <model>
+```
+
+## 運作方式
+
+```
+ OpenAI / Anthropic / Ollama 客戶端 ──► FastAPI gateway（單一進程）
+                                          │  請求驗證、工具／推理解析、
+                                          │  伺服器端工具（網頁搜尋／抓取／MCP）
+                                          ▼
+                                  引擎（單一 MLX 執行緒）
+          ┌────────────────────────────────┴───────────────────────────────┐
+   VLM batch runner（所有 mlx-vlm 模型）                純文字快速路徑（mlx-lm 模型）
+   共享連續批次、每列各自取樣                           單請求 generate_step
+   推測解碼通道：DFlash2 / MTP / prompt-copy
+   前綴快取：RAM ─► SSD ─► 選用的儲存層
+```
+
+所有 GPU 工作都在同一條 MLX 執行緒上，請求之間不會互搶 GPU。每個回應在自己的生成結束時就回傳。
+
+### 推測解碼
+
+Qwen3.5 家族的單一請求在推測解碼通道中解碼：
+
+- **DFlash2**：獨立的區塊草稿模型，每輪提出多個 token；裝了相符的草稿模型就自動使用。
+- **MTP**：checkpoint 自帶的多 token 預測頭；沒有草稿模型時的後備。
+- **Prompt-copy 草稿**：當輸出開始重複 prompt 裡的文字（改程式碼、引用工具結果、多輪 agent），
+  通道會提出那段文字的後續，並在同一次驗證中檢查。預設開啟（`YUNSHU_SPEC_COPY_ROWS`，設 `0` 關閉）。
+
+所有解碼與驗證的矩陣乘法都走**不隨批次改變的 kernel**：一個 token 不論單獨驗證或和其他列一起驗證，
+算術都相同。這讓開關推測解碼時的貪婪輸出完全一致，取樣輸出在依位置決定的取樣下也精確一致。
+用 `YUNSHU_VLM_DRAFT` 選擇草稿（`mtp`、`off` 或草稿模型路徑）。
+
+### 前綴快取（APC）
+
+Qwen3.5 家族混合了 attention 層與遞迴的 GatedDeltaNet 層。遞迴狀態不能像 KV 快取那樣切回較早的
+token，所以一般的前綴快取無法使用。Yunshu 在前綴邊界保存**精確的 checkpoint**（KV 加遞迴狀態），
+以文字 token 及圖片像素／音訊特徵為鍵，所以快取命中的結果和冷預填完全相同。
+
+| 層 | 位置 | 預設 |
+|---|---|---|
+| HOT | RAM 中可直接使用的陣列 | 開啟，依可用記憶體決定大小（`YUNSHU_VLM_APC_MEMORY_GB`） |
+| WARM | RAM 中壓縮存放（無損 zstd，或有損 int8 / int4） | 關閉（`YUNSHU_VLM_APC_WARM`） |
+| SSD | `~/.yunshu/cache/apc`，一個全域磁碟預算並保留剩餘空間，重開後仍在 | 開啟（`YUNSHU_VLM_APC_DISK`、`_DIR`、`_GB`） |
+| 儲存層 | 外接 SSD、HDD、NAS（`YUNSHU_VLM_APC_DISK_TIERS`） | 關閉；會量測每個磁碟的速度，只有還原比重算快時才使用 |
+
+重複或修改過的長 prompt、多輪對話與 agent 迴圈，會從最近的 checkpoint 還原，不必重新預填。
+對話變長時，同一段對話較舊的 checkpoint 會被取代，不會越堆越多。`yunshu cache status` 與
+`yunshu cache gc` 可檢視與清理 SSD 快取。
+
+### 結構化輸出
+
+JSON schema、JSON object、regex 與 grammar 約束在解碼時強制執行（預設使用 llguidance），也包括
+工具呼叫的參數。不支援的 schema 寫法會明確回錯，而不是默默忽略。
+
+## API 相容性
+
+| API | 路由 |
+|---|---|
+| OpenAI | `/v1/chat/completions`、`/v1/completions`、`/v1/responses`（HTTP 與 WebSocket）、`/v1/embeddings`、`/v1/models`、`/v1/audio/*`、`/v1/images/*`、`/v1/realtime`、`/v1/files`、`/v1/batches` |
+| Anthropic | `/v1/messages`（thinking、tools、`cache_control`、伺服器工具 `web_search` / `web_fetch`、`mcp_servers`）、`/v1/messages/count_tokens`、`/v1/messages/batches`、Files |
+| Ollama | `/api/chat`、`/api/generate` 與模型相關路由 |
+| Yunshu 擴充 | 請求即時階段（`/v1/requests`）、以請求 id 取消、預熱、截止時間、佇列標頭、串流中的預填進度、`/v1/yunshu/status` |
+
+Chat 支援的參數：`tools` / `tool_choice` / `parallel_tool_calls`、`response_format`（`json_object`、
+strict `json_schema`）、`stop`、`logprobs` / `top_logprobs`（串流也有）、`n`、`seed`、penalty、
+`logit_bias`、`reasoning_effort`（推理內容另外回傳）、含 usage 的串流，以及 `usage` 中的快取 token 數。
+錯誤使用各 API 自己的格式。擴充欄位都有命名空間（`x_yunshu`、`X-Yunshu-*`），官方 SDK 會忽略。
+完整矩陣與每一列的驗證方式見 [API surface](docs/guides/API_SURFACE.md)。
+
+## 程式碼 agent
+
+```bash
+yunshu launch claude      # 或：codex、opencode
+```
+
+`yunshu launch` 會寫好客戶端設定（base URL、模型、上下文長度與輸出上限、reasoning effort）並啟動
+agent。對 Claude Code 還會裝上狀態列，即時顯示預填進度、解碼速度與快取命中。
+
+- **Claude Code**：Messages API，含串流、thinking、`/context` 用的 `count_tokens`、模型探索，以及由
+  Yunshu 在伺服器端執行的 WebSearch 工具。
+- **Codex**：Responses API，含推理項目、function call、本地壓縮與 `web_search`。
+- **opencode**：Chat Completions，含工具與 usage。
+
+伺服器端網頁搜尋使用可設定的後端（例如 SearXNG）；請求中指定的 MCP 伺服器由 gateway 連線。
+各 agent 實際呼叫了什麼、怎麼驗證的，見 [Agent 相容性](docs/guides/AGENT_COMPAT.md)。
 
 ## 效能
 
-在 M5 Max(128 GB)上以 Qwen3.8-27B 量測,2026-09-28/29。除非另有註明,都用同一個 Jundot
-`oQ4e-mtp` checkpoint。各表的量測方法與腳本見
-[docs/BENCHMARKS.md](docs/BENCHMARKS.md);原始數據由維護者保存,不隨 repo 發布。
+Qwen3.8-27B（oQ4e），M5 Max 128 GB，單一請求，貪婪解碼。方法、原始結果與完整比較表在
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md)。
 
-| 引擎 | 能力檢查 | 對話 TTFT(熱) | 8K prompt:冷 / 重複 / 改尾巴 | 解碼 tok/s |
-|---|---|---|---|---|
-| **Yunshu 0.1.1**(預設:MTP block 6、batch-invariant、ragged KV) | 34/34 | 0.192 s | 8.42 / 0.115 / 0.259 s | 73 |
-| mlx-vlm 0.7.3 server(APC) | 27/28 | 0.212 s | 8.60 / 0.108 / 0.265 s | 32 |
-| oMLX.app 0.7(MTP + 快取) | 31/31 | 0.312 s | 8.60 / 0.361 / 0.376 s | 85 |
-| Splash 1.1(自家量化模型 + DFlash2) | 31/31 | 0.206 s | 7.88 / 0.131 / 7.88 s | 119 |
-| TensorFold 0.3.6.1(MTP,parallel 8) | 23/34 | — | — | 28 |
-
-Yunshu 的檢查項比舊的量測多(logprobs、串流推理分離);TensorFold 在圖片、工具、JSON schema、
-logprobs 幾項沒有通過。
-
-單一請求的無損解碼,依輸出類型(同一 checkpoint、程式內、greedy、384 token;tok/s):
-
-| 上下文 | 程式碼 | 散文 | 類 JSON | 開推測 == 關推測 |
-|---|---|---|---|---|
-| 1K | 82.1 | 57.8 | 69.0 | 是(已測)¹ |
-| 32K | 75.4 | 51.2 | 64.2 | 是(已測)¹ |
-| 131K | 59.7 | 43.8 | 46.0 | 是(已測)¹ |
-
-¹ 上面每個上下文、每個任務,開推測與不開推測的 greedy 輸出都逐 token 相同。矩陣乘與列數無關;
-解碼與驗證的注意力走同一顆逐列 kernel,一個 token 的結果不會因為一起驗證的 token 數而改變。
-
-MMLU-Pro,300 題,8 路並行,上限 16384 token,`reasoning_effort=medium`(同時檢驗準確率與長時間
-穩定性;所有引擎設定相同):
-
-| 引擎 | 答對 | 耗時 | 總吞吐 tok/s | 記憶體峰值 |
-|---|---|---|---|---|
-| **Yunshu**(ragged KV) | 249 / 300 | 28.3 分 | 139 | 33.7 GiB |
-| Yunshu 0.1.0 時期的共用批次(補齊 KV) | 250 / 300 | 46.5 分 | 88 | 45 GiB |
-| TensorFold 0.3.6.1(MTP,parallel 8) | 250 / 300 | 24.9 分 | 159 | 35.1 GiB |
-| Splash 1.1 | 252 / 300 | 17.2 分 | 223 | 67 GiB |
-| oMLX.app | 229 / 300(27 題被它的 prefill 記憶體保護拒絕) | 29.2 分 | 120 | 75 GiB |
-
-開啟 `YUNSHU_KV_PRECISION=int8`(有損,需手動開啟)時 Yunshu 答對 251 / 300,峰值 28.1 GiB
-(在較早版本的 ragged 快取上量測,34.6 分)。
-
-**Qwen3.8-27B 的預設推測路徑:DFlash2 drafter**(成本感知的鏈深度、8-bit drafter 權重),server、greedy、
-生成 128 token、單一請求、prompt 各不相同,tok/s。兩種語料:小說散文(`novel_en`,難以草擬)與 Python
-程式碼(`code_python`,容易草擬):
-
-| 上下文 | novel_en | code_python |
+| | Yunshu | TensorFold 0.6.1 |
 |---|---|---|
-| 1K | 57.1 | 82.0 |
-| 8K | 48.2 | 89.1 |
-| 32K | 46.1 | 70.5 |
-| 131K | 32.9 | 79.9 |
+| 冷啟動首字延遲，8K prompt | 8.6 秒 | 8.5 秒 |
+| 冷啟動首字延遲，32K prompt | 38.3 秒 | 39.4 秒 |
+| 重複或修改過的長 prompt | 從前綴快取還原，不必重新預填 | — |
+| 解碼，短程式碼 prompt | 約 90–98 tok/s（DFlash2） | 約 140 tok/s（DFlash2） |
 
-131K 的 TTFT 約 207 s(冷 prefill,約 640 tok/s,已在硬體上限);能力矩陣 34/34。同一 server 上對照 checkpoint
-自帶的 MTP 頭,novel_en 在 1K 為 57.1 對 47.5 tok/s。數字每次執行會有數 tok/s 的浮動,因為接受率取決於文字。
+目前 TensorFold 的單請求解碼較快，縮小這個差距是正在進行的主要工作。推測解碼永遠不會改變
+Yunshu 的貪婪輸出。相對於原版 MLX 路徑的準確度，分三個層次檢查（logit 對齊、貪婪分歧、成對下游評測），
+見 [準確度](docs/guides/ACCURACY.md)。
 
-同語料對照(novel_en,單一請求,tok/s;各引擎的量化可能不同;兩者皆於 2026-09-29 量測):
+## 模型
 
-| 上下文 | Yunshu(DFlash2) | TensorFold 0.3.6.1(DFlash2) |
+| 模型 | 服務路徑 |
+|---|---|
+| Qwen3.5 / 3.6 / 3.8 家族（優先調校 Qwen3.8-27B） | VLM batch runner，含前綴快取與 MTP / DFlash2 推測解碼 |
+| 其他 mlx-vlm 模型（Gemma、GLM、Qwen-VL、Qwen-Omni…） | 同一個 runner；模型支援時可輸入圖片、音訊、影片；快取版面允許時使用前綴快取 |
+| 純文字 mlx-lm 模型 | 單請求快速路徑，含約束、工具與 logprobs |
+
+`/v1/models` 會回傳每個模型的資訊卡：上下文長度、輸出上限，以及實際支援哪些輸入與功能。
+
+## 其他能力
+
+| 能力 | 端點 | Extra |
 |---|---|---|
-| 1K | 57.1 | 76.4 |
-| 8K | 48.2 | 67.2 |
-| 32K | 46.1 | 63.4 |
-| 131K | 32.9 | 38.9 |
-| 131K 的 TTFT | 207 s | 280 s |
+| Qwen3-Omni 語音對語音 | `/v1/omni/speech/stream`（[範例](examples/talk.py)） | `omni` |
+| Realtime 語音、ASR、TTS | `/v1/realtime`、`/v1/audio/transcriptions`、`/v1/audio/speech` | `audio` |
+| OCR | `/v1/ocr`（GLM-OCR） | `vision` |
+| 圖片生成與編輯 | `/v1/images/generations`、`/v1/images/edits` | `generation` |
+| Embeddings、rerank、相似度 | `/v1/embeddings`、`/v1/rerank`、`/v1/score` | `embeddings` |
 
-在這組小說散文上,TensorFold 每個上下文的解碼都比 Yunshu 快(131K 約 1.2 倍,1K–32K 約 1.3–1.4 倍);
-Yunshu 的 prefill 較快(131K:207 對 280 s)。Splash 與 oMLX 沒有在這組語料上跑過;下表中它們的數字來自較早、
-不同的 prompt 集合,不能與上面各欄直接比較。
+## 命令列
 
-較早、使用 MTP 草稿的速度掃描(每個 prompt 都不同,不命中快取;生成 128 token;未註明單位者為 tok/s):
+| 指令 | 用途 |
+|---|---|
+| `yunshu doctor` | 檢查這台 Mac、相依套件與模型，並說明怎麼修 |
+| `yunshu pull` / `yunshu model` | 下載與管理模型 |
+| `yunshu serve` / `yunshu service` | 執行伺服器，或安裝成登入時啟動的服務 |
+| `yunshu launch` / `yunshu statusline` | 啟動接好 Yunshu 的程式碼 agent；引擎即時狀態列 |
+| `yunshu chat`、`complete`、`embed`、`transcribe`、`speak`、`ocr`、`image` | 在終端機使用執行中的伺服器 |
+| `yunshu status`、`cancel` | 伺服器狀態、取消進行中的請求 |
+| `yunshu config` | 實際生效的設定與來源 |
+| `yunshu cache status` / `gc` | 檢視與清理 SSD 前綴快取 |
+| `yunshu bench`、`eval`、`diagnose` | 效能測試、準確度評測、系統診斷 |
 
-| | Yunshu | oMLX | Splash | TensorFold(MTP) |
-|---|---|---|---|---|
-| 8K / 131K token 的 TTFT | 8.6 / 207 s | 8.5 / 214 s | 7.9 / 207 s | 9.8 / 293 s |
-| 1K / 32K / 131K 之後的解碼 | 59² / 59 / 47 | 71 / 60 / 38 | 101 / 48 / 68 | 26 / 57 / 19 |
-| 8 個 1K prompt 並發,總吞吐 | 64 | 53 | 70 | 65 |
-
-² 單一請求的解碼速度取決於草稿被接受多少,會隨 prompt 變動;Yunshu 的 1K 數字是 8 次的平均
-(單次介於 40–70)。其他格都是單次量測。
-
-Yunshu 目前的位置:
-- 前綴重用與熱 TTFT 是量到最好的;冷 prefill 已達硬體上限(各引擎相差約 10% 以內)。
-- 準確率與其他引擎相當;每次長時間執行都是 0 錯誤。
-- **落後 Splash** 的地方:長上下文解碼(131K:47 vs 68 tok/s)與並發長輸出(MMLU-Pro:139 vs
-  223 tok/s)。TensorFold 在後者也領先(159),因為它每一列都起草;Yunshu 只在請求單獨執行時起草。
-  多列推測解碼開發中(`YUNSHU_ROUND_DRIVER`,實驗性)。
-- 其他請求解碼時若有長 prompt 進來,prefill 期間其他請求的解碼會停住;量過的每個引擎都是如此。
-- 2026-09-28 版本的 60 分鐘混合壓測(對話、長文件、圖片、工具、JSON schema、思考、斷線)完成
-  699 個請求,伺服器 0 錯誤,記憶體沒有成長(17–26 GiB)。
-
-## 支援的模型
-
-| 層級 | 模型 | 路徑 | 可得到的功能 |
-|---|---|---|---|
-| 1 —— 已調校並量測 | Qwen3.5 / 3.6 / 3.8 家族(文字 + 圖片) | VLM batch runner | 前綴快取(記憶體 + SSD)、MTP / DFlash 無損推測解碼、上述所有 API 功能 |
-| 2 —— 支援 | 任何 `mlx-lm` 文字模型 | 單請求快速路徑(`generate_step`) | KV 前綴快取、工具、JSON schema、logprobs;可開啟 n-gram 推測、KV 量化 |
-| 2 —— 支援 | 其他 `mlx-vlm` 模型(GLM、Qwen-VL、Gemma-4、Qwen3-Omni、Nemotron-Omni 等) | 同一個 VLM batch runner | 連續批次、前綴快取(使用 sliding window 的模型除外)、圖片 / 音訊 / 影片、上述所有 API 功能;無推測解碼 |
-
-2026-09-28 這一輪只重新量測了第 1 層;第 2 層的 VLM 之後才改走 runner,仍需實機冒煙測試。
-
-## 其他模態
-
-以下功能在同一個伺服器裡,透過可選 extras 安裝。**2026-09-28 這一輪都沒有重新驗證**,
-這一輪只涵蓋 LLM/VLM。
-
-| 模態 | 端點 | 後端 | Extra |
-|---|---|---|---|
-| 原生語音對語音(Qwen3-Omni Thinker→Talker,串流) | `POST /v1/omni/speech/stream` | `mlx-vlm` | `omni` |
-| 即時語音 | `WS /v1/realtime` | omni,或 ASR → LLM → TTS | `audio` |
-| ASR | `/v1/audio/transcriptions` | `mlx-audio` / Whisper | `audio` |
-| TTS | `/v1/audio/speech` | `mlx-audio` | `audio` |
-| 圖像生成 | `/v1/images/generations` | 擴散模型 | `generation` |
-| Embeddings / rerank(文字 + 多模態) | `/v1/embeddings`、`/v1/rerank` | `mlx-lm` / `mlx-embeddings` | `embeddings` |
-
-語音對語音:服務一個 Qwen3-Omni 模型(`uv sync --extra omni`),試試
-[`examples/talk.py`](examples/talk.py)(麥克風)或 [`examples/quickstart.py`](examples/quickstart.py)
-(輸出 WAV,不需音訊硬體)。已確認上游 `mlx-vlm` 0.7.3 多輪 omni 輸出正確
-(維護者於 2026-09-28 確認);伺服器的 Realtime 路徑尚未確認。
-
-另外:MCP 伺服器/客戶端,以及相容 Anthropic 的 `/v1/messages`。
-
-## 架構
-
-```
-  客戶端(任意 OpenAI / Anthropic SDK)
-        │   OpenAI / Anthropic / MCP / Realtime-WS / SSE
-  ┌─────┴───────────────────────────────────────────────┐
-  │  閘道(FastAPI)       路由 + 中介層                   │
-  ├─────────────────────────────────────────────────────┤
-  │  引擎                                                 │
-  │   · VLM batch runner(所有 mlx-vlm 模型)             │
-  │       連續批次 · 前綴快取(記憶體 + SSD)             │
-  │       Qwen3.5 家族:MTP / DFlash + batch-invariant    │
-  │   · LLM 快速路徑(mlx-lm generate_step)              │
-  │       KV 前綴快取 · 約束解碼                          │
-  │   · 其他模態:omni、ASR/TTS、圖像、影片、embeddings   │
-  └─────────────────────────────────────────────────────┘
-        單一 MLX 執行緒 · 經由 Apple MLX 在裝置端執行
-```
-
-## 服務模型
-
-所有 GPU 工作都在一條 MLX 執行緒上。VLM(mlx-vlm)模型的並行請求共用一個連續批次,每列有自己的
-取樣設定;單獨一個請求時會使用推測解碼(Qwen3.5 家族),期間進來的請求則加入共用批次、不做推測。
-純文字的 mlx-lm 模型走單請求快速路徑,並行請求會依序執行。每個回應在它自己的生成結束時就立即返回。
+每個指令都有 `--help`。
 
 ## 設定
 
-所有設定都是 [設定參考](docs/CONFIGURATION.md) 列出的 `YUNSHU_*` 名稱(由同一份登錄表產生)。
-可用環境變數、TOML 檔(`yunshu serve --config yunshu.toml`)或 `yunshu serve --set KEY=VALUE`
-設定;`yunshu config` 顯示每項的生效值與來源。值無法解析會中止啟動,拼錯的名稱會收到警告。
+所有設定都走同一個註冊表：環境變數、TOML 檔（`yunshu serve --config yunshu.toml`）或
+`--set KEY=VALUE`。`yunshu config` 會顯示實際生效的值與來源。常用的：
 
-## 建構於
+| 設定 | 用途 |
+|---|---|
+| `YUNSHU_VLM_DRAFT` | 草稿選擇：`mtp`、`off` 或草稿模型路徑 |
+| `YUNSHU_SPEC_COPY_ROWS` | prompt-copy 草稿寬度（`0` = 關閉） |
+| `YUNSHU_VLM_APC_MEMORY_GB`、`YUNSHU_VLM_APC_DISK_GB`、`YUNSHU_VLM_APC_DISK_DIR` | 前綴快取的 RAM、SSD 預算與位置 |
+| `YUNSHU_VLM_APC_DISK_TIERS` | 額外的儲存層，例如 `/Volumes/Ext/apc@200,/Volumes/NAS/apc` |
+| `YUNSHU_VLM_APC_WARM`、`YUNSHU_KV_PRECISION` | 有損的省記憶體選項（預設關閉） |
+| `YUNSHU_AUTH_TOKEN`、`YUNSHU_QUEUE_LIMIT` | API key 與請求佇列上限 |
 
-[MLX](https://github.com/ml-explore/mlx) · [mlx-lm](https://github.com/ml-explore/mlx-lm) ·
-[mlx-vlm](https://github.com/Blaizzy/mlx-vlm) · [mlx-audio](https://github.com/Blaizzy/mlx-audio)。
-部分驗證 kernel 取自 [oMLX](https://github.com/jundot/omlx)(Apache-2.0),見
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+所有設定見 [設定](docs/CONFIGURATION.md)。
 
-## 授權
+## 文件
 
-Apache 2.0 —— 見 [LICENSE](LICENSE)。
+- [客戶端](docs/guides/CLIENTS.md)：curl、OpenAI / Anthropic SDK、Open WebUI、agent
+- [API surface](docs/guides/API_SURFACE.md) 與 [API 參考](docs/API.md)
+- [Agent 相容性](docs/guides/AGENT_COMPAT.md)
+- [KV 快取分層](docs/guides/KV_CACHE_MATRIX.md) 與 [prompt caching API](docs/guides/PROMPT_CACHING_APIS.md)
+- [效能測試](docs/BENCHMARKS.md) 與 [準確度](docs/guides/ACCURACY.md)
+- [背景服務](docs/guides/SERVICE.md)、[疑難排解](docs/guides/TROUBLESHOOTING.md)、[變更紀錄](CHANGELOG.md)
+
+## 隱私
+
+不收集遙測、使用統計或當機報告。Yunshu 只在下載模型、連到你設定的網頁搜尋／MCP 服務，以及請求
+要求抓取網頁時才對外連線。
+
+## 基礎與授權
+
+[MLX](https://github.com/ml-explore/mlx)、[mlx-lm](https://github.com/ml-explore/mlx-lm)、
+[mlx-vlm](https://github.com/Blaizzy/mlx-vlm)、[mlx-audio](https://github.com/Blaizzy/mlx-audio)。
+來自 [oMLX](https://github.com/jundot/omlx) 與 [TensorFold](https://github.com/ashhart/TensorFold)
+的 kernel 保留其授權聲明，見 [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md)。Yunshu 採用
+Apache 2.0：[LICENSE](LICENSE)。

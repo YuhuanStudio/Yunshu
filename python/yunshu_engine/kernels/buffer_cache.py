@@ -20,6 +20,11 @@ logger = logging.getLogger(__name__)
 _STATE = {"limit": 0}
 
 
+def auto_limit_gib(total_bytes: int) -> float:
+    """A reusable allocator pool scales with RAM (128 GiB: 6, 8 GiB: 0.4)."""
+    return min(6.0, max(0.0, total_bytes / (1 << 30) * 0.05))
+
+
 def clear_if_over() -> None:
     limit = _STATE["limit"]
     if limit <= 0 or mx.get_cache_memory() > limit:
@@ -28,6 +33,9 @@ def clear_if_over() -> None:
 
 class _MxView(types.ModuleType):
     """``mlx.core`` with a bounded ``clear_cache`` (everything else forwarded)."""
+
+    def clear_cache(self) -> None:
+        clear_if_over()
 
     def __getattr__(self, name: str):
         return getattr(mx, name)
@@ -40,7 +48,6 @@ def install(limit_gib: float) -> bool:
     _STATE["limit"] = int(max(0.0, limit_gib) * (1 << 30))
     if not isinstance(ar.mx, _MxView):
         view = _MxView("mlx.core")
-        view.clear_cache = clear_if_over
         ar.mx = view
         logger.info("prefill buffer cache kept up to %.1f GiB", limit_gib)
     return _STATE["limit"] > 0

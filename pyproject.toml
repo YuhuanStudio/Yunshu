@@ -23,7 +23,7 @@ include = [
 [project]
 name = "yunshu"
 version = "0.1.2"
-description = "Fast local LLM/VLM inference engine for Apple Silicon — lossless speculative decoding, prefix caching, OpenAI/Anthropic-compatible"
+description = "Fast local single-node LLM/VLM inference engine for Apple Silicon — speculative decoding, prefix reuse, OpenAI/Anthropic-compatible"
 readme = "README.md"
 license = "Apache-2.0"
 # Vendored oMLX (Apache-2.0) and TensorFold (MIT) kernels: their notices ship too.
@@ -32,7 +32,7 @@ requires-python = ">=3.13"
 authors = [
     {name = "YuhuanStudio"},
 ]
-keywords = ["mlx", "apple-silicon", "inference", "llm", "vlm", "speculative-decoding", "prefix-cache", "openai-compatible", "local-ai", "mac"]
+keywords = ["mlx", "apple-silicon", "inference", "llm", "vlm", "speculative-decoding", "prefix-cache", "anthropic-compatible", "openai-compatible", "local-ai", "mac"]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "Intended Audience :: Developers",
@@ -138,8 +138,8 @@ generation = [
     "torchvision>=0.16.0",
     "Pillow>=10.0.0",
 ]
-# KV-transfer wire compression (yunshu_engine.kv_transfer). Absent → transfers
-# fall back to uncompressed (the codec is now honestly recorded in the header).
+# Optional local compression codecs, including lossless APC WARM / lower storage
+# tier encoding. No distributed serving or cross-node KV offload is offered.
 compression = [
     "zstandard>=0.22.0",
     "lz4>=4.3.0",
