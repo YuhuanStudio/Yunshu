@@ -1,8 +1,8 @@
 # Running Yunshu as a background service
 
 `yunshu service` manages a per-user launchd agent. It starts Yunshu at login, restarts it after a
-crash (not after a clean stop), and writes its output to one log file. It does not need root and
-writes only two files:
+crash (not after a clean stop), and writes its output to a rotating log file. It does not need root.
+The primary files are:
 
 | What | Where |
 |---|---|
@@ -56,6 +56,14 @@ yunshu service stop          # stop until the next login or `service start`
 yunshu service start
 yunshu service uninstall     # stop and remove the agent; models and logs stay
 ```
+
+## Log rotation
+
+`yunshu service rotate-logs` rotates the service log manually. Size / age rotation,
+gzip archives and count / age retention use `YUNSHU_LOG_MAX_MB`,
+`YUNSHU_LOG_ROTATE_HOURS`, `YUNSHU_LOG_KEEP` and `YUNSHU_LOG_RETENTION_DAYS`.
+Secrets are redacted. Main's optional numbers-only serve log is separate; see
+[configuration](../CONFIGURATION.md).
 
 ## Uninstalling Yunshu completely
 

@@ -2,103 +2,86 @@
 
 # Yunshu
 
-**A fast local LLM / VLM inference engine for Apple Silicon.**
+**A fast, local, single-node LLM / VLM inference engine for Apple Silicon.**
 
-One process, OpenAI- and Anthropic-compatible, running on-device via MLX. Built for low latency on
-a single machine: fast first token, fast lossless decode, and prefix reuse that skips work you
-already paid for. The first fully tuned model is **Qwen3.8-27B**.
+One OpenAI/Anthropic-compatible process, on-device via MLX. Built for LLM/VLM decode
+speed, cold and cached time to first token (TTFT), prefix reuse and complete inference
+features. **Qwen3.8-27B is the first fully tuned model.** Speech, Realtime voice,
+image generation, video input and embeddings are supported capabilities; LLM/VLM serving is
+the focus. Yunmo is one consumer.
 
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
 [![CI](https://github.com/YuhuanStudio/Yunshu/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/YuhuanStudio/Yunshu/actions/workflows/ci.yml)
 
-**English** · [简体中文](./README.zh-CN.md) · [繁體中文](./README.zh-TW.md)
+**English** · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md)
 
 </div>
 
----
+Latest release: **v0.1.2 (2026-10-02)**; **v0.1.1 (2026-09-29)**. This README also
+covers **unreleased main**; see [CHANGELOG](CHANGELOG.md).
 
-## What it does differently
+## Inference features
 
-- **Lossless speculative decode.** A DFlash2 drafter when one is installed for the model (picked
-  automatically), else MTP (the checkpoint's own head).
-  Every decode and verify matmul of a drafting request goes through one batch-invariant kernel, so
-  greedy output with speculation on is token-identical to speculation off — the guarantee Splash
-  calls lossless.
-- **Per-row KV for concurrent requests.** Rows of the shared batch keep their own KV length, so a
-  short request never reads a long one's padding (Qwen3.5 family; MMLU-Pro at 8 in flight 88 → 139
-  tok/s, 131K-context decode 24 → 47 tok/s).
-- **Lossy only when you ask.** Every default is lossless. Memory savers that change outputs (int8
-  KV, KV quantization, 4-bit cached prefixes, int8 SSD cache) are settings you turn on.
-- **Prefix cache for hybrid models.** Qwen3.5-family models mix attention with recurrent
-  GatedDeltaNet layers, which ordinary KV caches cannot slice. Yunshu keeps exact checkpoints,
-  keyed by image pixels as well as text, 8 GiB in RAM by default plus an SSD tier that is on by
-  default (`~/.yunshu/cache/apc`, one global disk budget with a free-space reserve, opt out with
-  `YUNSHU_VLM_APC_DISK=0`). Repeated or edited long prompts skip prefill, also after a restart.
-- **Verify kernels checked against output.** GatedDeltaNet, attention and 5-bit matmul verify
-  kernels, partly vendored from oMLX, each adopted only after a same-checkpoint A/B.
-- **The full API surface on the fast path.** Tool calls, JSON-schema constraints, stop sequences,
-  logprobs, a streaming reasoning/content split, `reasoning_effort` passed to chat templates that
-  support it (Qwen3.8), and cancellation on client disconnect. `/v1/models` states what each model
-  supports (tools, structured output, logprobs, media, context) and a request that uses what the
-  model lacks gets an explicit 400. Regex and JSON-schema constraints are enforced exactly
-  (llguidance covers schemas beyond the built-in subset); a construct that cannot be enforced
-  (e.g. `uniqueItems`, `not`, `if / then / else`, `contains`) is a 400, not silently ignored.
-- **Coding-agent compatibility.** Claude Code, Codex and opencode run against it: Messages and
-  Responses with native tools, server-side `web_search` / `web_fetch` / MCP connector, Files,
-  Batches, Conversations, and `yunshu statusline` for Claude Code's status line. Sampled requests
-  (temperature above 0, what agents send) use speculative decoding too. Evidence per feature:
-  [AGENT_COMPAT.md](docs/guides/AGENT_COMPAT.md).
-- **Diagnostics.** `yunshu doctor` (with a fix per problem), `yunshu cache status|gc`,
-  `yunshu diagnose` (a local bundle with no prompts, never uploaded).
+- **Speculative decoding.** Matching DFlash2 drafter discovered automatically, otherwise
+  the checkpoint's MTP head. Invariant decode/verify kernels support greedy parity within
+  that path; sampled drafting uses position-keyed draws. Main adds invariant verify up to
+  32 rows and prompt-copy drafting in the MTP lane (on by default,
+  `YUNSHU_SPEC_COPY_ROWS=0` opts out). Tree drafting remains experimental and off.
+  Plain runner vs invariant-lane output is not universally identical: see
+  [accuracy evidence](docs/guides/ACCURACY.md) and [benchmark limits](docs/BENCHMARKS.md).
+- **Prefix reuse.** Hybrid Qwen3.5-family checkpoints retain attention KV and recurrent
+  state; text and media keys prevent mismatched reuse. RAM APC plus a default bounded SSD
+  cache survive repeated turns and restarts. Main adds optional WARM RAM and further
+  storage tiers with measured restore-cost selection. Lossless WARM stays off; int8/int4
+  cache formats and KV quantization are explicit lossy options. See
+  [cache tiers](docs/guides/KV_CACHE_MATRIX.md).
+- **Complete request features.** Tools, JSON-schema constraints, stop, logprobs, separate
+  reasoning/content streams, template-supported reasoning effort and cancellation.
+  `/v1/models` advertises each model's capabilities; unsupported requests get explicit
+  errors. Main defaults JSON constraints to llguidance; unsupported constructs are rejected.
+- **Coding agents.** Claude Code, Codex and opencode use native Messages / Responses /
+  Chat APIs, server-side search/fetch/MCP, Files, Batches and Conversations. `yunshu launch`
+  supplies model limits; `yunshu statusline` exposes live engine state for Claude Code.
+  [Compatibility evidence](docs/guides/AGENT_COMPAT.md) distinguishes verified features
+  from client limits.
+- **Local diagnostics.** `yunshu doctor`, `yunshu cache status`, `yunshu cache gc` and
+  `yunshu diagnose`; diagnostics stay local and contain no prompts.
 
 ## Quickstart
 
-Needs a Mac with Apple Silicon (macOS 14+) and [uv](https://docs.astral.sh/uv/).
+Apple Silicon, macOS 14+, Python 3.13+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-# Install. The vision extra covers the Qwen3.5 / 3.6 / 3.8 family and every VLM.
 uv tool install "yunshu[vision]"
-
-yunshu doctor                                   # checks this Mac and prints fixes
-yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit   # downloads to ~/.yunshu/models/
+yunshu doctor
+yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit
 yunshu serve -m mlx-community/Qwen3.5-9B-MLX-4bit
 ```
 
-Other ways to install: `pipx install "yunshu[vision]"`, Homebrew
-(`brew install yuhuanstudio/tap/yunshu`), or the latest `main`
-(`uv tool install "yunshu[vision] @ git+https://github.com/YuhuanStudio/Yunshu"`).
+The server listens on `http://127.0.0.1:8000`. Models are stored in `~/.yunshu/models`;
+`serve -m org/name` also finds the Hugging Face cache and downloads only if needed.
+`yunshu config set models_dir /path/to/models` changes the location.
 
-`yunshu serve -m org/name` uses a model already in the models directory or the Hugging Face cache
-and downloads only when neither has it. Models live in `~/.yunshu/models`; to keep them elsewhere,
-run `yunshu config set models_dir /path/to/models` (saved in `~/.yunshu/config.toml`).
-
-### Qwen3.8-27B (the tuned model)
-
-Measured memory footprint is about 21 GiB at a 1K prompt and 29 GiB at 32K (weights, drafter and
-KV), so use a Mac with 32 GB or more; 131K context needs more.
+### Qwen3.8-27B
 
 ```bash
-yunshu pull Jundot/Qwen3.8-27B-oQ4e-mtp            # the model: 4-bit, ships an MTP head
-yunshu pull incoai/Qwen3.8-27B-DFlash2             # the drafter: faster than MTP
-yunshu doctor -m Jundot/Qwen3.8-27B-oQ4e-mtp       # "speculative" row shows the path in use
+yunshu pull Jundot/Qwen3.8-27B-oQ4e-mtp
+yunshu pull incoai/Qwen3.8-27B-DFlash2
+yunshu doctor -m Jundot/Qwen3.8-27B-oQ4e-mtp
 yunshu serve -m Jundot/Qwen3.8-27B-oQ4e-mtp
 ```
 
-With the drafter in the models directory or the Hugging Face cache, `yunshu serve` finds and uses
-it; no flag is needed. The startup log says `Speculative decoding: dflash`. To choose yourself:
-`YUNSHU_VLM_DRAFT=mtp` forces the checkpoint's MTP head, `YUNSHU_VLM_DRAFT=off` disables drafting,
-`YUNSHU_VLM_DRAFT=/path/to/drafter` picks a specific drafter. Every path is lossless: with
-speculation on, greedy output equals speculation off.
-
-The server listens on `http://127.0.0.1:8000`. Any OpenAI client works unchanged:
+With the matching drafter installed, the startup log should say `Speculative decoding:
+dflash`; `doctor` reports the selected path. `YUNSHU_VLM_DRAFT=mtp` forces MTP,
+`YUNSHU_VLM_DRAFT=off` disables drafting, and an absolute drafter path selects it explicitly.
+Memory needs depend on weights, context, drafting and cache budgets; use the model check
+in `doctor` on your Mac instead of treating a benchmark footprint as a minimum-RAM promise.
 
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="local")  # any key works
-
-# Single-model mode: the model name is a placeholder, the server serves what you loaded.
+client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="local")
 r = client.chat.completions.create(
     model="local",
     messages=[{"role": "user", "content": "Explain MLX in one sentence."}],
@@ -107,214 +90,125 @@ r = client.chat.completions.create(
 print(r.choices[0].message.content)
 ```
 
-To run it in the background at login: `yunshu service install -m <model>`
-([service guide](docs/guides/SERVICE.md)). Every command has `--help`. `yunshu model list` shows
-local models, including the Hugging Face cache.
+Any key works unless `--auth-token` was set. In single-model mode `local` is a placeholder;
+in multi-model mode use an id from `/v1/models`.
 
-**From source** (development): clone the repository, run `uv sync --extra vision` (or
-`--all-extras`), then `uv run yunshu serve -m <model>`. `uv.lock` pins the exact versions
-(MLX 0.32, `mlx-vlm` 0.7.3+).
+For unreleased main / source development:
 
-**No telemetry.** Yunshu collects and sends no usage data, analytics or crash reports. That is not
-"never goes online": it connects out only when you or your request cause it to — model downloads you
-ask for, MCP servers you configure, the server-side `web_search` provider you set up, and `web_fetch`
-(on by default; it fetches the URL a request asks for, and blocks private addresses unless you allow
-them, see `YUNSHU_WEB_FETCH`). Maintainers' upstream checks (`just vendor-check`) are run by hand.
+```bash
+git clone https://github.com/YuhuanStudio/Yunshu.git
+cd Yunshu
+uv sync --extra vision
+uv run yunshu serve -m Jundot/Qwen3.8-27B-oQ4e-mtp
+```
 
-**Docs:**
-- [connecting clients](docs/guides/CLIENTS.md) (OpenAI / Anthropic SDKs, coding agents, Open WebUI)
-- [troubleshooting](docs/guides/TROUBLESHOOTING.md)
-- [API reference](docs/API.md)
-- [configuration reference](docs/CONFIGURATION.md)
+`uv.lock` pins dependencies; main requires MLX 0.32.3+, mlx-lm 0.32.0+, mlx-vlm 0.7.4+.
+`yunshu model list` lists local models. `yunshu service install -m <model>` installs the
+login service ([service guide](docs/guides/SERVICE.md)); each command has `--help`.
+
+**No telemetry.** Model downloads, configured MCP/search providers and request-triggered
+web fetches can connect out. No usage analytics or crash reports are sent. Optional main
+`YUNSHU_SERVE_LOG` writes local numbers only, without prompts, outputs or token ids.
 
 ## Performance
 
-Measured on an M5 Max (128 GB), Qwen3.8-27B, 2026-09-28/29. Same Jundot `oQ4e-mtp` checkpoint unless
-noted. How each table was measured (scripts and methods) is in [docs/BENCHMARKS.md](docs/BENCHMARKS.md);
-the raw run data stays with the maintainers.
+Every measurement below is sourced in [BENCHMARKS](docs/BENCHMARKS.md) or the
+[dated PERF_TREND log](docs/reports/PERF_TREND.md). M5 Max / 128 GB, Qwen3.8-27B
+Jundot oQ4e-mtp unless stated otherwise. Dates identify measurements, not release dates.
 
-| Engine | Capability checks | Chat TTFT (warm) | 8K prompt: cold / repeat / edited tail | Decode tok/s |
-|---|---|---|---|---|
-| **Yunshu 0.1.1** (default: MTP block 6, batch-invariant, ragged KV) | 34/34 | 0.192 s | 8.42 / 0.115 / 0.259 s | 73 |
-| mlx-vlm 0.7.3 server (APC) | 27/28 | 0.212 s | 8.60 / 0.108 / 0.265 s | 32 |
-| oMLX.app 0.7 (MTP + cache) | 31/31 | 0.312 s | 8.60 / 0.361 / 0.376 s | 85 |
-| Splash 1.1 (own quantized model + DFlash2) | 31/31 | 0.206 s | 7.88 / 0.131 / 7.88 s | 119 |
-| TensorFold 0.3.6.1 (MTP, parallel 8) | 23/34 | — | — | 28 |
+**2026-10-02 tfbench**, recorded in `4e1338c4`: greedy, 256 output tokens, three
+independent server sessions per cell, medians. Yunshu was that morning's **unreleased
+main (SHA not recorded), actually using MTP**; TensorFold used DFlash2. This predates
+main's prefill / prompt-copy / wide-verify merges and is not a same-drafter A/B.
 
-Yunshu's matrix has more checks than the older runs (logprobs, the streaming reasoning split);
-TensorFold fails the image, tool, JSON-schema and logprobs checks.
-
-Lossless single-request decode by output type (same checkpoint, in-process, greedy, 384 tokens;
-tok/s):
-
-| Context | Code | Prose | JSON-like | Spec on == off |
-|---|---|---|---|---|
-| 1K | 82.1 | 57.8 | 69.0 | yes (tested)¹ |
-| 32K | 75.4 | 51.2 | 64.2 | yes (tested)¹ |
-| 131K | 59.7 | 43.8 | 46.0 | yes (tested)¹ |
-
-¹ Speculative and plain greedy output matched token for token on every task at every context
-above. Matmuls are row-invariant, and decode and verify attention run one per-row kernel whose
-result for a token does not depend on how many tokens are verified with it.
-
-MMLU-Pro, 300 questions, 8 in flight, max 16384 tokens, `reasoning_effort=medium` (accuracy and a
-long-run soak; same settings for every engine):
-
-| Engine | Correct | Wall time | Aggregate tok/s | Peak footprint |
-|---|---|---|---|---|
-| **Yunshu** (ragged KV) | 249 / 300 | 28.3 min | 139 | 33.7 GiB |
-| Yunshu 0.1.0-era shared batch (padded KV) | 250 / 300 | 46.5 min | 88 | 45 GiB |
-| TensorFold 0.3.6.1 (MTP, parallel 8) | 250 / 300 | 24.9 min | 159 | 35.1 GiB |
-| Splash 1.1 | 252 / 300 | 17.2 min | 223 | 67 GiB |
-| oMLX.app | 229 / 300 (27 rejected by its prefill memory guard) | 29.2 min | 120 | 75 GiB |
-
-With `YUNSHU_KV_PRECISION=int8` (lossy, opt-in) Yunshu scored 251 / 300 at a 28.1 GiB peak (measured
-on an earlier build of the ragged cache, 34.6 min).
-
-**Default speculative path on Qwen3.8-27B: DFlash2 drafter** (cost-aware chain depth, 8-bit drafter
-weights), server, greedy, 128 generated tokens, one request, unique prompts, tok/s. Two corpora: novel
-prose (`novel_en`, hard to draft) and Python code (`code_python`, easy):
-
-| Context | novel_en | code_python |
+| Context / output | TensorFold 0.6.1 tok/s / cold TTFT s | Yunshu main (MTP) tok/s / cold TTFT s |
 |---|---|---|
-| 1K | 57.1 | 82.0 |
-| 8K | 48.2 | 89.1 |
-| 32K | 46.1 | 70.5 |
-| 131K | 32.9 | 79.9 |
+| 1K code | 140.5 / 1.2 | 69.3 / 1.4 |
+| 1K prose | 72.4 / 1.2 | 52.9 / 1.4 |
+| 8K code | 80.6 / 8.4 | 60.2 / 11.1 |
+| 8K prose | 67.4 / 8.5 | 57.5 / 11.1 |
+| 32K code | 91.2 / 39.4 | 58.7 / 47.2 |
+| 32K prose | 55.1 / 39.4 | 46.3 / 47.7 |
 
-TTFT at 131K is about 207 s (cold prefill, ~640 tok/s, at the hardware ceiling); the capability
-matrix is 34/34. Against the checkpoint's MTP head on the same server, novel_en at 1K is 57.1
-versus 47.5 tok/s. The numbers move a few tok/s from run to run because acceptance depends on the
-text.
+TensorFold is ahead in all these cells. **Splash is ahead in the 2026-09-27 exploratory
+TTFT check**: 3.221 / 0.130 s cold / repeat, versus Yunshu direct VLMEngine 3.511 /
+3.512 s, for a 3,323-token prompt. Splash 1.1.0 used its own quantized model and INT8
+KV; single runs, shared GPU, Yunshu SHA unknown. These are different weights and cache
+conditions, not an engine-only comparison. No updated full comparison follows the merges.
 
-Same-corpus comparison (novel_en, single request, tok/s; the quantization may differ between
-engines; both measured 2026-09-29):
+**Later 2026-10-02 main measurements, unreleased:**
 
-| Context | Yunshu (DFlash2) | TensorFold 0.3.6.1 (DFlash2) |
-|---|---|---|
-| 1K | 57.1 | 76.4 |
-| 8K | 48.2 | 67.2 |
-| 32K | 46.1 | 63.4 |
-| 131K | 32.9 | 38.9 |
-| TTFT at 131K | 207 s | 280 s |
+| Workload | Before | After | Commit / source |
+|---|---|---|---|
+| Cold TTFT, 8K | 11.0 s | 8.57 s | `a4d71bc8`, BENCHMARKS |
+| Cold TTFT, 32K | 47.5 s | 38.3 s | `a4d71bc8`, BENCHMARKS |
+| MTP prompt-copy, code turn 2, 32K | 63 tok/s | 100–138 tok/s | `c666be70` / `bb4895ca`, PERF_TREND |
+| MTP prompt-copy, code turn 2, 8K | 62 tok/s | 86 tok/s | same |
 
-TensorFold decodes novel prose faster than Yunshu at every context here (about 1.2x at 131K, 1.3-1.4x
-at 1K-32K); Yunshu's prefill is faster (207 vs 280 s at 131K). Splash and oMLX were not run on this
-corpus; their figures in the next table come from an earlier, different prompt set and should not be
-read against the columns above.
+Prefill figures are the dated merge record; public repeat counts / intervals are unavailable.
+Prompt-copy greedy digests matched off/on; prose stayed within ±3% single-run noise.
+Cold-prefill numerics can differ from earlier builds; APC namespaces include the prefill
+settings. No universal decode speedup or hardware-ceiling claim is implied.
 
-Earlier speed sweep with the MTP draft (unique prompts, no cache hits; 128 generated tokens; tok/s
-unless noted):
+**Agentic coding, partial, measured 2026-10-02** (PERF_TREND / `2815311c`):
 
-| | Yunshu | oMLX | Splash | TensorFold (MTP) |
+| Snapshot / agent | Pass / runs | Rate (Wilson 95%) | Wall median / p90 s | Decode median tok/s |
 |---|---|---|---|---|
-| TTFT at 8K / 131K tokens | 8.6 / 207 s | 8.5 / 214 s | 7.9 / 207 s | 9.8 / 293 s |
-| Decode after 1K / 32K / 131K | 59² / 59 / 47 | 71 / 60 / 38 | 101 / 48 / 68 | 26 / 57 / 19 |
-| 8 concurrent 1K prompts, aggregate | 64 | 53 | 70 | 65 |
+| prod `c4e2b244+` / opencode | 34 / 41 | 83% (69–91%) | 337 / 1200 | 22.2 |
+| prod4 `d225f16c` / Claude Code | 14 / 15 | 93% (70–99%) | 93 / 309 | 60.8 |
+| prod4 `d225f16c` / opencode | 9 / 10 | 90% (60–98%) | 112 / 137 | 56.9 |
 
-² Single-request decode depends on how many drafted tokens are accepted, which varies with the
-prompt; Yunshu's 1K figure is the mean of 8 runs (single runs ranged 40–70). The other cells are
-single runs.
+Failures remain in the denominator, including five prod timeouts. Prod4 covers 10 of 20
+tasks, with 1–3 repeats; snapshot `d225f16c` is included in v0.1.2. Different snapshots
+and task mixes prevent claiming a paired speedup. Codex and TensorFold agentic results
+are pending. Accuracy Tier 3 and APC replay results, including losses and incomplete
+subsets, are in [BENCHMARKS](docs/BENCHMARKS.md).
 
-Where Yunshu stands:
-- Prefix reuse and warm TTFT are the best measured; cold prefill is at the hardware ceiling (every
-  engine within ~10%).
-- Accuracy matches the others; 0 errors in every long run.
-- **Behind Splash** on long-context decode (131K: 47 vs 68 tok/s) and on concurrent long outputs
-  (MMLU-Pro: 139 vs 223 tok/s). TensorFold is also ahead there (159) because it drafts for every
-  row; Yunshu drafts only for a request that is alone. Multi-row speculative decoding is in
-  progress (`YUNSHU_ROUND_DRIVER`, experimental).
-- A long prompt that arrives while others decode stalls their decode during its prefill; every
-  engine measured does this.
-- A 60-minute mixed soak on the 2026-09-28 build (chat, long documents, images, tools, JSON schema,
-  thinking, disconnects) finished 699 requests with 0 server errors and no memory growth
-  (footprint 17–26 GiB).
+## Models and serving paths
 
-## Supported models
+| Models | Serving path | Scope |
+|---|---|---|
+| Qwen3.5 / 3.6 / 3.8 family; Qwen3.8-27B tuned first | VLM batch runner | APC, MTP/DFlash on supported family models, per-row sampling |
+| Other mlx-vlm models (Gemma, GLM, Qwen-VL, Omni, …) | Same VLM batch runner | model-dependent media and tools; APC where cache layout permits; no family-specific speculation |
+| Text-only mlx-lm models | Single-request `generate_step` fast path | prefix cache, constraints, tools and logprobs where supported; concurrent requests serialize |
 
-| Tier | Models | Path | What you get |
-|---|---|---|---|
-| 1 — tuned and measured | Qwen3.5 / 3.6 / 3.8 family (text + images) | VLM batch runner | prefix cache (RAM + SSD), MTP / DFlash lossless spec decode, all API features above |
-| 2 — supported | any `mlx-lm` text model | single-request fast path (`generate_step`) | KV prefix cache, tools, JSON schema, logprobs; opt-in n-gram spec, KV quant |
-| 2 — supported | any other `mlx-vlm` model (GLM, Qwen-VL, Gemma-4, Qwen3-Omni, Nemotron-Omni, …) | the same VLM batch runner | continuous batching, prefix cache (unless the model uses a sliding window), images / audio / video, all API features above; no speculative decode |
+All GPU work runs on one MLX thread. The default VLM runner shares concurrent decode
+rows; a lone supported request can draft. Multi-row drafting uses the experimental
+`YUNSHU_ROUND_DRIVER`, off by default, with measured latency tradeoffs. Main's M01 split
+organizes the text engine into modules without changing serving paths. See the model
+card for actual capabilities, not just a model-family name.
 
-Only tier 1 was re-measured in the 2026-09-28 round; tier-2 VLMs moved onto the runner afterwards and still need their real-model smoke run.
+## Other supported capabilities
 
-## Other modalities
+| Capability | API / example | Extra |
+|---|---|---|
+| Native Qwen3-Omni speech-to-speech | `/v1/omni/speech/stream`, [talk.py](examples/talk.py) | `omni` |
+| Realtime voice, ASR, TTS | `/v1/realtime`, `/v1/audio/transcriptions`, `/v1/audio/speech` | `audio` (native Omni needs `omni`) |
+| Image generation | `/v1/images/generations` | `generation` |
+| Embeddings / rerank | `/v1/embeddings`, `/v1/rerank` | `embeddings` |
+| Text WebSocket / Responses WebSocket / Unix socket | `/v1/stream`, `/v1/responses`, `yunshu serve --uds PATH` | core |
 
-These ship in the same server behind optional extras. **None were re-verified in the 2026-09-28
-round**, which covered LLM/VLM only.
+These capabilities have separate model/backend requirements and are not covered by the
+LLM/VLM performance tables. Video input is supported by applicable VLMs; video generation
+has no engine backend or public HTTP route. WebRTC and HTTP/2 remain unimplemented.
+[API surface](docs/guides/API_SURFACE.md) and [transports](docs/guides/TRANSPORTS.md)
+list the checks and limits.
 
-| Modality | Endpoint | Backend | Extra |
-|---|---|---|---|
-| Native speech-to-speech (Qwen3-Omni Thinker→Talker, streaming) | `POST /v1/omni/speech/stream` | `mlx-vlm` | `omni` |
-| Realtime voice | `WS /v1/realtime` | omni, or ASR → LLM → TTS | `audio` |
-| Text over WebSocket (multiplexed, cancel by id) | `WS /v1/stream`, `WS /v1/responses` | any served model | -- |
-| ASR | `/v1/audio/transcriptions` | `mlx-audio` / Whisper | `audio` |
-| TTS | `/v1/audio/speech` | `mlx-audio` | `audio` |
-| Image generation | `/v1/images/generations` | diffusion | `generation` |
-| Embeddings / rerank (text + multimodal) | `/v1/embeddings`, `/v1/rerank` | `mlx-lm` / `mlx-embeddings` | `embeddings` |
+## Configuration and docs
 
-For speech-to-speech, serve a Qwen3-Omni model (`uv sync --extra omni`) and try
-[`examples/talk.py`](examples/talk.py) (microphone) or [`examples/quickstart.py`](examples/quickstart.py)
-(writes a WAV, no audio hardware). Upstream `mlx-vlm` 0.7.3 was checked to keep multi-turn omni
-output correct (maintainer check, 2026-09-28); the server's Realtime path
-was not.
+Settings go through one registry: environment, TOML (`yunshu serve --config yunshu.toml`),
+or `yunshu serve --set KEY=VALUE`; `yunshu config` shows effective values and sources.
 
-Text-to-video generation is not offered over HTTP (the route was removed); video input to VLMs works.
+- [Clients](docs/guides/CLIENTS.md)
+- [Troubleshooting](docs/guides/TROUBLESHOOTING.md)
+- [API reference](docs/API.md)
+- [Configuration](docs/CONFIGURATION.md)
+- [Documentation index](docs/README.md)
 
-Transports beyond SSE ([docs/guides/TRANSPORTS.md](docs/guides/TRANSPORTS.md)): a multiplexed text WebSocket
-(`WS /v1/stream`: many requests on one socket, cancel / stop / `max_tokens` update by id, heartbeats,
-backpressure; client in `python/yunshu_client`, demo in `examples/ws_stream.py`), OpenAI's Responses WebSocket
-mode (`client.responses.connect()`), Realtime in the GA and beta schemas, and `yunshu serve --uds PATH` for a
-Unix socket (`curl --unix-socket`, OpenAI SDK over an httpx uds transport). WebRTC and HTTP/2 are not offered yet.
+## Built on and license
 
-Also: MCP server/client, an Anthropic-compatible `/v1/messages` surface and an Ollama-compatible `/api` layer (route status: [docs/guides/API_SURFACE.md](docs/guides/API_SURFACE.md)).
-
-## Architecture
-
-```
-  Client (any OpenAI / Anthropic SDK)
-        │   OpenAI / Anthropic / MCP / Realtime-WS / SSE
-  ┌─────┴───────────────────────────────────────────────┐
-  │  Gateway (FastAPI)     routers + middleware           │
-  ├─────────────────────────────────────────────────────┤
-  │  Engine                                               │
-  │   · VLM batch runner (every mlx-vlm model)            │
-  │       continuous batching · prefix cache (RAM + SSD)  │
-  │       Qwen3.5 family: MTP / DFlash + batch-invariant  │
-  │   · LLM fast path (mlx-lm generate_step)              │
-  │       KV prefix cache · constrained decoding          │
-  │   · other modalities: omni, ASR/TTS, image,           │
-  │     embeddings                                        │
-  └─────────────────────────────────────────────────────┘
-        one MLX thread · runs on-device via Apple MLX
-```
-
-## Serving model
-
-All GPU work runs on one MLX thread. VLM (mlx-vlm) models serve concurrent requests in one
-continuous batch, each row with its own sampling settings; a request that is alone uses speculative
-decoding (Qwen3.5 family), and requests that arrive meanwhile join the shared batch without it.
-Text-only mlx-lm models use the single-request fast path, so their concurrent requests run one at a
-time. Every response returns as soon as its own generation finishes.
-
-## Configuration
-
-Every setting is a `YUNSHU_*` name listed in the
-[configuration reference](docs/CONFIGURATION.md) (generated from one registry). Set it as an
-environment variable, in a TOML file (`yunshu serve --config yunshu.toml`), or with
-`yunshu serve --set KEY=VALUE`; `yunshu config` shows each effective value and where it came
-from. A bad value stops startup; a misspelled name gets a warning.
-
-## Built on
-
-[MLX](https://github.com/ml-explore/mlx) · [mlx-lm](https://github.com/ml-explore/mlx-lm) ·
-[mlx-vlm](https://github.com/Blaizzy/mlx-vlm) · [mlx-audio](https://github.com/Blaizzy/mlx-audio).
-Some kernels are vendored from [oMLX](https://github.com/jundot/omlx) (Apache-2.0) and
-[TensorFold](https://github.com/ashhart/TensorFold) (MIT); see
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
-## License
-
-Apache 2.0 — see [LICENSE](LICENSE).
+[MLX](https://github.com/ml-explore/mlx), [mlx-lm](https://github.com/ml-explore/mlx-lm),
+[mlx-vlm](https://github.com/Blaizzy/mlx-vlm), [mlx-audio](https://github.com/Blaizzy/mlx-audio).
+Vendored kernels from [oMLX](https://github.com/jundot/omlx) and
+[TensorFold](https://github.com/ashhart/TensorFold) have their notices in
+[THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md). Yunshu is Apache 2.0: [LICENSE](LICENSE).

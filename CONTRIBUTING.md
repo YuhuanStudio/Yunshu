@@ -1,12 +1,11 @@
 # Contributing to Yunshu
 
 Thank you for your interest in contributing to Yunshu! This guide covers the minimum you need to get a
-working dev loop. Read the repo's `CLAUDE.md` for the full architectural picture (what's live, what's
-dead, what's being refactored). By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
+working dev loop. Read [AGENTS.md](AGENTS.md) for the architectural scope and settings rules. By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Prerequisites
 
-- macOS with Apple Silicon (M1/M2/M3/M4) — Yunshu does not run on x86/Linux/GPU.
+- macOS with Apple Silicon (M-series) — Yunshu requires macOS and a native arm64 Python.
 - Python 3.13+
 - [uv](https://github.com/astral-sh/uv) package manager
 - [just](https://github.com/casey/just) command runner (`brew install just`)
@@ -23,10 +22,10 @@ This runs `uv sync --all-extras --dev`. For a lighter
 checkout, pick just the extras you need instead of `--all-extras`:
 
 ```bash
-uv sync --extra omni          # mlx-vlm + torch — native Qwen3-Omni speech-to-speech (the flagship)
+uv sync --extra omni          # mlx-vlm + torch — native Qwen3-Omni speech-to-speech (a supported capability)
 uv sync --extra vision        # mlx-vlm (VLM / OCR)
 uv sync --extra audio         # mlx-audio (ASR / TTS / Realtime voice cascade)
-uv sync --extra generation    # diffusers + torch (image / video generation)
+uv sync --extra generation    # diffusers + torch (image generation)
 uv sync --extra embeddings    # mlx-embeddings (/v1/embeddings, /v1/rerank)
 uv sync --all-extras          # everything — what most contributors want
 ```
@@ -34,7 +33,7 @@ uv sync --all-extras          # everything — what most contributors want
 ## Development loop
 
 ```bash
-just lint              # ruff check
+just lint              # ruff check + mypy baseline gate
 just format            # ruff format
 just test-unit         # unit tests only (fast — no models needed)
 just test              # unit suite (integration tests are opt-in, ignored by default)
@@ -51,7 +50,7 @@ Yunshu is a flat monorepo (no `yunshu/` subdir):
 | Layer | Directory | Responsibility |
 |:-----:|-----------|----------------|
 | L1 | `python/yunshu_gateway/` | FastAPI HTTP server, OpenAI/Anthropic/MCP/Realtime routers |
-| L2 | `python/yunshu_control/` | Lightweight admin / usage accounting |
+| L2 | `python/yunshu_control/` | Audit log and token counting |
 | L4 | `python/yunshu_engine/` | Inference engine (text + vision + audio + image) |
 | L5 | `python/yunshu_kv/` | KV prefix cache |
 | CLI | `python/yunshu_cli/` | `yunshu serve / chat / model / ...` |
@@ -59,15 +58,16 @@ Yunshu is a flat monorepo (no `yunshu/` subdir):
 > **Note:** `python/yunshu_engine/` is being actively refactored by the owner. If your change is
 > engine-side, coordinate before opening a large PR.
 
-Yunshu has **no custom Metal kernels** — it wraps MLX
-(hand-written kernels benchmarked slower on a single decode stream), so there's nothing to build there.
+Yunshu builds on MLX and includes custom and vendored Metal kernels. They compile at runtime;
+there is no separate kernel build step. Adopt a kernel only with a same-checkpoint end-to-end
+A/B and output checks. Performance priorities are decode, cold/cached TTFT and prefix reuse.
 
 ## Commit & PR conventions
 
 We follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```
-feat(cli): add `yunshu model pull` subcommand
+feat(cli): add `yunshu pull` subcommand
 fix(gateway): correct streaming SSE keepalive interval
 docs(readme): clarify non-goals
 ```

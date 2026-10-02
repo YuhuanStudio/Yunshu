@@ -86,6 +86,18 @@ report such a sample.
 * Limit: preemption happens within one poll interval of the first request, so a sample can briefly share the GPU
   with a request before the stop lands. Keep `poll_s` small; the idle gate makes this rare.
 
+## Implemented offline measurement support (unreleased main)
+
+`YUNSHU_SERVE_LOG=1` writes a local, size-capped numbers-only event log: timings,
+token counts, cache tier, speculative acceptance, concurrency, arm and build. It
+never records prompts, outputs or token ids. `YUNSHU_SERVE_LOG_DIR`,
+`YUNSHU_SERVE_LOG_MAX_MB`, `YUNSHU_SERVE_LOG_KEEP` control location and rotation;
+`YUNSHU_ARM` labels a manually chosen configuration without changing behavior.
+The server reports cumulative GPU busy seconds in `/v1/yunshu/status` and
+`yunshu_gpu_busy_seconds_total` in `/metrics`. These are busy-time counters, not
+hardware utilization samples. Offline switchback, CUPED and mSPRT helpers and
+run-history variance profiling are implemented; no online arm selection is enabled.
+
 ## Planned, not implemented
 
 * Online lossless A/B on live traffic, recording metrics only (no prompts).
