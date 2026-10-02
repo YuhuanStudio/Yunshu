@@ -83,8 +83,8 @@ to bf16 (2.4e-3): int8 K/V is at the numerical noise floor, int4 is about three 
 | Tier | Restore | vs prefill |
 |---|---|---|
 | HOT hit (clone) | 0.04 s | 900x |
-| WARM int8 (lossy) | ~0.05 s | 700x |
-| WARM lossless (decode 17 GB/s + unshuffle + copy) | ~0.25 s | 150x |
+| WARM int8 (lossy), roofline | ~0.05 s | 700x |
+| WARM lossless, roofline (decode 17 GB/s + GPU plane merge + copy) | ~0.25 s | 150x |
 | internal SSD (10.3 GB/s measured, F_NOCACHE) | 0.22 s | 165x |
 | TB4 SSD (5.0 GB/s) | 0.46 s | 81x |
 | HDD (150 MB/s, 12 ms; throttled simulation) | 14.9 s raw, 11.1 s zstd | 2.5x / 3.3x |
@@ -95,21 +95,76 @@ Break-even read bandwidth for a 32K prefix is 62 MB/s (checkpoint bytes / prefil
 NAS still beats recomputing a long prefix. A 1K prefix on HDD or NAS does not (1.45 s / 2.15 s restore against
 1.16 s of prefill), which is why a tier is used per entry by the cost model, not blindly.
 
+**Measured through the server** (`reload_ms` of `x_yunshu.cache`: the whole lookup, promotion into RAM
+included; median over the replay below; a checkpoint = 154 MB + 64 KiB per token):
+
+| Tier | cached tokens | hits | median reload | p90 | effective MB/s |
+|---|---|---|---|---|---|
+| HOT (clone) | up to 13K / 13-22K / 22-40K | 26 / 14 / 14 | 28 / 41 / 63 ms | 36 / 52 / 75 ms | 23-31 GB/s |
+| internal SSD | up to 13K / 13-22K / 22-40K | 3 / 3 / 3 | 128 / 147 / 496 ms | 293 / 263 / 527 ms | 4-7 GB/s |
+| TB4 SSD (single tier) | up to 13K / 13-22K / 22-40K | 7 / 31 / 61 | 138 / 605 / 1300 ms | 604 / 907 / 2085 ms | 1.4-6 GB/s |
+| WARM lossless | up to 13K / 13-22K / 22-40K | 4 / 10 / 7 | 331 / 685 / 1812 ms | 361 / 1401 / 6282 ms | 1.0-2.5 GB/s |
+| WARM int8 (lossy) | up to 13K / 13-22K / 22-40K | 4 / 8 / 2 | 63 / 503 / 128 ms | 72 / 5547 / 161 ms | 2.4-17 GB/s |
+
+The sequential probe (10.3 and 5.0 GB/s) is an upper bound: reading a checkpoint back through the loader and
+cloning it into the cache delivers 1.4-7 GB/s, and a cold read of a large file is slower than one still in the
+page cache. The storage cost model therefore uses the observed restore speed (EMA per tier) when it is slower
+than the probe. WARM lossless decodes at 1-2.5 GB/s end to end, not at the 17 GB/s of the codec: promotion
+into HOT evicts (and demotes, i.e. compresses) another checkpoint inside the same lookup, and the decoded
+copy is cloned once more. WARM int8's p90 shows the same demotion work (quantize plus the exact SSD copy).
+
+**Replay: 3 agent sessions growing to 30K tokens round-robin (20 s idle gaps), each revisited, Qwen3.8-27B**
+(`queue_tier4.sh`, `session_replay.py`; 27 requests; SSD = the TB4 volume unless stated; greedy):
+
+| Configuration | prompt tokens served from cache | hits (ram / warm / ssd) | TTFT mean / p50 / p90 / max | peak RSS |
+|---|---|---|---|---|
+| 4 GiB RAM only (no SSD) | 31.7 % | 20 / 0 / 0 | 21.2 / 17.7 / 39.8 / 44.7 s | 4.7 GB |
+| 4 GiB RAM + SSD (before this change) | 86.3 % | 2 / 0 / 24 | 6.0 / 6.1 / 8.8 / 14.0 s | 5.6 GB |
+| 4 GiB RAM + SSD, superseded checkpoints dropped on disk | 86.3 % | 2 / 0 / 24 | 6.3 / 6.0 / 9.1 / 13.9 s | 5.7 GB |
+| 4 GiB + WARM lossless (share 0.4) + SSD | 86.3 % | 2 / 7 / 17 | 6.2 / 6.2 / 8.9 / 13.9 s | 9.0 GB |
+| 4 GiB + WARM int8 (share 0.4) + SSD | 86.3 % | 2 / 1 / 23 | 7.2 / 6.0 / 14.7 / 19.0 s | 6.3 GB |
+| 6 GiB RAM + SSD | 86.3 % | 12 / 0 / 14 | 5.5 / 5.7 / 7.1 / 13.8 s | 5.4 GB |
+| 6 GiB + WARM lossless + SSD | 86.3 % | 2 / 14 / 10 | 6.3 / 5.6 / 10.8 / 13.9 s | 10.5 GB |
+| 6 GiB + WARM int8 + SSD | 86.3 % | 2 / 13 / 11 | 6.8 / 5.9 / 12.1 / 18.0 s | 5.6 GB |
+| 32 GiB RAM (everything fits) | 86.3 % | 26 / 0 / 0 | 4.7 / 4.8 / 5.5 / 13.8 s | 4.7 GB |
+| 4 GiB + internal SSD (3 GiB) > TB4 SSD (6 GiB) > simulated HDD (40 GiB) | 85.7 % | 2 / 0 / 24 (9 internal, 15 TB4, 0 HDD) | 5.6 / 5.7 / 8.9 / 14.0 s | 5.4 GB |
+| 4 GiB + TB4 SSD (3 GiB) > simulated HDD (150 MB/s, 17 ms) | 81.3 % | 4 / 0 / 22 (12 TB4, 10 HDD) | 10.4 / 7.7 / 19.2 / 28.3 s | 5.8 GB |
+
+Every configuration hits the same 86.3 % ceiling (the first request of a session and the head are cold; each
+turn adds 3K new tokens, 3.4 s of prefill that no cache removes). What differs is where the hit comes from
+and what it costs. Reading the table:
+- the SSD tier is the whole difference between 21 s and 6 s mean TTFT at 4 GiB; the HDD-only variant restores
+  a 2 GB checkpoint in 9-11 s instead of recomputing it for 25-45 s;
+- WARM, lossless or int8, adds nothing over the SSD on these runs: the mean TTFT is equal or worse (6.2-7.2 s
+  against 6.0 s), and lossless WARM doubles the resident memory (peak RSS 9-10.5 GB: HOT + compressed copies +
+  the one entry being compressed + the decode buffers). The roofline said so before the run (the codec is not
+  faster than an internal NVMe, and the end-to-end decode is slower than the codec);
+- three devices (internal SSD, TB4 SSD, simulated HDD) with fast-tier caps below the working set (3 + 6 GiB; each
+  session's newest checkpoint is 2.1 GB, plus its interval checkpoint) match the single big SSD (5.6 s against 6.0 s) because the mover demotes the least
+  recently used checkpoints instead of deleting them and the cost model picks the cheapest tier per lookup.
+
+**Disk supersede.** A request's checkpoints used to accumulate on the SSD tiers: the 3-session replay left 46
+files and 63 GiB, the SSD cap (64 GiB) reached in five minutes. Once the cap or the RAM budget is small the cache
+the next request needs is the one an LRU evicts first, so these stale copies cost hits in tiered
+configurations (a first tiered run lost every session's newest checkpoint and recomputed 30-47 s requests).
+A checkpoint written to any tier now drops the checkpoints of earlier requests that are prefixes of it, on every
+tier: the same replay leaves 6 files and 10.8 GiB (the head plus each session's newest checkpoints) with the same
+hits. Heads and anything this process neither stored nor restored are kept.
+
 **Conclusions.**
 1. The tier that pays is the SSD (and the storage tiers below it): without it the 4 GiB RAM budget of a 16-32 GB
-   machine re-prefills 40-90 % of the agent traffic; with it 14 % (the cold first request per session) and the
-   mean TTFT of 3 sessions growing to 30K falls from 10.7 s to 4.7 s (model; measured below).
-2. **WARM lossless** is bit-exact (tested token-identical) but compresses only 1.4x (K/V) and restores no
-   faster than an internal NVMe (0.25 s against 0.22 s), so on a machine with a normal SSD it adds no hit and
-   no TTFT while it takes HOT memory and CPU for compression. It helps only with no SSD tier, or in the band
-   where the working set is 1-1.5x the HOT capacity. Not a measured end-to-end win: **off by default**
-   (`YUNSHU_VLM_APC_WARM=off`); keep it for machines without a usable SSD tier.
-3. **WARM int8 / int4** are lossy: opt-in only, never default. int8 g32 gives 1.8x capacity and a 0.05 s
-   restore at the noise floor of bf16; int4 3.6x at about 3x the KLD. Their gain over an internal SSD is about
-   0.2 s per WARM hit.
-4. Lower storage tiers matter on slow media: restores from external SSD/HDD/NAS need per-device measurement
-   (the break-even above), a cost model, background demotion and zstd on the slow ones (+33 % effective
-   bandwidth), all of which are implemented; fast disks stay raw.
+   machine serves 32 % of the prompt tokens from cache and runs at a 21 s mean TTFT (45 s at the end of the
+   replay); with it 86 % and 6 s.
+2. **WARM lossless** is bit-exact (tested token-identical, restores from WARM, SSD and HOT give the same greedy
+   tokens) but compresses 1.4x, and on 27B traffic it is not a win: off by default
+   (`YUNSHU_VLM_APC_WARM=off`), as the lossless-default rule demands a measured end-to-end win. Keep it for
+   machines without a usable SSD tier.
+3. **WARM int8 / int4** are lossy: opt-in only, never default, and the replay shows no TTFT gain either.
+4. Lower storage tiers matter on slow media: restores from external SSD / HDD / NAS need per-device
+   measurement (the break-even above), a cost model that learns the real restore speed, background demotion
+   and zstd on the slow ones (+33 % effective bandwidth); fast disks stay raw. All implemented and tested
+   with throttled devices; the real TB5 enclosure and a real HDD / NAS were not available (HDD and NAS are
+   simulated by pacing every probe, copy and read of the tier to the stated bandwidth and latency).
 
 **Machine sizes** (APC RAM budget: 32 GiB on 128 GB, 16 GiB on 64 GB, 4 GiB on 16-32 GB; 30K-token sessions
 take 2.2 GB, 60K 4.1 GB):
@@ -117,8 +172,8 @@ take 2.2 GB, 60K 4.1 GB):
 | Machine | HOT holds | SSD tier | WARM |
 |---|---|---|---|
 | 128 GB (32 GiB) | ~14 sessions of 30K, 7 of 60K | not needed for a few sessions, still the restart cache | not worth it |
-| 64 GB (16 GiB) | ~7 of 30K, 3 of 60K | needed beyond 3 long sessions | only without SSD |
-| 16-32 GB (4 GiB) | 1-2 sessions of 30K | the cache: without it hit rate collapses | int8 (opt-in) buys ~0.2 s per hit; lossless nothing |
+| 64 GB (16 GiB) | ~7 of 30K, 3 of 60K | needed beyond 3 long sessions | only without SSD (model) |
+| 16-32 GB (4 GiB) | 1-2 sessions of 30K | the cache: without it 32 % served from cache, 21 s mean TTFT | no gain measured (lossless or int8) |
 
 **Settings** (all in `settings.py`, stable options; none is an experimental flag):
 `YUNSHU_VLM_APC_WARM` (`off` | `lossless` | `int8` | `int4`, default `off`), `YUNSHU_VLM_APC_WARM_SHARE` (share of

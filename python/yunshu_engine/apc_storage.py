@@ -525,6 +525,7 @@ class FileTier:
         self.root = spec.path
         self.dir = spec.path / namespace
         self.name = name or device_name(spec.path)
+        self.fixed_name = name is not None
         self.profile = profile
         self.cap_bytes = int(cap_bytes)
         self.budget = budget
@@ -920,6 +921,7 @@ class TieredDiskStore(SpillDiskStore):
     def __init__(self, *args: Any, name: str | None = None, **kwargs: Any):
         super().__init__(*args, **kwargs)
         self.name = name or device_name(self.dir.parent)
+        self.fixed_name = name is not None
         self.profile: DeviceProfile | None = None
         self.sim: tuple[float, float] | None = None
         self.lower: list[FileTier] = []
@@ -942,16 +944,23 @@ class TieredDiskStore(SpillDiskStore):
     # ── configuration ──────────────────────────────────────────────────
     def add_lower(self, tier: FileTier) -> None:
         """Add a lower tier; the lower tiers stay ordered by measured read bandwidth. Tiers on
-        the same volume are told apart by their directory name."""
-        if tier.name == self.name and "/" not in self.name:
-            self.name = f"{self.name}/{self.dir.parent.name}"
-        if tier.name in {self.name, *(t.name for t in self.lower)}:
-            tier.name = f"{tier.name}/{tier.root.name}"
+        the same volume (the primary store included) are told apart by their directory name."""
         tier.owner = self
         self.lower.append(tier)
         self.lower.sort(key=lambda t: -(t.profile.read_bps if t.profile else 0.0))
         for i, t in enumerate(self.lower):
             t.is_last = i == len(self.lower) - 1
+        self._relabel()
+
+    def _relabel(self) -> None:
+        entries = [(self, self.dir.parent)] + [(t, t.root) for t in self.lower]
+        base = {id(o): device_name(path) for o, path in entries}
+        count = Counter(base.values())
+        for o, path in entries:
+            if not getattr(o, "fixed_name", False):  # an explicit name is kept
+                o.name = base[id(o)] + (
+                    f"/{path.name}" if count[base[id(o)]] > 1 else ""
+                )
 
     def start_mover(self) -> None:
         if self._mover is None and self.lower:

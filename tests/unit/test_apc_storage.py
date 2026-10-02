@@ -105,6 +105,16 @@ def _find(s, toks, extra=(5,)):
 
 
 # ── specs, profiles ──────────────────────────────────────────────────────
+def test_tiers_on_one_volume_are_told_apart_by_directory(tmp_path):
+    s = TieredDiskStore(tmp_path / "t0", namespace=NS, num_workers=1, max_bytes=1 << 30)
+    for d in ("t1", "t2"):
+        (tmp_path / d).mkdir()
+        s.add_lower(FileTier(TierSpec(tmp_path / d), NS, _profile(), cap_bytes=1 << 30))
+    names = [s.name, *(t.name for t in s.lower)]
+    assert len(set(names)) == 3, names
+    assert s.name.endswith("/t0") and any(n.endswith("/t2") for n in names)
+
+
 def test_parse_tier_specs():
     a, b, c = parse_tiers("/Volumes/A@128, ~/x/y , /mnt/nas@2.5!sim=110/4")
     assert (a.path, a.cap_gib, a.sim) == (Path("/Volumes/A"), 128.0, None)
