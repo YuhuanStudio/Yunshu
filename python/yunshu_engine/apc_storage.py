@@ -1,3 +1,4 @@
+# Patches upstream mlx-vlm symbols (see vendor.json kind=patches; `just vendor-check` flags source changes)
 """N-level storage for the APC checkpoints: internal SSD -> external SSD -> HDD -> NAS -> recompute.
 
 The first directory is the primary store (``SpillDiskStore``: upstream safetensors files, the async
