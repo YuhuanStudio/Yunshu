@@ -207,7 +207,9 @@ def onehot(k: int, n: int) -> mx.array:
     return mx.array(v)
 
 
-def run_lane(monkeypatch, target, guide, first, eos, limit, accuracy, seed, block):
+def run_lane(
+    monkeypatch, target, guide, first, eos, limit, accuracy, seed, block, **extra
+):
     import mlx_vlm.speculative.mtp as mtp
 
     vocab = target.vocab
@@ -250,6 +252,7 @@ def run_lane(monkeypatch, target, guide, first, eos, limit, accuracy, seed, bloc
         stop_check=None,
         eos_token_ids={eos},
         guide=guide,
+        **extra,
     ):
         out.extend(toks)
     return out

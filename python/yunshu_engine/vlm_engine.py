@@ -1911,8 +1911,19 @@ class VLMEngine:
                 TokenMaskProcessor(eos_ids=list(self._get_eos_ids()), **mask_kw)
             )
         constraint = self._build_text_constraint(json_schema)
+        constraint_guide = None
         if constraint is not None:
-            processors.append(ConstraintProcessor(constraint, self._tokenizer))
+            from .constrained_spec import ConstraintGuide
+
+            assert self._tokenizer is not None
+            constraint_guide = ConstraintGuide(
+                ConstraintProcessor(constraint, self._tokenizer),
+                int(
+                    (self._config.get("text_config") or {}).get("vocab_size")
+                    or self._config.get("vocab_size")
+                    or len(getattr(self._tokenizer, "_tokenizer", self._tokenizer))
+                ),
+            )
 
         stop_ids = set() if ignore_eos else set(self._get_eos_ids())
         stop_ids.update(stop_token_ids or [])
@@ -1937,6 +1948,12 @@ class VLMEngine:
         thinking_tokens = 0
         count = 0
         guide = self._tool_guide(tool_spec, in_think)
+        if constraint_guide is not None:
+            from .constrained_spec import CombinedGuide
+
+            guide = (
+                CombinedGuide(constraint_guide, guide) if guide else constraint_guide
+            )
         for token in self._batch_runner.iter_tokens(
             input_ids,
             max_tokens=max_tokens,

@@ -294,6 +294,20 @@
       "commit": "00093678",
       "license": "MIT",
       "why": "Qwen3.5 MTP head weights driven per row, upstream draft loop"
+    },
+    {
+      "path": "python/yunshu_engine/constrained_spec.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "license": "MIT",
+      "commit": "v0.7.3",
+      "kind": "derived",
+      "upstream_paths": [
+        "mlx_vlm/speculative/dflash.py",
+        "mlx_vlm/generate/ar.py",
+        "mlx_vlm/models/qwen3_5/speculative_verifier.py"
+      ],
+      "why": "single-row constrained DFlash transactions and accepted target-row probabilities"
     }
   ],
   "inspired": [
@@ -1332,6 +1346,82 @@
       "commit": "v0.7.3",
       "why": "a WARM hit is decoded into the RAM tier through the upstream byte-budget admission",
       "source_sha256": "094ed706a1cb3ed3fabaea9ce24c10cbdfdedd60e2cc0d56973a190a7bb10447",
+      "installed_version": "0.7.4"
+    },
+    {
+      "path": "python/yunshu_engine/constrained_spec.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "license": "MIT",
+      "commit": "v0.7.3",
+      "kind": "patches",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.generate.ar",
+      "symbol": "_sample_with_positions",
+      "signature": "(sampler: 'Callable[[mx.array], mx.array]', logprobs: 'mx.array', *, row_ids: 'Optional[List[int]]' = None, positions: 'Optional[List[int]]' = None) -> 'mx.array'",
+      "source_sha256": "c65d02b3a62030d4fbe62dee5f402d541e5bcb210584e78a9927292a8c2c58fb",
+      "installed_version": "0.7.4",
+      "why": "retain sampled prefill distribution / serial arithmetic of floating target projections"
+    },
+    {
+      "path": "python/yunshu_engine/constrained_spec.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "license": "MIT",
+      "commit": "v0.7.3",
+      "kind": "patches",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen3_5.speculative_verifier",
+      "symbol": "Qwen3_5BatchInvariantForward._linear",
+      "signature": "(self, linear, x: mlx.core.array) -> mlx.core.array",
+      "source_sha256": "668b9a7064f30c63348028fb72f22119b73e2897e2d246024c80fbe54e0404dd",
+      "installed_version": "0.7.4",
+      "why": "retain sampled prefill distribution / serial arithmetic of floating target projections"
+    },
+    {
+      "path": "python/yunshu_engine/constrained_spec.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "license": "MIT",
+      "commit": "v0.7.3",
+      "kind": "patches",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen3_5.speculative_verifier",
+      "symbol": "Qwen3_5BatchInvariantForward._linears",
+      "signature": "(self, linears, x: mlx.core.array)",
+      "source_sha256": "5cdaf151d00f3ab314f4722b475eec88a5228060be36c321c1363314ab249e0a",
+      "installed_version": "0.7.4",
+      "why": "retain sampled prefill distribution / serial arithmetic of floating target projections"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/constrained_spec.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.speculative.utils",
+      "symbol": "run_speculative_server_rounds",
+      "signature": "(model, draft_model, prompt_cache, hidden, **kw)",
+      "license": "MIT",
+      "commit": "v0.7.3",
+      "why": "constrained DFlash rounds with target-row logprobs",
+      "source_sha256": "f8daeca6474acf220603d35cd1918807b7ea4932a0daf0ab376f954b9fee6811",
+      "binding": "rebound in mlx_vlm.generate.ar and mlx_vlm.speculative.utils",
+      "installed_version": "0.7.4"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/constrained_spec.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.generate.ar",
+      "symbol": "PromptProcessingBatch.__init__",
+      "signature": "(self, model: 'nn.Module', uids: 'List[int]', input_ids: 'List[List[int]]', max_tokens: 'List[int]', inputs_embeds: 'mx.array', prompt_kwargs: 'dict', logits_processors: 'Optional[List[Optional[List[Callable[[mx.array, mx.array], mx.array]]]]]' = None, thinking_budget_criteria: 'Optional[List[Any]]' = None, prefill_step_size: 'Optional[int]' = 2048, kv_bits=None, kv_key_bits=None, kv_value_bits=None, kv_key_scheme=None, kv_value_scheme=None, kv_group_size: 'int' = 64, kv_quant_scheme: 'str' = 'uniform', quantized_kv_start: 'int' = 0, warm_cache: 'Optional[List[Any]]' = None, apc_meta: 'Optional[List[dict]]' = None, apc_manager: \"Optional['_apc.APCManager']\" = None, apc_coordinator: \"Optional['_apc.APCCoordinator']\" = None, right_pad_per_row: 'Optional[List[int]]' = None, suffix_lens: 'Optional[List[int]]' = None, apc_mode: 'Optional[str]' = None, draft_model: 'Optional[nn.Module]' = None, draft_kind: 'Optional[str]' = None, draft_block_size: 'Optional[int]' = None, greedy_sampling: 'bool' = False)",
+      "license": "MIT",
+      "commit": "v0.7.3",
+      "why": "canonical singleton stock prefill before the first immediate prompt step",
+      "source_sha256": "463151a660348eb1b33871c7e8ec88c14327655067f6ef34fb0bd1b99ab278f1",
       "installed_version": "0.7.4"
     }
   ],

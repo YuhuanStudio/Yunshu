@@ -132,6 +132,14 @@ def rounds(
     )
 
     lm = model.language_model if hasattr(model, "language_model") else model
+    from .constrained_spec import (
+        current_request,
+        exact_verify,
+        forced_tokens,
+        target_rows,
+    )
+
+    request = current_request()
     block_total = _dflash_block_total(draft_model, draft_block_size)
     draft_model.reset(model)
     window = int(_STATE["window"])
@@ -213,16 +221,27 @@ def rounds(
         return now
 
     while emitted < max_tokens and not finished:
+        forced = forced_tokens(guide, min(block_total - 1, max_tokens - emitted))
+        if len(forced) < 2:
+            forced = []
         is_copy = bool(next_copy)
         bs = (
-            len(next_copy) + 1
+            len(forced) + 1
+            if forced
+            else len(next_copy) + 1
             if is_copy
             else min(block_total, max_tokens - emitted + 1)
         )
         if bs <= 1:
             break
         t = clock()
-        if is_copy:
+        if forced:
+            draft_tokens, chained = mx.array([forced], dtype=token_dtype), 0
+            next_copy = []
+            is_copy = False
+            if queued is not None:
+                chained = queued[1]
+        elif is_copy:
             # A copied run is verified like any draft; the head's chain is not built.
             draft_tokens, chained = mx.array([next_copy], dtype=token_dtype), 0
             next_copy = []
@@ -246,35 +265,38 @@ def rounds(
                 # chain back first (only inside a tool call, a short stretch).
                 masks = guide.plan(draft_tokens.reshape(-1).tolist(), bs)
                 guide.lane_rounds += masks is not None
-            if keyed is None and masks is None:
-                verify = mtp._mtp_verify_target(
-                    lm, verify_input, prompt_cache, sampler, sample_target_tokens=True
-                )
+            logprobs = None
+            if (
+                keyed is None
+                and masks is None
+                and guide is None
+                and not (request and request.logprobs)
+            ):
+                with exact_verify(request, guide):
+                    verify = mtp._mtp_verify_target(
+                        lm,
+                        verify_input,
+                        prompt_cache,
+                        sampler,
+                        sample_target_tokens=True,
+                    )
                 target = verify.target_tokens.reshape(1, -1).astype(token_dtype)
             else:
                 # Masked and/or sampled request. A sampled row r draws generation index
                 # ``emitted + r`` with the keyed sampler, so a draft is accepted exactly
                 # when serial sampling would have produced it (see keyed_sampling); a
                 # tool-call mask is applied to the logits first, as serial decoding does.
-                verify = mtp._mtp_verify_target(
-                    lm, verify_input, prompt_cache, sampler, sample_target_tokens=False
-                )
-                logits = lm.speculative_logits_from_hidden(verify.hidden)
-                if masks is not None:
-                    from .tool_call_grammar import apply_bitmask
-
-                    logits = apply_bitmask(logits, masks)
-                if keyed is None:
-                    target = (
-                        mx.argmax(logits, axis=-1).reshape(1, -1).astype(token_dtype)
+                with exact_verify(request, guide):
+                    verify = mtp._mtp_verify_target(
+                        lm,
+                        verify_input,
+                        prompt_cache,
+                        sampler,
+                        sample_target_tokens=False,
                     )
-                else:
-                    logits = logits[0]
-                    logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
-                    target = keyed.sample_positions(
-                        logprobs, list(range(emitted, emitted + bs))
-                    ).reshape(1, -1)
-                    target = target.astype(token_dtype)
+                    logits = lm.speculative_logits_from_hidden(verify.hidden)
+                target, logprobs = target_rows(logits, masks, emitted, keyed, request)
+                target = target.astype(token_dtype)
             # Early absorb: every row through the head with the true tokens.
             # The chain's own entries (built from the head's hidden) go first.
             if chained:
@@ -307,6 +329,9 @@ def rounds(
             # per-round drafted / accepted counts (drafter lifetime counters; the runner
             # diffs them per request for x_yunshu.speculative)
             _record_speculative_round(draft_model, accepted, bs - 1)
+            reports = (
+                request.reports(logprobs, new_tokens) if request is not None else []
+            )
             # Rows 0..accepted stay in the head's cache; later rows go.
             rejected = bs - (accepted + 1)
             if rejected:
@@ -333,7 +358,12 @@ def rounds(
                 copy.extend(new_tokens)
                 next_copy = plan_copy(emitted + len(new_tokens))
             nb = min(block_total, max_tokens - (emitted + len(new_tokens)) + 1)
-            if nb > 1 and len(new_tokens) == accepted + 1 and not next_copy:
+            if (
+                nb > 1
+                and len(new_tokens) == accepted + 1
+                and not next_copy
+                and not (guide is not None and guide.constrained)
+            ):
                 queued = (*chain(seed_tok, seed_h, nb), nb)
             t = mark("next_chain_build", t)
             verify.commit(lm, prompt_cache, accepted, bs)
@@ -352,6 +382,8 @@ def rounds(
         n = len(new_tokens)
         for pos, tok in enumerate(new_tokens):
             emitted += 1
+            if reports:
+                request.pending.append(reports[pos])
             if emitted >= max_tokens:
                 finished = True
             if eos_token_ids is not None and tok in eos_token_ids:

@@ -414,7 +414,7 @@ class VLMBatchRunner:
         stats.prompt_tokens = len(ids)
         greedy = temperature is None or temperature < 1e-6
         processors = list(logits_processors or [])
-        # Upstream drops logprobs while drafting, so logprob requests decode AR.
+        # Exact lane reports come from committed target rows, including the first token.
         # A thinking budget forces "\n</think>" through upstream's
         # ThinkingBudgetCriteria, which only the non-speculative batch applies.
         # Sampled requests draft too: their tokens are drawn by a position-keyed sampler, so
@@ -434,7 +434,7 @@ class VLMBatchRunner:
             and self.drafter is not None
             and keyed_ok
             and not processors
-            and not logprobs
+            and (not logprobs or self._lane_takes_guide(None))
             and thinking_budget is None
             and (guide is None or self._lane_takes_guide(guide))
         )
@@ -521,15 +521,16 @@ class VLMBatchRunner:
             job.abandoned = True
 
     def _lane_takes_guide(self, guide: Any) -> bool:
-        """The speculative lane masks a tool-call guide's verify window itself when the
-        row is greedy MTP and starts unconstrained (its first token is sampled
-        before the lane runs)."""
+        """Whether the lane has exact target-row masks and probability readout."""
         from . import mtp_lane
 
-        return (
-            self.draft_kind == "mtp"
-            and mtp_lane.can_guide(self.drafter)
-            and not guide.constrained
+        return (self.draft_kind == "mtp" and mtp_lane.can_guide(self.drafter)) or (
+            self.draft_kind == "dflash"
+            and callable(
+                getattr(
+                    self.model.language_model, "speculative_verify_dflash_hidden", None
+                )
+            )
         )
 
     def _emit(self, job: _Job, item: Any) -> None:
@@ -646,11 +647,13 @@ class VLMBatchRunner:
                 and not (self.driver is not None and job.prompt_kwargs is None)
             )
             if not lane:
-                # Rows that decode one token at a time mask through a processor.
-                from .tool_call_grammar import ToolCallProcessor
-
                 job.use_draft = job.allow_draft = False
-                job.processors = [*job.processors, ToolCallProcessor(job.guide)]
+            # Preserve serial processor order: penalties / suppression first,
+            # grammar next, fp32 reporting last. Spec runs these at prefill only.
+            from .tool_call_grammar import ToolCallProcessor
+
+            pos = len(job.processors) - int(job.logprobs)
+            job.processors.insert(pos, ToolCallProcessor(job.guide))
 
         use_apc = self.apc_manager is not None
         if use_apc and self._apc_admit is not None:
@@ -669,6 +672,18 @@ class VLMBatchRunner:
         else:
             job.stats.spec_mode = _spec_mode(self.drafter)
             job.spec_base = _spec_counters(self.drafter)
+            from .constrained_spec import SpecRequest, install
+
+            install()
+            job.spec_request = SpecRequest(job.logprobs, job.top_logprobs)
+            job.spec_request.guide = job.guide
+            job.processors.append(job.spec_request)
+            logger.info(
+                "Exact speculative request engaged: %s constrained=%s logprobs=%s",
+                job.stats.spec_mode,
+                job.guide is not None,
+                job.logprobs,
+            )
         pkw = job.prompt_kwargs
         if pkw is None:
             if alone:
@@ -677,6 +692,16 @@ class VLMBatchRunner:
                 mx.array(job.ids)[None], None, mask=None
             ).to_dict()
         salt = job.salt if job.salt is not None else self.apc_semantic_hash
+        if job.guide is not None or job.logprobs:
+            from mlx_vlm.apc import semantic_extra_hash
+
+            # Ordinary speculative requests can prefill short spans with the
+            # dense tile attention. Canonical stock-attention requests must not
+            # consume those states; AR and spec here share this exact namespace.
+            salt = semantic_extra_hash(
+                image_hash=int(salt or 0),
+                media={"yunshu_target_attention": "stock-serial-v2"},
+            )
         if salt is not None:
             pkw["_apc_semantic_hash"] = salt
         rd = pkw.get("rope_deltas")
@@ -807,11 +832,14 @@ class VLMBatchRunner:
         # The invariant kernels are what make spec on == spec off; they are on
         # only while the single-row speculative lane steps (and off for every
         # other user of the model, including the shared batch).
-        invariant = group.spec and batch_invariant.is_installed()
+        serial_rows = group.spec and any(
+            job.guide is not None or job.logprobs for job in group.jobs.values()
+        )
+        invariant = group.spec and batch_invariant.is_installed() and not serial_rows
         # With ragged KV on, the speculative lane's decode and verify
         # attention run the ragged kernel over its one-row cache, so both
         # share per-row arithmetic (and the shared batch's).
-        dense_lane = group.spec and bool(self.ragged_kv)
+        dense_lane = group.spec and bool(self.ragged_kv) and not serial_rows
         if invariant:
             batch_invariant.set_active(True)
         if self.ragged_kv:
@@ -844,12 +872,24 @@ class VLMBatchRunner:
 
             mtp_lane.set_guide(job.guide)
             mtp_lane.set_context(job.ids)
+            from .constrained_spec import set_request
+
+            set_request(job.spec_request)
+            if job.guide is not None or job.logprobs:
+                from .constrained_spec import prepare_serial_prefill
+
+                prepare_serial_prefill(group.gen)
         try:
             prompt_progress, responses = group.gen.next()
+            if group.spec and (job.guide is not None or job.logprobs):
+                from .constrained_spec import finish_serial_prefill
+
+                finish_serial_prefill(group.gen)
         finally:
             if group.spec:
                 mtp_lane.set_guide(None)
                 mtp_lane.set_context(None)
+                set_request(None)
         self._note_prefill(group)
         for job in group.jobs.values():
             self._note_cache(job)
@@ -892,12 +932,17 @@ class VLMBatchRunner:
             stats.generated += 1
             lp = None
             if job.logprobs:
+                token_lp, top_lp = (
+                    job.spec_request.take(int(response.token))
+                    if group.spec
+                    else (response.token_logprob, response.top_logprobs)
+                )
                 lp = {
                     "token_id": int(response.token),
-                    "logprob": float(response.token_logprob),
+                    "logprob": float(token_lp),
                     "top_logprobs": [
                         {"token_id": int(t), "logprob": float(v)}
-                        for t, v in (response.top_logprobs or [])
+                        for t, v in (top_lp or [])
                     ],
                 }
             self._emit(job, (int(response.token), lp))
@@ -1267,6 +1312,7 @@ class _Job:
     rope_delta: float = 0.0
     allow_draft: bool = False
     guide: Any = None
+    spec_request: Any = None
     keyed: Any = (
         None  # KeyedSampler of a sampled request served by the speculative lane
     )
