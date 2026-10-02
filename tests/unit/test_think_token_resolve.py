@@ -65,7 +65,12 @@ def test_resolver_returns_none_for_multitoken_marker():
 
 
 def test_all_think_sites_use_the_helper():
-    src = inspect.getsource(batched_engine)
+    src = "\n".join(
+        inspect.getsource(method)
+        for _, method in inspect.getmembers(
+            batched_engine.BatchedEngine, inspect.isfunction
+        )
+    )
     # every old bare-encode site is gone; the helper is used throughout
     assert 'encode("</think")' not in src
     assert 'encode("<think")' not in src
