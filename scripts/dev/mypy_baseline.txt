@@ -64,7 +64,6 @@
 1	python/yunshu_engine/batched_engine.py	assignment	Incompatible types in assignment (expression has type "list[int]", variable has type "str | list[dict[Any, Any]]")
 1	python/yunshu_engine/batched_engine.py	assignment	Incompatible types in assignment (expression has type "list[int]", variable has type "str")
 1	python/yunshu_engine/batched_engine.py	assignment	Incompatible types in assignment (expression has type "threading.Event", variable has type "asyncio.locks.Event")
-1	python/yunshu_engine/batched_engine.py	attr-defined	"Event" has no attribute "_value"
 1	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "_stats"
 1	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "abort_request"
 1	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "add_request"
@@ -86,11 +85,10 @@
 7	python/yunshu_engine/batched_engine.py	func-returns-value	"clear_cache" does not return a value (it only ever returns None)
 7	python/yunshu_engine/batched_engine.py	func-returns-value	"synchronize" does not return a value (it only ever returns None)
 1	python/yunshu_engine/batched_engine.py	misc	"None" not callable
-1	python/yunshu_engine/batched_engine.py	misc	Cannot assign to a type
 1	python/yunshu_engine/batched_engine.py	misc	Too many values to unpack (2 expected, 3 provided)
 1	python/yunshu_engine/batched_engine.py	no-any-return	Returning Any from function declared to return "GenerationOutput"
-3	python/yunshu_engine/batched_engine.py	no-any-return	Returning Any from function declared to return "bool"
-5	python/yunshu_engine/batched_engine.py	no-any-return	Returning Any from function declared to return "int"
+1	python/yunshu_engine/batched_engine.py	no-any-return	Returning Any from function declared to return "bool"
+4	python/yunshu_engine/batched_engine.py	no-any-return	Returning Any from function declared to return "int"
 2	python/yunshu_engine/batched_engine.py	no-any-return	Returning Any from function declared to return "list[int]"
 1	python/yunshu_engine/batched_engine.py	no-any-return	Returning Any from function declared to return "str"
 2	python/yunshu_engine/batched_engine.py	no-redef	Name "_chunk_logprobs" already defined on line N
@@ -106,6 +104,7 @@
 1	python/yunshu_engine/draft_vocab.py	arg-type	Argument 2 to "_matmul" of "DraftVocab" has incompatible type "tuple[Any, ...] | None"; expected "tuple[Any, ...]"
 1	python/yunshu_engine/draft_vocab.py	misc	Expected iterable as variadic argument
 1	python/yunshu_engine/draft_vocab.py	no-any-return	Returning Any from function declared to return "array"
+1	python/yunshu_engine/engine_cache.py	misc	Cannot assign to a type
 2	python/yunshu_engine/engine_core.py	arg-type	Argument 1 to "ensure_future" has incompatible type "Coroutine[Any, Any, None]"; expected "Awaitable[Literal[True]]"
 1	python/yunshu_engine/engine_core.py	assignment	Incompatible types in assignment (expression has type "Any | None", variable has type "str")
 1	python/yunshu_engine/engine_core.py	assignment	Incompatible types in assignment (expression has type "None", variable has type "CompositionScheduler")
@@ -121,6 +120,9 @@
 1	python/yunshu_engine/engine_core.py	no-any-return	Returning Any from function declared to return "str"
 1	python/yunshu_engine/engine_core.py	operator	Unsupported operand types for + ("object" and "int")
 3	python/yunshu_engine/engine_core.py	union-attr	Item "None" of "Any | None" has no attribute "outputs"
+1	python/yunshu_engine/engine_policy.py	attr-defined	"Event" has no attribute "_value"
+2	python/yunshu_engine/engine_policy.py	no-any-return	Returning Any from function declared to return "bool"
+1	python/yunshu_engine/engine_policy.py	no-any-return	Returning Any from function declared to return "int"
 1	python/yunshu_engine/gateway_optimizer.py	assignment	Incompatible types in assignment (expression has type "_CacheEntry | None", variable has type "_CacheEntry")
 1	python/yunshu_engine/gateway_optimizer.py	assignment	Incompatible types in assignment (expression has type "list[Any]", target has type "dict[Any, Any]")
 1	python/yunshu_engine/gateway_optimizer.py	assignment	Incompatible types in assignment (expression has type "list[dict[Any, Any] | Any]", target has type "dict[Any, Any]")
