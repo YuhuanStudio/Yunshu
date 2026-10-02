@@ -31,8 +31,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from servers import Server, free_ports  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "dev"))
+from gpuq_pause import timed  # noqa: E402
+
 
 def send(url: str, body: dict) -> dict:
+    """One timed request; re-run if it overlapped a gpuq pause (see scripts/dev/gpuq_pause.py)."""
+    return timed(lambda: _send(url, body))
+
+
+def _send(url: str, body: dict) -> dict:
     body = dict(body)
     body["stream"] = True
     body["stream_options"] = {"include_usage": True}

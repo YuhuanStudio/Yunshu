@@ -27,6 +27,19 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dev"))
+from gpuq_pause import pause_intervals  # noqa: E402
+
+
+def paused_seconds(t0: float, t1: float) -> float:
+    """Seconds of [t0, t1] this job spent stopped by gpuq; an unreadable pause file counts as all of it."""
+    try:
+        spans = pause_intervals()
+    except (OSError, ValueError, TypeError):
+        return t1 - t0
+    return sum(max(0.0, min(b, t1) - max(a, t0)) for a, b in spans)
+
+
 NO_THINK = {"chat_template_kwargs": {"enable_thinking": False}}
 TOOL = {
     "type": "function",
@@ -421,6 +434,7 @@ def cancel(a, res: Results) -> None:
                         if got >= 20:
                             break
         time.sleep(2)
+        w0 = time.time()
         t0 = time.perf_counter()
         c = openai_client(a.url)
         rr = c.chat.completions.create(
@@ -431,6 +445,8 @@ def cancel(a, res: Results) -> None:
             extra_body=NO_THINK,
         )
         wall = time.perf_counter() - t0
+        # time spent SIGSTOPped by gpuq (serving gate) is not engine time
+        wall = max(0.0, wall - paused_seconds(w0, time.time()))
         text = (rr.choices[0].message.content or "").lower()
         ok = got >= 20 and "paris" in text and wall < 60
         return (
