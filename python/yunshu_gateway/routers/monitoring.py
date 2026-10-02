@@ -1031,7 +1031,8 @@ async def spec_decode_stats(request: Request) -> dict[str, Any]:
         mtp = getattr(engine, "_mtp_decoder", None)
         info = {
             "model_id": model_id,
-            "spec_enabled": ngram is not None
+            "spec_enabled": decoder is not None
+            or ngram is not None
             or getattr(engine, "_gemma4_assistant_proposer", None) is not None,
             "ngram_enabled": ngram is not None,
             "mtp_enabled": mtp is not None,

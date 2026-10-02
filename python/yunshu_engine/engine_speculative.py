@@ -287,6 +287,432 @@ class EngineSpeculativeMixin:
             cached_tokens=0,
         )
 
+    async def _generate_speculative(  # type: ignore[misc]
+        self: _engine.BatchedEngine,
+        prompt: str | list[dict],
+        max_tokens: int = 256,
+        temperature: float = 0.7,
+        top_p: float = 1.0,
+        top_k: int = 0,
+        min_p: float = 0.0,
+        repetition_penalty: float = 1.0,
+        frequency_penalty: float = 0.0,
+        presence_penalty: float = 0.0,
+        logit_bias: dict[int, float] | None = None,
+        stop: list[str] | None = None,
+        stop_token_ids: list[int] | None = None,
+        seed: int | None = None,
+        enable_thinking: bool | None = None,
+        logprobs: bool = False,
+        top_logprobs: int | None = None,
+        thinking_budget: int | None = None,
+        xtc_probability: float = 0.0,
+        xtc_threshold: float = 0.0,
+        json_schema: dict | str | None = None,
+        cancel_event: asyncio.Event | None = None,
+        logits_processors: list | None = None,
+        timeout_seconds: float = 300.0,
+        lora_adapter: str | None = None,
+    ) -> _engine.GenerationOutput:
+        """Generate using speculative decoding (unverified external LM path).
+
+        This path bypasses the continuous batching scheduler and runs the
+        SpeculativeDecoder directly. Best for single-request scenarios where
+        the draft model can propose K tokens for the target to verify.
+        """
+        decoder = self._spec_decoder
+        tokenizer = self._tokenizer
+        if decoder is None or tokenizer is None:
+            # Fall back to standard generation if no decoder
+            return await self._generate_fast(
+                prompt=prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
+                repetition_penalty=repetition_penalty,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                logit_bias=logit_bias,
+                stop=stop,
+                stop_token_ids=stop_token_ids,
+                seed=seed,
+                enable_thinking=enable_thinking,
+                logprobs=logprobs,
+                top_logprobs=top_logprobs,
+                thinking_budget=thinking_budget,
+                xtc_probability=xtc_probability,
+                xtc_threshold=xtc_threshold,
+                json_schema=json_schema,
+                cancel_event=cancel_event,
+                logits_processors=logits_processors,
+                timeout_seconds=timeout_seconds,
+                lora_adapter=lora_adapter,
+            )
+
+        from .mlx_executor import get_mlx_executor
+
+        executor = get_mlx_executor()
+        loop = asyncio.get_running_loop()
+
+        # Tokenize prompt — handle messages-format (list of dicts) like _generate_fast.
+        # route through _apply_chat_template + _encode_prompt so this matches the
+        # fast path AND applies the double-BOS guard (raw apply_chat_template+encode prepends
+        # BOS twice for Gemma/Llama-3/Mistral, corrupting the first-token distribution).
+        if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
+            text = self._apply_chat_template(prompt, enable_thinking=enable_thinking)
+            input_ids = self._encode_prompt(tokenizer, text)
+        else:
+            text = prompt if isinstance(prompt, str) else str(prompt)
+            input_ids = tokenizer.encode(text)
+        import mlx.core as mx
+
+        if seed is not None:
+            mx.random.seed(seed)
+
+        input_array = mx.array(input_ids).reshape(1, -1)
+
+        # Build EOS + stop token sets
+        eos_ids = set()
+        if hasattr(tokenizer, "eos_token_id"):
+            eid = tokenizer.eos_token_id
+            if isinstance(eid, (list, tuple)):
+                eos_ids.update(eid)
+            elif eid is not None:
+                eos_ids.add(eid)
+        if stop_token_ids:
+            eos_ids.update(stop_token_ids)
+        if stop:
+            for s in stop:
+                try:
+                    ids = tokenizer.encode(s)
+                    if len(ids) == 1:
+                        eos_ids.add(ids[0])
+                except Exception:
+                    _engine.logger.debug(
+                        f"failed to encode stop sequence: {s!r}", exc_info=True
+                    )
+
+        # Run speculative generation on the MLX executor thread
+        # Use incremental detokenizer for correct multi-byte UTF-8
+        detokenizer = tokenizer.detokenizer
+        detokenizer.reset()
+
+        # Wire grammar constraint into spec decoder for structured output.
+        # route regex/choice/cfg correctly (was always JsonSchemaConstraint →
+        # silently dropped non-JSON grammars).
+        _spec_constraint = None
+        if json_schema is not None:
+            try:
+                _spec_constraint = _engine._build_grammar_constraint(
+                    json_schema, tokenizer
+                )
+            except Exception:
+                _engine.logger.warning(
+                    "Grammar constraint setup failed for spec decode", exc_info=True
+                )
+        _prev_constraint = decoder.constraint
+        decoder.constraint = _spec_constraint
+
+        # (LoRA concurrency keystone): the adapter lifecycle runs inside
+        # _run_spec_with_lora on the executor thread (serialized with generation), not here
+        # on the event loop. _lora_applied stays False so the legacy event-loop release
+        # blocks below are inert no-ops.
+        _lora_applied = False
+
+        def _run_spec():
+            token_ids = decoder.generate(
+                input_ids=input_array,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                cancel_event=cancel_event,
+                repetition_penalty=repetition_penalty,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                logit_bias=logit_bias,
+            )
+            # Apply stop token truncation (exclude stop token from output)
+            for i, tid in enumerate(token_ids):
+                if tid in eos_ids:
+                    # Add tokens before the stop token to detokenizer
+                    for j in range(i):
+                        detokenizer.add_token(token_ids[j])
+                    return token_ids[:i], True
+            # No stop token found — add all tokens to detokenizer
+            for tid in token_ids:
+                detokenizer.add_token(tid)
+            return token_ids, False
+
+        def _run_spec_with_lora():
+            # adapter acquire+apply / release+restore on the executor thread.
+            _applied = False
+            if lora_adapter and getattr(self, "_lora_manager", None) is not None:
+                try:
+                    _applied = self._lora_manager.acquire_adapter(lora_adapter)
+                except Exception as _le:  # fail loud, don't serve base
+                    raise RuntimeError(
+                        f"LoRA adapter '{lora_adapter}' could not be applied"
+                    ) from _le
+                if not _applied:
+                    raise RuntimeError(
+                        f"LoRA adapter '{lora_adapter}' could not be applied"
+                    )
+            try:
+                return _run_spec()
+            finally:
+                if _applied and getattr(self, "_lora_manager", None) is not None:
+                    try:
+                        self._lora_manager.release_adapter(lora_adapter)
+                    except Exception:
+                        _engine.logger.debug(
+                            "LoRA release failed (spec executor)", exc_info=True
+                        )
+
+        _spec_gen_t0 = time.perf_counter()
+        try:
+            token_ids, hit_stop = await asyncio.wait_for(
+                loop.run_in_executor(executor, _run_spec_with_lora),
+                timeout=timeout_seconds,
+            )
+        except TimeoutError:
+            _engine.logger.warning(
+                f"Speculative generation timed out after {timeout_seconds}s"
+            )
+            try:
+                import mlx.core as _mx
+
+                await loop.run_in_executor(
+                    executor, lambda: (_mx.synchronize(), _mx.clear_cache())
+                )
+            except Exception:
+                _engine.logger.debug(
+                    "GPU cache cleanup failed after spec decode timeout", exc_info=True
+                )
+            decoder.constraint = _prev_constraint
+            if (
+                _lora_applied
+                and hasattr(self, "_lora_manager")
+                and self._lora_manager is not None
+            ):
+                try:
+                    self._lora_manager.release_adapter(lora_adapter)
+                except Exception:
+                    _engine.logger.warning(
+                        "LoRA release failed after spec decode timeout", exc_info=True
+                    )
+            return _engine.GenerationOutput(
+                finished=True,
+                finish_reason="error",
+                prompt_tokens=len(input_ids),
+                completion_tokens=0,
+                error=f"Speculative generation timed out after {timeout_seconds}s",
+                ttft_ms=0.0,
+                cached_tokens=0,
+            )
+        except MemoryError:
+            _engine.logger.warning(
+                "OOM during speculative generation — returning memory_limit finish reason"
+            )
+            try:
+                import mlx.core as _mx
+
+                await loop.run_in_executor(
+                    executor, lambda: (_mx.synchronize(), _mx.clear_cache())
+                )
+            except Exception:
+                _engine.logger.debug(
+                    "GPU cache cleanup failed after spec decode OOM", exc_info=True
+                )
+            decoder.constraint = _prev_constraint
+            if (
+                _lora_applied
+                and hasattr(self, "_lora_manager")
+                and self._lora_manager is not None
+            ):
+                try:
+                    self._lora_manager.release_adapter(lora_adapter)
+                except Exception:
+                    _engine.logger.warning(
+                        "LoRA release failed after spec decode OOM", exc_info=True
+                    )
+            return _engine.GenerationOutput(
+                finished=True,
+                finish_reason="memory_limit",
+                prompt_tokens=len(input_ids),
+                completion_tokens=0,
+                error="OOM during speculative generation",
+                ttft_ms=0.0,
+                cached_tokens=0,
+            )
+        except RuntimeError as e:
+            if "memory" in str(e).lower() or "out of" in str(e).lower():
+                _engine.logger.warning(f"MLX OOM during speculative generation: {e}")
+                try:
+                    import mlx.core as _mx
+
+                    await loop.run_in_executor(
+                        executor, lambda: (_mx.synchronize(), _mx.clear_cache())
+                    )
+                except Exception:
+                    _engine.logger.debug(
+                        "GPU cache cleanup failed after spec decode OOM (RuntimeError)",
+                        exc_info=True,
+                    )
+                decoder.constraint = _prev_constraint
+                if (
+                    _lora_applied
+                    and hasattr(self, "_lora_manager")
+                    and self._lora_manager is not None
+                ):
+                    try:
+                        self._lora_manager.release_adapter(lora_adapter)
+                    except Exception:
+                        _engine.logger.warning(
+                            "LoRA release failed after spec decode OOM (RuntimeError)",
+                            exc_info=True,
+                        )
+                return _engine.GenerationOutput(
+                    finished=True,
+                    finish_reason="memory_limit",
+                    prompt_tokens=len(input_ids),
+                    completion_tokens=0,
+                    error=str(e),
+                    ttft_ms=0.0,
+                    cached_tokens=0,
+                )
+            decoder.constraint = _prev_constraint
+            if (
+                _lora_applied
+                and hasattr(self, "_lora_manager")
+                and self._lora_manager is not None
+            ):
+                try:
+                    self._lora_manager.release_adapter(lora_adapter)
+                except Exception:
+                    _engine.logger.warning(
+                        "LoRA release failed after spec decode RuntimeError",
+                        exc_info=True,
+                    )
+            # Return error output for non-OOM RuntimeError instead of
+            # propagating to caller (which expects GenerationOutput).
+            return _engine.GenerationOutput(
+                finished=True,
+                finish_reason="error",
+                prompt_tokens=len(input_ids),
+                completion_tokens=0,
+                error=f"RuntimeError during speculative generation: {e}",
+                ttft_ms=0.0,
+                cached_tokens=0,
+            )
+        except Exception as e:
+            _engine.logger.error(
+                f"Unexpected error during speculative generation: {e}", exc_info=True
+            )
+            decoder.constraint = _prev_constraint
+            if (
+                _lora_applied
+                and hasattr(self, "_lora_manager")
+                and self._lora_manager is not None
+            ):
+                try:
+                    self._lora_manager.release_adapter(lora_adapter)
+                except Exception:
+                    _engine.logger.warning(
+                        "LoRA release failed after spec decode unexpected error",
+                        exc_info=True,
+                    )
+            # Return error output instead of propagating exception to caller.
+            return _engine.GenerationOutput(
+                finished=True,
+                finish_reason="error",
+                prompt_tokens=len(input_ids),
+                completion_tokens=0,
+                error=f"Speculative generation failed: {e}",
+                ttft_ms=0.0,
+                cached_tokens=0,
+            )
+        _spec_ttft_s = time.perf_counter() - _spec_gen_t0
+        detokenizer.finalize()
+
+        text = _engine._clean_special_tokens(detokenizer.text)
+
+        # Build logprobs from individual tokens — speculative decode black-box
+        # generate() does not expose logits, so we cannot compute real logprobs.
+        # Return None instead of fake 0.0 to avoid misleading consumers.
+        _logprobs = None
+        if logprobs and token_ids:
+            _logprobs = None  # Real logprobs unavailable from spec decode black-box
+
+        # Record TTFT in Prometheus for spec decode path
+        if _spec_ttft_s > 0:
+            try:
+                from yunshu_gateway.middleware.prometheus_exporter import (
+                    get_prometheus_metrics,
+                )
+
+                pm = get_prometheus_metrics()
+                pm.observe_histogram(
+                    "ttft_seconds", _spec_ttft_s, labels={"model_id": self.model_label}
+                )
+            except Exception:
+                _engine.logger.debug(
+                    "TTFT prometheus recording failed in spec decode path",
+                    exc_info=True,
+                )
+
+        # Determine finish_reason with cancel awareness
+        _cancelled = _engine._is_cancelled(cancel_event)
+        if _cancelled or hit_stop or len(token_ids) < max_tokens:
+            _finish_reason = "stop"
+        else:
+            _finish_reason = "length"
+
+        # Reasoning parser: extract thinking tokens from spec decode output.
+        # Speculative decode uses a black-box generate() that does not track
+        # thinking tokens, so we parse the output text for reasoning content.
+        _spec_reasoning_tok = 0
+        if text:
+            try:
+                from .reasoning_parser import get_reasoning_parser
+
+                rp = get_reasoning_parser(self.model_name)
+                rp_out = rp.parse(text)
+                if rp_out.reasoning and rp_out.reasoning_tokens > 0:
+                    _spec_reasoning_tok = rp_out.reasoning_tokens
+                    if rp_out.content != text:
+                        text = rp_out.content
+            except Exception:
+                _engine.logger.debug(
+                    "reasoning_parser failed in spec decode path", exc_info=True
+                )
+
+        decoder.constraint = _prev_constraint
+        if (
+            _lora_applied
+            and hasattr(self, "_lora_manager")
+            and self._lora_manager is not None
+        ):
+            try:
+                self._lora_manager.release_adapter(lora_adapter)
+            except Exception:
+                _engine.logger.warning(
+                    "LoRA release failed after spec decode normal completion",
+                    exc_info=True,
+                )
+        return _engine.GenerationOutput(
+            text=text,
+            new_text=text,
+            prompt_tokens=len(input_ids),
+            completion_tokens=len(token_ids),
+            finished=True,
+            finish_reason=_finish_reason,
+            reasoning_tokens=_spec_reasoning_tok,
+            cached_tokens=0,
+            logprobs=_logprobs,
+            ttft_ms=round(_spec_ttft_s * 1000, 1),
+        )
+
 
 # Resolve the facade after definitions to also support direct module imports.
 from . import batched_engine as _engine

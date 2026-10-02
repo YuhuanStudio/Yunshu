@@ -46,6 +46,11 @@ class EngineDiagnosticsMixin:
             stats = {"model": self.model_name, "loaded": self._loaded}
         if self._adaptive_spec is not None:
             stats["adaptive_spec"] = self._adaptive_spec.get_stats()
+        if self._spec_decoder is not None:
+            stats["spec_decode"] = {
+                **self._spec_decoder._stats,
+                "enabled": self._spec_enabled,
+            }
         if self._lookahead_reasoning is not None:
             stats["lookahead_reasoning"] = self._lookahead_reasoning.get_stats()
         # Metal kernel stats removed (kernels deleted — slower than mx.fast).

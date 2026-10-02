@@ -46,19 +46,14 @@ def test_remaining_text_routes():
     assert _route(eng, stream=True, gemma4_eligible=lambda: True) is None
 
 
-@pytest.mark.parametrize("flag", ["eagle", "mtp", "mlxvlm_mtp"])
-def test_retired_flags_cannot_select_unsafe_text_routes(monkeypatch, flag):
+@pytest.mark.parametrize("flag", ["mtp", "mlxvlm_mtp"])
+def test_retired_native_text_mtp_modes(monkeypatch, flag):
     monkeypatch.setenv("YUNSHU_SPEC_UNVERIFIED", flag)
-    monkeypatch.setenv("YUNSHU_DRAFT_MODEL", "/missing/eagle")
-    # Even stale state from a plugin cannot re-enable the removed dispatch.
-    eng = _engine(_spec_enabled=True, _spec_decoder=object(), _mtp_decoder=object())
-    assert _route(eng) == "ngram"
-    assert _route(eng, stream=True) is None
-    assert (
-        not {"YUNSHU_SPEC_UNVERIFIED", "YUNSHU_DRAFT_MODEL"} & settings.REGISTRY.keys()
-    )
+    with pytest.raises(ValueError):
+        settings.get("YUNSHU_SPEC_UNVERIFIED")
     assert not hasattr(BatchedEngine, "_generate_mtp")
-    assert not hasattr(BatchedEngine, "_generate_speculative")
+    assert not hasattr(BatchedEngine, "_stream_generate_mtp")
+    assert not hasattr(BatchedEngine, "_stream_generate_speculative")
 
 
 @pytest.mark.parametrize("model_type", ["qwen3_5", "qwen3_6"])

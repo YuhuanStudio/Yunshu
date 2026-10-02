@@ -1,0 +1,95 @@
+"""The legacy 'eagle' route accepts an ordinary LM, without EAGLE heads."""
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+
+from yunshu_engine.batched_engine import BatchedEngine, GenerationOutput
+
+
+def engine_with_plain_config(config):
+    engine = BatchedEngine(model_name="plain-qwen2")
+    engine._model = SimpleNamespace(config=SimpleNamespace(to_dict=lambda: config))
+    engine._tokenizer = SimpleNamespace(
+        eos_token_id=99, encode=lambda *_a, **_k: [1, 2, 3]
+    )
+    return engine
+
+
+def route(engine, **kwargs):
+    args = dict(
+        spec_decode=True,
+        stream=False,
+        temperature=0.0,
+        logprobs=False,
+        use_engine_loop=False,
+    )
+    args.update(kwargs)
+    return engine._spec_route(**args)
+
+
+@pytest.mark.parametrize("path_source", ["setting", "config"])
+@pytest.mark.parametrize("with_config", [False, True])
+def test_plain_external_model_is_reachable(monkeypatch, path_source, with_config):
+    from mlx_lm import utils
+
+    path = "/ordinary/qwen2-draft"
+    config = {"model_type": "qwen2"}
+    monkeypatch.setenv("YUNSHU_SPEC_UNVERIFIED", "eagle")
+    monkeypatch.setenv("YUNSHU_DRAFT_MODEL", path if path_source == "setting" else "")
+    if path_source == "config":
+        config["draft_model_path"] = path
+    engine = engine_with_plain_config(config)
+    draft = SimpleNamespace(config=SimpleNamespace(model_type="qwen2"))
+    loaded = (
+        (draft, engine._tokenizer, {}) if with_config else (draft, engine._tokenizer)
+    )
+    load = Mock(return_value=loaded)
+    monkeypatch.setattr(utils, "load", load)
+    engine._init_spec_decode()
+    load.assert_called_once_with(path)
+    assert engine._spec_decoder.draft is draft
+    assert engine._spec_enabled is True
+    assert route(engine) == "eagle"
+    assert route(engine, stream=True) is None
+    assert route(engine, temperature=0.7) is None
+    assert route(engine, logprobs=True) is None
+    assert route(engine, use_engine_loop=True) is None
+
+
+def test_draft_path_alone_never_loads_a_second_model(monkeypatch):
+    from mlx_lm import utils
+
+    monkeypatch.setenv("YUNSHU_SPEC_UNVERIFIED", "")
+    monkeypatch.setenv("YUNSHU_DRAFT_MODEL", "/ordinary/qwen2-draft")
+    engine = engine_with_plain_config({"model_type": "qwen2"})
+    load = Mock()
+    monkeypatch.setattr(utils, "load", load)
+    engine._init_spec_decode()
+    load.assert_not_called()
+    assert engine._spec_decoder is None
+    assert route(engine) == "ngram"
+
+
+@pytest.mark.asyncio
+async def test_public_generate_selects_plain_external_draft(monkeypatch):
+    from mlx_lm import utils
+
+    monkeypatch.setenv("YUNSHU_SPEC_UNVERIFIED", "eagle")
+    monkeypatch.setenv("YUNSHU_DRAFT_MODEL", "/ordinary/qwen2-draft")
+    engine = engine_with_plain_config({"model_type": "qwen2"})
+    monkeypatch.setattr(utils, "load", Mock(return_value=(object(), engine._tokenizer)))
+    engine._init_spec_decode()
+    engine._loaded = True
+    expected = GenerationOutput(text="draft route", finished=True, finish_reason="stop")
+    engine._generate_speculative = AsyncMock(return_value=expected)
+    engine._generate_fast = AsyncMock()
+    assert (
+        await engine.generate(
+            "hello", temperature=0.0, spec_decode=True, use_engine_loop=False
+        )
+        is expected
+    )
+    engine._generate_speculative.assert_awaited_once()
+    engine._generate_fast.assert_not_called()
