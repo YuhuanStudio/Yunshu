@@ -430,6 +430,51 @@ def test_a_volume_that_fails_mid_scan_keeps_its_files(tmp_path, monkeypatch):
     assert t1.available() and len(t1.index) == len(files)
 
 
+def test_a_busy_volume_is_not_taken_for_an_unplugged_one(tmp_path, monkeypatch):
+    import yunshu_engine.apc_storage as mod
+
+    s = _store(tmp_path, soft_mb=0.2, lower=[(1e9, "raw")])
+    for i in range(3):
+        _put(s, _toks(1500, i), i + 1)
+    s.settle()
+    t1 = s.lower[0]
+    assert t1.index and t1.available()
+    held = dict(t1.index)
+    t1.CHECK_TIMEOUT_S = 0.05
+    real = mod.ensure_root
+    monkeypatch.setattr(mod, "ensure_root", lambda p: (time.sleep(0.5), real(p))[1])
+    t1._avail = (
+        0.0,
+        True,
+    )  # due for a re-check; the check now takes 0.5 s (a stat behind a big fsync)
+    assert t1.available(), (
+        "a slow answer from a volume that answered recently is not an absence"
+    )
+    assert t1.index == held, "no re-scan, no empty index while it is only busy"
+    time.sleep(0.6)
+    monkeypatch.setattr(mod, "ensure_root", real)
+    t1._avail = (0.0, True)
+    assert t1.available() and t1.index == held
+
+
+def test_observed_restore_speed_overrides_an_optimistic_probe(tmp_path):
+    s = _store(tmp_path, soft_mb=0.2, lower=[(2e9, "raw")])
+    keys = [_put(s, _toks(1500, i), i + 1) for i in range(3)]
+    s.settle()
+    toks = _toks(1500, 0)
+    assert _find(s, toks) == (keys[0], 1500)
+    t1 = s.lower[0]
+    e = t1.index[keys[0]]
+    assert t1.restore_s(e) < 0.01  # the probe says: milliseconds
+    t1.note_restore(256 << 20, 400.0)  # but a real restore delivered 0.64 MiB/s
+    assert t1.restore_s(e) == pytest.approx(e.orig / t1.eff_bps)
+    s.prefill_tps = (
+        5000.0  # 1500 tokens re-prefill in 0.3 s; the real restore takes 12 ms x ...
+    )
+    assert _find(s, toks) is None and s.cost_rejected >= 1
+    assert s.snapshot()[1]["effective_read_bps"] == pytest.approx((256 << 20) / 400.0)
+
+
 def test_corrupt_lower_file_falls_back_and_is_deleted(tmp_path):
     s = _store(tmp_path, soft_mb=0.2, lower=[(1e9, "zstd")])
     keys = [_put(s, _toks(1500, i), i + 1) for i in range(3)]

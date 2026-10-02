@@ -533,11 +533,14 @@ class FileTier:
         self.index: dict[int, _Entry] = {}
         self._lock = threading.RLock()
         self._avail = (0.0, False)
+        self._check: Any = None
+        self._last_ok = 0.0
         self._stat_pool = ThreadPoolExecutor(
             1, thread_name_prefix=f"apc-stat-{self.name}"
         )
         self.hits = 0
         self.hit_bytes = 0
+        self.skipped = 0  # lookups that found the tier unavailable
         self.demoted_in = 0
         self.invalidated = 0
         self.decode_bps = 0.0
@@ -552,20 +555,38 @@ class FileTier:
         self._ns = namespace
         self.rescan()
 
-    # availability: a hung NAS mount must not hang the engine
+    # availability: a hung NAS mount must not hang the engine, and a volume that is merely busy
+    # (a multi-GB copy with fsync in flight makes even a stat slow) must not look unplugged
+    BUSY_GRACE_S = 120.0
+    CHECK_TIMEOUT_S = 2.0
+
     def available(self) -> bool:
         now = time.monotonic()
         t, ok = self._avail
         if now - t < 5.0:
             return ok
-        try:
-            ok = self._stat_pool.submit(
+        gone = False
+        pending = self._check
+        if pending is None:
+            pending = self._check = self._stat_pool.submit(
                 lambda: ensure_root(self.root) and os.access(self.root, os.W_OK)
-            ).result(timeout=2.0)
-        except (FutureTimeout, OSError):
-            ok = False
+            )
+        try:
+            ok = bool(pending.result(timeout=self.CHECK_TIMEOUT_S))
+            self._check = None
+            self._last_ok = now if ok else self._last_ok
+            gone = not ok
+        except FutureTimeout:
+            # still checking: keep the last known state while it was answering recently
+            ok = self._avail[1] and now - self._last_ok < self.BUSY_GRACE_S
+            gone = not ok
+        except OSError:
+            self._check = None
+            ok, gone = False, True
         self._avail = (now, bool(ok))
-        if ok and not self._was_available:
+        if gone:
+            self._was_available = False
+        elif ok and not self._was_available:
             self._was_available = True
             self.rescan()  # (re)mounted: validate what is there again
             stale = (
@@ -579,8 +600,6 @@ class FileTier:
                     logger.warning(
                         "APC storage %s: probe failed", self.name, exc_info=True
                     )
-        elif not ok:
-            self._was_available = False
         return self._avail[1]
 
     def _busy_paths(self) -> set[Path]:
@@ -714,9 +733,27 @@ class FileTier:
                 best = (h, n, e)
         return best
 
+    # observed restore speed (bytes / s, EMA): reading a checkpoint back through the loader
+    # (tensor by tensor, then copied into the cache) is slower than the sequential probe
+    eff_bps = 0.0
+
+    def note_restore(self, orig_bytes: int, seconds: float) -> None:
+        if orig_bytes < (64 << 20) or seconds <= 0:
+            return
+        bps = orig_bytes / seconds
+        self.eff_bps = bps if not self.eff_bps else 0.7 * self.eff_bps + 0.3 * bps
+
     def restore_s(self, e: _Entry) -> float | None:
         if self.profile is None:
             return None
+        if self.eff_bps:
+            floor = e.orig / self.eff_bps
+            return max(
+                floor,
+                self.profile.restore_s(
+                    e.orig, self.decode_bps, e.ratio if e.encoded else 1.0
+                ),
+            )
         return self.profile.restore_s(
             e.orig, self.decode_bps, e.ratio if e.encoded else 1.0
         )
@@ -848,6 +885,8 @@ class FileTier:
             "latency_ms": p.latency_s * 1e3 if p else None,
             "hits": self.hits,
             "hit_bytes": self.hit_bytes,
+            "skipped_unavailable": self.skipped,
+            "effective_read_bps": self.eff_bps or None,
             "demoted_in": self.demoted_in,
             "invalidated": self.invalidated,
             "simulated": bool(self.spec.sim),
@@ -860,6 +899,16 @@ class TieredDiskStore(SpillDiskStore):
 
     prefill_tps: float = DEFAULT_PREFILL_TPS
     prefill_observed = False
+    eff_bps = 0.0  # observed restore speed of the primary store (EMA, bytes / s)
+    cost_rejected = (
+        0  # candidates found but not worth restoring (slower than re-prefilling)
+    )
+
+    def _primary_restore_s(self, nbytes: int) -> float | None:
+        if self.profile is None:
+            return None
+        t = self.profile.restore_s(nbytes)
+        return max(t, nbytes / self.eff_bps) if self.eff_bps else t
 
     def __init__(self, *args: Any, name: str | None = None, **kwargs: Any):
         super().__init__(*args, **kwargs)
@@ -940,17 +989,16 @@ class TieredDiskStore(SpillDiskStore):
         )
         if r0 is not None:
             h, n = r0
-            rs = (
-                self.profile.restore_s(self.exact_cache_bytes(h))
-                if self.profile
-                else None
-            )
+            rs = self._primary_restore_s(self.exact_cache_bytes(h))
             if self._worth(rs, n - min_prefix_tokens):
                 cands.append(
                     ((rs or 0.0) + (len(tokens) - n) / self.prefill_tps, h, n, None)
                 )
+            else:
+                self._rejected(self.name, n, rs)
         for tier in self.lower:
             if not tier.available():
+                tier.skipped += 1
                 continue
             hit = tier.find(tokens, extra_hash, max_len, min_prefix_tokens)
             if hit is None:
@@ -958,6 +1006,7 @@ class TieredDiskStore(SpillDiskStore):
             h, n, e = hit
             rs = tier.restore_s(e)
             if rs is None or not self._worth(rs, n - min_prefix_tokens):
+                self._rejected(tier.name, n, rs)
                 continue
             cands.append((rs + (len(tokens) - n) / self.prefill_tps, h, n, tier))
         if not cands:
@@ -968,6 +1017,21 @@ class TieredDiskStore(SpillDiskStore):
         else:
             self._where.pop(h, None)
         return h, n
+
+    def _rejected(self, name: str, n: int, restore_s: float | None) -> None:
+        self.cost_rejected += 1
+        now = time.monotonic()
+        if now - self._last_reject_log > 1.0:
+            self._last_reject_log = now
+            logger.info(
+                "APC storage: %d-token checkpoint on %s not restored (restore %s s, prefill %.0f tok/s)",
+                n,
+                name,
+                "?" if restore_s is None else f"{restore_s:.1f}",
+                self.prefill_tps,
+            )
+
+    _last_reject_log = 0.0
 
     def exact_cache_bytes(self, cache_hash: int) -> int:
         tier = self._where.get(cache_hash)
@@ -988,6 +1052,12 @@ class TieredDiskStore(SpillDiskStore):
                         break
             if tier is None:
                 if got is not None:
+                    nbytes = self.exact_cache_bytes(cache_hash)
+                    if nbytes >= (64 << 20):
+                        bps = nbytes / max(time.perf_counter() - t0, 1e-6)
+                        self.eff_bps = (
+                            bps if not self.eff_bps else 0.7 * self.eff_bps + 0.3 * bps
+                        )
                     self.last_device = self.name
                     self.device_hits[self.name] += 1
                     self.primary_hits += 1
@@ -1005,6 +1075,10 @@ class TieredDiskStore(SpillDiskStore):
         if sim is not None and got is not None:  # the file is really on a fast disk
             e = tier.index.get(cache_hash)
             _pace(e.size if e else 0, t0, sim)
+        if got is not None:
+            e = tier.index.get(cache_hash)
+            if e is not None:
+                tier.note_restore(e.orig, time.perf_counter() - t0)
         return got
 
     def _load_lower(
@@ -1286,6 +1360,9 @@ class TieredDiskStore(SpillDiskStore):
             "latency_ms": self.profile.latency_s * 1e3 if self.profile else None,
             "hits": self.primary_hits,
             "hit_bytes": self.primary_hit_bytes,
+            "effective_read_bps": self.eff_bps or None,
+            "prefill_tps": round(self.prefill_tps, 1),
+            "cost_rejected": self.cost_rejected,
             "simulated": bool(self.sim),
         }
         return [primary, *(t.snapshot() for t in self.lower)]
