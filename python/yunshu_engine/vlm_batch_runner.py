@@ -37,6 +37,7 @@ import numpy as np
 
 from . import keyed_sampling
 from .keyed_sampling import top_k_filter, top_p_filter
+from .serving.busy_time import BusyMeter
 
 logger = logging.getLogger(__name__)
 
@@ -283,6 +284,10 @@ class VLMBatchRunner:
         # text requests of dense Qwen3.5-family models; None = upstream only.
         self.driver: Any = None
         self._driver_jobs: dict[int, _Job] = {}
+        # GPU-busy seconds: every executor slice, and the round driver's steps inside them
+        # (``/v1/yunshu/status`` and ``/metrics`` report the cumulative counters).
+        self.busy_meter = BusyMeter()
+        self.driver_busy_meter = BusyMeter()
 
     def prepare_media(
         self,
@@ -749,7 +754,8 @@ class VLMBatchRunner:
                 self._emit(job, _DONE)
         if not self._driver_jobs:
             return
-        events = self.driver.step()
+        with self.driver_busy_meter.span():
+            events = self.driver.step()
         self._note_driver_prefill()
         for event in events:
             job = event.handle
@@ -939,8 +945,19 @@ class VLMBatchRunner:
             if st is not None and uid not in waiting and st.t_first == 0.0:
                 st.prefill_done = st.prefill_total
 
+    def busy_snapshot(self) -> dict:
+        """Cumulative GPU-busy accounting: all slices and the round driver's share."""
+        return {
+            "slices": self.busy_meter.snapshot(),
+            "round_driver": self.driver_busy_meter.snapshot(),
+        }
+
     def _drive_slice(self, resubmit: bool = True) -> None:
-        """One scheduling slice on the MLX thread."""
+        """One scheduling slice on the MLX thread, timed into ``busy_meter``."""
+        with self.busy_meter.span():
+            self._drive_slice_body(resubmit)
+
+    def _drive_slice_body(self, resubmit: bool) -> None:
         _install_row_context()
         try:
             with self._lock:

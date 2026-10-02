@@ -136,6 +136,24 @@ def _requests() -> list[dict[str, Any]]:
     return out
 
 
+def _gpu_busy() -> dict[str, Any]:
+    """Cumulative GPU-busy seconds and idle fraction per loaded engine (the idle fraction is
+    since the runner was built; take two ``busy_seconds`` samples for a window). An engine that
+    does not account busy time is absent, not zero."""
+    from .monitoring import _collect_engines
+
+    out: dict[str, Any] = {}
+    try:
+        for model_id, engine in _collect_engines(get_engine(), get_model_manager()):
+            fn = getattr(engine, "busy_snapshot", None)
+            snap = fn() if callable(fn) else None
+            if snap:
+                out[model_id] = snap
+    except Exception:
+        logger.debug("busy snapshot failed", exc_info=True)
+    return out
+
+
 @router.get("/yunshu/status")
 async def status(request: Request) -> dict:
     """Everything an operator or a client wants to know before sending a big request."""
@@ -168,6 +186,7 @@ async def status(request: Request) -> dict:
             "items": reqs,
         },
         "last": registry.last(),
+        "gpu": _gpu_busy(),
         "throughput": {
             "window_s": 60,
             "requests": len(window),

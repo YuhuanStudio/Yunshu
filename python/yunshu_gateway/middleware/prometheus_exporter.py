@@ -688,6 +688,20 @@ class PrometheusMetrics:
         ):
             self._counters[key] = _Counter(f"yunshu_{key}_total", text)
 
+        # GPU-busy seconds of the VLM runner (monitoring._populate_busy_metrics): the idle
+        # fraction over a window is 1 - rate(yunshu_gpu_busy_seconds_total).
+        for key, text in (
+            (
+                "gpu_busy_seconds",
+                "Cumulative seconds the runner's GPU slices were executing",
+            ),
+            (
+                "round_driver_busy_seconds",
+                "Cumulative seconds spent in round-driver steps",
+            ),
+        ):
+            self._counters[key] = _Counter(f"yunshu_{key}_total", text)
+
         # TTFT histogram with inference buckets (was missing from predefined)
         self._histograms["ttft_seconds"] = _Histogram(
             "yunshu_ttft_seconds",

@@ -158,6 +158,8 @@ class RequestInfo:
     # What the context-window manager removed from the prompt (set by the engine through
     # ``ContextWindowManager.publish``); None when nothing was.
     context_policy: dict | None = None
+    # Generations in flight (this one included) when it was admitted; serve log only.
+    concurrency_start: int = 0
     # The token budget when the prompt left less room than max_tokens asked for
     # (``token_budget.TokenBudget.report``); None when the request fit.
     budget: dict | None = None
@@ -488,6 +490,10 @@ def record_done(info: RequestInfo, stats: dict) -> None:
             "ttft_ms": stats.get("ttft_ms"),
         }
     )
+    with contextlib.suppress(Exception):
+        from . import serve_log
+
+        serve_log.record(info, stats, concurrency_end=len(registry.active()) + 1)
 
 
 # ── ASGI middleware ─────────────────────────────────────────────────────
@@ -538,6 +544,7 @@ class YunshuExtensionsMiddleware:
         if tracked:
             info.queue_position, info.queue_est_wait_ms = queue_snapshot(info)
             registry.add(info)
+            info.concurrency_start = len(registry.active())
             tokens.append((current_request_info, current_request_info.set(info)))
         try:
             await self._serve(scope, receive, send, info, tracked)
