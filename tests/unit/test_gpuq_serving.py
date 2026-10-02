@@ -376,3 +376,149 @@ def test_pauser_only_signals_job_group(q, monkeypatch):
     sent.clear()
     p.pause(3.0)
     assert sent == []
+
+
+def test_priority_preemption_runs_high_while_low_stopped(q, monkeypatch):
+    # CPU stand-ins only: low work has tight active timeout/stall limits.
+    monkeypatch.setattr(q, "free_memory_gb", lambda: 100.0)
+    low, path = _job(
+        q,
+        [
+            sys.executable,
+            "-c",
+            "import time; print('low', flush=True); time.sleep(1.0)",
+        ],
+        priority=-1,
+        timeout_s=1.4,
+        stall_s=1.4,
+        mem_gb=24,
+    )
+    t = _run_bg(q, low, path, q.ServingGate())
+    assert _wait_for(lambda: low.get("pid"))
+    high, hp = _job(
+        q, [sys.executable, "-c", "import time; time.sleep(1.6)"], priority=0, mem_gb=24
+    )
+    try:
+        assert _wait_for(lambda: q._read(hp).get("state") == "running", 3)
+        assert _state(low["pid"]).startswith("T")
+        assert q._read(path)["paused"] is True
+        assert (
+            json.loads((q.LOGS / (low["id"] + ".pauses.json")).read_text())["pauses"][
+                -1
+            ][1]
+            is None
+        )
+        t.join(8)
+        assert not t.is_alive()
+        done = q._read(path)
+        hd = q._read(hp)
+        assert done["state"] == hd["state"] == "done"
+        assert done["pauses"][0][1] - done["pauses"][0][0] >= 1.5
+        assert done["paused"] is False
+        assert hd["ended"] <= done["pauses"][0][1]
+    finally:
+        q._patch_job(path, cancel=True)
+        q._patch_job(hp, cancel=True)
+        t.join(8)
+
+
+@pytest.mark.parametrize("available", [20.0, None])
+def test_priority_preemption_never_stops_when_memory_not_admitted(
+    q, monkeypatch, available
+):
+    monkeypatch.setattr(q, "free_memory_gb", lambda: available)
+    low, path = _job(q, ["sleep", "0.5"], priority=-2, mem_gb=24)
+    high, hp = _job(q, ["true"], priority=0, mem_gb=24)
+    q._run_one(low, path)
+    assert q._read(path)["state"] == "done"
+    assert q._read(path)["pauses"] == []
+    assert q._read(hp)["state"] == "pending"
+
+
+def test_priority_pause_drains_all_high_jobs_before_resuming(q, monkeypatch):
+    monkeypatch.setattr(q, "free_memory_gb", lambda: 100.0)
+    low, path = _job(q, ["sleep", "0.6"], priority=-1, mem_gb=24)
+    _, first = _job(q, ["sleep", "0.1"], priority=0, mem_gb=24)
+    _, second = _job(q, ["sleep", "0.1"], priority=1, mem_gb=24)
+    q._run_one(low, path)
+    done = q._read(path)
+    assert done["state"] == "done" and len(done["pauses"]) == 1
+    assert q._read(second)["ended"] <= q._read(first)["started"]
+    assert done["pauses"][0][1] >= q._read(first)["ended"]
+
+
+def test_priority_pause_waits_for_pending_then_resumes_on_cancel(q, monkeypatch):
+    low, path = _job(q, ["true"], priority=-1, pid=4242, state="running")
+    _, hp = _job(q, ["true"], priority=0, mem_gb=24)
+    monkeypatch.setattr(q.os, "killpg", lambda *_: None)
+    monkeypatch.setattr(q, "free_memory_gb", lambda: 1.0)
+    p = q.Pauser(low, path)
+    p.pause(time.time(), reason="priority")
+    g = q.ServingGate()
+    assert q._priority_step(p, g, time.time()) is True
+    assert q._read(hp)["waiting"] == "mem"
+    q._patch_job(hp, cancel=True)
+    assert q._priority_step(p, g, time.time()) is False
+    p.step(g, False, time.time())
+    assert not p.paused
+
+
+def test_preempting_runner_error_does_not_abandon_low_job(q, monkeypatch):
+    low, path = _job(q, ["sleep", "0.3"], priority=-1, mem_gb=24)
+    _, hp = _job(q, ["true"], priority=0, mem_gb=24)
+    run = q._run_one
+
+    def fail_high(job, path, gate=None):
+        if job["priority"] >= 0:
+            raise RuntimeError("injected runner error")
+        return run(job, path, gate)
+
+    monkeypatch.setattr(q, "_run_one", fail_high)
+    monkeypatch.setattr(q, "free_memory_gb", lambda: 100.0)
+    run(low, path)
+    assert q._read(path)["state"] == "done"
+    assert q._read(path)["paused"] is False
+    assert q._read(hp)["state"] == "failed"
+
+
+def test_adoption_closes_open_pause_file(q, monkeypatch):
+    job, path = _job(
+        q,
+        ["true"],
+        state="running",
+        priority=-1,
+        pid=123,
+        pauses=[[time.time() - 3, None]],
+        paused=True,
+        pause_reason="priority",
+    )
+    monkeypatch.setattr(q, "_alive", lambda _: False)
+    q._adopt(job, path)
+    saved = json.loads((q.LOGS / (job["id"] + ".pauses.json")).read_text())
+    assert saved["pauses"][0][1] is not None
+    assert q._read(path)["state"] == "lost"
+
+
+@pytest.mark.parametrize("already_paused", [False, True])
+def test_priority_holds_pause_during_serving_start_window(
+    q, monkeypatch, already_paused
+):
+    monkeypatch.setattr(q, "free_memory_gb", lambda: 100.0)
+    signals = []
+    monkeypatch.setattr(q.os, "killpg", lambda pid, sig: signals.append((pid, sig)))
+    low, path = _job(q, ["true"], state="running", pid=4242, priority=-1, mem_gb=24)
+    _, hp = _job(q, ["true"], priority=0, mem_gb=24)
+    p = q.Pauser(low, path)
+    if already_paused:
+        p.pause(time.time() - 2)
+    g = q.ServingGate(fetch=lambda *_: False)
+    g.configure(
+        {"urls": ["http://production"], "idle_start_s": 120, "idle_resume_s": 0}
+    )
+    g.poll()
+    assert g.may_resume() and not g.may_start()
+    assert q._priority_step(p, g, time.time()) is True
+    assert p.paused and low["pause_reason"] == "priority"
+    assert q._read(hp)["state"] == "pending"
+    assert q._read(hp)["waiting"] == "idle"
+    assert signals == [(4242, q.signal.SIGSTOP)]

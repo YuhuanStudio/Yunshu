@@ -2,15 +2,17 @@
 
     gpuq digest                 # jobs finished since the last digest (first time: last 24 h), then mark
     gpuq digest --since 6h      # or 90m / 2d / an ISO time / epoch seconds; does not move the marker
+    gpuq digest --label-prefix worker- --since 6h  # only this label prefix; does not move the marker
     gpuq digest --peek          # same window as the marker but leave the marker alone
 
 Finished jobs are grouped by label family (the label without its round / shard suffix: ``paired-gsm8k-ref-r3``
 -> ``paired-gsm8k-ref``). Each family shows its states, the log of its last job and every output path found
-in the commands (the argument after ``--out`` / ``--output``, also ``--out=PATH``). Two kinds of problem are
+at submission or in commands (the argument after ``--out`` / ``--output``, also ``--out=PATH``). Two kinds of problem are
 flagged and listed first, because they are the results nobody read:
 
-* a job that ended failed, lost, stalled or timeout;
-* a ``done`` job whose output file is missing or empty (a directory counts as empty when it has no files).
+* a job that ended failed, lost, stalled, timeout or cancelled, or has an absent/nonzero rc;
+* an output that is missing/empty, or lacks a line containing ``complete`` when expect_complete is set.
+  A directory counts as empty when it has no files; complete checking requires a file.
 
 Exit status 1 when anything is flagged, so a coordinator loop can stop on it. The marker
 (``$GPUQ_DIR/.digest_marker``) is the start of the last digest's window, taken before the jobs were read, so a job
@@ -25,13 +27,14 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-BAD_STATES = ("failed", "lost", "stalled", "timeout")
-FINAL = BAD_STATES + ("done", "cancelled")
+BAD_STATES = ("failed", "lost", "stalled", "timeout", "cancelled")
+FINAL = BAD_STATES + ("done",)
 OUT_FLAGS = ("--out", "--output")
 DEFAULT_WINDOW_S = 24 * 3600
 _SUFFIX = re.compile(r"-(?:r\d+|p\d+s\d+|s\d+|\d+)$")
@@ -52,7 +55,7 @@ def family(label: str) -> str:
 def output_paths(job: dict) -> list:
     """Paths named by --out / --output in the job command, resolved against the job's cwd."""
     cmd = [str(x) for x in job.get("cmd") or []]
-    found = []
+    found = [str(p) for p in job.get("outputs", [])]
     for i, arg in enumerate(cmd):
         val = None
         if arg in OUT_FLAGS and i + 1 < len(cmd):
@@ -62,21 +65,33 @@ def output_paths(job: dict) -> list:
                 if arg.startswith(flag + "="):
                     val = arg[len(flag) + 1 :]
         if val and not val.startswith("-"):
-            p = Path(val).expanduser()
-            if not p.is_absolute():
-                p = Path(job.get("cwd") or ".") / p
-            found.append(p)
-    return found
+            found.append(val)
+    paths = []
+    for val in found:
+        p = Path(val).expanduser()
+        if not p.is_absolute():
+            p = Path(job.get("cwd") or ".") / p
+        if p not in paths:
+            paths.append(p)
+    return paths
 
 
-def output_problem(path: Path) -> Optional[str]:
+def output_problem(path: Path, expect_complete: bool = False) -> Optional[str]:
     """None when the output exists and has content, else a short reason."""
     try:
         if path.is_dir():
+            if expect_complete:
+                return "complete requires a file"
             return None if any(q.is_file() for q in path.rglob("*")) else "empty dir"
         if not path.exists():
             return "missing"
-        return None if path.stat().st_size > 0 else "empty"
+        if path.stat().st_size == 0:
+            return "empty"
+        if expect_complete:
+            with path.open(encoding="utf-8", errors="replace") as f:
+                if not any("complete" in line for line in f):
+                    return "no complete line"
+        return None
     except OSError as e:
         return "unreadable (%s)" % e.__class__.__name__
 
@@ -108,9 +123,16 @@ def read_marker(root: Path) -> Optional[float]:
 
 
 def write_marker(root: Path, t: float) -> None:
-    tmp = root / ".digest_marker.tmp"
-    tmp.write_text("%.3f\n" % t)
-    tmp.replace(root / ".digest_marker")
+    root.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w", dir=root, prefix=".digest_marker.", delete=False
+    ) as f:
+        tmp = Path(f.name)
+        f.write("%.17g\n" % t)
+    try:
+        tmp.replace(root / ".digest_marker")
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def load_jobs(root: Path) -> list:
@@ -123,11 +145,26 @@ def load_jobs(root: Path) -> list:
     return jobs
 
 
-def collect(root: Path, since: float, until: float) -> dict:
+def output_issues(job: dict) -> list:
+    """Shared wait/digest output contract, including legacy command output flags."""
+    issues = []
+    paths = output_paths(job)
+    for path in paths:
+        why = output_problem(path, bool(job.get("expect_complete")))
+        if why:
+            issues.append("output %s: %s" % (why, path))
+    if job.get("expect_complete") and not paths:
+        issues.append("output missing: --expect-complete requires an output path")
+    return issues
+
+
+def collect(root: Path, since: float, until: float, label_prefix: str = "") -> dict:
     """Finished jobs with ended in (since, until], plus problems, grouped by family."""
     fams: dict = {}
     problems = []
     for j in load_jobs(root):
+        if not j.get("label", "").startswith(label_prefix):
+            continue
         if j.get("state") not in FINAL:
             continue
         ended = j.get("ended") or 0
@@ -135,13 +172,9 @@ def collect(root: Path, since: float, until: float) -> dict:
             continue
         outs = output_paths(j)
         issues = []
-        if j["state"] in BAD_STATES:
+        if j["state"] in BAD_STATES or j.get("rc") != 0:
             issues.append("state %s rc=%s" % (j["state"], j.get("rc")))
-        if j["state"] == "done":
-            for p in outs:
-                why = output_problem(p)
-                if why:
-                    issues.append("output %s: %s" % (why, p))
+        issues.extend(output_issues(j))
         entry = {
             "id": j["id"],
             "label": j.get("label", ""),
@@ -218,6 +251,9 @@ def main(argv: Optional[list] = None) -> int:
         "--since",
         help="window start: 90m, 6h, 2d, epoch seconds or ISO time (default: last digest)",
     )
+    ap.add_argument(
+        "--label-prefix", default="", help="only labels starting with this prefix"
+    )
     ap.add_argument("--peek", action="store_true", help="do not move the marker")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     a = ap.parse_args(argv)
@@ -228,13 +264,13 @@ def main(argv: Optional[list] = None) -> int:
         since = parse_since(a.since, now)
     else:
         since = marker if marker is not None else now - DEFAULT_WINDOW_S
-    res = collect(root, since, now)
+    res = collect(root, since, now, a.label_prefix)
     if a.json:
         json.dump(res, sys.stdout, indent=1)
         sys.stdout.write("\n")
     else:
         print(render(res, since, now))
-    if not a.since and not a.peek:
+    if not a.since and not a.peek and not a.label_prefix:
         write_marker(root, now)
     return 1 if res["problems"] else 0
 

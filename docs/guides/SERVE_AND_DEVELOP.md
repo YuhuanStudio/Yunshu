@@ -15,11 +15,17 @@ frozen the instant user traffic arrives.
 | Pause record | Each interval is stored in the job JSON (`pauses: [[t0, t1], ...]`, wall-clock) and in the file named by `$GPUQ_PAUSE_FILE`. |
 | Timeouts | `--timeout` and `--stall` count active time only; paused time is excluded. |
 | Memory admission | A job declares `--mem-gb` (default 24, 0 with `--serving-ok`). It starts only if `free - mem_gb >= reserve_gb` (default 16, free = `psutil` available or `vm_stat` free + inactive + speculative + purgeable). |
-| Bypass | `--serving-ok` skips the idle gate and is never paused (CPU-only jobs). |
-| Status | `gpuq status` shows `wait-idle`, `wait-mem`, `paused` and a `pauses=N` count. |
+| Bypass | `--serving-ok` skips the idle gate and serving pauses (CPU-only jobs). Priority preemption still applies. |
+| Priority preemption (Q01) | Pending p>=0 work can `SIGSTOP` a running p<=-1 job when memory admits both resident jobs; no job is killed to reclaim memory. High-priority jobs run serially, then the low-priority job resumes when no uncancelled p>=0 job remains pending and the serving resume gate permits it. |
+| Status | `gpuq status` shows `wait-idle`, `wait-mem`, `paused` and a `pauses=N` count. When pending jobs have no active runner, an `idle:` line explains memory admission, serving, paused jobs, or a stopped daemon. |
 
 An unreachable server (connection refused) counts as idle; a timeout, 5xx or unparsable answer counts as busy
-(fail closed). Without a configured URL nothing changes: no gate, no memory admission, no pauses.
+(fail closed). Without configured URLs or an explicit reserve, there is no serving gate, serial memory
+admission, or serving pause. Priority preemption still checks memory: the
+measured available memory (which already excludes the resident low-priority job) minus the new job's `mem_gb`
+must leave `reserve_gb` (default 16 GB). Unknown memory prevents priority preemption; the low-priority job
+continues. A blocked pending high-priority job is shown as `wait-mem`. When memory does admit both jobs,
+the low-priority job stays paused even if the high-priority job is still waiting for the serving start window.
 
 ## Enable it
 
@@ -38,6 +44,30 @@ Environment overrides: `GPUQ_SERVING_URLS` (comma separated), `GPUQ_IDLE_START_S
 scripts/dev/gpuq submit --label eval --mem-gb 30 -- python bench.py     # gated, preemptible
 scripts/dev/gpuq submit --label lint --serving-ok -- python cpu_job.py  # bypasses the gate
 ```
+
+## Submit labels and bounded waits
+
+An active label (pending, running, or paused) is exclusive. Concurrent submissions with the same active label
+are rejected. A label can be reused after its earlier job finishes; every submission gets a distinct job id.
+Submission never deletes earlier logs, pause records, return codes, or output files.
+
+Declare expected results with repeatable queue-level `--out` arguments **before** the command separator `--`.
+`--expect-complete` requires every output to be a nonempty file containing a line with the literal `complete`.
+Command-level `--out` / `--output` paths are also checked for older jobs. The command remains responsible for
+writing its own outputs; declaring an output does not pass an argument to the command.
+
+```bash
+scripts/dev/gpuq submit --label eval-unique --out results/a.jsonl --out results/b.jsonl \
+  --expect-complete -- python sweep.py
+scripts/dev/gpuq wait --max-seconds 45 JOB_ID OTHER_JOB_ID
+scripts/dev/gpuq digest --label-prefix eval- --since 6h
+```
+
+`wait` uses one deadline for the entire id list and prints one summary line per job: state, rc, output problems
+(`missing_outputs`, including empty/incomplete outputs), and log path. Exit 0 means every job is `done` with rc 0
+and verified outputs; exit 1 means a job failed, was cancelled, is missing, or has invalid outputs; exit 2 means
+some jobs remain pending/running at the deadline. Exit 2 takes precedence over failures in finished peers so
+callers know they must keep waiting. With no `--max-seconds`, wait blocks until all known jobs finish.
 
 ## Measurement-integrity rule
 
@@ -67,15 +97,40 @@ report such a sample.
 A job that finished is not a result anyone has read. `scripts/dev/gpuq digest` (`scripts/dev/gpuq_digest.py`, stdlib
 only, python 3.9 safe) lists the jobs finished since the last digest, grouped by label family (`paired-gsm8k-ref-r3`
 -> `paired-gsm8k-ref`): states, total time, the last job's log and every output path named by `--out` / `--output`
-in the command. It flags first, and exits 1 on, any job that ended `failed`, `lost`, `stalled` or `timeout`, and any
-`done` job whose output file is missing or empty (so a clean exit that wrote nothing is not a result).
+in the command or declared at submission. It flags first, and exits 1 on, any job that ended `failed`, `lost`,
+`stalled`, `timeout` or `cancelled`, has an absent/nonzero rc, or has missing/empty outputs. When
+`--expect-complete` was submitted, an absent `complete` line also fails verification. These are the same output
+checks used by `wait`, so a clean process exit that wrote nothing is not a result.
 
 ```bash
 scripts/dev/gpuq digest              # since the last digest (first run: last 24 h); moves the marker
 scripts/dev/gpuq digest --peek       # same window, marker untouched
 scripts/dev/gpuq digest --since 6h   # 90m / 2d / ISO time / epoch; never moves the marker
+scripts/dev/gpuq digest --label-prefix eval- --since 6h # restrict to one worker/sweep
 ```
 
 The marker is `$GPUQ_DIR/.digest_marker`, the time the previous digest started (taken before it read the jobs, so a
 job ending mid-digest appears next time). Rule: the coordinator runs `gpuq digest` at every check-in and acts on
-every flagged line (fix, requeue or explain) before starting new work.
+every flagged line (fix, requeue or explain) before starting new work. A label-filtered digest never moves the
+global marker, even without `--since`, so inspecting one worker cannot hide another worker's results.
+
+## Reloading daemon code between jobs
+
+The daemon keeps the Python code loaded at startup. After the lead merges a queue change, hold new submissions
+and restart during a job boundary (no running or paused job). Use the shared queue directory, terminate only
+the PID holding `daemon.lock`, and start the replacement with `/usr/bin/python3` (Python 3.9). Keep all job,
+log, lock, and output files in place. These commands are for the lead to execute; workers must not restart the
+live daemon during measurement.
+
+```bash
+cd /Users/yuhuan/Documents/YuhuanStudio/Yunshu
+export GPUQ_DIR=/Volumes/P5Plus/yunshu-gpuq
+scripts/dev/gpuq status                    # confirm the job boundary
+GPUQ_DAEMON_PID="$(lsof -t "$GPUQ_DIR/daemon.lock")"
+ps -p "$GPUQ_DAEMON_PID" -o pid=,command=   # must be gpuq.py _daemon
+kill -TERM "$GPUQ_DAEMON_PID"              # PID only, never a process group
+while kill -0 "$GPUQ_DAEMON_PID" 2>/dev/null; do sleep 1; done
+nohup /usr/bin/python3 scripts/dev/gpuq.py _daemon \
+  >> "$GPUQ_DIR/daemon.log" 2>&1 < /dev/null &
+scripts/dev/gpuq status
+```
