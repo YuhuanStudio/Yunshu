@@ -445,15 +445,40 @@ def check_prefix_disk() -> Check:
     return Check("prefix cache disk", "ok", msg)
 
 
-# Minimums mirror pyproject.toml; a lower version has known breakage (APC, MTP, llguidance
-# schemas), so it is a failure with the upgrade command, not a warning.
-MIN_VERSIONS = {
-    "mlx": "0.32.3",
-    "mlx-lm": "0.31.3",
-    "mlx-vlm": "0.7.4",
-    "mlx-audio": "0.5.7",
-    "llguidance": "1.8",
-}
+# Packages whose minimum version is enforced; the minimums themselves come from this
+# release's own dependency metadata (pyproject.toml), so they cannot drift.
+CHECKED_PACKAGES = (
+    "mlx",
+    "mlx-lm",
+    "mlx-vlm",
+    "mlx-audio",
+    "llguidance",
+    "transformers",
+)
+
+
+def min_versions() -> dict[str, str]:
+    """``name -> minimum version`` for CHECKED_PACKAGES, read from the yunshu distribution's
+    requirements (a lower version has known breakage, so it is a failure, not a warning)."""
+    from importlib.metadata import PackageNotFoundError, requires
+
+    from packaging.requirements import Requirement
+
+    try:
+        reqs = requires("yunshu") or []
+    except PackageNotFoundError:
+        return {}
+    out: dict[str, str] = {}
+    for line in reqs:
+        r = Requirement(line)
+        if r.name not in CHECKED_PACKAGES:
+            continue
+        for spec in r.specifier:
+            if spec.operator == ">=":
+                out[r.name] = spec.version
+    return out
+
+
 # extra name -> (package, what it enables)
 EXTRAS = {
     "vision": ("mlx-vlm", "image/video input and the Qwen3.5 / 3.6 / 3.8 family"),
@@ -474,7 +499,7 @@ def _vkey(v: str) -> tuple[int, ...]:
 def check_versions(pkg=_pkg) -> list[Check]:
     """Installed packages below the minimum this release needs."""
     out = []
-    for name, minimum in MIN_VERSIONS.items():
+    for name, minimum in min_versions().items():
         have = pkg(name)
         if have is None or _vkey(have) >= _vkey(minimum):
             continue

@@ -46,13 +46,6 @@ from .qwen35_verify_qmm import is_row_exact_armed
 from .row_exact_qmv import one_row_qmv, rows_qmv
 
 
-def advance_left_padding_info(q35, cache, steps):
-    """mlx-vlm < 0.7.4 caches the per-row left padding and needs it advanced with the
-    cache; 0.7.4 reads ``cache.left_padding`` afresh each step and dropped the helper."""
-    fn = getattr(q35, "_qwen3_5_advance_left_padding_info", None)
-    if fn is not None:
-        fn(cache, steps)
-
 logger = logging.getLogger(__name__)
 
 _PATCHED = False
@@ -1023,7 +1016,6 @@ def _qwen4_prefill(module, inputs, cache):
     )
     if hasattr(cache, "advance"):
         cache.advance(length)
-        advance_left_padding_info(q35, cache, length)
         q35._qwen3_5_advance_lengths_info(cache, length)
     flat = norm_gate(
         inputs=[
@@ -1778,7 +1770,6 @@ def apply_qwen35_gdn_prework_patch() -> bool:
         cache[0], cache[1] = conv_state, state
         if hasattr(cache, "advance"):
             cache.advance(1)
-            advance_left_padding_info(q35, cache, 1)
             q35._qwen3_5_advance_lengths_info(cache, 1)
         global _QWEN4_DECODE_ENGAGED_LOGGED
         if not _QWEN4_DECODE_ENGAGED_LOGGED:
@@ -1841,7 +1832,6 @@ def apply_qwen35_gdn_prework_patch() -> bool:
             result = self.out_proj(out.reshape(1, 1, -1))
             cache[0], cache[1] = conv_state, state
             cache.advance(1)
-            advance_left_padding_info(q35, cache, 1)
             q35._qwen3_5_advance_lengths_info(cache, 1)
             global _QWEN35_DECODE_ENGAGED_LOGGED
             if not _QWEN35_DECODE_ENGAGED_LOGGED:
@@ -1881,7 +1871,6 @@ def apply_qwen35_gdn_prework_patch() -> bool:
         cache[0], cache[1] = conv_state, state
         if hasattr(cache, "advance"):
             cache.advance(1)
-            advance_left_padding_info(q35, cache, 1)
             q35._qwen3_5_advance_lengths_info(cache, 1)
         global _QWEN4_DECODE_ENGAGED_LOGGED
         if not _QWEN4_DECODE_ENGAGED_LOGGED:
@@ -1928,7 +1917,6 @@ def apply_qwen35_gdn_prework_patch() -> bool:
                 result = _qwen4_verify(plan, inputs, cache)
                 if hasattr(cache, "advance"):
                     cache.advance(length)
-                    advance_left_padding_info(q35, cache, length)
                     q35._qwen3_5_advance_lengths_info(cache, length)
                 global _QWEN4_VERIFY_ENGAGED_LOGGED
                 if not _QWEN4_VERIFY_ENGAGED_LOGGED:
@@ -2043,7 +2031,6 @@ def apply_qwen35_gdn_prework_patch() -> bool:
             )
         if hasattr(cache, "advance"):
             cache.advance(length)
-            advance_left_padding_info(q35, cache, length)
             q35._qwen3_5_advance_lengths_info(cache, length)
         if not fused:
             out = layer.norm(

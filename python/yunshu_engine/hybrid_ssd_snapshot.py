@@ -295,11 +295,9 @@ class HybridSnapshotStore:
                     meta[f"l{i}"] = "kv"
                     meta[f"l{i}o"] = str(int(getattr(c, "offset", k.shape[-2])))
                 else:
-                    # ArraysCache (recurrent state): its .cache list. (.state is that
-                    # list under mlx-lm 0.31 but (cache, left_padding, lengths) under 0.32.)
+                    # ArraysCache (recurrent state): its .cache list (.state is
+                    # (cache, left_padding, lengths)).
                     state = getattr(c, "cache", None)
-                    if state is None:
-                        state = getattr(c, "state", None)
                     state = list(state) if state is not None else []
                     nonnull = []
                     for j, arr in enumerate(state):

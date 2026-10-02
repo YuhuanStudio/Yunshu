@@ -54,12 +54,12 @@ classifiers = [
 dependencies = [
     # ── Apple ML Stack (text path only) ──
     "mlx>=0.32.3",
-    "mlx-lm>=0.31.3",
+    "mlx-lm>=0.32.0",
     # ── Model / Tokenizer ──
-    "transformers>=5.17.0",
-    "tokenizers>=0.21.0",
+    "transformers>=5.18.0",
+    "tokenizers>=0.23.2",
     "safetensors>=0.5.0",
-    "huggingface-hub>=0.23.0",
+    "huggingface-hub>=1.33.0",
     # ── API Framework ──
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.34.0",
@@ -88,7 +88,8 @@ dependencies = [
     "python-multipart>=0.0.27",
     "openai>=2.33.0",
     "jsonschema>=4.26.0",
-    "llguidance>=1.8",
+    "llguidance>=1.9.1",
+    "packaging>=24.0",
 ]
 
 [project.urls]

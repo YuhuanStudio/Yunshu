@@ -762,8 +762,6 @@ def tree_commit(lm, cache: list, res: TreeResult, path: list[int]) -> None:
     previous one): the caches end as if those tokens had been decoded one by one."""
     from mlx_vlm.models.qwen3_5 import language as q35
 
-    from .kernels.omlx.qwen35_gdn_prework import advance_left_padding_info
-
     w, n0, m = res.shape.width, res.n0, len(path)
     path_arr = mx.array(path + [0] * (w - m), dtype=mx.int32)
     count_arr = mx.array([m], dtype=mx.int32)
@@ -786,7 +784,6 @@ def tree_commit(lm, cache: list, res: TreeResult, path: list[int]) -> None:
             c[0] = mx.take(seq, conv_idx, axis=0)[None]
             if hasattr(c, "advance"):
                 c.advance(m)
-                advance_left_padding_info(q35, c, m)
                 q35._qwen3_5_advance_lengths_info(c, m)
 
 

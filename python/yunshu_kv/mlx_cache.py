@@ -11,7 +11,7 @@ Based on deep study of mlx-lm's cache.py and oMLX's type_handlers.py.
 Key MLX KVCache contract:
 - keys/values shape: (B, n_kv_heads, L, head_dim), axis 2 = sequence dim
 - Direct attribute assignment: cache.keys = k; cache.values = v; cache.offset = n
-- cache.state returns (keys, values) tuple
+- cache.keys_and_values() returns (keys, values) up to the offset
 - Slicing: keys[:, :, start:end, :] for block extraction
 - Concatenation: mx.concatenate(list, axis=2) for block assembly
 """
@@ -85,20 +85,6 @@ def is_sliceable(cache_obj: Any) -> bool:
     )
 
 
-def cache_keys_values(cache_obj: Any) -> tuple[Any, Any]:
-    """The (keys, values) a KV cache holds, up to its offset, under any mlx-lm version.
-
-    mlx-lm 0.32 made ``.state`` the whole buffer plus offsets (a 3- to 6-tuple) and added
-    ``keys_and_values()``; before that ``.state`` was ``(keys, values)``.
-    """
-    fn = getattr(cache_obj, "keys_and_values", None)
-    if callable(fn):
-        keys, values = fn()
-        return keys, values
-    state = cache_obj.state
-    return state[0], state[1]
-
-
 def extract_cache_state(cache_obj: Any) -> dict:
     """Extract serializable state from an MLX cache object.
 
@@ -107,7 +93,7 @@ def extract_cache_state(cache_obj: Any) -> dict:
     ct = detect_cache_type(cache_obj)
 
     if ct in (CacheType.KVCACHE, CacheType.BATCH_KVCACHE, CacheType.QUANTIZED_KVCACHE):
-        keys, values = cache_keys_values(cache_obj)
+        keys, values = cache_obj.keys_and_values()
         return {
             "keys": keys,
             "values": values,
@@ -118,7 +104,7 @@ def extract_cache_state(cache_obj: Any) -> dict:
         }
 
     elif ct == CacheType.ROTATING_KVCACHE:
-        keys, values = cache_keys_values(cache_obj)
+        keys, values = cache_obj.keys_and_values()
         meta = getattr(cache_obj, "meta_state", "")
         return {
             "keys": keys,

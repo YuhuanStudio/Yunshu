@@ -21,7 +21,7 @@ first public release, P2 = soon after, P3 = later or on request.
 
 | | Status | Notes |
 |---|---|---|
-| From source (`uv sync --extra vision`) | ✅ | `uv.lock` pins MLX 0.32.2 / mlx-lm 0.31.3 / mlx-vlm 0.7.3 |
+| From source (`uv sync --extra vision`) | ✅ | `uv.lock` pins MLX 0.32.3 / mlx-lm 0.32.0 / mlx-vlm 0.7.4 |
 | `uv tool install` from a wheel | ✅ | Clean tool env on 2026-09-29, then `doctor`, serve Qwen3.5-0.8B, `/health`, `/version`, `/v1/models`, chat, `/v1/messages`, `service install --dry-run` |
 | `uv tool install` from git | ✅ | Same package as the wheel; the repository is public |
 | PyPI (`uv tool install "yunshu[vision]"`, `pipx install`) | 🟡 P1 | 0.1.2 builds and passes `twine check`; the name `yunshu` was free on 2026-09-29. Publishing waits for the maintainer's go-ahead and the one-time trusted-publisher setup ([RELEASING.md](../../RELEASING.md)) |

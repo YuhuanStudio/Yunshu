@@ -45,7 +45,7 @@ def install() -> bool:
         from mlx_vlm.models.qwen3_5.speculative_verifier import (
             Qwen3_5BatchInvariantForward as verifier,
         )
-    except ImportError:  # pragma: no cover - older mlx-vlm
+    except ImportError:  # pragma: no cover - mlx-vlm not installed
         return False
     from . import batch_invariant
 

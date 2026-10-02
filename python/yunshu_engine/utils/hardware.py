@@ -143,9 +143,8 @@ def get_os_version() -> str:
 
 
 def get_mlx_version() -> str:
-    # mlx.__version__ no longer exists in 0.31+; mlx.core.__version__ is the
-    # canonical attribute. Falls back to importlib.metadata when the runtime
-    # attribute is unavailable.
+    # mlx.core.__version__ is the canonical attribute; importlib.metadata is the
+    # fallback when the runtime attribute is unavailable.
     try:
         import mlx.core
 

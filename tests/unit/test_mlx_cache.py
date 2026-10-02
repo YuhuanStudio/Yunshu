@@ -31,8 +31,7 @@ class MockKVCache:
         self.values = values
         self.offset = offset
 
-    @property
-    def state(self):
+    def keys_and_values(self):
         return (self.keys, self.values)
 
 
@@ -48,8 +47,7 @@ class MockRotatingKVCache:
         self._idx = idx
         self.meta_state = "test"
 
-    @property
-    def state(self):
+    def keys_and_values(self):
         return (self.keys, self.values)
 
 

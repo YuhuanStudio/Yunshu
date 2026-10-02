@@ -167,13 +167,15 @@ def build_penalty_processors(
         return []
     from mlx_lm.sample_utils import make_logits_processors
 
-    return make_logits_processors(
-        logit_bias=logit_bias or None,
-        repetition_penalty=(
-            repetition_penalty if repetition_penalty not in (None, 1.0) else None
-        ),
-        presence_penalty=presence_penalty or None,
-        frequency_penalty=frequency_penalty or None,
+    return list(
+        make_logits_processors(
+            logit_bias=logit_bias or None,
+            repetition_penalty=(
+                repetition_penalty if repetition_penalty not in (None, 1.0) else None
+            ),
+            presence_penalty=presence_penalty or None,
+            frequency_penalty=frequency_penalty or None,
+        )
     )
 
 
