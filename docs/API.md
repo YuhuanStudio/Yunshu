@@ -2,13 +2,13 @@
 
 Yunshu exposes an **OpenAI/Anthropic-compatible** HTTP API plus a few Yunshu-specific
 endpoints for the native-omni and retrieval surfaces. Base URL is `http://<host>:<port>/v1`
-(default port 8000). Auth: inference endpoints are open by default; admin endpoints are
-gated by `YUNSHU_AUTH_TOKEN` (see [CONFIGURATION.md](CONFIGURATION.md)). The complete route-by-route
+(default port 8000). Auth: inference endpoints are open by default; local model lifecycle
+operations are gated by `YUNSHU_AUTH_TOKEN` (see [CONFIGURATION.md](CONFIGURATION.md)). The complete route-by-route
 status, the parameter coverage and the removed list are in [guides/API_SURFACE.md](guides/API_SURFACE.md).
 
 For the standard OpenAI/Anthropic endpoints, use your existing SDK unchanged — the
-shapes match the upstream spec. This page documents the **full surface** and the
-**non-standard** endpoints in detail.
+shapes match the upstream spec. This page is a concise endpoint overview with non-standard examples; the linked
+route matrix includes Files, Batches, Conversations, compaction and WebSocket details.
 
 ## OpenAI-compatible
 
@@ -41,7 +41,7 @@ verified with the `ollama` SDK. `pull` / `create` / `copy` / `delete` answer 501
 
 ### POST `/v1/omni/speech/stream` — native speech-to-speech
 
-Streams Qwen3-Omni Thinker text + Talker audio as Server-Sent Events. Requires
+Streams Qwen3-Omni Thinker text + Talker audio as Server-Sent Events. Uses a served Qwen3-Omni model or a separate model selected with
 `YUNSHU_OMNI_MODEL`.
 
 ```jsonc
@@ -99,7 +99,7 @@ cross-modal vectors land in one shared space. Optional top-level `instruction`. 
 | POST | `/v1/ocr` | OCR (GLM-OCR via mlx-vlm). |
 | POST/GET | `/v1/mcp`, `/v1/mcp/sse`, `/v1/mcp/tools` | Model Context Protocol server + client surface. |
 
-## Admin (token-gated)
+## Local model lifecycle and diagnostics
 
 Denied unless `YUNSHU_AUTH_TOKEN` is set (or `YUNSHU_AUTH_DISABLED=1` locally): model lifecycle
 (`POST /v1/models/load`, `/v1/models/unload/{id}`) and the `/debug/*` diagnostics, which are only

@@ -7,6 +7,65 @@ Release steps: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+Changes on main after v0.1.2; not part of the published 2026-10-02 package.
+
+### Added
+
+- Prompt-copy drafting in the MTP lane, on by default; proposals from the prompt and
+  generated text pass through invariant verify. `YUNSHU_SPEC_COPY_ROWS` (default 8;
+  0 opts out). Workload-specific measurements and parity limits: [BENCHMARKS](docs/BENCHMARKS.md).
+- Batch-invariant GDN / attention verification up to 32 rows and wider DFlash2 trees.
+  Defaults are unchanged; `YUNSHU_SPEC_TREE` remains experimental and off.
+- Multi-tier APC storage: optional WARM RAM, further profiled storage devices,
+  background demotion and restore selection using observed bandwidth vs recompute cost.
+  Added `YUNSHU_VLM_APC_WARM` (off by default; lossless, int8, int4),
+  `YUNSHU_VLM_APC_WARM_SHARE`, `YUNSHU_VLM_APC_DISK_TIERS` and
+  `YUNSHU_VLM_APC_DISK_ENCODING` (lossless lower-tier encoding).
+  Lossless WARM did not improve the measured replay; int8/int4 remain lossy opt-ins.
+  `yunshu doctor` lists tier availability, free space and measured bandwidth.
+- Optional local numbers-only serving log (`YUNSHU_SERVE_LOG`,
+  `YUNSHU_SERVE_LOG_DIR`, `YUNSHU_SERVE_LOG_MAX_MB`, `YUNSHU_SERVE_LOG_KEEP`,
+  `YUNSHU_ARM`); no prompts, outputs or token ids. GPU busy-time status / metrics,
+  experiment-statistics helpers and pause-aware development benchmarks.
+- Public tfbench harness and per-request speculative `rounds` counters in `x_yunshu`;
+  partial paired accuracy and agentic results with failures and uncertainty recorded.
+
+### Changed
+
+- Faster Qwen3.5-family cold prefill: large chunks use stock quantized matmul, with
+  MLX's chunked GDN core. New stable settings `YUNSHU_PREFILL_MATMUL` (stock/lane,
+  default stock) and `YUNSHU_PREFILL_GDN` (chunked/step, default chunked) are part of
+  APC keys and SSD namespaces. Cold-prefill numerics can differ from the old path;
+  decode/verify stay invariant. Dated measurements: 27B cold TTFT 8K 11.0 → 8.57 s,
+  32K 47.5 → 38.3 s (`a4d71bc8`; [BENCHMARKS](docs/BENCHMARKS.md)).
+- JSON-schema / json_object constraints default to llguidance via new
+  `YUNSHU_JSON_SCHEMA_ENGINE`; the in-house engine remains an option and supported
+  fallback. Unsupported constraints are still explicit errors.
+- M01 splits the text engine into serving, sampling, cache, template and speculative
+  modules, preserving import and monkeypatch targets; serving paths stay the same.
+- Dependency minimums raised to the locked versions, including mlx-lm 0.32.0,
+  llguidance 1.9.1 and transformers 5.18.0; obsolete old-version fallback code removed.
+  No `YUNSHU_*` settings were removed in this post-v0.1.2 range.
+- Development GPU queue waits for serving idleness, pauses its own jobs for user
+  traffic, safely preempts backlog work for higher priorities, refuses active duplicate
+  labels, and verifies declared output files with bounded waits and filtered digests.
+
+### Fixed
+
+- Model leases held until HTTP responses / WebSocket connections end, including
+  errors and cancellation; unload no longer races the request hand-off.
+- Media context budgets use processor-derived token costs; text fast-path overlong
+  prompts get an explicit error instead of being silently left-truncated.
+- Invalid CFG grammars are 400s at request validation. Server-side web_fetch accepts
+  common model-produced URL shapes and returns actionable `invalid_tool_input` errors.
+- Realtime TTS stops on barge-in.
+- APC disk supersede removes obsolete grown-conversation checkpoints on every tier;
+  file leases protect active readers, transient I/O errors retain valid files, and a
+  longer SSD prefix avoids wasted WARM decode work.
+- Agent-compatibility replay harness imports resolve from the agentic harness;
+  failed GPU jobs retain their exit status and cannot be reported as completed results.
+
+
 ## [0.1.2] - 2026-10-02
 
 Agent compatibility, constrained decoding that says what it cannot do, a bounded SSD prefix cache,
