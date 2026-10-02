@@ -16,6 +16,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import time
 import urllib.request
 from pathlib import Path
@@ -396,7 +397,7 @@ def part_agent(s, out, a):
             )
 
 
-def main():
+def parse_args(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--engine", required=True)
     ap.add_argument("--part", required=True)
@@ -406,7 +407,19 @@ def main():
     ap.add_argument("--only-kind", action="append", choices=["prose", "code"])
     ap.add_argument("--env", action="append", default=[])
     ap.add_argument("--tag", default="")
-    a = ap.parse_args()
+    args = list(sys.argv[1:] if argv is None else argv)
+    # Tags are filename suffixes and often begin with '-'. Keep registered
+    # options as options, but bind a tag value before argparse classifies it.
+    i = 0
+    while i + 1 < len(args):
+        if args[i] == "--tag" and args[i + 1] not in ap._option_string_actions:
+            args[i : i + 2] = ["--tag=" + args[i + 1]]
+        i += 1
+    return ap.parse_args(args)
+
+
+def main():
+    a = parse_args()
     extra_env = dict(kv.split("=", 1) for kv in a.env)
     s = Srv(a.engine, extra_env, f"{a.engine}-{a.part}-{a.rep}{a.tag}")
     try:

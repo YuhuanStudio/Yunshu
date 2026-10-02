@@ -102,3 +102,49 @@ def test_server_launch_checks_fresh_log_and_cleans_up(monkeypatch, tmp_path, act
         assert len(killed) == 1
     assert launched["env"]["YUNSHU_VLM_DRAFT"] == tfbench.D
     assert launched["env"]["HOME"] == str(tmp_path / "home/repeat")
+
+
+@pytest.mark.parametrize(
+    "tag_args,tag",
+    [
+        (["--tag", "-dflash"], "-dflash"),
+        (["--tag=-dflash"], "-dflash"),
+        (["--tag", "plain"], "plain"),
+        (["--tag", ""], ""),
+    ],
+)
+def test_queued_tag_suffix_is_a_value(tag_args, tag):
+    argv = [
+        "--engine",
+        "yunshu",
+        "--part",
+        "decode",
+        "--out",
+        "result.jsonl",
+        *tag_args,
+        "--env",
+        f"YUNSHU_VLM_DRAFT={tfbench.D}",
+    ]
+    original = list(argv)
+    args = tfbench.parse_args(argv)
+    assert args.tag == tag
+    assert args.env == [f"YUNSHU_VLM_DRAFT={tfbench.D}"]
+    assert argv == original
+
+
+def test_tag_does_not_consume_next_registered_option():
+    with pytest.raises(SystemExit) as exc:
+        tfbench.parse_args(
+            [
+                "--engine",
+                "yunshu",
+                "--part",
+                "decode",
+                "--out",
+                "x",
+                "--tag",
+                "--env",
+                f"YUNSHU_VLM_DRAFT={tfbench.D}",
+            ]
+        )
+    assert exc.value.code == 2
