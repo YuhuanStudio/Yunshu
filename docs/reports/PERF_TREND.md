@@ -366,3 +366,35 @@ Splash 官方模型 120 個交錯前綴請求全數輸出正確，約 316 s 後 
 
 單列 verify forward（profile_verify_step, T=6, 1K）：packed 46.9 ms，driver 用的 lane matmul 42.9 ms，所以 forward 不是差距來源；runner 步與步之間 0.0-0.1 ms。
 
+2026-10-02 agentic matrix partial results (`scripts/research/agentic`, see `docs/guides/AGENTIC_BENCH.md`), Qwen3.8-27B oQ4e-mtp, M5 Max, Yunshu default settings, 20 tasks. The snapshots differ (the code changed between them), so they are listed apart and not pooled. Failed runs are in the denominator; no shard ended failed, lost, stalled or timed out in the queue, and 5 runs of the first snapshot hit the 20-minute run timeout (counted as failures). `prod2` and `prod3` have no results.
+
+| snapshot (git SHA) | agent | runs | pass | rate (Wilson 95%) | wall med / p90 (s) | cache hit | decode tok/s med | TTFT med (s) | timeouts | api err / malformed / leaked |
+|---|---|---:|---:|---|---|---:|---:|---:|---:|---|
+| prod (c4e2b244+, 09-30) | opencode | 41 | 34 | 83% (69-91%) | 337 / 1200 | 83.6% | 22.2 | 0.9 | 5 | 0 / 0 / 0 |
+| prod4 (d225f16c, 10-02) | claude | 15 | 14 | 93% (70-99%) | 93 / 309 | 89.2% | 60.8 | 1.9 | 0 | 0 / 0 / 0 |
+| prod4 (d225f16c, 10-02) | opencode | 10 | 9 | 90% (60-98%) | 112 / 137 | 84.2% | 56.9 | 0.8 | 0 | 0 / 0 / 0 |
+
+The failing tasks are cli-add-flag, fix-failing-textkit, http-todo-api and parser-conf in `prod` (mostly timeouts) and only fix-failing-textkit in `prod4`, in both agents. The `prod` to `prod4` change (wall 337 to 112 s median, decode 22 to 57 tok/s for opencode) comes from a different server snapshot and a different run mix (10 of 20 tasks, 1-3 repeats each), so it is a direction, not a measured speedup. Intervals are wide at n = 10-15.
+
+| cell (engine / agent) | state |
+|---|---|
+| yunshu-default / opencode | pass 1 complete (12 of 12 shards done; 41 + 10 runs); pass 2 queued (12 shards) |
+| yunshu-default / claude | 3 of 12 pass-1 shards done (15 runs); 9 pass-1 + 12 pass-2 shards queued, plus 1 requeue shard |
+| yunshu-default / codex | nothing run; 24 shards queued |
+| tensorfold-default / opencode | nothing run; 24 shards queued |
+
+82 shards are pending at priority -3 (below every other job, so they run only when the queue is otherwise empty); no cell has all three repeats of all 20 tasks yet.
+
+
+## 2026-10-02 prompt-copy 草稿（MTP lane，驗證視窗 8 列，YUNSHU_SPEC_COPY_ROWS=0 為關）
+
+Qwen3.8-27B，貪婪，tfbench decode 與 replay_traffic（seed 1234）；所有 cell 輸出 digest 與關閉時逐 token 相同。
+
+| cell | 關 tok/s | 開 tok/s |
+|---|---|---|
+| 32K code turn2 | 63 | 100-138 |
+| 8K code turn2 | 62 | 86 |
+| 1K code 冷 | 72 | 83 |
+| 32K / 8K / 1K prose（含 turn2） | 46-59 | 持平（±3%，單次量測雜訊） |
+| agent replay 0004（編輯） | 92 | 106 |
+| agent replay 0002/0006/0003 | 83/71/84 | 持平 |

@@ -13,6 +13,7 @@ without polling anything else.
     gpuq status                  # queue table (paused / waiting-idle / waiting-mem columns)
     gpuq log ID                  # print a job's log
     gpuq cancel ID               # drop a pending job or stop a running one
+    gpuq digest [--since 6h] [--peek]  # jobs finished since the last digest, failures and empty outputs flagged
 
 Serving awareness (optional; docs/guides/SERVE_AND_DEVELOP.md): with production server URLs configured
 (GPUQ_SERVING_URLS, or $GPUQ_DIR/serving.json) a job starts only after every server has been idle for
@@ -393,6 +394,13 @@ def submit(
     return jid
 
 
+def _read_rc(jid: str) -> int | None:
+    try:
+        return int((LOGS / f"{jid}.rc").read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
 def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
     gate = gate or ServingGate()
     job.update(state="running", started=_now(), pid=None)
@@ -402,7 +410,13 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
     try:
         rc_file = LOGS / f"{job['id']}.rc"
         proc = subprocess.Popen(
-            ["/bin/sh", "-c", '"$@"; echo $? > "$GPUQ_RC"', "sh", *job["cmd"]],
+            [
+                "/bin/sh",
+                "-c",
+                '"$@"; rc=$?; echo $rc > "$GPUQ_RC"; exit $rc',
+                "sh",
+                *job["cmd"],
+            ],
             cwd=job["cwd"],
             env={
                 **job["env"],
@@ -462,6 +476,13 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
                 except subprocess.TimeoutExpired:
                     os.killpg(proc.pid, signal.SIGKILL)
                     rc = proc.wait()
+    # The command's own exit status is in the rc file; the shell's status alone is not
+    # trusted (a wrapper that ends in `echo` exits 0 after a crash).
+    rc_file_rc = _read_rc(job["id"])
+    if rc_file_rc is not None:
+        rc = rc_file_rc
+    elif not why:
+        rc = rc if rc not in (None, 0) else None  # no rc file: unknown, not success
     state = why or ("done" if rc == 0 else "failed")
     ended = _now()
     if pauser.paused:  # the job died while stopped: close the interval
@@ -684,6 +705,12 @@ def main() -> int:
     sub.add_parser("log").add_argument("id")
     sub.add_parser("cancel").add_argument("id")
     sub.add_parser("_daemon")
+    sub.add_parser("digest", add_help=False)  # flags handled by gpuq_digest.py
+    if sys.argv[1:2] == ["digest"]:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import gpuq_digest  # noqa: PLC0415
+
+        return gpuq_digest.main(sys.argv[2:])
     a = ap.parse_args()
     if a.op in ("submit", "run"):
         cmd = a.cmd[1:] if a.cmd[:1] == ["--"] else a.cmd

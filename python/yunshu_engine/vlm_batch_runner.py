@@ -75,6 +75,8 @@ class RunStats:
     spec_drafted: int = 0
     spec_accepted: int = 0
     spec_rounds: int = 0  # verify rounds this request took part in
+    spec_copy_rounds: int = 0  # of those, rounds that verified a copied run
+    spec_copy_tokens: int = 0  # tokens those rounds committed
 
     @property
     def phase(self) -> str:
@@ -837,11 +839,13 @@ class VLMBatchRunner:
             from . import mtp_lane
 
             mtp_lane.set_guide(job.guide)
+            mtp_lane.set_context(job.ids)
         try:
             prompt_progress, responses = group.gen.next()
         finally:
             if group.spec:
                 mtp_lane.set_guide(None)
+                mtp_lane.set_context(None)
         self._note_prefill(group)
         for job in group.jobs.values():
             self._note_cache(job)
@@ -1037,6 +1041,8 @@ def _spec_counters(drafter: Any) -> tuple | None:
         getattr(drafter, "speculative_total_rounds", 0),
         float(getattr(drafter, "speculative_total_accepted", 0.0)),
         getattr(drafter, "speculative_total_drafted", 0),
+        getattr(drafter, "copy_total_rounds", 0),
+        getattr(drafter, "copy_total_tokens", 0),
     )
 
 
@@ -1051,6 +1057,8 @@ def _note_spec(drafter: Any, job: _Job) -> None:
     job.stats.spec_drafted = max(int(now[2] - base[2]), 0)
     job.stats.spec_rounds = max(int(now[0] - base[0]), 0)
     job.stats.spec_accepted = max(int(round(now[1] - base[1])), 0)
+    job.stats.spec_copy_rounds = max(int(now[3] - base[3]), 0)
+    job.stats.spec_copy_tokens = max(int(now[4] - base[4]), 0)
 
 
 def _spec_mode(drafter: Any) -> str:

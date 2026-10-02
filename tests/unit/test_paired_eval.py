@@ -133,3 +133,40 @@ def test_attempt_counts_keep_timeouts_visible_after_successful_retries(
         "unresolved_items": 1,
     }
     assert set(pe.load_arm("mmlu_pro", "ref")) == {"a"}
+
+
+def test_ifeval_rows_are_scored_before_pairing(tmp_path, monkeypatch):
+    """Regression: run stores correct=None; report used to find no paired items."""
+    import json
+
+    ds = {"ifeval-1": {"k": 1}, "ifeval-2": {"k": 2}}
+
+    def fake(doc, resps):
+        ok = resps[0] == "good"
+        return {"prompt_level_strict_acc": ok, "prompt_level_loose_acc": ok}
+
+    def row(i, text, finish="stop"):
+        return {
+            "kind": "q",
+            "id": f"ifeval-{i}",
+            "response": text,
+            "finish": finish,
+            "correct": None,
+        }
+
+    rows = [row(1, "<think>x</think>good"), row(2, "good", "length")]
+    assert pe.ifeval_score_rows(rows, ds, fake) == 2
+    assert rows[0]["correct"] is True
+    assert rows[1]["correct"] is False  # truncated counts as failure
+    assert pe.ifeval_score_rows(rows, ds, fake) == 0  # idempotent
+
+    monkeypatch.setattr(pe, "OUT", tmp_path)
+    d = tmp_path / "ifeval"
+    d.mkdir()
+    for arm in ("ref", "cand"):
+        lines = [json.dumps(r) for r in (row(1, "good"), row(2, "bad"))]
+        (d / f"{arm}.jsonl").write_text("\n".join(lines) + "\n")
+    monkeypatch.setattr(pe, "ifeval_dataset", lambda: ds)
+    monkeypatch.setattr(pe, "_ifeval_checker", lambda: fake)
+    ref, cand = pe.load_arm("ifeval", "ref"), pe.load_arm("ifeval", "cand")
+    assert ref["ifeval-1"]["correct"] is True and cand["ifeval-2"]["correct"] is False

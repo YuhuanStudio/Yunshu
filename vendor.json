@@ -150,6 +150,18 @@
   "derived": [
     {
       "kind": "derived",
+      "path": "python/yunshu_engine/copy_drafter.py",
+      "repo": "https://github.com/ashhart/TensorFold",
+      "clone": "reference/TensorFold",
+      "upstream_paths": [
+        "src/tensorfold/engine/lane_engine.py"
+      ],
+      "commit": "34bae79a",
+      "license": "MIT",
+      "why": "prompt-copy / lookup drafting (SuffixLookupProposer: n-gram index, longest backward match, silence after misses), rewritten with a full-prompt index, a windowed benefit estimate and a verify-window parameter; Rapid-MLX's copy drafts inform the idea"
+    },
+    {
+      "kind": "derived",
       "path": "python/yunshu_engine/kernels/lane_linear.py",
       "repo": "https://github.com/ashhart/TensorFold",
       "clone": "reference/TensorFold",

@@ -6,12 +6,13 @@ the streaming GPU loop."""
 
 from __future__ import annotations
 
-import pathlib
+import inspect
+
+from yunshu_engine.batched_engine import BatchedEngine
 
 
 def _src():
-    root = pathlib.Path(__file__).resolve().parents[2]
-    return (root / "python/yunshu_engine/batched_engine.py").read_text()
+    return inspect.getsource(BatchedEngine._stream_generate_fast)
 
 
 def test_streaming_total_deadline_computed():

@@ -29,3 +29,35 @@ def test_adoption_requires_exit_status(gpuq, tmp_path, exit_status, expected):
     gpuq._adopt(job, tmp_path / "interrupted.json")
     assert job["state"] == expected
     assert job["adopted"] is True
+
+
+def test_failing_command_is_recorded_failed(tmp_path, monkeypatch):
+    """A command that crashes must be 'failed' with its own exit status, not 'done' / 0
+    (the shell wrapper ends in `echo`, whose status used to be taken as the job's)."""
+    import importlib
+    import sys
+    from pathlib import Path
+
+    monkeypatch.setenv("GPUQ_DIR", str(tmp_path))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "dev"))
+    import gpuq
+
+    gpuq = importlib.reload(gpuq)
+    gpuq.JOBS.mkdir(parents=True, exist_ok=True)
+    gpuq.LOGS.mkdir(parents=True, exist_ok=True)
+    job = {
+        "id": "crash",
+        "cmd": [sys.executable, "-c", "raise KeyError('agent')"],
+        "cwd": str(tmp_path),
+        "env": dict(__import__("os").environ),
+        "timeout_s": 60,
+        "stall_s": 60,
+        "priority": 0,
+        "submitted": 0.0,
+        "state": "pending",
+    }
+    path = gpuq.JOBS / "crash.json"
+    gpuq._write(path, job)
+    gpuq._run_one(job, path)
+    assert job["state"] == "failed"
+    assert job["rc"] == 1
