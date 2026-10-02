@@ -1221,6 +1221,7 @@ class BatchedEngine(
         logprobs: bool,
         use_engine_loop: bool,
         gemma4_eligible=None,
+        external_eligible: bool = True,
     ) -> str | None:
         if use_engine_loop or logprobs:
             return None
@@ -1229,6 +1230,7 @@ class BatchedEngine(
             spec_decode
             and greedy
             and not stream
+            and external_eligible
             and getattr(self, "_spec_enabled", False)
             and getattr(self, "_spec_decoder", None) is not None
             and settings.get("YUNSHU_SPEC_UNVERIFIED") == "eagle"
@@ -1362,6 +1364,28 @@ class BatchedEngine(
             temperature=temperature,
             logprobs=bool(logprobs),
             use_engine_loop=_use_engine_loop,
+            # The external adapter does not implement the full fast-path
+            # parameter contract. Never drop a client's requested behavior.
+            external_eligible=(
+                json_schema is None
+                and not logits_processors
+                and not logit_bias
+                and not stop
+                and thinking_budget is None
+                and reasoning_effort is None
+                and not lora_adapter
+                and repetition_penalty == 1.0
+                and frequency_penalty == 0.0
+                and presence_penalty == 0.0
+                and top_p == 1.0
+                and top_k == 0
+                and min_p == 0.0
+                and xtc_probability == 0.0
+                and not top_n_sigma
+                and not min_tokens
+                and not ignore_eos
+                and not suppress_tokens
+            ),
             gemma4_eligible=lambda: self._gemma4_spec_eligible(
                 logprobs=logprobs,
                 json_schema=json_schema,
@@ -2196,13 +2220,14 @@ class BatchedEngine(
         try:
             from mlx_lm.utils import load as load_model
 
-            from .speculative_decoder import SpeculativeDecoder
+            from .speculative_decoder import SpecDecodingConfig, SpeculativeDecoder
 
             draft_model = load_model(draft_path)[0]
             self._spec_decoder = SpeculativeDecoder(
                 self._model,
                 draft_model,
                 self._tokenizer,
+                config=SpecDecodingConfig(draft_temperature=0.0),
                 lookahead=self._lookahead_reasoning,
             )
             self._spec_enabled = True

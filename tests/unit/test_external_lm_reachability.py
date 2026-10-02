@@ -93,3 +93,47 @@ async def test_public_generate_selects_plain_external_draft(monkeypatch):
     )
     engine._generate_speculative.assert_awaited_once()
     engine._generate_fast.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "option",
+    [
+        {"json_schema": {"type": "object"}},
+        {"logits_processors": [object()]},
+        {"logit_bias": {2: -10}},
+        {"stop": ["multi token stop"]},
+        {"thinking_budget": 20},
+        {"reasoning_effort": "high"},
+        {"lora_adapter": "adapter"},
+        {"repetition_penalty": 1.1},
+        {"frequency_penalty": 0.1},
+        {"presence_penalty": 0.1},
+        {"top_p": 0.9},
+        {"top_k": 10},
+        {"min_p": 0.1},
+        {"xtc_probability": 0.1},
+        {"top_n_sigma": 2},
+        {"min_tokens": 10},
+        {"ignore_eos": True},
+        {"suppress_tokens": [2]},
+    ],
+)
+@pytest.mark.asyncio
+async def test_external_draft_falls_back_for_unimplemented_parameters(
+    monkeypatch, option
+):
+    monkeypatch.setenv("YUNSHU_SPEC_UNVERIFIED", "eagle")
+    engine = engine_with_plain_config({"model_type": "qwen2"})
+    engine._spec_decoder = object()
+    engine._spec_enabled = True
+    engine._loaded = True
+    engine._generate_speculative = AsyncMock()
+    expected = GenerationOutput(text="fast", finished=True, finish_reason="stop")
+    engine._generate_fast = AsyncMock(return_value=expected)
+    assert (
+        await engine.generate(
+            "hello", temperature=0.0, spec_decode=True, use_engine_loop=False, **option
+        )
+        is expected
+    )
+    engine._generate_speculative.assert_not_awaited()

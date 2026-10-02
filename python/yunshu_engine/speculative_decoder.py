@@ -576,7 +576,14 @@ class SpeculativeDecoder:
 
         # Generate uniform random numbers for all positions at once
         uniforms = mx.array([self.rng.random() for _ in range(K)])
-        accepted_mask = uniforms < ratios
+        if temperature is None or temperature <= 1e-6:
+            # Greedy target distribution is a point mass. A probability-ratio
+            # test can accept non-argmax drafts or reject the correct argmax.
+            accepted_mask = mx.argmax(
+                target_logprobs, axis=-1
+            ) == draft_ids_arr.squeeze(-1)
+        else:
+            accepted_mask = uniforms < ratios
 
         # Sequential scan: find first rejection (sequential dependency)
         accepted_ids = []
