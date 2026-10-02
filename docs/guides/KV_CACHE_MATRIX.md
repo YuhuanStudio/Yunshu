@@ -143,6 +143,10 @@ and what it costs. Reading the table:
   session's newest checkpoint is 2.1 GB, plus its interval checkpoint) match the single big SSD (5.6 s against 6.0 s) because the mover demotes the least
   recently used checkpoints instead of deleting them and the cost model picks the cheapest tier per lookup.
 
+**Output identity.** Every replay sends the same 27 greedy requests (8 new tokens each). Against the all-RAM
+replay, every request served with the same cached length returned the same text: 24 HOT, 131 SSD hits (internal,
+TB4 and the simulated HDD, raw and zstd files), 21 WARM-lossless hits, 7 cold requests; none differed.
+
 **Disk supersede.** A request's checkpoints used to accumulate on the SSD tiers: the 3-session replay left 46
 files and 63 GiB, the SSD cap (64 GiB) reached in five minutes. Once the cap or the RAM budget is small the cache
 the next request needs is the one an LRU evicts first, so these stale copies cost hits in tiered
