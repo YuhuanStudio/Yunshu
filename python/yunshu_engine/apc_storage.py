@@ -538,6 +538,7 @@ class FileTier:
         if budget is not None:
             budget.register_owner(namespace, self._evict_path, self._busy_paths)
         self._moving: set[Path] = set()
+        self.owner: Any = None  # the TieredDiskStore this tier belongs to
         self.reprofile: Any = (
             None  # callable() -> DeviceProfile | None, set by the engine
         )
@@ -582,7 +583,7 @@ class FileTier:
         """The budget wants this file gone. A tier that has a lower tier to give it to returns
         False (the mover demotes it instead of the budget deleting it) unless the tier is far
         over its cap, i.e. the mover is stuck."""
-        owner = getattr(self, "owner", None)
+        owner = self.owner
         with self._lock:
             h, e = next(
                 ((k, v) for k, v in self.index.items() if v.path == path), (None, None)
