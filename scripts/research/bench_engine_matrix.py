@@ -34,6 +34,8 @@ from io import BytesIO
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dev"))
+from gpuq_pause import timed  # noqa: E402
 
 DOC_LINE = (
     "Section {i}: The municipal archive logs routine maintenance for building "
@@ -122,6 +124,9 @@ class Client:
         return http.client.HTTPConnection(self.host, self.port, timeout=self.timeout)
 
     def stream(self, body, abort_after_chunks: int | None = None):
+        return timed(lambda: self._stream(body, abort_after_chunks))
+
+    def _stream(self, body, abort_after_chunks: int | None = None):
         body = dict(body, stream=True, stream_options={"include_usage": True})
         r = {
             "first_content_s": None,
@@ -195,6 +200,9 @@ class Client:
         return r
 
     def complete(self, body):
+        return timed(lambda: self._complete(body))
+
+    def _complete(self, body):
         t0 = time.perf_counter()
         conn = self._conn()
         try:
