@@ -208,3 +208,17 @@ def test_label_reuse_preserves_all_previous_job_artifacts(q):
     }
     q.submit(["true"], "reuse-files", 1, 0)
     assert all(p.read_bytes() == content for p, content in snapshot.items())
+
+
+def test_starved_backlog_job_ages_one_step(q, monkeypatch):
+    now = 100_000.0
+    monkeypatch.setattr(q.time, "time", lambda: now)
+    old = dict(id="old", state="pending", priority=-1, submitted=now - q.AGE_S - 1, env={})
+    deep = dict(id="deep", state="pending", priority=-3, submitted=now - 10 * q.AGE_S, env={})
+    fresh = dict(id="fresh", state="pending", priority=0, submitted=now - 5, env={})
+    # p-1 that waited AGE_S competes with p0 (older first); deep backlog only rises one step.
+    assert q._eff_priority(old, now) == 0
+    assert q._eff_priority(deep, now) == -2
+    assert q._pick([old, deep, fresh])["id"] == "old"
+    young = dict(old, id="young", submitted=now - 60)
+    assert q._pick([young, fresh])["id"] == "fresh"

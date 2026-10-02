@@ -359,6 +359,20 @@ class Pauser:
 # ---------------------------------------------------------------- queue
 
 
+AGE_S = float(os.environ.get("GPUQ_AGE_S", 2 * 3600))
+
+
+def _eff_priority(job: dict, now: float | None = None) -> int:
+    """Priority with one step of aging: a job below 0 that has waited AGE_S rises by
+    one (never above 0), so p-1 work is not starved forever by a stream of p0 jobs
+    while deep backlog (p-3) stays behind interactive work."""
+    p = job.get("priority", 0)
+    if p >= 0 or job.get("state") != "pending":
+        return p
+    waited = (now or time.time()) - job.get("submitted", now or time.time())
+    return min(0, p + 1) if waited >= AGE_S else p
+
+
 def _jobs() -> list[dict]:
     return sorted(
         (j for p in JOBS.glob("*.json") if (j := _read(p))),
@@ -384,8 +398,9 @@ def _pick(jobs: list[dict], eligible=None) -> dict | None:
         pending = [j for j in pending if eligible(j)]
     if not pending:
         return None
-    top = max(j.get("priority", 0) for j in pending)
-    pending = [j for j in pending if j.get("priority", 0) == top]
+    now = time.time()
+    top = max(_eff_priority(j, now) for j in pending)
+    pending = [j for j in pending if _eff_priority(j, now) == top]
     last: dict[str, float] = {}
     for j in jobs:
         if "started" in j:
@@ -517,7 +532,7 @@ def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
     pending = [
         j
         for j in _jobs()
-        if j["state"] == "pending" and j.get("priority", 0) >= 0 and not j.get("cancel")
+        if j["state"] == "pending" and _eff_priority(j) >= 0 and not j.get("cancel")
     ]
     blockers = {j["id"]: _preempt_blocker(j, gate) for j in pending}
     for j in pending:
