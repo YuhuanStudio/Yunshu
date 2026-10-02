@@ -134,6 +134,7 @@ def test_summary_cannot_hide_missing_pair_or_token_difference():
 
 def test_flag_census_covers_all_current_experiments():
     from scripts.research.experimental_flags_plan import plan
+
     from yunshu_engine import settings
 
     census = plan()
@@ -146,3 +147,49 @@ def test_flag_census_covers_all_current_experiments():
         row["decide"] and row["evidence"] and row["measurement_argv"]
         for row in census["flags"]
     )
+
+
+def test_external_trace_accepts_sdk_integer_tokens():
+    from scripts.research.audit_external_draft import trace_steps
+
+    def generate_step():
+        yield 7, "lp7"
+        yield 8, "lp8"
+
+    observed = []
+    assert list(trace_steps(generate_step, observed)) == [(7, "lp7"), (8, "lp8")]
+    assert observed == [7, 8]
+
+
+def test_a_failed_tiny_token_parity_cannot_authorize_27b():
+    receipt = {
+        "complete": True,
+        "smoke": True,
+        "dry_run": False,
+        "source_sha": "s",
+        "areas": ["tree"],
+        "arms": [{"rc": 0, "rows": [1]}, {"rc": 0, "rows": [1]}],
+        "summary": {"tree": [{"token_parity": False}]},
+    }
+    assert not audit.validate_smoke(receipt, "s", ["tree"])
+    receipt["summary"]["tree"][0]["token_parity"] = True
+    assert audit.validate_smoke(receipt, "s", ["tree"])
+
+
+def test_dispatch_requires_real_success_and_submits_only_timing_quiet(tmp_path):
+    from scripts.research.audit_flag_dispatch import eligible_smoke, timing_command
+
+    matrix = SimpleNamespace(
+        validate_smoke=lambda r, s, a: r.get("valid", False),
+        source_sha=lambda: "s",
+        AREAS=["tree"],
+    )
+    assert not eligible_smoke({"state": "pending", "rc": 0}, {"valid": True}, matrix)
+    assert not eligible_smoke({"state": "done", "rc": 1}, {"valid": True}, matrix)
+    assert not eligible_smoke({"state": "done", "rc": 0}, {"valid": False}, matrix)
+    assert eligible_smoke(
+        {"state": "done", "rc": 0, "contended": True}, {"valid": True}, matrix
+    )
+    argv = timing_command(tmp_path / "snapshot", tmp_path / "results", "unique-label")
+    assert "--quiet" in argv and argv[argv.index("--priority") + 1] == "-1"
+    assert "--require-smoke" in argv and argv[-1].endswith("smoke.json")

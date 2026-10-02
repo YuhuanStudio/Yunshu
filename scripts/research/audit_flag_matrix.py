@@ -44,7 +44,10 @@ def sha(value):
 def source_sha():
     manifest = [
         (str(p.relative_to(ROOT)), hashlib.sha256(p.read_bytes()).hexdigest())
-        for p in sorted((ROOT / "python").rglob("*.py"))
+        for p in sorted(
+            list((ROOT / "python").rglob("*.py"))
+            + list((ROOT / "scripts").rglob("*.py"))
+        )
     ]
     return sha(manifest)
 
@@ -179,8 +182,11 @@ def launcher(port):
 def server(checkpoint, settings, path):
     port = free_port()
     env = {k: v for k, v in os.environ.items() if not k.startswith("YUNSHU_")}
+    config_file = path.with_suffix(".config.toml")
+    config_file.write_text("# isolated audit settings; environment selects each arm\n")
     env.update(settings)
     env.update(
+        YUNSHU_CONFIG=str(config_file),
         AUDIT_TINY_SMOKE="1" if checkpoint == TINY else "0",
         YUNSHU_MODEL=str(checkpoint),
         YUNSHU_AUTH_DISABLED="1",
@@ -320,7 +326,7 @@ def prompts(checkpoint, contexts):
     return result
 
 
-def serving_arm(args, area, arm, rep, prepared, captured):
+def serving_arm(args, area, arm, rep, prepared, captured, drafter=None):
     smoke = args.smoke
     checkpoint = TINY if smoke else MODEL
     setting = {
@@ -335,12 +341,16 @@ def serving_arm(args, area, arm, rep, prepared, captured):
         "tools": "YUNSHU_TOOL_GRAMMAR",
         "driver": "YUNSHU_ROUND_DRIVER",
     }[area]
+    if drafter is not None:
+        setting["YUNSHU_VLM_DRAFT"] = drafter
     setting[flag] = (
         ("tree" if area == "tree" else "1")
         if arm
         else ("off" if area == "tree" else "0")
     )
-    name = f"{area}-r{rep}-{arm}"
+    name = f"{area}-r{rep}-{arm}" + (
+        "-mtp" if drafter == "mtp" else "-dflash" if drafter else ""
+    )
     log = args.out.parent / (name + ".server.log")
     rows = []
     with server(checkpoint, setting, log) as (url, model, mode):
@@ -441,7 +451,7 @@ def serving_arm(args, area, arm, rep, prepared, captured):
             if area == "tools" and arm and not any(g["active"] for g in guides):
                 raise RuntimeError("tool grammar flag set but per-request guide absent")
             row = {
-                "case": label,
+                "case": f"{mode}/{label}" if area == "tree" else label,
                 "area": area,
                 "arm": arm,
                 "rep": rep,
@@ -630,8 +640,18 @@ def driver_full_validation(args, rep=0):
 
 def validate_smoke(receipt, digest, areas):
     expected = sum(1 if area == "external" else 2 for area in areas)
+    summary = receipt.get("summary", {})
+    parity_ok = all(
+        area not in areas
+        or (
+            summary.get(area)
+            and all(cell.get("token_parity") is True for cell in summary[area])
+        )
+        for area in ("tree", "driver")
+    )
     return (
-        receipt.get("complete") is True
+        parity_ok
+        and receipt.get("complete") is True
         and receipt.get("smoke") is True
         and receipt.get("dry_run") is False
         and receipt.get("source_sha") == digest
@@ -724,9 +744,24 @@ def main():
                                     else len(prepared)
                                 )
                             else:
-                                receipt["rows"] = serving_arm(
-                                    args, area, arm, rep, prepared, captured
+                                receipt["rows"] = []
+                                drafters = (
+                                    [None]
+                                    if args.smoke or area != "tree"
+                                    else ["mtp", str(DRAFT)]
                                 )
+                                for drafter in drafters:
+                                    receipt["rows"].extend(
+                                        serving_arm(
+                                            args,
+                                            area,
+                                            arm,
+                                            rep,
+                                            prepared,
+                                            captured,
+                                            drafter,
+                                        )
+                                    )
                             receipt["rc"] = 0
                         except Exception as exc:
                             receipt["error"] = str(exc)
@@ -769,6 +804,19 @@ def main():
             all(arm["rc"] == 0 for arm in result["arms"])
             and result.get("driver_full", {}).get("rc", 0) == 0
         )
+        if args.smoke and not args.dry_run:
+            result["smoke_token_parity"] = all(
+                area not in args.areas
+                or (
+                    result["summary"].get(area)
+                    and all(
+                        cell.get("token_parity") is True
+                        for cell in result["summary"][area]
+                    )
+                )
+                for area in ("tree", "driver")
+            )
+            result["complete"] = result["complete"] and result["smoke_token_parity"]
         result["load_end"] = os.getloadavg()
     finally:
         args.out.write_text(json.dumps(result, indent=2) + "\n")

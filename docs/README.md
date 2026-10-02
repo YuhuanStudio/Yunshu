@@ -1,6 +1,9 @@
 # docs/ layout
 
-Yunshu is a local LLM / VLM inference engine. Start at the top-level [README](../README.md).
+Yunshu is a fast, local, single-node LLM / VLM inference engine for Apple Silicon.
+Qwen3.8-27B is the first fully tuned model; other modalities are supported capabilities.
+Latest release: v0.1.2 (2026-10-02), following v0.1.1 (2026-09-29). Benchmark pages
+label later main measurements as unreleased. Start at the top-level [README](../README.md).
 
 Using it:
 
@@ -10,6 +13,9 @@ Using it:
 - [guides/TROUBLESHOOTING.md](guides/TROUBLESHOOTING.md)
 - [API.md](API.md): endpoints
 - [CONFIGURATION.md](CONFIGURATION.md): every `YUNSHU_*` setting (generated)
+- [guides/ACCURACY.md](guides/ACCURACY.md): distribution, greedy and paired task evidence
+- [guides/KV_CACHE_MATRIX.md](guides/KV_CACHE_MATRIX.md): current APC tiers and measured tradeoffs
+- [guides/AGENT_COMPAT.md](guides/AGENT_COMPAT.md): coding-agent feature evidence
 - [BENCHMARKS.md](BENCHMARKS.md): where each published number comes from and how to reproduce it
 
 Maintaining it: [RELEASING.md](../RELEASING.md) (cutting a release),

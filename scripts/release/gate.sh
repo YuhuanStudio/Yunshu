@@ -142,10 +142,16 @@ if has serve-27b; then
       # The server must decode as fast as the engine in-process on the same prompt
       # (same greedy tokens); a per-token serving overhead fails the gate.
       sp=$(${YENV[@]} $GATE_ROOT/tool-vision/yunshu/bin/python scripts/release/check_server_path.py --url $URL \
-        --model $M --server-log $OUT/27b-server.log --output $OUT/27b-server-path.json 2> $OUT/27b-server-path.log | tail -1)
+        --retry-contended --model $M --server-log $OUT/27b-server.log --output $OUT/27b-server-path.json 2> $OUT/27b-server-path.log | tail -1)
       spd=$($PY -c "import json,sys; d=json.loads(sys.argv[1]); print(f\"server/in-process worst {d['worst_ratio']} (min {d['min_ratio']}), same text {d['same_text']}, spec {d['spec']}: \" + ', '.join(f\"{c['task']}@{c['context']} {c['server_tps']}/{c['inprocess_tps']}\" for c in d['cases']))" "$sp" 2>/dev/null)
-      [[ $sp == *'"status": "PASS"'* ]] && rec serve-27b.server_path PASS "$spd" \
-        || rec serve-27b.server_path FAIL "${spd:-could not measure (27b-server-path.log)}"
+      # The checker preserves both attempts, retries contamination once, and
+      # reports CONTENDED when no quiet timing result was obtained (gate rc 3).
+      sps=$($PY -c 'import json,sys; print(json.loads(sys.argv[1])["status"])' "$sp" 2>/dev/null)
+      spc=$($PY -c 'import json,sys; print(str(json.loads(sys.argv[1]).get("contended", False)).lower())' "$sp" 2>/dev/null)
+      case $sps in
+        PASS|CONTENDED) rec serve-27b.server_path $sps "${spd:-CPU contention; rerun}" --contended "${spc:-true}" ;;
+        *) rec serve-27b.server_path FAIL "${spd:-could not measure (27b-server-path.log)}" --contended "${spc:-false}" ;;
+      esac
     else rec serve-27b.boot FAIL "server did not become ready (27b-server.log)"; fi
     stop $YP
     log_clean serve-27b.log_clean $OUT/27b-server.log

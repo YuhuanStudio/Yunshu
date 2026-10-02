@@ -56,10 +56,20 @@ def digest(ids):
     return hashlib.sha256(json.dumps(ids).encode()).hexdigest()
 
 
+def trace_steps(original, observed, *args, **kwargs):
+    # mlx-lm generate_step yields Python ints after its own readback.
+    for token, logprobs in original(*args, **kwargs):
+        observed.append(int(token))
+        yield token, logprobs
+
+
 async def measure(args):
     from yunshu_engine.batched_engine import BatchedEngine
 
+    config_file = args.out.with_suffix(".config.toml")
+    config_file.write_text("# isolated external draft audit\n")
     environment = {
+        "YUNSHU_CONFIG": str(config_file),
         "YUNSHU_SPEC_UNVERIFIED": "eagle",
         "YUNSHU_DRAFT_MODEL": str(args.draft),
         "YUNSHU_ENGINE_LOOP": "0",
@@ -67,9 +77,13 @@ async def measure(args):
         "YUNSHU_OVERLAP": "",
         "YUNSHU_SSD_CACHE": "0",
         "YUNSHU_GPU_SAMPLER": "0",
+        "YUNSHU_KV_QUANT_BITS": "off",
+        "YUNSHU_PREFIX_HOT_LIMIT": "0",
+        "YUNSHU_RESPONSE_CACHE": "0",
     }
     rows = []
-    with patch.dict(os.environ, environment):
+    inherited = {k: v for k, v in os.environ.items() if not k.startswith("YUNSHU_")}
+    with patch.dict(os.environ, {**inherited, **environment}, clear=True):
         engine = BatchedEngine(model_name=str(args.target))
         await engine.start()
         try:
@@ -104,9 +118,7 @@ async def measure(args):
             observed = []
 
             def trace_plain(*a, **kw):
-                for token, lp in plain_generate(*a, **kw):
-                    observed.append(int(token.item()))
-                    yield token, lp
+                yield from trace_steps(plain_generate, observed, *a, **kw)
 
             def trace_draft(*a, **kw):
                 ids = draft_generate(*a, **kw)
@@ -115,6 +127,20 @@ async def measure(args):
 
             eos = engine._tokenizer.eos_token_id
             eos = set(eos if isinstance(eos, (list, tuple)) else [eos])
+
+            async def clear_prefixes():
+                from yunshu_engine.mlx_executor import get_mlx_executor
+
+                def clear():
+                    if engine._kv_prefix_cache is not None:
+                        engine._kv_prefix_cache.clear()
+                    if engine._prompt_cache is not None:
+                        engine._prompt_cache.invalidate_all()
+
+                await asyncio.get_running_loop().run_in_executor(
+                    get_mlx_executor(), clear
+                )
+
             repeats = 1 if args.smoke else args.repeats
             tokens = min(args.tokens, 16) if args.smoke else args.tokens
             for rep in range(repeats):
@@ -123,6 +149,7 @@ async def measure(args):
                     pair = {}
                     for arm in order:
                         observed.clear()
+                        await clear_prefixes()
                         with (
                             patch.object(generation, "generate_step", trace_plain),
                             patch.object(engine._spec_decoder, "generate", trace_draft),
@@ -146,6 +173,7 @@ async def measure(args):
                             )
                         pair[arm] = ids
                         # Timing calls exclude trace instrumentation entirely.
+                        await clear_prefixes()
                         start = time.perf_counter()
                         timed = await engine.generate(
                             prompt,
@@ -170,7 +198,8 @@ async def measure(args):
                             "digest": digest(ids),
                             "wall_s": elapsed,
                             "completion_tokens": timed.completion_tokens,
-                            "wall_tps": timed.completion_tokens / elapsed,
+                            "wall_tps": len(ids) / elapsed,
+                            "metric": "cold-request output-token wall rate (not decode-only)",
                         }
                         rows.append(row)
                         print(json.dumps(row), flush=True)

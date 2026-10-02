@@ -21,6 +21,9 @@ import time
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dev"))
+from gpuq_contention import was_contended  # noqa: E402
+
 M = "/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
 D = "/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2"
 TF = {
@@ -306,6 +309,7 @@ def req(model, text, mt, seed=None, extra=None, temp=0):
 
 
 def emit(out, **kw):
+    kw["contended"] = was_contended()
     out.write(json.dumps(kw) + "\n")
     out.flush()
 
