@@ -81,3 +81,48 @@ def test_marker_moves_only_when_asked(tmp_path, monkeypatch, capsys):
     assert abs(gd.read_marker(tmp_path) - m2) < 0.01
     assert gd.main(["--since", "1d"]) == 1
     assert abs(gd.read_marker(tmp_path) - m2) < 0.01  # --since never moves it
+
+
+def test_declared_outputs_complete_and_label_filter(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("GPUQ_DIR", str(tmp_path))
+    now = time.time()
+    output = tmp_path / "declared.jsonl"
+    output.write_text("partial\n")
+    _job(tmp_path, "a", "mine-r0", "done", now - 10)
+    p = tmp_path / "jobs/a.json"
+    data = json.loads(p.read_text())
+    data.update(outputs=[str(output)], expect_complete=True)
+    p.write_text(json.dumps(data))
+    _job(tmp_path, "b", "other-r0", "failed", now - 5, rc=7)
+    assert gd.main(["--label-prefix", "mine", "--since", "1h"]) == 1
+    text = capsys.readouterr().out
+    assert "1 finished jobs" in text and "complete" in text and "other" not in text
+    output.write_text("partial\ncomplete\n")
+    assert gd.main(["--label-prefix", "mine", "--since", "1h"]) == 0
+    assert not (tmp_path / ".digest_marker").exists()
+    assert gd.main(["--label-prefix", "absent", "--since", "1h"]) == 0
+
+
+def test_filtered_digest_keeps_global_marker(tmp_path, monkeypatch):
+    monkeypatch.setenv("GPUQ_DIR", str(tmp_path))
+    marker = time.time() - 100
+    gd.write_marker(tmp_path, marker)
+    _job(tmp_path, "a", "mine", "done", time.time() - 1)
+    assert gd.main(["--label-prefix", "mine"]) == 0
+    assert gd.read_marker(tmp_path) == marker
+
+
+def test_digest_rejects_done_with_nonzero_rc_and_cancelled(tmp_path):
+    now = time.time()
+    _job(tmp_path, "badrc", "mine", "done", now - 3, rc=7)
+    _job(tmp_path, "cancel", "mine", "cancelled", now - 2, rc=None)
+    assert {e["id"] for e in gd.collect(tmp_path, now - 10, now)["problems"]} == {
+        "badrc",
+        "cancel",
+    }
+
+
+def test_marker_round_trips_without_losing_timestamp_precision(tmp_path):
+    marker = 1790942392.3600042
+    gd.write_marker(tmp_path, marker)
+    assert gd.read_marker(tmp_path) == marker
