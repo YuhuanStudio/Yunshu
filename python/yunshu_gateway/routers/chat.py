@@ -554,6 +554,10 @@ class ChatCompletionRequest(BaseModel):
                 raise ValueError(
                     f"grammar.type: must be one of 'json', 'regex', 'choice', 'cfg', got '{gtype}'"
                 )
+            if gtype == "cfg" and "grammar" in self.grammar:
+                from yunshu_engine.grammar_constraint import validate_constraint_spec
+
+                validate_constraint_spec(self.grammar)
         # Validate logprobs/top_logprobs consistency
         if self.logprobs and self.top_logprobs is None:
             pass  # OK, top_logprobs defaults to None which is valid
@@ -2410,9 +2414,16 @@ async def _handle_vlm_chat(
 
         _vtok = getattr(vlm_engine, "_tokenizer", None)
         if _vtok is not None:
+            from yunshu_engine.media_tokens import make_media_token_counter
+
             _vlm_est = count_message_tokens(
-                messages, _vtok
-            )  # already counts image blocks
+                messages,
+                _vtok,
+                media_counter=make_media_token_counter(
+                    getattr(vlm_engine, "_processor", None),
+                    getattr(vlm_engine, "_config", None),
+                ),
+            )  # image/video cost from the processor's patch grid
         else:
             _img = sum(
                 1

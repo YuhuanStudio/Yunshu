@@ -752,6 +752,10 @@ class ResponsesRequest(BaseModel):
                 raise ValueError(
                     f"grammar.type: must be one of 'json', 'regex', 'choice', 'cfg', got '{gtype}'"
                 )
+            if gtype == "cfg" and "grammar" in self.grammar:
+                from yunshu_engine.grammar_constraint import validate_constraint_spec
+
+                validate_constraint_spec(self.grammar)
         if self.stop and len(self.stop) > 16:
             raise ValueError("stop: maximum 16 stop sequences")
         if self.stop and any(not s for s in self.stop):

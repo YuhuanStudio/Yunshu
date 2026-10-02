@@ -10,7 +10,7 @@ try:
     import xxhash
 
     def _hash_bytes(data: bytes) -> int:
-        return xxhash.xxh64(data).intdigest()
+        return int(xxhash.xxh64(data).intdigest())
 except ImportError:
     import hashlib
 

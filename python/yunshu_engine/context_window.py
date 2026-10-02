@@ -247,6 +247,17 @@ class ContextWindowManager:
         self._importance_threshold = importance_threshold
         self._stats = ContextWindowStats()
 
+    @classmethod
+    def for_processor(
+        cls, processor=None, config: dict | None = None, **kwargs
+    ) -> ContextWindowManager:
+        """Manager whose media cost comes from the model's processor / config."""
+        from .media_tokens import make_media_token_counter
+
+        return cls(
+            media_token_counter=make_media_token_counter(processor, config), **kwargs
+        )
+
     # ── Public API ──
 
     def compute_truncation(
@@ -606,7 +617,13 @@ class ContextWindowManager:
                 for block in content:
                     if isinstance(block, dict):
                         block_type = block.get("type", "")
-                        if block_type in ("image_url", "image", "video", "video_url"):
+                        if block_type in (
+                            "image_url",
+                            "image",
+                            "image_data",
+                            "video",
+                            "video_url",
+                        ):
                             # Image/video blocks cost hundreds of tokens in practice
                             total += (
                                 self._media_token_counter(block)

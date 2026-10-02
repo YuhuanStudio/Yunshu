@@ -756,3 +756,52 @@ def test_explicit_tool_request_patterns():
     assert (
         explicit_tool_request("search the web", defs[1:]) is None
     )  # tool not declared
+
+
+def test_web_fetch_wrong_key_is_recovered_and_missing_url_is_actionable(
+    make, monkeypatch
+):
+    import http.server
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            b = b"<html><title>Doc</title><body>hello</body></html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}/d"
+    monkeypatch.setenv("YUNSHU_WEB_FETCH_ALLOW_PRIVATE", "1")
+    tool = {"type": "web_fetch_20250910", "name": "web_fetch"}
+    try:
+        c, _ = make(
+            [
+                ([call("web_fetch", {"uri": url})], "tool_use"),
+                ([text("ok")], "end_turn"),
+            ]
+        )
+        m = c.post("/v1/messages", json=body([tool])).json()
+        assert m["content"][1]["content"]["type"] == "web_fetch_result"
+        c, inner = make(
+            [
+                ([call("web_fetch", {"query": url})], "tool_use"),
+                ([text("ok")], "end_turn"),
+            ]
+        )
+        m = c.post("/v1/messages", json=body([tool])).json()
+        assert m["content"][1]["content"] == {
+            "type": "web_fetch_tool_result_error",
+            "error_code": "invalid_tool_input",
+        }
+        sent = inner.requests[1].messages[2].content[0]["content"]
+        assert '{"url": "https://example.com/page"}' in sent
+    finally:
+        srv.shutdown()
+        srv.server_close()
