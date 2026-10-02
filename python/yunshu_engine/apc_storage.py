@@ -28,6 +28,7 @@ Everything here works on files; no MLX array is touched off the caller's thread.
 from __future__ import annotations
 
 import contextlib
+import importlib.util
 import json
 import logging
 import os
@@ -58,7 +59,9 @@ ENCODED_SUFFIX = ".yscx"
 RAW_SUFFIX = ".safetensors"
 _MAGIC = b"YSCX1\0\0\0"
 _TRAILER = struct.Struct("<QI8s")  # header length, header crc32, magic
-SOFT_CAP_SLACK = 1.25  # the budget's hard cap is this much above the mover's soft cap
+OVERSHOOT_DELETE = (
+    1.5  # over this multiple of its cap a tier deletes instead of waiting for the mover
+)
 DEFAULT_PREFILL_TPS = (
     1500.0  # until a real prefill has been observed (conservative: high)
 )
@@ -125,6 +128,25 @@ def mount_of(path: Path) -> Path:
     return p
 
 
+def ensure_root(path: Path) -> bool:
+    """Create the tier directory when its volume is there. A path under a mount directory
+    (``/Volumes/NAME``, ``/mnt/NAME``, ``/media/..``) whose volume is not mounted is never created:
+    that would put the cache on the boot disk under the name of a missing device."""
+    p = Path(path).expanduser()
+    if p.is_dir():
+        return True
+    parts = p.parts
+    for i, part in enumerate(parts[:-1]):
+        if part in ("Volumes", "mnt", "media") and i == 1 and len(parts) > 2:
+            if not Path(*parts[: i + 2]).is_dir():
+                return False
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    return True
+
+
 def device_name(path: Path) -> str:
     m = mount_of(path)
     return "internal" if str(m) == "/" else (m.name or str(m))
@@ -155,7 +177,8 @@ def probe_device(
 ) -> DeviceProfile:
     """Measure sequential write / read bandwidth and small-read latency of ``path``'s volume."""
     root = Path(path).expanduser()
-    root.mkdir(parents=True, exist_ok=True)
+    if not ensure_root(root):
+        raise OSError(f"{root}: volume not mounted")
     d = root / f".yunshu-probe-{os.getpid()}-{threading.get_ident()}"
     d.mkdir(parents=True, exist_ok=True)
     try:
@@ -515,6 +538,9 @@ class FileTier:
         if budget is not None:
             budget.register_owner(namespace, self._evict_path, self._busy_paths)
         self._moving: set[Path] = set()
+        self.reprofile: Any = (
+            None  # callable() -> DeviceProfile | None, set by the engine
+        )
         self._ns = namespace
         self.rescan()
 
@@ -526,7 +552,7 @@ class FileTier:
             return ok
         try:
             ok = self._stat_pool.submit(
-                lambda: self.root.exists() and os.access(self.root, os.W_OK)
+                lambda: ensure_root(self.root) and os.access(self.root, os.W_OK)
             ).result(timeout=2.0)
         except (FutureTimeout, OSError):
             ok = False
@@ -534,18 +560,42 @@ class FileTier:
         if ok and not self._was_available:
             self._was_available = True
             self.rescan()  # (re)mounted: validate what is there again
+            stale = (
+                self.profile is None
+                or time.time() - self.profile.probed_at > PROFILE_TTL_S
+            )
+            if stale and callable(self.reprofile):
+                try:
+                    self.profile = self.reprofile() or self.profile
+                except Exception:
+                    logger.warning(
+                        "APC storage %s: probe failed", self.name, exc_info=True
+                    )
         elif not ok:
             self._was_available = False
-        return bool(ok)
+        return self._avail[1]
 
     def _busy_paths(self) -> set[Path]:
         return set(self._moving)
 
     def _evict_path(self, path: Path) -> bool:
+        """The budget wants this file gone. A tier that has a lower tier to give it to returns
+        False (the mover demotes it instead of the budget deleting it) unless the tier is far
+        over its cap, i.e. the mover is stuck."""
+        owner = getattr(self, "owner", None)
         with self._lock:
-            h = next((k for k, e in self.index.items() if e.path == path), None)
+            h, e = next(
+                ((k, v) for k, v in self.index.items() if v.path == path), (None, None)
+            )
+        if owner is not None and e is not None and not self.is_last:
+            if self.used() < OVERSHOOT_DELETE * self.cap_bytes:
+                pos = owner.lower.index(self) + 1
+                if owner._target_for(pos, e.orig, len(e.tokens)) is not None:
+                    owner._wake.set()
+                    return False
+        with self._lock:
             if h is not None:
-                del self.index[h]
+                self.index.pop(h, None)
         with contextlib.suppress(OSError):
             path.unlink()
         return True
@@ -569,6 +619,10 @@ class FileTier:
                     ENCODED_SUFFIX,
                 ) or not p.stem.startswith("exact_"):
                     continue
+                with open(
+                    p, "rb"
+                ) as probe:  # an I/O error is the volume's, not the file's
+                    probe.read(1)
                 if p.suffix == ENCODED_SUFFIX:
                     head = read_container_header(p)
                     meta = (head or {}).get("meta")
@@ -595,7 +649,18 @@ class FileTier:
                     meta.get("prefix_trimmable") == "1",
                     orig / max(p.stat().st_size, 1),
                 )
-            except (OSError, ValueError, KeyError, TypeError):
+            except OSError as e:
+                # the volume failed under us (a network glitch, an unplug): keep every file and
+                # treat the tier as unavailable until the next check validates it again
+                logger.warning(
+                    "APC storage %s: scan interrupted (%s); tier unavailable",
+                    self.name,
+                    e,
+                )
+                self._avail = (time.monotonic(), False)
+                self._was_available = False
+                return
+            except (ValueError, KeyError, TypeError):
                 self._invalid(p, "unreadable")
 
     @staticmethod
@@ -678,6 +743,8 @@ class FileTier:
             raw_t = self.profile.restore_s(orig)
             enc_t = self.profile.restore_s(orig, self.decode_bps, ratio)
             encode = self.encoding == "zstd" or (ratio >= 1.1 and enc_t < 0.9 * raw_t)
+        if encode and importlib.util.find_spec("zstandard") is None:
+            encode, ratio = False, 1.0  # the "compression" extra is not installed: raw
         size_est = int(orig / (ratio if encode else 1.0))
         if self.budget is not None and not self.budget.allow_write(size_est):
             return False
@@ -807,7 +874,13 @@ class TieredDiskStore(SpillDiskStore):
 
     # ── configuration ──────────────────────────────────────────────────
     def add_lower(self, tier: FileTier) -> None:
-        """Add a lower tier; the lower tiers stay ordered by measured read bandwidth."""
+        """Add a lower tier; the lower tiers stay ordered by measured read bandwidth. Tiers on
+        the same volume are told apart by their directory name."""
+        if tier.name == self.name and "/" not in self.name:
+            self.name = f"{self.name}/{self.dir.parent.name}"
+        if tier.name in {self.name, *(t.name for t in self.lower)}:
+            tier.name = f"{tier.name}/{tier.root.name}"
+        tier.owner = self
         self.lower.append(tier)
         self.lower.sort(key=lambda t: -(t.profile.read_bps if t.profile else 0.0))
         for i, t in enumerate(self.lower):
@@ -975,6 +1048,24 @@ class TieredDiskStore(SpillDiskStore):
         return loaded
 
     # ── placement ──────────────────────────────────────────────────────
+    def _evict_path(self, path) -> bool:
+        """The root's budget wants this file gone: with a lower tier that can take it, the mover
+        demotes it instead (return False = busy); otherwise (or when the mover is stuck, the
+        store far over its cap) it is deleted, i.e. recomputed later."""
+        if self.lower and self.soft_cap_bytes and path not in self._in_flight_paths():
+            if self._root_used() < OVERSHOOT_DELETE * self.soft_cap_bytes:
+                meta = self._meta_of(path)
+                if meta is not None:
+                    try:
+                        size = path.stat().st_size
+                    except OSError:
+                        size = 0
+                    ntok = meta.get("token_ids", "").count(",") + 1
+                    if self._target_for(0, size, ntok) is not None:
+                        self._wake.set()
+                        return False
+        return bool(super()._evict_path(path))
+
     def _write_payload(self, shard_id, block_hashes, payload) -> bool:
         ok = super()._write_payload(shard_id, block_hashes, payload)
         if ok:

@@ -927,6 +927,26 @@ def _populate_apc_metrics(pm) -> None:
             for key, name in _APC_COUNTERS:
                 if snap.get(key) is not None:
                     pm.set_counter(name, snap[key], labels=ml)
+            for t in snap.get("storage_tiers") or []:
+                tl = {**ml, "tier": str(t.get("name"))}
+                for key, name in (
+                    ("used_bytes", "apc_storage_tier_used_bytes"),
+                    ("cap_bytes", "apc_storage_tier_cap_bytes"),
+                    ("entries", "apc_storage_tier_entries"),
+                    ("read_bps", "apc_storage_tier_read_bytes_per_second"),
+                ):
+                    if t.get(key) is not None:
+                        pm.set_gauge(name, t[key], labels=tl)
+                pm.set_gauge(
+                    "apc_storage_tier_available",
+                    int(bool(t.get("available"))),
+                    labels=tl,
+                )
+                pm.set_counter("apc_storage_tier_hits", t.get("hits", 0), labels=tl)
+                if t.get("invalidated") is not None:
+                    pm.set_counter(
+                        "apc_storage_tier_invalidated", t["invalidated"], labels=tl
+                    )
             for tier, count in (snap.get("tier_hits") or {}).items():
                 pm.set_counter(
                     "apc_tier_lookups", count, labels={**ml, "tier": str(tier)}

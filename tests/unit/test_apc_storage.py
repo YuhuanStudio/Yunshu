@@ -113,6 +113,16 @@ def test_parse_tier_specs():
     assert parse_tiers(None) == [] and parse_tiers(" , ") == []
 
 
+def test_an_unmounted_volume_is_never_created(tmp_path):
+    from yunshu_engine.apc_storage import ensure_root
+
+    assert not ensure_root(Path("/Volumes/yunshu-no-such-volume-xyz/apc"))
+    assert not Path("/Volumes/yunshu-no-such-volume-xyz").exists()
+    assert ensure_root(tmp_path / "new" / "dir") and (tmp_path / "new" / "dir").is_dir()
+    with pytest.raises(OSError):
+        probe_device(Path("/Volumes/yunshu-no-such-volume-xyz/apc"), mb=8)
+
+
 def test_probe_measures_a_throttled_device(tmp_path):
     fast = probe_device(tmp_path / "fast", mb=16)
     slow = probe_device(tmp_path / "slow", mb=8, sim=(40e6, 0.02))
@@ -172,6 +182,31 @@ def test_overflow_is_demoted_and_restored_exactly(tmp_path, enc):
     assert t1.hits == 1 and s.device_hits["tier1"] == 1
     suffixes = {e.path.suffix for e in t1.index.values()}
     assert suffixes == ({".yscx"} if enc == "zstd" else {".safetensors"})
+
+
+def test_budget_hands_overflow_to_the_mover_instead_of_deleting(tmp_path):
+    from yunshu_kv.disk_budget import DiskBudget
+
+    s = _store(tmp_path, soft_mb=1.0, lower=[(1e9, "raw")])
+    budget = DiskBudget(
+        tmp_path / "t0", cap_bytes=1 << 20, reserve_pct=0, reserve_min_bytes=0
+    )
+    s.attach_budget(budget)
+    for i in range(
+        3
+    ):  # a checkpoint is 0.8 MB: from the second write the budget is over its cap
+        _put(s, _toks(1500, i), i + 1)
+        assert len(s._exact_index) + len(s.lower[0].index) == i + 1, (
+            "deleted, not demoted"
+        )
+        s.rebalance()  # the mover keeps up
+    assert s.lower[0].index
+    # with no lower tier able to take them (slower than a re-prefill) the budget deletes
+    s.lower[0].profile = _profile(1e5, 1e5)
+    before = len(s._exact_index)
+    for i in range(3, 6):
+        _put(s, _toks(1500, i), i + 1)
+    assert len(s._exact_index) < before + 3
 
 
 def test_cascade_down_through_three_tiers(tmp_path):
@@ -275,6 +310,30 @@ def test_unavailable_tier_is_skipped_and_validated_on_return(tmp_path):
         assert p not in {e.path for e in t1.index.values()}
         assert not p.exists()
     del keys
+
+
+def test_a_volume_that_fails_mid_scan_keeps_its_files(tmp_path, monkeypatch):
+    s = _store(tmp_path, soft_mb=0.2, lower=[(1e9, "raw")])
+    for i in range(3):
+        _put(s, _toks(1500, i), i + 1)
+    s.settle()
+    t1 = s.lower[0]
+    files = [e.path for e in t1.index.values()]
+    assert files
+    real_open = open
+
+    def flaky(path, *a, **kw):
+        if str(path).endswith(".safetensors") and str(t1.dir) in str(path):
+            raise OSError(5, "Input/output error")
+        return real_open(path, *a, **kw)
+
+    monkeypatch.setattr("builtins.open", flaky)
+    t1._avail, t1._was_available = (0.0, False), False
+    assert not t1.available()  # the scan hit an I/O error: unavailable, nothing deleted
+    monkeypatch.undo()
+    assert all(p.exists() for p in files) and t1.invalidated == 0
+    t1._avail = (0.0, False)
+    assert t1.available() and len(t1.index) == len(files)
 
 
 def test_corrupt_lower_file_falls_back_and_is_deleted(tmp_path):

@@ -38,7 +38,9 @@ logger = logging.getLogger(__name__)
 MODES = ("off", "lossless", "int8", "int4")
 CHUNK = 4 << 20
 ZSTD_LEVEL = 1
-_MAX_INFLIGHT = 2
+# One entry compresses at a time: its HOT arrays stay pinned until the encode finishes, so this
+# bounds the transient memory above the HOT + WARM budgets to one checkpoint.
+_MAX_INFLIGHT = 1
 
 _NP_DTYPE = {
     "mlx.core.bfloat16": (np.uint16, mx.bfloat16),
@@ -206,9 +208,11 @@ class WarmTier:
         self._chunk_pool = ThreadPoolExecutor(
             max(1, threads), thread_name_prefix="apc-warm-c"
         )
-        import zstandard
+        self._zstd: Any = None
+        if not self.lossy:
+            import zstandard  # the "compression" extra; the lossy modes do not need it
 
-        self._zstd = zstandard
+            self._zstd = zstandard
 
     # ── encode ─────────────────────────────────────────────────────────
     def _compress_buffer(self, buf: np.ndarray, plane: bool) -> list[bytes]:

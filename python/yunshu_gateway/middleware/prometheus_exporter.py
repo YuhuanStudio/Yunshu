@@ -673,6 +673,18 @@ class PrometheusMetrics:
             ("apc_disk_bytes", "Bytes of the APC SSD tier"),
             ("apc_disk_max_bytes", "Size cap of the APC SSD tier in bytes"),
             ("apc_disk_pending_bytes", "APC bytes queued for the SSD tier"),
+            ("apc_warm_bytes", "Bytes of the APC WARM tier (compact form in RAM)"),
+            ("apc_warm_max_bytes", "Size budget of the APC WARM tier in bytes"),
+            ("apc_warm_entries", "Checkpoints in the APC WARM tier"),
+            ("apc_warm_compression_ratio", "Raw / stored bytes of the WARM tier"),
+            (
+                "apc_storage_tier_used_bytes",
+                "Bytes in one APC storage tier (label tier)",
+            ),
+            ("apc_storage_tier_cap_bytes", "Size cap of one APC storage tier"),
+            ("apc_storage_tier_entries", "Checkpoints in one APC storage tier"),
+            ("apc_storage_tier_read_bytes_per_second", "Measured read bandwidth"),
+            ("apc_storage_tier_available", "1 when the tier's volume is mounted"),
         ):
             self._gauges[key] = _Gauge(f"yunshu_{key}", text)
         for key, text in (
@@ -685,6 +697,14 @@ class PrometheusMetrics:
             ("apc_disk_writes", "APC SSD tier writes"),
             ("apc_memory_evictions", "APC RAM evictions"),
             ("apc_memory_skips", "APC checkpoints skipped by the RAM budget"),
+            ("apc_warm_demotions", "Checkpoints demoted from RAM to the WARM tier"),
+            ("apc_warm_hits", "Prefix hits served from the WARM tier"),
+            ("apc_warm_evicted_to_ssd", "WARM checkpoints pushed out to the SSD tier"),
+            ("apc_warm_dropped", "WARM checkpoints dropped (lossy mode; SSD has them)"),
+            ("apc_warm_corrupt", "WARM entries that failed verification"),
+            ("apc_tier_lookups", "APC lookups by serving tier (label tier)"),
+            ("apc_storage_tier_hits", "Hits served from one APC storage tier"),
+            ("apc_storage_tier_invalidated", "Files dropped from a storage tier"),
         ):
             self._counters[key] = _Counter(f"yunshu_{key}_total", text)
 

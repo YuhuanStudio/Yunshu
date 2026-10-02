@@ -248,6 +248,7 @@ def main():
             for s in sess:  # and one more growth step
                 r = summarize(post(srv.url, s.body(steps + 1, a.max_new)))
                 emit(dict(kind="revisit+1", session=s.idx, step=steps + 1, **r))
+            emit(dict(kind="final", stats=kv_stats(srv.url)))
         elif a.scenario == "restart":
             for L in [int(x) for x in a.lengths.split(",")]:
                 s = Session(

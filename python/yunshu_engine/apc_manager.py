@@ -424,7 +424,14 @@ class YunshuAPCManager(APCManager):
         if warm_mode != "off" and warm_bytes > 0:
             from .apc_warm import WarmTier
 
-            self.warm = WarmTier(warm_mode, warm_bytes)
+            try:
+                self.warm = WarmTier(warm_mode, warm_bytes)
+            except ImportError as e:
+                logger.warning(
+                    "APC WARM tier '%s' needs the 'compression' extra (%s); WARM off",
+                    warm_mode,
+                    e,
+                )
         if isinstance(self.disk, SpillDiskStore) or self.warm is not None:
             self._exact_cache = _SpillingDict(self._demote)
 

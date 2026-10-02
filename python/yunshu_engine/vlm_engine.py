@@ -1373,9 +1373,9 @@ class VLMEngine:
         from .apc_storage import parse_tiers
 
         lower_specs = parse_tiers(settings.get("YUNSHU_VLM_APC_DISK_TIERS"))
-        # with lower tiers the mover keeps the SSD at its cap; the budget's hard cap is a little
-        # above, so the cap only deletes when the mover lags behind
-        hard_gb = max_gb * 1.25 if (lower_specs and max_gb > 0) else max_gb
+        # with lower tiers the budget hands what it would delete to the background mover (it
+        # deletes only when no lower tier can take the file, or the mover is far behind)
+        hard_gb = max_gb
         try:
             if lower_specs:
                 from .apc_storage import TieredDiskStore
@@ -1441,7 +1441,7 @@ class VLMEngine:
             try:
                 budget = disk_budget.budget_for(
                     spec.path,
-                    cap_bytes=int(cap_gb * 1.25 * (1 << 30)) if cap_gb > 0 else 0,
+                    cap_bytes=int(cap_gb * (1 << 30)) if cap_gb > 0 else 0,
                     label=f"APC disk tier {spec.path}",
                 )
             except Exception:
@@ -1462,6 +1462,7 @@ class VLMEngine:
                     "APC storage tier %s unavailable", spec.path, exc_info=True
                 )
                 continue
+            tier.reprofile = lambda spec=spec: profile_for(spec, store, force=True)
             with contextlib.suppress(Exception):
                 disk_budget.write_marker(
                     tier.dir,

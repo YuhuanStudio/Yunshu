@@ -15,7 +15,7 @@ Read this first: the "four tiers" exist on ONE of the serving paths.
 
 | Serving path | Serves | RAM, full precision (HOT) | RAM, 4-bit (WARM) | SSD | Nothing cached (COLD) |
 |---|---|---|---|---|---|
-| **VLM runner** (`VLMEngine` + `vlm_batch_runner.py`, mlx-vlm APC) | every mlx-vlm model, Qwen3.8-27B included; all `/v1/chat/completions`, `/v1/messages`, `/v1/responses` traffic for them | yes: exact checkpoints (KV + recurrent state), byte budget `YUNSHU_VLM_APC_MEMORY_GB` | **no** (would be lossy; not implemented here) | **yes, on by default**, lossless (bit-exact states), `~/.yunshu/cache/apc`, 64 GiB cap for the whole directory (all models together): `YUNSHU_VLM_APC_DISK=0` opts out, `YUNSHU_VLM_APC_DISK_DIR` / `YUNSHU_VLM_APC_DISK_GB` | full prefill |
+| **VLM runner** (`VLMEngine` + `vlm_batch_runner.py`, mlx-vlm APC) | every mlx-vlm model, Qwen3.8-27B included; all `/v1/chat/completions`, `/v1/messages`, `/v1/responses` traffic for them | yes: exact checkpoints (KV + recurrent state), byte budget `YUNSHU_VLM_APC_MEMORY_GB` | **opt-in, off by default** (`YUNSHU_VLM_APC_WARM`): `lossless` (zstd, bit-exact) or lossy `int8` / `int4` K/V; takes `YUNSHU_VLM_APC_WARM_SHARE` of the APC RAM budget | **yes, on by default**, lossless (bit-exact states), `~/.yunshu/cache/apc`, 64 GiB cap for the whole directory (all models together): `YUNSHU_VLM_APC_DISK=0` opts out, `YUNSHU_VLM_APC_DISK_DIR` / `YUNSHU_VLM_APC_DISK_GB`; further storage tiers below it (external SSD, HDD, NAS): `YUNSHU_VLM_APC_DISK_TIERS` | full prefill |
 | **Text fast path** (`BatchedEngine._generate_fast`, mlx-lm `generate_step`) | text-only mlx-lm models (e.g. Qwen2.5-3B) | yes: `KVPrefixCache`, `YUNSHU_PREFIX_MAX_ENTRIES` entries | yes but **off by default** (`YUNSHU_PREFIX_HOT_LIMIT=0`; lossy on reuse) | yes but **off by default** (`YUNSHU_SSD_CACHE=1`; `native` precision is bit-exact; skipped for models that prefill faster than `YUNSHU_SSD_CACHE_PREFILL_CEIL_TPS`) | full prefill |
 | Engine loop (`YUNSHU_ENGINE_LOOP=1`, legacy) | text models | radix cache (HOT only) | no | no | full prefill |
 
@@ -27,10 +27,13 @@ untouched), and `X-Yunshu-Cache-Tier` / `X-Yunshu-Cache-Reload-Ms` carry it on n
               "cache": { "tier": "ram", "cached_tokens": 13867, "reload_ms": 41.2 } }
 ```
 
-`tier` is `ram` (full-precision RAM: the VLM runner's APC, the text path's HOT), `warm` (text path only,
-4-bit RAM, lossy), `ssd` (reloaded from disk; `reload_ms` includes the read) or `none`. `/debug/kv-cache`
-and `/metrics` (`apc_*` gauges and counters) report occupancy, entries, hits by tier, evictions and disk
-bytes for the VLM runner.
+`tier` is `ram` (full-precision RAM = HOT: the VLM runner's APC, the text path's HOT), `warm` (the compact
+RAM form: the VLM runner with `YUNSHU_VLM_APC_WARM` on, the text path with `YUNSHU_PREFIX_HOT_LIMIT`),
+`ssd` (reloaded from a storage tier; `reload_ms` includes the read) or `none`. With more than one storage
+tier configured an `ssd` hit also carries `"device"`, the volume it came from (`internal`, `P5Plus`, ...).
+`/debug/kv-cache` and `/metrics` (`apc_*` gauges and counters, `apc_tier_lookups_total{tier}`,
+`apc_warm_*`, `apc_storage_tier_*{tier}`) report occupancy, entries, hits by tier, evictions, disk bytes and
+each storage tier's usage, measured bandwidth and availability for the VLM runner.
 
 ### VLM runner (APC) policy
 
@@ -50,6 +53,95 @@ recurrent state at one token position, reusable only by a prompt that starts wit
   re-prefilling; the cache also survives a restart). States are namespaced by the checkpoint's weights
   (path, file sizes, mtimes), so replacing a model in place never reads old states. `yunshu doctor` prints
   the directory, its size, the cap and the free space.
+
+### Cache hierarchy on the VLM runner: HOT / WARM / storage tiers / recompute
+
+Measured on the Qwen3.8-27B oQ4e (M5 Max, 128 GB), real checkpoints of 32K-token documents (code and prose),
+`scripts/research/apc_audit/tier_roofline.py`, `tier_breakeven.py`, `tier_capacity_model.py` (the raw
+results are private). Unified memory: HOT vs WARM is a format difference, not another memory pool.
+
+**What a checkpoint is.** 154 MB of recurrent (GDN) state, constant, plus 64 KiB of attention K/V per token (16
+attention layers, 4 KV heads, head dim 256, bf16): 8K tokens = 0.69 GB, 32K = 2.3 GB, 128K = 8.7 GB. The state is
+7 % of a 32K checkpoint and 22 % of an 8K one. (The "130 KiB per token" used for sizing elsewhere is the
+resident estimate with allocator slack; the bytes are 64 KiB.)
+
+| Form | bytes vs bf16 | Cost (this M5 Max) | Quality |
+|---|---|---|---|
+| HOT clone (ready arrays) | 1.00 | 0.043 s per 2.1 GB | exact |
+| lossless, zstd-1 on bf16 K/V | 1.27x smaller (no shuffle) | 1.4 GB/s per thread | exact |
+| lossless, byte-plane shuffle + zstd-1 | **1.46x** smaller | compress 7.3 GB/s, decode 17 GB/s (8 threads) | exact |
+| lossless on the GDN state (fp32 + bf16) | 1.07x | - | exact |
+| lz4 | 1.00x (no gain without shuffle), 1.18x with | 14 GB/s | exact |
+| int8 g32 K/V (affine), state exact | 0.56x (1.78x capacity) | dequantize 0.02-0.07 s per checkpoint | KLD vs exact: code 5.6e-4 (p99 7.6e-3), prose 2.3e-3; top-1 98.8 % / 98.0 % |
+| int4 g64 K/V | 0.28x (3.6x capacity) | same | code 2.0e-3 (p99 2.6e-2, max 0.11), prose 6.8e-3 (p99 5e-2); top-1 98.8 % / 95.7 % |
+
+Control (a second exact restore): KLD 0. The prose int8 figure equals the KLD of merely casting the GDN state
+to bf16 (2.4e-3): int8 K/V is at the numerical noise floor, int4 is about three times above it.
+
+**Restore of a 32K checkpoint (2.3 GB) per tier against re-prefilling (37 s at 885 tok/s):**
+
+| Tier | Restore | vs prefill |
+|---|---|---|
+| HOT hit (clone) | 0.04 s | 900x |
+| WARM int8 (lossy) | ~0.05 s | 700x |
+| WARM lossless (decode 17 GB/s + unshuffle + copy) | ~0.25 s | 150x |
+| internal SSD (10.3 GB/s measured, F_NOCACHE) | 0.22 s | 165x |
+| TB4 SSD (5.0 GB/s) | 0.46 s | 81x |
+| HDD (150 MB/s, 12 ms; throttled simulation) | 14.9 s raw, 11.1 s zstd | 2.5x / 3.3x |
+| NAS 1 GbE (110 MB/s, 3 ms; throttled simulation) | 22.3 s raw, 16.5 s zstd | 1.7x / 2.2x |
+| recompute | 37 s | 1x |
+
+Break-even read bandwidth for a 32K prefix is 62 MB/s (checkpoint bytes / prefill time): an HDD or a 1 GbE
+NAS still beats recomputing a long prefix. A 1K prefix on HDD or NAS does not (1.45 s / 2.15 s restore against
+1.16 s of prefill), which is why a tier is used per entry by the cost model, not blindly.
+
+**Conclusions.**
+1. The tier that pays is the SSD (and the storage tiers below it): without it the 4 GiB RAM budget of a 16-32 GB
+   machine re-prefills 40-90 % of the agent traffic; with it 14 % (the cold first request per session) and the
+   mean TTFT of 3 sessions growing to 30K falls from 10.7 s to 4.7 s (model; measured below).
+2. **WARM lossless** is bit-exact (tested token-identical) but compresses only 1.4x (K/V) and restores no
+   faster than an internal NVMe (0.25 s against 0.22 s), so on a machine with a normal SSD it adds no hit and
+   no TTFT while it takes HOT memory and CPU for compression. It helps only with no SSD tier, or in the band
+   where the working set is 1-1.5x the HOT capacity. Not a measured end-to-end win: **off by default**
+   (`YUNSHU_VLM_APC_WARM=off`); keep it for machines without a usable SSD tier.
+3. **WARM int8 / int4** are lossy: opt-in only, never default. int8 g32 gives 1.8x capacity and a 0.05 s
+   restore at the noise floor of bf16; int4 3.6x at about 3x the KLD. Their gain over an internal SSD is about
+   0.2 s per WARM hit.
+4. Lower storage tiers matter on slow media: restores from external SSD/HDD/NAS need per-device measurement
+   (the break-even above), a cost model, background demotion and zstd on the slow ones (+33 % effective
+   bandwidth), all of which are implemented; fast disks stay raw.
+
+**Machine sizes** (APC RAM budget: 32 GiB on 128 GB, 16 GiB on 64 GB, 4 GiB on 16-32 GB; 30K-token sessions
+take 2.2 GB, 60K 4.1 GB):
+
+| Machine | HOT holds | SSD tier | WARM |
+|---|---|---|---|
+| 128 GB (32 GiB) | ~14 sessions of 30K, 7 of 60K | not needed for a few sessions, still the restart cache | not worth it |
+| 64 GB (16 GiB) | ~7 of 30K, 3 of 60K | needed beyond 3 long sessions | only without SSD |
+| 16-32 GB (4 GiB) | 1-2 sessions of 30K | the cache: without it hit rate collapses | int8 (opt-in) buys ~0.2 s per hit; lossless nothing |
+
+**Settings** (all in `settings.py`, stable options; none is an experimental flag):
+`YUNSHU_VLM_APC_WARM` (`off` | `lossless` | `int8` | `int4`, default `off`), `YUNSHU_VLM_APC_WARM_SHARE` (share of
+the APC RAM budget the WARM tier takes, default 0.4), `YUNSHU_VLM_APC_DISK_TIERS` (`PATH[@GiB],...` lower
+storage tiers), `YUNSHU_VLM_APC_DISK_ENCODING` (`auto` | `raw` | `zstd`, lower tiers only, never lossy).
+
+**Mechanics.** HOT (`_exact_cache`) evicts LRU into WARM (`yunshu_engine/apc_warm.py`): lossless entries are
+compressed on a worker thread (one at a time, the entry stays promotable meanwhile), lossy entries are
+quantized on the GPU thread, and in lossy mode the exact copy goes to the SSD at the same moment (the SSD tier
+stays exact; a WARM entry that is evicted is dropped). A WARM hit decodes into HOT and the lookup then runs as
+a HOT hit (`tier: "warm"`); a failed checksum drops the entry and the lookup falls through to SSD /
+recompute. Storage tiers (`yunshu_engine/apc_storage.py`): the SSD directory is the primary store (upstream
+safetensors files, async writer, root-wide `DiskBudget`); each further directory is profiled at startup
+(`probe_device`: sequential read / write with `F_NOCACHE`, 4 KiB read latency; cached per mount in
+`~/.yunshu/cache/apc-device-profiles.json` for 24 h), ordered by measured read bandwidth, and has its own cap and
+free-space reserve. When a tier is over its cap the budget hands the file to a background mover instead of
+deleting it; the mover copies it (raw, or as a zstd container when the measured gain pays) to the first lower
+tier that is mounted, has room and where restore time beats re-prefilling the tokens it saves at the observed
+prefill speed. A lookup takes the cheapest candidate over all tiers (restore time + prefill of the rest). An
+unmounted tier (volume gone, stat timeout) is skipped; on return its files are re-validated (header, size,
+checksums) and corrupt ones are deleted. A path under `/Volumes/NAME` whose volume is absent is never created.
+An I/O error while scanning keeps the files and marks the tier unavailable. The cost of a hit from each
+tier is in `x_yunshu.cache.reload_ms`.
 
 ### SSD cache disk budget (APC and text tier)
 
