@@ -169,7 +169,7 @@ async def measure(args):
                         ids = ids[:stop][:tokens]
                         if not ids or result.finish_reason not in ("stop", "length"):
                             raise RuntimeError(
-                                f"incomplete generation: {result.finish_reason}"
+                                f"incomplete generation: {result.finish_reason}: {getattr(result, 'error', None)}"
                             )
                         pair[arm] = ids
                         # Timing calls exclude trace instrumentation entirely.
@@ -213,6 +213,9 @@ async def measure(args):
 
 
 def main():
+    import logging
+
+    logging.basicConfig(level=logging.INFO)
     ap = parser()
     args = ap.parse_args()
     if args.repeats < 3 and not args.smoke:

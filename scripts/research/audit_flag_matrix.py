@@ -30,7 +30,36 @@ MAIN = Path("/Users/yuhuan/Documents/YuhuanStudio/Yunshu")
 CAPTURES = MAIN / "docs/research/runs/2026-09-30-agent-census"
 CORPORA = MAIN / "reference/omlx/omlx/admin/bench_corpora"
 MODEL = Path("/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp")
-TINY = Path("/Volumes/P5Plus/models/Qwen3.5-0.8B-MLX-bf16")
+TINY_SRC = Path("/Volumes/P5Plus/models/Qwen3.5-0.8B-MLX-bf16")
+TINY = Path("/Volumes/P5Plus/yunshu-build/audit/tiny-mtp")
+
+
+def ensure_tiny_mtp(src=TINY_SRC, dst=TINY):
+    """Smoke checkpoint whose index lists its MTP head.
+
+    The 0.8B checkpoint ships mtp-weights.safetensors but its weight index omits
+    the mtp.* keys, and the runner reads the head through the index, so it would
+    serve with draft=off. Symlink the files and index the head so MTP engages.
+    """
+    import struct
+
+    index = json.loads((src / "model.safetensors.index.json").read_text())
+    with (src / "mtp-weights.safetensors").open("rb") as f:
+        header = json.loads(f.read(struct.unpack("<Q", f.read(8))[0]))
+    keys = [k for k in header if k != "__metadata__"]
+    if not keys or not all(k.startswith("mtp.") for k in keys):
+        raise ValueError("unexpected tiny MTP head layout")
+    for k in keys:
+        index["weight_map"][k] = "mtp-weights.safetensors"
+    dst.mkdir(parents=True, exist_ok=True)
+    for f in src.iterdir():
+        link = dst / f.name
+        if f.name != "model.safetensors.index.json" and not link.exists():
+            link.symlink_to(f)
+    (dst / "model.safetensors.index.json").write_text(json.dumps(index))
+    return dst
+
+
 DRAFT = Path("/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2")
 TEXT = Path("/Volumes/P5Plus/models/Qwen2.5-3B-Instruct-bf16")
 TEXT_DRAFT = Path("/Volumes/P5Plus/models/Qwen2.5-3B-Instruct-4bit")
@@ -673,6 +702,8 @@ def main():
     if args.serve is not None:
         launcher(args.serve)
         return
+    if args.smoke:
+        ensure_tiny_mtp()
     if args.out is None:
         ap.error("--out required")
     args.out.parent.mkdir(parents=True, exist_ok=True)

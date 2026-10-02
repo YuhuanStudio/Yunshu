@@ -193,3 +193,33 @@ def test_dispatch_requires_real_success_and_submits_only_timing_quiet(tmp_path):
     argv = timing_command(tmp_path / "snapshot", tmp_path / "results", "unique-label")
     assert "--quiet" in argv and argv[argv.index("--priority") + 1] == "-1"
     assert "--require-smoke" in argv and argv[-1].endswith("smoke.json")
+
+
+def test_tiny_smoke_checkpoint_indexes_its_mtp_head(tmp_path):
+    import json
+    import struct
+
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    src.mkdir()
+    (src / "model.safetensors").write_bytes(b"x")
+    (src / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {"language_model.model.a": "model.safetensors"}})
+    )
+    header = json.dumps({"mtp.fc.weight": {}, "__metadata__": {}}).encode()
+    (src / "mtp-weights.safetensors").write_bytes(
+        struct.pack("<Q", len(header)) + header
+    )
+    audit.ensure_tiny_mtp(src, dst)
+    audit.ensure_tiny_mtp(src, dst)  # idempotent
+    weight_map = json.loads((dst / "model.safetensors.index.json").read_text())[
+        "weight_map"
+    ]
+    assert weight_map["mtp.fc.weight"] == "mtp-weights.safetensors"
+    assert "language_model.model.a" in weight_map
+    # the source index stays untouched
+    assert (
+        "mtp.fc.weight"
+        not in json.loads((src / "model.safetensors.index.json").read_text())[
+            "weight_map"
+        ]
+    )
