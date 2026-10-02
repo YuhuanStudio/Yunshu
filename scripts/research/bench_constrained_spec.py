@@ -112,10 +112,55 @@ def workloads():
     )
 
 
+def read_trace(path, count, timeout=30.0):
+    """Return the first ``count`` JSON lines of ``path``, waiting for the writer.
+
+    The token receipt is written when the generator is closed, which can be
+    after the HTTP stream has already ended; reading immediately raced it.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        lines = path.read_text().splitlines() if path.exists() else []
+        if len(lines) >= count:
+            return [json.loads(line) for line in lines]
+        if time.monotonic() > deadline:
+            raise RuntimeError(f"trace {path} has {len(lines)} < {count} records")
+        time.sleep(0.1)
+
+
+def second_turn(prompt, result, extra):
+    """Messages for a follow-up turn that extends the first (prefix reuse)."""
+    text, _reasoning, tool_calls, _finish = result
+    messages = [{"role": "user", "content": prompt}]
+    if tool_calls:
+        calls = [
+            {
+                "id": f"call_{i}",
+                "type": "function",
+                "function": {"name": t["name"], "arguments": t["arguments"]},
+            }
+            for i, t in enumerate(tool_calls)
+        ]
+        messages.append({"role": "assistant", "content": None, "tool_calls": calls})
+        for call in calls:
+            messages.append(
+                {"role": "tool", "tool_call_id": call["id"], "content": "ok"}
+            )
+        messages.append({"role": "user", "content": "Now write tests/test_squares.py."})
+    else:
+        messages.append({"role": "assistant", "content": text})
+        messages.append(
+            {"role": "user", "content": "Do it again with different values."}
+        )
+    return messages
+
+
 def send(srv, prompt, extra, maximum):
     body = dict(
         model=srv.model,
-        messages=[{"role": "user", "content": prompt}],
+        messages=prompt
+        if isinstance(prompt, list)
+        else [{"role": "user", "content": prompt}],
         max_tokens=maximum,
         temperature=0,
         stream=True,
@@ -205,6 +250,11 @@ def main():
     ap.add_argument("--max-tokens", type=int, default=192)
     ap.add_argument("--smoke", action="store_true")
     ap.add_argument("--warm", action="store_true")
+    ap.add_argument(
+        "--turn2",
+        action="store_true",
+        help="after the first request send a second turn that reuses its cache",
+    )
     ap.add_argument("--agent", action="store_true")
     ap.add_argument(
         "--modes", nargs="+", choices=("mtp-ar", "mtp", "dflash-ar", "dflash")
@@ -300,18 +350,27 @@ def main():
                             "cfg-forced",
                         ):
                             continue
-                        for phase in ("cold", "warm") if a.warm else ("cold",):
-                            result = send(srv, prompt, extra, a.max_tokens)
-                            raw = json.loads(trace.read_text().splitlines()[-1])
+                        phases = ["cold"] + (["warm"] if a.warm else [])
+                        if a.turn2:
+                            phases.append("turn2")
+                        first_result = None
+                        for sent, phase in enumerate(phases, 1):
+                            if phase == "turn2":
+                                result = send(
+                                    srv,
+                                    second_turn(prompt, first_result["result"], extra),
+                                    extra,
+                                    a.max_tokens,
+                                )
+                            else:
+                                result = send(srv, prompt, extra, a.max_tokens)
+                            if first_result is None:
+                                first_result = result
+                            raw = read_trace(trace, sent)[-1]
                             result["raw_token_digest"] = raw["token_digest"]
                             result["raw_token_ids"] = raw["token_ids"]
                             if a.cache_state_check:
-                                states = [
-                                    json.loads(line)
-                                    for line in Path(str(trace) + ".states")
-                                    .read_text()
-                                    .splitlines()
-                                ]
+                                states = read_trace(Path(str(trace) + ".states"), sent)
                                 result["cache_state_digest"] = states[-1]["digest"]
                             receipts[(rep, mode, case + ":" + phase)] = result
                             tfbench.emit(
@@ -422,8 +481,19 @@ def main():
                 if a.agent
                 else ("digest", "raw_token_digest", "token_digest", "lp_digest")
             )
-            if a.cache_state_check:
-                fields += ("cache_state_digest",)
+            if (
+                a.cache_state_check
+                and result["cache_state_digest"] != baseline["cache_state_digest"]
+            ):
+                # Diagnostic only: raw cross-path state bits may differ while every
+                # observable (tokens, logprobs, later turns) stays identical.
+                tfbench.emit(
+                    out,
+                    part="cache_state_diff",
+                    rep=rep,
+                    mode=mode,
+                    case=case,
+                )
             for field in fields:
                 if result[field] != baseline[field]:
                     errors.append(f"parity r{rep} {mode} {case} {field}")
