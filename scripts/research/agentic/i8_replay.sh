@@ -7,7 +7,7 @@ main=/Users/yuhuan/Documents/YuhuanStudio/Yunshu
 bodies="$main/docs/research/runs/2026-09-30-agtraffic/artifacts/cap-opencode-fix-cart-discount-r1/bodies"
 out="$root/docs/research/runs/2026-10-02-i8"
 mkdir -p "$out"
-export AGENTIC_YUNSHU_SRC="$root/python"
+export AGENTIC_YUNSHU_SRC=/Volumes/P5Plus/yunshu-build/codex/i8-resumed-baseline/python
 export YUNSHU_AUXILIARY_SCHEDULING="$mode"
 for run in 1 2 3; do
   "$main/.venv/bin/python" "$root/scripts/research/agentic/i8_session_replay.py" \

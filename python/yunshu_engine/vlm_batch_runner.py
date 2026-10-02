@@ -35,9 +35,10 @@ from typing import Any
 import mlx.core as mx
 import numpy as np
 
-from . import keyed_sampling
+from . import keyed_sampling, settings
 from .keyed_sampling import top_k_filter, top_p_filter
 from .serving.busy_time import BusyMeter
+from .serving.work_scheduler import AGING_S, DECODE_QUANTUM_S, Work
 
 logger = logging.getLogger(__name__)
 
@@ -278,6 +279,7 @@ class VLMBatchRunner:
         self._aux_spec: _Group | None = None
         self._vocab_owner: Any = None
         self._driving = False
+        self._decode_debt = 0.0
         self.clear_on_idle = False
         # Requests the engine has accepted, including ones still being
         # prepared (templating, image encoding) — the runner alone cannot see
@@ -597,6 +599,7 @@ class VLMBatchRunner:
 
     def _submit(self, job: _Job) -> None:
         with self._lock:
+            job.queued = job.last_service = time.perf_counter()
             self._pending.append(job)
             if self._executor is None or self._driving:
                 return
@@ -839,11 +842,12 @@ class VLMBatchRunner:
         for uid, job in list(group.jobs.items()):
             cancelled = job.cancel_event is not None and job.cancel_event.is_set()
             if job.abandoned or cancelled:
+                group.prefills.pop(uid, None)
                 with contextlib.suppress(Exception):
                     group.gen.remove(uid)
                 self._finish(group, uid, "cancel" if cancelled else None)
 
-    def _step_group(self, group: _Group) -> None:
+    def _step_group(self, group: _Group, *, decode_only: bool = False) -> None:
         from .kernels import batch_invariant
 
         self._prune_group(group)
@@ -867,7 +871,7 @@ class VLMBatchRunner:
             if dense_lane:
                 ragged_kv.set_dense_lane(True)
         try:
-            self._step_generator(group)
+            self._step_generator(group, decode_only=decode_only)
         finally:
             if invariant:
                 batch_invariant.set_active(False)
@@ -876,7 +880,7 @@ class VLMBatchRunner:
                 if dense_lane:
                     ragged_kv.set_dense_lane(False)
 
-    def _step_generator(self, group: _Group) -> None:
+    def _step_generator(self, group: _Group, *, decode_only: bool = False) -> None:
         if group.spec:
             # Upstream's speculative verify reads mRoPE deltas from model
             # state, which the shared batch's steps overwrite.
@@ -910,7 +914,17 @@ class VLMBatchRunner:
             mtp_lane.set_guide(job.guide)
             mtp_lane.set_context(job.ids)
         try:
-            prompt_progress, responses = group.gen.next()
+            if decode_only:
+                # Upstream returns after decode once capacity is reached. Zero
+                # capacity yields without starting/resuming any prefill atom.
+                capacity = group.gen.completion_batch_size
+                group.gen.completion_batch_size = 0
+                try:
+                    prompt_progress, responses = group.gen.next()
+                finally:
+                    group.gen.completion_batch_size = capacity
+            else:
+                prompt_progress, responses = group.gen.next()
         finally:
             if group.spec:
                 mtp_lane.set_guide(None)
@@ -1055,6 +1069,71 @@ class VLMBatchRunner:
         with self.busy_meter.span():
             self._drive_slice_body(resubmit)
 
+    def _work(self, job: _Job) -> Work:
+        remaining = max(1, len(job.ids) - job.stats.cached_tokens - job.stats.prefill_done)
+        if not job.stats.prefill_done and not job.stats.cached_tokens and job.priority >= 0:
+            # Read metadata only: no clone, SSD read, LRU touch or cache pin.
+            # A later ordinary lookup revalidates availability and identity.
+            mgr = self.apc_manager
+            lock = getattr(mgr, "lock", None)
+            entries = getattr(mgr, "_exact_cache", None)
+            salt = job.salt if job.salt is not None else self.apc_semantic_hash
+            if lock is not None and isinstance(entries, dict):
+                tokens = tuple(job.ids)
+                with lock:
+                    hit = max((len(e.token_ids) for e in entries.values()
+                               if e.extra_hash == (salt or 0)
+                               and 0 < len(e.token_ids) < len(tokens)
+                               and tokens[:len(e.token_ids)] == e.token_ids), default=0)
+                remaining = max(1, len(tokens) - hit)
+        return Work(job.queued, job.last_service, remaining, job.priority)
+
+    def _step_work_groups(self, primary: bool) -> None:
+        now = time.perf_counter()
+        groups = self._groups()
+        candidates = [(g, j) for g in groups for j in g.jobs.values()
+                      if not j.stats.t_first
+                      and j.uid not in getattr(getattr(g.gen, "_generation_batch", None), "uids", []) and
+                      (not primary or j.priority >= 0 or now - j.last_service >= AGING_S)]
+        chosen = min(candidates, key=lambda gj: self._work(gj[1]).key(now), default=None)
+        decoding = any(len(getattr(g.gen, "_generation_batch", [])) for g in groups)
+        if self._decode_debt > 0 and decoding:
+            chosen = None
+        for group in groups:
+            self._prune_group(group)
+            allowed = [j for j in group.jobs.values()
+                       if not primary or j.priority >= 0 or now - j.last_service >= AGING_S]
+            if not allowed:
+                continue
+            # Generators without the upstream atom API (test fakes) retain
+            # ordinary dispatch. The optional round driver has its own policy.
+            if not hasattr(group.gen, "_unprocessed_sequences"):
+                self._step_group(group)
+                continue
+            selected = chosen is not None and chosen[0] is group
+            has_decode = bool(len(group.gen._generation_batch))
+            if not selected and not has_decode:
+                continue
+            if selected:
+                uid = chosen[1].uid
+                group.gen._prompt_batch = group.prefills.pop(uid, None)
+                group.gen._unprocessed_sequences.sort(key=lambda seq: seq[0] != uid)
+            before = time.perf_counter()
+            self._step_group(group, decode_only=not selected)
+            elapsed = time.perf_counter() - before
+            for job in allowed:
+                if job.stats.t_first or (selected and job is chosen[1]):
+                    job.last_service = time.perf_counter()
+            if selected:
+                batch = group.gen._prompt_batch
+                if batch is not None:
+                    (uid,) = batch.uids  # prefill_batch_size is always one
+                    group.prefills[uid] = batch
+                    group.gen._prompt_batch = None
+                self._decode_debt = DECODE_QUANTUM_S
+            else:
+                self._decode_debt = max(0.0, self._decode_debt - elapsed)
+
     def _drive_slice_body(self, resubmit: bool) -> None:
         _install_row_context()
         try:
@@ -1071,8 +1150,12 @@ class VLMBatchRunner:
                 primary = preparing or any(
                     j.priority >= 0 for j in [*active, *self._pending]
                 )
-                pending = [j for j in self._pending if not primary or j.priority >= 0]
-                self._pending = [j for j in self._pending if primary and j.priority < 0]
+                now = time.perf_counter()
+                pending = [j for j in self._pending if not primary or j.priority >= 0
+                           or now - j.last_service >= AGING_S]
+                selected_ids = {id(j) for j in pending}
+                self._pending = [j for j in self._pending if id(j) not in selected_ids]
+                work_order = settings.get_bool("YUNSHU_UNCACHED_SCHEDULING") and self.driver is None
                 auxiliary = sum(
                     j.priority < 0 for j in [*active, *self._pending, *pending]
                 )
@@ -1089,6 +1172,8 @@ class VLMBatchRunner:
                 and (not active or pending[0].priority >= 0)
                 and self.inflight() - auxiliary <= 1
             )
+            if work_order:
+                pending.sort(key=lambda j: self._work(j).key(time.perf_counter()))
             for job in pending:
                 cancelled = job.cancel_event is not None and job.cancel_event.is_set()
                 if job.abandoned or cancelled:
@@ -1101,10 +1186,17 @@ class VLMBatchRunner:
                 except Exception as exc:
                     logger.exception("VLM runner admission failed")
                     self._emit(job, exc)
-            for group in self._groups():
-                self._prune_group(group)
-                if not primary or not any(j.priority < 0 for j in group.jobs.values()):
-                    self._step_group(group)
+            if work_order:
+                self._step_work_groups(primary)
+            else:
+                for group in self._groups():
+                    self._prune_group(group)
+                    if (not primary or not any(j.priority < 0 for j in group.jobs.values())
+                        or any(time.perf_counter() - j.last_service >= AGING_S
+                               for j in group.jobs.values())):
+                        self._step_group(group)
+                        for j in group.jobs.values():
+                            j.last_service = time.perf_counter()
             if self._driver_jobs:
                 self._step_driver(primary)
             if self._spec is not None and not self._spec.jobs:
@@ -1361,6 +1453,8 @@ class _Job:
     cancel_event: Any
     stats: RunStats
     priority: int = 0
+    queued: float = 0.0
+    last_service: float = 0.0
     driver: Any = None
     out: queue.Queue = field(default_factory=queue.Queue)
     uid: int | None = None
@@ -1386,3 +1480,4 @@ class _Group:
     spec: bool
     sampler: RowSampler | None = None
     jobs: dict = field(default_factory=dict)
+    prefills: dict = field(default_factory=dict)

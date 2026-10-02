@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -225,11 +226,17 @@ async def defer_auxiliary() -> None:
     info = current_request_info.get()
     if not isinstance(info, RequestInfo) or info.scheduling_priority >= 0:
         return
+    from yunshu_engine.serving.work_scheduler import AGING_S
+
     await asyncio.sleep(0.5)
     while any(
         other is not info and other.scheduling_priority >= 0
         for other in registry.active()
     ):
-        if info.cancel_requested or info.deadline_exceeded:
+        if (
+            info.cancel_requested
+            or info.deadline_exceeded
+            or time.perf_counter() - info.arrived >= AGING_S
+        ):
             return
         await asyncio.sleep(0.01)
