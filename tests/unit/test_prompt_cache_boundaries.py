@@ -83,9 +83,10 @@ def test_openai_block_marker_preserved_without_altering_input():
     converted = _extract_input_text(source)
     assert isinstance(converted, list)
     messages = [{"role": "user", "content": converted}]
-    plan = openai_plan(messages)
+    plan = openai_plan(messages, {"mode": "explicit"})
     assert strip_markers(plan["messages"], plan["markers"]) == messages
-    assert len(plan["markers"]) == 1
+    assert len(plan["markers"]) == 2
+    assert len(plan["write_markers"]) == 1
 
 
 def test_anthropic_automatic_uses_final_block_and_rejects_conflicting_ttl():
@@ -131,3 +132,57 @@ def test_processor_media_expansion_maps_only_complete_media_boundary():
     ) == [(2, 300), (6, 300), (8, 300)]
     with pytest.raises(ValueError, match="processor"):
         expanded_boundaries(plain, [1, 2, 901, 3, 4, 5], [(5, 300)], {900})
+
+
+def test_diagnostic_marker_preserves_template_trimming():
+    from yunshu_engine.prompt_caching import trim_safe_shadow
+
+    value = "hello  MARK"
+    shadow = trim_safe_shadow(value, {"MARK": 300})
+
+    def render(text):
+        return "<s>" + text.strip() + "</s>"
+
+    assert render(shadow).replace("MARK", "") == render("hello  ")
+
+
+def test_moving_anthropic_breakpoint_has_twenty_block_lookback():
+    from yunshu_engine.prompt_caching import mark_anthropic, strip_markers
+    from yunshu_gateway.routers.anthropic import (
+        AnthropicMessagesRequest,
+        _convert_anthropic_messages,
+    )
+
+    messages = [{"role": "user", "content": f"block {i}"} for i in range(27)]
+    messages[-1]["content"] = [
+        {"type": "text", "text": "block 26", "cache_control": {"type": "ephemeral"}}
+    ]
+    req = AnthropicMessagesRequest(model="local", max_tokens=1, messages=messages)
+    plan = mark_anthropic(req)
+    assert len(plan["markers"]) == 27
+    assert len(plan["write_markers"]) == 1
+    converted, _ = _convert_anthropic_messages(
+        req.messages, has_images=False, temp_files=[]
+    )
+    shadow = "".join("<u>" + m["content"] + "</u>" for m in converted)
+    prompt = strip_markers(shadow, plan["markers"])
+    tok = SeamTokenizer()
+    resolved = rendered_boundaries(
+        prompt, shadow, plan["markers"], tok, tok.encode(prompt), selection=plan
+    )
+    assert len(resolved["points"]) == 27
+    assert len(resolved["writes"]) == 1
+    assert resolved["lookup_points"] == [n for n, _ in resolved["points"]][-21:]
+
+
+def test_openai_implicit_keeps_a_reusable_developer_head():
+    from yunshu_engine.prompt_caching import openai_plan
+
+    plan = openai_plan(
+        [
+            {"role": "developer", "content": "stable instructions"},
+            {"role": "user", "content": "changing question"},
+        ],
+        {"mode": "implicit", "ttl": "30m"},
+    )
+    assert len(plan["write_markers"]) == 2

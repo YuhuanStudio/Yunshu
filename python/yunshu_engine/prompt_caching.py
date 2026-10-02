@@ -27,27 +27,54 @@ def mark_anthropic(req) -> dict:
     markers: dict[str, int] = {}
     tools = {}
     marker_ends = {}
+    write_markers = set()
+    write_tools = set()
+    source_blocks = [
+        b
+        for c in [req.system, *(m.content for m in req.messages)]
+        if isinstance(c, list)
+        for b in c
+        if isinstance(b, dict)
+    ]
+    active = bool(
+        getattr(req, "cache_control", None)
+        or any(b.get("cache_control") for b in source_blocks)
+        or any(getattr(t, "cache_control", None) for t in (req.tools or []))
+    )
     nonce = "YUNSHUCACHE" + uuid.uuid4().hex
 
     def blocks(content):
         content = copy.deepcopy(content)
+        if not active:
+            return content
+        if isinstance(content, str):
+            content = [{"type": "text", "text": content}]
         if not isinstance(content, list):
             return content
         for block in content:
             control = block.get("cache_control")
-            if not control:
+            if not control and block.get("type") not in (
+                "text",
+                "tool_use",
+                "tool_result",
+                "image",
+                "document",
+            ):
                 continue
             marker = nonce + str(len(markers)) + "END"
-            duration = ttl(control)
+            duration = ttl(control) if control else 300
+            if control:
+                write_markers.add(marker)
             # These fields are preserved by the existing converter. Other blocks
             # are resolved after rendering through their serialized representation.
             key = "text" if block.get("type") == "text" else None
+            if key and not block.get(key) and not control:
+                continue
             if (
                 block.get("type") == "document"
                 and (block.get("source") or {}).get("type") == "text"
             ):
-                block["source"] = dict(block["source"])
-                block["source"]["data"] += marker
+                block["_yunshu_cache_marker"] = marker
                 markers[marker] = duration
             elif key:
                 block[key] = block.get(key, "") + marker
@@ -58,7 +85,7 @@ def mark_anthropic(req) -> dict:
                 block["content"] += marker
                 markers[marker] = duration
             elif block.get("type") == "tool_use":
-                block["name"] = block.get("name", "") + marker
+                block["_yunshu_cache_marker"] = marker
                 markers[marker] = duration
                 marker_ends[marker] = "tool_use"
             elif block.get("type") == "thinking":
@@ -75,8 +102,10 @@ def mark_anthropic(req) -> dict:
                     (b for b in reversed(inner) if b.get("type") == "text"), None
                 )
                 if last is None or inner[-1] is not last:
+                    if not control:
+                        continue
                     raise ValueError(
-                        "cache_control on an image-only tool_result requires a rendered media endpoint"
+                        "image-only tool_result cache endpoint is not supported"
                     )
                 last["text"] += marker
                 markers[marker] = duration
@@ -124,11 +153,16 @@ def mark_anthropic(req) -> dict:
         control = getattr(tool, "cache_control", None)
         if control:
             tools[i] = ttl(control)
-    if len(markers) + len(tools) > 4:
+            write_tools.add(i)
+        elif active:
+            tools[i] = 300
+    if len(write_markers) + len(write_tools) > 4:
         raise ValueError("at most four cache_control breakpoints are supported")
     return {
         "markers": markers,
         "marker_ends": marker_ends,
+        "write_markers": write_markers,
+        "write_tools": write_tools,
         "tools": tools,
         "points": [],
         "written": 0,
@@ -180,7 +214,7 @@ def tool_boundaries(
     return list(found.values())
 
 
-def token_boundaries(prompt, char_points, tokenizer, ids):
+def token_boundaries(prompt, char_points, tokenizer, ids, *, return_map=False):
     """Map rendered character endpoints against the actual full token IDs."""
     # A fast tokenizer's full-prompt offsets handle byte-fallback and non-ASCII
     # token seams. Verify its IDs against the engine's tokenization first.
@@ -196,6 +230,7 @@ def token_boundaries(prompt, char_points, tokenizer, ids):
         except (TypeError, ValueError, NotImplementedError, KeyError):
             pass
     points = []
+    endpoint_map = {}
     for char_end, duration in char_points:
         if offsets is not None:
             # Prefix only: a special token with offset (0,0) later in the
@@ -218,7 +253,9 @@ def token_boundaries(prompt, char_points, tokenizer, ids):
                 n += 1
         if 0 < n < len(ids):
             points.append((n, duration))
-    return sorted(set(points))
+            endpoint_map[char_end] = (n, duration)
+    points = sorted(set(points))
+    return (points, endpoint_map) if return_map else points
 
 
 def rendered_boundaries(
@@ -231,8 +268,11 @@ def rendered_boundaries(
     tools=None,
     tool_controls=None,
     marker_ends=None,
+    selection=None,
 ):
     chars = []
+    write_chars = set()
+    marker_chars = {}
     positions = {m: marked_prompt.find(m) for m in markers}
     for marker, duration in markers.items():
         at = positions[marker]
@@ -264,13 +304,48 @@ def rendered_boundaries(
                 end = max(candidates)
         end -= sum(len(m) for m, pos in positions.items() if 0 <= pos < end)
         chars.append((end, duration))
+        marker_chars[marker] = end
+        if selection is None or marker in selection.get("write_markers", markers):
+            write_chars.add(end)
     stripped = strip_markers(marked_prompt, markers)
     if stripped != prompt:
         raise ValueError("cache diagnostic render differs from original prompt")
     if len(chars) != len(markers):
         raise ValueError("cache breakpoint was removed by the rendered template")
-    chars.extend(tool_boundaries(prompt, tools or [], tool_controls or {}))
-    return token_boundaries(prompt, chars, tokenizer, ids)
+    tool_chars = tool_boundaries(prompt, tools or [], tool_controls or {})
+    chars.extend(tool_chars)
+    selected_tools = (selection or {}).get("write_tools", tool_controls or {})
+    write_chars.update(
+        n
+        for n, _ in tool_boundaries(
+            prompt,
+            tools or [],
+            {i: d for i, d in (tool_controls or {}).items() if i in selected_tools},
+        )
+    )
+    points, endpoint_map = token_boundaries(
+        prompt, chars, tokenizer, ids, return_map=True
+    )
+    if selection is None:
+        return points
+    writes = sorted({endpoint_map[n] for n in write_chars if n in endpoint_map})
+    if selection.get("protocol") == "openai":
+        lookup = {n for n, _ in writes}
+        if selection.get("mode") == "implicit":
+            lookup.update(
+                endpoint_map[marker_chars[m]][0]
+                for m in selection["eligible_markers"][-21:]
+                if marker_chars[m] in endpoint_map
+            )
+        return {"points": points, "writes": writes, "lookup_points": sorted(lookup)}
+    # Numerical seams stay stable when a moving breakpoint changes its lookup
+    # window. Only requested endpoints incur a checkpoint clone/write.
+    lookup = set()
+    positions = sorted({n for n, _ in points})
+    for n, _ in writes:
+        index = positions.index(n)
+        lookup.update(positions[max(0, index - 20) : index + 1])
+    return {"points": points, "writes": writes, "lookup_points": sorted(lookup)}
 
 
 def canonical_step_end(start: int, limit: int, step: int, boundaries=()) -> int:
@@ -283,32 +358,81 @@ def canonical_step_end(start: int, limit: int, step: int, boundaries=()) -> int:
 
 
 def openai_plan(messages, options=None):
-    """Explicit OpenAI content-block markers, preserved by gateway conversion."""
+    """OpenAI explicit/implicit endpoints; old automatic APC stays the default."""
+    options = options or {}
+    mode = options.get("mode", "implicit")
+    if mode not in ("explicit", "implicit"):
+        raise ValueError("prompt_cache_options.mode must be explicit or implicit")
+    marked = any(
+        p.get("prompt_cache_breakpoint")
+        for m in messages
+        for p in (m.get("content") if isinstance(m.get("content"), list) else [])
+        if isinstance(p, dict)
+    )
+    if not marked and not options.get("mode"):
+        return None
     shadow = copy.deepcopy(messages)
     markers: dict[str, int] = {}
+    writes: set[str] = set()
+    eligible: list[str] = []
+    head = None
+    leading = True
     nonce = "YUNSHUOPENAICACHE" + uuid.uuid4().hex
-    duration = (options or {}).get("ttl", "in_memory")
-    seconds = 86400 if duration == "24h" else 300
+    duration = options.get("ttl") or "30m"
+    durations = {"30m": 1800, "24h": 86400, "in_memory": 300}
+    if duration not in durations:
+        raise ValueError(
+            "prompt_cache_options.ttl must be 30m (legacy retention: in_memory or 24h)"
+        )
+    seconds = durations[duration]
     for message in shadow:
         content = message.get("content")
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if not block.get("prompt_cache_breakpoint"):
-                continue
-            if block.get("type") not in ("text", "input_text", "output_text"):
-                raise ValueError("OpenAI prompt_cache_breakpoint requires a text block")
+        last = None
+        if isinstance(content, str) and content:
             marker = nonce + str(len(markers)) + "END"
-            block["text"] = block.get("text", "") + marker
+            message["content"] = content + marker
             markers[marker] = seconds
-    if len(markers) > 4:
-        raise ValueError("at most four prompt cache writes are supported")
-    if not markers:
-        return None
+            last = marker
+        elif isinstance(content, list):
+            for block in content:
+                explicit = bool(block.get("prompt_cache_breakpoint"))
+                if block.get("type") not in ("text", "input_text", "output_text"):
+                    if explicit:
+                        raise ValueError(
+                            "OpenAI prompt_cache_breakpoint requires a text block"
+                        )
+                    continue
+                marker = nonce + str(len(markers)) + "END"
+                block["text"] = block.get("text", "") + marker
+                markers[marker] = seconds
+                last = marker
+                if explicit:
+                    writes.add(marker)
+        if leading and message.get("role") in ("system", "developer"):
+            head = last or head
+        else:
+            leading = False
+        if last and message.get("role") in ("user", "tool", "system", "developer"):
+            eligible.append(last)
+    if mode == "implicit" and eligible:
+        writes.add(eligible[-1])
+        # Hybrid state cannot be sliced from the latest user endpoint back to
+        # a system head. Keep the existing local APC head policy under budgets.
+        if head and len(writes) < 4:
+            writes.add(head)
+    if len(writes) > 4:
+        raise ValueError(
+            "at most four prompt cache writes are supported (implicit uses one slot)"
+        )
     return {
         "messages": shadow,
         "markers": markers,
         "tools": {},
+        "write_markers": writes,
+        "write_tools": set(),
+        "eligible_markers": eligible,
+        "protocol": "openai",
+        "mode": mode,
         "points": [],
         "written": 0,
         "resolved": False,
@@ -348,3 +472,19 @@ def expanded_boundaries(plain, expanded, points, media_ids):
     if any(n not in mapping for n, _ in points):
         raise ValueError("cache breakpoint cuts a processor media span")
     return [(mapping[n], duration) for n, duration in points]
+
+
+def trim_safe_shadow(value, markers):
+    """Let a template trim the same trailing whitespace as the real prompt."""
+    if isinstance(value, str):
+        for marker in markers:
+            if value.endswith(marker):
+                before = value[: -len(marker)]
+                text = before.rstrip()
+                value = text + marker + before[len(text) :]
+        return value
+    if isinstance(value, list):
+        return [trim_safe_shadow(v, markers) for v in value]
+    if isinstance(value, dict):
+        return {k: trim_safe_shadow(v, markers) for k, v in value.items()}
+    return value

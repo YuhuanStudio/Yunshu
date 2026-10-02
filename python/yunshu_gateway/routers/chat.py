@@ -384,6 +384,9 @@ class ChatCompletionRequest(BaseModel):
     messages: list[ChatMessage]
     # Ollama-style: how long the model stays loaded after this request ("5m", 300, -1, 0).
     keep_alive: str | int | float | None = None
+    prompt_cache_key: str | None = None
+    prompt_cache_retention: str | None = None
+    prompt_cache_options: dict | None = None
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
     top_k: int = Field(default=0, ge=0)
@@ -2474,6 +2477,9 @@ async def _handle_vlm_chat(
         )
 
     gen_kwargs: dict[str, Any] = dict(
+        prompt_cache_key=req.prompt_cache_key,
+        prompt_cache_retention=req.prompt_cache_retention,
+        prompt_cache_options=req.prompt_cache_options,
         messages=messages,
         max_tokens=req.effective_max_tokens(),
         temperature=req.temperature,
@@ -2847,6 +2853,9 @@ async def _stream_vlm_response(
             req.stream_options is not None and req.stream_options.include_usage
         )
         stream_kwargs: dict[str, Any] = dict(
+            prompt_cache_key=req.prompt_cache_key,
+            prompt_cache_retention=req.prompt_cache_retention,
+            prompt_cache_options=req.prompt_cache_options,
             messages=messages,
             max_tokens=req.effective_max_tokens(),
             temperature=req.temperature,

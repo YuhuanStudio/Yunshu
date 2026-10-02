@@ -25,7 +25,9 @@ def job(ids, *, salt=7, cancel=None):
 
 
 def runner():
-    return VLMBatchRunner(object(), object(), apc_manager=SimpleNamespace())
+    return VLMBatchRunner(
+        object(), object(), apc_manager=SimpleNamespace(), prefix_invariant=True
+    )
 
 
 def test_shared_prefix_waits_but_unrelated_or_other_media_does_not():
@@ -59,3 +61,24 @@ def test_small_shared_prefix_has_no_wait():
     a = job(list(range(9000)))
     r._prefix_producers = [(a, [8192])]
     assert not r._prefix_wait(job(list(range(100)) + [99999]))
+
+
+def test_prefill_progress_is_not_a_publication_receipt():
+    r = runner()
+    ready = [False]
+    r.apc_manager.checkpoint_ready = lambda *args: ready[0]
+    a = job(list(range(9000)))
+    b = job(a.ids)
+    a.stats.prefill_done = 8192
+    r._prefix_producers = [(a, [8192])]
+    assert r._prefix_wait(b)
+    ready[0] = True
+    assert not r._prefix_wait(b)
+
+
+def test_unqualified_numerical_configuration_keeps_original_admission():
+    r = runner()
+    r.prefix_invariant = False
+    a = job(list(range(9000)))
+    r._prefix_producers = [(a, [8192])]
+    assert not r._prefix_wait(job(a.ids))

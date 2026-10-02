@@ -52,6 +52,16 @@ _response_store: OrderedDict[str, dict] = OrderedDict()
 _response_store_lock = threading.Lock()
 
 
+def _cache_kw(req, engine) -> dict:
+    if not hasattr(engine, "_runner_input"):
+        return {}
+    return {
+        "prompt_cache_key": req.prompt_cache_key,
+        "prompt_cache_retention": req.prompt_cache_retention,
+        "prompt_cache_options": req.prompt_cache_options,
+    }
+
+
 def _native_kw(req) -> dict:
     """``tools=`` for an engine whose chat template renders tool definitions itself."""
     tools = getattr(req, "_native_tools", None)
@@ -675,6 +685,7 @@ class ResponsesRequest(BaseModel):
     service_tier: str | None = None
     prompt_cache_key: str | None = None
     prompt_cache_retention: str | None = None
+    prompt_cache_options: dict | None = None
     safety_identifier: str | None = None
     priority: int = Field(default=0, ge=0, le=100)
     logits_processors: list | None = None  # User-provided custom logits processors
@@ -1767,6 +1778,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                         request,
                         engine.generate(
                             **_native_kw(req),
+                            **_cache_kw(req, engine),
                             prompt=_non_batched_prompt,
                             max_tokens=req.max_output_tokens,
                             temperature=req.temperature,
@@ -2549,6 +2561,7 @@ async def _stream_response(
             else:
                 async for output in engine.generate_stream(
                     **_native_kw(req),
+                    **_cache_kw(req, engine),
                     prompt=_stream_prompt,
                     max_tokens=req.max_output_tokens,
                     temperature=req.temperature,

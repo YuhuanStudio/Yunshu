@@ -1,3 +1,4 @@
+# Patches upstream mlx-vlm dispatch; kernels remain unchanged.
 """Absolute prefill spans for the upstream runner's exact checkpoints.
 
 Only span dispatch is changed. Kernels and checkpoint publication are owned by
@@ -17,6 +18,26 @@ def install():
 
     class AbsolutePromptBatch(base):
         _yunshu_absolute_spans = True
+
+        def generate(self, *args, **kwargs):
+            coordinator = getattr(self, "_apc_coordinator", None)
+            meta = getattr(self, "_apc_meta", None) or []
+            descriptors = (
+                [
+                    (m["full_input_ids"], coordinator.request(m["full_input_ids"]))
+                    for m in meta
+                    if m is not None
+                ]
+                if coordinator is not None and hasattr(coordinator, "release_request")
+                else []
+            )
+            try:
+                return super().generate(*args, **kwargs)
+            finally:
+                # A decoding row no longer needs its prefill descriptor. This
+                # runs before the next identical queued prompt can look up APC.
+                for ids, policy in descriptors:
+                    coordinator.release_request(ids, policy)
 
         def prompt_step(self):
             step = self.prefill_step_size

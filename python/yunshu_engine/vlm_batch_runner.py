@@ -258,8 +258,10 @@ class VLMBatchRunner:
         apc_admit: Any = None,
         draft_kind: str = "mtp",
         executor: Any = None,
+        prefix_invariant: bool = False,
     ):
         self.model = model
+        self.prefix_invariant = prefix_invariant
         self.processor = processor
         self.apc_manager = apc_manager
         self.apc_semantic_hash = apc_semantic_hash
@@ -618,6 +620,10 @@ class VLMBatchRunner:
         from .cache_prefill import install
 
         install()
+        if self.prefix_invariant:
+            from .cache_decode import install as install_decode
+
+            install_decode()
 
         gen = BatchGenerator(
             self.model.language_model,
@@ -662,6 +668,8 @@ class VLMBatchRunner:
                 job.processors = [*job.processors, ToolCallProcessor(job.guide)]
 
         use_apc = self.apc_manager is not None
+        if job.cache_plan is not None and job.cache_plan.get("writes") == []:
+            use_apc = False
         if use_apc and self._apc_admit is not None:
             try:
                 use_apc = bool(self._apc_admit(mx.array(job.ids)))
@@ -720,7 +728,7 @@ class VLMBatchRunner:
                 spec=True,
             )
         else:
-            key = (job.top_logprobs, use_apc)
+            key = (job.top_logprobs, use_apc, job.cache_plan is not None)
             group = self._batches.get(key)
             if group is None:
                 sampler = RowSampler()
@@ -738,6 +746,9 @@ class VLMBatchRunner:
             group.gen.apc, "set_request"
         ):
             group.gen.apc.set_request(job.ids, job.cache_plan)
+        extra_hash = getattr(group.gen, "_apc_extra_hash", None)
+        if extra_hash is not None:
+            job.apc_salt = extra_hash(pkw)
         (uid,) = group.gen.insert(
             [job.ids],
             max_tokens=job.max_tokens,
@@ -818,6 +829,13 @@ class VLMBatchRunner:
         if reason is not None:
             job.stats.finish_reason = reason
         self._observe_prefill(job)
+        coordinator = getattr(group.gen, "apc", None)
+        if (
+            job.cache_plan is not None
+            and coordinator is not None
+            and hasattr(coordinator, "release_request")
+        ):
+            coordinator.release_request(job.ids, job.cache_plan)
         self._emit(job, _DONE)
 
     def _step_group(self, group: _Group) -> None:
@@ -832,15 +850,29 @@ class VLMBatchRunner:
                 self._finish(group, uid, "cancel" if cancelled else None)
         if not group.jobs:
             return
-        # The invariant kernels are what make spec on == spec off; they are on
-        # only while the single-row speculative lane steps (and off for every
-        # other user of the model, including the shared batch).
-        invariant = group.spec and batch_invariant.is_installed()
+        # Prefix consumers and producers must use the same per-row arithmetic
+        # regardless of batch arrival order. The same existing kernels already
+        # make the speculative lane invariant.
+        invariant = (
+            group.spec or self.prefix_invariant
+        ) and batch_invariant.is_installed()
         # With ragged KV on, the speculative lane's decode and verify
         # attention run the ragged kernel over its one-row cache, so both
         # share per-row arithmetic (and the shared batch's).
-        dense_lane = group.spec and bool(self.ragged_kv)
+        dense_lane = (group.spec or self.prefix_invariant) and bool(self.ragged_kv)
+        from . import cache_decode
+
+        cache_decode.set_active(invariant and self.prefix_invariant)
         if invariant:
+            if self.prefix_invariant and not getattr(
+                self, "_prefix_invariant_logged", False
+            ):
+                self._prefix_invariant_logged = True
+                logger.info(
+                    "APC prefix-invariant dispatch engaged: shared=%s dense_attention=%s",
+                    not group.spec,
+                    dense_lane,
+                )
             batch_invariant.set_active(True)
         if self.ragged_kv:
             from .kernels import ragged_kv
@@ -852,6 +884,7 @@ class VLMBatchRunner:
         try:
             self._step_generator(group)
         finally:
+            cache_decode.set_active(False)
             if invariant:
                 batch_invariant.set_active(False)
             if self.ragged_kv:
@@ -1018,7 +1051,11 @@ class VLMBatchRunner:
         state or future survives a producer failure. Releasing always returns
         through the normal content/media/kernel-validated APC lookup.
         """
-        if not self.singleflight or self.apc_manager is None:
+        if (
+            not self.singleflight
+            or not self.prefix_invariant
+            or self.apc_manager is None
+        ):
             return False
         for producer, points in self._prefix_producers:
             cancel = producer.cancel_event
@@ -1037,15 +1074,30 @@ class VLMBatchRunner:
                 if n < len(job.ids) and n > producer.stats.cached_tokens
             ]
             if job.cache_plan is not None:
-                requested = {n for n, _ in job.cache_plan["points"]}
+                requested = set(
+                    job.cache_plan.get(
+                        "lookup_points", [n for n, _ in job.cache_plan["points"]]
+                    )
+                )
                 eligible = [n for n in eligible if n in requested]
             for n in reversed(eligible):
                 if job.ids[:n] != producer.ids[:n]:
                     continue
-                # Progress is noted only after prompt_step has attempted its
-                # publication. A rejected snapshot releases to cold fallback.
-                if producer.stats.prefill_done + producer.stats.cached_tokens >= n:
+                # Demand uses an existing canonical position and matching
+                # earlier split plan, never invents a recurrent checkpoint.
+                if producer.cache_plan is not None and job.cache_plan is not None:
+
+                    def prior(plan):
+                        return tuple(p for p, _ in plan["points"] if p <= n)
+
+                    if prior(producer.cache_plan) != prior(job.cache_plan):
+                        continue
+                ready = getattr(self.apc_manager, "checkpoint_ready", None)
+                if ready is not None and ready(producer.ids[:n], producer.apc_salt):
                     return False
+                # Prefill progress alone is insufficient when publication is
+                # deferred. Completion/error/cancel above bounds this wait;
+                # missing snapshots eventually fall back to a cold admission.
                 if "prefix_wait_tokens" not in job.stats.extra:
                     job.stats.extra["prefix_wait_tokens"] = n
                     logger.info(
@@ -1068,6 +1120,13 @@ class VLMBatchRunner:
                 points = coordinator.checkpoint_lengths(
                     job.ids, group.gen._apc_media_token_ids(), begin=False
                 )
+                if job.cache_plan is not None:
+                    points = [
+                        n
+                        for n, _ in job.cache_plan.get(
+                            "writes", job.cache_plan["points"]
+                        )
+                    ]
                 self._prefix_producers.append((job, points))
             break
 
@@ -1361,6 +1420,7 @@ class _Job:
     cancel_event: Any
     stats: RunStats
     cache_plan: dict | None = None
+    apc_salt: int | None = None
     out: queue.Queue = field(default_factory=queue.Queue)
     uid: int | None = None
     start: float = 0.0

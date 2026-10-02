@@ -426,20 +426,37 @@ class _Coordinator(APCCoordinator):
     """Checkpoint positions: the prompt end, one interval boundary, the end of the system turn."""
 
     def set_request(self, token_ids, policy):
-        policies = self.__dict__.setdefault("_requests", collections.OrderedDict())
-        policies[tuple(token_ids)] = policy
-        while len(policies) > 64:
-            policies.popitem(last=False)
+        if policy is None:
+            return
+        # Bounded by live queued/prefilling rows, not a lossy LRU of active
+        # descriptors. Identical tokens may have different write/retention intent.
+        policies = self.__dict__.setdefault("_requests", {})
+        policies.setdefault(tuple(token_ids), collections.deque()).append(policy)
 
     def request(self, token_ids):
-        return self.__dict__.get("_requests", {}).get(tuple(token_ids))
+        pending = self.__dict__.get("_requests", {}).get(tuple(token_ids))
+        return pending[0] if pending else None
+
+    def release_request(self, token_ids, policy):
+        policies = self.__dict__.get("_requests", {})
+        tokens = tuple(token_ids)
+        pending = policies.get(tokens)
+        if pending is None:
+            return
+        for i, queued in enumerate(pending):
+            if queued is policy:
+                del pending[i]
+                break
+        if not pending:
+            policies.pop(tokens, None)
 
     def lookup(self, token_ids, **kwargs):
         policy = self.request(token_ids)
         if not policy or not self.is_checkpoint:
             return super().lookup(token_ids, **kwargs)
         points = self.checkpoint_lengths(token_ids, set(), begin=False)
-        maximum = max(points, default=0) if policy else len(token_ids) - 1
+        candidates = policy.get("lookup_points", [n for n, _ in policy["points"]])
+        maximum = max(candidates, default=0)
         extra_hash = kwargs["extra_hash"]
         while maximum > 0:
             cache, n = self.manager.lookup_exact_cache(
@@ -447,6 +464,7 @@ class _Coordinator(APCCoordinator):
                 extra_hash=extra_hash,
                 max_prefix_tokens=maximum,
                 min_prefix_tokens=kwargs.get("safe_lookup_min", 0),
+                refresh_retention=False,
             )
             if cache is None or not n:
                 return None
@@ -458,10 +476,11 @@ class _Coordinator(APCCoordinator):
             signature = tuple(p for p in points if p < n and p % 2048)
             source = self.manager._span_plans.get(key)
             if (
-                (n in points or n % 2048 == 0)
+                (n in candidates)
                 and source == signature
                 and kwargs["suffix_is_text_only"](n)
             ):
+                self.manager.touch_boundary(token_ids[:n], extra_hash)
                 return {
                     "matched_blocks": [],
                     "warm_cache": cache,
@@ -476,24 +495,24 @@ class _Coordinator(APCCoordinator):
         self, token_ids, prompt_cache, *, batch_idx=None, extra_hash=0
     ):
         tokens = tuple(token_ids)
-        policies = self.__dict__.get("_requests", {})
+        current = self.request(getattr(self, "_current_ids", tokens))
+        if current is not None and len(tokens) not in {
+            n for n, _ in current.get("writes", current["points"])
+        }:
+            return False
         matched = []
-        for ids, policy in policies.items():
-            if ids[: len(tokens)] != tokens:
-                continue
-            if policy is None:
-                continue
-            duration = next(
-                (ttl for n, ttl in policy["points"] if n == len(tokens)), None
-            )
-            if duration is not None:
-                matched.append(policy)
+        if current is not None:
+            matched.append(current)
         ok = super().store_checkpoint(
             tokens, prompt_cache, batch_idx=batch_idx, extra_hash=extra_hash
         )
         if ok and matched:
             for policy in matched:
-                duration = next(ttl for n, ttl in policy["points"] if n == len(tokens))
+                duration = next(
+                    ttl
+                    for n, ttl in policy.get("writes", policy["points"])
+                    if n == len(tokens)
+                )
                 self.manager.protect_boundary(tokens, extra_hash, duration)
             # Source span identity is bounded with the resident/known entries.
             full_ids = getattr(self, "_current_ids", tokens)
@@ -589,6 +608,7 @@ class YunshuAPCManager(APCManager):
         # inactivity TTL expires, always within the existing byte/entry budgets.
         self._retention: dict[int, tuple[float, int]] = {}
         self._span_plans: dict[int, tuple[int, ...]] = {}
+        self._expired_boundaries: set[int] = set()
         self._born: dict[int, int] = {}
         self._head_keys: set[int] = set()
         self._head_lengths: set[int] = set()
@@ -822,20 +842,44 @@ class YunshuAPCManager(APCManager):
                 return i
         return 0
 
+    def checkpoint_ready(self, token_ids, extra_hash):
+        """Publication receipt without cloning/evaluating a checkpoint."""
+        if extra_hash is None:
+            return False
+        self._expire_boundaries()
+        tokens = tuple(token_ids)
+        key = _sequence_hash(tokens, extra_hash, self.block_size)
+        with self.lock:
+            entry = self._exact_cache.get(key)
+            return bool(
+                entry is not None
+                and entry.token_ids == tokens
+                and entry.extra_hash == extra_hash
+            )
+
     def protect_boundary(self, token_ids, extra_hash, duration):
         key = _sequence_hash(tuple(token_ids), extra_hash, self.block_size)
         self._retention[key] = (time.monotonic() + duration, duration)
+        self._expired_boundaries.discard(key)
         # Only resident/bookkept entries need intent. Bound descriptor memory.
         if len(self._retention) > _BORN_MAX:
             self._retention = {
                 k: v for k, v in self._retention.items() if v[0] > time.monotonic()
             }
 
+    def touch_boundary(self, token_ids, extra_hash):
+        key = _sequence_hash(tuple(token_ids), extra_hash, self.block_size)
+        if key in self._retention:
+            duration = self._retention[key][1]
+            self._retention[key] = (time.monotonic() + duration, duration)
+
     def _expire_boundaries(self):
         now = time.monotonic()
         expired = [k for k, (deadline, _) in self._retention.items() if deadline <= now]
         for key in expired:
             self._retention.pop(key, None)
+            self._expired_boundaries.add(key)
+            self._span_plans.pop(key, None)
             with self.lock:
                 self._exact_cache.pop(key, None)
             if self.warm is not None:
@@ -909,6 +953,7 @@ class YunshuAPCManager(APCManager):
 
     # ── provenance ─────────────────────────────────────────────────────
     def lookup_exact_cache(self, token_ids, *args, **kwargs):
+        refresh_retention = kwargs.pop("refresh_retention", True)
         self._expire_boundaries()
         before = self.stats.disk_hits
         t0 = time.perf_counter()
@@ -922,12 +967,23 @@ class YunshuAPCManager(APCManager):
             ]
             self._promote_warm(tokens, int(vals[0]), vals[1], vals[2])
         cache, n = super().lookup_exact_cache(token_ids, *args, **kwargs)
-        if n:
-            extra = self._extra_of(args, kwargs)
-            key = _sequence_hash(tuple(token_ids[:n]), extra, self.block_size)
-            if key in self._retention:
-                duration = self._retention[key][1]
-                self._retention[key] = (time.monotonic() + duration, duration)
+        extra = self._extra_of(args, kwargs)
+        # A background spill may finish after drop_exact saw a busy writer.
+        # Tombstones veto resurrection without touching a request's live state.
+        while (
+            n
+            and _sequence_hash(tuple(token_ids[:n]), extra, self.block_size)
+            in self._expired_boundaries
+        ):
+            maximum = n - 1
+            retry = dict(kwargs, max_prefix_tokens=maximum)
+            positional = list(args)
+            if len(positional) > 1:
+                positional[1] = maximum
+                retry.pop("max_prefix_tokens")
+            cache, n = super().lookup_exact_cache(token_ids, *positional, **retry)
+        if n and refresh_retention:
+            self.touch_boundary(token_ids[:n], extra)
         ms = (time.perf_counter() - t0) * 1000.0
         tier = ("ssd" if self.stats.disk_hits > before else "ram") if n else "none"
         if n and self._promoted is not None and self._promoted[0] == n:

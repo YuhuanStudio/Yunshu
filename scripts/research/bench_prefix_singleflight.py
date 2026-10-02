@@ -115,7 +115,7 @@ def main():
                     t.YUNSHU_BIN = wrappers[mode]
                     server = t.Srv(
                         "yunshu",
-                        {"YUNSHU_VLM_APC_DISK": "0", "YUNSHU_VLM_DRAFT": "off"},
+                        {"YUNSHU_VLM_APC_DISK": "0", "YUNSHU_VLM_DRAFT": t.D},
                         f"cachesf-{ctx}-{rep}-{mode}-{time.time_ns()}",
                     )
                     try:
@@ -178,7 +178,12 @@ def main():
                                 "singleflight_waits": log.count(
                                     "APC single-flight wait:"
                                 ),
-                                "spec_off": "Speculative decoding: off" in log,
+                                "dflash_installed": "Speculative decoding: dflash"
+                                in log,
+                                "prefix_invariant": "APC prefix-invariant dispatch engaged:"
+                                in log,
+                                "shared_gdn": "APC shared GDN singleton arithmetic engaged:"
+                                in log,
                                 "source": source,
                             },
                             "server_log": str(server.log),

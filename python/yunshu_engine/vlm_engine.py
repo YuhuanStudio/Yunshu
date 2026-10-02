@@ -849,6 +849,8 @@ class VLMEngine:
                         pkw,
                         _enable_thinking,
                         tpl_extra,
+                        kwargs.get("prompt_cache_options")
+                        or {"ttl": kwargs.get("prompt_cache_retention")},
                     ),
                     **runner_params,
                 )
@@ -1074,6 +1076,8 @@ class VLMEngine:
                     pkw,
                     enable_thinking,
                     tpl_extra,
+                    kwargs.get("prompt_cache_options")
+                    or {"ttl": kwargs.get("prompt_cache_retention")},
                 ),
                 **runner_params,
             )
@@ -1312,6 +1316,9 @@ class VLMEngine:
                 "apc_adapter_schema": ADAPTER_SCHEMA_VERSION,
                 "apc_layout": "exact_cache_v1",
                 "prefill_kernel": self._prefill_kernel_id(),
+                "shared_prefix_invariant": bool(
+                    getattr(self, "_prefix_invariant_dispatch", False)
+                ),
             },
             digest_size=8,
         )
@@ -1684,6 +1691,7 @@ class VLMEngine:
                     block = int(getattr(drafter.config, "block_size", 0)) or None
                 else:
                     block = 6 if invariant else 3
+        self._prefix_invariant_dispatch = bool(kernels and kernels.get("invariant"))
         # After the kernels: the identity names the prefill matmul they installed.
         budget = self._apc_memory_gb()
         if self._apc_backend is None and budget > 0:
@@ -1738,6 +1746,7 @@ class VLMEngine:
             apc_admit=self._apc_capacity_allows,
             draft_kind=draft_kind,
             executor=self._executor,
+            prefix_invariant=self._prefix_invariant_dispatch,
         )
         runner.clear_on_idle = bool(getattr(self, "_mx_large_model", False))
         runner.stop_tokens = set(self._get_eos_ids())
@@ -2139,20 +2148,38 @@ class VLMEngine:
         return ids.tolist(), None, None
 
     def _resolve_prompt_cache_plan(
-        self, plan, messages, ids, prompt_kwargs, enable_thinking, template_extra
+        self,
+        plan,
+        messages,
+        ids,
+        prompt_kwargs,
+        enable_thinking,
+        template_extra,
+        cache_options=None,
     ):
         if plan is None:
             from .prompt_caching import openai_plan
 
-            plan = openai_plan(messages)
-        if not plan or not (plan.get("markers") or plan.get("tools")):
+            plan = openai_plan(messages, cache_options)
+        if plan is None:
             return None
-        from .prompt_caching import expanded_boundaries, rendered_boundaries
+        if not (plan.get("markers") or plan.get("tools")):
+            if (cache_options or {}).get("mode") == "explicit":
+                plan["resolved"] = True
+                return plan
+            return None
+        from .prompt_caching import (
+            expanded_boundaries,
+            rendered_boundaries,
+            trim_safe_shadow,
+        )
 
         if prompt_kwargs is None:
             prompt = self._format_prompt(messages, enable_thinking, template_extra)
             shadow = self._format_prompt(
-                plan["messages"], enable_thinking, template_extra
+                trim_safe_shadow(plan["messages"], plan["markers"]),
+                enable_thinking,
+                template_extra,
             )
             rendered_ids = ids
         else:
@@ -2173,7 +2200,7 @@ class VLMEngine:
                 template_extra=template_extra,
             )
             shadow = self._apply_vlm_template_with_cache(
-                plan["messages"],
+                trim_safe_shadow(plan["messages"], plan["markers"]),
                 enable_thinking=enable_thinking,
                 max_images=count or None,
                 template_extra=template_extra,
@@ -2188,13 +2215,22 @@ class VLMEngine:
             tools=(template_extra or {}).get("tools"),
             tool_controls=plan["tools"],
             marker_ends=plan.get("marker_ends"),
+            selection=plan,
         )
         if prompt_kwargs is not None:
             from mlx_vlm.apc import multimodal_token_ids_from_config
 
             media = multimodal_token_ids_from_config(self._model.language_model.config)
-            points = expanded_boundaries(rendered_ids, ids, points, media)
-        plan["points"] = points
+            lookup = expanded_boundaries(
+                rendered_ids, ids, [(n, 0) for n in points["lookup_points"]], media
+            )
+            points = {
+                k: expanded_boundaries(rendered_ids, ids, value, media)
+                for k, value in points.items()
+                if k != "lookup_points"
+            }
+            points["lookup_points"] = [n for n, _ in lookup]
+        plan.update(points)
         plan["resolved"] = True
         logger.info("Prompt cache rendered token boundaries: %s", plan["points"])
         return plan

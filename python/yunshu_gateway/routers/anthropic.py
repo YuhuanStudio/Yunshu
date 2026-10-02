@@ -434,7 +434,8 @@ def _extract_text_from_content(content: str | list[dict] | None) -> str:
             parts.append(block.get("thinking", ""))
 
         else:
-            parts.append(str(block))
+            clean = {k: v for k, v in block.items() if k != "_yunshu_cache_marker"}
+            parts.append(str(clean) + block.get("_yunshu_cache_marker", ""))
 
     return "\n".join(parts)
 
@@ -536,7 +537,11 @@ def _convert_anthropic_messages(
                         {
                             "id": tool_id,
                             "type": "function",
-                            "function": {"name": tool_name, "arguments": _args},
+                            "function": {
+                                "name": tool_name
+                                + block.get("_yunshu_cache_marker", ""),
+                                "arguments": _args,
+                            },
                         }
                     )
                 else:
