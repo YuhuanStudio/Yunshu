@@ -1669,6 +1669,9 @@ class VLMEngine:
                 else:
                     block = 6 if invariant else 3
         # After the kernels: the identity names the prefill matmul they installed.
+        from .kernels import buffer_cache
+
+        buffer_cache.install(float(settings.get("YUNSHU_PREFILL_BUFFER_CACHE_GB")))
         budget = self._apc_memory_gb()
         if self._apc_backend is None and budget > 0:
             from mlx_vlm.apc import semantic_extra_hash
