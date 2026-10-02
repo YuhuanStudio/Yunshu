@@ -475,6 +475,69 @@ def test_observed_restore_speed_overrides_an_optimistic_probe(tmp_path):
     assert s.snapshot()[1]["effective_read_bps"] == pytest.approx((256 << 20) / 400.0)
 
 
+def test_a_file_being_read_is_not_deleted_under_the_reader(tmp_path):
+    s = _store(tmp_path, soft_mb=0.2, lower=[(1e9, "raw")])
+    keys = [_put(s, _toks(1500, i), i + 1) for i in range(3)]
+    s.settle()
+    t1 = s.lower[0]
+    k = next(iter(t1.index))
+    path = t1.index[k].path
+    s._lease(path)  # a lookup is loading it
+    s.drop_exact(k)  # a newer checkpoint supersedes it meanwhile
+    assert k not in t1.index and path.exists(), "gone from the index, still on disk"
+    s._release(path)
+    assert not path.exists(), "unlinked once the reader is done"
+    # the primary store too
+    k2 = _put(s, _toks(1500, 9), 9)
+    p2 = s._exact_index[k2]
+    s._lease(p2)
+    assert s.drop_exact(k2) and p2.exists() and k2 not in s._exact_index
+    s._release(p2)
+    assert not p2.exists()
+    del keys
+
+
+def test_a_read_that_cannot_complete_never_deletes_a_good_file(tmp_path, monkeypatch):
+    s = _store(tmp_path, soft_mb=0.2, lower=[(1e9, "raw")])
+    for i in range(3):
+        _put(s, _toks(1500, i), i + 1)
+    s.settle()
+    t1 = s.lower[0]
+    k = next(iter(t1.index))
+    path = t1.index[k].path
+
+    def eio(*a, **kw):
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(s, "_load_exact_cache_file", eio)
+    s._where[k] = t1
+    assert s.load_exact_cache(k, prefix_len=len(t1.index[k].tokens)) is None
+    assert path.exists() and k in t1.index and t1.invalidated == 0
+    monkeypatch.undo()
+    # a file that vanished under the reader is a quiet miss
+    path.unlink()
+    s._where[k] = t1
+    assert s.load_exact_cache(k, prefix_len=len(t1.index[k].tokens)) is None
+    assert k not in t1.index and t1.invalidated == 0
+
+
+def test_prefill_speed_is_observed_from_the_tokens_really_computed():
+    from yunshu_engine.vlm_batch_runner import RunStats, VLMBatchRunner
+
+    seen = []
+    disk = SimpleNamespace(observe_prefill=lambda n, t: seen.append((n, t)))
+    runner = SimpleNamespace(
+        apc_manager=SimpleNamespace(disk=disk), _active_jobs=lambda: 0
+    )
+    st = RunStats()
+    st.t_admit, st.t_first, st.cache_reload_ms = 10.0, 15.0, 500.0
+    st.cached_tokens = 25000
+    st.prefill_total = 28000  # counts the cached tokens while the prompt is processed
+    job = SimpleNamespace(stats=st, ids=list(range(28000)))
+    VLMBatchRunner._observe_prefill(runner, job)
+    assert seen == [(3000, pytest.approx(4.5))]
+
+
 def test_corrupt_lower_file_falls_back_and_is_deleted(tmp_path):
     s = _store(tmp_path, soft_mb=0.2, lower=[(1e9, "zstd")])
     keys = [_put(s, _toks(1500, i), i + 1) for i in range(3)]

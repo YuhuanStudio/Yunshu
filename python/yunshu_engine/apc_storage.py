@@ -623,8 +623,7 @@ class FileTier:
         with self._lock:
             if h is not None:
                 self.index.pop(h, None)
-        with contextlib.suppress(OSError):
-            path.unlink()
+        self._unlink(path)
         return True
 
     def rescan(self) -> None:
@@ -762,8 +761,16 @@ class FileTier:
         with self._lock:
             e = self.index.pop(h, None)
         if e is not None:
-            with contextlib.suppress(OSError):
-                e.path.unlink()
+            self._unlink(e.path)
+
+    def _unlink(self, path: Path) -> None:
+        """Delete a file; a file somebody is reading right now goes when the reader is done."""
+        owner = self.owner
+        if owner is not None:
+            owner._unlink_when_free(path)
+            return
+        with contextlib.suppress(OSError):
+            path.unlink()
 
     def touch(self, h: int) -> None:
         e = self.index.get(h)
@@ -917,6 +924,9 @@ class TieredDiskStore(SpillDiskStore):
         self.sim: tuple[float, float] | None = None
         self.lower: list[FileTier] = []
         self._where: dict[int, FileTier] = {}
+        self._lease_lock = threading.Lock()
+        self._leases: Counter = Counter()
+        self._deferred: set[Path] = set()
         self.last_device: str | None = None
         self.device_hits: Counter = Counter()
         self.soft_cap_bytes = 0
@@ -1018,6 +1028,39 @@ class TieredDiskStore(SpillDiskStore):
             self._where.pop(h, None)
         return h, n
 
+    # ── leases: a file that is being read is not deleted under the reader ─────────────
+    def _lease(self, path: Path) -> None:
+        with self._lease_lock:
+            self._leases[path] += 1
+
+    def _release(self, path: Path) -> None:
+        with self._lease_lock:
+            self._leases[path] -= 1
+            if self._leases[path] > 0:
+                return
+            del self._leases[path]
+            late = path in self._deferred
+            self._deferred.discard(path)
+        if late:
+            with contextlib.suppress(OSError):
+                path.unlink()
+
+    def _unlink_when_free(self, path: Path) -> None:
+        with self._lease_lock:
+            if self._leases.get(path, 0) > 0:
+                self._deferred.add(path)
+                return
+        with contextlib.suppress(OSError):
+            path.unlink()
+
+    @contextlib.contextmanager
+    def _leased(self, path: Path):
+        self._lease(path)
+        try:
+            yield
+        finally:
+            self._release(path)
+
     def _rejected(self, name: str, n: int, restore_s: float | None) -> None:
         self.cost_rejected += 1
         now = time.monotonic()
@@ -1044,7 +1087,13 @@ class TieredDiskStore(SpillDiskStore):
         tier = self._where.get(cache_hash)
         t0 = time.perf_counter()
         if tier is None:
-            got = super().load_exact_cache(cache_hash, **kwargs)
+            with self._index_lock:
+                src = self._exact_index.get(cache_hash)
+            if src is not None:
+                with self._leased(src):
+                    got = super().load_exact_cache(cache_hash, **kwargs)
+            else:
+                got = super().load_exact_cache(cache_hash, **kwargs)
             if got is None:  # moved down between the lookup and the read
                 for t in self.lower:
                     if cache_hash in t.index and t.available():
@@ -1093,10 +1142,19 @@ class TieredDiskStore(SpillDiskStore):
         e = tier.index.get(h)
         if e is None:
             return None
+        with self._leased(e.path):
+            return self._load_lower_leased(tier, h, e, prefix_len, min_capacity_tokens)
+
+    def _load_lower_leased(self, tier, h, e, prefix_len, min_capacity_tokens):
+        """Read one checkpoint back from a lower tier. Fail closed, but delete only what is
+        provably bad: a file that vanished (superseded, moved) is a miss, an I/O error is a miss
+        that keeps the file, a file that is torn or fails validation is removed."""
         tmp = None
         try:
             try:
                 path, tmp = tier.raw_path_for_load(h, self.dir)
+            except OSError:
+                return None
             except Exception as exc:
                 tier._invalid(e.path, f"decode failed: {type(exc).__name__}")
                 tier.drop(h)
@@ -1104,6 +1162,8 @@ class TieredDiskStore(SpillDiskStore):
             loaded = self._load_exact_cache_file(
                 path, min_capacity_tokens=min_capacity_tokens, prefix_len=prefix_len
             )
+        except OSError:
+            return None
         except Exception as exc:
             tier._invalid(e.path, f"load raised {type(exc).__name__}")
             tier.drop(h)
@@ -1115,8 +1175,18 @@ class TieredDiskStore(SpillDiskStore):
                 with self._header_cache_lock:
                     self._header_cache.pop(tmp, None)
         if loaded is None:
-            tier._invalid(e.path, "torn or unreadable")
-            tier.drop(h)
+            if not e.path.exists():
+                with tier._lock:
+                    tier.index.pop(h, None)  # gone under us: a miss
+            elif not e.encoded and not tier._raw_complete(e.path):
+                tier._invalid(e.path, "torn or truncated")
+                tier.drop(h)
+            else:
+                logger.warning(
+                    "APC storage %s: %s could not be read back; kept, lookup recomputes",
+                    tier.name,
+                    e.path.name,
+                )
             return None
         if self.validator is not None:
             try:
@@ -1150,7 +1220,14 @@ class TieredDiskStore(SpillDiskStore):
             if cache_hash in tier.index:
                 tier.drop(cache_hash)
                 return True
-        return bool(super().drop_exact(cache_hash))
+        with self._index_lock:
+            path = self._exact_index.get(cache_hash)
+        if path is None:
+            return False
+        ok = self._remove_primary(path)
+        if ok:
+            self._tok_cache().pop(cache_hash, None)
+        return ok
 
     # ── placement ──────────────────────────────────────────────────────
     def _evict_path(self, path) -> bool:
@@ -1169,6 +1246,24 @@ class TieredDiskStore(SpillDiskStore):
                     if self._target_for(0, size, ntok) is not None:
                         self._wake.set()
                         return False
+        return self._remove_primary(path)
+
+    def _remove_primary(self, path) -> bool:
+        """Delete one primary-store file (index and all); a file being read goes when the reader
+        is done. False when it is still being written."""
+        if path in self._in_flight_paths():
+            return False
+        if self._leases.get(path, 0) > 0:
+            with self._lease_lock:
+                self._deferred.add(path)
+            try:
+                size = path.stat().st_size
+            except OSError:
+                size = 0
+            self._drop_index_for_path(path)
+            self._disk_bytes = max(0, self._disk_bytes - size)
+            self.evictions += 1
+            return True
         return bool(super()._evict_path(path))
 
     def _write_payload(self, shard_id, block_hashes, payload) -> bool:
@@ -1236,7 +1331,9 @@ class TieredDiskStore(SpillDiskStore):
                 if tier is None:
                     self.dropped_not_worth += 1
                     continue
-                if tier.put(path, h, meta, size):
+                with self._leased(path):
+                    moved_ok = tier.put(path, h, meta, size)
+                if moved_ok:
                     self._evict_primary(h, path)
                     used -= size
                     moved += 1
@@ -1265,7 +1362,11 @@ class TieredDiskStore(SpillDiskStore):
                         continue
                     tmp_raw, cleanup = self._raw_copy(tier, h)
                     try:
-                        ok = tmp_raw is not None and nxt.put(tmp_raw, h, meta, e.orig)
+                        if tmp_raw is None:
+                            ok = False
+                        else:
+                            with self._leased(e.path):
+                                ok = nxt.put(tmp_raw, h, meta, e.orig)
                     finally:
                         if cleanup is not None:
                             with contextlib.suppress(OSError):

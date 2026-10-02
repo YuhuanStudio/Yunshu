@@ -905,7 +905,10 @@ class VLMBatchRunner:
         ):
             return
         reload_s = (st.cache_reload_ms or 0.0) / 1000.0
-        observe(st.prefill_total, st.t_first - st.t_admit - reload_s)
+        # tokens computed this request: the prompt minus what the cache served (prefill_total
+        # can still count the cached ones while the prompt is being processed)
+        fresh = len(job.ids) - st.cached_tokens
+        observe(fresh, st.t_first - st.t_admit - reload_s)
 
     def _note_cache(self, job: _Job) -> None:
         """Record the tier and lookup time of ``job``'s prefix-cache hit (per-request
