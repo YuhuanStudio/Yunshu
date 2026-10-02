@@ -50,6 +50,25 @@ def test_apc_snapshot_populates_metrics(monkeypatch):
     assert "yunshu_apc_lookups_hit_total" in text
 
 
+def test_busy_seconds_reach_metrics(monkeypatch):
+    snap = {"slices": {"busy_seconds": 12.5}, "round_driver": {"busy_seconds": 9.0}}
+    engine = SimpleNamespace(busy_snapshot=lambda: snap)
+    monkeypatch.setattr(
+        "yunshu_gateway.engine.get_engine", lambda: engine, raising=False
+    )
+    monkeypatch.setattr(
+        "yunshu_gateway.engine.get_model_manager", lambda: None, raising=False
+    )
+    pm = PrometheusMetrics()
+    monitoring._populate_busy_metrics(pm)
+    text = pm.generate()
+    line = next(
+        x for x in text.splitlines() if x.startswith("yunshu_gpu_busy_seconds_total{")
+    )
+    assert float(line.rsplit(" ", 1)[1]) == 12.5
+    assert "yunshu_round_driver_busy_seconds_total" in text
+
+
 def test_metrics_endpoint_serves_apc_gauges(monkeypatch):
     monkeypatch.setenv("YUNSHU_AUTH_DISABLED", "1")
     _patch_engine(monkeypatch)

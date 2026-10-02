@@ -3258,6 +3258,11 @@ class VLMEngine:
             logger.debug("APC snapshot unavailable", exc_info=True)
             return None
 
+    def busy_snapshot(self) -> dict | None:
+        """GPU-busy accounting of the batch runner (None before a model is loaded)."""
+        runner = self._batch_runner
+        return runner.busy_snapshot() if runner is not None else None
+
     def get_kv_cache_stats(self) -> dict:
         """Same shape as the text engine's, so /debug/kv-cache and /metrics cover both."""
         snap = self.apc_snapshot()
