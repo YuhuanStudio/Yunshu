@@ -181,8 +181,8 @@ class TestBatchedEngineSpecDecode:
         from yunshu_engine.batched_engine import BatchedEngine
 
         engine = BatchedEngine(model_name="test")
-        assert engine._spec_decoder is None
-        assert engine._spec_enabled is False
+        assert not hasattr(engine, "_spec_decoder")
+        assert not hasattr(engine, "_spec_enabled")
 
     def test_init_spec_decode_no_heads(self):
         """Model without spec heads should not enable spec decode."""
@@ -195,10 +195,10 @@ class TestBatchedEngineSpecDecode:
         engine._tokenizer = MagicMock()
 
         engine._init_spec_decode()
-        assert engine._spec_enabled is False
+        assert not hasattr(engine, "_spec_enabled")
 
     def test_init_spec_decode_with_mtp(self):
-        """Model with MTP heads should enable spec decode."""
+        """Text MTP metadata must not install an unverified decoder."""
         from yunshu_engine.batched_engine import BatchedEngine
 
         engine = BatchedEngine(model_name="test")
@@ -212,10 +212,11 @@ class TestBatchedEngineSpecDecode:
         engine._tokenizer = MagicMock()
 
         engine._init_spec_decode()
-        assert engine._spec_enabled is True
+        assert not hasattr(engine, "_spec_enabled")
+        assert engine._ngram_proposer is not None
 
     def test_init_spec_decode_with_eagle(self):
-        """Model with EAGLE heads should enable spec decode."""
+        """EAGLE metadata must not advertise a nonexistent serving route."""
         from yunshu_engine.batched_engine import BatchedEngine
 
         engine = BatchedEngine(model_name="test")
@@ -228,7 +229,8 @@ class TestBatchedEngineSpecDecode:
         engine._tokenizer = MagicMock()
 
         engine._init_spec_decode()
-        assert engine._spec_enabled is True
+        assert not hasattr(engine, "_spec_enabled")
+        assert engine._ngram_proposer is not None
 
     def test_init_spec_decode_no_config(self):
         """Model without config should not crash."""
@@ -239,7 +241,7 @@ class TestBatchedEngineSpecDecode:
         engine._tokenizer = MagicMock()
 
         engine._init_spec_decode()
-        assert engine._spec_enabled is False
+        assert not hasattr(engine, "_spec_enabled")
 
 
 class TestAutoConfigureSpeculative:

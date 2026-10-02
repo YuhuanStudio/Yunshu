@@ -150,7 +150,6 @@ from .engine_cache import (
 from .engine_diagnostics import EngineDiagnosticsMixin
 from .engine_embeddings import EngineEmbeddingsMixin
 from .engine_fast import EngineFastMixin
-from .engine_mtp import EngineMtpMixin
 from .engine_ngram import EngineNgramMixin
 from .engine_policy import (
     _is_cancelled as _is_cancelled,
@@ -213,7 +212,6 @@ class BatchedEngine(
     EngineStreamMixin,
     EngineSpeculativeMixin,
     EngineNgramMixin,
-    EngineMtpMixin,
 ):
     """User-facing continuous batching engine.
 
@@ -272,17 +270,9 @@ class BatchedEngine(
 
         self._preprocessor_registry = PreprocessorRegistry()
 
-        # Speculative decoding state (Phase 4)
-        self._spec_decoder = None  # SpeculativeDecoder instance
-        self._spec_enabled = False
-
         # Gemma-4 dual-load assistant drafter (EAGLE-style external drafter that
         # shares the target's KV; validated 2.08×). Gated by YUNSHU_GEMMA4_ASSISTANT.
         self._gemma4_assistant_proposer = None  # Gemma4AssistantProposer
-
-        # MTP speculative decoding (built-in multi-token prediction heads)
-        self._mtp_decoder = None  # MTPDecoder instance
-        self._mtp_strategy = None  # MTPStrategy wrapper
 
         # N-gram proposer for model-free speculative decoding
         self._ngram_proposer = None  # NgramProposer, created on demand
@@ -333,20 +323,6 @@ class BatchedEngine(
         # the knee of the reuse/cold-penalty curve (≈3.1x reuse for ≈+18% cold
         # prefill).
         self._hybrid_prefix_block = 128
-        # Experimental MTP for text-only models (YUNSHU_SPEC_UNVERIFIED=mlxvlm_mtp;
-        # YUNSHU_MTP is the VLM runner's MTP draft switch). mlx-vlm is the supported MTP
-        # implementation (its speculative path is the only correct one — see mlxvlm_mtp.py).
-        # This text-engine MTP backend is single-backend + honors only
-        # temperature (drops top_p/json_schema/penalties, see _warn_mtp_dropped_params) +
-        # non-streaming. Treat it as EXPERIMENTAL, not a shipped prod win; the real spec win
-        # is the gemma-4 assistant drafter. When set and the model has native MTP weights,
-        # the engine serves via that backend (single-backend swap, no dual-load): greedy →
-        # MTP; sampling → plain gen on the same model.
-        self._mlxvlm_mtp_enabled = (
-            settings.get("YUNSHU_SPEC_UNVERIFIED") == "mlxvlm_mtp"
-        )
-        self._mlxvlm_mtp = None
-
         # Warm prompt prefill stats (tracked across _warm_prompt_prefill calls)
         self._warm_prompt_stats: dict = {
             "prompts_loaded": 0,
@@ -487,34 +463,6 @@ class BatchedEngine(
 
         executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
-
-        # mlx-vlm native MTP single-backend mode. When enabled
-        # and the checkpoint has native MTP weights, load the mlx-vlm target +
-        # MTP drafter on the executor thread and skip the mlx-lm fast-path setup
-        # entirely (no dual-load). chat() delegates to this backend.
-        if self._mlxvlm_mtp_enabled:
-            try:
-                from .mlxvlm_mtp import MLXVLMMtp, is_mtp_capable
-
-                if is_mtp_capable(self.model_name):
-                    backend = MLXVLMMtp(self.model_name)
-                    await loop.run_in_executor(executor, backend.load)
-                    self._mlxvlm_mtp = backend
-                    self._tokenizer = backend.tokenizer
-                    _cache_tokenizer_vocab(self._tokenizer)  # missed this twin
-                    self._loaded = True
-                    logger.info("mlx-vlm MTP backend active for %s", self.model_name)
-                    return
-                logger.info(
-                    "YUNSHU_SPEC_UNVERIFIED=mlxvlm_mtp set but %s is not MTP-capable; "
-                    "using standard path",
-                    self.model_name,
-                )
-            except Exception:
-                logger.warning(
-                    "mlx-vlm MTP backend load failed; falling back to standard path",
-                    exc_info=True,
-                )
 
         # Load model on MLX executor thread (non-blocking)
         def _load():
@@ -667,26 +615,6 @@ class BatchedEngine(
         except Exception:
             logger.warning("Model optimization detection skipped", exc_info=True)
 
-        # The home-grown Qwen3.5 MTP (n_confirmed_patch + mtp_patch +
-        # mtp_decoder) lacked mlx-vlm's GatedDeltaNet intermediate-state capture
-        # (garbage on 27B, ~0.9x on 9B); Qwen3.5-family MTP is served by the VLM
-        # runner. Kept only as the experimental YUNSHU_SPEC_UNVERIFIED=mtp route.
-        if settings.get("YUNSHU_SPEC_UNVERIFIED") == "mtp":
-            try:
-                from .n_confirmed_patch import apply_n_confirmed_patch
-
-                if apply_n_confirmed_patch():
-                    logger.info("[experimental] n_confirmed patch applied")
-            except Exception:
-                logger.debug("n_confirmed patch skipped", exc_info=True)
-            try:
-                from .mtp_patch import apply_mtp_patch
-
-                if apply_mtp_patch():
-                    logger.info("[experimental] MTP patch applied")
-            except Exception:
-                logger.warning("MTP patch skipped", exc_info=True)
-
         # Load per-model settings from model_settings.json + env overrides
         self._load_model_settings()
 
@@ -831,8 +759,6 @@ class BatchedEngine(
         # consumed by turbo_quant only.
         if not s.prefix_cache_enabled:
             self._kv_prefix_cache = None
-        if s.spec_decode_enabled:
-            self._spec_enabled = True
 
         if s.ssd_cache_enabled and self._kv_prefix_cache is not None:
             self._kv_prefix_cache.enable_ssd_cache(
@@ -1155,32 +1081,15 @@ class BatchedEngine(
     def _wire_spec_decoders_to_scheduler(self) -> None:
         """Wire speculative decoding decoders into the scheduler's batch path.
 
-        Called after _ensure_engine_core() creates the scheduler and after
-        _init_spec_decode() has detected spec heads and created decoders.
-
-        Three paths:
-          1. Cross-model: SpeculativeDecoder → scheduler.set_spec_decoder()
-          2. MTP: MTPDecoder → scheduler.set_mtp_decoder()
-          3. N-gram: already handled by SchedulerConfig.ngram_spec_enabled
-
-        Also propagates N-gram proposer settings to the scheduler config
-        if BatchedEngine has one but the scheduler doesn't.
+        Propagate the text n-gram proposer when the scheduler lacks one.
+        Native Qwen MTP and DFlash are served by the VLM runner; unverified
+        cross-model/text MTP decoders are not installed in the text scheduler.
         """
         if self._engine_core is None:
             return
         scheduler = self._engine_core.scheduler
 
-        # Path 1: Cross-model speculative decoder (EAGLE-3 / external draft)
-        if self._spec_decoder is not None:
-            scheduler.set_spec_decoder(self._spec_decoder)
-            logger.info("Wired cross-model spec decoder into scheduler batch path")
-
-        # Path 2: MTP decoder (built-in multi-token prediction heads)
-        if self._mtp_decoder is not None:
-            scheduler.set_mtp_decoder(self._mtp_decoder)
-            logger.info("Wired MTP decoder into scheduler batch path")
-
-        # Path 3: Propagate N-gram proposer to scheduler if needed
+        # Propagate N-gram proposer to scheduler if needed
         # (BatchedEngine creates its own N-gram proposer, but the scheduler
         # may not have one if ngram_spec_enabled was False in EngineCoreConfig).
         # Only the n-gram family has min_n/max_n config; the suffix proposer is
@@ -1229,12 +1138,9 @@ class BatchedEngine(
             self._prompt_cache = None
 
         # Speculative decoding subsystems
-        self._spec_decoder = None
         self._gemma4_assistant_proposer = None
         self._ngram_proposer = None
         self._adaptive_spec = None
-        self._mtp_decoder = None
-        self._mtp_strategy = None
         self._medusa_proposer = None
         self._medusa_strategy = None
         self._warm_prompts = None
@@ -1291,13 +1197,6 @@ class BatchedEngine(
     # |                  | on, and (spec_decode or YUNSHU_NGRAM_DEFAULT=1);     | output == plain greedy with drafts accepted|
     # |                  | non-trimmable caches fall back inside the method     | opt-in: ~2.5x slower on low-acceptance     |
     # |                  |                                                      | prose/code, ~1.7x faster on repetitive     |
-    # | eagle / mtp      | only with YUNSHU_SPEC_UNVERIFIED=eagle|mtp, greedy,  | NOT verified lossless: EAGLE's acceptance  |
-    # |                  | (eagle never streams: its streamer has no stop       |                                            |
-    # |                  | hold-back, so multi-token stops would leak)          |                                            |
-    # |                  | fast path, no logprobs (experiments)                 | ignores request temperature; both give     |
-    # |                  |                                                      | empty output on non-trimmable (hybrid)     |
-    # |                  |                                                      | caches; no measured win on Apple Silicon.  |
-    # |                  |                                                      | Qwen3.5-family MTP lives in the VLM runner.|
     # | (streaming ngram)| never: _stream_generate_ngram_spec early-terminates  | live repro: "count to 8" streamed "1 "     |
     #
     # Everything else is plain decoding.
@@ -1314,15 +1213,6 @@ class BatchedEngine(
         if use_engine_loop or logprobs:
             return None
         greedy = temperature is None or temperature <= 0.0
-        experimental = settings.get("YUNSHU_SPEC_UNVERIFIED")
-        if spec_decode and greedy and experimental == "eagle" and not stream:
-            if getattr(self, "_spec_enabled", False) and getattr(
-                self, "_spec_decoder", None
-            ):
-                return "eagle"
-        if spec_decode and greedy and experimental == "mtp":
-            if getattr(self, "_mtp_decoder", None) is not None:
-                return "mtp"
         if stream:
             return None
         if spec_decode and gemma4_eligible is not None and gemma4_eligible():
@@ -1606,73 +1496,6 @@ class BatchedEngine(
                 logger.warning(
                     "Gemma-4 assistant spec decode failed; falling back", exc_info=True
                 )
-
-        # Speculative decoding path (Phase 4: single-request EAGLE-3).
-        # NB: all spec paths below are gated on `not logprobs` — none of them
-        # populate per-token logprobs, so when logprobs are requested correctness
-        # wins and we fall through to normal generation (which does).
-        # The cross-model SpeculativeDecoder omits residual-
-        # distribution resampling and tests acceptance at temperature 1.0
-        # regardless of request temperature, so it is NOT lossless for
-        # temperature>0 (output distribution is biased toward the greedy
-        # sequence). Restrict it to GREEDY requests, where longest-exact-argmax
-        # acceptance IS lossless; temp>0 falls through to correct normal decode.
-        if _spec == "eagle":
-            return await self._generate_speculative(
-                prompt=prompt,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                top_k=top_k,
-                min_p=min_p,
-                repetition_penalty=repetition_penalty,
-                frequency_penalty=frequency_penalty,
-                presence_penalty=presence_penalty,
-                logit_bias=logit_bias,
-                stop=stop,
-                stop_token_ids=stop_token_ids,
-                seed=seed,
-                enable_thinking=enable_thinking,
-                logprobs=logprobs,
-                top_logprobs=top_logprobs,
-                thinking_budget=thinking_budget,
-                xtc_probability=xtc_probability,
-                xtc_threshold=xtc_threshold,
-                json_schema=json_schema,
-                cancel_event=cancel_event,
-                logits_processors=logits_processors,
-                timeout_seconds=timeout_seconds or 300.0,
-                lora_adapter=lora_adapter,
-            )
-
-        # MTP speculative decoding (built-in multi-token prediction heads)
-        if _spec == "mtp":
-            return await self._generate_mtp(
-                prompt=prompt,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                top_k=top_k,
-                min_p=min_p,
-                repetition_penalty=repetition_penalty,
-                frequency_penalty=frequency_penalty,
-                presence_penalty=presence_penalty,
-                logit_bias=logit_bias,
-                stop=stop,
-                stop_token_ids=stop_token_ids,
-                seed=seed,
-                enable_thinking=enable_thinking,
-                logprobs=logprobs,
-                top_logprobs=top_logprobs,
-                thinking_budget=thinking_budget,
-                cancel_event=cancel_event,
-                json_schema=json_schema,
-                xtc_probability=xtc_probability,
-                xtc_threshold=xtc_threshold,
-                logits_processors=logits_processors,
-                timeout_seconds=timeout_seconds or 300.0,
-                lora_adapter=lora_adapter,
-            )
 
         # N-gram speculative decoding (model-free, CPU-based proposal).
         # N-gram verify accepts a draft iff it equals the
@@ -2039,86 +1862,6 @@ class BatchedEngine(
 
             _cancel_event = _CompositeCancelEvent()
 
-        # Speculative decoding path (Phase 4)
-        if _spec == "eagle":
-            try:
-                async for output in self._stream_generate_speculative(
-                    prompt=prompt,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    top_k=top_k,
-                    min_p=min_p,
-                    repetition_penalty=repetition_penalty,
-                    frequency_penalty=frequency_penalty,
-                    presence_penalty=presence_penalty,
-                    logit_bias=logit_bias,
-                    logprobs=logprobs,
-                    top_logprobs=top_logprobs,
-                    stop=stop,
-                    stop_token_ids=stop_token_ids,
-                    seed=seed,
-                    enable_thinking=enable_thinking,
-                    thinking_budget=thinking_budget,
-                    xtc_probability=xtc_probability,
-                    xtc_threshold=xtc_threshold,
-                    json_schema=json_schema,
-                    cancel_event=_cancel_event,
-                    logits_processors=logits_processors,
-                    lora_adapter=lora_adapter,
-                ):
-                    yield output
-            finally:
-                if _tracker is not None:
-                    try:
-                        _tracker.unregister(_stream_req_id)
-                    except Exception:
-                        logger.debug("request tracker cleanup failed", exc_info=True)
-            return
-
-        # MTP speculative decoding streaming (built-in mlx-lm MTPDecoder path),
-        # experimental route only (YUNSHU_SPEC_UNVERIFIED=mtp).
-        if _spec == "mtp":
-            try:
-                async for output in self._stream_generate_mtp(
-                    prompt=prompt,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    top_k=top_k,
-                    min_p=min_p,
-                    repetition_penalty=repetition_penalty,
-                    frequency_penalty=frequency_penalty,
-                    presence_penalty=presence_penalty,
-                    logit_bias=logit_bias,
-                    logprobs=logprobs,
-                    top_logprobs=top_logprobs,
-                    stop=stop,
-                    stop_token_ids=stop_token_ids,
-                    seed=seed,
-                    cancel_event=_cancel_event,
-                    enable_thinking=enable_thinking,
-                    thinking_budget=thinking_budget,
-                    timeout_seconds=timeout_seconds or 300.0,
-                    json_schema=json_schema,
-                    xtc_probability=xtc_probability,
-                    xtc_threshold=xtc_threshold,
-                    logits_processors=logits_processors,
-                    lora_adapter=lora_adapter,
-                    kv_cache_breakpoints=kv_cache_breakpoints,
-                    min_tokens=min_tokens,
-                    ignore_eos=ignore_eos,
-                    suppress_tokens=suppress_tokens,
-                ):
-                    yield output
-            finally:
-                if _tracker is not None:
-                    try:
-                        _tracker.unregister(_stream_req_id)
-                    except Exception:
-                        logger.debug("request tracker cleanup failed", exc_info=True)
-            return
-
         # Fast path: bypass EngineCore for single-request streaming
         if not _use_engine_loop:
             try:
@@ -2289,9 +2032,8 @@ class BatchedEngine(
     def _init_spec_decode(self) -> None:
         """Initialize speculative decoding if the model supports it.
 
-        Called during start() after model loading. Checks for spec heads in the
-        model config and creates a SpeculativeDecoder if detected.
-        Also initializes N-gram proposer as a model-free fallback.
+        Text serving supports the greedy n-gram/suffix verifier and Gemma-4
+        assistant. Qwen3.5 native MTP/DFlash is owned by the VLM batch runner.
         """
         # Always initialize N-gram proposer (model-free, zero overhead when idle)
         from .ngram_proposer import NgramConfig, NgramProposer
@@ -2376,141 +2118,6 @@ class BatchedEngine(
         # head-detection early return below.
         self._init_gemma4_assistant_spec()
 
-        from .speculative_decoder import auto_configure_speculative, detect_spec_heads
-
-        model_config = {}
-        config_obj = getattr(self._model, "config", None) or getattr(
-            self._model, "args", None
-        )
-        if config_obj is not None:
-            if hasattr(config_obj, "to_dict"):
-                model_config = config_obj.to_dict()
-            elif hasattr(config_obj, "__dict__"):
-                model_config = {
-                    k: v
-                    for k, v in config_obj.__dict__.items()
-                    if not k.startswith("_")
-                }
-
-        head_info = detect_spec_heads(model_config)
-
-        # An EXTERNAL cross-model draft (YUNSHU_DRAFT_MODEL /
-        # config draft_model_path) is independent of the target's native spec
-        # heads — it works for ANY model. Load it BEFORE the no-native-heads
-        # early return below, otherwise an explicitly-configured draft model was
-        # silently ignored for models without native heads (e.g. plain Qwen2.5),
-        # and a `spec_decode: true` request fell through to the n-gram path.
-        draft_path = settings.get("YUNSHU_DRAFT_MODEL")
-        if not draft_path and model_config:
-            draft_path = model_config.get("draft_model_path", "")
-        if draft_path:
-            try:
-                from mlx_lm.utils import load as load_model
-
-                draft_model, _ = load_model(draft_path)
-                from .speculative_decoder import SpeculativeDecoder
-
-                self._spec_decoder = SpeculativeDecoder(
-                    self._model,
-                    draft_model,
-                    self._tokenizer,
-                    lookahead=self._lookahead_reasoning,
-                )
-                self._spec_enabled = True
-                logger.info(
-                    f"Draft model loaded from {draft_path}: "
-                    f"speculative decoding ACTIVE (type={head_info.head_type})"
-                )
-            except Exception as e:
-                logger.warning(
-                    f"Draft model load failed ({e}), speculative decoding disabled"
-                )
-
-        if head_info.head_type == "none":
-            logger.debug("No speculative decoding heads detected (native)")
-            return  # external draft, if any, already loaded above
-
-        spec_config = auto_configure_speculative(model_config)
-        if spec_config.draft_length == 0:
-            return
-
-        logger.info(
-            f"Speculative decoding available: type={head_info.head_type}, "
-            f"draft_length={spec_config.draft_length}"
-        )
-
-        # The home-grown MTP decoder lacked mlx-vlm's GatedDeltaNet
-        # intermediate-state capture (garbage on 27B, ~0.9x on 9B). Both text
-        # MTP backends are experimental (YUNSHU_SPEC_UNVERIFIED=mtp|mlxvlm_mtp).
-        if (
-            head_info.head_type == "mtp"
-            and settings.get("YUNSHU_SPEC_UNVERIFIED") != "mtp"
-        ):
-            logger.info(
-                "Native MTP head detected on %s; text MTP is experimental "
-                "(YUNSHU_SPEC_UNVERIFIED=mlxvlm_mtp or mtp).",
-                self.model_name,
-            )
-        elif head_info.head_type == "mtp" and self._spec_decoder is None:
-            try:
-                # Load MTP head weights if available
-                inner = getattr(self._model, "language_model", self._model)
-                if not hasattr(inner, "mtp"):
-                    try:
-                        from .mtp_patch import load_model_with_mtp
-
-                        model_name_or_path = model_config.get(
-                            "_name_or_path", self.model_name
-                        )
-                        self._model = load_model_with_mtp(model_name_or_path)
-                        logger.info("MTP head weights loaded from model directory")
-                    except FileNotFoundError as e:
-                        logger.info(
-                            f"MTP weights not found ({e}), using backbone-only MTP"
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"MTP weights load failed ({e}), using backbone-only MTP"
-                        )
-
-                from .mtp_decoder import MTPConfig, MTPDecoder
-
-                mtp_config = MTPConfig(
-                    max_tokens=256,
-                    use_n_confirmed=True,
-                )
-                self._mtp_decoder = MTPDecoder(
-                    self._model,
-                    self._tokenizer,
-                    mtp_config,
-                )
-                # (: the _mtp_strategy wrapper was dead — routing uses
-                # _mtp_decoder directly; removed the unread MTPStrategy build.)
-                self._spec_enabled = True
-                logger.info(
-                    f"MTP decoder initialized: heads={head_info.num_heads}, "
-                    f"draft_length={head_info.draft_length}, "
-                    f"n_confirmed=True, config={head_info.head_config}"
-                )
-            except Exception as e:
-                logger.warning(f"MTP decoder init failed ({e})")
-
-        # NOTE : Medusa, and the unified SpecStrategyFactory strategies
-        # (GPUNgram/LLM/Suffix/DFlash/Composite), were built into engine state but
-        # NEVER consulted by generate()/generate_stream() routing — only by the
-        # now-deleted _get_spec_strategy() (zero serving callers). They were dead
-        # code claiming to be working spec strategies. Removed to keep the spec
-        # surface honest. The real, reachable spec paths are: N-gram (default),
-        # MTP (model with prediction heads), cross-model (YUNSHU_DRAFT_MODEL), and
-        # the Gemma-4 assistant drafter (YUNSHU_GEMMA4_ASSISTANT). Medusa/the
-        # factory strategies remain available as research modules in their own
-        # files but are not wired into serving.
-
-        # Store config for on-demand decoder creation
-        self._spec_config = spec_config
-        self._spec_head_info = head_info
-        self._spec_enabled = True
-
     def _init_gemma4_assistant_spec(self) -> None:
         """Build the Gemma-4 dual-load assistant drafter when configured.
 
@@ -2547,7 +2154,6 @@ class BatchedEngine(
             self._gemma4_assistant_proposer = Gemma4AssistantProposer.from_paths(
                 drafter_dir, embed.weight, embed_scale, tcfg
             )
-            self._spec_enabled = True
             logger.info(
                 f"Gemma-4 assistant drafter loaded from {drafter_dir}: "
                 f"spec decode primitive ACTIVE (sliding_kv={self._gemma4_assistant_proposer.sliding_kv_layer}, "

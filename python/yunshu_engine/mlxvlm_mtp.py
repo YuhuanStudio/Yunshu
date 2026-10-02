@@ -12,9 +12,9 @@ the locked version). Greedy/pure-temperature
 requests get the MTP speedup (lossless by construction — the verify is exact);
 everything else falls back to plain autoregressive generation on the same model.
 
-This is a standalone backend (its own mlx-vlm model + drafter), used only when
-YUNSHU_SPEC_UNVERIFIED=mlxvlm_mtp and the model is MTP-capable. It does NOT touch the default
-mlx-lm fast path.
+This standalone research backend owns its own mlx-vlm model and drafter.
+It has no serving dispatch. The checkpoint detection and in-memory drafter
+helpers below remain shared with the VLM batch runner.
 """
 
 from __future__ import annotations

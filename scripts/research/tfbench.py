@@ -106,13 +106,14 @@ class Srv:
                 "--no-update-check",
             ]
         self.cmd = cmd
-        self.proc = subprocess.Popen(
-            cmd,
-            stdout=open(self.log, "ab"),
-            stderr=subprocess.STDOUT,
-            env=env,
-            start_new_session=True,
-        )
+        with open(self.log, "wb") as server_log:
+            self.proc = subprocess.Popen(
+                cmd,
+                stdout=server_log,
+                stderr=subprocess.STDOUT,
+                env=env,
+                start_new_session=True,
+            )
         self.url = f"http://127.0.0.1:{self.port}"
         t0 = time.time()
         while time.time() - t0 < 900:
@@ -312,7 +313,6 @@ def part_decode(s, out, a):
     ctxs = a.only_ctx or [1024, 8192, 32768]
     for ctx in ctxs:
         for kind in a.only_kind or ("prose", "code"):
-            salt = ctx // 1024 + (3 if kind == "code" else 0)
             text = load_prompt(f"{kind}-{ctx}")
             reply = ""
             for phase in ("cold", "warm", "turn2"):

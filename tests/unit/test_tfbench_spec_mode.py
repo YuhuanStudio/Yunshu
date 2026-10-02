@@ -55,3 +55,50 @@ def test_records_actual_runner_mode(tmp_path):
     server.log.write_text("VLM batch runner: apc=32.0GiB draft=dflash block=8")
     server.verify_spec_mode()
     assert server.engaged_spec_mode == "dflash"
+
+
+@pytest.mark.parametrize("actual", ["dflash", "mtp", None])
+def test_server_launch_checks_fresh_log_and_cleans_up(monkeypatch, tmp_path, actual):
+    import io
+
+    monkeypatch.setattr(tfbench, "OUT", tmp_path)
+    monkeypatch.setattr(tfbench, "free_port", lambda: 18999)
+    log = tmp_path / "out/server-repeat.log"
+    log.parent.mkdir()
+    log.write_text("VLM batch runner: apc=off draft=dflash block=8\n")
+    launched = {}
+
+    class Proc:
+        pid = 123456789
+
+        def poll(self):
+            return None
+
+    def launch(cmd, **kw):
+        launched.update(cmd=cmd, env=kw["env"])
+        if actual:
+            kw["stdout"].write(
+                f"VLM batch runner: apc=off draft={actual} block=8\n".encode()
+            )
+            kw["stdout"].flush()
+        kw["stdout"].close()
+        return Proc()
+
+    monkeypatch.setattr(tfbench.subprocess, "Popen", launch)
+    monkeypatch.setattr(
+        tfbench.urllib.request,
+        "urlopen",
+        lambda *_a, **_kw: io.BytesIO(b'{"data":[{"id":"test"}]}'),
+    )
+    killed = []
+    monkeypatch.setattr(tfbench.Srv, "kill", lambda s: killed.append(s.proc))
+    if actual == "dflash":
+        server = tfbench.Srv("yunshu", {}, "repeat")
+        assert server.engaged_spec_mode == "dflash"
+        assert not killed
+    else:
+        with pytest.raises(RuntimeError, match="requested spec=dflash"):
+            tfbench.Srv("yunshu", {}, "repeat")
+        assert len(killed) == 1
+    assert launched["env"]["YUNSHU_VLM_DRAFT"] == tfbench.D
+    assert launched["env"]["HOME"] == str(tmp_path / "home/repeat")
