@@ -94,8 +94,60 @@ def schema_source(schema: Any) -> str:
 
     raw = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
     return cast(
-        str, ARTIFACTS.get(("schema-source", raw), lambda: _llg_schema_json(schema))
+        str,
+        ARTIFACTS.get(
+            ("schema-source", raw),
+            lambda: annotation_free_source(_llg_schema_json(schema)),
+        ),
     )
+
+
+def annotation_free_source(source: str) -> str:
+    """Share compiled grammars across pure documentation changes.
+
+    Run AFTER our schema normalization: annotations can affect whether its
+    allOf object branches merge. Traverse schema positions only, never literal
+    values or property names. References can address arbitrary JSON pointers,
+    including annotations, so conservatively retain reference-bearing schemas.
+    Admission still validates the original request, with its original key.
+    """
+    from .grammar_constraint import (
+        _SCHEMA_LIST_KEYS,
+        _SCHEMA_MAP_KEYS,
+        _SCHEMA_ONE_KEYS,
+    )
+
+    node = json.loads(source)
+
+    def referenced(value: Any) -> bool:
+        if isinstance(value, dict):
+            return "$ref" in value or any(referenced(v) for v in value.values())
+        return isinstance(value, list) and any(referenced(v) for v in value)
+
+    if referenced(node):
+        return source
+
+    def clean(value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        result = {}
+        for key, child in value.items():
+            if key in ("title", "description", "$comment"):
+                continue
+            if key in _SCHEMA_MAP_KEYS and isinstance(child, dict):
+                child = {name: clean(sub) for name, sub in child.items()}
+            elif key in _SCHEMA_LIST_KEYS and isinstance(child, list):
+                child = [clean(sub) for sub in child]
+            elif key in _SCHEMA_ONE_KEYS:
+                child = (
+                    [clean(sub) for sub in child]
+                    if isinstance(child, list)
+                    else clean(child)
+                )
+            result[key] = child
+        return result
+
+    return json.dumps(clean(node), ensure_ascii=False)
 
 
 def llg_grammar(kind: str, source: str, *, compact: bool = False) -> str:

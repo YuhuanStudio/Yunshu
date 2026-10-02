@@ -103,6 +103,82 @@ def test_schema_property_order_is_part_of_key():
     assert gc.schema_source(a) != gc.schema_source(b)
 
 
+@pytest.mark.parametrize("compact", [False, True])
+@pytest.mark.parametrize(
+    "text", ['{"description":"yes","n":1}', '{"description":"no","n":2}']
+)
+def test_annotation_variants_reuse_artifacts_with_original_masks(
+    monkeypatch, tok, compact, text
+):
+    schema = {
+        "type": "object",
+        "title": "A response",
+        "description": "Documentation only",
+        "$comment": "Version one",
+        "properties": {
+            "description": {
+                "type": "string",
+                "enum": ["yes", "no"],
+                "description": "Choice",
+            },
+            "n": {"type": "integer", "minimum": 1, "maximum": 2, "title": "Count"},
+        },
+        "required": ["description", "n"],
+    }
+    # Compile the original annotated schema before changing any cache key.
+    with monkeypatch.context() as patch:
+        patch.setattr(gc, "annotation_free_source", lambda source: source)
+        original = LlgJsonSchemaConstraint(schema, tok, compact=compact)
+    gc.ARTIFACTS.clear()
+    normalized = LlgJsonSchemaConstraint(schema, tok, compact=compact)
+    variant = json.loads(json.dumps(schema))
+    variant["description"] = "Different documentation"
+    variant["properties"]["n"]["title"] = "Different count"
+    reused = LlgJsonSchemaConstraint(variant, tok, compact=compact)
+    assert normalized._schema_json == reused._schema_json
+    assert len([k for k in gc.ARTIFACTS._entries if k[0] == "matcher"]) == 1
+    assert normalized._matcher is not reused._matcher
+    for tid in tok.encode(text):
+        masks = [c.get_allowed_tokens(tok, []) for c in (original, normalized, reused)]
+        assert masks[0] == masks[1] == masks[2] and tid in masks[0]
+        for constraint in (original, normalized, reused):
+            constraint.advance(tok.decode([tid]))
+    assert (
+        original.get_allowed_tokens(tok, [])
+        == normalized.get_allowed_tokens(tok, [])
+        == reused.get_allowed_tokens(tok, [])
+    )
+
+
+def test_annotation_cleanup_preserves_data_references_and_normalization():
+    from yunshu_engine.grammar_constraint import _llg_schema_json
+
+    schema = {
+        "type": "object",
+        "properties": {"title": {"const": {"description": "literal", "title": "data"}}},
+        "examples": [{"description": "example data"}],
+    }
+    cleaned = json.loads(gc.schema_source(schema))
+    assert (
+        cleaned["properties"]["title"]["const"]
+        == schema["properties"]["title"]["const"]
+    )
+    assert cleaned["examples"] == schema["examples"]
+    reference = {"$ref": "#/description", "description": {"type": "string"}}
+    assert gc.schema_source(reference) == _llg_schema_json(reference)
+    # These branches do not merge under the existing normalization policy.
+    branches = {
+        "allOf": [
+            {"properties": {"x": {"type": "string", "description": "one"}}},
+            {"properties": {"x": {"type": "string", "description": "two"}}},
+        ]
+    }
+    assert "allOf" in json.loads(gc.schema_source(branches))
+    assert gc.schema_source({"type": "string", "minLength": 1}) != gc.schema_source(
+        {"type": "string", "minLength": 2}
+    )
+
+
 def test_regex_build_reused_but_lazy_caches_are_private(monkeypatch):
     from yunshu_engine import grammar_constraint as constraints
 

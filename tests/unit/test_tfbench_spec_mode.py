@@ -148,3 +148,40 @@ def test_tag_does_not_consume_next_registered_option():
             ]
         )
     assert exc.value.code == 2
+
+
+def test_cpu_preflight_checks_legacy_tag_without_starting_server(
+    monkeypatch, tmp_path, capsys
+):
+    import sys
+
+    (tmp_path / "config.json").write_text('{"model_type":"qwen3_5"}')
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "tfbench",
+            "--engine",
+            "yunshu",
+            "--part",
+            "decode",
+            "--out",
+            str(tmp_path / "result.jsonl"),
+            "--tag",
+            "-dflash",
+            "--model",
+            str(tmp_path),
+            "--dry-run",
+        ],
+    )
+    prompts = []
+    monkeypatch.setattr(
+        tfbench, "load_prompt", lambda name: prompts.append(name) or "prompt"
+    )
+    monkeypatch.setattr(
+        tfbench, "Srv", lambda *_a, **_k: pytest.fail("CPU preflight launched a server")
+    )
+    tfbench.main()
+    assert len(prompts) == 6
+    assert '"requested_spec_mode": "dflash"' in capsys.readouterr().out
+    assert not (tmp_path / "result.jsonl").exists()

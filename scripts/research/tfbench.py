@@ -75,7 +75,7 @@ def engaged_spec_mode(engine, log):
 
 
 class Srv:
-    def __init__(self, engine, extra_env, tag):
+    def __init__(self, engine, extra_env, tag, model=None):
         self.engine, self.port = engine, free_port()
         self.requested_spec_mode, extra_env = spec_request(engine, extra_env)
         self.extra_env = extra_env
@@ -95,7 +95,7 @@ class Srv:
         if engine == "yunshu":
             if YUNSHU_SRC:
                 env["PYTHONPATH"] = YUNSHU_SRC
-            cmd = [YUNSHU_BIN, "serve", "-m", M, "--port", str(self.port)]
+            cmd = [YUNSHU_BIN, "serve", "-m", model or M, "--port", str(self.port)]
         else:
             cmd = [
                 TF[engine],
@@ -315,13 +315,17 @@ def emit(out, **kw):
 
 
 def part_decode(s, out, a):
-    ctxs = a.only_ctx or [1024, 8192, 32768]
+    ctxs = [512] if a.smoke else a.only_ctx or [1024, 8192, 32768]
     for ctx in ctxs:
         for kind in a.only_kind or ("prose", "code"):
-            text = load_prompt(f"{kind}-{ctx}")
+            text = (
+                "Write a short example and explain it."
+                if a.smoke
+                else load_prompt(f"{kind}-{ctx}")
+            )
             reply = ""
             for phase in ("cold", "warm", "turn2"):
-                b = req(s.model, text, 256)
+                b = req(s.model, text, 16 if a.smoke else 256)
                 if phase == "turn2":
                     b["messages"] += [
                         {"role": "assistant", "content": reply},
@@ -342,15 +346,24 @@ def part_decode(s, out, a):
 
 
 def part_conc(s, out, a):
-    for n in (2, 4, 8):
-        for trial in range(2):
+    for n in (2,) if a.smoke else (2, 4, 8):
+        for trial in range(1 if a.smoke else 2):
             texts = [
-                load_prompt(f"conc-{'prose' if (i + trial) % 2 == 0 else 'code'}-{i}")
+                "Say hello."
+                if a.smoke
+                else load_prompt(
+                    f"conc-{'prose' if (i + trial) % 2 == 0 else 'code'}-{i}"
+                )
                 for i in range(n)
             ]
             t0 = time.perf_counter()
             with cf.ThreadPoolExecutor(n) as ex:
-                rs = list(ex.map(lambda t: send(s.url, req(s.model, t, 256)), texts))
+                rs = list(
+                    ex.map(
+                        lambda t: send(s.url, req(s.model, t, 16 if a.smoke else 256)),
+                        texts,
+                    )
+                )
             for r in rs:
                 r.pop("_text")
             wall = time.perf_counter() - t0
@@ -377,11 +390,14 @@ def part_agent(s, out, a):
         BODIES2 / "0003-req.json",
     ]
     title = json.loads((BODIES / "0001-req.json").read_text())
-    for f in files:
+    for f in files[:1] if a.smoke else files:
         body = json.loads(f.read_text())
         body["model"] = s.model
         body["seed"] = 1234
-        for i in range(3):
+        if a.smoke:
+            body["max_tokens"] = 16
+            title["max_tokens"] = 16
+        for i in range(1 if a.smoke else 3):
             th = fut = None
             if i == 0:
                 th = cf.ThreadPoolExecutor(1)
@@ -411,6 +427,9 @@ def parse_args(argv=None):
     ap.add_argument("--only-kind", action="append", choices=["prose", "code"])
     ap.add_argument("--env", action="append", default=[])
     ap.add_argument("--tag", default="")
+    ap.add_argument("--model", default=M)
+    ap.add_argument("--smoke", action="store_true")
+    ap.add_argument("--dry-run", action="store_true")
     args = list(sys.argv[1:] if argv is None else argv)
     # Tags are filename suffixes and often begin with '-'. Keep registered
     # options as options, but bind a tag value before argparse classifies it.
@@ -425,7 +444,32 @@ def parse_args(argv=None):
 def main():
     a = parse_args()
     extra_env = dict(kv.split("=", 1) for kv in a.env)
-    s = Srv(a.engine, extra_env, f"{a.engine}-{a.part}-{a.rep}{a.tag}")
+    if a.part not in ("decode", "ca"):
+        raise ValueError("supported audit parts: decode, ca")
+    if a.dry_run:
+        if a.part == "decode" and not a.smoke:
+            for ctx in a.only_ctx or [1024, 8192, 32768]:
+                for kind in a.only_kind or ("prose", "code"):
+                    load_prompt(f"{kind}-{ctx}")
+        elif a.part == "ca":
+            for directory in (BODIES, BODIES2):
+                if not list(directory.glob("*-req.json")):
+                    raise FileNotFoundError(directory)
+        if not (Path(a.model) / "config.json").is_file():
+            raise FileNotFoundError(a.model)
+        mode, selected = spec_request(a.engine, extra_env)
+        print(
+            json.dumps(
+                {
+                    "complete": "dry-run",
+                    "requested_spec_mode": mode,
+                    "env": selected,
+                    "model": a.model,
+                }
+            )
+        )
+        return
+    s = Srv(a.engine, extra_env, f"{a.engine}-{a.part}-{a.rep}{a.tag}", model=a.model)
     try:
         with open(a.out, "a") as out:
             emit(
@@ -448,7 +492,14 @@ def main():
             else:
                 {"decode": part_decode}[a.part](s, out, a)
             s.verify_spec_mode()
-            emit(out, part="part_done", engine=a.engine, which=a.part, rep=a.rep)
+            emit(
+                out,
+                part="part_done",
+                engine=a.engine,
+                which=a.part,
+                rep=a.rep,
+                complete=True,
+            )
     finally:
         s.kill()
 

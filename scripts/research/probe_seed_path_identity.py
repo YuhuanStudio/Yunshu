@@ -37,10 +37,31 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
     ap.add_argument("--tokens", type=int, default=160)
+    ap.add_argument("--speed-tokens", type=int, default=256)
     ap.add_argument("--seeds", type=int, nargs="+", default=[1, 2])
     ap.add_argument("--speed-only", action="store_true")
+    ap.add_argument("--skip-speed", action="store_true")
+    ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
+
+    if (
+        min(a.tokens, a.speed_tokens) < 1
+        or not (Path(a.model) / "config.json").is_file()
+    ):
+        ap.error("positive tokens and local model config required")
+    if a.dry_run:
+        print(
+            json.dumps(
+                {
+                    "complete": "dry-run",
+                    "model": a.model,
+                    "configs": CONFIGS,
+                    "seeds": a.seeds,
+                }
+            )
+        )
+        return
 
     from yunshu_engine import vlm_batch_runner as vbr
     from yunshu_engine.vlm_engine import VLMEngine
@@ -131,10 +152,10 @@ def main() -> None:
     # speed: S solo and a 4-wide shared batch (sampled, seeded)
     ids = ids_of(PROMPTS["prose"])
     cfg = CONFIGS[0]
-    for rep in range(3):
+    for rep in range(0 if a.skip_speed else 3):
         t0 = time.perf_counter()
         toks = []
-        consume(ids, cfg, 5, False, 256, toks, vbr.RunStats()).join()
+        consume(ids, cfg, 5, False, a.speed_tokens, toks, vbr.RunStats()).join()
         emit(
             dict(
                 kind="speed",
@@ -152,7 +173,7 @@ def main() -> None:
                 cfg,
                 5 + k,
                 False,
-                256,
+                a.speed_tokens,
                 sinks[k],
                 vbr.RunStats(),
             )
@@ -169,7 +190,9 @@ def main() -> None:
                 s=time.perf_counter() - t0,
             )
         )
-    emit(dict(kind="summary", all_identical=ok))
+    emit(dict(kind="summary", all_identical=ok, complete=True))
+    out.close()
+    asyncio.new_event_loop().run_until_complete(engine.stop())
     sys.exit(0 if ok else 1)
 
 
