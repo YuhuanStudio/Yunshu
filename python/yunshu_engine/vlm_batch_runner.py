@@ -1132,19 +1132,22 @@ class VLMBatchRunner:
             if not hasattr(group.gen, "_unprocessed_sequences"):
                 self._step_group(group)
                 continue
-            selected = chosen is not None and chosen[0] is group
+            selected_job = (
+                chosen[1] if chosen is not None and chosen[0] is group else None
+            )
+            selected = selected_job is not None
             has_decode = bool(len(group.gen._generation_batch))
             if not selected and not has_decode:
                 continue
-            if selected:
-                uid = chosen[1].uid
+            if selected_job is not None:
+                uid = selected_job.uid
                 group.gen._prompt_batch = group.prefills.pop(uid, None)
                 group.gen._unprocessed_sequences.sort(key=lambda seq: seq[0] != uid)
             before = time.perf_counter()
             self._step_group(group, decode_only=not selected)
             elapsed = time.perf_counter() - before
             for job in allowed:
-                if job.stats.t_first or (selected and job is chosen[1]):
+                if job.stats.t_first or (selected and job is selected_job):
                     job.last_service = time.perf_counter()
             if selected:
                 batch = group.gen._prompt_batch
