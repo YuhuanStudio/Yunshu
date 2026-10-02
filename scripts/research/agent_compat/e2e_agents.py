@@ -26,6 +26,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(
+    0, str(HERE.parent / "agentic")
+)  # servers.py lives with the agentic harness
 os.environ.setdefault("AGENTIC_YUNSHU_SRC", str(HERE.parents[2] / "python"))
 
 import census  # noqa: E402

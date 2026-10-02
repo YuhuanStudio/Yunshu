@@ -398,3 +398,41 @@ Qwen3.8-27B，貪婪，tfbench decode 與 replay_traffic（seed 1234）；所有
 | 32K / 8K / 1K prose（含 turn2） | 46-59 | 持平（±3%，單次量測雜訊） |
 | agent replay 0004（編輯） | 92 | 106 |
 | agent replay 0002/0006/0003 | 83/71/84 | 持平 |
+
+
+2026-10-02 Yunshu vs TensorFold（TF 0.6.1 / 0.3.6.1）同一 checkpoint（Qwen3.8-27B oQ4e-mtp）、M5 Max、貪婪、256 token 輸出、gpuq 序列化、每格 3 次獨立 server session 取中位數（tfbench，`scripts/research/tfbench.py`）。Yunshu 為當日早上的 main（harness 沒記錄 sha）；因 server 用暫存 HOME，drafter 不在 `spec_select` 搜尋路徑，**這批 Yunshu 實際跑的是 MTP 而不是 DFlash2**（日誌「Speculative decoding: mtp」），TF 是明確指定 DFlash2 drafter。這是缺口，不是勝負。
+
+| 條件（decode tok/s 中位數 / 冷 TTFT s） | TF 0.6.1 | TF 0.3.6.1 | Yunshu（MTP） | TF 0.6.1 ÷ Yunshu |
+|---|---:|---:|---:|---:|
+| 1K code | 140.5 / 1.2 | 134.7 / 1.2 | 69.3 / 1.4 | 2.03× |
+| 1K prose | 72.4 / 1.2 | 75.6 / 1.2 | 52.9 / 1.4 | 1.37× |
+| 8K code | 80.6 / 8.4 | 80.7 / 8.9 | 60.2 / 11.1 | 1.34× |
+| 8K prose | 67.4 / 8.5 | 68.9 / 9.0 | 57.5 / 11.1 | 1.17× |
+| 32K code | 91.2 / 39.4 | 86.4 / 42.5 | 58.7 / 47.2 | 1.55× |
+| 32K prose | 55.1 / 39.4 | 58.7 / 41.3 | 46.3 / 47.7 | 1.19× |
+| 並行 n=2 / 4 / 8 聚合 tok/s | 79.8 / 129.6 / 164.2 | 80.8 / 131.1 / 168.6 | 39.8 / 73.2 / 112.6 | 2.0 / 1.77 / 1.46× |
+| 1K 關 speculation（單列 AR） | — | — | 26.7（TF `draft:false` 26.4） | 底座相同 |
+
+Agent 重放（opencode 錄製請求，warm 第 2 次起）：TF 0.6.1 105-159 tok/s、Yunshu 38-90 tok/s（4 個請求體的中位數）；冷首包 TTFT 兩邊相近。
+
+缺口根因（tfgap / tfstudy，1K code，貪婪，輸出 sha 相同的消融）：兩邊 AR 底座一樣快，差距在「每輪提交 token 數 × 每輪時間」。
+
+| 量 | TF 0.6.1 | Yunshu MTP block 6 | Yunshu DFlash2 鏈 | Yunshu DFlash2 樹 7 節點 | 寬窗口分支 DFlash2 樹 15 節點（未合併） |
+|---|---:|---:|---:|---:|---:|
+| code-1K decode tok/s（冷 / 暖 / turn2） | 140.5 | 71.2 / 71.3 / 68.0 | 90.5 / 79.9 / 65.5 | 83.4 / 75.9 / 67.8 | 89.5 / 76.5 / 68.9 |
+| tokens / 輪（冷） | 7.1（TF 自己的日誌，36 輪） | 3.08 | 4.49 | 5.02 | 5.57 |
+| ms / 輪（冷，256 tok ÷ tok/s ÷ 輪數） | 49.3（TF 消融表） | 43.3 | 49.6 | 60.2 | 62.2 |
+| prose-1K tok/s ／ tokens/輪 | 72.4 ／ 3.5 | 53.2 ／ 2.31 | 46.7 ／ 2.35 | 50.6 ／ 3.08 | 48.9 ／ 3.28 |
+
+- DFlash2 鏈每輪 49.6 ms 與 TF 的 49.3 ms 相同，但 4.49 對 7.1 tokens/輪，比值 1.58，正好是 tok/s 比值（140.5/90.5 = 1.55）。差距是每輪 token 數，不是 kernel 速度。
+- 每輪 token 數受 verify 寬度限制：TF 用 16 列（15 個樹節點）一次 verify，Yunshu 單請求 lane 上限 8 列（`tree_verify.MAX_ROWS=8`，7 個草稿節點）。
+- 為什麼不能直接加寬：`profile_verify_step`（27B，1K，verify forward 毫秒）stock 路徑 T=1/4/7/8/9/12/16 = 43.3/44.0/45.8/46.4/**63.0**/75.6/72.3，超過 8 列就掉出 oMLX `verify_qmm`（≤8 列）快路徑；用 TF lane matmul（`--lane-linear`）T=1/8/9/12/16 = 42.2/41.6/43.8/51.6/53.5，成本幾乎平。所以 8 列是 kernel 的上限，不是排程的選擇；寬列需要寬列且列不變的 kernel（另一個 agent 的 wide-verify 分支在做，未合併、位元相等尚未過關）。
+- 其他單點（1K，貪婪）：MTP block 8 / 12 code 69.1 / 56.8 tok/s（block 6 為 71.2），prose 50.1 / 36.5（53.2），更寬的 MTP 區塊反而更慢；round driver（單請求）code 77.2 tok/s、2.91-4.20 tokens/輪，亦未追上。並行：Yunshu 預設 n=2 時每條 25.7 tok/s（= 純 AR，並行請求不 draft）；`YUNSHU_ROUND_DRIVER=1` 的 n=2/4/8 聚合為 67.6-68.4 / 106.3-112.4 / 135.5-139.2（預設 40.0 / 74.4 / 114.5-114.8）。
+- 未量：TF 的 8K / 32K 每輪 token 數只有 TF 日誌值（code-8K 4.2、code-32K 5.3），Yunshu 的 8K+ 每輪 token 與 SPEC_TREE 決定見下一筆（補跑）。
+
+2026-10-02 其餘未入帳的測量，各一行（資料與 run 目錄在私有 research，數字只取已量到的）：
+- 依賴刷新（deps-bench，合併 fbca545a，2026-10-02）：同一 27B、1K 貪婪、spec on，舊鎖 66.6（63.7-66.6）vs 新鎖 66.4（65.2-66.7）tok/s，各 6 次；spec off 23.4 vs 23.5；輸出 ids 的 sha 新舊鎖相同（spec on f3c918a6…、off 235ef6c9…，各 1392 token）。decode 沒變。
+- APC audit（合併 c93f9e6f，2026-09-30，Claude Code / Codex / opencode 錄製式 agent 任務，27B）：這批 run 的任務通過數同時受 agent 逾時與別的變因影響，只拿 cache 數字：Claude Code fix-cart-discount 請求 cache 命中 base 0.942 → main 0.915；polyglot-wordy 0.861 → 0.892；opencode 0.803 → 0.642 / 0.768 → 0.728；Codex main 0.881 / 0.796。命中比沒有全面上升，是 audit 後的 checkpoint 行為，不是勝利宣告；wall 與通過率不可比（base 有 540 s 逾時被砍的 run）。
+- Prefill 各類別剖析（prefill_profile，27B，8192 token，chunk 2048，2026-10-02）：stock 牆鐘 9.42 s、Yunshu 12.02 s（慢 28%）；佔比 mlp.gate_up 37.7% / 37.0%、mlp.down 21.2% / 20.5%、gdn.in_proj 15.3% / 16.1%；各 matmul 類 stock 41-53 TFLOPS，Yunshu 33-42 TFLOPS。prefill 慢的位置是量化 matmul，不是 attention 或 norm（另一個 agent 持續在做）。
+- Prefill 公平性（cf6105c8，2026-09-28，4 條背景 decode + 1 條長 prefill）：chunk 0 / 256 / 512，16K：長請求 TTFT 17.8 / 21.6 / 19.5 s，prefill 期間背景 decode 0.7 / 2.9 / 1.7 tok/s（原本 23.6）；32K：37.7 / 47.0 / 42.3 s、0.6 / 2.7 / 1.6 tok/s。小 chunk 換來背景速率，付出長請求 TTFT；實驗旗標，沒有成為預設。
+- Fused prefill（2026-09-29，同一 4+1 負載）：fused 64 / 128：16K TTFT 35.9 / 27.5 s（baseline 17.7），背景 decode 7.2 / 4.8 tok/s；32K 78.1 / 60.0 s（baseline 37.7）。背景速度提高，長請求 TTFT 約變兩倍；已被 round driver 的 mixed 負載結果取代（上方 mixed16 背景 3.8 tok/s、TTFT 不退步的方向），不再追。
