@@ -29,7 +29,8 @@ def test_stream_fast_resolves_think_tokens_unconditionally():
     assert "detect_needs_think_prefix" in src
     # think-token resolution now goes through _resolve_think_token_ids (bracketed
     # form) instead of the buggy bare encode("<think"). It must still be UNCONDITIONAL.
-    i = src.index("_resolve_think_token_ids(tokenizer)")
+    i = src.index("_resolve_think_token_ids(")
+    assert "tokenizer" in src[i : i + 120]
     window = src[max(0, i - 400) : i]
     assert "if thinking_budget is not None or enable_thinking:" not in window
 

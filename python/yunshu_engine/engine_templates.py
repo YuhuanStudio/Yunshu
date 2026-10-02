@@ -2,7 +2,8 @@ from __future__ import annotations
 
 """Engine templates extracted from batched_engine.
 
-Runtime dependencies stay on the compatibility facade so existing patches apply.
+Patchable helpers resolve through the compatibility facade. Concrete self types
+retain the shared BatchedEngine state; misc ignores allow that mixin self type.
 """
 
 import asyncio

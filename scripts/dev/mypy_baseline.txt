@@ -44,8 +44,7 @@
 1	python/yunshu_engine/batch_sampler.py	operator	Unsupported operand types for / ("array" and "None")
 1	python/yunshu_engine/batched_engine.py	arg-type	Argument "logprobs" to "_stream_generate_mtp" of "BatchedEngine" has incompatible type "bool | int"; expected "bool"
 1	python/yunshu_engine/batched_engine.py	arg-type	Argument "logprobs" to "_stream_generate_speculative" of "BatchedEngine" has incompatible type "bool | int"; expected "bool"
-2	python/yunshu_engine/batched_engine.py	arg-type	Argument "prompt" to "_stream_generate_fast" of "BatchedEngine" has incompatible type "str | list[dict[Any, Any]]"; expected "str"
-1	python/yunshu_engine/batched_engine.py	arg-type	Argument 1 to "len" has incompatible type "Any | None"; expected "Sized"
+2	python/yunshu_engine/batched_engine.py	arg-type	Argument "prompt" to "_stream_generate_fast" of "EngineStreamMixin" has incompatible type "str | list[dict[Any, Any]]"; expected "str"
 3	python/yunshu_engine/batched_engine.py	arg-type	Argument 1 to "make_prompt_cache" has incompatible type "None"; expected Module
 1	python/yunshu_engine/batched_engine.py	arg-type	Argument 1 to "quantize" has incompatible type "None"; expected Module
 1	python/yunshu_engine/batched_engine.py	arg-type	Argument 2 to "hash_request" of "ResponseCache" has incompatible type "str"; expected "list[dict[Any, Any]]"
@@ -59,15 +58,13 @@
 1	python/yunshu_engine/batched_engine.py	assignment	Incompatible types in assignment (expression has type "SpeculativeDecoder", variable has type "None")
 1	python/yunshu_engine/batched_engine.py	assignment	Incompatible types in assignment (expression has type "SuffixProposer", variable has type "None")
 1	python/yunshu_engine/batched_engine.py	assignment	Incompatible types in assignment (expression has type "_CompositeCancelEvent", variable has type "Event | None")
-1	python/yunshu_engine/batched_engine.py	assignment	Incompatible types in assignment (expression has type "list[int]", variable has type "str | list[dict[Any, Any]]")
-1	python/yunshu_engine/batched_engine.py	assignment	Incompatible types in assignment (expression has type "list[int]", variable has type "str")
 1	python/yunshu_engine/batched_engine.py	assignment	Incompatible types in assignment (expression has type "threading.Event", variable has type "asyncio.locks.Event")
 1	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "abort_request"
 1	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "add_request"
-5	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "config"
-5	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "decode"
+1	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "config"
+2	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "decode"
 1	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "detokenizer"
-16	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "encode"
+10	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "encode"
 4	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "eos_token_id"
 1	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "full_kv_layer"
 1	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "generate"
@@ -78,8 +75,8 @@
 1	python/yunshu_engine/batched_engine.py	call-arg	Unexpected keyword argument "kv_cache_breakpoints" for "_stream_generate_mtp" of "BatchedEngine"
 1	python/yunshu_engine/batched_engine.py	call-arg	Unexpected keyword argument "min_tokens" for "_stream_generate_mtp" of "BatchedEngine"; did you mean "max_tokens"?
 1	python/yunshu_engine/batched_engine.py	call-arg	Unexpected keyword argument "suppress_tokens" for "_stream_generate_mtp" of "BatchedEngine"
-7	python/yunshu_engine/batched_engine.py	func-returns-value	"clear_cache" does not return a value (it only ever returns None)
-7	python/yunshu_engine/batched_engine.py	func-returns-value	"synchronize" does not return a value (it only ever returns None)
+5	python/yunshu_engine/batched_engine.py	func-returns-value	"clear_cache" does not return a value (it only ever returns None)
+5	python/yunshu_engine/batched_engine.py	func-returns-value	"synchronize" does not return a value (it only ever returns None)
 1	python/yunshu_engine/batched_engine.py	misc	Too many values to unpack (2 expected, 3 provided)
 1	python/yunshu_engine/batched_engine.py	no-any-return	Returning Any from function declared to return "GenerationOutput"
 1	python/yunshu_engine/batched_engine.py	no-any-return	Returning Any from function declared to return "int"
@@ -121,9 +118,20 @@
 1	python/yunshu_engine/engine_embeddings.py	union-attr	Item "complex" of "int | float | complex | list[list_or_scalar]" has no attribute "__iter__" (not iterable)
 1	python/yunshu_engine/engine_embeddings.py	union-attr	Item "float" of "int | float | complex | list[list_or_scalar]" has no attribute "__iter__" (not iterable)
 1	python/yunshu_engine/engine_embeddings.py	union-attr	Item "int" of "int | float | complex | list[list_or_scalar]" has no attribute "__iter__" (not iterable)
+1	python/yunshu_engine/engine_fast.py	arg-type	Argument 1 to "len" has incompatible type "Any | None"; expected "Sized"
+1	python/yunshu_engine/engine_fast.py	assignment	Incompatible types in assignment (expression has type "list[int]", variable has type "str | list[dict[Any, Any]]")
+2	python/yunshu_engine/engine_fast.py	attr-defined	"None" has no attribute "config"
+2	python/yunshu_engine/engine_fast.py	attr-defined	"None" has no attribute "decode"
+4	python/yunshu_engine/engine_fast.py	attr-defined	"None" has no attribute "encode"
+2	python/yunshu_engine/engine_fast.py	func-returns-value	"clear_cache" does not return a value (it only ever returns None)
+2	python/yunshu_engine/engine_fast.py	func-returns-value	"synchronize" does not return a value (it only ever returns None)
 1	python/yunshu_engine/engine_policy.py	attr-defined	"Event" has no attribute "_value"
 2	python/yunshu_engine/engine_policy.py	no-any-return	Returning Any from function declared to return "bool"
 1	python/yunshu_engine/engine_policy.py	no-any-return	Returning Any from function declared to return "int"
+1	python/yunshu_engine/engine_stream.py	assignment	Incompatible types in assignment (expression has type "list[int]", variable has type "str")
+2	python/yunshu_engine/engine_stream.py	attr-defined	"None" has no attribute "config"
+1	python/yunshu_engine/engine_stream.py	attr-defined	"None" has no attribute "decode"
+2	python/yunshu_engine/engine_stream.py	attr-defined	"None" has no attribute "encode"
 2	python/yunshu_engine/engine_templates.py	no-any-return	Returning Any from function declared to return "list[int]"
 1	python/yunshu_engine/gateway_optimizer.py	assignment	Incompatible types in assignment (expression has type "_CacheEntry | None", variable has type "_CacheEntry")
 1	python/yunshu_engine/gateway_optimizer.py	assignment	Incompatible types in assignment (expression has type "list[Any]", target has type "dict[Any, Any]")
