@@ -17,7 +17,7 @@ frozen the instant user traffic arrives.
 | Memory admission | A job declares `--mem-gb` (default 24, 0 with `--serving-ok`). It starts only if `free - mem_gb >= reserve_gb` (default 16, free = `psutil` available or `vm_stat` free + inactive + speculative + purgeable). |
 | Bypass | `--serving-ok` skips the idle gate and serving pauses (CPU-only jobs). Priority preemption still applies. |
 | Priority preemption (Q01) | Pending p>=0 work can `SIGSTOP` a running p<=-1 job when memory admits both resident jobs; no job is killed to reclaim memory. High-priority jobs run serially, then the low-priority job resumes when no uncancelled p>=0 job remains pending and the serving resume gate permits it. |
-| Status | `gpuq status` shows `wait-idle`, `wait-mem`, `paused` and a `pauses=N` count. When pending jobs have no active runner, an `idle:` line explains memory admission, serving, paused jobs, or a stopped daemon. |
+| Status | `gpuq status` shows `wait-idle`, `wait-mem`, `wait-cpu`, `paused` and a `pauses=N` count. When pending jobs have no active runner, an `idle:` line explains memory admission, serving, paused jobs, or a stopped daemon. |
 
 An unreachable server (connection refused) counts as idle; a timeout, 5xx or unparsable answer counts as busy
 (fail closed). Without configured URLs or an explicit reserve, there is no serving gate, serial memory
@@ -104,6 +104,48 @@ run-history variance profiling are implemented; no online arm selection is enabl
 * Bandit auto-tuning of lossless knobs against those metrics.
 * A gated autonomous improvement loop that proposes, measures and lands changes only through the existing gates.
 
+## CPU contamination (Q02)
+
+Every started job records `cpu_samples` at start, every 30 seconds and end: `load_1m`, `load_5m`,
+`foreign_cpu_pct` and `top_cpu` (PID, name, `cpu_pct`, eight largest). The sum includes **all** non-job
+processes, excluding the job's descendant tree and process group. One busy core is 100%. After the initial
+`ps` estimate, CPU percentages use CPU-time deltas over the sampling interval. The monitor polls every two
+seconds, stores `foreign_cpu_max_pct` / `foreign_cpu_mean_pct` across those polls, and latches `contended`
+when the threshold is reached or sampling fails. An observation gap over five seconds resets the quiet
+window; time waiting behind other GPU jobs does not count toward the CPU admission timeout. It writes a single CPU summary to the log at completion;
+monitoring never adds log heartbeats that could mask a stalled command.
+
+Jobs with priority >= 0, and jobs explicitly submitted with `--quiet`, must have foreign CPU below 150% for
+20 continuous seconds before starting. After a 300-second maximum CPU wait they may start with
+`quiet_timeout` / `contended` set. Serving and memory admission still apply; `--serving-ok` does not bypass
+the CPU gate. Configure per submission (values are saved with the job and exported to its harness):
+
+```bash
+scripts/dev/gpuq submit --quiet --priority -1 --cpu-threshold 150 --quiet-window 20 \
+  --quiet-max-wait 300 --label cpu-quiet-unique -- python bench.py
+```
+
+Environment defaults: `GPUQ_CPU_THRESHOLD`, `GPUQ_QUIET_WINDOW_S`, `GPUQ_QUIET_MAX_WAIT_S` and
+`GPUQ_CPU_SAMPLE_S` (stored periodic sample interval, default 30). These are queue settings, not engine
+experiment flags. `gpuq status` shows `wait-cpu`; finished `done` jobs with contamination display as
+`contended`. `wait` returns **3** for otherwise successful contended perf/quiet jobs; unfinished peers still
+return 2, real command/output failures return 1. Contended negative-priority audits are shown but remain
+successful. Digest flags contended perf/quiet jobs as untrustworthy, with a distinct family state.
+
+`GPUQ_CONTENTION_FILE` names the atomic JSON flag file. Harnesses can use
+`scripts/dev/gpuq_contention.py:was_contended()` for the latched job flag, or
+`was_contended(t0, t1)` for one wall-clock attempt. Missing/bad files or flags with a last sample older than ten seconds fail closed when the variable is set;
+outside gpuq it returns false. `tfbench` includes `contended` on every result row. The release gate includes
+it on each check row and retries a contended server-path comparison once after a bounded quiet wait. Both
+attempts are retained in `27b-server-path.json`; a quiet failure is FAIL, two contended timing attempts are
+CONTENDED (gate exit 3), and text/spec mismatches remain FAIL. A quiet successful retry can validate that
+check, while gpuq's job-wide flag still asks callers to remeasure other perf results from the job.
+
+An adopted pre-Q02 job has no historical CPU evidence: it is flagged `unmonitored_before_adoption` and
+receives new samples from adoption onwards. Already-running processes retain their original environment;
+only newly launched jobs receive `GPUQ_CONTENTION_FILE`. Point sampling cannot observe every short-lived
+process between polls; no tok/s or TTFT improvement is implied by these queue changes.
+
 ## Reading finished GPU jobs: `gpuq digest`
 
 A job that finished is not a result anyone has read. `scripts/dev/gpuq digest` (`scripts/dev/gpuq_digest.py`, stdlib
@@ -129,7 +171,8 @@ global marker, even without `--since`, so inspecting one worker cannot hide anot
 ## Reloading daemon code between jobs
 
 The daemon keeps the Python code loaded at startup. After the lead merges a queue change, hold new submissions
-and restart during a job boundary (no running or paused job). Use the shared queue directory, terminate only
+and restart the daemon. A job boundary is convenient; running/paused jobs are adopted on restart.
+Pre-Q02 running jobs have no earlier CPU samples and are flagged for remeasurement. Use the shared queue directory, terminate only
 the PID holding `daemon.lock`, and start the replacement with `/usr/bin/python3` (Python 3.9). Keep all job,
 log, lock, and output files in place. These commands are for the lead to execute; workers must not restart the
 live daemon during measurement.
@@ -137,7 +180,7 @@ live daemon during measurement.
 ```bash
 cd /Users/yuhuan/Documents/YuhuanStudio/Yunshu
 export GPUQ_DIR=/Volumes/P5Plus/yunshu-gpuq
-scripts/dev/gpuq status                    # confirm the job boundary
+scripts/dev/gpuq status                    # inspect running/paused jobs (adopted after restart)
 GPUQ_DAEMON_PID="$(lsof -t "$GPUQ_DIR/daemon.lock")"
 ps -p "$GPUQ_DAEMON_PID" -o pid=,command=   # must be gpuq.py _daemon
 kill -TERM "$GPUQ_DAEMON_PID"              # PID only, never a process group
