@@ -238,25 +238,47 @@ class IFEval(Bench):
         return {"correct": None}  # scored later by `score` with lm_eval's checker
 
 
-def ifeval_score_file(path: Path) -> None:
-    """Fill correct / correct_loose in place using lm_eval's IFEval checker."""
+def _ifeval_checker():
     os.environ.setdefault("NLTK_DATA", "/Volumes/P5Plus/yunshu-test-cache/nltk")
     from lm_eval.tasks.ifeval import utils as ifeval_utils  # noqa: PLC0415
 
-    ds = {
+    return ifeval_utils.process_results
+
+
+def ifeval_score_rows(rows: list[dict], ds: dict, process=None) -> int:
+    """Fill ``correct`` / ``correct_loose`` on unscored question rows; returns how many.
+
+    ``run`` stores IFEval rows with ``correct: null`` (the checker needs lm_eval, which
+    lives in another venv), so every consumer must score before pairing. A truncated
+    answer (finish == length) counts as a failure, like every other bench.
+    """
+    process = process or _ifeval_checker()
+    n = 0
+    for r in rows:
+        if r.get("kind") != "q" or "response" not in r or r.get("correct") is not None:
+            continue
+        resp = strip_think(r["response"]) if r.get("finish") != "length" else ""
+        res = process(ds[r["id"]], [resp])
+        r["correct"] = bool(res["prompt_level_strict_acc"])
+        r["correct_loose"] = bool(res["prompt_level_loose_acc"])
+        n += 1
+    return n
+
+
+def ifeval_dataset() -> dict:
+    return {
         f"ifeval-{r['key']}": r
         for r in read_jsonl(DATASETS / "ifeval/input_data.jsonl")
     }
+
+
+def ifeval_score_file(path: Path) -> None:
+    """Score a result file in place (atomic replace; not while a job appends)."""
     rows = read_jsonl(path)
-    for r in rows:
-        if r.get("kind") != "q" or "response" not in r:
-            continue
-        doc = ds[r["id"]]
-        resp = strip_think(r["response"]) if r.get("finish") != "length" else ""
-        res = ifeval_utils.process_results(doc, [resp])
-        r["correct"] = bool(res["prompt_level_strict_acc"])
-        r["correct_loose"] = bool(res["prompt_level_loose_acc"])
-    path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+    ifeval_score_rows(rows, ifeval_dataset())
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+    tmp.replace(path)
 
 
 # needle / RULER-style ------------------------------------------------------
@@ -798,6 +820,8 @@ def load_arm(bench: str, arm: str) -> dict[str, dict]:
         for r in read_jsonl(result_path(bench, arm))
         if r.get("kind") == "q" and not r.get("error")
     ]
+    if bench == "ifeval":  # stored unscored: score in memory so reports never see null
+        ifeval_score_rows(rows, ifeval_dataset())
     return {r["id"]: r for r in rows}  # last row per id wins
 
 
@@ -827,6 +851,11 @@ def arm_attempt_counts(bench: str, arm: str) -> dict[str, int]:
 
 
 def cmd_report(a) -> int:
+    if a.bench == "ifeval":
+        try:
+            import lm_eval  # noqa: F401, PLC0415
+        except ImportError:  # the checker lives in the deps venv
+            return subprocess.call([str(DEPS_PY), __file__, *sys.argv[1:]])
     for name in (a.ref, a.cand):
         counts = arm_attempt_counts(a.bench, name)
         print(
