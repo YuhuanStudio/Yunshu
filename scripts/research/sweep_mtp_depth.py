@@ -21,6 +21,37 @@ import sys
 import time
 from pathlib import Path
 
+# Parse audit jobs without importing MLX or loading weights.
+if "--dry-run" in sys.argv:
+    arguments = [a for a in sys.argv[1:] if a != "--dry-run"]
+    checkpoint = Path(arguments[0])
+    config = json.loads((checkpoint / "config.json").read_text())
+    blocks = [int(a) for a in arguments[1:] if not a.startswith("--")]
+    context = int(
+        next((a.split("=", 1)[1] for a in arguments if a.startswith("--context=")), "0")
+    )
+    tasks_arg = next(
+        (a.split("=", 1)[1] for a in arguments if a.startswith("--tasks=")),
+        "code,prose,json_like",
+    )
+    if context < 0 or any(b < 2 for b in blocks):
+        raise ValueError("invalid context or draft block")
+    if not set(tasks_arg.split(",")) <= {"code", "prose", "json_like"}:
+        raise ValueError("unknown task")
+    print(
+        json.dumps(
+            {
+                "complete": "dry-run",
+                "checkpoint": str(checkpoint),
+                "model_type": config.get("model_type"),
+                "blocks": blocks,
+                "context": context,
+                "tasks": tasks_arg,
+            }
+        )
+    )
+    sys.exit(0)
+
 import mlx.core as mx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python"))
@@ -361,7 +392,22 @@ for name, prompt, mt in tasks:
                 ),
                 min(len(r["tokens"]), len(ref[name])),
             )
+        import hashlib
+
+        r["token_digest"] = hashlib.sha256(json.dumps(r["tokens"]).encode()).hexdigest()
         r["tokens_head"] = r["tokens"][:64]
         r.pop("tokens")
         print(json.dumps(r), flush=True)
     mx.clear_cache()
+
+print(
+    json.dumps(
+        {
+            "complete": True,
+            "tasks": len(tasks),
+            "blocks": sizes,
+            "ar_reference": not _skip_ar,
+        }
+    ),
+    flush=True,
+)
