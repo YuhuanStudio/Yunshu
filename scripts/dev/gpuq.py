@@ -393,6 +393,13 @@ def submit(
     return jid
 
 
+def _read_rc(jid: str) -> int | None:
+    try:
+        return int((LOGS / f"{jid}.rc").read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
 def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
     gate = gate or ServingGate()
     job.update(state="running", started=_now(), pid=None)
@@ -402,7 +409,13 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
     try:
         rc_file = LOGS / f"{job['id']}.rc"
         proc = subprocess.Popen(
-            ["/bin/sh", "-c", '"$@"; echo $? > "$GPUQ_RC"', "sh", *job["cmd"]],
+            [
+                "/bin/sh",
+                "-c",
+                '"$@"; rc=$?; echo $rc > "$GPUQ_RC"; exit $rc',
+                "sh",
+                *job["cmd"],
+            ],
             cwd=job["cwd"],
             env={
                 **job["env"],
@@ -462,6 +475,13 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
                 except subprocess.TimeoutExpired:
                     os.killpg(proc.pid, signal.SIGKILL)
                     rc = proc.wait()
+    # The command's own exit status is in the rc file; the shell's status alone is not
+    # trusted (a wrapper that ends in `echo` exits 0 after a crash).
+    rc_file_rc = _read_rc(job["id"])
+    if rc_file_rc is not None:
+        rc = rc_file_rc
+    elif not why:
+        rc = rc if rc not in (None, 0) else None  # no rc file: unknown, not success
     state = why or ("done" if rc == 0 else "failed")
     ended = _now()
     if pauser.paused:  # the job died while stopped: close the interval

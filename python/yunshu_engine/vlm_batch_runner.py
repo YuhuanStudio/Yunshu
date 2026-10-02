@@ -74,6 +74,7 @@ class RunStats:
     spec_mode: str | None = None  # "mtp" / "dflash" while a drafter is in use
     spec_drafted: int = 0
     spec_accepted: int = 0
+    spec_rounds: int = 0  # verify rounds this request took part in
 
     @property
     def phase(self) -> str:
@@ -1048,6 +1049,7 @@ def _note_spec(drafter: Any, job: _Job) -> None:
     if now is None or base is None:
         return
     job.stats.spec_drafted = max(int(now[2] - base[2]), 0)
+    job.stats.spec_rounds = max(int(now[0] - base[0]), 0)
     job.stats.spec_accepted = max(int(round(now[1] - base[1])), 0)
 
 

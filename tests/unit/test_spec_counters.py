@@ -24,6 +24,12 @@ def test_spec_counters_diff_per_request():
     info.gen = SimpleNamespace(stats=job.stats)
     usage = {"prompt_tokens": 1, "completion_tokens": 2}
     spec = x_yunshu.build_stats(info, usage)["speculative"]
-    assert spec == {"mode": "mtp", "drafted": 10, "accepted": 5, "acceptance_rate": 0.5}
+    assert spec == {
+        "mode": "mtp",
+        "drafted": 10,
+        "accepted": 5,
+        "acceptance_rate": 0.5,
+        "rounds": 2,
+    }
     _note_spec(None, job)  # no drafter: leaves the numbers alone
     assert job.stats.spec_drafted == 10
