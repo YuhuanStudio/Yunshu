@@ -1295,9 +1295,26 @@ class VLMEngine:
                 "kv_precision": settings.get("YUNSHU_KV_PRECISION"),
                 "apc_adapter_schema": ADAPTER_SCHEMA_VERSION,
                 "apc_layout": "exact_cache_v1",
+                "prefill_kernel": self._prefill_kernel_id(),
             },
             digest_size=8,
         )
+
+    def _prefill_kernel_id(self) -> str:
+        """The arithmetic of prefill chunks (``lane_linear.prefill_kernel_id``) when the lane
+        projections serve this model's prefill, else ``"stock"``."""
+        from .kernels import lane_linear
+
+        model = getattr(self, "_model", None)
+        lm = getattr(model, "language_model", None)
+        from .kernels import gdn_prefill
+
+        matmul = "stock"
+        if lm is not None and any(
+            isinstance(m, lane_linear.LaneLinear) for _, m in lm.named_modules()
+        ):
+            matmul = lane_linear.prefill_kernel_id()
+        return f"{matmul}+{gdn_prefill.kernel_id()}"
 
     def _install_apc_identity(self, lm) -> None:
         """Make every APC key (RAM and SSD) depend on this checkpoint's identity, and
@@ -1310,7 +1327,8 @@ class VLMEngine:
         geometry do not fit the model (a corrupt or foreign file).
         """
         identity = self._apc_disk_namespace()
-        lm.apc_key_dependencies = lambda: (f"yunshu-checkpoint:{identity}",)
+        kernel = self._prefill_kernel_id()
+        lm.apc_key_dependencies = lambda: (f"yunshu-checkpoint:{identity}:{kernel}",)
         disk = getattr(self._apc_backend, "disk", None)
         if disk is None or not hasattr(disk, "validator"):
             return
@@ -1426,29 +1444,6 @@ class VLMEngine:
                 lanes["converted"],
                 len(lanes["skipped"]),
             )
-        budget = self._apc_memory_gb()
-        if self._apc_backend is None and budget > 0:
-            from mlx_vlm.apc import semantic_extra_hash
-
-            from .apc_manager import YunshuAPCManager
-
-            # Sliding-window (rotating) caches cannot be checkpointed at a
-            # prefix boundary, so those families decode without APC.
-            if not self.backend_capabilities(lm).cache.has_sliding_window:
-                self._apc_backend = YunshuAPCManager(
-                    num_blocks=512,
-                    block_size=16,
-                    disk=self._apc_disk_tier(),
-                    overrides={"memory_max_gb": budget},
-                    head_marker=self._chatml_head_marker(),
-                )
-                self._install_apc_identity(lm)
-                self._apc_semantic_hash = semantic_extra_hash(
-                    image_hash=0,
-                    media={"audio": None, "video": None},
-                    model=lm,
-                    processor=self._processor,
-                )
         drafter = None
         draft_kind = "mtp"
         from . import spec_select
@@ -1537,6 +1532,18 @@ class VLMEngine:
                     kernels["lane_linear"] = lane_linear.convert(
                         self._model.language_model
                     )["converted"]
+                    # Never with the round driver: its prefill relies on span-invariant
+                    # lane arithmetic (its own stock calls go through LaneLinear.prefill).
+                    if (
+                        settings.get("YUNSHU_PREFILL_MATMUL") == "stock"
+                        and not use_driver
+                    ):
+                        lane_linear.set_stock_rows(lane_linear.PIECE)
+                    kernels["prefill_matmul"] = lane_linear.prefill_kernel_id()
+                if settings.get("YUNSHU_PREFILL_GDN") == "chunked" and not use_driver:
+                    from .kernels import gdn_prefill
+
+                    gdn_prefill.install()
                 kernels["invariant"] = install_invariant(
                     self._model.language_model, model=self._model, packed=False
                 )
@@ -1576,6 +1583,30 @@ class VLMEngine:
                     block = int(getattr(drafter.config, "block_size", 0)) or None
                 else:
                     block = 6 if invariant else 3
+        # After the kernels: the identity names the prefill matmul they installed.
+        budget = self._apc_memory_gb()
+        if self._apc_backend is None and budget > 0:
+            from mlx_vlm.apc import semantic_extra_hash
+
+            from .apc_manager import YunshuAPCManager
+
+            # Sliding-window (rotating) caches cannot be checkpointed at a
+            # prefix boundary, so those families decode without APC.
+            if not self.backend_capabilities(lm).cache.has_sliding_window:
+                self._apc_backend = YunshuAPCManager(
+                    num_blocks=512,
+                    block_size=16,
+                    disk=self._apc_disk_tier(),
+                    overrides={"memory_max_gb": budget},
+                    head_marker=self._chatml_head_marker(),
+                )
+                self._install_apc_identity(lm)
+                self._apc_semantic_hash = semantic_extra_hash(
+                    image_hash=0,
+                    media={"audio": None, "video": None},
+                    model=lm,
+                    processor=self._processor,
+                )
         if drafter is not None and draft_kind == "dflash":
             # Cost-aware chain depth from measured cycle costs (27B server:
             # 57/48/46 vs upstream adaptive 46/38/38 tok/s at 1K/8K/32K).
