@@ -15,6 +15,18 @@ from pathlib import Path
 from spec_bench_snapshot import freeze, refuse_contended, was_contended
 
 
+def chat_ids(tok, text):
+    """Prompt token ids as a plain list (newer transformers return a BatchEncoding)."""
+    out = tok.apply_chat_template(
+        [{"role": "user", "content": text}],
+        tokenize=True,
+        add_generation_prompt=True,
+        enable_thinking=False,
+    )
+    out = out["input_ids"] if hasattr(out, "keys") else out
+    return list(out)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("model")
@@ -157,12 +169,7 @@ def main():
             for ctx in a.contexts:
                 for task, ask in tasks.items():
                     text = tok.decode(filler[:ctx]) + "\n\n" + ask
-                    ids = tok.apply_chat_template(
-                        [{"role": "user", "content": text}],
-                        tokenize=True,
-                        add_generation_prompt=True,
-                        enable_thinking=False,
-                    )
+                    ids = chat_ids(tok, text)
                     key = (ctx, task)
                     if rep == 0:
                         plain = run(ids, None, a.tokens)
@@ -207,17 +214,7 @@ def main():
         # correctness evidence; the short checks do not claim sampled speed.
         for seed in (17, 37, 1234):
             for task, ask in tasks.items():
-                ids = tok.apply_chat_template(
-                    [
-                        {
-                            "role": "user",
-                            "content": tok.decode(filler[:1024]) + "\n\n" + ask,
-                        }
-                    ],
-                    tokenize=True,
-                    add_generation_prompt=True,
-                    enable_thinking=False,
-                )
+                ids = chat_ids(tok, tok.decode(filler[:1024]) + "\n\n" + ask)
                 expected = None
                 for (bits, fused, selector), draft in [
                     ((0, False, False), None),
