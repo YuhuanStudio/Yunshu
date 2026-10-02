@@ -828,7 +828,10 @@ def _extract_input_text(content) -> str | list:
             t = block.get("text", "")
             if t:
                 text_parts.append(t)
-                multimodal.append({"type": "text", "text": t})
+                part = {"type": "text", "text": t}
+                if block.get("prompt_cache_breakpoint"):
+                    part["prompt_cache_breakpoint"] = block["prompt_cache_breakpoint"]
+                multimodal.append(part)
         elif btype == "input_image":
             has_media = True
             # Unwrap a nested {"url": ...} (clients reusing the chat shape) — a raw
@@ -847,7 +850,7 @@ def _extract_input_text(content) -> str | list:
             multimodal.append(
                 {"type": "input_audio", "input_audio": block.get("input_audio", block)}
             )
-    if has_media:
+    if has_media or any(p.get("prompt_cache_breakpoint") for p in multimodal):
         return multimodal
     return "\n".join(text_parts)
 

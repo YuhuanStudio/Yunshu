@@ -143,3 +143,14 @@ would otherwise guess wrong; `--dry-run` prints it.
 | Claude Code | `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, every model alias -> the served model, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (the real window), `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`, optional `CLAUDE_CODE_EFFORT_LEVEL` (`--effort`), and a `--settings` status line running `yunshu statusline` (live prefill progress, decode speed, last cache hit, context %; skipped when you have your own `statusLine`, off with `--no-statusline`). Environment and flags only: `~/.claude` is not written. |
 | Codex | `~/.codex/config.toml` (`model_provider`, `model_context_window`, `model_auto_compact_token_limit`, `web_search = "live"` when a provider is configured) and `~/.codex/yunshu-models.json` (`model_catalog_json`: window, reasoning levels, modalities, a compact `base_instructions`). |
 | opencode | `provider.yunshu` in `opencode.json` with `limit.context` / `limit.output`, `reasoning`, `tool_call`, `modalities`. |
+
+The VLM runner maps Claude `cache_control` markers through conversion and the
+actual chat template, including native tool definitions and message text. It
+reports actual checkpoint writes and reads rather than estimating tokens from
+system text. Repeated cold prefixes can wait on an admitted producer's planned
+hybrid checkpoint. Waiters stay outside the generator until publication is
+attempted, then use the ordinary APC lookup; cancellation or failure releases
+waiters to cold fallback. Media salts stay part of identity and each request
+keeps its own mutable KV, sampler and detokenizer. Uniform clients in one
+upstream generator may already avoid duplicate prefill; cross-generator groups
+are measured separately in the single-flight replay.

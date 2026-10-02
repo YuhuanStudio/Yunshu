@@ -842,6 +842,14 @@ class VLMEngine:
                     extras=_runner_extras,
                     prompt_kwargs=pkw,
                     apc_semantic_hash=salt,
+                    prompt_cache_plan=self._resolve_prompt_cache_plan(
+                        kwargs.get("prompt_cache_plan"),
+                        messages,
+                        ids,
+                        pkw,
+                        _enable_thinking,
+                        tpl_extra,
+                    ),
                     **runner_params,
                 )
 
@@ -1059,6 +1067,14 @@ class VLMEngine:
                 _safe_queue,
                 prompt_kwargs=pkw,
                 apc_semantic_hash=salt,
+                prompt_cache_plan=self._resolve_prompt_cache_plan(
+                    kwargs.get("prompt_cache_plan"),
+                    messages,
+                    ids,
+                    pkw,
+                    enable_thinking,
+                    tpl_extra,
+                ),
                 **runner_params,
             )
 
@@ -1872,6 +1888,7 @@ class VLMEngine:
         stats: Any,
         prompt_kwargs: dict | None = None,
         apc_semantic_hash: int | None = None,
+        prompt_cache_plan: dict | None = None,
         logprobs: bool = False,
         top_logprobs: int | None = None,
         min_tokens: int = 0,
@@ -1948,6 +1965,7 @@ class VLMEngine:
             logits_processors=processors,
             prompt_kwargs=prompt_kwargs,
             apc_semantic_hash=apc_semantic_hash,
+            prompt_cache_plan=prompt_cache_plan,
             cancel_event=cancel_event,
             stats=stats,
             logprobs=bool(logprobs),
@@ -2119,6 +2137,67 @@ class VLMEngine:
             messages, enable_thinking=enable_thinking, template_extra=template_extra
         )
         return ids.tolist(), None, None
+
+    def _resolve_prompt_cache_plan(
+        self, plan, messages, ids, prompt_kwargs, enable_thinking, template_extra
+    ):
+        if plan is None:
+            from .prompt_caching import openai_plan
+
+            plan = openai_plan(messages)
+        if not plan or not (plan.get("markers") or plan.get("tools")):
+            return None
+        from .prompt_caching import expanded_boundaries, rendered_boundaries
+
+        if prompt_kwargs is None:
+            prompt = self._format_prompt(messages, enable_thinking, template_extra)
+            shadow = self._format_prompt(
+                plan["messages"], enable_thinking, template_extra
+            )
+            rendered_ids = ids
+        else:
+            # The same pure template builder used for the prepared media request;
+            # no second image/audio encoder invocation.
+            count = sum(
+                p.get("type") == "image_url"
+                for m in messages
+                for p in (
+                    m.get("content") if isinstance(m.get("content"), list) else []
+                )
+                if isinstance(p, dict)
+            )
+            prompt = self._apply_vlm_template_with_cache(
+                messages,
+                enable_thinking=enable_thinking,
+                max_images=count or None,
+                template_extra=template_extra,
+            )
+            shadow = self._apply_vlm_template_with_cache(
+                plan["messages"],
+                enable_thinking=enable_thinking,
+                max_images=count or None,
+                template_extra=template_extra,
+            )
+            rendered_ids = self._tokenizer.encode(prompt, add_special_tokens=False)
+        points = rendered_boundaries(
+            prompt,
+            shadow,
+            plan["markers"],
+            self._tokenizer,
+            rendered_ids,
+            tools=(template_extra or {}).get("tools"),
+            tool_controls=plan["tools"],
+            marker_ends=plan.get("marker_ends"),
+        )
+        if prompt_kwargs is not None:
+            from mlx_vlm.apc import multimodal_token_ids_from_config
+
+            media = multimodal_token_ids_from_config(self._model.language_model.config)
+            points = expanded_boundaries(rendered_ids, ids, points, media)
+        plan["points"] = points
+        plan["resolved"] = True
+        logger.info("Prompt cache rendered token boundaries: %s", plan["points"])
+        return plan
 
     def _runner_kwargs(self, **params) -> dict:
         kwargs = params.pop("kwargs")
@@ -2353,6 +2432,10 @@ class VLMEngine:
                             parts.append({"type": "audio"})
                         elif part.get("type") == "text":
                             parts.append({"type": "text", "text": part.get("text", "")})
+                        if part.get("_yunshu_cache_marker"):
+                            parts.append(
+                                {"type": "text", "text": part["_yunshu_cache_marker"]}
+                            )
                     elif isinstance(part, str):
                         parts.append({"type": "text", "text": part})
                 # emit deferred video-frame placeholders at the end of this

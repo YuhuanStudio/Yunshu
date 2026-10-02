@@ -244,6 +244,8 @@ class TokenMaskProcessor:
 class VLMBatchRunner:
     """Owns the APC manager, the drafter and the shared batch scheduler."""
 
+    singleflight = True
+
     def __init__(
         self,
         model: Any,
@@ -271,6 +273,7 @@ class VLMBatchRunner:
         self._executor = executor
         self._lock = threading.Lock()
         self._pending: list[_Job] = []
+        self._prefix_producers: list[tuple[_Job, list[int]]] = []
         # Shared continuous batches keyed by (top_logprobs_k, use_apc) and the
         # exclusive speculative lane (one request, only while it is alone).
         self._batches: dict[tuple, _Group] = {}
@@ -403,6 +406,7 @@ class VLMBatchRunner:
         xtc_threshold: float = 0.0,
         xtc_special_tokens: list | None = None,
         guide: Any = None,
+        prompt_cache_plan: dict | None = None,
     ) -> Iterator[int]:
         """Yield generated token ids; ``stats`` is filled in as generation runs.
 
@@ -480,6 +484,7 @@ class VLMBatchRunner:
             seed=seed,
             cancel_event=cancel_event,
             stats=stats,
+            cache_plan=prompt_cache_plan,
             budget=budget,
         )
         # The round driver drafts for any row without logits processors, logprobs
@@ -610,6 +615,10 @@ class VLMBatchRunner:
     ):
         from mlx_vlm.generate.ar import BatchGenerator
 
+        from .cache_prefill import install
+
+        install()
+
         gen = BatchGenerator(
             self.model.language_model,
             self.processor,
@@ -658,7 +667,11 @@ class VLMBatchRunner:
                 use_apc = bool(self._apc_admit(mx.array(job.ids)))
             except Exception:
                 logger.debug("APC admission check failed; using APC", exc_info=True)
-        if self.driver is not None and job.prompt_kwargs is None:
+        if (
+            self.driver is not None
+            and job.prompt_kwargs is None
+            and job.cache_plan is None
+        ):
             self._admit_driver(job, use_apc)
             return
         job.stats.used_apc = use_apc
@@ -677,6 +690,17 @@ class VLMBatchRunner:
                 mx.array(job.ids)[None], None, mask=None
             ).to_dict()
         salt = job.salt if job.salt is not None else self.apc_semantic_hash
+        if job.cache_plan is not None:
+            # Explicit seams have their own numerical span plan. Automatic
+            # checkpoints keep their existing namespace and persistence.
+            import hashlib
+
+            salt = int.from_bytes(
+                hashlib.blake2b(
+                    f"{salt}:explicit-absolute-spans-v1".encode(), digest_size=8
+                ).digest(),
+                "little",
+            )
         if salt is not None:
             pkw["_apc_semantic_hash"] = salt
         rd = pkw.get("rope_deltas")
@@ -710,6 +734,10 @@ class VLMBatchRunner:
                     spec=False,
                     sampler=sampler,
                 )
+        if getattr(group.gen, "apc", None) is not None and hasattr(
+            group.gen.apc, "set_request"
+        ):
+            group.gen.apc.set_request(job.ids, job.cache_plan)
         (uid,) = group.gen.insert(
             [job.ids],
             max_tokens=job.max_tokens,
@@ -983,6 +1011,66 @@ class VLMBatchRunner:
             "round_driver": self.driver_busy_meter.snapshot(),
         }
 
+    def _prefix_wait(self, job: _Job) -> bool:
+        """Wait only for existing, exact hybrid checkpoint positions.
+
+        The serialized executor owns this table. No shared mutable KV, sampling
+        state or future survives a producer failure. Releasing always returns
+        through the normal content/media/kernel-validated APC lookup.
+        """
+        if not self.singleflight or self.apc_manager is None:
+            return False
+        for producer, points in self._prefix_producers:
+            cancel = producer.cancel_event
+            if (
+                producer.terminal
+                or producer.abandoned
+                or producer.stats.t_first
+                or (cancel is not None and cancel.is_set())
+                or producer.salt != job.salt
+                or (producer.cache_plan is None) != (job.cache_plan is None)
+            ):
+                continue
+            eligible = [
+                n
+                for n in points
+                if n < len(job.ids) and n > producer.stats.cached_tokens
+            ]
+            if job.cache_plan is not None:
+                requested = {n for n, _ in job.cache_plan["points"]}
+                eligible = [n for n in eligible if n in requested]
+            for n in reversed(eligible):
+                if job.ids[:n] != producer.ids[:n]:
+                    continue
+                # Progress is noted only after prompt_step has attempted its
+                # publication. A rejected snapshot releases to cold fallback.
+                if producer.stats.prefill_done + producer.stats.cached_tokens >= n:
+                    return False
+                if "prefix_wait_tokens" not in job.stats.extra:
+                    job.stats.extra["prefix_wait_tokens"] = n
+                    logger.info(
+                        "APC single-flight wait: prefix=%d producer=%s waiter=%s",
+                        n,
+                        id(producer),
+                        id(job),
+                    )
+                return True
+        return False
+
+    def _track_prefix_producer(self, job: _Job):
+        if not job.stats.used_apc or id(job) in self._driver_jobs:
+            return
+        for group in self._groups():
+            if job.uid not in group.jobs or group.jobs[job.uid] is not job:
+                continue
+            coordinator = getattr(group.gen, "apc", None)
+            if coordinator is not None and hasattr(coordinator, "set_request"):
+                points = coordinator.checkpoint_lengths(
+                    job.ids, group.gen._apc_media_token_ids(), begin=False
+                )
+                self._prefix_producers.append((job, points))
+            break
+
     def _drive_slice(self, resubmit: bool = True) -> None:
         """One scheduling slice on the MLX thread, timed into ``busy_meter``."""
         with self.busy_meter.span():
@@ -996,6 +1084,12 @@ class VLMBatchRunner:
             alone = (
                 len(pending) == 1 and self._active_jobs() == 0 and self.inflight() <= 1
             )
+            self._prefix_producers = [
+                (j, points)
+                for j, points in self._prefix_producers
+                if not j.terminal and not j.stats.t_first
+            ]
+            waiting = []
             for job in pending:
                 cancelled = job.cancel_event is not None and job.cancel_event.is_set()
                 if job.abandoned or cancelled:
@@ -1003,11 +1097,18 @@ class VLMBatchRunner:
                     job.stats.finish_reason = "cancel" if cancelled else None
                     self._emit(job, _DONE)
                     continue
+                if self._prefix_wait(job):
+                    waiting.append(job)
+                    continue
                 try:
                     self._admit(job, alone)
+                    self._track_prefix_producer(job)
                 except Exception as exc:
                     logger.exception("VLM runner admission failed")
                     self._emit(job, exc)
+            if waiting:
+                with self._lock:
+                    self._pending = waiting + self._pending
             for group in self._groups():
                 self._step_group(group)
             if self._driver_jobs:
@@ -1259,6 +1360,7 @@ class _Job:
     seed: int | None
     cancel_event: Any
     stats: RunStats
+    cache_plan: dict | None = None
     out: queue.Queue = field(default_factory=queue.Queue)
     uid: int | None = None
     start: float = 0.0

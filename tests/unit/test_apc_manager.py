@@ -283,3 +283,63 @@ def test_entry_too_large_for_ram_is_written_synchronously(tmp_path):
     assert len(_files(tmp_path)) == 1
     _, n = m.lookup_exact_cache(ids + [1])
     assert n == 96
+
+
+def test_explicit_breakpoint_is_stored_and_survives_growing_turn():
+    m = _mgr()
+    c = _coordinator(m)
+    ids = list(range(6000, 6300))
+    plan = {"points": [(113, 300)], "written": 0}
+    c.set_request(ids, plan)
+    assert c.checkpoint_lengths(ids, set()) == [113]
+    m.begin_request()
+    m.protect_boundary(ids[:113], 0, 300)
+    assert m.store_exact_cache(ids[:113], _cache(113))
+    m.begin_request()
+    assert m.store_exact_cache(ids[:280], _cache(280))
+    assert 113 in [len(e.token_ids) for e in m._exact_cache.values()]
+
+
+def test_explicit_ttl_refreshes_only_on_a_read(monkeypatch):
+    m = _mgr()
+    clock = [100.0]
+    monkeypatch.setattr("yunshu_engine.apc_manager.time.monotonic", lambda: clock[0])
+    ids = list(range(2000, 2200))
+    m.protect_boundary(ids[:113], 0, 300)
+    m.store_exact_cache(ids[:113], _cache(113))
+    clock[0] = 350.0
+    assert m.lookup_exact_cache(ids)[1] == 113
+    clock[0] = 600.0
+    assert m.lookup_exact_cache(ids)[1] == 113
+    clock[0] = 901.0
+    assert m.lookup_exact_cache(ids)[1] == 0
+
+
+def test_failed_explicit_store_reports_no_creation_or_retention(monkeypatch):
+    from mlx_vlm.apc_coordinator import APCCoordinator
+
+    m = _mgr()
+    c = _coordinator(m)
+    ids = list(range(6000, 6300))
+    plan = {"points": [(113, 300)], "written": 0}
+    c.set_request(ids, plan)
+    c.checkpoint_lengths(ids, set())
+    monkeypatch.setattr(APCCoordinator, "store_checkpoint", lambda *a, **k: False)
+    assert not c.store_checkpoint(ids[:113], [])
+    assert plan["written"] == 0
+    assert not m._retention
+
+
+def test_successful_explicit_store_reports_full_rendered_prefix(monkeypatch):
+    from mlx_vlm.apc_coordinator import APCCoordinator
+
+    m = _mgr()
+    c = _coordinator(m)
+    ids = list(range(6000, 6300))
+    plan = {"points": [(113, 300)], "written": 0}
+    c.set_request(ids, plan)
+    c.checkpoint_lengths(ids, set())
+    monkeypatch.setattr(APCCoordinator, "store_checkpoint", lambda *a, **k: True)
+    assert c.store_checkpoint(ids[:113], [])
+    assert plan["written"] == 113
+    assert m._retention
