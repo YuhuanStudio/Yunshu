@@ -69,6 +69,40 @@ def test_busy_seconds_reach_metrics(monkeypatch):
     assert "yunshu_round_driver_busy_seconds_total" in text
 
 
+def test_warm_and_storage_tiers_reach_metrics(monkeypatch):
+    snap = {
+        "warm_bytes": 123,
+        "warm_hits": 4,
+        "warm_ratio": 1.4,
+        "tier_hits": {"ram": 3, "warm": 1, "ssd": 2, "none": 1},
+        "storage_tiers": [
+            {"name": "internal", "used_bytes": 10, "cap_bytes": 20, "entries": 2,
+             "read_bps": 9e9, "hits": 2, "available": True},
+            {"name": "nas", "used_bytes": 5, "cap_bytes": 50, "entries": 1,
+             "read_bps": 1e8, "hits": 0, "available": False, "invalidated": 1},
+        ],
+    }  # fmt: skip
+    engine = SimpleNamespace(apc_snapshot=lambda: snap)
+    monkeypatch.setattr(
+        "yunshu_gateway.engine.get_engine", lambda: engine, raising=False
+    )
+    monkeypatch.setattr(
+        "yunshu_gateway.engine.get_model_manager", lambda: None, raising=False
+    )
+    pm = PrometheusMetrics()
+    monitoring._populate_apc_metrics(pm)
+    text = pm.generate()
+    assert "yunshu_apc_warm_bytes" in text and "yunshu_apc_warm_hits_total" in text
+    assert "yunshu_apc_tier_lookups_total{" in text and 'tier="warm"' in text
+    line = next(
+        x
+        for x in text.splitlines()
+        if x.startswith("yunshu_apc_storage_tier_available{") and 'tier="nas"' in x
+    )
+    assert float(line.rsplit(" ", 1)[1]) == 0.0
+    assert "yunshu_apc_storage_tier_read_bytes_per_second{" in text
+
+
 def test_metrics_endpoint_serves_apc_gauges(monkeypatch):
     monkeypatch.setenv("YUNSHU_AUTH_DISABLED", "1")
     _patch_engine(monkeypatch)

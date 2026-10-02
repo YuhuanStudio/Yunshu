@@ -412,6 +412,12 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
                 if st is not None and st.cache_reload_ms is not None
                 else None
             ),
+            # the storage tier (volume) an "ssd" hit came from, when more than one is configured
+            **(
+                {"device": st.cache_device}
+                if st is not None and getattr(st, "cache_device", None)
+                else {}
+            ),
         },
         "prefill_ms": _ms(prefill_s),
         "prefill_tps": prefill_tps,

@@ -248,6 +248,7 @@ def main():
             for s in sess:  # and one more growth step
                 r = summarize(post(srv.url, s.body(steps + 1, a.max_new)))
                 emit(dict(kind="revisit+1", session=s.idx, step=steps + 1, **r))
+            emit(dict(kind="final", stats=kv_stats(srv.url)))
         elif a.scenario == "restart":
             for L in [int(x) for x in a.lengths.split(",")]:
                 s = Session(
@@ -293,8 +294,14 @@ def main():
                 emit(dict(kind="hit", length=L, **hit, stats=kv_stats(srv.url)))
                 hit2 = summarize(post(srv.url, b2))
                 emit(dict(kind="hit-repeat", length=L, **hit2))
+        emit(dict(kind="complete"))
     finally:
         srv.kill()
+    # fail closed: a run that did not reach its last line wrote incomplete results
+    lines = out.read_text().splitlines() if out.exists() else []
+    if not lines or json.loads(lines[-1]).get("kind") != "complete":
+        print("session_replay: results incomplete", file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == "__main__":
