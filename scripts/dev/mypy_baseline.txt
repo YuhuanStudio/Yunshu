@@ -42,7 +42,7 @@
 1	python/yunshu_engine/batch_sampler.py	arg-type	Argument 1 to "append" of "list" has incompatible type "int | float | complex | list[list_or_scalar]"; expected "int"
 2	python/yunshu_engine/batch_sampler.py	index	Value of type "int | float | complex" is not indexable
 1	python/yunshu_engine/batch_sampler.py	operator	Unsupported operand types for / ("array" and "None")
-1	python/yunshu_engine/batched_engine.py	arg-type	Argument "logprobs" to "_stream_generate_mtp" of "BatchedEngine" has incompatible type "bool | int"; expected "bool"
+1	python/yunshu_engine/batched_engine.py	arg-type	Argument "logprobs" to "_stream_generate_mtp" of "EngineMtpMixin" has incompatible type "bool | int"; expected "bool"
 1	python/yunshu_engine/batched_engine.py	arg-type	Argument "logprobs" to "_stream_generate_speculative" of "EngineSpeculativeMixin" has incompatible type "bool | int"; expected "bool"
 1	python/yunshu_engine/batched_engine.py	arg-type	Argument 1 to "make_prompt_cache" has incompatible type "None"; expected Module
 1	python/yunshu_engine/batched_engine.py	arg-type	Argument 1 to "quantize" has incompatible type "None"; expected Module
@@ -61,24 +61,17 @@
 1	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "abort_request"
 1	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "add_request"
 1	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "config"
-1	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "detokenizer"
-4	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "encode"
-2	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "eos_token_id"
 1	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "full_kv_layer"
 1	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "generate"
 1	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "sliding_kv_layer"
-1	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "stats"
 1	python/yunshu_engine/batched_engine.py	attr-defined	"None" has no attribute "stream_outputs"
-1	python/yunshu_engine/batched_engine.py	call-arg	Unexpected keyword argument "ignore_eos" for "_stream_generate_mtp" of "BatchedEngine"
-1	python/yunshu_engine/batched_engine.py	call-arg	Unexpected keyword argument "kv_cache_breakpoints" for "_stream_generate_mtp" of "BatchedEngine"
-1	python/yunshu_engine/batched_engine.py	call-arg	Unexpected keyword argument "min_tokens" for "_stream_generate_mtp" of "BatchedEngine"; did you mean "max_tokens"?
-1	python/yunshu_engine/batched_engine.py	call-arg	Unexpected keyword argument "suppress_tokens" for "_stream_generate_mtp" of "BatchedEngine"
-3	python/yunshu_engine/batched_engine.py	func-returns-value	"clear_cache" does not return a value (it only ever returns None)
-3	python/yunshu_engine/batched_engine.py	func-returns-value	"synchronize" does not return a value (it only ever returns None)
+1	python/yunshu_engine/batched_engine.py	call-arg	Unexpected keyword argument "ignore_eos" for "_stream_generate_mtp" of "EngineMtpMixin"
+1	python/yunshu_engine/batched_engine.py	call-arg	Unexpected keyword argument "kv_cache_breakpoints" for "_stream_generate_mtp" of "EngineMtpMixin"
+1	python/yunshu_engine/batched_engine.py	call-arg	Unexpected keyword argument "min_tokens" for "_stream_generate_mtp" of "EngineMtpMixin"; did you mean "max_tokens"?
+1	python/yunshu_engine/batched_engine.py	call-arg	Unexpected keyword argument "suppress_tokens" for "_stream_generate_mtp" of "EngineMtpMixin"
 1	python/yunshu_engine/batched_engine.py	misc	Too many values to unpack (2 expected, 3 provided)
 1	python/yunshu_engine/batched_engine.py	no-any-return	Returning Any from function declared to return "GenerationOutput"
 1	python/yunshu_engine/batched_engine.py	no-any-return	Returning Any from function declared to return "int"
-1	python/yunshu_engine/batched_engine.py	no-redef	Name "_chunk_logprobs" already defined on line N
 1	python/yunshu_engine/batched_engine.py	union-attr	Item "None" of "Any | None" has no attribute "embed_tokens"
 1	python/yunshu_engine/bfcl_eval.py	no-any-return	Returning Any from function declared to return "str"
 1	python/yunshu_engine/bfcl_eval.py	no-redef	Name "results" already defined on line N
@@ -123,6 +116,13 @@
 4	python/yunshu_engine/engine_fast.py	attr-defined	"None" has no attribute "encode"
 2	python/yunshu_engine/engine_fast.py	func-returns-value	"clear_cache" does not return a value (it only ever returns None)
 2	python/yunshu_engine/engine_fast.py	func-returns-value	"synchronize" does not return a value (it only ever returns None)
+1	python/yunshu_engine/engine_mtp.py	attr-defined	"None" has no attribute "detokenizer"
+4	python/yunshu_engine/engine_mtp.py	attr-defined	"None" has no attribute "encode"
+2	python/yunshu_engine/engine_mtp.py	attr-defined	"None" has no attribute "eos_token_id"
+1	python/yunshu_engine/engine_mtp.py	attr-defined	"None" has no attribute "stats"
+3	python/yunshu_engine/engine_mtp.py	func-returns-value	"clear_cache" does not return a value (it only ever returns None)
+3	python/yunshu_engine/engine_mtp.py	func-returns-value	"synchronize" does not return a value (it only ever returns None)
+1	python/yunshu_engine/engine_mtp.py	no-redef	Name "_chunk_logprobs" already defined on line N
 1	python/yunshu_engine/engine_ngram.py	arg-type	Argument "prompt" to "_stream_generate_fast" of "EngineStreamMixin" has incompatible type "str | list[dict[Any, Any]]"; expected "str"
 2	python/yunshu_engine/engine_ngram.py	arg-type	Argument 1 to "make_prompt_cache" has incompatible type "None"; expected Module
 2	python/yunshu_engine/engine_ngram.py	attr-defined	"None" has no attribute "decode"
