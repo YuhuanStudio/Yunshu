@@ -193,7 +193,7 @@ class SpillDiskStore(DiskBlockStore):
 
     # Called on the writer thread after a checkpoint file landed: ``(cache_hash, token_ids,
     # extra_hash)``. The manager uses it to drop the files that checkpoint supersedes.
-    on_exact_written = None
+    on_exact_written: Any = None
 
     def _write_payload(self, shard_id, block_hashes, payload) -> bool:
         ok = self._write_payload_impl(shard_id, block_hashes, payload)
@@ -210,9 +210,7 @@ class SpillDiskStore(DiskBlockStore):
         return ok
 
     def _tok_cache(self) -> dict:
-        cache = self.__dict__.get("_tok_by_hash")
-        if cache is None:
-            cache = self.__dict__.setdefault("_tok_by_hash", {})
+        cache: dict = self.__dict__.setdefault("_tok_by_hash", {})
         return cache
 
     def exact_prefixes_of(self, tokens, extra_hash, exclude=None) -> list:
