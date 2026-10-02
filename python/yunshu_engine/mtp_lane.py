@@ -111,7 +111,7 @@ def set_copy_rows(rows: int, limit: int | None = None) -> int:
 def set_copy_cost(on: bool) -> bool:
     """Cost-aware copy rounds (width / copy-or-model chosen from measured prices)."""
     _STATE["copy_cost"] = bool(on)
-    return _STATE["copy_cost"]
+    return bool(on)
 
 
 def copy_rows_for_model(language_model: Any, rows: int | None = None) -> int:
