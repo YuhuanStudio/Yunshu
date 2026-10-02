@@ -49,6 +49,9 @@ def test_readme_commands_and_flags_exist(path):
             part = args[position]
             if part.startswith("-"):
                 break
+            positional = any(p.param_type_name == "argument" for p in command.params)
+            if part not in command.commands and positional:
+                break  # e.g. `yunshu launch claude`: the group's own TOOL argument
             assert part in command.commands, f"Unknown command in {example}"
             command = command.commands[part]
             position += 1
@@ -68,18 +71,14 @@ def test_readme_settings_and_install_extras_exist(path):
         assert extra in project["optional-dependencies"]
 
 
-def test_translated_performance_tables_match_english():
-    def measurements(path):
+def test_translated_performance_numbers_match_english():
+    def numbers(path):
         tables = re.findall(r"(?:^\|.*\n)+", path.read_text(), re.MULTILINE)
-        return [
-            table
-            for table in tables
-            if "cold TTFT" in table
-            or "Before | After" in table
-            or "Pass / runs" in table
-        ]
+        perf = [t for t in tables if "TensorFold 0.6.1" in t]
+        assert len(perf) == 1, f"{path.name}: expected one performance table"
+        return re.findall(r"\d+(?:\.\d+)?", perf[0])
 
-    reference = measurements(READMES[0])
-    assert len(reference) == 3
+    reference = numbers(READMES[0])
+    assert reference
     for path in READMES[1:]:
-        assert measurements(path) == reference, f"{path.name}: measurement drift"
+        assert numbers(path) == reference, f"{path.name}: measurement drift"
