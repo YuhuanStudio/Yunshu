@@ -614,7 +614,77 @@ def _work_list(
     return hit
 
 
+TILE_TOKENS = 8  # query tokens one tile launch serves (the kernel's fused rows)
+MAX_WINDOW = 32  # widest speculative window (tokens) the tile kernel path takes
+
+
 def ragged_decode_attention(
+    queries: mx.array,
+    keys: mx.array,
+    values: mx.array,
+    lengths: mx.array,
+    scale: float,
+    max_length: int | None = None,
+    k_scales: mx.array | None = None,
+    v_scales: mx.array | None = None,
+    impl: str = "auto",
+    row_lengths: Sequence[int] | None = None,
+    slots: mx.array | None = None,
+) -> mx.array:
+    """``_attend`` for any window of up to ``MAX_WINDOW`` query tokens.
+
+    Windows wider than the tile kernel's 8 fused tokens run as groups of 8
+    consecutive tokens, each one launch of the same kernel over the same keys
+    with the group's own causal limit. A token's arithmetic is that of the
+    8-token launch whatever its window position, which equals a one-token
+    decode of its position (tokens are padded to 8 there), so a wide verify
+    row stays bit-identical to plain decode. Each group re-reads the chunk
+    keys (the wide window's cost over keys is one read per 8 tokens).
+    """
+    T = int(queries.shape[2])
+    if T <= TILE_TOKENS:
+        return _attend(
+            queries,
+            keys,
+            values,
+            lengths,
+            scale,
+            max_length,
+            k_scales,
+            v_scales,
+            impl,
+            row_lengths,
+            slots,
+        )
+    if impl != "tile" or T > MAX_WINDOW:
+        raise ValueError(f"ragged_decode_attention: {T} tokens need impl='tile'")
+    outs = []
+    for g in range(0, T, TILE_TOKENS):
+        tg = min(TILE_TOKENS, T - g)
+        off = (
+            T - g - tg
+        )  # tokens after this group: its last token sees this many fewer keys
+        outs.append(
+            _attend(
+                queries[:, :, g : g + tg],
+                keys,
+                values,
+                lengths - off if off else lengths,
+                scale,
+                None if max_length is None else max_length - off,
+                k_scales,
+                v_scales,
+                impl,
+                None
+                if row_lengths is None
+                else tuple(int(n) - off for n in row_lengths),
+                slots,
+            )
+        )
+    return mx.concatenate(outs, axis=2)
+
+
+def _attend(
     queries: mx.array,
     keys: mx.array,
     values: mx.array,

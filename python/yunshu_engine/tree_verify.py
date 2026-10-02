@@ -46,7 +46,10 @@ from .kernels.omlx import qwen35_verify_qmm as vq
 
 logger = logging.getLogger(__name__)
 
-MAX_ROWS = 8  # batch-invariant projections and the tile kernel's token window
+MAX_ROWS = 32  # lane projections (<= 128 rows), the fused GDN kernels (<= 32), the tile kernel's token groups
+NARROW_ROWS = (
+    8  # without lane projections only the sg8 / packed kernels' window is row-invariant
+)
 CK = ra.CHUNK
 
 
@@ -545,11 +548,23 @@ class RoundContext:
             )
             self.plan_b = ra._work_list(tuple(local), 1, self.ntail, True)
         if self.cstar:
-            self.len_a = self.tail_start + w - 1
-            self.len_a_arr = mx.array([self.len_a], dtype=mx.int32)
+            # shared chunks, one tile launch per 8 consecutive tokens (the
+            # kernel's fused token rows; a group's last token sees ``off``
+            # fewer window keys than the window's last)
             self.slot0 = mx.array([0], dtype=mx.int32)
-            self.nc_a = -(-self.len_a // CK)
-            self.plan_a = ra._work_list((self.len_a,), w, self.nc_a, True)
+            self.groups_a = []
+            bases, base = [], 0
+            for lo in range(0, w, ra.TILE_TOKENS):
+                tg = min(ra.TILE_TOKENS, w - lo)
+                length = self.tail_start + lo + tg - 1
+                nc = -(-length // CK)
+                plan = ra._work_list((length,), tg, nc, True)
+                self.groups_a.append(
+                    (lo, tg, mx.array([length], dtype=mx.int32), nc, plan)
+                )
+                bases.append(plan[1] + base)
+                base += plan[2]
+            self.starts_a = bases[0] if len(bases) == 1 else mx.concatenate(bases)
         self.pos = None
 
 
@@ -581,21 +596,30 @@ def tree_attention(
     g = h // hkv
     cstar, tail_start, ntail, m = rc.cstar, rc.tail_start, rc.ntail, rc.m
     scale_arr = _scale_array(scale)
-    q_fused = _fuse_tokens(queries, hkv, g, w)
 
     # shared chunks 0 .. cstar - 1: every row sees them whole
     if cstar:
-        po_a, pm_a, pl_a, starts_a = _tile_partials(
-            q_fused,
-            keys,
-            values,
-            rc.len_a_arr,
-            rc.slot0,
-            scale_arr,
-            rc.plan_a,
-            w,
-            rc.nc_a,
-        )
+        parts = [
+            _tile_partials(
+                _fuse_tokens(queries[:, :, lo : lo + tg], hkv, g, tg),
+                keys,
+                values,
+                len_arr,
+                rc.slot0,
+                scale_arr,
+                plan,
+                tg,
+                nc,
+            )[:3]
+            for lo, tg, len_arr, nc, plan in rc.groups_a
+        ]
+        if len(parts) == 1:
+            po_a, pm_a, pl_a = parts[0]
+        else:
+            po_a, pm_a, pl_a = (
+                mx.concatenate(list(x)) for x in zip(*parts, strict=True)
+            )
+        starts_a = rc.starts_a
     else:
         po_a = pm_a = pl_a = _zeros((1,), mx.float32)
         starts_a = _zeros((w,), mx.int32)
@@ -697,6 +721,15 @@ def supported(language_model: Any) -> bool:
 # ── the forward ─────────────────────────────────────────────────────────────
 
 
+def lane_projections(lm: Any) -> bool:
+    """The decoder's projections are ``LaneLinear`` (row-invariant at any row count)."""
+    from .kernels.lane_linear import LaneLinear
+
+    layer = lm.model.layers[0]
+    proj = layer.linear_attn.in_proj_qkv if layer.is_linear else layer.self_attn.q_proj
+    return isinstance(proj, LaneLinear)
+
+
 def lane_ready(lm: Any, cache: list) -> bool:
     """The prompt cache is the single-row lane layout ``tree_forward`` reads."""
     return ragged_kv._lane_length(cache[lm.model.fa_idx]) is not None
@@ -720,6 +753,8 @@ def tree_forward(
     w = shape.width
     if w > MAX_ROWS:
         raise ValueError(f"tree window of {w} rows (limit {MAX_ROWS})")
+    if w > NARROW_ROWS and not lane_projections(lm):
+        raise ValueError(f"tree window of {w} rows needs the lane projections")
     n0 = ragged_kv._lane_length(cache[model.fa_idx])
     if n0 is None:
         raise ValueError("tree verify needs the single-row lane cache")
@@ -734,8 +769,10 @@ def tree_forward(
     h = model.embed_tokens(tokens)
     res = TreeResult(shape=shape, n0=n0, hidden=h)
     capture = set(capture_ids)
-    for i, (layer, c) in enumerate(zip(model.layers, cache, strict=True)):
-        normed = layer.input_layernorm(h)
+    layers = model.layers
+    nxt_norm = {i: layers[i + 1].input_layernorm for i in range(len(layers) - 1)}
+    normed = layers[0].input_layernorm(h)
+    for i, (layer, c) in enumerate(zip(layers, cache, strict=True)):
         if layer.is_linear:
             r, rec = _gdn_layer(verifier, layer.linear_attn, normed, c, shape)
         else:
@@ -749,8 +786,21 @@ def tree_forward(
             r = verifier._linear(at.o_proj, out * mx.sigmoid(gate))
             rec = ("kv",)
         res.records[i] = rec
-        h = h + r
-        h = h + verifier._feed_forward(layer.mlp, layer.post_attention_layernorm(h))
+        # fused residual add + RMSNorm (bit-exact to the separate ops)
+        post = layer.post_attention_layernorm
+        if vq._add_rms_eligible(h, r, post):
+            h, normed, _ = vq.add_rms_norm(h, r, post)
+        else:
+            h = h + r
+            normed = post(h)
+        ff = verifier._feed_forward(layer.mlp, normed)
+        nxt = nxt_norm.get(i)
+        if nxt is not None and vq._add_rms_eligible(h, ff, nxt):
+            h, normed, _ = vq.add_rms_norm(h, ff, nxt)
+        else:
+            h = h + ff
+            if nxt is not None:
+                normed = nxt(h)
         if i in capture:
             res.captured.append(h)
     res.hidden = model.norm(h)

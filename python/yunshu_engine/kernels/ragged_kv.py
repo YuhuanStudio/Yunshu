@@ -442,6 +442,15 @@ def _lane_length(cache: Any) -> int | None:
     return None
 
 
+def _window_limit() -> int:
+    """Widest speculative window the lane attention takes: the tile kernel
+    serves windows of up to ``MAX_WINDOW`` tokens in groups of 8; without it
+    (key-parallel fallback) 8."""
+    from .ragged_attention import MAX_WINDOW
+
+    return MAX_WINDOW if tile_ready() else 8
+
+
 def dense_lane_attention(queries: mx.array, cache: Any, scale: float):
     """The ragged kernel over a one-row stock cache (``_lane_length``) after
     ``update_and_fetch`` stored this step's keys, or None when the call is not
@@ -455,7 +464,7 @@ def dense_lane_attention(queries: mx.array, cache: Any, scale: float):
     if (
         queries.ndim != 4
         or queries.shape[0] != 1
-        or queries.shape[2] > 8
+        or queries.shape[2] > _window_limit()
         or queries.dtype != mx.bfloat16
         or keys.dtype != mx.bfloat16
         or values.dtype != mx.bfloat16
@@ -492,15 +501,18 @@ def dense_lane_attention(queries: mx.array, cache: Any, scale: float):
 # ── install ──────────────────────────────────────────────────────────────────
 
 
-def _attention(self, x, cache, position_ids, position_embeddings, linears=None):
+def _attention(
+    self, x, cache, position_ids, position_embeddings, linears=None, verify=False
+):
     """qwen3_5 attention over a ragged cache, or a dense-lane ``KVCache``;
     None hands the call back to the caller's stock path."""
     B, L, _ = x.shape
+    limit = _window_limit() if verify else 8
     ragged = isinstance(cache, RaggedKVCache)
     if not ragged and not (
         _STATE["dense_lane"]
         and B == 1
-        and L <= 8  # prefill keeps the stock path
+        and limit >= L  # prefill keeps the stock path
         and x.dtype == mx.bfloat16
         and _lane_length(cache) is not None
         and cache.keys.dtype == mx.bfloat16
@@ -569,6 +581,7 @@ def install() -> bool:
                 position_ids,
                 position_embeddings,
                 linears=self._linears,
+                verify=True,
             )
             if res is None:
                 return vorig(
