@@ -436,3 +436,21 @@ Agent 重放（opencode 錄製請求，warm 第 2 次起）：TF 0.6.1 105-159 t
 - Prefill 各類別剖析（prefill_profile，27B，8192 token，chunk 2048，2026-10-02）：stock 牆鐘 9.42 s、Yunshu 12.02 s（慢 28%）；佔比 mlp.gate_up 37.7% / 37.0%、mlp.down 21.2% / 20.5%、gdn.in_proj 15.3% / 16.1%；各 matmul 類 stock 41-53 TFLOPS，Yunshu 33-42 TFLOPS。prefill 慢的位置是量化 matmul，不是 attention 或 norm（另一個 agent 持續在做）。
 - Prefill 公平性（cf6105c8，2026-09-28，4 條背景 decode + 1 條長 prefill）：chunk 0 / 256 / 512，16K：長請求 TTFT 17.8 / 21.6 / 19.5 s，prefill 期間背景 decode 0.7 / 2.9 / 1.7 tok/s（原本 23.6）；32K：37.7 / 47.0 / 42.3 s、0.6 / 2.7 / 1.6 tok/s。小 chunk 換來背景速率，付出長請求 TTFT；實驗旗標，沒有成為預設。
 - Fused prefill（2026-09-29，同一 4+1 負載）：fused 64 / 128：16K TTFT 35.9 / 27.5 s（baseline 17.7），背景 decode 7.2 / 4.8 tok/s；32K 78.1 / 60.0 s（baseline 37.7）。背景速度提高，長請求 TTFT 約變兩倍；已被 round driver 的 mixed 負載結果取代（上方 mixed16 背景 3.8 tok/s、TTFT 不退步的方向），不再追。
+
+2026-10-02 Prefill / TTFT（27B Qwen3.8 oQ4e-mtp，M5 Max，tfbench decode part，每格 3 次 session 的平均，prose 與 code 相同；之前 = `YUNSHU_PREFILL_MATMUL=lane YUNSHU_PREFILL_GDN=step`，即改動前的行為；TF 為先前同機量測）：
+
+| TTFT（秒） | 之前 | 之後 | TF 0.6.1 |
+|---|---:|---:|---:|
+| 8K 冷 | 11.02 | 8.43 | 8.45 |
+| 32K 冷 | 47.56 | 37.06 | 39.4 |
+| 8K warm（全前綴命中） | 0.127 | 0.114 | 0.07 |
+| 32K warm | 0.27 | 0.24 | 0.11-0.13 |
+| 8K turn2 | 0.66 | 0.61 | 0.50 |
+| 32K turn2 | 1.11 | 1.04 | 0.65-0.68 |
+
+- 根因：冷 prefill 慢在 matmul，不在 GDN、不在 runner。同一個 chunk-2048 forward（in-process，8K）stock mlx_lm 7.95 s、Yunshu 10.59 s；`mx.clear_cache` 每 chunk 對此無影響（10.61 s）。Yunshu 把所有 projection 換成 LaneLinear，lane kernel 每 128 列重讀一次權重（2048 列的 chunk 讀 16 次），matmul 只有 34-42 TFLOPS，stock 為 46-53（實測 bf16 峰值 52-60，q4 51-56）。
+- 修法 1（`YUNSHU_PREFILL_MATMUL=stock`，預設）：> 512 列的呼叫走 MLX 的 quantized matmul（權重每次呼叫 untile），decode / verify（≤128 列）仍是列不變的 lane kernel，所以 spec on == off 不變；forward 10.59 → 8.59 s。這使 prefill bits 隨 chunk 列數而變（同 stock mlx-lm）。round driver 不受影響（預設 0，只有非 driver 的 spec 路徑開）。
+- 修法 2（`YUNSHU_PREFILL_GDN=chunked`，預設）：prefill chunk（≥64 token）的 GDN core 用 `mx.fast.gated_delta_update`（單層 T=4096 6.5 → 2.4 ms；輸出差 ≤ 1 個 bf16 ulp，state 約 0.2%）。登記為 vendor.json patch。
+- APC key / SSD namespace 含 prefill kernel id（`stock-qmm-gt512+gdn-chunked-ge64`），舊 checkpoint 不會混用。驗證：`apc_restore_identity.py`（冷參考 vs 部分前綴還原 vs 完整還原，貪婪 64 token，逐 token logprob）8K 與 32K、prose 與 code：tokens 相同、logprob 位元相等（max_abs_dlp 0.0）；`sweep_round_driver.py --phase parity`（27B，alone / batch / stagger / AR）全部相同。
+- Roofline：8K prompt ≈ 2 × 26.4e9 × 8192 = 433 TFLOP，在實測 ~55 TFLOPS 下 7.9 s（stock forward 7.95 s = 峰值的 ~100%；8.43 s 含 head 吸入與 runner 開銷）。32K 另加 attention。Yunshu 現在 8K 約 94%、32K 比 TF 快 6%。
+- turn2 / warm 剩餘缺口（32K，engine 內時間線 `turn2_timeline.py`）：turn2 1.04 s ≈ 還原 clone 90 ms + 281 token chunk 0.54 s + 兩次 checkpoint 存檔各約 105 ms（在第一個 token 之前同步做）+ 尾端 1 token 步 0.1 s。checkpoint 位置不是問題（cached 32777 / 33059 已涵蓋整個前一輪 prompt）。複製 32K cache 在 buffer cache 暖時 9 ms、冷時 54 ms；上游每個 prompt chunk 後與 runner idle 時 `mx.clear_cache()`，現在改為保留 6 GiB（`YUNSHU_PREFILL_BUFFER_CACHE_GB`），同大小重複請求的還原 95 → 17 ms，但大小不同的請求（turn2）仍要新配置。
