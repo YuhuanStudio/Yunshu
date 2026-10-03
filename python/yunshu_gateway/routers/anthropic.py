@@ -1513,7 +1513,7 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
             # Diagnostic rendering must include the same assistant continuation.
             # Keep the marked source intact so cache boundaries still map exactly.
             _plan["messages"] = _append_tool_prefill(
-                _plan["messages"], req._tool_prefill
+                _plan["messages"], getattr(req, "_tool_prefill", "")
             )
 
     # Non-streaming: register with request tracker for cancellation support
