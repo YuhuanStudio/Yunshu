@@ -516,6 +516,7 @@ class ToolCallGuide:
         self.calls = 0
         self.masked = 0
         self.lane_rounds = 0
+        self._planning = 0
         if thinking_open and grammar.think_end_id is not None:
             self.phase = WAIT
         elif grammar.forced:
@@ -577,23 +578,36 @@ class ToolCallGuide:
         if m.is_stopped():
             self.phase = FREE
             self.calls += 1
-            logger.info(
-                "tool call closed under grammar (%d tokens masked so far in %d calls, "
-                "%d masked lane rounds)",
-                self.masked,
-                self.calls,
-                self.lane_rounds,
-            )
+            if not self._planning:
+                logger.info(
+                    "tool call closed under grammar (%d tokens masked so far in %d calls, "
+                    "%d masked lane rounds)",
+                    self.masked,
+                    self.calls,
+                    self.lane_rounds,
+                )
         return True
 
     def checkpoint(self) -> tuple:
-        return (self.phase, self.matcher, self.consumed, self.broken)
+        return (
+            self.phase,
+            self.matcher,
+            self.consumed,
+            self.broken,
+            self.calls,
+        )
 
     def restore(self, cp: tuple) -> None:
-        phase, matcher, consumed, broken = cp
+        phase, matcher, consumed, broken, calls = cp
         if matcher is not None and matcher is self.matcher and self.consumed > consumed:
             matcher.rollback(self.consumed - consumed)
-        self.phase, self.matcher, self.consumed, self.broken = cp
+        self.phase, self.matcher, self.consumed, self.broken = (
+            phase,
+            matcher,
+            consumed,
+            broken,
+        )
+        self.calls = calls
 
     def advance(self, tokens: list[int]) -> int:
         """Feed ``tokens`` until one arms a constrained state (that token is
@@ -642,6 +656,7 @@ class ToolCallGuide:
             return None
         out = np.full((n_pos, self.grammar.words), -1, dtype=np.int32)
         cp = self.checkpoint()
+        self._planning += 1
         try:
             for i in range(n_pos):
                 constrained = self.fill(out[i])
@@ -656,6 +671,7 @@ class ToolCallGuide:
                     break
         finally:
             self.restore(cp)
+            self._planning -= 1
         return out
 
 

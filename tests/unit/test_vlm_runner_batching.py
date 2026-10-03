@@ -242,7 +242,11 @@ def test_ragged_format_set_only_while_runner_steps():
             return [], []
 
     group = vbr._Group(gen=Gen(), spec=False)
-    group.jobs = {1: SimpleNamespace(cancel_event=None, abandoned=False)}
+    group.jobs = {
+        1: SimpleNamespace(
+            cancel_event=None, abandoned=False, guide=None, logprobs=False
+        )
+    }
     runner._step_group(group)
     assert seen == ["int8"]
     assert ragged_kv._STATE["format"] is None

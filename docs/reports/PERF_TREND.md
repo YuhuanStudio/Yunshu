@@ -483,3 +483,51 @@ Yunshu 實際 MTP；TF 日誌明確 DFlash2。每個 ctx/kind/phase 跨三輪和
 - view 用獨立 array handles 接續已 detached 的單列 ArraysCache，省 upstream merge 的 zeros+整 row copy；重置 lengths/left_padding，CPU逐 state 與 upstream merge相同，雙向mutation隔離通過。多列/custom/non-native狀態沿用 upstream。
 - 一 token revisit 的 view 沒有穩定收益：第二個 warm revisit 各輪配對 +2.41 / -7.57 / -6.12 ms（正=省時）；第三個 +1.90 / -2.74 / +0.52 ms。因此 serving 只在已知單列 memory plan、fresh suffix >=64 時使用 view；短 suffix / 未知 plan保留原 merge。64是保守的使用範圍限制，量測點為66，不宣稱找到了最佳 crossover。
 - 這是 suffix TTFT 約1%的小改善，不是 cold prefill或decode速度聲明；沒有新增設定或實驗旗標。原型與解析檔 `prefill3-fixed-view.py`、`prefill3-fixed-view-summary.json`，完整log在gpuq。
+
+
+## 2026-10-03 constrained speculation 與 accepted-target logprobs（codex-cspec）
+
+Qwen3.8-27B oQ4e-mtp／DFlash2，同一 checkpoint，單請求 lane；保留一般 JSON-schema／CFG／regex／choice 的 grammar transactions、singleton-token forced windows，MTP／DFlash／copy 草稿只接受與 AR 相同的 target token。LP 取 accepted target rows，首 token 保留實際 sampler distribution；qualified constrained／LP requests 共用 stock-serial arithmetic 與 cache namespace。沒有新增實驗旗標；保留這些合格請求的預設 speculative routing，其他未合格 processor 仍沿既有 AR 路徑。
+
+合併後快照 be34c0f3，source_hash `0abdba7726f1d5d2256cc43d0577b99ce37e526b95bc9629a00b32c248634b24`。priority 0、`gpuq --quiet`、3 次交錯 on/off、job JSON contended=false（1620% foreign CPU 門檻），raw IDs／內容 parity 通過。以下皆為各自三輪中位數，不與其他快照混算：
+
+| 工作（cold） | AR tok/s（range） | DFlash tok/s（range） | 倍率 |
+|---|---:|---:|---:|
+| JSON，192-token 長度上限 | 28.3（28.2–28.3） | 113.1（112.8–113.5） | 4.00× |
+| required write_file tool call | 28.0（27.9–28.0） | 100.7（100.5–100.9） | 3.60× |
+
+Job：`1003-104311-00-cspec-json-tool-merged-r3-1003-1018-resume90-104311`，rc0、expected JSONL 最後 complete=true／parity=true；artifact `/Volumes/P5Plus/yunshu-build/codex/cspec/json-tool-merged-r3-1018.jsonl`。JSON 這一格皆 finish=length，只證明固定長度的速率與逐 token parity，不拿它宣稱完整 schema；tool 格全為完整 tool_calls 且參數 schema_valid。server logs 均證實 DFlash engaged。
+
+正確性另用不帶 --quiet 的 jobs；其 tok/s 不作效能結論：
+- `1003-104311-00-cspec-tool-lp-turn2-mtp-df-1003-1022-resume90-104311`：12 個 MTP／DFlash on/off cold／warm／turn2，raw IDs、全部 LP、cache bits 相同；turn2 cached307，185 tokens／185 LP，完整 tool call。
+- `1003-104958-00-cspec-complete-jsonlp-turn2-1050`：384-token 上限，12 個完整 schema_valid JSON＋LP；turn2 cached23，214 tokens／214 LP，raw IDs、LP、cache bits 相同。
+- `1003-112609-00-cspec-original185-lp-delivery-retry-1123`：原始 tool-grammar-off 185-token 注入模板，24 個請求，MTP／DFlash on/off cold／warm／turn2 全部 raw IDs、LP（所請求者）、cache bits 相同；turn2 cached184，259 tokens／259 LP，完整 tool call。原始 cache digest 問題不再重現。
+三個 job 均 rc0、expected output 最後 complete=true；補充 CPU proof 確認所有 36 個 LP 請求的 LP count == raw ID count，chosen／top LP 全為有限值，warm／turn2 確有 cache hit。Artifacts 與 `final-receipt-proof.json` 在 `/Volumes/P5Plus/yunshu-build/codex/cspec/`。
+
+be34c0f3 修正共同 VLM streaming 的空文字／tool-parser／reasoning／final LP 遺失，並在 streaming／non-streaming JSON 中略過不可能的非有限 top candidates，所有有限 target LP 值保持不變。原始185首次重驗 rc1 是兩邊都丟 tool LP，不能當成功證據；修正後以上 retry 通過。舊 flagged timing 依 job JSON 的 reclassification 解讀，沒有僅因舊 contention 標記重跑已完成的測量。三輪 agent replay 證據另行追加。
+
+
+同日 agent replay：`1003-121147-00-cspec-agent-final-progress-r3-1212`，rc0、complete=true、parity=true、contended=false；priority0／--quiet，3 次交錯 AR／DFlash sessions，原始四個 opencode 請求體，輔助 title 固定貪婪、主要 bodies 保留原設定並固定 seed1234。每輪每 body 的兩次 warm 先取中位數，再取三輪中位數（非六次獨立 run）；表中的 wall 僅為該重放請求，不是實際代理任務完成時間：
+
+| body | AR warm tok/s | DFlash warm tok/s | AR／DFlash warm wall s |
+|---|---:|---:|---:|
+| fix-cart 0002 | 21.00 | 74.90 | 2.345／0.730 |
+| fix-cart 0004 | 19.95 | 68.25 | 11.841／3.526 |
+| fix-cart 0006 | 19.95 | 54.80 | 10.705／3.950 |
+| polyglot 0003 | 19.60 | 63.30 | 3.849／1.269 |
+
+六個 server logs 全部證實預期 engaged mode；全部 primary＋title raw tokens on/off 相同，每個重複 prompt 的 cold／warm token digest 亦相同。Artifact `/Volumes/P5Plus/yunshu-build/codex/cspec/agent-final-progress-r3-1212.jsonl`，逐 body／rep 摘要 `agent-final-summary.json`。舊 `1003-005714-00-cspec-guided-agent-final-r3-20261003-0058` rc1 的差異只在 sampled title；重排 `1003-104311-00-cspec-agent-merged-r3-1003-1018-resume90-104311` 因漏保留 stall 設定而在600s stalled，兩者 timing 不採用。dad4641c 增加每RPC的job-log進度，最終 job 另保留15分鐘stall，14m02s成功完成。
+
+上述 cache bits 指診斷在首個 generation batch 捕捉的 prompt／prefill state；不宣稱所有未使用的 verify buffer 或 decode-tail storage 相同。第二輪 cache-hit 與完整 raw IDs／LP parity 才是重用後的可觀察正確性證據。
+
+
+完整輸出 quiet 補測（dad4641c，--max-tokens384／--require-structured-complete）：`1003-125849-00-cspec-complete-json-tool-quiet-r3-1254`，rc0、complete=true、parity=true、contended=false，3 次交錯 sessions。24 個請求全部 schema_valid、cold/warm raw IDs 與 on/off 相同，warm 確有 APC hit；JSON 各197 tokens、tool各122 tokens。作完整輸出的效能結論採這一組，192-token表保留為截斷測量：
+
+| 完整輸出 | AR tok/s（range） | DFlash tok/s（range） | 倍率 |
+|---|---:|---:|---:|
+| JSON cold | 28.1（27.9–28.3） | 112.1（110.5–112.2） | 3.99× |
+| JSON warm | 23.4（23.2–23.5） | 111.4（109.7–112.5） | 4.76× |
+| tool cold | 27.8（27.8–27.9） | 100.6（99.1–100.8） | 3.62× |
+| tool warm | 23.0（22.8–23.3） | 77.7（76.5–77.8） | 3.38× |
+
+Artifact `/Volumes/P5Plus/yunshu-build/codex/cspec/complete-json-tool-quiet-r3-1254.jsonl`；6個server logs全確認DF/AR engaged，`complete-quiet-summary.json`保留三輪數字。交付前 full unit nice15：8220 passed／20 skipped；ruff check/format、mypy gate無新增錯誤。沒有新微小效能量測；不以功能修復冒充1–3%增益。

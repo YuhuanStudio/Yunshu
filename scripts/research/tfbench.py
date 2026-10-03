@@ -391,7 +391,9 @@ def main():
                 part_conc(s, out, a)
                 part_agent(s, out, a)
             else:
-                {"decode": part_decode}[a.part](s, out, a)
+                {"decode": part_decode, "conc": part_conc, "agent": part_agent}[a.part](
+                    s, out, a
+                )
             emit(out, part="part_done", engine=a.engine, which=a.part, rep=a.rep)
     finally:
         s.kill()
