@@ -5,7 +5,7 @@ set -u
 root="$(git rev-parse --show-toplevel)"
 main=/Users/yuhuan/Documents/YuhuanStudio/Yunshu
 bodies="$main/docs/research/runs/2026-09-30-agtraffic/artifacts/cap-opencode-fix-cart-discount-r1/bodies"
-out="$root/docs/research/runs/2026-10-03-i8c"
+out="${I8_OUT:-$root/docs/research/runs/2026-10-03-i8d}"
 mkdir -p "$out"
 export AGENTIC_YUNSHU_SRC="$root/python"
 rc=0
@@ -17,8 +17,8 @@ for run in $run; do
     "$main/.venv/bin/python" "$root/scripts/research/agentic/i8_session_replay.py" \
       --checkpoint /Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp \
       --bodies "$bodies" \
-      --cache-dir "/Volumes/P5Plus/yunshu-build/codex-i8-apc/c-$arm-$run" \
-      --label "i8c-$arm-$run" --out "$out/$arm-$run.jsonl" --log "$out/$arm-$run.server.log"
+      --cache-dir "/Volumes/P5Plus/yunshu-build/codex-i8-apc/d-$arm-$run" \
+      --label "i8d-$arm-$run" --out "$out/$arm-$run.jsonl" --log "$out/$arm-$run.server.log"
     r=$?; echo "arm=$arm run=$run rc=$r"; [ $r -ne 0 ] && rc=1
   done
 done

@@ -19,12 +19,13 @@ def percentiles(rows: list[dict]) -> dict:
     )
 
 
-def summarize(root: Path) -> dict:
+def summarize(root: Path, first_run: int = 1) -> dict:
     records = {}
     titles = {}
+    source = None
     for mode in ("0", "1"):
         records[mode], titles[mode] = [], []
-        for run in range(1, 4):
+        for run in range(first_run, first_run + 3):
             path = root / f"{mode}-{run}.jsonl"
             rows = [json.loads(s) for s in path.read_text().splitlines()]
             mains = [r for r in rows if r["kind"] == "main"]
@@ -36,13 +37,23 @@ def summarize(root: Path) -> dict:
                 or rows[-1]["kind"] != "complete"
             ):
                 raise ValueError(f"incomplete session replay: {path}")
+            receipt = rows[-1]
+            if receipt.get("engaged_mode") != "mtp" or not receipt.get("source_sha256"):
+                raise ValueError(f"missing MTP / source receipt: {path}")
+            if source is None:
+                source = receipt["source_sha256"]
+            elif source != receipt["source_sha256"]:
+                raise ValueError(f"different source versions: {path}")
             if any(not r["stream_done"] for r in [*mains, *auxiliary]):
                 raise ValueError(f"incomplete stream: {path}")
             if mains[0].get("cached_tokens") != 0:
                 raise ValueError(f"first agent turn was not cold: {path}")
             records[mode].append(mains)
             titles[mode].extend(auxiliary)
-    result = {}
+    result = {
+        "source_sha256": source,
+        "run_numbers": list(range(first_run, first_run + 3)),
+    }
     for mode, runs in records.items():
         result[mode] = dict(
             runs=3,
@@ -83,8 +94,9 @@ def summarize(root: Path) -> dict:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
+    parser.add_argument("--first-run", type=int, default=1)
     args = parser.parse_args()
-    result = summarize(args.root)
+    result = summarize(args.root, args.first_run)
     output = json.dumps(result, indent=2) + "\n"
     (args.root / "summary.json").write_text(output)
     print(output)

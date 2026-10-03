@@ -8,7 +8,10 @@ GPU-only: submit through gpuq at priority -1.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
+import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -33,6 +36,7 @@ def replay(args, bodies, attempt):
         extra=("--set", f"YUNSHU_VLM_APC_DISK_DIR={cache}"),
     )
     records = []
+    load_start = os.getloadavg()[0]
 
     def emit(kind, name, result):
         record = dict(kind=kind, body=name, label=args.label, seed=42, **result)
@@ -68,7 +72,30 @@ def replay(args, bodies, attempt):
             for name, original in bodies[1:]:
                 emit("main", name, _send(server.url, {**original, "seed": 42}))
             emit("title", bodies[0][0], future.result())
-        emit("complete", "", {})
+        server_log = log.read_text(errors="replace")
+        mode = re.search(r"Speculative decoding: (\w+)", server_log)
+        if mode is None or mode.group(1) != "mtp":
+            raise RuntimeError("27B replay did not engage checkpoint MTP")
+        src = Path(__file__).resolve().parents[3] / "python/yunshu_engine"
+        paths = (
+            "vlm_batch_runner.py",
+            "serving/work_scheduler.py",
+            "serving/auxiliary_prefill.py",
+        )
+        emit(
+            "complete",
+            "",
+            {
+                "engaged_mode": mode.group(1),
+                "server_log": str(log),
+                "source_sha256": {
+                    name: hashlib.sha256((src / name).read_bytes()).hexdigest()
+                    for name in paths
+                },
+                "load_1m_start": load_start,
+                "load_1m_end": os.getloadavg()[0],
+            },
+        )
         return records
     finally:
         server.kill()

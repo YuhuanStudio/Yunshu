@@ -55,4 +55,7 @@ directory), `repo/` (the starting files), `hidden/` (test files copied to `_hidd
 `check-tasks` must report the starting repo failing and the reference passing. Keep tasks deterministic and
 offline. Polyglot exercises are listed in `tasks.py` and materialized from the dataset, never committed.
 
-Results are private (`docs/research/`); do not put numbers in public docs.
+Raw prompts, recordings and JSONL stay private (`docs/research/`). Publish only dated,
+aggregate results with snapshot SHAs, denominators, timeouts and uncertainty, as in
+[BENCHMARKS](../BENCHMARKS.md) and [PERF_TREND](../reports/PERF_TREND.md).
+The 2026-10-02 matrix is partial; Codex and TensorFold cells have no published result.

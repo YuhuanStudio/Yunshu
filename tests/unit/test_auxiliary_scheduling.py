@@ -364,3 +364,57 @@ def test_fingerprint_survives_real_gateway_schema(title):
 
     validated = ChatCompletionRequest.model_validate(title)
     assert admission.auxiliary_kind(validated.model_dump()) == "opencode_title"
+
+
+def test_auxiliary_keeps_checkpoint_cuts_without_primary_cache_effects():
+    from yunshu_engine.apc_manager import YunshuAPCManager
+    from yunshu_engine.serving.auxiliary_prefill import AuxiliaryPrefillPolicy
+
+    class Manager:
+        exact_cache_guard_tokens = 1
+        checkpoint_interval_tokens = 2048
+        keep_interval_checkpoint = True
+        block_size = 256
+        exact_cache_min_tokens = 1
+        head_marker = (9, 8)
+        head_boundary = YunshuAPCManager.head_boundary
+
+        def note_head(self, *_):
+            raise AssertionError("primary head metadata touched")
+
+        def begin_request(self):
+            raise AssertionError("primary request generation touched")
+
+    policy = AuxiliaryPrefillPolicy(Manager())
+    # Exercise Yunshu's exact same checkpoint arithmetic, with no GPU model.
+    from yunshu_engine.serving.auxiliary_prefill import _AuxiliaryCoordinator
+
+    c = object.__new__(_AuxiliaryCoordinator)
+    c.manager = policy
+    c.plan = SimpleNamespace(restorable=True, strategy="checkpoint")
+    ids = [1, 2, 9, 8, *range(3000)]
+    assert c.checkpoint_lengths(ids, set()) == [2, 2048, len(ids) - 1]
+    assert c.lookup(ids) is None
+    assert c.store_checkpoint(ids, object())
+    assert c.commit(object(), ids)
+    assert not hasattr(policy, "disk")
+
+
+def test_auxiliary_generator_receives_numerical_policy_not_primary_cache(runner):  # noqa: F811
+    from yunshu_engine.serving.auxiliary_prefill import AuxiliaryPrefillPolicy
+
+    runner.apc_manager = SimpleNamespace(
+        exact_cache_guard_tokens=1,
+        checkpoint_interval_tokens=2048,
+        keep_interval_checkpoint=True,
+        block_size=256,
+        exact_cache_min_tokens=1,
+        head_marker=(9, 8),
+        coordinator=lambda model: None,
+    )
+    aux = job(-1)
+    runner._submit(aux)
+    runner._drive_slice(False)
+    manager = runner._groups()[0].gen.kwargs["apc_manager"]
+    assert isinstance(manager, AuxiliaryPrefillPolicy)
+    assert not aux.stats.used_apc

@@ -57,7 +57,7 @@ class AtomGen(FakeGen):
                 self._generation_batch.pop(uid)
         if out:
             self.clock[0] += 0.05
-        if self.completion_batch_size == 0:
+        if self.completion_batch_size == 0 or (self.kwargs.get("draft_model") and out):
             return [], out
         if self._prompt_batch is None and self._unprocessed_sequences:
             uid, ids = self._unprocessed_sequences.pop(0)
@@ -158,13 +158,13 @@ def test_decode_quantum_is_paid_in_measured_time(atoms):
     cold.ids = list(range(8192))
     r._submit(cold)
     g = r._groups()[0]
-    for _ in range(4):
+    for _ in range(2):
         r._drive_slice(False)
     assert len(g.gen.atoms) == 1
-    for _ in range(5):
+    for _ in range(3):
         r._drive_slice(False)
     assert any(a[0] == cold.uid for a in g.gen.atoms)
-    assert dec.stats.generated >= 5
+    assert dec.stats.generated >= 2
 
 
 def test_cancel_suspended_prefill_releases_state(atoms):
@@ -223,3 +223,66 @@ async def test_gateway_auxiliary_age_escapes_endless_interactive_wait(monkeypatc
     finally:
         current_request_info.reset(token)
     assert sleeps == [0.5]
+
+
+def test_paused_spec_decode_does_not_block_primary_prefill(atoms):
+    r, clock = atoms
+    aux = job(-1)
+    aux.use_draft = True
+    aux.max_tokens = 1000
+    r._submit(aux)
+    r._drive_slice(False)
+    lane = r._aux_spec
+    assert lane is not None and lane.gen._generation_batch
+    main = job(0)
+    main.use_draft = True
+    main.ids = list(range(8192))
+    r._submit(main)
+    for _ in range(4):
+        r._drive_slice(False)
+    assert main.stats.prefill_done == main.stats.prefill_total
+    assert len(r._spec.gen.atoms) == 4
+    assert not lane.gen.rows[aux.uid][0]
+    assert clock[0] - main.queued < 10
+
+
+def test_cold_prefill_keeps_protection_after_short_overtake(atoms):
+    r, _ = atoms
+    cold = job(0)
+    cold.ids = list(range(8192))
+    r._submit(cold)
+    r._drive_slice(False)
+    g = r._groups()[0]
+    short = job(0)
+    r._submit(short)
+    r._drive_slice(False)
+    assert cold.prefill_skips == 1
+    for _ in range(3):
+        fresh = job(0)
+        r._submit(fresh)
+        # Drain decode debt, then exactly one protected cold atom.
+        before = len(g.gen.atoms)
+        for _ in range(10):
+            r._drive_slice(False)
+            if len(g.gen.atoms) > before:
+                break
+        assert g.gen.atoms[-1][0] == cold.uid
+        assert cold.prefill_skips >= 1
+
+
+def test_decode_slice_does_not_complete_suspended_prefill(atoms):
+    r, _ = atoms
+    cold = job(0)
+    cold.ids = list(range(8192))
+    r._submit(cold)
+    r._drive_slice(False)
+    short = job(0)
+    short.max_tokens = 100
+    r._submit(short)
+    r._drive_slice(False)
+    g = r._groups()[0]
+    assert cold.uid in g.prefills
+    assert cold.stats.prefill_done == 2048
+    r._drive_slice(False)
+    assert cold.stats.prefill_done == 2048
+    assert r._work(cold).uncached_tokens == 6144

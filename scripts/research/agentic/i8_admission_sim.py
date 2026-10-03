@@ -2,11 +2,11 @@
 
 Replays three captured sessions (prompt sizes from the request bodies, 4.15
 chars/token calibrated on run.jsonl) as concurrent agents against one
-single-GPU-thread server model: prefill atoms of 512 tokens at the measured
+single-GPU-thread server model: prefill atoms of 2048 tokens at the measured
 236 ms + 1.21 ms/token, batched decode steps of 25 ms. Policies:
   fifo   - upstream: oldest pending prefill first, one decode step per atom
   aux    - auxiliary (tool-less title) requests yield while a main turn waits
-  full   - aux + Work.key HRRN uncached ordering + 250 ms decode quanta, aging
+  full   - aux + Work.key HRRN uncached ordering + 100 ms decode quanta, aging and bounded overtaking
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from yunshu_engine.serving.work_scheduler import (  # noqa: E402
     Work,
 )
 
-ATOM = 512
+ATOM = 2048
 QUANTUM = [DECODE_QUANTUM_S]
 STEP_S = 0.025
 CPT = 4.15
@@ -52,6 +52,7 @@ class Req:
         self.sid, self.arrive, self.aux, self.gen = sid, arrive, aux, gen
         self.left = max(1, tokens - cached)
         self.last = arrive
+        self.skips = 0
         self.first = None
         self.dec = 0
 
@@ -85,7 +86,7 @@ def simulate(sessions, policy, starts, think=2.0, gen_main=150, gen_aux=20):
             if policy == "aux":
                 aged = t - r.last >= 10
                 return (0 if (not r.aux or aged or not waiting_main) else 1, r.arrive)
-            w = Work(r.arrive, r.last, r.left, -1 if r.aux else 0)
+            w = Work(r.arrive, r.last, r.left, -1 if r.aux else 0, skips=r.skips)
             return w.key(t)
 
         do_decode = bool(run) and (policy != "full" or debt > 0 or not pend)
@@ -93,6 +94,10 @@ def simulate(sessions, policy, starts, think=2.0, gen_main=150, gen_aux=20):
             do_decode = False
         if pend and not (policy == "full" and do_decode):
             r = min(pend, key=key)
+            if policy == "full":
+                for waiter in pend:
+                    if waiter is not r and waiter.aux == r.aux:
+                        waiter.skips += 1
             n = min(ATOM, r.left)
             dt = PREFILL_TOKEN_S * n + (0.0 if hasattr(r, "started") else FIXED_S)
             r.started = True
@@ -134,11 +139,16 @@ def simulate(sessions, policy, starts, think=2.0, gen_main=150, gen_aux=20):
 
 
 def main() -> None:
+    global ATOM
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", default="docs/research/runs")
+    ap.add_argument("--atom", type=int, default=ATOM)
     ap.add_argument("--quantum", type=float, default=DECODE_QUANTUM_S)
     ap.add_argument("--offsets", default="0,1.5,3")
     a = ap.parse_args()
+    ATOM = a.atom
+    if ATOM <= 0 or a.quantum <= 0:
+        ap.error("atom and quantum must be positive")
     QUANTUM[0] = a.quantum
     sessions = load(Path(a.runs))
     starts = [float(x) for x in a.offsets.split(",")][: len(sessions)]

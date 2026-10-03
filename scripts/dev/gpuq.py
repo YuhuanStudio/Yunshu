@@ -8,20 +8,37 @@ plain local process (``wait``), so whoever submitted can block on completion
 without polling anything else.
 
     gpuq submit [--label L] [--timeout MIN] [--priority N] [--serving-ok] [--mem-gb G] -- cmd args...
-    gpuq wait ID [ID ...]        # block until all finish; exit 1 if any failed
+    gpuq wait [--max-seconds N] ID [ID ...]  # exit 0 verified / 1 failed / 2 unfinished / 3 contended perf
     gpuq run [opts] -- cmd ...   # submit + wait (drop-in for the old gpu_run.sh)
     gpuq status                  # queue table (paused / waiting-idle / waiting-mem columns)
     gpuq log ID                  # print a job's log
     gpuq cancel ID               # drop a pending job or stop a running one
-    gpuq digest [--since 6h] [--peek]  # jobs finished since the last digest, failures and empty outputs flagged
+    gpuq digest [--label-prefix X] [--since 6h] [--peek]  # jobs finished since the last digest, failures and empty outputs flagged
 
 Serving awareness (optional; docs/guides/SERVE_AND_DEVELOP.md): with production server URLs configured
 (GPUQ_SERVING_URLS, or $GPUQ_DIR/serving.json) a job starts only after every server has been idle for
 IDLE_START seconds, is SIGSTOPped (its own process group only) the moment a production request appears, and
 SIGCONTed after IDLE_RESUME idle seconds. Pause intervals go to the job JSON and to the file named by
 $GPUQ_PAUSE_FILE (read them with scripts/dev/gpuq_pause.py). ``--serving-ok`` bypasses the gate (CPU-only
-jobs); ``--mem-gb`` is checked against free memory minus the production reserve. The poller reads only the
+jobs, still subject to priority preemption); ``--mem-gb`` is checked against free memory minus the production reserve. The poller reads only the
 request counts from /v1/yunshu/status, never prompts.
+
+Priority preemption (Q01): pending p>=0 jobs can pause a running p<=-1 job when free memory admits both
+resident jobs, even without a serving config. Unknown/insufficient memory leaves the running job alone.
+Submit-level repeatable ``--out PATH`` declares expected results; ``--expect-complete`` requires a line containing
+``complete`` in each output. Wait and digest validate declared and legacy command-level output paths.
+Duplicate active labels are refused; submitting never deletes earlier artifacts.
+
+CPU contention (Q02): every job records load averages and the top foreign CPU consumers at start,
+periodically and end, excluding its own descendants/process group. --quiet jobs (timing measurements) wait for a
+continuous quiet window (default summed foreign CPU <150% for 20s, maximum wait 300s). --cpu-threshold,
+--quiet-window and --quiet-max-wait override GPUQ_CPU_THRESHOLD / GPUQ_QUIET_WINDOW_S /
+GPUQ_QUIET_MAX_WAIT_S. GPUQ_CPU_SAMPLE_S controls stored periodic samples (default 30s); monitoring polls
+at most every 2s. Contention is latched in job.contended and GPUQ_CONTENTION_FILE; done is displayed as
+contended, and wait returns 3 for otherwise successful contended perf/quiet jobs (failures still return 1).
+Processes with nice >=10 are excluded: run CPU suites/builds with ``nice -n 15 taskpolicy -b ...``.
+The priority/fairness winner reserves the GPU while waiting for CPU admission, bounded by the smaller
+of its max wait and GPUQ_QUIET_HOLD_MAX_S (daemon environment, default 300s). Status shows hold time/reason.
 
 State lives in $GPUQ_DIR (default ~/.cache/yunshu/gpuq). Jobs keep the
 submitter's cwd and environment.
@@ -33,10 +50,12 @@ import argparse
 import contextlib
 import fcntl
 import json
+import math
 import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -51,6 +70,17 @@ POLL_S = 2.0
 DEFAULT_MEM_GB = 24.0
 DEFAULT_RESERVE_GB = 16.0
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from gpuq_contention import (  # noqa: E402
+    ENV,
+    MAX_POLL_GAP_S,
+    ContentionMonitor,
+    QuietGate,
+    contention_config,
+    flag_sample_time,
+    requires_quiet,
+)
+
 
 def _now() -> float:
     return time.time()
@@ -64,9 +94,20 @@ def _read(path: Path) -> dict:
 
 
 def _write(path: Path, data: dict) -> None:
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=1))
-    tmp.replace(path)
+    # CLI cancellation and daemon updates can write the same job concurrently.
+    with tempfile.NamedTemporaryFile(
+        mode="w", dir=path.parent, prefix=path.name + ".", suffix=".tmp", delete=False
+    ) as f:
+        tmp = Path(f.name)
+        try:
+            json.dump(data, f, indent=1)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+    try:
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------- serving gate
@@ -122,6 +163,7 @@ class ServingGate:
 
     def __init__(self, fetch=None) -> None:
         self.cfg: dict = {}
+        self.cpu = None
         self.fetch = fetch or _fetch_busy
         self.idle_since: float | None = None
 
@@ -223,13 +265,108 @@ def mem_blocked(job: dict, gate: ServingGate, free=free_memory_gb) -> bool:
     return avail - need < gate.reserve_gb
 
 
-def _blocker(job: dict, gate: ServingGate, free=free_memory_gb) -> str | None:
+def _blocker(job: dict, gate: ServingGate, free=free_memory_gb, cpu=True) -> str | None:
     """Why a pending job may not start now: 'idle' (production busy / not idle long enough), 'mem', or None."""
     if gate.enabled and not job.get("serving_ok") and not gate.may_start():
         return "idle"
     if mem_blocked(job, gate, free):
         return "mem"
-    return None
+    return _cpu_blocker(job, gate) if cpu else None
+
+
+def _cpu_blocker(job: dict, gate: ServingGate):
+    if gate.cpu is None or not requires_quiet(job):
+        return None
+    now = _now()
+    sample = gate.cpu.sample(now)
+    blocked = gate.cpu.blocked(job, sample, now)
+    cpu = sample["foreign_cpu_pct"]
+    cfg = contention_config(job)
+    if not blocked:
+        reason = (
+            "quiet timeout; running contended"
+            if job.get("quiet_timeout")
+            else "quiet window satisfied"
+        )
+    elif cpu is None:
+        reason = "CPU sampling unavailable"
+    elif cpu >= cfg["threshold_pct"]:
+        reason = f"foreign CPU {cpu:.1f}% >= {cfg['threshold_pct']:.1f}%"
+    else:
+        reason = f"quiet window {now - job['quiet_since']:.0f}/{cfg['window_s']:g}s"
+    job["quiet_hold_reason"] = reason
+    if not blocked:
+        job["cpu_admission_sample"] = sample
+    _patch_job(
+        JOBS / (job["id"] + ".json"),
+        **{
+            k: job[k]
+            for k in (
+                "quiet_wait_started",
+                "quiet_since",
+                "quiet_timeout",
+                "quiet_last_poll",
+                "quiet_hold_reason",
+            )
+            if k in job
+        },
+    )
+    return "cpu" if blocked else None
+
+
+def _release_quiet_hold(job: dict, now: float) -> None:
+    start = job.get("quiet_hold_started")
+    if start is not None:
+        job.update(quiet_hold_elapsed_s=max(0.0, now - start), quiet_hold_started=None)
+        _patch_job(
+            JOBS / f"{job['id']}.json",
+            quiet_hold_started=None,
+            quiet_hold_elapsed_s=job["quiet_hold_elapsed_s"],
+        )
+
+
+def _admit(jobs: list[dict], gate: ServingGate, preempt=False) -> dict | None:
+    """Pick by priority/fairness before CPU admission; a quiet winner owns the slot."""
+    pending = [
+        j
+        for j in jobs
+        if j["state"] == "pending"
+        and not j.get("cancel")
+        and (not preempt or j in _preempting([j]))
+    ]
+    blocker = _preempt_blocker if preempt else _blocker
+    blockers = {j["id"]: blocker(j, gate, cpu=False) for j in pending}
+    winner = _pick(jobs, lambda j: j["id"] in blockers and blockers[j["id"]] is None)
+    now = _now()
+    for job in pending:
+        if job is not winner:
+            _release_quiet_hold(job, now)
+        why = blockers[job["id"]]
+        if why is None and job is not winner:
+            why = "slot"
+        if job is winner and gate.cpu is not None and requires_quiet(job):
+            if job.get("quiet_hold_started") is None:
+                cap = float(os.environ.get("GPUQ_QUIET_HOLD_MAX_S", 300))
+                if not math.isfinite(cap) or cap < 0:
+                    raise ValueError("invalid GPUQ_QUIET_HOLD_MAX_S")
+                job.update(
+                    quiet_hold_started=now,
+                    quiet_hold_elapsed_s=0.0,
+                    quiet_hold_limit_s=min(contention_config(job)["max_wait_s"], cap),
+                    quiet_wait_started=now,
+                    quiet_since=None,
+                    quiet_last_poll=None,
+                    quiet_timeout=False,
+                )
+                _patch_job(
+                    JOBS / f"{job['id']}.json",
+                    **{k: v for k, v in job.items() if k.startswith("quiet_")},
+                )
+            why = _cpu_blocker(job, gate)
+        if job.get("waiting") != why:
+            _patch_job(JOBS / f"{job['id']}.json", waiting=why)
+        job["waiting"] = why
+    return winner if winner is not None and winner["waiting"] is None else None
 
 
 class Pauser:
@@ -252,7 +389,11 @@ class Pauser:
         data = _read(
             self.path
         )  # merge: never clobber a cancel flag the CLI set meanwhile
-        data.update(pauses=self.pauses, paused=self.paused)
+        data.update(
+            pauses=self.pauses,
+            paused=self.paused,
+            pause_reason=self.job.get("pause_reason"),
+        )
         _write(self.path, data)
         _write(LOGS / f"{self.job['id']}.pauses.json", {"pauses": self.pauses})
 
@@ -262,8 +403,10 @@ class Pauser:
             with contextlib.suppress(ProcessLookupError, PermissionError):
                 os.killpg(pid, sig)
 
-    def pause(self, now: float) -> None:
+    def pause(self, now: float, reason: str = "serving") -> None:
+        self.job["pause_reason"] = reason
         if self.paused:
+            self._save()
             return
         self.pauses.append([now, None])
         self._save()  # record first, so a crash leaves a visible open interval
@@ -273,6 +416,7 @@ class Pauser:
         if not self.paused:
             return
         self.pauses[-1][1] = now
+        self.job["pause_reason"] = None
         self._signal(signal.SIGCONT)
         self._save()
 
@@ -288,6 +432,20 @@ class Pauser:
 
 
 # ---------------------------------------------------------------- queue
+
+
+AGE_S = float(os.environ.get("GPUQ_AGE_S", 2 * 3600))
+
+
+def _eff_priority(job: dict, now: float | None = None) -> int:
+    """Priority with one step of aging: a job below 0 that has waited AGE_S rises by
+    one (never above 0), so p-1 work is not starved forever by a stream of p0 jobs
+    while deep backlog (p-3) stays behind interactive work."""
+    p = job.get("priority", 0)
+    if p >= 0 or job.get("state") not in ("pending", "running"):
+        return p
+    waited = (now or time.time()) - job.get("submitted", now or time.time())
+    return min(0, p + 1) if waited >= AGE_S else p
 
 
 def _jobs() -> list[dict]:
@@ -315,8 +473,9 @@ def _pick(jobs: list[dict], eligible=None) -> dict | None:
         pending = [j for j in pending if eligible(j)]
     if not pending:
         return None
-    top = max(j.get("priority", 0) for j in pending)
-    pending = [j for j in pending if j.get("priority", 0) == top]
+    now = time.time()
+    top = max(_eff_priority(j, now) for j in pending)
+    pending = [j for j in pending if _eff_priority(j, now) == top]
     last: dict[str, float] = {}
     for j in jobs:
         if "started" in j:
@@ -367,29 +526,49 @@ def submit(
     stall_min: float = STALL_S / 60,
     serving_ok: bool = False,
     mem_gb: float | None = None,
+    outputs: list[str] | None = None,
+    expect_complete: bool = False,
+    quiet: bool = False,
+    cpu_config: dict | None = None,
 ) -> str:
+    cfg = contention_config({"contention_config": cpu_config or {}})
     JOBS.mkdir(parents=True, exist_ok=True)
     LOGS.mkdir(parents=True, exist_ok=True)
-    jid = _new_id(label)
-    if mem_gb is None:
-        mem_gb = 0.0 if serving_ok else DEFAULT_MEM_GB
-    _write(
-        JOBS / f"{jid}.json",
-        {
-            "id": jid,
-            "label": label,
-            "cmd": cmd,
-            "cwd": os.getcwd(),
-            "env": dict(os.environ),
-            "timeout_s": timeout_min * 60,
-            "stall_s": stall_min * 60,
-            "priority": priority,
-            "serving_ok": serving_ok,
-            "mem_gb": mem_gb,
-            "submitted": _now(),
-            "state": "pending",
-        },
-    )
+    # Serialize label admission and id allocation across all submitters.
+    with open(ROOT / "submit.lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if any(
+            j.get("label") == label and j.get("state") in ("pending", "running")
+            for j in _jobs()
+        ):
+            raise ValueError(f"duplicate active label: {label}")
+        jid = _new_id(label)
+        if mem_gb is None:
+            mem_gb = 0.0 if serving_ok else DEFAULT_MEM_GB
+        _write(
+            JOBS / f"{jid}.json",
+            {
+                "id": jid,
+                "label": label,
+                "cmd": cmd,
+                "cwd": os.getcwd(),
+                "env": dict(os.environ),
+                "timeout_s": timeout_min * 60,
+                "stall_s": stall_min * 60,
+                "priority": priority,
+                "serving_ok": serving_ok,
+                "mem_gb": mem_gb,
+                "outputs": [
+                    str(Path(p).expanduser().resolve()) for p in (outputs or [])
+                ],
+                "expect_complete": expect_complete,
+                "quiet": quiet,
+                "contention_config": cfg,
+                "contended": False,
+                "submitted": _now(),
+                "state": "pending",
+            },
+        )
     _ensure_daemon()
     return jid
 
@@ -401,12 +580,70 @@ def _read_rc(jid: str) -> int | None:
         return None
 
 
+def _preempt_blocker(job: dict, gate: ServingGate, cpu=True) -> str | None:
+    """Admission while the stopped low-priority job remains resident.
+
+    Available memory already excludes resident allocations. Unlike ordinary
+    serial admission, preemption always checks memory and fails closed if unknown.
+    """
+    need = float(job.get("mem_gb", DEFAULT_MEM_GB))
+    if need > 0:
+        available = free_memory_gb()
+        if available is None or available - need < gate.reserve_gb:
+            return "mem"
+    if gate.enabled and not job.get("serving_ok") and not gate.may_start():
+        return "idle"
+    return _cpu_blocker(job, gate) if cpu else None
+
+
+def _preempting(jobs: list[dict]) -> list[dict]:
+    """Pending jobs allowed to pause a running backlog job. Raw priority, not aged:
+    an aged backlog job must never preempt another backlog job (each nested job
+    would pause the previous one and start the next, stacking resident jobs)."""
+    return [
+        j
+        for j in jobs
+        if j["state"] == "pending" and j.get("priority", 0) >= 0 and not j.get("cancel")
+    ]
+
+
+def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
+    """Run admitted p>=0 work inside a p<=-1 pause; never kill to reclaim memory.
+
+    Returns True while priority work still owns the pause. The nested runner
+    cannot preempt again (its priority is >=0), so at most two jobs are resident.
+    """
+    # A backlog job that already aged into the interactive level (waited AGE_S) is
+    # not paused again for every new p0 job, or it would never finish.
+    if _eff_priority(pauser.job) >= 0:
+        return False
+    jobs = _jobs()
+    pending = _preempting(jobs)
+    high = _admit(jobs, gate, preempt=True)
+    # Memory admission decides whether to pause. The serving start window only
+    # decides when the admitted high-priority job can start; it must not let the
+    # low-priority job resume early through the shorter serving resume window.
+    if any(j.get("waiting") != "mem" for j in pending):
+        pauser.pause(now, reason="priority")
+    if high is not None:
+        path = JOBS / f"{high['id']}.json"
+        if not _read(path).get("cancel"):
+            _execute(high, path, gate)
+        return True
+    return (
+        bool(pending) and pauser.paused and pauser.job.get("pause_reason") == "priority"
+    )
+
+
 def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
     gate = gate or ServingGate()
+    _release_quiet_hold(job, _now())
     job.update(state="running", started=_now(), pid=None)
     log = open(LOGS / f"{job['id']}.log", "w")  # noqa: SIM115 - closed after the job ends
     pause_file = LOGS / f"{job['id']}.pauses.json"
     _write(pause_file, {"pauses": []})
+    monitor = ContentionMonitor(job, path, LOGS, _write, _read)
+    monitor.record("start")
     try:
         rc_file = LOGS / f"{job['id']}.rc"
         proc = subprocess.Popen(
@@ -420,8 +657,10 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
             cwd=job["cwd"],
             env={
                 **job["env"],
+                **{ENV[k]: str(v) for k, v in monitor.cfg.items()},
                 "GPUQ_RC": str(rc_file),
                 "GPUQ_PAUSE_FILE": str(pause_file),
+                "GPUQ_CONTENTION_FILE": str(monitor.flag),
             },
             stdout=log,
             stderr=subprocess.STDOUT,
@@ -431,7 +670,10 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
     except OSError as e:
         log.write(f"gpuq: failed to start: {e}\n")
         job.update(state="failed", rc=127, ended=_now())
+        monitor.record("end")
+        log.write(monitor.summary() + "\n")
         _write(path, job)
+        log.close()
         return
     job["pid"] = proc.pid
     job["pauses"] = []
@@ -448,26 +690,25 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
             now = _now()
             if gate.enabled:
                 gate.poll(now)
-            was_paused = pauser.paused
             cancelled = bool(_read(path).get("cancel"))
             if cancelled:
                 pauser.resume(now)  # a stopped group cannot act on SIGINT
-            else:
+            elif not _priority_step(pauser, gate, now):
                 pauser.step(gate, serving_ok, now)
-            if was_paused and not pauser.paused:
-                last_growth = now  # paused time is not stall time
+            now = _now()
+            monitor.poll(now)
             if pauser.paused:
                 continue  # timeouts and stall detection only count active time
             deadline = job["started"] + job["timeout_s"] + pauser.total(now)
             log_path = LOGS / f"{job['id']}.log"
             size = log_path.stat().st_size if log_path.exists() else 0
             if size != last_size:
-                last_size, last_growth = size, now
+                last_size, last_growth = size, now - pauser.total(now)
             if cancelled:
                 why = "cancelled"
             elif now > deadline:
                 why = "timeout"
-            elif now - last_growth > job.get("stall_s", STALL_S):
+            elif now - pauser.total(now) - last_growth > job.get("stall_s", STALL_S):
                 why = "stalled"
             if why:
                 os.killpg(proc.pid, signal.SIGINT)
@@ -488,11 +729,13 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
     if pauser.paused:  # the job died while stopped: close the interval
         pauser.pauses[-1][1] = ended
         pauser.job["pauses"], pauser.job["paused"] = pauser.pauses, False
-    job.update(state=state, rc=rc, ended=ended, paused=False)
+    job.update(state=state, rc=rc, ended=ended, paused=False, pause_reason=None)
     log.write(
         f"\ngpuq: {state} rc={rc} after {ended - job['started']:.0f}s "
         f"({len(pauser.pauses)} pauses, {pauser.total(ended):.0f}s paused)\n"
     )
+    monitor.record("end", ended)
+    log.write(monitor.summary() + "\n")
     log.close()
     _write(LOGS / f"{job['id']}.pauses.json", {"pauses": pauser.pauses})
     _write(path, job)
@@ -515,6 +758,22 @@ def _adopt(job: dict, path: Path, gate: ServingGate | None = None) -> None:
     pid = job.get("pid")
     pauser = Pauser(job, path)
     serving_ok = bool(job.get("serving_ok"))
+    monitor = ContentionMonitor(job, path, LOGS, _write, _read)
+    last_sample = flag_sample_time(_read(monitor.flag))
+    if (
+        not job.get("cpu_samples")
+        or last_sample is None
+        or _now() - last_sample > MAX_POLL_GAP_S
+    ):
+        job["contended"] = True
+        job.setdefault("contention_reasons", []).append("unmonitored_before_adoption")
+        monitor.events.append(
+            [
+                last_sample if last_sample is not None else job.get("started", _now()),
+                _now(),
+            ]
+        )
+    monitor.record("adopt")
     why = None
     while _alive(pid):
         now = _now()
@@ -523,8 +782,10 @@ def _adopt(job: dict, path: Path, gate: ServingGate | None = None) -> None:
         cancelled = bool(_read(path).get("cancel"))
         if cancelled:
             pauser.resume(now)
-        else:
+        elif not _priority_step(pauser, gate, now):
             pauser.step(gate, serving_ok, now)
+        now = _now()
+        monitor.poll(now)
         deadline = (
             job.get("started", now) + job.get("timeout_s", 1200) + pauser.total(now)
         )
@@ -551,10 +812,46 @@ def _adopt(job: dict, path: Path, gate: ServingGate | None = None) -> None:
         rc=rc,
         ended=_now(),
         adopted=True,
+        pause_reason=None,
         pauses=pauser.pauses,
         paused=False,
     )
+    monitor.record("end")
+    with open(LOGS / f"{job['id']}.log", "a") as log:
+        log.write("\n" + monitor.summary() + "\n")
+    _write(LOGS / f"{job['id']}.pauses.json", {"pauses": pauser.pauses})
     _write(path, job)
+
+
+def _execute(job: dict, path: Path, gate: ServingGate) -> None:
+    """Contain a runner error for normal and preempting jobs alike."""
+    print(f"{time.strftime('%H:%M:%S')} run {job['id']}", flush=True)
+    try:
+        _run_one(job, path, gate)
+    except Exception as e:  # noqa: BLE001 - a full disk etc. must not stop the queue
+        print(f"{time.strftime('%H:%M:%S')} job error {job['id']}: {e!r}", flush=True)
+        # Never leave an untracked GPU process behind after a runner error.
+        pid = job.get("pid")
+        if pid and pid > 1:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(pid, signal.SIGKILL)
+        with contextlib.suppress(Exception):
+            pauser = Pauser(job, path)
+            ended = _now()
+            if pauser.paused:
+                pauser.pauses[-1][1] = ended
+            job.update(
+                state="failed",
+                rc=None,
+                ended=ended,
+                error=repr(e),
+                paused=False,
+                pause_reason=None,
+                pauses=pauser.pauses,
+            )
+            _write(LOGS / f"{job['id']}.pauses.json", {"pauses": pauser.pauses})
+            _write(path, job)
+    print(f"{time.strftime('%H:%M:%S')} end {job['id']} {job['state']}", flush=True)
 
 
 def daemon() -> None:
@@ -566,6 +863,7 @@ def daemon() -> None:
         return
     idle_since = _now()
     gate = ServingGate()
+    gate.cpu = QuietGate()
     while True:
         gate.configure(load_serving_config())
         # A job left running by a previous daemon is adopted: wait for its
@@ -579,14 +877,11 @@ def daemon() -> None:
             j
         ) in _jobs():  # a cancelled pending job must go even while the gate blocks it
             if j["state"] == "pending" and j.get("cancel"):
+                _release_quiet_hold(j, _now())
                 _patch_job(JOBS / f"{j['id']}.json", state="cancelled", ended=_now())
         jobs = _jobs()
-        job = _pick(jobs, lambda j: _blocker(j, gate) is None)
+        job = _admit(jobs, gate)
         pending = [j for j in jobs if j["state"] == "pending"]
-        for j in pending:  # surface why a job is waiting (gpuq status)
-            want = _blocker(j, gate)
-            if j.get("waiting") != want:
-                _patch_job(JOBS / f"{j['id']}.json", waiting=want)
         if job is None:
             if pending:
                 idle_since = _now()  # blocked jobs are not an idle queue
@@ -599,17 +894,7 @@ def daemon() -> None:
             job.update(state="cancelled", ended=_now())
             _write(path, job)
             continue
-        print(f"{time.strftime('%H:%M:%S')} run {job['id']}", flush=True)
-        try:
-            _run_one(job, path, gate)
-        except Exception as e:  # noqa: BLE001 - a full disk etc. must not stop the queue
-            print(
-                f"{time.strftime('%H:%M:%S')} job error {job['id']}: {e!r}", flush=True
-            )
-            with contextlib.suppress(Exception):
-                job.update(state="failed", rc=None, ended=_now(), error=repr(e))
-                _write(path, job)
-        print(f"{time.strftime('%H:%M:%S')} end {job['id']} {job['state']}", flush=True)
+        _execute(job, path, gate)
         idle_since = _now()
 
 
@@ -623,21 +908,44 @@ def _patch_job(path: Path, **kw) -> None:
 FINAL = {"done", "failed", "timeout", "stalled", "cancelled", "lost"}
 
 
-def wait(ids: list[str]) -> int:
-    bad = 0
-    for jid in ids:
-        path = JOBS / f"{jid}.json"
-        while (j := _read(path)).get("state") not in FINAL:
-            if not j:
-                print(f"gpuq: no such job {jid}", file=sys.stderr)
-                return 2
-            time.sleep(POLL_S * 2)
-        dur = j.get("ended", 0) - j.get("started", j.get("ended", 0))
+def _output_issues(job: dict) -> list[str]:
+    # Keep standalone execution and importlib-based tests on the same validator.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from gpuq_digest import output_issues  # noqa: PLC0415
+
+    return output_issues(job)
+
+
+def wait(ids: list[str], max_seconds: float | None = None) -> int:
+    deadline = None if max_seconds is None else time.monotonic() + max_seconds
+    while True:
+        jobs = [(jid, _read(JOBS / f"{jid}.json")) for jid in ids]
+        pending = any(j and j.get("state") not in FINAL for _, j in jobs)
+        if not pending or (deadline is not None and time.monotonic() >= deadline):
+            break
+        delay = POLL_S * 2
+        if deadline is not None:
+            delay = min(delay, max(0.0, deadline - time.monotonic()))
+        time.sleep(delay)
+    bad = False
+    contended = False
+    for jid, j in jobs:
+        issues = _output_issues(j) if j else ["job not found"]
+        state = j.get("state", "missing")
         print(
-            f"{jid}: {j['state']} rc={j.get('rc')} {dur:.0f}s log={LOGS / (jid + '.log')}"
+            f"{jid}: {display_state(j) if j else state} rc={j.get('rc')} missing_outputs={json.dumps(issues)} "
+            f"log={LOGS / (jid + '.log')}"
         )
-        bad += j["state"] != "done"
-    return 1 if bad else 0
+        contended = contended or (bool(j.get("contended")) and requires_quiet(j))
+        bad = (
+            bad
+            or not j
+            or (
+                state in FINAL and (state != "done" or j.get("rc") != 0 or bool(issues))
+            )
+        )
+    # An unfinished job takes precedence: callers must keep waiting even if a peer failed.
+    return 2 if pending else (1 if bad else (3 if contended else 0))
 
 
 def display_state(j: dict) -> str:
@@ -646,6 +954,8 @@ def display_state(j: dict) -> str:
         return "paused"
     if j["state"] == "pending" and j.get("waiting"):
         return f"wait-{j['waiting']}"
+    if j["state"] == "done" and j.get("contended"):
+        return "contended"
     return j["state"]
 
 
@@ -656,15 +966,63 @@ def status() -> None:
     recent = [
         j for j in rows if j["state"] in FINAL and now - j.get("ended", 0) < 6 * 3600
     ]
-    print(f"daemon: {'up' if _daemon_running() else 'down'}")
+    daemon_up = _daemon_running()
+    print(f"daemon: {'up' if daemon_up else 'down'}")
     cfg = load_serving_config()
     if cfg.get("urls"):
         print(f"serving gate: {', '.join(cfg['urls'])}")
+    pending = [j for j in active if j["state"] == "pending"]
+    running = [j for j in active if j["state"] == "running"]
+    if pending and not any(not j.get("paused") for j in running):
+        reasons = []
+        if not daemon_up:
+            reasons.append("daemon down")
+        if any(j.get("paused") for j in running):
+            reasons.append(
+                "pause: "
+                + ", ".join(
+                    f"{j['id']} ({j.get('pause_reason') or 'serving'})" for j in running
+                )
+            )
+        for j in pending:
+            why = j.get("waiting")
+            explanation = {
+                "mem": "memory admission (free memory minus job need is below reserve, or unknown during preemption)",
+                "idle": "serving (busy or idle-start window)",
+                "pause": "pause",
+                "cpu": "CPU contention (waiting for continuous quiet window)",
+            }.get(why)
+            if explanation:
+                reasons.append(f"{j['id']}: {explanation}")
+        print(
+            "idle: "
+            + "; ".join(reasons or ["awaiting daemon scheduling/admission poll"])
+        )
     for j in active + recent[-15:]:
         t0 = j.get("started", j["submitted"])
         age = (j.get("ended") or now) - t0
         np = len(j.get("pauses", []))
         extra = f"  pauses={np}" if np else ""
+        if requires_quiet(j):
+            start = j.get("quiet_hold_started")
+            held = (
+                max(0.0, now - start)
+                if start is not None
+                else j.get("quiet_hold_elapsed_s", 0)
+            )
+            limit = j.get(
+                "quiet_hold_limit_s",
+                min(
+                    contention_config(j)["max_wait_s"],
+                    float(os.environ.get("GPUQ_QUIET_HOLD_MAX_S", 300)),
+                ),
+            )
+            reason = (
+                j.get("quiet_hold_reason")
+                if start is not None or j["state"] != "pending"
+                else j.get("waiting") or "GPU priority/fairness"
+            )
+            extra += f"  held={held:.0f}/{limit:g}s ({reason})"
         print(
             f"{display_state(j):>9}  {age:6.0f}s  p{j.get('priority', 0)}  {j['id']}{extra}"
         )
@@ -691,7 +1049,7 @@ def main() -> int:
         p.add_argument(
             "--serving-ok",
             action="store_true",
-            help="bypass the production-idle gate (CPU-only jobs); never paused",
+            help="bypass the production-idle gate and serving pauses (CPU-only jobs)",
         )
         p.add_argument(
             "--mem-gb",
@@ -699,8 +1057,43 @@ def main() -> int:
             default=None,
             help=f"unified memory the job needs (default {DEFAULT_MEM_GB:g}, 0 with --serving-ok)",
         )
+        p.add_argument(
+            "--out",
+            action="append",
+            default=[],
+            help="expected output path (repeatable)",
+        )
+        p.add_argument(
+            "--expect-complete",
+            action="store_true",
+            help="require a line containing complete in every output",
+        )
+        p.add_argument(
+            "--quiet",
+            action="store_true",
+            help="timing measurement: wait for a quiet CPU before starting and treat contention as untrustworthy",
+        )
+        p.add_argument(
+            "--cpu-threshold",
+            type=float,
+            help="summed foreign CPU percent (default 150)",
+        )
+        p.add_argument(
+            "--quiet-window", type=float, help="continuous quiet seconds (default 20)"
+        )
+        p.add_argument(
+            "--quiet-max-wait",
+            type=float,
+            help="maximum CPU wait seconds (default 300)",
+        )
         p.add_argument("cmd", nargs=argparse.REMAINDER)
-    sub.add_parser("wait").add_argument("ids", nargs="+")
+    wp = sub.add_parser("wait")
+    wp.add_argument(
+        "--max-seconds",
+        type=float,
+        help="return 2 if still pending after this many seconds",
+    )
+    wp.add_argument("ids", nargs="+")
     sub.add_parser("status")
     sub.add_parser("log").add_argument("id")
     sub.add_parser("cancel").add_argument("id")
@@ -716,13 +1109,37 @@ def main() -> int:
         cmd = a.cmd[1:] if a.cmd[:1] == ["--"] else a.cmd
         if not cmd:
             ap.error("missing command after --")
-        jid = submit(
-            cmd, a.label, a.timeout, a.priority, a.stall, a.serving_ok, a.mem_gb
-        )
+        try:
+            jid = submit(
+                cmd,
+                a.label,
+                a.timeout,
+                a.priority,
+                a.stall,
+                a.serving_ok,
+                a.mem_gb,
+                a.out,
+                a.expect_complete,
+                a.quiet,
+                {
+                    k: v
+                    for k, v in dict(
+                        threshold_pct=a.cpu_threshold,
+                        window_s=a.quiet_window,
+                        max_wait_s=a.quiet_max_wait,
+                    ).items()
+                    if v is not None
+                },
+            )
+        except ValueError as e:
+            print(f"gpuq: {e}", file=sys.stderr)
+            return 1
         print(jid, flush=True)
         return wait([jid]) if a.op == "run" else 0
     if a.op == "wait":
-        return wait(a.ids)
+        if a.max_seconds is not None and a.max_seconds < 0:
+            ap.error("--max-seconds must be nonnegative")
+        return wait(a.ids, a.max_seconds)
     if a.op == "status":
         status()
     elif a.op == "log":

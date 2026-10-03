@@ -28,6 +28,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dev"))
+from gpuq_contention import was_contended  # noqa: E402
 from gpuq_pause import pause_intervals  # noqa: E402
 
 
@@ -71,8 +72,9 @@ class Results:
         self.prefix = prefix
         path.parent.mkdir(parents=True, exist_ok=True)
 
-    def add(self, name: str, status: str, detail: str = "") -> bool:
+    def add(self, name: str, status: str, detail: str = "", contended=None) -> bool:
         row = {
+            "contended": was_contended() if contended is None else contended,
             "check": f"{self.prefix}{name}",
             "status": status,
             "detail": str(detail)[:500],
@@ -668,12 +670,20 @@ def summary(a) -> int:
     print("-" * (width + 60))
     for r in rows:
         print(f"{r['check']:<{width}}  {r['status']:<6}  {r['detail'][:100]}")
-    counts = {s: sum(r["status"] == s for r in rows) for s in ("PASS", "FAIL", "SKIP")}
+    counts = {
+        s: sum(r["status"] == s for r in rows)
+        for s in ("PASS", "FAIL", "SKIP", "CONTENDED")
+    }
     print("-" * (width + 60))
-    print(f"PASS {counts['PASS']}  FAIL {counts['FAIL']}  SKIP {counts['SKIP']}")
+    print(
+        f"PASS {counts['PASS']}  FAIL {counts['FAIL']}  SKIP {counts['SKIP']}  CONTENDED {counts['CONTENDED']}"
+    )
     if counts["FAIL"]:
         print("GATE: FAIL")
         return 1
+    if counts["CONTENDED"]:
+        print("GATE: CONTENDED (rerun after contention)")
+        return 3
     print("GATE: PASS")
     return 0
 
@@ -687,8 +697,13 @@ def main() -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("record")
     r.add_argument("name")
-    r.add_argument("status", choices=("PASS", "FAIL", "SKIP"))
+    r.add_argument("status", choices=("PASS", "FAIL", "SKIP", "CONTENDED"))
     r.add_argument("detail", nargs="?", default="")
+    r.add_argument(
+        "--contended",
+        choices=("true", "false"),
+        help="override the job flag for a measured attempt",
+    )
     for name in ("sdk", "cancel", "long", "family"):
         p = sub.add_parser(name)
         p.add_argument("--url", required=True)
@@ -702,7 +717,12 @@ def main() -> int:
     a = ap.parse_args()
     res = Results(a.results, a.prefix)
     if a.cmd == "record":
-        res.add(a.name, a.status, a.detail)
+        res.add(
+            a.name,
+            a.status,
+            a.detail,
+            contended=None if a.contended is None else a.contended == "true",
+        )
         return 0
     if a.cmd == "summary":
         return summary(a)

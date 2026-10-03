@@ -436,3 +436,17 @@ Agent 重放（opencode 錄製請求，warm 第 2 次起）：TF 0.6.1 105-159 t
 - Prefill 各類別剖析（prefill_profile，27B，8192 token，chunk 2048，2026-10-02）：stock 牆鐘 9.42 s、Yunshu 12.02 s（慢 28%）；佔比 mlp.gate_up 37.7% / 37.0%、mlp.down 21.2% / 20.5%、gdn.in_proj 15.3% / 16.1%；各 matmul 類 stock 41-53 TFLOPS，Yunshu 33-42 TFLOPS。prefill 慢的位置是量化 matmul，不是 attention 或 norm（另一個 agent 持續在做）。
 - Prefill 公平性（cf6105c8，2026-09-28，4 條背景 decode + 1 條長 prefill）：chunk 0 / 256 / 512，16K：長請求 TTFT 17.8 / 21.6 / 19.5 s，prefill 期間背景 decode 0.7 / 2.9 / 1.7 tok/s（原本 23.6）；32K：37.7 / 47.0 / 42.3 s、0.6 / 2.7 / 1.6 tok/s。小 chunk 換來背景速率，付出長請求 TTFT；實驗旗標，沒有成為預設。
 - Fused prefill（2026-09-29，同一 4+1 負載）：fused 64 / 128：16K TTFT 35.9 / 27.5 s（baseline 17.7），背景 decode 7.2 / 4.8 tok/s；32K 78.1 / 60.0 s（baseline 37.7）。背景速度提高，長請求 TTFT 約變兩倍；已被 round driver 的 mixed 負載結果取代（上方 mixed16 背景 3.8 tok/s、TTFT 不退步的方向），不再追。
+
+2026-10-03 I8 opt-in scheduling repair（codex-i8，same Qwen3.8-27B-oQ4e-mtp checkpoint；兩個 flags 保持 default off）：修 paused auxiliary speculative lane 被算成可償還 decode debt 的 ~20 s main-prefill stall；保留 auxiliary canonical checkpoint cuts 但不 lookup/store cache；bounded overtaking 保護長 cold prefill。一次 quiet job `1003-112620-00-i8-fix-three-ab-1127` 跑三個 interleaved fresh-server pairs（runs5/6/7，arm order1/0/1），seed42、原始七個 captured opencode bodies、六個 empty APC roots。rc0、六份 final complete、0 pauses、contended=false；foreign CPU max170.5% < 新門檻1620%。六份 source receipts 相同（runner586184da / work3b8792f8 / aux4db4ea25），mode=mtp；18/18 main與3/3 title完整輸出digests相同。
+
+| 指標 | stock ordering | auxiliary + uncached scheduling on |
+|---|---:|---:|
+| pooled main TTFT p50/p90 | 0.745 / 8.666 s | 0.797 / 7.760 s |
+| mean main TTFT | 2.122 s | 2.071 s |
+| warm main TTFT p50/p90 | 0.628 / 1.755 s | 0.696 / 2.423 s |
+| mean sum of six main completion times | 40.829 s | 32.366 s |
+| mean title TTFT / completion | 3.040 / 17.807 s | 28.778 / 37.268 s |
+
+Small but real：這個 captured replay 的 mean main TTFT 改善2.36%，三對都同方向（2.1208→2.0735、2.1218→2.0718、2.1222→2.0690 s），保留 opt-in 實作。Cold first-main TTFT 8.671/8.664/8.670→7.780/7.787/7.752 s；pooled p90改善10.45%，main總完成時間改善20.73%（aux不再占用主請求的單列MTP機會）。同時 median退步6.98%、warm p90退步38.1%，title更晚；不能宣稱全面TTFT win，更不是 isolated model decode/kernel 加速。兩個預設仍關閉。CPU 2048-atom mixed simulation也尚未勝FIFO p90（10.675 vs12.624 s），需真正長cold + warm suffix混合GPU驗證後才決定default。
+
+Independent non-quiet correctness job `1003-110707-00-i8-token-parity-1107` rc0 + final complete：actual runner emitted token-ID digest 7/7 on/off相同；兩arm第一main cold cached0 vs hit cached7335（prompt7336）均63 tokens、digest526abd8e8275f19c001e5753d7030987996ce3be962a929d665ebaeb5fe071c3。它加了重送request，timing不入上表。前任0.8B smoke `1003-102420-00-i8-tiny-smoke-1027` stalled rc-2、無complete，不作parity或timing結論。完整結果：`docs/research/runs/2026-10-03-i8e/summary.json`，`scripts/research/agentic/i8_summarize.py ROOT --first-run 5`。

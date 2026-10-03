@@ -97,7 +97,7 @@ or `http://127.0.0.1:8000/v1` when it runs natively.
 
 ## Yunmo
 
-[Yunmo](../../../Yunmo)'s `llm_adapter` is OpenAI-compatible: set its `base_url` to
+Yunmo (a separate consumer project)'s `llm_adapter` is OpenAI-compatible: set its `base_url` to
 `http://127.0.0.1:8000/v1`.
 
 ## Checking the server
