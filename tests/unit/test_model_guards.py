@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -131,7 +132,13 @@ def test_anthropic_image_block_on_text_model_is_400(monkeypatch):
 
 
 def test_version_reads_pyproject_in_a_checkout():
-    assert yunshu_version() == "0.1.2"
+    import tomllib
+
+    root = Path(__file__).resolve().parents[2]
+    expected = tomllib.loads((root / "pyproject.toml").read_text())["project"][
+        "version"
+    ]
+    assert yunshu_version() == expected
 
 
 def test_responses_on_embedding_model_is_400(monkeypatch, tmp_path):

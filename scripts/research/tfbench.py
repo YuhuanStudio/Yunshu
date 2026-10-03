@@ -313,6 +313,7 @@ def req(model, text, mt, seed=None, extra=None, temp=0):
 
 
 def emit(out, **kw):
+    kw["device"] = os.environ.get("GPUQ_DEVICE", "m5")
     kw["contended"] = was_contended()
     out.write(json.dumps(kw) + "\n")
     out.flush()
