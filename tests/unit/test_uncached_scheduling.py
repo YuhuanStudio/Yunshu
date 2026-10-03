@@ -9,7 +9,7 @@ import pytest
 
 from tests.unit.test_auxiliary_scheduling import job
 from tests.unit.test_vlm_runner_batching import FakeGen, runner  # noqa: F401
-from yunshu_engine.serving.work_scheduler import AGING_S, Work
+from yunshu_engine.serving.work_scheduler import AGING_S, DECODE_QUANTUM_S, Work
 from yunshu_gateway import admission
 
 
@@ -317,7 +317,7 @@ def test_last_atom_and_first_token_precede_decode_repayment(atoms):
     assert suffix.stats.t_first
     assert not any(uid == long.uid for uid, _, _ in g.gen.atoms)
     # First-token delivery does not silently erase the fairness obligation.
-    assert r._decode_debt == 0.1
+    assert r._decode_debt == DECODE_QUANTUM_S
     for _ in range(4):
         r._drive_slice(False)
     assert any(uid == long.uid for uid, _, _ in g.gen.atoms)
@@ -558,3 +558,31 @@ def test_sole_foreground_can_progress_before_reading_cache_estimates(
     monkeypatch.setattr(r, "_work", estimate)
     r._step_work_groups(True)
     assert foreground.stats.prefill_done == 2048
+
+
+def test_two_40ms_decode_steps_release_a_canonical_atom(atoms, monkeypatch):
+    r, clock = atoms
+    dec = job(0)
+    dec.max_tokens = 1000
+    r._submit(dec)
+    r._drive_slice(False)
+    r._drive_slice(False)
+    gen = r._groups()[0].gen
+    next_step = gen.next
+
+    def ar40ms():
+        result = next_step()
+        if result[1]:
+            clock[0] -= 0.01  # AtomGen normally charges 50 ms per decode.
+        return result
+
+    monkeypatch.setattr(gen, "next", ar40ms)
+    cold = job(0)
+    cold.ids = list(range(8192))
+    r._submit(cold)
+    r._drive_slice(False)
+    r._drive_slice(False)
+    assert not cold.stats.prefill_done
+    r._drive_slice(False)
+    assert cold.stats.prefill_done == 2048
+    assert dec.stats.generated >= 3
