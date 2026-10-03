@@ -242,53 +242,67 @@ rc -2 while waiting for arm 1's title; only arm 0 completed. It had the captured
 pass and establishes no timing claim for 0.8B. Its servers were cleaned up.
 
 
-## Next-iteration final-window dispatch (awaiting quiet measurements)
+## Final-window dispatch and bounded turn handoff (2026-10-03)
 
-The opt-in work policy carries an interactive request through its remaining
-2048-token window and first-token delivery before repaying decode debt. This
-continuation is latched after an executed atom enters that window, including a
-partially cached suffix that needs more than one atom. Every canonical checkpoint
-and token span stays with the generator. A long waiter keeps FIFO protection
-after one overtaking atom; the already-selected request can finish its bounded
-window before that protection resumes. New arrivals cannot repeat the bypass.
-Cancellation removes both the saved prefill and deferred checkpoint captures.
+Both options remain **default off**. The final quiet three-pair replay matches all
+21 raw prompt pairs and six cold/full-hit pairs; the long mix matches all 18
+complete response digests. Captured p50 is still slightly worse, so the requested
+all-metric default gate has not passed.
 
-The tiny-model probe's original stall was silent continued generation, rather
-than a scheduler with no progress: instrumented output reached 19,949 tokens
-before the diagnostic's deadline. On the merged version both 0.8B arms complete
-their title streams, but title digests differ. It is a transport/liveness probe,
-not lossless evidence for the small model. Both deployment options remain off.
+The selected interactive request finishes its remaining 2048-token window and
+emits its first token before repaying decode debt. An executed atom latches the
+remaining window immediately. Actual lookup/progress revalidates the estimate;
+an evicted warm checkpoint cannot turn a long cold miss into an unbounded
+continuation. Canonical checkpoint cuts, sampling and grammar state are unchanged.
+Long waiters retain FIFO protection after one overtaking atom, while the already
+selected request may finish its bounded window. New arrivals cannot repeat that
+bypass. An aged auxiliary yields once to the highest-ranked primary final window
+and regains its service opportunity afterwards.
 
-Qualified runners now reserve one 100 ms handoff after a primary completion.
-Repeated completions do not extend that grace; actual auxiliary service or an
-empty auxiliary lane resets it. Eligibility is checked again after a completion
-in the same slice. An aged auxiliary may yield once to the highest-ranked primary
-if that primary is in its final window, then regains its service opportunity.
-Metadata peeks use the admitted APC namespace, and final-window status is
-revalidated after actual lookup/progress so an evicted warm estimate cannot turn
-a long cold miss into an unbounded continuation. These handoff changes await
-their own quiet replay; both defaults stay off.
+Qualified runners reserve a 100 ms primary completion handoff, including auxiliary
+admission. Young auxiliary work may renew it at each completion; the oldest aged
+auxiliary gets that grace once per actual-service episode, preventing indefinite
+extension. Empty handoff slices yield via a CPU-only timer (at most 2 ms). A ready
+primary cancels the timer and dispatches immediately; stale callbacks cannot
+submit duplicate slices. All MLX operations stay on the original executor.
 
-The handoff reservation yields the worker with a CPU-only timer (at most 2 ms
-between checks) instead of resubmitting an empty slice in a busy loop. A ready
-primary is dispatched immediately. Young auxiliary work can renew the grace at
-each primary completion; once the oldest auxiliary is aged, its grace is granted
-only once until actual service. This keeps rapid completions from extending an
-aged wait indefinitely.
+With one eligible foreground, ordinary stepping keeps the prompt batch live.
+A peer causes that exact batch to be parked before work selection. Cancellation
+clears live and parked states and discards unpublished checkpoints. Competing
+candidates share one metadata estimate per slice, using the admitted APC namespace.
+The decode quantum is 75 ms, independent of the 100 ms handoff reservation.
 
-A ready primary cancels a pending handoff timer and submits immediately; the
-cancelled timer cannot submit a second slice. With exactly one eligible
-foreground group/request, dispatch uses its ordinary generator step, preserving
-saved prompt state and debt accounting without repeatedly scoring cache metadata.
-Competing candidates share one estimate snapshot per slice; actual progress is
-still revalidated after the selected step.
+Latest evidence: `1003-182813-00-i8-next8-admit-all-1830`, rc 0, quiet clean,
+zero pauses; identical runtime/kernel/dependency/model-config hashes before and
+after. Captured runs 29/30/31 preserve all seven original bodies, seed 42 and their
+original output limits. Post-timing first-prompt repeats are excluded from timing.
 
-The singleton path now keeps its prompt batch live in the generator between
-atoms, as ordinary stepping does. When a peer becomes eligible, that same batch
-is parked before work selection and restored unchanged when selected again.
-Cancellation clears both live and parked states. The decode quantum is now
-75 ms, independent of the 100 ms handoff reservation.
+| Captured main metric | stock | policy on |
+| --- | ---: | ---: |
+| TTFT p50 | 0.7515 s | 0.7570 s |
+| TTFT p90 | 8.5990 s | 7.6239 s |
+| warm TTFT p90 | 1.7496 s | 1.7268 s |
+| mean six-turn completion sum | 40.226 s | 33.504 s |
 
-Handoff grace also keeps auxiliary rows pending before admission, avoiding
-cache/drafter context preparation during a primary turn transition. The same
-100 ms bound applies, and aged admission resumes once it expires.
+The synthetic long mix has an 11068-token prime, a 26468-token cold request and
+suffix prompts of 11120/11600/13392 tokens. Actual cache hits are 11067/52/10240:
+the middle suffix is effectively near-cold. It uses 48-token main output limits;
+these are separate from the uncapped captured replay.
+
+| Long-mix main metric | stock | policy on |
+| --- | ---: | ---: |
+| TTFT p50 | 23.0980 s | 8.6795 s |
+| TTFT p90 | 31.3856 s | 30.4925 s |
+| suffix p90 (including near-cold) | 31.4140 s | 12.9238 s |
+| mean main wall time | 58.6095 s | 52.7925 s |
+
+Captured median regresses 0.73%, despite lower p90, warm tail and completion.
+The enabled completion sums are 30.426/30.773/39.312 s; the slower third session
+is retained. These are measured scheduling tradeoffs, not a universal speed or
+quality claim. Results: `../research/runs/2026-10-03-i8-next8/summary.json` and
+external `i8-phase8-metrics.json` / `i8-final-harvest.json` on P5Plus.
+
+The 0.8B probe's original silent stall was continued generation, observed through
+19949 tokens before its diagnostic deadline. Both merged-version title streams
+complete, but their digests differ. Small-model probes establish transport and
+liveness only; they are not lossless/default evidence for that model.

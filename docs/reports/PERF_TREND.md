@@ -496,3 +496,10 @@ Yunshu 實際 MTP；TF 日誌明確 DFlash2。每個 ctx/kind/phase 跨三輪和
 - view 用獨立 array handles 接續已 detached 的單列 ArraysCache，省 upstream merge 的 zeros+整 row copy；重置 lengths/left_padding，CPU逐 state 與 upstream merge相同，雙向mutation隔離通過。多列/custom/non-native狀態沿用 upstream。
 - 一 token revisit 的 view 沒有穩定收益：第二個 warm revisit 各輪配對 +2.41 / -7.57 / -6.12 ms（正=省時）；第三個 +1.90 / -2.74 / +0.52 ms。因此 serving 只在已知單列 memory plan、fresh suffix >=64 時使用 view；短 suffix / 未知 plan保留原 merge。64是保守的使用範圍限制，量測點為66，不宣稱找到了最佳 crossover。
 - 這是 suffix TTFT 約1%的小改善，不是 cold prefill或decode速度聲明；沒有新增設定或實驗旗標。原型與解析檔 `prefill3-fixed-view.py`、`prefill3-fixed-view-summary.json`，完整log在gpuq。
+
+
+2026-10-03 I8 final-window／handoff opt-in（7189c262；defaults仍off）：同Qwen3.8-27B-oQ4e-mtp、seed42，job `1003-182813-00-i8-next8-admit-all-1830`，三captured switchback pairs＋三long-mix pairs，rc0、complete、0 pauses、contended=false（foreign CPU max253.7% <1620%），22 runtime/kernel/dependency/model-config hashes前後相同。21/21 raw prompt pairs、6/6 post-timing cold/full-hit pairs、18/18 mixed完整輸出digest相同。改動只dispatch／handoff，不改canonical cuts或sampler。
+
+- captured pooled main p50 .7515→.7570 s（退0.73%）、p90 8.5990→7.6239 s、warm p50 .622→.611 s、warm p90 1.7496→1.7268 s、mean TTFT2.1425→1.9226 s、mean六turn completion sum40.226→33.504 s（改善16.71%）。on三session sums30.426/30.773/39.312 s，完整保留outlier。全指標default gate未過，不升預設。
+- long mix：prime11068／cold26468 tokens，suffix prompts11120/11600/13392、實際cached11067/52/10240（中間近cold）。pooled main p50 23.098→8.6795 s、p90 31.3856→30.4925 s、suffix p90 31.414→12.9238 s、main wall mean58.6095→52.7925 s。synthetic main max48與captured自然output limits分开，不宣稱所有模型／流量贏。
+- small but real：warm p50 -1.77%、warm p90 -1.30%，保留opt-in；不拿它們抵銷main median gate失敗。後續需singleton warm3的host/GPU/restore/writer與consumer-lease timeline。tiny0.8B仍有digest差，不能當lossless證據。資料：private `docs/research/runs/2026-10-03-i8-next8`，外部 `i8-phase8-metrics.json`、`i8-final-harvest.json`。
