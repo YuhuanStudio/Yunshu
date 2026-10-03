@@ -5,9 +5,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        Before filing, please skim the README **"What this is NOT"** section — Yunshu is deliberately
-        a single-node, single-consumer, local engine. Requests for multi-node sharding, multi-tenant
-        scheduling, or beating mlx-lm on raw throughput are out of scope.
+        Yunshu prioritizes local LLM/VLM decode speed, first-token latency,
+        prompt reuse and API completeness on Apple Silicon. Read docs/ROADMAP.md
+        for priorities and proposal guidance before suggesting substantial changes.
 
   - type: textarea
     id: problem
@@ -45,3 +45,9 @@ body:
     id: alternatives
     attributes:
       label: Alternatives you considered
+
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and success criteria
+      description: What will users change or notice? What observable result would make this improvement successful?
