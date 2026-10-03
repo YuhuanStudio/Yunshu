@@ -91,3 +91,8 @@ def reorder(tokens, parents):
         output_shapes=[(width - 1,), (width,), (width,)],
         output_dtypes=[mx.int32] * 3,
     )
+
+
+def remap_landed(landed_nodes, permutation):
+    """Keep budget probabilities in original proposal rank after row reordering."""
+    return [int(permutation[node + 1]) - 1 for node in landed_nodes]

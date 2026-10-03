@@ -1,10 +1,12 @@
 """GPU numerical parity for last-use node ordering; run only via gpuq/m3run."""
 
 import argparse
+import hashlib
 import json
 import random
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from gdn_tree_order import live_bound, order_plan, reorder
 
@@ -135,6 +137,43 @@ def main():
             expected = mx.take(reference, permutation, axis=1)
             mx.eval(expected, candidate)
             assert bool(mx.array_equal(expected, candidate)), (width, arm)
+            # Compare the committed FP32 recurrent state for the same leaf,
+            # rather than only the BF16 projected verify outputs.
+            path = [width - 1]
+            while parents[path[-1]] >= 0:
+                path.append(parents[path[-1]])
+            path.reverse()
+            inverse = {old: new for new, old in enumerate(expected_order)}
+            new_path = [inverse[old] for old in path]
+            layer = SimpleNamespace(
+                A_log=inputs[1],
+                dt_bias=inputs[2],
+                num_k_heads=hk,
+                num_v_heads=hv,
+                head_k_dim=dk,
+                head_v_dim=dv,
+            )
+            count = mx.array([len(path)], dtype=mx.int32)
+            old_state = tv.replay_path(
+                layer,
+                inputs[0],
+                (inputs[4], inputs[5], inputs[6], inputs[7]),
+                mx.array(path + [0] * (width - len(path)), dtype=mx.int32),
+                count,
+            )
+            new_state = tv.replay_path(
+                layer,
+                inputs[0],
+                (permuted[4], permuted[5], permuted[6], permuted[7]),
+                mx.array(new_path + [0] * (width - len(path)), dtype=mx.int32),
+                count,
+            )
+            mx.eval(old_state, new_state)
+            assert bool(mx.array_equal(old_state, new_state)), (
+                "FP32 replay",
+                width,
+                arm,
+            )
             records.append(
                 dict(
                     width=width,
@@ -142,9 +181,17 @@ def main():
                     live_slots=need,
                     bound=live_bound(width),
                     bit_equal=True,
+                    replay_bit_equal=True,
                 )
             )
-    records.append(dict(complete=True, success=True, cases=len(records)))
+    records.append(
+        dict(
+            complete=True,
+            success=True,
+            cases=len(records),
+            source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        )
+    )
     args.output.write_text("".join(json.dumps(r) + "\n" for r in records))
     print(json.dumps(records[-1]), flush=True)
 

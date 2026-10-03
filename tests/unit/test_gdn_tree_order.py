@@ -52,3 +52,24 @@ def test_balanced_and_comb_adversaries():
     assert check([-1, *[0] * 31]) == 1
     assert _module.live_bound(16) == 3
     assert _module.live_bound(32) == 4
+
+
+def test_budget_observations_keep_original_proposal_rank():
+    from yunshu_engine.spec_schedule import NodeBudget
+
+    parents = [-1, *[(row - 1) // 2 for row in range(1, 16)]]
+    order, _, _ = _module.order_plan(parents)
+    path = [15]
+    while parents[path[-1]] >= 0:
+        path.append(parents[path[-1]])
+    path.reverse()
+    original = [row - 1 for row in path[1:]]
+    reordered = [order.index(row) - 1 for row in path[1:]]
+    assert reordered != original
+    a, b = NodeBudget(15), NodeBudget(15)
+    for _ in range(20):
+        a.observe(15, original, 50)
+        b.observe(15, _module.remap_landed(reordered, order), 50)
+    assert a.p == b.p
+    assert a.samples == b.samples
+    assert a.best() == b.best()
