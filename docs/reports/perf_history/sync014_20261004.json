@@ -1,0 +1,1871 @@
+{
+  "complete": true,
+  "date": "2026-10-04",
+  "cycle": "0.1.4",
+  "device": "M5 Max /128 GiB",
+  "source": {
+    "head": "242848ec447dbc3e10a210e6e56f17ba162c9e8f",
+    "python_tree_sha256": "6e16cd405cb93a8986497ac4d6b0d3ed5d59ef66c0a94f08f73e57ef50f5bf4e",
+    "python_diff": "none",
+    "pilot_source_attestation": "same Python source as following arms; only vendor/docs/checker/tests changed",
+    "release_python_tree_matches": false,
+    "baseline_context": "Dependency A/B uses identical main 242848ec source on both arms; the old lock matches v0.1.3, not a claim that the source is the release tag tree.",
+    "release_python_git_tree": "aa1ea142e80088af7850be48bb0f37e71fed86d5",
+    "baseline_python_git_tree": "043535781b1c63cbf6cb271ad1c7abde87ac9c1f",
+    "tag_to_baseline_python_paths": [
+      "python/yunshu_cli/chat.py",
+      "python/yunshu_cli/model.py",
+      "python/yunshu_cli/serve.py",
+      "python/yunshu_engine/kernels/lane_linear.py",
+      "python/yunshu_engine/kernels/nax_prefill.py",
+      "python/yunshu_engine/kernels/tensorfold/lane_qmm.py",
+      "python/yunshu_engine/vlm_engine.py",
+      "python/yunshu_gateway/routers/anthropic.py",
+      "python/yunshu_gateway/routers/responses.py"
+    ]
+  },
+  "dependencies": {
+    "changed": {
+      "ast-serialize": [
+        "0.11.2",
+        "0.12.1"
+      ],
+      "cuda-pathfinder": [
+        "1.8.2",
+        "1.8.3"
+      ],
+      "markupsafe": [
+        "3.0.3",
+        "3.0.4"
+      ],
+      "openai": [
+        "3.23.0",
+        "3.24.0"
+      ],
+      "tzdata": [
+        "2026.4",
+        "2026.5"
+      ],
+      "virtualenv": [
+        "21.14.3",
+        "21.14.5"
+      ],
+      "websockets": [
+        "17.1",
+        "17.2"
+      ],
+      "zipp": [
+        "4.1.0",
+        "4.1.1"
+      ]
+    },
+    "stack": {
+      "mlx": [
+        "0.32.3",
+        "0.32.3"
+      ],
+      "mlx-lm": [
+        "0.32.0",
+        "0.32.0"
+      ],
+      "mlx-vlm": [
+        "0.7.4",
+        "0.7.4"
+      ],
+      "mlx-metal": [
+        "0.32.3",
+        "0.32.3"
+      ],
+      "transformers": [
+        "5.18.0",
+        "5.18.0"
+      ],
+      "llguidance": [
+        "1.9.1",
+        "1.9.1"
+      ],
+      "tokenizers": [
+        "0.23.2",
+        "0.23.2"
+      ],
+      "numpy": [
+        "2.5.3",
+        "2.5.3"
+      ]
+    },
+    "lock_sha256": {
+      "old": "d4ddc23270044e3af73ac98db109f72f92b9e86282d3df74b5454c9d7c1f7c59",
+      "new": "4283751a0e469537e6b93c569f65e62c212af24c849d52cf8f3aa7ee3447c9fc"
+    },
+    "python": "3.13.15",
+    "baseline_tag": "v0.1.3",
+    "baseline_lock_matches_release": true,
+    "installed_m5": {
+      "old": {
+        "ast-serialize": "0.11.2",
+        "cuda-pathfinder": null,
+        "markupsafe": "3.0.3",
+        "openai": "3.23.0",
+        "tzdata": null,
+        "virtualenv": "21.14.3",
+        "websockets": "17.1",
+        "zipp": "4.1.0"
+      },
+      "new": {
+        "ast-serialize": "0.12.1",
+        "cuda-pathfinder": null,
+        "markupsafe": "3.0.4",
+        "openai": "3.24.0",
+        "tzdata": null,
+        "virtualenv": "21.14.5",
+        "websockets": "17.2",
+        "zipp": "4.1.1"
+      }
+    }
+  },
+  "cpu_checks": {
+    "m5": {
+      "old_interpreter_final": {
+        "passed": 8750,
+        "skipped": 20,
+        "seconds": 344.01
+      },
+      "new_lock_py313": {
+        "passed": 8750,
+        "skipped": 20,
+        "seconds": 347.6
+      },
+      "handoff_final": {
+        "passed": 8750,
+        "skipped": 20,
+        "seconds": 360.53
+      }
+    },
+    "m3": {
+      "new_lock_final": {
+        "passed": 8661,
+        "skipped": 109,
+        "seconds": 266.27
+      }
+    },
+    "ruff": "pass",
+    "format": "pass",
+    "mypy": {
+      "baseline_debt": 897,
+      "new_errors": 0
+    },
+    "vendor_check": {
+      "rc": 1,
+      "unhandled_source_changes": 0,
+      "reason": "huggingface-hub 2.1.1 excluded by tokenizers/datasets/diffusers <2.0 constraints"
+    },
+    "suite_exit_codes": {
+      "m5-new314-initial": 0,
+      "m3-initial": 0,
+      "m5-main-final": 0,
+      "m3-final": 0,
+      "m5-new313-final": 0
+    },
+    "focused_public_docs_vendor": {
+      "passed": 40,
+      "rc": 0
+    }
+  },
+  "corpus": {
+    "complete": true,
+    "device": "m5",
+    "cells": [
+      {
+        "cell": "prose-1024",
+        "utf8_sha256": "cab74a3496926a17f41a951cbe96173b4c0d75a33809a050d93ea4cf4f52388d",
+        "characters": 3951,
+        "actual_prompt_tokens": 1034,
+        "max_tokens": 256,
+        "seed": 1234,
+        "temperature": 0
+      },
+      {
+        "cell": "code-1024",
+        "utf8_sha256": "2630cf59b74b7e902f7f27537f92419bb06624f45760206eb50d16bc7ae6a2d8",
+        "characters": 3803,
+        "actual_prompt_tokens": 1034,
+        "max_tokens": 256,
+        "seed": 1234,
+        "temperature": 0
+      },
+      {
+        "cell": "prose-8192",
+        "utf8_sha256": "7813d1d301556038e8b0de6ab7f0bf1871bb14784160cda0f91cb58f76122b18",
+        "characters": 28170,
+        "actual_prompt_tokens": 8203,
+        "max_tokens": 256,
+        "seed": 1234,
+        "temperature": 0
+      },
+      {
+        "cell": "code-8192",
+        "utf8_sha256": "b286449848f8481a6403701915aa52894209cd8cda9fbf523af6aeb139b5da7e",
+        "characters": 32813,
+        "actual_prompt_tokens": 8203,
+        "max_tokens": 256,
+        "seed": 1234,
+        "temperature": 0
+      },
+      {
+        "cell": "prose-32768",
+        "utf8_sha256": "eb8a1edd29e30da5c1fdd81849cdd00582e73af7c30ff104183adca95fd1eb05",
+        "characters": 49128,
+        "actual_prompt_tokens": 32778,
+        "max_tokens": 256,
+        "seed": 1234,
+        "temperature": 0
+      },
+      {
+        "cell": "code-32768",
+        "utf8_sha256": "000940bcf13debd9a2983760e36c435ad6f392affa686afdca62b696724a75b9",
+        "characters": 127310,
+        "actual_prompt_tokens": 32779,
+        "max_tokens": 256,
+        "seed": 1234,
+        "temperature": 0
+      }
+    ]
+  },
+  "benchmark": {
+    "model": "Jundot/Qwen3.8-27B-oQ4e-mtp",
+    "dflash_drafter": "incoai/Qwen3.8-27B-DFlash2",
+    "python": "3.13.15",
+    "max_tokens": 256,
+    "seed": 1234,
+    "temperature": 0,
+    "apc_ram_budget": "product auto /32 GiB",
+    "apc_disk": false,
+    "warmups_per_server": 2,
+    "reps": 3,
+    "order": "r0 old/new; r1 new/old; r2 old/new, each mode",
+    "metrics": "HTTP warm decode (ct-1)/(end-first content); cold and turn-2 HTTP TTFT; model already loaded",
+    "quiet": true
+  },
+  "correctness": {
+    "on_off_paired_cells": 24,
+    "on_off_all_identical": true,
+    "plain_contract": "initialized same invariant kernels; allow_draft=False",
+    "accuracy_n": 200,
+    "old_correct": 200,
+    "new_correct": 200,
+    "net_correct_delta": 0,
+    "accuracy_identical_ids": 200,
+    "accuracy_scope": "deterministic padded arithmetic; not a broad benchmark",
+    "ground_truth_sha256": "1323cfbfab2b152bf20e78b5abe895ecf4dd0f33db440a2220472a707b8dfb9d",
+    "timing_paired_requests": 108,
+    "timing_old_new_ids_all_identical": true,
+    "warm_cold_ids_all_identical": true
+  },
+  "timing": [
+    {
+      "mode": "mtp",
+      "cell": "prose-1024-cold",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          1.197,
+          1.195,
+          1.194
+        ],
+        "new": [
+          1.193,
+          1.195,
+          1.195
+        ]
+      },
+      "median": {
+        "old": 1.195,
+        "new": 1.195
+      },
+      "delta_percent": 0.0,
+      "cached": {
+        "old": [
+          0,
+          0,
+          0
+        ],
+        "new": [
+          0,
+          0,
+          0
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "mtp",
+      "cell": "prose-1024-warm",
+      "metric": "dec_tps",
+      "values": {
+        "old": [
+          54.2,
+          54.1,
+          54.0
+        ],
+        "new": [
+          54.1,
+          54.0,
+          53.9
+        ]
+      },
+      "median": {
+        "old": 54.1,
+        "new": 54.0
+      },
+      "delta_percent": -0.1848428835489857,
+      "cached": {
+        "old": [
+          1033,
+          1033,
+          1033
+        ],
+        "new": [
+          1033,
+          1033,
+          1033
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "mtp",
+      "cell": "prose-1024-turn2",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          0.467,
+          0.469,
+          0.469
+        ],
+        "new": [
+          0.464,
+          0.472,
+          0.471
+        ]
+      },
+      "median": {
+        "old": 0.469,
+        "new": 0.471
+      },
+      "delta_percent": 0.4264392324093924,
+      "cached": {
+        "old": [
+          1033,
+          1033,
+          1033
+        ],
+        "new": [
+          1033,
+          1033,
+          1033
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "mtp",
+      "cell": "code-1024-cold",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          1.182,
+          1.184,
+          1.182
+        ],
+        "new": [
+          1.179,
+          1.183,
+          1.183
+        ]
+      },
+      "median": {
+        "old": 1.182,
+        "new": 1.183
+      },
+      "delta_percent": 0.08460236886633776,
+      "cached": {
+        "old": [
+          0,
+          0,
+          0
+        ],
+        "new": [
+          0,
+          0,
+          0
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "mtp",
+      "cell": "code-1024-warm",
+      "metric": "dec_tps",
+      "values": {
+        "old": [
+          98.4,
+          98.4,
+          98.1
+        ],
+        "new": [
+          98.1,
+          98.6,
+          98.4
+        ]
+      },
+      "median": {
+        "old": 98.4,
+        "new": 98.4
+      },
+      "delta_percent": 0.0,
+      "cached": {
+        "old": [
+          1033,
+          1033,
+          1033
+        ],
+        "new": [
+          1033,
+          1033,
+          1033
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "mtp",
+      "cell": "code-1024-turn2",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          0.462,
+          0.462,
+          0.462
+        ],
+        "new": [
+          0.457,
+          0.46,
+          0.463
+        ]
+      },
+      "median": {
+        "old": 0.462,
+        "new": 0.46
+      },
+      "delta_percent": -0.43290043290042934,
+      "cached": {
+        "old": [
+          1033,
+          1033,
+          1033
+        ],
+        "new": [
+          1033,
+          1033,
+          1033
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "mtp",
+      "cell": "prose-8192-cold",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          7.708,
+          7.718,
+          7.714
+        ],
+        "new": [
+          7.711,
+          7.716,
+          7.708
+        ]
+      },
+      "median": {
+        "old": 7.714,
+        "new": 7.711
+      },
+      "delta_percent": -0.03889032927145708,
+      "cached": {
+        "old": [
+          0,
+          0,
+          0
+        ],
+        "new": [
+          0,
+          0,
+          0
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "mtp",
+      "cell": "prose-8192-warm",
+      "metric": "dec_tps",
+      "values": {
+        "old": [
+          55.2,
+          55.1,
+          55.1
+        ],
+        "new": [
+          55.2,
+          55.2,
+          55.1
+        ]
+      },
+      "median": {
+        "old": 55.1,
+        "new": 55.2
+      },
+      "delta_percent": 0.1814882032667997,
+      "cached": {
+        "old": [
+          8202,
+          8202,
+          8202
+        ],
+        "new": [
+          8202,
+          8202,
+          8202
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "mtp",
+      "cell": "prose-8192-turn2",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          0.511,
+          0.509,
+          0.508
+        ],
+        "new": [
+          0.51,
+          0.506,
+          0.512
+        ]
+      },
+      "median": {
+        "old": 0.509,
+        "new": 0.51
+      },
+      "delta_percent": 0.19646365422396617,
+      "cached": {
+        "old": [
+          8202,
+          8202,
+          8202
+        ],
+        "new": [
+          8202,
+          8202,
+          8202
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "mtp",
+      "cell": "code-8192-cold",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          7.716,
+          7.714,
+          7.72
+        ],
+        "new": [
+          7.712,
+          7.721,
+          7.72
+        ]
+      },
+      "median": {
+        "old": 7.716,
+        "new": 7.72
+      },
+      "delta_percent": 0.051840331778119086,
+      "cached": {
+        "old": [
+          0,
+          0,
+          0
+        ],
+        "new": [
+          0,
+          0,
+          0
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "mtp",
+      "cell": "code-8192-warm",
+      "metric": "dec_tps",
+      "values": {
+        "old": [
+          58.4,
+          58.5,
+          58.5
+        ],
+        "new": [
+          58.5,
+          58.6,
+          58.4
+        ]
+      },
+      "median": {
+        "old": 58.5,
+        "new": 58.5
+      },
+      "delta_percent": 0.0,
+      "cached": {
+        "old": [
+          8202,
+          8202,
+          8202
+        ],
+        "new": [
+          8202,
+          8202,
+          8202
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "mtp",
+      "cell": "code-8192-turn2",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          0.509,
+          0.507,
+          0.507
+        ],
+        "new": [
+          0.507,
+          0.507,
+          0.506
+        ]
+      },
+      "median": {
+        "old": 0.507,
+        "new": 0.507
+      },
+      "delta_percent": 0.0,
+      "cached": {
+        "old": [
+          8202,
+          8202,
+          8202
+        ],
+        "new": [
+          8202,
+          8202,
+          8202
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "mtp",
+      "cell": "prose-32768-cold",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          34.463,
+          34.12,
+          34.109
+        ],
+        "new": [
+          34.117,
+          34.104,
+          34.121
+        ]
+      },
+      "median": {
+        "old": 34.12,
+        "new": 34.117
+      },
+      "delta_percent": -0.008792497069165517,
+      "cached": {
+        "old": [
+          0,
+          0,
+          0
+        ],
+        "new": [
+          0,
+          0,
+          0
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "mtp",
+      "cell": "prose-32768-warm",
+      "metric": "dec_tps",
+      "values": {
+        "old": [
+          43.8,
+          43.8,
+          43.9
+        ],
+        "new": [
+          43.9,
+          43.9,
+          43.8
+        ]
+      },
+      "median": {
+        "old": 43.8,
+        "new": 43.9
+      },
+      "delta_percent": 0.22831050228311334,
+      "cached": {
+        "old": [
+          32777,
+          32777,
+          32777
+        ],
+        "new": [
+          32777,
+          32777,
+          32777
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "mtp",
+      "cell": "prose-32768-turn2",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          0.71,
+          0.703,
+          0.705
+        ],
+        "new": [
+          0.709,
+          0.708,
+          0.705
+        ]
+      },
+      "median": {
+        "old": 0.705,
+        "new": 0.708
+      },
+      "delta_percent": 0.42553191489360653,
+      "cached": {
+        "old": [
+          32777,
+          32777,
+          32777
+        ],
+        "new": [
+          32777,
+          32777,
+          32777
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "mtp",
+      "cell": "code-32768-cold",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          34.157,
+          34.146,
+          34.144
+        ],
+        "new": [
+          34.148,
+          34.161,
+          34.161
+        ]
+      },
+      "median": {
+        "old": 34.146,
+        "new": 34.161
+      },
+      "delta_percent": 0.043929010718679606,
+      "cached": {
+        "old": [
+          0,
+          0,
+          0
+        ],
+        "new": [
+          0,
+          0,
+          0
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "mtp",
+      "cell": "code-32768-warm",
+      "metric": "dec_tps",
+      "values": {
+        "old": [
+          73.2,
+          73.5,
+          73.4
+        ],
+        "new": [
+          73.6,
+          73.6,
+          73.5
+        ]
+      },
+      "median": {
+        "old": 73.4,
+        "new": 73.6
+      },
+      "delta_percent": 0.27247956403269047,
+      "cached": {
+        "old": [
+          32778,
+          32778,
+          32778
+        ],
+        "new": [
+          32778,
+          32778,
+          32778
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "mtp",
+      "cell": "code-32768-turn2",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          0.72,
+          0.724,
+          0.72
+        ],
+        "new": [
+          0.726,
+          0.72,
+          0.723
+        ]
+      },
+      "median": {
+        "old": 0.72,
+        "new": 0.723
+      },
+      "delta_percent": 0.4166666666666652,
+      "cached": {
+        "old": [
+          32778,
+          32778,
+          32778
+        ],
+        "new": [
+          32778,
+          32778,
+          32778
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "dflash",
+      "cell": "prose-1024-cold",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          1.215,
+          1.213,
+          1.209
+        ],
+        "new": [
+          1.22,
+          1.209,
+          1.215
+        ]
+      },
+      "median": {
+        "old": 1.213,
+        "new": 1.215
+      },
+      "delta_percent": 0.16488046166529546,
+      "cached": {
+        "old": [
+          0,
+          0,
+          0
+        ],
+        "new": [
+          0,
+          0,
+          0
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "dflash",
+      "cell": "prose-1024-warm",
+      "metric": "dec_tps",
+      "values": {
+        "old": [
+          49.5,
+          50.6,
+          50.5
+        ],
+        "new": [
+          49.8,
+          50.6,
+          50.7
+        ]
+      },
+      "median": {
+        "old": 50.5,
+        "new": 50.6
+      },
+      "delta_percent": 0.1980198019801982,
+      "cached": {
+        "old": [
+          1033,
+          1033,
+          1033
+        ],
+        "new": [
+          1033,
+          1033,
+          1033
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "dflash",
+      "cell": "prose-1024-turn2",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          0.905,
+          0.49,
+          0.489
+        ],
+        "new": [
+          0.493,
+          0.491,
+          0.487
+        ]
+      },
+      "median": {
+        "old": 0.49,
+        "new": 0.491
+      },
+      "delta_percent": 0.20408163265306367,
+      "cached": {
+        "old": [
+          1033,
+          1033,
+          1033
+        ],
+        "new": [
+          1033,
+          1033,
+          1033
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "dflash",
+      "cell": "code-1024-cold",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          1.201,
+          1.202,
+          1.199
+        ],
+        "new": [
+          1.2,
+          1.202,
+          1.198
+        ]
+      },
+      "median": {
+        "old": 1.201,
+        "new": 1.2
+      },
+      "delta_percent": -0.08326394671108739,
+      "cached": {
+        "old": [
+          0,
+          0,
+          0
+        ],
+        "new": [
+          0,
+          0,
+          0
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "dflash",
+      "cell": "code-1024-warm",
+      "metric": "dec_tps",
+      "values": {
+        "old": [
+          107.1,
+          107.2,
+          108.7
+        ],
+        "new": [
+          106.4,
+          108.4,
+          108.1
+        ]
+      },
+      "median": {
+        "old": 107.2,
+        "new": 108.1
+      },
+      "delta_percent": 0.8395522388059629,
+      "cached": {
+        "old": [
+          1033,
+          1033,
+          1033
+        ],
+        "new": [
+          1033,
+          1033,
+          1033
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "dflash",
+      "cell": "code-1024-turn2",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          0.48,
+          0.48,
+          0.477
+        ],
+        "new": [
+          0.48,
+          0.481,
+          0.482
+        ]
+      },
+      "median": {
+        "old": 0.48,
+        "new": 0.481
+      },
+      "delta_percent": 0.2083333333333437,
+      "cached": {
+        "old": [
+          1033,
+          1033,
+          1033
+        ],
+        "new": [
+          1033,
+          1033,
+          1033
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "dflash",
+      "cell": "prose-8192-cold",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          7.773,
+          7.777,
+          7.772
+        ],
+        "new": [
+          7.845,
+          7.782,
+          7.783
+        ]
+      },
+      "median": {
+        "old": 7.773,
+        "new": 7.783
+      },
+      "delta_percent": 0.128650456709134,
+      "cached": {
+        "old": [
+          0,
+          0,
+          0
+        ],
+        "new": [
+          0,
+          0,
+          0
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "dflash",
+      "cell": "prose-8192-warm",
+      "metric": "dec_tps",
+      "values": {
+        "old": [
+          49.8,
+          50.3,
+          50.5
+        ],
+        "new": [
+          49.6,
+          50.1,
+          50.2
+        ]
+      },
+      "median": {
+        "old": 50.3,
+        "new": 50.1
+      },
+      "delta_percent": -0.3976143141153021,
+      "cached": {
+        "old": [
+          8202,
+          8202,
+          8202
+        ],
+        "new": [
+          8202,
+          8202,
+          8202
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "dflash",
+      "cell": "prose-8192-turn2",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          0.885,
+          0.542,
+          0.544
+        ],
+        "new": [
+          0.556,
+          0.542,
+          0.54
+        ]
+      },
+      "median": {
+        "old": 0.544,
+        "new": 0.542
+      },
+      "delta_percent": -0.3676470588235281,
+      "cached": {
+        "old": [
+          8202,
+          8202,
+          8202
+        ],
+        "new": [
+          8202,
+          8202,
+          8202
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "dflash",
+      "cell": "code-8192-cold",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          7.778,
+          7.776,
+          7.772
+        ],
+        "new": [
+          7.771,
+          7.771,
+          7.775
+        ]
+      },
+      "median": {
+        "old": 7.776,
+        "new": 7.771
+      },
+      "delta_percent": -0.0643004115226331,
+      "cached": {
+        "old": [
+          0,
+          0,
+          0
+        ],
+        "new": [
+          0,
+          0,
+          0
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "dflash",
+      "cell": "code-8192-warm",
+      "metric": "dec_tps",
+      "values": {
+        "old": [
+          62.3,
+          63.3,
+          63.1
+        ],
+        "new": [
+          62.8,
+          62.9,
+          63.1
+        ]
+      },
+      "median": {
+        "old": 63.1,
+        "new": 62.9
+      },
+      "delta_percent": -0.31695721077654726,
+      "cached": {
+        "old": [
+          8202,
+          8202,
+          8202
+        ],
+        "new": [
+          8202,
+          8202,
+          8202
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "dflash",
+      "cell": "code-8192-turn2",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          0.545,
+          0.543,
+          0.541
+        ],
+        "new": [
+          0.545,
+          0.542,
+          0.541
+        ]
+      },
+      "median": {
+        "old": 0.543,
+        "new": 0.542
+      },
+      "delta_percent": -0.18416206261510082,
+      "cached": {
+        "old": [
+          8202,
+          8202,
+          8202
+        ],
+        "new": [
+          8202,
+          8202,
+          8202
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "dflash",
+      "cell": "prose-32768-cold",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          34.318,
+          34.335,
+          34.346
+        ],
+        "new": [
+          35.158,
+          34.338,
+          34.335
+        ]
+      },
+      "median": {
+        "old": 34.335,
+        "new": 34.338
+      },
+      "delta_percent": 0.00873743993010656,
+      "cached": {
+        "old": [
+          0,
+          0,
+          0
+        ],
+        "new": [
+          0,
+          0,
+          0
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "dflash",
+      "cell": "prose-32768-warm",
+      "metric": "dec_tps",
+      "values": {
+        "old": [
+          43.9,
+          44.1,
+          44.1
+        ],
+        "new": [
+          43.0,
+          44.2,
+          44.2
+        ]
+      },
+      "median": {
+        "old": 44.1,
+        "new": 44.2
+      },
+      "delta_percent": 0.22675736961450532,
+      "cached": {
+        "old": [
+          32777,
+          32777,
+          32777
+        ],
+        "new": [
+          32777,
+          32777,
+          32777
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "dflash",
+      "cell": "prose-32768-turn2",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          1.14,
+          0.8,
+          0.8
+        ],
+        "new": [
+          0.807,
+          0.804,
+          0.806
+        ]
+      },
+      "median": {
+        "old": 0.8,
+        "new": 0.806
+      },
+      "delta_percent": 0.7500000000000062,
+      "cached": {
+        "old": [
+          32777,
+          32777,
+          32777
+        ],
+        "new": [
+          32777,
+          32777,
+          32777
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "dflash",
+      "cell": "code-32768-cold",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          34.407,
+          34.421,
+          34.428
+        ],
+        "new": [
+          34.574,
+          34.427,
+          34.402
+        ]
+      },
+      "median": {
+        "old": 34.421,
+        "new": 34.427
+      },
+      "delta_percent": 0.017431219313790436,
+      "cached": {
+        "old": [
+          0,
+          0,
+          0
+        ],
+        "new": [
+          0,
+          0,
+          0
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "dflash",
+      "cell": "code-32768-warm",
+      "metric": "dec_tps",
+      "values": {
+        "old": [
+          76.7,
+          76.6,
+          76.8
+        ],
+        "new": [
+          76.1,
+          76.8,
+          77.0
+        ]
+      },
+      "median": {
+        "old": 76.7,
+        "new": 76.8
+      },
+      "delta_percent": 0.13037809647977738,
+      "cached": {
+        "old": [
+          32778,
+          32778,
+          32778
+        ],
+        "new": [
+          32778,
+          32778,
+          32778
+        ]
+      },
+      "investigate": false
+    },
+    {
+      "mode": "dflash",
+      "cell": "code-32768-turn2",
+      "metric": "ttft_s",
+      "values": {
+        "old": [
+          0.819,
+          0.821,
+          0.82
+        ],
+        "new": [
+          0.832,
+          0.818,
+          0.837
+        ]
+      },
+      "median": {
+        "old": 0.82,
+        "new": 0.832
+      },
+      "delta_percent": 1.4634146341463428,
+      "cached": {
+        "old": [
+          32778,
+          32778,
+          32778
+        ],
+        "new": [
+          32778,
+          32778,
+          32778
+        ]
+      },
+      "investigate": false
+    }
+  ],
+  "targeted_ttft_recheck": {
+    "complete": true,
+    "passed": true,
+    "device": "m5",
+    "scope": "isolated32K code cell, two short warmups then cold/warm/turn2, three reversed-order interleaved pairs",
+    "values": {
+      "old": [
+        0.824,
+        0.822,
+        0.833
+      ],
+      "new": [
+        0.825,
+        0.822,
+        0.819
+      ],
+      "device": "m5",
+      "execution_device": "m5",
+      "remote_host": null
+    },
+    "median": {
+      "old": 0.824,
+      "new": 0.822,
+      "device": "m5",
+      "execution_device": "m5",
+      "remote_host": null
+    },
+    "delta_percent": -0.24271844660194164,
+    "arms": [
+      {
+        "arm": "new",
+        "rep": 0,
+        "rc": 0,
+        "complete": true,
+        "file": "/Volumes/P5Plus/yunshu-build/codex/sync014/recheck/perf-new-dflash-r0.json",
+        "device": "m5",
+        "execution_device": "m5",
+        "remote_host": null
+      },
+      {
+        "arm": "old",
+        "rep": 0,
+        "rc": 0,
+        "complete": true,
+        "file": "/Volumes/P5Plus/yunshu-build/codex/sync014/recheck/perf-old-dflash-r0.json",
+        "device": "m5",
+        "execution_device": "m5",
+        "remote_host": null
+      },
+      {
+        "arm": "old",
+        "rep": 1,
+        "rc": 0,
+        "complete": true,
+        "file": "/Volumes/P5Plus/yunshu-build/codex/sync014/recheck/perf-old-dflash-r1.json",
+        "device": "m5",
+        "execution_device": "m5",
+        "remote_host": null
+      },
+      {
+        "arm": "new",
+        "rep": 1,
+        "rc": 0,
+        "complete": true,
+        "file": "/Volumes/P5Plus/yunshu-build/codex/sync014/recheck/perf-new-dflash-r1.json",
+        "device": "m5",
+        "execution_device": "m5",
+        "remote_host": null
+      },
+      {
+        "arm": "new",
+        "rep": 2,
+        "rc": 0,
+        "complete": true,
+        "file": "/Volumes/P5Plus/yunshu-build/codex/sync014/recheck/perf-new-dflash-r2.json",
+        "device": "m5",
+        "execution_device": "m5",
+        "remote_host": null
+      },
+      {
+        "arm": "old",
+        "rep": 2,
+        "rc": 0,
+        "complete": true,
+        "file": "/Volumes/P5Plus/yunshu-build/codex/sync014/recheck/perf-old-dflash-r2.json",
+        "device": "m5",
+        "execution_device": "m5",
+        "remote_host": null
+      }
+    ],
+    "execution_device": "m5",
+    "remote_host": null
+  },
+  "regression_decision": {
+    "complete": true,
+    "device": "m5",
+    "warm_decode_delta_range_percent": [
+      -0.3976143141153021,
+      0.8395522388059629
+    ],
+    "ttft_delta_range_percent": [
+      -0.43290043290042934,
+      1.4634146341463428
+    ],
+    "adverse_alert_threshold_percent": 3,
+    "adverse_alerts": 0,
+    "verdict": "No reproducible dependency performance regression; targeted reversed-order DFlash32K code turn-2 check records the largest primary delta separately. No pin added.",
+    "largest_ttft_change": {
+      "mode": "dflash",
+      "cell": "code-32768-turn2",
+      "values": {
+        "old": [
+          0.819,
+          0.821,
+          0.82
+        ],
+        "new": [
+          0.832,
+          0.818,
+          0.837
+        ],
+        "device": "m5",
+        "execution_device": "m5",
+        "remote_host": null
+      },
+      "median": {
+        "old": 0.82,
+        "new": 0.832,
+        "device": "m5",
+        "execution_device": "m5",
+        "remote_host": null
+      },
+      "delta_percent": 1.4634146341463428
+    },
+    "package_pins_added": [],
+    "recheck": {
+      "complete": true,
+      "passed": true,
+      "device": "m5",
+      "scope": "isolated32K code cell, two short warmups then cold/warm/turn2, three reversed-order interleaved pairs",
+      "values": {
+        "old": [
+          0.824,
+          0.822,
+          0.833
+        ],
+        "new": [
+          0.825,
+          0.822,
+          0.819
+        ],
+        "device": "m5",
+        "execution_device": "m5",
+        "remote_host": null
+      },
+      "median": {
+        "old": 0.824,
+        "new": 0.822,
+        "device": "m5",
+        "execution_device": "m5",
+        "remote_host": null
+      },
+      "delta_percent": -0.24271844660194164,
+      "arms": [
+        {
+          "arm": "new",
+          "rep": 0,
+          "rc": 0,
+          "complete": true,
+          "file": "/Volumes/P5Plus/yunshu-build/codex/sync014/recheck/perf-new-dflash-r0.json",
+          "device": "m5",
+          "execution_device": "m5",
+          "remote_host": null
+        },
+        {
+          "arm": "old",
+          "rep": 0,
+          "rc": 0,
+          "complete": true,
+          "file": "/Volumes/P5Plus/yunshu-build/codex/sync014/recheck/perf-old-dflash-r0.json",
+          "device": "m5",
+          "execution_device": "m5",
+          "remote_host": null
+        },
+        {
+          "arm": "old",
+          "rep": 1,
+          "rc": 0,
+          "complete": true,
+          "file": "/Volumes/P5Plus/yunshu-build/codex/sync014/recheck/perf-old-dflash-r1.json",
+          "device": "m5",
+          "execution_device": "m5",
+          "remote_host": null
+        },
+        {
+          "arm": "new",
+          "rep": 1,
+          "rc": 0,
+          "complete": true,
+          "file": "/Volumes/P5Plus/yunshu-build/codex/sync014/recheck/perf-new-dflash-r1.json",
+          "device": "m5",
+          "execution_device": "m5",
+          "remote_host": null
+        },
+        {
+          "arm": "new",
+          "rep": 2,
+          "rc": 0,
+          "complete": true,
+          "file": "/Volumes/P5Plus/yunshu-build/codex/sync014/recheck/perf-new-dflash-r2.json",
+          "device": "m5",
+          "execution_device": "m5",
+          "remote_host": null
+        },
+        {
+          "arm": "old",
+          "rep": 2,
+          "rc": 0,
+          "complete": true,
+          "file": "/Volumes/P5Plus/yunshu-build/codex/sync014/recheck/perf-old-dflash-r2.json",
+          "device": "m5",
+          "execution_device": "m5",
+          "remote_host": null
+        }
+      ],
+      "execution_device": "m5",
+      "remote_host": null
+    }
+  },
+  "jobs": [
+    {
+      "id": "1004-041551-00-sync014-tiny-first",
+      "label": "sync014-tiny-first",
+      "state": "done",
+      "rc": 0,
+      "quiet": false,
+      "contended": false,
+      "device": "m5"
+    },
+    {
+      "id": "1004-043337-00-sync014-parity-pilot-0433",
+      "label": "sync014-parity-pilot-0433",
+      "state": "done",
+      "rc": 0,
+      "quiet": false,
+      "contended": false,
+      "device": "m5"
+    },
+    {
+      "id": "1004-043815-00-sync014-correctness-sweep-0438",
+      "label": "sync014-correctness-sweep-0438",
+      "state": "failed",
+      "rc": 1,
+      "quiet": false,
+      "contended": false,
+      "device": "m5"
+    },
+    {
+      "id": "1004-043815-00-sync014-perf-three-reps-0438",
+      "label": "sync014-perf-three-reps-0438",
+      "state": "cancelled",
+      "rc": null,
+      "quiet": true,
+      "contended": false,
+      "device": "m5"
+    },
+    {
+      "id": "1004-045047-00-sync014-tiny-qualified-0450",
+      "label": "sync014-tiny-qualified-0450",
+      "state": "done",
+      "rc": 0,
+      "quiet": false,
+      "contended": false,
+      "device": "m5"
+    },
+    {
+      "id": "1004-045440-00-sync014-qualified-pilot-0454",
+      "label": "sync014-qualified-pilot-0454",
+      "state": "done",
+      "rc": 0,
+      "quiet": false,
+      "contended": false,
+      "device": "m5"
+    },
+    {
+      "id": "1004-050752-00-sync014-qualified-correctness-0507",
+      "label": "sync014-qualified-correctness-0507",
+      "state": "done",
+      "rc": 0,
+      "quiet": false,
+      "contended": false,
+      "device": "m5"
+    },
+    {
+      "id": "1004-050752-00-sync014-perf-pilot-0507",
+      "label": "sync014-perf-pilot-0507",
+      "state": "done",
+      "rc": 0,
+      "quiet": true,
+      "contended": false,
+      "device": "m5"
+    },
+    {
+      "id": "1004-053041-00-sync014-qualified-perf-three-reps-0530",
+      "label": "sync014-qualified-perf-three-reps-0530",
+      "state": "cancelled",
+      "rc": null,
+      "quiet": true,
+      "contended": false,
+      "device": "m5"
+    },
+    {
+      "id": "1004-053212-00-sync014-standard-perf-pilot-0532",
+      "label": "sync014-standard-perf-pilot-0532",
+      "state": "done",
+      "rc": 0,
+      "quiet": true,
+      "contended": false,
+      "device": "m5"
+    },
+    {
+      "id": "1004-062131-00-sync014-standard-perf-three-reps-0621",
+      "label": "sync014-standard-perf-three-reps-0621",
+      "state": "done",
+      "rc": 0,
+      "quiet": true,
+      "contended": false,
+      "device": "m5"
+    },
+    {
+      "id": "1004-065937-00-sync014-ttft-recheck-0658",
+      "label": "sync014-ttft-recheck-0658",
+      "state": "done",
+      "rc": 0,
+      "quiet": true,
+      "contended": false,
+      "device": "m5"
+    }
+  ],
+  "limitations": [
+    "Global YUNSHU_VLM_DRAFT=off selects unqualified stock kernels; the initial comparison was rejected, equally on both locks.",
+    "The 4GiB APC pilot missed 32K and is excluded; published timings use product auto APC.",
+    "No unchanged-kernel timing fluctuation is claimed as an optimization.",
+    "huggingface-hub 2.1.1 is excluded by transitive <2.0 constraints; vendor-check rc1 only for this package notice."
+  ]
+}

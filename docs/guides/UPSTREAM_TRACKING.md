@@ -42,9 +42,13 @@ the parity checks, then record the new hash:
 
 ## Sync a derived / inspired entry
 
-1. `just vendor-check` lists upstream commits on its paths since `commit`.
+1. `just vendor-check` lists upstream commits on its paths since `reviewed_commit` (or `commit` before the first review).
 2. Read them (`git -C reference/<clone> show <sha>`) and port what applies.
-3. Set `commit` to the upstream commit (or tag) you reviewed up to.
+3. When re-copying a file, set `commit` to its new upstream source. When deliberately retaining the local
+   implementation, preserve `commit` as its provenance and record `reviewed_commit`, `reviewed_date`, and
+   `review_reason`. Explain which upstream changes are already covered, inapplicable, or need a separate
+   correctness/performance gate. The next check still reports changes after that review; local differences
+   are always compared with the original copied source.
 
 ## Add a new one
 

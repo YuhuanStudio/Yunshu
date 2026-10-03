@@ -22,6 +22,8 @@ Changes on main after 0.1.3; not part of a published package yet.
 
 ### Changed
 
+- Refresh the dependency lock and record reviewed upstream code without losing its original provenance. The MLX stack versions remain unchanged. [Validation](docs/reports/PERF_TREND.md#2026-10-04--014-cycle-dependency-sync-m5-max).
+
 ### Fixed
 
 ### Security

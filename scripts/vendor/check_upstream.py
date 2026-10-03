@@ -167,7 +167,8 @@ def check_vendored(entries, fetched: set) -> int:
         clone = clone_dir(e["clone"])
         ref = upstream_ref(clone)
         src = e["upstream_path"]
-        log = git(clone, "log", "--oneline", f"{e['commit']}..{ref}", "--", src)
+        reviewed = e.get("reviewed_commit", e["commit"])
+        log = git(clone, "log", "--oneline", f"{reviewed}..{ref}", "--", src)
         ours = (ROOT / e["path"]).read_text()
         base = git(clone, "show", f"{e['commit']}:{src}")
         local_lines = sum(
@@ -181,8 +182,10 @@ def check_vendored(entries, fetched: set) -> int:
         print(
             f"- {e['path']}  [{status}]  (copied at {e['commit']}, {local_lines} local line diffs)"
         )
+        if "reviewed_commit" in e:
+            print(f"    reviewed {reviewed}: {e['review_reason']}")
         if log:
-            stat = git(clone, "diff", "--shortstat", e["commit"], ref, "--", src)
+            stat = git(clone, "diff", "--shortstat", reviewed, ref, "--", src)
             print(f"    upstream {ref}: {stat}")
             for line in log.splitlines()[:10]:
                 print(f"      {line}")
@@ -202,7 +205,8 @@ def check_history(entries) -> int:
             continue
         ref = upstream_ref(clone)
         paths = e["upstream_paths"]
-        log = git(clone, "log", "--oneline", f"{e['commit']}..{ref}", "--", *paths)
+        reviewed = e.get("reviewed_commit", e["commit"])
+        log = git(clone, "log", "--oneline", f"{reviewed}..{ref}", "--", *paths)
         behind += bool(log)
         n = len(log.splitlines()) if log else 0
         flag = f"{n} upstream commits" if n else "up to date"
@@ -210,6 +214,8 @@ def check_history(entries) -> int:
             f"- {e['path']}  <- {e['repo'].split('github.com/')[-1]} {', '.join(paths)}"
             f"  [{flag}]  (base {e['commit']}, {e['license']})"
         )
+        if "reviewed_commit" in e:
+            print(f"    reviewed {reviewed}: {e['review_reason']}")
         for line in log.splitlines()[:6]:
             print(f"      {line}")
     return behind

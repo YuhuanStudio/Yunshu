@@ -685,3 +685,31 @@ All34 inherited/resumed jobs finished or cancelled, receipts in
 /Volumes/P5Plus/yunshu-build/codex/naxprefill2-harvest.json. Full roofline,
 per-op breakdown, exact engagement/dispatch, exclusions and own ideas:
 the private research notes (NAX_PREFILL.md).
+
+
+## 2026-10-04 — 0.1.4 cycle dependency sync (M5 Max)
+
+Both arms use identical main `242848ec` Python source and checkpoint (not the release-tag code tree), release `v0.1.3` lock versus `uv lock --upgrade`; Python 3.13.15, M5 Max 128 GiB, greedy seed 1234, 256 output tokens, code/prose 1K/8K/32K. MTP and explicit DFlash2, product auto RAM APC 32 GiB, disk off. Model loaded; two short warmups per server. Three interleaved quiet repetitions per lock/mode; all timing jobs rc0+complete+CPU clean. Full raw triplets, digests, lock/source hashes and job receipts: [JSON evidence](perf_history/sync014_20261004.json).
+
+| Mode | Context / corpus | Warm decode tok/s old → new | Cold TTFT ms old → new | Turn-2 TTFT ms old → new |
+|---|---|---|---|---|
+| mtp | 1024 / prose | 54.1 → 54.0 | 1195 → 1195 | 469 → 471 |
+| mtp | 1024 / code | 98.4 → 98.4 | 1182 → 1183 | 462 → 460 |
+| mtp | 8192 / prose | 55.1 → 55.2 | 7714 → 7711 | 509 → 510 |
+| mtp | 8192 / code | 58.5 → 58.5 | 7716 → 7720 | 507 → 507 |
+| mtp | 32768 / prose | 43.8 → 43.9 | 34120 → 34117 | 705 → 708 |
+| mtp | 32768 / code | 73.4 → 73.6 | 34146 → 34161 | 720 → 723 |
+| dflash | 1024 / prose | 50.5 → 50.6 | 1213 → 1215 | 490 → 491 |
+| dflash | 1024 / code | 107.2 → 108.1 | 1201 → 1200 | 480 → 481 |
+| dflash | 8192 / prose | 50.3 → 50.1 | 7773 → 7783 | 544 → 542 |
+| dflash | 8192 / code | 63.1 → 62.9 | 7776 → 7771 | 543 → 542 |
+| dflash | 32768 / prose | 44.1 → 44.2 | 34335 → 34338 | 800 → 806 |
+| dflash | 32768 / code | 76.7 → 76.8 | 34421 → 34427 | 820 → 832 |
+
+M5 correctness: 24 same-kernel spec/plain paired cells all 256-ID identical (both locks, MTP+DFlash); 200 paired arithmetic items, 200/200 in each lock, net 0 and all raw IDs identical. Timing: 108 old/new paired requests and every cold/warm replay also ID-identical; actual warm/turn-2 cache hits checked. Plain means `allow_draft=False` on the initialized invariant path. The initial global-draft-off comparison changed kernel arithmetic and was rejected on both locks; its rc 1 is retained. An initial 4 GiB APC pilot produced 32K misses and is excluded, and two dependent timing jobs were cancelled before valid measurements. No engine kernel/default changed; no small timing fluctuation is advertised as a new optimization.
+
+Lock changes: ast-serialize 0.11.2→0.12.1, cuda-pathfinder 1.8.2→1.8.3, markupsafe 3.0.3→3.0.4, openai 3.23.0→3.24.0, tzdata 2026.4→2026.5, virtualenv 21.14.3→21.14.5, websockets 17.1→17.2, zipp 4.1.0→4.1.1. CUDA-pathfinder and tzdata are platform-marker-only on this M5; the other six are installed. MLX 0.32.3 / mlx-metal 0.32.3, mlx-lm 0.32.0, mlx-vlm 0.7.4, transformers 5.18.0, llguidance 1.9.1, tokenizers 0.23.2 and numpy 2.5.3 are unchanged.
+
+CPU gates under nice 15: M5 new-lock 8750 passed/20 skipped, M3 new-lock 8661 passed / 109 skipped (portability only); ruff check/format pass, mypy 0 new errors (897 existing baseline). Every reference clone attempted ff-only pull: 115 clones, 3 dirty skipped and 1 clean mlx-vlm divergence preserved; all others succeeded after retries. 32 entries re-justified with preserved copy provenance; 63 patched symbol source files old/new byte-identical, 4 stale AST fingerprints repaired. Vendor-check has no remaining source/self-check alerts; rc 1 is only huggingface-hub 2.1.1 excluded by tokenizers/datasets/diffusers <2.0. Private upstream review/backlog are intentionally untracked.
+
+Primary warm-decode median changes range -0.40% to +0.84%; cold/turn-2 TTFT -0.43% to +1.46%. The largest adverse primary value was DFlash 32K code turn-2, 820→832ms. Three additional reversed-order isolated-cell pairs did not reproduce it: old 824/822/833 ms, new 825/822/819 ms, medians 824→822 ms (-0.24%), all IDs equal and quiet/clean. Keep both datasets; no package pin or performance optimization claim.
