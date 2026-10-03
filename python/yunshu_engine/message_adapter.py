@@ -282,6 +282,17 @@ def _merge_leading_system(messages: list[dict]) -> list[dict]:
     return [{"role": "system", "content": merged}, *messages[n:]]
 
 
+def _hoist_system(messages: list[dict]) -> list[dict]:
+    """Canonical instruction block for templates that only accept it first."""
+    systems = [
+        dict(m, role="system")
+        for m in messages
+        if m.get("role") in ("system", "developer")
+    ]
+    turns = [dict(m) for m in messages if m.get("role") not in ("system", "developer")]
+    return _merge_leading_system(systems) + turns
+
+
 class QwenMessageAdapter(MessageAdapter):
     """Qwen 3.5: Attention patch compatibility formatting.
 
@@ -309,19 +320,9 @@ class QwenMessageAdapter(MessageAdapter):
 
             adapted.append(new_msg)
 
-        # Qwen's chat template raises TemplateError "System message must be at the
-        # beginning" for any system message after the first. Coding agents send them in
-        # the middle of the conversation (Codex `developer` items, Claude Code's per-turn
-        # environment / token-budget notes). Hoisting them to the front would rewrite the
-        # start of the prompt every turn and defeat prefix caching, so leading system
-        # messages merge into one and later ones become user messages in place.
-        lead = 0
-        while lead < len(adapted) and adapted[lead]["role"] == "system":
-            lead += 1
-        for m in adapted[lead:]:
-            if m["role"] == "system":
-                m["role"] = "user"
-        return _merge_leading_system(adapted)
+        # System/developer content remains instruction-level even when supplied
+        # after a turn. System-first templates need one canonical leading block.
+        return _hoist_system(adapted)
 
     def family_name(self) -> str:
         return "qwen"
@@ -614,17 +615,7 @@ class GenericMessageAdapter(MessageAdapter):
     """Generic: pass-through with minimal cleanup."""
 
     def adapt(self, messages: list[dict]) -> list[dict]:
-        # Unknown/renamed checkpoints can still use a system-first template.
-        # Preserve instruction priority rather than treating reminders as user text.
-        systems = [
-            dict(m, role="system")
-            for m in messages
-            if m.get("role") in ("system", "developer")
-        ]
-        turns = [
-            dict(m) for m in messages if m.get("role") not in ("system", "developer")
-        ]
-        return _merge_leading_system(systems) + turns
+        return _hoist_system(messages)
 
     def family_name(self) -> str:
         return "generic"
@@ -674,11 +665,11 @@ def get_message_adapter(model_name: str | None = None) -> MessageAdapter:
 
 
 def keeps_mid_conversation_system(model_name: str | None = None) -> bool:
-    """True when the family's adapter leaves later system messages where the agent put
-    them (Qwen: as user messages in place), so the API layer must not hoist them into the
-    leading system prompt: a per-turn note there rewrites the prompt start every turn and
-    defeats prefix reuse."""
-    return isinstance(get_message_adapter(model_name), QwenMessageAdapter)
+    """No adapter lowers instruction messages to user turns for prefix reuse.
+
+    The gateway hoists instruction content before rendering system-first templates.
+    """
+    return False
 
 
 def adapt_messages(messages: list[dict], model_name: str | None = None) -> list[dict]:

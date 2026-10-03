@@ -14,6 +14,13 @@ DEV = REPO / "scripts/dev"
 sys.path.insert(0, str(DEV))
 
 
+@pytest.fixture(autouse=True)
+def _fixed_threshold(monkeypatch):
+    # The default scales with the machine's core count; these tests pin 150%.
+    monkeypatch.setenv("GPUQ_CPU_THRESHOLD", "150")
+    monkeypatch.setitem(helper().DEFAULTS, "threshold_pct", 150.0)
+
+
 def load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
@@ -748,3 +755,17 @@ def test_quiet_reservation_follows_owner_fairness_and_releases_for_higher_priori
     assert held["quiet_hold_started"] is None
     assert held["quiet_hold_elapsed_s"] == 2
     assert held["waiting"] == "slot"
+
+
+def test_default_threshold_scales_with_cores(monkeypatch):
+    import importlib
+
+    h = helper()
+    monkeypatch.setattr(h.os, "cpu_count", lambda: 18)
+    monkeypatch.delenv("GPUQ_CPU_THRESHOLD", raising=False)
+    fresh = importlib.reload(h)
+    try:
+        assert fresh.DEFAULTS["threshold_pct"] == 1620.0
+    finally:
+        monkeypatch.undo()
+        importlib.reload(fresh)

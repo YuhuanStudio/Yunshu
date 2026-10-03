@@ -4,18 +4,20 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import mlx.core as mx
+import pytest
 
 from yunshu_engine.message_adapter import adapt_messages
 from yunshu_engine.speculative_decoder import DraftResult, SpeculativeDecoder
 
 
-def test_renamed_checkpoint_hoists_all_instruction_roles_without_mutation():
+@pytest.mark.parametrize("model_name", ["/tmp/tiny-q4-mtp", "Qwen3.8-27B"])
+def test_renamed_checkpoint_hoists_all_instruction_roles_without_mutation(model_name):
     messages = [
         {"role": "user", "content": "hello"},
         {"role": "system", "content": "reminder"},
         {"role": "developer", "content": [{"type": "text", "text": "policy"}]},
     ]
-    out = adapt_messages(messages, "/tmp/tiny-q4-mtp")
+    out = adapt_messages(messages, model_name)
     assert out == [{"role": "system", "content": "reminder\n\npolicy"}, messages[0]]
     assert messages[2]["role"] == "developer"
 
@@ -47,26 +49,27 @@ def test_fp32_round_attention_preserves_dtype_and_causal_prefix():
     from yunshu_engine.round_driver.batch import KVPlan, Slots, attend
 
     with mx.stream(mx.cpu):
-        q = mx.ones((1, 1, 2, 4), dtype=mx.float32)
-        k = mx.ones((1, 1, 2, 4), dtype=mx.float32)
-        v = mx.array([[[[2.0, 2.0, 2.0, 2.0], [6.0, 6.0, 6.0, 6.0]]]])
+        q = mx.ones((1, 1, 2, 256), dtype=mx.float32)
+        k = mx.ones((1, 1, 2, 256), dtype=mx.float32)
+        v = mx.broadcast_to(mx.array([2.0, 6.0])[None, None, :, None], (1, 1, 2, 256))
         at = SimpleNamespace(
             q_proj=lambda x: x,
             k_proj=lambda x: x,
             v_proj=lambda x: x,
-            _prepare_projected_qkv=lambda *a: (q, k, v, mx.zeros((1, 2, 4)), None),
+            _prepare_projected_qkv=lambda *a: (q, k, v, mx.zeros((1, 2, 256)), None),
             scale=0.5,
             o_proj=lambda x: x,
         )
         slots = Slots(1)
         slot = slots.alloc()
         slots.reserve(2)
-        out = attend(at, mx.zeros((1, 2, 4)), slots, 0, KVPlan.make([slot], [0], 2))
+        out = attend(at, mx.zeros((1, 2, 256)), slots, 0, KVPlan.make([slot], [0], 2))
         assert out.dtype == mx.float32
-        assert out.tolist() == [[[1.0, 1.0, 1.0, 1.0], [2.0, 2.0, 2.0, 2.0]]]
+        assert out.tolist() == [[[1.0] * 256, [2.0] * 256]]
 
 
-def test_tree_setting_reaches_upstream_hook_instead_of_chain_lane(monkeypatch):
+@pytest.mark.parametrize("case", ["greedy", "guide", "keyed"])
+def test_tree_setting_reaches_upstream_hook_instead_of_chain_lane(monkeypatch, case):
     from mlx_vlm.generate import ar
     from mlx_vlm.speculative import utils
 
@@ -88,7 +91,12 @@ def test_tree_setting_reaches_upstream_hook_instead_of_chain_lane(monkeypatch):
     monkeypatch.setattr(
         mtp_lane, "rounds", lambda *a, **kw: calls.append("chain") or iter(())
     )
-    mtp_lane._STATE.update(installed=False, enabled=True, guide=None)
+    mtp_lane._STATE.update(
+        installed=False, enabled=True, guide=object() if case == "guide" else None
+    )
+    from yunshu_engine.keyed_sampling import KeyedSampler
+
+    sampler = KeyedSampler(SimpleNamespace(), 42) if case == "keyed" else None
     try:
         mtp_lane.install()
         with mx.stream(mx.cpu):
@@ -98,12 +106,44 @@ def test_tree_setting_reaches_upstream_hook_instead_of_chain_lane(monkeypatch):
                 [],
                 None,
                 draft_kind="mtp",
-                greedy_sampling=True,
+                greedy_sampling=case != "keyed",
                 first_bonus=mx.array([1]),
                 max_tokens=4,
-                sampler=None,
+                sampler=sampler,
             )
-        assert calls == ["tree"]
+        assert calls == (["tree"] if case == "greedy" else ["chain"])
     finally:
         mtp_lane._STATE.clear()
         mtp_lane._STATE.update(state)
+
+
+@pytest.mark.parametrize("accepted", [False, True])
+def test_generate_marks_only_first_alignment_token_uncached(monkeypatch, accepted):
+    from yunshu_engine.speculative_decoder import SpecDecodingConfig, VerifyResult
+
+    monkeypatch.setattr("mlx_lm.models.cache.make_prompt_cache", lambda _: [])
+    with mx.stream(mx.cpu):
+
+        def model(ids, cache=None):
+            return mx.array([[[0.0, 10.0, 0.0]]])
+
+        decoder = SpeculativeDecoder(
+            model,
+            model,
+            SimpleNamespace(eos_token_id=99),
+            SpecDecodingConfig(draft_length=1, draft_temperature=0.0),
+        )
+        seen = []
+
+        def verify(draft, ids, cache, **kwargs):
+            seen.append(kwargs["cache_contains_last_token"])
+            return VerifyResult(
+                int(accepted), [1] if accepted else [], -1 if accepted else 0, 1, []
+            )
+
+        monkeypatch.setattr(decoder, "verify_draft", verify)
+        assert (
+            decoder.generate(mx.array([[0]]), max_tokens=5, temperature=0.0) == [1] * 5
+        )
+        assert seen[0] is False
+        assert len(seen) >= 2 and all(seen[1:])

@@ -1041,6 +1041,9 @@ class SpeculativeDecoder:
         K = self.config.draft_length
         draft_sampler = make_sampler(temp=self.config.draft_temperature)
 
+        # Prefill has not processed its newly sampled first token. Subsequent
+        # iterations explicitly cache the correction/bonus below.
+        cache_contains_last_token = False
         while len(generated_tokens) < max_tokens:
             # Cooperative cancellation check (thread-safe for asyncio.Event)
             if cancel_event is not None and (
@@ -1131,7 +1134,7 @@ class SpeculativeDecoder:
                 last_tok_arr,
                 target_cache,
                 temperature=temperature,
-                cache_contains_last_token=False,
+                cache_contains_last_token=cache_contains_last_token,
             )
 
             # SP-PEN: Apply penalty/bias to bonus token.
@@ -1303,6 +1306,7 @@ class SpeculativeDecoder:
                 if bonus_id >= 0 and len(generated_tokens) < max_tokens:
                     self.target(mx.array([[bonus_id]]), cache=target_cache)
 
+            cache_contains_last_token = True
             if any(t in eos_ids for t in generated_tokens):
                 return generated_tokens
 

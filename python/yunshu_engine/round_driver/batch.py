@@ -199,8 +199,10 @@ def attend(
     if queries.dtype != mx.bfloat16 or keys.dtype != mx.bfloat16:
         # The ragged Metal kernels accept bf16 only. MTP heads may retain
         # fp16/fp32 weights; keep their arithmetic instead of rounding to bf16.
-        ks = mx.take(slots.k[i], plan.slot_ids, axis=0)[..., : plan.max_length, :]
-        vs = mx.take(slots.v[i], plan.slot_ids, axis=0)[..., : plan.max_length, :]
+        stored_k, stored_v = slots.k[i], slots.v[i]
+        assert stored_k is not None and stored_v is not None
+        ks = mx.take(stored_k, plan.slot_ids, axis=0)[..., : plan.max_length, :]
+        vs = mx.take(stored_v, plan.slot_ids, axis=0)[..., : plan.max_length, :]
         positions = mx.array(plan.n0, dtype=mx.int32)[:, None] + mx.arange(T)[None, :]
         mask = mx.arange(plan.max_length)[None, None, :] <= positions[:, :, None]
         out = mx.fast.scaled_dot_product_attention(

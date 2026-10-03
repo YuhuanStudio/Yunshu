@@ -60,6 +60,21 @@ def test_head_boundary_is_the_start_of_the_first_user_turn():
     assert m.head_boundary(ids) == 0
 
 
+def test_user_first_multiturn_chat_does_not_pin_a_fake_system_head():
+    ids = [
+        IM_START,
+        USER,
+        *range(100, 140),
+        IM_START,
+        999,
+        *range(200, 240),
+        IM_START,
+        USER,
+        5,
+    ]
+    assert _mgr().head_boundary(ids) == 0
+
+
 def _coordinator(m):
     from types import SimpleNamespace
 
