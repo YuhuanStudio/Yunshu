@@ -373,3 +373,21 @@ def test_exited_jobs_are_adopted_before_live_ones(q, monkeypatch):
         dict(id="queued", state="pending"),
     ]
     assert [j["id"] for j in q._adoption_order(jobs)] == ["gone", "live"]
+
+
+def test_aging_never_lifts_a_capped_job_over_its_cap(q, monkeypatch):
+    now = 100_000.0
+    monkeypatch.setattr(q.time, "time", lambda: now)
+    (q.ROOT / "priority_caps.json").write_text('{"research-": -1}')
+    job(
+        q,
+        "r",
+        label="research-timing",
+        state="pending",
+        priority=0,
+        submitted=now - 3 * q.AGE_S,
+    )
+    job(q, "core", label="core-timing", state="pending", priority=0, submitted=now - 5)
+    jobs = {j["id"]: j for j in q._jobs()}
+    assert q._eff_priority(jobs["r"], now) == -1
+    assert q._pick(q._jobs())["id"] == "core"

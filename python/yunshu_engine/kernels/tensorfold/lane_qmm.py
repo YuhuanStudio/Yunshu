@@ -290,7 +290,7 @@ def supports(weight: mx.array, scales: mx.array, x: mx.array, bits: int, group_s
 
 
 def lane_matmul(x: mx.array, weight: mx.array, sbt: mx.array, *, tiled: bool = False,
-                sk: int | None = None, nt: int = NT, group: int = 64, row_block: int | None = None, row_limit: int = MAX_ROWS) -> mx.array:
+                sk: int | None = None, nt: int = NT, group: int = 64, row_block: int | None = None, row_limit: int = MAX_ROWS, prefill_narrow: bool = False) -> mx.array:
     """x (..., K) bf16 times the packed ``weight`` (N, K*bits/32) transposed, rows <= MAX_ROWS, tiled or not."""
 
     K = int(x.shape[-1])
@@ -298,7 +298,11 @@ def lane_matmul(x: mx.array, weight: mx.array, sbt: mx.array, *, tiled: bool = F
     lead = x.shape[:-1]
     x2 = x.reshape(-1, K)
     M = int(x2.shape[0])
-    if not 1 <= row_limit <= 512:
+    if prefill_narrow:
+        if not (N < 256 and 512 < M <= 8192 and M % 128 == 0 and group == 64 and row_block == 32):
+            raise ValueError("long narrow prefill requires aligned rows, group64 and the original 32-row block")
+        row_limit = 8192
+    elif not 1 <= row_limit <= 512:
         raise ValueError("lane_matmul row_limit must be in 1..512")
     if M > row_limit:
         raise ValueError(f"lane_matmul takes at most {row_limit} rows, got {M}")

@@ -90,3 +90,28 @@ def apc_resident_gib(url):
     except Exception:  # noqa: BLE001
         pass
     return None
+
+
+def allocator_pool_gib(url):
+    """Freed MLX buffers the allocator keeps for reuse (bounded by the engine's cache limit,
+    ~6 GiB on 128 GiB), from the server's /metrics; None when unavailable."""
+    import urllib.request
+
+    try:
+        text = urllib.request.urlopen(url.rstrip("/") + "/metrics", timeout=10).read()
+        for line in text.decode().splitlines():
+            if line.startswith('yunshu_gpu_memory_bytes{type="cache"}'):
+                return round(float(line.rsplit(" ", 1)[1]) / 2**30, 3)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def retained_gib(url):
+    """Memory the server holds on purpose and bounds itself: prefix-cache checkpoints in RAM plus
+    the allocator's reuse pool. A "memory returns" check subtracts this; None without the APC
+    figure (the pool counts as 0 when the server does not report it)."""
+    apc = apc_resident_gib(url)
+    if apc is None:
+        return None
+    return round(apc + (allocator_pool_gib(url) or 0.0), 3)

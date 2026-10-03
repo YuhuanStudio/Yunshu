@@ -449,7 +449,9 @@ def _eff_priority(job: dict, now: float | None = None) -> int:
     if p >= 0 or job.get("state") not in ("pending", "running"):
         return p
     waited = (now or time.time()) - job.get("submitted", now or time.time())
-    return min(0, p + 1) if waited >= AGE_S else p
+    aged = min(0, p + 1) if waited >= AGE_S else p
+    # A lead cap (priority_caps.json) is a ceiling aging never lifts a job over.
+    return min(aged, job.get("priority_cap", aged))
 
 
 def _priority_caps() -> dict[str, int]:
@@ -463,6 +465,8 @@ def _priority_caps() -> dict[str, int]:
 def _cap_priority(job: dict, caps: dict[str, int]) -> dict:
     label = job.get("label") or ""
     capped = [v for k, v in caps.items() if label.startswith(k)]
+    if capped:
+        job["priority_cap"] = min(capped)
     if capped and job.get("priority", 0) > min(capped):
         job["priority_requested"] = job.get("priority", 0)
         job["priority"] = min(capped)

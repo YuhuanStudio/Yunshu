@@ -329,6 +329,19 @@
         "mlx_vlm/models/qwen3_5/speculative_verifier.py"
       ],
       "why": "single-row constrained DFlash transactions and accepted target-row probabilities"
+    },
+    {
+      "kind": "derived",
+      "path": "python/yunshu_engine/kernels/nax_prefill.py",
+      "repo": "https://github.com/ml-explore/mlx",
+      "clone": "reference/mlx",
+      "upstream_paths": [
+        "mlx/backend/metal/kernels/quantized_nax.h",
+        "mlx/backend/metal/kernels/steel/gemm/nax.h"
+      ],
+      "commit": "64ea011cb65f14d9ce2737e60db9a4ae91ed7441",
+      "license": "MIT",
+      "why": "Native MLX 0.32.3 NAX QMM accumulation over lane-tiled weights/paired scales; only input loader and M tile differ. Installed headers are version-guarded and source-hashed into the prefill arithmetic namespace."
     }
   ],
   "inspired": [

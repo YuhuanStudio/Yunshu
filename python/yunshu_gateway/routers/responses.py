@@ -1544,11 +1544,11 @@ async def create_response(req: ResponsesRequest, request: Request):
             if _tc == "required":
                 _resp_tool_prefill = "<tool_call>\n"
             elif isinstance(_tc, dict) and _tc.get("name"):
-                _resp_tool_prefill = (
-                    '<tool_call>\n{"name": '
-                    + json.dumps(_tc["name"])
-                    + ', "arguments": {'
-                )
+                # Keep the JSON object complete for the model to generate, as
+                # on Chat/Anthropic. A half-open arguments object encourages an
+                # immediate empty closure; the injected prompt steers the name
+                # and _enforce_tool_choice filters it after parsing.
+                _resp_tool_prefill = "<tool_call>\n"
             if _resp_tool_prefill:
                 from .chat import _append_tool_prefill
 
