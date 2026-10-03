@@ -281,6 +281,7 @@ def test_missing_priority_caps_change_nothing(q):
 
 
 def test_aged_running_backlog_job_yields_after_its_slice(q, monkeypatch):
+    monkeypatch.setattr(q, "free_memory_gb", lambda: 100.0)
     now = 100_000.0
     monkeypatch.setattr(q.time, "time", lambda: now)
     aged = dict(

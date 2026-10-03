@@ -7,9 +7,32 @@ Release steps: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
-Draft for 0.1.3: faster structured responses, long prompts and follow-up turns on
-Apple Silicon, with more reliable coding-agent requests and prompt reuse. These
-changes are on main after v0.1.2; they are not in the published 0.1.2 package.
+Changes on main after 0.1.3; not part of a published package yet.
+
+### Highlights
+
+### Upgrade notes / breaking changes
+
+### Performance
+
+| Machine | Model / mode | Metric / workload | Before → after | Recorded source |
+|---|---|---|---|---|
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Security
+
+[Full changelog: v0.1.3…main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.3...main)
+
+## [0.1.3] - 2026-10-03
+
+Faster structured responses, long prompts and follow-up turns on Apple Silicon, more
+reliable coding-agent requests and prompt reuse, and correct batch-invariant decoding on
+M1–M4 Macs.
 
 ### Highlights
 
@@ -23,6 +46,8 @@ changes are on main after v0.1.2; they are not in the published 0.1.2 package.
 - Generate repetitive code faster with verified prompt copies: DFlash 32K code
   **72.74 → 82.56 tok/s**; prose results vary by context.
   [Measurements](docs/BENCHMARKS.md#013-draft-measurements-2026-10-03).
+- Correct speculative decoding on M1–M4 Macs: output now matches plain decoding there
+  too, with M5 speed unchanged (27B, 20 cells digest-equal, −0.4% to +3.0%).
 
 ### Upgrade notes / breaking changes
 
@@ -38,8 +63,9 @@ changes are on main after v0.1.2; they are not in the published 0.1.2 package.
 - `YUNSHU_SPEC_COPY_ROWS` now defaults to 16 on certified models (8 on narrower
   backends); use 8 to retain the previous cap or 0 to disable prompt copying.
   The measured prose tradeoff for the cap change was −0.2% to −1.0%.
-- TODO before release: M1–M4 portability fix and scheduler default are still on
-  branches; add their upgrade impact only after they land and pass validation.
+- M1–M4 Macs: the batch-invariant decode kernels used by speculative decoding now
+  compute correct results there (some output columns were wrong before, so speculative
+  output could differ from plain decoding). No action needed; M5 kernels are unchanged.
 
 ### Performance
 
@@ -90,13 +116,19 @@ October 3 results use three interleaved clean repetitions. Sources and limitatio
   errors retain valid files and active readers are protected from deletion.
 - Settings paths expand `~`, including defaults (`1fb15d20`); Realtime speech stops
   when the user interrupts, and malformed `web_fetch` input gives actionable errors.
+- M1–M4 Macs: speculative decoding output equals plain decoding again; the invariant
+  matmul and attention kernels are chosen once per GPU generation and checked with
+  real data on GPUs they were not written for.
+- Coding-agent tool loops keep earlier reasoning when the client does not send it back,
+  accept empty tool arguments, keep tool-call argument types from the tool schema in
+  history, and end GLM tool-result turns correctly.
 
 ### Security
 
 - No separate security-policy change in this range. Model leases and cache-reader
   protection strengthen request lifecycle safety; see [SECURITY.md](SECURITY.md).
 
-[Full changelog: v0.1.2…main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.2...main)
+[Full changelog: v0.1.2…v0.1.3](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.2...v0.1.3)
 
 ## [0.1.2] - 2026-10-02
 

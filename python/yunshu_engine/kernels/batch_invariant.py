@@ -154,6 +154,12 @@ def install(language_model: Any, model: Any = None, packed: bool = False) -> dic
         def exact_rows(linear, x):
             # Layers sg8 cannot take: every row must equal stock single-row
             # decode. Never re-enter the patched ops functions from here.
+            if isinstance(linear, nn.Linear) and x.ndim == 3 and x.shape[1] > 1:
+                # BF16 checkpoints and floating-point GDN gates also need the
+                # decode GEMV reduction. A verify GEMM is not row-invariant.
+                return mx.concatenate(
+                    [linear(x[:, t : t + 1]) for t in range(x.shape[1])], axis=1
+                )
             if not isinstance(linear, nn.QuantizedLinear):
                 return linear(x)
             if x.ndim != 3 or x.shape[0] * x.shape[1] == 1:

@@ -67,6 +67,9 @@ def model():
         ),
     )
     lm.set_dtype(mx.bfloat16)
+    # Serving calls eval(): training uses a chunked parallel GDN scan whose
+    # BF16 arithmetic is not checkpoint-span invariant on every Apple GPU.
+    lm.eval()
     mx.eval(lm.parameters())
 
     class Embeds:

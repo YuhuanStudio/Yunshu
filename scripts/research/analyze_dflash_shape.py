@@ -4,11 +4,17 @@ import argparse
 import json
 import math
 import statistics
+import sys
 from collections import defaultdict
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 
 def summarize(records, receipt, *, baseline="main"):
+    from device_evidence import require_same_device
+
+    require_same_device(records + [receipt], performance=True)
     if receipt.get("rc") != 0 or receipt.get("state") != "done":
         raise ValueError("job must finish with rc 0")
     if not receipt.get("quiet") or receipt.get("contended"):

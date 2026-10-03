@@ -185,7 +185,7 @@ and rejected experiments.
 | Complete JSON warm decode, AR → DFlash | 23.4 → 111.4 tok/s | Oct 3 constrained speculation; `1003-125849-00-cspec-complete-json-tool-quiet-r3-1254` |
 | Complete tool-call warm decode, AR → DFlash | 23.0 → 77.7 tok/s | Same receipt; complete schema-valid output, tokens equal |
 | Follow-up TTFT, 8K code / 32K code, MTP | 569 → 512 ms / 900 → 721 ms | Oct 3 native singleton KV capacity; `1003-145700-00-prefill4-http-combo8k-1456` / `http-combo32k-1456` |
-| DFlash cold code decode, 8K / 32K | 74.50 → 82.19 / 72.74 → 82.56 tok/s | Oct 3 DFlash2 greedy prompt-copy islands; `1003-161523-00-wide4-timing-bundle-1615` |
+| DFlash cold code decode, 1K / 8K / 32K | 97.74 → 109.48 / 74.50 → 82.19 / 72.74 → 82.56 tok/s | Oct 3 DFlash2 greedy prompt-copy islands; `1003-161523-00-wide4-timing-bundle-1615` |
 | MTP copy cap 8 → 16, 8K code turn 2 | 106.1 → 129.2 tok/s | Oct 3 prompt-copy maximum; `1003-110949-00-wide3-copy-cap-bindfix-1111` |
 
 All above are medians of three interleaved clean repetitions, with matching token

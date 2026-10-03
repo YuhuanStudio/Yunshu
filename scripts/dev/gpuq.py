@@ -1,4 +1,4 @@
-"""GPU job queue: one GPU, many benchmark jobs, run one at a time.
+"""GPU job queue: independent M5 timing and M3 correctness slots.
 
 Benchmarks on a single Apple GPU are only meaningful when nothing else is on it,
 so every GPU job goes through this queue. ``submit`` returns at once; a single
@@ -57,10 +57,12 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(os.environ.get("GPUQ_DIR", "~/.cache/yunshu/gpuq")).expanduser()
 JOBS = ROOT / "jobs"
@@ -70,6 +72,7 @@ STALL_S = 600  # a job whose log stops growing this long is stopped as "stalled"
 POLL_S = 2.0
 DEFAULT_MEM_GB = 24.0
 DEFAULT_RESERVE_GB = 16.0
+CLAIM_LOCK = threading.Lock()
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from gpuq_contention import (  # noqa: E402
@@ -562,7 +565,30 @@ def submit(
     expect_complete: bool = False,
     quiet: bool = False,
     cpu_config: dict | None = None,
+    device: str = "m5",
 ) -> str:
+    if device not in {"m5", "m3", "any"}:
+        raise ValueError("device must be m5, m3 or any")
+    if quiet and device != "m5":
+        raise ValueError(
+            "--quiet requires --device m5; M3 cannot decide M5 performance"
+        )
+    if mem_gb is None:
+        mem_gb = 0.0 if serving_ok else DEFAULT_MEM_GB
+    if not math.isfinite(mem_gb) or mem_gb < 0:
+        raise ValueError("mem_gb must be finite and nonnegative")
+    if device != "m5" and mem_gb > 28:
+        raise ValueError("M3 admission: maximum 28 GB (36 GB minus 8 GB user reserve)")
+    if device != "m5" and _daemon_running():
+        caps = _read(ROOT / "daemon-capabilities.json")
+        try:
+            lock_pid = (ROOT / "daemon.lock").read_text().strip()
+        except OSError:
+            lock_pid = ""
+        if "m3" not in caps.get("devices", []) or str(caps.get("pid")) != lock_pid:
+            raise ValueError(
+                "running daemon does not support M3 lanes; use an upgraded isolated GPUQ_DIR (do not restart the live daemon)"
+            )
     cfg = contention_config({"contention_config": cpu_config or {}})
     JOBS.mkdir(parents=True, exist_ok=True)
     LOGS.mkdir(parents=True, exist_ok=True)
@@ -581,6 +607,11 @@ def submit(
             JOBS / f"{jid}.json",
             {
                 "id": jid,
+                "device": device,
+                "requested_device": device,
+                "remote_host": None,
+                "rc": None,
+                "pid": None,
                 "label": label,
                 "cmd": cmd,
                 "cwd": os.getcwd(),
@@ -603,6 +634,22 @@ def submit(
         )
     _ensure_daemon()
     return jid
+
+
+def _claim(job: dict, lane: str) -> bool:
+    """Atomic reservation shared by the dispatcher and local priority preemption."""
+    with CLAIM_LOCK:
+        path = JOBS / f"{job['id']}.json"
+        current = _read(path)
+        if current.get("state") != "pending" or current.get("cancel"):
+            return False
+        job.update(device=lane, state="running", started=_now(), remote_host=None)
+        if lane == "m3":
+            from gpuq_remote import config
+
+            job["remote_host"] = config(job["env"])[0]
+        _write(path, job)
+        return True
 
 
 def _read_rc(jid: str) -> int | None:
@@ -665,7 +712,7 @@ def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
         and now - _last_run_start(pauser) < AGED_SLICE_S
     ):
         return False
-    jobs = _jobs()
+    jobs = [j for j in _jobs() if j.get("device", "m5") in {"m5", "any"}]
     pending = _preempting(jobs)
     high = _admit(jobs, gate, preempt=True)
     # Memory admission decides whether to pause. The serving start window only
@@ -675,7 +722,7 @@ def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
         pauser.pause(now, reason="priority")
     if high is not None:
         path = JOBS / f"{high['id']}.json"
-        if not _read(path).get("cancel"):
+        if _claim(high, "m5"):
             _execute(high, path, gate)
         return True
     return (
@@ -706,6 +753,7 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
             env={
                 **job["env"],
                 **{ENV[k]: str(v) for k, v in monitor.cfg.items()},
+                "GPUQ_DEVICE": "m5",
                 "GPUQ_RC": str(rc_file),
                 "GPUQ_PAUSE_FILE": str(pause_file),
                 "GPUQ_CONTENTION_FILE": str(monitor.flag),
@@ -786,6 +834,72 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
     log.write(monitor.summary() + "\n")
     log.close()
     _write(LOGS / f"{job['id']}.pauses.json", {"pauses": pauser.pauses})
+    _write(path, job)
+    _stamp_local_outputs(job)
+
+
+def _stamp_local_outputs(job):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "research"))
+    from device_evidence import stamp_output
+    from gpuq_digest import output_paths
+
+    for output in output_paths(job):
+        stamp_output(output, "m5")
+
+
+def _run_remote(job: dict, path: Path) -> None:
+    import gpuq_remote
+
+    job.update(state="running", started=_now(), pid=None, pauses=[], contended=False)
+    _write(path, job)
+    with open(LOGS / f"{job['id']}.log", "w", buffering=1) as log:
+        remote = gpuq_remote.Remote(
+            job, path, SimpleNamespace(ROOT=ROOT, _write=_write, _read=_read), log
+        )
+        try:
+            remote.run()
+            state = remote.reason or ("done" if job.get("rc") == 0 else "failed")
+        except Exception as exc:
+            state = remote.reason or "failed"
+            job.update(error=str(exc))
+            log.write(f"gpuq M3: {exc}\n")
+        try:
+            remote.cleanup()
+        except Exception as exc:
+            log.write(f"gpuq M3 cleanup: {exc}\n")
+        if job.get("rc") is not None:
+            (LOGS / f"{job['id']}.rc").write_text(str(job["rc"]))
+        job.update(state=state, ended=_now(), pid=None)
+        log.write(f"gpuq: device=m3 {state} rc={job.get('rc')}\n")
+    _write(path, job)
+    _write(LOGS / f"{job['id']}.pauses.json", {"pauses": []})
+
+
+def _adopt_remote(job: dict, path: Path, gate=None) -> None:
+    # A lost transport never becomes success; stop the remote group before reuse.
+    import gpuq_remote
+
+    with open(LOGS / f"{job['id']}.log", "a") as log:
+        remote = gpuq_remote.Remote(
+            job, path, SimpleNamespace(ROOT=ROOT, _write=_write, _read=_read), log
+        )
+        try:
+            remote.stop()
+        except Exception as exc:
+            _write(ROOT / "m3-quarantine.json", {"error": str(exc), "job": job["id"]})
+        try:
+            remote.collect()
+            remote.cleanup()
+        except Exception as exc:
+            log.write(f"gpuq M3 recovery: {exc}\n")
+    job.update(
+        state="lost",
+        rc=None,
+        pid=None,
+        ended=_now(),
+        adopted=True,
+        error="M3 transport interrupted; not completion evidence",
+    )
     _write(path, job)
 
 
@@ -875,7 +989,10 @@ def _execute(job: dict, path: Path, gate: ServingGate) -> None:
     """Contain a runner error for normal and preempting jobs alike."""
     print(f"{time.strftime('%H:%M:%S')} run {job['id']}", flush=True)
     try:
-        _run_one(job, path, gate)
+        if job.get("device") == "m3":
+            _run_remote(job, path)
+        else:
+            _run_one(job, path, gate)
     except Exception as e:  # noqa: BLE001 - a full disk etc. must not stop the queue
         print(f"{time.strftime('%H:%M:%S')} job error {job['id']}: {e!r}", flush=True)
         # Never leave an untracked GPU process behind after a runner error.
@@ -906,7 +1023,7 @@ def _adoption_order(jobs: list[dict]) -> list[dict]:
     """Running jobs left by a previous daemon, already-exited ones first: adopting a
     live job blocks until it ends, and a finished job must not look running meanwhile."""
     running = [j for j in jobs if j["state"] == "running"]
-    return sorted(running, key=lambda j: _alive(j.get("pid")))
+    return sorted(running, key=lambda j: (_alive(j.get("pid")), bool(j.get("paused"))))
 
 
 def daemon() -> None:
@@ -916,40 +1033,95 @@ def daemon() -> None:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         return
+    lock.seek(0)
+    lock.truncate()
+    lock.write(str(os.getpid()))
+    lock.flush()
+    _write(
+        ROOT / "daemon-capabilities.json", {"pid": os.getpid(), "devices": ["m5", "m3"]}
+    )
     idle_since = _now()
     gate = ServingGate()
     gate.cpu = QuietGate()
+    workers: dict[str, threading.Thread] = {}
+    adopted = False
+    errors: list[BaseException] = []
+
+    def lane_work(target, *args):
+        try:
+            target(*args)
+        except BaseException as exc:
+            errors.append(exc)
+
     while True:
+        for worker in workers.values():
+            worker.join(timeout=0.001)
+        if errors:
+            raise errors[0]
         gate.configure(load_serving_config())
-        # A job left running by a previous daemon is adopted: wait for its
-        # process group to exit (still under timeout / cancel), then record it.
-        for j in _adoption_order(_jobs()):
-            _adopt(j, JOBS / f"{j['id']}.json", gate)
-        if gate.enabled:
+        if not adopted:
+            by_lane: dict[str, list[dict]] = {}
+            for j in _adoption_order(_jobs()):
+                by_lane.setdefault(j.get("device", "m5"), []).append(j)
+
+            def adopt_lane(lane, rows):
+                target = _adopt_remote if lane == "m3" else _adopt
+                for row in rows:
+                    target(row, JOBS / f"{row['id']}.json", gate)
+
+            for lane, rows in by_lane.items():
+                worker = threading.Thread(
+                    target=lane_work, args=(adopt_lane, lane, rows)
+                )
+                workers[lane] = worker
+                worker.start()
+            adopted = True
+        workers = {lane: t for lane, t in workers.items() if t.is_alive()}
+        if gate.enabled and "m5" not in workers:
             gate.poll()
-        for (
-            j
-        ) in _jobs():  # a cancelled pending job must go even while the gate blocks it
+        for j in _jobs():
             if j["state"] == "pending" and j.get("cancel"):
                 _release_quiet_hold(j, _now())
                 _patch_job(JOBS / f"{j['id']}.json", state="cancelled", ended=_now())
-        jobs = _jobs()
-        job = _admit(jobs, gate)
-        pending = [j for j in jobs if j["state"] == "pending"]
-        if job is None:
-            if pending:
-                idle_since = _now()  # blocked jobs are not an idle queue
-            elif _now() - idle_since > IDLE_EXIT_S:
-                return
-            time.sleep(min(POLL_S, gate.poll_s) if gate.enabled else POLL_S)
-            continue
-        path = JOBS / f"{job['id']}.json"
-        if _read(path).get("cancel"):
-            job.update(state="cancelled", ended=_now())
-            _write(path, job)
-            continue
-        _execute(job, path, gate)
-        idle_since = _now()
+        # Reserve/mark each winner before evaluating the next lane (any runs once).
+        for lane in ("m5", "m3"):
+            if (
+                lane in workers
+                or lane == "m3"
+                and (ROOT / "m3-quarantine.json").exists()
+            ):
+                continue
+            jobs = _jobs()
+            eligible = [j for j in jobs if j.get("device", "m5") in {lane, "any"}]
+            if lane == "m5":
+                job = _admit(eligible, gate)
+            else:
+                job = _pick(
+                    eligible,
+                    lambda j: (
+                        not j.get("cancel")
+                        and not j.get("quiet")
+                        and float(j.get("mem_gb", DEFAULT_MEM_GB)) <= 28
+                    ),
+                )
+            if job is None:
+                continue
+            if not _claim(job, lane):
+                continue
+            path = JOBS / f"{job['id']}.json"
+            worker = threading.Thread(
+                target=lane_work, args=(_execute, job, path, gate)
+            )
+            workers[lane] = worker
+            worker.start()
+            worker.join(timeout=0.001)
+            if errors:
+                raise errors[0]
+        if workers or any(j["state"] == "pending" for j in _jobs()):
+            idle_since = _now()
+        elif _now() - idle_since > IDLE_EXIT_S:
+            return
+        time.sleep(POLL_S)
 
 
 def _patch_job(path: Path, **kw) -> None:
@@ -987,7 +1159,7 @@ def wait(ids: list[str], max_seconds: float | None = None) -> int:
         issues = _output_issues(j) if j else ["job not found"]
         state = j.get("state", "missing")
         print(
-            f"{jid}: {display_state(j) if j else state} rc={j.get('rc')} missing_outputs={json.dumps(issues)} "
+            f"{jid}: {display_state(j) if j else state} rc={j.get('rc')} device={j.get('device', 'm5')} missing_outputs={json.dumps(issues)} "
             f"log={LOGS / (jid + '.log')}"
         )
         contended = contended or (bool(j.get("contended")) and requires_quiet(j))
@@ -1078,7 +1250,7 @@ def status() -> None:
             )
             extra += f"  held={held:.0f}/{limit:g}s ({reason})"
         print(
-            f"{display_state(j):>9}  {age:6.0f}s  p{j.get('priority', 0)}  {j['id']}{extra}"
+            f"{display_state(j):>9}  device={j.get('device', 'm5')}  {age:6.0f}s  p{j.get('priority', 0)}  {j['id']}{extra}"
         )
 
 
@@ -1090,6 +1262,7 @@ def main() -> int:
     for name in ("submit", "run"):
         p = sub.add_parser(name)
         p.add_argument("--label", default="job")
+        p.add_argument("--device", choices=("m5", "m3", "any"), default="m5")
         p.add_argument(
             "--timeout", type=float, default=20.0, help="minutes (default 20)"
         )
@@ -1184,6 +1357,7 @@ def main() -> int:
                     ).items()
                     if v is not None
                 },
+                device=a.device,
             )
         except ValueError as e:
             print(f"gpuq: {e}", file=sys.stderr)

@@ -71,6 +71,23 @@ A version that reached PyPI cannot be re-uploaded. Fix forward with the next pat
   ([steps](packaging/homebrew/README.md)).
 
 
+## Start the next cycle: sync dependencies and upstream
+
+Right after a release, before new feature work, the next version starts from current upstream:
+
+1. **Dependencies.** `uv lock --upgrade` (MLX, mlx-lm, mlx-vlm, transformers, llguidance and the rest), then
+   `just test && just lint`. MLX releases can change numerics: re-check speculative output equals plain output on
+   the 27B, the paired accuracy set agrees within one question, and decode / TTFT on the standard cells did not
+   regress. Record the before / after in `docs/reports/PERF_TREND.md`.
+2. **Vendored and patched code.** Pull every reference clone and run `just vendor-check`: each vendored kernel,
+   ported file and upstream monkeypatch in `vendor.json` whose upstream source changed is reviewed, re-synced or
+   re-justified. Drop local patches that upstream now makes unnecessary.
+3. **Upstream changes worth taking.** Read the release notes / merged PRs since the last sync of MLX, mlx-lm,
+   mlx-vlm and the engines we compare with or learn from. List bug fixes that affect us, new kernels or features,
+   and new ideas, with links, as backlog items for the cycle.
+4. Land the sync as its own merge with the measurements above, so later regressions can be bisected to it.
+
+
 ## Release notes contract
 
 Keep the next draft under `[Unreleased]` until a maintainer cuts the release.
