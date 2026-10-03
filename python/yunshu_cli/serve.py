@@ -343,16 +343,12 @@ def _check_bind_address(host: str, port: int) -> None:
     addresses = socket.getaddrinfo(
         host, port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE
     )
-    last_error: OSError | None = None
     for family, socktype, proto, _, address in addresses:
-        try:
-            with socket.socket(family, socktype, proto) as probe:
-                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                probe.bind(address)
-            return
-        except OSError as exc:
-            last_error = exc
-    raise last_error or OSError("no usable bind address")
+        with socket.socket(family, socktype, proto) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind(address)
+    if not addresses:
+        raise OSError("no usable bind address")
 
 
 def _rotate_service_log() -> None:

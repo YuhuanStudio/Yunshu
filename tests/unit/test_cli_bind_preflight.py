@@ -60,3 +60,21 @@ def test_uds_skips_tcp_probe(monkeypatch, tmp_path):
     monkeypatch.setattr(serve_module, "_rotate_service_log", lambda: None)
     result = CliRunner().invoke(app, ["serve", "--uds", str(tmp_path / "server.sock")])
     assert result.exit_code == 0, result.output
+
+
+def test_all_resolved_addresses_are_checked(monkeypatch):
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+        # An earlier bindable address must not hide a later occupied one.
+        monkeypatch.setattr(
+            socket,
+            "getaddrinfo",
+            lambda *args, **kwargs: [
+                (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 0)),
+                (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", port)),
+            ],
+        )
+        with pytest.raises(OSError):
+            serve_module._check_bind_address("localhost", port)
