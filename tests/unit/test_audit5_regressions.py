@@ -263,3 +263,19 @@ def test_bf16_external_stream_matches_upstream_sampler_on_normalization_ties(
             == [expected] * 8
         )
         assert decoder.acceptance_rate == 1.0
+
+
+@pytest.mark.parametrize(
+    "model", ["DeepSeek-V4", "Phi-4", "Llama-3.1", "InternVL3", "GLM-4", "command-r"]
+)
+def test_system_first_families_receive_one_instruction_block(model):
+    source = [
+        {"role": "system", "content": "base"},
+        {"role": "user", "content": "task"},
+        {"role": "system", "content": "reminder"},
+        {"role": "developer", "content": "policy"},
+    ]
+    out = adapt_messages(source, model)
+    assert [m["role"] for m in out] == ["system", "user"]
+    assert out[0]["content"] == "base\n\nreminder\n\npolicy"
+    assert source[2]["role"] == "system" and source[3]["role"] == "developer"

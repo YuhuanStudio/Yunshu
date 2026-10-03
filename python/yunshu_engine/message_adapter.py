@@ -675,7 +675,7 @@ def keeps_mid_conversation_system(model_name: str | None = None) -> bool:
 def adapt_messages(messages: list[dict], model_name: str | None = None) -> list[dict]:
     """Convenience: adapt messages for a model in one call."""
     adapter = get_message_adapter(model_name)
-    return adapter.adapt(messages)
+    return adapter.adapt(_hoist_system(messages))
 
 
 def register_message_adapter(family: str, adapter_cls: type[MessageAdapter]) -> None:
