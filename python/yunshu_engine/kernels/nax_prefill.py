@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.metadata
+import logging
 import re
 from functools import cache
 from pathlib import Path
@@ -186,12 +187,15 @@ def make(
 
 
 _enabled = False
+_dispatches = 0
+logger = logging.getLogger(__name__)
 
 
 def enable() -> bool:
     """Enable only the measured MLX/device pair; failed ABI checks keep stock."""
-    global _enabled
+    global _enabled, _dispatches
     _enabled = False
+    _dispatches = 0
     if importlib.metadata.version("mlx") != "0.32.3":
         return False
     if mx.device_info().get("device_name") != "Apple M5 Max":
@@ -206,6 +210,19 @@ def enable() -> bool:
 
 def enabled() -> bool:
     return _enabled
+
+
+def disable() -> None:
+    global _enabled, _dispatches
+    _enabled = False
+    _dispatches = 0
+
+
+def record_dispatch(m: int, k: int, n: int, bits: int) -> None:
+    global _dispatches
+    if not _dispatches:
+        logger.info("NAX prefill engaged: rows=%d K=%d N=%d bits=%d", m, k, n, bits)
+    _dispatches += 1
 
 
 @cache
@@ -231,8 +248,21 @@ def eligible(m: int, k: int, n: int, bits: int, group: int, tiled: bool) -> bool
     )
 
 
+def narrow_eligible(m: int, k: int, n: int, bits: int, group: int) -> bool:
+    return bool(
+        _enabled
+        and 512 < m <= 8192
+        and m % 128 == 0
+        and k % 64 == 0
+        and 0 < n < 256
+        and bits in (4, 5, 8)
+        and group == 64
+    )
+
+
 def matmul(x: mx.array, weight: mx.array, sbt: mx.array, *, bits: int) -> mx.array:
     m, k = x.shape
+    record_dispatch(m, k, sbt.shape[1], bits)
     bm = 64 if m > 4096 and k > 8192 else 128
     return cast(
         mx.array, make(mx, x, weight, None, None, bits=bits, bm=bm, bn=64, sbt=sbt)()

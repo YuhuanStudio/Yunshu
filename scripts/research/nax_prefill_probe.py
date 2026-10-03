@@ -213,10 +213,13 @@ def micro(a, mx):
 def model(a, mx):
     from contextlib import nullcontext
 
+    import nax_prefill_dispatch as dispatch
+
     from yunshu_engine.kernels import batch_invariant, lane_linear, ragged_kv
     from yunshu_engine.mrope import clear_rope_state
     from yunshu_engine.vlm_engine import VLMEngine
 
+    dispatch.install("base")
     engine = VLMEngine(str(a.model))
     asyncio.run(engine.start())
     batch_invariant.set_active(True)

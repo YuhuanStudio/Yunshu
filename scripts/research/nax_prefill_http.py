@@ -37,6 +37,7 @@ def main():
             "lane128",
             "narrow",
             "combo",
+            "production",
         ),
         required=True,
     )
@@ -61,9 +62,11 @@ def main():
     t.YUNSHU_SRC = str(Path(__file__).resolve().parents[2] / "python")
     launcher = a.out.with_suffix(".launcher.py")
     patch = ""
+    if a.arm in ("base", "planes", "stock"):
+        patch = "from yunshu_engine.kernels import nax_prefill\nnax_prefill.disable()\nnax_prefill.enable = lambda: False\n"
     custom = a.arm in ("tile128", "lane64", "lane128", "narrow", "combo")
     if a.arm in ("planes", "stock"):
-        patch = f"""
+        patch += f"""
 from yunshu_engine.kernels import lane_linear
 original = lane_linear.LaneLinear.stock
 retained = {{}}
@@ -161,6 +164,12 @@ atexit.register(lambda: print('NAX_DISPATCH_RECEIPT ' + json.dumps(dict(arm={a.a
                 raise RuntimeError("MTP engagement missing")
             if not a.model and "stock-qmm-gt512" not in log:
                 raise RuntimeError("stock prefill engagement missing")
+            if (
+                a.arm == "production"
+                and not a.model
+                and "NAX prefill engaged: rows=2048" not in log
+            ):
+                raise RuntimeError("production NAX prefill did not engage")
     finally:
         t.subprocess.Popen = original_popen
         if server is not None:

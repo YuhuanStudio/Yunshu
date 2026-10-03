@@ -15,8 +15,12 @@ def install(arm):
     import mlx.core as mx
     from nax_qmm_tiles import make
 
-    from yunshu_engine.kernels import lane_linear
+    from yunshu_engine.kernels import lane_linear, nax_prefill
     from yunshu_engine.kernels.tensorfold import lane_qmm
+
+    # Baseline must retain main's stock path after serving integration.
+    nax_prefill.disable()
+    nax_prefill.enable = lambda: False
 
     global _original, _maximum
     if _original is None:

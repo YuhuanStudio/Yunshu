@@ -25,6 +25,7 @@ from typing import Any
 import mlx.core as mx
 import mlx.nn as nn
 
+from . import nax_prefill
 from .tensorfold import lane_qmm
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,12 @@ def set_stock_rows(rows: int) -> None:
 def prefill_kernel_id() -> str:
     """Names the prefill arithmetic; part of every APC key and SSD namespace, so states written
     by one prefill kernel are never read back as another's."""
-    return f"stock-qmm-gt{STOCK_ROWS}" if STOCK_ROWS else "lane-qmm"
+    base = f"stock-qmm-gt{STOCK_ROWS}" if STOCK_ROWS else "lane-qmm"
+    return (
+        base + "+" + nax_prefill.arithmetic_id()
+        if STOCK_ROWS and nax_prefill.enabled()
+        else base
+    )
 
 
 def eligible(module: Any) -> bool:
@@ -200,7 +206,29 @@ class LaneLinear(nn.Module):
         if dtype != mx.bfloat16:
             x2 = x2.astype(mx.bfloat16)
         m = int(x2.shape[0])
-        if STOCK_ROWS and m > STOCK_ROWS and self.output_dims >= NARROW:
+        if (
+            STOCK_ROWS
+            and m > STOCK_ROWS
+            and nax_prefill.narrow_eligible(
+                m, self.input_dims, self.output_dims, self.bits, self.group_size
+            )
+        ):
+            nax_prefill.record_dispatch(m, self.input_dims, self.output_dims, self.bits)
+            y = self._rows(x2, prefill_narrow=True)
+        elif (
+            STOCK_ROWS
+            and m > STOCK_ROWS
+            and nax_prefill.eligible(
+                m,
+                self.input_dims,
+                self.output_dims,
+                self.bits,
+                self.group_size,
+                self.tiled,
+            )
+        ):
+            y = nax_prefill.matmul(x2, self.weight, self.sbt, bits=self.bits)
+        elif STOCK_ROWS and m > STOCK_ROWS and self.output_dims >= NARROW:
             weight, scales, biases = self.stock()
             y = mx.quantized_matmul(
                 x2,

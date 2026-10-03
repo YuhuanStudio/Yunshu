@@ -77,6 +77,7 @@ def main():
     if a.out.exists():
         raise FileExistsError(a.out)
     a.out.parent.mkdir(parents=True, exist_ok=True)
+    dispatch.install("base")
     engine = VLMEngine(a.model)
     asyncio.run(engine.start())
     runner = engine._batch_runner

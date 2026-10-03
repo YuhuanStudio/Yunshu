@@ -1558,7 +1558,10 @@ class VLMEngine:
         Qwen3.5-family only (``_SPEC_MODEL_TYPES``); ``YUNSHU_MTP=0`` disables the
         MTP draft.
         """
+        from .kernels import nax_prefill
         from .vlm_batch_runner import VLMBatchRunner
+
+        nax_prefill.disable()
 
         spec_family = self._config.get("model_type") in self._SPEC_MODEL_TYPES
         lm = self._model.language_model
@@ -1675,6 +1678,21 @@ class VLMEngine:
                         and not use_driver
                     ):
                         lane_linear.set_stock_rows(lane_linear.STOCK_MIN_ROWS)
+                        text_cfg = self._config.get("text_config", self._config)
+                        if (
+                            kernels["lane_linear"]
+                            and text_cfg.get("hidden_size") == 5120
+                            and text_cfg.get("num_hidden_layers") == 64
+                            and nax_prefill.enable()
+                        ):
+                            nax_prefill.warmup(
+                                {
+                                    module.bits
+                                    for _, module in lm.named_modules()
+                                    if isinstance(module, lane_linear.LaneLinear)
+                                }
+                            )
+                            kernels["nax_prefill"] = nax_prefill.arithmetic_id()
                     kernels["prefill_matmul"] = lane_linear.prefill_kernel_id()
                 if settings.get("YUNSHU_PREFILL_GDN") == "chunked" and not use_driver:
                     from .kernels import gdn_prefill

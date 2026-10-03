@@ -23,6 +23,7 @@ def main():
             "lane128",
             "narrow",
             "combo",
+            "production",
         ),
         required=True,
     )

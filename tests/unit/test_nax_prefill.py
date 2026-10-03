@@ -91,3 +91,43 @@ def test_long_narrow_dispatch_does_not_widen_general_row_limit(monkeypatch):
             row_block=32,
             prefill_narrow=True,
         )
+
+
+def test_lane_prefill_native_route_skips_stock_layout(monkeypatch):
+    import mlx.core as mx
+
+    from yunshu_engine.kernels import lane_linear
+
+    layer = lane_linear.LaneLinear(
+        mx.zeros((256, 8), dtype=mx.uint32),
+        mx.zeros((256, 1), dtype=mx.bfloat16),
+        mx.zeros((256, 1), dtype=mx.bfloat16),
+        4,
+        64,
+    )
+    monkeypatch.setattr(lane_linear, "STOCK_ROWS", 512)
+    monkeypatch.setattr(nax_prefill, "_enabled", True)
+    monkeypatch.setattr(
+        layer, "stock", lambda: pytest.fail("native lane loader must not untile")
+    )
+    calls = []
+
+    def native(x, weight, sbt, *, bits):
+        calls.append((weight, sbt, bits))
+        return mx.zeros((x.shape[0], 256), dtype=mx.bfloat16)
+
+    monkeypatch.setattr(nax_prefill, "matmul", native)
+    result = layer(mx.zeros((1, 1024, 64), dtype=mx.bfloat16))
+    assert result.shape == (1, 1024, 256)
+    assert calls == [(layer.weight, layer.sbt, 4)]
+
+
+def test_lane_arithmetic_id_includes_native_source_only_when_stock_enabled(monkeypatch):
+    from yunshu_engine.kernels import lane_linear
+
+    monkeypatch.setattr(nax_prefill, "_enabled", True)
+    monkeypatch.setattr(nax_prefill, "arithmetic_id", lambda: "native-source-A")
+    monkeypatch.setattr(lane_linear, "STOCK_ROWS", 512)
+    assert lane_linear.prefill_kernel_id() == "stock-qmm-gt512+native-source-A"
+    monkeypatch.setattr(lane_linear, "STOCK_ROWS", 0)
+    assert lane_linear.prefill_kernel_id() == "lane-qmm"

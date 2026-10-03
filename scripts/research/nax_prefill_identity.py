@@ -11,7 +11,9 @@ from pathlib import Path
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--arm", choices=("combo", "lane128", "tile128"), required=True)
+    p.add_argument(
+        "--arm", choices=("combo", "lane128", "tile128", "production"), required=True
+    )
     p.add_argument("--contexts", type=int, nargs="+", default=[8192, 32768])
     p.add_argument("--kinds", nargs="+", default=["prose", "code"])
     p.add_argument("--model")
@@ -49,6 +51,10 @@ def main():
     launcher.write_text(
         f"#!{sys.executable}\nimport sys\nsys.path.insert(0,{str(Path(__file__).parent)!r})\nimport nax_prefill_dispatch as dispatch\ndispatch.install({a.arm!r})\nfrom yunshu_engine.kernels import lane_linear\noriginal_id=lane_linear.prefill_kernel_id\nlane_linear.prefill_kernel_id=lambda: original_id()+'+research-{a.arm}'\nfrom yunshu_cli import main\nmain()\n"
     )
+    if a.arm == "production":
+        launcher.write_text(
+            f"#!{sys.executable}\nfrom yunshu_cli import main\nmain()\n"
+        )
     launcher.chmod(0o700)
     t.YUNSHU_BIN = str(launcher)
     t.YUNSHU_SRC = str(Path(__file__).resolve().parents[2] / "python")
@@ -80,13 +86,25 @@ def main():
                             "--out",
                             str(target),
                             "--env",
-                            "YUNSHU_VLM_DRAFT=mtp",
+                            "YUNSHU_VLM_DRAFT=off" if tiny else "YUNSHU_VLM_DRAFT=mtp",
                             "--env",
                             "YUNSHU_VLM_APC_DISK=0",
                         ] + (["--turn2"] if turn2 else [])
                         error = None
                         try:
                             identity.main()
+                            if a.arm == "production" and not tiny:
+                                for side in ("A", "B"):
+                                    log = (
+                                        t.OUT / "out" / f"server-apcid-{side}-{ctx}.log"
+                                    )
+                                    if (
+                                        "NAX prefill engaged: rows=2048"
+                                        not in log.read_text()
+                                    ):
+                                        raise RuntimeError(
+                                            f"production prefill not engaged in {log}"
+                                        )
                         except Exception as exc:
                             error = repr(exc)
                         rows = (
