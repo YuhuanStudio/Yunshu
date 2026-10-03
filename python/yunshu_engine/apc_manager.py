@@ -430,11 +430,90 @@ class Lookup:
 class _Coordinator(APCCoordinator):
     """Checkpoint positions: the prompt end, one interval boundary, the end of the system turn."""
 
+    def set_request(self, token_ids, policy):
+        if policy is None:
+            return
+        # Bounded by live queued/prefilling rows, not a lossy LRU of active
+        # descriptors. Identical tokens may have different write/retention intent.
+        policies = self.__dict__.setdefault("_requests", {})
+        policies.setdefault(tuple(token_ids), collections.deque()).append(policy)
+
+    def request(self, token_ids):
+        pending = self.__dict__.get("_requests", {}).get(tuple(token_ids))
+        return pending[0] if pending else None
+
+    def release_request(self, token_ids, policy):
+        policies = self.__dict__.get("_requests", {})
+        tokens = tuple(token_ids)
+        pending = policies.get(tokens)
+        if pending is None:
+            return
+        for i, queued in enumerate(pending):
+            if queued is policy:
+                del pending[i]
+                break
+        if not pending:
+            policies.pop(tokens, None)
+
+    def lookup(self, token_ids, **kwargs):
+        policy = self.request(token_ids)
+        if not policy or not self.is_checkpoint:
+            return self._lookup_canonical(token_ids, **kwargs)
+        points = self.checkpoint_lengths(token_ids, set(), begin=False)
+        candidates = policy.get("lookup_points", [n for n, _ in policy["points"]])
+        maximum = max(candidates, default=0)
+        extra_hash = kwargs["extra_hash"]
+        while maximum > 0:
+            cache, n = self.manager.lookup_exact_cache(
+                token_ids,
+                extra_hash=extra_hash,
+                max_prefix_tokens=maximum,
+                min_prefix_tokens=kwargs.get("safe_lookup_min", 0),
+                refresh_retention=False,
+            )
+            if cache is None or not n:
+                return None
+            key = _sequence_hash(
+                tuple(token_ids[:n]), extra_hash, self.manager.block_size
+            )
+            # Restoring at a noncanonical point, or from a different earlier
+            # split plan, changes the hybrid recurrence's numerical spans.
+            signature = tuple(p for p in points if p < n and p % 2048)
+            source = self.manager._span_plans.get(key)
+            if (
+                (n in candidates)
+                and source == signature
+                and kwargs["suffix_is_text_only"](n)
+            ):
+                self.manager.touch_boundary(token_ids[:n], extra_hash)
+                return {
+                    "matched_blocks": [],
+                    "warm_cache": cache,
+                    "prefix_len": n,
+                    "extra_hash": extra_hash,
+                    "full_input_ids": list(token_ids),
+                }
+            maximum = n - 1
+        return None
+
+    def _publish_checkpoint_policy(self, tokens, extra_hash, policy, signature):
+        if policy is None:
+            return
+        duration = next(
+            ttl for n, ttl in policy.get("writes", policy["points"]) if n == len(tokens)
+        )
+        self.manager.protect_boundary(tokens, extra_hash, duration)
+        key = _sequence_hash(tokens, extra_hash, self.manager.block_size)
+        self.manager._span_plans[key] = signature
+        while len(self.manager._span_plans) > _BORN_MAX:
+            self.manager._span_plans.pop(next(iter(self.manager._span_plans)))
+        policy["written"] = max(policy.get("written", 0), len(tokens))
+
     # Enabled only around a runner generator step. Round-driver and external APC
     # callers retain synchronous admission until they supply the same flush boundary.
     defer_checkpoint_stores = False
 
-    def lookup(self, token_ids, **kwargs):
+    def _lookup_canonical(self, token_ids, **kwargs):
         stride = getattr(self.manager, "prefill_stride", 0)
         # Media processors may expand / reshape positions; retain their existing
         # boundary policy. Text prefixes use the same grid in cold and warm runs.
@@ -505,8 +584,20 @@ class _Coordinator(APCCoordinator):
     def store_checkpoint(
         self, token_ids, prompt_cache, *, extra_hash=0, batch_idx=None
     ) -> bool:
+        tokens = tuple(token_ids)
+        full_ids = getattr(self, "_current_ids", tokens)
+        policy = self.request(full_ids)
+        signature = ()
+        if policy is not None:
+            if len(tokens) not in {
+                n for n, _ in policy.get("writes", policy["points"])
+            }:
+                return False
+            points = self.checkpoint_lengths(full_ids, set(), begin=False)
+            signature = tuple(p for p in points if p < len(tokens) and p % 2048)
         if (
-            getattr(self, "_split_lengths", False)
+            policy is None
+            and getattr(self, "_split_lengths", False)
             and len(token_ids) not in self._store_lengths
         ):
             return False  # deterministic forward boundary, not an extra snapshot
@@ -539,22 +630,28 @@ class _Coordinator(APCCoordinator):
             not can_defer
             or resident + pending_bytes + size > self.manager.memory_max_bytes
         ):
-            return bool(
+            ok = bool(
                 super().store_checkpoint(
                     token_ids, prompt_cache, extra_hash=extra_hash, batch_idx=batch_idx
                 )
             )
+            if ok:
+                self._publish_checkpoint_policy(tokens, extra_hash, policy, signature)
+            return ok
         targets: list[Any] = []
         snapshot = [
             clone_cache_entry(c, min_capacity_tokens=None, eval_targets=targets)
             for c in prompt_cache
         ]
         if any(c is None for c in snapshot):
-            return bool(
+            ok = bool(
                 super().store_checkpoint(
                     token_ids, prompt_cache, extra_hash=extra_hash, batch_idx=batch_idx
                 )
             )
+            if ok:
+                self._publish_checkpoint_policy(tokens, extra_hash, policy, signature)
+            return ok
         pending = self.__dict__.setdefault("_deferred_checkpoints", [])
         pending.append(
             (
@@ -567,6 +664,8 @@ class _Coordinator(APCCoordinator):
                     "_request_generation",
                     getattr(self.manager, "_generation", None),
                 ),
+                policy,
+                signature,
             )
         )
         self._deferred_bytes = pending_bytes + size
@@ -582,18 +681,29 @@ class _Coordinator(APCCoordinator):
 
         pending = self.__dict__.pop("_deferred_checkpoints", [])
         self._deferred_bytes = 0
-        for tokens, snapshot, extra_hash, targets, generation in pending:
+        for (
+            tokens,
+            snapshot,
+            extra_hash,
+            targets,
+            generation,
+            policy,
+            signature,
+        ) in pending:
             mx.eval(targets)
             kwargs = {"extra_hash": extra_hash}
             if generation is not None:
                 kwargs["_generation"] = generation
-            self.manager.store_exact_cache(tokens, snapshot, **kwargs)
+            if self.manager.store_exact_cache(tokens, snapshot, **kwargs):
+                self._publish_checkpoint_policy(tokens, extra_hash, policy, signature)
 
     def discard_deferred_checkpoints(self) -> None:
         self.__dict__.pop("_deferred_checkpoints", None)
         self._deferred_bytes = 0
 
-    def checkpoint_lengths(self, token_ids, media_token_ids):
+    def checkpoint_lengths(self, token_ids, media_token_ids, *, begin=True):
+        if begin:
+            self._current_ids = tuple(token_ids)
         final = self.checkpoint_len(token_ids, media_token_ids)
         if final <= 0:
             return []
@@ -601,6 +711,26 @@ class _Coordinator(APCCoordinator):
         stride = getattr(mgr, "prefill_stride", 0)
         if media_token_ids.intersection(token_ids):
             stride = 0
+        policy = self.request(token_ids)
+        if policy:
+            from mlx_vlm.apc import adjust_prefix_to_text_suffix_boundary
+
+            lengths = []
+            for n, _ in policy["points"]:
+                safe = adjust_prefix_to_text_suffix_boundary(
+                    token_ids, n, media_token_ids, max_prefix_tokens=final
+                )
+                if safe != n:
+                    raise ValueError(
+                        "cache breakpoint cuts a media span or final guard"
+                    )
+                if n >= mgr.exact_cache_min_tokens:
+                    lengths.append(n)
+            if begin:
+                mgr.begin_request()
+                self._request_generation = mgr._generation
+                self._split_lengths = False
+            return sorted(set(lengths))
         lengths = {final}
         interval = mgr.checkpoint_interval_tokens
         if interval > 0 and mgr.keep_interval_checkpoint:
@@ -631,7 +761,8 @@ class _Coordinator(APCCoordinator):
         if head and mgr.exact_cache_min_tokens <= head < final:
             lengths.add(head)
             mgr.note_head(token_ids[:head])
-        mgr.begin_request()
+        if begin:
+            mgr.begin_request()
         self._request_generation = mgr._generation
         self._store_lengths = frozenset(lengths)
         self._split_lengths = bool(stride)
@@ -668,6 +799,11 @@ class YunshuAPCManager(APCManager):
         self.prefill_message_end = prefill_message_end
         self.lookups: collections.deque[Lookup] = collections.deque(maxlen=64)
         self._generation = 0
+        # Explicit endpoints are protected against superseding until their
+        # inactivity TTL expires, always within the existing byte/entry budgets.
+        self._retention: dict[int, tuple[float, int]] = {}
+        self._span_plans: dict[int, tuple[int, ...]] = {}
+        self._expired_boundaries: set[int] = set()
         self._born: dict[int, int] = {}
         self._head_keys: set[int] = set()
         self._head_lengths: set[int] = set()
@@ -752,7 +888,7 @@ class YunshuAPCManager(APCManager):
         process did not store or restore itself (it may serve another session)."""
         with self._plock:
             newest = self._born.get(cache_hash)
-            heads = set(self._head_keys)
+            heads = set(self._head_keys) | set(self._retention)
         disk = self.disk
         if newest is None or disk is None:
             return
@@ -903,6 +1039,51 @@ class YunshuAPCManager(APCManager):
                 return i
         return 0
 
+    def checkpoint_ready(self, token_ids, extra_hash):
+        """Publication receipt without cloning/evaluating a checkpoint."""
+        if extra_hash is None:
+            return False
+        self._expire_boundaries()
+        tokens = tuple(token_ids)
+        key = _sequence_hash(tokens, extra_hash, self.block_size)
+        with self.lock:
+            entry = self._exact_cache.get(key)
+            return bool(
+                entry is not None
+                and entry.token_ids == tokens
+                and entry.extra_hash == extra_hash
+            )
+
+    def protect_boundary(self, token_ids, extra_hash, duration):
+        key = _sequence_hash(tuple(token_ids), extra_hash, self.block_size)
+        self._retention[key] = (time.monotonic() + duration, duration)
+        self._expired_boundaries.discard(key)
+        # Only resident/bookkept entries need intent. Bound descriptor memory.
+        if len(self._retention) > _BORN_MAX:
+            self._retention = {
+                k: v for k, v in self._retention.items() if v[0] > time.monotonic()
+            }
+
+    def touch_boundary(self, token_ids, extra_hash):
+        key = _sequence_hash(tuple(token_ids), extra_hash, self.block_size)
+        if key in self._retention:
+            duration = self._retention[key][1]
+            self._retention[key] = (time.monotonic() + duration, duration)
+
+    def _expire_boundaries(self):
+        now = time.monotonic()
+        expired = [k for k, (deadline, _) in self._retention.items() if deadline <= now]
+        for key in expired:
+            self._retention.pop(key, None)
+            self._expired_boundaries.add(key)
+            self._span_plans.pop(key, None)
+            with self.lock:
+                self._exact_cache.pop(key, None)
+            if self.warm is not None:
+                self.warm.take(key)
+            if isinstance(self.disk, SpillDiskStore):
+                self.disk.drop_exact(key)
+
     def begin_request(self) -> None:
         with self._plock:
             self._generation += 1
@@ -955,6 +1136,7 @@ class YunshuAPCManager(APCManager):
                     entry.extra_hash != extra_hash
                     or len(stored) >= len(tokens)
                     or key in self._head_keys
+                    or key in self._retention
                     or self._born.get(key, gen) >= gen
                     or tokens[: len(stored)] != stored
                 ):
@@ -965,7 +1147,7 @@ class YunshuAPCManager(APCManager):
                 dropped += 1
         if self.warm is not None:
             with self._plock:
-                keep = set(self._head_keys)
+                keep = set(self._head_keys) | set(self._retention)
             dropped += self.warm.supersede(tokens, extra_hash, gen, keep)
         if dropped:
             logger.debug("APC: superseded %d earlier checkpoint(s)", dropped)
@@ -1044,6 +1226,8 @@ class YunshuAPCManager(APCManager):
         return best
 
     def lookup_exact_cache(self, token_ids, *args, **kwargs):
+        refresh_retention = kwargs.pop("refresh_retention", True)
+        self._expire_boundaries()
         policy = _CANONICAL_LOOKUP.get()
         if policy is not None and policy[0] == id(self):
             names = ("extra_hash", "max_prefix_tokens", "min_prefix_tokens")
@@ -1084,6 +1268,23 @@ class YunshuAPCManager(APCManager):
             ]
             self._promote_warm(tokens, int(vals[0]), vals[1], vals[2])
         cache, n = super().lookup_exact_cache(token_ids, *args, **kwargs)
+        extra = self._extra_of(args, kwargs)
+        # A background spill may finish after drop_exact saw a busy writer.
+        # Tombstones veto resurrection without touching a request's live state.
+        while (
+            n
+            and _sequence_hash(tuple(token_ids[:n]), extra, self.block_size)
+            in self._expired_boundaries
+        ):
+            maximum = n - 1
+            retry = dict(kwargs, max_prefix_tokens=maximum)
+            positional = list(args)
+            if len(positional) > 1:
+                positional[1] = maximum
+                retry.pop("max_prefix_tokens")
+            cache, n = super().lookup_exact_cache(token_ids, *positional, **retry)
+        if n and refresh_retention:
+            self.touch_boundary(token_ids[:n], extra)
         ms = (time.perf_counter() - t0) * 1000.0
         tier = ("ssd" if self.stats.disk_hits > before else "ram") if n else "none"
         if n and self._promoted is not None and self._promoted[0] == n:

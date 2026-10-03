@@ -30,12 +30,15 @@ Submit-level repeatable ``--out PATH`` declares expected results; ``--expect-com
 Duplicate active labels are refused; submitting never deletes earlier artifacts.
 
 CPU contention (Q02): every job records load averages and the top foreign CPU consumers at start,
-periodically and end, excluding its own descendants/process group. p>=0 and --quiet jobs wait for a
+periodically and end, excluding its own descendants/process group. --quiet jobs (timing measurements) wait for a
 continuous quiet window (default summed foreign CPU <150% for 20s, maximum wait 300s). --cpu-threshold,
 --quiet-window and --quiet-max-wait override GPUQ_CPU_THRESHOLD / GPUQ_QUIET_WINDOW_S /
 GPUQ_QUIET_MAX_WAIT_S. GPUQ_CPU_SAMPLE_S controls stored periodic samples (default 30s); monitoring polls
 at most every 2s. Contention is latched in job.contended and GPUQ_CONTENTION_FILE; done is displayed as
 contended, and wait returns 3 for otherwise successful contended perf/quiet jobs (failures still return 1).
+Processes with nice >=10 are excluded: run CPU suites/builds with ``nice -n 15 taskpolicy -b ...``.
+The priority/fairness winner reserves the GPU while waiting for CPU admission, bounded by the smaller
+of its max wait and GPUQ_QUIET_HOLD_MAX_S (daemon environment, default 300s). Status shows hold time/reason.
 
 State lives in $GPUQ_DIR (default ~/.cache/yunshu/gpuq). Jobs keep the
 submitter's cwd and environment.
@@ -47,6 +50,7 @@ import argparse
 import contextlib
 import fcntl
 import json
+import math
 import os
 import signal
 import subprocess
@@ -261,13 +265,13 @@ def mem_blocked(job: dict, gate: ServingGate, free=free_memory_gb) -> bool:
     return avail - need < gate.reserve_gb
 
 
-def _blocker(job: dict, gate: ServingGate, free=free_memory_gb) -> str | None:
+def _blocker(job: dict, gate: ServingGate, free=free_memory_gb, cpu=True) -> str | None:
     """Why a pending job may not start now: 'idle' (production busy / not idle long enough), 'mem', or None."""
     if gate.enabled and not job.get("serving_ok") and not gate.may_start():
         return "idle"
     if mem_blocked(job, gate, free):
         return "mem"
-    return _cpu_blocker(job, gate)
+    return _cpu_blocker(job, gate) if cpu else None
 
 
 def _cpu_blocker(job: dict, gate: ServingGate):
@@ -276,6 +280,21 @@ def _cpu_blocker(job: dict, gate: ServingGate):
     now = _now()
     sample = gate.cpu.sample(now)
     blocked = gate.cpu.blocked(job, sample, now)
+    cpu = sample["foreign_cpu_pct"]
+    cfg = contention_config(job)
+    if not blocked:
+        reason = (
+            "quiet timeout; running contended"
+            if job.get("quiet_timeout")
+            else "quiet window satisfied"
+        )
+    elif cpu is None:
+        reason = "CPU sampling unavailable"
+    elif cpu >= cfg["threshold_pct"]:
+        reason = f"foreign CPU {cpu:.1f}% >= {cfg['threshold_pct']:.1f}%"
+    else:
+        reason = f"quiet window {now - job['quiet_since']:.0f}/{cfg['window_s']:g}s"
+    job["quiet_hold_reason"] = reason
     if not blocked:
         job["cpu_admission_sample"] = sample
     _patch_job(
@@ -287,11 +306,67 @@ def _cpu_blocker(job: dict, gate: ServingGate):
                 "quiet_since",
                 "quiet_timeout",
                 "quiet_last_poll",
+                "quiet_hold_reason",
             )
             if k in job
         },
     )
     return "cpu" if blocked else None
+
+
+def _release_quiet_hold(job: dict, now: float) -> None:
+    start = job.get("quiet_hold_started")
+    if start is not None:
+        job.update(quiet_hold_elapsed_s=max(0.0, now - start), quiet_hold_started=None)
+        _patch_job(
+            JOBS / f"{job['id']}.json",
+            quiet_hold_started=None,
+            quiet_hold_elapsed_s=job["quiet_hold_elapsed_s"],
+        )
+
+
+def _admit(jobs: list[dict], gate: ServingGate, preempt=False) -> dict | None:
+    """Pick by priority/fairness before CPU admission; a quiet winner owns the slot."""
+    pending = [
+        j
+        for j in jobs
+        if j["state"] == "pending"
+        and not j.get("cancel")
+        and (not preempt or j in _preempting([j]))
+    ]
+    blocker = _preempt_blocker if preempt else _blocker
+    blockers = {j["id"]: blocker(j, gate, cpu=False) for j in pending}
+    winner = _pick(jobs, lambda j: j["id"] in blockers and blockers[j["id"]] is None)
+    now = _now()
+    for job in pending:
+        if job is not winner:
+            _release_quiet_hold(job, now)
+        why = blockers[job["id"]]
+        if why is None and job is not winner:
+            why = "slot"
+        if job is winner and gate.cpu is not None and requires_quiet(job):
+            if job.get("quiet_hold_started") is None:
+                cap = float(os.environ.get("GPUQ_QUIET_HOLD_MAX_S", 300))
+                if not math.isfinite(cap) or cap < 0:
+                    raise ValueError("invalid GPUQ_QUIET_HOLD_MAX_S")
+                job.update(
+                    quiet_hold_started=now,
+                    quiet_hold_elapsed_s=0.0,
+                    quiet_hold_limit_s=min(contention_config(job)["max_wait_s"], cap),
+                    quiet_wait_started=now,
+                    quiet_since=None,
+                    quiet_last_poll=None,
+                    quiet_timeout=False,
+                )
+                _patch_job(
+                    JOBS / f"{job['id']}.json",
+                    **{k: v for k, v in job.items() if k.startswith("quiet_")},
+                )
+            why = _cpu_blocker(job, gate)
+        if job.get("waiting") != why:
+            _patch_job(JOBS / f"{job['id']}.json", waiting=why)
+        job["waiting"] = why
+    return winner if winner is not None and winner["waiting"] is None else None
 
 
 class Pauser:
@@ -359,6 +434,20 @@ class Pauser:
 # ---------------------------------------------------------------- queue
 
 
+AGE_S = float(os.environ.get("GPUQ_AGE_S", 2 * 3600))
+
+
+def _eff_priority(job: dict, now: float | None = None) -> int:
+    """Priority with one step of aging: a job below 0 that has waited AGE_S rises by
+    one (never above 0), so p-1 work is not starved forever by a stream of p0 jobs
+    while deep backlog (p-3) stays behind interactive work."""
+    p = job.get("priority", 0)
+    if p >= 0 or job.get("state") not in ("pending", "running"):
+        return p
+    waited = (now or time.time()) - job.get("submitted", now or time.time())
+    return min(0, p + 1) if waited >= AGE_S else p
+
+
 def _jobs() -> list[dict]:
     return sorted(
         (j for p in JOBS.glob("*.json") if (j := _read(p))),
@@ -384,8 +473,9 @@ def _pick(jobs: list[dict], eligible=None) -> dict | None:
         pending = [j for j in pending if eligible(j)]
     if not pending:
         return None
-    top = max(j.get("priority", 0) for j in pending)
-    pending = [j for j in pending if j.get("priority", 0) == top]
+    now = time.time()
+    top = max(_eff_priority(j, now) for j in pending)
+    pending = [j for j in pending if _eff_priority(j, now) == top]
     last: dict[str, float] = {}
     for j in jobs:
         if "started" in j:
@@ -490,7 +580,7 @@ def _read_rc(jid: str) -> int | None:
         return None
 
 
-def _preempt_blocker(job: dict, gate: ServingGate) -> str | None:
+def _preempt_blocker(job: dict, gate: ServingGate, cpu=True) -> str | None:
     """Admission while the stopped low-priority job remains resident.
 
     Available memory already excludes resident allocations. Unlike ordinary
@@ -503,7 +593,18 @@ def _preempt_blocker(job: dict, gate: ServingGate) -> str | None:
             return "mem"
     if gate.enabled and not job.get("serving_ok") and not gate.may_start():
         return "idle"
-    return _cpu_blocker(job, gate)
+    return _cpu_blocker(job, gate) if cpu else None
+
+
+def _preempting(jobs: list[dict]) -> list[dict]:
+    """Pending jobs allowed to pause a running backlog job. Raw priority, not aged:
+    an aged backlog job must never preempt another backlog job (each nested job
+    would pause the previous one and start the next, stacking resident jobs)."""
+    return [
+        j
+        for j in jobs
+        if j["state"] == "pending" and j.get("priority", 0) >= 0 and not j.get("cancel")
+    ]
 
 
 def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
@@ -512,24 +613,18 @@ def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
     Returns True while priority work still owns the pause. The nested runner
     cannot preempt again (its priority is >=0), so at most two jobs are resident.
     """
-    if pauser.job.get("priority", 0) >= 0:
+    # A backlog job that already aged into the interactive level (waited AGE_S) is
+    # not paused again for every new p0 job, or it would never finish.
+    if _eff_priority(pauser.job) >= 0:
         return False
-    pending = [
-        j
-        for j in _jobs()
-        if j["state"] == "pending" and j.get("priority", 0) >= 0 and not j.get("cancel")
-    ]
-    blockers = {j["id"]: _preempt_blocker(j, gate) for j in pending}
-    for j in pending:
-        why = blockers[j["id"]]
-        if j.get("waiting") != why:
-            _patch_job(JOBS / f"{j['id']}.json", waiting=why)
+    jobs = _jobs()
+    pending = _preempting(jobs)
+    high = _admit(jobs, gate, preempt=True)
     # Memory admission decides whether to pause. The serving start window only
     # decides when the admitted high-priority job can start; it must not let the
     # low-priority job resume early through the shorter serving resume window.
-    if any(why != "mem" for why in blockers.values()):
+    if any(j.get("waiting") != "mem" for j in pending):
         pauser.pause(now, reason="priority")
-    high = _pick(pending, lambda j: blockers[j["id"]] is None)
     if high is not None:
         path = JOBS / f"{high['id']}.json"
         if not _read(path).get("cancel"):
@@ -542,6 +637,7 @@ def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
 
 def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
     gate = gate or ServingGate()
+    _release_quiet_hold(job, _now())
     job.update(state="running", started=_now(), pid=None)
     log = open(LOGS / f"{job['id']}.log", "w")  # noqa: SIM115 - closed after the job ends
     pause_file = LOGS / f"{job['id']}.pauses.json"
@@ -781,14 +877,11 @@ def daemon() -> None:
             j
         ) in _jobs():  # a cancelled pending job must go even while the gate blocks it
             if j["state"] == "pending" and j.get("cancel"):
+                _release_quiet_hold(j, _now())
                 _patch_job(JOBS / f"{j['id']}.json", state="cancelled", ended=_now())
         jobs = _jobs()
-        job = _pick(jobs, lambda j: _blocker(j, gate) is None)
+        job = _admit(jobs, gate)
         pending = [j for j in jobs if j["state"] == "pending"]
-        for j in pending:  # surface why a job is waiting (gpuq status)
-            want = _blocker(j, gate)
-            if j.get("waiting") != want:
-                _patch_job(JOBS / f"{j['id']}.json", waiting=want)
         if job is None:
             if pending:
                 idle_since = _now()  # blocked jobs are not an idle queue
@@ -910,6 +1003,26 @@ def status() -> None:
         age = (j.get("ended") or now) - t0
         np = len(j.get("pauses", []))
         extra = f"  pauses={np}" if np else ""
+        if requires_quiet(j):
+            start = j.get("quiet_hold_started")
+            held = (
+                max(0.0, now - start)
+                if start is not None
+                else j.get("quiet_hold_elapsed_s", 0)
+            )
+            limit = j.get(
+                "quiet_hold_limit_s",
+                min(
+                    contention_config(j)["max_wait_s"],
+                    float(os.environ.get("GPUQ_QUIET_HOLD_MAX_S", 300)),
+                ),
+            )
+            reason = (
+                j.get("quiet_hold_reason")
+                if start is not None or j["state"] != "pending"
+                else j.get("waiting") or "GPU priority/fairness"
+            )
+            extra += f"  held={held:.0f}/{limit:g}s ({reason})"
         print(
             f"{display_state(j):>9}  {age:6.0f}s  p{j.get('priority', 0)}  {j['id']}{extra}"
         )
@@ -956,7 +1069,9 @@ def main() -> int:
             help="require a line containing complete in every output",
         )
         p.add_argument(
-            "--quiet", action="store_true", help="wait for quiet CPU even for p<0"
+            "--quiet",
+            action="store_true",
+            help="timing measurement: wait for a quiet CPU before starting and treat contention as untrustworthy",
         )
         p.add_argument(
             "--cpu-threshold",

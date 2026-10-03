@@ -298,3 +298,140 @@ def test_entry_too_large_for_ram_is_written_synchronously(tmp_path):
     assert len(_files(tmp_path)) == 1
     _, n = m.lookup_exact_cache(ids + [1])
     assert n == 96
+
+
+def test_explicit_breakpoint_is_stored_and_survives_growing_turn():
+    m = _mgr()
+    c = _coordinator(m)
+    ids = list(range(6000, 6300))
+    plan = {"points": [(113, 300)], "written": 0}
+    c.set_request(ids, plan)
+    assert c.checkpoint_lengths(ids, set()) == [113]
+    m.begin_request()
+    m.protect_boundary(ids[:113], 0, 300)
+    assert m.store_exact_cache(ids[:113], _cache(113))
+    m.begin_request()
+    assert m.store_exact_cache(ids[:280], _cache(280))
+    assert 113 in [len(e.token_ids) for e in m._exact_cache.values()]
+
+
+def test_explicit_ttl_refreshes_only_on_a_read(monkeypatch):
+    m = _mgr()
+    clock = [100.0]
+    monkeypatch.setattr("yunshu_engine.apc_manager.time.monotonic", lambda: clock[0])
+    ids = list(range(2000, 2200))
+    m.protect_boundary(ids[:113], 0, 300)
+    m.store_exact_cache(ids[:113], _cache(113))
+    clock[0] = 350.0
+    assert m.lookup_exact_cache(ids)[1] == 113
+    clock[0] = 600.0
+    assert m.lookup_exact_cache(ids)[1] == 113
+    clock[0] = 901.0
+    assert m.lookup_exact_cache(ids)[1] == 0
+
+
+def test_failed_explicit_store_reports_no_creation_or_retention(monkeypatch):
+    from mlx_vlm.apc_coordinator import APCCoordinator
+
+    m = _mgr()
+    c = _coordinator(m)
+    ids = list(range(6000, 6300))
+    plan = {"points": [(113, 300)], "written": 0}
+    c.set_request(ids, plan)
+    c.checkpoint_lengths(ids, set())
+    monkeypatch.setattr(APCCoordinator, "store_checkpoint", lambda *a, **k: False)
+    assert not c.store_checkpoint(ids[:113], [])
+    assert plan["written"] == 0
+    assert not m._retention
+
+
+def test_successful_explicit_store_reports_full_rendered_prefix(monkeypatch):
+    from mlx_vlm.apc_coordinator import APCCoordinator
+
+    m = _mgr()
+    c = _coordinator(m)
+    ids = list(range(6000, 6300))
+    plan = {"points": [(113, 300)], "written": 0}
+    c.set_request(ids, plan)
+    c.checkpoint_lengths(ids, set())
+    monkeypatch.setattr(APCCoordinator, "store_checkpoint", lambda *a, **k: True)
+    assert c.store_checkpoint(ids[:113], [])
+    assert plan["written"] == 113
+    assert m._retention
+
+
+def test_expired_async_spill_cannot_resurrect_a_breakpoint(monkeypatch):
+    from mlx_vlm.apc import APCManager
+
+    m = _mgr()
+    ids = list(range(2000, 2200))
+    now = [100.0]
+    monkeypatch.setattr("yunshu_engine.apc_manager.time.monotonic", lambda: now[0])
+    m.protect_boundary(ids[:113], 0, 300)
+    # A queued disk publication lands after expiry and returns its old state.
+    monkeypatch.setattr(
+        APCManager,
+        "lookup_exact_cache",
+        lambda self, tokens, *args, **kw: (
+            (["old"], 113) if kw.get("max_prefix_tokens", 200) >= 113 else (None, 0)
+        ),
+    )
+    now[0] = 401.0
+    assert m.lookup_exact_cache(ids)[1] == 0
+
+
+def test_rejected_span_plan_does_not_refresh_retention(monkeypatch):
+    from mlx_vlm.apc import _sequence_hash
+
+    m = _mgr()
+    c = _coordinator(m)
+    ids = list(range(2000, 2200))
+    now = [100.0]
+    monkeypatch.setattr("yunshu_engine.apc_manager.time.monotonic", lambda: now[0])
+    c.set_request(ids, {"points": [(113, 300)], "written": 0})
+    m.protect_boundary(ids[:113], 0, 300)
+    m.store_exact_cache(ids[:113], _cache(113))
+    key = _sequence_hash(tuple(ids[:113]), 0, m.block_size)
+    m._span_plans[key] = (17,)  # the source used a different earlier split
+    now[0] = 350.0
+    assert (
+        c.lookup(
+            ids, extra_hash=0, safe_lookup_min=0, suffix_is_text_only=lambda n: True
+        )
+        is None
+    )
+    assert m._retention[key][0] == 400.0
+
+
+def test_canonical_seams_without_a_write_do_not_clone(monkeypatch):
+    from mlx_vlm.apc_coordinator import APCCoordinator
+
+    m = _mgr()
+    c = _coordinator(m)
+    ids = list(range(6000, 6300))
+    plan = {"points": [(80, 300), (113, 300)], "writes": [(113, 300)], "written": 0}
+    c.set_request(ids, plan)
+    assert c.checkpoint_lengths(ids, set()) == [80, 113]
+    calls = []
+    monkeypatch.setattr(
+        APCCoordinator, "store_checkpoint", lambda *a, **k: calls.append(a) or True
+    )
+    assert not c.store_checkpoint(ids[:80], [])
+    assert not calls
+    assert c.store_checkpoint(ids[:113], [])
+    assert len(calls) == 1
+    assert plan["written"] == 113
+
+
+def test_identical_prompt_policies_remain_fifo_until_prefill_finishes():
+    c = _coordinator(_mgr())
+    ids = list(range(2000, 2200))
+    first = {"points": [(80, 300)], "written": 0}
+    second = {"points": [(113, 3600)], "written": 0}
+    c.set_request(ids, first)
+    c.set_request(ids, second)
+    assert c.request(ids) is first
+    c.release_request(ids, first)
+    assert c.request(ids) is second
+    c.release_request(ids, second)
+    assert c.request(ids) is None

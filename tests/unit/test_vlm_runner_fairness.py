@@ -39,6 +39,6 @@ def test_other_modality_waits_one_slice_not_the_whole_generation(runner, monkeyp
         "the generation must still be running for this to mean anything"
     )
     assert waited < 20 * STEP_S, f"waited {waited:.3f}s behind the generation"
-    t.join(10)
+    t.join(120)  # generous: slow when tests run on efficiency cores
     assert len(tokens) == 200
     ex.shutdown(wait=True)

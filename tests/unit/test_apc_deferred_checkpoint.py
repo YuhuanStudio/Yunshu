@@ -337,3 +337,45 @@ def test_multirow_restore_keeps_upstream_merge():
     merged, prefix = coordinator.merge_rows(rows, [32, 48])
     assert prefix == 48
     assert merged[0].keys.shape[:3] == (2, 1, 48)
+
+
+def test_deferred_policy_survives_prefill_descriptor_release():
+    from mlx_vlm.apc import _sequence_hash
+
+    manager = _mgr()
+    coordinator = _coordinator(manager)
+    ids = list(range(300))
+    policy = {"points": [(80, 300), (113, 3600)], "writes": [(113, 3600)], "written": 0}
+    coordinator.set_request(ids, policy)
+    coordinator.checkpoint_lengths(ids, set())
+    coordinator.defer_checkpoint_stores = True
+    rec = ArraysCache(1)
+    rec.cache = [mx.ones((1, 2, 3))]
+    assert not coordinator.store_checkpoint(ids[:80], [rec])
+    assert coordinator.store_checkpoint(ids[:113], [rec])
+    assert policy["written"] == 0
+    assert manager._span_plans == {}
+    coordinator.release_request(ids, policy)
+    coordinator.flush_deferred_checkpoints()
+    key = _sequence_hash(tuple(ids[:113]), 0, manager.block_size)
+    assert policy["written"] == 113
+    assert manager._span_plans[key] == (80,)
+    assert manager._retention[key][1] == 3600
+
+
+def test_rejected_deferred_admission_does_not_publish_policy(monkeypatch):
+    manager = _mgr()
+    coordinator = _coordinator(manager)
+    ids = list(range(300))
+    policy = {"points": [(113, 300)], "written": 0}
+    coordinator.set_request(ids, policy)
+    coordinator.checkpoint_lengths(ids, set())
+    coordinator.defer_checkpoint_stores = True
+    rec = ArraysCache(1)
+    rec.cache = [mx.ones((1, 2, 3))]
+    assert coordinator.store_checkpoint(ids[:113], [rec])
+    monkeypatch.setattr(manager, "store_exact_cache", lambda *a, **kw: False)
+    coordinator.flush_deferred_checkpoints()
+    assert policy["written"] == 0
+    assert manager._retention == {}
+    assert manager._span_plans == {}
