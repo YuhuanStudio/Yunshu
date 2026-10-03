@@ -306,3 +306,38 @@ def test_aged_running_backlog_job_yields_after_its_slice(q, monkeypatch):
     monkeypatch.setattr(pauser2, "_signal", lambda sig: None)
     assert q._priority_step(pauser2, q.ServingGate(), now) is False
     assert not pauser2.paused
+
+
+def test_short_checks_run_first_within_a_priority(q):
+    import time
+
+    now = time.time()
+    big = dict(
+        id="big",
+        label="wide5-matrix-r3",
+        state="pending",
+        priority=0,
+        submitted=now - 9,
+        env={},
+    )
+    tiny = dict(
+        id="tiny",
+        label="prefill5-identity-tiny-1933",
+        state="pending",
+        priority=0,
+        submitted=now,
+        env={},
+    )
+    low = dict(
+        id="low",
+        label="audit-smoke-x",
+        state="pending",
+        priority=-1,
+        submitted=now - 10,
+        env={},
+    )
+    assert q._pick([big, tiny, low])["id"] == "tiny"
+    assert q._pick([big, low])["id"] == "big"
+    assert not q._is_short(dict(label="tinyllama-bench")) and q._is_short(
+        dict(label="x-smoke")
+    )
