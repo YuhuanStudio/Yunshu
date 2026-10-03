@@ -459,3 +459,20 @@ Agent 重放（opencode 錄製請求，warm 第 2 次起）：TF 0.6.1 105-159 t
 
 I7 checkpoint deferral 候選的 roofline：已量到的 32K turn2 1.037 s 中，首 token 前兩筆 checkpoint store 108 + 107 ms，因此理想 TTFT 上限為少 215 ms（20.7%），不是 decode 加速預測。native single-row cache 在 token emission 前只捕捉 lazy detached snapshot，之後由同一 MLX thread evaluate/admit；batch/custom cache 與 pending snapshot 超出 APC RAM budget 時維持同步路徑，取消會丟棄 pending capture。新回歸測試證明原程式失敗、候選通過（包含對同一 mx.array 的原位修改、KV append、metadata offset 保留與 emit-before-flush）。三組 HTTP A/B 尚未完成，不記錄效能勝負；量測 harness 若發現另一套直接執行的完整 unit suite 同時運行，會失敗而不採用數字。
 128-row 舊門檻補查已完成：同步 baseline 同樣在 generated token 26 分歧，off digest `f7d979e5d0be…`、on `ac026b6e2a96…` 與 512-row / 延後候選完全一致。因此這個 production AR/spec 分歧在原門檻就存在，不能歸因於 512-row 或 I7。第一個 HTTP A/B job 因完整 unit suite 同時運行被污染檢查立即拒絕（rc=1、0 s），沒有採用任何效能數字。
+
+2026-10-03 Prefill checkpoint deferral / restore reservation（Qwen3.8-27B oQ4e-mtp，M5 Max，HTTP greedy 256 output tokens，三輪交錯獨立 server sessions，中位數）：
+
+2026-10-03 11:00 contention 規則更新為 foreign CPU >= 1620%。以下六 jobs 的 JSON 均為 `contended=false`（含 reclassified），不因 result rows 的舊 contended 標記重跑。job wrapper rc=1 是舊 load/quiet 判定；逐 arm 檢查全部 rc=0、six measurement rows、success complete、server engaged proof。資料 `prefill2-http-final-0055/*-0132-{legacy,reserved,tf}.jsonl`，重新收割 `prefill3-reclassified-harvest.json` / `prefill3-reclassified-summary.json`。jobs：`1003-013230-00-prefill2-v2-http-{8192,32768}-{r0,r1,r2}-0132`。
+
+| ctx / kind | cold legacy / reserved / TF (ms) | turn2 legacy / reserved / TF (ms) | warm legacy / reserved / TF (ms) |
+|---|---:|---:|---:|
+| 8K prose | 8463 / 8402 / 8396 | 637 / 564 / 495 | 118 / 112 / 68 |
+| 8K code | 8469 / 8424 / 8399 | 633 / 559 / 495 | 117 / 116 / 70 |
+| 32K prose | 37004 / 36903 / 39035 | 965 / 819 / 653 | 228 / 217 / 104 |
+| 32K code | 37053 / 36899 / 39098 | 986 / 875 / 669 | 240 / 240 / 128 |
+
+Yunshu 實際 MTP；TF 日誌明確 DFlash2。每個 ctx/kind/phase 跨三輪和 arms 的 request hash 相同，turn2 assistant reply 固定。legacy 關掉 buffer cache、使用 stock threshold128、同步 checkpoint、upstream merge；reserved 為 threshold512、保留 buffer cache、deferred checkpoint、single-row KV reservation。因此此表是整組 behavior A/B，不能把全部差值歸因於 deferral，也不能宣稱 legacy/reserved token 位元相等（prefill arithmetic 不同）。32K cold 比 TF 快約 5.5%，turn2 / warm 仍落後 TF。
+
+同 arithmetic 的固定成本 probe `1003-005349-00-prefill2-v2-fixed-0053`（rc0+complete，JSON clean/reclassified，三輪交錯）：32K prefix 加 66 fresh tokens，sync / deferred / reserved TTFT median 576.48 / 472.82 / 467.09 ms；sync/deferred 都使用 upstream merge，故 deferred 少 103.66 ms（18.0%）。三種模式 generated token digests 相同。後續一 token revisit 約 111–113 ms，首個 allocator-cold revisit 約 205–215 ms，不能用 deferral 解釋一 token 固定 overhead。reservation 的 suffix 差值只有 5.73 ms（1.2%），保留數字、不單獨作穩定收益聲明。
+
+正確性：`1003-005349-00-prefill2-v2-identity-0053` rc0+complete，8K/32K prose/code 的 suffix/chat cold/partial/full APC token 與逐 token logprob 相同（max_abs_dlp=0）；`1003-005349-00-prefill2-v2-parity-0053`、合併後 `1003-101326-00-prefill3-merged-parity-1022` rc0+complete，1K prose/code serving spec off/on token digests 相同。先前第26 token AR/spec 分歧已以共同 target kernel context 修正。合併 main cache TTL/span policy 時 metadata 隨 detached snapshot 捕捉，只在成功 admission 後發布；max_tokens=1 的 first token 先 emit、再 flush、最後 DONE，避免 written usage race（30577356 / 6a6ec759）。
