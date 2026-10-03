@@ -15,6 +15,12 @@ from yunshu_engine.apc_manager import SpillDiskStore, YunshuAPCManager  # noqa: 
 from yunshu_engine.apc_warm import WarmTier  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _allow_test_disk_restore(monkeypatch):
+    # These tiny roundtrip tests exercise storage, not the host's free-RAM policy.
+    monkeypatch.setenv("APC_DISK_MIN_FREE_RAM_GB", "0")
+
+
 def _cache(n: int, seed: int = 0, dtype=mx.bfloat16):
     """Hybrid-style prompt cache: float32 recurrent state + bf16 dense KV of n tokens."""
     mx.random.seed(seed)

@@ -256,3 +256,16 @@ def test_cli_serve_set_rejects_unknown_key():
     r = CliRunner().invoke(app, ["serve", "--set", "mtpp=1"])
     assert r.exit_code == 2
     assert "YUNSHU_MTP" in r.output
+
+
+def test_path_settings_expand_the_home_directory(monkeypatch, tmp_path):
+    # A "~/..." default used to reach Path() unexpanded and create ./~/.cache/... in the cwd.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert settings.get("YUNSHU_SSD_CACHE_DIR") == str(
+        tmp_path / ".cache/yunshu/kv-ssd"
+    )
+    monkeypatch.setenv("YUNSHU_SSD_CACHE_DIR", "~/elsewhere")
+    assert settings.get("YUNSHU_SSD_CACHE_DIR") == str(tmp_path / "elsewhere")
+    for name, s in settings.REGISTRY.items():
+        if s.type == "path":
+            assert not str(settings.get(name) or "").startswith("~"), name

@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 
 try:
     import mlx.core as mx
@@ -500,3 +501,22 @@ def get_hardware_profile() -> dict:
         "mlx_lm_version": get_mlx_lm_version(),
         "adaptive_defaults": adaptive,
     }
+
+
+@lru_cache(maxsize=1)
+def is_paravirtual_metal() -> bool:
+    """Apple's VM Metal device, not a physical M1-M5 GPU.
+
+    Hosted macOS 14/15 reports air64_v26/v27. Its stock BF16 prefill is
+    span-dependent and large keyed sampling graphs can hang the GPU driver.
+    Require both identifiers; OS version and Apple GPU family are insufficient.
+    """
+    if not HAS_MLX:
+        return False
+    try:
+        info = mx.device_info(mx.gpu)
+        return info.get("device_name") == "Apple Paravirtual device" and bool(
+            re.fullmatch(r"air64_v\d+", str(info.get("architecture", "")))
+        )
+    except Exception:
+        return False

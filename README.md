@@ -33,10 +33,12 @@ paid for. The first fully tuned model is **Qwen3.8-27B**.
 
 ## Quickstart
 
+For model selection, external storage, readiness checks and upgrades, follow the [first-run guide](docs/guides/FIRST_RUN.md).
+
 Apple Silicon, macOS 14+, Python 3.13+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-uv tool install "yunshu[vision]"
+uv tool install --python 3.13 "yunshu[vision]"
 yunshu doctor                                   # checks this Mac and says how to fix problems
 yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit
 yunshu serve -m mlx-community/Qwen3.5-9B-MLX-4bit
@@ -195,9 +197,12 @@ comparison tables are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 | Cold TTFT, 8K prompt | 8.6 s | 8.5 s |
 | Cold TTFT, 32K prompt | 38.3 s | 39.4 s |
 | Repeated / edited long prompt | restores from the prefix cache instead of re-prefilling | — |
-| Decode, short code prompt | ~90–98 tok/s (DFlash2) | ~140 tok/s (DFlash2) |
+| Follow-up turn TTFT, 8K / 32K code | 512 / 721 ms | 505 / 670 ms |
+| Decode, short code prompt | ~110 tok/s (DFlash2) | ~140 tok/s (DFlash2) |
+| JSON-schema / tool-call output, warm | 111 / 78 tok/s (speculative decoding stays on) | — |
 
-TensorFold is currently faster at single-request decode; closing that gap is the main ongoing work.
+TensorFold is still faster at single-request decode and at 32K follow-up turns; closing those gaps is the
+main ongoing work. Structured output keeps speculative decoding (23 tok/s without it).
 Speculation never changes Yunshu's greedy output. Accuracy against the stock MLX path is checked at
 three levels (logit alignment, greedy divergence, paired downstream evals) in
 [Accuracy](docs/guides/ACCURACY.md).

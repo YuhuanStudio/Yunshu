@@ -2,7 +2,7 @@
 """Row-invariant quantized projections for the round driver (any row count).
 
 TensorFold's lane matmul (``kernels.tensorfold.lane_qmm``, MIT) multiplies bf16
-rows by MLX affine-quantized weights (2..8 bits) on the M5 tensor units with a
+rows by MLX affine-quantized weights (2..8 bits) with hardware-selected cooperative tensor fragment layouts and a
 per-group fma order fixed by the weight shape: a row's result has the same bits
 whether it is alone or one of up to 128 rows in the call. ``LaneLinear`` holds
 a projection in the kernel's layout (weight tiled 32 columns wide, group-major
@@ -25,6 +25,7 @@ from typing import Any
 import mlx.core as mx
 import mlx.nn as nn
 
+from . import nax_prefill
 from .tensorfold import lane_qmm
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,12 @@ def set_stock_rows(rows: int) -> None:
 def prefill_kernel_id() -> str:
     """Names the prefill arithmetic; part of every APC key and SSD namespace, so states written
     by one prefill kernel are never read back as another's."""
-    return f"stock-qmm-gt{STOCK_ROWS}" if STOCK_ROWS else "lane-qmm"
+    base = f"stock-qmm-gt{STOCK_ROWS}" if STOCK_ROWS else "lane-qmm"
+    return (
+        base + "+" + nax_prefill.arithmetic_id()
+        if STOCK_ROWS and nax_prefill.enabled()
+        else base
+    )
 
 
 def eligible(module: Any) -> bool:
@@ -59,7 +65,7 @@ def eligible(module: Any) -> bool:
     if module.get("biases") is None or module.scales.dtype != mx.bfloat16:
         return False
     bits, group = int(module.bits), int(module.group_size)
-    if not lane_qmm.readable(bits, group):
+    if not lane_qmm.readable(bits, group) or not lane_qmm.ready():
         return False
     n = int(module.weight.shape[0])
     k = int(module.weight.shape[1]) * 32 // bits
@@ -119,12 +125,16 @@ class LaneLinear(nn.Module):
             f"bits={self.bits}, group_size={self.group_size}, lane"
         )
 
-    def _rows(self, x2: mx.array) -> mx.array:
+    def _rows(self, x2: mx.array, *, prefill_narrow: bool = False) -> mx.array:
         # 17..48 rows: 16-row threadgroup blocks (same bits per row as the
         # default 32-row block, 10-35% faster on projections up to ~20K wide;
         # the 248K-wide LM head is slower that way)
         m = int(x2.shape[0])
-        block = 16 if 16 < m <= 48 and self.output_dims < 100_000 else None
+        block = (
+            32
+            if prefill_narrow
+            else (16 if 16 < m <= 48 and self.output_dims < 100_000 else None)
+        )
         return lane_qmm.lane_matmul(
             x2,
             self.weight,
@@ -133,6 +143,7 @@ class LaneLinear(nn.Module):
             group=self.group_size,
             row_block=block,
             row_limit=PIECE,
+            prefill_narrow=prefill_narrow,
         )
 
     def stock(self) -> tuple[mx.array, mx.array, mx.array]:
@@ -195,7 +206,29 @@ class LaneLinear(nn.Module):
         if dtype != mx.bfloat16:
             x2 = x2.astype(mx.bfloat16)
         m = int(x2.shape[0])
-        if STOCK_ROWS and m > STOCK_ROWS and self.output_dims >= NARROW:
+        if (
+            STOCK_ROWS
+            and m > STOCK_ROWS
+            and nax_prefill.narrow_eligible(
+                m, self.input_dims, self.output_dims, self.bits, self.group_size
+            )
+        ):
+            nax_prefill.record_dispatch(m, self.input_dims, self.output_dims, self.bits)
+            y = self._rows(x2, prefill_narrow=True)
+        elif (
+            STOCK_ROWS
+            and m > STOCK_ROWS
+            and nax_prefill.eligible(
+                m,
+                self.input_dims,
+                self.output_dims,
+                self.bits,
+                self.group_size,
+                self.tiled,
+            )
+        ):
+            y = nax_prefill.matmul(x2, self.weight, self.sbt, bits=self.bits)
+        elif STOCK_ROWS and m > STOCK_ROWS and self.output_dims >= NARROW:
             weight, scales, biases = self.stock()
             y = mx.quantized_matmul(
                 x2,

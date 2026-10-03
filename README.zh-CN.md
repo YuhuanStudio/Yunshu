@@ -35,7 +35,7 @@
 需要 Apple Silicon、macOS 14 以上、Python 3.13 以上与 [uv](https://docs.astral.sh/uv/)。
 
 ```bash
-uv tool install "yunshu[vision]"
+uv tool install --python 3.13 "yunshu[vision]"
 yunshu doctor                                   # 检查这台 Mac，并说明怎么修
 yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit
 yunshu serve -m mlx-community/Qwen3.5-9B-MLX-4bit
@@ -181,9 +181,11 @@ Qwen3.8-27B（oQ4e），M5 Max 128 GB，单一请求，贪婪解码。方法、�
 | 冷启动首字延迟，8K prompt | 8.6 秒 | 8.5 秒 |
 | 冷启动首字延迟，32K prompt | 38.3 秒 | 39.4 秒 |
 | 重复或修改过的长 prompt | 从前缀缓存还原，不必重新预填 | — |
-| 解码，短代码 prompt | 约 90–98 tok/s（DFlash2） | 约 140 tok/s（DFlash2） |
+| 后续回合首字延迟，8K / 32K 代码 | 512 / 721 毫秒 | 505 / 670 毫秒 |
+| 解码，短代码 prompt | 约 110 tok/s（DFlash2） | 约 140 tok/s（DFlash2） |
+| JSON schema / 工具调用输出，warm | 111 / 78 tok/s（推测解码照常启用） | — |
 
-目前 TensorFold 的单请求解码较快，缩小这个差距是正在进行的主要工作。推测解码永远不会改变
+目前 TensorFold 的单请求解码与 32K 后续回合仍较快，缩小这些差距是正在进行的主要工作。结构化输出也照常使用推测解码（不用时为 23 tok/s）。推测解码永远不会改变
 Yunshu 的贪婪输出。相对于原版 MLX 路径的准确度，分三个层次检查（logit 对齐、贪婪分歧、成对下游评测），
 见 [准确度](docs/guides/ACCURACY.md)。
 

@@ -1547,6 +1547,13 @@ class VLMEngine:
         if settings.get("YUNSHU_KV_PRECISION") != "bf16":
             logger.warning("YUNSHU_ROUND_DRIVER: int8 KV keeps the upstream path")
             return False
+        from .kernels.tensorfold.lane_qmm import ready
+
+        if not ready():
+            logger.warning(
+                "YUNSHU_ROUND_DRIVER: lane arithmetic self-test failed; using upstream runner"
+            )
+            return False
         return True
 
     def _build_batch_runner(self, model_path: str):
@@ -1558,7 +1565,27 @@ class VLMEngine:
         Qwen3.5-family only (``_SPEC_MODEL_TYPES``); ``YUNSHU_MTP=0`` disables the
         MTP draft.
         """
+        from .kernels import nax_prefill
+        from .utils.hardware import is_paravirtual_metal
         from .vlm_batch_runner import VLMBatchRunner
+
+        nax_prefill.disable()
+
+        if is_paravirtual_metal():
+            # air64's stock BF16 prefix arithmetic differs by prefill span.
+            # Keep cold upstream forwards, without APC or custom verify/cache kernels.
+            logger.warning(
+                "Apple Paravirtual Metal: using stock VLM runner without APC or speculation"
+            )
+            self._prefix_invariant_dispatch = False
+            self._apc_prefill_stride = 0
+            runner = VLMBatchRunner(
+                self._model, self._processor, executor=self._executor
+            )
+            runner.clear_on_idle = bool(getattr(self, "_mx_large_model", False))
+            runner.stop_tokens = set(self._get_eos_ids())
+            runner.inflight = lambda: self._active_count
+            return runner
 
         spec_family = self._config.get("model_type") in self._SPEC_MODEL_TYPES
         lm = self._model.language_model
@@ -1660,9 +1687,9 @@ class VLMEngine:
                 # (M5-class tensor ops; sg8 elsewhere). 27B, in-process vs the
                 # NAX packed kernel: MTP / DFlash2 decode +0..+17% at 1K-131K
                 # with identical tokens, and 0.6 GiB less memory (no repacked copy).
-                from .kernels.ragged_attention import tile_ready
+                from .kernels.tensorfold.lane_qmm import ready
 
-                if tile_ready():
+                if ready():
                     from .kernels import lane_linear
 
                     kernels["lane_linear"] = lane_linear.convert(
@@ -1675,6 +1702,21 @@ class VLMEngine:
                         and not use_driver
                     ):
                         lane_linear.set_stock_rows(lane_linear.STOCK_MIN_ROWS)
+                        text_cfg = self._config.get("text_config", self._config)
+                        if (
+                            kernels["lane_linear"]
+                            and text_cfg.get("hidden_size") == 5120
+                            and text_cfg.get("num_hidden_layers") == 64
+                            and nax_prefill.enable()
+                        ):
+                            nax_prefill.warmup(
+                                {
+                                    module.bits
+                                    for _, module in lm.named_modules()
+                                    if isinstance(module, lane_linear.LaneLinear)
+                                }
+                            )
+                            kernels["nax_prefill"] = nax_prefill.arithmetic_id()
                     kernels["prefill_matmul"] = lane_linear.prefill_kernel_id()
                 if settings.get("YUNSHU_PREFILL_GDN") == "chunked" and not use_driver:
                     from .kernels import gdn_prefill
@@ -1933,15 +1975,30 @@ class VLMEngine:
     def _runner_events(self, input_ids, **kw):
         """``_runner_events_impl`` plus the optional generated-vs-delivered capture
         (``YUNSHU_DEBUG_STREAM_CAPTURE``)."""
+        tools = kw.pop("tool_recovery_tools", None)
+        events = self._runner_events_impl(input_ids, **kw)
+        if tools:
+            from .tool_format import formats_for_tokenizer
+            from .tool_thinking import recover_tool_events
+
+            formats = formats_for_tokenizer(self._tokenizer)
+            if any(fmt.name == "glm47" for fmt in formats):
+                ids = self._tokenizer.encode(
+                    "<|observation|>", add_special_tokens=False
+                )
+                if len(ids) == 1 and ids[0] not in (kw.get("stop_token_ids") or []):
+                    events = recover_tool_events(
+                        events, observation_id=ids[0], formats=formats, tools=tools
+                    )
         path = settings.get_str("YUNSHU_DEBUG_STREAM_CAPTURE")
         if not path:
-            yield from self._runner_events_impl(input_ids, **kw)
+            yield from events
             return
         ids: list[int] = []
         pieces: list[str] = []
         finish = None
         try:
-            for event in self._runner_events_impl(input_ids, **kw):
+            for event in events:
                 text, token, _state, finish_reason = event[:4]
                 if token is not None:
                     ids.append(int(token))
@@ -2362,6 +2419,7 @@ class VLMEngine:
             xtc_probability=float(kwargs.get("xtc_probability") or 0.0),
             xtc_threshold=float(kwargs.get("xtc_threshold") or 0.0),
             tool_spec=kwargs.get("_tool_spec"),
+            tool_recovery_tools=kwargs.get("_tool_recovery_tools"),
         )
 
     def _tool_guide(self, spec: dict | None, thinking_open: bool):
@@ -2604,15 +2662,21 @@ class VLMEngine:
                 patched.append(tc)
                 continue
             func = tc.get("function")
-            if isinstance(func, dict) and isinstance(func.get("arguments"), str):
+            if isinstance(func, dict) and (
+                func.get("arguments") is None or isinstance(func.get("arguments"), str)
+            ):
                 try:
-                    parsed = _json.loads(func["arguments"])
+                    parsed = _json.loads((func.get("arguments") or "").strip() or "{}")
                 except Exception:
                     parsed = {"value": func["arguments"]}
                 tc = dict(tc)
                 tc["function"] = dict(func)
                 tc["function"]["arguments"] = (
-                    parsed if isinstance(parsed, dict) else {"value": parsed}
+                    parsed
+                    if isinstance(parsed, dict)
+                    else {}
+                    if parsed is None
+                    else {"value": parsed}
                 )
             patched.append(tc)
         return patched
@@ -2650,6 +2714,7 @@ class VLMEngine:
         parallel = kwargs.pop("parallel_tool_calls", True)
         if tools:
             extra["tools"] = tools
+            kwargs["_tool_recovery_tools"] = tools
             if settings.get_bool("YUNSHU_TOOL_GRAMMAR"):
                 from .tool_call_grammar import normalize_tool_choice
 

@@ -33,8 +33,15 @@ def _processor():
     return SimpleNamespace(tokenizer=SimpleNamespace(stopping_criteria=_Stop()))
 
 
-@pytest.fixture(scope="module")
-def model():
+@pytest.fixture(scope="module", params=[mx.bfloat16, mx.float32])
+def model(request):
+    from yunshu_engine.utils.hardware import is_paravirtual_metal
+
+    if request.param == mx.bfloat16 and is_paravirtual_metal():
+        pytest.skip(
+            "Apple Paravirtual air64 stock BF16 prefill is span-dependent; "
+            "serving disables APC there (FP32 cache roundtrips remain tested)"
+        )
     from mlx_vlm.models.qwen3_5.config import TextConfig
     from mlx_vlm.models.qwen3_5.language import LanguageModel
 
@@ -66,7 +73,10 @@ def model():
             vision_start_token_id=1022,
         ),
     )
-    lm.set_dtype(mx.bfloat16)
+    lm.set_dtype(request.param)
+    # Serving calls eval(): training uses a chunked parallel GDN scan whose
+    # BF16 arithmetic is not checkpoint-span invariant on every Apple GPU.
+    lm.eval()
     mx.eval(lm.parameters())
 
     class Embeds:

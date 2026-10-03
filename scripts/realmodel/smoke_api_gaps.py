@@ -56,11 +56,13 @@ def red_png_b64() -> str:
 
 
 def version():
+    from yunshu_engine.version import yunshu_version
+
     v = httpx.get(B + "/version").json()
-    return v.get("version") == "0.1.2", v
+    return v.get("version") == yunshu_version(), v
 
 
-chk("version 0.1.2", version)
+chk("version matches the checkout", version)
 
 
 def logprob_consistency():

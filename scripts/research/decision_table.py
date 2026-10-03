@@ -21,6 +21,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 
 def records(path: str) -> list[dict]:
     out = []
@@ -47,6 +49,12 @@ def job_evidence(directory: Path) -> dict[str, dict]:
 
 def verdict(recs: list[dict], mode: str | None, job: dict | None = None) -> str | None:
     """None when the file is trustworthy, else the reason it is not."""
+    from device_evidence import require_same_device
+
+    try:
+        require_same_device(recs + ([job] if job else []), performance=True)
+    except ValueError as exc:
+        return str(exc)
     done = [r for r in recs if r.get("complete")]
     if not done or not recs[-1].get("complete"):
         return "no final complete record"

@@ -5,8 +5,14 @@ Qwen3.8-27B is the first fully tuned model; other modalities are supported capab
 Latest release: v0.1.2 (2026-10-02), following v0.1.1 (2026-09-29). Benchmark pages
 label later main measurements as unreleased. Start at the top-level [README](../README.md).
 
-Using it:
+## Start here
 
+- [Installation and quickstart](../README.md#quickstart)
+- [Model support and validation](guides/MODEL_SUPPORT.md)
+
+## Use and configure
+
+- [guides/FIRST_RUN.md](guides/FIRST_RUN.md): install, choose a cached or small model, readiness, first chat/API request and upgrades
 - [guides/CLIENTS.md](guides/CLIENTS.md): connecting OpenAI / Anthropic SDKs, coding agents, Open
   WebUI
 - [guides/SERVICE.md](guides/SERVICE.md): running in the background (launchd), uninstalling
@@ -18,7 +24,13 @@ Using it:
 - [guides/AGENT_COMPAT.md](guides/AGENT_COMPAT.md): coding-agent feature evidence
 - [BENCHMARKS.md](BENCHMARKS.md): where each published number comes from and how to reproduce it
 
-Maintaining it: [RELEASING.md](../RELEASING.md) (cutting a release),
+## Contribute and maintain
+
+- [Contributing](../CONTRIBUTING.md) and [security/privacy](../SECURITY.md)
+- [Roadmap and RFC process](ROADMAP.md)
+- [Hardware validation plan](guides/HARDWARE_VALIDATION.md)
+
+[RELEASING.md](../RELEASING.md) (cutting a release),
 [guides/RELEASE_GATE.md](guides/RELEASE_GATE.md) (the end-to-end acceptance run a release must pass) and
 [guides/RELEASE_READINESS.md](guides/RELEASE_READINESS.md) (the outward-facing checklist).
 

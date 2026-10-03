@@ -71,3 +71,7 @@ testresource/
 docs/reports/history/
 docs/research/
 scripts/research/local.env
+
+# Isolated laptop validation models, test home and uv cache
+/.m3-home/
+/.uv-cache/
