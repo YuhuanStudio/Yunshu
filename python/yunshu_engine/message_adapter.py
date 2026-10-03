@@ -614,7 +614,17 @@ class GenericMessageAdapter(MessageAdapter):
     """Generic: pass-through with minimal cleanup."""
 
     def adapt(self, messages: list[dict]) -> list[dict]:
-        return [dict(m) for m in messages]
+        # Unknown/renamed checkpoints can still use a system-first template.
+        # Preserve instruction priority rather than treating reminders as user text.
+        systems = [
+            dict(m, role="system")
+            for m in messages
+            if m.get("role") in ("system", "developer")
+        ]
+        turns = [
+            dict(m) for m in messages if m.get("role") not in ("system", "developer")
+        ]
+        return _merge_leading_system(systems) + turns
 
     def family_name(self) -> str:
         return "generic"

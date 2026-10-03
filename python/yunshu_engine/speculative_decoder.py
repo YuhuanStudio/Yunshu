@@ -480,6 +480,8 @@ class SpeculativeDecoder:
         input_ids: mx.array,
         cache: list,
         temperature: float = 0.0,
+        *,
+        cache_contains_last_token: bool = True,
     ) -> VerifyResult:
         """Verify draft tokens against the target model in one pass.
 
@@ -522,20 +524,21 @@ class SpeculativeDecoder:
         # misaligned.  After rollback, the cache is as if last_token was never
         # processed, so feeding [last_tok, d0..dK-1] produces K+1 logits
         # correctly: logits[0] verifies d0, logits[K] is the bonus.
-        try:
-            from mlx_lm.models.cache import trim_prompt_cache
+        if cache_contains_last_token:
+            try:
+                from mlx_lm.models.cache import trim_prompt_cache
 
-            trim_prompt_cache(cache, 1)
-        except Exception:
-            trimmed = False
-            for c in cache:
-                if hasattr(c, "trim"):
-                    c.trim(1)
-                    trimmed = True
-            if not trimmed:
-                logger.warning(
-                    "Cannot rollback KV cache — verification logits may be misaligned"
-                )
+                trim_prompt_cache(cache, 1)
+            except Exception:
+                trimmed = False
+                for c in cache:
+                    if hasattr(c, "trim"):
+                        c.trim(1)
+                        trimmed = True
+                if not trimmed:
+                    logger.warning(
+                        "Cannot rollback KV cache — verification logits may be misaligned"
+                    )
 
         # Build aligned input: [last_token(s), d0, d1, ..., dK-1]
         last_tok = input_ids[:, -1:]  # [1, 1] — last token from previous step
@@ -1124,7 +1127,11 @@ class SpeculativeDecoder:
             ):
                 break
             verify_result = self.verify_draft(
-                draft_result, last_tok_arr, target_cache, temperature=temperature
+                draft_result,
+                last_tok_arr,
+                target_cache,
+                temperature=temperature,
+                cache_contains_last_token=False,
             )
 
             # SP-PEN: Apply penalty/bias to bonus token.

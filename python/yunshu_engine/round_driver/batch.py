@@ -196,18 +196,29 @@ def attend(
     idx = plan.scatter_index(HKV, slots.cap)
     slots.k[i] = _scatter_rows(slots.k[i], idx, keys)
     slots.v[i] = _scatter_rows(slots.v[i], idx, values)
-    tile = H // HKV <= 8 and ra.tile_ready()
-    out = ra.ragged_decode_attention(
-        queries,
-        slots.k[i],
-        slots.v[i],
-        plan.lengths,
-        at.scale,
-        max_length=plan.max_length,
-        row_lengths=plan.length_list,
-        slots=plan.slot_ids,
-        impl="tile" if tile else "auto",
-    )
+    if queries.dtype != mx.bfloat16 or keys.dtype != mx.bfloat16:
+        # The ragged Metal kernels accept bf16 only. MTP heads may retain
+        # fp16/fp32 weights; keep their arithmetic instead of rounding to bf16.
+        ks = mx.take(slots.k[i], plan.slot_ids, axis=0)[..., : plan.max_length, :]
+        vs = mx.take(slots.v[i], plan.slot_ids, axis=0)[..., : plan.max_length, :]
+        positions = mx.array(plan.n0, dtype=mx.int32)[:, None] + mx.arange(T)[None, :]
+        mask = mx.arange(plan.max_length)[None, None, :] <= positions[:, :, None]
+        out = mx.fast.scaled_dot_product_attention(
+            queries, ks, vs, scale=at.scale, mask=mask[:, None, :, :]
+        )
+    else:
+        tile = H // HKV <= 8 and ra.tile_ready()
+        out = ra.ragged_decode_attention(
+            queries,
+            slots.k[i],
+            slots.v[i],
+            plan.lengths,
+            at.scale,
+            max_length=plan.max_length,
+            row_lengths=plan.length_list,
+            slots=plan.slot_ids,
+            impl="tile" if tile else "auto",
+        )
     out = out.transpose(0, 2, 1, 3).reshape(B, T, -1) * mx.sigmoid(gate)
     return at.o_proj(out if pack is None else pack.unpad(out))
 
