@@ -18,8 +18,24 @@ ROOT = Path(__file__).resolve().parents[2]
 READMES = [ROOT / name for name in ("README.md", "README.zh-CN.md", "README.zh-TW.md")]
 
 
-@pytest.mark.parametrize("path", READMES, ids=lambda p: p.name)
-def test_readme_local_links_resolve(path):
+@pytest.mark.parametrize(
+    "path",
+    READMES
+    + [
+        ROOT / name
+        for name in (
+            "CONTRIBUTING.md",
+            "SECURITY.md",
+            "RELEASING.md",
+            "docs/README.md",
+            "docs/ROADMAP.md",
+            "docs/guides/HARDWARE_VALIDATION.md",
+            "docs/guides/MODEL_SUPPORT.md",
+        )
+    ],
+    ids=lambda p: p.name,
+)
+def test_public_doc_local_links_resolve(path):
     for target in re.findall(r"\]\(([^)]+)\)", path.read_text()):
         url = urlsplit(target)
         if url.scheme or not url.path:
