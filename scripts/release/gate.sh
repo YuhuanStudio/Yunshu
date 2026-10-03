@@ -32,6 +32,8 @@ mkdir -p $OUT $GATE_ROOT
 OUT=${OUT:A}
 RESULTS=$OUT/results-$(date +%H%M%S).jsonl
 GH=$GATE_ROOT/home                         # HOME for every yunshu command and server
+rm -rf $GH/.yunshu/cache                   # each gate starts cold; caches from earlier gates are not kept
+trap 'rm -rf $GH/.yunshu/cache' EXIT
 BV=$GATE_ROOT/bin-vision/yunshu            # README quickstart install: yunshu[vision]
 BA=$GATE_ROOT/bin-all/yunshu               # yunshu[all]: audio, omni, generation too
 export UV_CACHE_DIR=$GATE_ROOT/uv-cache UV_PYTHON_INSTALL_DIR=$GATE_ROOT/uv-python
