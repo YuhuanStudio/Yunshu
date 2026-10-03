@@ -175,6 +175,33 @@ def require_cache_reuse(result, phase):
         raise RuntimeError(f"{phase} did not reuse the cache")
 
 
+def cache_state_differences(baseline, speculative):
+    """Compare tensor slots, preserving K/V identity and missing-state evidence.
+
+    KVCache and BatchKVCache may represent the same bits; their class names
+    are diagnostic metadata rather than part of the numerical comparison.
+    """
+
+    def slots(details):
+        counts, result = {}, {}
+        for row in details:
+            layer = row[0]
+            slot = counts.get(layer, 0)
+            counts[layer] = slot + 1
+            result[layer, slot] = row
+        return result
+
+    left, right = slots(baseline), slots(speculative)
+    differences = []
+    for layer, slot in sorted(left.keys() | right.keys()):
+        a, b = left.get((layer, slot)), right.get((layer, slot))
+        if a is None or b is None or a[2:] != b[2:]:
+            differences.append(
+                {"layer": layer, "slot": slot, "baseline": a, "speculative": b}
+            )
+    return differences
+
+
 def second_turn(prompt, result, extra):
     """Messages for a follow-up turn that extends the first (prefix reuse)."""
     text, _reasoning, tool_calls, _finish = result
@@ -560,6 +587,9 @@ def main():
                     rep=rep,
                     mode=mode,
                     case=case,
+                    differences=cache_state_differences(
+                        baseline["cache_state_details"], result["cache_state_details"]
+                    ),
                 )
             for field in fields:
                 if result[field] != baseline[field]:

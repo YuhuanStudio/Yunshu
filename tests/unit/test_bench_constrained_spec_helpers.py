@@ -103,3 +103,21 @@ def test_cache_reuse_probe_fails_closed_on_a_miss(phase):
     with pytest.raises(RuntimeError, match="did not reuse"):
         bench.require_cache_reuse({"xy": {"cached_tokens": 0}}, phase)
     bench.require_cache_reuse({"xy": {"cached_tokens": 29}}, phase)
+
+
+def test_cache_diff_identifies_state_slot_and_ignores_container_class():
+    bench = _load()
+    ar = [
+        [3, "KVCache", [1, 4, 185, 256], "bf16", "a"],
+        [3, "KVCache", [1, 4, 185, 256], "bf16", "b"],
+    ]
+    spec = [
+        [3, "BatchKVCache", [1, 4, 185, 256], "bf16", "a"],
+        [3, "BatchKVCache", [1, 4, 185, 256], "bf16", "c"],
+    ]
+    assert bench.cache_state_differences(ar, spec) == [
+        {"layer": 3, "slot": 1, "baseline": ar[1], "speculative": spec[1]}
+    ]
+    assert bench.cache_state_differences(ar, spec[:1]) == [
+        {"layer": 3, "slot": 1, "baseline": ar[1], "speculative": None}
+    ]
