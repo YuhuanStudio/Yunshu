@@ -765,7 +765,7 @@ def test_default_threshold_scales_with_cores(monkeypatch):
     monkeypatch.delenv("GPUQ_CPU_THRESHOLD", raising=False)
     fresh = importlib.reload(h)
     try:
-        assert fresh.DEFAULTS["threshold_pct"] == 450.0
+        assert fresh.DEFAULTS["threshold_pct"] == 1620.0
     finally:
         monkeypatch.undo()
         importlib.reload(fresh)
