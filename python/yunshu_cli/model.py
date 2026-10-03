@@ -307,24 +307,41 @@ def pull(
 model_app.command("download", hidden=True)(pull)
 
 
+def resolve_info_model(model: str) -> Path:
+    """Resolve the same local inventory shown by list, refusing ambiguous names."""
+    direct = Path(model).expanduser()
+    if direct.is_dir() and _is_model_dir(direct):
+        return direct
+    base = _get_models_dir()
+    exact = base / model
+    if exact.is_dir() and _is_model_dir(exact):
+        return exact
+    models = scan_models_dir(base) + scan_hf_cache()
+    # Full org/name IDs take precedence over fuzzy matches.
+    matches = [m for m in models if m["name"] == model]
+    if not matches:
+        matches = [m for m in models if model.casefold() in m["name"].casefold()]
+    unique = {Path(m["path"]).resolve(): m for m in matches}
+    if len(unique) == 1:
+        return next(iter(unique))
+    if unique:
+        names = ", ".join(sorted(m["name"] for m in unique.values()))
+        fail(
+            f"Model name {model!r} is ambiguous: {names}. Use a full path or org/name.",
+            code=2,
+        )
+    fail(
+        f"Model not found: {model}. Run yunshu model list to see local models.", code=1
+    )
+    raise AssertionError("fail exits")
+
+
 @model_app.command("info")
 def model_info(
     model: str = typer.Argument(help="Model name or path."),
 ):
     """Show detailed model information."""
-    base = _get_models_dir()
-    model_path = Path(model)
-    if not model_path.exists():
-        model_path = base / model
-    if not model_path.exists() and base.exists():
-        # Try to find by partial match
-        for subdir in base.iterdir():
-            if subdir.is_dir() and model.lower() in subdir.name.lower():
-                model_path = subdir
-                break
-
-    if not model_path.exists():
-        fail(f"Model not found: {model}", code=1)
+    model_path = resolve_info_model(model)
 
     config_path = model_path / "config.json"
     model_type = _detect_model_type(model_path)
