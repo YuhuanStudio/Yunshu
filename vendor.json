@@ -1408,6 +1408,36 @@
       "why": "reuse existing singleton fused prework for shared decode; no new kernel",
       "source_sha256": "e399b508bdd048f9704ee4f665c9a26ec16cbcad5cceca08216ca8b6129cfee7",
       "installed_version": "0.7.4"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/dflash_conv.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.speculative.drafters.dflash2.dflash2",
+      "symbol": "GroupedDynamicCausalConv.prepare",
+      "signature": "(self, hidden: mlx.core.array) -> tuple[mlx.core.array, mlx.core.array]",
+      "license": "MIT",
+      "commit": "v0.7.4",
+      "installed_version": "0.7.4",
+      "source_sha256": "2bb0b2e8a6061f0d8bfa6d72a36a789c17c0953d93e47bbdc194df53b26b0173",
+      "why": "private-instance one-dispatch causal convolution; target/shared readout unchanged"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/dflash_conv.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.speculative.drafters.dflash2.dflash2",
+      "symbol": "GroupedDynamicCausalConv.finish",
+      "signature": "(self, hidden: mlx.core.array, dynamic: mlx.core.array) -> mlx.core.array",
+      "license": "MIT",
+      "commit": "v0.7.4",
+      "installed_version": "0.7.4",
+      "source_sha256": "291dfd879656be3f56db7c58691bf3c8336046b88b5533cde263c24de99ae430",
+      "why": "private-instance one-dispatch causal convolution; target/shared readout unchanged"
     }
   ],
   "watch": [
