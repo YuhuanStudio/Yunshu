@@ -60,6 +60,21 @@ def test_complete_clean_matrix_counts_three_runs():
     assert winner["reps"] == 3
 
 
+def test_explicit_baseline_uses_current_copy_default():
+    rows, receipt = evidence()
+    rows[0]["arms"][0] = "nativecopy8"
+    for row in rows:
+        if row.get("arm") == "main":
+            row["arm"] = "nativecopy8"
+    result = summarize(rows, receipt, baseline="nativecopy8")
+    winner = next(r for r in result if r["arm"] == "copy8")
+    assert winner["gain_pct"] == pytest.approx(2.0)
+    with pytest.raises(ValueError, match="main baseline required"):
+        summarize(rows, receipt)
+    with pytest.raises(ValueError, match="missing baseline required"):
+        summarize(rows, receipt, baseline="missing")
+
+
 @pytest.mark.parametrize(
     "field,value",
     [("rc", 1), ("state", "running"), ("quiet", False), ("contended", True)],

@@ -8,7 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 
 
-def summarize(records, receipt):
+def summarize(records, receipt, *, baseline="main"):
     if receipt.get("rc") != 0 or receipt.get("state") != "done":
         raise ValueError("job must finish with rc 0")
     if not receipt.get("quiet") or receipt.get("contended"):
@@ -64,9 +64,9 @@ def summarize(records, receipt):
         raise ValueError("incomplete or unexpected matrix")
     result = []
     for (ctx, task, arm), rows in sorted(groups.items()):
-        base = groups.get((ctx, task, "main"))
+        base = groups.get((ctx, task, baseline))
         if not base:
-            raise ValueError("main baseline required")
+            raise ValueError(f"{baseline} baseline required")
         tps = statistics.median(r["tps"] for r in rows)
         base_tps = statistics.median(r["tps"] for r in base)
         result.append(
@@ -91,12 +91,14 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("results", type=Path)
     p.add_argument("receipt", type=Path)
+    p.add_argument("--baseline", default="main")
     a = p.parse_args()
     print(
         json.dumps(
             summarize(
                 [json.loads(s) for s in a.results.read_text().splitlines()],
                 json.loads(a.receipt.read_text()),
+                baseline=a.baseline,
             ),
             indent=2,
         )
