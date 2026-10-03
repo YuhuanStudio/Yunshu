@@ -190,3 +190,40 @@ def test_agent_trace_waits_for_primary_and_auxiliary_receipts(tmp_path):
         thread.join()
     with pytest.raises(RuntimeError, match="no primary"):
         bench.read_agent_trace(trace, [{"complete": True}])
+
+
+def test_http_receipt_rejects_nonfinite_json_logprobs(monkeypatch):
+    from types import SimpleNamespace
+
+    bench = _load()
+    chunk = {
+        "choices": [
+            {
+                "delta": {"content": "x"},
+                "finish_reason": "stop",
+                "logprobs": {
+                    "content": [
+                        {
+                            "token": "x",
+                            "logprob": -1.0,
+                            "top_logprobs": [
+                                {"token": "masked", "logprob": float("-inf")}
+                            ],
+                        }
+                    ]
+                },
+            }
+        ],
+        "usage": {"completion_tokens": 1, "prompt_tokens": 1},
+    }
+
+    class Response:
+        def __enter__(self):
+            return iter([(f"data: {json.dumps(chunk)}\n").encode(), b"data: [DONE]\n"])
+
+        def __exit__(self, *args):
+            pass
+
+    monkeypatch.setattr(bench.urllib.request, "urlopen", lambda *a, **kw: Response())
+    with pytest.raises(ValueError, match="nonfinite"):
+        bench.send(SimpleNamespace(url="http://localhost", model="test"), "q", {}, 1)

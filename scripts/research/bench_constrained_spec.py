@@ -262,6 +262,10 @@ def second_turn(prompt, result, extra):
     return messages
 
 
+def reject_nonfinite(value):
+    raise ValueError(f"nonfinite JSON number: {value}")
+
+
 def send(srv, prompt, extra, maximum):
     body = dict(
         model=srv.model,
@@ -293,7 +297,7 @@ def send(srv, prompt, extra, maximum):
             if p == b"[DONE]":
                 done = True
                 break
-            chunk = json.loads(p)
+            chunk = json.loads(p, parse_constant=reject_nonfinite)
             if chunk.get("error"):
                 raise RuntimeError(str(chunk["error"]))
             usage = chunk.get("usage") or usage

@@ -2366,7 +2366,7 @@ class VLMEngine:
                 input_ids, stats=stats, **params
             ):
                 reason = {"budget": "stop"}.get(finish, finish)
-                if not (text or reason):
+                if not (text or reason or lp is not None):
                     continue
                 first = stats.generated == 1 and token is not None
                 ok = deliver(
