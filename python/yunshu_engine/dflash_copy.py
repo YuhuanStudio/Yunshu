@@ -144,7 +144,9 @@ def install() -> bool:
             or callable(getattr(draft, "prepare_target_hidden", None))
             or context_window(draft) is None
             or not tree_verify.supported(lm)
+            or not tree_verify.lane_projections(lm)
             or not tree_verify.lane_ready(lm, cache)
+            or mtp_lane.verify_max_rows(True, lm) < 16
             or _dflash_block_total(draft, kw.get("draft_block_size"))
             > mtp_lane.verify_max_rows(tree_verify.lane_projections(lm), lm)
         ):
@@ -168,3 +170,17 @@ def install() -> bool:
     utils._dflash_rounds = rounds
     dflash._dflash_next_block_size = next_block
     return True
+
+
+def configure(
+    language_model: Any, rows: int, *, invariant: bool, lane_projections: bool
+) -> tuple[int, bool]:
+    """Apply the existing setting to this target and install only the measured lane."""
+    from . import mtp_lane
+
+    limit = mtp_lane.verify_max_rows(lane_projections, language_model)
+    effective = mtp_lane.set_copy_rows(rows, limit)
+    enabled = bool(
+        effective >= 3 and invariant and lane_projections and limit >= 16 and install()
+    )
+    return effective, enabled
