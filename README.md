@@ -33,6 +33,8 @@ paid for. The first fully tuned model is **Qwen3.8-27B**.
 
 ## Quickstart
 
+For model selection, external storage, readiness checks and upgrades, follow the [first-run guide](docs/guides/FIRST_RUN.md).
+
 Apple Silicon, macOS 14+, Python 3.13+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash

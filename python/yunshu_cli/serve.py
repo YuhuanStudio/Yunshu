@@ -16,7 +16,11 @@ from yunshu_engine import settings
 
 console = Console()
 
-serve_app = typer.Typer(help="Start inference server.", no_args_is_help=True)
+serve_app = typer.Typer(
+    help="Start inference server.",
+    no_args_is_help=True,
+    context_settings={"allow_interspersed_args": True},
+)
 
 
 def _is_omni_model(model: str | None) -> bool:
@@ -45,6 +49,9 @@ def _is_omni_model(model: str | None) -> bool:
 
 @serve_app.callback(invoke_without_command=True)
 def serve(
+    model_ref: str | None = typer.Argument(
+        None, help="Model path or Hugging Face ID (also accepted through --model/-m)."
+    ),
     model: str | None = typer.Option(
         None,
         "--model",
@@ -171,6 +178,15 @@ def serve(
     """Start Yunshu inference server."""
     import uvicorn
 
+    from ._output import fail
+
+    if model_ref and model and model_ref != model:
+        fail(
+            "The positional model and --model disagree. Use one model reference.",
+            code=2,
+        )
+    model = model_ref or model
+
     # Flags and --set become highest-precedence settings. They are also
     # exported so worker/reload subprocesses see them.
     overrides: dict[str, object] = {}
@@ -201,8 +217,7 @@ def serve(
         if not sep or name not in settings.REGISTRY:
             close = settings.close_matches(name)
             hint = f" (did you mean {', '.join(close)}?)" if close else ""
-            console.print(f"[red]Error:[/] --set {item!r}: unknown setting{hint}")
-            raise typer.Exit(2)
+            fail(f"--set {item!r}: unknown setting{hint}", code=2)
         overrides[name] = value
     for key, value in overrides.items():
         settings.set_override(key, value)
@@ -210,8 +225,21 @@ def serve(
         for warning in settings.validate(warn=False):
             console.print(f"[yellow]Warning:[/] {warning}")
     except settings.SettingError as exc:
-        console.print(f"[red]Error:[/] {exc}")
-        raise typer.Exit(2) from None
+        fail(str(exc), code=2)
+
+    # Fail before importing/loading a checkpoint when the chosen TCP endpoint
+    # cannot bind. Uvicorn remains the authority at startup (another process
+    # can acquire the port after this check). Unix sockets use their own path.
+    if not uds and not settings.get("YUNSHU_UDS"):
+        try:
+            _check_bind_address(host, port)
+        except OSError as exc:
+            fail(
+                f"Cannot listen on {host}:{port}: {exc}. "
+                "Choose another --port (for example --port 8001), "
+                "or stop the server already using this address.",
+                code=2,
+            )
 
     env = os.environ.copy()
     env.update({k: settings._to_text(v) for k, v in overrides.items()})
@@ -318,6 +346,23 @@ def serve(
         # by the gateway middleware via YUNSHU_MAX_REQUEST_SIZE (set above).
         server_header="Yunshu" if server_header else None,
     )
+
+
+def _check_bind_address(host: str, port: int) -> None:
+    """Check the actual bind address without contacting or stopping its owner."""
+    import socket
+
+    if not 0 <= port <= 65535:
+        raise OSError("port must be between 0 and 65535")
+    addresses = socket.getaddrinfo(
+        host, port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE
+    )
+    for family, socktype, proto, _, address in addresses:
+        with socket.socket(family, socktype, proto) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind(address)
+    if not addresses:
+        raise OSError("no usable bind address")
 
 
 def _rotate_service_log() -> None:

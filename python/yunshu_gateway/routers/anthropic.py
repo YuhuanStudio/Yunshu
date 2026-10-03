@@ -1510,6 +1510,11 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
             from .chat import _append_tool_prefill
 
             messages = _append_tool_prefill(messages, req._tool_prefill)
+            # Diagnostic rendering must include the same assistant continuation.
+            # Keep the marked source intact so cache boundaries still map exactly.
+            _plan["messages"] = _append_tool_prefill(
+                _plan["messages"], getattr(req, "_tool_prefill", "")
+            )
 
     # Non-streaming: register with request tracker for cancellation support
     message_id = f"msg_{uuid.uuid4().hex[:24]}"

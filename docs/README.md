@@ -12,6 +12,7 @@ label later main measurements as unreleased. Start at the top-level [README](../
 
 ## Use and configure
 
+- [guides/FIRST_RUN.md](guides/FIRST_RUN.md): install, choose a cached or small model, readiness, first chat/API request and upgrades
 - [guides/CLIENTS.md](guides/CLIENTS.md): connecting OpenAI / Anthropic SDKs, coding agents, Open
   WebUI
 - [guides/SERVICE.md](guides/SERVICE.md): running in the background (launchd), uninstalling
