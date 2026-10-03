@@ -302,7 +302,12 @@ class ToolCallFunction(BaseModel):
     """Function call within a tool_call."""
 
     name: str
-    arguments: str = ""
+    arguments: str = "{}"
+
+    @field_validator("arguments", mode="before")
+    @classmethod
+    def normalize_empty_arguments(cls, value):
+        return "{}" if value is None or value == "" else value
 
 
 class ToolCall(BaseModel):
@@ -320,6 +325,8 @@ class ChatMessage(BaseModel):
     tool_calls: list[ToolCall] | None = None  # assistant messages with tool calls
     tool_call_id: str | None = None  # tool role messages (result of a tool call)
     name: str | None = None  # tool role messages (function name)
+    reasoning_content: str | None = None
+    reasoning: str | None = None
 
     @model_validator(mode="after")
     def validate_message(self):
@@ -824,6 +831,14 @@ def _extract_messages(msgs: list[ChatMessage]) -> list[dict]:
             d["tool_call_id"] = msg.tool_call_id
         if msg.name is not None:
             d["name"] = msg.name
+        if msg.role == "assistant":
+            reasoning = (
+                msg.reasoning_content
+                if msg.reasoning_content is not None
+                else msg.reasoning
+            )
+            if reasoning is not None:
+                d["reasoning_content"] = reasoning
         result.append(d)
     return result
 

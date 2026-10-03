@@ -119,9 +119,11 @@ class EngineTemplatesMixin:
                     func = tc.get("function")
                     if isinstance(func, dict):
                         args = func.get("arguments")
+                        if args is None:
+                            args = "{}"
                         if isinstance(args, str):
                             try:
-                                parsed = _json.loads(args)
+                                parsed = _json.loads(args.strip() or "{}")
                             except Exception:
                                 parsed = {"value": args}
                             tc = dict(tc)
@@ -129,6 +131,8 @@ class EngineTemplatesMixin:
                             tc["function"]["arguments"] = (
                                 parsed
                                 if isinstance(parsed, dict)
+                                else {}
+                                if parsed is None
                                 else {"value": parsed}
                             )
                     patched.append(tc)
