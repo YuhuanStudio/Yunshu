@@ -44,7 +44,7 @@ macOS with Apple Silicon and Python 3.13+. Choose your package manager:
 # pip: run inside a virtual environment
 python -m pip install --upgrade "yunshu[vision]=={version}"
 # uv: install or replace the isolated CLI tool
-uv tool install --upgrade "yunshu[vision]=={version}"
+uv tool install --upgrade --python 3.13 "yunshu[vision]=={version}"
 # Homebrew: available after the tap formula is updated
 brew update
 brew install yuhuanstudio/tap/yunshu   # first install

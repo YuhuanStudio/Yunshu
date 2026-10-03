@@ -38,7 +38,7 @@ For model selection, external storage, readiness checks and upgrades, follow the
 Apple Silicon, macOS 14+, Python 3.13+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-uv tool install "yunshu[vision]"
+uv tool install --python 3.13 "yunshu[vision]"
 yunshu doctor                                   # checks this Mac and says how to fix problems
 yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit
 yunshu serve -m mlx-community/Qwen3.5-9B-MLX-4bit

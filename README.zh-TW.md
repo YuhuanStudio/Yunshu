@@ -35,7 +35,7 @@
 需要 Apple Silicon、macOS 14 以上、Python 3.13 以上與 [uv](https://docs.astral.sh/uv/)。
 
 ```bash
-uv tool install "yunshu[vision]"
+uv tool install --python 3.13 "yunshu[vision]"
 yunshu doctor                                   # 檢查這台 Mac，並說明怎麼修
 yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit
 yunshu serve -m mlx-community/Qwen3.5-9B-MLX-4bit

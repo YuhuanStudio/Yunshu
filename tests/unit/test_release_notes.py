@@ -31,7 +31,7 @@ Older changes
     assert "example.com" not in notes
     assert "/blob/v0.1.3/docs/BENCHMARKS.md#results" in notes
     assert 'python -m pip install --upgrade "yunshu[vision]==0.1.3"' in notes
-    assert 'uv tool install --upgrade "yunshu[vision]==0.1.3"' in notes
+    assert 'uv tool install --upgrade --python 3.13 "yunshu[vision]==0.1.3"' in notes
     assert "brew upgrade yuhuanstudio/tap/yunshu" in notes
     assert notes.count("/compare/v0.1.2...v0.1.3") == 1
 
