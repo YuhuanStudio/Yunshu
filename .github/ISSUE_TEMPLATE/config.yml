@@ -3,3 +3,7 @@ contact_links:
   - name: Yunshu discussions / questions
     url: https://github.com/YuhuanStudio/Yunshu/discussions
     about: For "how do I..." usage questions that aren't bugs or feature requests.
+
+  - name: Private vulnerability report
+    url: https://github.com/YuhuanStudio/Yunshu/security/advisories/new
+    about: Report unpatched vulnerabilities privately; see SECURITY.md.
