@@ -268,3 +268,10 @@ Metadata peeks use the admitted APC namespace, and final-window status is
 revalidated after actual lookup/progress so an evicted warm estimate cannot turn
 a long cold miss into an unbounded continuation. These handoff changes await
 their own quiet replay; both defaults stay off.
+
+The handoff reservation yields the worker with a CPU-only timer (at most 2 ms
+between checks) instead of resubmitting an empty slice in a busy loop. A ready
+primary is dispatched immediately. Young auxiliary work can renew the grace at
+each primary completion; once the oldest auxiliary is aged, its grace is granted
+only once until actual service. This keeps rapid completions from extending an
+aged wait indefinitely.

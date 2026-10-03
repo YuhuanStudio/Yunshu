@@ -483,3 +483,44 @@ def test_warm_estimate_cannot_latch_a_long_cold_miss(atoms, monkeypatch):
     assert not cold.finishing_prefill
     r._drive_slice(False)
     assert cold.stats.prefill_done == 2048
+
+
+def test_handoff_yields_worker_but_not_a_ready_primary(atoms):
+    r, clock = atoms
+    r._primary_handoff_at = clock[0]
+    assert r._handoff_delay() == 0.002
+    primary = job(0)
+    r._submit(primary)
+    assert r._handoff_delay() == 0
+    r._pending.clear()
+    clock[0] += 0.11
+    assert r._handoff_delay() == 0
+
+
+def test_young_handoff_refreshes_but_aged_handoff_is_used_once(atoms):
+    r, clock = atoms
+    r.prefix_invariant = True
+    aux = job(-1)
+    r._submit(aux)
+
+    def finish():
+        primary = job(0)
+        group = SimpleNamespace(jobs={42: primary}, sampler=None, gen=SimpleNamespace())
+        r._finish(group, 42, "stop")
+
+    finish()
+    first = r._primary_handoff_at
+    clock[0] += 0.05
+    finish()
+    assert r._primary_handoff_at > first
+    clock[0] += AGING_S
+    finish()
+    aged = r._primary_handoff_at
+    assert aux.handoff_graced
+    clock[0] += 0.05
+    finish()
+    assert r._primary_handoff_at == aged
+    clock[0] += 0.06
+    r._drive_slice(False)
+    assert aux.stats.prefill_done
+    assert not aux.handoff_graced

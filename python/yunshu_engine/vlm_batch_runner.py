@@ -902,10 +902,18 @@ class VLMBatchRunner:
             and job.priority >= 0
             and reason != "cancel"
             and not job.abandoned
-            and self._primary_handoff_at is None
         ):
-            # Bridge consumer/API handoff once, never extend it on each finish.
-            self._primary_handoff_at = time.perf_counter()
+            now = time.perf_counter()
+            auxiliary = [
+                j for g in self._groups() for j in g.jobs.values() if j.priority < 0
+            ]
+            auxiliary += [j for j in self._pending if j.priority < 0]
+            aged = [j for j in auxiliary if now - j.last_service >= AGING_S]
+            oldest = min(aged, key=lambda j: j.queued, default=None)
+            if oldest is None or not oldest.handoff_graced:
+                self._primary_handoff_at = now
+                if oldest is not None:
+                    oldest.handoff_graced = True
         self._observe_prefill(job)
         coordinator = getattr(group.gen, "apc", None)
         if (
@@ -1443,6 +1451,8 @@ class VLMBatchRunner:
             for job in allowed:
                 if job.stats.t_first or (selected and job is selected_job):
                     job.last_service = time.perf_counter()
+                    if job.priority < 0:
+                        job.handoff_graced = False
             if selected_job is not None:
                 if selected_job.priority < 0:
                     selected_job.prefill_skips = 0
@@ -1469,6 +1479,25 @@ class VLMBatchRunner:
                 self._decode_debt = DECODE_QUANTUM_S
             elif not first_pending:
                 self._decode_debt = max(0.0, self._decode_debt - elapsed)
+
+    def _handoff_delay(self) -> float:
+        if (
+            not settings.get_bool("YUNSHU_UNCACHED_SCHEDULING")
+            or self.driver is not None
+        ):
+            return 0.0
+        at = self._primary_handoff_at
+        if at is None:
+            return 0.0
+        remaining = PRIMARY_HANDOFF_S - (time.perf_counter() - at)
+        if remaining <= 0 or any(
+            j.priority >= 0 for g in self._groups() for j in g.jobs.values()
+        ):
+            return 0.0
+        with self._lock:
+            if any(j.priority >= 0 for j in self._pending):
+                return 0.0
+        return min(0.002, remaining)
 
     def _drive_slice_body(self, resubmit: bool) -> None:
         _install_row_context()
@@ -1603,7 +1632,15 @@ class VLMBatchRunner:
                 self._driving = False
                 again = False
         if again:
-            self._schedule()
+            delay = self._handoff_delay()
+            if delay:
+                # Free the Metal worker and GIL for preparing/submitting the
+                # next request. The timer only submits; it never executes MLX.
+                timer = threading.Timer(delay, self._schedule)
+                timer.daemon = True
+                timer.start()
+            else:
+                self._schedule()
         elif self.clear_on_idle:
             # Large models: release the buffer pool once everything drains
             # (clearing under active batches would only force reallocation). Up to
@@ -1823,6 +1860,7 @@ class _Job:
     last_service: float = 0.0
     prefill_skips: int = 0
     finishing_prefill: bool = False
+    handoff_graced: bool = False
     driver: Any = None
     cache_plan: dict | None = None
     apc_salt: int | None = None
