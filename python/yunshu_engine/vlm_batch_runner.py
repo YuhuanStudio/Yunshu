@@ -1567,10 +1567,19 @@ class VLMBatchRunner:
                     j.priority >= 0 for j in [*active, *self._pending]
                 )
                 now = time.perf_counter()
+                handoff = (
+                    settings.get_bool("YUNSHU_UNCACHED_SCHEDULING")
+                    and self.driver is None
+                    and self._primary_handoff_at is not None
+                    and now - self._primary_handoff_at < PRIMARY_HANDOFF_S
+                )
                 pending = [
                     j
                     for j in self._pending
-                    if not primary or j.priority >= 0 or now - j.last_service >= AGING_S
+                    if j.priority >= 0
+                    or (
+                        not handoff and (not primary or now - j.last_service >= AGING_S)
+                    )
                 ]
                 selected_ids = {id(j) for j in pending}
                 self._pending = [j for j in self._pending if id(j) not in selected_ids]

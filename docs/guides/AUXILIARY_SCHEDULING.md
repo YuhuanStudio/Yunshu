@@ -288,3 +288,7 @@ atoms, as ordinary stepping does. When a peer becomes eligible, that same batch
 is parked before work selection and restored unchanged when selected again.
 Cancellation clears both live and parked states. The decode quantum is now
 75 ms, independent of the 100 ms handoff reservation.
+
+Handoff grace also keeps auxiliary rows pending before admission, avoiding
+cache/drafter context preparation during a primary turn transition. The same
+100 ms bound applies, and aged admission resumes once it expires.

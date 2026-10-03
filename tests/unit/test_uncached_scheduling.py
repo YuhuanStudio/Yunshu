@@ -604,3 +604,18 @@ def test_singleton_keeps_live_batch_until_a_peer_needs_dispatch(atoms):
     r._drive_slice(False)
     assert group.prefills[first.uid] is live
     assert second.finishing_prefill
+
+
+def test_handoff_defers_auxiliary_admission_as_well_as_steps(atoms):
+    r, clock = atoms
+    aux = job(-1)
+    r._submit(aux)
+    clock[0] += AGING_S
+    r._primary_handoff_at = clock[0]
+    r._drive_slice(False)
+    assert aux in r._pending
+    assert not r._groups()
+    clock[0] += 0.11
+    r._drive_slice(False)
+    assert aux not in r._pending
+    assert r._groups() and aux.stats.prefill_done
