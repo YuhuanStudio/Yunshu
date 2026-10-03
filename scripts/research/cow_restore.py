@@ -10,7 +10,8 @@ def install():
     from mlx_vlm import apc_adapters
     from yunshu_engine.kernels.cache_restore import clone_native_restore
 
-    original = apc_adapters.clone_cache_entry
+    installed = apc_adapters.clone_cache_entry
+    original = getattr(installed, "_yunshu_restore_original", installed)
     counts = {"enabled": True, "view_restores": 0}
 
     def clone(c, *, min_capacity_tokens, eval_targets):
@@ -31,6 +32,6 @@ def install():
     apc_adapters.clone_cache_entry = clone
 
     def uninstall():
-        apc_adapters.clone_cache_entry = original
+        apc_adapters.clone_cache_entry = installed
 
     return counts, uninstall

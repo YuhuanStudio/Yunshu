@@ -347,6 +347,13 @@ def main():
                         phase="metadata",
                         model=a.model,
                         profiled=a.profile,
+                        native_restore_installed=bool(
+                            getattr(
+                                apc_adapters.clone_cache_entry,
+                                "_yunshu_restore_views",
+                                False,
+                            )
+                        ),
                         source_sha256=hashlib.sha256(
                             Path(__file__).read_bytes()
                         ).hexdigest(),

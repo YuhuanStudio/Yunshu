@@ -64,3 +64,33 @@ def test_custom_cache_restore_retains_adapter_contract(monkeypatch):
         == "custom"
     )
     assert calls == [(cache, {"min_capacity_tokens": 80, "eval_targets": targets})]
+
+
+def test_research_baseline_remains_upstream_after_default_install(monkeypatch):
+    from mlx_vlm import apc_adapters
+    from mlx_vlm.models.cache import KVCache
+    from scripts.research.cow_restore import install as install_research
+
+    from yunshu_engine.kernels import cache_restore
+
+    calls = []
+    original = apc_adapters.clone_cache_entry
+
+    def adapter(cache, **kwargs):
+        calls.append(kwargs["min_capacity_tokens"])
+        return original(cache, **kwargs)
+
+    monkeypatch.setattr(apc_adapters, "clone_cache_entry", adapter)
+    cache_restore.install()
+    production = apc_adapters.clone_cache_entry
+    counts, uninstall = install_research()
+    try:
+        counts["enabled"] = False
+        apc_adapters.clone_cache_entry(
+            KVCache(), min_capacity_tokens=80, eval_targets=[]
+        )
+        assert calls == [80]
+        assert counts["view_restores"] == 0
+    finally:
+        uninstall()
+    assert apc_adapters.clone_cache_entry is production

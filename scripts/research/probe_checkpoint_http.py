@@ -49,6 +49,22 @@ def restore_experiment_launcher(mode):
     """Process-local research patches; no serving flag or APC arithmetic change."""
     patch = ""
     if mode in (
+        "reserved",
+        "async",
+        "barrier",
+        "asyncbarrier",
+        "paired32",
+        "spans",
+        "cow",
+        "cowasync",
+    ):
+        # Keep the reference arm upstream even after COW ships. Candidates
+        # install the exact production helper through their explicit wrapper.
+        patch += (
+            "from yunshu_engine.kernels import cache_restore\n"
+            "cache_restore.install = lambda: None\n"
+        )
+    if mode in (
         "async",
         "barrier",
         "asyncbarrier",

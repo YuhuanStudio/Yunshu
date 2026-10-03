@@ -63,4 +63,5 @@ def install() -> None:
         )
 
     clone._yunshu_restore_views = True  # type: ignore[attr-defined]
+    clone._yunshu_restore_original = original  # type: ignore[attr-defined]
     apc_adapters.clone_cache_entry = clone

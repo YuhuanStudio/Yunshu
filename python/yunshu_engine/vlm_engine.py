@@ -1777,9 +1777,10 @@ class VLMEngine:
         from .kernels import buffer_cache
 
         if spec_family and not use_driver:
-            from .kernels import singleton_cache
+            from .kernels import cache_restore, singleton_cache
 
             singleton_cache.install()
+            cache_restore.install()
         cache_gib = settings.get("YUNSHU_PREFILL_BUFFER_CACHE_GB")
         if cache_gib is None:
             from .apc_manager import total_memory_bytes

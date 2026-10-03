@@ -685,3 +685,38 @@ All34 inherited/resumed jobs finished or cancelled, receipts in
 /Volumes/P5Plus/yunshu-build/codex/naxprefill2-harvest.json. Full roofline,
 per-op breakdown, exact engagement/dispatch, exclusions and own ideas:
 the private research notes (NAX_PREFILL.md).
+
+### 2026-10-04 — native APC restore handles (small but real cached win)
+
+M5 Max, same Jundot/Qwen3.8-27B-oQ4e-mtp checkpoint, MTP, RAM APC:
+restore exact native KVCache/ArraysCache through independent MLX copy-on-write
+handles, then reserve capacity directly from the stored prefix. Stores remain
+detached; custom/quantized cache adapters retain the upstream contract. This
+avoids an intermediate full-prefix clone, not all cache copies.
+
+Three interleaved quiet HTTP pairs against main242848ec, 256 generated tokens,
+identical requests and response digests in every phase:
+
+| 32K phase | main median ms | restore views median ms | paired savings ms |
+|---|---:|---:|---|
+| prose warm | 148 | 116 | 31 / 36 / 32 |
+| code warm | 241 | 210 | 32 / 35 / 29 |
+| prose turn-2 | 707 | 701 | -4 / 14 / 6 |
+| code turn-2 | 717 | 718 | -1 / 4 / -5 |
+
+Warm hits improve 21.6% / 12.9%; turn-2 pairs are mixed and the remaining
+32K turn-2 gap is not closed. Cold medians34096→34100ms prose and
+34140→34139ms code: no cold gain claimed. HTTP overhead medians1.40/1.45ms.
+Job1004-044738-00-prefill5-cow-main32k-r3-0452: rc0, final complete,
+three digest gates pass, six MTP servers, clean foreign CPU max243.6%<1620%.
+The older main1bddf9a2 warm-prose pairs also saved32/37/33ms; its cold
+outliers and mixed code-warm results are retained in the private report.
+
+Correctness:1004-045826-00-prefill5-cow-quality200-0501, rc0+complete,
+200/200 both arms, zero different raw token IDs or logprobs (modest arithmetic
+set, not a broad accuracy benchmark). Cold/partial/full APC gate
+1003-223727-00-prefill5-cow-identity32k-2236: tokens and all logprobs
+bit-equal, max_abs_dlp0. Native source/live bidirectional mutation, capacity,
+metadata, detached stores and custom fallback have CPU regressions. No new
+setting. Lossless activation is limited to the existing native singleton
+Qwen serving path; VM/round-driver admission is unchanged.
