@@ -116,7 +116,7 @@ def cases(smoke, smoke_tokens=24):
         (tf.BODIES2, "0003-req.json"),
     ):
         body = json.loads((parent / name).read_text())
-        body.update(temperature=0, max_tokens=256, seed=1234)
+        body.update(temperature=0, seed=1234)
         result.append((parent.parent.name + "/" + name, body))
     return result
 
