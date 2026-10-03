@@ -176,3 +176,20 @@ def test_row_keeps_legacy_dtype_promotion_without_a_reference_cycle():
     reference = weakref.ref(row)
     del row
     assert reference() is None
+
+
+def test_shipped_installer_is_idempotent_and_preserves_callable_signature(monkeypatch):
+    import inspect
+
+    from yunshu_engine.kernels import singleton_cache
+
+    original = Qwen3_5Model.__call__
+    monkeypatch.setattr(Qwen3_5Model, "__call__", original)
+    assert singleton_cache.install()
+    installed = Qwen3_5Model.__call__
+    assert installed is not original
+    assert singleton_cache.install()
+    assert Qwen3_5Model.__call__ is installed
+    assert list(inspect.signature(installed).parameters) == list(
+        inspect.signature(original).parameters
+    )

@@ -1,11 +1,10 @@
 # Patches upstream mlx-vlm symbols (see vendor.json kind=patches; `just vendor-check` flags source changes)
-"""Keep MLX's buffer cache across prefill steps.
+"""Keep a bounded MLX allocator pool across prompt chunks and requests.
 
-mlx-vlm's ``BatchGenerator`` calls ``mx.clear_cache()`` after every prompt chunk. The next large
-allocation then gets fresh pages from the OS: cloning a 32K-token Qwen3.8-27B cache (APC restore, each
-checkpoint store) costs 54 ms with the cache cleared and 9 ms with it warm. Here ``clear_cache`` in the
-generator module only clears once the cache holds more than ``limit_gib``, so the buffers a chunk freed
-are reused by the next chunk and by the clones. Output is untouched (allocator behavior only).
+A whole-pool clear after a temporary overflow discards the long-prefix restore
+buffers too. Set MLX's cache limit instead: its next allocation reclaims excess
+freed memory while retaining reusable buffers. Freed buffers can transiently
+exceed the limit until that allocation. Zero retains upstream boundary clears.
 """
 
 from __future__ import annotations
@@ -26,8 +25,9 @@ def auto_limit_gib(total_bytes: int) -> float:
 
 
 def clear_if_over() -> None:
+    """Boundary compatibility hook: the allocator reclaims a positive pool."""
     limit = _STATE["limit"]
-    if limit <= 0 or mx.get_cache_memory() > limit:
+    if limit <= 0:
         mx.clear_cache()
 
 
@@ -42,10 +42,16 @@ class _MxView(types.ModuleType):
 
 
 def install(limit_gib: float) -> bool:
-    """Bound the generator's ``mx.clear_cache()`` calls; 0 restores upstream's clear-every-time."""
+    """Bound allocator reuse; 0 restores upstream's clear at each boundary."""
     from mlx_vlm.generate import ar
 
-    _STATE["limit"] = int(max(0.0, limit_gib) * (1 << 30))
+    limit = int(max(0.0, limit_gib) * (1 << 30))
+    if limit > 0:
+        previous = mx.set_cache_limit(limit)
+        _STATE.setdefault("previous_cache_limit", previous)
+    elif "previous_cache_limit" in _STATE:
+        mx.set_cache_limit(_STATE.pop("previous_cache_limit"))
+    _STATE["limit"] = limit
     if not isinstance(ar.mx, _MxView):
         view = _MxView("mlx.core")
         ar.mx = view

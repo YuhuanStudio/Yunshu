@@ -1453,6 +1453,21 @@
       "why": "preserve a private single-row restored KV reservation without recopying",
       "source_sha256": "07ba60a8680462137dda5220c33358bd4c2dee70aaa4dd9a6a184e5671634d48",
       "installed_version": "0.7.4"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/kernels/singleton_cache.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen3_5.language",
+      "symbol": "Qwen3_5Model.__call__",
+      "signature": "(self, inputs, inputs_embeds=None, mask=None, cache=None, position_ids=None, capture_layer_ids=None, hidden_sink=None)",
+      "license": "MIT",
+      "commit": "v0.7.3",
+      "why": "native unpadded singleton extract/merge views retain KV capacity and upstream metadata; custom, quantized, padded, multi-row and speculative caches stay upstream",
+      "source_sha256": "70aaa49ac3c48311e46c18f2486c733f469d5013d029fa59d94a05c0f4af0234",
+      "installed_version": "0.7.4"
     }
   ],
   "watch": [

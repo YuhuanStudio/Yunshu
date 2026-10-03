@@ -483,3 +483,30 @@ Yunshu 實際 MTP；TF 日誌明確 DFlash2。每個 ctx/kind/phase 跨三輪和
 - view 用獨立 array handles 接續已 detached 的單列 ArraysCache，省 upstream merge 的 zeros+整 row copy；重置 lengths/left_padding，CPU逐 state 與 upstream merge相同，雙向mutation隔離通過。多列/custom/non-native狀態沿用 upstream。
 - 一 token revisit 的 view 沒有穩定收益：第二個 warm revisit 各輪配對 +2.41 / -7.57 / -6.12 ms（正=省時）；第三個 +1.90 / -2.74 / +0.52 ms。因此 serving 只在已知單列 memory plan、fresh suffix >=64 時使用 view；短 suffix / 未知 plan保留原 merge。64是保守的使用範圍限制，量測點為66，不宣稱找到了最佳 crossover。
 - 這是 suffix TTFT 約1%的小改善，不是 cold prefill或decode速度聲明；沒有新增設定或實驗旗標。原型與解析檔 `prefill3-fixed-view.py`、`prefill3-fixed-view-summary.json`，完整log在gpuq。
+
+### 2026-10-03 -- native singleton KV capacity, bounded allocator pool, wider invariant prefill dispatch
+
+Same checkpoint Jundot/Qwen3.8-27B-oQ4e-mtp; Yunshu MTP, TensorFold 0.6.1 DFlash2. Three interleaved clean HTTP repetitions per context, prose/code, fixed second-turn reply and matching request hashes. All baseline/candidate 256-token response digests match; all 18 server logs prove the engaged mode. Candidate uses native singleton extract/merge views retaining KV capacity, MLX allocator cache limit (auto6GiB on128GiB), and one invariant lane dispatch up to512rows with the same32-row threadgroup arithmetic. Other direct lane callers keep128-row guard. No lossy precision change or new experimental setting.
+
+| Median HTTP TTFT ms | baseline | candidate | TF DFlash2 |
+|---|---:|---:|---:|
+|8K prose cold|8394|8325|8403|
+|8K code cold|8404|8365|8406|
+|8K prose warm|119|85|74|
+|8K code warm|124|92|76|
+|8K prose turn2|562|509|508|
+|8K code turn2|569|512|505|
+|32K prose cold|38099|36644|39077|
+|32K code cold|37735|36671|39074|
+|32K prose warm|230|145|108|
+|32K code warm|245|158|123|
+|32K prose turn2|825|705|649|
+|32K code turn2|900|721|670|
+
+32K turn2 paired savings prose118/117/120ms; code207/182/166ms. 8K prose53/53/47ms; code39/58/60ms. The8K turn2 gap is1/7ms;32K remains56/51ms. Do not claim a complete32K win. Cold paired gains are nonuniform (prose1285/278/1464ms, code1094/290/411ms); report the median, not a per-arm decomposition. Prior to shipping, native-only32K+282 paired savings112/93/110ms. Small but real: wide-only32K+282 savings8/14/22ms (median14ms ~1.8%), same digest.
+
+Correctness: native and wide200-item paired sets each200/200 in both arms, every token and per-token LP bit-equal; native full APC hits prove engagement. Native8K/32K prose/code chat partial/full hit equals cold bit-exact LP, maxabs0. CPU actual Qwen tests verify capacity retention, metadata reset, mutation/exception isolation, dtype promotion, and no cache reference cycle. The capacity regression fails the old method (cap5 vs256).
+
+Jobs:1003-145700-00-prefill4-http-combo8k-1456 / http-combo32k-1456 rc0+complete+clean (foreign CPU max298/598%, threshold1620). Supporting: native32k-ab-1425, restore-mtp32k-1230, native-identity-1427, quality200-1247, native-warm-quality200-1456. Full IDs/verdicts and log tails: /Volumes/P5Plus/yunshu-build/codex/prefill4-own-harvest.json. Timing jobs used --quiet; correctness jobs did not.
+
+Roofline/profile: actual restore source2.302GB, capacity2.335GB; minimum read+write4.64GB at prior measured530GB/s ~8.8ms. Synchronized32K+282 profile: clone including allocator44.3ms, lookup-other1.3, merge0.4, suffix prompt-step657.3(target637.0), first generate84.9(target84.6), admission3.3, residual14.8. HTTP extras0.8..1.8ms in inherited receipts. Profile barriers are attribution only, not serving TTFT claims. Stock planes eligible1.416GiB, but stock_calls_before_first=0 on282-token lane suffix. Larger64/128-row tiles are bit-equal but checkpoint microbench2-12x slower; rejected. General direct/pad clone does not show consistent turn2 benefit; not selected.
