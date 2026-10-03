@@ -1,9 +1,11 @@
 """gpuq serving awareness: idle-gated start, SIGSTOP preemption, pause records, memory admission."""
 
+import contextlib
 import http.server
 import importlib.util
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -67,7 +69,15 @@ def q(tmp_path, monkeypatch):
     for k in list(os.environ):
         if k.startswith("GPUQ_") and k != "GPUQ_DIR":
             monkeypatch.delenv(k)
-    return m
+    yield m
+    # A failed assertion can leave a job stopped (SIGSTOP) with no runner left to
+    # resume or cancel it; reap every job process group the test started.
+    for f in (tmp_path / "jobs").glob("*.json"):
+        pid = m._read(f).get("pid")
+        if pid:
+            for sig in (signal.SIGCONT, signal.SIGKILL):
+                with contextlib.suppress(OSError):
+                    os.killpg(pid, sig)
 
 
 @pytest.fixture
