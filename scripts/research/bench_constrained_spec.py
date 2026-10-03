@@ -170,7 +170,9 @@ def run_agent(srv, out, args):
     def deterministic_title(url, body, *a, **kw):
         if not body.get("tools"):
             body = dict(body, temperature=0)
-        return original(url, body, *a, **kw)
+        result = original(url, body, *a, **kw)
+        print("agent request finished", flush=True)
+        return result
 
     tfbench.send = deterministic_title
     try:

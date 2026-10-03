@@ -76,7 +76,7 @@ def test_trace_cursor_advances_across_cases_and_phases(tmp_path):
     ] == [[n] for n in range(6)]
 
 
-def test_agent_title_is_greedy_but_primary_bodies_are_unchanged(monkeypatch):
+def test_agent_title_is_greedy_but_primary_bodies_are_unchanged(monkeypatch, capsys):
     bench = _load()
     seen = []
     monkeypatch.setattr(
@@ -95,6 +95,10 @@ def test_agent_title_is_greedy_but_primary_bodies_are_unchanged(monkeypatch):
         {"temperature": 0.7, "tools": [{}], "seed": 1234},
     ]
     assert bench.tfbench.send is original
+    assert capsys.readouterr().out.splitlines() == [
+        "agent request finished",
+        "agent request finished",
+    ]
 
 
 @pytest.mark.parametrize("phase", ["warm", "turn2"])
