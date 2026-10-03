@@ -10,6 +10,7 @@ class AuxiliaryPrefillPolicy(SimpleNamespace):
 
     def __init__(self, manager):
         super().__init__(
+            _generation=0,
             **{
                 name: getattr(manager, name)
                 for name in (
@@ -20,7 +21,7 @@ class AuxiliaryPrefillPolicy(SimpleNamespace):
                     "exact_cache_min_tokens",
                     "head_marker",
                 )
-            }
+            },
         )
 
     def head_boundary(self, token_ids):

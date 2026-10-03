@@ -24,6 +24,8 @@ def bodies(tiny=False):
         (ROOT / "tests/fixtures/auxiliary/opencode_title.json").read_text()
     )
     title["seed"] = 42
+    if tiny:
+        title["max_tokens"] = 48  # transport smoke; no classifier/parity claim
     # Two unrelated contexts prevent the cold row from donating the warm prefix.
     n = 80 if tiny else 2200
     warm = dict(
@@ -78,6 +80,7 @@ def main():
     p.add_argument("--checkpoint", required=True)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--tiny", action="store_true")
+    p.add_argument("--rounds", type=int, default=3)
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args()
     title, warm, cold, suffixes = bodies(args.tiny)
@@ -106,7 +109,7 @@ def main():
         )
     }
     all_rows = []
-    for run in range(3):
+    for run in range(args.rounds):
         for arm in (run % 2, 1 - run % 2):
             os.environ["YUNSHU_AUXILIARY_SCHEDULING"] = str(arm)
             os.environ["YUNSHU_UNCACHED_SCHEDULING"] = str(arm)
@@ -168,7 +171,7 @@ def main():
                 )
             all_rows.extend(rows)
     pairs = []
-    for run in range(3):
+    for run in range(args.rounds):
         before = {
             r["kind"]: r
             for r in all_rows
@@ -195,7 +198,7 @@ def main():
     )
     (args.out / "complete.jsonl").write_text(json.dumps(summary) + "\n")
     print(json.dumps(summary), flush=True)
-    if summary["equal"] != summary["total"]:
+    if not args.tiny and summary["equal"] != summary["total"]:
         raise SystemExit("mixed output parity failed")
 
 
