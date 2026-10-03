@@ -1,0 +1,19 @@
+name: rel013 native isolation
+on:
+  push:
+    branches: ['ci/rel013-*']
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv python install 3.13
+      - run: uv sync --dev --extra vision --extra compression
+      - run: uv run python scripts/dev/rel013_native_isolation.py
