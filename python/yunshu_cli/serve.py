@@ -213,6 +213,20 @@ def serve(
         console.print(f"[red]Error:[/] {exc}")
         raise typer.Exit(2) from None
 
+    # Fail before importing/loading a checkpoint when the chosen TCP endpoint
+    # cannot bind. Uvicorn remains the authority at startup (another process
+    # can acquire the port after this check). Unix sockets use their own path.
+    if not uds and not settings.get("YUNSHU_UDS"):
+        try:
+            _check_bind_address(host, port)
+        except OSError as exc:
+            console.print(
+                f"[red]Error:[/] Cannot listen on {host}:{port}: {exc}. "
+                "Choose another --port (for example --port 8001), "
+                "or stop the server already using this address."
+            )
+            raise typer.Exit(2) from None
+
     env = os.environ.copy()
     env.update({k: settings._to_text(v) for k, v in overrides.items()})
     hf = settings.get("YUNSHU_HF_ENDPOINT")
@@ -318,6 +332,27 @@ def serve(
         # by the gateway middleware via YUNSHU_MAX_REQUEST_SIZE (set above).
         server_header="Yunshu" if server_header else None,
     )
+
+
+def _check_bind_address(host: str, port: int) -> None:
+    """Check the actual bind address without contacting or stopping its owner."""
+    import socket
+
+    if not 0 <= port <= 65535:
+        raise OSError("port must be between 0 and 65535")
+    addresses = socket.getaddrinfo(
+        host, port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE
+    )
+    last_error: OSError | None = None
+    for family, socktype, proto, _, address in addresses:
+        try:
+            with socket.socket(family, socktype, proto) as probe:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                probe.bind(address)
+            return
+        except OSError as exc:
+            last_error = exc
+    raise last_error or OSError("no usable bind address")
 
 
 def _rotate_service_log() -> None:
