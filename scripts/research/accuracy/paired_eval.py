@@ -792,6 +792,7 @@ def cmd_run(a) -> int:
                         row["truncated"] = True
                         if row.get("correct") is not None:
                             row["correct"] = False
+                row["device"] = os.environ.get("GPUQ_DEVICE", "m5")
                 with lock:
                     out.write(json.dumps(row, ensure_ascii=False) + "\n")
                     out.flush()
@@ -863,6 +864,14 @@ def cmd_report(a) -> int:
             f"attempted_items {counts['attempted_items']}, unresolved_items {counts['unresolved_items']}"
         )
     ref, cand = load_arm(a.bench, a.ref), load_arm(a.bench, a.cand)
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from device_evidence import require_same_device
+
+    device = require_same_device(list(ref.values()), list(cand.values()))
+    print(
+        f"device={device}"
+        + (" portability evidence (not M5)" if device == "m3" else "")
+    )
     ids = sorted(set(ref) & set(cand))
     key = a.field
     ids = [

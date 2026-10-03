@@ -91,6 +91,10 @@ def run_arms(arms, *, dry_run=False):
 
 
 def eligible_smoke(job, receipt, digest):
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from device_evidence import require_same_device
+
+    require_same_device([job, receipt], performance=True)
     return (
         job.get("state") == "done"
         and job.get("rc") == 0

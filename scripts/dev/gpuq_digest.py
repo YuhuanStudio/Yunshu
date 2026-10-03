@@ -182,6 +182,11 @@ def collect(root: Path, since: float, until: float, label_prefix: str = "") -> d
         issues.extend(output_issues(j))
         entry = {
             "id": j["id"],
+            "device": j.get("device", "m5"),
+            "remote_host": j.get("remote_host"),
+            "evidence": "portability evidence (not M5)"
+            if j.get("device") == "m3"
+            else "M5 evidence",
             "label": j.get("label", ""),
             "state": "contended"
             if j["state"] == "done" and j.get("contended")
@@ -246,6 +251,16 @@ def render(res: dict, since: float, until: float) -> str:
                 _fmt_t(es[-1]["ended"]),
             )
         )
+        for e in es:
+            out.append(
+                "      %s device=%s %s rc=%s"
+                % (
+                    e["id"],
+                    e.get("device", "m5"),
+                    e.get("evidence", "M5 evidence"),
+                    e["rc"],
+                )
+            )
         outs = sorted({o for e in es for o in e["outputs"]})
         for o in outs:
             out.append("      out %s" % o)
