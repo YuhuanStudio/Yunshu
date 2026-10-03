@@ -209,3 +209,24 @@ def test_stateful_external_generation_matches_serial_target(draft_bias, monkeypa
             # An identical deterministic model must propose the target's entire
             # stream. Parity alone hides a broken, perpetually rejected proposer.
             assert decoder.acceptance_rate == 1.0
+
+
+def test_greedy_acceptance_uses_raw_logits_before_bf16_normalization():
+    with mx.stream(mx.cpu):
+        logits = mx.zeros((1, 2, 8192), dtype=mx.bfloat16)
+        logits[:, :, 0] = 0.1
+        logits[:, :, 1] = 0.101
+        normalized = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
+        assert int(mx.argmax(logits[0, 0]).item()) == 1
+        assert int(mx.argmax(normalized[0, 0]).item()) == 0
+        decoder = SpeculativeDecoder(
+            lambda ids, cache=None: logits, object(), SimpleNamespace(eos_token_id=99)
+        )
+        result = decoder.verify_draft(
+            DraftResult([0], [0.0]),
+            mx.array([[3]]),
+            [],
+            cache_contains_last_token=False,
+        )
+        assert result.accepted_ids == []
+        assert result.bonus_token_id == 1
