@@ -385,3 +385,101 @@ def test_executed_atom_latches_its_remaining_final_window(atoms):
         (0, 2048),
         (2048, 952),
     ]
+
+
+def test_metadata_peek_uses_admitted_apc_namespace(atoms):
+    r, _ = atoms
+    r.apc_manager = SimpleNamespace(
+        lock=threading.Lock(),
+        _exact_cache={
+            "base": SimpleNamespace(token_ids=tuple(range(100)), extra_hash=7),
+            "planned": SimpleNamespace(token_ids=tuple(range(200)), extra_hash=8),
+        },
+    )
+    j = job(0)
+    j.ids, j.salt, j.apc_salt = list(range(210)), 7, 8
+    assert r._work(j).uncached_tokens == 10
+
+
+def test_aged_aux_yields_once_to_best_primary_final_window(atoms):
+    r, clock = atoms
+    background = job(0)
+    background.max_tokens = 1000
+    r._submit(background)
+    r._drive_slice(False)
+    r._drive_slice(False)
+    aux = job(-1)
+    aux.ids = list(range(738))
+    r._submit(aux)
+    clock[0] += AGING_S
+    suffix = job(0)
+    suffix.ids = list(range(128))
+    r._submit(suffix)
+    r._decode_debt = 0
+    r._drive_slice(False)
+    assert suffix.finishing_prefill and not aux.stats.prefill_done
+    assert aux.prefill_skips == 1
+    r._drive_slice(False)
+    assert suffix.stats.t_first
+    fresh = job(0)
+    r._submit(fresh)
+    r._decode_debt = 0
+    r._drive_slice(False)
+    assert aux.stats.prefill_done == 738
+    assert not fresh.stats.prefill_done
+
+
+def test_handoff_is_applied_after_finish_in_same_slice_and_expires(atoms):
+    r, clock = atoms
+    r.prefix_invariant = True
+    main = job(0)
+    main.max_tokens = 2
+    r._submit(main)
+    r._drive_slice(False)
+    r._drive_slice(False)
+    aux = job(-1)
+    r._submit(aux)
+    clock[0] += AGING_S
+    r._decode_debt = 0
+    r._drive_slice(False)
+    assert main.stats.generated == 2
+    assert not aux.stats.prefill_done
+    started = r._primary_handoff_at
+    assert started is not None
+    # A second finish cannot extend this grace while auxiliary work waits.
+    other = job(0)
+    group = SimpleNamespace(jobs={42: other}, sampler=None, gen=SimpleNamespace())
+    other.uid = 42
+    clock[0] += 0.05
+    r._finish(group, 42, "stop")
+    assert r._primary_handoff_at == started
+    clock[0] += 0.06
+    r._drive_slice(False)
+    assert aux.stats.prefill_done
+    assert r._primary_handoff_at is None
+
+
+def test_warm_estimate_cannot_latch_a_long_cold_miss(atoms, monkeypatch):
+    r, _ = atoms
+    dec = job(0)
+    dec.max_tokens = 1000
+    r._submit(dec)
+    r._drive_slice(False)
+    r._drive_slice(False)
+    cold = job(0)
+    cold.ids = list(range(8192))
+    work = r._work
+
+    def optimistic(j):
+        if j is cold and not j.stats.prefill_done:
+            return Work(j.queued, j.last_service, 128)
+        return work(j)
+
+    monkeypatch.setattr(r, "_work", optimistic)
+    r._submit(cold)
+    r._decode_debt = 0.1
+    r._drive_slice(False)
+    assert cold.stats.prefill_done == 2048
+    assert not cold.finishing_prefill
+    r._drive_slice(False)
+    assert cold.stats.prefill_done == 2048

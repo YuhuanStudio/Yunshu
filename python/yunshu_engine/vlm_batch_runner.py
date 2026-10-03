@@ -38,7 +38,12 @@ import numpy as np
 from . import keyed_sampling, settings
 from .keyed_sampling import top_k_filter, top_p_filter
 from .serving.busy_time import BusyMeter
-from .serving.work_scheduler import AGING_S, DECODE_QUANTUM_S, Work
+from .serving.work_scheduler import (
+    AGING_S,
+    DECODE_QUANTUM_S,
+    PRIMARY_HANDOFF_S,
+    Work,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +296,7 @@ class VLMBatchRunner:
         self._vocab_owner: Any = None
         self._driving = False
         self._decode_debt = 0.0
+        self._primary_handoff_at: float | None = None
         self.clear_on_idle = False
         # Requests the engine has accepted, including ones still being
         # prepared (templating, image encoding) — the runner alone cannot see
@@ -891,6 +897,15 @@ class VLMBatchRunner:
             return
         if reason is not None:
             job.stats.finish_reason = reason
+        if (
+            self.prefix_invariant
+            and job.priority >= 0
+            and reason != "cancel"
+            and not job.abandoned
+            and self._primary_handoff_at is None
+        ):
+            # Bridge consumer/API handoff once, never extend it on each finish.
+            self._primary_handoff_at = time.perf_counter()
         self._observe_prefill(job)
         coordinator = getattr(group.gen, "apc", None)
         if (
@@ -1297,7 +1312,9 @@ class VLMBatchRunner:
             mgr = self.apc_manager
             lock = getattr(mgr, "lock", None)
             entries = getattr(mgr, "_exact_cache", None)
-            salt = job.salt if job.salt is not None else self.apc_semantic_hash
+            salt = job.apc_salt
+            if salt is None:
+                salt = job.salt if job.salt is not None else self.apc_semantic_hash
             if lock is not None and isinstance(entries, dict):
                 tokens = tuple(job.ids)
                 with lock:
@@ -1323,6 +1340,16 @@ class VLMBatchRunner:
     def _step_work_groups(self, primary: bool) -> None:
         now = time.perf_counter()
         groups = self._groups()
+
+        def eligible(job: _Job) -> bool:
+            # Re-evaluate after a primary completes earlier in this slice.
+            held = self._primary_handoff_at is not None and (
+                time.perf_counter() - self._primary_handoff_at < PRIMARY_HANDOFF_S
+            )
+            return job.priority >= 0 or (
+                not held and (not primary or now - job.last_service >= AGING_S)
+            )
+
         candidates = [
             (g, j)
             for g in groups
@@ -1330,19 +1357,31 @@ class VLMBatchRunner:
             if not j.stats.t_first
             and j.uid
             not in getattr(getattr(g.gen, "_generation_batch", None), "uids", [])
-            and (not primary or j.priority >= 0 or now - j.last_service >= AGING_S)
+            and eligible(j)
         ]
         chosen = min(
             candidates, key=lambda gj: self._work(gj[1]).key(now), default=None
         )
+        aged_yield = None
+        primary_choice = min(
+            ((g, j) for g, j in candidates if j.priority >= 0),
+            key=lambda gj: self._work(gj[1]).key(now),
+            default=None,
+        )
+        if (
+            chosen is not None
+            and chosen[1].priority < 0
+            and chosen[1].prefill_skips < 1
+            and primary_choice is not None
+            and self._work(primary_choice[1]).uncached_tokens <= PREFILL_STEP
+        ):
+            aged_yield = chosen[1]
+            chosen = primary_choice
         # Paused auxiliary decode cannot repay debt. Counting it here makes
         # a primary prefill wait for each auxiliary aging interval (~20 s).
         decoding = any(
             len(getattr(g.gen, "_generation_batch", []))
-            and any(
-                not primary or j.priority >= 0 or now - j.last_service >= AGING_S
-                for j in g.jobs.values()
-            )
+            and any(eligible(j) for j in g.jobs.values())
             for g in groups
         )
         # Once the selected primary reaches its last canonical atom, carry it
@@ -1370,11 +1409,7 @@ class VLMBatchRunner:
             chosen = None
         for group in groups:
             self._prune_group(group)
-            allowed = [
-                j
-                for j in group.jobs.values()
-                if not primary or j.priority >= 0 or now - j.last_service >= AGING_S
-            ]
+            allowed = [j for j in group.jobs.values() if eligible(j)]
             if not allowed:
                 continue
             # Generators without the upstream atom API (test fakes) retain
@@ -1390,6 +1425,8 @@ class VLMBatchRunner:
             if not selected and not has_decode:
                 continue
             if selected_job is not None:
+                if aged_yield is not None:
+                    aged_yield.prefill_skips += 1
                 if final_atom:
                     selected_job.finishing_prefill = True
                 uid = selected_job.uid
@@ -1401,19 +1438,21 @@ class VLMBatchRunner:
             before = time.perf_counter()
             self._step_group(group, decode_only=not selected)
             elapsed = time.perf_counter() - before
+            if any(j.priority < 0 for j in allowed):
+                self._primary_handoff_at = None
             for job in allowed:
                 if job.stats.t_first or (selected and job is selected_job):
                     job.last_service = time.perf_counter()
             if selected_job is not None:
-                if (
+                if selected_job.priority < 0:
+                    selected_job.prefill_skips = 0
+                # Revalidate after actual lookup/progress. A metadata-only warm
+                # estimate can lose its checkpoint before this atom executes.
+                selected_job.finishing_prefill = (
                     selected_job.priority >= 0
                     and not selected_job.stats.t_first
                     and self._work(selected_job).uncached_tokens <= PREFILL_STEP
-                ):
-                    # This executed atom may have entered the final window.
-                    # Finish the same overtaking episode before FIFO protection
-                    # returns to the other waiter, preserving every span.
-                    selected_job.finishing_prefill = True
+                )
                 # Bound overtaking in executed atoms, independent of arrival
                 # rate and the latency of the competing short requests.
                 for _, waiter in candidates:
@@ -1462,6 +1501,8 @@ class VLMBatchRunner:
                 auxiliary = sum(
                     j.priority < 0 for j in [*active, *self._pending, *pending]
                 )
+                if not auxiliary:
+                    self._primary_handoff_at = None
             for job in cancelled_pending:
                 job.stats.finish_reason = (
                     "cancel"

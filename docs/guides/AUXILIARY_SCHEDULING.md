@@ -258,3 +258,13 @@ than a scheduler with no progress: instrumented output reached 19,949 tokens
 before the diagnostic's deadline. On the merged version both 0.8B arms complete
 their title streams, but title digests differ. It is a transport/liveness probe,
 not lossless evidence for the small model. Both deployment options remain off.
+
+Qualified runners now reserve one 100 ms handoff after a primary completion.
+Repeated completions do not extend that grace; actual auxiliary service or an
+empty auxiliary lane resets it. Eligibility is checked again after a completion
+in the same slice. An aged auxiliary may yield once to the highest-ranked primary
+if that primary is in its final window, then regains its service opportunity.
+Metadata peeks use the admitted APC namespace, and final-window status is
+revalidated after actual lookup/progress so an evicted warm estimate cannot turn
+a long cold miss into an unbounded continuation. These handoff changes await
+their own quiet replay; both defaults stay off.
