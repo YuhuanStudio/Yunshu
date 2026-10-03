@@ -551,19 +551,40 @@ _TILE_READY: list = []
 
 
 def tile_ready() -> bool:
-    """Whether this OS / GPU compiles and runs the tensor-op tile kernel
-    (MetalPerformancePrimitives; M5-class GPUs)."""
+    """Certify nonzero tensor-op attention and token-row invariance once.
+
+    MPP can compile on older Apple GPUs using software tensor operations;
+    successful compilation or an all-zero output alone proves no arithmetic.
+    """
     if not _TILE_READY:
         try:
-            q = mx.zeros((1, 2, 2, 256), dtype=mx.bfloat16)
-            kv = mx.zeros((1, 1, 64, 256), dtype=mx.bfloat16)
-            _TILE_READY.append(True)  # let the probe call through
-            mx.eval(
-                ragged_decode_attention(
-                    q, kv, kv, mx.array([3]), 1.0, impl="tile", row_lengths=(3,)
-                )
+            q = ((mx.arange(1024).reshape(1, 2, 2, 256) % 19 - 9) / 16).astype(
+                mx.bfloat16
             )
-        except Exception:  # noqa: BLE001 - any compile/launch failure
+            k = ((mx.arange(16384).reshape(1, 1, 64, 256) % 23 - 11) / 16).astype(
+                mx.bfloat16
+            )
+            v = ((mx.arange(16384).reshape(1, 1, 64, 256) % 29 - 14) / 16).astype(
+                mx.bfloat16
+            )
+            lengths = mx.array([3])
+            _TILE_READY.append(True)  # let the probe call through
+            out = ragged_decode_attention(
+                q, k, v, lengths, 0.0625, impl="tile", row_lengths=(3,)
+            )
+            one = ragged_decode_attention(
+                q[:, :, -1:], k, v, lengths, 0.0625, impl="tile", row_lengths=(3,)
+            )
+            ref = mx.fast.scaled_dot_product_attention(
+                q, k[:, :, :3], v[:, :, :3], scale=0.0625, mask="causal"
+            )
+            if not mx.array_equal(out[:, :, -1:], one).item():
+                raise RuntimeError("tile attention differs by token-row count")
+            if not (
+                mx.max(mx.abs(out.astype(mx.float32) - ref.astype(mx.float32))) < 0.02
+            ).item():
+                raise RuntimeError("tile attention differs from reference")
+        except Exception:  # noqa: BLE001 - any compile, launch or numerical failure
             _TILE_READY[:] = [False]
     return _TILE_READY[0]
 

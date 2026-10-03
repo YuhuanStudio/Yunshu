@@ -121,7 +121,8 @@
       "license": "MIT",
       "local_changes": [
         "imports point at yunshu_engine.kernels.tensorfold (inputs, lane_widen)",
-        "lane_matmul takes row_block (rows per threadgroup; bit-identical to the default block, faster at 17-48 rows on wide projections)"
+        "lane_matmul takes row_block (rows per threadgroup; bit-identical to the default block, faster at 17-48 rows on wide projections)",
+        "cooperative tensor coordinates come from get_multidimensional_index, not an M5-specific fragment layout; one-time numerical admission"
       ],
       "why": "integer-code tensor-unit matmul (5/6/8-bit via uint8 widening), used by kernels/int_code_linear.py",
       "kind": "vendored"
@@ -133,7 +134,7 @@
       "upstream_path": "src/tensorfold/kernels/qwen/dense/v1/lane_widen.py",
       "commit": "34bae79a",
       "license": "MIT",
-      "local_changes": [],
+      "local_changes": ["cooperative tensor element coordinates queried through MPP for M1-M5 portability"],
       "kind": "vendored"
     },
     {

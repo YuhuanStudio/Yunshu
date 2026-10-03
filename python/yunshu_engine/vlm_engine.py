@@ -1547,6 +1547,13 @@ class VLMEngine:
         if settings.get("YUNSHU_KV_PRECISION") != "bf16":
             logger.warning("YUNSHU_ROUND_DRIVER: int8 KV keeps the upstream path")
             return False
+        from .kernels.tensorfold.lane_qmm import ready
+
+        if not ready():
+            logger.warning(
+                "YUNSHU_ROUND_DRIVER: lane arithmetic self-test failed; using upstream runner"
+            )
+            return False
         return True
 
     def _build_batch_runner(self, model_path: str):
@@ -1660,9 +1667,9 @@ class VLMEngine:
                 # (M5-class tensor ops; sg8 elsewhere). 27B, in-process vs the
                 # NAX packed kernel: MTP / DFlash2 decode +0..+17% at 1K-131K
                 # with identical tokens, and 0.6 GiB less memory (no repacked copy).
-                from .kernels.ragged_attention import tile_ready
+                from .kernels.tensorfold.lane_qmm import ready
 
-                if tile_ready():
+                if ready():
                     from .kernels import lane_linear
 
                     kernels["lane_linear"] = lane_linear.convert(

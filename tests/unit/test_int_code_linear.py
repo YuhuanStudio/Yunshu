@@ -5,10 +5,11 @@ import pytest
 mx = pytest.importorskip("mlx.core")
 nn = pytest.importorskip("mlx.nn")
 
-from yunshu_engine.kernels.omlx import is_nax_available  # noqa: E402
+from yunshu_engine.kernels.tensorfold.lane_qmm import ready  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
-    not is_nax_available(), reason="needs an M5-class GPU with tensor units"
+    not ready(),
+    reason="lane tensor-op arithmetic self-test failed on this GPU / Metal compiler",
 )
 
 

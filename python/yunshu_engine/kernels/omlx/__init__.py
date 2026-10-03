@@ -69,8 +69,7 @@ def is_nax_available() -> bool:
             ok = gen >= (18 if suffix == "p" else 17)
         if ok:
             lib = Path(mx.__file__).parent / "lib" / "mlx.metallib"
-            if lib.is_file():
-                ok = b"affine_qmm_t_nax" in lib.read_bytes()
+            ok = lib.is_file() and b"affine_qmm_t_nax" in lib.read_bytes()
     except Exception:
         ok = False
     _NAX_CACHE["value"] = ok
