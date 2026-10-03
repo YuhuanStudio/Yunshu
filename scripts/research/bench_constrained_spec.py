@@ -175,6 +175,29 @@ def require_cache_reuse(result, phase):
         raise RuntimeError(f"{phase} did not reuse the cache")
 
 
+def structured_receipt(result, extra):
+    """Validate finished structured outputs; length-limited parity is separate."""
+    if "response_format" not in extra and "tools" not in extra:
+        return {}
+    text, _reasoning, calls, finish = result
+    if finish == "length":
+        return {"structured_complete": False, "structured_status": "length_limit"}
+    import jsonschema
+
+    if "response_format" in extra:
+        schema = extra["response_format"]["json_schema"]["schema"]
+        jsonschema.validate(json.loads(text), schema)
+    if "tools" in extra:
+        if extra.get("tool_choice") == "required" and not calls:
+            raise ValueError("required tool call missing")
+        schemas = {
+            t["function"]["name"]: t["function"]["parameters"] for t in extra["tools"]
+        }
+        for call in calls:
+            jsonschema.validate(json.loads(call["arguments"]), schemas[call["name"]])
+    return {"structured_complete": True, "structured_status": "schema_valid"}
+
+
 def cache_state_differences(baseline, speculative):
     """Compare tensor slots, preserving K/V identity and missing-state evidence.
 
@@ -339,6 +362,7 @@ def main():
         "--modes", nargs="+", choices=("mtp-ar", "mtp", "dflash-ar", "dflash")
     )
     ap.add_argument("--cache-state-check", action="store_true")
+    ap.add_argument("--require-structured-complete", action="store_true")
     ap.add_argument("--only-case", action="append")
     a = ap.parse_args()
     tfbench.YUNSHU_SRC = str(Path(__file__).resolve().parents[2] / "python")
@@ -448,6 +472,11 @@ def main():
                             else:
                                 result = send(srv, prompt, extra, a.max_tokens)
                             require_cache_reuse(result, phase)
+                            result.update(structured_receipt(result["result"], extra))
+                            if a.require_structured_complete and not result.get(
+                                "structured_complete", True
+                            ):
+                                raise RuntimeError("structured output hit length limit")
                             if extra.get("logprobs") and not result["logprobs"]:
                                 raise RuntimeError(
                                     "requested logprobs receipt is empty"

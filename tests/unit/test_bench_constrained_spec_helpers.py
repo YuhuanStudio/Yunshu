@@ -121,3 +121,51 @@ def test_cache_diff_identifies_state_slot_and_ignores_container_class():
     assert bench.cache_state_differences(ar, spec[:1]) == [
         {"layer": 3, "slot": 1, "baseline": ar[1], "speculative": None}
     ]
+
+
+def test_structured_receipt_distinguishes_truncation_from_valid_schema():
+    from jsonschema.exceptions import ValidationError
+
+    bench = _load()
+    extra = {
+        "response_format": {
+            "json_schema": {
+                "schema": {
+                    "type": "object",
+                    "properties": {"n": {"type": "integer"}},
+                    "required": ["n"],
+                    "additionalProperties": False,
+                }
+            }
+        }
+    }
+    assert bench.structured_receipt(["{", "", [], "length"], extra) == {
+        "structured_complete": False,
+        "structured_status": "length_limit",
+    }
+    assert bench.structured_receipt(['{"n": 1}', "", [], "stop"], extra) == {
+        "structured_complete": True,
+        "structured_status": "schema_valid",
+    }
+    with pytest.raises(ValidationError):
+        bench.structured_receipt(['{"n": "wrong"}', "", [], "stop"], extra)
+
+
+def test_required_tool_receipt_checks_arguments_and_missing_calls():
+    bench = _load()
+    extra = {
+        "tool_choice": "required",
+        "tools": [
+            {
+                "function": {
+                    "name": "f",
+                    "parameters": {"type": "object", "required": ["x"]},
+                }
+            }
+        ],
+    }
+    assert bench.structured_receipt(
+        ["", "", [{"name": "f", "arguments": '{"x": 1}'}], "tool_calls"], extra
+    )["structured_complete"]
+    with pytest.raises(ValueError, match="required tool"):
+        bench.structured_receipt(["", "", [], "stop"], extra)
