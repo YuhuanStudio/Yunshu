@@ -1,4 +1,7 @@
-"""Same-checkpoint native span scheduling: hidden and all cache states bit gate."""
+"""Short span hidden/cache bit gate; insufficient to approve this experiment.
+
+The 256-token HTTP comparison rejected span_forward despite this gate passing.
+"""
 
 import argparse
 import asyncio

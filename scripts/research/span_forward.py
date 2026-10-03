@@ -1,5 +1,9 @@
 """Research-only joint projection/MLP dispatch with unchanged mixer spans.
 
+REJECTED as lossless: three 32K HTTP pairs diverged on 256-token outputs.
+Short hidden/cache and 200-item gates passed but did not detect that failure.
+Never install this experiment in serving; retained for failure diagnosis.
+
 The scheduler joins a short non-stored boundary, but FA and GDN still execute
 exactly the old spans. Quantized lane projections and MLPs share their dispatch;
 the final one-token generate remains untouched.
