@@ -1565,7 +1565,24 @@ class VLMEngine:
         Qwen3.5-family only (``_SPEC_MODEL_TYPES``); ``YUNSHU_MTP=0`` disables the
         MTP draft.
         """
+        from .utils.hardware import is_paravirtual_metal
         from .vlm_batch_runner import VLMBatchRunner
+
+        if is_paravirtual_metal():
+            # air64's stock BF16 prefix arithmetic differs by prefill span.
+            # Keep cold upstream forwards, without APC or custom verify/cache kernels.
+            logger.warning(
+                "Apple Paravirtual Metal: using stock VLM runner without APC or speculation"
+            )
+            self._prefix_invariant_dispatch = False
+            self._apc_prefill_stride = 0
+            runner = VLMBatchRunner(
+                self._model, self._processor, executor=self._executor
+            )
+            runner.clear_on_idle = bool(getattr(self, "_mx_large_model", False))
+            runner.stop_tokens = set(self._get_eos_ids())
+            runner.inflight = lambda: self._active_count
+            return runner
 
         spec_family = self._config.get("model_type") in self._SPEC_MODEL_TYPES
         lm = self._model.language_model

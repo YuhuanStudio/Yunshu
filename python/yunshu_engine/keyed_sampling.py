@@ -143,6 +143,24 @@ class KeyedSampler:
         self.params = params
         self.seed = int(seed) & 0xFFFFFFFFFFFFFFFF
         self._next = 0
+        from .utils.hardware import is_paravirtual_metal
+
+        if is_paravirtual_metal():
+            self.sample_positions = self._sample_positions_virtual
+
+    def _sample_positions_virtual(self, logprobs, positions):
+        """Bound each VM command buffer; the 600 x 248320 graph can GPU-hang."""
+        pos = (
+            positions if isinstance(positions, mx.array) else mx.array(list(positions))
+        )
+        draws = []
+        for start in range(0, int(pos.size), 64):
+            draw = KeyedSampler.sample_positions(
+                self, logprobs[start : start + 64], pos[start : start + 64]
+            )
+            mx.eval(draw)  # submit before building the next graph
+            draws.append(draw)
+        return mx.concatenate(draws) if draws else mx.array([], dtype=mx.uint32)
 
     def sample_positions(self, logprobs: mx.array, positions) -> mx.array:
         """Tokens ``[N]`` for logprob rows ``[N, V]`` at generation indices ``positions``."""
