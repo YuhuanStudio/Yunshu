@@ -275,3 +275,10 @@ primary is dispatched immediately. Young auxiliary work can renew the grace at
 each primary completion; once the oldest auxiliary is aged, its grace is granted
 only once until actual service. This keeps rapid completions from extending an
 aged wait indefinitely.
+
+A ready primary cancels a pending handoff timer and submits immediately; the
+cancelled timer cannot submit a second slice. With exactly one eligible
+foreground group/request, dispatch uses its ordinary generator step, preserving
+saved prompt state and debt accounting without repeatedly scoring cache metadata.
+Competing candidates share one estimate snapshot per slice; actual progress is
+still revalidated after the selected step.

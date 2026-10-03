@@ -297,6 +297,7 @@ class VLMBatchRunner:
         self._driving = False
         self._decode_debt = 0.0
         self._primary_handoff_at: float | None = None
+        self._handoff_timer: threading.Timer | None = None
         self.clear_on_idle = False
         # Requests the engine has accepted, including ones still being
         # prepared (templating, image encoding) — the runner alone cannot see
@@ -620,8 +621,13 @@ class VLMBatchRunner:
         with self._lock:
             job.queued = job.last_service = time.perf_counter()
             self._pending.append(job)
-            if self._executor is None or self._driving:
+            if self._executor is None:
                 return
+            if self._driving:
+                if job.priority < 0 or self._handoff_timer is None:
+                    return
+                self._handoff_timer.cancel()
+                self._handoff_timer = None
             self._driving = True
         self._schedule()
 
@@ -1358,6 +1364,38 @@ class VLMBatchRunner:
                 not held and (not primary or now - job.last_service >= AGING_S)
             )
 
+        runnable = [g for g in groups if any(eligible(j) for j in g.jobs.values())]
+        if len(runnable) == 1 and len(runnable[0].jobs) == 1:
+            group = runnable[0]
+            (job,) = group.jobs.values()
+            if job.priority >= 0:
+                # With no eligible peer there is no scheduling choice. Keep
+                # the generator's ordinary path and avoid repeated cache peeks.
+                prefilling = not job.stats.t_first and job.uid not in getattr(
+                    getattr(group.gen, "_generation_batch", None), "uids", []
+                )
+                first_pending = job.finishing_prefill and not job.stats.t_first
+                if job.uid in group.prefills:
+                    group.gen._prompt_batch = group.prefills.pop(job.uid)
+                before = time.perf_counter()
+                self._step_group(group)
+                elapsed = time.perf_counter() - before
+                job.last_service = time.perf_counter()
+                if prefilling:
+                    job.finishing_prefill = (
+                        not job.stats.t_first
+                        and self._work(job).uncached_tokens <= PREFILL_STEP
+                    )
+                    self._decode_debt = DECODE_QUANTUM_S
+                elif not first_pending:
+                    self._decode_debt = max(0.0, self._decode_debt - elapsed)
+                batch = getattr(group.gen, "_prompt_batch", None)
+                if batch is not None:
+                    (uid,) = batch.uids
+                    group.prefills[uid] = batch
+                    group.gen._prompt_batch = None
+                return
+
         candidates = [
             (g, j)
             for g in groups
@@ -1367,13 +1405,14 @@ class VLMBatchRunner:
             not in getattr(getattr(g.gen, "_generation_batch", None), "uids", [])
             and eligible(j)
         ]
+        estimates = {id(j): self._work(j) for _, j in candidates}
         chosen = min(
-            candidates, key=lambda gj: self._work(gj[1]).key(now), default=None
+            candidates, key=lambda gj: estimates[id(gj[1])].key(now), default=None
         )
         aged_yield = None
         primary_choice = min(
             ((g, j) for g, j in candidates if j.priority >= 0),
-            key=lambda gj: self._work(gj[1]).key(now),
+            key=lambda gj: estimates[id(gj[1])].key(now),
             default=None,
         )
         if (
@@ -1381,7 +1420,7 @@ class VLMBatchRunner:
             and chosen[1].priority < 0
             and chosen[1].prefill_skips < 1
             and primary_choice is not None
-            and self._work(primary_choice[1]).uncached_tokens <= PREFILL_STEP
+            and estimates[id(primary_choice[1])].uncached_tokens <= PREFILL_STEP
         ):
             aged_yield = chosen[1]
             chosen = primary_choice
@@ -1410,7 +1449,7 @@ class VLMBatchRunner:
             and chosen[1].priority >= 0
             and (
                 chosen[1].finishing_prefill
-                or self._work(chosen[1]).uncached_tokens <= PREFILL_STEP
+                or estimates[id(chosen[1])].uncached_tokens <= PREFILL_STEP
             )
         )
         if delivering_first or (self._decode_debt > 0 and decoding and not final_atom):
@@ -1479,6 +1518,14 @@ class VLMBatchRunner:
                 self._decode_debt = DECODE_QUANTUM_S
             elif not first_pending:
                 self._decode_debt = max(0.0, self._decode_debt - elapsed)
+
+    def _wake_handoff(self, timer: threading.Thread | None = None) -> None:
+        current = threading.current_thread() if timer is None else timer
+        with self._lock:
+            if self._handoff_timer is not current:
+                return
+            self._handoff_timer = None
+        self._schedule()
 
     def _handoff_delay(self) -> float:
         if (
@@ -1636,9 +1683,16 @@ class VLMBatchRunner:
             if delay:
                 # Free the Metal worker and GIL for preparing/submitting the
                 # next request. The timer only submits; it never executes MLX.
-                timer = threading.Timer(delay, self._schedule)
+                timer = threading.Timer(delay, self._wake_handoff)
                 timer.daemon = True
-                timer.start()
+                with self._lock:
+                    ready = any(j.priority >= 0 for j in self._pending)
+                    if not ready:
+                        self._handoff_timer = timer
+                if ready:
+                    self._schedule()
+                else:
+                    timer.start()
             else:
                 self._schedule()
         elif self.clear_on_idle:

@@ -524,3 +524,37 @@ def test_young_handoff_refreshes_but_aged_handoff_is_used_once(atoms):
     r._drive_slice(False)
     assert aux.stats.prefill_done
     assert not aux.handoff_graced
+
+
+def test_ready_primary_cancels_handoff_timer_without_duplicate_submit(atoms):
+    r, _ = atoms
+    calls, cancelled = [], []
+    r._executor = SimpleNamespace(submit=lambda fn: calls.append(fn))
+    r._driving = True
+    timer = SimpleNamespace(cancel=lambda: cancelled.append(True))
+    r._handoff_timer = timer
+    r._submit(job(-1))
+    assert not calls and not cancelled
+    r._submit(job(0))
+    assert len(calls) == 1 and cancelled == [True]
+    assert r._handoff_timer is None
+    r._wake_handoff(timer)
+    assert len(calls) == 1
+
+
+def test_sole_foreground_can_progress_before_reading_cache_estimates(
+    atoms, monkeypatch
+):
+    r, _ = atoms
+    foreground = job(0)
+    foreground.ids = list(range(8192))
+    r._admit(foreground, True)
+    work = r._work
+
+    def estimate(j):
+        assert j.stats.prefill_done, "cache estimates must not gate a sole foreground"
+        return work(j)
+
+    monkeypatch.setattr(r, "_work", estimate)
+    r._step_work_groups(True)
+    assert foreground.stats.prefill_done == 2048
