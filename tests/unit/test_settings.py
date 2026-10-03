@@ -261,7 +261,9 @@ def test_cli_serve_set_rejects_unknown_key():
 def test_path_settings_expand_the_home_directory(monkeypatch, tmp_path):
     # A "~/..." default used to reach Path() unexpanded and create ./~/.cache/... in the cwd.
     monkeypatch.setenv("HOME", str(tmp_path))
-    assert settings.get("YUNSHU_SSD_CACHE_DIR") == str(tmp_path / ".cache/yunshu/kv-ssd")
+    assert settings.get("YUNSHU_SSD_CACHE_DIR") == str(
+        tmp_path / ".cache/yunshu/kv-ssd"
+    )
     monkeypatch.setenv("YUNSHU_SSD_CACHE_DIR", "~/elsewhere")
     assert settings.get("YUNSHU_SSD_CACHE_DIR") == str(tmp_path / "elsewhere")
     for name, s in settings.REGISTRY.items():
