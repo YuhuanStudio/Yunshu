@@ -902,6 +902,13 @@ def _execute(job: dict, path: Path, gate: ServingGate) -> None:
     print(f"{time.strftime('%H:%M:%S')} end {job['id']} {job['state']}", flush=True)
 
 
+def _adoption_order(jobs: list[dict]) -> list[dict]:
+    """Running jobs left by a previous daemon, already-exited ones first: adopting a
+    live job blocks until it ends, and a finished job must not look running meanwhile."""
+    running = [j for j in jobs if j["state"] == "running"]
+    return sorted(running, key=lambda j: _alive(j.get("pid")))
+
+
 def daemon() -> None:
     ROOT.mkdir(parents=True, exist_ok=True)
     lock = open(ROOT / "daemon.lock", "a")  # noqa: SIM115 - held for the daemon's lifetime
@@ -916,9 +923,8 @@ def daemon() -> None:
         gate.configure(load_serving_config())
         # A job left running by a previous daemon is adopted: wait for its
         # process group to exit (still under timeout / cancel), then record it.
-        for j in _jobs():
-            if j["state"] == "running":
-                _adopt(j, JOBS / f"{j['id']}.json", gate)
+        for j in _adoption_order(_jobs()):
+            _adopt(j, JOBS / f"{j['id']}.json", gate)
         if gate.enabled:
             gate.poll()
         for (

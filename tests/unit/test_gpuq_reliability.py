@@ -362,3 +362,13 @@ def test_running_p0_job_is_never_paused_for_priority(q, monkeypatch):
     monkeypatch.setattr(q, "_execute", lambda *a, **k: None)
     assert q._priority_step(pauser, q.ServingGate(), now) is False
     assert not pauser.paused
+
+
+def test_exited_jobs_are_adopted_before_live_ones(q, monkeypatch):
+    monkeypatch.setattr(q, "_alive", lambda pid: pid == 1)
+    jobs = [
+        dict(id="live", state="running", pid=1),
+        dict(id="gone", state="running", pid=2),
+        dict(id="queued", state="pending"),
+    ]
+    assert [j["id"] for j in q._adoption_order(jobs)] == ["gone", "live"]
