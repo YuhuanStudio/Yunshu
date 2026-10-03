@@ -85,6 +85,28 @@ def main():
                     lane_linear.PIECE = 512 if mode == "wide" else piece
                     lane_qmm.MAX_ROWS = 512 if mode == "wide" else maximum
                     runner.apc_manager.clear()
+                    if candidate == "native":
+                        prime_stats = RunStats()
+                        primed = list(
+                            runner.iter_tokens(
+                                ids,
+                                max_tokens=1,
+                                temperature=0,
+                                seed=1234,
+                                apc_semantic_hash=salt,
+                                stats=prime_stats,
+                                logprobs=True,
+                            )
+                        )
+                        engine._executor.submit(lambda: None).result()
+                        if (
+                            not primed
+                            or not prime_stats.finish_reason
+                            or prime_stats.cached_tokens
+                        ):
+                            raise RuntimeError(
+                                "paired warm prime incomplete / not cold"
+                            )
                     native_before = native_forward.native_calls
                     stats, tokens, lps = RunStats(), [], []
                     for token in runner.iter_tokens(
@@ -99,8 +121,15 @@ def main():
                         tokens.append(token)
                         lps.append(stats.last_logprob["logprob"])
                     engine._executor.submit(lambda: None).result()
-                    if not tokens or not stats.finish_reason or stats.cached_tokens:
-                        raise RuntimeError("incomplete / non-cold paired item")
+                    expected_cached = len(ids) - 1 if candidate == "native" else 0
+                    if (
+                        not tokens
+                        or not stats.finish_reason
+                        or stats.cached_tokens != expected_cached
+                    ):
+                        raise RuntimeError(
+                            "incomplete / unexpected paired cache boundary"
+                        )
                     native_calls = native_forward.native_calls - native_before
                     if mode == "native" and not native_calls:
                         raise RuntimeError("native singleton path did not engage")
@@ -109,7 +138,12 @@ def main():
                     scored = bool(match and int(match[1]) == answer)
                     correct[mode] += scored
                     results[mode] = dict(
-                        tokens=tokens, lps=lps, text=text, correct=scored
+                        tokens=tokens,
+                        lps=lps,
+                        text=text,
+                        correct=scored,
+                        cached=stats.cached_tokens,
+                        native_calls=native_calls,
                     )
                 equal = (
                     results["baseline"]["tokens"] == results[candidate]["tokens"]

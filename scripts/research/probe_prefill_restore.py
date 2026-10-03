@@ -62,7 +62,16 @@ def main():
     ap.add_argument(
         "--modes",
         nargs="+",
-        choices=("baseline", "direct", "keep", "wide", "native", "pool"),
+        choices=(
+            "baseline",
+            "direct",
+            "keep",
+            "wide",
+            "native",
+            "pool",
+            "nativepool",
+            "combo",
+        ),
         default=["baseline", "direct", "keep"],
     )
     a = ap.parse_args()
@@ -338,21 +347,23 @@ def main():
                 for mode in a.modes if rep % 2 == 0 else list(reversed(a.modes)):
                     Qwen3_5Model.__call__ = (
                         native_model_forward
-                        if mode == "native"
+                        if mode in ("native", "nativepool", "combo")
                         else original_model_forward
                     )
                     apc_adapters.clone_cache_entry = (
                         direct if mode in ("direct", "keep") else clone
                     )
-                    lane_qmm.MAX_ROWS = 512 if mode == "wide" else max_rows
-                    lane_linear.PIECE = 512 if mode == "wide" else piece
+                    lane_qmm.MAX_ROWS = 512 if mode in ("wide", "combo") else max_rows
+                    lane_linear.PIECE = 512 if mode in ("wide", "combo") else piece
                     mx.set_cache_limit(
                         buffer_cache._STATE["limit"]
-                        if mode in ("keep", "pool")
+                        if mode in ("keep", "pool", "nativepool", "combo")
                         else original_pool_limit
                     )
                     buffer_cache.clear_if_over = (
-                        (lambda: None) if mode in ("keep", "pool") else clear
+                        (lambda: None)
+                        if mode in ("keep", "pool", "nativepool", "combo")
+                        else clear
                     )
                     runner.apc_manager.clear()
                     run(ids, "prime", mode, rep)
