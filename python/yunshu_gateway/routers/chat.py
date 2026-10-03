@@ -2450,6 +2450,13 @@ async def _handle_vlm_chat(
             _vlm_est = count_message_tokens(
                 messages,
                 _vtok,
+                text_counter=(
+                    getattr(
+                        getattr(vlm_engine, "_guard_token_counts", None), "count", None
+                    )
+                    if getattr(vlm_engine, "_prefix_invariant_dispatch", False)
+                    else None
+                ),
                 media_counter=make_media_token_counter(
                     getattr(vlm_engine, "_processor", None),
                     getattr(vlm_engine, "_config", None),

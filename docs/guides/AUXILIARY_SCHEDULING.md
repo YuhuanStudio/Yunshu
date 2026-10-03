@@ -326,3 +326,30 @@ opposite sign (-0.87%). The existing three-pair digest-identical 27B evidence sh
 p90 -11%, warm p90 -1.3%, six-turn completion -17%, and long-mix TTFT p50
 23.1 -> 8.7 s. This decision supersedes the historical default-off gate above;
 those entries record earlier decisions, not the current deployment default.
+
+
+## Warm context guard (2026-10-04, codex-i8f)
+
+Qualified VLM backends also reuse successful exact text token counts in the gateway
+context/prefill guard. Each engine owns a tokenizer-identity-scoped LRU, limited to
+128 strings and 2 MiB of conservatively estimated Unicode text payload. Engine stop
+clears it; a tokenizer replacement invalidates it. Failed encodes keep the existing
+heuristic fallback and are never cached. Clear/replacement epochs prevent an older
+in-flight encode from publishing into the new cache.
+
+Only text counts are reused. Role/tool overhead and processor-derived image/video
+costs are still counted for each request, and context limits and token budgets use
+the same counts. Unqualified backends keep the original counting path. This reduces
+repeated host tokenization; it does not eliminate APC restore or GPU prefill time.
+The merged-tree M5 confirmation used actual DFlash: captured raw 7/7,
+cold/full-hit 2/2 and long-mix 6/6 digests matched default policy versus explicit
+FIFO (`1003-233802-00-i8-f-merged-confirm-2340`). The 0.8B smoke retained FIFO.
+
+The delivered-code M5 three-pair check (`1004-074925-00-i8-f-count-final-27b-0750`)
+matched all 12 raw output pairs and cold/full-hit digests. On this 8K-text,
+16-output-token singleton workload, warm guard counting averaged 5.558 -> 0.013 ms.
+Warm HTTP TTFT median was 78 -> 72 ms, but mean was 81.889 -> 82.333 ms;
+completion mean was 383.889 -> 402.222 ms, including a 560 ms first-warm candidate.
+The host counting reduction is measured; a general end-to-end latency gain is not
+established by this set. An earlier production run overlapped the MLX unit suite;
+its timings are excluded even though gpuq's CPU monitor marked it clean.

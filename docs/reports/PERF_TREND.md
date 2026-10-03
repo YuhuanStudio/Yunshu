@@ -641,3 +641,16 @@ Roofline/profile: actual restore source2.302GB, capacity2.335GB; minimum read+wr
 
 
 2026-10-03 I8 qualified scheduler default decision（codex-i8e；lead decision）：採用既有 clean quiet 三對 job `1003-182813-00-i8-next8-admit-all-1830`、相同27B checkpoint與digests。captured p50 .7515→.7570 s（+0.73%，5.5ms；phase5反方向-0.87%，lead判為run-to-run noise），p90 8.5990→7.6239 s（約-11%）、warm p90 1.7496→1.7268 s（-1.3%）、六turn completion40.226→33.504 s（約-17%）；long-mix TTFT p50 23.098→8.6795 s。只在實際engage qualified batch-invariant kernels的backend升預設；非invariant（0.8B）保留FIFO，兩個stable opt-out／explicit opt-in設定保留。這是scheduler traffic證據，不是所有模型的普遍加速；歷史default-off條目不改寫。
+
+
+2026-10-04 I8 engine-owned exact context-guard counts（codex-i8f；small but real **host work only**）：qualified VLM backend 使用 bounded text-count LRU（128 entries / 2MiB conservative text payload），tokenizer identity＋clear epoch隔離、stop清除、只cache成功encode；media/tool overhead與context/token budget仍逐次依原規則計算。非qualified保持原count path；沒有新增experimental flag。M5 actual DFlash quiet三個interleaved fresh-server pairs `1004-074925-00-i8-f-count-final-27b-0750` rc0/final complete/0 pauses，contended=false（foreign max249.43% <1620%）；source receipts前後一致，12/12 raw output pairs與cold/full-hit digests全同。8K純文字、max16、seed42、temp0，每server三個warm repeats。
+
+- M5 warm guard count mean **5.558→0.013ms**（約省5.54ms CPU工作）；240條text與240個包含tool/media的message計數cold/cache完全相同，這不是generation quality benchmark。
+- HTTP warm TTFT median **78→72ms**，mean **81.889→82.333ms**（+0.44ms）；三對mean差為candidate -5.33/-5.67/+12.33ms。保留第三對127/95ms TTFT，不宣稱平均TTFT全面加速。
+- completion mean **383.889→402.222ms**；candidate第三對first-warm560ms、下一turn427ms保留。早期原型同樣有665ms完成時間離群；追加三對trace未重現該665ms值，全部inflight=1，沒有lease誤判證據。此改動只減少重複host encode，不改GPU arithmetic、APC restore或scheduler。
+- `1004-074240-00-i8-f-count-production-27b-0746` 的12對parity PASS，但與nice15 MLX unit suite重疊，**整批timing排除**（CPU monitor clean並不足以排除GPU工作重疊）。正式重新量測為上面final job。
+- 合併後scheduler required確認 `1003-233802-00-i8-f-merged-confirm-2340` M5 actualDFlash、quiet rc0/complete/clean，captured raw7、cold/fullhit2、longmix6全同；tiny default/FIFO smoke保持qualified=False、uncached=False、auxiliary=False。既有lead accepted default數字沿用前項，不將一對確認當成新的三對效能claim。
+
+M5 full nice15 unit gate：8673 passed /20 skipped；M3與M5 focused38 PASS（M3不作timing決策）。Ruff check/format與mypy gate（897 baseline、no new）PASS。Idle-sync removal候選在M5三對TTFT兩臂都80ms，已移出交付，外部patch保留；host-ID roundtrip候選尚無27B measurement，不宣稱勝負。外部資料：P5Plus `i8-f-count-final/analysis.json`、`source.json`、`i8-f-trace-analysis.json`、`i8-f-unit-guard.log`。
+
+追加正式程式trace `1004-075423-00-i8-f-final-trace-27b-0755`：M5 quiet rc0/complete、0 pauses、CPU clean（foreign max137.91%）；12 raw pairs＋cold/fullhit全同。兩臂都出現MLX group step 100–300ms的慢段，末對回復正常，不能把CPU clean等同於所有device runtime平穩。全部warm inflight=1、runner input約0.26–0.37ms；guard→input baseline約5.7–7.8ms、cache約0.5–0.8ms。這定位了被移除的host encode與仍存在的group-runtime變異，不把變異歸因於lease，也不宣稱解決全部10–30ms。資料 `i8-f-final-trace-analysis.json`。

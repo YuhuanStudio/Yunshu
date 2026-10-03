@@ -356,6 +356,10 @@ class VLMEngine:
         self._temp_files: list[str] | None = None
         self._temp_files_lock = threading.Lock()
 
+        from yunshu_control.token_counter import TokenCountCache
+
+        self._guard_token_counts = TokenCountCache()
+
         # Text prompt tokenization cache — caches _format_prompt() output and
         # tokenizer.encode() results keyed by message content hash (and the
         # template extras), plus _processor.apply_chat_template() output for
@@ -696,6 +700,9 @@ class VLMEngine:
         self._running = False
 
         self._text_prompt_cache.clear()
+        guard_counts = getattr(self, "_guard_token_counts", None)
+        if guard_counts is not None:
+            guard_counts.clear()
         self._backend_caps = None
 
         gc.collect()
