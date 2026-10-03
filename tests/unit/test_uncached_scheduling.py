@@ -338,3 +338,24 @@ def test_last_cold_atom_keeps_numeric_spans_and_bypasses_debt(atoms):
     r._drive_slice(False)
     g = r._groups()[0]
     assert [a[1:] for a in g.gen.atoms if a[0] == cold.uid] == [(0, 2048), (2048, 2048)]
+
+
+def test_cancel_final_window_before_first_token_clears_priority(atoms):
+    r, _ = atoms
+    suffix = job(0)
+    suffix.ids = list(range(128))
+    suffix.cancel_event = threading.Event()
+    r._submit(suffix)
+    r._drive_slice(False)
+    assert suffix.finishing_prefill and not suffix.stats.t_first
+    suffix.cancel_event.set()
+    next_job = job(0)
+    r._submit(next_job)
+    for _ in range(8):
+        r._drive_slice(False)
+        if not r.busy():
+            break
+    assert suffix.stats.finish_reason == "cancel"
+    assert not suffix.stats.generated
+    assert next_job.stats.generated == 2
+    assert not r.busy()

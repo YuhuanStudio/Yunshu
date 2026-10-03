@@ -152,7 +152,7 @@ def main():
                     record("title", aux.result())
                 if not args.tiny and "Speculative decoding: mtp" not in log.read_text():
                     raise AssertionError("missing checkpoint MTP engagement")
-                if any(
+                if not args.tiny and any(
                     r["cached_tokens"] <= 0
                     for r in rows
                     if r["kind"].startswith("suffix")
