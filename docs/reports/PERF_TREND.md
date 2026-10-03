@@ -476,3 +476,10 @@ Yunshu 實際 MTP；TF 日誌明確 DFlash2。每個 ctx/kind/phase 跨三輪和
 同 arithmetic 的固定成本 probe `1003-005349-00-prefill2-v2-fixed-0053`（rc0+complete，JSON clean/reclassified，三輪交錯）：32K prefix 加 66 fresh tokens，sync / deferred / reserved TTFT median 576.48 / 472.82 / 467.09 ms；sync/deferred 都使用 upstream merge，故 deferred 少 103.66 ms（18.0%）。三種模式 generated token digests 相同。後續一 token revisit 約 111–113 ms，首個 allocator-cold revisit 約 205–215 ms，不能用 deferral 解釋一 token 固定 overhead。reservation 的 suffix 差值只有 5.73 ms（1.2%），保留數字、不單獨作穩定收益聲明。
 
 正確性：`1003-005349-00-prefill2-v2-identity-0053` rc0+complete，8K/32K prose/code 的 suffix/chat cold/partial/full APC token 與逐 token logprob 相同（max_abs_dlp=0）；`1003-005349-00-prefill2-v2-parity-0053`、合併後 `1003-101326-00-prefill3-merged-parity-1022` rc0+complete，1K prose/code serving spec off/on token digests 相同。先前第26 token AR/spec 分歧已以共同 target kernel context 修正。合併 main cache TTL/span policy 時 metadata 隨 detached snapshot 捕捉，只在成功 admission 後發布；max_tokens=1 的 first token 先 emit、再 flush、最後 DONE，避免 written usage race（30577356 / 6a6ec759）。
+
+2026-10-03 small but real：單列 native GDN restore 的 suffix-prefill view（`1003-102110-00-prefill3-fixed-view-1021`，rc0 + success complete；quiet，foreign CPU max217.6%，低於1620%；MTP engaged，32K，三輪交錯 sync/reserved/view）：
+
+- 66-token suffix 的 reserved/view 三輪配對少 2.96 / 4.49 / 5.93 ms（0.63 / 0.95 / 1.26%）；配對中位改善4.49ms。各 arm 自己的 TTFT 中位數 sync/reserved/view = 564.58 / 470.77 / 467.81 ms。cold/hit 與各 mode generated token digest 均相同；本 probe 每次16個generated tokens，逐token logprob的完整8K/32K identity證據是前一個 merged-identity job，不把兩個probe混成同一驗證。
+- view 用獨立 array handles 接續已 detached 的單列 ArraysCache，省 upstream merge 的 zeros+整 row copy；重置 lengths/left_padding，CPU逐 state 與 upstream merge相同，雙向mutation隔離通過。多列/custom/non-native狀態沿用 upstream。
+- 一 token revisit 的 view 沒有穩定收益：第二個 warm revisit 各輪配對 +2.41 / -7.57 / -6.12 ms（正=省時）；第三個 +1.90 / -2.74 / +0.52 ms。因此 serving 只在已知單列 memory plan、fresh suffix >=64 時使用 view；短 suffix / 未知 plan保留原 merge。64是保守的使用範圍限制，量測點為66，不宣稱找到了最佳 crossover。
+- 這是 suffix TTFT 約1%的小改善，不是 cold prefill或decode速度聲明；沒有新增設定或實驗旗標。原型與解析檔 `prefill3-fixed-view.py`、`prefill3-fixed-view-summary.json`，完整log在gpuq。

@@ -427,6 +427,30 @@ class Lookup:
     device: str | None = None  # storage tier (volume name) of an ssd hit
 
 
+def _single_native_arrays_row(source):
+    """A private native restore row with upstream merge's metadata reset.
+
+    Return None for non-native or multi-row state. Views use separate array
+    handles, so subsequent live cache mutation cannot change the restored source.
+    This avoids ArraysCache.merge's zeros allocation and whole-row assignment.
+    """
+    from mlx_vlm.models.cache import ArraysCache
+
+    if type(source) is not ArraysCache or any(
+        a is not None and (not a.ndim or a.shape[0] != 1) for a in source.cache
+    ):
+        return None
+    row = ArraysCache(len(source.cache))
+    if source.empty():
+        import mlx.core as mx
+
+        # Upstream initializes zero padding for its one empty row.
+        row.left_padding = mx.array([0])
+    else:
+        row.cache = [a.view(a.dtype) if a is not None else None for a in source.cache]
+    return row
+
+
 class _Coordinator(APCCoordinator):
     """Checkpoint positions: the prompt end, one interval boundary, the end of the system turn."""
 
@@ -560,6 +584,10 @@ class _Coordinator(APCCoordinator):
         ):
             import mlx.core as mx
 
+            lengths = self.manager.memory_plan.lengths
+            # The measured suffix-prefill win does not extend to one-token
+            # revisits. Keep their upstream merge; unknown plans do likewise.
+            arrays_view = len(lengths) == 1 and lengths[0] - prefix >= 64
             merged = []
             for c in rows:
                 if type(c) is KVCache:
@@ -573,7 +601,10 @@ class _Coordinator(APCCoordinator):
                     batch.offset += prefix
                     merged.append(batch)
                 else:
-                    merged.append(merge_cache_entries([c], [prefix]))
+                    row = _single_native_arrays_row(c) if arrays_view else None
+                    merged.append(
+                        row if row is not None else merge_cache_entries([c], [prefix])
+                    )
             if all(c is not None for c in merged):
                 mx.eval([c.state for c in merged])
                 with self.manager.lock:

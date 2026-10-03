@@ -410,3 +410,78 @@ def test_one_token_completion_waits_for_deferred_publication():
     group.jobs[1] = job
     runner._step_generator(group)
     assert events == ["emit", "flush", "done"]
+
+
+@pytest.mark.parametrize(
+    "slots", [(False, False), (False, True), (True, False), (True, True)]
+)
+def test_private_arrays_restore_view_matches_upstream_state_and_metadata(slots):
+    from yunshu_engine.apc_manager import _single_native_arrays_row
+
+    source = ArraysCache(2)
+    source.cache = [
+        mx.full((1, 2, 3), i + 2) if present else None
+        for i, present in enumerate(slots)
+    ]
+    source.lengths = mx.array([12])
+    source.left_padding = mx.array([3])
+    expected = ArraysCache.merge([source])
+    restored = _single_native_arrays_row(source)
+    assert restored is not None
+    mx.eval(expected.state, restored.state)
+    for a, b in zip(restored.state, expected.state, strict=True):
+        if b is None:
+            assert a is None
+        else:
+            assert mx.array_equal(a, b).item()
+    assert restored.lengths is expected.lengths is None
+    assert (restored.left_padding is None) == (expected.left_padding is None)
+    if expected.left_padding is not None:
+        assert restored.left_padding.tolist() == expected.left_padding.tolist()
+    assert source.lengths.tolist() == [12]
+    assert source.left_padding.tolist() == [3]
+    if not source.empty():
+        index = next(i for i, a in enumerate(source.cache) if a is not None)
+        assert restored[index] is not source[index]
+        original = source[index].tolist()
+        restored[index][:] = 99
+        assert source[index].tolist() == original
+        source[index][:] = 17
+        assert restored[index].tolist() == [[[99.0] * 3] * 2]
+
+
+def test_private_arrays_restore_view_rejects_multirow_and_custom_contracts():
+    from yunshu_engine.apc_manager import _single_native_arrays_row
+
+    source = ArraysCache(1)
+    source.cache = [mx.ones((2, 2, 3))]
+    assert _single_native_arrays_row(source) is None
+
+    class CustomArraysCache(ArraysCache):
+        pass
+
+    assert _single_native_arrays_row(CustomArraysCache(1)) is None
+
+
+@pytest.mark.parametrize("fresh", [1, 63, 64])
+def test_arrays_restore_view_only_for_known_suffix_prefill(monkeypatch, fresh):
+    from mlx_vlm import apc_adapters
+
+    manager = _mgr()
+    coordinator = _coordinator(manager)
+    coordinator.prepare_prefill([32 + fresh], prefill_step_size=2048)
+    source = ArraysCache(1)
+    source.cache = [mx.ones((1, 2, 3))]
+    calls = []
+    merge = apc_adapters.merge_cache_entries
+
+    def observed(entries, prefix_lens):
+        calls.append(entries[0])
+        return merge(entries, prefix_lens)
+
+    monkeypatch.setattr(apc_adapters, "merge_cache_entries", observed)
+    restored, prefix = coordinator.merge_rows([{"warm_cache": [source]}], [32])
+    assert calls == ([] if fresh >= 64 else [source])
+    assert prefix == 32
+    assert restored[0][0].tolist() == source[0].tolist()
+    assert restored[0][0] is not source[0]
