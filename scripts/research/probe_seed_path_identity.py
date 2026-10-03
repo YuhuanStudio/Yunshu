@@ -33,6 +33,37 @@ CONFIGS = [
 ]
 
 
+def consume_tokens(runner, ids, cfg, seed, draft, n, sink, stats, errors):
+    """Joinable consumer whose failures cannot masquerade as equal outputs."""
+
+    def go():
+        try:
+            for token in runner.iter_tokens(
+                ids,
+                max_tokens=n,
+                seed=seed,
+                prompt_kwargs=None,
+                allow_draft=draft,
+                stats=stats,
+                **cfg,
+            ):
+                sink.append(token)
+        except Exception as exc:
+            errors.append({"seed": seed, "draft": draft, "error": repr(exc)})
+
+    thread = threading.Thread(target=go)
+    thread.start()
+    return thread
+
+
+def identity_complete(results, errors):
+    return (
+        not errors
+        and bool(results["L"][0])
+        and results["L"][0] == results["S"][0] == results["M"][0]
+    )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
@@ -84,22 +115,12 @@ def main() -> None:
         )
         return list(tok.encode(s))
 
-    def consume(ids, cfg, seed, draft, n, sink, stats):
-        def go():
-            for t in runner.iter_tokens(
-                ids,
-                max_tokens=n,
-                seed=seed,
-                prompt_kwargs=None,
-                allow_draft=draft,
-                stats=stats,
-                **cfg,
-            ):
-                sink.append(t)
+    consumer_errors = []
 
-        th = threading.Thread(target=go)
-        th.start()
-        return th
+    def consume(ids, cfg, seed, draft, n, sink, stats):
+        return consume_tokens(
+            runner, ids, cfg, seed, draft, n, sink, stats, consumer_errors
+        )
 
     def digest(t):
         return hashlib.sha256(json.dumps(t).encode()).hexdigest()[:16]
@@ -129,7 +150,7 @@ def main() -> None:
                     for th in ths:
                         th.join()
                     res[mode] = (toks, st)
-                same = res["L"][0] == res["S"][0] == res["M"][0]
+                same = identity_complete(res, consumer_errors)
                 ok &= same
 
                 def first_diff(m, res=res):
@@ -190,7 +211,15 @@ def main() -> None:
                 s=time.perf_counter() - t0,
             )
         )
-    emit(dict(kind="summary", all_identical=ok, complete=True))
+    ok = ok and not consumer_errors
+    emit(
+        dict(
+            kind="summary",
+            all_identical=ok,
+            consumer_errors=consumer_errors,
+            complete=True,
+        )
+    )
     out.close()
     asyncio.new_event_loop().run_until_complete(engine.stop())
     sys.exit(0 if ok else 1)
