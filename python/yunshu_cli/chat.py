@@ -78,6 +78,9 @@ def chat(
         )
         raise typer.Exit(1)
 
+    # Each CLI invocation starts a new conversation, even when embedded in
+    # a long-lived Python process. Never send another session to this model.
+    HISTORY.clear()
     if system:
         HISTORY.append({"role": "system", "content": system})
 
@@ -130,7 +133,8 @@ def _repl(
                 console.print("[dim]Goodbye![/]")
                 break
             elif cmd == "/clear":
-                HISTORY.clear()
+                # Clearing conversation turns keeps the session instructions.
+                HISTORY[:] = [m for m in HISTORY if m["role"] == "system"]
                 console.print("[dim]Conversation cleared.[/]")
                 continue
             elif cmd == "/thinking":
