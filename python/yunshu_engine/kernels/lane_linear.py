@@ -29,7 +29,7 @@ from .tensorfold import lane_qmm
 
 logger = logging.getLogger(__name__)
 
-PIECE = lane_qmm.MAX_ROWS
+PIECE = 512  # prefill dispatch only; other lane callers retain the 128-row guard
 NARROW = 256  # outputs below this run the lane matmul in prefill too
 # Calls above this many rows (a prefill chunk) run MLX's own quantized matmul on the weight
 # untiled for the call: the lane kernel reads the whole weight once per 128 rows (16 reads per
@@ -132,6 +132,7 @@ class LaneLinear(nn.Module):
             tiled=self.tiled,
             group=self.group_size,
             row_block=block,
+            row_limit=PIECE,
         )
 
     def stock(self) -> tuple[mx.array, mx.array, mx.array]:

@@ -38,7 +38,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from .tool_arguments import coerce_tool_calls
+from .tool_arguments import coerce_tool_calls, parser_tools
 
 logger = logging.getLogger(__name__)
 
@@ -121,14 +121,34 @@ def _upstream(name: str) -> ToolFormat | None:
 
     def parse(body: str, tools: Any) -> list[Call]:
         body = _unwrap_doubled_braces(body)
+        original_tools = tools
+        tools = parser_tools(tools)
         if "<function=" in body:
-            return _parse_function_xml(module, body, tools)
+            return (
+                coerce_tool_calls(
+                    _parse_function_xml(module, body, tools),
+                    original_tools,
+                    raw_text_values=True,
+                )
+                or []
+            )
         try:
-            return _calls_from(module.parse_tool_call(body, tools))
+            calls = _calls_from(module.parse_tool_call(body, tools))
+            return (
+                coerce_tool_calls(
+                    calls,
+                    original_tools,
+                    raw_text_values="<arg_key>" in body
+                    and not body.lstrip().startswith(("{", "[")),
+                )
+                or []
+            )
         except Exception:
             loose = _parse_loose_tag(body, tools)
             if loose:
-                return loose
+                return (
+                    coerce_tool_calls(loose, original_tools, raw_text_values=True) or []
+                )
             raise
 
     return ToolFormat(
@@ -408,7 +428,7 @@ def native_format(tokenizer: Any) -> ToolFormat | None:
         try:
             from mlx_lm.tokenizer_utils import _infer_tool_parser as lm_infer
 
-            name = lm_infer(text)
+            name = lm_infer(tokenizer)
         except ImportError:  # pragma: no cover
             name = None
     if name is None or name == "json_tools":

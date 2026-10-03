@@ -122,6 +122,10 @@ def _enforce_anthropic_tool_choice(tool_calls, tool_choice):
     surfaced the wrong/extra calls and a tool_use stop_reason. Mirror the chat enforcement:
     for a forced tool, drop calls whose name != the forced name; honor
     disable_parallel_tool_use by capping to one call."""
+    if tool_choice == "none" or (
+        isinstance(tool_choice, dict) and tool_choice.get("type") == "none"
+    ):
+        return [] if tool_calls else tool_calls
     if not tool_calls or not isinstance(tool_choice, dict):
         return tool_calls
 
@@ -525,6 +529,8 @@ def _convert_anthropic_messages(
                     tool_id = block.get("id", f"toolu_{uuid.uuid4().hex[:24]}")
                     tool_name = block.get("name", "unknown")
                     tool_input = block.get("input", {})
+                    if tool_input is None:
+                        tool_input = {}
                     _tool_id_to_name[tool_id] = tool_name  # for the tool_result name
                     # json.dumps handles any JSON-serializable input (Anthropic spec
                     # says object, but a list/scalar must still be valid JSON, not str()'s
@@ -1163,9 +1169,8 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     # Anthropic API semantics: role="system" entries in messages[] should be
     # lifted into the canonical system field, not left in the messages list.
     # This matches omlx behavior and ensures correct cache key computation.
-    # Only the leading ones for families whose adapter keeps later system messages in
-    # place (Qwen): Claude Code sends a per-turn note as a trailing system message, and
-    # hoisting it into the system prompt rewrote the prompt start every turn (0% reuse).
+    # Keep reminders at instruction priority; changing them can invalidate a
+    # prefix hit, but converting them to user text changes request semantics.
     _system_parts: list[str] = []
     _filtered_messages: list[dict] = []
     _in_place = _keeps_mid_system(req.model)

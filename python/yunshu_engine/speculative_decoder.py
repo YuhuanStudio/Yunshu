@@ -480,6 +480,8 @@ class SpeculativeDecoder:
         input_ids: mx.array,
         cache: list,
         temperature: float = 0.0,
+        *,
+        cache_contains_last_token: bool = True,
     ) -> VerifyResult:
         """Verify draft tokens against the target model in one pass.
 
@@ -522,20 +524,21 @@ class SpeculativeDecoder:
         # misaligned.  After rollback, the cache is as if last_token was never
         # processed, so feeding [last_tok, d0..dK-1] produces K+1 logits
         # correctly: logits[0] verifies d0, logits[K] is the bonus.
-        try:
-            from mlx_lm.models.cache import trim_prompt_cache
+        if cache_contains_last_token:
+            try:
+                from mlx_lm.models.cache import trim_prompt_cache
 
-            trim_prompt_cache(cache, 1)
-        except Exception:
-            trimmed = False
-            for c in cache:
-                if hasattr(c, "trim"):
-                    c.trim(1)
-                    trimmed = True
-            if not trimmed:
-                logger.warning(
-                    "Cannot rollback KV cache — verification logits may be misaligned"
-                )
+                trim_prompt_cache(cache, 1)
+            except Exception:
+                trimmed = False
+                for c in cache:
+                    if hasattr(c, "trim"):
+                        c.trim(1)
+                        trimmed = True
+                if not trimmed:
+                    logger.warning(
+                        "Cannot rollback KV cache — verification logits may be misaligned"
+                    )
 
         # Build aligned input: [last_token(s), d0, d1, ..., dK-1]
         last_tok = input_ids[:, -1:]  # [1, 1] — last token from previous step
@@ -576,7 +579,14 @@ class SpeculativeDecoder:
 
         # Generate uniform random numbers for all positions at once
         uniforms = mx.array([self.rng.random() for _ in range(K)])
-        accepted_mask = uniforms < ratios
+        if temperature is None or temperature <= 1e-6:
+            # Greedy target distribution is a point mass. A probability-ratio
+            # test can accept non-argmax drafts or reject the correct argmax.
+            accepted_mask = mx.argmax(
+                target_logprobs, axis=-1
+            ) == draft_ids_arr.squeeze(-1)
+        else:
+            accepted_mask = uniforms < ratios
 
         # Sequential scan: find first rejection (sequential dependency)
         accepted_ids = []
@@ -655,12 +665,11 @@ class SpeculativeDecoder:
             except Exception:
                 pass
 
-        if rejected_at >= 0:
-            # Rejected at bonus_pos: use logits at that position for resample
-            bonus_token = sampler(logits[0, bonus_pos : bonus_pos + 1, :])
-        else:
-            # All accepted: bonus from position K (prediction after all drafts)
-            bonus_token = sampler(logits[0, K : K + 1, :])
+        # Sample from the same normalized distribution as plain generate_step,
+        # including any bonus-token grammar mask applied above.
+        bonus_logits = logits[0, bonus_pos : bonus_pos + 1, :]
+        bonus_logprobs = bonus_logits - mx.logsumexp(bonus_logits, keepdims=True)
+        bonus_token = sampler(bonus_logprobs)
         bonus_id = bonus_token.item()
 
         return VerifyResult(
@@ -1020,10 +1029,14 @@ class SpeculativeDecoder:
         t_logits = (
             t_out.logits[:, -1, :] if hasattr(t_out, "logits") else t_out[:, -1, :]
         )
+        # mlx-lm generate_step passes normalized logprobs to its sampler.
+        # In bf16 normalization can create ties, so every external draw must
+        # use that same distribution rather than mixing raw/normalized argmax.
+        t_logprobs = t_logits - mx.logsumexp(t_logits, keepdims=True)
         if target_sampler:
-            first_token = int(target_sampler(t_logits).item())
+            first_token = int(target_sampler(t_logprobs).item())
         else:
-            first_token = int(t_logits.argmax(axis=-1).item())
+            first_token = int(t_logprobs.argmax(axis=-1).item())
 
         self.draft(input_ids, cache=draft_cache)
 
@@ -1087,7 +1100,7 @@ class SpeculativeDecoder:
                     except Exception:
                         pass
                 d_logprobs = d_logits - mx.logsumexp(d_logits, axis=-1, keepdims=True)
-                next_tok = draft_sampler(d_logits)
+                next_tok = draft_sampler(d_logprobs)
                 tok_id = int(next_tok.item())
                 draft_tokens.append(tok_id)
                 draft_probs.append(float(d_logprobs[0, tok_id].item()))
@@ -1117,7 +1130,11 @@ class SpeculativeDecoder:
             ):
                 break
             verify_result = self.verify_draft(
-                draft_result, last_tok_arr, target_cache, temperature=temperature
+                draft_result,
+                last_tok_arr,
+                target_cache,
+                temperature=temperature,
+                cache_contains_last_token=False,
             )
 
             # SP-PEN: Apply penalty/bias to bonus token.
@@ -1243,10 +1260,9 @@ class SpeculativeDecoder:
                                 self.constraint.advance(
                                     self.tokenizer.decode([correction])
                                 )
-                # verify_draft rolled back 1 then fed [last_tok, d0..dK-1] (K+1 entries).
-                # After rollback, cache had N-1 entries. After forward K+1: N+K.
-                # Only accepted+1 are valid (last_tok + accepted drafts).
-                # Trim the rejected ones: (N+K) - (N-1+accepted+1) = K - accepted.
+                # Target cache excludes last_tok at entry. Verification appends
+                # last_tok and all drafts; retain last_tok + accepted drafts,
+                # leaving correction uncached for the next aligned verification.
                 trim_count = len(draft_tokens) - accepted
                 try:
                     from mlx_lm.models.cache import trim_prompt_cache
@@ -1258,17 +1274,18 @@ class SpeculativeDecoder:
                             c.trim(trim_count)
 
                 self._restore_cache(draft_cache, draft_snap)
-                # Re-feed accepted + correction tokens to draft cache.
-                refeed = generated_tokens[-(accepted + 1) :]
+                # The snapshot excludes last_tok. Rebuild the committed prefix
+                # through accepted drafts, leaving correction for the next draft
+                # call. Feeding correction here would duplicate it next round.
+                refeed = [last_tok, *verify_result.accepted_ids]
                 for tok in refeed:
                     self.draft(mx.array([[tok]]), cache=draft_cache)
 
-                # Feed correction token to target cache so it becomes the last
-                # entry.  This ensures the next verify_draft's rollback will
-                # correctly remove the correction (not the last accepted draft).
-                correction = generated_tokens[-1]
-                self.target(mx.array([[correction]]), cache=target_cache)
             else:
+                # The draft loop processed last_tok and drafts[:-1]. Cache its
+                # final accepted token before the next call processes the bonus.
+                if len(generated_tokens) < max_tokens:
+                    self.draft(mx.array([[draft_tokens[-1]]]), cache=draft_cache)
                 # All accepted: advance grammar constraint for all accepted + bonus.
                 # Pop the stale checkpoint without restoring (all-accept path
                 # never calls rollback, so without this the checkpoint stack
@@ -1284,11 +1301,6 @@ class SpeculativeDecoder:
                     if bonus_id >= 0 and bonus_id not in eos_ids:
                         with contextlib.suppress(Exception):
                             self.constraint.advance(self.tokenizer.decode([bonus_id]))
-                # feed bonus token to target cache for the same
-                # reason — the bonus must be in cache before next verify_draft.
-                if bonus_id >= 0 and len(generated_tokens) < max_tokens:
-                    self.target(mx.array([[bonus_id]]), cache=target_cache)
-
             if any(t in eos_ids for t in generated_tokens):
                 return generated_tokens
 

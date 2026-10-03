@@ -314,7 +314,7 @@ def check_speculative(model: str) -> list[Check]:
     import json
 
     from yunshu_engine import model_discovery, spec_select
-    from yunshu_engine.mlxvlm_mtp import is_mtp_capable
+    from yunshu_engine.mlxvlm_mtp import is_mtp_capable, unindexed_mtp_warning
 
     resolved = model_discovery.resolve_model_ref(model)
     cfg_path = Path(resolved or model).expanduser() / "config.json"
@@ -322,6 +322,9 @@ def check_speculative(model: str) -> list[Check]:
         cfg = json.loads(cfg_path.read_text())
     except (OSError, ValueError):
         return []
+    warning = unindexed_mtp_warning(str(cfg_path.parent))
+    if warning:
+        return [Check("speculative", "warn", warning)]
     family = cfg.get("model_type") in ("qwen3_5", "qwen3_6", "qwen3_5_moe")
     choice = spec_select.choose(
         cfg,

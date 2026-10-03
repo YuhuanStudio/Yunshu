@@ -154,3 +154,9 @@ waiters to cold fallback. Media salts stay part of identity and each request
 keeps its own mutable KV, sampler and detokenizer. Uniform clients in one
 upstream generator may already avoid duplicate prefill; cross-generator groups
 are measured separately in the single-flight replay.
+
+System-first templates receive one leading instruction block. Anthropic top-level
+`system` and system reminders are merged in their input order; OpenAI system and
+developer messages are likewise hoisted. Reminders retain instruction priority.
+Changing a reminder changes the leading prompt and can reduce prefix reuse. Renaming
+a checkpoint does not disable this normalization for an otherwise unknown family.

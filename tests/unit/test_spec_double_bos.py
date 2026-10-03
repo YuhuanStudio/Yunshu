@@ -19,11 +19,7 @@ from yunshu_engine.batched_engine import BatchedEngine
 
 _SPEC_METHODS = [
     "_generate_ngram_spec",
-    "_generate_mtp",
-    "_generate_speculative",
-    "_stream_generate_mtp",
     "_stream_generate_ngram_spec",
-    "_stream_generate_speculative",
 ]
 
 

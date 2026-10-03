@@ -1,8 +1,8 @@
 # Upstream (derived): jundot/omlx (Apache-2.0) omlx/patches/mlx_lm_mtp @ deb9f00a
 # DEPRECATED : home-grown Qwen3.5 MTP — superseded by mlx-vlm's
-# native MTP (see mlxvlm_mtp.py + YUNSHU_SPEC_UNVERIFIED=mlxvlm_mtp; ~1.82x in a proof script, not served/gated — experimental).
+# native MTP (see mlxvlm_mtp.py standalone research backend; ~1.82x in a proof script, not served/gated — experimental).
 # This lacked mlx-vlm's GatedDeltaNet intermediate-state capture (garbage on 27B,
-# ~0.9x on 9B). Kept only as the experimental YUNSHU_SPEC_UNVERIFIED=mtp route.
+# ~0.9x on 9B). Standalone research only; the served MTP path is the VLM batch runner.
 """MTP (Multi-Token Prediction) monkey-patch for mlx-lm's Qwen3.5 model.
 
 Ports the oMLX MTP patch (PR 990) to Yunshu. Adds:
