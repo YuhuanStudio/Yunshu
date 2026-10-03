@@ -46,7 +46,7 @@ for n in (8, 200, 600):
     row = np.full((1, 248320), -np.inf, dtype=np.float32)
     row[0, :5] = 0
     lp = mx.broadcast_to(mx.array(row), (n, 248320))
-    draw = KeyedSampler(RowParams(temperature=1), 0).sample_positions(lp, range(n))
+    draw = KeyedSampler(RowParams(temperature=1, top_p=1, top_k=0, min_p=0), 0).sample_positions(lp, range(n))
     print("DRAW", n, np.unique(np.array(draw)).tolist(), flush=True)
     mx.clear_cache()
 
