@@ -20,7 +20,11 @@ from pathlib import Path
 MAX_POLL_GAP_S = 5.0
 STALE_FLAG_S = 10.0
 
-DEFAULTS = dict(threshold_pct=150.0, window_s=20.0, max_wait_s=300.0, sample_s=30.0)
+# Foreign CPU (percent of one core) at which a timing run counts as contended: a quarter of
+# the machine's cores (450% on an 18-core M5 Max), at least 300%. 150% flagged ordinary
+# background activity; measured slowdowns (27B decode 98 -> 89 tok/s) appeared near load 6.
+_DEFAULT_THRESHOLD = max(300.0, 25.0 * (os.cpu_count() or 8))
+DEFAULTS = dict(threshold_pct=_DEFAULT_THRESHOLD, window_s=20.0, max_wait_s=300.0, sample_s=30.0)
 ENV = dict(
     threshold_pct="GPUQ_CPU_THRESHOLD",
     window_s="GPUQ_QUIET_WINDOW_S",
