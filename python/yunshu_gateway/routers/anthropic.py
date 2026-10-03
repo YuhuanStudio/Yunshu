@@ -1163,9 +1163,8 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     # Anthropic API semantics: role="system" entries in messages[] should be
     # lifted into the canonical system field, not left in the messages list.
     # This matches omlx behavior and ensures correct cache key computation.
-    # Only the leading ones for families whose adapter keeps later system messages in
-    # place (Qwen): Claude Code sends a per-turn note as a trailing system message, and
-    # hoisting it into the system prompt rewrote the prompt start every turn (0% reuse).
+    # Keep reminders at instruction priority; changing them can invalidate a
+    # prefix hit, but converting them to user text changes request semantics.
     _system_parts: list[str] = []
     _filtered_messages: list[dict] = []
     _in_place = _keeps_mid_system(req.model)

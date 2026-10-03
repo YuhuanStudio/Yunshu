@@ -517,7 +517,7 @@ class TestApplyVLMTemplateWithCache:
         assert stats["misses"] == 1
         assert stats["template_entries"] == 1
 
-    def test_vision_path_demotes_mid_conversation_system_messages(self):
+    def test_vision_path_hoists_mid_conversation_system_messages(self):
         """Claude Code sends per-turn system notes mid-conversation; Qwen's template raises on
         them, so the vision path must run the same family adapter as the text path."""
         engine = VLMEngine("/models/Qwen3.5-9B-MLX-4bit")
@@ -536,7 +536,7 @@ class TestApplyVLMTemplateWithCache:
             {"role": "system", "content": "<total_tokens>1</total_tokens>"},
         ]
         engine._apply_vlm_template_with_cache(messages)
-        assert seen["roles"] == ["system", "user", "tool", "user"]
+        assert seen["roles"] == ["system", "user", "tool"]
 
     def test_template_cache_different_num_audios(self):
         engine = VLMEngine("/models/test")

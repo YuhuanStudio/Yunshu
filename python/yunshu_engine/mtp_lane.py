@@ -466,12 +466,22 @@ def install() -> bool:
     from mlx_vlm.generate import ar
     from mlx_vlm.speculative import utils as spec_utils
 
+    from . import settings
+
     original = ar.run_speculative_server_rounds
 
     def run(model, draft_model, prompt_cache, hidden, **kw):
         first = kw.get("first_bonus")
         if (
             _STATE["enabled"]
+            # Tree owns the upstream MTP hook; the chain lane must not
+            # intercept its eligible requests before that hook is reached.
+            and not (
+                settings.get("YUNSHU_SPEC_TREE") == "tree"
+                and kw.get("greedy_sampling")
+                and _STATE["guide"] is None
+                and not isinstance(kw.get("sampler"), KeyedSampler)
+            )
             and kw.get("draft_kind") == "mtp"
             and (
                 kw.get("greedy_sampling") or isinstance(kw.get("sampler"), KeyedSampler)

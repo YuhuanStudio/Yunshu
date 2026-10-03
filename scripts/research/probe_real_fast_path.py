@@ -3,20 +3,17 @@
 import asyncio
 import hashlib
 import json
-import os
 import platform
 import time
 from pathlib import Path
 
+from yunshu_engine import settings
 from yunshu_engine.batched_engine import BatchedEngine
 
 
 async def main():
-    if (
-        os.environ.get("YUNSHU_ENGINE_LOOP") == "1"
-        or os.environ.get("YUNSHU_SPEC_UNVERIFIED") == "mlxvlm_mtp"
-    ):
-        raise SystemExit("Run with default fast path (no ENGINE_LOOP or MTP override)")
+    if settings.get_bool("YUNSHU_ENGINE_LOOP"):
+        raise SystemExit("Run with default fast path (no ENGINE_LOOP override)")
     path = Path("models/Qwen2.5-3B-Instruct-4bit")
     engine = BatchedEngine(str(path))
     results = []

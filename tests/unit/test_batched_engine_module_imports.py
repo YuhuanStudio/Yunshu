@@ -22,7 +22,6 @@ import pytest
         "engine_stream",
         "engine_speculative",
         "engine_ngram",
-        "engine_mtp",
     ],
 )
 def test_extracted_module_imports_before_facade(package, module):

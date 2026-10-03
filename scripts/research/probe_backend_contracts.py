@@ -5,16 +5,12 @@ These are observations of current behavior, not a production-readiness test.
 """
 
 import asyncio
-import contextlib
 import json
 import platform
-import threading
-import time
 
 import mlx.core as mx
 from mlx_lm.models.cache import KVCache
 
-from yunshu_engine.batched_engine import BatchedEngine
 from yunshu_engine.kv_prefix_cache import KVPrefixCache
 from yunshu_engine.omni_engine import OmniEngine
 
@@ -65,64 +61,6 @@ async def main():
     with patch("subprocess.run", side_effect=FileNotFoundError("probe: no ffmpeg")):
         frames = await video_engine._extract_frames_from_file("probe-video.mp4")
     rows["video_decode_failure"] = dict(returned_frames=frames, raised=False)
-
-    class Backend:
-        def generate(self, messages, **kwargs):
-            self.kwargs = kwargs
-            time.sleep(0.08)
-            self.finished = True
-            return dict(
-                text="hello EARLY middle LATE end", completion_tokens=8, prompt_tokens=3
-            )
-
-    backend = Backend()
-    engine = object.__new__(BatchedEngine)
-    engine._mlxvlm_mtp = backend
-    engine._apply_chat_template = lambda *_: "prompt"
-    started = time.monotonic()
-    chunks = []
-    async for chunk in engine.stream_chat(
-        [],
-        max_tokens=8,
-        stop=["LATE", "EARLY"],
-        json_schema={"type": "object"},
-        top_p=0.2,
-    ):
-        chunks.append(chunk)
-        first_s = time.monotonic() - started
-    rows["mtp_stream"] = dict(
-        chunks=len(chunks),
-        first_s=first_s,
-        finished_before_first=backend.finished,
-        forwarded_parameters=sorted(backend.kwargs),
-        output=chunks[0].text,
-        finish_reason=chunks[0].finish_reason,
-        completion_tokens=chunks[0].completion_tokens,
-    )
-    assert len(chunks) == 1 and "json_schema" not in backend.kwargs
-    assert chunks[0].text == "hello EARLY middle "
-
-    entered, release, ended = threading.Event(), threading.Event(), threading.Event()
-
-    def blocking_generate(*args, **kwargs):
-        entered.set()
-        release.wait(2)
-        ended.set()
-        return dict(text="done", completion_tokens=1, prompt_tokens=1)
-
-    backend.generate = blocking_generate
-    task = asyncio.create_task(engine.chat([]))
-    while not entered.is_set():
-        await asyncio.sleep(0.001)
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
-    rows["mtp_cancel"] = dict(
-        awaiter_cancelled=task.cancelled(), worker_still_running=not ended.is_set()
-    )
-    release.set()
-    while not ended.is_set():
-        await asyncio.sleep(0.001)
 
     # Real tokenizer; no model tensors loaded. A byte-split Unicode sequence is
     # decoded by the actual OmniEngine fragment method one token at a time.

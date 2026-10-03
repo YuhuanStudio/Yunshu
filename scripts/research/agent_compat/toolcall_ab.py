@@ -54,6 +54,7 @@ def main():
     ap.add_argument("--max-tokens", type=int, default=3000)
     ap.add_argument("--out", required=True)
     ap.add_argument("--stream", action="store_true")
+    ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     root = sorted(
         glob.glob(
@@ -64,8 +65,23 @@ def main():
         rec = [json.loads(x) for x in f][a.index]
     body = rec["body"]
     known = {t["name"] for t in body.get("tools") or []}
+    if a.n < 1 or a.max_tokens < 1 or not known:
+        ap.error("positive replay count/max tokens and captured tools required")
+    if (
+        not (Path(a.src) / "yunshu_engine").is_dir()
+        or not (Path(a.model) / "config.json").is_file()
+    ):
+        ap.error("local source and model config required")
+    if a.dry_run:
+        print(
+            json.dumps(
+                {"complete": "dry-run", "n": a.n, "tools": len(known), "src": a.src}
+            )
+        )
+        return
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
+    servers.SERVER_HOME = out / "server-home"
     os.environ["AGENTIC_YUNSHU_SRC"] = a.src
     port = servers.free_ports(1)[0]
     srv = servers.Server("yunshu", a.model, port, out / "server.log")
@@ -114,11 +130,21 @@ def main():
                 )
                 print(i, kind, f"{time.time() - t0:.1f}s", detail[:110], flush=True)
         (out / "results.json").write_text(
-            json.dumps({"counts": counts, "rows": rows}, indent=1)
+            json.dumps(
+                {
+                    "counts": counts,
+                    "rows": rows,
+                    "complete": len(rows) == a.n,
+                    "source": a.src,
+                },
+                indent=1,
+            )
         )
         print("COUNTS", counts, flush=True)
     finally:
         srv.kill()
+    if counts.get("error"):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

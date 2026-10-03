@@ -1,9 +1,4 @@
-"""Mid-conversation system messages stay in place for Qwen (prefix reuse), are hoisted otherwise.
-
-Claude Code sends a per-turn note (token budget, environment) as a system-role message at the
-end of the history. Hoisting it into the leading system prompt rewrote the prompt start every
-turn, so the prefix cache never hit (0% cached tokens on a real Claude Code session).
-"""
+"""Instruction priority is preserved by canonical system hoisting."""
 
 import os
 
@@ -13,9 +8,9 @@ from fastapi.testclient import TestClient
 from yunshu_engine.message_adapter import keeps_mid_conversation_system
 
 
-def test_only_qwen_keeps_mid_conversation_system():
-    assert keeps_mid_conversation_system("Qwen3.8-27B-oQ4e-mtp")
-    assert keeps_mid_conversation_system("qwen2.5-3b")
+def test_instruction_messages_are_hoisted_for_all_families():
+    assert not keeps_mid_conversation_system("Qwen3.8-27B-oQ4e-mtp")
+    assert not keeps_mid_conversation_system("qwen2.5-3b")
     assert not keeps_mid_conversation_system("gemma-4-e4b-it")
     assert not keeps_mid_conversation_system("claude-3")
     assert not keeps_mid_conversation_system(None)
@@ -77,14 +72,13 @@ BODY = {
 }
 
 
-def test_qwen_keeps_trailing_system_note_in_place(_engine, monkeypatch):
+def test_qwen_hoists_trailing_system_note(_engine, monkeypatch):
     engine, set_engine = _engine
     msgs = _captured_messages(engine, set_engine, monkeypatch, "Qwen3.8-27B", BODY)
     roles = [m["role"] for m in msgs]
-    assert roles == ["system", "user", "assistant", "user", "system"]
+    assert roles == ["system", "user", "assistant", "user"]
     assert "TOP_SYSTEM" in msgs[0]["content"] and "LEADING_NOTE" in msgs[0]["content"]
-    assert "TURN_NOTE" not in msgs[0]["content"]
-    assert msgs[-1]["content"] == "TURN_NOTE"
+    assert "TURN_NOTE" in msgs[0]["content"]
 
 
 def test_other_families_still_hoist(_engine, monkeypatch):
@@ -94,7 +88,7 @@ def test_other_families_still_hoist(_engine, monkeypatch):
     assert "TURN_NOTE" in msgs[0]["content"]
 
 
-def test_changing_note_leaves_earlier_prompt_bytes_identical(_engine, monkeypatch):
+def test_changing_note_preserves_conversation_turns(_engine, monkeypatch):
     engine, set_engine = _engine
     a = dict(
         BODY, messages=BODY["messages"][:-1] + [{"role": "system", "content": "N1"}]
@@ -104,4 +98,5 @@ def test_changing_note_leaves_earlier_prompt_bytes_identical(_engine, monkeypatc
     )
     ma = _captured_messages(engine, set_engine, monkeypatch, "Qwen3.8-27B", a)
     mb = _captured_messages(engine, set_engine, monkeypatch, "Qwen3.8-27B", b)
-    assert ma[:-1] == mb[:-1]
+    assert ma[1:] == mb[1:]
+    assert "N1" in ma[0]["content"] and "N2" in mb[0]["content"]

@@ -613,11 +613,11 @@ def _sections():
             _p_metrics("REALISTIC"),
         ),
         (
-            "MTP spec decode (Qwen3.6-27B production path, coherent)",
+            "MTP spec decode (served VLM runner, token parity)",
             "full",
             True,
             [PY, "scripts/verify/verify_mtp_spec.py"],
-            {"YUNSHU_SPEC_UNVERIFIED": "mlxvlm_mtp", "PYTHONPATH": VLM_PP},
+            {"PYTHONPATH": VLM_PP},
             _p_passfail_skip,
         ),
         # (methodology): the PRIMARY cross-framework comparison is ALL-EXTERNAL

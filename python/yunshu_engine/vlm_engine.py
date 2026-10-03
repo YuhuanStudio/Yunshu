@@ -860,8 +860,18 @@ class VLMEngine:
                 # Only a client-set timeout applies: a fixed default would also
                 # count time spent waiting for a batch slot.
                 _timeout_seconds = kwargs.get("timeout_seconds") or None
+                from .grammar_compile import prepare_constraint
+
+                async def _prepare_call():
+                    # gather waits for validation before the consumer can admit any token.
+                    call, _ = await asyncio.gather(
+                        loop.run_in_executor(self._executor, _prepare),
+                        prepare_constraint(kwargs.get("json_schema")),
+                    )
+                    return call
+
                 call = await asyncio.wait_for(
-                    loop.run_in_executor(self._executor, _prepare),
+                    _prepare_call(),
                     timeout=_timeout_seconds,
                 )
                 (
@@ -1090,7 +1100,12 @@ class VLMEngine:
             try:
                 # Templating + media encoding on the MLX thread; tokens are then
                 # consumed off it (the runner's driver needs that thread).
-                call = await loop.run_in_executor(self._executor, _prepare)
+                from .grammar_compile import prepare_constraint
+
+                call, _ = await asyncio.gather(
+                    loop.run_in_executor(self._executor, _prepare),
+                    prepare_constraint(kwargs.get("json_schema")),
+                )
             except Exception as e:
                 logger.error(f"VLM stream error: {e}", exc_info=True)
                 _safe_queue.put_nowait(
@@ -1565,8 +1580,11 @@ class VLMEngine:
         drafter = None
         draft_kind = "mtp"
         from . import spec_select
-        from .mlxvlm_mtp import is_mtp_capable
+        from .mlxvlm_mtp import is_mtp_capable, unindexed_mtp_warning
 
+        warning = unindexed_mtp_warning(model_path)
+        if warning:
+            logger.warning(warning)
         choice = spec_select.choose(
             self._config,
             spec_family=spec_family,
