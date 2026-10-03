@@ -246,6 +246,7 @@ def test_aged_running_backlog_job_is_not_preempted(q, monkeypatch):
         state="running",
         priority=-1,
         submitted=now - q.AGE_S - 1,
+        started=now - 60,
         pid=1,
         env={},
     )
@@ -277,3 +278,31 @@ def test_priority_caps_demote_secondary_labels(q):
 def test_missing_priority_caps_change_nothing(q):
     job(q, "a", label="bigmoe-quality", state="pending", priority=0)
     assert q._jobs()[0]["priority"] == 0
+
+
+def test_aged_running_backlog_job_yields_after_its_slice(q, monkeypatch):
+    now = 100_000.0
+    monkeypatch.setattr(q.time, "time", lambda: now)
+    aged = dict(
+        id="aged",
+        state="running",
+        priority=-1,
+        submitted=now - q.AGE_S - 1,
+        started=now - q.AGED_SLICE_S - 1,
+        pid=1,
+        env={},
+    )
+    q._write(q.JOBS / "aged.json", aged)
+    q.submit(["true"], "interactive", 1, 0)
+    pauser = q.Pauser(aged, q.JOBS / "aged.json")
+    monkeypatch.setattr(pauser, "_signal", lambda sig: None)
+    monkeypatch.setattr(q, "_execute", lambda *a, **k: None)
+    q._priority_step(pauser, q.ServingGate(), now)
+    assert pauser.paused
+    # A resume restarts the slice.
+    aged2 = dict(aged, id="aged2", pauses=[[now - 600, now - 60]])
+    q._write(q.JOBS / "aged2.json", aged2)
+    pauser2 = q.Pauser(aged2, q.JOBS / "aged2.json")
+    monkeypatch.setattr(pauser2, "_signal", lambda sig: None)
+    assert q._priority_step(pauser2, q.ServingGate(), now) is False
+    assert not pauser2.paused

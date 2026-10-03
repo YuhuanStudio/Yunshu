@@ -625,15 +625,29 @@ def _preempting(jobs: list[dict]) -> list[dict]:
     ]
 
 
+AGED_SLICE_S = float(os.environ.get("GPUQ_AGED_SLICE_S", 20 * 60))
+
+
+def _last_run_start(pauser: Pauser) -> float:
+    resumes = [p[1] for p in pauser.pauses if p[1] is not None]
+    return max([pauser.job.get("started") or 0.0, *resumes])
+
+
 def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
     """Run admitted p>=0 work inside a p<=-1 pause; never kill to reclaim memory.
 
     Returns True while priority work still owns the pause. The nested runner
     cannot preempt again (its priority is >=0), so at most two jobs are resident.
     """
-    # A backlog job that already aged into the interactive level (waited AGE_S) is
-    # not paused again for every new p0 job, or it would never finish.
-    if _eff_priority(pauser.job) >= 0:
+    # A backlog job that aged into the interactive level (waited AGE_S) gets a
+    # guaranteed AGED_SLICE_S of running since it last started or resumed, so it
+    # makes progress; after that it yields to p0 work like any backlog job (a long
+    # aged job must not hold the GPU for hours while interactive work queues).
+    if (
+        _eff_priority(pauser.job, now) >= 0
+        and not pauser.paused
+        and now - _last_run_start(pauser) < AGED_SLICE_S
+    ):
         return False
     jobs = _jobs()
     pending = _preempting(jobs)
