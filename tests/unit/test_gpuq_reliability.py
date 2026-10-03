@@ -391,3 +391,32 @@ def test_aging_never_lifts_a_capped_job_over_its_cap(q, monkeypatch):
     jobs = {j["id"]: j for j in q._jobs()}
     assert q._eff_priority(jobs["r"], now) == -1
     assert q._pick(q._jobs())["id"] == "core"
+
+
+def test_memory_starved_p0_job_stops_preemption(q, monkeypatch):
+    # A paused backlog job stays resident; a large p0 job cannot fit beside it.
+    # After MEM_RESERVE_S the backlog job resumes instead of yielding to smaller
+    # p0 jobs, so it finishes and the large job can run.
+    monkeypatch.setattr(q, "free_memory_gb", lambda: 50.0)
+    now = 100_000.0
+    monkeypatch.setattr(q.time, "time", lambda: now)
+    low = dict(id="low", state="running", priority=-1, submitted=now - 60,
+               started=now - 60, pid=1, env={})
+    q._write(q.JOBS / "low.json", low)
+    q.submit(["true"], "big-128k", 1, 0, mem_gb=80.0)
+    q.submit(["true"], "small", 1, 0, mem_gb=10.0)
+    ran = []
+    monkeypatch.setattr(q, "_execute", lambda job, *a, **k: ran.append(job["label"]))
+    pauser = q.Pauser(low, q.JOBS / "low.json")
+    monkeypatch.setattr(pauser, "_signal", lambda sig: None)
+    assert q._priority_step(pauser, q.ServingGate(), now) is True
+    assert ran == ["small"]
+    # The small job finished; another arrives after the big one starved long enough.
+    later = now + q.MEM_RESERVE_S + 1
+    monkeypatch.setattr(q.time, "time", lambda: later)
+    for j in q._jobs():
+        if j.get("label") == "small":
+            q._patch_job(q.JOBS / f"{j['id']}.json", state="done", ended=later)
+    q.submit(["true"], "small2", 1, 0, mem_gb=10.0)
+    assert q._priority_step(pauser, q.ServingGate(), later) is False
+    assert ran == ["small"]

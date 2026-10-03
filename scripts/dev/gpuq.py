@@ -691,6 +691,7 @@ def _preempting(jobs: list[dict]) -> list[dict]:
 
 
 AGED_SLICE_S = float(os.environ.get("GPUQ_AGED_SLICE_S", 20 * 60))
+MEM_RESERVE_S = float(os.environ.get("GPUQ_MEM_RESERVE_S", 30 * 60))
 
 
 def _last_run_start(pauser: Pauser) -> float:
@@ -719,6 +720,16 @@ def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
     jobs = [j for j in _jobs() if j.get("device", "m5") in {"m5", "any"}]
     pending = _preempting(jobs)
     high = _admit(jobs, gate, preempt=True)
+    # Head-of-line memory reservation. Preemption keeps the paused job resident,
+    # so a large p>=0 job is memory-blocked for as long as smaller jobs keep
+    # preempting in its place. Once it has waited MEM_RESERVE_S, stop preempting:
+    # the backlog job resumes, finishes and frees its memory, and the large job
+    # gets the slot through ordinary admission.
+    if any(
+        j.get("waiting") == "mem" and now - j.get("submitted", now) >= MEM_RESERVE_S
+        for j in pending
+    ):
+        return False
     # Memory admission decides whether to pause. The serving start window only
     # decides when the admitted high-priority job can start; it must not let the
     # low-priority job resume early through the shorter serving resume window.
