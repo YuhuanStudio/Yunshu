@@ -94,12 +94,14 @@ from yunshu_engine import mtp_lane  # noqa: E402
 
 
 @pytest.mark.parametrize("accuracy", [0.0, 0.7])
-@pytest.mark.parametrize("rows", [0, 4, 8, 16])
+@pytest.mark.parametrize("rows", [0, 4, 8, 16, 24, 32])
+@pytest.mark.parametrize("cost_aware", [False, True])
 def test_lane_output_is_identical_with_copy_rounds(
     toy,  # noqa: F811
     monkeypatch,
     accuracy,
     rows,
+    cost_aware,
 ):
     hf = toy
     eos = hf.eos_token_id
@@ -119,6 +121,10 @@ def test_lane_output_is_identical_with_copy_rounds(
         orig = mtp_lane.CopyDrafter
 
         def spy(*a, **k):
+            if cost_aware:
+                from yunshu_engine.copy_cost import CopyCosts
+
+                k["costs"] = CopyCosts({8: 42, 16: 44, 24: 58, 32: 62}, 43)
             heads.append(orig(*a, **k))
             return heads[-1]
 
@@ -130,9 +136,114 @@ def test_lane_output_is_identical_with_copy_rounds(
     assert got == script
     if rows >= 3:
         (cd,) = heads
-        assert (
-            cd.rounds > 0 and cd.committed > 60
-        )  # copy rounds carried the quoted runs
+        assert cd.rounds > 0
+        if not cost_aware:
+            assert cd.committed > 60  # copy rounds carried the quoted runs
         assert cd.accepted <= cd.proposed
     else:
         assert not heads
+
+
+def test_copy_rows_follow_verify_width():
+    from yunshu_engine import mtp_lane
+
+    keep = mtp_lane._STATE["copy_rows"]
+    try:
+        assert mtp_lane.set_copy_rows(16, 8) == 8  # sg8 / packed verify: 8 rows
+        assert mtp_lane.set_copy_rows(16, 32) == 16
+        assert mtp_lane.set_copy_rows(64, 32) == 32
+        assert mtp_lane.set_copy_rows(0, 32) == 0
+        assert mtp_lane.set_copy_rows(-1, 32) == 0
+        assert mtp_lane.set_copy_rows(16, -1) == 0
+    finally:
+        mtp_lane.set_copy_rows(keep)
+
+
+@pytest.mark.parametrize(
+    "lane,tile,expected",
+    [(False, False, 8), (False, True, 8), (True, False, 8), (True, True, 32)],
+)
+def test_copy_width_requires_both_lane_projections_and_tile_attention(
+    monkeypatch, lane, tile, expected
+):
+    from yunshu_engine.kernels import ragged_attention
+
+    monkeypatch.setattr(ragged_attention, "tile_ready", lambda: tile)
+    assert mtp_lane.verify_max_rows(lane) == expected
+
+
+@pytest.mark.parametrize("dim,group,expected", [(256, 8, 32), (128, 8, 8), (256, 9, 8)])
+def test_copy_width_respects_the_model_attention_tile_shape(
+    monkeypatch, dim, group, expected
+):
+    from types import SimpleNamespace
+
+    from yunshu_engine.kernels import ragged_attention
+
+    monkeypatch.setattr(ragged_attention, "tile_ready", lambda: True)
+    attention = SimpleNamespace(
+        head_dim=dim, num_attention_heads=group * 4, num_key_value_heads=4
+    )
+    model = SimpleNamespace(
+        model=SimpleNamespace(
+            layers=[SimpleNamespace(is_linear=False, self_attn=attention)]
+        )
+    )
+    assert mtp_lane.verify_max_rows(True, model) == expected
+
+
+def test_copy_width_does_not_certify_unconverted_expert_projections(monkeypatch):
+    from types import SimpleNamespace
+
+    from yunshu_engine.kernels import ragged_attention
+
+    monkeypatch.setattr(ragged_attention, "tile_ready", lambda: True)
+    model = SimpleNamespace(
+        model=SimpleNamespace(
+            layers=[
+                SimpleNamespace(
+                    is_linear=True, mlp=SimpleNamespace(switch_mlp=object())
+                )
+            ]
+        )
+    )
+    assert mtp_lane.verify_max_rows(True, model) == 8
+
+
+def test_round_rechecks_target_after_another_engine_sets_global_copy_width(monkeypatch):
+    from types import SimpleNamespace
+
+    from yunshu_engine.kernels import lane_linear, ragged_attention
+
+    class Lane:
+        pass
+
+    monkeypatch.setattr(lane_linear, "LaneLinear", Lane)
+    monkeypatch.setattr(ragged_attention, "tile_ready", lambda: True)
+    monkeypatch.setitem(mtp_lane._STATE, "copy_rows", 32)
+    attention = SimpleNamespace(
+        q_proj=object(), head_dim=256, num_attention_heads=32, num_key_value_heads=4
+    )
+    model = SimpleNamespace(
+        model=SimpleNamespace(
+            layers=[SimpleNamespace(is_linear=False, self_attn=attention)]
+        )
+    )
+    assert mtp_lane.copy_rows_for_model(model) == 8
+    attention.q_proj = Lane()
+    assert mtp_lane.copy_rows_for_model(model) == 32
+
+
+def test_unknown_target_geometry_keeps_a_conservative_copy_cap(monkeypatch):
+    monkeypatch.setitem(mtp_lane._STATE, "copy_rows", 32)
+    assert mtp_lane.copy_rows_for_model(object()) == 8
+
+
+def test_default_copy_cap_is_wide_but_unknown_backend_stays_narrow(monkeypatch):
+    from yunshu_engine import mtp_lane, settings
+
+    monkeypatch.delenv("YUNSHU_SPEC_COPY_ROWS", raising=False)
+    assert settings.REGISTRY["YUNSHU_SPEC_COPY_ROWS"].default == 16
+    monkeypatch.setitem(mtp_lane._STATE, "copy_rows", 16)
+    assert mtp_lane.copy_rows_for_model(object()) == 8
+    assert mtp_lane.copy_rows_for_model(object(), rows=0) == 0

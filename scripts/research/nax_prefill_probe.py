@@ -420,9 +420,10 @@ def model(a, mx):
 
 
 def narrow(a, mx):
+    from yunshu_engine.kernels import lane_linear
     from yunshu_engine.kernels.tensorfold import lane_qmm
 
-    lane_qmm.MAX_ROWS = 8192  # research only; keep the native 32-row block
+    piece = lane_linear.PIECE
     mx.random.seed(113)
     for m in [512] if a.tiny else [512, 1024, 2048, 4096, 8192]:
         x = mx.random.normal((m, 5120)).astype(mx.bfloat16)
@@ -438,15 +439,28 @@ def narrow(a, mx):
                 return mx.concatenate(
                     [
                         lane_qmm.lane_matmul(
-                            x[i : i + 128], q, sbt, group=64, row_block=32
+                            x[i : i + piece],
+                            q,
+                            sbt,
+                            group=64,
+                            row_block=32,
+                            row_limit=piece,
                         )
-                        for i in range(0, m, 128)
+                        for i in range(0, m, piece)
                     ]
                 )
 
             def full():
                 lane_qmm._xs_cache.clear()
-                return lane_qmm.lane_matmul(x, q, sbt, group=64, row_block=32)
+                return lane_qmm.lane_matmul(
+                    x,
+                    q,
+                    sbt,
+                    group=64,
+                    row_block=32,
+                    row_limit=piece,
+                    prefill_narrow=m > 512,
+                )
 
             ref, got = base(), full()
             mx.eval(ref, got)

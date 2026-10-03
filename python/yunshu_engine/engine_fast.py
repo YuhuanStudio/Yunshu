@@ -268,6 +268,9 @@ class EngineFastMixin:
         from mlx_lm.generate import generate_step
         from mlx_lm.sample_utils import make_sampler
 
+        from .grammar_compile import prepare_constraint
+
+        await prepare_constraint(json_schema)
         tokenizer = self._tokenizer
         model = self._model
 

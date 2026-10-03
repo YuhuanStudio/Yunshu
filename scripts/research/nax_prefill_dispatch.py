@@ -63,7 +63,7 @@ def install(arm):
             return _original(self, x)
         x2 = x.reshape(-1, self.input_dims).astype(mx.bfloat16)
         if narrow:
-            y = self._rows(x2)
+            y = self._rows(x2, prefill_narrow=True)
         else:
             bm = 64 if arm == "lane64" or (m > 4096 and self.input_dims > 8192) else 128
             if arm == "tile128":

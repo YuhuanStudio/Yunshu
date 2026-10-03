@@ -437,6 +437,15 @@ Agent 重放（opencode 錄製請求，warm 第 2 次起）：TF 0.6.1 105-159 t
 - Prefill 公平性（cf6105c8，2026-09-28，4 條背景 decode + 1 條長 prefill）：chunk 0 / 256 / 512，16K：長請求 TTFT 17.8 / 21.6 / 19.5 s，prefill 期間背景 decode 0.7 / 2.9 / 1.7 tok/s（原本 23.6）；32K：37.7 / 47.0 / 42.3 s、0.6 / 2.7 / 1.6 tok/s。小 chunk 換來背景速率，付出長請求 TTFT；實驗旗標，沒有成為預設。
 - Fused prefill（2026-09-29，同一 4+1 負載）：fused 64 / 128：16K TTFT 35.9 / 27.5 s（baseline 17.7），背景 decode 7.2 / 4.8 tok/s；32K 78.1 / 60.0 s（baseline 37.7）。背景速度提高，長請求 TTFT 約變兩倍；已被 round driver 的 mixed 負載結果取代（上方 mixed16 背景 3.8 tok/s、TTFT 不退步的方向），不再追。
 
+2026-10-02 C7 — bounded generic grammar artifacts + async CPU preparation (codex-audit; CPU-only, no tok/s or TTFT claim). Real tool parameter schemas from `2026-09-30-agent-census` (Claude Code/Codex/opencode); Qwen3.8-27B tokenizer only, no model load. 18 schemas × 10 alternating fresh/repeated pairs; tokenizer vocabulary construction excluded. Fresh = schema validation + normalization + grammar + tokenizer-bound parser; repeated = same operations with cached artifacts and a fresh deep-copied matcher. Schema property order, compact whitespace, tokenizer identity/vocabulary and CFG source remain in cache keys. Regex request traversal/predicate caches remain private.
+
+| Client | Captured schema occurrences / unique | Fresh compile median | Repeated compile median | Initial masks equal |
+|---|---:|---:|---:|---:|
+| claude | 382 / 21 | 0.2321 ms | 0.0234 ms | 6/6 |
+| codex | 66 / 10 | 0.2421 ms | 0.0187 ms | 6/6 |
+| opencode | 27 / 9 | 0.2040 ms | 0.0192 ms | 6/6 |
+
+Receipt: `/Volumes/P5Plus/yunshu-build/codex/audit-grammar-final.json`; harness `scripts/research/bench_grammar_compile.py`. Start/end 1-minute load 2.75 (<3); measurements rerun after contention. CPU regression checks compare every token mask on cold/cached CFG/JSON/compact JSON, plus independent reset/checkpoint/rollback, worker cancellation/error admission and schema ordering. Full unit: 8047 passed, 20 skipped; ruff + mypy gate pass (no new baseline debt). Small but real: repeated construction saves roughly 0.2 ms/schema; async preparation itself is excluded from these numbers, and hot preparation bypasses a worker round trip. Native parser memory is opaque: cache bounds 128 entries and 4 MiB of key/source bytes, not a claimed native-memory bound. Gateway request validation retains its synchronous 400 contract; engine-side cold preparation runs on two CPU workers (up to 32 admitted jobs per event loop) and VLM prompt/media preparation overlaps it before token admission.
 2026-10-02 Prefill / TTFT（27B Qwen3.8 oQ4e-mtp，M5 Max，tfbench decode part，每格 3 次 session 的平均，prose 與 code 相同；之前 = `YUNSHU_PREFILL_MATMUL=lane YUNSHU_PREFILL_GDN=step`，即改動前的行為；TF 為先前同機量測）：
 
 | TTFT（秒） | 之前 | 之後 | TF 0.6.1 |
@@ -531,3 +540,81 @@ be34c0f3 修正共同 VLM streaming 的空文字／tool-parser／reasoning／fin
 | tool warm | 23.0（22.8–23.3） | 77.7（76.5–77.8） | 3.38× |
 
 Artifact `/Volumes/P5Plus/yunshu-build/codex/cspec/complete-json-tool-quiet-r3-1254.jsonl`；6個server logs全確認DF/AR engaged，`complete-quiet-summary.json`保留三輪數字。交付前 full unit nice15：8220 passed／20 skipped；ruff check/format、mypy gate無新增錯誤。沒有新微小效能量測；不以功能修復冒充1–3%增益。
+
+
+## 2026-10-03 — prompt-copy maximum 8 → 16 rows (codex-wide3)
+
+Qwen3.8-27B-oQ4e-mtp, M5 Max; same Python source/checkpoint, 3 interleaved
+8/16-row server arms, MTP mode and actual copy caps confirmed. Job
+`1003-110949-00-wide3-copy-cap-bindfix-1111`: rc0, final complete success,
+CPU clean (foreign max 265.5%, threshold 1620%). All workload/phase output
+digests match. Earlier `1003-101336-00-wide3-copy-cap-ab-1020` failed its first
+arm on a port bind race; it is not the decision run.
+
+Median decode tok/s (8 → 16):
+
+| Context | Workload | cold | warm | turn2 |
+|---|---|---:|---:|---:|
+| 8K | code | 67.4 → 69.3 | 67.4 → 68.7 | 106.1 → 129.2 |
+| 32K | code | 68.2 → 70.9 | 70.4 → 73.0 | 70.7 → 73.1 |
+| 8K | prose | 52.5 → 52.3 | 52.6 → 52.4 | 55.2 → 55.1 |
+| 32K | prose | 48.1 → 48.0 | 48.1 → 47.9 | 50.6 → 50.1 |
+
+Decision: default maximum 16; retain the per-model certified width (8 on narrow
+backends), explicit 8-row override and 0=off. The existing short-match first
+window, confidence gate and miss backoff remain unchanged. Although 32K
+attention makes 12+ rows dearer, long code copies still pay: no context-only hard
+8-row cap. This is a code/repetition benefit with a measured small prose
+tradeoff (-0.2% to -1.0%), not a universal speedup or TTFT claim. Small but real:
+8K warm code +1.9%, 32K code +3.4–4.0%; 8K code turn2 +21.8% on this corpus.
+
+The separate cost-aware policy was rejected and moved to a research-only
+wrapper (`1003-102815-00-wide3-copy-cost-ab-1030`, rc0, complete, clean, same
+digests): fixed16 → cost16 at 32K prose cold/warm 48.2 → 46.8/46.9, all three
+pairs negative. It missed useful copy islands (4 rounds/12 tokens → 1/1).
+The public YUNSHU_SPEC_COPY_COST option and serving switch were removed.
+
+
+2026-10-03 DFlash2 greedy prompt-copy islands（codex-wide4；Qwen3.8-27B oQ4e-mtp / same DFlash2 checkpoint，single-request invariant lane）。基線是 f104150e 的 adaptive chain；candidate固定模型的訓練block8，再以既有SPEC_COPY_ROWS=16驗證copied runs，跳過copy island裡的drafter，恢復時一次吸收bounded pending taps。Target verifier／cache transaction不變，sampled、guide/LP與unsupported/exact/narrow保留既有fallback。沒有新增設定；0仍關閉copy。
+
+Job `1003-161523-00-wide4-timing-bundle-1615` rc0，quiet clean（foreign max330%<1620），native-matrix三次交錯、54個spec arms全部raw-ID digest等於AR；同checkpoint與單一source/harness fingerprint。表為256-token cold decode的三輪中位數，不是TTFT、warm或TF最新版本的速度claim。`chain8`控制臂分開固定block與copy的貢獻。
+
+| Context/task | adaptive main tok/s | fixed chain8 | chain8 + copy16 | gain vs main |
+|---|---:|---:|---:|---:|
+| 1K code | 97.74 | 100.33 | 109.48 | +12.01% |
+| 1K prose | 52.32 | 53.46 | 52.29 | -0.05% |
+| 8K code | 74.50 | 76.87 | 82.19 | +10.32% |
+| 8K prose | 51.46 | 51.84 | 51.83 | +0.72% |
+| 32K code | 72.74 | 73.90 | 82.56 | +13.51% |
+| 32K prose | 44.85 | 46.79 | 46.75 | +4.23% |
+
+小但真實：8K prose +0.72%，1K prose -0.05%如實記錄；code三格+10.32–13.51%。固定block也有貢獻，不能把全部增益歸因copy。1K code commits/round約4.72→5.20；仍未追上TF歷史7.1/49ms，不宣稱gap已全關。
+
+Correctness `1003-161523-00-wide4-correctness-bundle-1615` rc0/complete：200 paired code/sentence echo items，AR與candidate各200/200 correct，raw-ID digest全同、net correct差0。`1003-172719-00-wide4-http-default-smoke-1731` rc0/complete：actual serving DFlash、copy16/0、APC warm cached1033、repeat、newline stop內容digest都等於AR；copy16實際7rounds/97published tokens、copy0無copy。此HTTP是nonquiet correctness smoke，不採其tok/s/TTFT作效能claim。
+
+### 2026-10-03 -- native singleton KV capacity, bounded allocator pool, wider invariant prefill dispatch
+
+Same checkpoint Jundot/Qwen3.8-27B-oQ4e-mtp; Yunshu MTP, TensorFold 0.6.1 DFlash2. Three interleaved clean HTTP repetitions per context, prose/code, fixed second-turn reply and matching request hashes. All baseline/candidate 256-token response digests match; all 18 server logs prove the engaged mode. Candidate uses native singleton extract/merge views retaining KV capacity, MLX allocator cache limit (auto6GiB on128GiB), and one invariant lane dispatch up to512rows with the same32-row threadgroup arithmetic. Other direct lane callers keep128-row guard. No lossy precision change or new experimental setting.
+
+| Median HTTP TTFT ms | baseline | candidate | TF DFlash2 |
+|---|---:|---:|---:|
+|8K prose cold|8394|8325|8403|
+|8K code cold|8404|8365|8406|
+|8K prose warm|119|85|74|
+|8K code warm|124|92|76|
+|8K prose turn2|562|509|508|
+|8K code turn2|569|512|505|
+|32K prose cold|38099|36644|39077|
+|32K code cold|37735|36671|39074|
+|32K prose warm|230|145|108|
+|32K code warm|245|158|123|
+|32K prose turn2|825|705|649|
+|32K code turn2|900|721|670|
+
+32K turn2 paired savings prose118/117/120ms; code207/182/166ms. 8K prose53/53/47ms; code39/58/60ms. The8K turn2 gap is1/7ms;32K remains56/51ms. Do not claim a complete32K win. Cold paired gains are nonuniform (prose1285/278/1464ms, code1094/290/411ms); report the median, not a per-arm decomposition. Prior to shipping, native-only32K+282 paired savings112/93/110ms. Small but real: wide-only32K+282 savings8/14/22ms (median14ms ~1.8%), same digest.
+
+Correctness: native and wide200-item paired sets each200/200 in both arms, every token and per-token LP bit-equal; native full APC hits prove engagement. Native8K/32K prose/code chat partial/full hit equals cold bit-exact LP, maxabs0. CPU actual Qwen tests verify capacity retention, metadata reset, mutation/exception isolation, dtype promotion, and no cache reference cycle. The capacity regression fails the old method (cap5 vs256).
+
+Jobs:1003-145700-00-prefill4-http-combo8k-1456 / http-combo32k-1456 rc0+complete+clean (foreign CPU max298/598%, threshold1620). Supporting: native32k-ab-1425, restore-mtp32k-1230, native-identity-1427, quality200-1247, native-warm-quality200-1456. Full IDs/verdicts and log tails: /Volumes/P5Plus/yunshu-build/codex/prefill4-own-harvest.json. Timing jobs used --quiet; correctness jobs did not.
+
+Roofline/profile: actual restore source2.302GB, capacity2.335GB; minimum read+write4.64GB at prior measured530GB/s ~8.8ms. Synchronized32K+282 profile: clone including allocator44.3ms, lookup-other1.3, merge0.4, suffix prompt-step657.3(target637.0), first generate84.9(target84.6), admission3.3, residual14.8. HTTP extras0.8..1.8ms in inherited receipts. Profile barriers are attribution only, not serving TTFT claims. Stock planes eligible1.416GiB, but stock_calls_before_first=0 on282-token lane suffix. Larger64/128-row tiles are bit-equal but checkpoint microbench2-12x slower; rejected. General direct/pad clone does not show consistent turn2 benefit; not selected.

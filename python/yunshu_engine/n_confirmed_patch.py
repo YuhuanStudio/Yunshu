@@ -1,8 +1,8 @@
 # Patches upstream mlx-lm symbols (see vendor.json kind=patches; `just vendor-check` flags source changes)
 # DEPRECATED: home-grown Qwen3.5 MTP — superseded by mlx-vlm's
-# native MTP (see mlxvlm_mtp.py + YUNSHU_SPEC_UNVERIFIED=mlxvlm_mtp; ~1.82x in a proof script, not served/gated — experimental).
+# native MTP (see mlxvlm_mtp.py standalone research backend; ~1.82x in a proof script, not served/gated — experimental).
 # This lacked mlx-vlm's GatedDeltaNet intermediate-state capture (garbage on 27B,
-# ~0.9x on 9B). Kept only as the experimental YUNSHU_SPEC_UNVERIFIED=mtp route.
+# ~0.9x on 9B). Standalone research only; the served MTP path is the VLM batch runner.
 """n_confirmed support for GatedDeltaNet — enables zero-cost reject in MTP.
 
 When the model forward processes S=2 tokens with n_confirmed=1, the SSM

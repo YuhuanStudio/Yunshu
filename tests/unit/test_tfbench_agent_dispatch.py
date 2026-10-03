@@ -13,9 +13,17 @@ def test_agent_part_is_dispatched_and_server_closed(tmp_path, monkeypatch):
     spec.loader.exec_module(module)
     calls = []
     server = SimpleNamespace(
-        ready_s=0, cmd=[], url="unused", model="fake", kill=lambda: calls.append("kill")
+        ready_s=0,
+        cmd=[],
+        url="unused",
+        model="fake",
+        kill=lambda: calls.append("kill"),
+        extra_env={},
+        requested_spec_mode=None,
+        engaged_spec_mode=None,
+        verify_spec_mode=lambda: None,
     )
-    monkeypatch.setattr(module, "Srv", lambda *args: server)
+    monkeypatch.setattr(module, "Srv", lambda *args, **kwargs: server)
     monkeypatch.setattr(module, "send", lambda *args: {})
     monkeypatch.setattr(module, "part_agent", lambda *args: calls.append("agent"))
     output = tmp_path / "agent.jsonl"

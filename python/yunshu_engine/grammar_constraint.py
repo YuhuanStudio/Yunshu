@@ -423,7 +423,9 @@ class RegexConstraint:
         self._pattern = pattern
         # Build the DFA first: it validates the pattern and rejects anything
         # outside the supported subset (UnsupportedRegexError, a ValueError).
-        self._dfa = _RegexDFA(pattern)
+        from .grammar_compile import regex_dfa
+
+        self._dfa = regex_dfa(pattern)
         self._compiled = self._dfa._compiled
         self._text_buffer = ""
         self._done = False
@@ -1005,13 +1007,12 @@ class _LlgConstraint:
                 f"CFG constraints need a Hugging Face tokenizer: {exc}"
             ) from exc
         grammar = self._make_grammar()
-        err = self._LLMatcher.validate_grammar(grammar, llt)
-        if err:
-            raise self._error(err)
-        matcher = self._LLMatcher(llt, grammar)
-        err = matcher.get_error()
-        if err:
-            raise self._error(err)
+        from .grammar_compile import new_llg_matcher
+
+        try:
+            matcher = new_llg_matcher(llt, grammar)
+        except Exception as exc:
+            raise self._error(str(exc)) from exc
         self._llt = llt
         self._matcher = matcher
         self._words = (llt.vocab_size + 31) // 32
@@ -1130,7 +1131,12 @@ class CfgGrammarConstraint(_LlgConstraint):
         super().__init__(grammar, tokenizer)
 
     def _make_grammar(self) -> str:
-        return self._LLMatcher.grammar_from_lark(self._grammar_text)
+        from .grammar_compile import llg_grammar
+
+        try:
+            return llg_grammar("cfg", self._grammar_text)
+        except Exception as exc:
+            raise self._error(str(exc)) from exc
 
     def _error(self, message: str) -> Exception:
         return UnsupportedGrammarError(f"invalid CFG grammar: {message[:400]}")
@@ -1276,15 +1282,19 @@ class LlgJsonSchemaConstraint(_LlgConstraint):
     ) -> None:
         """``compact``: no structural whitespace at all (``{"a":1}``), so every
         key, separator and brace is forced text; jump-forward decoding uses it."""
-        self._schema_json = _llg_schema_json(schema)
+        from .grammar_compile import schema_source
+
+        self._schema_json = schema_source(schema)
         self._compact = compact
         super().__init__(schema, tokenizer)
 
     def _make_grammar(self) -> str:
-        return self._LLMatcher.grammar_from_json_schema(
-            self._schema_json,
-            defaults=_LLG_COMPACT if self._compact else _LLG_WHITESPACE,
-        )
+        from .grammar_compile import llg_grammar
+
+        try:
+            return llg_grammar("json_schema", self._schema_json, compact=self._compact)
+        except Exception as exc:
+            raise self._error(str(exc)) from exc
 
     def _error(self, message: str) -> Exception:
         from .json_schema import UnsupportedSchemaError
@@ -1307,15 +1317,12 @@ class LlgJsonSchemaConstraint(_LlgConstraint):
 
 def validate_llg_json_schema(schema: dict) -> None:
     """Raise ``UnsupportedSchemaError`` when llguidance cannot compile ``schema``."""
-    from llguidance import LLMatcher
-
+    from .grammar_compile import llg_grammar, schema_source
     from .json_schema import UnsupportedSchemaError
 
     try:
-        grammar = LLMatcher.grammar_from_json_schema(
-            _llg_schema_json(schema), defaults=_LLG_WHITESPACE
-        )
-        err = LLMatcher.validate_grammar(grammar)
+        llg_grammar("json_schema", schema_source(schema))
+        err = None
     except Exception as exc:  # noqa: BLE001 - llguidance raises plain exceptions
         err = str(exc)
     if err:
@@ -1331,11 +1338,14 @@ def validate_llg_cfg(grammar: str) -> None:
     request validation instead of when the engine builds the constraint.
     """
     try:
-        from llguidance import LLMatcher
+        import llguidance  # noqa: F401
     except ImportError:  # no llguidance: the engine reports it when it builds
         return
     try:
-        err = LLMatcher.validate_grammar(LLMatcher.grammar_from_lark(grammar))
+        from .grammar_compile import llg_grammar
+
+        llg_grammar("cfg", grammar)
+        err = None
     except Exception as exc:  # noqa: BLE001 - llguidance raises plain exceptions
         err = str(exc)
     if err:
@@ -1560,7 +1570,9 @@ def validate_constraint_spec(spec: Any) -> None:
         pattern = spec["pattern"]
         if not isinstance(pattern, str):
             raise UnsupportedRegexError("regex pattern must be a string")
-        _RegexDFA(pattern)
+        from .grammar_compile import regex_dfa
+
+        regex_dfa(pattern)
         return
     if gtype == "choice" and "choices" in spec:
         choices = spec["choices"]

@@ -198,7 +198,7 @@ class TestBatchedEngineSpecDecode:
         assert engine._spec_enabled is False
 
     def test_init_spec_decode_with_mtp(self):
-        """Model with MTP heads should enable spec decode."""
+        """Text MTP metadata must not install an unverified decoder."""
         from yunshu_engine.batched_engine import BatchedEngine
 
         engine = BatchedEngine(model_name="test")
@@ -212,10 +212,11 @@ class TestBatchedEngineSpecDecode:
         engine._tokenizer = MagicMock()
 
         engine._init_spec_decode()
-        assert engine._spec_enabled is True
+        assert engine._spec_enabled is False
+        assert engine._ngram_proposer is not None
 
     def test_init_spec_decode_with_eagle(self):
-        """Model with EAGLE heads should enable spec decode."""
+        """EAGLE metadata must not advertise a nonexistent serving route."""
         from yunshu_engine.batched_engine import BatchedEngine
 
         engine = BatchedEngine(model_name="test")
@@ -228,7 +229,8 @@ class TestBatchedEngineSpecDecode:
         engine._tokenizer = MagicMock()
 
         engine._init_spec_decode()
-        assert engine._spec_enabled is True
+        assert engine._spec_enabled is False
+        assert engine._ngram_proposer is not None
 
     def test_init_spec_decode_no_config(self):
         """Model without config should not crash."""

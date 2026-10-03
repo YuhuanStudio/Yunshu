@@ -7,7 +7,7 @@ Qwen3/Qwen3.5/DeepSeek-R1 the bare form tokenizes to TWO tokens (e.g. Qwen3.5 `<
 state machine never engaged → the ENTIRE chain-of-thought (plus literal markup) leaked into
 delta.content with reasoning_tokens=0, defeating the streaming fixes on the
 DEFAULT path. _resolve_think_token_ids encodes the BRACKETED form with
-add_special_tokens=False, and the fix is swept to all 8 think-token call sites.
+add_special_tokens=False, and the fix is swept to all live think-token call sites.
 """
 
 from __future__ import annotations
@@ -74,4 +74,11 @@ def test_all_think_sites_use_the_helper():
     # every old bare-encode site is gone; the helper is used throughout
     assert 'encode("</think")' not in src
     assert 'encode("<think")' not in src
-    assert src.count("_resolve_think_token_ids(") >= 8
+    for name in (
+        "_generate_fast",
+        "_stream_generate_fast",
+        "_stream_generate_ngram_spec",
+    ):
+        assert "_resolve_think_token_ids(" in inspect.getsource(
+            getattr(batched_engine.BatchedEngine, name)
+        )

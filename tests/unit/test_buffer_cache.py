@@ -19,9 +19,14 @@ def test_default_pool_scales_with_physical_ram():
 @pytest.fixture
 def restore():
     original = ar.mx
+    state = dict(buffer_cache._STATE)
+    previous = mx.set_cache_limit(0)
+    mx.set_cache_limit(previous)
     yield
     ar.mx = original
-    buffer_cache._STATE["limit"] = 0
+    mx.set_cache_limit(previous)
+    buffer_cache._STATE.clear()
+    buffer_cache._STATE.update(state)
 
 
 def _fill_cache():
@@ -42,12 +47,17 @@ def test_small_cache_survives_generator_clear(restore):
     assert ar.mx.array is mx.array
 
 
-def test_cache_over_the_limit_is_cleared(restore):
+def test_over_limit_pool_is_reclaimed_on_allocation_without_full_clear(restore):
     mx.clear_cache()
     buffer_cache.install(1e-6)
     _fill_cache()
+    held = mx.get_cache_memory()
+    assert held > 0
     ar.mx.clear_cache()
-    assert mx.get_cache_memory() == 0
+    assert mx.get_cache_memory() == held
+    scratch = mx.empty((16,), dtype=mx.float32)
+    mx.eval(scratch)
+    assert mx.get_cache_memory() <= buffer_cache._STATE["limit"]
 
 
 def test_zero_limit_clears_every_time(restore):

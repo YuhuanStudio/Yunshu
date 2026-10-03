@@ -102,9 +102,9 @@ def test_prefill_chunks_run_stock_matmul_only_when_enabled():
     lane_out = lane(x)
     assert lane_linear.STOCK_ROWS == 0
     assert lane_linear.prefill_kernel_id() == "lane-qmm"
-    lane_linear.set_stock_rows(lane_linear.PIECE)
+    lane_linear.set_stock_rows(128)
     try:
-        assert lane_linear.prefill_kernel_id() == f"stock-qmm-gt{lane_linear.PIECE}"
+        assert lane_linear.prefill_kernel_id() == "stock-qmm-gt128"
         stock_out = lane(x)
         # above the threshold: MLX's own matmul on the same rows
         assert mx.array_equal(stock_out, q(x)).item()
@@ -115,3 +115,19 @@ def test_prefill_chunks_run_stock_matmul_only_when_enabled():
     finally:
         lane_linear.set_stock_rows(0)
     assert mx.array_equal(lane(x), lane_out).item()
+
+
+def test_wide_prefill_does_not_expand_other_lane_callers_guard():
+    from yunshu_engine.kernels.tensorfold import lane_qmm
+
+    assert lane_qmm.MAX_ROWS == 128
+    assert lane_linear.PIECE == 512
+    x = mx.zeros((129, 512), mx.bfloat16)
+    weight = mx.zeros((32, 64), mx.uint32)
+    sbt = mx.zeros((8, 32, 2), mx.bfloat16)
+    with pytest.raises(ValueError, match="at most 128 rows"):
+        lane_qmm.lane_matmul(x, weight, sbt)
+    with pytest.raises(ValueError, match="row_limit"):
+        lane_qmm.lane_matmul(x, weight, sbt, row_limit=1024)
+    actual = lane_qmm.lane_matmul(x, weight, sbt, row_limit=512)
+    assert actual.shape == (129, 32)

@@ -74,3 +74,45 @@ def test_drafter_split_reads_indexed_head_only(tmp_path):
     tensors = mx.load(str(output / "model.safetensors"))
     assert set(tensors) == {"fc.weight"}
     assert tensors["fc.weight"].shape == (2, 2)
+
+
+def test_unindexed_head_warns_in_doctor_and_startup(caplog, monkeypatch, tmp_path):
+    from yunshu_cli.doctor import check_speculative
+    from yunshu_engine.mlxvlm_mtp import unindexed_mtp_warning
+
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {"model_type": "qwen3_5", "text_config": {"mtp_num_hidden_layers": 1}}
+        )
+    )
+    (tmp_path / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {"base.weight": "model.safetensors"}})
+    )
+    (tmp_path / "mtp-weights.safetensors").touch()
+    warning = unindexed_mtp_warning(str(tmp_path))
+    assert "draft=off" in warning
+    checks = check_speculative(str(tmp_path))
+    assert checks[0].status == "warn"
+    assert "mtp-weights.safetensors" in checks[0].detail
+    # Stop at drafter selection: verify the real startup log without model/GPU work.
+    from types import SimpleNamespace
+
+    import pytest
+
+    from yunshu_engine import spec_select
+    from yunshu_engine.vlm_engine import VLMEngine
+
+    class SelectionReachedError(Exception):
+        pass
+
+    def stop_at_selection(*_a, **_kw):
+        raise SelectionReachedError
+
+    engine = object.__new__(VLMEngine)
+    engine._config = json.loads((tmp_path / "config.json").read_text())
+    engine._model = SimpleNamespace(language_model=object())
+    monkeypatch.setattr(VLMEngine, "_round_driver_wanted", lambda *_: False)
+    monkeypatch.setattr(spec_select, "choose", stop_at_selection)
+    with pytest.raises(SelectionReachedError):
+        engine._build_batch_runner(str(tmp_path))
+    assert warning in caplog.text

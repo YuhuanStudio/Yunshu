@@ -10,15 +10,17 @@ comment. Summary of upstreams and licenses:
 |---|---|---|
 | jundot/omlx | Apache-2.0 | vendored `kernels/omlx/`; derived `ragged_attention.py` tile kernel, `mtp_patch.py`; inspired `spec_prefill.py`, `lane_layers.py`, `model_settings.py`, `mrope.py`, `mlx_executor.py`, `prefill_progress.py`, `yunshu_kv/mlx_cache.py`; derived `process_memory_enforcer.py` |
 | ashhart/TensorFold | MIT | vendored `kernels/tensorfold/`; derived `lane_linear.py`, `int_code_linear.py`, `round_driver/allocate.py`, `copy_drafter.py`; inspired draft vocabulary, DFlash/tree drafting, tree verify, round driver, ordered chunk merge |
-| Blaizzy/mlx-vlm | MIT | patched (speculative verifier, DFlash/MTP rounds, batch generator, audio patches, APC checkpoint policy and lookup provenance); derived `dflash_context.py`, `mtp_lane.py`, `mtp_tree.py`, `round_driver/mtp.py`; tool-format registry, DFlash chain depth, structured-output wiring |
+| Blaizzy/mlx-vlm | MIT | patched (speculative verifier, DFlash/MTP rounds, batch generator, audio patches, APC checkpoint policy and lookup provenance); derived `dflash_context.py`, `dflash_copy.py`, `mtp_lane.py`, `mtp_tree.py`, `round_driver/mtp.py`; tool-format registry, DFlash chain depth, structured-output wiring |
 | ml-explore/mlx-lm | MIT | patched Qwen3.5 GatedDeltaNet (`n_confirmed_patch.py`); tool parsers; speculative verification (`spec_draft_verifier.py`), sampler order (`batched_engine.py`) |
-| ml-explore/mlx | MIT | patched `nn.QuantizedLinear.__call__` for batch-invariant decode |
+| ml-explore/mlx | MIT | patched `nn.QuantizedLinear.__call__` for batch-invariant decode; derived native NAX prefill loader (`nax_prefill.py`) |
 | vllm-project/vllm, vllm-omni | Apache-2.0 | derived `gemma4_assistant.py`; inspired n-gram / suffix proposers, block pool, mRoPE state, TeaCache |
 | ggml-org/llama.cpp | MIT | inspired n-gram hash pool |
 | sgl-project/sglang | Apache-2.0 | inspired radix-tree prefix matching (`kv_optimizations.py`) |
 | waybarrios/vllm-mlx | Apache-2.0 | inspired warm-prompt preloading (`model_optimizations.py`) |
 | incoai/splash | Apache-2.0 | inspired lossless (batch-invariant) speculative decoding; credited inside the vendored oMLX kernels |
 | bstnxbt/dflash-mlx, youssofal/MTPLX | Apache-2.0 | credited inside the vendored oMLX kernels |
+
+`nax_prefill.py` reuses installed MLX 0.32.3 Metal headers (Apple copyright, MIT) at tag `v0.32.3`, including `quantized_nax.h` and `steel/gemm/nax.h`. It preserves their dequantizer, NAX MAC and K accumulation, replacing only the global input loader for the lane layout and choosing measured M tiles. Runtime expansion preserves the original header copyright notices; source provenance is recorded in `vendor.json`.
 
 ## oMLX — `python/yunshu_engine/kernels/omlx/`
 

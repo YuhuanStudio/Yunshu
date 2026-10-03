@@ -59,3 +59,35 @@ def test_source_change_changes_arithmetic_namespace(monkeypatch):
     monkeypatch.setattr(nax_prefill, "lane_header", lambda: "kernel B")
     assert nax_prefill.arithmetic_id() != first
     nax_prefill.arithmetic_id.cache_clear()
+
+
+def test_long_narrow_dispatch_does_not_widen_general_row_limit(monkeypatch):
+    import mlx.core as mx
+
+    from yunshu_engine.kernels.tensorfold import lane_qmm
+
+    def fake_kernel(name):
+        def run(**kwargs):
+            return [
+                mx.zeros(kwargs["output_shapes"][0], dtype=kwargs["output_dtypes"][0])
+            ]
+
+        return run
+
+    monkeypatch.setattr(lane_qmm, "_kernel", fake_kernel)
+    monkeypatch.setattr(lane_qmm, "_xs_cache", {})
+    x = mx.zeros((1024, 64), dtype=mx.bfloat16)
+    weight = mx.zeros((48, 8), dtype=mx.uint32)
+    sbt = mx.zeros((1, 48, 2), dtype=mx.bfloat16)
+    with pytest.raises(ValueError, match="at most"):
+        lane_qmm.lane_matmul(x, weight, sbt, row_block=32, row_limit=512)
+    got = lane_qmm.lane_matmul(x, weight, sbt, row_block=32, prefill_narrow=True)
+    assert got.shape == (1024, 48)
+    with pytest.raises(ValueError, match="long narrow"):
+        lane_qmm.lane_matmul(
+            x,
+            mx.zeros((256, 8), dtype=mx.uint32),
+            sbt,
+            row_block=32,
+            prefill_narrow=True,
+        )
