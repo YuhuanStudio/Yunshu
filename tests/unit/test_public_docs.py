@@ -115,6 +115,7 @@ def test_unreleased_changelog_has_release_notes_structure():
     headings = re.findall(r"^### (.+)$", section, re.MULTILINE)
     assert headings == required
     highlights = section.split("### Highlights\n", 1)[1].split("\n### ", 1)[0]
-    assert 3 <= len(re.findall(r"^- ", highlights, re.MULTILINE)) <= 6
+    count = len(re.findall(r"^- ", highlights, re.MULTILINE))
+    assert count == 0 or 3 <= count <= 6  # A freshly cut next-release draft is empty.
     assert "| Machine | Model / mode | Metric / workload | Before → after |" in section
     assert "https://github.com/YuhuanStudio/Yunshu/compare/" in section

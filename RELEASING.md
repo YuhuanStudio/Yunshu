@@ -28,7 +28,9 @@ zsh scripts/release/gate.sh
 #    version = "0.1.1"
 
 # 3. Turn "## [Unreleased]" in CHANGELOG.md into "## [0.1.1] - YYYY-MM-DD"
-#    and start a new empty "## [Unreleased]" above it.
+#    and start a new "## [Unreleased]" above it with the required headings,
+#    an empty performance table and a compare footer to main. Leave lists empty
+#    until changes land; do not invent highlights for an empty draft.
 
 # 4. Build and check locally.
 rm -rf dist && uv build
