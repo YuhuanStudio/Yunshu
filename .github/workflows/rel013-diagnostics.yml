@@ -1,0 +1,27 @@
+name: rel013 diagnostics
+on:
+  push:
+    branches: ['ci/rel013-*']
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv python install 3.13
+      - run: uv sync --dev --extra vision --extra compression
+      - run: |
+          sw_vers
+          system_profiler SPDisplaysDataType
+          uv run python scripts/dev/rel013_probe.py
+      - name: Focused regressions
+        run: uv run pytest tests/unit/test_apc_manager_e2e.py tests/unit/test_keyed_sampling.py tests/unit/test_apc_warm.py -vv --tb=long
+      - name: Full unit suite
+        if: always()
+        run: uv run pytest tests/unit -q --tb=short
