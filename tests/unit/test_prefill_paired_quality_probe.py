@@ -104,17 +104,30 @@ def test_native_paired_gate_primes_both_arms_and_reports_hit_engagement(
     assert rows[0]["arms"]["native"]["native_calls"] > 0
 
 
+@pytest.mark.parametrize("variant", ["async", "spans"])
 def test_async_paired_gate_uses_real_canonical_chat_and_requires_restore(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, variant
 ):
     root = Path(__file__).resolve().parents[2]
     monkeypatch.syspath_prepend(str(root / "scripts/research"))
     import async_restore
+    import span_forward
+    from mlx_vlm.models.qwen3_5.language import Qwen3_5Model
 
     from yunshu_engine import vlm_engine
 
-    counts = {"enabled": True, "async_merges": 0}
+    counter = "async_merges" if variant == "async" else "forwards"
+    counts = {"enabled": True, counter: 0}
+
+    def installed(*args, **kwargs):
+        pass
+
+    def install_span():
+        monkeypatch.setattr(Qwen3_5Model, "__call__", installed)
+        return counts, lambda: None
+
     monkeypatch.setattr(async_restore, "install", lambda: (counts, lambda: None))
+    monkeypatch.setattr(span_forward, "install", install_span)
     spec = importlib.util.spec_from_file_location(
         "async_quality_probe", root / "scripts/research/probe_prefill_paired_quality.py"
     )
@@ -144,7 +157,9 @@ def test_async_paired_gate_uses_real_canonical_chat_and_requires_restore(
             requests.append((list(ids), max_tokens, counts["enabled"]))
             stats.cached_tokens = self.cached
             if self.cached and counts["enabled"]:
-                counts["async_merges"] += 1
+                if variant == "spans":
+                    assert Qwen3_5Model.__call__ is installed
+                counts[counter] += 1
             stats.last_logprob = {"logprob": -0.25}
             yield 90
             stats.finish_reason = "stop"
@@ -174,7 +189,7 @@ def test_async_paired_gate_uses_real_canonical_chat_and_requires_restore(
             "--items",
             "1",
             "--variant",
-            "async",
+            variant,
             "--model",
             "tiny",
         ],
@@ -190,5 +205,5 @@ def test_async_paired_gate_uses_real_canonical_chat_and_requires_restore(
         (priming, 1, True),
         (chat, 16, True),
     ]
-    assert rows[0]["arms"]["async"]["cached"] == 99
-    assert counts["async_merges"] == 1
+    assert rows[0]["arms"][variant]["cached"] == 99
+    assert counts[counter] == 1

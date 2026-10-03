@@ -162,9 +162,10 @@ def main():
                         kernel_uninstall = kernel_install()
                     if async_counts:
                         async_counts["enabled"] = mode in ("async", "cowasync")
-                    Qwen3_5Model.__call__ = (
-                        native_forward if mode == "native" else model_forward
-                    )
+                    if candidate in ("native", "wide"):
+                        Qwen3_5Model.__call__ = (
+                            native_forward if mode == "native" else model_forward
+                        )
                     lane_linear.PIECE = 512 if mode == "wide" else piece
                     lane_qmm.MAX_ROWS = 512 if mode == "wide" else maximum
                     runner.apc_manager.clear()
