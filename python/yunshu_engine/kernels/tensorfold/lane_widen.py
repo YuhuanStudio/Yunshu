@@ -8,9 +8,6 @@ NIBBLES = r"""
   static_assert(BITS == 2 || BITS == 3, "4-bit weights go to the tensor op as they are");
   const ushort lane = thread_index_in_simdgroup;
   const ushort sg = simdgroup_index_in_threadgroup;     // K slice
-  const short qid = lane >> 2;
-  const short fm = (qid & 4) | ((lane >> 1) & 3);
-  const short fn = ((qid & 2) | (lane & 1)) * 4;
   const int M = mdims[0], MP = mdims[1];
   constexpr int KG = K / 64;
   constexpr int NF = NT / 16;
@@ -31,9 +28,6 @@ NIBBLES = r"""
 
   float C[TMR][NF * 8];
   for (int t = 0; t < TMR; t++) for (int i = 0; i < NF * 8; i++) C[t][i] = 0.0f;
-  const device uint4* sbv = (const device uint4*)SBt;
-  bool colok[NF];
-  for (int f = 0; f < NF; f++) colok[f] = n0 + f * 16 + fn < N;
   for (int g = g_begin; g < g_end; g++) {
     uint w[WPG + 1];
     for (int i = 0; i <= WPG; i++) w[i] = 0;
@@ -61,27 +55,20 @@ NIBBLES = r"""
       }
     }
     simdgroup_barrier(mem_flags::mem_threadgroup);
-    float s[NF][4], bb[NF][4];
-    for (int f = 0; f < NF; f++) {
-      const uint4 q = colok[f] ? sbv[(g * N + n0 + f * 16 + fn) / 4] : uint4(0);
-      const vec<bfloat, 8> v = as_type<vec<bfloat, 8>>(q);
-      for (int j = 0; j < 4; j++) { s[f][j] = float(v[2 * j]); bb[f][j] = float(v[2 * j + 1]); }
-    }
     auto a = tA.slice(g * 64, 0);
     auto P = op.template get_destination_cooperative_tensor<decltype(a), decltype(b), float>();
     op.run(a, b, P);
     simdgroup_barrier(mem_flags::mem_threadgroup);   // the op has read the stage before the next group's widening
-    for (int t = 0; t < TMR; t++) {
-      // the last row block can run past MP (MP % 32 == 16): those rows are never stored, and XS ends at MP
-      const bool live = rb + t * 16 < MP;
-      const float xs0 = live ? XS[g * MP + rb + t * 16 + fm] : 0.0f;
-      const float xs1 = live ? XS[g * MP + rb + t * 16 + fm + 8] : 0.0f;
-      for (int f = 0; f < NF; f++)
-        for (int r = 0; r < 2; r++)
-          for (int j = 0; j < 4; j++) {
-            const int i = f * 8 + r * 4 + j;
-            C[t][i] = fma(s[f][j], P[t * NF * 8 + i], fma(bb[f][j], r ? xs1 : xs0, C[t][i]));
-          }
+
+    for (int i = 0; i < TMR * NF * 8; i++) {
+      auto ids = P.get_multidimensional_index(i);
+      const int col = n0 + ids[0], row = rb + ids[1];
+      const vec<bfloat, 2> sb = col < N
+          ? as_type<vec<bfloat, 2>>(((const device uint*)SBt)[g * N + col])
+          : vec<bfloat, 2>(0);
+      const float xs = row < MP ? XS[g * MP + row] : 0.0f;
+      C[i / (NF * 8)][i % (NF * 8)] = fma(float(sb[0]), P[i],
+          fma(float(sb[1]), xs, C[i / (NF * 8)][i % (NF * 8)]));
     }
   }
   threadgroup float part[(SK > 1 ? SK - 1 : 1) * NF * 8 * 32];
@@ -93,20 +80,22 @@ NIBBLES = r"""
         for (int s2 = 1; s2 < SK; s2++) for (int i = 0; i < NF * 8; i++) C[t][i] += part[((s2 - 1) * NF * 8 + i) * 32 + lane];
       threadgroup_barrier(mem_flags::mem_threadgroup);
     }
-    if (sg == 0)
-      for (int f = 0; f < NF; f++)
-        for (int r = 0; r < 2; r++) {
-          const int m = rb + t * 16 + fm + 8 * r;
-          const int nn = n0 + f * 16 + fn;
-          if (m < M && nn < N)
-            for (int j = 0; j < 4; j++) Y[m * N + nn + j] = static_cast<bfloat>(C[t][f * 8 + r * 4 + j]);
-        }
+
+    if (sg == 0) {
+      auto a = tA.slice(0, 0);
+      auto P = op.template get_destination_cooperative_tensor<decltype(a), decltype(b), float>();
+      for (int i = 0; i < NF * 8; i++) {
+        auto ids = P.get_multidimensional_index(t * NF * 8 + i);
+        const int m = rb + ids[1], n = n0 + ids[0];
+        if (m < M && n < N) Y[m * N + n] = static_cast<bfloat>(C[t][i]);
+      }
+    }
   }
 """
 
 # 5-, 6- and 8-bit weights to bytes for the bf16 x uint8 op: a group is one little-endian bit stream, 4 values a word
 _NIBBLE_WIDENING = NIBBLES[NIBBLES.index("    if (BITS == 3) {"):
-                           NIBBLES.index("    simdgroup_barrier(mem_flags::mem_threadgroup);\n    float s[NF][4]")]
+                           NIBBLES.index("    simdgroup_barrier(mem_flags::mem_threadgroup);\n    auto a =")]
 _BYTE_WIDENING = """    for (int c = 0; c < 16; c++) {
       const int bit = 4 * BITS * c, i = bit >> 5, sh = bit & 31;
       uint word = w[i] >> sh;

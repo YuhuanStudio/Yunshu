@@ -1,0 +1,72 @@
+#!/bin/bash
+# Run a command on the helper Mac (the user's M3 Max) against this checkout's exact tree, so small-model
+# correctness checks and unit suites do not wait behind 27B timing jobs in the M5's GPU queue.
+#
+#   scripts/dev/m3run [--model PATH]... [--no-lock] -- CMD ARGS...
+#
+# The current tree (HEAD plus uncommitted tracked changes) is pushed to the helper's Yunshu checkout and checked
+# out in a detached worktree under .m3-wt/<name>; CMD runs there with that checkout's .venv first on PATH (use
+# `python -m pytest ...`, not `uv run`), HOME and UV_CACHE_DIR inside the checkout (git-excluded), and
+# M3_MODELS pointing at the synced small models. --model rsyncs a model directory once (kept for later runs);
+# a model path in CMD must use $M3_MODELS/<basename>. Runs are serialized with a lock unless --no-lock (CPU-only).
+# Never for timing claims (no Neural Accelerators) and only for small models (36 GB machine).
+# The helper is the user's personal laptop: nothing is written outside its Yunshu checkout.
+set -euo pipefail
+HOST=${M3_HOST:-yuhuan@192.168.50.55}
+KEY=${M3_KEY:-$HOME/.ssh/yunshu_m3}
+REPO=${M3_REPO:-/Users/yuhuan/Documents/YuhuanStudio/Yunshu}
+SSH=(ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=10 "$HOST")
+models=() lock=1
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --model) models+=("$2"); shift 2 ;;
+    --no-lock) lock=0; shift ;;
+    --) shift; break ;;
+    *) echo "m3run: unknown option $1 (put the command after --)" >&2; exit 2 ;;
+  esac
+done
+[ $# -gt 0 ] || { echo "usage: m3run [--model PATH]... [--no-lock] -- CMD ARGS..." >&2; exit 2; }
+
+top=$(git rev-parse --show-toplevel)
+name=$(basename "$top")
+sha=$(git -C "$top" stash create 2>/dev/null || true)   # HEAD + uncommitted tracked changes, stash list untouched
+[ -n "$sha" ] || sha=$(git -C "$top" rev-parse HEAD)
+GIT_SSH_COMMAND="ssh -i $KEY -o BatchMode=yes" git -C "$top" push -q -f \
+  "ssh://$HOST$REPO" "$sha:refs/m5/$name" >/dev/null
+
+for m in "${models[@]+"${models[@]}"}"; do
+  m=${m%/}
+  rsync -a --delete -e "ssh -i $KEY -o BatchMode=yes" "$m/" "$HOST:$REPO/.m3-home/models/$(basename "$m")/"
+done
+
+q() { printf '%q ' "$@"; }
+q1() { printf '%q' "$1"; }
+remote=$(cat <<EOF
+set -e
+cd $(q1 "$REPO")
+grep -qx '.m3-wt/' .git/info/exclude || printf '.m3-wt/\n' >> .git/info/exclude
+mkdir -p .m3-home/models .m3-home/tmp .uv-cache .m3-wt
+run() {
+  wt=.m3-wt/$(q1 "$name")
+  if [ -d "\$wt" ]; then git -C "\$wt" checkout -q --detach -f $sha; git -C "\$wt" clean -qfdx
+  else git worktree add -q --detach "\$wt" $sha; fi
+  if [ ! -e .venv/.m5-lock-sha ] || [ "\$(cat .venv/.m5-lock-sha)" != "\$(git rev-parse $sha:uv.lock)" ]; then
+    HOME=\$PWD/.m3-home UV_CACHE_DIR=\$PWD/.uv-cache UV_PROJECT_ENVIRONMENT=\$PWD/.venv \\
+      ~/.local/bin/uv sync -q --frozen --all-extras --dev --project "\$wt"
+    git rev-parse $sha:uv.lock > .venv/.m5-lock-sha
+  fi
+  cd "\$wt"
+  export HOME=$(q1 "$REPO")/.m3-home UV_CACHE_DIR=$(q1 "$REPO")/.uv-cache TMPDIR=$(q1 "$REPO")/.m3-home/tmp M3_MODELS=$(q1 "$REPO")/.m3-home/models
+  export GPUQ_DEVICE=m3
+  export PATH=$(q1 "$REPO")/.venv/bin:\$PATH PYTHONPATH=\$PWD/python
+  $(q "$@")
+}
+if [ $lock = 1 ]; then
+  export -f run 2>/dev/null || true
+  /usr/bin/lockf -k .m3-home/m3run.lock /bin/bash -c "\$(declare -f run); run"
+else
+  run
+fi
+EOF
+)
+exec "${SSH[@]}" "/bin/bash -c $(q "$remote")"

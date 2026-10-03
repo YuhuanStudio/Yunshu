@@ -37,12 +37,44 @@ def _types(schema: dict) -> list[str]:
     if isinstance(t, str):
         return [t]
     if isinstance(t, list):
-        return [x for x in t if isinstance(x, str)]
+        return t if t and all(isinstance(x, str) for x in t) else []
+    for keyword in ("anyOf", "oneOf"):
+        branches = schema.get(keyword)
+        if isinstance(branches, list):
+            kinds = [
+                _types(branch) if isinstance(branch, dict) else []
+                for branch in branches
+            ]
+            if not kinds or any(not types for types in kinds):
+                return []
+            return list(dict.fromkeys(t for types in kinds for t in types))
+    values = schema.get("enum")
+    if not isinstance(values, list) or not values:
+        values = [schema["const"]] if "const" in schema else []
+    kinds_by_type = {
+        str: "string",
+        bool: "boolean",
+        int: "integer",
+        float: "number",
+        list: "array",
+        dict: "object",
+        type(None): "null",
+    }
+    if values:
+        return list(dict.fromkeys(kinds_by_type.get(type(v), "string") for v in values))
     return []
 
 
 def _from_text(text: str, types: list[str]) -> tuple[bool, Any]:
     stripped = text.strip()
+    # XML parsers sometimes retain a JSON-quoted scalar. Unwrap only when the
+    # schema excludes strings, so identifiers/leading zeroes remain exact.
+    try:
+        decoded = json.loads(stripped)
+        if isinstance(decoded, str) and "string" not in types:
+            stripped = decoded.strip()
+    except ValueError:
+        pass
     for t in types:
         if t == "integer":
             try:
@@ -79,10 +111,11 @@ def _coerce(value: Any, schema: Any) -> Any:
     if not isinstance(schema, dict):
         return value
     types = _types(schema)
-    if isinstance(value, str) and types and "string" not in types:
-        ok, converted = _from_text(value, types)
-        if ok:
-            value = converted
+    if isinstance(value, str) and types:
+        if "string" not in types:
+            ok, converted = _from_text(value, types)
+            if ok:
+                value = converted
     if isinstance(value, dict):
         props = schema.get("properties")
         if isinstance(props, dict):
@@ -92,7 +125,13 @@ def _coerce(value: Any, schema: Any) -> Any:
     return value
 
 
-def coerce_tool_arguments(name: str, arguments: str, schemas: dict[str, dict]) -> str:
+def coerce_tool_arguments(
+    name: str,
+    arguments: str,
+    schemas: dict[str, dict],
+    *,
+    raw_text_values: bool = False,
+) -> str:
     """Return ``arguments`` (a JSON object string) with string values converted
     to the types declared in ``schemas[name]``. Never raises; returns the input
     unchanged when there is nothing to convert or it cannot be parsed."""
@@ -105,17 +144,30 @@ def coerce_tool_arguments(name: str, arguments: str, schemas: dict[str, dict]) -
         return arguments
     if not isinstance(args, dict):
         return arguments
+    original = args
     try:
+        if raw_text_values:
+            # XML's unquoted null is ambiguous with a string; JSON's quoted
+            # "null" is already a valid string and must never take this branch.
+            props = schema.get("properties") or {}
+            args = dict(args)
+            for key, value in args.items():
+                prop = props.get(key)
+                types = _types(prop) if isinstance(prop, dict) else []
+                if value == "null" and "string" in types and "null" in types:
+                    args[key] = None
         coerced = _coerce(args, schema)
     except Exception:
         return arguments
     out = json.dumps(coerced, ensure_ascii=False)
-    if out == json.dumps(args, ensure_ascii=False):
+    if out == json.dumps(original, ensure_ascii=False):
         return arguments
     return out
 
 
-def coerce_tool_calls(calls: list | None, tools: Any) -> list | None:
+def coerce_tool_calls(
+    calls: list | None, tools: Any, *, raw_text_values: bool = False
+) -> list | None:
     """Return copies of ``{"name", "arguments"}`` dicts with typed arguments."""
     if not calls:
         return calls
@@ -128,7 +180,10 @@ def coerce_tool_calls(calls: list | None, tools: Any) -> list | None:
             call = {
                 **call,
                 "arguments": coerce_tool_arguments(
-                    call.get("name", ""), call["arguments"], schemas
+                    call.get("name", ""),
+                    call["arguments"],
+                    schemas,
+                    raw_text_values=raw_text_values,
                 ),
             }
         out.append(call)
@@ -143,3 +198,26 @@ def arguments_json(arguments: Any) -> str:
     if arguments is None:
         return "{}"
     return json.dumps(arguments, ensure_ascii=False)
+
+
+def parser_tools(tools: Any) -> Any:
+    """Teach upstream parsers about string unions before they deserialize text.
+
+    Upstream GLM/Qwen readers only recognize type == 'string'. Once '123'
+    became an integer, downstream schema coercion cannot recover the raw value.
+    Copies keep the caller's schema and grammar cache untouched.
+    """
+    import copy
+
+    if not tools:
+        return tools
+    result = copy.deepcopy(tools)
+    for tool in result:
+        if not isinstance(tool, dict):
+            continue
+        fn = tool.get("function", tool)
+        params = fn.get("parameters") or fn.get("input_schema") or {}
+        for schema in (params.get("properties") or {}).values():
+            if isinstance(schema, dict) and "string" in _types(schema):
+                schema["type"] = "string"
+    return result

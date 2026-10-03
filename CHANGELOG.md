@@ -7,64 +7,128 @@ Release steps: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
-Changes on main after v0.1.2; not part of the published 2026-10-02 package.
+Changes on main after 0.1.3; not part of a published package yet.
+
+### Highlights
+
+### Upgrade notes / breaking changes
+
+### Performance
+
+| Machine | Model / mode | Metric / workload | Before → after | Recorded source |
+|---|---|---|---|---|
 
 ### Added
 
-- Prompt-copy drafting in the MTP lane, on by default; proposals from the prompt and
-  generated text pass through invariant verify. `YUNSHU_SPEC_COPY_ROWS` (default 8;
-  0 opts out). Workload-specific measurements and parity limits: [BENCHMARKS](docs/BENCHMARKS.md).
-- Batch-invariant GDN / attention verification up to 32 rows and wider DFlash2 trees.
-  Defaults are unchanged; `YUNSHU_SPEC_TREE` remains experimental and off.
-- Multi-tier APC storage: optional WARM RAM, further profiled storage devices,
-  background demotion and restore selection using observed bandwidth vs recompute cost.
-  Added `YUNSHU_VLM_APC_WARM` (off by default; lossless, int8, int4),
-  `YUNSHU_VLM_APC_WARM_SHARE`, `YUNSHU_VLM_APC_DISK_TIERS` and
-  `YUNSHU_VLM_APC_DISK_ENCODING` (lossless lower-tier encoding).
-  Lossless WARM did not improve the measured replay; int8/int4 remain lossy opt-ins.
-  `yunshu doctor` lists tier availability, free space and measured bandwidth.
-- Optional local numbers-only serving log (`YUNSHU_SERVE_LOG`,
-  `YUNSHU_SERVE_LOG_DIR`, `YUNSHU_SERVE_LOG_MAX_MB`, `YUNSHU_SERVE_LOG_KEEP`,
-  `YUNSHU_ARM`); no prompts, outputs or token ids. GPU busy-time status / metrics,
-  experiment-statistics helpers and pause-aware development benchmarks.
-- Public tfbench harness and per-request speculative `rounds` counters in `x_yunshu`;
-  partial paired accuracy and agentic results with failures and uncertainty recorded.
-
 ### Changed
-
-- Faster Qwen3.5-family cold prefill: large chunks use stock quantized matmul, with
-  MLX's chunked GDN core. New stable settings `YUNSHU_PREFILL_MATMUL` (stock/lane,
-  default stock) and `YUNSHU_PREFILL_GDN` (chunked/step, default chunked) are part of
-  APC keys and SSD namespaces. Cold-prefill numerics can differ from the old path;
-  decode/verify stay invariant. Dated measurements: 27B cold TTFT 8K 11.0 → 8.57 s,
-  32K 47.5 → 38.3 s (`a4d71bc8`; [BENCHMARKS](docs/BENCHMARKS.md)).
-- JSON-schema / json_object constraints default to llguidance via new
-  `YUNSHU_JSON_SCHEMA_ENGINE`; the in-house engine remains an option and supported
-  fallback. Unsupported constraints are still explicit errors.
-- M01 splits the text engine into serving, sampling, cache, template and speculative
-  modules, preserving import and monkeypatch targets; serving paths stay the same.
-- Dependency minimums raised to the locked versions, including mlx-lm 0.32.0,
-  llguidance 1.9.1 and transformers 5.18.0; obsolete old-version fallback code removed.
-  No `YUNSHU_*` settings were removed in this post-v0.1.2 range.
-- Development GPU queue waits for serving idleness, pauses its own jobs for user
-  traffic, safely preempts backlog work for higher priorities, refuses active duplicate
-  labels, and verifies declared output files with bounded waits and filtered digests.
 
 ### Fixed
 
-- Model leases held until HTTP responses / WebSocket connections end, including
-  errors and cancellation; unload no longer races the request hand-off.
-- Media context budgets use processor-derived token costs; text fast-path overlong
-  prompts get an explicit error instead of being silently left-truncated.
-- Invalid CFG grammars are 400s at request validation. Server-side web_fetch accepts
-  common model-produced URL shapes and returns actionable `invalid_tool_input` errors.
-- Realtime TTS stops on barge-in.
-- APC disk supersede removes obsolete grown-conversation checkpoints on every tier;
-  file leases protect active readers, transient I/O errors retain valid files, and a
-  longer SSD prefix avoids wasted WARM decode work.
-- Agent-compatibility replay harness imports resolve from the agentic harness;
-  failed GPU jobs retain their exit status and cannot be reported as completed results.
+### Security
 
+[Full changelog: v0.1.3…main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.3...main)
+
+## [0.1.3] - 2026-10-03
+
+Faster structured responses, long prompts and follow-up turns on Apple Silicon, more
+reliable coding-agent requests and prompt reuse, and correct batch-invariant decoding on
+M1–M4 Macs.
+
+### Highlights
+
+- Get complete JSON responses faster: warm decode **23.4 → 111.4 tok/s** with
+  identical output and logprobs in the recorded Qwen3.8-27B test. [Measurements](docs/BENCHMARKS.md#013-draft-measurements-2026-10-03).
+- Start follow-up answers sooner: 32K code first-token latency **900 → 721 ms**;
+  8K code **569 → 512 ms**. [Measurements](docs/BENCHMARKS.md#013-draft-measurements-2026-10-03).
+- Speed up repetitive follow-up code: raising the verified prompt-copy cap from
+  8 to 16 improved the measured 8K code turn from **106.1 → 129.2 tok/s**.
+  [Measurements](docs/BENCHMARKS.md#013-draft-measurements-2026-10-03).
+- Generate repetitive code faster with verified prompt copies: DFlash 32K code
+  **72.74 → 82.56 tok/s**; prose results vary by context.
+  [Measurements](docs/BENCHMARKS.md#013-draft-measurements-2026-10-03).
+- Correct speculative decoding on M1–M4 Macs: output now matches plain decoding there
+  too, with M5 speed unchanged (27B, 20 cells digest-equal, −0.4% to +3.0%).
+
+### Upgrade notes / breaking changes
+
+- Upgrade dependencies together: minimums now include `mlx-lm>=0.32.0`,
+  `llguidance>=1.9.1` and `transformers>=5.18.0`. Run `yunshu doctor` after upgrading.
+- JSON-schema and `json_object` requests now use llguidance by default.
+  `YUNSHU_JSON_SCHEMA_ENGINE` selects the alternative engine; unsupported
+  constraints remain explicit errors.
+- Overlong text prompts now return an error instead of silently losing their
+  beginning. Invalid grammars return HTTP 400 before generation.
+- Cold-prefill arithmetic changed; existing cached prompts may be recomputed in
+  a new cache namespace. Decode verification remains exact for qualified paths.
+- `YUNSHU_SPEC_COPY_ROWS` now defaults to 16 on certified models (8 on narrower
+  backends); use 8 to retain the previous cap or 0 to disable prompt copying.
+  The measured prose tradeoff for the cap change was −0.2% to −1.0%.
+- M1–M4 Macs: the batch-invariant decode kernels used by speculative decoding now
+  compute correct results there (some output columns were wrong before, so speculative
+  output could differ from plain decoding). No action needed; M5 kernels are unchanged.
+
+### Performance
+
+All rows use M5 Max and Jundot/Qwen3.8-27B-oQ4e-mtp. These are separate
+same-checkpoint experiments, not cumulative gains or promises for every model.
+October 3 results use three interleaved clean repetitions. Sources and limitations:
+[BENCHMARKS](docs/BENCHMARKS.md#013-draft-measurements-2026-10-03).
+
+| Machine | Model / mode | Metric / workload | Before → after | Recorded source |
+|---|---|---|---|---|
+| M5 Max | Qwen3.8-27B, MTP | Cold TTFT, 8K / 32K | 11.0 → 8.57 s / 47.5 → 38.3 s | `a4d71bc8`, Oct 2 prefill |
+| M5 Max | Qwen3.8-27B, MTP | Follow-up TTFT, 8K / 32K code | 569 → 512 ms / 900 → 721 ms | `d624e52d`, Oct 3 singleton capacity |
+| M5 Max | Qwen3.8-27B, DFlash | Complete JSON warm decode | 23.4 → 111.4 tok/s | `dad4641c`, Oct 3 complete-output run |
+| M5 Max | Qwen3.8-27B, DFlash | Complete tool-call warm decode | 23.0 → 77.7 tok/s | Same complete-output run |
+| M5 Max | Qwen3.8-27B, DFlash | Cold code decode, 8K / 32K | 74.50 → 82.19 / 72.74 → 82.56 tok/s | `78c03c94`, Oct 3 prompt-copy islands |
+
+### Added
+
+- Qualified JSON-schema, grammar and tool-call requests can use speculative
+  decoding while preserving accepted output tokens and requested logprobs.
+- Concurrent requests can share one initial prompt computation; Anthropic
+  `cache_control` and OpenAI `cached_tokens` reflect the rendered prompt boundaries.
+- Optional extra RAM and disk prompt-cache tiers, inspected by `yunshu doctor`:
+  `YUNSHU_VLM_APC_WARM`, `YUNSHU_VLM_APC_WARM_SHARE`,
+  `YUNSHU_VLM_APC_DISK_TIERS`, `YUNSHU_VLM_APC_DISK_ENCODING`.
+  Compressed lossless RAM is off; int8/int4 remain lossy opt-ins.
+- Optional local numbers-only serving logs (`YUNSHU_SERVE_LOG`) and per-request
+  speculative `rounds` counters; logs contain no prompts, outputs or token IDs.
+
+### Changed
+
+- Long-prompt processing and cached follow-up turns do less allocation and copying;
+  prompt checkpoint writes no longer delay the first token on eligible requests.
+- MTP and greedy DFlash can verify copied prompt passages; experimental tree
+  decoding remains off. No universal code or prose speedup is claimed.
+- Dependency minimums match the refreshed lock; text-serving internals were
+  reorganized without changing their supported import surface.
+
+### Fixed
+
+- Claude Code requests with mixed system/developer messages no longer fail with
+  HTTP 500; streamed tool and reasoning responses retain all requested logprobs.
+- Models stay loaded until responses and WebSockets finish, including cancellation;
+  media context limits account for the processor's actual token costs.
+- External draft generation follows the target sampling distribution and committed
+  conversation prefix; experimental tree requests reach the selected mode.
+- Growing conversations remove superseded disk checkpoints safely; transient I/O
+  errors retain valid files and active readers are protected from deletion.
+- Settings paths expand `~`, including defaults (`1fb15d20`); Realtime speech stops
+  when the user interrupts, and malformed `web_fetch` input gives actionable errors.
+- M1–M4 Macs: speculative decoding output equals plain decoding again; the invariant
+  matmul and attention kernels are chosen once per GPU generation and checked with
+  real data on GPUs they were not written for.
+- Coding-agent tool loops keep earlier reasoning when the client does not send it back,
+  accept empty tool arguments, keep tool-call argument types from the tool schema in
+  history, and end GLM tool-result turns correctly.
+
+### Security
+
+- No separate security-policy change in this range. Model leases and cache-reader
+  protection strengthen request lifecycle safety; see [SECURITY.md](SECURITY.md).
+
+[Full changelog: v0.1.2…v0.1.3](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.2...v0.1.3)
 
 ## [0.1.2] - 2026-10-02
 

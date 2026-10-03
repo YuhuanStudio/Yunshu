@@ -44,7 +44,9 @@ def test_known_device_and_abi_can_enable(monkeypatch):
     monkeypatch.setattr(nax_prefill, "_enabled", False)
     monkeypatch.setattr(nax_prefill.importlib.metadata, "version", lambda _: "0.32.3")
     monkeypatch.setattr(
-        nax_prefill.mx, "device_info", lambda: {"device_name": "Apple M5 Max"}
+        nax_prefill.mx,
+        "device_info",
+        lambda: {"device_name": "Apple M5 Max", "architecture": "applegpu_g17s"},
     )
     monkeypatch.setattr(nax_prefill, "lane_header", lambda: "known ABI")
     assert nax_prefill.enable()
@@ -131,3 +133,26 @@ def test_lane_arithmetic_id_includes_native_source_only_when_stock_enabled(monke
     assert lane_linear.prefill_kernel_id() == "stock-qmm-gt512+native-source-A"
     monkeypatch.setattr(lane_linear, "STOCK_ROWS", 0)
     assert lane_linear.prefill_kernel_id() == "lane-qmm"
+
+
+@pytest.mark.parametrize(
+    "architecture", ["applegpu_g16s", "applegpu_g19s", "", "unknown"]
+)
+def test_unmeasured_generation_cannot_enable(monkeypatch, architecture):
+    monkeypatch.setattr(nax_prefill, "_enabled", True)
+    monkeypatch.setattr(nax_prefill.importlib.metadata, "version", lambda _: "0.32.3")
+    monkeypatch.setattr(
+        nax_prefill.mx,
+        "device_info",
+        lambda: {
+            "device_name": "Apple M5 Max",
+            "architecture": architecture,
+        },
+    )
+    monkeypatch.setattr(
+        nax_prefill,
+        "lane_header",
+        lambda: pytest.fail("unsupported GPU must not load NAX headers"),
+    )
+    assert not nax_prefill.enable()
+    assert not nax_prefill.enabled()

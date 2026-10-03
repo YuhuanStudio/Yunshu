@@ -198,7 +198,12 @@ def enable() -> bool:
     _dispatches = 0
     if importlib.metadata.version("mlx") != "0.32.3":
         return False
-    if mx.device_info().get("device_name") != "Apple M5 Max":
+    info = mx.device_info()
+    from .tensorfold.lane_qmm import _generation
+
+    if info.get("device_name") != "Apple M5 Max" or _generation(
+        str(info.get("architecture", ""))
+    ) not in (17, 18):
         return False
     try:
         lane_header()

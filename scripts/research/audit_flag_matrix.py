@@ -673,6 +673,10 @@ def driver_full_validation(args, rep=0):
 
 
 def validate_smoke(receipt, digest, areas):
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from device_evidence import require_same_device
+
+    require_same_device([receipt], performance=True)
     expected = sum(1 if area == "external" else 2 for area in areas)
     summary = receipt.get("summary", {})
     parity_ok = all(
@@ -701,7 +705,9 @@ def main():
     ap.add_argument("--out", type=Path)
     ap.add_argument("--areas", nargs="+", choices=AREAS, default=list(AREAS))
     ap.add_argument("--smoke", action="store_true")
-    ap.add_argument("--tiny-model", type=Path, help="Prepared quantized tiny MTP checkpoint")
+    ap.add_argument(
+        "--tiny-model", type=Path, help="Prepared quantized tiny MTP checkpoint"
+    )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--require-smoke", type=Path)
     ap.add_argument("--serve", type=int, help=argparse.SUPPRESS)

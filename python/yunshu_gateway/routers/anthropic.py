@@ -122,6 +122,10 @@ def _enforce_anthropic_tool_choice(tool_calls, tool_choice):
     surfaced the wrong/extra calls and a tool_use stop_reason. Mirror the chat enforcement:
     for a forced tool, drop calls whose name != the forced name; honor
     disable_parallel_tool_use by capping to one call."""
+    if tool_choice == "none" or (
+        isinstance(tool_choice, dict) and tool_choice.get("type") == "none"
+    ):
+        return [] if tool_calls else tool_calls
     if not tool_calls or not isinstance(tool_choice, dict):
         return tool_calls
 
@@ -525,6 +529,8 @@ def _convert_anthropic_messages(
                     tool_id = block.get("id", f"toolu_{uuid.uuid4().hex[:24]}")
                     tool_name = block.get("name", "unknown")
                     tool_input = block.get("input", {})
+                    if tool_input is None:
+                        tool_input = {}
                     _tool_id_to_name[tool_id] = tool_name  # for the tool_result name
                     # json.dumps handles any JSON-serializable input (Anthropic spec
                     # says object, but a list/scalar must still be valid JSON, not str()'s

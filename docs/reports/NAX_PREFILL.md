@@ -1,8 +1,8 @@
 # M5 Max cold-prefill compute investigation
 
-Worker: `codex-naxprefill`; checkpoint: `Jundot/Qwen3.8-27B-oQ4e-mtp`.
+Worker: `codex-naxprefill2` (resumed `codex-naxprefill`); checkpoint: `Jundot/Qwen3.8-27B-oQ4e-mtp`.
 This investigation covers compute only. Restore and APC implementation belong
-to `codex-prefill4` and are not modified here.
+to the prefill lead and are not modified here.
 
 ## Hardware ceiling and FLOP accounting
 
@@ -91,9 +91,9 @@ Thus all three main compute paths already engage NAX; this does not establish
 a percentage of Neural Accelerator utilization. Full Xcode counter analysis
 is unavailable in the installed Command Line Tools.
 
-Captures: `/Volumes/P5Plus/yunshu-build/codex/nax-real-layers-1449-layer{0,3}.gputrace`.
-Capture snapshots include the resident model buffers (about 17 GiB each),
-despite restricting dispatched work to a layer.
+Capture receipts: `/Volumes/P5Plus/yunshu-build/codex/nax-capture-engagement.json`
+and `nax-capture-kernels.json`. The captures included resident model buffers
+(about 17 GiB each) and were deleted after inspection, as required.
 
 ## MLX dispatch, checked against the installed version
 
@@ -155,8 +155,8 @@ timings must not be reported as HTTP TTFT. Plain model forwards also omit
 gateway, tokenization, final head and first-token dispatch.
 
 The tile prototype reuses installed MLX QMM helper arithmetic, holds BK=64
-fixed, and tests BM/BN changes only. It is research code and does not alter
-serving. Layout-retention arms use exactly the same packed weights and QMM;
+fixed, and tests BM/BN changes only. The initial sweep is research code; the proven direct-loader variant is now
+connected to serving under the guards below. Layout-retention arms use exactly the same packed weights and QMM;
 they bound the benefit of eliminating repeated layout work. Prebuilding their
 layouts before a plain model timing is a compute ceiling experiment; HTTP
 cold requests must include the first construction cost.
@@ -236,4 +236,66 @@ cost before readiness; this setup cost remains part of model loading.
 Raw summaries: `nax-phase2-model-summary.json`, `nax-http-paired-summary.json`
 under `/Volumes/P5Plus/yunshu-build/codex`. The production module is prepared
 with fail-closed version/device/shape checks and a source-hashed arithmetic ID;
-it is not yet connected to serving pending paired accuracy and APC identity.
+it is connected to serving after the paired accuracy and APC identity gates.
+
+## Production validation and scope
+
+The loader is enabled only for MLX 0.32.3 on the measured Apple M5 Max,
+with GPU generation 17/18 checked through the same parser as the invariant
+backend, and the 5120-hidden/64-layer quantized target. M1–M4 retain main
+portable kernels. Unknown devices, versions and unsupported shapes keep
+stock QMM. Accepted spans have 512<M<=8192 and M%128==0; wide projections
+require tiled group-64 weights, K%64==0, N%64==0, and 4/5/8 bits.
+Decode/verify use the existing bounded lane path. The round driver is excluded.
+
+The native headers and loader are hashed into the existing prefill arithmetic
+ID, which already contributes to the APC key. No APC or restore implementation
+was edited. Tiny tile warmup occurs before model readiness; its compilation
+cost is model setup cost. No extra full weight representation is retained.
+
+`1003-192610-00-nax-quality200-aligned-1925`: M5, rc0, complete, 200 arithmetic
+questions with neutral long-context padding, baseline/candidate 200/200,
+zero different raw token IDs or per-token logprobs, 496 candidate dispatches
+per item. This modest gate does not establish accuracy on a broad benchmark.
+The research and production loaders use identical generated Metal arithmetic.
+
+`1003-213959-00-nax-production-identity-2140`: M5, rc0 and successful complete;
+8K/32K prose/code, suffix/chat, cold versus genuine partial/full APC hits.
+Every token and logprob is bit-equal (max_abs_dlp=0). All 16 server logs
+confirm MTP and NAX prefill engagement.
+
+`1003-212558-00-nax-final-http-2125`: M5, rc0, successful complete, quiet,
+foreign CPU max 210.21% (1620% threshold). Three balanced independent server
+sessions per arm/context, 256 output tokens, cached=0, identical request hashes
+and response digests; all 12 logs confirm MTP and all 6 candidate logs NAX.
+
+| Cold HTTP TTFT median ms | Baseline | Production | Reduction | Historical TF |
+|---|---:|---:|---:|---:|
+| 8K prose | 8547 | 7765 | 9.15% | 8396 |
+| 8K code | 8432 | 7788 | 7.64% | 8399 |
+| 32K prose | 36806 | 34105 | 7.34% | 39035 |
+| 32K code | 36651 | 34134 | 6.87% | 39098 |
+
+TF remains the historical DFlash2 comparison from PERF_TREND, not a new TF
+run. These measurements precede the final merge from main 2830fff1; the
+post-merge measurements and gate results follow below. The baseline launcher
+disables only this NAX integration in the same merged tree, retaining main
+stock QMM and its invariant lane dispatch; it is not a separate checkout.
+
+## Own ideas and negative results
+
+The concrete contribution is a layout bridge: feed existing lane-tiled packed
+weights and paired scale/bias planes directly into native NAX arithmetic.
+It removes layout reconstruction without keeping a second resident checkpoint.
+The same-row-block narrow prefill extension is deliberately limited rather
+than widening the generic lane API. Tile tuning is a small part of the combined
+win; the isolated 8K tile-only plain forward gain was about 0.9%, not a standalone
+HTTP claim.
+
+Transient dequant-to-GEMM was neither uniformly faster nor bit-equal, and was
+not adopted. BN128 and blanket BM128 were rejected by M5 tile measurements.
+Narrow-only timings were mixed, so no standalone narrow speed claim is made.
+GDN and attention already select native NAX: no additional GDN/attention/norm
+change is shipped. A future norm-to-loader fusion must preserve each original
+bf16 rounding boundary; its cheapest decisive test is a single-layer paired
+output/state comparison before whole-model timing. It remains unimplemented.
