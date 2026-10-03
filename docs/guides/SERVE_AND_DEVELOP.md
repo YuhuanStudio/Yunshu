@@ -214,3 +214,49 @@ nohup /usr/bin/python3 scripts/dev/gpuq.py _daemon \
   >> "$GPUQ_DIR/daemon.log" 2>&1 < /dev/null &
 scripts/dev/gpuq status
 ```
+
+## Optional M3 correctness lane
+
+`gpuq submit --device m5|m3|any` keeps `m5` as the default. One daemon runs a
+local M5 slot and a remote M3 slot concurrently. `any` is explicit: a job is
+reserved once by whichever slot admits it first. Local serving, quiet admission
+and priority preemption apply to the M5 slot. `--quiet` is rejected with `m3`
+and `any`: timing measurements belong on the M5.
+
+Configure `M3_HOST`, `M3_KEY` and `M3_REPO` as for `scripts/dev/m3run`; the remote
+repository must already have its working `.venv`. The M3 is a personal laptop:
+all worktrees, outputs, models, HOME, temporary files and caches stay within that
+checkout. Remote GPU commands share m3run's lock. A 36 GB laptop admits declared
+memory up to 28 GB, reserving 8 GB of capacity for its user. Declare realistic
+peak memory; a 16 GB 27B 4-bit correctness smoke fits this admission limit.
+
+```bash
+scripts/dev/gpuq submit --device m3 --label worker-tiny-smoke-unique --mem-gb 3 \
+  --out /Volumes/P5Plus/yunshu-build/smoke.jsonl --expect-complete -- \
+  python scripts/dev/m3q_smoke.py --model /Volumes/P5Plus/models/small-model \
+  --out /Volumes/P5Plus/yunshu-build/smoke.jsonl
+```
+
+The remote snapshot contains HEAD plus tracked edits (including staged new
+files), in a detached `.m3-wt/gpuq-<id>` worktree. The command and environment map
+worktree paths and venv executables to their remote equivalents. Checkpoints
+under `/Volumes/P5Plus/models` or `/Volumes/Micron/models` map to
+`.m3-home/models/<checkpoint-name>`; checksum rsync reuses the retained copy.
+Outputs under `/Volumes/P5Plus/yunshu-build` map to `.m3-home/out` and declared
+outputs return to their original paths even when the command fails. Declare
+outputs with queue-level `--out` or command-level `--out`/`--output`. Other
+external output destinations are rejected. Logs stream to the usual queue log.
+Cancellation, timeout and stall handling stop the remote command's process group;
+SSH or transfer failure is a failed job, never a successful receipt. If remote
+cleanup cannot be confirmed, `m3-quarantine.json` prevents further M3 dispatch.
+Inspect and confirm cleanup before removing that marker; M5 work continues.
+
+Job JSON, status, wait and digest carry `device`; completed M3 JSON/JSONL outputs
+also carry the execution device. M3 digest entries say **portability evidence
+(not M5)**. Same-device correctness comparisons are allowed; mixed-device
+accuracy/parity arms and M3 performance verdicts are refused by the research
+analysis helpers. Unlabelled historical receipts predate M3 offload and retain
+their M5 meaning. An M3 failure requires M5 reproduction before rejecting an
+M5 optimization; an M3 pass cannot approve an M5 GPU hot-path default or merge.
+Use M3 results for portability and fast logic feedback, then run the final M5
+gate. CPU suites should use `nice -n 15`, directly or via `m3run --no-lock`.

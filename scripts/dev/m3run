@@ -45,7 +45,7 @@ remote=$(cat <<EOF
 set -e
 cd $(q1 "$REPO")
 grep -qx '.m3-wt/' .git/info/exclude || printf '.m3-wt/\n' >> .git/info/exclude
-mkdir -p .m3-home/models .uv-cache .m3-wt
+mkdir -p .m3-home/models .m3-home/tmp .uv-cache .m3-wt
 run() {
   wt=.m3-wt/$(q1 "$name")
   if [ -d "\$wt" ]; then git -C "\$wt" checkout -q --detach -f $sha; git -C "\$wt" clean -qfdx
@@ -56,7 +56,8 @@ run() {
     git rev-parse $sha:uv.lock > .venv/.m5-lock-sha
   fi
   cd "\$wt"
-  export HOME=$(q1 "$REPO")/.m3-home UV_CACHE_DIR=$(q1 "$REPO")/.uv-cache M3_MODELS=$(q1 "$REPO")/.m3-home/models
+  export HOME=$(q1 "$REPO")/.m3-home UV_CACHE_DIR=$(q1 "$REPO")/.uv-cache TMPDIR=$(q1 "$REPO")/.m3-home/tmp M3_MODELS=$(q1 "$REPO")/.m3-home/models
+  export GPUQ_DEVICE=m3
   export PATH=$(q1 "$REPO")/.venv/bin:\$PATH PYTHONPATH=\$PWD/python
   $(q "$@")
 }
