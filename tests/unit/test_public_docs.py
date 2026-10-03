@@ -18,8 +18,24 @@ ROOT = Path(__file__).resolve().parents[2]
 READMES = [ROOT / name for name in ("README.md", "README.zh-CN.md", "README.zh-TW.md")]
 
 
-@pytest.mark.parametrize("path", READMES, ids=lambda p: p.name)
-def test_readme_local_links_resolve(path):
+@pytest.mark.parametrize(
+    "path",
+    READMES
+    + [
+        ROOT / name
+        for name in (
+            "CONTRIBUTING.md",
+            "SECURITY.md",
+            "RELEASING.md",
+            "docs/README.md",
+            "docs/ROADMAP.md",
+            "docs/guides/HARDWARE_VALIDATION.md",
+            "docs/guides/MODEL_SUPPORT.md",
+        )
+    ],
+    ids=lambda p: p.name,
+)
+def test_public_doc_local_links_resolve(path):
     for target in re.findall(r"\]\(([^)]+)\)", path.read_text()):
         url = urlsplit(target)
         if url.scheme or not url.path:
@@ -82,3 +98,24 @@ def test_translated_performance_numbers_match_english():
     assert reference
     for path in READMES[1:]:
         assert numbers(path) == reference, f"{path.name}: measurement drift"
+
+
+def test_unreleased_changelog_has_release_notes_structure():
+    text = (ROOT / "CHANGELOG.md").read_text()
+    section = text.split("## [Unreleased]\n", 1)[1].split("\n## [", 1)[0]
+    required = [
+        "Highlights",
+        "Upgrade notes / breaking changes",
+        "Performance",
+        "Added",
+        "Changed",
+        "Fixed",
+        "Security",
+    ]
+    headings = re.findall(r"^### (.+)$", section, re.MULTILINE)
+    assert headings == required
+    highlights = section.split("### Highlights\n", 1)[1].split("\n### ", 1)[0]
+    count = len(re.findall(r"^- ", highlights, re.MULTILINE))
+    assert count == 0 or 3 <= count <= 6  # A freshly cut next-release draft is empty.
+    assert "| Machine | Model / mode | Metric / workload | Before → after |" in section
+    assert "https://github.com/YuhuanStudio/Yunshu/compare/" in section

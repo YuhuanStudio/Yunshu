@@ -52,6 +52,7 @@ import fcntl
 import json
 import math
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -499,7 +500,20 @@ def _pick(jobs: list[dict], eligible=None) -> dict | None:
         if "started" in j:
             o = _owner(j)
             last[o] = max(last.get(o, 0.0), j["started"])
-    return min(pending, key=lambda j: (last.get(_owner(j), 0.0), j["submitted"]))
+    # Short correctness checks (tiny / smoke / dry-run labels) go first within a
+    # priority: they take a minute and unblock a worker's next step, while a
+    # 27B timing job behind them barely moves.
+    return min(
+        pending,
+        key=lambda j: (not _is_short(j), last.get(_owner(j), 0.0), j["submitted"]),
+    )
+
+
+_SHORT = re.compile(r"(^|[-_])(tiny|smoke|dry)([-_]|$)", re.I)
+
+
+def _is_short(job: dict) -> bool:
+    return bool(_SHORT.search(job.get("label") or ""))
 
 
 def _new_id(label: str) -> str:
@@ -625,15 +639,31 @@ def _preempting(jobs: list[dict]) -> list[dict]:
     ]
 
 
+AGED_SLICE_S = float(os.environ.get("GPUQ_AGED_SLICE_S", 20 * 60))
+
+
+def _last_run_start(pauser: Pauser) -> float:
+    resumes = [p[1] for p in pauser.pauses if p[1] is not None]
+    return max([pauser.job.get("started") or 0.0, *resumes])
+
+
 def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
     """Run admitted p>=0 work inside a p<=-1 pause; never kill to reclaim memory.
 
     Returns True while priority work still owns the pause. The nested runner
     cannot preempt again (its priority is >=0), so at most two jobs are resident.
     """
-    # A backlog job that already aged into the interactive level (waited AGE_S) is
-    # not paused again for every new p0 job, or it would never finish.
-    if _eff_priority(pauser.job) >= 0:
+    # A backlog job that aged into the interactive level (waited AGE_S) gets a
+    # guaranteed AGED_SLICE_S of running since it last started or resumed, so it
+    # makes progress; after that it yields to p0 work like any backlog job (a long
+    # aged job must not hold the GPU for hours while interactive work queues).
+    if pauser.job.get("priority", 0) >= 0:
+        return False  # only backlog (raw p<=-1) work is ever paused for priority
+    if (
+        _eff_priority(pauser.job, now) >= 0
+        and not pauser.paused
+        and now - _last_run_start(pauser) < AGED_SLICE_S
+    ):
         return False
     jobs = _jobs()
     pending = _preempting(jobs)
@@ -872,6 +902,13 @@ def _execute(job: dict, path: Path, gate: ServingGate) -> None:
     print(f"{time.strftime('%H:%M:%S')} end {job['id']} {job['state']}", flush=True)
 
 
+def _adoption_order(jobs: list[dict]) -> list[dict]:
+    """Running jobs left by a previous daemon, already-exited ones first: adopting a
+    live job blocks until it ends, and a finished job must not look running meanwhile."""
+    running = [j for j in jobs if j["state"] == "running"]
+    return sorted(running, key=lambda j: _alive(j.get("pid")))
+
+
 def daemon() -> None:
     ROOT.mkdir(parents=True, exist_ok=True)
     lock = open(ROOT / "daemon.lock", "a")  # noqa: SIM115 - held for the daemon's lifetime
@@ -886,9 +923,8 @@ def daemon() -> None:
         gate.configure(load_serving_config())
         # A job left running by a previous daemon is adopted: wait for its
         # process group to exit (still under timeout / cancel), then record it.
-        for j in _jobs():
-            if j["state"] == "running":
-                _adopt(j, JOBS / f"{j['id']}.json", gate)
+        for j in _adoption_order(_jobs()):
+            _adopt(j, JOBS / f"{j['id']}.json", gate)
         if gate.enabled:
             gate.poll()
         for (

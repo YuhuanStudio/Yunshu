@@ -447,7 +447,7 @@ def _parse(s: Setting, text: str) -> Any:
         elif s.type == "json":
             return json.loads(value)
         elif s.type == "path":
-            return value
+            return os.path.expanduser(value)
         else:
             return text if s.empty_is_value else value
     except (ValueError, json.JSONDecodeError) as exc:
@@ -462,6 +462,9 @@ def get(name: str) -> Any:
     text, _ = raw(name)
     s = REGISTRY[name]
     if text is None:
+        if s.type == "path" and isinstance(s.default, str):
+            # "~/..." defaults name the user's home, never a directory called "~".
+            return os.path.expanduser(s.default)
         return s.default
     return _parse(s, text)
 
