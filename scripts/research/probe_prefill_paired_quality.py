@@ -30,7 +30,20 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--items", type=int, default=200)
-    ap.add_argument("--variant", choices=("wide", "native"), default="wide")
+    ap.add_argument(
+        "--variant",
+        choices=(
+            "wide",
+            "native",
+            "async",
+            "barrier",
+            "paired32",
+            "cow",
+            "cowasync",
+            "spans",
+        ),
+        default="wide",
+    )
     ap.add_argument(
         "--model", default="/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
     )
@@ -58,6 +71,30 @@ def main():
     piece, maximum = lane_linear.PIECE, lane_qmm.MAX_ROWS
     tokenizer = getattr(runner.processor, "tokenizer", runner.processor)
     a.out.parent.mkdir(parents=True, exist_ok=True)
+    async_counts = {}
+    uninstall_async = None
+    span_counts = {}
+    uninstall_spans = None
+    if a.variant == "spans":
+        from span_forward import install as install_spans
+
+        span_counts, uninstall_spans = install_spans()
+    cow_counts = {}
+    uninstall_cow = None
+    if a.variant in ("cow", "cowasync"):
+        from cow_restore import install as install_cow
+
+        cow_counts, uninstall_cow = install_cow()
+    if a.variant in ("async", "cowasync"):
+        from async_restore import install
+
+        async_counts, uninstall_async = install()
+    kernel_install = None
+    kernel_uninstall = None
+    if a.variant == "paired32":
+        from lane_paired32 import install as kernel_install
+    elif a.variant == "barrier":
+        from lane_final_barrier import install as kernel_install
     candidate = a.variant
     correct = {"baseline": 0, candidate: 0}
     different = 0
@@ -73,23 +110,78 @@ def main():
                     False,
                     {"enable_thinking": False},
                 ).result()
+                prime_ids = ids
+                if candidate in (
+                    "async",
+                    "barrier",
+                    "paired32",
+                    "cow",
+                    "cowasync",
+                    "spans",
+                ):
+                    if not runner.apc_manager.prefill_stride:
+                        prime_ids = ids[:-65]
+                    else:
+                        prime_ids = ids
+                        ids, _, salt = engine._executor.submit(
+                            engine._runner_input,
+                            [
+                                {"role": "user", "content": prompt},
+                                {
+                                    "role": "assistant",
+                                    "content": "The previous question is noted. " * 24,
+                                },
+                                {"role": "user", "content": prompt.rsplit("\n", 1)[-1]},
+                            ],
+                            [],
+                            [],
+                            False,
+                            {"enable_thinking": False},
+                        ).result()
+                        if (
+                            ids[: len(prime_ids) - 1] != prime_ids[:-1]
+                            or len(ids) - len(prime_ids) < 64
+                        ):
+                            raise RuntimeError(
+                                "quality chat does not share a canonical long-suffix boundary"
+                            )
                 results = {}
                 for mode in (
                     ("baseline", candidate)
                     if index % 2 == 0
                     else (candidate, "baseline")
                 ):
-                    Qwen3_5Model.__call__ = (
-                        native_forward if mode == "native" else model_forward
-                    )
+                    if span_counts:
+                        span_counts["enabled"] = mode == "spans"
+                    if cow_counts:
+                        cow_counts["enabled"] = mode in ("cow", "cowasync")
+                    if kernel_uninstall:
+                        kernel_uninstall()
+                        kernel_uninstall = None
+                    if kernel_install and mode == candidate:
+                        kernel_uninstall = kernel_install()
+                    if async_counts:
+                        async_counts["enabled"] = mode in ("async", "cowasync")
+                    if candidate in ("native", "wide"):
+                        Qwen3_5Model.__call__ = (
+                            native_forward if mode == "native" else model_forward
+                        )
                     lane_linear.PIECE = 512 if mode == "wide" else piece
                     lane_qmm.MAX_ROWS = 512 if mode == "wide" else maximum
                     runner.apc_manager.clear()
-                    if candidate == "native":
+                    if candidate in (
+                        "native",
+                        "async",
+                        "barrier",
+                        "paired32",
+                        "cow",
+                        "cowasync",
+                        "spans",
+                    ):
                         prime_stats = RunStats()
                         primed = list(
                             runner.iter_tokens(
-                                ids,
+                                prime_ids,
                                 max_tokens=1,
                                 temperature=0,
                                 seed=1234,
@@ -107,6 +199,9 @@ def main():
                             raise RuntimeError(
                                 "paired warm prime incomplete / not cold"
                             )
+                    span_before = span_counts.get("forwards", 0)
+                    cow_before = cow_counts.get("view_restores", 0)
+                    async_before = async_counts.get("async_merges", 0)
                     native_before = native_forward.native_calls
                     stats, tokens, lps = RunStats(), [], []
                     for token in runner.iter_tokens(
@@ -121,7 +216,14 @@ def main():
                         tokens.append(token)
                         lps.append(stats.last_logprob["logprob"])
                     engine._executor.submit(lambda: None).result()
-                    expected_cached = len(ids) - 1 if candidate == "native" else 0
+                    expected_cached = (
+                        len(prime_ids) - 1
+                        if candidate
+                        in ("async", "barrier", "paired32", "cow", "cowasync", "spans")
+                        else len(ids) - 1
+                        if candidate == "native"
+                        else 0
+                    )
                     if (
                         not tokens
                         or not stats.finish_reason
@@ -130,9 +232,25 @@ def main():
                         raise RuntimeError(
                             "incomplete / unexpected paired cache boundary"
                         )
+                    if "27B" in a.model and (
+                        not stats.used_draft or stats.spec_mode != "mtp"
+                    ):
+                        raise RuntimeError("paired quality did not engage MTP")
                     native_calls = native_forward.native_calls - native_before
                     if mode == "native" and not native_calls:
                         raise RuntimeError("native singleton path did not engage")
+                    if mode == "spans" and span_counts["forwards"] <= span_before:
+                        raise RuntimeError("joint span forward did not engage")
+                    if (
+                        mode in ("cow", "cowasync")
+                        and cow_counts["view_restores"] <= cow_before
+                    ):
+                        raise RuntimeError("COW restore did not engage")
+                    if (
+                        mode in ("async", "cowasync")
+                        and async_counts["async_merges"] <= async_before
+                    ):
+                        raise RuntimeError("async suffix restore did not engage")
                     text = tokenizer.decode(tokens, skip_special_tokens=True).strip()
                     match = re.fullmatch(r"\s*(-?\d+)\s*", text)
                     scored = bool(match and int(match[1]) == answer)
@@ -144,6 +262,8 @@ def main():
                         correct=scored,
                         cached=stats.cached_tokens,
                         native_calls=native_calls,
+                        used_draft=stats.used_draft,
+                        spec_mode=stats.spec_mode,
                     )
                 equal = (
                     results["baseline"]["tokens"] == results[candidate]["tokens"]
@@ -185,6 +305,14 @@ def main():
     finally:
         Qwen3_5Model.__call__ = model_forward
         lane_linear.PIECE, lane_qmm.MAX_ROWS = piece, maximum
+        if kernel_uninstall:
+            kernel_uninstall()
+        if uninstall_spans:
+            uninstall_spans()
+        if uninstall_cow:
+            uninstall_cow()
+        if uninstall_async:
+            uninstall_async()
         asyncio.run(engine.stop())
 
 

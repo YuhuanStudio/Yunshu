@@ -48,6 +48,50 @@ def assert_no_full_unit_suites(processes=None):
 def restore_experiment_launcher(mode):
     """Process-local research patches; no serving flag or APC arithmetic change."""
     patch = ""
+    if mode in (
+        "reserved",
+        "async",
+        "barrier",
+        "asyncbarrier",
+        "paired32",
+        "spans",
+        "cow",
+        "cowasync",
+    ):
+        # Keep the reference arm upstream even after COW ships. Candidates
+        # install the exact production helper through their explicit wrapper.
+        patch += (
+            "from yunshu_engine.kernels import cache_restore\n"
+            "cache_restore.install = lambda: None\n"
+        )
+    if mode in (
+        "async",
+        "barrier",
+        "asyncbarrier",
+        "paired32",
+        "spans",
+        "cow",
+        "cowasync",
+    ):
+        patch += (
+            "import sys\n"
+            + f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})\n"
+        )
+    if mode in ("cow", "cowasync"):
+        patch += "from cow_restore import install as _install_cow\n_cow_counts, _cow_uninstall = _install_cow()\n"
+    if mode == "spans":
+        patch += "from span_forward import install as _install_spans\n_span_counts, _span_uninstall = _install_spans()\n"
+    if mode == "paired32":
+        patch += "from lane_paired32 import install as _install_paired32\n_paired32_uninstall = _install_paired32()\n"
+    if mode in ("barrier", "asyncbarrier"):
+        patch += "from lane_final_barrier import install as _install_barrier\n_barrier_uninstall = _install_barrier()\n"
+    if mode in ("async", "asyncbarrier", "cowasync"):
+        patch += (
+            "import sys\n"
+            f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})\n"
+            "from async_restore import install\n"
+            "_async_counts, _async_uninstall = install()\n"
+        )
     if mode in ("direct", "keep"):
         patch += (
             "import sys\n"
@@ -94,6 +138,13 @@ def main():
     ap.add_argument(
         "--mode",
         choices=(
+            "async",
+            "cow",
+            "cowasync",
+            "spans",
+            "barrier",
+            "paired32",
+            "asyncbarrier",
             "sync",
             "deferred",
             "reserved",

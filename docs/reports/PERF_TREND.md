@@ -713,3 +713,69 @@ Lock changes: ast-serialize 0.11.2→0.12.1, cuda-pathfinder 1.8.2→1.8.3, mark
 CPU gates under nice 15: M5 new-lock 8750 passed/20 skipped, M3 new-lock 8661 passed / 109 skipped (portability only); ruff check/format pass, mypy 0 new errors (897 existing baseline). Every reference clone attempted ff-only pull: 115 clones, 3 dirty skipped and 1 clean mlx-vlm divergence preserved; all others succeeded after retries. 32 entries re-justified with preserved copy provenance; 63 patched symbol source files old/new byte-identical, 4 stale AST fingerprints repaired. Vendor-check has no remaining source/self-check alerts; rc 1 is only huggingface-hub 2.1.1 excluded by tokenizers/datasets/diffusers <2.0. Private upstream review/backlog are intentionally untracked.
 
 Primary warm-decode median changes range -0.40% to +0.84%; cold/turn-2 TTFT -0.43% to +1.46%. The largest adverse primary value was DFlash 32K code turn-2, 820→832ms. Three additional reversed-order isolated-cell pairs did not reproduce it: old 824/822/833 ms, new 825/822/819 ms, medians 824→822 ms (-0.24%), all IDs equal and quiet/clean. Keep both datasets; no package pin or performance optimization claim.
+
+### 2026-10-04 — native APC restore handles (small but real cached win)
+
+M5 Max, same Jundot/Qwen3.8-27B-oQ4e-mtp checkpoint, MTP, RAM APC:
+restore exact native KVCache/ArraysCache through independent MLX copy-on-write
+handles, then reserve capacity directly from the stored prefix. Stores remain
+detached; custom/quantized cache adapters retain the upstream contract. This
+avoids an intermediate full-prefix clone, not all cache copies.
+
+Three interleaved quiet HTTP pairs against main242848ec, 256 generated tokens,
+identical requests and response digests in every phase:
+
+| 32K phase | main median ms | restore views median ms | paired savings ms |
+|---|---:|---:|---|
+| prose warm | 148 | 116 | 31 / 36 / 32 |
+| code warm | 241 | 210 | 32 / 35 / 29 |
+| prose turn-2 | 707 | 701 | -4 / 14 / 6 |
+| code turn-2 | 717 | 718 | -1 / 4 / -5 |
+
+Warm hits improve 21.6% / 12.9%; turn-2 pairs are mixed and the remaining
+32K turn-2 gap is not closed. Cold medians34096→34100ms prose and
+34140→34139ms code: no cold gain claimed. HTTP overhead medians1.40/1.45ms.
+Job1004-044738-00-prefill5-cow-main32k-r3-0452: rc0, final complete,
+three digest gates pass, six MTP servers, clean foreign CPU max243.6%<1620%.
+The older main1bddf9a2 warm-prose pairs also saved32/37/33ms; its cold
+outliers and mixed code-warm results are retained in the private report.
+
+Correctness:1004-045826-00-prefill5-cow-quality200-0501, rc0+complete,
+200/200 both arms, zero different raw token IDs or logprobs (modest arithmetic
+set, not a broad accuracy benchmark). Cold/partial/full APC gate
+1003-223727-00-prefill5-cow-identity32k-2236: tokens and all logprobs
+bit-equal, max_abs_dlp0. Native source/live bidirectional mutation, capacity,
+metadata, detached stores and custom fallback have CPU regressions. No new
+setting. Lossless activation is limited to the existing native singleton
+Qwen serving path; VM/round-driver admission is unchanged.
+
+### 2026-10-04 — restore views at 128K, with one invalid warm protocol
+
+Same M5/checkpoint/main reference as the 32K restore-view entry. Three quiet
+HTTP prose-warm pairs:478/474/505→346/328/330ms, savings132/146/175ms,
+median478→330ms (-31.0%), cached131078 on both arms. Every request/output
+digest matches. Job1004-050715-00-prefill5-cow-main128k-r3-0510:
+rc0+complete, six MTP servers, clean foreign CPU max355.5%<1620%.
+
+Preserve the negative evidence: COW code-warm rep1 missed APC (cached0)
+and re-prefilled in198178ms. Its warm comparison and following turn-2
+history are invalid; only two valid code pairs remain, so no three-rep
+code-warm/turn-2 improvement is claimed. Prose turn-2 pairs are mixed:
+1946/1813/1769→2274/1655/1638ms, savings-328/158/131ms. Cold has a
+3584ms prose regression outlier; no cold or uniform turn-2 gain claimed.
+The research matrix now rejects a missing expected warm/turn-2 APC hit,
+even when child rc0, final complete and all output digests match.
+
+Job1004-050740-00-prefill5-cow-identity128k-0512: rc0+complete;
+64-token cold/partial/full APC outputs and every logprob bit-equal,
+max_abs_dlp0. Partial cached131078, full cached131415. This is correctness
+evidence; its non-quiet times are not performance claims.
+
+Synchronized 32K attribution (not serving TTFT):
+1004-051142-00-prefill5-phase-main-cow32k-0518, rc0+complete, quiet clean.
+Warm clone+allocator38.71→9.27ms (one-copy lower bound≈8.75ms).
+Turn-2 clone+allocator43.41→31.14ms; prefill692.61→687.11ms and first
+raw generate107.44→102.27ms under per-layer barriers. The remaining
+allocator/copy gap and exact long-output first-visible-token path need
+further work; do not extrapolate these max16-token diagnostic timings to
+HTTP max256-token TTFT.

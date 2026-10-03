@@ -6,6 +6,22 @@ from types import SimpleNamespace
 from scripts.research.probe_checkpoint_http import assert_no_full_unit_suites
 
 
+def test_http_reference_does_not_inherit_production_cow(monkeypatch):
+    from scripts.research.probe_checkpoint_http import restore_experiment_launcher
+
+    from yunshu_engine.kernels import cache_restore
+
+    calls = []
+    monkeypatch.setattr(cache_restore, "install", lambda: calls.append("production"))
+    source = restore_experiment_launcher("reserved")
+    exec(compile(source, "research-reference", "exec"), {})
+    cache_restore.install()
+    assert calls == []
+    candidate = restore_experiment_launcher("cow")
+    assert candidate.startswith(source)
+    assert "from cow_restore import install" in candidate
+
+
 def test_http_arms_use_one_canonical_second_turn(monkeypatch, tmp_path):
     from scripts.research import probe_checkpoint_http as probe
 
