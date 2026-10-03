@@ -75,6 +75,19 @@ def is_mtp_capable(model_path: str) -> bool:
         return False
 
 
+def unindexed_mtp_warning(model_path: str) -> str | None:
+    """Explain an ignored standalone head without claiming it is loadable."""
+    heads = sorted(Path(model_path).glob("mtp-weights*.safetensors"))
+    if not heads or is_mtp_capable(model_path):
+        return None
+    return (
+        "MTP weights found outside a usable model.safetensors.index.json: "
+        + ", ".join(p.name for p in heads)
+        + "; native MTP is unavailable and may start with draft=off. "
+        "Use a checkpoint whose index lists its mtp.* tensors."
+    )
+
+
 @contextlib.contextmanager
 def _tolerant_target_load():
     """Scoped: let the TARGET ignore the embedded mtp.* keys it doesn't use

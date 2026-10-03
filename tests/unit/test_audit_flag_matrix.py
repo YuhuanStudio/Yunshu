@@ -223,3 +223,10 @@ def test_tiny_smoke_checkpoint_indexes_its_mtp_head(tmp_path):
             "weight_map"
         ]
     )
+
+
+def test_prompt_digest_accepts_serving_lists_and_array_like_inputs():
+    ids = [1, 2, 3]
+    assert audit.prompt_digest(ids) == audit.prompt_digest(
+        SimpleNamespace(tolist=lambda: ids)
+    )

@@ -226,3 +226,37 @@ def test_starved_backlog_job_ages_one_step(q, monkeypatch):
     assert q._pick([old, deep, fresh])["id"] == "old"
     young = dict(old, id="young", submitted=now - 60)
     assert q._pick([young, fresh])["id"] == "fresh"
+
+
+def test_aged_backlog_job_does_not_preempt_running_backlog(q):
+    now = 100_000.0
+    aged = dict(
+        id="aged", state="pending", priority=-1, submitted=now - q.AGE_S - 1, env={}
+    )
+    interactive = dict(id="p0", state="pending", priority=0, submitted=now, env={})
+    assert q._eff_priority(aged, now) == 0
+    assert [j["id"] for j in q._preempting([aged, interactive])] == ["p0"]
+
+
+def test_aged_running_backlog_job_is_not_preempted(q, monkeypatch):
+    now = 100_000.0
+    monkeypatch.setattr(q.time, "time", lambda: now)
+    aged = dict(
+        id="aged",
+        state="running",
+        priority=-1,
+        submitted=now - q.AGE_S - 1,
+        pid=1,
+        env={},
+    )
+    fresh = dict(
+        id="fresh", state="running", priority=-1, submitted=now - 60, pid=2, env={}
+    )
+    assert q._eff_priority(aged, now) == 0
+    assert q._eff_priority(fresh, now) == -1
+    q._write(q.JOBS / "aged.json", aged)
+    q.submit(["true"], "interactive", 1, 0)
+    pauser = q.Pauser(aged, q.JOBS / "aged.json")
+    monkeypatch.setattr(pauser, "_signal", lambda sig: None)
+    assert q._priority_step(pauser, q.ServingGate(), now) is False
+    assert not pauser.paused

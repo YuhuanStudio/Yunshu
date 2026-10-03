@@ -138,6 +138,11 @@ def free_port():
     raise RuntimeError("no free audit port")
 
 
+def prompt_digest(ids):
+    """Hash either serving lists or research MLX arrays consistently."""
+    return sha(ids.tolist() if hasattr(ids, "tolist") else ids)
+
+
 def launcher(port):
     # Instrument only this research server, never production engine files.
     import uvicorn
@@ -164,7 +169,7 @@ def launcher(port):
     def trace(self, ids, **kw):
         tokens, complete = [], False
         first = last = None
-        prompt_digest = sha(ids.tolist())
+        input_digest = prompt_digest(ids)
         start = count[0]
         try:
             for event in events(self, ids, **kw):
@@ -180,7 +185,7 @@ def launcher(port):
                 + json.dumps(
                     {
                         "tokens": tokens,
-                        "prompt_digest": prompt_digest,
+                        "prompt_digest": input_digest,
                         "decode_tps": (len(tokens) - 1) / (last - first)
                         if first and last and last > first
                         else None,
@@ -691,10 +696,12 @@ def validate_smoke(receipt, digest, areas):
 
 
 def main():
+    global TINY
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", type=Path)
     ap.add_argument("--areas", nargs="+", choices=AREAS, default=list(AREAS))
     ap.add_argument("--smoke", action="store_true")
+    ap.add_argument("--tiny-model", type=Path, help="Prepared quantized tiny MTP checkpoint")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--require-smoke", type=Path)
     ap.add_argument("--serve", type=int, help=argparse.SUPPRESS)
@@ -702,7 +709,9 @@ def main():
     if args.serve is not None:
         launcher(args.serve)
         return
-    if args.smoke:
+    if args.tiny_model:
+        TINY = args.tiny_model
+    elif args.smoke:
         ensure_tiny_mtp()
     if args.out is None:
         ap.error("--out required")
@@ -734,6 +743,7 @@ def main():
     result = {
         "complete": False,
         "source_sha": digest,
+        "smoke_checkpoint": str(TINY) if args.smoke else None,
         "areas": args.areas,
         "smoke": args.smoke,
         "dry_run": args.dry_run,

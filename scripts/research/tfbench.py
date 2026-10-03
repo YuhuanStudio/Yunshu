@@ -122,7 +122,11 @@ class Srv:
         t0 = time.time()
         while time.time() - t0 < 900:
             if self.proc.poll() is not None:
+                self.kill()
                 raise RuntimeError("server exited early")
+            if "FATAL:" in self.log.read_text(errors="replace"):
+                self.kill()
+                raise RuntimeError(f"server startup failed; see {self.log}")
             try:
                 with urllib.request.urlopen(self.url + "/v1/models", timeout=3) as r:
                     self.model = json.load(r)["data"][0]["id"]

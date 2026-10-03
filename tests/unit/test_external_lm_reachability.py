@@ -137,3 +137,40 @@ async def test_external_draft_falls_back_for_unimplemented_parameters(
         is expected
     )
     engine._generate_speculative.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_spec_prompt_array_and_seed_are_created_on_executor(monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    import mlx.core as mx
+
+    from yunshu_engine import mlx_executor
+
+    engine = engine_with_plain_config({"model_type": "qwen2"})
+    thread_ids = []
+    detok = SimpleNamespace(
+        reset=lambda: None, add_token=lambda _t: None, finalize=lambda: None, text="ok"
+    )
+    engine._tokenizer.detokenizer = detok
+    engine._spec_decoder = SimpleNamespace(
+        constraint=None, generate=lambda **kw: [4, 5]
+    )
+    main_thread = threading.get_ident()
+
+    def array(ids):
+        thread_ids.append(threading.get_ident())
+        assert threading.get_ident() != main_thread
+        return SimpleNamespace(reshape=lambda *_: ids)
+
+    monkeypatch.setattr(mx, "array", array)
+    monkeypatch.setattr(
+        mx.random, "seed", lambda _s: thread_ids.append(threading.get_ident())
+    )
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        monkeypatch.setattr(mlx_executor, "get_mlx_executor", lambda: executor)
+        result = await engine._generate_speculative("hello", max_tokens=2, seed=42)
+    assert result.finish_reason == "length"
+    assert len(thread_ids) == 2
+    assert len(set(thread_ids)) == 1

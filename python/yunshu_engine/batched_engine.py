@@ -697,7 +697,7 @@ class BatchedEngine(
         # unchanged.)
 
         # Initialize speculative decoding if model supports it (Phase 4)
-        self._init_spec_decode()
+        await loop.run_in_executor(executor, self._init_spec_decode)
 
         # Initialize LoRA adapter manager
         self._init_lora()

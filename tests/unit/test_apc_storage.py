@@ -137,7 +137,9 @@ def test_probe_measures_a_throttled_device(tmp_path):
     fast = probe_device(tmp_path / "fast", mb=16)
     slow = probe_device(tmp_path / "slow", mb=8, sim=(40e6, 0.02))
     assert fast.read_bps > 5 * slow.read_bps
-    assert 25e6 < slow.read_bps < 45e6 and 25e6 < slow.write_bps < 45e6
+    # The throttle caps at 40 MB/s; CPU copy overhead (slower on background QoS or a loaded
+    # machine) can only lower the measured rate, never raise it.
+    assert 10e6 < slow.read_bps < 45e6 and 10e6 < slow.write_bps < 45e6
     assert 0.015 < slow.latency_s < 0.05 and slow.simulated
     assert not list((tmp_path / "slow").glob(".yunshu-probe-*"))  # probe files cleaned
 

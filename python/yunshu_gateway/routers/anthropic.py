@@ -226,6 +226,7 @@ class AnthropicMessagesRequest(BaseModel):
     stop_sequences: list[str] | None = None
     system: str | list[dict] | None = None
     thinking: dict | None = None
+    cache_control: dict | None = None
     metadata: dict | None = None
     tools: list[AnthropicTool] | None = None
     tool_choice: dict | str | None = None
@@ -433,7 +434,8 @@ def _extract_text_from_content(content: str | list[dict] | None) -> str:
             parts.append(block.get("thinking", ""))
 
         else:
-            parts.append(str(block))
+            clean = {k: v for k, v in block.items() if k != "_yunshu_cache_marker"}
+            parts.append(str(clean) + block.get("_yunshu_cache_marker", ""))
 
     return "\n".join(parts)
 
@@ -535,7 +537,11 @@ def _convert_anthropic_messages(
                         {
                             "id": tool_id,
                             "type": "function",
-                            "function": {"name": tool_name, "arguments": _args},
+                            "function": {
+                                "name": tool_name
+                                + block.get("_yunshu_cache_marker", ""),
+                                "arguments": _args,
+                            },
                         }
                     )
                 else:
@@ -693,6 +699,10 @@ def _convert_anthropic_messages(
                 else:
                     text = _extract_text_from_content([block])
                     converted_parts.append({"type": "text", "text": text})
+                if block.get("_yunshu_cache_marker") and converted_parts:
+                    converted_parts[-1]["_yunshu_cache_marker"] = block[
+                        "_yunshu_cache_marker"
+                    ]
             intermediate.append({"role": role, "content": converted_parts})
 
         else:
@@ -812,7 +822,7 @@ def _convert_image_block(
         intermediate.append({"role": "user", "content": f"[Image: {media_type}]"})
 
 
-def _cacheable_prefix_token_count(system, char_offsets, tokenizer) -> int:
+def _cacheable_prefix_token_count(system, char_offsets, tokenizer, plan=None) -> int:
     """Tokens in the system text up to the LAST cache_control breakpoint — the portion
     Anthropic bills as cache_creation_input_tokens (everything after it is plain
     input_tokens). Best-effort: the offsets are character positions in the
@@ -820,6 +830,8 @@ def _cacheable_prefix_token_count(system, char_offsets, tokenizer) -> int:
     space — but that is far better than the old behavior of billing the ENTIRE uncached
     prompt as cache_creation (which reported input_tokens=0 on a first cache_control call).
     """
+    if plan is not None:
+        return int(plan.get("written", 0))
     if not char_offsets or tokenizer is None or not isinstance(system, list):
         return 0
     # Reassemble exactly as _extract_cache_control_hints measured the offsets:
@@ -1031,6 +1043,14 @@ def _apply_native_tools(req, engine) -> bool:
     return False
 
 
+def _cache_kw(req, engine) -> dict:
+    # The text fast path still consumes legacy character hints; avoid passing
+    # a new argument to engines that have not adopted the renderer contract.
+    if hasattr(engine, "_runner_input"):
+        return {"prompt_cache_plan": getattr(req, "_prompt_cache_plan", None)}
+    return {}
+
+
 def _native_kw(req) -> dict:
     tools = getattr(req, "_native_tools", None)
     if not tools:
@@ -1116,6 +1136,13 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     # char_offsets are cumulative character positions in the system text
     # where the engine should save KV prefix cache entries.
     _cache_hints, _kv_cache_breakpoints = _extract_cache_control_hints(req.system)
+    req._anthropic_orig_system = req.system
+    from yunshu_engine.prompt_caching import mark_anthropic
+
+    try:
+        req._prompt_cache_plan = mark_anthropic(req)  # type: ignore[attr-defined]
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if _kv_cache_breakpoints:
         logger.debug(
             "Anthropic cache_control breakpoints (char offsets): %s",
@@ -1172,7 +1199,6 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     # form to locate the cache_control breakpoint, so the cache_creation_input_tokens
     # logic was DEAD once req.system became a string here (the helper returns 0 for a str) —
     # cache_creation_input_tokens was always 0 even with cache_control breakpoints.
-    req._anthropic_orig_system = req.system
     if _all_system:
         req.system = "\n\n".join(_all_system)
         # Re-prepend ONE canonical system message so it actually reaches the
@@ -1373,6 +1399,18 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     _pending_tools = getattr(req, "_tool_prompt_pending", "")
     if _pending_tools and not _apply_native_tools(req, engine):
         messages = _inject_tool_prompt(messages, _pending_tools)
+
+    from yunshu_engine.prompt_caching import strip_markers
+
+    _plan = getattr(req, "_prompt_cache_plan", None)
+    assert _plan is not None
+    _plan["messages"] = messages
+    messages = strip_markers(messages, _plan["markers"])
+    req.system = strip_markers(req.system, _plan["markers"])
+    req.messages = [
+        m.model_copy(update={"content": strip_markers(m.content, _plan["markers"])})
+        for m in req.messages
+    ]
 
     # Reject prompts over the context window (400) or too large to prefill (413),
     # before we attempt generation (chat.py). Covers stream +
@@ -1630,6 +1668,7 @@ async def _non_stream_batched(
             timeout_seconds=req.timeout,
             lora_adapter=lora_adapter,
             kv_cache_breakpoints=kv_cache_breakpoints,
+            **_cache_kw(req, engine),
         )
         # disconnect guard — set cancel_event on client disconnect so the engine
         # decode loop stops (was: registered cancel_event but never polled is_disconnected
@@ -1786,6 +1825,7 @@ async def _non_stream_batched(
             getattr(req, "_anthropic_orig_system", req.system),
             kv_cache_breakpoints,
             _cache_tok,
+            getattr(req, "_prompt_cache_plan", None),
         ),
     )
     reasoning_tok = getattr(result, "reasoning_tokens", 0) or 0
@@ -1888,6 +1928,7 @@ async def _non_stream_legacy(
             timeout_seconds=req.timeout,
             lora_adapter=lora_adapter,
             kv_cache_breakpoints=kv_cache_breakpoints,
+            **_cache_kw(req, engine),
         )
         # disconnect guard (see _non_stream_batched).
         if request is not None:
@@ -2050,6 +2091,7 @@ async def _non_stream_legacy(
             getattr(req, "_anthropic_orig_system", req.system),
             kv_cache_breakpoints,
             _lg_cache_tok,
+            getattr(req, "_prompt_cache_plan", None),
         ),
     )
     _legacy_usage: dict[str, Any] = {
@@ -2167,6 +2209,7 @@ async def _stream_anthropic(
             getattr(req, "_anthropic_orig_system", req.system),
             kv_cache_breakpoints,
             _ms_tok,
+            getattr(req, "_prompt_cache_plan", None),
         )
         _ms_input, cache_creation, cache_read = _anthropic_cache_usage(
             inp_tokens, cached_toks, _ms_cacheable
@@ -2247,6 +2290,7 @@ async def _stream_anthropic(
                 timeout_seconds=req.timeout,
                 lora_adapter=lora_adapter,
                 kv_cache_breakpoints=kv_cache_breakpoints,
+                **_cache_kw(req, engine),
             ):
                 # Use engine's current_state (token-level tracking) for
                 # thinking routing — more accurate than text-level ThinkingParser
@@ -2536,6 +2580,7 @@ async def _stream_anthropic(
                 timeout_seconds=req.timeout,
                 lora_adapter=lora_adapter,
                 kv_cache_breakpoints=kv_cache_breakpoints,
+                **_cache_kw(req, engine),
             ):
                 if getattr(output, "error", None):
                     raise EngineStreamError(str(output.error))
@@ -2803,6 +2848,7 @@ async def _stream_anthropic(
                 kv_cache_breakpoints,
                 getattr(engine, "_tokenizer", None)
                 or getattr(engine, "tokenizer", None),
+                getattr(req, "_prompt_cache_plan", None),
             ),
         )
         _delta_usage: dict = {

@@ -185,3 +185,29 @@ def test_cpu_preflight_checks_legacy_tag_without_starting_server(
     assert len(prompts) == 6
     assert '"requested_spec_mode": "dflash"' in capsys.readouterr().out
     assert not (tmp_path / "result.jsonl").exists()
+
+
+def test_fatal_startup_does_not_spend_queue_time_polling(monkeypatch, tmp_path):
+    monkeypatch.setattr(tfbench, "OUT", tmp_path)
+    monkeypatch.setattr(tfbench, "free_port", lambda: 18999)
+
+    class Proc:
+        def poll(self):
+            return None
+
+    def launch(_cmd, **kw):
+        kw["stdout"].write(b"FATAL: model load failed: hidden-size mismatch\n")
+        kw["stdout"].flush()
+        return Proc()
+
+    monkeypatch.setattr(tfbench.subprocess, "Popen", launch)
+    monkeypatch.setattr(
+        tfbench.urllib.request,
+        "urlopen",
+        lambda *_a, **_kw: pytest.fail("polled fatal server"),
+    )
+    killed = []
+    monkeypatch.setattr(tfbench.Srv, "kill", lambda s: killed.append(s.proc))
+    with pytest.raises(RuntimeError, match="startup failed"):
+        tfbench.Srv("yunshu", {}, "fatal")
+    assert len(killed) == 1

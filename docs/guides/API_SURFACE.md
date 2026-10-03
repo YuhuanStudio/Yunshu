@@ -301,3 +301,29 @@ is whitespace-trimmed, a stream's concatenated deltas are not.
 - **`top_k`** at or above the vocabulary size means "no truncation" (no error); `0` disables it.
 - **`n > 1`** choice `i` uses seed `seed + i` wrapped to signed 64 bits (choice 0 keeps `seed`),
   identically on chat, completions and responses.
+
+Prompt-cache boundaries on the VLM runner are resolved against the full rendered
+chat template. Anthropic `cache_control` on system text blocks, native tool
+JSON definitions, message text, text documents and tool-result text creates an
+exact hybrid checkpoint at that token endpoint. Top-level automatic
+`cache_control` moves to the last eligible block. Up to four writes, `5m` and
+`1h` inactivity TTLs are supported; a successful read refreshes TTL. RAM and
+entry budgets can evict an endpoint earlier. A marker inside a BPE token keeps
+that token in the uncached suffix. Diagnostic rendering must reproduce the
+original prompt exactly. Image placeholder expansions are verified against the
+processor's actual token IDs; an endpoint inside a media span is rejected.
+
+`cache_creation_input_tokens` counts only successfully stored breakpoint tokens
+beyond the restored prefix. `cache_read_input_tokens` counts the actual restored
+prefix; those two fields plus `input_tokens` equal the rendered prompt length.
+OpenAI chat/Responses `cached_tokens` is the actual restored token count, without
+cloud billing rounding. OpenAI text content blocks carrying
+`prompt_cache_breakpoint: {"mode": "explicit"}` use the same renderer mapping.
+Automatic APC remains available without hints. Proprietary cloud model minimum
+lengths, cloud billing rates and guaranteed 24-hour residency are not emulated.
+The text fast path retains its older character-hint contract.
+
+Explicit endpoints have a separate numerical cache identity. Their suffixes
+finish the same absolute prefill spans as a cold request; restores from a
+different earlier breakpoint plan are rejected. These endpoints are retained
+within this process's bounded APC policy; a restart may require a new write.

@@ -368,11 +368,6 @@ class EngineSpeculativeMixin:
             input_ids = tokenizer.encode(text)
         import mlx.core as mx
 
-        if seed is not None:
-            mx.random.seed(seed)
-
-        input_array = mx.array(input_ids).reshape(1, -1)
-
         # Build EOS + stop token sets
         eos_ids = set()
         if hasattr(tokenizer, "eos_token_id"):
@@ -422,6 +417,11 @@ class EngineSpeculativeMixin:
         _lora_applied = False
 
         def _run_spec():
+            # Arrays retain their creating stream; create and seed them on the
+            # same executor thread that evaluates the speculative graph.
+            if seed is not None:
+                mx.random.seed(seed)
+            input_array = mx.array(input_ids).reshape(1, -1)
             token_ids = decoder.generate(
                 input_ids=input_array,
                 max_tokens=max_tokens,

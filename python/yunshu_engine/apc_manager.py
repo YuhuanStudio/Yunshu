@@ -425,11 +425,133 @@ class Lookup:
 class _Coordinator(APCCoordinator):
     """Checkpoint positions: the prompt end, one interval boundary, the end of the system turn."""
 
-    def checkpoint_lengths(self, token_ids, media_token_ids):
+    def set_request(self, token_ids, policy):
+        if policy is None:
+            return
+        # Bounded by live queued/prefilling rows, not a lossy LRU of active
+        # descriptors. Identical tokens may have different write/retention intent.
+        policies = self.__dict__.setdefault("_requests", {})
+        policies.setdefault(tuple(token_ids), collections.deque()).append(policy)
+
+    def request(self, token_ids):
+        pending = self.__dict__.get("_requests", {}).get(tuple(token_ids))
+        return pending[0] if pending else None
+
+    def release_request(self, token_ids, policy):
+        policies = self.__dict__.get("_requests", {})
+        tokens = tuple(token_ids)
+        pending = policies.get(tokens)
+        if pending is None:
+            return
+        for i, queued in enumerate(pending):
+            if queued is policy:
+                del pending[i]
+                break
+        if not pending:
+            policies.pop(tokens, None)
+
+    def lookup(self, token_ids, **kwargs):
+        policy = self.request(token_ids)
+        if not policy or not self.is_checkpoint:
+            return super().lookup(token_ids, **kwargs)
+        points = self.checkpoint_lengths(token_ids, set(), begin=False)
+        candidates = policy.get("lookup_points", [n for n, _ in policy["points"]])
+        maximum = max(candidates, default=0)
+        extra_hash = kwargs["extra_hash"]
+        while maximum > 0:
+            cache, n = self.manager.lookup_exact_cache(
+                token_ids,
+                extra_hash=extra_hash,
+                max_prefix_tokens=maximum,
+                min_prefix_tokens=kwargs.get("safe_lookup_min", 0),
+                refresh_retention=False,
+            )
+            if cache is None or not n:
+                return None
+            key = _sequence_hash(
+                tuple(token_ids[:n]), extra_hash, self.manager.block_size
+            )
+            # Restoring at a noncanonical point, or from a different earlier
+            # split plan, changes the hybrid recurrence's numerical spans.
+            signature = tuple(p for p in points if p < n and p % 2048)
+            source = self.manager._span_plans.get(key)
+            if (
+                (n in candidates)
+                and source == signature
+                and kwargs["suffix_is_text_only"](n)
+            ):
+                self.manager.touch_boundary(token_ids[:n], extra_hash)
+                return {
+                    "matched_blocks": [],
+                    "warm_cache": cache,
+                    "prefix_len": n,
+                    "extra_hash": extra_hash,
+                    "full_input_ids": list(token_ids),
+                }
+            maximum = n - 1
+        return None
+
+    def store_checkpoint(
+        self, token_ids, prompt_cache, *, batch_idx=None, extra_hash=0
+    ):
+        tokens = tuple(token_ids)
+        current = self.request(getattr(self, "_current_ids", tokens))
+        if current is not None and len(tokens) not in {
+            n for n, _ in current.get("writes", current["points"])
+        }:
+            return False
+        matched = []
+        if current is not None:
+            matched.append(current)
+        ok = super().store_checkpoint(
+            tokens, prompt_cache, batch_idx=batch_idx, extra_hash=extra_hash
+        )
+        if ok and matched:
+            for policy in matched:
+                duration = next(
+                    ttl
+                    for n, ttl in policy.get("writes", policy["points"])
+                    if n == len(tokens)
+                )
+                self.manager.protect_boundary(tokens, extra_hash, duration)
+            # Source span identity is bounded with the resident/known entries.
+            full_ids = getattr(self, "_current_ids", tokens)
+            points = self.checkpoint_lengths(full_ids, set(), begin=False)
+            key = _sequence_hash(tokens, extra_hash, self.manager.block_size)
+            self.manager._span_plans[key] = tuple(
+                p for p in points if p < len(tokens) and p % 2048
+            )
+            while len(self.manager._span_plans) > _BORN_MAX:
+                self.manager._span_plans.pop(next(iter(self.manager._span_plans)))
+            for policy in matched:
+                policy["written"] = max(policy.get("written", 0), len(tokens))
+        return ok
+
+    def checkpoint_lengths(self, token_ids, media_token_ids, *, begin=True):
+        if begin:
+            self._current_ids = tuple(token_ids)
         final = self.checkpoint_len(token_ids, media_token_ids)
         if final <= 0:
             return []
         mgr = self.manager
+        policy = self.request(token_ids)
+        if policy:
+            from mlx_vlm.apc import adjust_prefix_to_text_suffix_boundary
+
+            lengths = []
+            for n, _ in policy["points"]:
+                safe = adjust_prefix_to_text_suffix_boundary(
+                    token_ids, n, media_token_ids, max_prefix_tokens=final
+                )
+                if safe != n:
+                    raise ValueError(
+                        "cache breakpoint cuts a media span or final guard"
+                    )
+                if n >= mgr.exact_cache_min_tokens:
+                    lengths.append(n)
+            if begin:
+                mgr.begin_request()
+            return sorted(set(lengths))
         lengths = {final}
         interval = mgr.checkpoint_interval_tokens
         if interval > 0 and mgr.keep_interval_checkpoint:
@@ -458,7 +580,8 @@ class _Coordinator(APCCoordinator):
         if head and mgr.exact_cache_min_tokens <= head < final:
             lengths.add(head)
             mgr.note_head(token_ids[:head])
-        mgr.begin_request()
+        if begin:
+            mgr.begin_request()
         return sorted(lengths)
 
 
@@ -481,6 +604,11 @@ class YunshuAPCManager(APCManager):
         self.keep_interval_checkpoint = keep_interval_checkpoint
         self.lookups: collections.deque[Lookup] = collections.deque(maxlen=64)
         self._generation = 0
+        # Explicit endpoints are protected against superseding until their
+        # inactivity TTL expires, always within the existing byte/entry budgets.
+        self._retention: dict[int, tuple[float, int]] = {}
+        self._span_plans: dict[int, tuple[int, ...]] = {}
+        self._expired_boundaries: set[int] = set()
         self._born: dict[int, int] = {}
         self._head_keys: set[int] = set()
         self._head_lengths: set[int] = set()
@@ -565,7 +693,7 @@ class YunshuAPCManager(APCManager):
         process did not store or restore itself (it may serve another session)."""
         with self._plock:
             newest = self._born.get(cache_hash)
-            heads = set(self._head_keys)
+            heads = set(self._head_keys) | set(self._retention)
         disk = self.disk
         if newest is None or disk is None:
             return
@@ -714,6 +842,51 @@ class YunshuAPCManager(APCManager):
                 return i
         return 0
 
+    def checkpoint_ready(self, token_ids, extra_hash):
+        """Publication receipt without cloning/evaluating a checkpoint."""
+        if extra_hash is None:
+            return False
+        self._expire_boundaries()
+        tokens = tuple(token_ids)
+        key = _sequence_hash(tokens, extra_hash, self.block_size)
+        with self.lock:
+            entry = self._exact_cache.get(key)
+            return bool(
+                entry is not None
+                and entry.token_ids == tokens
+                and entry.extra_hash == extra_hash
+            )
+
+    def protect_boundary(self, token_ids, extra_hash, duration):
+        key = _sequence_hash(tuple(token_ids), extra_hash, self.block_size)
+        self._retention[key] = (time.monotonic() + duration, duration)
+        self._expired_boundaries.discard(key)
+        # Only resident/bookkept entries need intent. Bound descriptor memory.
+        if len(self._retention) > _BORN_MAX:
+            self._retention = {
+                k: v for k, v in self._retention.items() if v[0] > time.monotonic()
+            }
+
+    def touch_boundary(self, token_ids, extra_hash):
+        key = _sequence_hash(tuple(token_ids), extra_hash, self.block_size)
+        if key in self._retention:
+            duration = self._retention[key][1]
+            self._retention[key] = (time.monotonic() + duration, duration)
+
+    def _expire_boundaries(self):
+        now = time.monotonic()
+        expired = [k for k, (deadline, _) in self._retention.items() if deadline <= now]
+        for key in expired:
+            self._retention.pop(key, None)
+            self._expired_boundaries.add(key)
+            self._span_plans.pop(key, None)
+            with self.lock:
+                self._exact_cache.pop(key, None)
+            if self.warm is not None:
+                self.warm.take(key)
+            if isinstance(self.disk, SpillDiskStore):
+                self.disk.drop_exact(key)
+
     def begin_request(self) -> None:
         with self._plock:
             self._generation += 1
@@ -762,6 +935,7 @@ class YunshuAPCManager(APCManager):
                     entry.extra_hash != extra_hash
                     or len(stored) >= len(tokens)
                     or key in self._head_keys
+                    or key in self._retention
                     or self._born.get(key, gen) >= gen
                     or tokens[: len(stored)] != stored
                 ):
@@ -772,13 +946,15 @@ class YunshuAPCManager(APCManager):
                 dropped += 1
         if self.warm is not None:
             with self._plock:
-                keep = set(self._head_keys)
+                keep = set(self._head_keys) | set(self._retention)
             dropped += self.warm.supersede(tokens, extra_hash, gen, keep)
         if dropped:
             logger.debug("APC: superseded %d earlier checkpoint(s)", dropped)
 
     # ── provenance ─────────────────────────────────────────────────────
     def lookup_exact_cache(self, token_ids, *args, **kwargs):
+        refresh_retention = kwargs.pop("refresh_retention", True)
+        self._expire_boundaries()
         before = self.stats.disk_hits
         t0 = time.perf_counter()
         if self.warm is not None:
@@ -791,6 +967,23 @@ class YunshuAPCManager(APCManager):
             ]
             self._promote_warm(tokens, int(vals[0]), vals[1], vals[2])
         cache, n = super().lookup_exact_cache(token_ids, *args, **kwargs)
+        extra = self._extra_of(args, kwargs)
+        # A background spill may finish after drop_exact saw a busy writer.
+        # Tombstones veto resurrection without touching a request's live state.
+        while (
+            n
+            and _sequence_hash(tuple(token_ids[:n]), extra, self.block_size)
+            in self._expired_boundaries
+        ):
+            maximum = n - 1
+            retry = dict(kwargs, max_prefix_tokens=maximum)
+            positional = list(args)
+            if len(positional) > 1:
+                positional[1] = maximum
+                retry.pop("max_prefix_tokens")
+            cache, n = super().lookup_exact_cache(token_ids, *positional, **retry)
+        if n and refresh_retention:
+            self.touch_boundary(token_ids[:n], extra)
         ms = (time.perf_counter() - t0) * 1000.0
         tier = ("ssd" if self.stats.disk_hits > before else "ram") if n else "none"
         if n and self._promoted is not None and self._promoted[0] == n:
