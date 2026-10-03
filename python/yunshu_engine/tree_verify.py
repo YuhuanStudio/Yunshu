@@ -53,6 +53,11 @@ NARROW_ROWS = (
 CK = ra.CHUNK
 
 
+def _tree_tail_capacity(live_keys: int) -> int:
+    """Physical tail rows covering every live 64-key tile."""
+    return ((live_keys + 63) // 64) * 64
+
+
 class TreeShape:
     """Parent structure of a window (host side) with its cached index tables."""
 
@@ -625,7 +630,10 @@ def tree_attention(
         starts_a = _zeros((w,), mx.int32)
 
     # window chunk(s): one row per node over a gathered copy of the tail
-    cap2 = ntail * CK
+    # Keep CK-sized partials and their reduction order, but only materialize
+    # complete 64-key tiles containing live keys. The tile kernel's last load
+    # still begins at the same address; masked CK padding needs no backing rows.
+    cap2 = _tree_tail_capacity(m + shape.max_depth + 1)
     hkv_keys = keys[0]  # [HKV, CAP, D]
     hkv_vals = values[0]
     win_k = (
@@ -803,6 +811,17 @@ def tree_forward(
                 normed = nxt(h)
         if i in capture:
             res.captured.append(h)
+        # Submit the unchanged graph while later layers are being built. The
+        # first layer starts the drafter/verify dependency promptly; four-layer
+        # chunks avoid a separate submission for every decoder layer.
+        if (i == 0 or (i + 1) % 4 == 0) and i + 1 < len(layers):
+            try:
+                mx.async_eval(h, normed)
+            except BaseException:
+                # Early evaluation can fail before the round loop receives
+                # TreeResult. Restore appended KV lengths here in that case.
+                tree_abort(cache, res)
+                raise
     res.hidden = model.norm(h)
     return res
 

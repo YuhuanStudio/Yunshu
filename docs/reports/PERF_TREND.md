@@ -582,3 +582,23 @@ Job `1003-161523-00-wide4-timing-bundle-1615` rc0，quiet clean（foreign max330
 小但真實：8K prose +0.72%，1K prose -0.05%如實記錄；code三格+10.32–13.51%。固定block也有貢獻，不能把全部增益歸因copy。1K code commits/round約4.72→5.20；仍未追上TF歷史7.1/49ms，不宣稱gap已全關。
 
 Correctness `1003-161523-00-wide4-correctness-bundle-1615` rc0/complete：200 paired code/sentence echo items，AR與candidate各200/200 correct，raw-ID digest全同、net correct差0。`1003-172719-00-wide4-http-default-smoke-1731` rc0/complete：actual serving DFlash、copy16/0、APC warm cached1033、repeat、newline stop內容digest都等於AR；copy16實際7rounds/97published tokens、copy0無copy。此HTTP是nonquiet correctness smoke，不採其tok/s/TTFT作效能claim。
+
+
+## 2026-10-03 — wide5: tree verifier round submission and compact tail
+
+The optional tree verifier now submits the first decoder layer and each four-layer boundary without changing arithmetic, and allocates only the live 64-key tiles in its gathered tail while retaining CK512 partials and reduction order. Early submission failures roll back recorded KV appends. The serving default remains trained block8 + copy: a deep tree does not beat that policy at every context.
+
+Evidence: `1003-190158-00-wide5-matrix-r3-06`, rc0/final complete, quiet clean (foreign CPU max223.8% <1620%, no pauses), 256 generated tokens, three interleaved repetitions, same Qwen3.8-27B-oQ4e-mtp target and q8 DFlash2. This is a research deep15-node/15-position tree with GPU best-first search and integer ancestry planning, evaluated through the same verifier primitives; it is not a claim that the serving tree flag selects this proposal recipe. Frozen baseline core is 6646c663 (41724308 adds only the evidence analyzer), source SHA256 f8c7dd75cb6d87eb46b8409e9f06ca6092d7826455ceb4ac3037fee721531f53. All 72 spec arms have raw-ID digests identical to AR.
+
+| Context/task | main chain8+copy16 tok/s | original deep verifier | pipeline | pipeline+compact | compact increment over pipeline |
+|---|---:|---:|---:|---:|---:|
+| 1K code | 104.230 | 100.960 | 112.319 | 114.147 | +1.63% |
+| 1K prose | 52.581 | 57.062 | 63.243 | 64.370 | +1.78% |
+| 8K code | 83.732 | 68.311 | 72.961 | 77.487 | +6.20% |
+| 8K prose | 51.452 | 48.691 | 52.800 | 53.249 | +0.85% |
+| 32K code | 81.304 | 51.331 | 55.458 | 56.054 | +1.07% |
+| 32K prose | 46.301 | 35.536 | 38.761 | 40.419 | +4.28% |
+
+Medians, not cold-start promises. At 1K code commits/round stays 6.538; round latency 64.763 -> 58.213 -> 57.281ms, recovering 7.482ms. The first compact code repetition costs 83.862ms/round, so its steady median must not be substituted for the first request. Outside 1K the latency-aware node controller can change grouping/acceptance; the compact increment is E2E, not solely a memory-copy attribution. Small but real: 8K prose +0.85% versus the same pipeline tree. Versus main, fast deep tree wins 1K code/prose +9.51/+22.42%, but loses 8K code -7.46%, 32K code/prose -31.06/-12.70%; no global deep-tree promotion.
+
+`1003-190158-00-wide5-quality200-07`: nonquiet correctness, rc0/complete, 200 paired questions, AR200/200 and fast tree200/200, net difference0 and every digest identical. CPU regression tests cover early submissions, live tile addresses and failure rollback. Per-op barrier profiles for our path and TF q8 are diagnostics only: their added synchronizations destroy overlap and are not production round timing. The remaining gap to TF is not claimed closed. Artifacts: `/Volumes/P5Plus/yunshu-build/codex/wide5/matrix-summary.json`, `matrix-r3.jsonl`, `quality200.jsonl`.
