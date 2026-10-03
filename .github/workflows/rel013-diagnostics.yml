@@ -20,8 +20,3 @@ jobs:
           sw_vers
           system_profiler SPDisplaysDataType
           uv run python scripts/dev/rel013_probe.py
-      - name: Focused regressions
-        run: uv run pytest tests/unit/test_apc_manager_e2e.py tests/unit/test_keyed_sampling.py tests/unit/test_apc_warm.py -vv --tb=long
-      - name: Full unit suite
-        if: always()
-        run: uv run pytest tests/unit -q --tb=short
