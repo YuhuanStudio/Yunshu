@@ -8,8 +8,8 @@ body:
         Thanks for taking the time to file a bug! A few things that help us triage faster:
         - Yunshu is **single-node, single-consumer, Apple Silicon only**. Issues about multi-node
           clustering or multi-tenant throughput are likely out of scope (see README "non-goals").
-        - The owner is actively refactoring `python/yunshu_engine/` — if your bug is in the omni
-          engine, mention the file so we can route it.
+        - Report vulnerabilities privately using SECURITY.md, never in this form.
+        - Remove credentials, prompts and personal paths from attached logs.
 
   - type: textarea
     id: what-happened
@@ -58,12 +58,14 @@ body:
     id: env
     attributes:
       label: Environment
-      description: Run `yunshu diagnose` if it boots, otherwise fill these in by hand.
+      description: Run `yunshu diagnose` if it boots; review/redact before attaching. Include dependency versions and exact checkpoint revision.
       placeholder: |
         - macOS / chip:    (e.g. macOS 15.2, M3 Max)
         - Python:
         - Yunshu version:  (`pip show yunshu` or git SHA)
-        - Model + quant:
+        - Model + revision + quant:
+        - MLX / mlx-lm / mlx-vlm versions:
+        - Cold / repeated / follow-up request; speculative mode if known:
     validations:
       required: true
 

@@ -83,8 +83,7 @@ jobs:
           path: dist/
       - name: Release notes from CHANGELOG.md
         run: |
-          v="${GITHUB_REF_NAME#v}"
-          awk -v v="$v" 'index($0, "## [" v "]") == 1 {f=1; next} /^## \[/ {f=0} f' CHANGELOG.md > notes.md
+          python3 scripts/release/notes.py "${GITHUB_REF_NAME#v}" --output notes.md
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -52,6 +52,7 @@ import fcntl
 import json
 import math
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -499,7 +500,20 @@ def _pick(jobs: list[dict], eligible=None) -> dict | None:
         if "started" in j:
             o = _owner(j)
             last[o] = max(last.get(o, 0.0), j["started"])
-    return min(pending, key=lambda j: (last.get(_owner(j), 0.0), j["submitted"]))
+    # Short correctness checks (tiny / smoke / dry-run labels) go first within a
+    # priority: they take a minute and unblock a worker's next step, while a
+    # 27B timing job behind them barely moves.
+    return min(
+        pending,
+        key=lambda j: (not _is_short(j), last.get(_owner(j), 0.0), j["submitted"]),
+    )
+
+
+_SHORT = re.compile(r"(^|[-_])(tiny|smoke|dry)([-_]|$)", re.I)
+
+
+def _is_short(job: dict) -> bool:
+    return bool(_SHORT.search(job.get("label") or ""))
 
 
 def _new_id(label: str) -> str:

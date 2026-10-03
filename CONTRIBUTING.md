@@ -40,8 +40,9 @@ just test              # unit suite (integration tests are opt-in, ignored by de
 just test-single tests/unit/test_foo.py   # one file
 ```
 
-Run `just dev` to start the gateway on `:8000` against a local model. CI runs
-`ruff check python/ tests/` + `pytest tests/unit -q` on every push — keep that green.
+Run `just dev` to start the gateway on `:8000` against a local model. CI runs lint and package checks on pushes/PRs; the macOS unit suite runs on
+release/manual triggers. Run the full unit suite locally before handoff. See
+[the hardware validation plan](docs/guides/HARDWARE_VALIDATION.md) for planned coverage.
 
 ## Where things live
 
@@ -87,3 +88,22 @@ Open a PR against `main`. Include:
 
 By contributing, you agree that your contributions will be licensed under the
 [Apache License 2.0](LICENSE).
+
+
+## Review expectations
+
+Keep changes focused and explain the user-visible before/after behavior. Fixes
+need a regression test that fails before the fix. Document commands, results and
+anything unverified; doc-only changes do not need model benchmarks. Disclose AI
+assistance and review the result yourself, including sources and license notices.
+
+A reviewer checks correctness, project scope, compatibility, failure/cancellation
+behavior and evidence before recommending a merge. Maintainers resolve substantive
+objections and record tradeoffs. Hot-path changes need same-checkpoint output
+checks and end-to-end measurements; a faster isolated kernel alone is insufficient.
+
+Public settings belong in the settings registry; regenerate CONFIGURATION.md.
+List API/CLI/default changes and migration steps in Unreleased. Stable interfaces
+follow the [deprecation policy](RELEASING.md#compatibility-and-deprecation-policy).
+Large architecture changes use the [RFC process](docs/ROADMAP.md#lightweight-rfc-process).
+Triage uses the [label vocabulary](.github/LABELS.md).

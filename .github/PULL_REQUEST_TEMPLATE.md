@@ -1,23 +1,27 @@
-<!-- Thanks for contributing to Yunshu! Keep PRs focused; coordinate before large
-     engine-side changes (python/yunshu_engine/ is actively refactored). -->
+<!-- Keep this description understandable without the original discussion. -->
+## Problem and resulting behavior
 
-## What & why
+<!-- Give a concrete trigger and before/after example. Link existing discussion if useful. -->
 
-<!-- What does this change, and why? Link the issue it closes (e.g. "Closes #123"). -->
+## Validation
 
-## Testing
+<!-- Commands, results and unverified cases. A regression fix needs a test that fails before it. -->
 
-<!-- Paste `just test-unit` output (counts). For hot-path / decode changes, add a
-     before/after benchmark. Note anything you could NOT verify. -->
+## Compatibility and upgrade impact
 
-```
-# just test-unit
-```
+<!-- API/CLI/settings changes, dependency floors, changed defaults and migration steps; or none. -->
+
+## Performance evidence (when relevant)
+
+<!-- Machine, macOS, checkpoint/revision, quantization, source SHA, cold/warm/turn-2,
+     repetitions, before/after, output checks and regressions. Link BENCHMARKS/receipts.
+     Doc-only changes need no performance run. -->
 
 ## Checklist
 
-- [ ] `just lint` and `just format` are clean (CI runs `ruff check` + `ruff format --check`)
-- [ ] `just test-unit` is green (counts pasted above)
-- [ ] Title follows [Conventional Commits](https://www.conventionalcommits.org/) (e.g. `fix(gateway): …`)
-- [ ] Docs updated if I changed behavior, an endpoint, or a `YUNSHU_*` flag
-- [ ] Change fits the project scope (single-node, Apple Silicon; not multi-node / multi-tenant — see README non-goals)
+- [ ] Change fits local, single-node Apple Silicon inference scope
+- [ ] Lint, formatting and unit tests pass; results and limitations are recorded
+- [ ] Changed behavior has a regression test and user documentation
+- [ ] Public behavior changes are listed in CHANGELOG's Unreleased section
+- [ ] New settings use the registry and generated configuration docs
+- [ ] Any AI assistance is disclosed; I reviewed and can explain the changes
