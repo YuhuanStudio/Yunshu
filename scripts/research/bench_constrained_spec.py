@@ -304,6 +304,11 @@ def main():
     )
     ap.add_argument("--agent", action="store_true")
     ap.add_argument(
+        "--tool-grammar-off",
+        action="store_true",
+        help="reproduce the original injected 185-token tool prompt (unconstrained tools)",
+    )
+    ap.add_argument(
         "--modes", nargs="+", choices=("mtp-ar", "mtp", "dflash-ar", "dflash")
     )
     ap.add_argument("--cache-state-check", action="store_true")
@@ -358,6 +363,7 @@ def main():
             drafter=tfbench.D,
             max_tokens=a.max_tokens,
             sampler="position-keyed seed=1234",
+            tool_grammar=not a.tool_grammar_off,
             job=os.environ.get("GPUQ_JOB_ID"),
         )
         for rep in range(a.rep):
@@ -372,7 +378,7 @@ def main():
                         else drafter,
                         "CSPEC_DISABLE_DRAFT": "1" if mode.endswith("-ar") else "0",
                         "YUNSHU_AUTH_DISABLED": "1",
-                        "YUNSHU_TOOL_GRAMMAR": "1",
+                        "YUNSHU_TOOL_GRAMMAR": "0" if a.tool_grammar_off else "1",
                     }
                     trace = tfbench.OUT / f"tokens-{mode}-r{rep}.jsonl"
                     if trace.exists():
@@ -483,10 +489,14 @@ def main():
                     )
                     if expected not in log or engaged not in log:
                         raise RuntimeError("engaged path missing from server log")
-                    if not mode.endswith("-ar") and (
-                        a.agent
-                        or not a.only_case
-                        or any(case.startswith("tool-") for case in a.only_case)
+                    if (
+                        not mode.endswith("-ar")
+                        and not a.tool_grammar_off
+                        and (
+                            a.agent
+                            or not a.only_case
+                            or any(case.startswith("tool-") for case in a.only_case)
+                        )
                     ):
                         if (
                             f"Exact speculative request engaged: {drafter} constrained=True"
